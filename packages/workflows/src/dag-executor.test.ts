@@ -294,6 +294,25 @@ describe('buildTopologicalLayers', () => {
     expect(layers[2].map(n => n.id)).toEqual(['implement']);
   });
 
+  it('ATDD [P0 TD-1.4-E2E-007] keeps non-route fan-out on static topological layers', () => {
+    const nodes: DagNode[] = [
+      node('classify'),
+      node('investigate', ['classify'], { when: "$classify.output == 'BUG'" }),
+      node('plan', ['classify'], { when: "$classify.output == 'FEATURE'" }),
+      node('implement', ['investigate', 'plan'], {
+        trigger_rule: 'none_failed_min_one_success',
+      }),
+    ];
+
+    const layers = buildTopologicalLayers(nodes);
+
+    expect(layers.map(layer => layer.map(n => n.id).sort())).toEqual([
+      ['classify'],
+      ['investigate', 'plan'],
+      ['implement'],
+    ]);
+  });
+
   it('throws on cyclic graph (runtime safety check)', () => {
     const cyclic = [node('a', ['b']), node('b', ['a'])];
     expect(() => buildTopologicalLayers(cyclic)).toThrow('Cycle detected');
@@ -2298,6 +2317,79 @@ describe('executeDagWorkflow -- when condition parse errors (fail-closed)', () =
     expect(warning).toBeDefined();
     // Must NOT indicate the node ran (the old fail-open behavior)
     expect(warning).not.toMatch(/node ran/i);
+  });
+
+  it('ATDD [P0 TD-1.4-E2E-003] records node_skipped with when_condition_parse_error', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('parse-err-event-run');
+
+    const nodes: DagNode[] = [{ id: 'gate', command: 'my-cmd', when: 'not a valid condition' }];
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-parse-err-event',
+      testDir,
+      { name: 'parse-event-test', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const skippedEvent = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as Record<string, unknown>).event_type === 'node_skipped' &&
+        (call[0] as Record<string, unknown>).step_name === 'gate'
+    );
+    expect(skippedEvent).toBeDefined();
+    expect((skippedEvent![0] as Record<string, unknown>).data).toEqual(
+      expect.objectContaining({
+        reason: 'when_condition_parse_error',
+        expr: 'not a valid condition',
+      })
+    );
+  });
+
+  it('ATDD [P0 TD-1.4-E2E-008] does not create a checkpoint for unparseable when skips', async () => {
+    const upsertCheckpoint = mock(
+      async (data: Parameters<NonNullable<IWorkflowStore['upsertWorkflowNodeCheckpoint']>>[0]) => ({
+        ...data,
+        created_at: new Date(),
+      })
+    );
+    const store = createMockStore();
+    store.upsertWorkflowNodeCheckpoint = upsertCheckpoint;
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('parse-err-no-checkpoint-run');
+
+    const nodes: DagNode[] = [{ id: 'gate', command: 'my-cmd', when: 'not a valid condition' }];
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-parse-err-no-checkpoint',
+      testDir,
+      { name: 'parse-no-checkpoint-test', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(upsertCheckpoint).not.toHaveBeenCalled();
   });
 
   it('workflow completes without throwing when all nodes are skipped via parse error', async () => {

@@ -2905,4 +2905,75 @@ nodes:
       }
     });
   });
+
+  describe('Story 1.4 ATDD - non-route validation compatibility', () => {
+    it('ATDD [P1 TD-1.4-INT-014] loads malformed ordinary when without route_loop', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'malformed-ordinary-when.yaml'),
+        `
+name: malformed-ordinary-when
+description: Ordinary when grammar is evaluated at runtime
+nodes:
+  - id: classify
+    prompt: "Classify the request"
+  - id: guarded
+    prompt: "Only run when the condition is true"
+    depends_on: [classify]
+    when: "not valid condition"
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+      expect(result.workflows[0].workflow.nodes[1].when).toBe('not valid condition');
+    });
+
+    it('ATDD [P1 TD-1.4-INT-015] does not apply route-loop From Node rules to ordinary when', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'ordinary-when-known-ref.yaml'),
+        `
+name: ordinary-when-known-ref
+description: Ordinary when can reference known non-route producer output
+nodes:
+  - id: classify
+    prompt: "Classify"
+  - id: precheck
+    prompt: "Precheck"
+  - id: implement
+    prompt: "Implement"
+    depends_on: [classify]
+    when: "$precheck.output == 'ready'"
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+      expect(result.workflows[0].workflow.nodes[2].when).toBe("$precheck.output == 'ready'");
+    });
+
+    it.skip('ATDD [P2 TD-1.4-STATIC-001] inventory route-loop validation paths before activating route-loop gates', async () => {
+      // Skipped because this worktree has no route_loop schema, loader, or executor seam yet.
+      // Activate when route_loop production files are introduced and assert every validation
+      // path is listed in the implementation notes before non-route compatibility is reviewed.
+      const expectedRouteLoopPaths = [
+        'packages/workflows/src/schemas/route-loop.ts',
+        'packages/workflows/src/route-loop/graph.ts',
+        'packages/workflows/src/route-loop/scheduler.ts',
+        'packages/workflows/src/route-loop/state.ts',
+      ];
+      const existenceResults = await Promise.all(
+        expectedRouteLoopPaths.map(path => Bun.file(path).exists())
+      );
+
+      expect(existenceResults.every(Boolean)).toBe(true);
+    });
+  });
 });

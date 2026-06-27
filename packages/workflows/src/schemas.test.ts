@@ -695,3 +695,42 @@ describe('LOOP_NODE_AI_FIELDS', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Story 1.4 ATDD - non-route node mode compatibility
+// ---------------------------------------------------------------------------
+
+describe('Story 1.4 ATDD - existing node modes without route_loop', () => {
+  test('ATDD [P1 TD-1.4-INT-002] accepts every existing node mode without migration', () => {
+    const cases: Array<{ name: string; node: Record<string, unknown> }> = [
+      { name: 'command', node: { id: 'command-node', command: 'plan' } },
+      { name: 'prompt', node: { id: 'prompt-node', prompt: 'Summarize the change.' } },
+      { name: 'bash', node: { id: 'bash-node', bash: 'echo ok' } },
+      { name: 'script', node: { id: 'script-node', script: 'console.log("ok")', runtime: 'bun' } },
+      { name: 'approval', node: { id: 'approval-node', approval: { message: 'Approve?' } } },
+      { name: 'cancel', node: { id: 'cancel-node', cancel: 'Stop this run.' } },
+      {
+        name: 'loop',
+        node: {
+          id: 'loop-node',
+          loop: {
+            prompt: 'Work until done.',
+            until: 'DONE',
+            max_iterations: 3,
+            fresh_context: true,
+            until_bash: 'test -f done.txt',
+          },
+          idle_timeout: 300000,
+        },
+      },
+    ];
+
+    for (const { name, node } of cases) {
+      const result = dagNodeSchema.safeParse(node);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.id).toBe(`${name}-node`);
+      }
+    }
+  });
+});
