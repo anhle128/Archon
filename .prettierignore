@@ -29,6 +29,11 @@ package-lock.json
 .agents/
 .claude/
 .archon/
+.qoder/
+_bmad/
+
+# Runtime workspace state
+.omx/
 
 # Website (Astro/Starlight - uses own formatting)
 packages/docs-web/
