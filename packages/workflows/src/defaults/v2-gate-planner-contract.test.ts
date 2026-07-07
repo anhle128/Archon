@@ -148,24 +148,43 @@ describe('Gate-planner — v2 YAML structural + bundle + consumer boundary', () 
     });
   });
 
-  describe('scope boundary — flags are emitted but unconsumed this story', () => {
-    it('tea-rv, tea-nr, tea-tr still run unconditionally with no when: conditions', () => {
+  describe('scope boundary — gate-planner flags consumed by conditional branches', () => {
+    it('tea-rv and tea-nr are conditional siblings gated on gate-planner flags', () => {
       const v2 = parseFromDisk(V2_FILE, V2_STEM);
-      expect((nodeById(v2, 'tea-nr') as { depends_on?: string[] }).depends_on).toEqual(['tea-rv']);
-      expect((nodeById(v2, 'tea-tr') as { depends_on?: string[] }).depends_on).toEqual(['tea-nr']);
-      for (const id of ['tea-rv', 'tea-nr', 'tea-tr']) {
-        const n = nodeById(v2, id) as unknown as { when?: string };
-        expect(n?.when, `${id} must NOT gain a when: condition this story`).toBeUndefined();
-      }
+      expect((nodeById(v2, 'tea-rv') as unknown as { when?: string }).when).toBe(
+        '$gate-planner.output.run_rv == true'
+      );
+      expect((nodeById(v2, 'tea-nr') as unknown as { when?: string }).when).toBe(
+        '$gate-planner.output.run_nr == true'
+      );
+      expect((nodeById(v2, 'tea-rv') as { depends_on?: string[] }).depends_on).toEqual([
+        'gate-planner',
+      ]);
+      expect((nodeById(v2, 'tea-nr') as { depends_on?: string[] }).depends_on).toEqual([
+        'gate-planner',
+      ]);
     });
 
-    it('no node declares a when: on $gate-planner.output (consumption belongs to a later story)', () => {
-      const content = readLF(V2_FILE);
-      expect(content, `expected v2 file to exist: ${V2_FILE}`).not.toBeNull();
-      expect(
-        content as string,
-        'no node may consume $gate-planner.output this story'
-      ).not.toContain('$gate-planner.output');
+    it('tea-rv-skipped and tea-nr-skipped are inverse-condition bash siblings', () => {
+      const v2 = parseFromDisk(V2_FILE, V2_STEM);
+      expect((nodeById(v2, 'tea-rv-skipped') as unknown as { when?: string }).when).toBe(
+        '$gate-planner.output.run_rv == false'
+      );
+      expect((nodeById(v2, 'tea-nr-skipped') as unknown as { when?: string }).when).toBe(
+        '$gate-planner.output.run_nr == false'
+      );
+    });
+
+    it('tea-tr joins the four branch nodes with none_failed_min_one_success', () => {
+      const v2 = parseFromDisk(V2_FILE, V2_STEM);
+      const tr = nodeById(v2, 'tea-tr') as {
+        depends_on?: string[];
+        trigger_rule?: string;
+      };
+      expect([...(tr.depends_on ?? [])].sort()).toEqual(
+        ['tea-nr', 'tea-nr-skipped', 'tea-rv', 'tea-rv-skipped'].sort()
+      );
+      expect(tr.trigger_rule).toBe('none_failed_min_one_success');
     });
   });
 
