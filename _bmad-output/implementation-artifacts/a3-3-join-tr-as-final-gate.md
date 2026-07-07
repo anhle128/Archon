@@ -60,7 +60,7 @@ so that traceability is evaluated as the final release gate and the tail still r
 - [x] [Review][Patch] R1-F4 — The new `quality-gate-summary` barrier breaks the `run_tr=false` path by unconditionally reading `$tea-tr.output.gate` even when `tea-tr` is skipped.
       Evidence: `.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:799` assigns `GATE=$tea-tr.output.gate`, while skipped producers have no field output to read.
       Required fix: rework the barrier so it selects the resolved TR-role contract without dereferencing `$tea-tr.output.gate` when `tea-tr` is skipped, while preserving fail-closed behavior for branch failures and real TR `FAIL` / `ERROR` gates.
-- [ ] [Review][Patch] R1-F6 — `quality-gate-summary` allows an invalid real `tea-tr` contract to pass the final PR gate.
+- [x] [Review][Patch] R1-F6 — `quality-gate-summary` allows an invalid real `tea-tr` contract to pass the final PR gate.
       Evidence: `.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:799-807` reads `$tea-tr.output` and greps the raw JSON text only for `FAIL` / `ERROR`, while `tea-tr.output_format` only declares `contract_version`, `workflow`, `node`, `story_ref`, `gate`, `findings_count`, and `report_file` as broad primitive fields.
       Required fix: parse the real TR JSON contract deterministically before PR handoff and validate `contract_version`, `workflow`, `node`, `story_ref`, `gate`, and a non-negative `findings_count`; block `FAIL` / `ERROR` by parsed gate value and add tests for story or node mismatch plus formatted JSON and substring false positives.
 
@@ -205,12 +205,15 @@ The a3.2 DAG tests (`v2-tea-branches-dag.test.ts`) drive the real gate-planner (
 - Fix pass 2: Addressed R1-F4 — the barrier's field-level `$tea-tr.output.gate` threw `producer-not-run` when `tea-tr` was skipped on the `run_tr=false` path.
 - R1-F4 fix: Replaced field-level `$tea-tr.output.gate` with whole-output `$tea-tr.output` (returns empty string for skipped nodes, not a throw). Bash `case` pattern checks for `"gate":"FAIL"` / `"gate":"ERROR"` in the JSON text only when output is non-empty. Updated TD-042 to assert the whole-output pattern and explicitly verify field-level is NOT used.
 - All 37 contract tests and 10 DAG tests still pass after the fix. Full workflows package tests: 0 fail. Bundled checks pass.
+- Fix pass 3: Addressed R1-F6 — the barrier used raw substring matching (`case` pattern) on the JSON text instead of deterministic JSON parsing and envelope validation.
+- R1-F6 fix: Replaced `case` substring matching with `bun -e` inline script using `JSON.parse()` to validate the full contract envelope (`contract_version`, `workflow`, `node`, `story_ref`, `findings_count`, `gate`). Whole-output `$tea-tr.output` reference preserved (no `producer-not-run` on skipped tea-tr). Added 4 new DAG tests (TD-044 through TD-047) for story_ref mismatch, node mismatch, negative findings_count, and substring false-positive immunity. Updated contract test TD-042 to assert JSON.parse and envelope validation.
+- 37 contract tests pass. 14 DAG tests pass (10 original + 4 new). Full workflows package tests: 0 fail. Bundled checks pass. Type-check, lint, format all pass.
 
 ### File List
 
-- `.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml` — Added `quality-gate-summary` bash barrier node; rewired `create-pull-request` to depend on it; fixed barrier to use whole-output `$tea-tr.output` instead of field-level `$tea-tr.output.gate`.
+- `.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml` — Added `quality-gate-summary` bash barrier node; rewired `create-pull-request` to depend on it; fixed barrier to use whole-output `$tea-tr.output` instead of field-level `$tea-tr.output.gate`; replaced substring matching with `bun -e` JSON.parse envelope validation (R1-F6).
 - `packages/workflows/src/defaults/bundled-defaults.generated.ts` — Regenerated from YAML source.
 - `packages/workflows/package.json` — Added `v2-tr-join-contract.test.ts` to non-mock batch; added `v2-tr-join-dag.test.ts` as isolated segment.
-- `packages/workflows/src/defaults/v2-tr-join-contract.test.ts` — Updated TD-027 for barrier; added TD-042 for barrier structural assertions; updated TD-042 for whole-output pattern (R1-F4 fix).
-- `packages/workflows/src/defaults/v2-tr-join-dag.test.ts` — Added TD-043 for FAIL/ERROR/CONCERNS gate behavior proof.
+- `packages/workflows/src/defaults/v2-tr-join-contract.test.ts` — Updated TD-027 for barrier; added TD-042 for barrier structural assertions; updated TD-042 for whole-output pattern (R1-F4 fix); updated TD-042 for JSON.parse envelope validation (R1-F6 fix).
+- `packages/workflows/src/defaults/v2-tr-join-dag.test.ts` — Added TD-043 for FAIL/ERROR/CONCERNS gate behavior proof; added TD-044 through TD-047 for envelope validation proofs (R1-F6 fix).
 - `packages/workflows/src/defaults/v2-tea-branches-contract.test.ts` — Updated TD-010 for barrier dependency.

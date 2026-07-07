@@ -738,3 +738,114 @@ describe('TR gate FAIL — schema-valid but blocked by quality-gate-summary (TD-
     ).toContain('create-pull-request');
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TD-044 [P0] — envelope validation: mismatched story_ref blocks PR (R1-F6)
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('TR envelope — mismatched story_ref blocks PR (TD-044)', () => {
+  it('tea-tr with story_ref not matching resolved input fails the barrier', async () => {
+    const run = await runV2Dag({
+      cwd: cwdFixture,
+      arguments: CANONICAL_REF,
+      nodeResponses: {
+        'code-review-auto': validCrEvidence(),
+        'tea-automate': validTaEvidence({ test_files_changed: 3, nfr_relevant: 'true' }),
+        ...happyDownstream(),
+        'tea-tr': validTrGate({ story_ref: 'stale-story-ref' }),
+      },
+    });
+
+    expect(run.nodeState['tea-tr']).toBe('completed');
+    expect(
+      run.nodeState['quality-gate-summary'],
+      'quality-gate-summary must block on story_ref mismatch'
+    ).toBe('failed');
+    expect(run.providerCalls).not.toContain('create-pull-request');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TD-045 [P0] — envelope validation: mismatched node identity blocks PR
+// (R1-F6)
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('TR envelope — mismatched node identity blocks PR (TD-045)', () => {
+  it('tea-tr with node:"tea-rv" (wrong self-identification) fails the barrier', async () => {
+    const run = await runV2Dag({
+      cwd: cwdFixture,
+      arguments: CANONICAL_REF,
+      nodeResponses: {
+        'code-review-auto': validCrEvidence(),
+        'tea-automate': validTaEvidence({ test_files_changed: 3, nfr_relevant: 'true' }),
+        ...happyDownstream(),
+        'tea-tr': validTrGate({ node: 'tea-rv' }),
+      },
+    });
+
+    expect(run.nodeState['tea-tr']).toBe('completed');
+    expect(
+      run.nodeState['quality-gate-summary'],
+      'quality-gate-summary must block on node identity mismatch'
+    ).toBe('failed');
+    expect(run.providerCalls).not.toContain('create-pull-request');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TD-046 [P0] — envelope validation: negative findings_count blocks PR
+// (R1-F6)
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('TR envelope — negative findings_count blocks PR (TD-046)', () => {
+  it('tea-tr with findings_count:-1 fails the barrier', async () => {
+    const run = await runV2Dag({
+      cwd: cwdFixture,
+      arguments: CANONICAL_REF,
+      nodeResponses: {
+        'code-review-auto': validCrEvidence(),
+        'tea-automate': validTaEvidence({ test_files_changed: 3, nfr_relevant: 'true' }),
+        ...happyDownstream(),
+        'tea-tr': validTrGate({ findings_count: -1 }),
+      },
+    });
+
+    expect(run.nodeState['tea-tr']).toBe('completed');
+    expect(
+      run.nodeState['quality-gate-summary'],
+      'quality-gate-summary must block on negative findings_count'
+    ).toBe('failed');
+    expect(run.providerCalls).not.toContain('create-pull-request');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TD-047 [P0] — substring false-positive proof: an unrelated field
+// containing a gate-looking substring must NOT block when the actual gate
+// is PASS (R1-F6)
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('TR gate — substring false positive does not block (TD-047)', () => {
+  it('tea-tr with report_file containing "gate":"FAIL" substring passes the barrier when actual gate is PASS', async () => {
+    const run = await runV2Dag({
+      cwd: cwdFixture,
+      arguments: CANONICAL_REF,
+      nodeResponses: {
+        'code-review-auto': validCrEvidence(),
+        'tea-automate': validTaEvidence({ test_files_changed: 3, nfr_relevant: 'true' }),
+        ...happyDownstream(),
+        'tea-tr': validTrGate({ report_file: 'report-"gate":"FAIL"-leftover.md' }),
+      },
+    });
+
+    expect(run.nodeState['tea-tr']).toBe('completed');
+    expect(
+      run.nodeState['quality-gate-summary'],
+      'JSON.parse must read the actual gate field, not match substrings in other fields'
+    ).toBe('completed');
+    expect(
+      run.providerCalls,
+      'create-pull-request must be reached when actual gate is PASS regardless of substring noise'
+    ).toContain('create-pull-request');
+  });
+});

@@ -323,7 +323,7 @@ describe('quality-gate-summary — fail-closed barrier before PR (TD-042)', () =
     expect(node.trigger_rule).toBe('none_failed_min_one_success');
   });
 
-  it('quality-gate-summary bash checks TR gate via whole-output ref (not field-level) and exits non-zero on FAIL or ERROR', () => {
+  it('quality-gate-summary parses TR contract via JSON.parse and validates the full envelope before checking gate', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     const bash =
       (nodeById(v2, 'quality-gate-summary') as { bash?: string } | undefined)?.bash ?? '';
@@ -334,6 +334,12 @@ describe('quality-gate-summary — fail-closed barrier before PR (TD-042)', () =
       bash,
       'must NOT use field-level $tea-tr.output.gate (throws producer-not-run when tea-tr is skipped)'
     ).not.toContain('$tea-tr.output.gate');
+    expect(bash, 'must use JSON.parse for deterministic parsing').toContain('JSON.parse');
+    expect(bash, 'must validate contract_version').toContain('contract_version');
+    expect(bash, 'must validate workflow identity').toContain('workflow');
+    expect(bash, 'must validate node identity').toContain('node');
+    expect(bash, 'must validate story_ref against resolved input').toContain('story_ref');
+    expect(bash, 'must validate findings_count is non-negative').toContain('findings_count');
     expect(bash, 'must block FAIL gate').toContain('FAIL');
     expect(bash, 'must block ERROR gate').toContain('ERROR');
     expect(bash, 'must exit non-zero on blocked gate').toContain('exit 1');

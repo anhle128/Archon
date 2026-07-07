@@ -799,9 +799,36 @@ nodes:
       TR_OUTPUT=$tea-tr.output
 
       if [ -n "$TR_OUTPUT" ]; then
-        case "$TR_OUTPUT" in
-          *'"gate":"FAIL"'*|*'"gate": "FAIL"'*|*'"gate":"ERROR"'*|*'"gate": "ERROR"'*)
-            echo "Quality gate blocked: TR gate is FAIL or ERROR"
+        EXPECTED_REF=$resolve-story-input.output.story_ref
+
+        VALIDATION=$(
+          TR_JSON="$TR_OUTPUT" EXPECTED_REF="$EXPECTED_REF" \
+          bun -e '
+            const input = process.env.TR_JSON || "";
+            const expectedRef = process.env.EXPECTED_REF || "";
+            try {
+              const parsed = JSON.parse(input);
+              const errors = [];
+              if (parsed.contract_version !== "1.0") errors.push("contract_version must be 1.0");
+              if (parsed.workflow !== "bmad-dev-story-with-tea-fix-loop-v2") errors.push("workflow mismatch");
+              if (parsed.node !== "tea-tr") errors.push("node must be tea-tr");
+              if (expectedRef && parsed.story_ref !== expectedRef) errors.push("story_ref mismatch");
+              if (typeof parsed.findings_count !== "number" || parsed.findings_count < 0) errors.push("findings_count must be a non-negative number");
+              if (parsed.gate === "FAIL" || parsed.gate === "ERROR") errors.push("gate is " + parsed.gate);
+              if (errors.length > 0) {
+                process.stdout.write("BLOCK:" + errors.join("; "));
+              } else {
+                process.stdout.write("PASS");
+              }
+            } catch (e) {
+              process.stdout.write("BLOCK:invalid JSON - " + e.message);
+            }
+          '
+        )
+
+        case "$VALIDATION" in
+          BLOCK:*)
+            echo "Quality gate blocked: ${VALIDATION#BLOCK:}"
             exit 1
             ;;
         esac
