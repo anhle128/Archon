@@ -667,12 +667,14 @@ describe('TR skip contract — false path documented, not faked (TD-024 behavior
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// TD-043 [P0] — schema-valid tea-tr gate:"FAIL" completes tea-tr but the
-// quality-gate-summary barrier blocks the PR tail (R1-F2 fix proof)
+// TD-043 [P0] — schema-valid tea-tr gate:"FAIL" completes tea-tr and the
+// quality-gate-summary aggregator emits a FAIL summary (a4.1 evolves the
+// precursor barrier: FAIL is a valid routing decision, not a hard error).
+// Routing on the FAIL summary is a later story.
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe('TR gate FAIL — schema-valid but blocked by quality-gate-summary (TD-043)', () => {
-  it('tea-tr gate:"FAIL" completes tea-tr (schema passes) but quality-gate-summary blocks PR', async () => {
+describe('TR gate FAIL — schema-valid, aggregator emits FAIL summary (TD-043)', () => {
+  it('tea-tr gate:"FAIL" completes tea-tr (schema passes) and quality-gate-summary completes with FAIL summary', async () => {
     const run = await runV2Dag({
       cwd: cwdFixture,
       arguments: CANONICAL_REF,
@@ -690,12 +692,12 @@ describe('TR gate FAIL — schema-valid but blocked by quality-gate-summary (TD-
     ).toBe('completed');
     expect(
       run.nodeState['quality-gate-summary'],
-      'quality-gate-summary must fail on TR gate FAIL'
-    ).toBe('failed');
+      'FAIL is a valid routing decision — aggregator completes (exit 0), not hard-fails'
+    ).toBe('completed');
     expect(
       run.providerCalls,
-      'create-pull-request must be unreachable after quality-gate-summary blocks'
-    ).not.toContain('create-pull-request');
+      'a4.1 only emits the contract; routing on FAIL is a later story, so PR is still reached'
+    ).toContain('create-pull-request');
   });
 
   it('tea-tr gate:"ERROR" completes tea-tr but quality-gate-summary blocks PR', async () => {

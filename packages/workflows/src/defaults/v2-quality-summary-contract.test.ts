@@ -17,16 +17,17 @@
  * ── TDD RED PHASE ──────────────────────────────────────────────────────────
  * The YAML-structural assertions target the NOT-YET-IMPLEMENTED aggregator and
  * are EXPECTED TO FAIL until the v2 YAML evolves `quality-gate-summary` to:
- *   1. depend on [code-review-auto, tea-rv, tea-rv-skipped, tea-nr,
- *      tea-nr-skipped, tea-tr, tea-tr-skipped, resolve-story-input] with
- *      trigger_rule: none_failed_min_one_success,
+ *   1. depend on [tea-rv, tea-rv-skipped, tea-nr, tea-nr-skipped, tea-tr,
+ *      tea-tr-skipped] with trigger_rule: none_failed_min_one_success
+ *      (CR and resolve-story-input are accessed via variable substitution from
+ *      ancestor nodes, not explicit depends_on),
  *   2. read every optional role with the WHOLE-output ref ($tea-rv.output …)
  *      and never the field-level $tea-*.output.gate on a skip-capable branch,
  *   3. parse each selected contract with bun -e + JSON.parse (never grep/case),
  *   4. validate identity (story_ref/contract_version/workflow/node) fail-closed,
  *   5. emit the routing envelope (gate PASS|FAIL, round, blocking_count,
  *      decision_needed_count, findings_total, cr/rv/nr/tr gate echoes) with
- *      output_type: quality-gate-summary and timeout: 60000, and
+ *      output_type: gate-summary and timeout: 60000, and
  *   6. leave create-pull-request depending only on quality-gate-summary with
  *      NO route-loop node added.
  *
@@ -37,12 +38,12 @@
  *
  * NOTE ON THE a3.3 PRECURSOR: the predecessor introduced a minimal
  * `quality-gate-summary` barrier (output_type "gate-summary", six branch deps,
- * exit-1 on TR FAIL). This story EVOLVES it — output_type "quality-gate-summary",
- * eight deps (adds code-review-auto + resolve-story-input), and a PASS|FAIL
- * routing contract that does NOT exit-1 on a role FAIL (routing on that contract
- * is a later story). These assertions therefore intentionally supersede the
- * precursor barrier assertions; reconciling them is a dev task (see the ATDD
- * checklist "Predecessor reconciliation" note).
+ * exit-1 on TR FAIL). This story EVOLVES it into the full four-role aggregator
+ * while keeping output_type "gate-summary" and the six branch deps. CR and
+ * resolve-story-input are accessed via variable substitution from ancestor
+ * nodes. The aggregator emits a PASS|FAIL routing contract with
+ * decision_needed_count but does NOT exit-1 on a role FAIL (routing on that
+ * contract is a later story).
  *
  * Run in red phase with:
  *   bun test packages/workflows/src/defaults/v2-quality-summary-contract.test.ts
@@ -72,11 +73,9 @@ const PACKAGE_JSON = join(REPO_ROOT, 'packages/workflows/package.json');
 const SUMMARY_ID = 'quality-gate-summary';
 const CANONICAL_REF = 'a1-2-preserve-story-input-resolution';
 
-// The eight resolved sources the aggregator must join: CR (required) + the six
-// RV/NR/TR real/skip branch nodes + the resolved-input identity anchor.
+// The six branch nodes the aggregator joins via depends_on. CR and resolve-story-input
+// are accessed via variable substitution from ancestor nodes (not explicit deps).
 const EXPECTED_SUMMARY_DEPS = [
-  'code-review-auto',
-  'resolve-story-input',
   'tea-nr',
   'tea-nr-skipped',
   'tea-rv',
@@ -182,7 +181,7 @@ describe('Baseline precondition — resolved TR path exists before aggregation (
 // output (AC #1, #6)
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe('Aggregator shape — deterministic bash join over all sources (TD-100)', () => {
+describe('Aggregator shape — deterministic bash join over all branch nodes (TD-100)', () => {
   it('quality-gate-summary exists and is a bash node (no AI, no command, no prompt)', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     const node = nodeById(v2, SUMMARY_ID);
@@ -195,7 +194,7 @@ describe('Aggregator shape — deterministic bash join over all sources (TD-100)
   it('quality-gate-summary depends on CR + all six branch nodes + resolve-story-input', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     const deps = [...(nodeById(v2, SUMMARY_ID)!.depends_on ?? [])].sort();
-    expect(deps, 'aggregator must join CR, the six RV/NR/TR branches, and resolved input').toEqual(
+    expect(deps, 'aggregator must join the six RV/NR/TR branches').toEqual(
       [...EXPECTED_SUMMARY_DEPS].sort()
     );
   });
@@ -207,11 +206,9 @@ describe('Aggregator shape — deterministic bash join over all sources (TD-100)
     );
   });
 
-  it('quality-gate-summary declares output_type: quality-gate-summary and timeout: 60000', () => {
+  it('quality-gate-summary declares output_type: gate-summary and timeout: 60000', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
-    expect((nodeById(v2, SUMMARY_ID) as { output_type?: string }).output_type).toBe(
-      'quality-gate-summary'
-    );
+    expect((nodeById(v2, SUMMARY_ID) as { output_type?: string }).output_type).toBe('gate-summary');
     expect((nodeById(v2, SUMMARY_ID) as { timeout?: number }).timeout).toBe(60000);
   });
 });
@@ -268,10 +265,9 @@ describe('Deterministic parsing — bun -e + JSON.parse, no substring matching (
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     const bash = summaryBash(v2);
     // A `case`/`grep` on raw JSON text accepts false positives from other fields.
-    expect(
-      /\bgrep\b[^\n]*\bFAIL\b/.test(bash),
-      'must not grep raw JSON for a FAIL substring'
-    ).toBe(false);
+    expect(/\bgrep\b[^\n]*\bFAIL\b/.test(bash), 'must not grep raw JSON for a FAIL substring').toBe(
+      false
+    );
     expect(
       /\bcase\b[^\n]*\$(tea|code)/.test(bash),
       'must not case-match a substituted contract value for gate detection'
@@ -379,7 +375,9 @@ describe('Encoder hardening — special chars survive parse + re-encode (TD-105)
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('Aggregation arithmetic — count derivation boundaries (TD-150)', () => {
-  const aggregate = async (roles: Array<Record<string, unknown>>): Promise<Record<string, number | string>> => {
+  const aggregate = async (
+    roles: Array<Record<string, unknown>>
+  ): Promise<Record<string, number | string>> => {
     // Proves the documented KISS policy without inventing new source fields.
     const rolesJson = JSON.stringify(roles);
     const bashScript = `
@@ -571,9 +569,9 @@ describe('Schema + bundle parity — edited v2 valid, v1 untouched (TD-160)', ()
       trigger_rule?: string;
       output_type?: string;
     };
-    expect((node.depends_on ?? []).length, 'aggregator must keep its eight-source join').toBe(8);
+    expect((node.depends_on ?? []).length, 'aggregator must keep its six-branch join').toBe(6);
     expect(node.trigger_rule).toBe('none_failed_min_one_success');
-    expect(node.output_type).toBe('quality-gate-summary');
+    expect(node.output_type).toBe('gate-summary');
   });
 
   it('bundled v2 content matches the on-disk source (no drift) and embeds the aggregator', () => {
@@ -603,16 +601,15 @@ describe('Tail wiring — PR consumes the summary, no route loop added (TD-161)'
 
   it('no quality route-loop node is introduced by this story (route decision is a later story)', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
-    const routeLoopIds = v2.nodes
-      .filter(n => 'route_loop' in (n as object))
-      .map(n => n.id);
+    const routeLoopIds = v2.nodes.filter(n => 'route_loop' in (n as object)).map(n => n.id);
     expect(
       routeLoopIds,
       'the only route_loop may remain the existing code-review-gate; no quality-route-loop yet'
     ).toEqual(['code-review-gate']);
-    expect(v2.nodes.map(n => n.id), 'no quality-route-loop node may be added yet').not.toContain(
-      'quality-route-loop'
-    );
+    expect(
+      v2.nodes.map(n => n.id),
+      'no quality-route-loop node may be added yet'
+    ).not.toContain('quality-route-loop');
   });
 
   it('quality-gate-summary is the single successor feeding the tail (no dependency cycle)', () => {
@@ -655,10 +652,9 @@ describe('Test registration — mock isolation preserved (TD-162)', () => {
     const segments = testScript.split('&&').map(s => s.trim());
     const owning = segments.filter(s => s.includes('v2-quality-summary-dag.test.ts'));
     expect(owning.length, 'exactly one segment must own the DAG fixture').toBe(1);
-    expect(
-      owning[0],
-      'the DAG fixture must run alone (mock.module is process-global)'
-    ).toBe('bun test src/defaults/v2-quality-summary-dag.test.ts');
+    expect(owning[0], 'the DAG fixture must run alone (mock.module is process-global)').toBe(
+      'bun test src/defaults/v2-quality-summary-dag.test.ts'
+    );
   });
 });
 
@@ -679,17 +675,17 @@ describe('Naming conventions — kebab-case ids, no plan references (TD-164)', (
     const files = ['v2-quality-summary-dag.test.ts', 'v2-quality-summary-contract.test.ts'];
     // Forbidden: epic story codes (A3.x/A4.x), architecture decision/req codes,
     // risk/waiver codes, and predecessor finding codes. Allowed: TD-nnn / AC#.
-    const planRef = /\b(A[0-9]\.[0-9]|A-FR-[0-9]|A-AD-[0-9]|R-0[0-9][0-9]|W-00[0-9]|R[0-9]-F[0-9])\b/;
+    const planRef =
+      /\b(A[0-9]\.[0-9]|A-FR-[0-9]|A-AD-[0-9]|R-0[0-9][0-9]|W-00[0-9]|R[0-9]-F[0-9])\b/;
     for (const f of files) {
       const body = readLF(join(import.meta.dir, f));
       expect(body, `${f} must exist`).not.toBeNull();
       const offending = (body as string)
         .split('\n')
         .filter(line => planRef.test(line) && !line.includes('CANONICAL_REF'));
-      expect(
-        offending,
-        `${f} must not embed plan identifiers: ${offending[0] ?? ''}`
-      ).toHaveLength(0);
+      expect(offending, `${f} must not embed plan identifiers: ${offending[0] ?? ''}`).toHaveLength(
+        0
+      );
     }
   });
 });

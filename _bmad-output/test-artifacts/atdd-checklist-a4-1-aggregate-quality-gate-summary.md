@@ -62,11 +62,11 @@ AI generation, sequential — a single-context deterministic scaffold generation
 
 ## Generated Files
 
-| File | Level | Isolation | Registered in `package.json` |
-| ---- | ----- | --------- | ---------------------------- |
-| `packages/workflows/src/defaults/v2-quality-summary-contract.test.ts` | Structural + technique proofs | co-located (no `mock.module`) | yes — shared non-mock batch |
-| `packages/workflows/src/defaults/v2-quality-summary-dag.test.ts` | Behavioral DAG | its OWN `bun test` segment (`mock.module`) | yes — standalone segment |
-| `packages/workflows/package.json` | test wiring | — | edited (both segments added) |
+| File                                                                  | Level                         | Isolation                                  | Registered in `package.json` |
+| --------------------------------------------------------------------- | ----------------------------- | ------------------------------------------ | ---------------------------- |
+| `packages/workflows/src/defaults/v2-quality-summary-contract.test.ts` | Structural + technique proofs | co-located (no `mock.module`)              | yes — shared non-mock batch  |
+| `packages/workflows/src/defaults/v2-quality-summary-dag.test.ts`      | Behavioral DAG                | its OWN `bun test` segment (`mock.module`) | yes — standalone segment     |
+| `packages/workflows/package.json`                                     | test wiring                   | —                                          | edited (both segments added) |
 
 Validation performed on the scaffolds: both files transpile clean (Bun transpiler), `package.json` remains valid JSON, and both files pass the TD-164 no-plan-identifier self-scan.
 
@@ -76,67 +76,67 @@ Legend: **exec-red** = executable test failing until implementation; **technique
 
 ### P0
 
-| TD | Scenario | File | Representation |
-| -- | -------- | ---- | -------------- |
-| TD-100 | Deterministic bash aggregator: eight-source join, fail-closed trigger, timeout, typed output | contract | exec-red |
-| TD-101 | Whole-output reads only; no field-level `$tea-*.output.gate` on skip-capable branches | contract | exec-red |
-| TD-102 | `bun -e` + `JSON.parse`; no `grep`/`case` substring gate matching | contract | exec-red |
-| TD-130 | All four PASS → PASS, zero blocking, zero decision-needed, zero findings, PR reached | dag | exec-red |
-| TD-140 | Missing/empty required CR → no summary, PR unreachable | dag | exec-red |
-| TD-141 | Resolved-optional role empty (real fails, skip condition-skipped) → no route decision | dag | exec-red |
-| TD-142 | Mismatched `story_ref` → hard-fail, no summary | dag | exec-red |
-| TD-143 | Mismatched `contract_version` → hard-fail, no summary | dag | exec-red |
-| TD-144 | Mismatched `workflow` → hard-fail, no summary | dag | exec-red |
-| TD-145 | Mismatched producer `node` → hard-fail, no summary | dag | exec-red |
-| TD-146 | Role `ERROR` → hard-fail (ERROR ≠ FAIL), no route decision; contrasted with a FAIL that DOES emit | dag | exec-red |
-| TD-147 | Malformed selected JSON → fail closed | contract (technique: `JSON.parse` → non-zero exit) + dag (**skip**) | technique + skip |
-| TD-154 | Failed real branch blocks summary + PR even with a skip sibling | dag | exec-red |
-| TD-163 | a3.3 TR-join baseline present before aggregation | contract | exec-red |
+| TD     | Scenario                                                                                          | File                                                                | Representation   |
+| ------ | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ---------------- |
+| TD-100 | Deterministic bash aggregator: eight-source join, fail-closed trigger, timeout, typed output      | contract                                                            | exec-red         |
+| TD-101 | Whole-output reads only; no field-level `$tea-*.output.gate` on skip-capable branches             | contract                                                            | exec-red         |
+| TD-102 | `bun -e` + `JSON.parse`; no `grep`/`case` substring gate matching                                 | contract                                                            | exec-red         |
+| TD-130 | All four PASS → PASS, zero blocking, zero decision-needed, zero findings, PR reached              | dag                                                                 | exec-red         |
+| TD-140 | Missing/empty required CR → no summary, PR unreachable                                            | dag                                                                 | exec-red         |
+| TD-141 | Resolved-optional role empty (real fails, skip condition-skipped) → no route decision             | dag                                                                 | exec-red         |
+| TD-142 | Mismatched `story_ref` → hard-fail, no summary                                                    | dag                                                                 | exec-red         |
+| TD-143 | Mismatched `contract_version` → hard-fail, no summary                                             | dag                                                                 | exec-red         |
+| TD-144 | Mismatched `workflow` → hard-fail, no summary                                                     | dag                                                                 | exec-red         |
+| TD-145 | Mismatched producer `node` → hard-fail, no summary                                                | dag                                                                 | exec-red         |
+| TD-146 | Role `ERROR` → hard-fail (ERROR ≠ FAIL), no route decision; contrasted with a FAIL that DOES emit | dag                                                                 | exec-red         |
+| TD-147 | Malformed selected JSON → fail closed                                                             | contract (technique: `JSON.parse` → non-zero exit) + dag (**skip**) | technique + skip |
+| TD-154 | Failed real branch blocks summary + PR even with a skip sibling                                   | dag                                                                 | exec-red         |
+| TD-163 | a3.3 TR-join baseline present before aggregation                                                  | contract                                                            | exec-red         |
 
 ### P1
 
-| TD | Scenario | File | Representation |
-| -- | -------- | ---- | -------------- |
-| TD-103 | Exact stdout contract + best-effort `quality-gate-summary.json` persist | contract (structural) + dag (`readSummaryContract`) | exec-red |
-| TD-104 | Envelope carries every routing field + per-role gate echoes | contract | exec-red |
-| TD-105 | Special chars survive parse + re-encode | contract | technique |
-| TD-110 | CR FAIL → summary FAIL | dag | **skip** (unreachable — CR FAIL loops to dev-story); policy via TD-150 |
-| TD-111 | RV FAIL → summary FAIL, `rv_gate` FAIL, blocking recorded | dag | exec-red |
-| TD-112 | NR FAIL → summary FAIL, `nr_gate` FAIL | dag | exec-red |
-| TD-113 | TR FAIL → summary FAIL, `tr_gate` FAIL | dag | exec-red |
-| TD-114 | Multiple FAIL → `blocking_count` sums, `findings_total` sums | dag | exec-red |
-| TD-120 | One CONCERNS, no FAIL/ERROR → PASS, `decision_needed_count == 1` | dag | exec-red |
-| TD-121 | Multiple CONCERNS → PASS, count all concerned roles | dag | exec-red |
-| TD-131 | Skipped roles echo `SKIPPED`, not counted | dag | exec-red |
-| TD-148 | Negative `findings_count` → fail closed; missing CR `round` caught at source | dag | exec-red |
-| TD-149 | Failure paths persist no partial summary | dag | exec-red |
-| TD-150 | Boundary counts (zero, mixed, multi-concern, multi-block) | contract (arithmetic) + dag (mixed) | technique + exec-red |
-| TD-151 | Substring false positive cannot flip a parsed gate | contract | technique |
-| TD-153 | Trigger-rule: runs only when no dep failed and ≥1 completed | contract TD-100 (rule + full deps) + dag TD-130/TD-131/TD-154 | exec-red (composed) |
-| TD-156 | Two runs, distinct `ARTIFACTS_DIR`, no share/overwrite | dag | exec-red |
-| TD-160 | Edited v2 parses; source+bundle match; v1 byte-for-byte unchanged | contract | exec-red |
-| TD-161 | `create-pull-request` depends only on summary; no route-loop added | contract | exec-red |
-| TD-162 | Contract test in non-mock batch; DAG test in its own invocation | contract | exec-red |
+| TD     | Scenario                                                                     | File                                                          | Representation                                                         |
+| ------ | ---------------------------------------------------------------------------- | ------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| TD-103 | Exact stdout contract + best-effort `quality-gate-summary.json` persist      | contract (structural) + dag (`readSummaryContract`)           | exec-red                                                               |
+| TD-104 | Envelope carries every routing field + per-role gate echoes                  | contract                                                      | exec-red                                                               |
+| TD-105 | Special chars survive parse + re-encode                                      | contract                                                      | technique                                                              |
+| TD-110 | CR FAIL → summary FAIL                                                       | dag                                                           | **skip** (unreachable — CR FAIL loops to dev-story); policy via TD-150 |
+| TD-111 | RV FAIL → summary FAIL, `rv_gate` FAIL, blocking recorded                    | dag                                                           | exec-red                                                               |
+| TD-112 | NR FAIL → summary FAIL, `nr_gate` FAIL                                       | dag                                                           | exec-red                                                               |
+| TD-113 | TR FAIL → summary FAIL, `tr_gate` FAIL                                       | dag                                                           | exec-red                                                               |
+| TD-114 | Multiple FAIL → `blocking_count` sums, `findings_total` sums                 | dag                                                           | exec-red                                                               |
+| TD-120 | One CONCERNS, no FAIL/ERROR → PASS, `decision_needed_count == 1`             | dag                                                           | exec-red                                                               |
+| TD-121 | Multiple CONCERNS → PASS, count all concerned roles                          | dag                                                           | exec-red                                                               |
+| TD-131 | Skipped roles echo `SKIPPED`, not counted                                    | dag                                                           | exec-red                                                               |
+| TD-148 | Negative `findings_count` → fail closed; missing CR `round` caught at source | dag                                                           | exec-red                                                               |
+| TD-149 | Failure paths persist no partial summary                                     | dag                                                           | exec-red                                                               |
+| TD-150 | Boundary counts (zero, mixed, multi-concern, multi-block)                    | contract (arithmetic) + dag (mixed)                           | technique + exec-red                                                   |
+| TD-151 | Substring false positive cannot flip a parsed gate                           | contract                                                      | technique                                                              |
+| TD-153 | Trigger-rule: runs only when no dep failed and ≥1 completed                  | contract TD-100 (rule + full deps) + dag TD-130/TD-131/TD-154 | exec-red (composed)                                                    |
+| TD-156 | Two runs, distinct `ARTIFACTS_DIR`, no share/overwrite                       | dag                                                           | exec-red                                                               |
+| TD-160 | Edited v2 parses; source+bundle match; v1 byte-for-byte unchanged            | contract                                                      | exec-red                                                               |
+| TD-161 | `create-pull-request` depends only on summary; no route-loop added           | contract                                                      | exec-red                                                               |
+| TD-162 | Contract test in non-mock batch; DAG test in its own invocation              | contract                                                      | exec-red                                                               |
 
 ### P2 / P3
 
-| TD | Scenario | File | Representation |
-| -- | -------- | ---- | -------------- |
-| TD-152 | Deterministic encode; artifact overwrites (no `>>` append) | contract | technique + exec-red |
-| TD-155 | `timeout: 60000`; no unbounded external command | contract | exec-red |
-| TD-165 | File scope limited to v2 YAML / bundle / tests / package script | — | **review** (manual gate; see checklist) |
-| TD-164 | Kebab-case ids; no plan/finding identifiers in generated files | contract | exec-red (self-scan) |
+| TD     | Scenario                                                        | File     | Representation                          |
+| ------ | --------------------------------------------------------------- | -------- | --------------------------------------- |
+| TD-152 | Deterministic encode; artifact overwrites (no `>>` append)      | contract | technique + exec-red                    |
+| TD-155 | `timeout: 60000`; no unbounded external command                 | contract | exec-red                                |
+| TD-165 | File scope limited to v2 YAML / bundle / tests / package script | —        | **review** (manual gate; see checklist) |
+| TD-164 | Kebab-case ids; no plan/finding identifiers in generated files  | contract | exec-red (self-scan)                    |
 
 ## Acceptance Criteria Traceability
 
-| AC | Scenarios | Status |
-| -- | --------- | ------ |
-| AC1 (JSON-only reads, emit `quality-gate-summary.json`) | TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-130, TD-131, TD-151, TD-155, TD-156 | Covered |
-| AC2 (any role FAIL → `gate:FAIL` + records blocker) | TD-111, TD-112, TD-113, TD-114, TD-150; TD-110 via TD-150 arithmetic | Covered |
-| AC3 (CONCERNS-only → PASS + preserved `decision_needed_count>0`) | TD-104, TD-120, TD-121, TD-150; W-001 (granularity) | Covered |
-| AC4 (all PASS/SKIPPED, no CONCERNS → PASS + count 0) | TD-130, TD-131, TD-150 | Covered |
-| AC5 (missing/empty/mismatch/ERROR → fail-closed, no route decision) | TD-101, TD-102, TD-140–TD-149, TD-151, TD-153, TD-154 | Covered |
-| AC6 (edited v2 valid, source+bundle consistent, v1 untouched) | TD-100, TD-160, TD-161, TD-162, TD-163, TD-164, TD-165 | Covered |
+| AC                                                                  | Scenarios                                                                              | Status  |
+| ------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ------- |
+| AC1 (JSON-only reads, emit `quality-gate-summary.json`)             | TD-100, TD-101, TD-102, TD-103, TD-104, TD-105, TD-130, TD-131, TD-151, TD-155, TD-156 | Covered |
+| AC2 (any role FAIL → `gate:FAIL` + records blocker)                 | TD-111, TD-112, TD-113, TD-114, TD-150; TD-110 via TD-150 arithmetic                   | Covered |
+| AC3 (CONCERNS-only → PASS + preserved `decision_needed_count>0`)    | TD-104, TD-120, TD-121, TD-150; W-001 (granularity)                                    | Covered |
+| AC4 (all PASS/SKIPPED, no CONCERNS → PASS + count 0)                | TD-130, TD-131, TD-150                                                                 | Covered |
+| AC5 (missing/empty/mismatch/ERROR → fail-closed, no route decision) | TD-101, TD-102, TD-140–TD-149, TD-151, TD-153, TD-154                                  | Covered |
+| AC6 (edited v2 valid, source+bundle consistent, v1 untouched)       | TD-100, TD-160, TD-161, TD-162, TD-163, TD-164, TD-165                                 | Covered |
 
 ## Reviewer Concern Traceability
 
@@ -146,10 +146,10 @@ No reviewer concern is left unrepresented: each is an executable red test, a tec
 
 ## Skipped Scaffolds and Expected Failure Reasons
 
-| Scaffold | Location | Why skipped | Activation seam | Compensating coverage |
-| -------- | -------- | ----------- | --------------- | --------------------- |
-| TD-110 `cr_gate FAIL → summary FAIL` | `v2-quality-summary-dag.test.ts` | A CR `FAIL` is routed to the `dev-story` fix loop by `code-review-gate` (negative route) and a CR `ERROR` hard-fails at `verify-story-identity`; neither ever reaches `quality-gate-summary`. Cannot be driven through the real DAG without faking the review loop. | Rewire the workflow so a non-PASS CR reaches the aggregator directly. | Contract TD-150 arithmetic proves a FAIL role → summary FAIL + `blocking_count`. |
-| TD-147 `malformed source contract → fail closed` | `v2-quality-summary-dag.test.ts` | Every source feeding the aggregator emits well-formed JSON (AI nodes via `structuredOutput`; skip siblings via `bun` `JSON.stringify`), so malformed JSON cannot be injected mid-DAG through this harness. | A fault-injection seam that lets a source node emit raw non-JSON stdout. | Contract TD-147 proves `JSON.parse` on malformed input exits non-zero; TD-105 / TD-151 prove encoder/parse robustness. |
+| Scaffold                                         | Location                         | Why skipped                                                                                                                                                                                                                                                         | Activation seam                                                          | Compensating coverage                                                                                                  |
+| ------------------------------------------------ | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| TD-110 `cr_gate FAIL → summary FAIL`             | `v2-quality-summary-dag.test.ts` | A CR `FAIL` is routed to the `dev-story` fix loop by `code-review-gate` (negative route) and a CR `ERROR` hard-fails at `verify-story-identity`; neither ever reaches `quality-gate-summary`. Cannot be driven through the real DAG without faking the review loop. | Rewire the workflow so a non-PASS CR reaches the aggregator directly.    | Contract TD-150 arithmetic proves a FAIL role → summary FAIL + `blocking_count`.                                       |
+| TD-147 `malformed source contract → fail closed` | `v2-quality-summary-dag.test.ts` | Every source feeding the aggregator emits well-formed JSON (AI nodes via `structuredOutput`; skip siblings via `bun` `JSON.stringify`), so malformed JSON cannot be injected mid-DAG through this harness.                                                          | A fault-injection seam that lets a source node emit raw non-JSON stdout. | Contract TD-147 proves `JSON.parse` on malformed input exits non-zero; TD-105 / TD-151 prove encoder/parse robustness. |
 
 Both skips are executable-but-`it.skip` scaffolds (they load and are registered); each states its activation condition and an assertion of expected behavior.
 
@@ -163,13 +163,13 @@ Once `bun install` runs, the following are EXPECTED to fail until a3.3 + a4.1 im
 
 ## Waivers
 
-| Waiver | Subject | Reason | Owner | Residual Risk | Follow-Up Trigger |
-| ------ | ------- | ------ | ----- | ------------- | ----------------- |
-| W-001 | `decision_needed_count` per-finding granularity | Derived as the count of resolved roles whose gate is `CONCERNS`; no source contract exposes a per-finding decision-needed field (KISS/YAGNI). | Workflow maintainer | A later route-loop / sync story may need finer counts. | Reopen if a downstream consumer needs per-finding decision-needed totals. |
-| W-002 | Cancellation coverage | Executor cancellation and lifecycle ownership are unchanged by this YAML/bash-contract story. | Workflow maintainer | Cancellation during a summary write is not newly exercised. | Reopen if the implementation changes executor cancellation, node lifecycle, or artifact-write ownership. |
-| W-003 | Permission / auth coverage | No auth, credential, adapter, or protected-route code is in scope. | Security / platform owner | A stray change could add untested auth behavior. | Reopen if the diff touches credentials, adapters, server auth routes, provider credential delivery, or permission checks. |
-| W-004 | Load / performance testing | No runtime hot path or user-facing latency path changes. | Workflow maintainer | The aggregator bash could hang without a timeout. | TD-155 must pass; reopen if long-running runtime work is added. |
-| W-005 | Browser / first-party UI E2E | This is a backend workflow DAG change with no browser-visible surface; the isolated DAG executor run is the first-party consumer E2E. | Test architect | A UI consumer of `quality-gate-summary.json` is not exercised. | Reopen if a web/console surface renders the quality-gate summary. |
+| Waiver | Subject                                         | Reason                                                                                                                                        | Owner                     | Residual Risk                                                  | Follow-Up Trigger                                                                                                         |
+| ------ | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| W-001  | `decision_needed_count` per-finding granularity | Derived as the count of resolved roles whose gate is `CONCERNS`; no source contract exposes a per-finding decision-needed field (KISS/YAGNI). | Workflow maintainer       | A later route-loop / sync story may need finer counts.         | Reopen if a downstream consumer needs per-finding decision-needed totals.                                                 |
+| W-002  | Cancellation coverage                           | Executor cancellation and lifecycle ownership are unchanged by this YAML/bash-contract story.                                                 | Workflow maintainer       | Cancellation during a summary write is not newly exercised.    | Reopen if the implementation changes executor cancellation, node lifecycle, or artifact-write ownership.                  |
+| W-003  | Permission / auth coverage                      | No auth, credential, adapter, or protected-route code is in scope.                                                                            | Security / platform owner | A stray change could add untested auth behavior.               | Reopen if the diff touches credentials, adapters, server auth routes, provider credential delivery, or permission checks. |
+| W-004  | Load / performance testing                      | No runtime hot path or user-facing latency path changes.                                                                                      | Workflow maintainer       | The aggregator bash could hang without a timeout.              | TD-155 must pass; reopen if long-running runtime work is added.                                                           |
+| W-005  | Browser / first-party UI E2E                    | This is a backend workflow DAG change with no browser-visible surface; the isolated DAG executor run is the first-party consumer E2E.         | Test architect            | A UI consumer of `quality-gate-summary.json` is not exercised. | Reopen if a web/console surface renders the quality-gate summary.                                                         |
 
 ## Commands to Run the Generated Tests
 

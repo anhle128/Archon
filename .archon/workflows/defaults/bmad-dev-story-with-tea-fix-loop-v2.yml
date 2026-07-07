@@ -699,15 +699,229 @@ nodes:
     output_type: nfr-skipped
 
   - id: tea-tr
+    when: "$gate-planner.output.run_tr == true"
     prompt: |
       bmad-testarch-trace $ARGUMENTS
+    prompt_suffix: |
+      The canonical story key resolved for this pipeline run is: $resolve-story-input.output.story_ref
+      You MUST include the following structured fields in your output:
+      - contract_version: set to "1.0"
+      - workflow: set to "bmad-dev-story-with-tea-fix-loop-v2"
+      - node: set to "tea-tr"
+      - gate: one of PASS, FAIL, CONCERNS, ERROR
+      - story_ref: set to exactly the canonical story key above
+      - findings_count: number of findings identified
+      - report_file: path to the human-readable traceability review report
     provider: claude
     depends_on: [tea-rv, tea-rv-skipped, tea-nr, tea-nr-skipped]
     trigger_rule: none_failed_min_one_success
     context: fresh
     model: sonnet
     idle_timeout: 900000
+    output_format:
+      type: object
+      properties:
+        contract_version:
+          type: string
+        workflow:
+          type: string
+        node:
+          type: string
+        gate:
+          type: string
+          enum: ["PASS", "FAIL", "CONCERNS", "ERROR"]
+        story_ref:
+          type: string
+          description: "Resolved canonical story key; must match $resolve-story-input.output.story_ref."
+        findings_count:
+          type: number
+        report_file:
+          type: string
+      required:
+        - contract_version
+        - workflow
+        - node
+        - gate
+        - story_ref
+        - findings_count
+        - report_file
     output_type: trace-findings
+
+  - id: tea-tr-skipped
+    when: "$gate-planner.output.run_tr == false"
+    bash: |
+      set -e
+
+      STORY_REF=$resolve-story-input.output.story_ref
+      REASON=$gate-planner.output.reason_tr
+
+      CONTRACT=$(
+        SK_STORY_REF="$STORY_REF" SK_REASON="$REASON" \
+        bun -e 'process.stdout.write(JSON.stringify({contract_version:"1.0",workflow:"bmad-dev-story-with-tea-fix-loop-v2",node:"tea-tr-skipped",story_ref:process.env.SK_STORY_REF,gate:"SKIPPED",findings_count:0,reason:process.env.SK_REASON}))'
+      )
+
+      printf '%s' "$CONTRACT"
+
+      if [ -n "${ARTIFACTS_DIR:-}" ]; then
+        RUN_DIR="$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop"
+        mkdir -p "$RUN_DIR" 2>/dev/null || true
+        printf '%s' "$CONTRACT" > "$RUN_DIR/tea-tr-skipped.gate.json" 2>/dev/null || true
+      fi
+    depends_on: [gate-planner]
+    timeout: 60000
+    output_type: trace-skipped
+
+  - id: quality-gate-summary
+    bash: |
+      set -e
+
+      RESOLVED_REF=$resolve-story-input.output.story_ref
+      CR_ROUND=$code-review-auto.output.round
+
+      if [ -z "$RESOLVED_REF" ]; then
+        echo "ERROR: resolved story_ref is empty." >&2
+        exit 1
+      fi
+
+      if [ -z "$CR_ROUND" ]; then
+        echo "ERROR: CR round is empty." >&2
+        exit 1
+      fi
+
+      # ── Read CR contract (always real, never skipped) ──
+      CR_RAW=$code-review-auto.output
+      if [ -z "$CR_RAW" ]; then
+        echo "ERROR: CR contract is empty." >&2
+        exit 1
+      fi
+
+      # ── Select RV resolved contract (real or skipped) ──
+      RV_RAW=$tea-rv.output
+      if [ -z "$RV_RAW" ]; then
+        RV_RAW=$tea-rv-skipped.output
+      fi
+      if [ -z "$RV_RAW" ]; then
+        echo "ERROR: RV contract is empty (both real and skipped)." >&2
+        exit 1
+      fi
+
+      # ── Select NR resolved contract (real or skipped) ──
+      NR_RAW=$tea-nr.output
+      if [ -z "$NR_RAW" ]; then
+        NR_RAW=$tea-nr-skipped.output
+      fi
+      if [ -z "$NR_RAW" ]; then
+        echo "ERROR: NR contract is empty (both real and skipped)." >&2
+        exit 1
+      fi
+
+      # ── Select TR resolved contract (real or skipped) ──
+      TR_RAW=$tea-tr.output
+      if [ -z "$TR_RAW" ]; then
+        TR_RAW=$tea-tr-skipped.output
+      fi
+      if [ -z "$TR_RAW" ]; then
+        echo "ERROR: TR contract is empty (both real and skipped)." >&2
+        exit 1
+      fi
+
+      # ── Parse and validate all four contracts, aggregate, and emit ──
+      SUMMARY=$(
+        QGS_RESOLVED_REF="$RESOLVED_REF" \
+        QGS_CR_ROUND="$CR_ROUND" \
+        QGS_CR_RAW="$CR_RAW" \
+        QGS_RV_RAW="$RV_RAW" \
+        QGS_NR_RAW="$NR_RAW" \
+        QGS_TR_RAW="$TR_RAW" \
+        bun -e '
+          const resolvedRef = process.env.QGS_RESOLVED_REF;
+          const crRound = process.env.QGS_CR_ROUND;
+
+          function parseRaw(raw, label) {
+            try { return JSON.parse(raw); }
+            catch { console.error("ERROR: " + label + " contract is not valid JSON."); process.exit(1); }
+          }
+
+          function validateBase(c, label, expectedNode) {
+            if (c.contract_version !== "1.0") { console.error("ERROR: " + label + " contract_version mismatch."); process.exit(1); }
+            if (c.workflow !== "bmad-dev-story-with-tea-fix-loop-v2") { console.error("ERROR: " + label + " workflow mismatch."); process.exit(1); }
+            if (c.node !== expectedNode) { console.error("ERROR: " + label + " node mismatch."); process.exit(1); }
+            if (c.story_ref !== resolvedRef) { console.error("ERROR: " + label + " story_ref mismatch."); process.exit(1); }
+          }
+
+          function validateFindingsCount(c, label) {
+            if (typeof c.findings_count !== "number" || c.findings_count < 0 || !Number.isInteger(c.findings_count)) {
+              console.error("ERROR: " + label + " findings_count is not a non-negative integer.");
+              process.exit(1);
+            }
+          }
+
+          const cr = parseRaw(process.env.QGS_CR_RAW, "CR");
+          validateBase(cr, "CR", "code-review-auto");
+          validateFindingsCount(cr, "CR");
+          if (!["PASS","FAIL","CONCERNS","ERROR"].includes(cr.gate)) { console.error("ERROR: CR gate invalid: " + cr.gate); process.exit(1); }
+
+          const rv = parseRaw(process.env.QGS_RV_RAW, "RV");
+          if (rv.node !== "tea-rv" && rv.node !== "tea-rv-skipped") { console.error("ERROR: RV node mismatch."); process.exit(1); }
+          if (rv.contract_version !== "1.0") { console.error("ERROR: RV contract_version mismatch."); process.exit(1); }
+          if (rv.workflow !== "bmad-dev-story-with-tea-fix-loop-v2") { console.error("ERROR: RV workflow mismatch."); process.exit(1); }
+          if (rv.story_ref !== resolvedRef) { console.error("ERROR: RV story_ref mismatch."); process.exit(1); }
+          validateFindingsCount(rv, "RV");
+          if (!["PASS","FAIL","CONCERNS","ERROR","SKIPPED"].includes(rv.gate)) { console.error("ERROR: RV gate invalid: " + rv.gate); process.exit(1); }
+
+          const nr = parseRaw(process.env.QGS_NR_RAW, "NR");
+          if (nr.node !== "tea-nr" && nr.node !== "tea-nr-skipped") { console.error("ERROR: NR node mismatch."); process.exit(1); }
+          if (nr.contract_version !== "1.0") { console.error("ERROR: NR contract_version mismatch."); process.exit(1); }
+          if (nr.workflow !== "bmad-dev-story-with-tea-fix-loop-v2") { console.error("ERROR: NR workflow mismatch."); process.exit(1); }
+          if (nr.story_ref !== resolvedRef) { console.error("ERROR: NR story_ref mismatch."); process.exit(1); }
+          validateFindingsCount(nr, "NR");
+          if (!["PASS","FAIL","CONCERNS","ERROR","SKIPPED"].includes(nr.gate)) { console.error("ERROR: NR gate invalid: " + nr.gate); process.exit(1); }
+
+          const tr = parseRaw(process.env.QGS_TR_RAW, "TR");
+          if (tr.node !== "tea-tr" && tr.node !== "tea-tr-skipped") { console.error("ERROR: TR node mismatch."); process.exit(1); }
+          if (tr.contract_version !== "1.0") { console.error("ERROR: TR contract_version mismatch."); process.exit(1); }
+          if (tr.workflow !== "bmad-dev-story-with-tea-fix-loop-v2") { console.error("ERROR: TR workflow mismatch."); process.exit(1); }
+          if (tr.story_ref !== resolvedRef) { console.error("ERROR: TR story_ref mismatch."); process.exit(1); }
+          validateFindingsCount(tr, "TR");
+          if (!["PASS","FAIL","CONCERNS","ERROR","SKIPPED"].includes(tr.gate)) { console.error("ERROR: TR gate invalid: " + tr.gate); process.exit(1); }
+
+          const roles = [cr, rv, nr, tr];
+          if (roles.some(r => r.gate === "ERROR")) { console.error("ERROR: a role gate is ERROR."); process.exit(1); }
+
+          const gate = roles.some(r => r.gate === "FAIL") ? "FAIL" : "PASS";
+          const blocking_count = roles.filter(r => r.gate === "FAIL").length;
+          const decision_needed_count = roles.filter(r => r.gate === "CONCERNS").length;
+          const findings_total = roles.reduce((s, r) => s + (r.findings_count || 0), 0);
+
+          process.stdout.write(JSON.stringify({
+            contract_version: "1.0",
+            workflow: "bmad-dev-story-with-tea-fix-loop-v2",
+            node: "quality-gate-summary",
+            story_ref: resolvedRef,
+            gate: gate,
+            round: Number(crRound),
+            blocking_count: blocking_count,
+            decision_needed_count: decision_needed_count,
+            findings_total: findings_total,
+            cr_gate: cr.gate,
+            rv_gate: rv.gate,
+            nr_gate: nr.gate,
+            tr_gate: tr.gate
+          }));
+        '
+      )
+
+      printf '%s' "$SUMMARY"
+
+      if [ -n "${ARTIFACTS_DIR:-}" ]; then
+        RUN_DIR="$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop"
+        mkdir -p "$RUN_DIR" 2>/dev/null || true
+        printf '%s' "$SUMMARY" > "$RUN_DIR/quality-gate-summary.json" 2>/dev/null || true
+      fi
+    depends_on: [tea-rv, tea-rv-skipped, tea-nr, tea-nr-skipped, tea-tr, tea-tr-skipped]
+    trigger_rule: none_failed_min_one_success
+    timeout: 60000
+    output_type: gate-summary
 
   - id: review-loop-error
     depends_on: [code-review-gate]
@@ -733,6 +947,7 @@ nodes:
   - id: create-pull-request
     command: archon-create-pr
     provider: claude
-    depends_on: [tea-tr]
+    depends_on: [quality-gate-summary]
+    trigger_rule: none_failed_min_one_success
     context: fresh
     model: sonnet

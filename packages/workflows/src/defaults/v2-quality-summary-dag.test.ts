@@ -342,9 +342,7 @@ async function runV2Dag(opts: {
 // sidecar at nodes/<id>.md; the bash body also best-effort writes
 // $RUN_DIR/quality-gate-summary.json. Read whichever resolved.
 
-async function readSummaryContract(
-  artifactsDir: string
-): Promise<Record<string, unknown> | null> {
+async function readSummaryContract(artifactsDir: string): Promise<Record<string, unknown> | null> {
   const candidates = [
     join(artifactsDir, 'nodes', 'quality-gate-summary.md'),
     join(artifactsDir, 'bmad-dev-story-with-tea-fix-loop', 'quality-gate-summary.json'),
@@ -450,7 +448,8 @@ function baseResponses(
 ): Record<string, Record<string, unknown>> {
   return {
     'code-review-auto': overrides.cr ?? validCrEvidence(),
-    'tea-automate': overrides.ta ?? validTaEvidence({ test_files_changed: 3, nfr_relevant: 'true' }),
+    'tea-automate':
+      overrides.ta ?? validTaEvidence({ test_files_changed: 3, nfr_relevant: 'true' }),
     'dev-story': {},
     'tea-rv': overrides.rv ?? validRvGate(),
     'tea-nr': overrides.nr ?? validNrGate(),
@@ -486,9 +485,10 @@ describe('Happy path — all four roles PASS yields a clean PASS summary (TD-130
       nodeResponses: baseResponses(),
     });
 
-    expect(run.nodeState['quality-gate-summary'], 'aggregator must complete on the happy path').toBe(
-      'completed'
-    );
+    expect(
+      run.nodeState['quality-gate-summary'],
+      'aggregator must complete on the happy path'
+    ).toBe('completed');
     const c = await readSummaryContract(run.artifactsDir);
     expect(c, 'aggregator must emit quality-gate-summary.json').not.toBeNull();
     expect(c!.gate, 'all PASS → PASS').toBe('PASS');
@@ -563,9 +563,10 @@ describe('Blocking RV — real RV gate FAIL produces a FAIL summary (TD-111)', (
     );
     const c = await readSummaryContract(run.artifactsDir);
     expect(c!.gate, 'any role FAIL → summary FAIL').toBe('FAIL');
-    expect(c!.blocking_count as number, 'at least one blocking role recorded').toBeGreaterThanOrEqual(
-      1
-    );
+    expect(
+      c!.blocking_count as number,
+      'at least one blocking role recorded'
+    ).toBeGreaterThanOrEqual(1);
     expect(c!.rv_gate, 'RV block preserved in the per-role echo').toBe('FAIL');
     // PR reachability on a FAIL summary is intentionally NOT asserted here —
     // FAIL->dev-story routing is a later story; a4.1 only emits the contract.
@@ -671,9 +672,10 @@ describe('Decision-needed — one CONCERNS role yields PASS with a preserved cou
       nodeResponses: baseResponses({ tr: validTrGate({ gate: 'CONCERNS', findings_count: 2 }) }),
     });
 
-    expect(run.nodeState['quality-gate-summary'], 'CONCERNS is non-blocking → summary completes').toBe(
-      'completed'
-    );
+    expect(
+      run.nodeState['quality-gate-summary'],
+      'CONCERNS is non-blocking → summary completes'
+    ).toBe('completed');
     const c = await readSummaryContract(run.artifactsDir);
     expect(c!.gate, 'CONCERNS-only → PASS').toBe('PASS');
     expect(c!.decision_needed_count, 'the single CONCERNS role is preserved as a count').toBe(1);
@@ -781,7 +783,10 @@ describe('Fail-closed — mismatched story_ref (TD-142)', () => {
       run.nodeState['quality-gate-summary'],
       'story_ref mismatch is an identity ERROR — the aggregator must hard-fail'
     ).toBe('failed');
-    expect(await readSummaryContract(run.artifactsDir), 'no summary on identity mismatch').toBeNull();
+    expect(
+      await readSummaryContract(run.artifactsDir),
+      'no summary on identity mismatch'
+    ).toBeNull();
     expect(run.providerCalls).not.toContain('create-pull-request');
   });
 });
@@ -881,7 +886,9 @@ describe('Fail-closed — role ERROR is a hard failure, not a routable FAIL (TD-
       arguments: CANONICAL_REF,
       nodeResponses: baseResponses({ tr: validTrGate({ gate: 'ERROR' }) }),
     });
-    expect((await readSummaryContract(failRun.artifactsDir))?.gate, 'FAIL is routable').toBe('FAIL');
+    expect((await readSummaryContract(failRun.artifactsDir))?.gate, 'FAIL is routable').toBe(
+      'FAIL'
+    );
     expect(await readSummaryContract(errRun.artifactsDir), 'ERROR is not routable').toBeNull();
   });
 });
