@@ -64,16 +64,16 @@ Do NOT modify: `bmad-dev-story-with-tea-fix-loop.yml` (v1 baseline — must stay
 ### Current state of `tea-tr` (v2 YAML, lines 701-710) — what you are changing
 
 ```yaml
-  - id: tea-tr
-    prompt: |
-      bmad-testarch-trace $ARGUMENTS
-    provider: claude
-    depends_on: [tea-rv, tea-rv-skipped, tea-nr, tea-nr-skipped]
-    trigger_rule: none_failed_min_one_success
-    context: fresh
-    model: sonnet
-    idle_timeout: 900000
-    output_type: trace-findings
+- id: tea-tr
+  prompt: |
+    bmad-testarch-trace $ARGUMENTS
+  provider: claude
+  depends_on: [tea-rv, tea-rv-skipped, tea-nr, tea-nr-skipped]
+  trigger_rule: none_failed_min_one_success
+  context: fresh
+  model: sonnet
+  idle_timeout: 900000
+  output_type: trace-findings
 ```
 
 It already has the correct four-way `depends_on` and `trigger_rule` (a3.2 landed those). It is MISSING: the `when: run_tr == true` gate, the `output_format` gate contract, and the `prompt_suffix` that pins `story_ref`. Add those three; keep everything else.
@@ -174,8 +174,6 @@ The a3.2 DAG tests (`v2-tea-branches-dag.test.ts`) drive the real gate-planner (
 ## Dev Agent Record
 
 ### Agent Model Used
-
-
 
 ### Debug Log References
 

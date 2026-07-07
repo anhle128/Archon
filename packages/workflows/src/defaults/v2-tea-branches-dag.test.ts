@@ -421,6 +421,19 @@ function validNrGate(overrides: Record<string, unknown> = {}): Record<string, un
   };
 }
 
+function validTrGate(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    contract_version: '1.0',
+    workflow: V2_STEM,
+    node: 'tea-tr',
+    gate: 'PASS',
+    story_ref: CANONICAL_REF,
+    findings_count: 0,
+    report_file: 'tea-tr-report.md',
+    ...overrides,
+  };
+}
+
 // Downstream AI nodes that must complete on the happy path so tail
 // reachability can be asserted.
 function happyDownstream(): Record<string, Record<string, unknown>> {
@@ -428,7 +441,7 @@ function happyDownstream(): Record<string, Record<string, unknown>> {
     'dev-story': {},
     'tea-rv': validRvGate(),
     'tea-nr': validNrGate(),
-    'tea-tr': {},
+    'tea-tr': validTrGate(),
     'create-pull-request': {},
   };
 }
@@ -486,6 +499,9 @@ describe('RV/NR branches — both flags true resolve both real branches (TD-001)
     ).toBe(true);
     // Tail reachability (AC #4).
     expect(run.nodeState['tea-tr'], 'tea-tr must join the branches and complete').toBe('completed');
+    expect(run.nodeState['tea-tr-skipped'], 'run_tr=true → tea-tr-skipped must be skipped').toBe(
+      'skipped'
+    );
     expect(run.providerCalls, 'create-pull-request must be reached').toContain(
       'create-pull-request'
     );
@@ -536,6 +552,9 @@ describe('RV/NR branches — both flags false resolve explicit SKIPPED contracts
 
     // Tail still reachable through two skipped siblings .
     expect(run.nodeState['tea-tr'], 'skips must not cascade-skip tea-tr').toBe('completed');
+    expect(run.nodeState['tea-tr-skipped'], 'run_tr=true → tea-tr-skipped must be skipped').toBe(
+      'skipped'
+    );
     expect(run.providerCalls).toContain('create-pull-request');
   });
 
@@ -554,6 +573,9 @@ describe('RV/NR branches — both flags false resolve explicit SKIPPED contracts
     );
     expect(run.providerCalls, 'tea-nr-skipped is a bash node — no AI call').not.toContain(
       'tea-nr-skipped'
+    );
+    expect(run.providerCalls, 'tea-tr-skipped is a bash node — no AI call').not.toContain(
+      'tea-tr-skipped'
     );
   });
 });
@@ -583,6 +605,9 @@ describe('RV/NR branches — RV-real + NR-skipped boundary combination (TD-003)'
     expect(nrContract?.gate).toBe('SKIPPED');
 
     expect(run.nodeState['tea-tr']).toBe('completed');
+    expect(run.nodeState['tea-tr-skipped'], 'run_tr=true → tea-tr-skipped must be skipped').toBe(
+      'skipped'
+    );
     expect(run.providerCalls).toContain('create-pull-request');
   });
 });
@@ -617,6 +642,9 @@ describe('RV/NR branches — RV-skipped + NR-real proves NR decoupled from RV (T
     expect(rvContract?.gate).toBe('SKIPPED');
 
     expect(run.nodeState['tea-tr']).toBe('completed');
+    expect(run.nodeState['tea-tr-skipped'], 'run_tr=true → tea-tr-skipped must be skipped').toBe(
+      'skipped'
+    );
     expect(run.providerCalls).toContain('create-pull-request');
   });
 });
@@ -650,6 +678,10 @@ describe('RV/NR branches — real RV failure fails closed (TD-005)', () => {
       'none_failed_min_one_success must NOT run tea-tr when a real branch failed'
     ).not.toBe('completed');
     expect(
+      run.nodeState['tea-tr-skipped'],
+      'run_tr=true → tea-tr-skipped must be skipped even on failure path'
+    ).toBe('skipped');
+    expect(
       run.providerCalls,
       'create-pull-request must be unreachable after a failed real branch'
     ).not.toContain('create-pull-request');
@@ -681,6 +713,10 @@ describe('RV/NR branches — real NR failure fails closed (TD-006)', () => {
       run.nodeState['tea-tr'],
       'tea-tr must fail closed when the real NR branch failed'
     ).not.toBe('completed');
+    expect(
+      run.nodeState['tea-tr-skipped'],
+      'run_tr=true → tea-tr-skipped must be skipped even on failure path'
+    ).toBe('skipped');
     expect(run.providerCalls).not.toContain('create-pull-request');
   });
 });
