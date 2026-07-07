@@ -796,13 +796,15 @@ nodes:
     bash: |
       set -e
 
-      GATE=$tea-tr.output.gate
+      TR_OUTPUT=$tea-tr.output
 
-      if [ -n "$GATE" ]; then
-        if [ "$GATE" = "FAIL" ] || [ "$GATE" = "ERROR" ]; then
-          echo "Quality gate blocked: TR gate is $GATE"
-          exit 1
-        fi
+      if [ -n "$TR_OUTPUT" ]; then
+        case "$TR_OUTPUT" in
+          *'"gate":"FAIL"'*|*'"gate": "FAIL"'*|*'"gate":"ERROR"'*|*'"gate": "ERROR"'*)
+            echo "Quality gate blocked: TR gate is FAIL or ERROR"
+            exit 1
+            ;;
+        esac
       fi
 
       echo "Quality gate summary: all RV/NR/TR branches resolved, TR gate acceptable."

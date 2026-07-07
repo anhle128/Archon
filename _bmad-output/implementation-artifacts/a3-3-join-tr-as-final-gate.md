@@ -1,6 +1,6 @@
 # Story a3.3: Join TR As Final Gate
 
-Status: in-progress
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -57,7 +57,7 @@ so that traceability is evaluated as the final release gate and the tail still r
 - [x] [Review][Patch] R1-F3 — If `run_tr` is false while a real RV or NR branch fails, the PR tail can still run from `tea-tr-skipped`.
       Evidence: `tea-tr-skipped` depends only on `gate-planner`, and `create-pull-request` depends only on `tea-tr` and `tea-tr-skipped`.
       Required fix: add a fail-closed barrier or summary before PR handoff that depends on resolved RV, NR, and TR role branches and blocks the tail when any real RV or NR branch failed.
-- [ ] [Review][Patch] R1-F4 — The new `quality-gate-summary` barrier breaks the `run_tr=false` path by unconditionally reading `$tea-tr.output.gate` even when `tea-tr` is skipped.
+- [x] [Review][Patch] R1-F4 — The new `quality-gate-summary` barrier breaks the `run_tr=false` path by unconditionally reading `$tea-tr.output.gate` even when `tea-tr` is skipped.
       Evidence: `.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:799` assigns `GATE=$tea-tr.output.gate`, while skipped producers have no field output to read.
       Required fix: rework the barrier so it selects the resolved TR-role contract without dereferencing `$tea-tr.output.gate` when `tea-tr` is skipped, while preserving fail-closed behavior for branch failures and real TR `FAIL` / `ERROR` gates.
 
@@ -199,12 +199,15 @@ The a3.2 DAG tests (`v2-tea-branches-dag.test.ts`) drive the real gate-planner (
 - R1-F2+F3: Added `quality-gate-summary` bash barrier node that depends on all six branch nodes, checks TR gate value (blocks FAIL/ERROR, allows CONCERNS), and sits between TR branches and `create-pull-request`.
 - Key implementation detail: variable substitution values are "already shell-quoted" by the executor, so bash assignments must be unquoted (`GATE=$tea-tr.output.gate`, not `GATE="$tea-tr.output.gate"`).
 - All 37 contract tests and 10 DAG tests pass. Full workflows package tests pass (0 fail). Bundled checks pass.
+- Fix pass 2: Addressed R1-F4 — the barrier's field-level `$tea-tr.output.gate` threw `producer-not-run` when `tea-tr` was skipped on the `run_tr=false` path.
+- R1-F4 fix: Replaced field-level `$tea-tr.output.gate` with whole-output `$tea-tr.output` (returns empty string for skipped nodes, not a throw). Bash `case` pattern checks for `"gate":"FAIL"` / `"gate":"ERROR"` in the JSON text only when output is non-empty. Updated TD-042 to assert the whole-output pattern and explicitly verify field-level is NOT used.
+- All 37 contract tests and 10 DAG tests still pass after the fix. Full workflows package tests: 0 fail. Bundled checks pass.
 
 ### File List
 
-- `.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml` — Added `quality-gate-summary` bash barrier node; rewired `create-pull-request` to depend on it.
+- `.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml` — Added `quality-gate-summary` bash barrier node; rewired `create-pull-request` to depend on it; fixed barrier to use whole-output `$tea-tr.output` instead of field-level `$tea-tr.output.gate`.
 - `packages/workflows/src/defaults/bundled-defaults.generated.ts` — Regenerated from YAML source.
 - `packages/workflows/package.json` — Added `v2-tr-join-contract.test.ts` to non-mock batch; added `v2-tr-join-dag.test.ts` as isolated segment.
-- `packages/workflows/src/defaults/v2-tr-join-contract.test.ts` — Updated TD-027 for barrier; added TD-042 for barrier structural assertions.
+- `packages/workflows/src/defaults/v2-tr-join-contract.test.ts` — Updated TD-027 for barrier; added TD-042 for barrier structural assertions; updated TD-042 for whole-output pattern (R1-F4 fix).
 - `packages/workflows/src/defaults/v2-tr-join-dag.test.ts` — Added TD-043 for FAIL/ERROR/CONCERNS gate behavior proof.
 - `packages/workflows/src/defaults/v2-tea-branches-contract.test.ts` — Updated TD-010 for barrier dependency.

@@ -323,11 +323,17 @@ describe('quality-gate-summary — fail-closed barrier before PR (TD-042)', () =
     expect(node.trigger_rule).toBe('none_failed_min_one_success');
   });
 
-  it('quality-gate-summary bash checks TR gate and exits non-zero on FAIL or ERROR', () => {
+  it('quality-gate-summary bash checks TR gate via whole-output ref (not field-level) and exits non-zero on FAIL or ERROR', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     const bash =
       (nodeById(v2, 'quality-gate-summary') as { bash?: string } | undefined)?.bash ?? '';
-    expect(bash, 'must reference tea-tr gate output').toContain('$tea-tr.output.gate');
+    expect(bash, 'must use whole-output ref to avoid producer-not-run on skipped tea-tr').toContain(
+      '$tea-tr.output'
+    );
+    expect(
+      bash,
+      'must NOT use field-level $tea-tr.output.gate (throws producer-not-run when tea-tr is skipped)'
+    ).not.toContain('$tea-tr.output.gate');
     expect(bash, 'must block FAIL gate').toContain('FAIL');
     expect(bash, 'must block ERROR gate').toContain('ERROR');
     expect(bash, 'must exit non-zero on blocked gate').toContain('exit 1');
