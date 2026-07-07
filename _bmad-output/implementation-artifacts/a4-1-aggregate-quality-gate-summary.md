@@ -1,6 +1,6 @@
 # Story a4.1: Aggregate Quality Gate Summary
 
-Status: in-progress
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -56,7 +56,7 @@ so that the workflow has a single JSON contract (`quality-gate-summary.json`) th
 
 ### Review Findings
 
-- [ ] [Review][Patch] `quality-gate-summary` preserves the precursor output type and dependency shape instead of the accepted route-facing contract [.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:921]
+- [x] [Review][Patch] `quality-gate-summary` preserves the precursor output type and dependency shape instead of the accepted route-facing contract [.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:921] — FIXED: depends_on expanded to eight sources (code-review-auto, resolve-story-input + six branches), output_type changed to quality-gate-summary, all contract tests updated, bundle regenerated.
 
 ## Dev Notes
 
@@ -175,16 +175,18 @@ Qoder (Claude)
 ### Completion Notes List
 
 - Task 0 resolved: folded a3.3 TR-join wiring (tea-tr gate, tea-tr-skipped sibling, quality-gate-summary barrier, create-pull-request rewire) into this story since the worktree was at a3.2 state.
-- `quality-gate-summary` depends on 6 branch nodes (not 8). `code-review-auto` and `resolve-story-input` are accessed via variable substitution from ancestor nodes — adding them to depends_on would conflict with the a3.3 contract test (TD-042) which asserts exactly 6 deps.
-- `output_type` is `gate-summary` (matching the a3.3 precursor), not `quality-gate-summary`. The a4.1 contract test scaffold was updated to match.
+- `quality-gate-summary` depends on 8 nodes: `code-review-auto`, `resolve-story-input`, plus the six RV/NR/TR branch nodes. This matches the story spec (line 30) and the route-loop consumer contract.
+- `output_type` is `quality-gate-summary` (matching the story spec line 30), not the a3.3 precursor `gate-summary`.
 - `decision_needed_count` = number of resolved role contracts whose gate is `CONCERNS` (per story design).
 - Node identity validation for RV/NR/TR checks against the expected node id set (real or skipped), not the contract's self-identification.
+- R1-F1 fix pass: expanded depends_on from 6 to 8, changed output_type from `gate-summary` to `quality-gate-summary`, updated all contract tests (a4.1 + a3.3 TD-042), regenerated bundle.
 - All a3.3 tests (37 contract + 14 DAG), all a4.1 tests (38 contract + 24 DAG), and full `bun run validate` pass.
 
 ### File List
 
-- `.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml` — UPDATED: tea-tr gated with when/output_format/prompt_suffix, tea-tr-skipped added, quality-gate-summary evolved to four-role aggregator, create-pull-request rewired.
+- `.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml` — UPDATED: tea-tr gated with when/output_format/prompt_suffix, tea-tr-skipped added, quality-gate-summary evolved to four-role aggregator with 8-source depends_on and output_type:quality-gate-summary, create-pull-request rewired.
 - `packages/workflows/src/defaults/bundled-defaults.generated.ts` — REGENERATED via `bun run generate:bundled`.
-- `packages/workflows/src/defaults/v2-quality-summary-contract.test.ts` — UPDATED: aligned RED-phase scaffold assertions with actual implementation (6 deps, gate-summary output_type).
+- `packages/workflows/src/defaults/v2-quality-summary-contract.test.ts` — UPDATED: aligned assertions with story spec (8 deps, quality-gate-summary output_type).
 - `packages/workflows/src/defaults/v2-quality-summary-dag.test.ts` — Pre-existing RED-phase scaffold, no changes needed (all 22 tests pass).
+- `packages/workflows/src/defaults/v2-tr-join-contract.test.ts` — UPDATED: TD-042 dep set expanded to 8, output_type changed to quality-gate-summary.
 - `packages/workflows/src/defaults/v2-tr-join-dag.test.ts` — UPDATED: TD-043 updated to match a4.1 evolved behavior (FAIL is a valid routing decision, not a hard error).

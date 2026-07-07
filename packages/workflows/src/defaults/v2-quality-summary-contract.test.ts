@@ -17,17 +17,16 @@
  * ── TDD RED PHASE ──────────────────────────────────────────────────────────
  * The YAML-structural assertions target the NOT-YET-IMPLEMENTED aggregator and
  * are EXPECTED TO FAIL until the v2 YAML evolves `quality-gate-summary` to:
- *   1. depend on [tea-rv, tea-rv-skipped, tea-nr, tea-nr-skipped, tea-tr,
- *      tea-tr-skipped] with trigger_rule: none_failed_min_one_success
- *      (CR and resolve-story-input are accessed via variable substitution from
- *      ancestor nodes, not explicit depends_on),
+ *   1. depend on [code-review-auto, resolve-story-input, tea-rv, tea-rv-skipped,
+ *      tea-nr, tea-nr-skipped, tea-tr, tea-tr-skipped] with trigger_rule:
+ *      none_failed_min_one_success,
  *   2. read every optional role with the WHOLE-output ref ($tea-rv.output …)
  *      and never the field-level $tea-*.output.gate on a skip-capable branch,
  *   3. parse each selected contract with bun -e + JSON.parse (never grep/case),
  *   4. validate identity (story_ref/contract_version/workflow/node) fail-closed,
  *   5. emit the routing envelope (gate PASS|FAIL, round, blocking_count,
  *      decision_needed_count, findings_total, cr/rv/nr/tr gate echoes) with
- *      output_type: gate-summary and timeout: 60000, and
+ *      output_type: quality-gate-summary and timeout: 60000, and
  *   6. leave create-pull-request depending only on quality-gate-summary with
  *      NO route-loop node added.
  *
@@ -39,9 +38,9 @@
  * NOTE ON THE a3.3 PRECURSOR: the predecessor introduced a minimal
  * `quality-gate-summary` barrier (output_type "gate-summary", six branch deps,
  * exit-1 on TR FAIL). This story EVOLVES it into the full four-role aggregator
- * while keeping output_type "gate-summary" and the six branch deps. CR and
- * resolve-story-input are accessed via variable substitution from ancestor
- * nodes. The aggregator emits a PASS|FAIL routing contract with
+ * with output_type "quality-gate-summary" and eight deps (CR + resolve-story-input +
+ * six branch nodes). CR and resolve-story-input are now explicit depends_on entries.
+ * The aggregator emits a PASS|FAIL routing contract with
  * decision_needed_count but does NOT exit-1 on a role FAIL (routing on that
  * contract is a later story).
  *
@@ -73,9 +72,10 @@ const PACKAGE_JSON = join(REPO_ROOT, 'packages/workflows/package.json');
 const SUMMARY_ID = 'quality-gate-summary';
 const CANONICAL_REF = 'a1-2-preserve-story-input-resolution';
 
-// The six branch nodes the aggregator joins via depends_on. CR and resolve-story-input
-// are accessed via variable substitution from ancestor nodes (not explicit deps).
+// The eight source nodes the aggregator joins via depends_on: CR, resolve-story-input, and the six RV/NR/TR branches.
 const EXPECTED_SUMMARY_DEPS = [
+  'code-review-auto',
+  'resolve-story-input',
   'tea-nr',
   'tea-nr-skipped',
   'tea-rv',
@@ -191,12 +191,13 @@ describe('Aggregator shape — deterministic bash join over all branch nodes (TD
     expect('command' in node!, 'quality-gate-summary must NOT be a command node').toBe(false);
   });
 
-  it('quality-gate-summary depends on CR + all six branch nodes + resolve-story-input', () => {
+  it('quality-gate-summary depends on CR + resolve-story-input + all six branch nodes', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     const deps = [...(nodeById(v2, SUMMARY_ID)!.depends_on ?? [])].sort();
-    expect(deps, 'aggregator must join the six RV/NR/TR branches').toEqual(
-      [...EXPECTED_SUMMARY_DEPS].sort()
-    );
+    expect(
+      deps,
+      'aggregator must join CR + resolve-story-input + the six RV/NR/TR branches'
+    ).toEqual([...EXPECTED_SUMMARY_DEPS].sort());
   });
 
   it('quality-gate-summary uses none_failed_min_one_success (fails closed on any real branch failure)', () => {
@@ -206,9 +207,11 @@ describe('Aggregator shape — deterministic bash join over all branch nodes (TD
     );
   });
 
-  it('quality-gate-summary declares output_type: gate-summary and timeout: 60000', () => {
+  it('quality-gate-summary declares output_type: quality-gate-summary and timeout: 60000', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
-    expect((nodeById(v2, SUMMARY_ID) as { output_type?: string }).output_type).toBe('gate-summary');
+    expect((nodeById(v2, SUMMARY_ID) as { output_type?: string }).output_type).toBe(
+      'quality-gate-summary'
+    );
     expect((nodeById(v2, SUMMARY_ID) as { timeout?: number }).timeout).toBe(60000);
   });
 });
@@ -569,9 +572,9 @@ describe('Schema + bundle parity — edited v2 valid, v1 untouched (TD-160)', ()
       trigger_rule?: string;
       output_type?: string;
     };
-    expect((node.depends_on ?? []).length, 'aggregator must keep its six-branch join').toBe(6);
+    expect((node.depends_on ?? []).length, 'aggregator must have its eight-source join').toBe(8);
     expect(node.trigger_rule).toBe('none_failed_min_one_success');
-    expect(node.output_type).toBe('gate-summary');
+    expect(node.output_type).toBe('quality-gate-summary');
   });
 
   it('bundled v2 content matches the on-disk source (no drift) and embeds the aggregator', () => {

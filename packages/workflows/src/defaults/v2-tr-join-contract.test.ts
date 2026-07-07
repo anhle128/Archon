@@ -307,13 +307,22 @@ describe('PR tail — resolves through quality-gate-summary barrier (TD-027)', (
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('quality-gate-summary — fail-closed barrier before PR (TD-042)', () => {
-  it('quality-gate-summary exists as a bash node depending on all six branch nodes', () => {
+  it('quality-gate-summary exists as a bash node depending on all eight source nodes', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     const node = nodeById(v2, 'quality-gate-summary');
     expect(node, 'quality-gate-summary must exist').toBeDefined();
     expect('bash' in node!, 'quality-gate-summary must be a bash node').toBe(true);
     expect([...(node!.depends_on ?? [])].sort()).toEqual(
-      ['tea-nr', 'tea-nr-skipped', 'tea-rv', 'tea-rv-skipped', 'tea-tr', 'tea-tr-skipped'].sort()
+      [
+        'code-review-auto',
+        'resolve-story-input',
+        'tea-nr',
+        'tea-nr-skipped',
+        'tea-rv',
+        'tea-rv-skipped',
+        'tea-tr',
+        'tea-tr-skipped',
+      ].sort()
     );
   });
 
@@ -349,7 +358,7 @@ describe('quality-gate-summary — fail-closed barrier before PR (TD-042)', () =
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     expect((nodeById(v2, 'quality-gate-summary') as { timeout?: number }).timeout).toBe(60000);
     expect((nodeById(v2, 'quality-gate-summary') as { output_type?: string }).output_type).toBe(
-      'gate-summary'
+      'quality-gate-summary'
     );
   });
 });
