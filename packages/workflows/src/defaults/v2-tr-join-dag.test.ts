@@ -665,3 +665,76 @@ describe('TR skip contract — false path documented, not faked (TD-024 behavior
     expect(contract, 'a skipped node writes no gate contract on the happy path').toBeNull();
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TD-043 [P0] — schema-valid tea-tr gate:"FAIL" completes tea-tr but the
+// quality-gate-summary barrier blocks the PR tail (R1-F2 fix proof)
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('TR gate FAIL — schema-valid but blocked by quality-gate-summary (TD-043)', () => {
+  it('tea-tr gate:"FAIL" completes tea-tr (schema passes) but quality-gate-summary blocks PR', async () => {
+    const run = await runV2Dag({
+      cwd: cwdFixture,
+      arguments: CANONICAL_REF,
+      nodeResponses: {
+        'code-review-auto': validCrEvidence(),
+        'tea-automate': validTaEvidence({ test_files_changed: 3, nfr_relevant: 'true' }),
+        ...happyDownstream(),
+        'tea-tr': validTrGate({ gate: 'FAIL' }),
+      },
+    });
+
+    expect(
+      run.nodeState['tea-tr'],
+      'schema-valid FAIL gate must complete tea-tr (output_format passes)'
+    ).toBe('completed');
+    expect(
+      run.nodeState['quality-gate-summary'],
+      'quality-gate-summary must fail on TR gate FAIL'
+    ).toBe('failed');
+    expect(
+      run.providerCalls,
+      'create-pull-request must be unreachable after quality-gate-summary blocks'
+    ).not.toContain('create-pull-request');
+  });
+
+  it('tea-tr gate:"ERROR" completes tea-tr but quality-gate-summary blocks PR', async () => {
+    const run = await runV2Dag({
+      cwd: cwdFixture,
+      arguments: CANONICAL_REF,
+      nodeResponses: {
+        'code-review-auto': validCrEvidence(),
+        'tea-automate': validTaEvidence({ test_files_changed: 3, nfr_relevant: 'true' }),
+        ...happyDownstream(),
+        'tea-tr': validTrGate({ gate: 'ERROR' }),
+      },
+    });
+
+    expect(run.nodeState['tea-tr']).toBe('completed');
+    expect(run.nodeState['quality-gate-summary']).toBe('failed');
+    expect(run.providerCalls).not.toContain('create-pull-request');
+  });
+
+  it('tea-tr gate:"CONCERNS" is non-blocking — quality-gate-summary passes (matches RV/NR policy)', async () => {
+    const run = await runV2Dag({
+      cwd: cwdFixture,
+      arguments: CANONICAL_REF,
+      nodeResponses: {
+        'code-review-auto': validCrEvidence(),
+        'tea-automate': validTaEvidence({ test_files_changed: 3, nfr_relevant: 'true' }),
+        ...happyDownstream(),
+        'tea-tr': validTrGate({ gate: 'CONCERNS' }),
+      },
+    });
+
+    expect(run.nodeState['tea-tr']).toBe('completed');
+    expect(
+      run.nodeState['quality-gate-summary'],
+      'CONCERNS is non-blocking (matches RV/NR policy)'
+    ).toBe('completed');
+    expect(
+      run.providerCalls,
+      'create-pull-request must be reached when TR gate is CONCERNS'
+    ).toContain('create-pull-request');
+  });
+});

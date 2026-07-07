@@ -792,10 +792,28 @@ nodes:
       exit 1
     timeout: 60000
 
+  - id: quality-gate-summary
+    bash: |
+      set -e
+
+      GATE=$tea-tr.output.gate
+
+      if [ -n "$GATE" ]; then
+        if [ "$GATE" = "FAIL" ] || [ "$GATE" = "ERROR" ]; then
+          echo "Quality gate blocked: TR gate is $GATE"
+          exit 1
+        fi
+      fi
+
+      echo "Quality gate summary: all RV/NR/TR branches resolved, TR gate acceptable."
+    depends_on: [tea-rv, tea-rv-skipped, tea-nr, tea-nr-skipped, tea-tr, tea-tr-skipped]
+    trigger_rule: none_failed_min_one_success
+    timeout: 60000
+    output_type: gate-summary
+
   - id: create-pull-request
     command: archon-create-pr
     provider: claude
-    depends_on: [tea-tr, tea-tr-skipped]
-    trigger_rule: none_failed_min_one_success
+    depends_on: [quality-gate-summary]
     context: fresh
     model: sonnet

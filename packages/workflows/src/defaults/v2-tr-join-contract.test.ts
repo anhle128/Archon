@@ -291,22 +291,54 @@ describe('tea-tr-skipped hygiene — timeout + typed-output + artifact write (TD
 // (AC #2, #3, #4)
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe('PR tail — resolves from either TR branch, fails closed (TD-027)', () => {
-  it('create-pull-request depends on both tea-tr and tea-tr-skipped', () => {
+describe('PR tail — resolves through quality-gate-summary barrier (TD-027)', () => {
+  it('create-pull-request depends on quality-gate-summary (not directly on TR branches)', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     const deps = nodeById(v2, 'create-pull-request')!.depends_on ?? [];
-    expect([...deps].sort(), 'PR tail must join both TR-role siblings').toEqual(
-      ['tea-tr', 'tea-tr-skipped'].sort()
+    expect(deps, 'PR tail must depend on the quality-gate-summary barrier').toEqual([
+      'quality-gate-summary',
+    ]);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TD-042 [P0] — quality-gate-summary barrier: fail-closed on RV/NR failure
+// (R1-F3) and TR gate FAIL/ERROR (R1-F2)
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('quality-gate-summary — fail-closed barrier before PR (TD-042)', () => {
+  it('quality-gate-summary exists as a bash node depending on all six branch nodes', () => {
+    const v2 = parseFromDisk(V2_FILE, V2_STEM);
+    const node = nodeById(v2, 'quality-gate-summary');
+    expect(node, 'quality-gate-summary must exist').toBeDefined();
+    expect('bash' in node!, 'quality-gate-summary must be a bash node').toBe(true);
+    expect([...(node!.depends_on ?? [])].sort()).toEqual(
+      ['tea-nr', 'tea-nr-skipped', 'tea-rv', 'tea-rv-skipped', 'tea-tr', 'tea-tr-skipped'].sort()
     );
   });
 
-  it('create-pull-request uses none_failed_min_one_success (not all_done)', () => {
+  it('quality-gate-summary uses none_failed_min_one_success (fails closed on any real branch failure)', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
-    const pr = nodeById(v2, 'create-pull-request') as { trigger_rule?: string };
-    expect(
-      pr.trigger_rule,
-      'PR tail must fail closed on a real TR failure — no all_done masking'
-    ).toBe('none_failed_min_one_success');
+    const node = nodeById(v2, 'quality-gate-summary') as { trigger_rule?: string };
+    expect(node.trigger_rule).toBe('none_failed_min_one_success');
+  });
+
+  it('quality-gate-summary bash checks TR gate and exits non-zero on FAIL or ERROR', () => {
+    const v2 = parseFromDisk(V2_FILE, V2_STEM);
+    const bash =
+      (nodeById(v2, 'quality-gate-summary') as { bash?: string } | undefined)?.bash ?? '';
+    expect(bash, 'must reference tea-tr gate output').toContain('$tea-tr.output.gate');
+    expect(bash, 'must block FAIL gate').toContain('FAIL');
+    expect(bash, 'must block ERROR gate').toContain('ERROR');
+    expect(bash, 'must exit non-zero on blocked gate').toContain('exit 1');
+  });
+
+  it('quality-gate-summary declares timeout and typed output', () => {
+    const v2 = parseFromDisk(V2_FILE, V2_STEM);
+    expect((nodeById(v2, 'quality-gate-summary') as { timeout?: number }).timeout).toBe(60000);
+    expect((nodeById(v2, 'quality-gate-summary') as { output_type?: string }).output_type).toBe(
+      'gate-summary'
+    );
   });
 });
 

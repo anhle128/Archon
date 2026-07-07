@@ -1,6 +1,6 @@
 # Story a3.3: Join TR As Final Gate
 
-Status: in-progress
+Status: fix-pass-complete
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -48,13 +48,13 @@ so that traceability is evaluated as the final release gate and the tail still r
 
 ### Review Findings
 
-- [ ] [Review][Patch] R1-F1 — The new TR join acceptance tests are not wired into the normal package test script.
+- [x] [Review][Patch] R1-F1 — The new TR join acceptance tests are not wired into the normal package test script.
       Evidence: `packages/workflows/src/defaults/v2-tr-join-dag.test.ts:23` documents that the DAG file uses `mock.module()` and must run in its own invocation, but `packages/workflows/package.json:26` does not include either `v2-tr-join-contract.test.ts` or `v2-tr-join-dag.test.ts`.
       Required fix: add `v2-tr-join-contract.test.ts` to a non-mock workflow defaults test batch and add `v2-tr-join-dag.test.ts` as its own `bun test` segment.
-- [ ] [Review][Patch] R1-F2 — A schema-valid real `tea-tr` gate with `gate: "FAIL"` or `gate: "ERROR"` can still allow `create-pull-request` to run.
+- [x] [Review][Patch] R1-F2 — A schema-valid real `tea-tr` gate with `gate: "FAIL"` or `gate: "ERROR"` can still allow `create-pull-request` to run.
       Evidence: `tea-tr.output_format` allows `FAIL` and `ERROR`, while `create-pull-request` only checks upstream node completion via `none_failed_min_one_success`.
       Required fix: add a deterministic post-TR gate verification or summary step before PR handoff that blocks unacceptable real TR gate values before `create-pull-request` can run.
-- [ ] [Review][Patch] R1-F3 — If `run_tr` is false while a real RV or NR branch fails, the PR tail can still run from `tea-tr-skipped`.
+- [x] [Review][Patch] R1-F3 — If `run_tr` is false while a real RV or NR branch fails, the PR tail can still run from `tea-tr-skipped`.
       Evidence: `tea-tr-skipped` depends only on `gate-planner`, and `create-pull-request` depends only on `tea-tr` and `tea-tr-skipped`.
       Required fix: add a fail-closed barrier or summary before PR handoff that depends on resolved RV, NR, and TR role branches and blocks the tail when any real RV or NR branch failed.
 
@@ -191,4 +191,17 @@ The a3.2 DAG tests (`v2-tea-branches-dag.test.ts`) drive the real gate-planner (
 
 ### Completion Notes List
 
+- Fix pass 1: Addressed three HIGH-severity review findings (R1-F1, R1-F2, R1-F3).
+- R1-F1: Wired `v2-tr-join-contract.test.ts` and `v2-tr-join-dag.test.ts` into `packages/workflows/package.json` test script.
+- R1-F2+F3: Added `quality-gate-summary` bash barrier node that depends on all six branch nodes, checks TR gate value (blocks FAIL/ERROR, allows CONCERNS), and sits between TR branches and `create-pull-request`.
+- Key implementation detail: variable substitution values are "already shell-quoted" by the executor, so bash assignments must be unquoted (`GATE=$tea-tr.output.gate`, not `GATE="$tea-tr.output.gate"`).
+- All 37 contract tests and 10 DAG tests pass. Full workflows package tests pass (0 fail). Bundled checks pass.
+
 ### File List
+
+- `.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml` — Added `quality-gate-summary` bash barrier node; rewired `create-pull-request` to depend on it.
+- `packages/workflows/src/defaults/bundled-defaults.generated.ts` — Regenerated from YAML source.
+- `packages/workflows/package.json` — Added `v2-tr-join-contract.test.ts` to non-mock batch; added `v2-tr-join-dag.test.ts` as isolated segment.
+- `packages/workflows/src/defaults/v2-tr-join-contract.test.ts` — Updated TD-027 for barrier; added TD-042 for barrier structural assertions.
+- `packages/workflows/src/defaults/v2-tr-join-dag.test.ts` — Added TD-043 for FAIL/ERROR/CONCERNS gate behavior proof.
+- `packages/workflows/src/defaults/v2-tea-branches-contract.test.ts` — Updated TD-010 for barrier dependency.
