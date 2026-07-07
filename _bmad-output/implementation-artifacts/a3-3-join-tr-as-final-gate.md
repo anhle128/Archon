@@ -1,6 +1,6 @@
 # Story a3.3: Join TR As Final Gate
 
-Status: ready-for-dev
+Status: in-progress
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -45,6 +45,18 @@ so that traceability is evaluated as the final release gate and the tail still r
   - [ ] Run `bun run generate:bundled` to refresh `packages/workflows/src/defaults/bundled-defaults.generated.ts`.
   - [ ] Run `bun run check:bundled` to confirm no drift.
   - [ ] Run the affected package tests, then `bun run validate` before finishing.
+
+### Review Findings
+
+- [ ] [Review][Patch] R1-F1 — The new TR join acceptance tests are not wired into the normal package test script.
+      Evidence: `packages/workflows/src/defaults/v2-tr-join-dag.test.ts:23` documents that the DAG file uses `mock.module()` and must run in its own invocation, but `packages/workflows/package.json:26` does not include either `v2-tr-join-contract.test.ts` or `v2-tr-join-dag.test.ts`.
+      Required fix: add `v2-tr-join-contract.test.ts` to a non-mock workflow defaults test batch and add `v2-tr-join-dag.test.ts` as its own `bun test` segment.
+- [ ] [Review][Patch] R1-F2 — A schema-valid real `tea-tr` gate with `gate: "FAIL"` or `gate: "ERROR"` can still allow `create-pull-request` to run.
+      Evidence: `tea-tr.output_format` allows `FAIL` and `ERROR`, while `create-pull-request` only checks upstream node completion via `none_failed_min_one_success`.
+      Required fix: add a deterministic post-TR gate verification or summary step before PR handoff that blocks unacceptable real TR gate values before `create-pull-request` can run.
+- [ ] [Review][Patch] R1-F3 — If `run_tr` is false while a real RV or NR branch fails, the PR tail can still run from `tea-tr-skipped`.
+      Evidence: `tea-tr-skipped` depends only on `gate-planner`, and `create-pull-request` depends only on `tea-tr` and `tea-tr-skipped`.
+      Required fix: add a fail-closed barrier or summary before PR handoff that depends on resolved RV, NR, and TR role branches and blocks the tail when any real RV or NR branch failed.
 
 ## Dev Notes
 

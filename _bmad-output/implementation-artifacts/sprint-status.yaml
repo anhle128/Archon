@@ -41,7 +41,7 @@
 # - Retrospective appends its action items to action_items; sprint-status surfaces open ones
 
 generated: "2026-06-30 10:50:10 +0700"
-last_updated: "2026-07-08 00:22:56 +0700"
+last_updated: "2026-07-08 01:39:41 +0700"
 project: Archon
 project_key: NOKEY
 tracking_system: file-system
@@ -58,7 +58,7 @@ development_status:
   epic-a3: in-progress
   a3-1-add-gate-planner-flags: done
   a3-2-wire-rv-and-nr-sibling-branches: done
-  a3-3-join-tr-as-final-gate: ready-for-dev
+  a3-3-join-tr-as-final-gate: in-progress
   epic-a3-retrospective: optional
   epic-a4: backlog
   a4-1-aggregate-quality-gate-summary: backlog
