@@ -569,7 +569,7 @@ describe('Blocking RV — real RV gate FAIL produces a FAIL summary (TD-111)', (
     ).toBeGreaterThanOrEqual(1);
     expect(c!.rv_gate, 'RV block preserved in the per-role echo').toBe('FAIL');
     // PR reachability on a FAIL summary is intentionally NOT asserted here —
-    // FAIL->dev-story routing is a later story; a4.1 only emits the contract.
+    // FAIL->dev-story routing is a later story; the aggregator only emits the contract.
   });
 });
 

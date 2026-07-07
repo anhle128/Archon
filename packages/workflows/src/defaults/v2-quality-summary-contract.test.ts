@@ -35,7 +35,7 @@
  * red phase and are paired with the static YAML assertions that the node must
  * actually adopt that pattern.
  *
- * NOTE ON THE a3.3 PRECURSOR: the predecessor introduced a minimal
+ * NOTE ON THE PRECURSOR: the predecessor introduced a minimal
  * `quality-gate-summary` barrier (output_type "gate-summary", six branch deps,
  * exit-1 on TR FAIL). This story EVOLVES it into the full four-role aggregator
  * with output_type "quality-gate-summary" and eight deps (CR + resolve-story-input +
@@ -167,7 +167,7 @@ describe('Baseline precondition — resolved TR path exists before aggregation (
   it('tea-tr-skipped sibling exists as a bash node with the inverse guard', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     const skip = nodeById(v2, 'tea-tr-skipped') as { when?: string } | undefined;
-    expect(skip, 'tea-tr-skipped must exist (a3.3 TR-join baseline)').toBeDefined();
+    expect(skip, 'tea-tr-skipped must exist (TR-join baseline)').toBeDefined();
     expect('bash' in (skip as object), 'tea-tr-skipped must be a bash node').toBe(true);
     expect(skip!.when, 'tea-tr-skipped must use the inverse run_tr guard').toBe(
       '$gate-planner.output.run_tr == false'
@@ -782,7 +782,7 @@ describe('Naming conventions — kebab-case ids, no plan references (TD-164)', (
     // Forbidden: epic story codes (A3.x/A4.x), architecture decision/req codes,
     // risk/waiver codes, and predecessor finding codes. Allowed: TD-nnn / AC#.
     const planRef =
-      /\b(A[0-9]\.[0-9]|A-FR-[0-9]|A-AD-[0-9]|R-0[0-9][0-9]|W-00[0-9]|R[0-9]-F[0-9])\b/;
+      /\b(A[0-9]\.[0-9]|A-FR-[0-9]|A-AD-[0-9]|R-0[0-9][0-9]|W-00[0-9]|R[0-9]-F[0-9]|a[0-9]\.[0-9])\b/;
     for (const f of files) {
       const body = readLF(join(import.meta.dir, f));
       expect(body, `${f} must exist`).not.toBeNull();

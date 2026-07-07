@@ -303,7 +303,7 @@ describe('PR tail — resolves through quality-gate-summary barrier (TD-027)', (
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TD-042 [P0] — quality-gate-summary barrier: fail-closed on RV/NR failure
-// (R1-F3) and ERROR (not FAIL — FAIL is a valid routing decision in a4.1)
+// and ERROR (not FAIL — FAIL is a valid routing decision for the aggregator)
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('quality-gate-summary — fail-closed barrier before PR (TD-042)', () => {
@@ -509,7 +509,7 @@ describe('Scope guard — v1 untouched, v2 additive third skip node (TD-037)', (
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TD-038 [P1] — predecessor regression assertions preserved, not lost.
-// The a3.2 file's fail-closed join checks must survive the predecessor-update
+// The predecessor file's fail-closed join checks must survive the predecessor-update
 // task; the pre-TR-join "no when / skip absent" assertions must be INVERTED
 // there, never silently deleted.
 // ═══════════════════════════════════════════════════════════════════════════
@@ -602,7 +602,7 @@ describe('Naming conventions — kebab-case ids, no plan references (TD-041)', (
 
   it('generated TR-join ATDD test files contain no plan/story/epic identifiers', () => {
     const files = ['v2-tr-join-dag.test.ts', 'v2-tr-join-contract.test.ts'];
-    const planRef = /\b(A3\.\d|A-FR-\d|A-AD-\d|R-0\d\d|W-00\d)\b/;
+    const planRef = /\b(A3\.\d|A-FR-\d|A-AD-\d|R-0\d\d|W-00\d|R\d-F\d|a\d\.\d)\b/;
     for (const f of files) {
       const body = readLF(join(import.meta.dir, f));
       expect(body, `${f} must exist`).not.toBeNull();
