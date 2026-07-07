@@ -1,6 +1,6 @@
 # Story a4.1: Aggregate Quality Gate Summary
 
-Status: ready-for-dev
+Status: in-progress
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -53,6 +53,10 @@ so that the workflow has a single JSON contract (`quality-gate-summary.json`) th
 - [ ] **Task 6 — Regenerate bundle + validate (AC: #6)**
   - [ ] `bun run generate:bundled` to refresh `packages/workflows/src/defaults/bundled-defaults.generated.ts`; then `bun run check:bundled` to confirm no drift.
   - [ ] `bun test packages/workflows/src/defaults/v2-quality-summary-contract.test.ts` and the isolated `...-dag.test.ts`; then `bun run validate` before finishing.
+
+### Review Findings
+
+- [ ] [Review][Patch] `quality-gate-summary` preserves the precursor output type and dependency shape instead of the accepted route-facing contract [.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:921]
 
 ## Dev Notes
 
