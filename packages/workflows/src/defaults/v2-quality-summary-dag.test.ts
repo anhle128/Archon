@@ -947,6 +947,63 @@ describe('Fail-closed — invalid numeric contract field (TD-148)', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+// TD-170 [P1] — invalid CR round (negative or fractional) fails closed at the
+// aggregator before any summary is emitted (AC #5)
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('Fail-closed — invalid CR round (TD-170)', () => {
+  it('CR round:-1 → aggregator hard-fails, no summary, PR unreachable', async () => {
+    const run = await runV2Dag({
+      cwd: cwdFixture,
+      arguments: CANONICAL_REF,
+      nodeResponses: baseResponses({ cr: validCrEvidence({ round: -1 }) }),
+    });
+
+    expect(run.nodeState['code-review-auto'], 'source schema tolerates -1').toBe('completed');
+    expect(
+      run.nodeState['quality-gate-summary'],
+      'aggregator must reject a negative CR round'
+    ).toBe('failed');
+    expect(await readSummaryContract(run.artifactsDir), 'no summary on negative round').toBeNull();
+    expect(run.providerCalls, 'PR unreachable on invalid round').not.toContain(
+      'create-pull-request'
+    );
+  });
+
+  it('CR round:1.5 → aggregator hard-fails, no summary, PR unreachable', async () => {
+    const run = await runV2Dag({
+      cwd: cwdFixture,
+      arguments: CANONICAL_REF,
+      nodeResponses: baseResponses({ cr: validCrEvidence({ round: 1.5 }) }),
+    });
+
+    expect(run.nodeState['code-review-auto'], 'source schema tolerates 1.5').toBe('completed');
+    expect(
+      run.nodeState['quality-gate-summary'],
+      'aggregator must reject a fractional CR round'
+    ).toBe('failed');
+    expect(
+      await readSummaryContract(run.artifactsDir),
+      'no summary on fractional round'
+    ).toBeNull();
+    expect(run.providerCalls, 'PR unreachable on invalid round').not.toContain(
+      'create-pull-request'
+    );
+  });
+
+  it('CR round:0 → aggregator hard-fails, no summary', async () => {
+    const run = await runV2Dag({
+      cwd: cwdFixture,
+      arguments: CANONICAL_REF,
+      nodeResponses: baseResponses({ cr: validCrEvidence({ round: 0 }) }),
+    });
+
+    expect(run.nodeState['quality-gate-summary']).toBe('failed');
+    expect(await readSummaryContract(run.artifactsDir)).toBeNull();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 // TD-149 [P1] — failure paths leave stdout + quality-gate-summary.json absent
 // (no partial route decision) (AC #5)
 // ═══════════════════════════════════════════════════════════════════════════

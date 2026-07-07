@@ -836,6 +836,11 @@ nodes:
         bun -e '
           const resolvedRef = process.env.QGS_RESOLVED_REF;
           const crRound = process.env.QGS_CR_ROUND;
+          const crRoundNum = Number(crRound);
+          if (!Number.isInteger(crRoundNum) || crRoundNum < 1) {
+            console.error("ERROR: CR round is not a positive integer: " + crRound);
+            process.exit(1);
+          }
 
           function parseRaw(raw, label) {
             try { return JSON.parse(raw); }
@@ -899,7 +904,7 @@ nodes:
             node: "quality-gate-summary",
             story_ref: resolvedRef,
             gate: gate,
-            round: Number(crRound),
+            round: crRoundNum,
             blocking_count: blocking_count,
             decision_needed_count: decision_needed_count,
             findings_total: findings_total,

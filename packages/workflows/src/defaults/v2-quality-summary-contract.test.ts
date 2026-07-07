@@ -503,6 +503,54 @@ describe('Malformed input — JSON.parse fails closed with a non-zero exit (TD-1
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+// TD-170 [P1] — CR round is validated as a positive integer before emission
+// (negative and fractional values fail closed) (AC #5)
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('CR round validation — positive integer guard (TD-170)', () => {
+  it('aggregator validates CR round with Number.isInteger before emitting the summary', () => {
+    const v2 = parseFromDisk(V2_FILE, V2_STEM);
+    const bash = summaryBash(v2);
+    expect(
+      bash,
+      'aggregator must validate CR round as a positive integer with Number.isInteger'
+    ).toContain('Number.isInteger');
+    expect(bash, 'aggregator must check CR round >= 1').toMatch(/crRound[Nn]um\s*<\s*1/);
+  });
+
+  it('the CR round validation rejects negative and fractional values before any summary is written', async () => {
+    const validate = async (round: string): Promise<number> => {
+      const bashScript = `
+        set -e
+        CR_ROUND="$1"
+        CR_ROUND="$CR_ROUND" bun -e '
+          const crRound = process.env.CR_ROUND;
+          const crRoundNum = Number(crRound);
+          if (!Number.isInteger(crRoundNum) || crRoundNum < 1) {
+            console.error("ERROR: CR round is not a positive integer: " + crRound);
+            process.exit(1);
+          }
+          process.stdout.write(String(crRoundNum));
+        '
+      `;
+      let exitCode = 0;
+      try {
+        await execFileAsync('bash', ['-c', bashScript, '_', round]);
+      } catch (err) {
+        exitCode = (err as { code?: number }).code ?? 1;
+      }
+      return exitCode;
+    };
+
+    expect(await validate('-1'), 'negative round must fail closed').not.toBe(0);
+    expect(await validate('1.5'), 'fractional round must fail closed').not.toBe(0);
+    expect(await validate('0'), 'zero round must fail closed').not.toBe(0);
+    expect(await validate('1'), 'valid round 1 must pass').toBe(0);
+    expect(await validate('3'), 'valid round 3 must pass').toBe(0);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 // TD-152 [P2] — technique proof: the encoder is deterministic for identical
 // inputs (the artifact write overwrites, never appends duplicate JSON)
 // ═══════════════════════════════════════════════════════════════════════════
