@@ -1,6 +1,6 @@
 # Story a3.3: Join TR As Final Gate
 
-Status: in-progress
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
