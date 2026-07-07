@@ -345,7 +345,7 @@ nodes:
     effort: high
     depends_on: [code-review-gate]
     context: fresh
-    model: Kimi-K2.7-Code
+    model: DeepSeek-V4-Pro 
     idle_timeout: 900000
     output_type: pull-request
 
