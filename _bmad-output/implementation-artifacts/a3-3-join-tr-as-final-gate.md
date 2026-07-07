@@ -1,6 +1,6 @@
 # Story a3.3: Join TR As Final Gate
 
-Status: done
+Status: in-progress
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -60,6 +60,9 @@ so that traceability is evaluated as the final release gate and the tail still r
 - [x] [Review][Patch] R1-F4 — The new `quality-gate-summary` barrier breaks the `run_tr=false` path by unconditionally reading `$tea-tr.output.gate` even when `tea-tr` is skipped.
       Evidence: `.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:799` assigns `GATE=$tea-tr.output.gate`, while skipped producers have no field output to read.
       Required fix: rework the barrier so it selects the resolved TR-role contract without dereferencing `$tea-tr.output.gate` when `tea-tr` is skipped, while preserving fail-closed behavior for branch failures and real TR `FAIL` / `ERROR` gates.
+- [ ] [Review][Patch] R1-F6 — `quality-gate-summary` allows an invalid real `tea-tr` contract to pass the final PR gate.
+      Evidence: `.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:799-807` reads `$tea-tr.output` and greps the raw JSON text only for `FAIL` / `ERROR`, while `tea-tr.output_format` only declares `contract_version`, `workflow`, `node`, `story_ref`, `gate`, `findings_count`, and `report_file` as broad primitive fields.
+      Required fix: parse the real TR JSON contract deterministically before PR handoff and validate `contract_version`, `workflow`, `node`, `story_ref`, `gate`, and a non-negative `findings_count`; block `FAIL` / `ERROR` by parsed gate value and add tests for story or node mismatch plus formatted JSON and substring false positives.
 
 ## Dev Notes
 

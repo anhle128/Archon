@@ -58,7 +58,7 @@ development_status:
   epic-a3: in-progress
   a3-1-add-gate-planner-flags: done
   a3-2-wire-rv-and-nr-sibling-branches: done
-  a3-3-join-tr-as-final-gate: done
+  a3-3-join-tr-as-final-gate: in-progress
   epic-a3-retrospective: optional
   epic-a4: backlog
   a4-1-aggregate-quality-gate-summary: backlog
