@@ -691,6 +691,32 @@ describe('gate-planner — fail-closed on invalid evidence (no partial contract,
     }
   });
 
+  it('A3.1-INT-026 [P0] TA contract_version ≠ "1.0" → fail closed (envelope validation)', async () => {
+    const run = await runV2Dag({
+      cwd: cwdFixture,
+      arguments: CANONICAL_REF,
+      nodeResponses: {
+        'code-review-auto': validCrEvidence(),
+        'tea-automate': validTaEvidence({ contract_version: '2.0' }),
+        ...DOWNSTREAM_OK,
+      },
+    });
+    await expectFailClosedNoContract(run);
+  });
+
+  it('A3.1-INT-027 [P0] TA workflow ≠ "bmad-dev-story-with-tea-fix-loop-v2" → fail closed (envelope validation)', async () => {
+    const run = await runV2Dag({
+      cwd: cwdFixture,
+      arguments: CANONICAL_REF,
+      nodeResponses: {
+        'code-review-auto': validCrEvidence(),
+        'tea-automate': validTaEvidence({ workflow: 'some-other-workflow' }),
+        ...DOWNSTREAM_OK,
+      },
+    });
+    await expectFailClosedNoContract(run);
+  });
+
   it('A3.1-INT-011 [P0] partial-failure guard: on ANY validation failure, NO partial JSON is emitted before the exit', async () => {
     // Directly proves "emits no partial contract": neither the typed sidecar nor the
     // best-effort gate-planner.json exists after a fail-closed exit.

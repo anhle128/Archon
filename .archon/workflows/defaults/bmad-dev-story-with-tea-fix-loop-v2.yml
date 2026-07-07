@@ -418,6 +418,7 @@ nodes:
       CR_FINDINGS=$code-review-auto.output.findings_count
       TA_REF=$tea-automate.output.story_ref
       TA_VERSION=$tea-automate.output.contract_version
+      TA_WORKFLOW=$tea-automate.output.workflow
       TA_NODE=$tea-automate.output.node
       TA_TESTS=$tea-automate.output.test_files_changed
       TA_NFR=$tea-automate.output.nfr_relevant
@@ -456,6 +457,16 @@ nodes:
 
       if [ "$CR_NODE" != "code-review-auto" ]; then
         echo "ERROR: CR node mismatch — expected code-review-auto, got '$CR_NODE'." >&2
+        exit 1
+      fi
+
+      if [ "$TA_VERSION" != "1.0" ]; then
+        echo "ERROR: TA contract_version mismatch — expected 1.0, got '$TA_VERSION'." >&2
+        exit 1
+      fi
+
+      if [ "$TA_WORKFLOW" != "bmad-dev-story-with-tea-fix-loop-v2" ]; then
+        echo "ERROR: TA workflow mismatch — expected bmad-dev-story-with-tea-fix-loop-v2, got '$TA_WORKFLOW'." >&2
         exit 1
       fi
 
