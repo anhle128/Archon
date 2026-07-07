@@ -294,6 +294,8 @@ interface DagRun {
   artifactsDir: string;
 }
 
+let dagRunCounter = 0;
+
 async function runV2Dag(opts: {
   cwd: string;
   arguments?: string;
@@ -313,7 +315,8 @@ async function runV2Dag(opts: {
   const deps = createMockDepsWithResponses(store, opts.nodeResponses ?? {}, providerCalls);
   const platform = createMockPlatform();
   const workflowRun = makeWorkflowRun(opts.cwd, opts.arguments ?? '');
-  const artifactsDir = join(opts.cwd, 'artifacts');
+  dagRunCounter++;
+  const artifactsDir = join(opts.cwd, 'artifacts', `run-${dagRunCounter}`);
 
   try {
     await executeDagWorkflow(

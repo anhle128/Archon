@@ -284,6 +284,23 @@ async function buildFixtureDir(baseDir: string): Promise<string> {
   return cwd;
 }
 
+// ── Evidence builders ──────────────────────────────────────────────────────
+
+const DAG_CANONICAL_REF = 'a1-2-preserve-story-input-resolution';
+
+function validTaEvidence(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    contract_version: '1.0',
+    workflow: 'bmad-dev-story-with-tea-fix-loop-v2',
+    node: 'tea-automate',
+    story_ref: DAG_CANONICAL_REF,
+    test_files_changed: 2,
+    nfr_relevant: 'false',
+    automation_report: 'automation-report.md',
+    ...overrides,
+  };
+}
+
 // ── runV2Dag harness ───────────────────────────────────────────────────────
 
 type NodeEventState = 'completed' | 'failed' | 'skipped';
@@ -419,6 +436,7 @@ describe('A2.1 — v2 DAG DS→TA→CR sequence (mocked-provider harness)', () =
       cwd: cwdFixture,
       arguments: canonicalKey,
       nodeResponses: {
+        'tea-automate': validTaEvidence(),
         'code-review-auto': {
           contract_version: '1.0',
           workflow: 'bmad-dev-story-with-tea-fix-loop-v2',
@@ -484,7 +502,7 @@ describe('A2.1 — v2 DAG DS→TA→CR sequence (mocked-provider harness)', () =
         },
         // All remaining AI nodes respond so they complete without errors
         'dev-story': {},
-        'tea-automate': {},
+        'tea-automate': validTaEvidence(),
         'tea-rv': {},
         'tea-nr': {},
         'tea-tr': {},
@@ -525,7 +543,7 @@ describe('A2.1 — v2 DAG DS→TA→CR sequence (mocked-provider harness)', () =
       arguments: canonicalKey,
       nodeResponses: {
         'dev-story': {},
-        'tea-automate': {},
+        'tea-automate': validTaEvidence(),
       },
     });
 
@@ -576,7 +594,7 @@ describe('A2.1 — v2 DAG DS→TA→CR sequence (mocked-provider harness)', () =
           story_ref: canonicalKey,
         },
         'dev-story': {},
-        'tea-automate': {},
+        'tea-automate': validTaEvidence(),
       },
     });
 
@@ -621,7 +639,7 @@ describe('A2.1 — v2 DAG DS→TA→CR sequence (mocked-provider harness)', () =
           story_ref: canonicalKey,
         },
         'dev-story': {},
-        'tea-automate': {},
+        'tea-automate': validTaEvidence(),
         'tea-rv': {},
         'tea-nr': {},
         'tea-tr': {},
