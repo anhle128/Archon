@@ -791,31 +791,29 @@ describe('gate-planner — fail-closed on invalid evidence', () => {
 
 // ── JSON-escaping proof (direct bash execution) ────────────────────────────
 
-describe('gate-planner — JSON escaping of dynamic string fields', () => {
-  it('json_escape + printf produce valid JSON when story_ref contains backslash and double-quote', async () => {
-    // Direct bash execution of the json_escape function + printf contract template
-    // extracted from the gate-planner node. The nasty ref is passed as $1 to avoid
-    // bash quoting issues with backslashes and double quotes in the template.
-    const nastyRef = 'a1-2-test\\with"quotes';
+describe('gate-planner — JSON serialization of dynamic string fields', () => {
+  it('bun JSON.stringify produces valid JSON when story_ref contains backslash, double-quote, newline, carriage return, and tab', async () => {
+    const nastyRef = 'a1-2-test\\with"quotes\nand\rcarriage\ttab';
     const bashScript = `
       set -e
-      json_escape() {
-        printf '%s' "$1" | sed 's/\\\\/\\\\\\\\/g; s/"/\\\\"/g; s/\\t/\\\\t/g'
-      }
       RESOLVED_REF="$1"
       RUN_RV=true; RUN_NR=false; RUN_TR=true
       REASON_RV="test reason"
       REASON_NR="test reason"
       REASON_TR="Traceability review is the default final release gate."
       CR_FINDINGS=0; TA_TESTS=3
-      CONTRACT=$(printf '{"contract_version":"1.0","workflow":"bmad-dev-story-with-tea-fix-loop-v2","node":"gate-planner","story_ref":"%s","run_rv":%s,"run_nr":%s,"run_tr":%s,"reason_rv":"%s","reason_nr":"%s","reason_tr":"%s","cr_findings_count":%s,"ta_test_files_changed":%s}' \\
-        "$(json_escape "$RESOLVED_REF")" \\
-        "$RUN_RV" "$RUN_NR" "$RUN_TR" \\
-        "$(json_escape "$REASON_RV")" \\
-        "$(json_escape "$REASON_NR")" \\
-        "$(json_escape "$REASON_TR")" \\
-        "$CR_FINDINGS" \\
-        "$TA_TESTS")
+      CONTRACT=$(
+        GP_STORY_REF="$RESOLVED_REF" \\
+        GP_RUN_RV="$RUN_RV" \\
+        GP_RUN_NR="$RUN_NR" \\
+        GP_RUN_TR="$RUN_TR" \\
+        GP_REASON_RV="$REASON_RV" \\
+        GP_REASON_NR="$REASON_NR" \\
+        GP_REASON_TR="$REASON_TR" \\
+        GP_CR_FINDINGS="$CR_FINDINGS" \\
+        GP_TA_TESTS="$TA_TESTS" \\
+        bun -e 'process.stdout.write(JSON.stringify({contract_version:"1.0",workflow:"bmad-dev-story-with-tea-fix-loop-v2",node:"gate-planner",story_ref:process.env.GP_STORY_REF,run_rv:process.env.GP_RUN_RV==="true",run_nr:process.env.GP_RUN_NR==="true",run_tr:process.env.GP_RUN_TR==="true",reason_rv:process.env.GP_REASON_RV,reason_nr:process.env.GP_REASON_NR,reason_tr:process.env.GP_REASON_TR,cr_findings_count:Number(process.env.GP_CR_FINDINGS),ta_test_files_changed:Number(process.env.GP_TA_TESTS)}))'
+      )
       printf '%s' "$CONTRACT"
     `;
 
@@ -823,6 +821,13 @@ describe('gate-planner — JSON escaping of dynamic string fields', () => {
     const parsed = JSON.parse(stdout) as Record<string, unknown>;
     expect(parsed.story_ref).toBe(nastyRef);
     expect(parsed.run_rv).toBe(true);
+    expect(parsed.run_nr).toBe(false);
+    expect(parsed.run_tr).toBe(true);
     expect(typeof parsed.run_rv).toBe('boolean');
+    expect(typeof parsed.run_nr).toBe('boolean');
+    expect(typeof parsed.run_tr).toBe('boolean');
+    expect(parsed.contract_version).toBe('1.0');
+    expect(parsed.cr_findings_count).toBe(0);
+    expect(parsed.ta_test_files_changed).toBe(3);
   });
 });

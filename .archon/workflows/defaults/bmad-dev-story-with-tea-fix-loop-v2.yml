@@ -517,21 +517,20 @@ nodes:
       RUN_TR=true
       REASON_TR="Traceability review is the default final release gate."
 
-      # JSON-escape helper for all dynamic string fields in the contract
-      json_escape() {
-        printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g'
-      }
-
-      # Emit the contract as a single-line JSON object with real JSON booleans.
-      # All dynamic string fields are JSON-escaped to prevent malformed output.
-      CONTRACT=$(printf '{"contract_version":"1.0","workflow":"bmad-dev-story-with-tea-fix-loop-v2","node":"gate-planner","story_ref":"%s","run_rv":%s,"run_nr":%s,"run_tr":%s,"reason_rv":"%s","reason_nr":"%s","reason_tr":"%s","cr_findings_count":%s,"ta_test_files_changed":%s}' \
-        "$(json_escape "$RESOLVED_REF")" \
-        "$RUN_RV" "$RUN_NR" "$RUN_TR" \
-        "$(json_escape "$REASON_RV")" \
-        "$(json_escape "$REASON_NR")" \
-        "$(json_escape "$REASON_TR")" \
-        "$CR_FINDINGS" \
-        "$TA_TESTS")
+      # Serialize the contract with a real JSON encoder (bun) so every dynamic
+      # string field is correctly escaped for all JSON control characters.
+      CONTRACT=$(
+        GP_STORY_REF="$RESOLVED_REF" \
+        GP_RUN_RV="$RUN_RV" \
+        GP_RUN_NR="$RUN_NR" \
+        GP_RUN_TR="$RUN_TR" \
+        GP_REASON_RV="$REASON_RV" \
+        GP_REASON_NR="$REASON_NR" \
+        GP_REASON_TR="$REASON_TR" \
+        GP_CR_FINDINGS="$CR_FINDINGS" \
+        GP_TA_TESTS="$TA_TESTS" \
+        bun -e 'process.stdout.write(JSON.stringify({contract_version:"1.0",workflow:"bmad-dev-story-with-tea-fix-loop-v2",node:"gate-planner",story_ref:process.env.GP_STORY_REF,run_rv:process.env.GP_RUN_RV==="true",run_nr:process.env.GP_RUN_NR==="true",run_tr:process.env.GP_RUN_TR==="true",reason_rv:process.env.GP_REASON_RV,reason_nr:process.env.GP_REASON_NR,reason_tr:process.env.GP_REASON_TR,cr_findings_count:Number(process.env.GP_CR_FINDINGS),ta_test_files_changed:Number(process.env.GP_TA_TESTS)}))'
+      )
 
       printf '%s' "$CONTRACT"
 
