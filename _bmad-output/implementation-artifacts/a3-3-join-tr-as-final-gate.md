@@ -1,6 +1,6 @@
 # Story a3.3: Join TR As Final Gate
 
-Status: fix-pass-complete
+Status: in-progress
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -57,6 +57,9 @@ so that traceability is evaluated as the final release gate and the tail still r
 - [x] [Review][Patch] R1-F3 — If `run_tr` is false while a real RV or NR branch fails, the PR tail can still run from `tea-tr-skipped`.
       Evidence: `tea-tr-skipped` depends only on `gate-planner`, and `create-pull-request` depends only on `tea-tr` and `tea-tr-skipped`.
       Required fix: add a fail-closed barrier or summary before PR handoff that depends on resolved RV, NR, and TR role branches and blocks the tail when any real RV or NR branch failed.
+- [ ] [Review][Patch] R1-F4 — The new `quality-gate-summary` barrier breaks the `run_tr=false` path by unconditionally reading `$tea-tr.output.gate` even when `tea-tr` is skipped.
+      Evidence: `.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:799` assigns `GATE=$tea-tr.output.gate`, while skipped producers have no field output to read.
+      Required fix: rework the barrier so it selects the resolved TR-role contract without dereferencing `$tea-tr.output.gate` when `tea-tr` is skipped, while preserving fail-closed behavior for branch failures and real TR `FAIL` / `ERROR` gates.
 
 ## Dev Notes
 
