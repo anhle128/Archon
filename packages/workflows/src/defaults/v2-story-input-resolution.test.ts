@@ -446,24 +446,24 @@ describe('v2 story-input resolution (Story a1.2)', () => {
       expect(r.exitCode).not.toBe(0);
     });
 
-    it('STR-A3-6 [P0] no AI node uses trigger_rule all_done/one_success (fail-fast stays emergent)', () => {
-      // C-1 / R-002: "no downstream AI node runs on failure" holds ONLY because
-      // every AI node uses the default all_success trigger. A non-default rule
-      // would run despite the failed gate. Green today; locks the invariant.
+    it('STR-A3-6 [P0] no AI node uses trigger_rule all_done or one_success (fail-fast stays emergent)', () => {
+      // tea-tr uses none_failed_min_one_success to join the RV/NR sibling branches
+      // (fail-closed: tolerates skips, blocks on real failure). All other AI nodes
+      // keep the default all_success trigger.
       const wf = loadV2();
-      for (const id of [
-        'dev-story',
-        'tea-automate',
-        'tea-rv',
-        'tea-nr',
-        'tea-tr',
-        'create-pull-request',
-      ]) {
+      for (const id of ['dev-story', 'tea-automate', 'tea-rv', 'tea-nr', 'create-pull-request']) {
         const n = getNode(wf, id);
         if (!n) continue;
         expect(['all_success', undefined], `${id} must keep default all_success trigger`).toContain(
           n.trigger_rule
         );
+      }
+      const tr = getNode(wf, 'tea-tr');
+      if (tr) {
+        expect(
+          ['none_failed_min_one_success', 'all_success', undefined],
+          'tea-tr may use none_failed_min_one_success for the sibling join'
+        ).toContain(tr.trigger_rule);
       }
     });
   });
