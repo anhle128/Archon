@@ -1,6 +1,6 @@
 # Story a4.1: Aggregate Quality Gate Summary
 
-Status: in-progress
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
