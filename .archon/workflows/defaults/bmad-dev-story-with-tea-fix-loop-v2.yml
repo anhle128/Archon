@@ -482,6 +482,11 @@ nodes:
           exit 1
           ;;
       esac
+      # Reject values that exceed safe integer range for bash arithmetic and JSON serialization.
+      if [ "${#TA_TESTS}" -gt 15 ]; then
+        echo "ERROR: test_files_changed exceeds safe integer range: '$TA_TESTS'." >&2
+        exit 1
+      fi
 
       # findings_count must be a non-negative integer (0 is valid).
       case "$CR_FINDINGS" in
@@ -490,6 +495,11 @@ nodes:
           exit 1
           ;;
       esac
+      # Reject values that exceed safe integer range for bash arithmetic and JSON serialization.
+      if [ "${#CR_FINDINGS}" -gt 15 ]; then
+        echo "ERROR: findings_count exceeds safe integer range: '$CR_FINDINGS'." >&2
+        exit 1
+      fi
 
       # nfr_relevant must be exactly "true" or "false" (enum discipline).
       if [ "$TA_NFR" != "true" ] && [ "$TA_NFR" != "false" ]; then

@@ -695,6 +695,39 @@ describe('gate-planner — fail-closed on invalid evidence', () => {
     }
   });
 
+  it('oversized digit-only counts exceed safe integer range and fail closed', async () => {
+    const oversized = 100000000000000000000;
+    const taOversized = await runV2Dag({
+      cwd: cwdFixture,
+      arguments: CANONICAL_REF,
+      nodeResponses: {
+        'code-review-auto': validCrEvidence(),
+        'tea-automate': validTaEvidence({ test_files_changed: oversized }),
+        ...DOWNSTREAM_OK,
+      },
+    });
+    expect(
+      taOversized.nodeState['gate-planner'],
+      'oversized TA_TESTS must fail gate-planner closed'
+    ).not.toBe('completed');
+    await expectFailClosedNoContract(taOversized);
+
+    const crOversized = await runV2Dag({
+      cwd: cwdFixture,
+      arguments: CANONICAL_REF,
+      nodeResponses: {
+        'code-review-auto': validCrEvidence({ findings_count: oversized }),
+        'tea-automate': validTaEvidence(),
+        ...DOWNSTREAM_OK,
+      },
+    });
+    expect(
+      crOversized.nodeState['gate-planner'],
+      'oversized CR_FINDINGS must fail gate-planner closed'
+    ).not.toBe('completed');
+    await expectFailClosedNoContract(crOversized);
+  });
+
   it('partial-failure guard: no partial JSON is emitted before the exit on any validation failure', async () => {
     const run = await runV2Dag({
       cwd: cwdFixture,
