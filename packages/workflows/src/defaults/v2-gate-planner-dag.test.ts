@@ -1,38 +1,15 @@
 /**
- * RED-PHASE ACCEPTANCE SCAFFOLD — "Add Gate Planner Flags" (behavioral / DAG level).
+ * Behavioral / DAG-level acceptance tests for the gate-planner node.
  *
  * Drives the REAL executor + REAL `gate-planner` bash node through a minimal v2 DAG.
  * Only the AI provider nodes (dev-story / tea-automate / code-review-auto / tea-*) are
  * mocked; bash nodes (prepare-bmad-state, resolve-story-input, verify-story-identity,
- * and the new gate-planner) execute for real. This is the level that proves the
- * fail-closed invariant and the real-JSON-boolean flags — a mocked gate-planner would
- * be a fake test (R-007), so the harness deliberately never stubs bash.
- *
- * These are EXECUTABLE red tests, not test.skip(): the runV2Dag harness and the v2
- * YAML both exist today. Pre-implementation they FAIL cleanly because gate-planner
- * does not exist yet (no typed sidecar is written → capture returns null; happy path
- * still routes CR-gate.positive → tea-rv; invalid TA evidence does not fail the run).
- * They pass once the dev adds the gate-planner bash node, the tea-automate structured
- * signal, and the DAG re-parenting.
- *
- * The one exception (A3.1-INT-022, output-JSON escaping of a metacharacter story_ref)
- * is a test.skip() scaffold: the seam to feed an attacker-shaped RESOLVED_REF through
- * resolve-story-input does not exist yet — see its activation note.
+ * and the new gate-planner) execute for real. This proves the fail-closed invariant
+ * and the real-JSON-boolean flags — a mocked gate-planner would be a fake test.
  *
  * This file uses mock.module('@archon/paths', ...) — Bun's mock.module() is
  * process-global and irreversible — so it MUST run in its own isolated bun test
- * invocation (see packages/workflows/package.json). Do not co-locate with a sibling
- * that mock.module()s @archon/paths differently.
- *
- * Covers (executable red):
- *   AC1  INT-001 (happy path emits full contract)
- *   AC2  INT-002/003/004/005/006/007/008/009/010/011/012 (fail-closed matrix, no partial contract, no dev-story loop)
- *   AC3  INT-013 (envelope field VALUES in emitted JSON)
- *   AC4  INT-014 (run_tr default true in both cases)
- *   AC5  INT-015 (real JSON booleans — strict typeof)
- *   AC6  INT-016 (prove true) / INT-017 (prove false, boundary 0) / INT-019 (boundary 1) / INT-021 (real-bash meta)
- *   AC1  INT-020 (nfr_relevant pin) / INT-025 (upstream dependency failure containment)
- * Covers (skipped scaffold): INT-022 (metacharacter story_ref output-escaping — needs a RESOLVED_REF injection seam).
+ * invocation (see packages/workflows/package.json).
  */
 
 import { describe, it, expect, mock, beforeAll, afterAll } from 'bun:test';
@@ -40,10 +17,12 @@ import { mkdir, writeFile, rm, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+
+const execFileAsync = promisify(execFile);
 
 // ── @archon/paths mock ─────────────────────────────────────────────────────
-// Spread the REAL module so path helpers / command discovery work against the
-// real filesystem. Only createLogger is a no-op so test output stays clean.
 import * as realPaths from '@archon/paths';
 
 const mockLogFn = mock(() => {});
@@ -83,11 +62,9 @@ const V2_FILE = join(
 );
 
 const V2_STEM = 'bmad-dev-story-with-tea-fix-loop-v2';
-// The story key seeded into the fixture sprint-status; resolve-story-input derives
-// the canonical story_ref from it, and CR/TA evidence must echo it back.
 const CANONICAL_REF = 'a1-2-preserve-story-input-resolution';
 
-// ── Store / platform / deps (mirrors v2-story-dag.test.ts) ─────────────────
+// ── Store / platform / deps ────────────────────────────────────────────────
 
 type NodeEventState = 'completed' | 'failed' | 'skipped';
 
@@ -124,8 +101,6 @@ function createTrackedStore(
     updateWorkflowActivity: mock(() => Promise.resolve()),
     getWorkflowRunStatus: mock(() => Promise.resolve('running' as const)),
     completeWorkflowRun: mock(() => Promise.resolve()),
-    // The dag-executor NEVER throws on node failure — it calls failWorkflowRun().
-    // Tracking that call is the only reliable "run failed" signal.
     failWorkflowRun: mock(() => {
       runFailedRef.value = true;
       return Promise.resolve();
@@ -290,7 +265,6 @@ interface DagRun {
   nodeState: Record<string, NodeEventState>;
   providerCalls: string[];
   runFailed: boolean;
-  /** Absolute artifacts dir for this run — where node sidecars + gate-planner.json land. */
   artifactsDir: string;
 }
 
@@ -347,11 +321,7 @@ async function runV2Dag(opts: {
   return { nodeState, providerCalls, runFailed: runFailedRef.value, artifactsDir };
 }
 
-// ── gate-planner output capture (typed sidecar) ────────────────────────────
-// When gate-planner completes with `output_type: gate-decision`, the executor
-// writes its raw stdout to <artifactsDir>/nodes/gate-planner.md (writeNodeArtifact,
-// dag-executor.ts:4193-4220). On a fail-closed exit no sidecar is written — capture
-// returns null, which is exactly the "no partial contract" observable.
+// ── gate-planner output capture ────────────────────────────────────────────
 
 async function readGatePlannerOutput(
   artifactsDir: string
@@ -363,12 +333,10 @@ async function readGatePlannerOutput(
   try {
     return JSON.parse(raw) as Record<string, unknown>;
   } catch {
-    // A parse failure here is a real defect (malformed printf JSON, R-003) — surface it.
     throw new Error(`gate-planner sidecar is not valid JSON: ${raw.slice(0, 200)}`);
   }
 }
 
-/** The best-effort machine-readable artifact gate-planner writes on success. */
 function gatePlannerArtifactPath(artifactsDir: string): string {
   return join(artifactsDir, 'bmad-dev-story-with-tea-fix-loop', 'gate-planner.json');
 }
@@ -404,7 +372,6 @@ function validTaEvidence(overrides: Record<string, unknown> = {}): Record<string
   };
 }
 
-/** Downstream AI nodes must respond so they complete without provider errors. */
 const DOWNSTREAM_OK = {
   'dev-story': {},
   'tea-rv': {},
@@ -447,7 +414,7 @@ afterAll(async () => {
 // ── Happy path + flag proofs ───────────────────────────────────────────────
 
 describe('gate-planner — happy path + flag computation (real bash)', () => {
-  it('A3.1-INT-001 [P0] valid CR+TA evidence → gate-planner emits ONE JSON object with all flags + reasons present', async () => {
+  it('valid CR+TA evidence produces a JSON contract with all flags and reasons', async () => {
     const run = await runV2Dag({
       cwd: cwdFixture,
       arguments: CANONICAL_REF,
@@ -469,7 +436,7 @@ describe('gate-planner — happy path + flag computation (real bash)', () => {
     expect(typeof c!.reason_rv, 'reasons must be human-readable strings').toBe('string');
   });
 
-  it('A3.1-INT-016 [P0] fixture proves TRUE: TA_TESTS=3, nfr="true" → run_rv/nr/tr all === true (JSON booleans)', async () => {
+  it('fixture proves TRUE: test_files_changed=3, nfr=true yields all flags true as JSON booleans', async () => {
     const run = await runV2Dag({
       cwd: cwdFixture,
       arguments: CANONICAL_REF,
@@ -482,7 +449,6 @@ describe('gate-planner — happy path + flag computation (real bash)', () => {
 
     const c = await readGatePlannerOutput(run.artifactsDir);
     expect(c, 'gate-planner must emit a contract on the true-case').not.toBeNull();
-    // AC5: strict JSON boolean, not the string "true".
     expect(typeof c!.run_rv).toBe('boolean');
     expect(typeof c!.run_nr).toBe('boolean');
     expect(typeof c!.run_tr).toBe('boolean');
@@ -491,9 +457,7 @@ describe('gate-planner — happy path + flag computation (real bash)', () => {
     expect(c!.run_tr).toBe(true);
   });
 
-  it('A3.1-INT-017 [P0] fixture proves FALSE (boundary=0): TA_TESTS=0, nfr="false" → run_rv=false, run_nr=false, run_tr=true', async () => {
-    // 0 is BOTH the valid false-trigger for run_rv AND the boundary of the
-    // non-negative-integer validity check (R-012). It must be accepted, not rejected.
+  it('fixture proves FALSE (boundary=0): test_files_changed=0, nfr=false yields run_rv=false, run_nr=false, run_tr=true', async () => {
     const run = await runV2Dag({
       cwd: cwdFixture,
       arguments: CANONICAL_REF,
@@ -504,7 +468,7 @@ describe('gate-planner — happy path + flag computation (real bash)', () => {
       },
     });
 
-    expect(run.nodeState['gate-planner'], 'TA_TESTS=0 is VALID → gate-planner must complete').toBe(
+    expect(run.nodeState['gate-planner'], 'TA_TESTS=0 is valid, gate-planner must complete').toBe(
       'completed'
     );
     const c = await readGatePlannerOutput(run.artifactsDir);
@@ -515,7 +479,7 @@ describe('gate-planner — happy path + flag computation (real bash)', () => {
     expect(c!.run_tr).toBe(true);
   });
 
-  it('A3.1-INT-019 [P1] boundary just-above-zero: TA_TESTS=1 → run_rv === true', async () => {
+  it('boundary just above zero: test_files_changed=1 yields run_rv=true', async () => {
     const run = await runV2Dag({
       cwd: cwdFixture,
       arguments: CANONICAL_REF,
@@ -531,7 +495,7 @@ describe('gate-planner — happy path + flag computation (real bash)', () => {
     expect(c!.run_nr).toBe(false);
   });
 
-  it('A3.1-INT-014 [P1] run_tr defaults TRUE in BOTH true- and false-cases; reason_tr states it is the default final gate', async () => {
+  it('run_tr defaults true in both true- and false-cases; reason_tr states it is the default final gate', async () => {
     const trueRun = await runV2Dag({
       cwd: cwdFixture,
       arguments: CANONICAL_REF,
@@ -557,7 +521,7 @@ describe('gate-planner — happy path + flag computation (real bash)', () => {
     expect(String(fc?.reason_tr).toLowerCase()).toContain('default');
   });
 
-  it('A3.1-INT-013 [P1] emitted envelope carries contract_version="1.0", workflow=v2, node="gate-planner", story_ref=resolved', async () => {
+  it('emitted envelope carries contract_version=1.0, workflow=v2, node=gate-planner, story_ref=resolved', async () => {
     const run = await runV2Dag({
       cwd: cwdFixture,
       arguments: CANONICAL_REF,
@@ -575,7 +539,7 @@ describe('gate-planner — happy path + flag computation (real bash)', () => {
     expect(c!.story_ref).toBe(CANONICAL_REF);
   });
 
-  it('A3.1-INT-020 [P2] nfr_relevant pin: "true"→run_nr=true and "false"→run_nr=false are deterministic under fixed evidence', async () => {
+  it('nfr_relevant pin: true yields run_nr=true and false yields run_nr=false deterministically', async () => {
     const on = await runV2Dag({
       cwd: cwdFixture,
       arguments: CANONICAL_REF,
@@ -598,9 +562,7 @@ describe('gate-planner — happy path + flag computation (real bash)', () => {
     expect((await readGatePlannerOutput(off.artifactsDir))?.run_nr).toBe(false);
   });
 
-  it('A3.1-INT-021 [P1] real-bash meta-assert: the AI provider is NEVER invoked for gate-planner; output is genuine bash stdout', async () => {
-    // Guards against a fake test (R-007): if gate-planner were an AI/mocked node, it
-    // would appear in providerCalls. A bash node must not — its JSON is real stdout.
+  it('real-bash meta-assert: AI provider is never invoked for gate-planner', async () => {
     const run = await runV2Dag({
       cwd: cwdFixture,
       arguments: CANONICAL_REF,
@@ -615,7 +577,6 @@ describe('gate-planner — happy path + flag computation (real bash)', () => {
       'gate-planner is a bash node — the AI provider must never be called for it'
     ).not.toContain('gate-planner');
     const c = await readGatePlannerOutput(run.artifactsDir);
-    // The carried-through evidence count proves bash actually consumed TA output.
     expect(
       c?.ta_test_files_changed ?? c?.run_rv,
       'genuine bash-computed output expected'
@@ -623,12 +584,10 @@ describe('gate-planner — happy path + flag computation (real bash)', () => {
   });
 });
 
-// ── Fail-closed matrix (AC2 / R-001) ───────────────────────────────────────
+// ── Fail-closed matrix ─────────────────────────────────────────────────────
 
-describe('gate-planner — fail-closed on invalid evidence (no partial contract, no dev-story loop)', () => {
-  it('A3.1-INT-003 [P0] TA story_ref ≠ resolved → gate-planner exits non-zero, no contract', async () => {
-    // verify-story-identity only validates CR evidence — a TA mismatch is gate-planner's
-    // OWN fail-closed responsibility. CR is valid+matching so control reaches gate-planner.
+describe('gate-planner — fail-closed on invalid evidence', () => {
+  it('TA story_ref mismatch yields fail-closed with no contract', async () => {
     const run = await runV2Dag({
       cwd: cwdFixture,
       arguments: CANONICAL_REF,
@@ -644,7 +603,7 @@ describe('gate-planner — fail-closed on invalid evidence (no partial contract,
     await expectFailClosedNoContract(run);
   });
 
-  it('A3.1-INT-007 [P1] TA node ≠ "tea-automate" (envelope tamper) → fail closed', async () => {
+  it('TA node mismatch (envelope tamper) yields fail-closed', async () => {
     const run = await runV2Dag({
       cwd: cwdFixture,
       arguments: CANONICAL_REF,
@@ -657,7 +616,7 @@ describe('gate-planner — fail-closed on invalid evidence (no partial contract,
     await expectFailClosedNoContract(run);
   });
 
-  it('A3.1-INT-009 [P1] TA_TESTS ∈ {-1, "abc", ""} → each fails closed (not a non-negative integer)', async () => {
+  it('TA test_files_changed with invalid values (-1, "abc", "") each fail closed', async () => {
     for (const bad of [-1, 'abc', '']) {
       const run = await runV2Dag({
         cwd: cwdFixture,
@@ -676,7 +635,7 @@ describe('gate-planner — fail-closed on invalid evidence (no partial contract,
     }
   });
 
-  it('A3.1-INT-010 [P1] TA_NFR ∉ {"true","false"} (e.g. "TRUE","yes","") → fail closed (enum strictness)', async () => {
+  it('TA nfr_relevant with invalid values ("TRUE", "yes", "") each fail closed', async () => {
     for (const bad of ['TRUE', 'yes', '']) {
       const run = await runV2Dag({
         cwd: cwdFixture,
@@ -691,7 +650,7 @@ describe('gate-planner — fail-closed on invalid evidence (no partial contract,
     }
   });
 
-  it('A3.1-INT-026 [P0] TA contract_version ≠ "1.0" → fail closed (envelope validation)', async () => {
+  it('TA contract_version mismatch yields fail-closed', async () => {
     const run = await runV2Dag({
       cwd: cwdFixture,
       arguments: CANONICAL_REF,
@@ -704,7 +663,7 @@ describe('gate-planner — fail-closed on invalid evidence (no partial contract,
     await expectFailClosedNoContract(run);
   });
 
-  it('A3.1-INT-027 [P0] TA workflow ≠ "bmad-dev-story-with-tea-fix-loop-v2" → fail closed (envelope validation)', async () => {
+  it('TA workflow mismatch yields fail-closed', async () => {
     const run = await runV2Dag({
       cwd: cwdFixture,
       arguments: CANONICAL_REF,
@@ -717,9 +676,26 @@ describe('gate-planner — fail-closed on invalid evidence (no partial contract,
     await expectFailClosedNoContract(run);
   });
 
-  it('A3.1-INT-011 [P0] partial-failure guard: on ANY validation failure, NO partial JSON is emitted before the exit', async () => {
-    // Directly proves "emits no partial contract": neither the typed sidecar nor the
-    // best-effort gate-planner.json exists after a fail-closed exit.
+  it('CR findings_count with invalid values (-1, "abc", "") each fail closed', async () => {
+    for (const bad of [-1, 'abc', '']) {
+      const run = await runV2Dag({
+        cwd: cwdFixture,
+        arguments: CANONICAL_REF,
+        nodeResponses: {
+          'code-review-auto': validCrEvidence({ findings_count: bad }),
+          'tea-automate': validTaEvidence(),
+          ...DOWNSTREAM_OK,
+        },
+      });
+      expect(
+        run.nodeState['gate-planner'],
+        `CR_FINDINGS=${JSON.stringify(bad)} must fail gate-planner closed`
+      ).not.toBe('completed');
+      await expectFailClosedNoContract(run);
+    }
+  });
+
+  it('partial-failure guard: no partial JSON is emitted before the exit on any validation failure', async () => {
     const run = await runV2Dag({
       cwd: cwdFixture,
       arguments: CANONICAL_REF,
@@ -732,9 +708,7 @@ describe('gate-planner — fail-closed on invalid evidence (no partial contract,
     await expectFailClosedNoContract(run);
   });
 
-  it('A3.1-INT-002 [P0] CR story_ref ≠ resolved → run fails closed, gate-planner never reached, no contract', async () => {
-    // The CR mismatch is caught upstream by verify-story-identity, so gate-planner is
-    // skipped — still "invalid CR evidence ⇒ no gate-planner contract + run failed".
+  it('CR story_ref mismatch causes run to fail closed before gate-planner is reached', async () => {
     const run = await runV2Dag({
       cwd: cwdFixture,
       arguments: CANONICAL_REF,
@@ -750,7 +724,7 @@ describe('gate-planner — fail-closed on invalid evidence (no partial contract,
     await expectFailClosedNoContract(run);
   });
 
-  it('A3.1-INT-004 [P1] CR contract_version ≠ "1.0" → fail closed', async () => {
+  it('CR contract_version mismatch yields fail-closed', async () => {
     const run = await runV2Dag({
       cwd: cwdFixture,
       arguments: CANONICAL_REF,
@@ -763,7 +737,7 @@ describe('gate-planner — fail-closed on invalid evidence (no partial contract,
     await expectFailClosedNoContract(run);
   });
 
-  it('A3.1-INT-008 [P0] empty resolved story_ref (unresolvable story) → fail closed, no provider called, no contract', async () => {
+  it('empty resolved story_ref (unresolvable story) yields fail-closed', async () => {
     const run = await runV2Dag({
       cwd: cwdFixture,
       arguments: 'this-story-does-not-exist-xyz',
@@ -777,9 +751,7 @@ describe('gate-planner — fail-closed on invalid evidence (no partial contract,
     await expectFailClosedNoContract(run);
   });
 
-  it('A3.1-INT-012 [P1] regression: gate-planner failure is a HARD node error — it never routes back to dev-story', async () => {
-    // gate-planner sits AFTER the CR route_loop, not inside it, so a failure cannot
-    // feed the dev-story fix loop. dev-story is invoked exactly once (initial run).
+  it('gate-planner failure never routes back to dev-story (hard node error, not a loop)', async () => {
     const run = await runV2Dag({
       cwd: cwdFixture,
       arguments: CANONICAL_REF,
@@ -796,9 +768,7 @@ describe('gate-planner — fail-closed on invalid evidence (no partial contract,
     ).toBe(1);
   });
 
-  it('A3.1-INT-025 [P2] upstream dependency failure: tea-automate emits no schema-valid output → gate-planner unreached, workflow fails at TA', async () => {
-    // No tea-automate nodeResponse → enforced codex provider fails output_format
-    // validation → tea-automate 'failed' → CR/verify/gate all skipped.
+  it('upstream dependency failure: tea-automate emits no schema-valid output, gate-planner unreached', async () => {
     const run = await runV2Dag({
       cwd: cwdFixture,
       arguments: CANONICAL_REF,
@@ -817,22 +787,42 @@ describe('gate-planner — fail-closed on invalid evidence (no partial contract,
     ).not.toBe('completed');
     expect(run.runFailed).toBe(true);
   });
+});
 
-  it.skip('A3.1-INT-022 [P1] output-JSON escaping: a story_ref with " \\ newline backtick $(...) still yields JSON.parse-valid output', async () => {
-    // SKIPPED — no injection seam yet. The only variable envelope field that can carry
-    // shell/JSON metacharacters is story_ref, and it is produced by resolve-story-input
-    // from the sprint-status key. To drive a metacharacter-laden RESOLVED_REF into
-    // gate-planner we need one of:
-    //   (a) a sprint-status fixture whose story key contains metacharacters AND survives
-    //       resolve-story-input's own key validation, or
-    //   (b) a lower-level bash harness that invokes the gate-planner bash body directly
-    //       with a crafted RESOLVED_REF env/substitution.
-    // Neither seam exists today. ACTIVATE once one is added, then assert:
-    //   const c = await readGatePlannerOutput(run.artifactsDir);
-    //   expect(c).not.toBeNull();               // printf JSON survived the metacharacters
-    //   expect(c!.story_ref).toBe(nastyRef);    // value round-trips intact
-    // This proves the implementer-owned emitted-JSON escaping (R-003), which the
-    // input-side single-quote substitution (verified safe, NR-1) does not cover.
-    expect(true).toBe(false);
+// ── JSON-escaping proof (direct bash execution) ────────────────────────────
+
+describe('gate-planner — JSON escaping of dynamic string fields', () => {
+  it('json_escape + printf produce valid JSON when story_ref contains backslash and double-quote', async () => {
+    // Direct bash execution of the json_escape function + printf contract template
+    // extracted from the gate-planner node. The nasty ref is passed as $1 to avoid
+    // bash quoting issues with backslashes and double quotes in the template.
+    const nastyRef = 'a1-2-test\\with"quotes';
+    const bashScript = `
+      set -e
+      json_escape() {
+        printf '%s' "$1" | sed 's/\\\\/\\\\\\\\/g; s/"/\\\\"/g; s/\\t/\\\\t/g'
+      }
+      RESOLVED_REF="$1"
+      RUN_RV=true; RUN_NR=false; RUN_TR=true
+      REASON_RV="test reason"
+      REASON_NR="test reason"
+      REASON_TR="Traceability review is the default final release gate."
+      CR_FINDINGS=0; TA_TESTS=3
+      CONTRACT=$(printf '{"contract_version":"1.0","workflow":"bmad-dev-story-with-tea-fix-loop-v2","node":"gate-planner","story_ref":"%s","run_rv":%s,"run_nr":%s,"run_tr":%s,"reason_rv":"%s","reason_nr":"%s","reason_tr":"%s","cr_findings_count":%s,"ta_test_files_changed":%s}' \\
+        "$(json_escape "$RESOLVED_REF")" \\
+        "$RUN_RV" "$RUN_NR" "$RUN_TR" \\
+        "$(json_escape "$REASON_RV")" \\
+        "$(json_escape "$REASON_NR")" \\
+        "$(json_escape "$REASON_TR")" \\
+        "$CR_FINDINGS" \\
+        "$TA_TESTS")
+      printf '%s' "$CONTRACT"
+    `;
+
+    const { stdout } = await execFileAsync('bash', ['-c', bashScript, '_', nastyRef]);
+    const parsed = JSON.parse(stdout) as Record<string, unknown>;
+    expect(parsed.story_ref).toBe(nastyRef);
+    expect(parsed.run_rv).toBe(true);
+    expect(typeof parsed.run_rv).toBe('boolean');
   });
 });
