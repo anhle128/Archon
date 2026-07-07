@@ -239,11 +239,49 @@ nodes:
       bmad-testarch-automate $ARGUMENTS
     prompt_suffix: |
       The canonical story key resolved for this pipeline run is: $resolve-story-input.output.story_ref
+      You MUST include the following structured fields in your output:
+      - contract_version: set to "1.0"
+      - workflow: set to "bmad-dev-story-with-tea-fix-loop-v2"
+      - node: set to "tea-automate"
+      - story_ref: set to exactly the canonical story key above
+      - test_files_changed: count of test files created or modified during automation (number, 0 if none)
+      - nfr_relevant: "true" if the implementation touches NFR-sensitive paths (performance, security, reliability, scalability), otherwise "false"
+      - automation_report: path to the human-readable automation summary markdown
     provider: codex
     depends_on: [dev-story]
     context: fresh
     model: gpt-5.5
     idle_timeout: 900000
+    output_format:
+      type: object
+      properties:
+        contract_version:
+          type: string
+        workflow:
+          type: string
+        node:
+          type: string
+        story_ref:
+          type: string
+          description: "Resolved canonical story key; must match $resolve-story-input.output.story_ref."
+        test_files_changed:
+          type: number
+          description: "Count of test files created or modified during automation. 0 means no test artifacts were produced."
+        nfr_relevant:
+          type: string
+          enum: ["true", "false"]
+          description: "Whether the implementation touches NFR-sensitive paths (performance, security, reliability, scalability)."
+        automation_report:
+          type: string
+          description: "Path to the human-readable automation summary markdown."
+      required:
+        - contract_version
+        - workflow
+        - node
+        - story_ref
+        - test_files_changed
+        - nfr_relevant
+        - automation_report
     output_type: tea-automation
 
   - id: code-review-auto
@@ -364,15 +402,163 @@ nodes:
       condition: "$verify-story-identity.output == 'PASS'"
       max_iterations: 20
       routes:
-        positive: tea-rv
+        positive: gate-planner
         negative: dev-story
         exhausted: review-loop-error
+
+  - id: gate-planner
+    bash: |
+      set -e
+
+      RESOLVED_REF=$resolve-story-input.output.story_ref
+      CR_REF=$code-review-auto.output.story_ref
+      CR_VERSION=$code-review-auto.output.contract_version
+      CR_WORKFLOW=$code-review-auto.output.workflow
+      CR_NODE=$code-review-auto.output.node
+      CR_FINDINGS=$code-review-auto.output.findings_count
+      TA_REF=$tea-automate.output.story_ref
+      TA_VERSION=$tea-automate.output.contract_version
+      TA_WORKFLOW=$tea-automate.output.workflow
+      TA_NODE=$tea-automate.output.node
+      TA_TESTS=$tea-automate.output.test_files_changed
+      TA_NFR=$tea-automate.output.nfr_relevant
+
+      # Fail-closed: every validation must exit before any JSON is emitted.
+
+      if [ -z "$RESOLVED_REF" ]; then
+        echo "ERROR: resolved story_ref is empty." >&2
+        exit 1
+      fi
+
+      if [ -z "$CR_REF" ] || [ -z "$TA_REF" ]; then
+        echo "ERROR: CR or TA story_ref is empty." >&2
+        exit 1
+      fi
+
+      if [ "$CR_REF" != "$RESOLVED_REF" ]; then
+        echo "ERROR: CR story_ref mismatch. Resolved: $RESOLVED_REF, Contract: $CR_REF" >&2
+        exit 1
+      fi
+
+      if [ "$TA_REF" != "$RESOLVED_REF" ]; then
+        echo "ERROR: TA story_ref mismatch. Resolved: $RESOLVED_REF, Contract: $TA_REF" >&2
+        exit 1
+      fi
+
+      if [ "$CR_VERSION" != "1.0" ]; then
+        echo "ERROR: CR contract_version mismatch — expected 1.0, got '$CR_VERSION'." >&2
+        exit 1
+      fi
+
+      if [ "$CR_WORKFLOW" != "bmad-dev-story-with-tea-fix-loop-v2" ]; then
+        echo "ERROR: CR workflow mismatch — expected bmad-dev-story-with-tea-fix-loop-v2, got '$CR_WORKFLOW'." >&2
+        exit 1
+      fi
+
+      if [ "$CR_NODE" != "code-review-auto" ]; then
+        echo "ERROR: CR node mismatch — expected code-review-auto, got '$CR_NODE'." >&2
+        exit 1
+      fi
+
+      if [ "$TA_VERSION" != "1.0" ]; then
+        echo "ERROR: TA contract_version mismatch — expected 1.0, got '$TA_VERSION'." >&2
+        exit 1
+      fi
+
+      if [ "$TA_WORKFLOW" != "bmad-dev-story-with-tea-fix-loop-v2" ]; then
+        echo "ERROR: TA workflow mismatch — expected bmad-dev-story-with-tea-fix-loop-v2, got '$TA_WORKFLOW'." >&2
+        exit 1
+      fi
+
+      if [ "$TA_NODE" != "tea-automate" ]; then
+        echo "ERROR: TA node mismatch — expected tea-automate, got '$TA_NODE'." >&2
+        exit 1
+      fi
+
+      # test_files_changed must be a non-negative integer (0 is valid).
+      case "$TA_TESTS" in
+        ''|*[!0-9]*)
+          echo "ERROR: test_files_changed is not a non-negative integer: '$TA_TESTS'." >&2
+          exit 1
+          ;;
+      esac
+      # Reject values that exceed safe integer range for bash arithmetic and JSON serialization.
+      if [ "${#TA_TESTS}" -gt 15 ]; then
+        echo "ERROR: test_files_changed exceeds safe integer range: '$TA_TESTS'." >&2
+        exit 1
+      fi
+
+      # findings_count must be a non-negative integer (0 is valid).
+      case "$CR_FINDINGS" in
+        ''|*[!0-9]*)
+          echo "ERROR: findings_count is not a non-negative integer: '$CR_FINDINGS'." >&2
+          exit 1
+          ;;
+      esac
+      # Reject values that exceed safe integer range for bash arithmetic and JSON serialization.
+      if [ "${#CR_FINDINGS}" -gt 15 ]; then
+        echo "ERROR: findings_count exceeds safe integer range: '$CR_FINDINGS'." >&2
+        exit 1
+      fi
+
+      # nfr_relevant must be exactly "true" or "false" (enum discipline).
+      if [ "$TA_NFR" != "true" ] && [ "$TA_NFR" != "false" ]; then
+        echo "ERROR: nfr_relevant must be exactly 'true' or 'false', got '$TA_NFR'." >&2
+        exit 1
+      fi
+
+      # Deterministic flag policy
+      if [ "$TA_TESTS" -gt 0 ]; then
+        RUN_RV=true
+        REASON_RV="Automation produced $TA_TESTS changed test files; run test-review."
+      else
+        RUN_RV=false
+        REASON_RV="No test files changed; test-review is not applicable."
+      fi
+
+      if [ "$TA_NFR" = "true" ]; then
+        RUN_NR=true
+        REASON_NR="Implementation touches NFR-sensitive paths."
+      else
+        RUN_NR=false
+        REASON_NR="No NFR-sensitive paths touched."
+      fi
+
+      RUN_TR=true
+      REASON_TR="Traceability review is the default final release gate."
+
+      # Serialize the contract with a real JSON encoder (bun) so every dynamic
+      # string field is correctly escaped for all JSON control characters.
+      CONTRACT=$(
+        GP_STORY_REF="$RESOLVED_REF" \
+        GP_RUN_RV="$RUN_RV" \
+        GP_RUN_NR="$RUN_NR" \
+        GP_RUN_TR="$RUN_TR" \
+        GP_REASON_RV="$REASON_RV" \
+        GP_REASON_NR="$REASON_NR" \
+        GP_REASON_TR="$REASON_TR" \
+        GP_CR_FINDINGS="$CR_FINDINGS" \
+        GP_TA_TESTS="$TA_TESTS" \
+        bun -e 'process.stdout.write(JSON.stringify({contract_version:"1.0",workflow:"bmad-dev-story-with-tea-fix-loop-v2",node:"gate-planner",story_ref:process.env.GP_STORY_REF,run_rv:process.env.GP_RUN_RV==="true",run_nr:process.env.GP_RUN_NR==="true",run_tr:process.env.GP_RUN_TR==="true",reason_rv:process.env.GP_REASON_RV,reason_nr:process.env.GP_REASON_NR,reason_tr:process.env.GP_REASON_TR,cr_findings_count:Number(process.env.GP_CR_FINDINGS),ta_test_files_changed:Number(process.env.GP_TA_TESTS)}))'
+      )
+
+      printf '%s' "$CONTRACT"
+
+      # Best-effort machine-readable artifact write
+      if [ -n "${ARTIFACTS_DIR:-}" ]; then
+        RUN_DIR="$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop"
+        mkdir -p "$RUN_DIR" 2>/dev/null || true
+        printf '%s' "$CONTRACT" > "$RUN_DIR/gate-planner.json" 2>/dev/null || true
+      fi
+    depends_on: [code-review-gate]
+    timeout: 60000
+    output_type: gate-decision
 
   - id: tea-rv
     prompt: |
       bmad-testarch-test-review $ARGUMENTS
     provider: codex
-    depends_on: [code-review-gate]
+    depends_on: [gate-planner]
     context: fresh
     model: gpt-5.5
     idle_timeout: 900000

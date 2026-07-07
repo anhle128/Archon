@@ -238,6 +238,19 @@ function crContract(overrides: Record<string, unknown>): Record<string, unknown>
   };
 }
 
+function validTaEvidence(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    contract_version: '1.0',
+    workflow: 'bmad-dev-story-with-tea-fix-loop-v2',
+    node: 'tea-automate',
+    story_ref: CANONICAL_KEY,
+    test_files_changed: 2,
+    nfr_relevant: 'false',
+    automation_report: 'automation-report.md',
+    ...overrides,
+  };
+}
+
 async function buildFixtureDir(baseDir: string): Promise<string> {
   const cwd = join(baseDir, 'v2-cr-auto-fixture');
   await mkdir(cwd, { recursive: true });
@@ -363,7 +376,7 @@ describe('AC1 — CR JSON contract drives the positive route', () => {
       arguments: CANONICAL_KEY,
       nodeResponses: {
         'dev-story': {},
-        'tea-automate': {},
+        'tea-automate': validTaEvidence(),
         'code-review-auto': crContract({ gate: 'PASS' }),
         'tea-rv': {},
         'tea-nr': {},
@@ -394,7 +407,7 @@ describe('AC2 — DS/TA/CR failures are ERROR, not a fix-loop back to dev-story'
       arguments: CANONICAL_KEY,
       nodeResponses: {
         'dev-story': {},
-        'tea-automate': {},
+        'tea-automate': validTaEvidence(),
         'code-review-auto': { __throw: true },
       },
     });
@@ -421,7 +434,7 @@ describe('AC2 — DS/TA/CR failures are ERROR, not a fix-loop back to dev-story'
       arguments: CANONICAL_KEY,
       nodeResponses: {
         'dev-story': {},
-        'tea-automate': {},
+        'tea-automate': validTaEvidence(),
         'code-review-auto': crContract({ gate: 'ERROR' }),
       },
     });
@@ -478,7 +491,7 @@ describe('AC3 — DS/TA/CR operate on the same resolved story_ref', () => {
       arguments: CANONICAL_KEY,
       nodeResponses: {
         'dev-story': {},
-        'tea-automate': {},
+        'tea-automate': validTaEvidence(),
         'code-review-auto': crContract({ gate: 'FAIL', story_ref: 'a2-1-some-other-story' }),
       },
     });
@@ -502,7 +515,7 @@ describe('AC3 — DS/TA/CR operate on the same resolved story_ref', () => {
       arguments: CANONICAL_KEY,
       nodeResponses: {
         'dev-story': {},
-        'tea-automate': {},
+        'tea-automate': validTaEvidence(),
         'code-review-auto': crContract({ gate: 'PASS' }),
         'tea-rv': {},
         'tea-nr': {},
@@ -537,7 +550,7 @@ describe('AC3 — DS/TA/CR operate on the same resolved story_ref', () => {
       arguments: aliasInput,
       nodeResponses: {
         'dev-story': {},
-        'tea-automate': {},
+        'tea-automate': validTaEvidence(),
         'code-review-auto': crContract({ gate: 'PASS' }),
         'tea-rv': {},
         'tea-nr': {},
@@ -570,7 +583,7 @@ describe('Q1 — CONCERNS gate routing (A2.1 recommendation: non-blocking → ro
       arguments: CANONICAL_KEY,
       nodeResponses: {
         'dev-story': {},
-        'tea-automate': {},
+        'tea-automate': validTaEvidence(),
         'code-review-auto': crContract({ gate: 'CONCERNS', findings_count: 2 }),
         'tea-rv': {},
         'tea-nr': {},

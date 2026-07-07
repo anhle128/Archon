@@ -517,7 +517,7 @@ describe('v2 story-input resolution (Story a1.2)', () => {
       const gate = getNode(loadV2(), 'code-review-gate');
       expect(gate?.route_loop?.from).toBe('verify-story-identity');
       expect(gate?.route_loop?.condition).toBe("$verify-story-identity.output == 'PASS'");
-      expect(gate?.route_loop?.routes?.positive).toBe('tea-rv');
+      expect(gate?.route_loop?.routes?.positive).toBe('gate-planner');
       expect(gate?.route_loop?.routes?.negative).toBe('dev-story');
       expect(gate?.route_loop?.routes?.exhausted).toBe('review-loop-error');
     });
@@ -620,10 +620,10 @@ describe('v2 story-input resolution (Story a1.2)', () => {
         'code-review-gate must depend on verify-story-identity (R4-F2 fix)'
       ).toContain('verify-story-identity');
 
-      // tea-rv depends on code-review-gate (which transitively depends on the guard)
+      // tea-rv depends on gate-planner (which transitively depends on the guard via code-review-gate)
       const teaRv = getNode(wf, 'tea-rv');
-      expect(teaRv?.depends_on ?? [], 'tea-rv must depend on code-review-gate').toContain(
-        'code-review-gate'
+      expect(teaRv?.depends_on ?? [], 'tea-rv must depend on gate-planner').toContain(
+        'gate-planner'
       );
     });
 
