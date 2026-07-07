@@ -58,6 +58,8 @@ so that the workflow has a single JSON contract (`quality-gate-summary.json`) th
 
 - [x] [Review][Patch] `quality-gate-summary` preserves the precursor output type and dependency shape instead of the accepted route-facing contract [.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:921] — FIXED: depends_on expanded to eight sources (code-review-auto, resolve-story-input + six branches), output_type changed to quality-gate-summary, all contract tests updated, bundle regenerated.
 - [x] [Review][Patch] `quality-gate-summary` does not validate the CR round before emitting it into the route-facing summary [.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:786] — FIXED: added `Number.isInteger(crRoundNum) && crRoundNum >= 1` guard in the bun parser before any summary emission; added TD-170 contract tests (YAML structural + technique proof) and TD-170 DAG tests (round -1, 1.5, 0 all fail closed); bundle regenerated; `bun run validate` passes.
+- [ ] [Review][Patch] R2-F1 — `quality-gate-summary` accepts real or skipped producer ids regardless of which RV/NR/TR output was selected [.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:869].
+- [ ] [Review][Patch] R2-F2 — The predecessor TR-join contract test still asserts stale fail-closed semantics for `FAIL` even though a4.1 emits a routable `FAIL` summary [packages/workflows/src/defaults/v2-tr-join-contract.test.ts:305].
 
 ## Dev Notes
 
