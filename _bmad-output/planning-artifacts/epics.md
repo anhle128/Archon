@@ -1,8 +1,8 @@
 ---
 title: Archon Epics Handoff - BMAD TEA V2 Workflow Orchestration
 status: handoff
-created: "2026-06-30"
-updated: "2026-06-30"
+created: '2026-06-30'
+updated: '2026-06-30'
 source_parent_epics: ../../../_bmad-output/planning-artifacts/epics-bmad-tea-workflow-orchestration-2026-06-29/epics.md
 ---
 

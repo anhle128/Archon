@@ -274,8 +274,8 @@ describe('Skip-node hygiene — timeout + output_type sidecar (TD-018)', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// TD-010 [P1] — tea-tr fail-closed join; stays in scope (no run_tr gating)
-// AC #4, #5
+// TD-010 [P1] — tea-tr fail-closed join with run_tr gating; tea-tr-skipped sibling
+// AC #1, #2, #4, #5
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('tea-tr join — fail-closed and scope-bounded (TD-010)', () => {
@@ -295,21 +295,125 @@ describe('tea-tr join — fail-closed and scope-bounded (TD-010)', () => {
     );
   });
 
-  it('tea-tr stays unconditional in scope — no when:, and tea-tr-skipped is absent', () => {
+  it('tea-tr is gated on run_tr==true and tea-tr-skipped sibling exists with run_tr==false', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     expect(
       (nodeById(v2, 'tea-tr') as { when?: string }).when,
-      'tea-tr must have no when:'
-    ).toBeUndefined();
+      'tea-tr must be gated on run_tr==true'
+    ).toBe('$gate-planner.output.run_tr == true');
+    const trSkipped = nodeById(v2, 'tea-tr-skipped');
+    expect(trSkipped, 'tea-tr-skipped must exist').toBeDefined();
     expect(
-      nodeById(v2, 'tea-tr-skipped'),
-      'tea-tr-skipped belongs to a later story'
-    ).toBeUndefined();
+      (trSkipped as { when?: string }).when,
+      'tea-tr-skipped must be gated on run_tr==false'
+    ).toBe('$gate-planner.output.run_tr == false');
+    expect('bash' in trSkipped!, 'tea-tr-skipped must be a bash node').toBe(true);
   });
 
-  it('create-pull-request still depends on tea-tr (unchanged tail)', () => {
+  it('create-pull-request depends on quality-gate-summary barrier (fail-closed before PR)', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
-    expect(nodeById(v2, 'create-pull-request')!.depends_on).toEqual(['tea-tr']);
+    expect([...nodeById(v2, 'create-pull-request')!.depends_on].sort()).toEqual(
+      ['quality-gate-summary'].sort()
+    );
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TD-020 [P1] — tea-tr real branch contract (output_format, prompt_suffix)
+// AC #1, #3
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('TR real branch contract — output_format + prompt_suffix (TD-020)', () => {
+  it('tea-tr declares an output_format with the required gate-envelope fields and gate enum excluding SKIPPED', () => {
+    const v2 = parseFromDisk(V2_FILE, V2_STEM);
+    const of = (nodeById(v2, 'tea-tr') as { output_format?: OutputFormat } | undefined)
+      ?.output_format;
+    expect(of, 'tea-tr must declare output_format').toBeDefined();
+    expect(of!.type).toBe('object');
+    for (const field of REAL_GATE_REQUIRED_FIELDS) {
+      expect(of!.required, `tea-tr.output_format must require ${field}`).toContain(field);
+    }
+    const gateEnum = of!.properties?.gate?.enum ?? [];
+    expect(gateEnum, 'tea-tr gate enum must be PASS/FAIL/CONCERNS/ERROR').toEqual([
+      'PASS',
+      'FAIL',
+      'CONCERNS',
+      'ERROR',
+    ]);
+    expect(gateEnum, 'tea-tr real branch must NOT allow SKIPPED').not.toContain('SKIPPED');
+  });
+
+  it('tea-tr prompt_suffix pins story_ref to the resolved input', () => {
+    const v2 = parseFromDisk(V2_FILE, V2_STEM);
+    const node = nodeById(v2, 'tea-tr') as { prompt_suffix?: string } | undefined;
+    expect(node?.prompt_suffix, 'tea-tr must add a prompt_suffix pinning story_ref').toBeDefined();
+    expect(
+      node!.prompt_suffix,
+      'tea-tr prompt_suffix must pin $resolve-story-input.output.story_ref'
+    ).toContain('$resolve-story-input.output.story_ref');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TD-021 [P1] — tea-tr-skipped skip-contract encoder + hygiene
+// AC #2
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('TR skip-contract encoder + hygiene (TD-021)', () => {
+  it('tea-tr-skipped uses the bun JSON.stringify encoder, not naive echo', () => {
+    const v2 = parseFromDisk(V2_FILE, V2_STEM);
+    const bash = (nodeById(v2, 'tea-tr-skipped') as { bash?: string } | undefined)?.bash ?? '';
+    expect(bash, 'tea-tr-skipped must serialize via bun -e JSON.stringify').toContain(
+      'JSON.stringify'
+    );
+    expect(bash, 'tea-tr-skipped contract must set gate:"SKIPPED"').toContain('SKIPPED');
+    expect(
+      /echo\s+["']?\{/.test(bash),
+      'tea-tr-skipped must not build JSON with a naive echo "{...}"'
+    ).toBe(false);
+  });
+
+  it('tea-tr-skipped depends on gate-planner directly (not on RV/NR branches)', () => {
+    const v2 = parseFromDisk(V2_FILE, V2_STEM);
+    expect(nodeById(v2, 'tea-tr-skipped')!.depends_on).toEqual(['gate-planner']);
+  });
+
+  it('tea-tr-skipped declares timeout: 60000 and output_type: trace-skipped', () => {
+    const v2 = parseFromDisk(V2_FILE, V2_STEM);
+    expect((nodeById(v2, 'tea-tr-skipped') as { timeout?: number }).timeout).toBe(60000);
+    expect((nodeById(v2, 'tea-tr-skipped') as { output_type?: string }).output_type).toBe(
+      'trace-skipped'
+    );
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TD-022 [P1] — run_tr boolean drives exactly one TR branch per flag value
+// AC #1, #2
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('TR when: conditions — paired inverse boolean atoms (TD-022)', () => {
+  it('evaluator: run_tr boolean drives exactly one TR branch per flag value', () => {
+    const makeCompletedOutput = (jsonStdout: string): NodeOutput => ({
+      state: 'completed',
+      output: jsonStdout,
+    });
+    const outputs = (runTr: boolean): Map<string, NodeOutput> =>
+      new Map([['gate-planner', makeCompletedOutput(JSON.stringify({ run_tr: runTr }))]]);
+    // run_tr=true → real true, skip false
+    expect(evaluateCondition('$gate-planner.output.run_tr == true', outputs(true)).result).toBe(
+      true
+    );
+    expect(evaluateCondition('$gate-planner.output.run_tr == false', outputs(true)).result).toBe(
+      false
+    );
+    // run_tr=false → real false, skip true
+    expect(evaluateCondition('$gate-planner.output.run_tr == true', outputs(false)).result).toBe(
+      false
+    );
+    expect(evaluateCondition('$gate-planner.output.run_tr == false', outputs(false)).result).toBe(
+      true
+    );
   });
 });
 
@@ -350,13 +454,17 @@ describe('Route-loop integrity — code-review-gate unchanged (TD-011)', () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('Bundle parity — generated defaults embed the new branches (TD-015)', () => {
-  it('BUNDLED_WORKFLOWS v2 entry includes tea-rv-skipped and tea-nr-skipped nodes', () => {
+  it('BUNDLED_WORKFLOWS v2 entry includes tea-rv-skipped, tea-nr-skipped, and tea-tr-skipped nodes', () => {
     const content = BUNDLED_WORKFLOWS[V2_STEM];
     expect(content, `bundled v2 workflow must be present`).toBeDefined();
     expect(content, 'regenerated bundle must contain tea-rv-skipped').toContain('tea-rv-skipped');
     expect(content, 'regenerated bundle must contain tea-nr-skipped').toContain('tea-nr-skipped');
+    expect(content, 'regenerated bundle must contain tea-tr-skipped').toContain('tea-tr-skipped');
     expect(content, 'regenerated bundle must contain the run_rv when: guard').toContain(
       'run_rv == false'
+    );
+    expect(content, 'regenerated bundle must contain the run_tr when: guard').toContain(
+      'run_tr == false'
     );
   });
 
@@ -382,11 +490,12 @@ describe('Scope guard — v1 baseline untouched (TD-016)', () => {
     }
   });
 
-  it('v2 change is additive — exactly two new node ids appear versus the branch baseline', () => {
+  it('v2 change is additive — exactly three new node ids appear versus the branch baseline', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     const ids = v2.nodes.map(n => n.id);
     expect(ids, 'tea-rv-skipped must be a NEW node id').toContain('tea-rv-skipped');
     expect(ids, 'tea-nr-skipped must be a NEW node id').toContain('tea-nr-skipped');
+    expect(ids, 'tea-tr-skipped must be a NEW node id').toContain('tea-tr-skipped');
     // No new packages/migrations concern is a repo-structure fact, guarded by full validate (TD-019).
   });
 });
@@ -421,7 +530,7 @@ describe('Test isolation — DAG fixture runs as its own bun test invocation (TD
 describe('Naming conventions — kebab-case ids, no plan references (TD-017)', () => {
   it('new node ids are kebab-case', () => {
     const kebab = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-    for (const id of ['tea-rv-skipped', 'tea-nr-skipped']) {
+    for (const id of ['tea-rv-skipped', 'tea-nr-skipped', 'tea-tr-skipped']) {
       expect(kebab.test(id), `${id} must be kebab-case`).toBe(true);
     }
   });

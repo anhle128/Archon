@@ -29,6 +29,7 @@ Archon must not require Hermes-specific command names or model vocabulary — al
 Archon can create or update the provider-side workflow binding for a project using generic `provider` and `name` vocabulary.
 
 **Consequences (testable):**
+
 - Archon never exposes provider commands or models named specifically for Hermes.
 - Workflow provider binding vocabulary uses `provider` and `name`, not `profile`, `agent_name`, `agent`, or `agent_provider`.
 - Archon's stored binding can be compared against a consumer's Project Binding metadata to detect disagreement (Archon exposes enough state for the consumer to do this).
@@ -39,6 +40,7 @@ Archon can create or update the provider-side workflow binding for a project usi
 Archon exposes start, status, approve, reject, resume, retry, and cancel for workflow runs through Archon CLI JSON — this is the producer side of the provider adapter Hermes calls.
 
 **Consequences (testable):**
+
 - Archon returns parseable JSON responses for every CLI call whose result updates consumer state.
 - Archon does not expose an HTTP API for this state-changing control path — CLI only.
 - Every response includes schema version, success flag, correlation id, workflow run reference when applicable, binding reference when applicable, machine-readable result payload, and machine-readable error shape when failed.
@@ -49,6 +51,7 @@ Archon exposes start, status, approve, reject, resume, retry, and cancel for wor
 Archon emits signed workflow events for workflow completion, failure, approval-requested, delivery-failed, and artifact events through a non-blocking outbox, consumed by Hermes at `/p/{profile}/webhooks/workflow-events/{provider}`.
 
 **Consequences (testable):**
+
 - Archon writes events to a durable, non-blocking outbox — workflow execution continues even if event delivery later fails.
 - Every event includes schema version, event id, event type, occurred timestamp, provider binding reference, workflow run reference, project/codebase reference, signature metadata, and idempotency key.
 - Archon delivers duplicate-safe event ids so consumers can detect redelivery.
@@ -59,6 +62,7 @@ Archon emits signed workflow events for workflow completion, failure, approval-r
 Archon can report whether workflow event delivery is healthy, delayed, failed, duplicated, or waiting for reconciliation.
 
 **Consequences (testable):**
+
 - Archon persists delivery status, retry status, last error, and terminal failure diagnostics independent of workflow execution success.
 - Archon does not block workflow execution solely because event delivery failed.
 - Archon exposes this status through CLI JSON so a consumer can request or display it.
