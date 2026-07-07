@@ -1,4 +1,4 @@
-name: bmad-create-dev-story-with-tea
+name: bmad-create-and-dev-story-with-tea
 description: |
   Use when: User provides a BMAD story_name/story selector and wants one workflow to create the story, validate readiness, produce TEA test design and red ATDD, implement the created story, and run the BMAD code-review fix loop before opening a PR.
   Triggers: "bmad create dev story with tea <story_name>", "create and dev bmad story with tea <story_name>", "CS VS TD AT DS CR <story_name>".
@@ -227,10 +227,10 @@ nodes:
 
       Do not stop at happy paths.
       Do not mark coverage complete if P0/P1 edge cases are only implied.
-    provider: claude
+    provider: codex
     depends_on: [validate-story-readiness]
     context: fresh
-    model: opus
+    model: gpt-5.5
     effort: high
     output_type: risk-based-test-design
 

@@ -93,6 +93,43 @@ describe('loadCommandPrompt — home-scope resolution', () => {
     if (result.success) expect(result.content).toBe('REPO version');
   });
 
+  it('strips YAML frontmatter from command markdown before returning prompt content', async () => {
+    writeFileSync(
+      join(repoRoot, '.archon', 'commands', 'create-pr.md'),
+      [
+        '---',
+        'description: Create a PR from current branch',
+        'argument-hint: none',
+        '---',
+        '',
+        '# Create Pull Request',
+        '',
+        'Create the PR from the current branch.',
+      ].join('\n')
+    );
+
+    const result = await loadCommandPrompt(makeDeps(false), repoRoot, 'create-pr');
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.content.startsWith('---')).toBe(false);
+      expect(result.content).not.toContain('description: Create a PR from current branch');
+      expect(result.content.trimStart().startsWith('# Create Pull Request')).toBe(true);
+    }
+  });
+
+  it('surfaces empty_file when frontmatter leaves no command body', async () => {
+    writeFileSync(
+      join(repoRoot, '.archon', 'commands', 'metadata-only.md'),
+      ['---', 'description: Metadata only', '---', ''].join('\n')
+    );
+
+    const result = await loadCommandPrompt(makeDeps(false), repoRoot, 'metadata-only');
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.reason).toBe('empty_file');
+  });
+
   it('resolves a home command inside a 1-level subfolder by basename', async () => {
     mkdirSync(join(archonHome, 'commands', 'triage'), { recursive: true });
     writeFileSync(join(archonHome, 'commands', 'triage', 'review.md'), 'Review body');

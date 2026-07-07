@@ -295,7 +295,8 @@ export async function loadCommandPrompt(
     const filePath = join(dir, match.relativePath);
     try {
       const content = await readFile(filePath, 'utf-8');
-      if (!content.trim()) {
+      const promptContent = stripYamlFrontmatter(content);
+      if (!promptContent.trim()) {
         getLog().error({ commandName }, 'command_file_empty');
         return {
           success: false,
@@ -304,7 +305,7 @@ export async function loadCommandPrompt(
         };
       }
       getLog().debug({ commandName, filePath }, 'command_loaded');
-      return { success: true, content };
+      return { success: true, content: promptContent };
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       if (err.code === 'EACCES') {
@@ -334,8 +335,17 @@ export async function loadCommandPrompt(
       // Binary: check bundled commands
       const bundledContent = BUNDLED_COMMANDS[commandName];
       if (bundledContent) {
+        const promptContent = stripYamlFrontmatter(bundledContent);
+        if (!promptContent.trim()) {
+          getLog().error({ commandName }, 'command_bundled_empty');
+          return {
+            success: false,
+            reason: 'empty_file',
+            message: `Bundled command file is empty: ${commandName}.md`,
+          };
+        }
         getLog().debug({ commandName }, 'command_loaded_bundled');
-        return { success: true, content: bundledContent };
+        return { success: true, content: promptContent };
       }
       getLog().debug({ commandName }, 'command_bundled_not_found');
     } else {
@@ -349,7 +359,8 @@ export async function loadCommandPrompt(
         const filePath = join(appDefaultsPath, match.relativePath);
         try {
           const content = await readFile(filePath, 'utf-8');
-          if (!content.trim()) {
+          const promptContent = stripYamlFrontmatter(content);
+          if (!promptContent.trim()) {
             getLog().error({ commandName }, 'command_app_default_empty');
             return {
               success: false,
@@ -358,7 +369,7 @@ export async function loadCommandPrompt(
             };
           }
           getLog().debug({ commandName }, 'command_loaded_app_defaults');
-          return { success: true, content };
+          return { success: true, content: promptContent };
         } catch (error) {
           const err = error as NodeJS.ErrnoException;
           if (err.code !== 'ENOENT') {
@@ -382,6 +393,19 @@ export async function loadCommandPrompt(
     reason: 'not_found',
     message: `Command prompt not found: ${commandName}.md (searched: ${allSearchPaths.join(', ')})`,
   };
+}
+
+function stripYamlFrontmatter(content: string): string {
+  const normalizedStart = content.startsWith('\uFEFF') ? content.slice(1) : content;
+  const firstLineEnd = normalizedStart.search(/\r?\n/);
+  const firstLine = firstLineEnd === -1 ? normalizedStart : normalizedStart.slice(0, firstLineEnd);
+  if (firstLine.trim() !== '---') return content;
+
+  const bodyStart = firstLineEnd === -1 ? normalizedStart.length : firstLineEnd + 1;
+  const closingMatch = /^---[ \t]*(?:\r?\n|$)/m.exec(normalizedStart.slice(bodyStart));
+  if (!closingMatch) return content;
+
+  return normalizedStart.slice(bodyStart + closingMatch.index + closingMatch[0].length);
 }
 
 // ─── Variable Substitution ───────────────────────────────────────────────────
