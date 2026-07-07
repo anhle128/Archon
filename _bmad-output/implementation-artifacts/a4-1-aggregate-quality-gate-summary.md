@@ -58,8 +58,8 @@ so that the workflow has a single JSON contract (`quality-gate-summary.json`) th
 
 - [x] [Review][Patch] `quality-gate-summary` preserves the precursor output type and dependency shape instead of the accepted route-facing contract [.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:921] — FIXED: depends_on expanded to eight sources (code-review-auto, resolve-story-input + six branches), output_type changed to quality-gate-summary, all contract tests updated, bundle regenerated.
 - [x] [Review][Patch] `quality-gate-summary` does not validate the CR round before emitting it into the route-facing summary [.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:786] — FIXED: added `Number.isInteger(crRoundNum) && crRoundNum >= 1` guard in the bun parser before any summary emission; added TD-170 contract tests (YAML structural + technique proof) and TD-170 DAG tests (round -1, 1.5, 0 all fail closed); bundle regenerated; `bun run validate` passes.
-- [ ] [Review][Patch] R2-F1 — `quality-gate-summary` accepts real or skipped producer ids regardless of which RV/NR/TR output was selected [.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:869].
-- [ ] [Review][Patch] R2-F2 — The predecessor TR-join contract test still asserts stale fail-closed semantics for `FAIL` even though a4.1 emits a routable `FAIL` summary [packages/workflows/src/defaults/v2-tr-join-contract.test.ts:305].
+- [x] [Review][Patch] R2-F1 — `quality-gate-summary` accepts real or skipped producer ids regardless of which RV/NR/TR output was selected [.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:869]. FIXED: added RV_SOURCE/NR_SOURCE/TR_SOURCE tracking variables, exact node identity validation against selected producer, gate set scoped per producer (real vs skipped); added TD-180 contract tests (4) and DAG tests (3); bundle regenerated.
+- [x] [Review][Patch] R2-F2 — The predecessor TR-join contract test still asserts stale fail-closed semantics for `FAIL` even though a4.1 emits a routable `FAIL` summary [packages/workflows/src/defaults/v2-tr-join-contract.test.ts:305]. FIXED: updated TD-042 description and assertions to reflect a4.1 semantics (FAIL is a valid routing decision, only ERROR is a hard error).
 
 ## Dev Notes
 
@@ -181,16 +181,18 @@ Qoder (Claude)
 - `quality-gate-summary` depends on 8 nodes: `code-review-auto`, `resolve-story-input`, plus the six RV/NR/TR branch nodes. This matches the story spec (line 30) and the route-loop consumer contract.
 - `output_type` is `quality-gate-summary` (matching the story spec line 30), not the a3.3 precursor `gate-summary`.
 - `decision_needed_count` = number of resolved role contracts whose gate is `CONCERNS` (per story design).
-- Node identity validation for RV/NR/TR checks against the expected node id set (real or skipped), not the contract's self-identification.
+- Node identity validation for RV/NR/TR checks against the exact selected producer (tracked via RV_SOURCE/NR_SOURCE/TR_SOURCE), not either/or.
 - R1-F1 fix pass: expanded depends_on from 6 to 8, changed output_type from `gate-summary` to `quality-gate-summary`, updated all contract tests (a4.1 + a3.3 TD-042), regenerated bundle.
-- All a3.3 tests (37 contract + 14 DAG), all a4.1 tests (40 contract + 25 DAG), and full `bun run validate` pass.
 - R1-F2 fix pass: added CR round positive-integer validation (`Number.isInteger(crRoundNum) && crRoundNum >= 1`) in the bun parser before any summary emission; emission uses validated `crRoundNum` directly; added TD-170 contract tests (2) and DAG tests (3) for negative, fractional, and zero round values; bundle regenerated.
+- R2-F1 fix pass: added RV_SOURCE/NR_SOURCE/TR_SOURCE shell tracking variables that record which producer (real vs skipped) was selected for each optional role; passed to bun parser as QGS_RV_SOURCE/QGS_NR_SOURCE/QGS_TR_SOURCE env vars; node identity validated against exact selected producer (not either/or); gate set scoped per producer (real allows PASS|FAIL|CONCERNS|ERROR, skipped allows only SKIPPED); added TD-180 contract tests (4) and DAG tests (3) proving real output self-identifying as skipped sibling fails closed; bundle regenerated.
+- R2-F2 fix pass: updated TD-042 in v2-tr-join-contract.test.ts to reflect a4.1 semantics — FAIL is a valid routing decision (emits summary with gate:"FAIL"), only ERROR is a hard error; updated test description and assertions to remove stale "block FAIL gate" wording.
+- All a3.3 tests (37 contract + 14 DAG), all a4.1 tests (44 contract + 28 DAG / 2 skip), and full `bun run validate` pass.
 
 ### File List
 
-- `.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml` — UPDATED: tea-tr gated with when/output_format/prompt_suffix, tea-tr-skipped added, quality-gate-summary evolved to four-role aggregator with 8-source depends_on and output_type:quality-gate-summary, create-pull-request rewired.
+- `.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml` — UPDATED: tea-tr gated with when/output_format/prompt_suffix, tea-tr-skipped added, quality-gate-summary evolved to four-role aggregator with 8-source depends_on and output_type:quality-gate-summary, create-pull-request rewired; R2-F1 fix added RV_SOURCE/NR_SOURCE/TR_SOURCE tracking and exact node identity + gate set validation per selected producer.
 - `packages/workflows/src/defaults/bundled-defaults.generated.ts` — REGENERATED via `bun run generate:bundled`.
-- `packages/workflows/src/defaults/v2-quality-summary-contract.test.ts` — UPDATED: aligned assertions with story spec (8 deps, quality-gate-summary output_type); added TD-170 CR round validation tests.
-- `packages/workflows/src/defaults/v2-quality-summary-dag.test.ts` — UPDATED: added TD-170 DAG tests for negative, fractional, and zero CR round values (all fail closed).
-- `packages/workflows/src/defaults/v2-tr-join-contract.test.ts` — UPDATED: TD-042 dep set expanded to 8, output_type changed to quality-gate-summary.
+- `packages/workflows/src/defaults/v2-quality-summary-contract.test.ts` — UPDATED: aligned assertions with story spec (8 deps, quality-gate-summary output_type); added TD-170 CR round validation tests; added TD-180 producer-source tracking tests (4).
+- `packages/workflows/src/defaults/v2-quality-summary-dag.test.ts` — UPDATED: added TD-170 DAG tests for negative, fractional, and zero CR round values (all fail closed); added TD-180 DAG tests for real output self-identifying as skipped sibling (3).
+- `packages/workflows/src/defaults/v2-tr-join-contract.test.ts` — UPDATED: TD-042 dep set expanded to 8, output_type changed to quality-gate-summary; R2-F2 fix updated TD-042 description and assertions to reflect a4.1 FAIL semantics.
 - `packages/workflows/src/defaults/v2-tr-join-dag.test.ts` — UPDATED: TD-043 updated to match a4.1 evolved behavior (FAIL is a valid routing decision, not a hard error).

@@ -797,8 +797,10 @@ nodes:
 
       # ── Select RV resolved contract (real or skipped) ──
       RV_RAW=$tea-rv.output
+      RV_SOURCE="tea-rv"
       if [ -z "$RV_RAW" ]; then
         RV_RAW=$tea-rv-skipped.output
+        RV_SOURCE="tea-rv-skipped"
       fi
       if [ -z "$RV_RAW" ]; then
         echo "ERROR: RV contract is empty (both real and skipped)." >&2
@@ -807,8 +809,10 @@ nodes:
 
       # ── Select NR resolved contract (real or skipped) ──
       NR_RAW=$tea-nr.output
+      NR_SOURCE="tea-nr"
       if [ -z "$NR_RAW" ]; then
         NR_RAW=$tea-nr-skipped.output
+        NR_SOURCE="tea-nr-skipped"
       fi
       if [ -z "$NR_RAW" ]; then
         echo "ERROR: NR contract is empty (both real and skipped)." >&2
@@ -817,8 +821,10 @@ nodes:
 
       # ── Select TR resolved contract (real or skipped) ──
       TR_RAW=$tea-tr.output
+      TR_SOURCE="tea-tr"
       if [ -z "$TR_RAW" ]; then
         TR_RAW=$tea-tr-skipped.output
+        TR_SOURCE="tea-tr-skipped"
       fi
       if [ -z "$TR_RAW" ]; then
         echo "ERROR: TR contract is empty (both real and skipped)." >&2
@@ -831,8 +837,11 @@ nodes:
         QGS_CR_ROUND="$CR_ROUND" \
         QGS_CR_RAW="$CR_RAW" \
         QGS_RV_RAW="$RV_RAW" \
+        QGS_RV_SOURCE="$RV_SOURCE" \
         QGS_NR_RAW="$NR_RAW" \
+        QGS_NR_SOURCE="$NR_SOURCE" \
         QGS_TR_RAW="$TR_RAW" \
+        QGS_TR_SOURCE="$TR_SOURCE" \
         bun -e '
           const resolvedRef = process.env.QGS_RESOLVED_REF;
           const crRound = process.env.QGS_CR_ROUND;
@@ -867,28 +876,43 @@ nodes:
           if (!["PASS","FAIL","CONCERNS","ERROR"].includes(cr.gate)) { console.error("ERROR: CR gate invalid: " + cr.gate); process.exit(1); }
 
           const rv = parseRaw(process.env.QGS_RV_RAW, "RV");
-          if (rv.node !== "tea-rv" && rv.node !== "tea-rv-skipped") { console.error("ERROR: RV node mismatch."); process.exit(1); }
+          const rvSource = process.env.QGS_RV_SOURCE;
+          if (rv.node !== rvSource) { console.error("ERROR: RV node mismatch: expected " + rvSource + " got " + rv.node); process.exit(1); }
           if (rv.contract_version !== "1.0") { console.error("ERROR: RV contract_version mismatch."); process.exit(1); }
           if (rv.workflow !== "bmad-dev-story-with-tea-fix-loop-v2") { console.error("ERROR: RV workflow mismatch."); process.exit(1); }
           if (rv.story_ref !== resolvedRef) { console.error("ERROR: RV story_ref mismatch."); process.exit(1); }
           validateFindingsCount(rv, "RV");
-          if (!["PASS","FAIL","CONCERNS","ERROR","SKIPPED"].includes(rv.gate)) { console.error("ERROR: RV gate invalid: " + rv.gate); process.exit(1); }
+          if (rvSource === "tea-rv") {
+            if (!["PASS","FAIL","CONCERNS","ERROR"].includes(rv.gate)) { console.error("ERROR: RV gate invalid: " + rv.gate); process.exit(1); }
+          } else {
+            if (rv.gate !== "SKIPPED") { console.error("ERROR: RV skipped gate invalid: " + rv.gate); process.exit(1); }
+          }
 
           const nr = parseRaw(process.env.QGS_NR_RAW, "NR");
-          if (nr.node !== "tea-nr" && nr.node !== "tea-nr-skipped") { console.error("ERROR: NR node mismatch."); process.exit(1); }
+          const nrSource = process.env.QGS_NR_SOURCE;
+          if (nr.node !== nrSource) { console.error("ERROR: NR node mismatch: expected " + nrSource + " got " + nr.node); process.exit(1); }
           if (nr.contract_version !== "1.0") { console.error("ERROR: NR contract_version mismatch."); process.exit(1); }
           if (nr.workflow !== "bmad-dev-story-with-tea-fix-loop-v2") { console.error("ERROR: NR workflow mismatch."); process.exit(1); }
           if (nr.story_ref !== resolvedRef) { console.error("ERROR: NR story_ref mismatch."); process.exit(1); }
           validateFindingsCount(nr, "NR");
-          if (!["PASS","FAIL","CONCERNS","ERROR","SKIPPED"].includes(nr.gate)) { console.error("ERROR: NR gate invalid: " + nr.gate); process.exit(1); }
+          if (nrSource === "tea-nr") {
+            if (!["PASS","FAIL","CONCERNS","ERROR"].includes(nr.gate)) { console.error("ERROR: NR gate invalid: " + nr.gate); process.exit(1); }
+          } else {
+            if (nr.gate !== "SKIPPED") { console.error("ERROR: NR skipped gate invalid: " + nr.gate); process.exit(1); }
+          }
 
           const tr = parseRaw(process.env.QGS_TR_RAW, "TR");
-          if (tr.node !== "tea-tr" && tr.node !== "tea-tr-skipped") { console.error("ERROR: TR node mismatch."); process.exit(1); }
+          const trSource = process.env.QGS_TR_SOURCE;
+          if (tr.node !== trSource) { console.error("ERROR: TR node mismatch: expected " + trSource + " got " + tr.node); process.exit(1); }
           if (tr.contract_version !== "1.0") { console.error("ERROR: TR contract_version mismatch."); process.exit(1); }
           if (tr.workflow !== "bmad-dev-story-with-tea-fix-loop-v2") { console.error("ERROR: TR workflow mismatch."); process.exit(1); }
           if (tr.story_ref !== resolvedRef) { console.error("ERROR: TR story_ref mismatch."); process.exit(1); }
           validateFindingsCount(tr, "TR");
-          if (!["PASS","FAIL","CONCERNS","ERROR","SKIPPED"].includes(tr.gate)) { console.error("ERROR: TR gate invalid: " + tr.gate); process.exit(1); }
+          if (trSource === "tea-tr") {
+            if (!["PASS","FAIL","CONCERNS","ERROR"].includes(tr.gate)) { console.error("ERROR: TR gate invalid: " + tr.gate); process.exit(1); }
+          } else {
+            if (tr.gate !== "SKIPPED") { console.error("ERROR: TR skipped gate invalid: " + tr.gate); process.exit(1); }
+          }
 
           const roles = [cr, rv, nr, tr];
           if (roles.some(r => r.gate === "ERROR")) { console.error("ERROR: a role gate is ERROR."); process.exit(1); }

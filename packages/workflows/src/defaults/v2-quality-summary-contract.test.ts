@@ -551,6 +551,61 @@ describe('CR round validation — positive integer guard (TD-170)', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+// TD-180 [P0] — producer-source tracking: each optional role validates node
+// identity against the exact selected producer (real vs skipped), and the
+// allowed gate set is scoped to the selected producer (AC #5)
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('Producer-source tracking — exact node identity per selected branch (TD-180)', () => {
+  it('aggregator tracks which producer was selected for each optional role via shell variables', () => {
+    const v2 = parseFromDisk(V2_FILE, V2_STEM);
+    const bash = summaryBash(v2);
+    expect(bash, 'must track RV source with RV_SOURCE variable').toMatch(/RV_SOURCE=/);
+    expect(bash, 'must track NR source with NR_SOURCE variable').toMatch(/NR_SOURCE=/);
+    expect(bash, 'must track TR source with TR_SOURCE variable').toMatch(/TR_SOURCE=/);
+  });
+
+  it('aggregator passes source tracking variables to the bun parser', () => {
+    const v2 = parseFromDisk(V2_FILE, V2_STEM);
+    const bash = summaryBash(v2);
+    expect(bash, 'must pass QGS_RV_SOURCE to bun parser').toContain('QGS_RV_SOURCE');
+    expect(bash, 'must pass QGS_NR_SOURCE to bun parser').toContain('QGS_NR_SOURCE');
+    expect(bash, 'must pass QGS_TR_SOURCE to bun parser').toContain('QGS_TR_SOURCE');
+  });
+
+  it('bun parser validates each optional role node identity against the exact selected producer', () => {
+    const v2 = parseFromDisk(V2_FILE, V2_STEM);
+    const bash = summaryBash(v2);
+    expect(bash, 'must read rvSource from env').toContain('QGS_RV_SOURCE');
+    expect(bash, 'must compare rv.node against rvSource exactly').toMatch(
+      /rv\.node\s*!==\s*rvSource/
+    );
+    expect(bash, 'must read nrSource from env').toContain('QGS_NR_SOURCE');
+    expect(bash, 'must compare nr.node against nrSource exactly').toMatch(
+      /nr\.node\s*!==\s*nrSource/
+    );
+    expect(bash, 'must read trSource from env').toContain('QGS_TR_SOURCE');
+    expect(bash, 'must compare tr.node against trSource exactly').toMatch(
+      /tr\.node\s*!==\s*trSource/
+    );
+  });
+
+  it('bun parser scopes gate validation to the selected producer (real vs skipped)', () => {
+    const v2 = parseFromDisk(V2_FILE, V2_STEM);
+    const bash = summaryBash(v2);
+    expect(bash, 'must branch on rvSource to scope the RV gate set').toMatch(
+      /rvSource\s*===\s*"tea-rv"/
+    );
+    expect(bash, 'must branch on nrSource to scope the NR gate set').toMatch(
+      /nrSource\s*===\s*"tea-nr"/
+    );
+    expect(bash, 'must branch on trSource to scope the TR gate set').toMatch(
+      /trSource\s*===\s*"tea-tr"/
+    );
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 // TD-152 [P2] — technique proof: the encoder is deterministic for identical
 // inputs (the artifact write overwrites, never appends duplicate JSON)
 // ═══════════════════════════════════════════════════════════════════════════

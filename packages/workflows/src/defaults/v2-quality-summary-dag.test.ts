@@ -1004,6 +1004,60 @@ describe('Fail-closed — invalid CR round (TD-170)', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+// TD-180 [P0] — a real role output that self-identifies as its skipped
+// sibling fails closed (producer-source identity mismatch) (AC #5)
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('Fail-closed — real output self-identifies as skipped sibling (TD-180)', () => {
+  it('real RV output with node:"tea-rv-skipped" → aggregator hard-fails, no summary', async () => {
+    const run = await runV2Dag({
+      cwd: cwdFixture,
+      arguments: CANONICAL_REF,
+      nodeResponses: baseResponses({ rv: validRvGate({ node: 'tea-rv-skipped' }) }),
+    });
+
+    expect(run.nodeState['tea-rv'], 'schema-valid mismatch still completes the source node').toBe(
+      'completed'
+    );
+    expect(
+      run.nodeState['quality-gate-summary'],
+      'source-tracking identity check must reject the mismatch'
+    ).toBe('failed');
+    expect(
+      await readSummaryContract(run.artifactsDir),
+      'no summary on producer-source mismatch'
+    ).toBeNull();
+    expect(run.providerCalls).not.toContain('create-pull-request');
+  });
+
+  it('real NR output with node:"tea-nr-skipped" → aggregator hard-fails, no summary', async () => {
+    const run = await runV2Dag({
+      cwd: cwdFixture,
+      arguments: CANONICAL_REF,
+      nodeResponses: baseResponses({ nr: validNrGate({ node: 'tea-nr-skipped' }) }),
+    });
+
+    expect(run.nodeState['tea-nr']).toBe('completed');
+    expect(run.nodeState['quality-gate-summary']).toBe('failed');
+    expect(await readSummaryContract(run.artifactsDir)).toBeNull();
+    expect(run.providerCalls).not.toContain('create-pull-request');
+  });
+
+  it('real TR output with node:"tea-tr-skipped" → aggregator hard-fails, no summary', async () => {
+    const run = await runV2Dag({
+      cwd: cwdFixture,
+      arguments: CANONICAL_REF,
+      nodeResponses: baseResponses({ tr: validTrGate({ node: 'tea-tr-skipped' }) }),
+    });
+
+    expect(run.nodeState['tea-tr']).toBe('completed');
+    expect(run.nodeState['quality-gate-summary']).toBe('failed');
+    expect(await readSummaryContract(run.artifactsDir)).toBeNull();
+    expect(run.providerCalls).not.toContain('create-pull-request');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 // TD-149 [P1] — failure paths leave stdout + quality-gate-summary.json absent
 // (no partial route decision) (AC #5)
 // ═══════════════════════════════════════════════════════════════════════════

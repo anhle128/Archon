@@ -303,7 +303,7 @@ describe('PR tail — resolves through quality-gate-summary barrier (TD-027)', (
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TD-042 [P0] — quality-gate-summary barrier: fail-closed on RV/NR failure
-// (R1-F3) and TR gate FAIL/ERROR (R1-F2)
+// (R1-F3) and ERROR (not FAIL — FAIL is a valid routing decision in a4.1)
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('quality-gate-summary — fail-closed barrier before PR (TD-042)', () => {
@@ -332,7 +332,7 @@ describe('quality-gate-summary — fail-closed barrier before PR (TD-042)', () =
     expect(node.trigger_rule).toBe('none_failed_min_one_success');
   });
 
-  it('quality-gate-summary parses TR contract via JSON.parse and validates the full envelope before checking gate', () => {
+  it('quality-gate-summary parses TR contract via JSON.parse and validates the full envelope before aggregating', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     const bash =
       (nodeById(v2, 'quality-gate-summary') as { bash?: string } | undefined)?.bash ?? '';
@@ -349,9 +349,14 @@ describe('quality-gate-summary — fail-closed barrier before PR (TD-042)', () =
     expect(bash, 'must validate node identity').toContain('node');
     expect(bash, 'must validate story_ref against resolved input').toContain('story_ref');
     expect(bash, 'must validate findings_count is non-negative').toContain('findings_count');
-    expect(bash, 'must block FAIL gate').toContain('FAIL');
-    expect(bash, 'must block ERROR gate').toContain('ERROR');
-    expect(bash, 'must exit non-zero on blocked gate').toContain('exit 1');
+    expect(
+      bash,
+      'must reference FAIL for aggregation (FAIL is a valid routing decision)'
+    ).toContain('FAIL');
+    expect(
+      bash,
+      'must exit non-zero on ERROR gate (ERROR is a hard failure, distinct from FAIL)'
+    ).toContain('exit 1');
   });
 
   it('quality-gate-summary declares timeout and typed output', () => {
