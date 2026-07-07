@@ -341,11 +341,11 @@ nodes:
 
   - id: create-pull-request
     command: archon-create-pr
-    provider: qodercli
+    provider: codex
     effort: high
     depends_on: [code-review-gate]
     context: fresh
-    model: MiniMax-M3
+    model: gpt-5.4-mini
     idle_timeout: 900000
     output_type: pull-request
 
