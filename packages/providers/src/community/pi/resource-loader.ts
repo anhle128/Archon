@@ -1,4 +1,25 @@
-import { DefaultResourceLoader, getAgentDir } from '@earendil-works/pi-coding-agent';
+type PiCodingAgentModule = typeof import('@earendil-works/pi-coding-agent');
+type DefaultResourceLoaderCtor = PiCodingAgentModule['DefaultResourceLoader'];
+type DefaultResourceLoader = InstanceType<DefaultResourceLoaderCtor>;
+type GetAgentDirFn = PiCodingAgentModule['getAgentDir'];
+
+let defaultResourceLoaderCtor: DefaultResourceLoaderCtor | undefined;
+let getAgentDirFn: GetAgentDirFn | undefined;
+
+export function hydratePiResourceLoader(
+  piCodingAgentModule: PiCodingAgentModule | null | undefined
+): void {
+  if (
+    !piCodingAgentModule ||
+    typeof piCodingAgentModule.DefaultResourceLoader !== 'function' ||
+    typeof piCodingAgentModule.getAgentDir !== 'function'
+  ) {
+    return;
+  }
+
+  defaultResourceLoaderCtor = piCodingAgentModule.DefaultResourceLoader;
+  getAgentDirFn = piCodingAgentModule.getAgentDir;
+}
 
 /**
  * In pi-coding-agent <= 0.67.x, DefaultResourceLoader and PackageManager
@@ -79,12 +100,18 @@ export function createNoopResourceLoader(
   cwd: string,
   options: NoopResourceLoaderOptions = {}
 ): DefaultResourceLoader {
-  return new DefaultResourceLoader({
+  if (!defaultResourceLoaderCtor || !getAgentDirFn) {
+    throw new Error(
+      'Pi ResourceLoader is not hydrated. Call hydratePiResourceLoader() before createNoopResourceLoader().'
+    );
+  }
+
+  return new defaultResourceLoaderCtor({
     cwd,
     // Required since pi-coding-agent 0.71 dropped the implicit fallback.
     // Calling Pi's own `getAgentDir()` honors `PI_CODING_AGENT_DIR` and
     // matches the behavior of the pre-0.71 default exactly.
-    agentDir: getAgentDir(),
+    agentDir: getAgentDirFn(),
     noExtensions: options.enableExtensions !== true,
     noSkills: true,
     noPromptTemplates: true,
@@ -160,6 +187,10 @@ export async function getOrCreateReloadedExtensionLoader(
   cwd: string,
   options: Pick<NoopResourceLoaderOptions, 'systemPrompt' | 'additionalSkillPaths'> = {}
 ): Promise<DefaultResourceLoader> {
+  if (!defaultResourceLoaderCtor || !getAgentDirFn) {
+    const piCodingAgentModule = await import('@earendil-works/pi-coding-agent');
+    hydratePiResourceLoader(piCodingAgentModule);
+  }
   const key = extensionLoaderCacheKey(
     cwd,
     options.systemPrompt,

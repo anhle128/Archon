@@ -1,27 +1,58 @@
-import {
-  createBashTool,
-  createCodingTools,
-  createEditTool,
-  createFindTool,
-  createGrepTool,
-  createLsTool,
-  createReadTool,
-  createWriteTool,
-  type BashSpawnContext,
-  type BashSpawnHook,
-} from '@earendil-works/pi-coding-agent';
 import type { ThinkingLevel } from '@earendil-works/pi-ai';
-
-/**
- * Pi's exported `Tool` type is structurally `AgentTool<TSchema>` and isn't
- * re-exported at the package root. Pi 0.68+ removed the `codingTools`
- * aggregate in favor of a `createCodingTools(cwd, options)` factory, so we
- * derive the element type from the factory's return type — still
- * namespace-free, still satisfies TS's portable-type requirement.
- */
-type PiTool = ReturnType<typeof createCodingTools>[number];
+import type { BashSpawnContext, BashSpawnHook } from '@earendil-works/pi-coding-agent';
 
 import type { NodeConfig } from '../../types';
+
+type PiTool = ReturnType<
+  typeof import('@earendil-works/pi-coding-agent').createCodingTools
+>[number];
+type CreateBashTool = typeof import('@earendil-works/pi-coding-agent').createBashTool;
+type CreateEditTool = typeof import('@earendil-works/pi-coding-agent').createEditTool;
+type CreateFindTool = typeof import('@earendil-works/pi-coding-agent').createFindTool;
+type CreateGrepTool = typeof import('@earendil-works/pi-coding-agent').createGrepTool;
+type CreateLsTool = typeof import('@earendil-works/pi-coding-agent').createLsTool;
+type CreateReadTool = typeof import('@earendil-works/pi-coding-agent').createReadTool;
+type CreateWriteTool = typeof import('@earendil-works/pi-coding-agent').createWriteTool;
+
+export interface PiToolFactoryApi {
+  createBashTool: CreateBashTool;
+  createEditTool: CreateEditTool;
+  createFindTool: CreateFindTool;
+  createGrepTool: CreateGrepTool;
+  createLsTool: CreateLsTool;
+  createReadTool: CreateReadTool;
+  createWriteTool: CreateWriteTool;
+}
+
+let piToolFactories: PiToolFactoryApi | undefined;
+
+export function hydratePiToolFactories(
+  piToolFactoryApi: PiToolFactoryApi | null | undefined
+): void {
+  if (
+    !piToolFactoryApi ||
+    typeof piToolFactoryApi.createBashTool !== 'function' ||
+    typeof piToolFactoryApi.createEditTool !== 'function' ||
+    typeof piToolFactoryApi.createFindTool !== 'function' ||
+    typeof piToolFactoryApi.createGrepTool !== 'function' ||
+    typeof piToolFactoryApi.createLsTool !== 'function' ||
+    typeof piToolFactoryApi.createReadTool !== 'function' ||
+    typeof piToolFactoryApi.createWriteTool !== 'function'
+  ) {
+    return;
+  }
+
+  piToolFactories = piToolFactoryApi;
+}
+
+function getPiToolFactories(): PiToolFactoryApi {
+  if (!piToolFactories) {
+    throw new Error(
+      'Pi tool factories are not hydrated. Call hydratePiToolFactories() before building Pi tools.'
+    );
+  }
+  return piToolFactories;
+}
 
 // ─── Thinking level ────────────────────────────────────────────────────────
 
@@ -128,21 +159,26 @@ function buildBashSpawnHook(env: Record<string, string> | undefined): BashSpawnH
 
 /** Map a normalized (lowercase) Pi tool name to its Pi-internal factory. */
 function buildPiTool(name: PiToolName, cwd: string, spawnHook: BashSpawnHook | undefined): PiTool {
+  const factories = getPiToolFactories();
   switch (name) {
     case 'read':
-      return createReadTool(cwd);
+      return factories.createReadTool(cwd);
     case 'bash':
-      return spawnHook ? createBashTool(cwd, { spawnHook }) : createBashTool(cwd);
+      return spawnHook
+        ? factories.createBashTool(cwd, { spawnHook })
+        : factories.createBashTool(cwd);
     case 'edit':
-      return createEditTool(cwd);
+      return factories.createEditTool(cwd);
     case 'write':
-      return createWriteTool(cwd);
+      return factories.createWriteTool(cwd);
     case 'grep':
-      return createGrepTool(cwd);
+      return factories.createGrepTool(cwd);
     case 'find':
-      return createFindTool(cwd);
+      return factories.createFindTool(cwd);
     case 'ls':
-      return createLsTool(cwd);
+      return factories.createLsTool(cwd);
+    default:
+      throw new Error(`Unsupported Pi tool: ${name}`);
   }
 }
 

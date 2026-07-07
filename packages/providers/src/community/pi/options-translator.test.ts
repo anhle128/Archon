@@ -4,7 +4,40 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { NodeConfig } from '../../types';
-import { resolvePiSkills, resolvePiThinkingLevel, resolvePiTools } from './options-translator';
+import {
+  hydratePiToolFactories,
+  resolvePiSkills,
+  resolvePiThinkingLevel,
+  resolvePiTools,
+  type PiToolFactoryApi,
+} from './options-translator';
+
+interface FakePiTool {
+  __piTool: string;
+  cwd: string;
+  spawnHook?: unknown;
+}
+
+const makeFakeTool = (name: string, cwd: string, spawnHook?: unknown): FakePiTool => ({
+  __piTool: name,
+  cwd,
+  ...(spawnHook ? { spawnHook } : {}),
+});
+
+const fakeToolFactories = {
+  createReadTool: (cwd: string) => makeFakeTool('read', cwd),
+  createBashTool: (cwd: string, options?: { spawnHook?: unknown }) =>
+    makeFakeTool('bash', cwd, options?.spawnHook),
+  createEditTool: (cwd: string) => makeFakeTool('edit', cwd),
+  createWriteTool: (cwd: string) => makeFakeTool('write', cwd),
+  createGrepTool: (cwd: string) => makeFakeTool('grep', cwd),
+  createFindTool: (cwd: string) => makeFakeTool('find', cwd),
+  createLsTool: (cwd: string) => makeFakeTool('ls', cwd),
+} as unknown as PiToolFactoryApi;
+
+beforeAll(() => {
+  hydratePiToolFactories(fakeToolFactories);
+});
 
 // ─── resolvePiThinkingLevel ─────────────────────────────────────────────
 

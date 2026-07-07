@@ -2,11 +2,22 @@
  * Telegram Markdown Converter
  *
  * Converts GitHub-flavored markdown (from AI assistants) to Telegram MarkdownV2 format.
- * Uses telegramify-markdown library for robust conversion.
+ * Uses telegramify-markdown when it is available, with a local fallback when the
+ * package cannot load in the current install.
  */
 
-import telegramifyMarkdown from 'telegramify-markdown';
+type TelegramifyMarkdown = (markdown: string, mode: 'escape') => string;
+
 import { createLogger } from '@archon/paths';
+
+interface TelegramifyMarkdownModule {
+  default?: TelegramifyMarkdown;
+}
+
+const telegramifyMarkdownModule = (await import('telegramify-markdown').catch(
+  () => null
+)) as TelegramifyMarkdownModule | null;
+const telegramifyMarkdown = telegramifyMarkdownModule?.default;
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -33,6 +44,10 @@ export function convertToTelegramMarkdown(markdown: string): string {
     return markdown;
   }
 
+  if (!telegramifyMarkdown) {
+    return convertToTelegramMarkdownFallback(markdown);
+  }
+
   try {
     // 'escape' strategy: escape unsupported tags rather than remove them
     let result = telegramifyMarkdown(markdown, 'escape');
@@ -45,8 +60,76 @@ export function convertToTelegramMarkdown(markdown: string): string {
     return result;
   } catch (error) {
     getLog().warn({ err: error }, 'telegram.markdown_conversion_failed');
-    return escapeMarkdownV2(markdown);
+    return convertToTelegramMarkdownFallback(markdown);
   }
+}
+
+function convertToTelegramMarkdownFallback(markdown: string): string {
+  const placeholders: string[] = [];
+
+  const stash = (replacement: string): string => {
+    const token = `\u0001${placeholders.length}\u0002`;
+    placeholders.push(replacement);
+    return token;
+  };
+
+  const restore = (text: string): string =>
+    placeholders.reduce(
+      (acc, replacement, index) => acc.replaceAll(`\u0001${index}\u0002`, replacement),
+      text
+    );
+
+  const processInline = (segment: string): string => {
+    let text = segment;
+
+    text = text.replace(/`[^`\n]+`/g, match => stash(match));
+    text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, match => stash(match));
+    text = text.replace(/(?<!\\)\*\*([^*\n]+)\*\*/g, (_, inner: string) =>
+      stash(`*${escapeMarkdownV2(inner)}*`)
+    );
+    text = text.replace(/(?<![\\*])\*([^*\n]+)\*(?!\*)/g, (_, inner: string) =>
+      stash(`_${escapeMarkdownV2(inner)}_`)
+    );
+
+    return escapeMarkdownV2(text);
+  };
+
+  const codeBlockPattern = /```[\s\S]*?```/g;
+  const text = markdown.replace(codeBlockPattern, match => stash(match));
+  const lines = text.split('\n');
+  let shouldAppendNewline = false;
+
+  const processedLines = lines.map(line => {
+    const quoteMatch = /^(\s*>\s?)(.*)$/.exec(line);
+    if (quoteMatch) {
+      shouldAppendNewline = true;
+      return `${quoteMatch[1]}${processInline(quoteMatch[2])}`;
+    }
+
+    const headerMatch = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (headerMatch) {
+      return `*${processInline(headerMatch[2])}*`;
+    }
+
+    const bulletMatch = /^(\s*[-*+]\s+)(.*)$/.exec(line);
+    if (bulletMatch) {
+      return `${bulletMatch[1]}${processInline(bulletMatch[2])}`;
+    }
+
+    const orderedMatch = /^(\s*\d+\.\s+)(.*)$/.exec(line);
+    if (orderedMatch) {
+      return `${orderedMatch[1]}${processInline(orderedMatch[2])}`;
+    }
+
+    return processInline(line);
+  });
+
+  const restored = restore(processedLines.join('\n'));
+  if (shouldAppendNewline && !restored.endsWith('\n')) {
+    return `${restored}\n`;
+  }
+
+  return restored;
 }
 
 /**
