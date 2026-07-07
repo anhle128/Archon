@@ -699,77 +699,15 @@ nodes:
     output_type: nfr-skipped
 
   - id: tea-tr
-    when: "$gate-planner.output.run_tr == true"
     prompt: |
       bmad-testarch-trace $ARGUMENTS
-    prompt_suffix: |
-      The canonical story key resolved for this pipeline run is: $resolve-story-input.output.story_ref
-      You MUST include the following structured fields in your output:
-      - contract_version: set to "1.0"
-      - workflow: set to "bmad-dev-story-with-tea-fix-loop-v2"
-      - node: set to "tea-tr"
-      - gate: one of PASS, FAIL, CONCERNS, ERROR
-      - story_ref: set to exactly the canonical story key above
-      - findings_count: number of findings identified
-      - report_file: path to the human-readable traceability report
     provider: claude
     depends_on: [tea-rv, tea-rv-skipped, tea-nr, tea-nr-skipped]
     trigger_rule: none_failed_min_one_success
     context: fresh
     model: sonnet
     idle_timeout: 900000
-    output_format:
-      type: object
-      properties:
-        contract_version:
-          type: string
-        workflow:
-          type: string
-        node:
-          type: string
-        gate:
-          type: string
-          enum: ["PASS", "FAIL", "CONCERNS", "ERROR"]
-        story_ref:
-          type: string
-          description: "Resolved canonical story key; must match $resolve-story-input.output.story_ref."
-        findings_count:
-          type: number
-        report_file:
-          type: string
-      required:
-        - contract_version
-        - workflow
-        - node
-        - gate
-        - story_ref
-        - findings_count
-        - report_file
     output_type: trace-findings
-
-  - id: tea-tr-skipped
-    when: "$gate-planner.output.run_tr == false"
-    bash: |
-      set -e
-
-      STORY_REF=$resolve-story-input.output.story_ref
-      REASON=$gate-planner.output.reason_tr
-
-      CONTRACT=$(
-        SK_STORY_REF="$STORY_REF" SK_REASON="$REASON" \
-        bun -e 'process.stdout.write(JSON.stringify({contract_version:"1.0",workflow:"bmad-dev-story-with-tea-fix-loop-v2",node:"tea-tr-skipped",story_ref:process.env.SK_STORY_REF,gate:"SKIPPED",findings_count:0,reason:process.env.SK_REASON}))'
-      )
-
-      printf '%s' "$CONTRACT"
-
-      if [ -n "${ARTIFACTS_DIR:-}" ]; then
-        RUN_DIR="$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop"
-        mkdir -p "$RUN_DIR" 2>/dev/null || true
-        printf '%s' "$CONTRACT" > "$RUN_DIR/tea-tr-skipped.gate.json" 2>/dev/null || true
-      fi
-    depends_on: [gate-planner]
-    timeout: 60000
-    output_type: trace-skipped
 
   - id: review-loop-error
     depends_on: [code-review-gate]
@@ -792,57 +730,9 @@ nodes:
       exit 1
     timeout: 60000
 
-  - id: quality-gate-summary
-    bash: |
-      set -e
-
-      TR_OUTPUT=$tea-tr.output
-
-      if [ -n "$TR_OUTPUT" ]; then
-        EXPECTED_REF=$resolve-story-input.output.story_ref
-
-        VALIDATION=$(
-          TR_JSON="$TR_OUTPUT" EXPECTED_REF="$EXPECTED_REF" \
-          bun -e '
-            const input = process.env.TR_JSON || "";
-            const expectedRef = process.env.EXPECTED_REF || "";
-            try {
-              const parsed = JSON.parse(input);
-              const errors = [];
-              if (parsed.contract_version !== "1.0") errors.push("contract_version must be 1.0");
-              if (parsed.workflow !== "bmad-dev-story-with-tea-fix-loop-v2") errors.push("workflow mismatch");
-              if (parsed.node !== "tea-tr") errors.push("node must be tea-tr");
-              if (expectedRef && parsed.story_ref !== expectedRef) errors.push("story_ref mismatch");
-              if (typeof parsed.findings_count !== "number" || parsed.findings_count < 0) errors.push("findings_count must be a non-negative number");
-              if (parsed.gate === "FAIL" || parsed.gate === "ERROR") errors.push("gate is " + parsed.gate);
-              if (errors.length > 0) {
-                process.stdout.write("BLOCK:" + errors.join("; "));
-              } else {
-                process.stdout.write("PASS");
-              }
-            } catch (e) {
-              process.stdout.write("BLOCK:invalid JSON - " + e.message);
-            }
-          '
-        )
-
-        case "$VALIDATION" in
-          BLOCK:*)
-            echo "Quality gate blocked: ${VALIDATION#BLOCK:}"
-            exit 1
-            ;;
-        esac
-      fi
-
-      echo "Quality gate summary: all RV/NR/TR branches resolved, TR gate acceptable."
-    depends_on: [tea-rv, tea-rv-skipped, tea-nr, tea-nr-skipped, tea-tr, tea-tr-skipped]
-    trigger_rule: none_failed_min_one_success
-    timeout: 60000
-    output_type: gate-summary
-
   - id: create-pull-request
     command: archon-create-pr
     provider: claude
-    depends_on: [quality-gate-summary]
+    depends_on: [tea-tr]
     context: fresh
     model: sonnet
