@@ -1,6 +1,6 @@
 # Story a4.1: Aggregate Quality Gate Summary
 
-Status: done
+Status: in-progress
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -57,6 +57,7 @@ so that the workflow has a single JSON contract (`quality-gate-summary.json`) th
 ### Review Findings
 
 - [x] [Review][Patch] `quality-gate-summary` preserves the precursor output type and dependency shape instead of the accepted route-facing contract [.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:921] — FIXED: depends_on expanded to eight sources (code-review-auto, resolve-story-input + six branches), output_type changed to quality-gate-summary, all contract tests updated, bundle regenerated.
+- [ ] [Review][Patch] `quality-gate-summary` does not validate the CR round before emitting it into the route-facing summary [.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:786]
 
 ## Dev Notes
 
