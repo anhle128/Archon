@@ -1,6 +1,8 @@
 import { Type, type TObject, type TSchema } from '@sinclair/typebox';
-import { defineTool, type ToolDefinition } from '@earendil-works/pi-coding-agent';
+import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
 import type { NativeTool } from '../../types';
+
+type PiDefineTool = typeof import('@earendil-works/pi-coding-agent').defineTool;
 
 function isString(v: unknown): v is string {
   return typeof v === 'string';
@@ -55,7 +57,10 @@ function jsonSchemaToTypeBox(schema: Record<string, unknown>): TObject {
  * Adapt NativeTools to Pi `ToolDefinition`s for the `customTools` array. The
  * handler's text result becomes the tool's content; `details` is unused.
  */
-export function buildPiNativeToolDefinitions(nativeTools: NativeTool[]): ToolDefinition[] {
+export function buildPiNativeToolDefinitions(
+  nativeTools: NativeTool[],
+  defineTool: PiDefineTool
+): ToolDefinition[] {
   return nativeTools.map(spec =>
     defineTool({
       // Pi shows `label` in its UI; derive it per-tool from the name so a future
