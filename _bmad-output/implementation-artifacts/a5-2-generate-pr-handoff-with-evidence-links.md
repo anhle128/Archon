@@ -19,7 +19,7 @@ The live per-finding deferred-items population (finding id, title, source gate, 
 However, a5-1 explicitly defined the populated `decision-needed-check.json` contract shape ("so a5.2's PR handoff has a stable target shape") [Source: a5-1 story, AC #5].
 Therefore this story can fixture-test the deferred-items rendering against a synthetic populated contract, deferring only the live Linear population itself.
 
-Additionally, `decision-needed-check` was confirmed present at merge commit `aab7c878` (PR #17) but was removed at HEAD (`e88c7eb6`) by a subsequent checkpoint commit.
+Additionally, `decision-needed-check` was confirmed present at merge commit `aab7c878` (PR #17) but was removed by checkpoint `e88c7eb6` and remains absent in the current checkout (`260fe3cf` at validation time).
 Task 0 MUST confirm the a5-1 end-state is present in the working checkout before building.
 
 ## Acceptance Criteria
@@ -40,7 +40,7 @@ AC #2 is implementable as a rendering template and fixture-testable against synt
 ## Tasks / Subtasks
 
 - [ ] **Task 0 — Confirm a5-1 baseline is present in this checkout (HARD GATE — read "READ FIRST" section first)**
-  - [ ] Confirm `decision-needed-check` exists as a `bash:` node with `depends_on: [quality-route-loop, quality-gate-summary, resolve-story-input]`, `output_type: decision-needed-check`, and `quality-route-loop.routes.positive: decision-needed-check` and `create-pull-request.depends_on: [decision-needed-check]`. If ABSENT (known state — removed at HEAD `e88c7eb6`, present at `aab7c878`), restore a5-1's end-state from `aab7c878` into the v2 YAML (cherry-pick the a5-1 diff from `aab7c878`, or re-apply from a5-1's documented target node shape). Record the restoration in the Dev Agent Record.
+  - [ ] Confirm `decision-needed-check` exists as a `bash:` node with `depends_on: [quality-route-loop, quality-gate-summary, resolve-story-input]`, `output_type: decision-needed-check`, and `quality-route-loop.routes.positive: decision-needed-check` and `create-pull-request.depends_on: [decision-needed-check]`. If ABSENT (known state — removed by checkpoint `e88c7eb6`, still absent in current checkout `260fe3cf`, present at `aab7c878`), restore a5-1's end-state from `aab7c878` into the v2 YAML (cherry-pick the a5-1 diff from `aab7c878`, or re-apply from a5-1's documented target node shape). Record the restoration in the Dev Agent Record.
   - [ ] Confirm the a4.2 tail is intact: `verify-quality-summary`, `quality-route-loop` (`from: verify-quality-summary`, `negative: dev-story`, `exhausted: review-loop-error`, `max_iterations: 20`), `review-loop-error.depends_on: [quality-route-loop]`. If any piece is absent, STOP and reconcile before proceeding.
   - [ ] Confirm `create-pull-request` is a `command: archon-create-pr` node with `context: fresh`, `provider: claude`, `model: sonnet`. Record the exact current shape.
   - [ ] Determine whether BMAD-METHOD M3.1/M3.2 or a Linear integration are available (they are NOT — same blocker as a5-1 Task 0). Record the decision: build evidence-links + deferred-items rendering, but live population remains deferred.
@@ -62,7 +62,7 @@ AC #2 is implementable as a rendering template and fixture-testable against synt
   - [ ] Do NOT re-run the full envelope gauntlet (upstream nodes already validated) — check only `story_ref` match and presence.
 
 - [ ] **Task 2 — Emit `pr-handoff.md` + `pr-handoff.json` (AC: #1, #2, #3, #4)**
-  - [ ] Emit `pr-handoff.json` to stdout (becomes `$pr-handoff.output`) with the contract envelope: `contract_version`, `workflow`, `node: "pr-handoff"`, `story_ref`, and evidence fields: `quality_summary` (object: `gate`, `round`, `blocking_count`, `decision_needed_count`, `findings_total`), `gates` (object with `cr`, `rv`, `nr`, `tr` each containing `gate`, `source` (real or skipped node id), `findings_count`), `gate_plan` (object: `run_rv`, `run_nr`, `run_tr`), `decision_needed` (object: `deferred`, `deferred_count`, `deferred_items` array — each item with `finding_id`, `title`, `source_gate`, `linear_issue_id`, `linear_url`, `status`).
+  - [ ] Emit `pr-handoff.json` to stdout (becomes `$pr-handoff.output`) with the contract envelope: `contract_version`, `workflow`, `node: "pr-handoff"`, `story_ref`, and evidence fields: `quality_summary` (object: `gate`, `round`, `blocking_count`, `decision_needed_count`, `findings_total`, `artifact_file`), `gates` (object with `cr`, `rv`, `nr`, `tr` each containing `gate`, `source` (real or skipped node id), `findings_count`, `artifact_file`, and optional `report_file`), `gate_plan` (object: `run_rv`, `run_nr`, `run_tr`, `artifact_file`), `decision_needed` (object: `deferred`, `deferred_count`, `deferred_items` array — each item with `finding_id`, `title`, `source_gate`, `linear_issue_id`, `linear_url`, `status`, plus `artifact_file` for the decision-needed contract).
   - [ ] Best-effort write `pr-handoff.json` to `$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop/pr-handoff.json` using the guarded pattern (`if [ -n "${ARTIFACTS_DIR:-}" ]; then ... || true; fi`).
   - [ ] Best-effort write `pr-handoff.md` (human-readable Markdown rendering of the evidence) to `$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop/pr-handoff.md`. The Markdown MUST:
     - List each gate with its outcome (PASS/FAIL/CONCERNS/SKIPPED) and source node.
@@ -92,7 +92,7 @@ AC #2 is implementable as a rendering template and fixture-testable against synt
     - No plan/story/finding identifiers (`a\d[-.]\d`, `R\d-F\d`, `A-FR-\d`) appear in the test file — use `TD-nnn`/`AC#` taxonomy only.
   - [ ] Add `packages/workflows/src/defaults/v2-pr-handoff-dag.test.ts` (uses `mock.module` + real executor + real bash — MUST run as its OWN isolated `bun test` segment). Prove end-to-end with stubbed upstream:
     - (a) All gates PASS, `decision_needed_count: 0`, `deferred: false` → `pr-handoff` emits `pr-handoff.json` with `status: "PASS"`, empty `deferred_items`, evidence links for all six contracts, and `pr-handoff.md` contains "No decision-needed items were deferred."
-    - (b) Synthetic populated `deferred_items` in `decision-needed-check.json` (simulate future live path) → `pr-handoff.md` lists each item with finding id/title/source gate/Linear id/URL/status, contains "deferred to Linear", does NOT contain "fixed in this PR" or imply items were resolved.
+    - (b) Synthetic populated `deferred_items` in `decision-needed-check.json` (simulate future live path) → `pr-handoff.md` lists each item with finding id/title/source gate/Linear id/URL/status, contains "deferred to Linear" and "NOT fixed in this PR", and does NOT contain positive/resolved wording such as "were fixed in this PR" without the `NOT` qualifier.
     - (c) `story_ref` mismatch on one consumed contract → node fails closed (non-zero exit, no artifact emitted), `create-pull-request` NOT reached.
     - (d) RV skipped, NR real, TR skipped → handoff correctly shows `SKIPPED` for RV/TR and real gate for NR, with correct source node ids.
     - (e) Confirm the emitted `pr-handoff.json` carries the full envelope + `story_ref` equal to the resolved key.
@@ -148,6 +148,19 @@ The artifact file paths recorded in the handoff are for the human reviewer's con
 **AI node contracts carry a `report_file` field** pointing to the human-readable report (e.g., `tea-rv.output.report_file`).
 Skipped nodes do NOT have a `report_file` — they have `reason`.
 Include `report_file` in the handoff links when available.
+
+The handoff JSON and Markdown MUST include concrete artifact path fields, not only source node names.
+Use these mappings:
+
+- `quality_summary.artifact_file`: `$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop/quality-gate-summary.json`
+- `gate_plan.artifact_file`: `$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop/gate-planner.json`
+- `decision_needed.artifact_file`: `$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop/decision-needed.json`
+- `gates.cr.artifact_file`: `$ARTIFACTS_DIR/nodes/code-review-auto.md`
+- `gates.rv.artifact_file`: `$ARTIFACTS_DIR/nodes/test-review-findings.md` when source is `tea-rv`; otherwise `$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop/tea-rv-skipped.gate.json`
+- `gates.nr.artifact_file`: `$ARTIFACTS_DIR/nodes/nfr-findings.md` when source is `tea-nr`; otherwise `$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop/tea-nr-skipped.gate.json`
+- `gates.tr.artifact_file`: `$ARTIFACTS_DIR/nodes/trace-findings.md` when source is `tea-tr`; otherwise `$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop/tea-tr-skipped.gate.json`
+
+The Markdown table must render these as links so AC #1 can be verified without guessing.
 
 ### Resolving real vs. skipped branches
 
@@ -282,13 +295,27 @@ Verified against `loader.ts`:
       PH_RV="$RV_OUT" PH_RV_SRC="$RV_SOURCE" \
       PH_NR="$NR_OUT" PH_NR_SRC="$NR_SOURCE" \
       PH_TR="$TR_OUT" PH_TR_SRC="$TR_SOURCE" \
+      PH_ARTIFACTS_DIR="${ARTIFACTS_DIR:-}" \
       bun -e '
         const ref = process.env.PH_REF;
+        const artifactsDir = process.env.PH_ARTIFACTS_DIR || "$ARTIFACTS_DIR";
+        const runFile = (name) => artifactsDir + "/bmad-dev-story-with-tea-fix-loop/" + name;
+        const nodeFile = (name) => artifactsDir + "/nodes/" + name;
         function parse(raw, label) {
           let c;
           try { c = JSON.parse(raw); } catch { throw new Error(label + " is not valid JSON"); }
           if (!c.story_ref || c.story_ref !== ref) throw new Error(label + " story_ref mismatch: " + c.story_ref + " !== " + ref);
           return c;
+        }
+        function gateArtifact(source) {
+          if (source === "code-review-auto") return nodeFile("code-review-auto.md");
+          if (source === "tea-rv") return nodeFile("test-review-findings.md");
+          if (source === "tea-rv-skipped") return runFile("tea-rv-skipped.gate.json");
+          if (source === "tea-nr") return nodeFile("nfr-findings.md");
+          if (source === "tea-nr-skipped") return runFile("tea-nr-skipped.gate.json");
+          if (source === "tea-tr") return nodeFile("trace-findings.md");
+          if (source === "tea-tr-skipped") return runFile("tea-tr-skipped.gate.json");
+          throw new Error("unknown gate source: " + source);
         }
         const summary = parse(process.env.PH_SUMMARY, "quality-gate-summary");
         const dnc = parse(process.env.PH_DNC, "decision-needed-check");
@@ -312,23 +339,26 @@ Verified against `loader.ts`:
             round: summary.round,
             blocking_count: summary.blocking_count,
             decision_needed_count: summary.decision_needed_count,
-            findings_total: summary.findings_total
+            findings_total: summary.findings_total,
+            artifact_file: runFile("quality-gate-summary.json")
           },
           gates: {
-            cr: { gate: cr.gate, source: "code-review-auto", findings_count: cr.findings_count, report_file: cr.report_file || null },
-            rv: { gate: rv.gate, source: rvSrc, findings_count: rv.findings_count, report_file: rv.report_file || null },
-            nr: { gate: nr.gate, source: nrSrc, findings_count: nr.findings_count, report_file: nr.report_file || null },
-            tr: { gate: tr.gate, source: trSrc, findings_count: tr.findings_count, report_file: tr.report_file || null }
+            cr: { gate: cr.gate, source: "code-review-auto", findings_count: cr.findings_count, artifact_file: gateArtifact("code-review-auto"), report_file: cr.report_file || null },
+            rv: { gate: rv.gate, source: rvSrc, findings_count: rv.findings_count, artifact_file: gateArtifact(rvSrc), report_file: rv.report_file || null },
+            nr: { gate: nr.gate, source: nrSrc, findings_count: nr.findings_count, artifact_file: gateArtifact(nrSrc), report_file: nr.report_file || null },
+            tr: { gate: tr.gate, source: trSrc, findings_count: tr.findings_count, artifact_file: gateArtifact(trSrc), report_file: tr.report_file || null }
           },
           gate_plan: {
             run_rv: gp.run_rv,
             run_nr: gp.run_nr,
-            run_tr: gp.run_tr
+            run_tr: gp.run_tr,
+            artifact_file: runFile("gate-planner.json")
           },
           decision_needed: {
             deferred: dnc.deferred,
             deferred_count: dnc.deferred_count,
-            deferred_items: dnc.deferred_items || []
+            deferred_items: dnc.deferred_items || [],
+            artifact_file: runFile("decision-needed.json")
           }
         };
 
@@ -354,16 +384,22 @@ Verified against `loader.ts`:
         lines.push("**Overall:** " + h.quality_summary.gate + " (round " + h.quality_summary.round + ")");
         lines.push("**Blocking findings:** " + h.quality_summary.blocking_count);
         lines.push("**Total findings:** " + h.quality_summary.findings_total);
+        lines.push("**Quality summary artifact:** [" + h.quality_summary.artifact_file + "](" + h.quality_summary.artifact_file + ")");
+        lines.push("**Decision-needed artifact:** [" + h.decision_needed.artifact_file + "](" + h.decision_needed.artifact_file + ")");
         lines.push("");
         lines.push("### Gate Results");
         lines.push("");
-        lines.push("| Gate | Outcome | Source | Findings |");
-        lines.push("|------|---------|--------|----------|");
+        lines.push("| Gate | Outcome | Source | Findings | Artifact | Report |");
+        lines.push("|------|---------|--------|----------|----------|--------|");
         for (const [key, g] of Object.entries(h.gates)) {
-          lines.push("| " + key.toUpperCase() + " | " + g.gate + " | " + g.source + " | " + g.findings_count + " |");
+          const artifact = "[" + g.artifact_file + "](" + g.artifact_file + ")";
+          const report = g.report_file ? "[" + g.report_file + "](" + g.report_file + ")" : "";
+          lines.push("| " + key.toUpperCase() + " | " + g.gate + " | " + g.source + " | " + g.findings_count + " | " + artifact + " | " + report + " |");
         }
         lines.push("");
         lines.push("### Gate Plan");
+        lines.push("");
+        lines.push("Artifact: [" + h.gate_plan.artifact_file + "](" + h.gate_plan.artifact_file + ")");
         lines.push("");
         lines.push("- RV (test review): " + (h.gate_plan.run_rv ? "executed" : "skipped"));
         lines.push("- NR (NFR review): " + (h.gate_plan.run_nr ? "executed" : "skipped"));
@@ -438,7 +474,7 @@ The `output_type: pr-handoff` additionally makes the executor write typed sideca
 - a5-1's deferred-items contract has: `deferred: bool`, `deferred_count: number`, `created_count`, `reused_count`, `synced_count`, `deferred_items: [{finding_id, title, source_gate, linear_issue_id, linear_url, status}]`.
 - a5-1 review findings carry forward: (1) ensure env vars are EXPORTED into `bun -e` invocations (the `DNC_SUMMARY="$SUMMARY"` prefix pattern); (2) test files must not embed real story keys — use a neutral synthetic key whose prefix satisfies `resolve-story-input`'s awk pattern but does NOT match the naming-hygiene guard (`a[0-9][-.][0-9]`); (3) `typeof count !== "number"` guard — never `Number(...)` coercion [Source: a5-1 review finding R1-F1].
 - a5-1's tests (`v2-decision-needed-contract.test.ts`, `v2-decision-needed-dag.test.ts`) are the closest templates for the new tests (along with a4.2's `v2-quality-route-loop-*.test.ts`).
-- a5-1 is PRESENT at merge commit `aab7c878` but ABSENT at HEAD `e88c7eb6`. Task 0 must restore it.
+- a5-1 is PRESENT at merge commit `aab7c878` but was removed by checkpoint `e88c7eb6` and remains ABSENT in current checkout `260fe3cf`. Task 0 must restore it.
 
 ### Previous story intelligence (a4-1, a4-2 — inherited disciplines)
 
