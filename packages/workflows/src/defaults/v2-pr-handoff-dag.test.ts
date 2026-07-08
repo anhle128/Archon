@@ -714,13 +714,16 @@ describe('Missing branch boundary — both real and skipped empty (TD-414)', () 
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// TD-415 [P1] — mixed branch path: RV skipped, NR real, TR skipped →
-// handoff correctly shows SKIPPED for RV/TR and real gate for NR with
-// correct source node ids. (AC #1)
+// TD-415 [P1] — mixed branch path: RV skipped, NR real, TR real →
+// handoff correctly shows tea-rv-skipped source for RV and real sources for
+// NR/TR with correct source node ids. (AC #1)
+// Note: gate-planner always sets run_tr=true, so TR always runs real through
+// the DAG. Skipped-TR rendering is proven by technique proof in the contract
+// test sibling (TD-415b).
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe('Mixed branch — RV skip, NR real, TR skip (TD-415)', () => {
-  it('RV skipped + NR real + TR skipped → handoff shows correct sources and outcomes', async () => {
+describe('Mixed branch — RV skip, NR real, TR real (TD-415)', () => {
+  it('RV skipped + NR real + TR real → handoff shows correct sources and outcomes', async () => {
     const run = await runV2Dag({
       cwd: cwdFixture,
       arguments: CANONICAL_REF,
@@ -733,20 +736,18 @@ describe('Mixed branch — RV skip, NR real, TR skip (TD-415)', () => {
     });
 
     // When test_files_changed is 0, gate-planner sets run_rv=false, so
-    // tea-rv-skipped runs instead of tea-rv. tea-nr runs real. For TR,
-    // the planner always runs TR (run_tr=true), so tea-tr runs real.
-    // The exact branch mix depends on gate-planner logic — assert the
-    // handoff correctly reflects whatever branches were taken.
+    // tea-rv-skipped runs instead of tea-rv. tea-nr and tea-tr both run real
+    // (gate-planner always sets run_tr=true).
     if (run.nodeState[NODE_ID] === 'completed') {
       const artifact = await readHandoffJson(run.artifactsDir);
       expect(artifact, 'handoff must be written when node completes').not.toBeNull();
       const gates = artifact!.parsed.gates as Record<string, Record<string, unknown>>;
+      expect(gates.rv, 'RV must be present in gates').toBeDefined();
+      expect(gates.rv!.source, 'RV source must be tea-rv-skipped').toBe('tea-rv-skipped');
       expect(gates.nr, 'NR must be present in gates').toBeDefined();
-      // Source should reflect which branch ran
-      for (const key of ['rv', 'nr', 'tr']) {
-        expect(gates[key], `${key} gate must be present`).toBeDefined();
-        expect(typeof gates[key]!.source === 'string', `${key} source must be a string`).toBe(true);
-      }
+      expect(gates.nr!.source, 'NR source must be tea-nr').toBe('tea-nr');
+      expect(gates.tr, 'TR must be present in gates').toBeDefined();
+      expect(gates.tr!.source, 'TR source must be tea-tr').toBe('tea-tr');
     }
   });
 });

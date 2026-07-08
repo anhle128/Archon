@@ -106,8 +106,8 @@ AC #2 is implementable as a rendering template and fixture-testable against synt
 
 ### Review Findings
 
-- [ ] [Review][Patch] Escape deferred-item Markdown table cells in `pr-handoff.md` rendering [.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:1206]
-- [ ] [Review][Patch] Make TD-415 actually prove the requested skipped-TR branch path [packages/workflows/src/defaults/v2-pr-handoff-dag.test.ts:722]
+- [x] [Review][Patch] Escape deferred-item Markdown table cells in `pr-handoff.md` rendering [.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:1206]
+- [x] [Review][Patch] Make TD-415 actually prove the requested skipped-TR branch path [packages/workflows/src/defaults/v2-pr-handoff-dag.test.ts:722]
 
 ## Dev Notes
 
@@ -563,6 +563,8 @@ Claude (via Qoder)
 - Task 5: Registered both test files in package.json. Regenerated bundled defaults. Updated 5 stale assertions in prior test files (TD-161, TD-027, TD-010, TD-302, TD-218) that expected create-pull-request.depends_on: [decision-needed-check] to expect [pr-handoff]. Fixed naming-hygiene violations (removed story identifier references from test descriptions).
 - Fixed variable name `dnc` → `dnCheck` in the pr-handoff bun -e script to avoid triggering the 'nc ' forbidden command check in tests.
 - Pre-existing core test failure (codebases.test.ts) confirmed unrelated to this change.
+- Fix pass R1-F1: Added `esc` helper to escape `|` in deferred-item Markdown table cells (YAML renderer + test HANDOFF_RENDER_SCRIPT). Strengthened TD-411 to assert exactly 5 cells per row using lookbehind pipe-split.
+- Fix pass R1-F2: Updated TD-415 description/assertions to match actual branch mix (RV skip + NR real + TR real). Added TD-415b technique proof for skipped-TR rendering with synthetic data.
 
 ### Completion Notes List
 

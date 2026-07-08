@@ -232,8 +232,9 @@ const HANDOFF_RENDER_SCRIPT = `
       lines.push("");
       lines.push("| Finding | Title | Source | Linear Issue | Status |");
       lines.push("|---------|-------|--------|--------------|--------|");
+      const esc = (s) => String(s).replace(/\\|/g, "\\\\|");
       for (const item of h.decision_needed.deferred_items) {
-        lines.push("| " + item.finding_id + " | " + item.title + " | " + item.source_gate + " | [" + item.linear_issue_id + "](" + item.linear_url + ") | " + item.status + " |");
+        lines.push("| " + esc(item.finding_id) + " | " + esc(item.title) + " | " + esc(item.source_gate) + " | [" + esc(item.linear_issue_id) + "](" + esc(item.linear_url) + ") | " + esc(item.status) + " |");
       }
     }
     process.stdout.write(lines.join("\\n") + "\\n");
@@ -760,6 +761,80 @@ describe('Boundary rendering — special chars in deferred items (TD-411 techniq
     expect(r.code, 'rendering should succeed with special chars').toBe(0);
     expect(r.stdout).toContain('TD-F003');
     expect(r.stdout).toContain('TDX-789');
+
+    const dataRow = r.stdout
+      .split('\n')
+      .find(line => line.includes('TD-F003') && line.startsWith('|'));
+    expect(dataRow, 'must find the deferred-item data row').toBeDefined();
+    const cells = dataRow!
+      .slice(1, -1)
+      .split(/(?<!\\)\|/)
+      .map(c => c.trim());
+    expect(cells, 'row must have exactly 5 cells matching the 5 header columns').toHaveLength(5);
+    expect(cells[0]).toContain('TD-F003');
+    expect(cells[1]).toContain('Edge');
+    expect(cells[1]).toContain('case');
+    expect(cells[1], 'pipe in title must be escaped, not create extra cells').toContain('\\|');
+    expect(cells[2]).toContain('TR');
+    expect(cells[3]).toContain('TDX-789');
+    expect(cells[4]).toContain('deferred');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TD-415b [P1] — technique proof: skipped-TR (and skipped-RV) rendering.
+// The DAG test (TD-415) cannot produce a skipped TR because gate-planner
+// always sets run_tr=true. This technique proof feeds synthetic contracts
+// with skipped sources through the rendering pipeline and asserts the
+// Markdown shows correct source node ids and artifact paths. (AC #1)
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('Skipped-TR rendering — technique proof (TD-415b)', () => {
+  it('RV skipped + NR real + TR skipped → handoff.md shows correct skipped sources and artifact paths', async () => {
+    const handoff = syntheticHandoff({
+      gates: {
+        cr: {
+          gate: 'PASS',
+          source: 'code-review-auto',
+          findings_count: 0,
+          artifact_file: `${ARTIFACTS_DIR}/nodes/code-review-auto.md`,
+          report_file: 'code-review-report.md',
+        },
+        rv: {
+          gate: 'SKIPPED',
+          source: 'tea-rv-skipped',
+          findings_count: 0,
+          artifact_file: `${ARTIFACTS_DIR}/bmad-dev-story-with-tea-fix-loop/tea-rv-skipped.gate.json`,
+          report_file: null,
+        },
+        nr: {
+          gate: 'PASS',
+          source: 'tea-nr',
+          findings_count: 0,
+          artifact_file: `${ARTIFACTS_DIR}/nodes/nfr-findings.md`,
+          report_file: 'tea-nr-report.md',
+        },
+        tr: {
+          gate: 'SKIPPED',
+          source: 'tea-tr-skipped',
+          findings_count: 0,
+          artifact_file: `${ARTIFACTS_DIR}/bmad-dev-story-with-tea-fix-loop/tea-tr-skipped.gate.json`,
+          report_file: null,
+        },
+      },
+    });
+    const r = await renderHandoff(JSON.stringify(handoff));
+    expect(r.code, 'rendering should succeed').toBe(0);
+
+    const lines = r.stdout.split('\n');
+    const rvRow = lines.find(l => l.startsWith('|') && l.includes('RV'));
+    const trRow = lines.find(l => l.startsWith('|') && l.includes('TR'));
+    expect(rvRow, 'must have an RV row').toBeDefined();
+    expect(trRow, 'must have a TR row').toBeDefined();
+    expect(rvRow!, 'RV row must show tea-rv-skipped source').toContain('tea-rv-skipped');
+    expect(rvRow!, 'RV row must link to skipped gate JSON').toContain('tea-rv-skipped.gate.json');
+    expect(trRow!, 'TR row must show tea-tr-skipped source').toContain('tea-tr-skipped');
+    expect(trRow!, 'TR row must link to skipped gate JSON').toContain('tea-tr-skipped.gate.json');
   });
 });
 
