@@ -293,7 +293,7 @@ nodes:
     depends_on: [generate-red-acceptance-tests]
     context: fresh
     model: Qwen3.7-Plus
-    idle_timeout: 900000
+    idle_timeout: 3600000
     output_type: dev-story
 
   - id: code-review
