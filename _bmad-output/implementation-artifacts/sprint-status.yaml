@@ -65,7 +65,7 @@ development_status:
   a4-2-route-quality-loop-and-error-paths: done
   epic-a4-retrospective: optional
   epic-a5: in-progress
-  a5-1-orchestrate-decision-needed-follow-up: in-progress
+  a5-1-orchestrate-decision-needed-follow-up: done
   a5-2-generate-pr-handoff-with-evidence-links: backlog
   epic-a5-retrospective: optional
   epic-a6: backlog
