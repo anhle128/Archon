@@ -195,6 +195,16 @@ The workflow source of truth is the YAML under `.archon/workflows/defaults/`; th
 - [Source: packages/workflows/src/dag-executor.test.ts + loader.test.ts + condition-evaluator.test.ts] — existing route_loop test patterns (end-to-end rerun order, two-loop cases, field-ref/exit-path loader validation) to reference.
 - [Source: _bmad-output/project-context.md] — bundled-defaults generation, mock.module isolation, no-plan-refs-in-code, fail-closed-on-JSON, story-identity, ERROR-≠-FAIL, SDK/package-boundary rules.
 
+### ATDD Artifacts
+
+Red-phase acceptance scaffolds generated before implementation (TDD red):
+
+- Checklist: `_bmad-output/test-artifacts/atdd-checklist-a4-2-route-quality-loop-and-error-paths.md`
+- Contract tests (co-located, no `mock.module`): `packages/workflows/src/defaults/v2-quality-route-loop-contract.test.ts`
+- DAG tests (isolated `bun test` segment, `mock.module`): `packages/workflows/src/defaults/v2-quality-route-loop-dag.test.ts`
+- Both files are registered in `packages/workflows/package.json` (contract in the shared non-mock batch; DAG as its own standalone segment).
+- All scenarios assert target behavior and are RED against this ~a3.2 checkout until Task 0's baseline plus the reader/loop wiring land.
+
 ## Unresolved Questions
 
 1. **CR short-circuit removal (design confirmation).** This story removes the `code-review-gate` route_loop and consolidates to a single loop at the summary, per the architecture (A-AD-5 "ONLY source", Epic A4 "One Quality Route Loop"). The cost is that TEA gates run even on CR-failing rounds. The operator was asked to confirm consolidate-vs-keep-both and did not select; the story proceeds on the spec-mandated consolidation. If the operator instead wants to preserve the CR short-circuit for compute savings, that is a deliberate divergence from A-AD-5 and changes Tasks 2-4 — confirm before the dev deviates.
