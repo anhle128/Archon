@@ -1,33 +1,31 @@
 /**
- * RED-PHASE ATDD acceptance scaffolds — RV/NR conditional sibling branches.
+ * RED-PHASE ATDD acceptance scaffolds — TR joined as the final release gate.
  *
  * Behavioral / DAG-level acceptance tests that drive the REAL executor + REAL
  * `gate-planner` bash node through the v2 DAG. Only AI provider nodes
  * (dev-story / tea-automate / code-review-auto / tea-rv / tea-nr / tea-tr /
  * create-pull-request) are mocked; bash nodes — including gate-planner AND the
- * new `tea-rv-skipped` / `tea-nr-skipped` skip-contract encoders — execute for
- * real. A mocked gate-planner would be a fake test (TD-010).
+ * new `tea-tr-skipped` skip-contract encoder — execute for real. A mocked
+ * gate-planner would be a fake test (TD-029 keeps the false path structural).
  *
  * ── TDD RED PHASE ──────────────────────────────────────────────────────────
  * These tests assert the TARGET behavior of the not-yet-implemented wiring and
  * are EXPECTED TO FAIL until the following production edits land in
  * `.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml`:
- *   1. `tea-rv`  gets `when: "$gate-planner.output.run_rv == true"` + output_format.
- *   2. `tea-rv-skipped` bash node added: `when: "... run_rv == false"`,
- *      emits a `gate:"SKIPPED"` contract.
- *   3. `tea-nr`  decoupled from tea-rv (`depends_on: [gate-planner]`) +
- *      `when: "... run_nr == true"` + output_format.
- *   4. `tea-nr-skipped` bash node added: `when: "... run_nr == false"`.
- *   5. `tea-tr` rewired to `depends_on: [tea-rv, tea-rv-skipped, tea-nr,
- *      tea-nr-skipped]` with `trigger_rule: none_failed_min_one_success`.
+ *   1. `tea-tr` gets `when: "$gate-planner.output.run_tr == true"`,
+ *      an output_format gate envelope, and a story_ref prompt_suffix.
+ *   2. `tea-tr-skipped` bash node added (`when: "... run_tr == false"`,
+ *      depends_on: [gate-planner]) emitting a gate:"SKIPPED" contract.
+ *   3. `create-pull-request` rewired to depends_on: [tea-tr, tea-tr-skipped]
+ *      with trigger_rule: none_failed_min_one_success.
  *
- * ── ISOLATION (TD-013) ─────────────────────────────────────────────
+ * ── ISOLATION (TD-039) ─────────────────────────────────────────────
  * This file uses mock.module('@archon/paths', ...). Bun's mock.module() is
  * process-global and irreversible, so this file MUST run as its OWN isolated
  * `bun test` invocation. It is intentionally NOT yet registered in
  * packages/workflows/package.json — registering it (its own invocation, never
  * co-located) is the GREEN-phase step. Run it in red phase with:
- *   bun test packages/workflows/src/defaults/v2-tea-branches-dag.test.ts
+ *   bun test packages/workflows/src/defaults/v2-tr-join-dag.test.ts
  */
 
 import { describe, it, expect, mock, beforeAll, afterAll } from 'bun:test';
@@ -83,9 +81,9 @@ const CANONICAL_REF = 'a1-2-preserve-story-input-resolution';
 type NodeEventState = 'completed' | 'failed' | 'skipped';
 
 const MOCK_RUN = {
-  id: 'tea-branches-run-id',
+  id: 'tr-join-run-id',
   workflow_name: V2_STEM,
-  conversation_id: 'conv-tb',
+  conversation_id: 'conv-tr',
   parent_conversation_id: null,
   codebase_id: null,
   status: 'running' as const,
@@ -155,9 +153,9 @@ function createMockPlatform(): IWorkflowPlatform {
 
 function makeWorkflowRun(cwd: string, userMessage: string): WorkflowRun {
   return {
-    id: 'tea-branches-run-id',
+    id: 'tr-join-run-id',
     workflow_name: V2_STEM,
-    conversation_id: 'conv-tb',
+    conversation_id: 'conv-tr',
     parent_conversation_id: null,
     codebase_id: null,
     status: 'running',
@@ -234,7 +232,7 @@ function createMockDepsWithResponses(
 // ── Fixture directory ──────────────────────────────────────────────────────
 
 async function buildFixtureDir(baseDir: string): Promise<string> {
-  const cwd = join(baseDir, 'tea-branches-fixture');
+  const cwd = join(baseDir, 'tr-join-fixture');
   await mkdir(cwd, { recursive: true });
 
   const skills = [
@@ -310,7 +308,7 @@ async function runV2Dag(opts: {
     await executeDagWorkflow(
       deps,
       platform,
-      'conv-tb',
+      'conv-tr',
       opts.cwd,
       {
         name: workflow.name,
@@ -336,9 +334,9 @@ async function runV2Dag(opts: {
 }
 
 // ── Skip-contract capture ──────────────────────────────────────────────────
-// A `-skipped` node declares output_type, so the executor writes a typed
-// sidecar at nodes/<id>.md; the bash body also best-effort writes
-// $RUN_DIR/<id>.gate.json. Read whichever resolved (AC #2 / TD-002 / TD-008).
+// tea-tr-skipped declares output_type, so the executor writes a typed sidecar
+// at nodes/<id>.md; the bash body also best-effort writes
+// $RUN_DIR/<id>.gate.json. Read whichever resolved (AC #2 / TD-024).
 
 async function readSkipContract(
   artifactsDir: string,
@@ -392,9 +390,7 @@ function validTaEvidence(overrides: Record<string, unknown> = {}): Record<string
   };
 }
 
-// Real RV/NR gate contract the -real branches must emit once output_format is
-// added. Gate vocab intentionally excludes SKIPPED (only skip nodes emit it —
-// / TD-007).
+// Real RV/NR gate contracts (predecessor output_format). Gate vocab excludes SKIPPED.
 function validRvGate(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     contract_version: '1.0',
@@ -421,6 +417,8 @@ function validNrGate(overrides: Record<string, unknown> = {}): Record<string, un
   };
 }
 
+// Real TR gate the joined final gate must emit once tea-tr gains output_format.
+// SKIPPED is intentionally NOT a legal tea-tr gate value (only tea-tr-skipped).
 function validTrGate(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     contract_version: '1.0',
@@ -435,7 +433,7 @@ function validTrGate(overrides: Record<string, unknown> = {}): Record<string, un
 }
 
 // Downstream AI nodes that must complete on the happy path so tail
-// reachability can be asserted.
+// reachability can be asserted. tea-tr now needs a schema-valid gate.
 function happyDownstream(): Record<string, Record<string, unknown>> {
   return {
     'dev-story': {},
@@ -452,7 +450,7 @@ let fixtureBase = '';
 let cwdFixture = '';
 
 beforeAll(async () => {
-  fixtureBase = join(tmpdir(), `tea-branches-dag-${process.pid}`);
+  fixtureBase = join(tmpdir(), `tr-join-dag-${process.pid}`);
   cwdFixture = await buildFixtureDir(fixtureBase);
 });
 
@@ -461,11 +459,12 @@ afterAll(async () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// TD-001 [P0] — run_rv=true & run_nr=true → real RV + real NR, tail reachable
+// TD-030 [P0] — real gate-planner happy path (run_tr=true) completes tea-tr,
+// skips tea-tr-skipped, and reaches the PR tail (AC #1, #4)
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe('RV/NR branches — both flags true resolve both real branches (TD-001)', () => {
-  it('RV real completed XOR RV skipped; NR real completed XOR NR skipped; tea-tr + PR reached', async () => {
+describe('TR join — happy path completes real TR, skips TR-skip, reaches PR (TD-030)', () => {
+  it('run_tr=true → tea-tr completed, tea-tr-skipped skipped, create-pull-request reached', async () => {
     const run = await runV2Dag({
       cwd: cwdFixture,
       arguments: CANONICAL_REF,
@@ -476,185 +475,59 @@ describe('RV/NR branches — both flags true resolve both real branches (TD-001)
       },
     });
 
-    // RV pair: exactly one resolves (real completes, skip is skipped).
-    expect(run.nodeState['tea-rv'], 'run_rv=true → tea-rv must complete').toBe('completed');
-    expect(run.nodeState['tea-rv-skipped'], 'run_rv=true → tea-rv-skipped must be skipped').toBe(
+    // Real TR runs; the skip sibling is condition-skipped by run_tr==false.
+    expect(run.nodeState['tea-tr'], 'run_tr=true → tea-tr must complete').toBe('completed');
+    expect(run.nodeState['tea-tr-skipped'], 'run_tr=true → tea-tr-skipped must be skipped').toBe(
       'skipped'
     );
-    // NR pair: exactly one resolves.
-    expect(run.nodeState['tea-nr'], 'run_nr=true → tea-nr must complete').toBe('completed');
-    expect(run.nodeState['tea-nr-skipped'], 'run_nr=true → tea-nr-skipped must be skipped').toBe(
-      'skipped'
-    );
-    // XOR discipline (AC #7).
+    // XOR discipline — exactly one TR-role branch completes.
     expect(
-      (run.nodeState['tea-rv'] === 'completed') !==
-        (run.nodeState['tea-rv-skipped'] === 'completed'),
-      'exactly one RV branch may complete'
+      (run.nodeState['tea-tr'] === 'completed') !==
+        (run.nodeState['tea-tr-skipped'] === 'completed'),
+      'exactly one TR-role branch may complete'
     ).toBe(true);
+    // Tail reachability through the resolved TR branch (AC #2 downstream successor).
     expect(
-      (run.nodeState['tea-nr'] === 'completed') !==
-        (run.nodeState['tea-nr-skipped'] === 'completed'),
-      'exactly one NR branch may complete'
-    ).toBe(true);
-    // Tail reachability (AC #4).
-    expect(run.nodeState['tea-tr'], 'tea-tr must join the branches and complete').toBe('completed');
-    expect(run.nodeState['tea-tr-skipped'], 'run_tr=true → tea-tr-skipped must be skipped').toBe(
-      'skipped'
-    );
-    expect(run.providerCalls, 'create-pull-request must be reached').toContain(
-      'create-pull-request'
-    );
+      run.providerCalls,
+      'create-pull-request must be reached from a resolved TR gate'
+    ).toContain('create-pull-request');
   });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// TD-002 [P0] — run_rv=false & run_nr=false → skip contracts, tail reachable
-// AC #2 (skip vs missing evidence)
+// TD-034 [P1] — PR trigger-rule proof: one completed TR sibling + the other
+// skipped satisfies none_failed_min_one_success (AC #4)
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe('RV/NR branches — both flags false resolve explicit SKIPPED contracts (TD-002)', () => {
-  it('skip nodes complete, real nodes skipped, and each emits a parsed gate:SKIPPED contract', async () => {
+describe('PR trigger-rule — one completed TR sibling + one skipped runs the tail (TD-034)', () => {
+  it('exactly one TR sibling completes while the other is skipped, and PR still runs', async () => {
     const run = await runV2Dag({
       cwd: cwdFixture,
       arguments: CANONICAL_REF,
       nodeResponses: {
         'code-review-auto': validCrEvidence(),
-        'tea-automate': validTaEvidence({ test_files_changed: 0, nfr_relevant: 'false' }),
+        'tea-automate': validTaEvidence({ test_files_changed: 3, nfr_relevant: 'true' }),
         ...happyDownstream(),
       },
     });
 
-    expect(run.nodeState['tea-rv-skipped'], 'run_rv=false → tea-rv-skipped must complete').toBe(
-      'completed'
-    );
-    expect(run.nodeState['tea-rv'], 'run_rv=false → tea-rv must be skipped').toBe('skipped');
-    expect(run.nodeState['tea-nr-skipped'], 'run_nr=false → tea-nr-skipped must complete').toBe(
-      'completed'
-    );
-    expect(run.nodeState['tea-nr'], 'run_nr=false → tea-nr must be skipped').toBe('skipped');
-
-    // Explicit SKIPPED contract distinguishes "skipped branch" from "missing
-    // evidence" (AC #2) and proves valid JSON serialization .
-    const rvContract = await readSkipContract(run.artifactsDir, 'tea-rv-skipped');
-    expect(rvContract, 'tea-rv-skipped must emit a machine-readable contract').not.toBeNull();
-    expect(rvContract!.gate, 'skip contract gate must be SKIPPED').toBe('SKIPPED');
-    expect(rvContract!.story_ref, 'skip contract must pin the resolved story_ref').toBe(
-      CANONICAL_REF
-    );
-    expect(rvContract!.node).toBe('tea-rv-skipped');
-
-    const nrContract = await readSkipContract(run.artifactsDir, 'tea-nr-skipped');
-    expect(nrContract, 'tea-nr-skipped must emit a machine-readable contract').not.toBeNull();
-    expect(nrContract!.gate).toBe('SKIPPED');
-    expect(nrContract!.story_ref).toBe(CANONICAL_REF);
-    expect(nrContract!.node).toBe('tea-nr-skipped');
-
-    // Tail still reachable through two skipped siblings .
-    expect(run.nodeState['tea-tr'], 'skips must not cascade-skip tea-tr').toBe('completed');
-    expect(run.nodeState['tea-tr-skipped'], 'run_tr=true → tea-tr-skipped must be skipped').toBe(
-      'skipped'
-    );
-    expect(run.providerCalls).toContain('create-pull-request');
-  });
-
-  it('skip contracts are emitted by real bash, never by the AI provider', async () => {
-    const run = await runV2Dag({
-      cwd: cwdFixture,
-      arguments: CANONICAL_REF,
-      nodeResponses: {
-        'code-review-auto': validCrEvidence(),
-        'tea-automate': validTaEvidence({ test_files_changed: 0, nfr_relevant: 'false' }),
-        ...happyDownstream(),
-      },
-    });
-    expect(run.providerCalls, 'tea-rv-skipped is a bash node — no AI call').not.toContain(
-      'tea-rv-skipped'
-    );
-    expect(run.providerCalls, 'tea-nr-skipped is a bash node — no AI call').not.toContain(
-      'tea-nr-skipped'
-    );
-    expect(run.providerCalls, 'tea-tr-skipped is a bash node — no AI call').not.toContain(
-      'tea-tr-skipped'
-    );
+    const trStates = [run.nodeState['tea-tr'], run.nodeState['tea-tr-skipped']];
+    const completed = trStates.filter(s => s === 'completed').length;
+    const skipped = trStates.filter(s => s === 'skipped').length;
+    expect(completed, 'exactly one TR-role sibling may complete').toBe(1);
+    expect(skipped, 'the other TR-role sibling must be skipped, not failed').toBe(1);
+    expect(
+      run.providerCalls,
+      'none_failed_min_one_success: one completed + one skipped runs the tail'
+    ).toContain('create-pull-request');
   });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// TD-003 [P0] — boundary test_files_changed=1 & nfr=false → RV real, NR skipped
+// TD-031 [P0] — real RV branch FAILURE fails closed before tea-tr + PR (AC #4)
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe('RV/NR branches — RV-real + NR-skipped boundary combination (TD-003)', () => {
-  it('test_files_changed=1 runs real RV; nfr=false runs NR skip contract; tail reachable', async () => {
-    const run = await runV2Dag({
-      cwd: cwdFixture,
-      arguments: CANONICAL_REF,
-      nodeResponses: {
-        'code-review-auto': validCrEvidence(),
-        'tea-automate': validTaEvidence({ test_files_changed: 1, nfr_relevant: 'false' }),
-        ...happyDownstream(),
-      },
-    });
-
-    expect(run.nodeState['tea-rv'], 'test_files_changed=1 → RV real completes').toBe('completed');
-    expect(run.nodeState['tea-rv-skipped']).toBe('skipped');
-    expect(run.nodeState['tea-nr-skipped'], 'nfr=false → NR skip completes').toBe('completed');
-    expect(run.nodeState['tea-nr']).toBe('skipped');
-
-    const nrContract = await readSkipContract(run.artifactsDir, 'tea-nr-skipped');
-    expect(nrContract?.gate).toBe('SKIPPED');
-
-    expect(run.nodeState['tea-tr']).toBe('completed');
-    expect(run.nodeState['tea-tr-skipped'], 'run_tr=true → tea-tr-skipped must be skipped').toBe(
-      'skipped'
-    );
-    expect(run.providerCalls).toContain('create-pull-request');
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════════════════
-// TD-004 [P0] — decoupling: test_files_changed=0 & nfr=true → RV skipped, NR real
-// Proves NR is a SIBLING of RV, not a successor . ,
-// ═══════════════════════════════════════════════════════════════════════════
-
-describe('RV/NR branches — RV-skipped + NR-real proves NR decoupled from RV (TD-004)', () => {
-  it('test_files_changed=0 skips RV; nfr=true runs real NR even though RV did not run', async () => {
-    const run = await runV2Dag({
-      cwd: cwdFixture,
-      arguments: CANONICAL_REF,
-      nodeResponses: {
-        'code-review-auto': validCrEvidence(),
-        'tea-automate': validTaEvidence({ test_files_changed: 0, nfr_relevant: 'true' }),
-        ...happyDownstream(),
-      },
-    });
-
-    // The core decoupling proof: NR runs while RV real did NOT. Under the old
-    // `tea-nr depends_on: [tea-rv]` wiring this is impossible .
-    expect(run.nodeState['tea-rv-skipped'], 'test_files_changed=0 → RV skip completes').toBe(
-      'completed'
-    );
-    expect(run.nodeState['tea-rv'], 'RV real must not run').toBe('skipped');
-    expect(run.nodeState['tea-nr'], 'nfr=true → NR real completes as a sibling').toBe('completed');
-    expect(run.nodeState['tea-nr-skipped']).toBe('skipped');
-
-    const rvContract = await readSkipContract(run.artifactsDir, 'tea-rv-skipped');
-    expect(rvContract?.gate).toBe('SKIPPED');
-
-    expect(run.nodeState['tea-tr']).toBe('completed');
-    expect(run.nodeState['tea-tr-skipped'], 'run_tr=true → tea-tr-skipped must be skipped').toBe(
-      'skipped'
-    );
-    expect(run.providerCalls).toContain('create-pull-request');
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════════════════
-// TD-005 [P1] — real RV branch FAILURE fails closed before tea-tr + PR
-// (fail-closed join, not all_done)
-// ═══════════════════════════════════════════════════════════════════════════
-
-describe('RV/NR branches — real RV failure fails closed (TD-005)', () => {
+describe('TR join — real RV failure fails closed (TD-031)', () => {
   it('a schema-invalid RV real output fails tea-rv; tea-tr and PR must NOT run', async () => {
     const run = await runV2Dag({
       cwd: cwdFixture,
@@ -663,11 +536,10 @@ describe('RV/NR branches — real RV failure fails closed (TD-005)', () => {
         'code-review-auto': validCrEvidence(),
         'tea-automate': validTaEvidence({ test_files_changed: 3, nfr_relevant: 'true' }),
         'dev-story': {},
-        // Empty structured output → once tea-rv declares output_format the node
-        // fails schema validation. That failed real branch must fail the join closed.
+        // Empty structured output → tea-rv (output_format) fails schema validation.
         'tea-rv': {},
         'tea-nr': validNrGate(),
-        'tea-tr': {},
+        'tea-tr': validTrGate(),
         'create-pull-request': {},
       },
     });
@@ -678,10 +550,6 @@ describe('RV/NR branches — real RV failure fails closed (TD-005)', () => {
       'none_failed_min_one_success must NOT run tea-tr when a real branch failed'
     ).not.toBe('completed');
     expect(
-      run.nodeState['tea-tr-skipped'],
-      'run_tr=true → tea-tr-skipped must be skipped even on failure path'
-    ).toBe('skipped');
-    expect(
       run.providerCalls,
       'create-pull-request must be unreachable after a failed real branch'
     ).not.toContain('create-pull-request');
@@ -689,10 +557,10 @@ describe('RV/NR branches — real RV failure fails closed (TD-005)', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// TD-006 [P1] — real NR branch FAILURE fails closed before tea-tr + PR
+// TD-032 [P0] — real NR branch FAILURE fails closed before tea-tr + PR (AC #4)
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe('RV/NR branches — real NR failure fails closed (TD-006)', () => {
+describe('TR join — real NR failure fails closed (TD-032)', () => {
   it('a schema-invalid NR real output fails tea-nr; tea-tr and PR must NOT run', async () => {
     const run = await runV2Dag({
       cwd: cwdFixture,
@@ -703,7 +571,7 @@ describe('RV/NR branches — real NR failure fails closed (TD-006)', () => {
         'dev-story': {},
         'tea-rv': validRvGate(),
         'tea-nr': {},
-        'tea-tr': {},
+        'tea-tr': validTrGate(),
         'create-pull-request': {},
       },
     });
@@ -713,10 +581,275 @@ describe('RV/NR branches — real NR failure fails closed (TD-006)', () => {
       run.nodeState['tea-tr'],
       'tea-tr must fail closed when the real NR branch failed'
     ).not.toBe('completed');
-    expect(
-      run.nodeState['tea-tr-skipped'],
-      'run_tr=true → tea-tr-skipped must be skipped even on failure path'
-    ).toBe('skipped');
     expect(run.providerCalls).not.toContain('create-pull-request');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TD-033 [P1] — invalid REAL tea-tr output fails the final gate and blocks PR
+// (AC #4)
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('Final gate — invalid real tea-tr output blocks the PR tail (TD-033)', () => {
+  it('empty tea-tr output fails schema (once output_format lands); PR must NOT run', async () => {
+    const run = await runV2Dag({
+      cwd: cwdFixture,
+      arguments: CANONICAL_REF,
+      nodeResponses: {
+        'code-review-auto': validCrEvidence(),
+        'tea-automate': validTaEvidence({ test_files_changed: 3, nfr_relevant: 'true' }),
+        'dev-story': {},
+        'tea-rv': validRvGate(),
+        'tea-nr': validNrGate(),
+        // Empty output → once tea-tr declares output_format, the final gate fails
+        // schema validation and the PR tail must fail closed on it.
+        'tea-tr': {},
+        'create-pull-request': {},
+      },
+    });
+
+    expect(
+      run.nodeState['tea-tr'],
+      'tea-tr with no schema-valid gate output must fail (not silently pass)'
+    ).toBe('failed');
+    expect(
+      run.providerCalls,
+      'create-pull-request must be unreachable after the final gate failed'
+    ).not.toContain('create-pull-request');
+  });
+
+  it('a real tea-tr gate emitting SKIPPED violates its enum and must fail', async () => {
+    const run = await runV2Dag({
+      cwd: cwdFixture,
+      arguments: CANONICAL_REF,
+      nodeResponses: {
+        'code-review-auto': validCrEvidence(),
+        'tea-automate': validTaEvidence({ test_files_changed: 3, nfr_relevant: 'true' }),
+        ...happyDownstream(),
+        // A real TR gate emitting SKIPPED violates the gate enum → must fail.
+        'tea-tr': validTrGate({ gate: 'SKIPPED' }),
+      },
+    });
+    expect(
+      run.nodeState['tea-tr'],
+      'real tea-tr emitting SKIPPED must fail schema (SKIPPED belongs to tea-tr-skipped only)'
+    ).toBe('failed');
+    expect(run.providerCalls).not.toContain('create-pull-request');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TD-024 [P1] behavioral note — the false path (tea-tr-skipped emits a parsed
+// SKIPPED contract) cannot be driven behaviorally without faking gate-planner,
+// which TD-029 forbids: the real gate-planner hardcodes run_tr=true. The false
+// path CONTRACT is proven structurally (contract file TD-024) and by the
+// condition-evaluator (TD-029). Here we only assert the happy-path invariant:
+// tea-tr-skipped is skipped and writes no contract when run_tr is true.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('TR skip contract — false path documented, not faked (TD-024 behavioral note)', () => {
+  it('happy path never emits a tea-tr-skipped contract because run_tr is true', async () => {
+    const run = await runV2Dag({
+      cwd: cwdFixture,
+      arguments: CANONICAL_REF,
+      nodeResponses: {
+        'code-review-auto': validCrEvidence(),
+        'tea-automate': validTaEvidence({ test_files_changed: 3, nfr_relevant: 'true' }),
+        ...happyDownstream(),
+      },
+    });
+    expect(run.nodeState['tea-tr-skipped'], 'run_tr=true → tea-tr-skipped is skipped').toBe(
+      'skipped'
+    );
+    const contract = await readSkipContract(run.artifactsDir, 'tea-tr-skipped');
+    expect(contract, 'a skipped node writes no gate contract on the happy path').toBeNull();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TD-043 [P0] — schema-valid tea-tr gate:"FAIL" completes tea-tr and the
+// quality-gate-summary aggregator emits a FAIL summary (the aggregator evolves the
+// precursor barrier: FAIL is a valid routing decision, not a hard error).
+// Routing on the FAIL summary is a later story.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('TR gate FAIL — schema-valid, aggregator emits FAIL summary (TD-043)', () => {
+  it('tea-tr gate:"FAIL" completes tea-tr (schema passes) and quality-gate-summary completes with FAIL summary', async () => {
+    const run = await runV2Dag({
+      cwd: cwdFixture,
+      arguments: CANONICAL_REF,
+      nodeResponses: {
+        'code-review-auto': validCrEvidence(),
+        'tea-automate': validTaEvidence({ test_files_changed: 3, nfr_relevant: 'true' }),
+        ...happyDownstream(),
+        'tea-tr': validTrGate({ gate: 'FAIL' }),
+      },
+    });
+
+    expect(
+      run.nodeState['tea-tr'],
+      'schema-valid FAIL gate must complete tea-tr (output_format passes)'
+    ).toBe('completed');
+    expect(
+      run.nodeState['quality-gate-summary'],
+      'FAIL is a valid routing decision — aggregator completes (exit 0), not hard-fails'
+    ).toBe('completed');
+    expect(
+      run.providerCalls,
+      'FAIL summary routes negative to dev-story (loop iterates), PR is NOT reached'
+    ).not.toContain('create-pull-request');
+    expect(
+      run.providerCalls.filter(c => c === 'dev-story').length,
+      'FAIL causes the quality loop to re-enter dev-story'
+    ).toBeGreaterThan(1);
+  });
+
+  it('tea-tr gate:"ERROR" completes tea-tr but quality-gate-summary blocks PR', async () => {
+    const run = await runV2Dag({
+      cwd: cwdFixture,
+      arguments: CANONICAL_REF,
+      nodeResponses: {
+        'code-review-auto': validCrEvidence(),
+        'tea-automate': validTaEvidence({ test_files_changed: 3, nfr_relevant: 'true' }),
+        ...happyDownstream(),
+        'tea-tr': validTrGate({ gate: 'ERROR' }),
+      },
+    });
+
+    expect(run.nodeState['tea-tr']).toBe('completed');
+    expect(run.nodeState['quality-gate-summary']).toBe('failed');
+    expect(run.providerCalls).not.toContain('create-pull-request');
+  });
+
+  it('tea-tr gate:"CONCERNS" is non-blocking — quality-gate-summary passes (matches RV/NR policy)', async () => {
+    const run = await runV2Dag({
+      cwd: cwdFixture,
+      arguments: CANONICAL_REF,
+      nodeResponses: {
+        'code-review-auto': validCrEvidence(),
+        'tea-automate': validTaEvidence({ test_files_changed: 3, nfr_relevant: 'true' }),
+        ...happyDownstream(),
+        'tea-tr': validTrGate({ gate: 'CONCERNS' }),
+      },
+    });
+
+    expect(run.nodeState['tea-tr']).toBe('completed');
+    expect(
+      run.nodeState['quality-gate-summary'],
+      'CONCERNS is non-blocking (matches RV/NR policy)'
+    ).toBe('completed');
+    expect(
+      run.providerCalls,
+      'create-pull-request must be reached when TR gate is CONCERNS'
+    ).toContain('create-pull-request');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TD-044 [P0] — envelope validation: mismatched story_ref blocks PR
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('TR envelope — mismatched story_ref blocks PR (TD-044)', () => {
+  it('tea-tr with story_ref not matching resolved input fails the barrier', async () => {
+    const run = await runV2Dag({
+      cwd: cwdFixture,
+      arguments: CANONICAL_REF,
+      nodeResponses: {
+        'code-review-auto': validCrEvidence(),
+        'tea-automate': validTaEvidence({ test_files_changed: 3, nfr_relevant: 'true' }),
+        ...happyDownstream(),
+        'tea-tr': validTrGate({ story_ref: 'stale-story-ref' }),
+      },
+    });
+
+    expect(run.nodeState['tea-tr']).toBe('completed');
+    expect(
+      run.nodeState['quality-gate-summary'],
+      'quality-gate-summary must block on story_ref mismatch'
+    ).toBe('failed');
+    expect(run.providerCalls).not.toContain('create-pull-request');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TD-045 [P0] — envelope validation: mismatched node identity blocks PR
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('TR envelope — mismatched node identity blocks PR (TD-045)', () => {
+  it('tea-tr with node:"tea-rv" (wrong self-identification) fails the barrier', async () => {
+    const run = await runV2Dag({
+      cwd: cwdFixture,
+      arguments: CANONICAL_REF,
+      nodeResponses: {
+        'code-review-auto': validCrEvidence(),
+        'tea-automate': validTaEvidence({ test_files_changed: 3, nfr_relevant: 'true' }),
+        ...happyDownstream(),
+        'tea-tr': validTrGate({ node: 'tea-rv' }),
+      },
+    });
+
+    expect(run.nodeState['tea-tr']).toBe('completed');
+    expect(
+      run.nodeState['quality-gate-summary'],
+      'quality-gate-summary must block on node identity mismatch'
+    ).toBe('failed');
+    expect(run.providerCalls).not.toContain('create-pull-request');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TD-046 [P0] — envelope validation: negative findings_count blocks PR
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('TR envelope — negative findings_count blocks PR (TD-046)', () => {
+  it('tea-tr with findings_count:-1 fails the barrier', async () => {
+    const run = await runV2Dag({
+      cwd: cwdFixture,
+      arguments: CANONICAL_REF,
+      nodeResponses: {
+        'code-review-auto': validCrEvidence(),
+        'tea-automate': validTaEvidence({ test_files_changed: 3, nfr_relevant: 'true' }),
+        ...happyDownstream(),
+        'tea-tr': validTrGate({ findings_count: -1 }),
+      },
+    });
+
+    expect(run.nodeState['tea-tr']).toBe('completed');
+    expect(
+      run.nodeState['quality-gate-summary'],
+      'quality-gate-summary must block on negative findings_count'
+    ).toBe('failed');
+    expect(run.providerCalls).not.toContain('create-pull-request');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TD-047 [P0] — substring false-positive proof: an unrelated field
+// containing a gate-looking substring must NOT block when the actual gate
+// is PASS
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('TR gate — substring false positive does not block (TD-047)', () => {
+  it('tea-tr with report_file containing "gate":"FAIL" substring passes the barrier when actual gate is PASS', async () => {
+    const run = await runV2Dag({
+      cwd: cwdFixture,
+      arguments: CANONICAL_REF,
+      nodeResponses: {
+        'code-review-auto': validCrEvidence(),
+        'tea-automate': validTaEvidence({ test_files_changed: 3, nfr_relevant: 'true' }),
+        ...happyDownstream(),
+        'tea-tr': validTrGate({ report_file: 'report-"gate":"FAIL"-leftover.md' }),
+      },
+    });
+
+    expect(run.nodeState['tea-tr']).toBe('completed');
+    expect(
+      run.nodeState['quality-gate-summary'],
+      'JSON.parse must read the actual gate field, not match substrings in other fields'
+    ).toBe('completed');
+    expect(
+      run.providerCalls,
+      'create-pull-request must be reached when actual gate is PASS regardless of substring noise'
+    ).toContain('create-pull-request');
   });
 });

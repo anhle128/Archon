@@ -178,8 +178,14 @@ export class PiProvider implements IAgentProvider {
     const [
       piCodingAgent,
       { bridgeSession },
-      { resolvePiSkills, resolvePiThinkingLevel, resolvePiTools, buildDefaultPiTools },
-      { createNoopResourceLoader, getOrCreateReloadedExtensionLoader },
+      {
+        hydratePiToolFactories,
+        resolvePiSkills,
+        resolvePiThinkingLevel,
+        resolvePiTools,
+        buildDefaultPiTools,
+      },
+      { hydratePiResourceLoader, createNoopResourceLoader, getOrCreateReloadedExtensionLoader },
       { resolvePiSession },
       { createArchonUIBridge, createArchonUIContext },
       { buildPiNativeToolDefinitions },
@@ -193,6 +199,8 @@ export class PiProvider implements IAgentProvider {
       import('./native-tools'),
     ]);
     const { createAgentSession } = piCodingAgent;
+    hydratePiToolFactories(piCodingAgent);
+    hydratePiResourceLoader(piCodingAgent);
 
     const assistantConfig = requestOptions?.assistantConfig ?? {};
     const piConfig = parsePiConfig(assistantConfig);
@@ -393,7 +401,11 @@ export class PiProvider implements IAgentProvider {
     //    was provided but not found, it falls through to a new session and
     //    the caller surfaces a resume_failed warning (matches the Codex
     //    provider's fallback pattern for the same condition).
-    const { sessionManager, resumeFailed } = await resolvePiSession(cwd, resumeSessionId);
+    const { sessionManager, resumeFailed } = await resolvePiSession(
+      cwd,
+      resumeSessionId,
+      piCodingAgent.SessionManager
+    );
     if (resumeFailed) {
       yield {
         type: 'system',
@@ -499,7 +511,7 @@ export class PiProvider implements IAgentProvider {
     // base tool set must be re-supplied alongside the native defs.
     const nativeToolDefs =
       requestOptions?.nativeTools && requestOptions.nativeTools.length > 0
-        ? buildPiNativeToolDefinitions(requestOptions.nativeTools)
+        ? buildPiNativeToolDefinitions(requestOptions.nativeTools, piCodingAgent.defineTool)
         : [];
     const baseTools =
       filteredTools ??

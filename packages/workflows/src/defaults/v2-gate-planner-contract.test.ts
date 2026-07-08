@@ -76,12 +76,12 @@ describe('Gate-planner — v2 YAML structural + bundle + consumer boundary', () 
       expect('command' in gp!, 'gate-planner must not be a command node').toBe(false);
     });
 
-    it('gate-planner declares gate-decision output type and depends on the CR gate', () => {
+    it('gate-planner declares gate-decision output type and depends on verify-story-identity', () => {
       const v2 = parseFromDisk(V2_FILE, V2_STEM);
       const gp = nodeById(v2, 'gate-planner');
       expect(gp, 'gate-planner must exist').toBeDefined();
       expect((gp as unknown as { output_type?: string }).output_type).toBe('gate-decision');
-      expect((gp as { depends_on?: string[] }).depends_on).toContain('code-review-gate');
+      expect((gp as { depends_on?: string[] }).depends_on).toContain('verify-story-identity');
     });
 
     it('gate-planner declares a bounded timeout', () => {
@@ -122,13 +122,23 @@ describe('Gate-planner — v2 YAML structural + bundle + consumer boundary', () 
     });
   });
 
-  describe('DAG re-parenting places gate-planner between the CR gate and the TEA gates', () => {
-    it('code-review-gate positive route points at gate-planner', () => {
+  describe('DAG re-parenting places gate-planner between the story guard and the TEA gates', () => {
+    it('quality-route-loop exists with correct routing (replaces old code-review-gate)', () => {
       const v2 = parseFromDisk(V2_FILE, V2_STEM);
-      const gate = nodeById(v2, 'code-review-gate');
-      const routes = (gate as unknown as { route_loop?: { routes?: { positive?: string } } })
-        .route_loop?.routes;
-      expect(routes?.positive, 'positive route must target gate-planner').toBe('gate-planner');
+      const loop = nodeById(v2, 'quality-route-loop');
+      expect(loop, 'quality-route-loop must exist').toBeDefined();
+      const routes = (
+        loop as unknown as {
+          route_loop?: { routes?: { positive?: string; negative?: string; exhausted?: string } };
+        }
+      ).route_loop?.routes;
+      expect(routes?.positive, 'positive route must target create-pull-request').toBe(
+        'create-pull-request'
+      );
+      expect(routes?.negative, 'negative route must target dev-story').toBe('dev-story');
+      expect(routes?.exhausted, 'exhausted route must target review-loop-error').toBe(
+        'review-loop-error'
+      );
     });
 
     it('tea-rv depends on gate-planner', () => {

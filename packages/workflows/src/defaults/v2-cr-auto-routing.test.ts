@@ -387,7 +387,24 @@ describe('AC1 — CR JSON contract drives the positive route', () => {
           findings_count: 0,
           report_file: 'tea-rv-report.md',
         },
-        'tea-tr': {},
+        'tea-nr': {
+          contract_version: '1.0',
+          workflow: 'bmad-dev-story-with-tea-fix-loop-v2',
+          node: 'tea-nr',
+          gate: 'PASS',
+          story_ref: CANONICAL_KEY,
+          findings_count: 0,
+          report_file: 'tea-nr-report.md',
+        },
+        'tea-tr': {
+          contract_version: '1.0',
+          workflow: 'bmad-dev-story-with-tea-fix-loop-v2',
+          node: 'tea-tr',
+          gate: 'PASS',
+          story_ref: CANONICAL_KEY,
+          findings_count: 0,
+          report_file: 'tea-tr-report.md',
+        },
         'create-pull-request': {},
       },
     });
@@ -423,7 +440,7 @@ describe('AC2 — DS/TA/CR failures are ERROR, not a fix-loop back to dev-story'
     expect(run.nodeState['verify-story-identity']).toBe('skipped');
     // dev-story ran exactly once (initial); the negative route never re-entered it.
     expect(run.providerCalls.filter(c => c === 'dev-story').length).toBe(1);
-    expect(run.nodeState['code-review-gate']).not.toBe('completed');
+    expect(run.nodeState['quality-route-loop']).not.toBe('completed');
     expect(run.nodeState['tea-rv']).not.toBe('completed');
     expect(run.runFailed).toBe(true);
   });
@@ -504,7 +521,7 @@ describe('AC3 — DS/TA/CR operate on the same resolved story_ref', () => {
     });
 
     expect(run.nodeState['verify-story-identity']).toBe('failed');
-    expect(run.nodeState['code-review-gate']).toBe('skipped');
+    expect(run.nodeState['quality-route-loop']).not.toBe('completed');
     expect(
       run.providerCalls.filter(c => c === 'dev-story').length,
       'identity mismatch must not re-enter dev-story via the negative route'
@@ -533,7 +550,24 @@ describe('AC3 — DS/TA/CR operate on the same resolved story_ref', () => {
           findings_count: 0,
           report_file: 'tea-rv-report.md',
         },
-        'tea-tr': {},
+        'tea-nr': {
+          contract_version: '1.0',
+          workflow: 'bmad-dev-story-with-tea-fix-loop-v2',
+          node: 'tea-nr',
+          gate: 'PASS',
+          story_ref: CANONICAL_KEY,
+          findings_count: 0,
+          report_file: 'tea-nr-report.md',
+        },
+        'tea-tr': {
+          contract_version: '1.0',
+          workflow: 'bmad-dev-story-with-tea-fix-loop-v2',
+          node: 'tea-tr',
+          gate: 'PASS',
+          story_ref: CANONICAL_KEY,
+          findings_count: 0,
+          report_file: 'tea-tr-report.md',
+        },
         'create-pull-request': {},
       },
     });
@@ -575,7 +609,24 @@ describe('AC3 — DS/TA/CR operate on the same resolved story_ref', () => {
           findings_count: 0,
           report_file: 'tea-rv-report.md',
         },
-        'tea-tr': {},
+        'tea-nr': {
+          contract_version: '1.0',
+          workflow: 'bmad-dev-story-with-tea-fix-loop-v2',
+          node: 'tea-nr',
+          gate: 'PASS',
+          story_ref: CANONICAL_KEY,
+          findings_count: 0,
+          report_file: 'tea-nr-report.md',
+        },
+        'tea-tr': {
+          contract_version: '1.0',
+          workflow: 'bmad-dev-story-with-tea-fix-loop-v2',
+          node: 'tea-tr',
+          gate: 'PASS',
+          story_ref: CANONICAL_KEY,
+          findings_count: 0,
+          report_file: 'tea-tr-report.md',
+        },
         'create-pull-request': {},
       },
     });
@@ -615,7 +666,24 @@ describe('Q1 — CONCERNS gate routing (A2.1 recommendation: non-blocking → ro
           findings_count: 0,
           report_file: 'tea-rv-report.md',
         },
-        'tea-tr': {},
+        'tea-nr': {
+          contract_version: '1.0',
+          workflow: 'bmad-dev-story-with-tea-fix-loop-v2',
+          node: 'tea-nr',
+          gate: 'PASS',
+          story_ref: CANONICAL_KEY,
+          findings_count: 0,
+          report_file: 'tea-nr-report.md',
+        },
+        'tea-tr': {
+          contract_version: '1.0',
+          workflow: 'bmad-dev-story-with-tea-fix-loop-v2',
+          node: 'tea-tr',
+          gate: 'PASS',
+          story_ref: CANONICAL_KEY,
+          findings_count: 0,
+          report_file: 'tea-tr-report.md',
+        },
         'create-pull-request': {},
       },
     });

@@ -1,8 +1,8 @@
 ---
 title: Archon Architecture Handoff - BMAD TEA V2 Workflow Orchestration
 status: handoff
-created: "2026-06-30"
-updated: "2026-06-30"
+created: '2026-06-30'
+updated: '2026-06-30'
 source_parent_architecture: ../../../_bmad-output/planning-artifacts/architecture/architecture-workflow-engine-2026-06-29/ARCHITECTURE-SPINE.md
 ---
 
@@ -90,23 +90,23 @@ It creates or reuses Linear issues, invokes the BMAD-METHOD sync contract with L
 
 ## Workflow-Owned Nodes
 
-| Node | Owner In Archon | Required Output |
-| --- | --- | --- |
-| `dev-story` | Invoke BMAD dev story behavior and preserve story input | Node result plus story reference evidence |
-| `tea-automate` | Invoke BMAD-TEA automation and expose evidence pointers | Test automation evidence contract or pointer |
-| `code-review-auto` | Invoke BMAD-METHOD `bmad-code-review-auto` | `code-review-auto.gate.json` |
-| `gate-planner` | Plan conditional TEA release gates | `gate-planner.json` |
-| `tea-rv` | Invoke BMAD-TEA test review when needed | `tea-rv.gate.json` |
-| `tea-rv-skipped` | Resolve skipped RV branch | `tea-rv-skipped.gate.json` |
-| `tea-nr` | Invoke BMAD-TEA NFR review when needed | `tea-nr.gate.json` |
-| `tea-nr-skipped` | Resolve skipped NR branch | `tea-nr-skipped.gate.json` |
-| `tea-tr` | Invoke BMAD-TEA traceability review | `tea-tr.gate.json` |
-| `tea-tr-skipped` | Resolve skipped TR branch when release-gate evaluation is already blocked | `tea-tr-skipped.gate.json` |
-| `quality-gate-summary` | Aggregate route contract | `quality-gate-summary.json` |
-| `quality-route-loop` | Route the single quality loop | Route-loop state |
-| `decision-needed-check` | Create or reuse Linear issues, call BMAD-METHOD sync, and block PR preparation on issue or sync failure | `decision-needed-check.json` |
-| `review-loop-error` | Report exhausted quality loop | Review-loop error artifact |
-| `create-pull-request` | Prepare PR handoff with evidence links | PR handoff artifact |
+| Node                    | Owner In Archon                                                                                         | Required Output                              |
+| ----------------------- | ------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| `dev-story`             | Invoke BMAD dev story behavior and preserve story input                                                 | Node result plus story reference evidence    |
+| `tea-automate`          | Invoke BMAD-TEA automation and expose evidence pointers                                                 | Test automation evidence contract or pointer |
+| `code-review-auto`      | Invoke BMAD-METHOD `bmad-code-review-auto`                                                              | `code-review-auto.gate.json`                 |
+| `gate-planner`          | Plan conditional TEA release gates                                                                      | `gate-planner.json`                          |
+| `tea-rv`                | Invoke BMAD-TEA test review when needed                                                                 | `tea-rv.gate.json`                           |
+| `tea-rv-skipped`        | Resolve skipped RV branch                                                                               | `tea-rv-skipped.gate.json`                   |
+| `tea-nr`                | Invoke BMAD-TEA NFR review when needed                                                                  | `tea-nr.gate.json`                           |
+| `tea-nr-skipped`        | Resolve skipped NR branch                                                                               | `tea-nr-skipped.gate.json`                   |
+| `tea-tr`                | Invoke BMAD-TEA traceability review                                                                     | `tea-tr.gate.json`                           |
+| `tea-tr-skipped`        | Resolve skipped TR branch when release-gate evaluation is already blocked                               | `tea-tr-skipped.gate.json`                   |
+| `quality-gate-summary`  | Aggregate route contract                                                                                | `quality-gate-summary.json`                  |
+| `quality-route-loop`    | Route the single quality loop                                                                           | Route-loop state                             |
+| `decision-needed-check` | Create or reuse Linear issues, call BMAD-METHOD sync, and block PR preparation on issue or sync failure | `decision-needed-check.json`                 |
+| `review-loop-error`     | Report exhausted quality loop                                                                           | Review-loop error artifact                   |
+| `create-pull-request`   | Prepare PR handoff with evidence links                                                                  | PR handoff artifact                          |
 
 ## Contract Envelope
 

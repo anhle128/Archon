@@ -165,8 +165,8 @@ describe('bundled-defaults', () => {
       expect(content).toContain('command: archon-create-pr');
     });
 
-    it('bmad-create-dev-story-with-tea should create story before dev loop and PR after review gate', () => {
-      const content = BUNDLED_WORKFLOWS['bmad-create-dev-story-with-tea'];
+    it('bmad-create-and-dev-story-with-tea should create story before dev loop and PR after review gate', () => {
+      const content = BUNDLED_WORKFLOWS['bmad-create-and-dev-story-with-tea'];
       expect(content).toContain('id: prepare-bmad-state');
       expect(content).toContain('RUN_DIR="$ARTIFACTS_DIR/bmad-create-dev-story-with-tea"');
       expect(content).toContain('id: create-story');

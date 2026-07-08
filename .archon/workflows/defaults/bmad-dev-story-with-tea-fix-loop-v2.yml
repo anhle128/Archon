@@ -395,14 +395,170 @@ nodes:
     depends_on: [resolve-story-input, code-review-auto]
     output_type: story-identity-verified
 
-  - id: code-review-gate
-    depends_on: [verify-story-identity]
+  - id: quality-gate-summary
+    bash: |
+      set -e
+
+      RESOLVED_REF=$resolve-story-input.output.story_ref
+
+      CR_OUT=$code-review-auto.output
+      RV_REAL_OUT=$tea-rv.output
+      RV_SKIP_OUT=$tea-rv-skipped.output
+      NR_REAL_OUT=$tea-nr.output
+      NR_SKIP_OUT=$tea-nr-skipped.output
+      TR_REAL_OUT=$tea-tr.output
+      TR_SKIP_OUT=$tea-tr-skipped.output
+
+      if [ -z "$RESOLVED_REF" ]; then
+        echo "ERROR: resolved story_ref is empty." >&2
+        exit 1
+      fi
+
+      if [ -z "$CR_OUT" ]; then
+        echo "ERROR: code-review-auto output is empty." >&2
+        exit 1
+      fi
+
+      RV_OUT="${RV_REAL_OUT:-$RV_SKIP_OUT}"
+      NR_OUT="${NR_REAL_OUT:-$NR_SKIP_OUT}"
+      TR_OUT="${TR_REAL_OUT:-$TR_SKIP_OUT}"
+
+      if [ -z "$RV_OUT" ]; then
+        echo "ERROR: no resolved RV contract (both real and skipped empty)." >&2
+        exit 1
+      fi
+
+      if [ -z "$NR_OUT" ]; then
+        echo "ERROR: no resolved NR contract (both real and skipped empty)." >&2
+        exit 1
+      fi
+
+      if [ -z "$TR_OUT" ]; then
+        echo "ERROR: no resolved TR contract (both real and skipped empty)." >&2
+        exit 1
+      fi
+
+      RV_SOURCE="tea-rv"
+      if [ -z "$RV_REAL_OUT" ]; then
+        RV_SOURCE="tea-rv-skipped"
+      fi
+
+      NR_SOURCE="tea-nr"
+      if [ -z "$NR_REAL_OUT" ]; then
+        NR_SOURCE="tea-nr-skipped"
+      fi
+
+      TR_SOURCE="tea-tr"
+      if [ -z "$TR_REAL_OUT" ]; then
+        TR_SOURCE="tea-tr-skipped"
+      fi
+
+      SUMMARY=$(
+        QGS_RESOLVED="$RESOLVED_REF" \
+        QGS_CR="$CR_OUT" \
+        QGS_RV="$RV_OUT" QGS_RV_SOURCE="$RV_SOURCE" \
+        QGS_NR="$NR_OUT" QGS_NR_SOURCE="$NR_SOURCE" \
+        QGS_TR="$TR_OUT" QGS_TR_SOURCE="$TR_SOURCE" \
+        bun -e '
+          const resolved = process.env.QGS_RESOLVED;
+          function validateBase(raw, role) {
+            let c;
+            try { c = JSON.parse(raw); } catch { throw new Error(role + " contract is not valid JSON"); }
+            if (!c.contract_version || c.contract_version !== "1.0") throw new Error(role + " contract_version mismatch");
+            if (c.workflow !== "bmad-dev-story-with-tea-fix-loop-v2") throw new Error(role + " workflow mismatch");
+            if (!c.story_ref || c.story_ref !== resolved) throw new Error(role + " story_ref mismatch");
+            if (typeof c.findings_count !== "number" || c.findings_count < 0) throw new Error(role + " findings_count invalid");
+            return c;
+          }
+          const cr = validateBase(process.env.QGS_CR, "CR");
+          if (cr.node !== "code-review-auto") throw new Error("CR node mismatch: " + cr.node);
+          const crValidGates = ["PASS","FAIL","CONCERNS","ERROR"];
+          if (!crValidGates.includes(cr.gate)) throw new Error("CR gate invalid: " + cr.gate);
+          const crRoundNum = Number(cr.round);
+          if (!Number.isInteger(crRoundNum) || crRoundNum < 1) throw new Error("CR round invalid: " + cr.round);
+          const rvSource = process.env.QGS_RV_SOURCE;
+          const rv = validateBase(process.env.QGS_RV, "RV");
+          if (rv.node !== rvSource) throw new Error("RV node mismatch: " + rv.node + " !== " + rvSource);
+          const rvGates = rvSource === "tea-rv" ? ["PASS","FAIL","CONCERNS","ERROR"] : ["SKIPPED"];
+          if (!rvGates.includes(rv.gate)) throw new Error("RV gate invalid: " + rv.gate);
+          const nrSource = process.env.QGS_NR_SOURCE;
+          const nr = validateBase(process.env.QGS_NR, "NR");
+          if (nr.node !== nrSource) throw new Error("NR node mismatch: " + nr.node + " !== " + nrSource);
+          const nrGates = nrSource === "tea-nr" ? ["PASS","FAIL","CONCERNS","ERROR"] : ["SKIPPED"];
+          if (!nrGates.includes(nr.gate)) throw new Error("NR gate invalid: " + nr.gate);
+          const trSource = process.env.QGS_TR_SOURCE;
+          const tr = validateBase(process.env.QGS_TR, "TR");
+          if (tr.node !== trSource) throw new Error("TR node mismatch: " + tr.node + " !== " + trSource);
+          const trGates = trSource === "tea-tr" ? ["PASS","FAIL","CONCERNS","ERROR"] : ["SKIPPED"];
+          if (!trGates.includes(tr.gate)) throw new Error("TR gate invalid: " + tr.gate);
+          for (const [name, c] of [["CR",cr],["RV",rv],["NR",nr],["TR",tr]]) {
+            if (c.gate === "ERROR") throw new Error(name + " gate is ERROR — tooling or contract failure");
+          }
+          const roles = [cr, rv, nr, tr];
+          const failCount = roles.filter(r => r.gate === "FAIL").length;
+          const concernsCount = roles.filter(r => r.gate === "CONCERNS").length;
+          const findingsTotal = roles.reduce((s, r) => s + (r.findings_count || 0), 0);
+          const gate = failCount > 0 ? "FAIL" : "PASS";
+          process.stdout.write(JSON.stringify({
+            contract_version: "1.0",
+            workflow: "bmad-dev-story-with-tea-fix-loop-v2",
+            node: "quality-gate-summary",
+            story_ref: resolved,
+            gate,
+            round: crRoundNum,
+            blocking_count: failCount,
+            decision_needed_count: concernsCount,
+            findings_total: findingsTotal,
+            cr_gate: cr.gate,
+            rv_gate: rv.gate,
+            nr_gate: nr.gate,
+            tr_gate: tr.gate
+          }));
+        '
+      )
+
+      printf '%s' "$SUMMARY"
+
+      if [ -n "${ARTIFACTS_DIR:-}" ]; then
+        RUN_DIR="$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop"
+        mkdir -p "$RUN_DIR" 2>/dev/null || true
+        printf '%s' "$SUMMARY" > "$RUN_DIR/quality-gate-summary.json" 2>/dev/null || true
+      fi
+    depends_on: [code-review-auto, tea-rv, tea-rv-skipped, tea-nr, tea-nr-skipped, tea-tr, tea-tr-skipped, resolve-story-input]
+    trigger_rule: none_failed_min_one_success
+    timeout: 60000
+    output_type: quality-gate-summary
+
+  - id: verify-quality-summary
+    bash: |
+      set -e
+      SUMMARY=$quality-gate-summary.output
+      RESOLVED_REF=$resolve-story-input.output.story_ref
+      GATE=$(
+        QRS_SUMMARY="$SUMMARY" QRS_RESOLVED="$RESOLVED_REF" \
+        bun -e '
+          const s = JSON.parse(process.env.QRS_SUMMARY || "");
+          if (s.contract_version !== "1.0") { console.error("ERROR: contract_version"); process.exit(1); }
+          if (s.workflow !== "bmad-dev-story-with-tea-fix-loop-v2") { console.error("ERROR: workflow"); process.exit(1); }
+          if (s.node !== "quality-gate-summary") { console.error("ERROR: node"); process.exit(1); }
+          if (!s.story_ref || s.story_ref !== process.env.QRS_RESOLVED) { console.error("ERROR: story_ref"); process.exit(1); }
+          if (s.gate !== "PASS" && s.gate !== "FAIL") { console.error("ERROR: gate"); process.exit(1); }
+          process.stdout.write(s.gate);
+        '
+      )
+      printf '%s' "$GATE"
+    timeout: 60000
+    depends_on: [quality-gate-summary, resolve-story-input]
+    output_type: quality-summary-verified
+
+  - id: quality-route-loop
+    depends_on: [verify-quality-summary]
     route_loop:
-      from: verify-story-identity
-      condition: "$verify-story-identity.output == 'PASS'"
+      from: verify-quality-summary
+      condition: "$verify-quality-summary.output == 'PASS'"
       max_iterations: 20
       routes:
-        positive: gate-planner
+        positive: create-pull-request
         negative: dev-story
         exhausted: review-loop-error
 
@@ -550,7 +706,7 @@ nodes:
         mkdir -p "$RUN_DIR" 2>/dev/null || true
         printf '%s' "$CONTRACT" > "$RUN_DIR/gate-planner.json" 2>/dev/null || true
       fi
-    depends_on: [code-review-gate]
+    depends_on: [verify-story-identity]
     timeout: 60000
     output_type: gate-decision
 
@@ -699,32 +855,109 @@ nodes:
     output_type: nfr-skipped
 
   - id: tea-tr
+    when: "$gate-planner.output.run_tr == true"
     prompt: |
       bmad-testarch-trace $ARGUMENTS
+    prompt_suffix: |
+      The canonical story key resolved for this pipeline run is: $resolve-story-input.output.story_ref
+      You MUST include the following structured fields in your output:
+      - contract_version: set to "1.0"
+      - workflow: set to "bmad-dev-story-with-tea-fix-loop-v2"
+      - node: set to "tea-tr"
+      - gate: one of PASS, FAIL, CONCERNS, ERROR
+      - story_ref: set to exactly the canonical story key above
+      - findings_count: number of findings identified
+      - report_file: path to the human-readable traceability review report
     provider: claude
     depends_on: [tea-rv, tea-rv-skipped, tea-nr, tea-nr-skipped]
     trigger_rule: none_failed_min_one_success
     context: fresh
     model: sonnet
     idle_timeout: 900000
+    output_format:
+      type: object
+      properties:
+        contract_version:
+          type: string
+        workflow:
+          type: string
+        node:
+          type: string
+        gate:
+          type: string
+          enum: ["PASS", "FAIL", "CONCERNS", "ERROR"]
+        story_ref:
+          type: string
+          description: "Resolved canonical story key; must match $resolve-story-input.output.story_ref."
+        findings_count:
+          type: number
+        report_file:
+          type: string
+      required:
+        - contract_version
+        - workflow
+        - node
+        - gate
+        - story_ref
+        - findings_count
+        - report_file
     output_type: trace-findings
 
-  - id: review-loop-error
-    depends_on: [code-review-gate]
+  - id: tea-tr-skipped
+    when: "$gate-planner.output.run_tr == false"
     bash: |
       set -e
 
-      STATE="$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop/state.json"
-      DECISIONS="$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop/decision-log.md"
-      OPEN_FINDINGS="$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop/findings/open-findings.md"
+      STORY_REF=$resolve-story-input.output.story_ref
+      REASON=$gate-planner.output.reason_tr
 
-      echo "BMAD code-review fix loop exhausted its retry budget."
-      echo "State: $STATE"
-      echo "Decision log: $DECISIONS"
+      CONTRACT=$(
+        SK_STORY_REF="$STORY_REF" SK_REASON="$REASON" \
+        bun -e 'process.stdout.write(JSON.stringify({contract_version:"1.0",workflow:"bmad-dev-story-with-tea-fix-loop-v2",node:"tea-tr-skipped",story_ref:process.env.SK_STORY_REF,gate:"SKIPPED",findings_count:0,reason:process.env.SK_REASON}))'
+      )
+
+      printf '%s' "$CONTRACT"
+
+      if [ -n "${ARTIFACTS_DIR:-}" ]; then
+        RUN_DIR="$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop"
+        mkdir -p "$RUN_DIR" 2>/dev/null || true
+        printf '%s' "$CONTRACT" > "$RUN_DIR/tea-tr-skipped.gate.json" 2>/dev/null || true
+      fi
+    depends_on: [gate-planner]
+    timeout: 60000
+    output_type: trace-skipped
+
+  - id: review-loop-error
+    depends_on: [quality-route-loop]
+    bash: |
+      set -e
+
+      RUN_DIR="$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop"
+      STATE="$RUN_DIR/state.json"
+      DECISIONS="$RUN_DIR/decision-log.md"
+      OPEN_FINDINGS="$RUN_DIR/findings/open-findings.md"
+
+      echo "BMAD quality fix loop exhausted its retry budget."
       echo "Open findings: $OPEN_FINDINGS"
+      echo "Decision log: $DECISIONS"
 
+      ROUND="unknown"
       if [ -f "$STATE" ]; then
+        ROUND=$(RLE_STATE="$STATE" bun -e 'try{const s=JSON.parse(require("fs").readFileSync(process.env.RLE_STATE,"utf-8"));process.stdout.write(String(s.round??0))}catch{process.stdout.write("0")}' 2>/dev/null || echo "unknown")
+        echo "State: $STATE"
         cat "$STATE"
+      fi
+
+      echo "Quality loop exhausted — iterations exceeded max budget."
+
+      ERROR_CONTRACT=$(
+        RLE_OPEN="$OPEN_FINDINGS" RLE_DECISIONS="$DECISIONS" RLE_ROUND="$ROUND" \
+        bun -e 'process.stdout.write(JSON.stringify({error:"quality-loop-exhausted",open_findings_file:process.env.RLE_OPEN,decision_log_file:process.env.RLE_DECISIONS,round:process.env.RLE_ROUND}))'
+      )
+
+      if [ -n "${ARTIFACTS_DIR:-}" ]; then
+        mkdir -p "$RUN_DIR" 2>/dev/null || true
+        printf '%s' "$ERROR_CONTRACT" > "$RUN_DIR/review-loop-error.json" 2>/dev/null || true
       fi
 
       exit 1
@@ -733,6 +966,6 @@ nodes:
   - id: create-pull-request
     command: archon-create-pr
     provider: claude
-    depends_on: [tea-tr]
+    depends_on: [quality-route-loop]
     context: fresh
     model: sonnet

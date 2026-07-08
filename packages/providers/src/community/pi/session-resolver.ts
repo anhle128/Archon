@@ -1,11 +1,21 @@
-import { SessionManager } from '@earendil-works/pi-coding-agent';
+export interface PiSessionInfo {
+  id: string;
+  path: string;
+  cwd: string;
+}
+
+export interface PiSessionManagerApi<TSessionManager> {
+  create(cwd: string): TSessionManager;
+  open(path: string): TSessionManager;
+  list(cwd: string): Promise<readonly PiSessionInfo[]>;
+}
 
 /**
  * Result of resolving an Archon `resumeSessionId` against Pi's session store.
  */
-export interface ResolvedSession {
+export interface ResolvedSession<TSessionManager> {
   /** SessionManager to hand to createAgentSession. */
-  sessionManager: SessionManager;
+  sessionManager: TSessionManager;
   /**
    * True when a resumeSessionId was provided but no matching session file
    * was found — caller should surface a system warning before the new
@@ -34,20 +44,21 @@ export interface ResolvedSession {
  * a fresh session is created. This matches Pi's own mental model and
  * avoids ambiguity.
  */
-export async function resolvePiSession(
+export async function resolvePiSession<TSessionManager>(
   cwd: string,
-  resumeSessionId: string | undefined
-): Promise<ResolvedSession> {
+  resumeSessionId: string | undefined,
+  sessionManagerApi: PiSessionManagerApi<TSessionManager>
+): Promise<ResolvedSession<TSessionManager>> {
   if (!resumeSessionId) {
-    return { sessionManager: SessionManager.create(cwd), resumeFailed: false };
+    return { sessionManager: sessionManagerApi.create(cwd), resumeFailed: false };
   }
 
   try {
-    const sessions = await SessionManager.list(cwd);
+    const sessions = await sessionManagerApi.list(cwd);
     const match = sessions.find(s => s.id === resumeSessionId);
     if (match) {
       return {
-        sessionManager: SessionManager.open(match.path),
+        sessionManager: sessionManagerApi.open(match.path),
         resumeFailed: false,
       };
     }
@@ -58,7 +69,7 @@ export async function resolvePiSession(
     if (!isMissingSessionDirError(err)) throw err;
   }
 
-  return { sessionManager: SessionManager.create(cwd), resumeFailed: true };
+  return { sessionManager: sessionManagerApi.create(cwd), resumeFailed: true };
 }
 
 function isMissingSessionDirError(err: unknown): boolean {

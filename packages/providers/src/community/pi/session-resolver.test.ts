@@ -1,18 +1,14 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 
-// ─── Mock SessionManager before import ─────────────────────────────────────
-
 const mockCreate = mock((_cwd: string) => ({ __kind: 'created' }));
 const mockOpen = mock((_path: string) => ({ __kind: 'opened' }));
 const mockList = mock(async (_cwd: string) => [] as { id: string; path: string; cwd: string }[]);
 
-mock.module('@earendil-works/pi-coding-agent', () => ({
-  SessionManager: {
-    create: mockCreate,
-    open: mockOpen,
-    list: mockList,
-  },
-}));
+const sessionManagerApi = {
+  create: mockCreate,
+  open: mockOpen,
+  list: mockList,
+};
 
 import { resolvePiSession } from './session-resolver';
 
@@ -25,7 +21,7 @@ describe('resolvePiSession', () => {
   });
 
   test('no resumeSessionId → create fresh session', async () => {
-    const result = await resolvePiSession('/tmp/proj', undefined);
+    const result = await resolvePiSession('/tmp/proj', undefined, sessionManagerApi);
     expect(result.resumeFailed).toBe(false);
     expect(mockCreate).toHaveBeenCalledWith('/tmp/proj');
     expect(mockOpen).not.toHaveBeenCalled();
@@ -38,7 +34,7 @@ describe('resolvePiSession', () => {
       { id: 'def-456', path: '/sessions/def-456.jsonl', cwd: '/tmp/proj' },
     ]);
 
-    const result = await resolvePiSession('/tmp/proj', 'def-456');
+    const result = await resolvePiSession('/tmp/proj', 'def-456', sessionManagerApi);
     expect(result.resumeFailed).toBe(false);
     expect(mockOpen).toHaveBeenCalledWith('/sessions/def-456.jsonl');
     expect(mockCreate).not.toHaveBeenCalled();
@@ -49,7 +45,7 @@ describe('resolvePiSession', () => {
       { id: 'abc-123', path: '/sessions/abc-123.jsonl', cwd: '/tmp/proj' },
     ]);
 
-    const result = await resolvePiSession('/tmp/proj', 'missing-id');
+    const result = await resolvePiSession('/tmp/proj', 'missing-id', sessionManagerApi);
     expect(result.resumeFailed).toBe(true);
     expect(mockCreate).toHaveBeenCalledWith('/tmp/proj');
     expect(mockOpen).not.toHaveBeenCalled();
@@ -61,7 +57,7 @@ describe('resolvePiSession', () => {
       throw err;
     });
 
-    const result = await resolvePiSession('/tmp/proj', 'some-id');
+    const result = await resolvePiSession('/tmp/proj', 'some-id', sessionManagerApi);
     expect(result.resumeFailed).toBe(true);
     expect(mockCreate).toHaveBeenCalledWith('/tmp/proj');
   });
@@ -72,7 +68,7 @@ describe('resolvePiSession', () => {
       throw err;
     });
 
-    const result = await resolvePiSession('/tmp/proj', 'some-id');
+    const result = await resolvePiSession('/tmp/proj', 'some-id', sessionManagerApi);
     expect(result.resumeFailed).toBe(true);
     expect(mockCreate).toHaveBeenCalledWith('/tmp/proj');
   });
@@ -85,7 +81,9 @@ describe('resolvePiSession', () => {
       throw err;
     });
 
-    await expect(resolvePiSession('/tmp/proj', 'some-id')).rejects.toThrow(/permission denied/);
+    await expect(resolvePiSession('/tmp/proj', 'some-id', sessionManagerApi)).rejects.toThrow(
+      /permission denied/
+    );
     expect(mockCreate).not.toHaveBeenCalled();
   });
 
@@ -94,12 +92,14 @@ describe('resolvePiSession', () => {
       throw new Error('some other failure');
     });
 
-    await expect(resolvePiSession('/tmp/proj', 'some-id')).rejects.toThrow(/some other failure/);
+    await expect(resolvePiSession('/tmp/proj', 'some-id', sessionManagerApi)).rejects.toThrow(
+      /some other failure/
+    );
   });
 
   test('empty resumeSessionId string → fresh session (no resume attempted)', async () => {
     // Treated as "no resume requested" by the truthy check in the resolver.
-    const result = await resolvePiSession('/tmp/proj', '');
+    const result = await resolvePiSession('/tmp/proj', '', sessionManagerApi);
     expect(result.resumeFailed).toBe(false);
     expect(mockList).not.toHaveBeenCalled();
     expect(mockCreate).toHaveBeenCalled();
