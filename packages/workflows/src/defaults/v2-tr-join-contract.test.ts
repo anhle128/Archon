@@ -303,17 +303,26 @@ describe('PR tail — resolves through quality-gate-summary barrier (TD-027)', (
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TD-042 [P0] — quality-gate-summary barrier: fail-closed on RV/NR failure
-// (R1-F3) and TR gate FAIL/ERROR (R1-F2)
+// and ERROR (not FAIL — FAIL is a valid routing decision for the aggregator)
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('quality-gate-summary — fail-closed barrier before PR (TD-042)', () => {
-  it('quality-gate-summary exists as a bash node depending on all six branch nodes', () => {
+  it('quality-gate-summary exists as a bash node depending on all eight source nodes', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     const node = nodeById(v2, 'quality-gate-summary');
     expect(node, 'quality-gate-summary must exist').toBeDefined();
     expect('bash' in node!, 'quality-gate-summary must be a bash node').toBe(true);
     expect([...(node!.depends_on ?? [])].sort()).toEqual(
-      ['tea-nr', 'tea-nr-skipped', 'tea-rv', 'tea-rv-skipped', 'tea-tr', 'tea-tr-skipped'].sort()
+      [
+        'code-review-auto',
+        'resolve-story-input',
+        'tea-nr',
+        'tea-nr-skipped',
+        'tea-rv',
+        'tea-rv-skipped',
+        'tea-tr',
+        'tea-tr-skipped',
+      ].sort()
     );
   });
 
@@ -323,7 +332,7 @@ describe('quality-gate-summary — fail-closed barrier before PR (TD-042)', () =
     expect(node.trigger_rule).toBe('none_failed_min_one_success');
   });
 
-  it('quality-gate-summary parses TR contract via JSON.parse and validates the full envelope before checking gate', () => {
+  it('quality-gate-summary parses TR contract via JSON.parse and validates the full envelope before aggregating', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     const bash =
       (nodeById(v2, 'quality-gate-summary') as { bash?: string } | undefined)?.bash ?? '';
@@ -340,16 +349,21 @@ describe('quality-gate-summary — fail-closed barrier before PR (TD-042)', () =
     expect(bash, 'must validate node identity').toContain('node');
     expect(bash, 'must validate story_ref against resolved input').toContain('story_ref');
     expect(bash, 'must validate findings_count is non-negative').toContain('findings_count');
-    expect(bash, 'must block FAIL gate').toContain('FAIL');
-    expect(bash, 'must block ERROR gate').toContain('ERROR');
-    expect(bash, 'must exit non-zero on blocked gate').toContain('exit 1');
+    expect(
+      bash,
+      'must reference FAIL for aggregation (FAIL is a valid routing decision)'
+    ).toContain('FAIL');
+    expect(
+      bash,
+      'must exit non-zero on ERROR gate (ERROR is a hard failure, distinct from FAIL)'
+    ).toContain('exit 1');
   });
 
   it('quality-gate-summary declares timeout and typed output', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     expect((nodeById(v2, 'quality-gate-summary') as { timeout?: number }).timeout).toBe(60000);
     expect((nodeById(v2, 'quality-gate-summary') as { output_type?: string }).output_type).toBe(
-      'gate-summary'
+      'quality-gate-summary'
     );
   });
 });
@@ -495,7 +509,7 @@ describe('Scope guard — v1 untouched, v2 additive third skip node (TD-037)', (
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TD-038 [P1] — predecessor regression assertions preserved, not lost.
-// The a3.2 file's fail-closed join checks must survive the predecessor-update
+// The predecessor file's fail-closed join checks must survive the predecessor-update
 // task; the pre-TR-join "no when / skip absent" assertions must be INVERTED
 // there, never silently deleted.
 // ═══════════════════════════════════════════════════════════════════════════
@@ -588,7 +602,7 @@ describe('Naming conventions — kebab-case ids, no plan references (TD-041)', (
 
   it('generated TR-join ATDD test files contain no plan/story/epic identifiers', () => {
     const files = ['v2-tr-join-dag.test.ts', 'v2-tr-join-contract.test.ts'];
-    const planRef = /\b(A3\.\d|A-FR-\d|A-AD-\d|R-0\d\d|W-00\d)\b/;
+    const planRef = /\b(A3\.\d|A-FR-\d|A-AD-\d|R-0\d\d|W-00\d|R\d-F\d|a\d\.\d)\b/;
     for (const f of files) {
       const body = readLF(join(import.meta.dir, f));
       expect(body, `${f} must exist`).not.toBeNull();

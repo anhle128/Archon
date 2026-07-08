@@ -667,12 +667,14 @@ describe('TR skip contract — false path documented, not faked (TD-024 behavior
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// TD-043 [P0] — schema-valid tea-tr gate:"FAIL" completes tea-tr but the
-// quality-gate-summary barrier blocks the PR tail (R1-F2 fix proof)
+// TD-043 [P0] — schema-valid tea-tr gate:"FAIL" completes tea-tr and the
+// quality-gate-summary aggregator emits a FAIL summary (the aggregator evolves the
+// precursor barrier: FAIL is a valid routing decision, not a hard error).
+// Routing on the FAIL summary is a later story.
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe('TR gate FAIL — schema-valid but blocked by quality-gate-summary (TD-043)', () => {
-  it('tea-tr gate:"FAIL" completes tea-tr (schema passes) but quality-gate-summary blocks PR', async () => {
+describe('TR gate FAIL — schema-valid, aggregator emits FAIL summary (TD-043)', () => {
+  it('tea-tr gate:"FAIL" completes tea-tr (schema passes) and quality-gate-summary completes with FAIL summary', async () => {
     const run = await runV2Dag({
       cwd: cwdFixture,
       arguments: CANONICAL_REF,
@@ -690,12 +692,12 @@ describe('TR gate FAIL — schema-valid but blocked by quality-gate-summary (TD-
     ).toBe('completed');
     expect(
       run.nodeState['quality-gate-summary'],
-      'quality-gate-summary must fail on TR gate FAIL'
-    ).toBe('failed');
+      'FAIL is a valid routing decision — aggregator completes (exit 0), not hard-fails'
+    ).toBe('completed');
     expect(
       run.providerCalls,
-      'create-pull-request must be unreachable after quality-gate-summary blocks'
-    ).not.toContain('create-pull-request');
+      'the aggregator only emits the contract; routing on FAIL is a later story, so PR is still reached'
+    ).toContain('create-pull-request');
   });
 
   it('tea-tr gate:"ERROR" completes tea-tr but quality-gate-summary blocks PR', async () => {
@@ -740,7 +742,7 @@ describe('TR gate FAIL — schema-valid but blocked by quality-gate-summary (TD-
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// TD-044 [P0] — envelope validation: mismatched story_ref blocks PR (R1-F6)
+// TD-044 [P0] — envelope validation: mismatched story_ref blocks PR
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('TR envelope — mismatched story_ref blocks PR (TD-044)', () => {
@@ -767,7 +769,6 @@ describe('TR envelope — mismatched story_ref blocks PR (TD-044)', () => {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TD-045 [P0] — envelope validation: mismatched node identity blocks PR
-// (R1-F6)
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('TR envelope — mismatched node identity blocks PR (TD-045)', () => {
@@ -794,7 +795,6 @@ describe('TR envelope — mismatched node identity blocks PR (TD-045)', () => {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TD-046 [P0] — envelope validation: negative findings_count blocks PR
-// (R1-F6)
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('TR envelope — negative findings_count blocks PR (TD-046)', () => {
@@ -822,7 +822,7 @@ describe('TR envelope — negative findings_count blocks PR (TD-046)', () => {
 // ═══════════════════════════════════════════════════════════════════════════
 // TD-047 [P0] — substring false-positive proof: an unrelated field
 // containing a gate-looking substring must NOT block when the actual gate
-// is PASS (R1-F6)
+// is PASS
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('TR gate — substring false positive does not block (TD-047)', () => {
