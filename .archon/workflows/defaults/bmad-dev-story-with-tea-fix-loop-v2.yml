@@ -558,7 +558,7 @@ nodes:
       condition: "$verify-quality-summary.output == 'PASS'"
       max_iterations: 20
       routes:
-        positive: create-pull-request
+        positive: decision-needed-check
         negative: dev-story
         exhausted: review-loop-error
 
@@ -963,9 +963,265 @@ nodes:
       exit 1
     timeout: 60000
 
+  - id: decision-needed-check
+    bash: |
+      set -e
+      SUMMARY=$quality-gate-summary.output
+      RESOLVED_REF=$resolve-story-input.output.story_ref
+
+      if [ -z "$RESOLVED_REF" ]; then
+        echo "ERROR: resolved story_ref is empty." >&2
+        exit 1
+      fi
+      if [ -z "$SUMMARY" ]; then
+        echo "ERROR: quality-gate-summary output is empty." >&2
+        exit 1
+      fi
+
+      CONTRACT=$(
+        DNC_SUMMARY="$SUMMARY" DNC_RESOLVED="$RESOLVED_REF" \
+        bun -e '
+          const s = JSON.parse(process.env.DNC_SUMMARY || "");
+          const resolved = process.env.DNC_RESOLVED;
+          if (s.contract_version !== "1.0") { console.error("ERROR: contract_version"); process.exit(1); }
+          if (s.workflow !== "bmad-dev-story-with-tea-fix-loop-v2") { console.error("ERROR: workflow"); process.exit(1); }
+          if (s.node !== "quality-gate-summary") { console.error("ERROR: node"); process.exit(1); }
+          if (!s.story_ref || s.story_ref !== resolved) { console.error("ERROR: story_ref"); process.exit(1); }
+          const count = s.decision_needed_count;
+          if (typeof count !== "number" || !Number.isInteger(count) || count < 0) { console.error("ERROR: decision_needed_count"); process.exit(1); }
+          if (count > 0) {
+            console.error("ERROR: " + count + " unresolved decision-needed finding(s) require Linear follow-up + BMAD-METHOD sync, which is unavailable. Blocking PR (fail closed).");
+            process.exit(1);
+          }
+          process.stdout.write(JSON.stringify({
+            contract_version: "1.0",
+            workflow: "bmad-dev-story-with-tea-fix-loop-v2",
+            node: "decision-needed-check",
+            story_ref: resolved,
+            status: "PASS",
+            decision_needed_count: count,
+            deferred: false,
+            deferred_count: 0,
+            created_count: 0,
+            reused_count: 0,
+            synced_count: 0,
+            deferred_items: []
+          }));
+        '
+      )
+
+      printf '%s' "$CONTRACT"
+
+      if [ -n "${ARTIFACTS_DIR:-}" ]; then
+        RUN_DIR="$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop"
+        mkdir -p "$RUN_DIR" 2>/dev/null || true
+        printf '%s' "$CONTRACT" > "$RUN_DIR/decision-needed.json" 2>/dev/null || true
+      fi
+    timeout: 60000
+    depends_on: [quality-route-loop, quality-gate-summary, resolve-story-input]
+    output_type: decision-needed-check
+
+  - id: pr-handoff
+    bash: |
+      set -e
+      RESOLVED_REF=$resolve-story-input.output.story_ref
+      SUMMARY=$quality-gate-summary.output
+      DNC=$decision-needed-check.output
+      CR=$code-review-auto.output
+      GP=$gate-planner.output
+      RV_REAL=$tea-rv.output
+      RV_SKIP=$tea-rv-skipped.output
+      NR_REAL=$tea-nr.output
+      NR_SKIP=$tea-nr-skipped.output
+      TR_REAL=$tea-tr.output
+      TR_SKIP=$tea-tr-skipped.output
+
+      if [ -z "$RESOLVED_REF" ]; then
+        echo "ERROR: resolved story_ref is empty." >&2
+        exit 1
+      fi
+      if [ -z "$SUMMARY" ]; then
+        echo "ERROR: quality-gate-summary output is empty." >&2
+        exit 1
+      fi
+      if [ -z "$DNC" ]; then
+        echo "ERROR: decision-needed-check output is empty." >&2
+        exit 1
+      fi
+      if [ -z "$CR" ]; then
+        echo "ERROR: code-review-auto output is empty." >&2
+        exit 1
+      fi
+
+      RV_OUT="${RV_REAL:-$RV_SKIP}"
+      NR_OUT="${NR_REAL:-$NR_SKIP}"
+      TR_OUT="${TR_REAL:-$TR_SKIP}"
+
+      if [ -z "$RV_OUT" ]; then
+        echo "ERROR: no resolved RV contract." >&2; exit 1
+      fi
+      if [ -z "$NR_OUT" ]; then
+        echo "ERROR: no resolved NR contract." >&2; exit 1
+      fi
+      if [ -z "$TR_OUT" ]; then
+        echo "ERROR: no resolved TR contract." >&2; exit 1
+      fi
+
+      RV_SOURCE="tea-rv"
+      if [ -z "$RV_REAL" ]; then RV_SOURCE="tea-rv-skipped"; fi
+      NR_SOURCE="tea-nr"
+      if [ -z "$NR_REAL" ]; then NR_SOURCE="tea-nr-skipped"; fi
+      TR_SOURCE="tea-tr"
+      if [ -z "$TR_REAL" ]; then TR_SOURCE="tea-tr-skipped"; fi
+
+      HANDOFF=$(
+        PH_REF="$RESOLVED_REF" \
+        PH_SUMMARY="$SUMMARY" \
+        PH_DNC="$DNC" \
+        PH_CR="$CR" \
+        PH_GP="$GP" \
+        PH_RV="$RV_OUT" PH_RV_SRC="$RV_SOURCE" \
+        PH_NR="$NR_OUT" PH_NR_SRC="$NR_SOURCE" \
+        PH_TR="$TR_OUT" PH_TR_SRC="$TR_SOURCE" \
+        PH_ARTIFACTS_DIR="${ARTIFACTS_DIR:-}" \
+        bun -e '
+          const ref = process.env.PH_REF;
+          const artifactsDir = process.env.PH_ARTIFACTS_DIR || "";
+          const runFile = (name) => artifactsDir + "/bmad-dev-story-with-tea-fix-loop/" + name;
+          const nodeFile = (name) => artifactsDir + "/nodes/" + name;
+          function parse(raw, label) {
+            let c;
+            try { c = JSON.parse(raw); } catch { throw new Error(label + " is not valid JSON"); }
+            if (!c.story_ref || c.story_ref !== ref) throw new Error(label + " story_ref mismatch: " + c.story_ref + " !== " + ref);
+            return c;
+          }
+          function gateArtifact(source) {
+            if (source === "code-review-auto") return nodeFile("code-review-auto.md");
+            if (source === "tea-rv") return nodeFile("test-review-findings.md");
+            if (source === "tea-rv-skipped") return runFile("tea-rv-skipped.gate.json");
+            if (source === "tea-nr") return nodeFile("nfr-findings.md");
+            if (source === "tea-nr-skipped") return runFile("tea-nr-skipped.gate.json");
+            if (source === "tea-tr") return nodeFile("trace-findings.md");
+            if (source === "tea-tr-skipped") return runFile("tea-tr-skipped.gate.json");
+            throw new Error("unknown gate source: " + source);
+          }
+          const summary = parse(process.env.PH_SUMMARY, "quality-gate-summary");
+          const dnCheck = parse(process.env.PH_DNC, "decision-needed-check");
+          const cr = parse(process.env.PH_CR, "code-review-auto");
+          const gp = parse(process.env.PH_GP, "gate-planner");
+          const rv = parse(process.env.PH_RV, "RV");
+          const nr = parse(process.env.PH_NR, "NR");
+          const tr = parse(process.env.PH_TR, "TR");
+          const rvSrc = process.env.PH_RV_SRC;
+          const nrSrc = process.env.PH_NR_SRC;
+          const trSrc = process.env.PH_TR_SRC;
+
+          const handoff = {
+            contract_version: "1.0",
+            workflow: "bmad-dev-story-with-tea-fix-loop-v2",
+            node: "pr-handoff",
+            story_ref: ref,
+            status: "PASS",
+            quality_summary: {
+              gate: summary.gate,
+              round: summary.round,
+              blocking_count: summary.blocking_count,
+              decision_needed_count: summary.decision_needed_count,
+              findings_total: summary.findings_total,
+              artifact_file: runFile("quality-gate-summary.json")
+            },
+            gates: {
+              cr: { gate: cr.gate, source: "code-review-auto", findings_count: cr.findings_count, artifact_file: gateArtifact("code-review-auto"), report_file: cr.report_file || null },
+              rv: { gate: rv.gate, source: rvSrc, findings_count: rv.findings_count, artifact_file: gateArtifact(rvSrc), report_file: rv.report_file || null },
+              nr: { gate: nr.gate, source: nrSrc, findings_count: nr.findings_count, artifact_file: gateArtifact(nrSrc), report_file: nr.report_file || null },
+              tr: { gate: tr.gate, source: trSrc, findings_count: tr.findings_count, artifact_file: gateArtifact(trSrc), report_file: tr.report_file || null }
+            },
+            gate_plan: {
+              run_rv: gp.run_rv,
+              run_nr: gp.run_nr,
+              run_tr: gp.run_tr,
+              artifact_file: runFile("gate-planner.json")
+            },
+            decision_needed: {
+              deferred: dnCheck.deferred,
+              deferred_count: dnCheck.deferred_count,
+              deferred_items: dnCheck.deferred_items || [],
+              artifact_file: runFile("decision-needed.json")
+            }
+          };
+
+          process.stdout.write(JSON.stringify(handoff));
+        '
+      )
+
+      printf '%s' "$HANDOFF"
+
+      if [ -n "${ARTIFACTS_DIR:-}" ]; then
+        RUN_DIR="$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop"
+        mkdir -p "$RUN_DIR" 2>/dev/null || true
+        printf '%s' "$HANDOFF" > "$RUN_DIR/pr-handoff.json" 2>/dev/null || true
+
+        PH_JSON="$HANDOFF" \
+        bun -e '
+          const h = JSON.parse(process.env.PH_JSON);
+          const lines = [];
+          lines.push("## Quality Evidence Summary");
+          lines.push("");
+          lines.push("**Story:** " + h.story_ref);
+          lines.push("**Overall:** " + h.quality_summary.gate + " (round " + h.quality_summary.round + ")");
+          lines.push("**Blocking findings:** " + h.quality_summary.blocking_count);
+          lines.push("**Total findings:** " + h.quality_summary.findings_total);
+          lines.push("**Quality summary artifact:** [" + h.quality_summary.artifact_file + "](" + h.quality_summary.artifact_file + ")");
+          lines.push("**Decision-needed artifact:** [" + h.decision_needed.artifact_file + "](" + h.decision_needed.artifact_file + ")");
+          lines.push("");
+          lines.push("### Gate Results");
+          lines.push("");
+          lines.push("| Gate | Outcome | Source | Findings | Artifact | Report |");
+          lines.push("|------|---------|--------|----------|----------|--------|");
+          for (const [key, g] of Object.entries(h.gates)) {
+            const artifact = "[" + g.artifact_file + "](" + g.artifact_file + ")";
+            const report = g.report_file ? "[" + g.report_file + "](" + g.report_file + ")" : "";
+            lines.push("| " + key.toUpperCase() + " | " + g.gate + " | " + g.source + " | " + g.findings_count + " | " + artifact + " | " + report + " |");
+          }
+          lines.push("");
+          lines.push("### Gate Plan");
+          lines.push("");
+          lines.push("Artifact: [" + h.gate_plan.artifact_file + "](" + h.gate_plan.artifact_file + ")");
+          lines.push("");
+          lines.push("- RV (test review): " + (h.gate_plan.run_rv ? "executed" : "skipped"));
+          lines.push("- NR (NFR review): " + (h.gate_plan.run_nr ? "executed" : "skipped"));
+          lines.push("- TR (traceability): " + (h.gate_plan.run_tr ? "executed" : "skipped"));
+          lines.push("");
+          lines.push("### Decision-Needed Items");
+          lines.push("");
+          if (!h.decision_needed.deferred || h.decision_needed.deferred_items.length === 0) {
+            lines.push("No decision-needed items were deferred.");
+          } else {
+            lines.push("The following items require human judgment and were deferred to Linear.");
+            lines.push("They were NOT fixed in this PR.");
+            lines.push("");
+            lines.push("| Finding | Title | Source | Linear Issue | Status |");
+            lines.push("|---------|-------|--------|--------------|--------|");
+            for (const item of h.decision_needed.deferred_items) {
+              lines.push("| " + item.finding_id + " | " + item.title + " | " + item.source_gate + " | [" + item.linear_issue_id + "](" + item.linear_url + ") | " + item.status + " |");
+            }
+          }
+          process.stdout.write(lines.join("\n") + "\n");
+        ' > "$RUN_DIR/pr-handoff.md" 2>/dev/null || true
+      fi
+    timeout: 60000
+    depends_on: [decision-needed-check, quality-gate-summary, code-review-auto, tea-rv, tea-rv-skipped, tea-nr, tea-nr-skipped, tea-tr, tea-tr-skipped, gate-planner, resolve-story-input]
+    trigger_rule: none_failed_min_one_success
+    output_type: pr-handoff
+
   - id: create-pull-request
     command: archon-create-pr
     provider: claude
-    depends_on: [quality-route-loop]
+    depends_on: [pr-handoff]
     context: fresh
     model: sonnet
+    prompt_suffix: |
+      IMPORTANT: Read $ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop/pr-handoff.md if it exists.
+      If found, include the entire content as a "## Quality Evidence" section in the PR body.
+      If the file does not exist, skip this — do not fail.
+      NEVER imply that deferred decision-needed items were fixed in this PR.

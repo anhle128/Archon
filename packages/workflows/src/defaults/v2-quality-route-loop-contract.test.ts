@@ -550,13 +550,13 @@ describe('Schema + loader — route_loop constraints honored, DAG validates (TD-
 // depend on quality-route-loop (no stale dependencies) (AC #2, #3)
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe('Tail wiring — PR depends on decision-needed-check, error target depends on the route loop (TD-218)', () => {
-  it('create-pull-request.depends_on is exactly [decision-needed-check]', () => {
+describe('Tail wiring — PR depends on pr-handoff, error target depends on the route loop (TD-218)', () => {
+  it('create-pull-request.depends_on is exactly [pr-handoff]', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     expect(
       nodeById(v2, 'create-pull-request')!.depends_on ?? [],
-      'the PR tail depends on the decision-needed-check seam inserted at the PASS exit'
-    ).toEqual(['decision-needed-check']);
+      'the PR tail depends on the pr-handoff collector which sits after decision-needed-check'
+    ).toEqual(['pr-handoff']);
   });
 
   it('review-loop-error.depends_on is exactly [quality-route-loop]', () => {
