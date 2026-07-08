@@ -132,8 +132,8 @@ describe('Gate-planner — v2 YAML structural + bundle + consumer boundary', () 
           route_loop?: { routes?: { positive?: string; negative?: string; exhausted?: string } };
         }
       ).route_loop?.routes;
-      expect(routes?.positive, 'positive route must target create-pull-request').toBe(
-        'create-pull-request'
+      expect(routes?.positive, 'positive route must target decision-needed-check').toBe(
+        'decision-needed-check'
       );
       expect(routes?.negative, 'negative route must target dev-story').toBe('dev-story');
       expect(routes?.exhausted, 'exhausted route must target review-loop-error').toBe(

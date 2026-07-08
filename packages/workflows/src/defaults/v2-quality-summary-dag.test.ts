@@ -665,7 +665,7 @@ describe('Blocking CR — intercepted by the review loop, not the aggregator (TD
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('Decision-needed — one CONCERNS role yields PASS with a preserved count (TD-120)', () => {
-  it('TR gate CONCERNS (others PASS) → gate PASS, decision_needed_count 1, tr_gate CONCERNS', async () => {
+  it('TR gate CONCERNS (others PASS) → gate PASS, decision_needed_count 1, tr_gate CONCERNS, PR blocked by decision-needed-check', async () => {
     const run = await runV2Dag({
       cwd: cwdFixture,
       arguments: CANONICAL_REF,
@@ -679,11 +679,16 @@ describe('Decision-needed — one CONCERNS role yields PASS with a preserved cou
     const c = await readSummaryContract(run.artifactsDir);
     expect(c!.gate, 'CONCERNS-only → PASS').toBe('PASS');
     expect(c!.decision_needed_count, 'the single CONCERNS role is preserved as a count').toBe(1);
-    expect(c!.blocking_count, 'CONCERNS does not block').toBe(0);
+    expect(c!.blocking_count, 'CONCERNS does not block the summary').toBe(0);
     expect(c!.tr_gate, 'the CONCERNS role echo is preserved').toBe('CONCERNS');
-    expect(run.providerCalls, 'PR reached on a PASS-with-concerns summary').toContain(
-      'create-pull-request'
-    );
+    expect(
+      run.nodeState['decision-needed-check'],
+      'decision_needed_count 1 fails the decision node closed'
+    ).toBe('failed');
+    expect(
+      run.providerCalls,
+      'decision-needed-check fail-closed blocks PR when CONCERNS items exist'
+    ).not.toContain('create-pull-request');
   });
 });
 
