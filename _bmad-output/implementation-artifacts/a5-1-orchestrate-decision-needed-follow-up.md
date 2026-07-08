@@ -83,8 +83,8 @@ Deferred ACs (#5, #6) are the epic's live-integration criteria; they are BLOCKED
 ### Review Findings
 
 - [x] [Review][Patch] R1-F1 — `decision-needed-check` coerces malformed `decision_needed_count` values to `0`, allowing a false no-op PASS instead of failing closed. [.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:990] — FIXED: replaced `Number(s.decision_needed_count)` with `typeof count !== "number"` guard; bundle regenerated; all tests pass.
-- [ ] [Review][Patch] R2-F1 — The malformed-count regression test still exercises a duplicated helper script instead of the actual YAML node body, so the exact `Number(...)` regression from R1 could be reintroduced without failing the test suite. [packages/workflows/src/defaults/v2-decision-needed-contract.test.ts:143]
-- [ ] [Review][Patch] R2-F2 — The contract test asserts that an ignored, local `.archon/mcp/linear.json` file is absent from the developer checkout, making validation depend on untracked local machine state. [packages/workflows/src/defaults/v2-decision-needed-contract.test.ts:269]
+- [x] [Review][Patch] R2-F1 — The malformed-count regression test still exercises a duplicated helper script instead of the actual YAML node body, so the exact `Number(...)` regression from R1 could be reintroduced without failing the test suite. [packages/workflows/src/defaults/v2-decision-needed-contract.test.ts:143] — FIXED: added static assertion against real `nodeBash(v2, NODE_ID)` for `const count = s.decision_needed_count`, `typeof count !== "number"`, and absence of `Number(s.decision_needed_count)`; contract test 49 pass.
+- [x] [Review][Patch] R2-F2 — The contract test asserts that an ignored, local `.archon/mcp/linear.json` file is absent from the developer checkout, making validation depend on untracked local machine state. [packages/workflows/src/defaults/v2-decision-needed-contract.test.ts:269] — FIXED: replaced `existsSync` check with source-controlled scan of v2 YAML + bundled defaults for Linear integration markers; test is now deterministic regardless of local untracked files.
 
 ## Dev Notes
 

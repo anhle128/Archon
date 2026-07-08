@@ -262,24 +262,28 @@ describe('Baseline precondition — prior quality tail present, live deps absent
     ]);
   });
 
-  it('no live tracking capability exists in the repo — no Linear config, client, or sync command', () => {
-    // The node must be built fail-closed because these inputs do not exist. If any
-    // of these appears, the buildable-now/fail-closed boundary has been crossed and
-    // the plan (and this red scaffold) must be revisited.
-    expect(
-      existsSync(join(REPO_ROOT, '.archon/mcp/linear.json')),
-      'no Linear MCP capability marker may exist yet'
-    ).toBe(false);
-    // The fail-closed diagnostic intentionally mentions "Linear" to name the
-    // unavailable capability — that is not a live integration. Check for actual
-    // Linear integration markers (MCP config references, API endpoints).
+  it('no live tracking capability exists in source-controlled files — no Linear MCP config, client, or sync command', () => {
+    // The node must be built fail-closed because these inputs do not exist in any
+    // source-controlled file. If any of these appears, the buildable-now/fail-closed
+    // boundary has been crossed and the plan (and this red scaffold) must be revisited.
+    // NOTE: we scan source-controlled content (v2 YAML + bundled defaults) rather
+    // than checking for local untracked files like .archon/mcp/linear.json, which
+    // is gitignored and may legitimately exist in a developer checkout.
     const v2Raw = readLF(V2_FILE) ?? '';
-    expect(
-      /mcp:.*linear/i.test(v2Raw) ||
-        /api\.linear\.app/i.test(v2Raw) ||
-        /LINEAR_API_KEY/.test(v2Raw),
-      'the v2 workflow must not wire a live Linear integration'
-    ).toBe(false);
+    const bundledV2 = BUNDLED_WORKFLOWS[V2_STEM] ?? '';
+    const combined = v2Raw + '\n' + bundledV2;
+    const linearMarkers = [
+      /mcp:.*linear/i,
+      /api\.linear\.app/i,
+      /LINEAR_API_KEY/,
+      /graphql.*linear/i,
+    ];
+    for (const pattern of linearMarkers) {
+      expect(
+        pattern.test(combined),
+        `source-controlled workflow files must not wire a live Linear integration (${pattern})`
+      ).toBe(false);
+    }
   });
 });
 
@@ -758,6 +762,22 @@ describe('Malformed fail-closed — empty / non-JSON summary yields no contract 
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('Count boundary — 0 passes, malformed + positive fail closed (TD-308 technique)', () => {
+  it('the real YAML node body uses the non-coercing typeof guard and never Number() coercion', () => {
+    const v2 = parseFromDisk(V2_FILE, V2_STEM);
+    const bash = nodeBash(v2, NODE_ID);
+    expect(
+      bash,
+      'the real node body must assign without coercion (const count = s.decision_needed_count)'
+    ).toContain('const count = s.decision_needed_count');
+    expect(bash, 'the real node body must reject non-number types with typeof guard').toContain(
+      'typeof count !== "number"'
+    );
+    expect(
+      bash,
+      'the real node body must NOT use Number(s.decision_needed_count) — that coerces null/false to 0'
+    ).not.toContain('Number(s.decision_needed_count)');
+  });
+
   it('decision_needed_count == 0 passes and emits the contract', async () => {
     const r = await runDecisionCheck(validSummary({ decision_needed_count: 0 }), CANONICAL_REF);
     expect(r.code, 'zero decision-needed items is the no-op success path').toBe(0);
