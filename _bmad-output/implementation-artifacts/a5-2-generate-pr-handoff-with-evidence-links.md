@@ -1,6 +1,6 @@
 # Story a5.2: Generate PR Handoff With Evidence Links
 
-Status: done
+Status: in-progress
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -103,6 +103,11 @@ AC #2 is implementable as a rendering template and fixture-testable against synt
   - [ ] `bun run generate:bundled` to refresh `packages/workflows/src/defaults/bundled-defaults.generated.ts`; then `bun run check:bundled` to confirm no drift.
   - [ ] If `archon-create-pr.md` was modified: `bun run generate:bundled` again (it is under `.archon/commands/defaults/` which is a bundled source) and `bun run check:bundled`.
   - [ ] Run the two new tests (`bun test packages/workflows/src/defaults/v2-pr-handoff-contract.test.ts` and the isolated `...-dag.test.ts`); then `bun run validate` before finishing.
+
+### Review Findings
+
+- [ ] [Review][Patch] Escape deferred-item Markdown table cells in `pr-handoff.md` rendering [.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:1206]
+- [ ] [Review][Patch] Make TD-415 actually prove the requested skipped-TR branch path [packages/workflows/src/defaults/v2-pr-handoff-dag.test.ts:722]
 
 ## Dev Notes
 
