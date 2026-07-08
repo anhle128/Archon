@@ -108,6 +108,8 @@ AC #2 is implementable as a rendering template and fixture-testable against synt
 
 - [x] [Review][Patch] Escape deferred-item Markdown table cells in `pr-handoff.md` rendering [.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:1206]
 - [x] [Review][Patch] Make TD-415 actually prove the requested skipped-TR branch path [packages/workflows/src/defaults/v2-pr-handoff-dag.test.ts:722]
+- [ ] [Review][Patch] Normalize newline and carriage-return characters in deferred-item Markdown table cells [.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:1205]
+- [ ] [Review][Patch] Add collector-level skipped-TR coverage for `pr-handoff` source selection [packages/workflows/src/defaults/v2-pr-handoff-contract.test.ts:792]
 
 ## Dev Notes
 
