@@ -517,7 +517,7 @@ describe('v2 story-input resolution (Story a1.2)', () => {
       expect(loop, 'quality-route-loop must exist').toBeDefined();
       expect(loop?.route_loop?.from).toBe('verify-quality-summary');
       expect(loop?.route_loop?.condition).toBe("$verify-quality-summary.output == 'PASS'");
-      expect(loop?.route_loop?.routes?.positive).toBe('create-pull-request');
+      expect(loop?.route_loop?.routes?.positive).toBe('decision-needed-check');
       expect(loop?.route_loop?.routes?.negative).toBe('dev-story');
       expect(loop?.route_loop?.routes?.exhausted).toBe('review-loop-error');
     });

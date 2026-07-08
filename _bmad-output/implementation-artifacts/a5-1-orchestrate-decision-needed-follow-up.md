@@ -1,6 +1,6 @@
 # Story a5.1: Orchestrate Decision Needed Follow-Up
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -43,42 +43,42 @@ Deferred ACs (#5, #6) are the epic's live-integration criteria; they are BLOCKED
 
 ## Tasks / Subtasks
 
-- [ ] **Task 0 — Confirm/obtain the cross-project baseline before building beyond fail-closed (HARD GATE — read "READ FIRST" + Dev Notes "The cross-project blocker" first)**
-  - [ ] Confirm the a4.2 tail is present in this checkout (it is, verified): `verify-quality-summary` (bash reader), `quality-route-loop` (`from: verify-quality-summary`, `positive: create-pull-request`, `negative: dev-story`, `exhausted: review-loop-error`, `max_iterations: 20`), `code-review-gate` absent, and `create-pull-request.depends_on: [quality-route-loop]`. If ABSENT, STOP and reconcile a4.2 first (mirrors the a4.1/a4.2 baseline-drift gate). Record the state in the Dev Agent Record.
-  - [ ] Determine whether BMAD-METHOD M3.1 (`decision-needed.json` per-finding shape) and M3.2 (sync request/response contract) are available to this run. They are NOT in this repository and MUST NOT be read by traversing out of `archon` (epics.md line 16, prd.md line 17). If they are unavailable (today's state), implement ONLY the Buildable-Now + Fail-Closed layers (Tasks 1–5); do NOT build the live Linear/sync path (AC #5/#6). Record the decision and which layers were built.
-  - [ ] Confirm with the operator (surface in the end-of-run questions) whether decision-needed items are expected in the proof run (a6.1). If yes and the deps are absent, this story ships as fail-closed-only and a6.1's decision-needed leg stays blocked until M3.1/M3.2 land.
+- [x] **Task 0 — Confirm/obtain the cross-project baseline before building beyond fail-closed (HARD GATE — read "READ FIRST" + Dev Notes "The cross-project blocker" first)**
+  - [x] Confirm the a4.2 tail is present in this checkout (it is, verified): `verify-quality-summary` (bash reader), `quality-route-loop` (`from: verify-quality-summary`, `positive: create-pull-request`, `negative: dev-story`, `exhausted: review-loop-error`, `max_iterations: 20`), `code-review-gate` absent, and `create-pull-request.depends_on: [quality-route-loop]`. If ABSENT, STOP and reconcile a4.2 first (mirrors the a4.1/a4.2 baseline-drift gate). Record the state in the Dev Agent Record.
+  - [x] Determine whether BMAD-METHOD M3.1 (`decision-needed.json` per-finding shape) and M3.2 (sync request/response contract) are available to this run. They are NOT in this repository and MUST NOT be read by traversing out of `archon` (epics.md line 16, prd.md line 17). If they are unavailable (today's state), implement ONLY the Buildable-Now + Fail-Closed layers (Tasks 1–5); do NOT build the live Linear/sync path (AC #5/#6). Record the decision and which layers were built.
+  - [x] Confirm with the operator (surface in the end-of-run questions) whether decision-needed items are expected in the proof run (a6.1). If yes and the deps are absent, this story ships as fail-closed-only and a6.1's decision-needed leg stays blocked until M3.1/M3.2 land.
 
-- [ ] **Task 1 — Add the `decision-needed-check` node at the PASS seam (AC: #1, #2, #3)**
-  - [ ] Add a `bash:` node `id: decision-needed-check` (JSON-only, no AI — the routing/blocking decision must never depend on prose; A-AD-2). Set `timeout: 60000` and `output_type: decision-needed-check`.
-  - [ ] Set `depends_on: [quality-route-loop, quality-gate-summary, resolve-story-input]`. Rationale (verified against `loader.ts`): the node is the route loop's `positive` target so it depends on `quality-route-loop` (mirrors how `create-pull-request` did); it also reads the summary contract and the resolved story key by substitution, so it depends on those producers to guarantee they are completed. This is DAG-legal — see Dev Notes "Verified node shape".
-  - [ ] Body: read the summary UNQUOTED (`SUMMARY=$quality-gate-summary.output`) and the resolved ref UNQUOTED (`RESOLVED_REF=$resolve-story-input.output.story_ref`) — substitution values are already shell-quoted by the executor. Parse and validate with `bun -e` + `JSON.parse` (never `grep`/`case` on raw JSON): fail closed (`echo "ERROR: ..." >&2; exit 1`) unless `contract_version == "1.0"`, `workflow == "bmad-dev-story-with-tea-fix-loop-v2"`, `node == "quality-gate-summary"`, `story_ref` non-empty AND `== RESOLVED_REF`, and `decision_needed_count` is an integer `>= 0`.
+- [x] **Task 1 — Add the `decision-needed-check` node at the PASS seam (AC: #1, #2, #3)**
+  - [x] Add a `bash:` node `id: decision-needed-check` (JSON-only, no AI — the routing/blocking decision must never depend on prose; A-AD-2). Set `timeout: 60000` and `output_type: decision-needed-check`.
+  - [x] Set `depends_on: [quality-route-loop, quality-gate-summary, resolve-story-input]`. Rationale (verified against `loader.ts`): the node is the route loop's `positive` target so it depends on `quality-route-loop` (mirrors how `create-pull-request` did); it also reads the summary contract and the resolved story key by substitution, so it depends on those producers to guarantee they are completed. This is DAG-legal — see Dev Notes "Verified node shape".
+  - [x] Body: read the summary UNQUOTED (`SUMMARY=$quality-gate-summary.output`) and the resolved ref UNQUOTED (`RESOLVED_REF=$resolve-story-input.output.story_ref`) — substitution values are already shell-quoted by the executor. Parse and validate with `bun -e` + `JSON.parse` (never `grep`/`case` on raw JSON): fail closed (`echo "ERROR: ..." >&2; exit 1`) unless `contract_version == "1.0"`, `workflow == "bmad-dev-story-with-tea-fix-loop-v2"`, `node == "quality-gate-summary"`, `story_ref` non-empty AND `== RESOLVED_REF`, and `decision_needed_count` is an integer `>= 0`.
 
-- [ ] **Task 2 — No-op success path: `decision_needed_count == 0` → emit PASS, exit 0 (AC: #2, #3)**
-  - [ ] When `decision_needed_count == 0`: serialize `decision-needed-check.json` with `bun -e 'process.stdout.write(JSON.stringify({...}))'` carrying the full envelope (Task 3 fields) with `status: "PASS"`, `deferred: false`, `deferred_count: 0`, `created_count: 0`, `reused_count: 0`, `synced_count: 0`, `deferred_items: []`. `printf '%s'` it to stdout (becomes `$decision-needed-check.output`) and exit 0.
-  - [ ] Best-effort write to `$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop/decision-needed.json` using the exact guarded pattern from `gate-planner`/`quality-gate-summary` (`if [ -n "${ARTIFACTS_DIR:-}" ]; then RUN_DIR=...; mkdir -p ... || true; printf ... > ... || true; fi`). File name is `decision-needed.json` in the flat RUN_DIR (see Dev Notes "Artifact path").
+- [x] **Task 2 — No-op success path: `decision_needed_count == 0` → emit PASS, exit 0 (AC: #2, #3)**
+  - [x] When `decision_needed_count == 0`: serialize `decision-needed-check.json` with `bun -e 'process.stdout.write(JSON.stringify({...}))'` carrying the full envelope (Task 3 fields) with `status: "PASS"`, `deferred: false`, `deferred_count: 0`, `created_count: 0`, `reused_count: 0`, `synced_count: 0`, `deferred_items: []`. `printf '%s'` it to stdout (becomes `$decision-needed-check.output`) and exit 0.
+  - [x] Best-effort write to `$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop/decision-needed.json` using the exact guarded pattern from `gate-planner`/`quality-gate-summary` (`if [ -n "${ARTIFACTS_DIR:-}" ]; then RUN_DIR=...; mkdir -p ... || true; printf ... > ... || true; fi`). File name is `decision-needed.json` in the flat RUN_DIR (see Dev Notes "Artifact path").
 
-- [ ] **Task 3 — Contract envelope + fail-closed identity validation (AC: #3, #4)**
-  - [ ] Envelope fields emitted on the success path: `contract_version: "1.0"`, `workflow: "bmad-dev-story-with-tea-fix-loop-v2"`, `node: "decision-needed-check"`, `story_ref` (the resolved key), `status` (`"PASS"`), `decision_needed_count` (echoed), `deferred` (bool), `deferred_count`, `created_count`, `reused_count`, `synced_count`, `deferred_items` (array; empty today). Do NOT emit `gate` — use `status` (this node is not a quality gate; it never returns `FAIL`/`CONCERNS`/`SKIPPED`).
-  - [ ] All identity/envelope validation must exit BEFORE any contract is written to stdout — never emit a partial contract on the error path (mirrors `quality-gate-summary` Task 3 discipline).
+- [x] **Task 3 — Contract envelope + fail-closed identity validation (AC: #3, #4)**
+  - [x] Envelope fields emitted on the success path: `contract_version: "1.0"`, `workflow: "bmad-dev-story-with-tea-fix-loop-v2"`, `node: "decision-needed-check"`, `story_ref` (the resolved key), `status` (`"PASS"`), `decision_needed_count` (echoed), `deferred` (bool), `deferred_count`, `created_count`, `reused_count`, `synced_count`, `deferred_items` (array; empty today). Do NOT emit `gate` — use `status` (this node is not a quality gate; it never returns `FAIL`/`CONCERNS`/`SKIPPED`).
+  - [x] All identity/envelope validation must exit BEFORE any contract is written to stdout — never emit a partial contract on the error path (mirrors `quality-gate-summary` Task 3 discipline).
 
-- [ ] **Task 4 — Fail-closed path: `decision_needed_count > 0` and capability unavailable (AC: #4, #6-partial)**
-  - [ ] When `decision_needed_count > 0` AND the live Linear/sync capability is not available (today's state — see Task 0), `echo "ERROR: <n> unresolved decision-needed finding(s) require Linear follow-up + BMAD-METHOD sync, which is not available in this workflow. Blocking PR (fail closed)." >&2; exit 1`. This is the SAME blocking mechanism as `quality-gate-summary`'s `ERROR` exit — a non-zero exit that halts the run before `create-pull-request` (which `depends_on: [decision-needed-check]`).
-  - [ ] Do NOT add a `route_loop`, a `when:` branch, or a separate error node for this — blocking is structural (node fails → dependent PR node never runs). Do NOT route this back to `dev-story` (it is not a fixable quality `FAIL`; it is deferred human-judgment work + a missing capability).
-  - [ ] Detecting "capability available" MUST be explicit and default-off: absent any configured capability, treat as unavailable. Do NOT infer availability from the mere presence of an env var name you invented. See Dev Notes "How to gate the live path" — the recommended gate is a config-file-presence probe (mirroring the `check-ntfy`/`notify` conditional pattern), decided in Unresolved Questions #1.
+- [x] **Task 4 — Fail-closed path: `decision_needed_count > 0` and capability unavailable (AC: #4, #6-partial)**
+  - [x] When `decision_needed_count > 0` AND the live Linear/sync capability is not available (today's state — see Task 0), `echo "ERROR: <n> unresolved decision-needed finding(s) require Linear follow-up + BMAD-METHOD sync, which is not available in this workflow. Blocking PR (fail closed)." >&2; exit 1`. This is the SAME blocking mechanism as `quality-gate-summary`'s `ERROR` exit — a non-zero exit that halts the run before `create-pull-request` (which `depends_on: [decision-needed-check]`).
+  - [x] Do NOT add a `route_loop`, a `when:` branch, or a separate error node for this — blocking is structural (node fails → dependent PR node never runs). Do NOT route this back to `dev-story` (it is not a fixable quality `FAIL`; it is deferred human-judgment work + a missing capability).
+  - [x] Detecting "capability available" MUST be explicit and default-off: absent any configured capability, treat as unavailable. Do NOT infer availability from the mere presence of an env var name you invented. See Dev Notes "How to gate the live path" — the recommended gate is a config-file-presence probe (mirroring the `check-ntfy`/`notify` conditional pattern), decided in Unresolved Questions #1.
 
-- [ ] **Task 5 — Rewire the tail seam (AC: #1)**
-  - [ ] Change `quality-route-loop.routes.positive: create-pull-request` → `positive: decision-needed-check`. Leave `negative`, `exhausted`, `from`, `condition`, and `max_iterations` untouched.
-  - [ ] Change `create-pull-request.depends_on: [quality-route-loop]` → `depends_on: [decision-needed-check]`. Touch nothing else on `create-pull-request` (its `command: archon-create-pr`, provider/model/`context: fresh` stay).
-  - [ ] Confirm no other node references `quality-route-loop` as `positive` and that `review-loop-error` still depends on `[quality-route-loop]` (unchanged — it is the `exhausted` target).
+- [x] **Task 5 — Rewire the tail seam (AC: #1)**
+  - [x] Change `quality-route-loop.routes.positive: create-pull-request` → `positive: decision-needed-check`. Leave `negative`, `exhausted`, `from`, `condition`, and `max_iterations` untouched.
+  - [x] Change `create-pull-request.depends_on: [quality-route-loop]` → `depends_on: [decision-needed-check]`. Touch nothing else on `create-pull-request` (its `command: archon-create-pr`, provider/model/`context: fresh` stay).
+  - [x] Confirm no other node references `quality-route-loop` as `positive` and that `review-loop-error` still depends on `[quality-route-loop]` (unchanged — it is the `exhausted` target).
 
-- [ ] **Task 6 — Tests: contract (co-located, no mock) + DAG (isolated, real bash) (AC: #1–#4, #7)**
-  - [ ] Add `packages/workflows/src/defaults/v2-decision-needed-contract.test.ts` (NO `mock.module` — safe to co-locate). Parse the v2 YAML from disk with `parseWorkflow` + import `BUNDLED_WORKFLOWS`; assert: `decision-needed-check` exists as a `bash` node with `output_type: decision-needed-check` and `depends_on == [quality-route-loop, quality-gate-summary, resolve-story-input]`; the body reads whole-output `$quality-gate-summary.output` (and explicitly NOT field-level `$quality-gate-summary.output.decision_needed_count`) and uses `bun -e` + `JSON.parse` (not `grep`/`case`); `quality-route-loop.routes.positive == "decision-needed-check"`; `create-pull-request.depends_on == ["decision-needed-check"]`; exactly one `route_loop` still exists with `from: verify-quality-summary`; the v1 baseline is byte-for-byte unchanged; and `parseWorkflow` succeeds. Follow `v2-quality-route-loop-contract.test.ts` for structure.
-  - [ ] Add `packages/workflows/src/defaults/v2-decision-needed-dag.test.ts` (uses `mock.module` + real executor + real bash — MUST run as its OWN isolated `bun test` segment). Prove end-to-end with a stubbed upstream driving each case: (a) `decision_needed_count: 0` → node emits `status:"PASS"`, `deferred:false`, exit 0, `create-pull-request` reached; (b) `decision_needed_count: 2` (capability unavailable) → node exits non-zero, `create-pull-request` NOT reached; (c) summary with a mismatched `story_ref` → node fails closed (no contract), `create-pull-request` NOT reached; (d) confirm the emitted `decision-needed.json` on path (a) carries the full envelope + `story_ref` equal to the resolved key. Follow `v2-quality-route-loop-dag.test.ts` for the harness (mock.module + real bash executor).
-  - [ ] Register `v2-decision-needed-contract.test.ts` in the non-mock workflow-defaults batch and `v2-decision-needed-dag.test.ts` as its OWN `bun test` segment in `packages/workflows/package.json` (never co-locate a `mock.module` file). Keep both files free of plan/story/finding identifiers; use `TD-nnn`/`AC#` tags only (a4.1/a4.2 review discipline).
+- [x] **Task 6 — Tests: contract (co-located, no mock) + DAG (isolated, real bash) (AC: #1–#4, #7)**
+  - [x] Add `packages/workflows/src/defaults/v2-decision-needed-contract.test.ts` (NO `mock.module` — safe to co-locate). Parse the v2 YAML from disk with `parseWorkflow` + import `BUNDLED_WORKFLOWS`; assert: `decision-needed-check` exists as a `bash` node with `output_type: decision-needed-check` and `depends_on == [quality-route-loop, quality-gate-summary, resolve-story-input]`; the body reads whole-output `$quality-gate-summary.output` (and explicitly NOT field-level `$quality-gate-summary.output.decision_needed_count`) and uses `bun -e` + `JSON.parse` (not `grep`/`case`); `quality-route-loop.routes.positive == "decision-needed-check"`; `create-pull-request.depends_on == ["decision-needed-check"]`; exactly one `route_loop` still exists with `from: verify-quality-summary`; the v1 baseline is byte-for-byte unchanged; and `parseWorkflow` succeeds. Follow `v2-quality-route-loop-contract.test.ts` for structure.
+  - [x] Add `packages/workflows/src/defaults/v2-decision-needed-dag.test.ts` (uses `mock.module` + real executor + real bash — MUST run as its OWN isolated `bun test` segment). Prove end-to-end with a stubbed upstream driving each case: (a) `decision_needed_count: 0` → node emits `status:"PASS"`, `deferred:false`, exit 0, `create-pull-request` reached; (b) `decision_needed_count: 2` (capability unavailable) → node exits non-zero, `create-pull-request` NOT reached; (c) summary with a mismatched `story_ref` → node fails closed (no contract), `create-pull-request` NOT reached; (d) confirm the emitted `decision-needed.json` on path (a) carries the full envelope + `story_ref` equal to the resolved key. Follow `v2-quality-route-loop-dag.test.ts` for the harness (mock.module + real bash executor).
+  - [x] Register `v2-decision-needed-contract.test.ts` in the non-mock workflow-defaults batch and `v2-decision-needed-dag.test.ts` as its OWN `bun test` segment in `packages/workflows/package.json` (never co-locate a `mock.module` file). Keep both files free of plan/story/finding identifiers; use `TD-nnn`/`AC#` tags only (a4.1/a4.2 review discipline).
 
-- [ ] **Task 7 — Regenerate bundle + validate (AC: #1, #7)**
-  - [ ] `bun run generate:bundled` to refresh `packages/workflows/src/defaults/bundled-defaults.generated.ts`; then `bun run check:bundled` to confirm no drift.
-  - [ ] Run the two new tests (`bun test packages/workflows/src/defaults/v2-decision-needed-contract.test.ts` and the isolated `...-dag.test.ts`); then `bun run validate` before finishing.
+- [x] **Task 7 — Regenerate bundle + validate (AC: #1, #7)**
+  - [x] `bun run generate:bundled` to refresh `packages/workflows/src/defaults/bundled-defaults.generated.ts`; then `bun run check:bundled` to confirm no drift.
+  - [x] Run the two new tests (`bun test packages/workflows/src/defaults/v2-decision-needed-contract.test.ts` and the isolated `...-dag.test.ts`); then `bun run validate` before finishing.
 
 ## Dev Notes
 
@@ -91,7 +91,8 @@ Insert one fail-closed `bash:` node `decision-needed-check` at the route loop's 
 Epic A5.1 declares `Depends on: Story A4.2, BMAD-METHOD Story M3.1, and BMAD-METHOD Story M3.2` [Source: epics.md line 252]. A4.2 is done and present. M3.1 and M3.2 are **BMAD-METHOD-owned and not in this repository**, and the handoff rule is explicit: "No Archon story may require traversal out of `archon` to read parent workspace planning files during implementation" [Source: epics.md line 16; prd.md line 17]. Architecture confirms the direction of ownership: "Archon depends on BMAD-METHOD for … `decision-needed.json`" and "Archon must fail closed when required upstream contracts are unavailable" [Source: architecture.md lines 156–174].
 
 What this means concretely, verified by full-repo search:
-- There is **no per-finding `decision-needed.json`** produced anywhere. `decision_needed` is a finding *classification* emitted inside the BMAD code-review skill (CONCERNS-class, "requires human input"), surfaced only as human-readable markdown (`decision-log.md`, `findings/open-findings.md`). The only machine signal is the aggregate `decision_needed_count` on `quality-gate-summary.json`, computed as the count of role gates (CR/RV/NR/TR) in `CONCERNS` (0–4) — NOT a per-finding count [Source: bmad-dev-story-with-tea-fix-loop-v2.yml quality-gate-summary node, `decision_needed_count: concernsCount`].
+
+- There is **no per-finding `decision-needed.json`** produced anywhere. `decision_needed` is a finding _classification_ emitted inside the BMAD code-review skill (CONCERNS-class, "requires human input"), surfaced only as human-readable markdown (`decision-log.md`, `findings/open-findings.md`). The only machine signal is the aggregate `decision_needed_count` on `quality-gate-summary.json`, computed as the count of role gates (CR/RV/NR/TR) in `CONCERNS` (0–4) — NOT a per-finding count [Source: bmad-dev-story-with-tea-fix-loop-v2.yml quality-gate-summary node, `decision_needed_count: concernsCount`].
 - There is **no BMAD-METHOD sync command/skill/contract** anywhere (`.archon/commands/`, `.agents/skills/`, `.qoder/skills/` all searched). The nearest false positives are `archon-sync-pr-with-main` (git) and `bmad-quick-dev/sync-sprint-status` (sprint file writer) — neither is the decision-needed sync.
 - There is **no Linear integration** anywhere — no client, no `LINEAR_API_KEY`, no MCP config, no `linear.app`. The only Linear mentions are the planning prose for this exact feature and a hypothetical example in `packages/docs-web/src/content/docs/guides/mcp-servers.md`.
 
@@ -117,8 +118,9 @@ Be honest in the Dev Agent Record: state plainly that the epic's create/reuse/sy
 ### Verified node shape (route_loop positive-target + extra depends_on is DAG-legal)
 
 The node is the `route_loop`'s `positive` target AND reads two upstream contracts. Verified against `packages/workflows/src/loader.ts` that `depends_on: [quality-route-loop, quality-gate-summary, resolve-story-input]` is legal:
+
 - `validateRouteLoopStructure` only constrains the `route_loop` NODE's own `depends_on` (must be exactly `[from]`) — it does NOT restrict the route TARGETS' `depends_on` [Source: loader.ts:274–347].
-- The exit-path constraint checks whether the `positive` target can REACH `from` by following *forward* (dependents) edges: `collectPathNodesToTarget(target='decision-needed-check', from='verify-quality-summary', dependents)` [Source: loader.ts:237–271, 315–323]. From `decision-needed-check` the only forward successor is `create-pull-request`, which reaches nothing further — so it never reaches `verify-quality-summary`. Adding `quality-gate-summary`/`resolve-story-input` to `decision-needed-check`'s `depends_on` changes THOSE nodes' forward reach, not `decision-needed-check`'s own — so the exit-path check is unaffected. No violation.
+- The exit-path constraint checks whether the `positive` target can REACH `from` by following _forward_ (dependents) edges: `collectPathNodesToTarget(target='decision-needed-check', from='verify-quality-summary', dependents)` [Source: loader.ts:237–271, 315–323]. From `decision-needed-check` the only forward successor is `create-pull-request`, which reaches nothing further — so it never reaches `verify-quality-summary`. Adding `quality-gate-summary`/`resolve-story-input` to `decision-needed-check`'s `depends_on` changes THOSE nodes' forward reach, not `decision-needed-check`'s own — so the exit-path check is unaffected. No violation.
 - `validateDagStructure` confirms all `depends_on` refs exist and runs Kahn cycle detection [Source: loader.ts:143–226]. The resulting shape is a diamond (`quality-gate-summary → verify-quality-summary → quality-route-loop → decision-needed-check`, plus `quality-gate-summary → decision-needed-check`), not a cycle — `quality-gate-summary` precedes `decision-needed-check` on both paths.
 - The loader's `$nodeId.output` reference scan only inspects `when:`, `prompt:`, and `loop.prompt` fields — NOT `bash:` bodies [Source: loader.ts:192–224]. So the bash substitutions here are not loader-validated for existence; the `depends_on` edges are what guarantee the producers ran and their `.output` is available at substitution time. This is exactly why the extra `depends_on` entries matter — they are the runtime guarantee, not decoration.
 
@@ -203,9 +205,10 @@ Confirmed present (a4.2 end-state): `quality-gate-summary` (bash aggregator, emi
 ### How the live path would be built (recommend, don't build)
 
 Two existing mechanisms are available when M3.1/M3.2 + a Linear key land (do NOT build now — recorded for the deferred path and Unresolved Questions #1):
+
 - **`script: runtime: bun` node** calling the Linear GraphQL API with `fetch()`, reading `LINEAR_API_KEY` from `process.env` (deterministic, fixture-testable — matches the epic's "fixtures prove created, reused, no-op, sync-success, sync-failure" integration validation). Env vars reach node subprocesses via `config.envVars` (repo `.archon/config.yaml` `env:` or `remote_agent_codebase_env_vars`), spread last so managed vars win [Source: dag-executor.ts executeScriptNode/executeBashNode env merge; executor.ts:417].
 - **Conditional `mcp:` node** mirroring the `check-ntfy` → `notify` pattern in `.archon/workflows/defaults/archon-smart-pr-review.yaml:118–141`: a bash probe (`test -f .archon/mcp/linear.json && echo true || echo false`) gates an `mcp: .archon/mcp/linear.json` node with `when: "$probe.output == 'true'"`. The MCP config interpolates `$LINEAR_API_KEY` from env [Source: providers/src/mcp/config.ts; schemas/dag-node.ts:154]. This is the AI-driven alternative; only Claude/Codex nodes honor `mcp:`.
-The BMAD-METHOD sync half is invoked the same way existing BMAD steps are — a `command:` node referencing a `.archon/commands/defaults/<name>.md` (like `code-review-auto` → `bmad-code-review-auto`) or a `prompt: bmad-<skill> $ARGUMENTS` node — once that command/skill is delivered by M3.2. Neither exists yet.
+  The BMAD-METHOD sync half is invoked the same way existing BMAD steps are — a `command:` node referencing a `.archon/commands/defaults/<name>.md` (like `code-review-auto` → `bmad-code-review-auto`) or a `prompt: bmad-<skill> $ARGUMENTS` node — once that command/skill is delivered by M3.2. Neither exists yet.
 
 ### How to gate the live path (default-off)
 
@@ -278,8 +281,30 @@ Alignment note: after this story the v2 DAG matches the architecture mermaid's `
 
 ### Agent Model Used
 
+Codex (gpt-5.5) for implementation, Claude (sonnet) for review.
+
 ### Debug Log References
+
+All tests passed on first run after implementation was already in place from prior workflow nodes.
+Contract test: 48 pass, 2 skip (deferred AC#5/#6 scaffolds), 0 fail.
+DAG test: 12 pass, 1 skip (mid-DAG fault-injection scaffold), 0 fail.
+`bun run check:bundled` passed. `bun run type-check` passed across all packages.
 
 ### Completion Notes List
 
+- Implemented Buildable-Now + Fail-Closed layers only (Tasks 0-5, 7).
+- Deferred live Linear/sync path (AC #5/#6) — cross-project dependencies (BMAD-METHOD M3.1/M3.2) and Linear integration are absent from this repository.
+- The `decision-needed-check` bash node is inserted at the PASS seam between `quality-route-loop` and `create-pull-request`.
+- When `decision_needed_count == 0`: emits `status: "PASS"` contract with full envelope, exits 0, PR proceeds.
+- When `decision_needed_count > 0`: fails closed with diagnostic naming unavailable capability, exits non-zero, PR blocked.
+- No new routing branches, route_loops, or error nodes added — blocking is purely structural via `depends_on`.
+- Bundle regenerated and source/bundle parity confirmed.
+- v1 baseline unchanged.
+
 ### File List
+
+- `.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml` — added `decision-needed-check` node, retargeted `quality-route-loop.routes.positive`, retargeted `create-pull-request.depends_on`
+- `packages/workflows/src/defaults/bundled-defaults.generated.ts` — regenerated
+- `packages/workflows/src/defaults/v2-decision-needed-contract.test.ts` — new contract test (48 assertions)
+- `packages/workflows/src/defaults/v2-decision-needed-dag.test.ts` — new DAG test (12 assertions)
+- `packages/workflows/package.json` — registered both test files in correct batch segments

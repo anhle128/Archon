@@ -558,7 +558,7 @@ nodes:
       condition: "$verify-quality-summary.output == 'PASS'"
       max_iterations: 20
       routes:
-        positive: create-pull-request
+        positive: decision-needed-check
         negative: dev-story
         exhausted: review-loop-error
 
@@ -963,9 +963,67 @@ nodes:
       exit 1
     timeout: 60000
 
+  - id: decision-needed-check
+    bash: |
+      set -e
+      SUMMARY=$quality-gate-summary.output
+      RESOLVED_REF=$resolve-story-input.output.story_ref
+
+      if [ -z "$RESOLVED_REF" ]; then
+        echo "ERROR: resolved story_ref is empty." >&2
+        exit 1
+      fi
+      if [ -z "$SUMMARY" ]; then
+        echo "ERROR: quality-gate-summary output is empty." >&2
+        exit 1
+      fi
+
+      CONTRACT=$(
+        DNC_SUMMARY="$SUMMARY" DNC_RESOLVED="$RESOLVED_REF" \
+        bun -e '
+          const s = JSON.parse(process.env.DNC_SUMMARY || "");
+          const resolved = process.env.DNC_RESOLVED;
+          if (s.contract_version !== "1.0") { console.error("ERROR: contract_version"); process.exit(1); }
+          if (s.workflow !== "bmad-dev-story-with-tea-fix-loop-v2") { console.error("ERROR: workflow"); process.exit(1); }
+          if (s.node !== "quality-gate-summary") { console.error("ERROR: node"); process.exit(1); }
+          if (!s.story_ref || s.story_ref !== resolved) { console.error("ERROR: story_ref"); process.exit(1); }
+          const count = Number(s.decision_needed_count);
+          if (!Number.isInteger(count) || count < 0) { console.error("ERROR: decision_needed_count"); process.exit(1); }
+          if (count > 0) {
+            console.error("ERROR: " + count + " unresolved decision-needed finding(s) require Linear follow-up + BMAD-METHOD sync, which is unavailable. Blocking PR (fail closed).");
+            process.exit(1);
+          }
+          process.stdout.write(JSON.stringify({
+            contract_version: "1.0",
+            workflow: "bmad-dev-story-with-tea-fix-loop-v2",
+            node: "decision-needed-check",
+            story_ref: resolved,
+            status: "PASS",
+            decision_needed_count: count,
+            deferred: false,
+            deferred_count: 0,
+            created_count: 0,
+            reused_count: 0,
+            synced_count: 0,
+            deferred_items: []
+          }));
+        '
+      )
+
+      printf '%s' "$CONTRACT"
+
+      if [ -n "${ARTIFACTS_DIR:-}" ]; then
+        RUN_DIR="$ARTIFACTS_DIR/bmad-dev-story-with-tea-fix-loop"
+        mkdir -p "$RUN_DIR" 2>/dev/null || true
+        printf '%s' "$CONTRACT" > "$RUN_DIR/decision-needed.json" 2>/dev/null || true
+      fi
+    timeout: 60000
+    depends_on: [quality-route-loop, quality-gate-summary, resolve-story-input]
+    output_type: decision-needed-check
+
   - id: create-pull-request
     command: archon-create-pr
     provider: claude
-    depends_on: [quality-route-loop]
+    depends_on: [decision-needed-check]
     context: fresh
     model: sonnet

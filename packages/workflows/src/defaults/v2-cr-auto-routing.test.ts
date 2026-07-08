@@ -694,6 +694,14 @@ describe('Q1 — CONCERNS gate routing (A2.1 recommendation: non-blocking → ro
       run.providerCalls.filter(c => c === 'dev-story').length,
       'CONCERNS must not loop dev-story under the non-blocking policy'
     ).toBe(1);
-    expect(run.runFailed).toBe(false);
+    expect(
+      run.nodeState['decision-needed-check'],
+      'CONCERNS raises decision_needed_count to 1, failing the decision node closed'
+    ).toBe('failed');
+    expect(
+      run.providerCalls,
+      'decision-needed-check fail-closed blocks PR when CONCERNS items exist'
+    ).not.toContain('create-pull-request');
+    expect(run.runFailed).toBe(true);
   });
 });

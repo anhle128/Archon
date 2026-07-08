@@ -291,12 +291,12 @@ describe('tea-tr-skipped hygiene — timeout + typed-output + artifact write (TD
 // (AC #2, #3, #4)
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe('PR tail — resolves through quality-route-loop routing authority (TD-027)', () => {
-  it('create-pull-request depends on quality-route-loop (the single quality routing authority)', () => {
+describe('PR tail — resolves through decision-needed-check routing authority (TD-027)', () => {
+  it('create-pull-request depends on decision-needed-check', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     const deps = nodeById(v2, 'create-pull-request')!.depends_on ?? [];
-    expect(deps, 'PR tail must depend on the quality-route-loop routing authority').toEqual([
-      'quality-route-loop',
+    expect(deps, 'PR tail must depend on the decision-needed-check node').toEqual([
+      'decision-needed-check',
     ]);
   });
 });

@@ -721,7 +721,7 @@ describe('TR gate FAIL — schema-valid, aggregator emits FAIL summary (TD-043)'
     expect(run.providerCalls).not.toContain('create-pull-request');
   });
 
-  it('tea-tr gate:"CONCERNS" is non-blocking — quality-gate-summary passes (matches RV/NR policy)', async () => {
+  it('tea-tr gate:"CONCERNS" is non-blocking at summary level but fails decision-needed-check closed (blocks PR)', async () => {
     const run = await runV2Dag({
       cwd: cwdFixture,
       arguments: CANONICAL_REF,
@@ -736,12 +736,16 @@ describe('TR gate FAIL — schema-valid, aggregator emits FAIL summary (TD-043)'
     expect(run.nodeState['tea-tr']).toBe('completed');
     expect(
       run.nodeState['quality-gate-summary'],
-      'CONCERNS is non-blocking (matches RV/NR policy)'
+      'CONCERNS is non-blocking at the summary level (matches RV/NR policy)'
     ).toBe('completed');
     expect(
+      run.nodeState['decision-needed-check'],
+      'CONCERNS raises decision_needed_count to 1, failing the decision node closed'
+    ).toBe('failed');
+    expect(
       run.providerCalls,
-      'create-pull-request must be reached when TR gate is CONCERNS'
-    ).toContain('create-pull-request');
+      'decision-needed-check fail-closed blocks PR when CONCERNS items exist'
+    ).not.toContain('create-pull-request');
   });
 });
 

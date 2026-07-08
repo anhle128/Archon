@@ -694,16 +694,16 @@ describe('Schema + bundle parity — edited v2 valid, v1 untouched (TD-160)', ()
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// TD-161 [P1] — tail wiring: create-pull-request depends on quality-route-loop
+// TD-161 [P1] — tail wiring: create-pull-request depends on decision-needed-check
 // which is sourced from the summary via the reader (AC #6)
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('Tail wiring — PR consumes the summary via the route loop (TD-161)', () => {
-  it('create-pull-request depends on quality-route-loop (the single routing authority)', () => {
+  it('create-pull-request depends on decision-needed-check', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     const deps = nodeById(v2, 'create-pull-request')!.depends_on ?? [];
-    expect(deps, 'PR tail must resolve through the quality route loop').toEqual([
-      'quality-route-loop',
+    expect(deps, 'PR tail must resolve through the decision-needed-check node').toEqual([
+      'decision-needed-check',
     ]);
   });
 

@@ -78,7 +78,7 @@ const EXPECTED_READER_DEPS = [SUMMARY_ID, 'resolve-story-input'];
 const EXPECTED_CONDITION = "$verify-quality-summary.output == 'PASS'";
 const EXPECTED_MAX_ITERATIONS = 20;
 const EXPECTED_ROUTES = {
-  positive: 'create-pull-request',
+  positive: 'decision-needed-check',
   negative: 'dev-story',
   exhausted: 'review-loop-error',
 };
@@ -508,10 +508,12 @@ describe('Route-loop shape — sourced from the reader, correct routes (TD-208)'
     );
   });
 
-  it('route_loop.routes are positive: create-pull-request, negative: dev-story, exhausted: review-loop-error', () => {
+  it('route_loop.routes are positive: decision-needed-check, negative: dev-story, exhausted: review-loop-error', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     const routes = routeLoopBlock(v2).routes ?? {};
-    expect(routes.positive, 'PASS routes forward to the PR tail').toBe(EXPECTED_ROUTES.positive);
+    expect(routes.positive, 'PASS routes forward to the decision-needed-check seam').toBe(
+      EXPECTED_ROUTES.positive
+    );
     expect(routes.negative, 'FAIL routes back to the dev-story fix loop').toBe(
       EXPECTED_ROUTES.negative
     );
@@ -548,13 +550,13 @@ describe('Schema + loader — route_loop constraints honored, DAG validates (TD-
 // depend on quality-route-loop (no stale dependencies) (AC #2, #3)
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe('Tail wiring — PR + error targets depend on the route loop (TD-218)', () => {
-  it('create-pull-request.depends_on is exactly [quality-route-loop]', () => {
+describe('Tail wiring — PR depends on decision-needed-check, error target depends on the route loop (TD-218)', () => {
+  it('create-pull-request.depends_on is exactly [decision-needed-check]', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     expect(
       nodeById(v2, 'create-pull-request')!.depends_on ?? [],
-      'the PR tail is the loop positive target and must depend on the loop'
-    ).toEqual([LOOP_ID]);
+      'the PR tail depends on the decision-needed-check seam inserted at the PASS exit'
+    ).toEqual(['decision-needed-check']);
   });
 
   it('review-loop-error.depends_on is exactly [quality-route-loop]', () => {
@@ -631,7 +633,7 @@ describe('Loop budget — max_iterations pinned to the documented value (TD-233)
 // NOT target the not-yet-existing decision-needed-check (the later seam) (AC #2)
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe('Forward target — PASS goes to the current tail, not a future node (TD-234)', () => {
+describe('Forward target — PASS routes to decision-needed-check at the PASS seam (TD-234)', () => {
   it('the positive route target exists as a real node in the DAG', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     const positive = routeLoopBlock(v2).routes?.positive;
@@ -641,18 +643,14 @@ describe('Forward target — PASS goes to the current tail, not a future node (T
     expect(nodeById(v2, positive as string), 'the positive target node must exist').toBeDefined();
   });
 
-  it('no route targets the not-yet-existing decision-needed-check (deferred to a later story)', () => {
+  it('decision-needed-check exists as the positive route target at the PASS seam', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
-    // The later story inserts decision-needed-check at this exact forward seam;
-    // routing to a nonexistent node here would fail DAG validation.
-    expect(
-      routeLoopBlock(v2).routes?.positive,
-      'PASS must not route to a future node yet'
-    ).not.toBe('decision-needed-check');
-    expect(
-      nodeById(v2, 'decision-needed-check'),
-      'decision-needed-check must not exist yet'
-    ).toBeUndefined();
+    expect(routeLoopBlock(v2).routes?.positive, 'PASS routes to decision-needed-check').toBe(
+      'decision-needed-check'
+    );
+    const node = nodeById(v2, 'decision-needed-check');
+    expect(node, 'decision-needed-check must exist at the PASS seam').toBeDefined();
+    expect('bash' in node!, 'decision-needed-check must be a bash node').toBe(true);
   });
 });
 
