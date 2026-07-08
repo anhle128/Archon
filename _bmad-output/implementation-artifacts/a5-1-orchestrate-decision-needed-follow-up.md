@@ -82,7 +82,7 @@ Deferred ACs (#5, #6) are the epic's live-integration criteria; they are BLOCKED
 
 ### Review Findings
 
-- [ ] [Review][Patch] R1-F1 — `decision-needed-check` coerces malformed `decision_needed_count` values to `0`, allowing a false no-op PASS instead of failing closed. [.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:990]
+- [x] [Review][Patch] R1-F1 — `decision-needed-check` coerces malformed `decision_needed_count` values to `0`, allowing a false no-op PASS instead of failing closed. [.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:990] — FIXED: replaced `Number(s.decision_needed_count)` with `typeof count !== "number"` guard; bundle regenerated; all tests pass.
 
 ## Dev Notes
 

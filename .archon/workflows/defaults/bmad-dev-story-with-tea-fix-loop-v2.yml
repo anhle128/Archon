@@ -987,8 +987,8 @@ nodes:
           if (s.workflow !== "bmad-dev-story-with-tea-fix-loop-v2") { console.error("ERROR: workflow"); process.exit(1); }
           if (s.node !== "quality-gate-summary") { console.error("ERROR: node"); process.exit(1); }
           if (!s.story_ref || s.story_ref !== resolved) { console.error("ERROR: story_ref"); process.exit(1); }
-          const count = Number(s.decision_needed_count);
-          if (!Number.isInteger(count) || count < 0) { console.error("ERROR: decision_needed_count"); process.exit(1); }
+          const count = s.decision_needed_count;
+          if (typeof count !== "number" || !Number.isInteger(count) || count < 0) { console.error("ERROR: decision_needed_count"); process.exit(1); }
           if (count > 0) {
             console.error("ERROR: " + count + " unresolved decision-needed finding(s) require Linear follow-up + BMAD-METHOD sync, which is unavailable. Blocking PR (fail closed).");
             process.exit(1);
