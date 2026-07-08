@@ -164,9 +164,10 @@ describe('v2 workflow baseline (Story a1.1)', () => {
 
       // (b) v2 retains all original v1 node ids AND adds the new nodes
       // A2.1 renamed code-review → code-review-auto in v2; exclude from retention check.
+      // A4.2 removed code-review-gate (replaced by quality-route-loop); exclude too.
       const v2Ids = v2.nodes.map(n => n.id);
       for (const id of v1Ids) {
-        if (id === 'code-review') continue;
+        if (id === 'code-review' || id === 'code-review-gate') continue;
         expect(v2Ids).toContain(id);
       }
       expect(v2Ids).toContain('code-review-auto');

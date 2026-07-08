@@ -493,11 +493,9 @@ describe('v2 story-input resolution (Story a1.2)', () => {
       ).toContain(RESOLVED_TOKEN);
     });
 
-    it('STR-A4-2 [P0] verify-story-identity guard exists, depends on resolve + code-review; gate depends on verify-story-identity', () => {
-      // R4-F2 fix: code-review-gate now routes from verify-story-identity (bash guard)
-      // using a bare-output condition so the loader does not require output_format on
-      // the from node. When verify-story-identity exits 1 on mismatch, code-review-gate
-      // is SKIPPED (all_success trigger), preventing dev-story from being activated.
+    it('STR-A4-2 [P0] verify-story-identity guard exists, depends on resolve + code-review; gate-planner depends on verify-story-identity', () => {
+      // a4.2 consolidated routing: code-review-gate was replaced by quality-route-loop.
+      // gate-planner now depends directly on verify-story-identity.
       const wf = loadV2();
       const guard = getNode(wf, 'verify-story-identity');
       expect(guard, 'verify-story-identity guard node must exist').toBeDefined();
@@ -505,23 +503,23 @@ describe('v2 story-input resolution (Story a1.2)', () => {
       expect(deps).toContain('resolve-story-input');
       expect(deps).toContain('code-review-auto');
 
-      const gate = getNode(wf, 'code-review-gate');
+      const gp = getNode(wf, 'gate-planner');
       expect(
-        gate?.depends_on ?? [],
-        'code-review-gate must depend on verify-story-identity (R4-F2 fix)'
+        gp?.depends_on ?? [],
+        'gate-planner must depend on verify-story-identity (a4.2 consolidation)'
       ).toEqual(['verify-story-identity']);
     });
 
-    it('STR-A4-3 [P0] route_loop on code-review-gate routes from verify-story-identity with bare-output condition (R4-F2)', () => {
-      // Bare-output condition avoids the loader's output_format.properties check
-      // (only triggered when a .field accessor is present). This allows a bash node
-      // to be the from source while still providing deterministic routing.
-      const gate = getNode(loadV2(), 'code-review-gate');
-      expect(gate?.route_loop?.from).toBe('verify-story-identity');
-      expect(gate?.route_loop?.condition).toBe("$verify-story-identity.output == 'PASS'");
-      expect(gate?.route_loop?.routes?.positive).toBe('gate-planner');
-      expect(gate?.route_loop?.routes?.negative).toBe('dev-story');
-      expect(gate?.route_loop?.routes?.exhausted).toBe('review-loop-error');
+    it('STR-A4-3 [P0] quality-route-loop routes from verify-quality-summary with bare-output condition (a4.2)', () => {
+      // a4.2 consolidation: code-review-gate was replaced by quality-route-loop,
+      // sourced from verify-quality-summary (bash reader that emits bare PASS/FAIL).
+      const loop = getNode(loadV2(), 'quality-route-loop');
+      expect(loop, 'quality-route-loop must exist').toBeDefined();
+      expect(loop?.route_loop?.from).toBe('verify-quality-summary');
+      expect(loop?.route_loop?.condition).toBe("$verify-quality-summary.output == 'PASS'");
+      expect(loop?.route_loop?.routes?.positive).toBe('create-pull-request');
+      expect(loop?.route_loop?.routes?.negative).toBe('dev-story');
+      expect(loop?.route_loop?.routes?.exhausted).toBe('review-loop-error');
     });
 
     it('STR-A4-4 [P0] positive route (tea-rv) transitively depends on the guard', () => {
@@ -592,14 +590,10 @@ describe('v2 story-input resolution (Story a1.2)', () => {
       expect(r.exitCode, `stderr: ${r.stderr}`).not.toBe(0);
     });
 
-    it('STR-A4-9 [P0] R4-F2 fix: code-review-gate routes from verify-story-identity; mismatch blocks ALL routes', () => {
-      // R4-F2 fix: the route_loop now gates from verify-story-identity (Archon-owned
-      // bash guard) using a bare-output condition. A mismatch causes verify-story-identity
-      // to exit 1 → code-review-gate is SKIPPED (all_success) → dev-story is never
-      // activated on either positive OR negative route.
-      // R4-F1 fix: verify-story-identity IS the deterministic Archon-owned enforcement
-      // path — it reads the engine-resolved story_ref via substitution and confirms
-      // identity before any routing decision fires.
+    it('STR-A4-9 [P0] a4.2 consolidation: quality-route-loop replaces code-review-gate; gate-planner depends on verify-story-identity', () => {
+      // a4.2 consolidation: code-review-gate was removed. quality-route-loop now
+      // provides the single bounded loop sourced from verify-quality-summary.
+      // gate-planner depends directly on verify-story-identity.
       const wf = loadV2();
 
       // code-review-auto declares story_ref for reference; guard enforces the value
@@ -611,18 +605,20 @@ describe('v2 story-input resolution (Story a1.2)', () => {
         'code-review-auto output_format must declare story_ref'
       ).toBeDefined();
 
-      // Gate routes from verify-story-identity with bare-output condition
-      const gate = getNode(wf, 'code-review-gate');
-      expect(gate?.route_loop?.from).toBe('verify-story-identity');
-      expect(gate?.route_loop?.condition).toBe("$verify-story-identity.output == 'PASS'");
+      // quality-route-loop routes from verify-quality-summary with bare-output condition
+      const loop = getNode(wf, 'quality-route-loop');
+      expect(loop, 'quality-route-loop must exist').toBeDefined();
+      expect(loop?.route_loop?.from).toBe('verify-quality-summary');
+      expect(loop?.route_loop?.condition).toBe("$verify-quality-summary.output == 'PASS'");
 
-      // Guard is directly upstream of code-review-gate
+      // gate-planner depends on verify-story-identity (the guard)
+      const gp = getNode(wf, 'gate-planner');
       expect(
-        gate?.depends_on ?? [],
-        'code-review-gate must depend on verify-story-identity (R4-F2 fix)'
+        gp?.depends_on ?? [],
+        'gate-planner must depend on verify-story-identity (a4.2 consolidation)'
       ).toContain('verify-story-identity');
 
-      // tea-rv depends on gate-planner (which transitively depends on the guard via code-review-gate)
+      // tea-rv depends on gate-planner
       const teaRv = getNode(wf, 'tea-rv');
       expect(teaRv?.depends_on ?? [], 'tea-rv must depend on gate-planner').toContain(
         'gate-planner'
@@ -685,7 +681,6 @@ describe('v2 story-input resolution (Story a1.2)', () => {
         'dev-story',
         'tea-automate',
         'code-review-auto',
-        'code-review-gate',
         'tea-rv',
         'tea-nr',
         'tea-tr',

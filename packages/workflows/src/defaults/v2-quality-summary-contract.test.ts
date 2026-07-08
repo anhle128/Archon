@@ -27,8 +27,8 @@
  *   5. emit the routing envelope (gate PASS|FAIL, round, blocking_count,
  *      decision_needed_count, findings_total, cr/rv/nr/tr gate echoes) with
  *      output_type: quality-gate-summary and timeout: 60000, and
- *   6. leave create-pull-request depending only on quality-gate-summary with
- *      NO route-loop node added.
+ *   6. leave create-pull-request depending on quality-route-loop (the single
+ *      quality routing authority sourced from the summary via the reader).
  *
  * The self-contained "technique proof" blocks (TD-105, TD-150, TD-151, TD-152)
  * validate that the CHOSEN encoder/parser pattern is sound; they pass in the
@@ -694,31 +694,26 @@ describe('Schema + bundle parity — edited v2 valid, v1 untouched (TD-160)', ()
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// TD-161 [P1] — tail wiring: create-pull-request depends only on the summary and
-// NO route-loop node is added by this story (AC #6)
+// TD-161 [P1] — tail wiring: create-pull-request depends on quality-route-loop
+// which is sourced from the summary via the reader (AC #6)
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe('Tail wiring — PR consumes the summary, no route loop added (TD-161)', () => {
-  it('create-pull-request depends only on quality-gate-summary', () => {
+describe('Tail wiring — PR consumes the summary via the route loop (TD-161)', () => {
+  it('create-pull-request depends on quality-route-loop (the single routing authority)', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     const deps = nodeById(v2, 'create-pull-request')!.depends_on ?? [];
-    expect(deps, 'PR tail must resolve solely through the aggregator').toEqual([SUMMARY_ID]);
+    expect(deps, 'PR tail must resolve through the quality route loop').toEqual([
+      'quality-route-loop',
+    ]);
   });
 
-  it('no quality route-loop node is introduced by this story (route decision is a later story)', () => {
+  it('quality-route-loop is the single route_loop node (code-review-gate removed)', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     const routeLoopIds = v2.nodes.filter(n => 'route_loop' in (n as object)).map(n => n.id);
-    expect(
-      routeLoopIds,
-      'the only route_loop may remain the existing code-review-gate; no quality-route-loop yet'
-    ).toEqual(['code-review-gate']);
-    expect(
-      v2.nodes.map(n => n.id),
-      'no quality-route-loop node may be added yet'
-    ).not.toContain('quality-route-loop');
+    expect(routeLoopIds, 'exactly one route_loop must exist').toEqual(['quality-route-loop']);
   });
 
-  it('quality-gate-summary is the single successor feeding the tail (no dependency cycle)', () => {
+  it('quality-gate-summary feeds the route loop chain without cycles', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     const summaryDeps = nodeById(v2, SUMMARY_ID)!.depends_on ?? [];
     expect(

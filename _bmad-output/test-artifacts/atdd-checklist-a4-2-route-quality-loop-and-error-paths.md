@@ -60,11 +60,11 @@ AI generation, sequential — single-context deterministic scaffold generation f
 
 ## Generated Files
 
-| File                                                                    | Level                         | Isolation                                  | Registered in `package.json` |
-| ----------------------------------------------------------------------- | ----------------------------- | ------------------------------------------ | ---------------------------- |
+| File                                                                     | Level                         | Isolation                                  | Registered in `package.json` |
+| ------------------------------------------------------------------------ | ----------------------------- | ------------------------------------------ | ---------------------------- |
 | `packages/workflows/src/defaults/v2-quality-route-loop-contract.test.ts` | Structural + technique proofs | co-located (no `mock.module`)              | yes — shared non-mock batch  |
 | `packages/workflows/src/defaults/v2-quality-route-loop-dag.test.ts`      | Behavioral DAG                | its OWN `bun test` segment (`mock.module`) | yes — standalone segment     |
-| `packages/workflows/package.json`                                       | test wiring                   | —                                          | edited (both segments added) |
+| `packages/workflows/package.json`                                        | test wiring                   | —                                          | edited (both segments added) |
 
 Validation performed on the scaffolds: both files transpile clean (Bun reached module resolution past the parse stage — no syntax errors), `package.json` remains valid JSON with the DAG test as the standalone segment `bun test src/defaults/v2-quality-route-loop-dag.test.ts`, and the contract file carries the TD-212 no-plan-identifier self-scan over both new files.
 
@@ -74,54 +74,54 @@ Legend: **exec-red** = executable test failing until implementation; **technique
 
 ### P0
 
-| TD     | Scenario                                                                                                | File                                                  | Representation   |
-| ------ | ------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- | ---------------- |
-| TD-200 | Summary baseline (`quality-gate-summary` aggregator + resolved TR path) present before route assertions | contract                                              | exec-red         |
-| TD-201 | Exactly one `route_loop` = `quality-route-loop`; `code-review-gate` absent; no node references it       | contract                                              | exec-red         |
-| TD-203 | `verify-quality-summary` bash reader exists, deps `[quality-gate-summary, resolve-story-input]`, bounded, typed | contract                                       | exec-red         |
-| TD-204 | Reader reads whole-output, `bun -e`+`JSON.parse`, validates envelope+identity; no field-ref/`grep`/`case` | contract                                            | exec-red         |
-| TD-207 | Malformed/stale/wrong-workflow/wrong-node/wrong-story/empty/invalid-gate summary → reader fails, no PASS/FAIL | contract (technique, real reader pipeline) + dag (**skip**) | technique + skip |
-| TD-222 | Persistent `FAIL` past budget → `review-loop-error` on max+1, never `create-pull-request`, non-zero      | dag                                                   | exec-red         |
-| TD-223 | Exhaustion evidence: open-findings pointer, decision-log pointer, round/iteration count, best-effort JSON | dag                                                  | exec-red         |
-| TD-224 | `ERROR` (role gate ERROR / identity mismatch) → summary hard-fails, reader never runs, no reroute, no PR | dag                                                   | exec-red         |
-| TD-235 | `review-loop-error` terminal: nothing routes on it, no route-facing gate/status contract                 | contract (topology) + dag TD-222 (exit non-zero)      | exec-red         |
+| TD     | Scenario                                                                                                        | File                                                        | Representation   |
+| ------ | --------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- | ---------------- |
+| TD-200 | Summary baseline (`quality-gate-summary` aggregator + resolved TR path) present before route assertions         | contract                                                    | exec-red         |
+| TD-201 | Exactly one `route_loop` = `quality-route-loop`; `code-review-gate` absent; no node references it               | contract                                                    | exec-red         |
+| TD-203 | `verify-quality-summary` bash reader exists, deps `[quality-gate-summary, resolve-story-input]`, bounded, typed | contract                                                    | exec-red         |
+| TD-204 | Reader reads whole-output, `bun -e`+`JSON.parse`, validates envelope+identity; no field-ref/`grep`/`case`       | contract                                                    | exec-red         |
+| TD-207 | Malformed/stale/wrong-workflow/wrong-node/wrong-story/empty/invalid-gate summary → reader fails, no PASS/FAIL   | contract (technique, real reader pipeline) + dag (**skip**) | technique + skip |
+| TD-222 | Persistent `FAIL` past budget → `review-loop-error` on max+1, never `create-pull-request`, non-zero             | dag                                                         | exec-red         |
+| TD-223 | Exhaustion evidence: open-findings pointer, decision-log pointer, round/iteration count, best-effort JSON       | dag                                                         | exec-red         |
+| TD-224 | `ERROR` (role gate ERROR / identity mismatch) → summary hard-fails, reader never runs, no reroute, no PR        | dag                                                         | exec-red         |
+| TD-235 | `review-loop-error` terminal: nothing routes on it, no route-facing gate/status contract                        | contract (topology) + dag TD-222 (exit non-zero)            | exec-red         |
 
 ### P1
 
-| TD     | Scenario                                                                                     | File                        | Representation       |
-| ------ | -------------------------------------------------------------------------------------------- | --------------------------- | -------------------- |
-| TD-202 | `gate-planner.depends_on` includes `verify-story-identity`, not `code-review-gate`           | contract                    | exec-red             |
-| TD-205 | Valid summary JSON → exact bare stdout `PASS`/`FAIL`, no prose; substring cannot flip gate    | contract                    | technique            |
-| TD-208 | Route-loop shape: `depends_on [reader]`, `from` reader, bare-output condition, three routes    | contract                    | exec-red             |
-| TD-209 | No `when`/`trigger_rule`/`retry` on route_loop; `parseWorkflow` validates the edited DAG      | contract                    | exec-red             |
-| TD-210 | v2 source + `BUNDLED_WORKFLOWS` match; old loop gone from bundle; v1 byte-for-byte unchanged   | contract                    | exec-red             |
-| TD-211 | Contract test in shared non-mock batch; DAG test in its OWN bun invocation                    | contract                    | exec-red             |
-| TD-218 | `create-pull-request.depends_on` and `review-loop-error.depends_on` both `[quality-route-loop]` | contract                  | exec-red             |
-| TD-220 | First-round `PASS` → reader `PASS`, positive to `create-pull-request`, `dev-story` once, no error node | dag                   | exec-red             |
-| TD-221 | `FAIL` round-1 then `PASS` round-2 → full-path rerun, `dev-story` twice, same `story_ref`, then PR | dag                     | exec-red             |
-| TD-227 | Dependency/partial upstream failure → summary/reader never complete, no reroute to `dev-story`  | dag                        | exec-red             |
-| TD-229 | Two runs, distinct artifact dirs → independent loop state, route activations, exhausted artifacts | dag                       | exec-red             |
-| TD-230 | Reader + `review-loop-error` bounded timeouts, no unbounded external command                  | contract                    | exec-red             |
-| TD-233 | `max_iterations` pinned + documented as 20 (continuity with the replaced loop)                | contract                    | exec-red             |
-| TD-234 | PASS targets `create-pull-request`, not the not-yet-existing `decision-needed-check`           | contract                    | exec-red             |
+| TD     | Scenario                                                                                               | File     | Representation |
+| ------ | ------------------------------------------------------------------------------------------------------ | -------- | -------------- |
+| TD-202 | `gate-planner.depends_on` includes `verify-story-identity`, not `code-review-gate`                     | contract | exec-red       |
+| TD-205 | Valid summary JSON → exact bare stdout `PASS`/`FAIL`, no prose; substring cannot flip gate             | contract | technique      |
+| TD-208 | Route-loop shape: `depends_on [reader]`, `from` reader, bare-output condition, three routes            | contract | exec-red       |
+| TD-209 | No `when`/`trigger_rule`/`retry` on route_loop; `parseWorkflow` validates the edited DAG               | contract | exec-red       |
+| TD-210 | v2 source + `BUNDLED_WORKFLOWS` match; old loop gone from bundle; v1 byte-for-byte unchanged           | contract | exec-red       |
+| TD-211 | Contract test in shared non-mock batch; DAG test in its OWN bun invocation                             | contract | exec-red       |
+| TD-218 | `create-pull-request.depends_on` and `review-loop-error.depends_on` both `[quality-route-loop]`        | contract | exec-red       |
+| TD-220 | First-round `PASS` → reader `PASS`, positive to `create-pull-request`, `dev-story` once, no error node | dag      | exec-red       |
+| TD-221 | `FAIL` round-1 then `PASS` round-2 → full-path rerun, `dev-story` twice, same `story_ref`, then PR     | dag      | exec-red       |
+| TD-227 | Dependency/partial upstream failure → summary/reader never complete, no reroute to `dev-story`         | dag      | exec-red       |
+| TD-229 | Two runs, distinct artifact dirs → independent loop state, route activations, exhausted artifacts      | dag      | exec-red       |
+| TD-230 | Reader + `review-loop-error` bounded timeouts, no unbounded external command                           | contract | exec-red       |
+| TD-233 | `max_iterations` pinned + documented as 20 (continuity with the replaced loop)                         | contract | exec-red       |
+| TD-234 | PASS targets `create-pull-request`, not the not-yet-existing `decision-needed-check`                   | contract | exec-red       |
 
 ### P2 / P3
 
-| TD     | Scenario                                                                        | File     | Representation                          |
-| ------ | ------------------------------------------------------------------------------- | -------- | --------------------------------------- |
-| TD-212 | Kebab-case ids/output types; no plan/story/epic/finding identifiers in new files | contract | exec-red (self-scan)                    |
-| TD-232 | File scope limited to v2 YAML / bundle / two tests / `package.json`             | —        | **review** (manual gate; see below)     |
+| TD     | Scenario                                                                         | File     | Representation                      |
+| ------ | -------------------------------------------------------------------------------- | -------- | ----------------------------------- |
+| TD-212 | Kebab-case ids/output types; no plan/story/epic/finding identifiers in new files | contract | exec-red (self-scan)                |
+| TD-232 | File scope limited to v2 YAML / bundle / two tests / `package.json`              | —        | **review** (manual gate; see below) |
 
 ## Acceptance Criteria Traceability
 
-| AC                                                                    | Scenarios                                            | Status  |
-| --------------------------------------------------------------------- | --------------------------------------------------- | ------- |
-| AC1 `FAIL` routes to `dev-story` and keeps the same `story_ref`.      | TD-204, TD-205, TD-208, TD-209, TD-221, TD-229      | Covered |
-| AC2 `PASS` routes forward to the current tail seam.                   | TD-205, TD-208, TD-218, TD-220, TD-234              | Covered |
-| AC3 Exhaustion routes to `review-loop-error`, records evidence, exits non-zero. | TD-208, TD-222, TD-223, TD-233, TD-235    | Covered |
-| AC4 `ERROR` fails closed and never reaches `dev-story`.              | TD-203, TD-204, TD-207, TD-224, TD-227              | Covered |
+| AC                                                                                          | Scenarios                                                      | Status  |
+| ------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | ------- |
+| AC1 `FAIL` routes to `dev-story` and keeps the same `story_ref`.                            | TD-204, TD-205, TD-208, TD-209, TD-221, TD-229                 | Covered |
+| AC2 `PASS` routes forward to the current tail seam.                                         | TD-205, TD-208, TD-218, TD-220, TD-234                         | Covered |
+| AC3 Exhaustion routes to `review-loop-error`, records evidence, exits non-zero.             | TD-208, TD-222, TD-223, TD-233, TD-235                         | Covered |
+| AC4 `ERROR` fails closed and never reaches `dev-story`.                                     | TD-203, TD-204, TD-207, TD-224, TD-227                         | Covered |
 | AC5 Edited v2 parses with one loop, old loop removed, `gate-planner` rewired, v1 unchanged. | TD-200, TD-201, TD-202, TD-208, TD-209, TD-210, TD-218, TD-232 | Covered |
-| AC6 Bundle parity + all four route outcomes proven.                  | TD-210, TD-211, TD-220, TD-221, TD-222, TD-224      | Covered |
+| AC6 Bundle parity + all four route outcomes proven.                                         | TD-210, TD-211, TD-220, TD-221, TD-222, TD-224                 | Covered |
 
 ## Reviewer Concern Traceability
 
@@ -132,9 +132,9 @@ No reviewer concern is left unrepresented: each is an executable red test, a tec
 
 ## Skipped Scaffolds and Expected Failure Reasons
 
-| Scaffold                                                        | Location                             | Why skipped                                                                                                                                                                                                                                                                     | Activation seam                                                                                        | Compensating coverage                                                                                                       |
-| --------------------------------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| TD-207 `malformed summary injected mid-DAG → reader fails`      | `v2-quality-route-loop-dag.test.ts`  | The only upstream source of `verify-quality-summary` is the real `quality-gate-summary` bash node, which emits a well-formed envelope OR hard-fails (exit 1). There is no seam to make the summary COMPLETE while emitting a malformed / wrong-identity / invalid-gate envelope, so the reader's defense-in-depth rejection cannot be driven end-to-end. | A stub summary node able to complete-with-arbitrary-stdout (fault-injection seam). | Contract TD-207 proves the reader's exact `JSON.parse` + envelope/identity pipeline fails closed (no `PASS`/`FAIL`) against every bad-envelope variant, via a real bash + bun subprocess. |
+| Scaffold                                                   | Location                            | Why skipped                                                                                                                                                                                                                                                                                                                                              | Activation seam                                                                    | Compensating coverage                                                                                                                                                                     |
+| ---------------------------------------------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TD-207 `malformed summary injected mid-DAG → reader fails` | `v2-quality-route-loop-dag.test.ts` | The only upstream source of `verify-quality-summary` is the real `quality-gate-summary` bash node, which emits a well-formed envelope OR hard-fails (exit 1). There is no seam to make the summary COMPLETE while emitting a malformed / wrong-identity / invalid-gate envelope, so the reader's defense-in-depth rejection cannot be driven end-to-end. | A stub summary node able to complete-with-arbitrary-stdout (fault-injection seam). | Contract TD-207 proves the reader's exact `JSON.parse` + envelope/identity pipeline fails closed (no `PASS`/`FAIL`) against every bad-envelope variant, via a real bash + bun subprocess. |
 
 The skip is an executable-but-`it.skip` scaffold (it loads and is registered); it states its activation condition and asserts expected behavior on activation.
 
@@ -152,12 +152,12 @@ Once `bun install` runs in the primary checkout, the following are EXPECTED to f
 
 ## Waivers
 
-| Waiver | Subject                    | Reason                                                                                                                          | Owner                     | Residual Risk                                                                     | Follow-Up Trigger                                                                                                          |
-| ------ | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| W-001  | Cancellation behavior      | Executor cancellation, pause, and lifecycle ownership are unchanged by this YAML + bash-reader story.                          | Workflow maintainer       | Cancellation during a route-loop rerun or error-artifact write is not newly exercised. | Reopen if the implementation touches executor cancellation, node lifecycle mutation, checkpoint reset, or artifact-write ownership. |
-| W-002  | Permission / auth behavior | No auth, credential, adapter, provider-credential delivery, webhook, or protected server-route code is in scope.               | Security / platform owner | A stray change could introduce untested auth behavior.                            | Reopen if the diff touches credentials, adapters, server auth routes, provider credential delivery, or permission checks. |
-| W-003  | Browser / first-party UI E2E | Backend workflow DAG change with no browser-visible acceptance path; the isolated DAG executor run is the first-party consumer E2E. | Test architect         | A future web/console visualization of the route loop / error artifact is not exercised. | Reopen if a web or console surface renders route-loop state, `review-loop-error` artifacts, or quality-summary decisions.  |
-| W-004  | Load / performance testing | No service runtime hot path, API endpoint, or user-facing latency threshold changes.                                          | Workflow maintainer       | The reader bash could hang if a timeout were omitted.                              | TD-230 must pass; reopen if the implementation adds long-running runtime work or shared scheduler changes.                |
+| Waiver | Subject                      | Reason                                                                                                                              | Owner                     | Residual Risk                                                                           | Follow-Up Trigger                                                                                                                   |
+| ------ | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| W-001  | Cancellation behavior        | Executor cancellation, pause, and lifecycle ownership are unchanged by this YAML + bash-reader story.                               | Workflow maintainer       | Cancellation during a route-loop rerun or error-artifact write is not newly exercised.  | Reopen if the implementation touches executor cancellation, node lifecycle mutation, checkpoint reset, or artifact-write ownership. |
+| W-002  | Permission / auth behavior   | No auth, credential, adapter, provider-credential delivery, webhook, or protected server-route code is in scope.                    | Security / platform owner | A stray change could introduce untested auth behavior.                                  | Reopen if the diff touches credentials, adapters, server auth routes, provider credential delivery, or permission checks.           |
+| W-003  | Browser / first-party UI E2E | Backend workflow DAG change with no browser-visible acceptance path; the isolated DAG executor run is the first-party consumer E2E. | Test architect            | A future web/console visualization of the route loop / error artifact is not exercised. | Reopen if a web or console surface renders route-loop state, `review-loop-error` artifacts, or quality-summary decisions.           |
+| W-004  | Load / performance testing   | No service runtime hot path, API endpoint, or user-facing latency threshold changes.                                                | Workflow maintainer       | The reader bash could hang if a timeout were omitted.                                   | TD-230 must pass; reopen if the implementation adds long-running runtime work or shared scheduler changes.                          |
 
 ## Commands to Run the Generated Tests
 

@@ -440,7 +440,7 @@ describe('AC2 — DS/TA/CR failures are ERROR, not a fix-loop back to dev-story'
     expect(run.nodeState['verify-story-identity']).toBe('skipped');
     // dev-story ran exactly once (initial); the negative route never re-entered it.
     expect(run.providerCalls.filter(c => c === 'dev-story').length).toBe(1);
-    expect(run.nodeState['code-review-gate']).not.toBe('completed');
+    expect(run.nodeState['quality-route-loop']).not.toBe('completed');
     expect(run.nodeState['tea-rv']).not.toBe('completed');
     expect(run.runFailed).toBe(true);
   });
@@ -521,7 +521,7 @@ describe('AC3 — DS/TA/CR operate on the same resolved story_ref', () => {
     });
 
     expect(run.nodeState['verify-story-identity']).toBe('failed');
-    expect(run.nodeState['code-review-gate']).toBe('skipped');
+    expect(run.nodeState['quality-route-loop']).not.toBe('completed');
     expect(
       run.providerCalls.filter(c => c === 'dev-story').length,
       'identity mismatch must not re-enter dev-story via the negative route'

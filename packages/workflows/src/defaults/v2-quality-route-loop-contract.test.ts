@@ -111,7 +111,12 @@ const readerBash = (wf: WorkflowDefinition): string =>
 
 const routeLoopBlock = (
   wf: WorkflowDefinition
-): { from?: string; condition?: string; max_iterations?: number; routes?: Record<string, string> } =>
+): {
+  from?: string;
+  condition?: string;
+  max_iterations?: number;
+  routes?: Record<string, string>;
+} =>
   (nodeById(wf, LOOP_ID) as { route_loop?: Record<string, unknown> } | undefined)?.route_loop ?? {};
 
 // The exact reader-validation pipeline the target node adopts (story-mandated
@@ -198,7 +203,10 @@ describe('Baseline precondition — summary aggregator + resolved TR path exist 
   it('quality-gate-summary aggregator exists as a bash node the loop can read', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     const node = nodeById(v2, SUMMARY_ID);
-    expect(node, 'quality-gate-summary must exist before the route loop can source it').toBeDefined();
+    expect(
+      node,
+      'quality-gate-summary must exist before the route loop can source it'
+    ).toBeDefined();
     expect('bash' in (node as object), 'quality-gate-summary must be a bash node').toBe(true);
   });
 
@@ -224,12 +232,17 @@ describe('One routing authority — single quality-route-loop, old loop removed 
   it('exactly one route_loop node exists and it is quality-route-loop', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     const routeLoopIds = v2.nodes.filter(n => 'route_loop' in (n as object)).map(n => n.id);
-    expect(routeLoopIds, 'the v2 DAG must consolidate to exactly one route_loop').toEqual([LOOP_ID]);
+    expect(routeLoopIds, 'the v2 DAG must consolidate to exactly one route_loop').toEqual([
+      LOOP_ID,
+    ]);
   });
 
   it('code-review-gate is removed entirely', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
-    expect(nodeById(v2, OLD_LOOP_ID), 'the code-review-gate route_loop must be deleted').toBeUndefined();
+    expect(
+      nodeById(v2, OLD_LOOP_ID),
+      'the code-review-gate route_loop must be deleted'
+    ).toBeUndefined();
   });
 
   it('no surviving node lists code-review-gate in depends_on or a route target', () => {
@@ -259,14 +272,21 @@ describe('Rewire — gate-planner depends on the retained identity barrier (TD-2
   it('gate-planner.depends_on includes verify-story-identity and NOT code-review-gate', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     const deps = nodeById(v2, 'gate-planner')!.depends_on ?? [];
-    expect(deps, 'gate-planner must source from the retained identity barrier').toContain(IDENTITY_ID);
-    expect(deps, 'gate-planner must not source from the removed route loop').not.toContain(OLD_LOOP_ID);
+    expect(deps, 'gate-planner must source from the retained identity barrier').toContain(
+      IDENTITY_ID
+    );
+    expect(deps, 'gate-planner must not source from the removed route loop').not.toContain(
+      OLD_LOOP_ID
+    );
   });
 
   it('verify-story-identity is retained as the fail-closed CR identity barrier', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     const node = nodeById(v2, IDENTITY_ID);
-    expect(node, 'verify-story-identity must be retained (only gate-planner deps move)').toBeDefined();
+    expect(
+      node,
+      'verify-story-identity must be retained (only gate-planner deps move)'
+    ).toBeDefined();
     expect('bash' in (node as object), 'verify-story-identity stays a bash gate reader').toBe(true);
   });
 });
@@ -348,18 +368,18 @@ describe('Reader safety — whole-output read, JSON.parse validation, no field-r
     for (const token of REQUIRED_READER_VALIDATION_TOKENS) {
       expect(bash, `the reader must validate ${token} before emitting`).toContain(token);
     }
-    expect(
-      bash,
-      'the reader must re-check story_ref against the resolved story input'
-    ).toContain('$resolve-story-input.output.story_ref');
+    expect(bash, 'the reader must re-check story_ref against the resolved story input').toContain(
+      '$resolve-story-input.output.story_ref'
+    );
   });
 
   it('the reader emits a bare gate via printf (nothing else on stdout)', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     const bash = readerBash(v2);
-    expect(bash, 'the reader must printf the bare gate value the route condition compares').toContain(
-      'printf'
-    );
+    expect(
+      bash,
+      'the reader must printf the bare gate value the route condition compares'
+    ).toContain('printf');
     expect(
       /echo\s+["']?\{/.test(bash),
       'the reader must not echo a JSON blob (the route compares a bare PASS/FAIL)'
@@ -472,9 +492,10 @@ describe('Reader fail-closed — malformed/stale/invalid summary yields no route
 describe('Route-loop shape — sourced from the reader, correct routes (TD-208)', () => {
   it('quality-route-loop depends only on [verify-quality-summary] (its from node)', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
-    expect(nodeById(v2, LOOP_ID)!.depends_on ?? [], 'the loop must depend solely on its from node').toEqual([
-      READER_ID,
-    ]);
+    expect(
+      nodeById(v2, LOOP_ID)!.depends_on ?? [],
+      'the loop must depend solely on its from node'
+    ).toEqual([READER_ID]);
   });
 
   it('route_loop.from is verify-quality-summary and condition is the bare-output PASS comparison', () => {
@@ -490,7 +511,9 @@ describe('Route-loop shape — sourced from the reader, correct routes (TD-208)'
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     const routes = routeLoopBlock(v2).routes ?? {};
     expect(routes.positive, 'PASS routes forward to the PR tail').toBe(EXPECTED_ROUTES.positive);
-    expect(routes.negative, 'FAIL routes back to the dev-story fix loop').toBe(EXPECTED_ROUTES.negative);
+    expect(routes.negative, 'FAIL routes back to the dev-story fix loop').toBe(
+      EXPECTED_ROUTES.negative
+    );
     expect(routes.exhausted, 'budget exhaustion routes to the terminal error node').toBe(
       EXPECTED_ROUTES.exhausted
     );
@@ -553,9 +576,10 @@ describe('Terminal error node — review-loop-error emits no routable contract (
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     for (const n of v2.nodes) {
       if (n.id === 'review-loop-error') continue;
-      expect(n.depends_on ?? [], `${n.id} must not depend on the terminal error node`).not.toContain(
-        'review-loop-error'
-      );
+      expect(
+        n.depends_on ?? [],
+        `${n.id} must not depend on the terminal error node`
+      ).not.toContain('review-loop-error');
       const routes = (n as { route_loop?: { routes?: Record<string, string> } }).route_loop?.routes;
       if (routes && n.id !== LOOP_ID) {
         expect(
@@ -610,7 +634,9 @@ describe('Forward target — PASS goes to the current tail, not a future node (T
   it('the positive route target exists as a real node in the DAG', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     const positive = routeLoopBlock(v2).routes?.positive;
-    expect(positive, 'the positive route must reference an existing node').toBe(EXPECTED_ROUTES.positive);
+    expect(positive, 'the positive route must reference an existing node').toBe(
+      EXPECTED_ROUTES.positive
+    );
     expect(nodeById(v2, positive as string), 'the positive target node must exist').toBeDefined();
   });
 
@@ -618,10 +644,14 @@ describe('Forward target — PASS goes to the current tail, not a future node (T
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     // The later story inserts decision-needed-check at this exact forward seam;
     // routing to a nonexistent node here would fail DAG validation.
-    expect(routeLoopBlock(v2).routes?.positive, 'PASS must not route to a future node yet').not.toBe(
-      'decision-needed-check'
-    );
-    expect(nodeById(v2, 'decision-needed-check'), 'decision-needed-check must not exist yet').toBeUndefined();
+    expect(
+      routeLoopBlock(v2).routes?.positive,
+      'PASS must not route to a future node yet'
+    ).not.toBe('decision-needed-check');
+    expect(
+      nodeById(v2, 'decision-needed-check'),
+      'decision-needed-check must not exist yet'
+    ).toBeUndefined();
   });
 });
 
@@ -664,16 +694,19 @@ describe('Bundle parity — v2 source/bundle in sync, v1 untouched (TD-210)', ()
     const content = BUNDLED_WORKFLOWS[V2_STEM];
     expect(content, 'bundled v2 workflow must be present').toBeDefined();
     expect(content, 'the regenerated bundle must embed quality-route-loop').toContain(LOOP_ID);
-    expect(content, 'the regenerated bundle must embed verify-quality-summary').toContain(READER_ID);
+    expect(content, 'the regenerated bundle must embed verify-quality-summary').toContain(
+      READER_ID
+    );
     expect(content?.replace(/\r\n/g, '\n')).toBe(readLF(V2_FILE));
   });
 
   it('the bundled v2 no longer embeds the removed code-review-gate route loop', () => {
     const content = BUNDLED_WORKFLOWS[V2_STEM] ?? '';
     // A single route_loop id remains; the old id must be gone from source + bundle.
-    expect(/id:\s*code-review-gate\b/.test(content), 'code-review-gate must be gone from the bundle').toBe(
-      false
-    );
+    expect(
+      /id:\s*code-review-gate\b/.test(content),
+      'code-review-gate must be gone from the bundle'
+    ).toBe(false);
   });
 
   it('the v1 baseline gains no reader/route-loop node (proves it was not edited)', () => {
@@ -707,7 +740,9 @@ describe('Test registration — mock isolation preserved (TD-211)', () => {
   it('the route-loop DAG test is registered as its OWN standalone bun invocation', () => {
     const pkg = readLF(PACKAGE_JSON) as string;
     const testScript = (JSON.parse(pkg) as { scripts?: { test?: string } }).scripts?.test ?? '';
-    expect(testScript, 'the DAG fixture must be registered').toContain('v2-quality-route-loop-dag.test.ts');
+    expect(testScript, 'the DAG fixture must be registered').toContain(
+      'v2-quality-route-loop-dag.test.ts'
+    );
     const segments = testScript.split('&&').map(s => s.trim());
     const owning = segments.filter(s => s.includes('v2-quality-route-loop-dag.test.ts'));
     expect(owning.length, 'exactly one segment must own the DAG fixture').toBe(1);
@@ -742,7 +777,9 @@ describe('Naming conventions — kebab-case ids, no plan references (TD-212)', (
       const offending = (body as string)
         .split('\n')
         .filter(line => planRef.test(line) && !line.includes('CANONICAL_REF'));
-      expect(offending, `${f} must not embed plan identifiers: ${offending[0] ?? ''}`).toHaveLength(0);
+      expect(offending, `${f} must not embed plan identifiers: ${offending[0] ?? ''}`).toHaveLength(
+        0
+      );
     }
   });
 });

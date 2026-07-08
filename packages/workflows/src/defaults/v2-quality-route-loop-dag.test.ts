@@ -439,9 +439,12 @@ function roleGate(node: string, overrides: Record<string, unknown> = {}): Record
   };
 }
 
-const validRvGate = (o: Record<string, unknown> = {}): Record<string, unknown> => roleGate('tea-rv', o);
-const validNrGate = (o: Record<string, unknown> = {}): Record<string, unknown> => roleGate('tea-nr', o);
-const validTrGate = (o: Record<string, unknown> = {}): Record<string, unknown> => roleGate('tea-tr', o);
+const validRvGate = (o: Record<string, unknown> = {}): Record<string, unknown> =>
+  roleGate('tea-rv', o);
+const validNrGate = (o: Record<string, unknown> = {}): Record<string, unknown> =>
+  roleGate('tea-nr', o);
+const validTrGate = (o: Record<string, unknown> = {}): Record<string, unknown> =>
+  roleGate('tea-tr', o);
 
 // Build a full per-node response map. Any entry may be an array (per-round).
 function baseResponses(
@@ -455,7 +458,8 @@ function baseResponses(
 ): Record<string, NodeResponse> {
   return {
     'code-review-auto': overrides.cr ?? validCrEvidence(),
-    'tea-automate': overrides.ta ?? validTaEvidence({ test_files_changed: 3, nfr_relevant: 'true' }),
+    'tea-automate':
+      overrides.ta ?? validTaEvidence({ test_files_changed: 3, nfr_relevant: 'true' }),
     'dev-story': {},
     'tea-rv': overrides.rv ?? validRvGate(),
     'tea-nr': overrides.nr ?? validNrGate(),
@@ -492,7 +496,9 @@ describe('Happy path — first-round PASS routes forward to the PR tail (TD-220)
       nodeResponses: baseResponses(),
     });
 
-    expect(run.nodeState['quality-gate-summary'], 'summary completes on a clean run').toBe('completed');
+    expect(run.nodeState['quality-gate-summary'], 'summary completes on a clean run').toBe(
+      'completed'
+    );
     expect(run.nodeState['verify-quality-summary'], 'the reader completes and emits PASS').toBe(
       'completed'
     );
@@ -503,7 +509,10 @@ describe('Happy path — first-round PASS routes forward to the PR tail (TD-220)
       run.providerCalls.filter(c => c === 'dev-story').length,
       'a first-round PASS must not re-run dev-story'
     ).toBe(1);
-    expect(run.nodeState['review-loop-error'], 'the error node must not run on a PASS').toBeUndefined();
+    expect(
+      run.nodeState['review-loop-error'],
+      'the error node must not run on a PASS'
+    ).toBeUndefined();
   });
 });
 
@@ -531,9 +540,10 @@ describe('Negative-then-recovery — FAIL reruns the fix loop, then PASS proceed
     ).toBe(2);
     // resolve-story-input is off the back-edge path, so its cached story_ref is
     // reused unchanged across both rounds (AC #1: same story_ref every round).
-    expect(run.nodeState['resolve-story-input'], 'the resolved story input is reused, not re-run').toBe(
-      'completed'
-    );
+    expect(
+      run.nodeState['resolve-story-input'],
+      'the resolved story input is reused, not re-run'
+    ).toBe('completed');
     expect(
       run.nodeCompletions['resolve-story-input'],
       'resolve-story-input resolves once and stays cached across rounds'
@@ -541,7 +551,10 @@ describe('Negative-then-recovery — FAIL reruns the fix loop, then PASS proceed
     expect(run.providerCalls, 'the recovered PASS round proceeds forward to the PR tail').toContain(
       'create-pull-request'
     );
-    expect(run.nodeState['review-loop-error'], 'a recovered loop must not hit the error node').toBeUndefined();
+    expect(
+      run.nodeState['review-loop-error'],
+      'a recovered loop must not hit the error node'
+    ).toBeUndefined();
   });
 });
 
@@ -591,7 +604,9 @@ describe('Exhaustion evidence — review-loop-error records findings + round cou
       nodeResponses: baseResponses({ tr: validTrGate({ gate: 'FAIL', findings_count: 1 }) }),
     });
 
-    expect(run.nodeState['review-loop-error'], 'the error node must run on exhaustion').toBe('failed');
+    expect(run.nodeState['review-loop-error'], 'the error node must run on exhaustion').toBe(
+      'failed'
+    );
     const evidence = await readReviewLoopError(run.artifactsDir);
     expect(evidence, 'exhaustion must persist a review-loop-error artifact').not.toBeNull();
     const raw = evidence!.raw;
@@ -634,7 +649,10 @@ describe('ERROR fail-closed — a summary ERROR never reroutes to dev-story (TD-
     expect(run.providerCalls, 'an ERROR must never reach the PR tail').not.toContain(
       'create-pull-request'
     );
-    expect(run.nodeState['review-loop-error'], 'an ERROR is not an exhaustion — no error-node route').toBeUndefined();
+    expect(
+      run.nodeState['review-loop-error'],
+      'an ERROR is not an exhaustion — no error-node route'
+    ).toBeUndefined();
   });
 
   it('identity mismatch (stale story_ref on a role) is an ERROR: summary fails, no reroute, no PR', async () => {
@@ -647,9 +665,10 @@ describe('ERROR fail-closed — a summary ERROR never reroutes to dev-story (TD-
     expect(run.nodeState['quality-gate-summary'], 'story_ref mismatch hard-fails the summary').toBe(
       'failed'
     );
-    expect(run.nodeState['verify-quality-summary'], 'the reader never runs on a failed summary').not.toBe(
-      'completed'
-    );
+    expect(
+      run.nodeState['verify-quality-summary'],
+      'the reader never runs on a failed summary'
+    ).not.toBe('completed');
     expect(
       run.providerCalls.filter(c => c === 'dev-story').length,
       'identity ERROR must not reroute to dev-story'
@@ -698,7 +717,9 @@ describe('Partial failure — a missing upstream contract blocks routing entirel
       nodeResponses: baseResponses({ nr: {} }),
     });
 
-    expect(run.nodeState['tea-nr'], 'the real NR branch with no valid output must fail').toBe('failed');
+    expect(run.nodeState['tea-nr'], 'the real NR branch with no valid output must fail').toBe(
+      'failed'
+    );
     expect(run.nodeState['tea-nr-skipped'], 'the NR skip sibling stays condition-skipped').toBe(
       'skipped'
     );
@@ -732,17 +753,26 @@ describe('Isolation — independent runs do not share loop state or artifacts (T
       exhaustedRun.artifactsDir
     );
     // The PASS run's clean outcome must not leak into the exhausted run and vice versa.
-    expect(passRun.providerCalls, 'the PASS run reaches the PR tail').toContain('create-pull-request');
-    expect(passRun.nodeState['review-loop-error'], 'the PASS run never hits the error node').toBeUndefined();
+    expect(passRun.providerCalls, 'the PASS run reaches the PR tail').toContain(
+      'create-pull-request'
+    );
+    expect(
+      passRun.nodeState['review-loop-error'],
+      'the PASS run never hits the error node'
+    ).toBeUndefined();
     expect(exhaustedRun.providerCalls, 'the exhausted run never reaches the PR tail').not.toContain(
       'create-pull-request'
     );
-    expect(exhaustedRun.nodeState['review-loop-error'], 'the exhausted run hits its own error node').toBe(
-      'failed'
-    );
+    expect(
+      exhaustedRun.nodeState['review-loop-error'],
+      'the exhausted run hits its own error node'
+    ).toBe('failed');
     // Independent exhausted artifacts: the exhausted run has its own error file;
     // the PASS run has none.
-    expect(await readReviewLoopError(exhaustedRun.artifactsDir), 'exhausted run owns its error artifact').not.toBeNull();
+    expect(
+      await readReviewLoopError(exhaustedRun.artifactsDir),
+      'exhausted run owns its error artifact'
+    ).not.toBeNull();
     expect(
       await readReviewLoopError(passRun.artifactsDir),
       'the PASS run must not carry an exhausted-loop artifact'
