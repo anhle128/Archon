@@ -141,9 +141,10 @@ const READER_VALIDATION_SCRIPT = `
   printf '%s' "$GATE"
 `;
 
-// story_ref sentinel kept in a named constant so the naming-hygiene test (TD-212)
-// can exempt this line; the hyphenated slug is not a plan/story identifier.
-const CANONICAL_REF = 'a1-2-preserve-story-input-resolution';
+// Neutral synthetic story reference — not a real plan, story, epic, or finding
+// identifier. Uses x1- prefix to satisfy resolve-story-input's key pattern
+// ([a-z][a-z0-9]*-[0-9]+-) without matching the naming-hygiene guard (a[0-9]).
+const CANONICAL_REF = 'x1-0-synthetic-quality-ref';
 
 interface ReaderResult {
   code: number;
@@ -770,13 +771,11 @@ describe('Naming conventions — kebab-case ids, no plan references (TD-212)', (
     // Forbidden: epic/story codes, architecture decision/req codes, risk/waiver/
     // concern codes, and predecessor finding codes. Allowed: TD-nnn / AC#.
     const planRef =
-      /\b(A[0-9]\.[0-9]|A-FR-[0-9]|A-AD-[0-9]|R-0[0-9][0-9]|W-00[0-9]|C-0[0-9][0-9]|R[0-9]-F[0-9]|a[0-9]\.[0-9])\b/;
+      /\b(A[0-9]\.[0-9]|A-FR-[0-9]|A-AD-[0-9]|R-0[0-9][0-9]|W-00[0-9]|C-0[0-9][0-9]|R[0-9]-F[0-9]|a[0-9][-.][0-9])\b/;
     for (const f of files) {
       const body = readLF(join(import.meta.dir, f));
       expect(body, `${f} must exist`).not.toBeNull();
-      const offending = (body as string)
-        .split('\n')
-        .filter(line => planRef.test(line) && !line.includes('CANONICAL_REF'));
+      const offending = (body as string).split('\n').filter(line => planRef.test(line));
       expect(offending, `${f} must not embed plan identifiers: ${offending[0] ?? ''}`).toHaveLength(
         0
       );

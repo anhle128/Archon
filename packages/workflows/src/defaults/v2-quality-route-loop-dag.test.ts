@@ -75,7 +75,7 @@ const V2_FILE = join(
 );
 
 const V2_STEM = 'bmad-dev-story-with-tea-fix-loop-v2';
-const CANONICAL_REF = 'a1-2-preserve-story-input-resolution';
+const CANONICAL_REF = 'x1-0-synthetic-quality-ref';
 
 // The real route_loop budget in the v2 YAML. Exhaustion happens on the
 // (budget + 1)-th FAIL evaluation. Kept in sync with the contract test's
@@ -612,9 +612,11 @@ describe('Exhaustion evidence — review-loop-error records findings + round cou
     const raw = evidence!.raw;
     expect(raw, 'the artifact must point at the open findings file').toContain('open-findings.md');
     expect(raw, 'the artifact must point at the decision log').toContain('decision-log');
+    const parsed = JSON.parse(raw) as { round?: unknown };
+    const roundNum = Number(parsed.round);
     expect(
-      /round|iteration/i.test(raw),
-      'the artifact must record a round or iteration count'
+      Number.isInteger(roundNum) && roundNum > 0,
+      `the artifact must record a positive integer round (got: ${JSON.stringify(parsed.round)})`
     ).toBe(true);
   });
 });

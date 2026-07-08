@@ -59,8 +59,8 @@ so that the v2 workflow has exactly one quality routing authority and tooling/co
 
 ### Review Findings
 
-- [ ] [Review][Patch] `review-loop-error` records `round: "0"` instead of reading the actual active round from `state.json` because the `bun -e` snippet reads `process.env.RLE_STATE` but the shell command never sets `RLE_STATE="$STATE"` [.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:946].
-- [ ] [Review][Patch] The new route-loop tests embed a real story key and their naming-hygiene guard exempts it, despite the story rule that code and test artifacts must not carry plan, story, epic, or finding identifiers [packages/workflows/src/defaults/v2-quality-route-loop-contract.test.ts:146].
+- [x] [Review][Patch] `review-loop-error` records `round: "0"` instead of reading the actual active round from `state.json` because the `bun -e` snippet reads `process.env.RLE_STATE` but the shell command never sets `RLE_STATE="$STATE"` [.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:946].
+- [x] [Review][Patch] The new route-loop tests embed a real story key and their naming-hygiene guard exempts it, despite the story rule that code and test artifacts must not carry plan, story, epic, or finding identifiers [packages/workflows/src/defaults/v2-quality-route-loop-contract.test.ts:146].
 
 ## Dev Notes
 
@@ -249,3 +249,17 @@ Qoder (Claude Sonnet 4 via Claude Code SDK)
 - `_bmad-output/test-artifacts/atdd-checklist-a4-2-route-quality-loop-and-error-paths.md` — Prettier format fix
 - `_bmad-output/test-artifacts/test-design-progress.md` — Prettier format fix
 - `_bmad-output/test-artifacts/test-design/test-design-a4-2-route-quality-loop-and-error-paths.md` — Prettier format fix
+
+### Fix Pass (Round 2)
+
+Applied fixes for two CR findings (R1-F1 High, R1-F2 Medium).
+
+**R1-F1 fix**: Added `RLE_STATE="$STATE"` env var prefix to the `bun -e` command in `review-loop-error` so the Bun process receives the state file path.
+Tightened TD-223 to parse `review-loop-error.json` and assert the round field is a positive integer (not just that the word "round" appears).
+
+**R1-F2 fix**: Replaced real story key `a1-2-preserve-story-input-resolution` with neutral synthetic `x1-0-synthetic-quality-ref` in both route-loop test files.
+The `x1-0-` prefix satisfies `resolve-story-input`'s awk key pattern (`[a-z][a-z0-9]*-[0-9]+-`) without matching the naming-hygiene guard (`a[0-9][-.][0-9]`).
+Removed the `!line.includes('CANONICAL_REF')` exemption from the guard.
+Broadened the guard regex from `a[0-9]\.[0-9]` to `a[0-9][-.][0-9]` to catch both dotted and hyphenated story identifiers.
+
+**Validation**: Contract 47/47 pass, DAG 9 pass + 1 skip, `bun run validate` exit 0.

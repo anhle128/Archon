@@ -943,7 +943,7 @@ nodes:
 
       ROUND="unknown"
       if [ -f "$STATE" ]; then
-        ROUND=$(bun -e 'try{const s=JSON.parse(require("fs").readFileSync(process.env.RLE_STATE,"utf-8"));process.stdout.write(String(s.round??0))}catch{process.stdout.write("0")}' 2>/dev/null || echo "unknown")
+        ROUND=$(RLE_STATE="$STATE" bun -e 'try{const s=JSON.parse(require("fs").readFileSync(process.env.RLE_STATE,"utf-8"));process.stdout.write(String(s.round??0))}catch{process.stdout.write("0")}' 2>/dev/null || echo "unknown")
         echo "State: $STATE"
         cat "$STATE"
       fi
