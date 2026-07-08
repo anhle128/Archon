@@ -1,6 +1,6 @@
 # Story a5.1: Orchestrate Decision Needed Follow-Up
 
-Status: done
+Status: in-progress
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -79,6 +79,10 @@ Deferred ACs (#5, #6) are the epic's live-integration criteria; they are BLOCKED
 - [x] **Task 7 — Regenerate bundle + validate (AC: #1, #7)**
   - [x] `bun run generate:bundled` to refresh `packages/workflows/src/defaults/bundled-defaults.generated.ts`; then `bun run check:bundled` to confirm no drift.
   - [x] Run the two new tests (`bun test packages/workflows/src/defaults/v2-decision-needed-contract.test.ts` and the isolated `...-dag.test.ts`); then `bun run validate` before finishing.
+
+### Review Findings
+
+- [ ] [Review][Patch] R1-F1 — `decision-needed-check` coerces malformed `decision_needed_count` values to `0`, allowing a false no-op PASS instead of failing closed. [.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:990]
 
 ## Dev Notes
 
