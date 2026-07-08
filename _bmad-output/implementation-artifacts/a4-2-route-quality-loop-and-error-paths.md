@@ -1,6 +1,6 @@
 # Story a4.2: Route Quality Loop And Error Paths
 
-Status: done
+Status: in-progress
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -56,6 +56,11 @@ so that the v2 workflow has exactly one quality routing authority and tooling/co
 - [x] **Task 7 — Regenerate bundle + validate (AC: #5, #6)**
   - [x] `bun run generate:bundled` to refresh `packages/workflows/src/defaults/bundled-defaults.generated.ts`; then `bun run check:bundled` to confirm no drift.
   - [x] `bun test packages/workflows/src/defaults/v2-quality-route-loop-contract.test.ts` and the isolated `...-dag.test.ts`; then `bun run validate` before finishing.
+
+### Review Findings
+
+- [ ] [Review][Patch] `review-loop-error` records `round: "0"` instead of reading the actual active round from `state.json` because the `bun -e` snippet reads `process.env.RLE_STATE` but the shell command never sets `RLE_STATE="$STATE"` [.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:946].
+- [ ] [Review][Patch] The new route-loop tests embed a real story key and their naming-hygiene guard exempts it, despite the story rule that code and test artifacts must not carry plan, story, epic, or finding identifiers [packages/workflows/src/defaults/v2-quality-route-loop-contract.test.ts:146].
 
 ## Dev Notes
 
