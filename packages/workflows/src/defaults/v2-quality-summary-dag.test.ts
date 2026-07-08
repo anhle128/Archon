@@ -363,8 +363,9 @@ async function readSummaryContract(artifactsDir: string): Promise<Record<string,
 // ── Evidence builders ──────────────────────────────────────────────────────
 
 // CR is the only role carrying `round` — the summary sources its round from it.
-// CR gate must be PASS/CONCERNS to clear verify-story-identity + code-review-gate
-// and reach the aggregator (FAIL loops back to dev-story, ERROR hard-fails).
+// CR gate must be PASS/CONCERNS to clear verify-story-identity (ERROR hard-fails).
+// CR FAIL flows through the TEA branches to the aggregator (summary emits FAIL,
+// the quality route Loop then routes back to dev-story).
 function validCrEvidence(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     contract_version: '1.0',
@@ -646,14 +647,13 @@ describe('Multi-blocker — several role FAILs sum into blocking_count (TD-114)'
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('Blocking CR — intercepted by the review loop, not the aggregator (TD-110)', () => {
-  // WHY SKIPPED: a CR gate:"FAIL" is routed to the dev-story fix loop by
-  // code-review-gate (negative route), and a CR gate:"ERROR" hard-fails at
-  // verify-story-identity. Neither ever reaches quality-gate-summary, so a
-  // "cr_gate:FAIL → summary FAIL" path cannot be driven through the real DAG
-  // without faking the review loop. The aggregator's cr_gate-FAIL blocking
-  // policy is proven at the arithmetic level in the contract test (TD-150,
-  // "multiple FAIL roles"). ACTIVATE this scaffold only if the workflow is ever
-  // rewired so a non-PASS CR reaches the aggregator directly.
+  // WHY SKIPPED: a CR gate:"FAIL" flows through gate-planner and the TEA branches
+  // to quality-gate-summary (the old code-review-gate short-circuit was removed),
+  // and the quality-route-loop then routes the FAIL back to dev-story. A CR
+  // gate:"ERROR" hard-fails at verify-story-identity. The aggregator's cr_gate-FAIL
+  // blocking policy is proven at the arithmetic level in the contract test (TD-150,
+  // "multiple FAIL roles"). ACTIVATE this scaffold only if a dedicated CR-FAIL
+  // DAG fixture is added to the route-loop test suite.
   it.skip('cr_gate FAIL → summary FAIL (unreachable: CR FAIL loops back to dev-story)', () => {
     expect(true).toBe(false);
   });

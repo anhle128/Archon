@@ -310,10 +310,10 @@ describe('tea-tr join — fail-closed and scope-bounded (TD-010)', () => {
     expect('bash' in trSkipped!, 'tea-tr-skipped must be a bash node').toBe(true);
   });
 
-  it('create-pull-request depends on quality-gate-summary barrier (fail-closed before PR)', () => {
+  it('create-pull-request depends on quality-route-loop (the single quality routing authority)', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     expect([...nodeById(v2, 'create-pull-request')!.depends_on].sort()).toEqual(
-      ['quality-gate-summary'].sort()
+      ['quality-route-loop'].sort()
     );
   });
 });
@@ -421,30 +421,19 @@ describe('TR when: conditions — paired inverse boolean atoms (TD-022)', () => 
 // TD-011 [P1] — route-loop configuration unchanged
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe('Route-loop integrity — code-review-gate unchanged (TD-011)', () => {
-  it('code-review-gate route_loop still routes positive→gate-planner and no when/trigger_rule/retry leaked in', () => {
+describe('Route-loop integrity — single quality route loop replaces code-review-gate (TD-011)', () => {
+  it('code-review-gate is removed and quality-route-loop is the single route_loop node', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
-    const gate = nodeById(v2, 'code-review-gate') as {
-      route_loop?: { routes?: { positive?: string; negative?: string } };
-      when?: string;
-      trigger_rule?: string;
-      retry?: unknown;
-    };
-    expect(gate.route_loop, 'code-review-gate must remain a route_loop node').toBeDefined();
-    expect(
-      gate.route_loop!.routes?.positive,
-      'positive branch must still target gate-planner'
-    ).toBe('gate-planner');
-    expect(gate.when, 'loader forbids when: on route_loop nodes').toBeUndefined();
-    expect(gate.trigger_rule).toBeUndefined();
-    expect(gate.retry).toBeUndefined();
+    expect(nodeById(v2, 'code-review-gate'), 'code-review-gate must be removed').toBeUndefined();
+    const routeLoopIds = v2.nodes.filter(n => 'route_loop' in (n as object)).map(n => n.id);
+    expect(routeLoopIds, 'exactly one route_loop node must exist').toEqual(['quality-route-loop']);
   });
 
-  it('gate-planner is unchanged — still a bash node depending on code-review-gate', () => {
+  it('gate-planner depends on verify-story-identity (the retained CR identity barrier)', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     const gp = nodeById(v2, 'gate-planner')!;
     expect('bash' in gp).toBe(true);
-    expect(gp.depends_on).toEqual(['code-review-gate']);
+    expect(gp.depends_on).toEqual(['verify-story-identity']);
   });
 });
 

@@ -696,8 +696,12 @@ describe('TR gate FAIL — schema-valid, aggregator emits FAIL summary (TD-043)'
     ).toBe('completed');
     expect(
       run.providerCalls,
-      'the aggregator only emits the contract; routing on FAIL is a later story, so PR is still reached'
-    ).toContain('create-pull-request');
+      'FAIL summary routes negative to dev-story (loop iterates), PR is NOT reached'
+    ).not.toContain('create-pull-request');
+    expect(
+      run.providerCalls.filter(c => c === 'dev-story').length,
+      'FAIL causes the quality loop to re-enter dev-story'
+    ).toBeGreaterThan(1);
   });
 
   it('tea-tr gate:"ERROR" completes tea-tr but quality-gate-summary blocks PR', async () => {

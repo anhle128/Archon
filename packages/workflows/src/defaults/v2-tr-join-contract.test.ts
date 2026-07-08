@@ -291,12 +291,12 @@ describe('tea-tr-skipped hygiene — timeout + typed-output + artifact write (TD
 // (AC #2, #3, #4)
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe('PR tail — resolves through quality-gate-summary barrier (TD-027)', () => {
-  it('create-pull-request depends on quality-gate-summary (not directly on TR branches)', () => {
+describe('PR tail — resolves through quality-route-loop routing authority (TD-027)', () => {
+  it('create-pull-request depends on quality-route-loop (the single quality routing authority)', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     const deps = nodeById(v2, 'create-pull-request')!.depends_on ?? [];
-    expect(deps, 'PR tail must depend on the quality-gate-summary barrier').toEqual([
-      'quality-gate-summary',
+    expect(deps, 'PR tail must depend on the quality-route-loop routing authority').toEqual([
+      'quality-route-loop',
     ]);
   });
 });
@@ -566,25 +566,23 @@ describe('Test isolation — TR-join DAG fixture runs standalone (TD-039)', () =
 // TD-040 [P2] — route_loop / gate-planner / v1 stay out of scope
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe('Blast-radius guard — upstream + planner unchanged (TD-040)', () => {
-  it('gate-planner is unchanged — bash node depending on code-review-gate, still emitting run_tr', () => {
+describe('Blast-radius guard — upstream + planner wiring (TD-040)', () => {
+  it('gate-planner is a bash node depending on verify-story-identity, still emitting run_tr', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     const gp = nodeById(v2, 'gate-planner') as { bash?: string; depends_on?: string[] };
     expect('bash' in (gp as object), 'gate-planner must remain a bash node').toBe(true);
-    expect(gp.depends_on, 'gate-planner must still depend on code-review-gate').toEqual([
-      'code-review-gate',
+    expect(gp.depends_on, 'gate-planner must depend on verify-story-identity').toEqual([
+      'verify-story-identity',
     ]);
     expect(gp.bash, 'gate-planner must still emit run_tr').toContain('run_tr');
     expect(gp.bash, 'gate-planner must still emit reason_tr').toContain('reason_tr');
   });
 
-  it('code-review-gate remains a route_loop routing positive→gate-planner', () => {
+  it('quality-route-loop is the single route_loop replacing the removed code-review-gate', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
-    const gate = nodeById(v2, 'code-review-gate') as {
-      route_loop?: { routes?: { positive?: string } };
-    };
-    expect(gate.route_loop, 'code-review-gate must remain a route_loop node').toBeDefined();
-    expect(gate.route_loop!.routes?.positive).toBe('gate-planner');
+    expect(nodeById(v2, 'code-review-gate'), 'code-review-gate must be removed').toBeUndefined();
+    const routeLoopIds = v2.nodes.filter(n => 'route_loop' in (n as object)).map(n => n.id);
+    expect(routeLoopIds, 'exactly one route_loop must exist').toEqual(['quality-route-loop']);
   });
 });
 

@@ -410,7 +410,7 @@ describe('A2.1 — v2 DAG DS→TA→CR sequence (mocked-provider harness)', () =
       ).toBe('skipped');
     }
 
-    // Nodes downstream of a skipped route_loop (code-review-gate) may have no event
+    // Nodes downstream of the skipped gate-planner may have no event
     // emitted (undefined) or be explicitly skipped — what matters is they NEVER completed.
     for (const nodeId of ['tea-rv', 'tea-nr', 'tea-tr', 'create-pull-request']) {
       expect(
@@ -455,10 +455,10 @@ describe('A2.1 — v2 DAG DS→TA→CR sequence (mocked-provider harness)', () =
     // The guard bash node must fail (story_ref mismatch → bash exits 1)
     expect(run.nodeState['verify-story-identity']).toBe('failed');
 
-    // code-review-gate depends on verify-story-identity (all_success) → skipped.
-    // Because code-review-gate is SKIPPED, the route_loop fires NEITHER the positive
-    // (tea-rv) NOR the negative (dev-story) route. Identity errors are not quality work.
-    expect(run.nodeState['code-review-gate']).toBe('skipped');
+    // gate-planner depends on verify-story-identity (all_success) → skipped.
+    // Because gate-planner is SKIPPED, downstream TEA branches and the quality loop
+    // never activate. Identity errors are not quality work.
+    expect(run.nodeState['gate-planner']).toBe('skipped');
 
     // The run must be marked failed by the executor (verify-story-identity failure
     // causes dag-executor to call failWorkflowRun — it does not throw).
@@ -583,10 +583,10 @@ describe('A2.1 — v2 DAG DS→TA→CR sequence (mocked-provider harness)', () =
       'verify-story-identity must be skipped when code-review-auto fails'
     ).toBe('skipped');
 
-    // code-review-gate depends on verify-story-identity → SKIPPED
+    // gate-planner depends on verify-story-identity → SKIPPED
     expect(
-      run.nodeState['code-review-gate'],
-      'code-review-gate must be skipped when verify-story-identity is skipped'
+      run.nodeState['gate-planner'],
+      'gate-planner must be skipped when verify-story-identity is skipped'
     ).toBe('skipped');
 
     // dev-story invoked exactly once (initial run only — not re-entered via negative route)
@@ -628,10 +628,10 @@ describe('A2.1 — v2 DAG DS→TA→CR sequence (mocked-provider harness)', () =
       'verify-story-identity must fail when gate is ERROR'
     ).toBe('failed');
 
-    // code-review-gate SKIPPED (depends on failed verify-story-identity)
+    // gate-planner SKIPPED (depends on failed verify-story-identity)
     expect(
-      run.nodeState['code-review-gate'],
-      'code-review-gate must be skipped when verify-story-identity fails'
+      run.nodeState['gate-planner'],
+      'gate-planner must be skipped when verify-story-identity fails'
     ).toBe('skipped');
 
     // dev-story invoked exactly once (no re-entry via negative route)
