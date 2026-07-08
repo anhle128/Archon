@@ -1,6 +1,6 @@
 # Story a4.2: Route Quality Loop And Error Paths
 
-Status: in-progress
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
