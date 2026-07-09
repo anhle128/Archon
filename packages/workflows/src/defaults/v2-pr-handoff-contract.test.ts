@@ -863,6 +863,12 @@ describe('Skipped-TR rendering — technique proof (TD-415b)', () => {
           report_file: null,
         },
       },
+      gate_plan: {
+        run_rv: false,
+        run_nr: true,
+        run_tr: false,
+        artifact_file: `${ARTIFACTS_DIR}/bmad-dev-story-with-tea-fix-loop/gate-planner.json`,
+      },
     });
     const r = await renderHandoff(JSON.stringify(handoff));
     expect(r.code, 'rendering should succeed').toBe(0);
@@ -876,6 +882,16 @@ describe('Skipped-TR rendering — technique proof (TD-415b)', () => {
     expect(rvRow!, 'RV row must link to skipped gate JSON').toContain('tea-rv-skipped.gate.json');
     expect(trRow!, 'TR row must show tea-tr-skipped source').toContain('tea-tr-skipped');
     expect(trRow!, 'TR row must link to skipped gate JSON').toContain('tea-tr-skipped.gate.json');
+
+    expect(r.stdout, 'gate-plan must render RV as skipped (coherent with gate result)').toContain(
+      'RV (test review): skipped'
+    );
+    expect(r.stdout, 'gate-plan must render TR as skipped (coherent with gate result)').toContain(
+      'TR (traceability): skipped'
+    );
+    expect(r.stdout, 'gate-plan must render NR as executed (coherent with gate result)').toContain(
+      'NR (NFR review): executed'
+    );
   });
 });
 
@@ -889,104 +905,23 @@ describe('Skipped-TR rendering — technique proof (TD-415b)', () => {
 // artifact paths. (AC #1)
 // ═══════════════════════════════════════════════════════════════════════════
 
-const COLLECTOR_SCRIPT = `
-  set -e
-  RV_OUT="\${RV_REAL:-\$RV_SKIP}"
-  NR_OUT="\${NR_REAL:-\$NR_SKIP}"
-  TR_OUT="\${TR_REAL:-\$TR_SKIP}"
+// TD-415c collector script is derived from the actual YAML node body at test
+// time (see extractCollectorScript below) to prevent drift between the test
+// harness and the production workflow node.
 
-  if [ -z "$RV_OUT" ]; then echo "ERROR: no resolved RV contract." >&2; exit 1; fi
-  if [ -z "$NR_OUT" ]; then echo "ERROR: no resolved NR contract." >&2; exit 1; fi
-  if [ -z "$TR_OUT" ]; then echo "ERROR: no resolved TR contract." >&2; exit 1; fi
-
-  RV_SOURCE="tea-rv"
-  if [ -z "$RV_REAL" ]; then RV_SOURCE="tea-rv-skipped"; fi
-  NR_SOURCE="tea-nr"
-  if [ -z "$NR_REAL" ]; then NR_SOURCE="tea-nr-skipped"; fi
-  TR_SOURCE="tea-tr"
-  if [ -z "$TR_REAL" ]; then TR_SOURCE="tea-tr-skipped"; fi
-
-  HANDOFF=$(
-    PH_REF="$RESOLVED_REF" \\
-    PH_SUMMARY="$SUMMARY" \
-    PH_DNC="$DNC" \
-    PH_CR="$CR" \
-    PH_GP="$GP" \
-    PH_RV="$RV_OUT" PH_RV_SRC="$RV_SOURCE" \
-    PH_NR="$NR_OUT" PH_NR_SRC="$NR_SOURCE" \
-    PH_TR="$TR_OUT" PH_TR_SRC="$TR_SOURCE" \
-    PH_ARTIFACTS_DIR="$ARTIFACTS_DIR" \
-    bun -e '
-      const ref = process.env.PH_REF;
-      const artifactsDir = process.env.PH_ARTIFACTS_DIR || "";
-      const runFile = (name) => artifactsDir + "/bmad-dev-story-with-tea-fix-loop/" + name;
-      const nodeFile = (name) => artifactsDir + "/nodes/" + name;
-      function parse(raw, label) {
-        let c;
-        try { c = JSON.parse(raw); } catch { throw new Error(label + " is not valid JSON"); }
-        if (!c.story_ref || c.story_ref !== ref) throw new Error(label + " story_ref mismatch: " + c.story_ref + " !== " + ref);
-        return c;
-      }
-      function gateArtifact(source) {
-        if (source === "code-review-auto") return nodeFile("code-review-auto.md");
-        if (source === "tea-rv") return nodeFile("test-review-findings.md");
-        if (source === "tea-rv-skipped") return runFile("tea-rv-skipped.gate.json");
-        if (source === "tea-nr") return nodeFile("nfr-findings.md");
-        if (source === "tea-nr-skipped") return runFile("tea-nr-skipped.gate.json");
-        if (source === "tea-tr") return nodeFile("trace-findings.md");
-        if (source === "tea-tr-skipped") return runFile("tea-tr-skipped.gate.json");
-        throw new Error("unknown gate source: " + source);
-      }
-      const summary = parse(process.env.PH_SUMMARY, "quality-gate-summary");
-      const dnCheck = parse(process.env.PH_DNC, "decision-needed-check");
-      const cr = parse(process.env.PH_CR, "code-review-auto");
-      const gp = parse(process.env.PH_GP, "gate-planner");
-      const rv = parse(process.env.PH_RV, "RV");
-      const nr = parse(process.env.PH_NR, "NR");
-      const tr = parse(process.env.PH_TR, "TR");
-      const rvSrc = process.env.PH_RV_SRC;
-      const nrSrc = process.env.PH_NR_SRC;
-      const trSrc = process.env.PH_TR_SRC;
-
-      const handoff = {
-        contract_version: "1.0",
-        workflow: "bmad-dev-story-with-tea-fix-loop-v2",
-        node: "pr-handoff",
-        story_ref: ref,
-        status: "PASS",
-        quality_summary: {
-          gate: summary.gate,
-          round: summary.round,
-          blocking_count: summary.blocking_count,
-          decision_needed_count: summary.decision_needed_count,
-          findings_total: summary.findings_total,
-          artifact_file: runFile("quality-gate-summary.json")
-        },
-        gates: {
-          cr: { gate: cr.gate, source: "code-review-auto", findings_count: cr.findings_count, artifact_file: gateArtifact("code-review-auto"), report_file: cr.report_file || null },
-          rv: { gate: rv.gate, source: rvSrc, findings_count: rv.findings_count, artifact_file: gateArtifact(rvSrc), report_file: rv.report_file || null },
-          nr: { gate: nr.gate, source: nrSrc, findings_count: nr.findings_count, artifact_file: gateArtifact(nrSrc), report_file: nr.report_file || null },
-          tr: { gate: tr.gate, source: trSrc, findings_count: tr.findings_count, artifact_file: gateArtifact(trSrc), report_file: tr.report_file || null }
-        },
-        gate_plan: {
-          run_rv: gp.run_rv,
-          run_nr: gp.run_nr,
-          run_tr: gp.run_tr,
-          artifact_file: runFile("gate-planner.json")
-        },
-        decision_needed: {
-          deferred: dnCheck.deferred,
-          deferred_count: dnCheck.deferred_count,
-          deferred_items: dnCheck.deferred_items || [],
-          artifact_file: runFile("decision-needed.json")
-        }
-      };
-
-      process.stdout.write(JSON.stringify(handoff));
-    '
-  )
-  printf '%s' "$HANDOFF"
-`;
+function extractCollectorScript(): string {
+  const v2 = parseFromDisk(V2_FILE, V2_STEM);
+  const bash = nodeBash(v2, NODE_ID);
+  const startMarker = 'RV_OUT="${RV_REAL:-$RV_SKIP}"';
+  const endMarker = 'printf \'%s\' "$HANDOFF"';
+  const startIdx = bash.indexOf(startMarker);
+  const endIdx = bash.indexOf(endMarker);
+  expect(startIdx, 'node body must contain RV_OUT= selection logic').toBeGreaterThan(-1);
+  expect(endIdx, 'node body must contain printf handoff output').toBeGreaterThan(-1);
+  expect(endIdx, 'printf must come after RV_OUT=').toBeGreaterThan(startIdx);
+  const collectorBody = bash.slice(startIdx, endIdx + endMarker.length);
+  return 'set -e\n' + collectorBody;
+}
 
 interface CollectorResult {
   code: number;
@@ -995,8 +930,9 @@ interface CollectorResult {
 }
 
 const runCollector = async (env: Record<string, string>): Promise<CollectorResult> => {
+  const collectorScript = extractCollectorScript();
   try {
-    const { stdout, stderr } = await execFileAsync('bash', ['-c', COLLECTOR_SCRIPT], {
+    const { stdout, stderr } = await execFileAsync('bash', ['-c', collectorScript], {
       env: { ...process.env, ...env },
     });
     return { code: 0, stdout, stderr };
@@ -1019,6 +955,24 @@ function makeContract(overrides: Record<string, unknown> = {}): string {
 
 describe('Collector-level skipped-TR — shell selection logic (TD-415c)', () => {
   const ARTIFACTS_DIR = '/test/artifacts';
+
+  it('extracted collector script matches the YAML node body (drift guard)', () => {
+    const script = extractCollectorScript();
+    for (const pattern of [
+      'RV_OUT="${RV_REAL:-$RV_SKIP}"',
+      'NR_OUT="${NR_REAL:-$NR_SKIP}"',
+      'TR_OUT="${TR_REAL:-$TR_SKIP}"',
+      'RV_SOURCE="tea-rv"',
+      'TR_SOURCE="tea-tr-skipped"',
+      'gateArtifact',
+      'tea-tr-skipped.gate.json',
+      'story_ref mismatch',
+      'process.stdout.write(JSON.stringify(handoff))',
+    ]) {
+      expect(script, `extracted collector must contain: ${pattern}`).toContain(pattern);
+    }
+  });
+
   const baseEnv = {
     RESOLVED_REF: CANONICAL_REF,
     SUMMARY: makeContract({
@@ -1042,7 +996,7 @@ describe('Collector-level skipped-TR — shell selection logic (TD-415c)', () =>
       story_ref: CANONICAL_REF,
       run_rv: false,
       run_nr: true,
-      run_tr: true,
+      run_tr: false,
     }),
     RV_REAL: '',
     RV_SKIP: makeContract({
@@ -1097,7 +1051,7 @@ describe('Collector-level skipped-TR — shell selection logic (TD-415c)', () =>
     );
   });
 
-  it('collector emits full envelope with correct story_ref', async () => {
+  it('collector emits full envelope with correct story_ref and coherent gate_plan', async () => {
     const r = await runCollector(baseEnv);
     expect(r.code, 'collector must succeed').toBe(0);
 
@@ -1107,6 +1061,31 @@ describe('Collector-level skipped-TR — shell selection logic (TD-415c)', () =>
     expect(handoff.node).toBe('pr-handoff');
     expect(handoff.story_ref).toBe(CANONICAL_REF);
     expect(handoff.status).toBe('PASS');
+    const gp = handoff.gate_plan as { run_rv: boolean; run_nr: boolean; run_tr: boolean };
+    expect(gp.run_rv, 'gate_plan.run_rv must be false (RV skipped)').toBe(false);
+    expect(gp.run_nr, 'gate_plan.run_nr must be true (NR real)').toBe(true);
+    expect(gp.run_tr, 'gate_plan.run_tr must be false (TR skipped)').toBe(false);
+  });
+
+  it('collector JSON renders Markdown with coherent gate-plan line (TR skipped)', async () => {
+    const r = await runCollector(baseEnv);
+    expect(r.code, 'collector must succeed').toBe(0);
+
+    const handoffJson = r.stdout;
+    const rendered = await renderHandoff(handoffJson);
+    expect(rendered.code, 'rendering should succeed').toBe(0);
+    expect(rendered.stdout, 'gate-plan must render TR as skipped').toContain(
+      'TR (traceability): skipped'
+    );
+    expect(rendered.stdout, 'gate-plan must render RV as skipped').toContain(
+      'RV (test review): skipped'
+    );
+    expect(rendered.stdout, 'gate-plan must render NR as executed').toContain(
+      'NR (NFR review): executed'
+    );
+    expect(rendered.stdout, 'gate results must show tea-tr-skipped source').toContain(
+      'tea-tr-skipped'
+    );
   });
 
   it('both RV and TR empty → collector fails closed (no resolved contract)', async () => {
