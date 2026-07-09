@@ -1,6 +1,6 @@
 # Story a5.2: Generate PR Handoff With Evidence Links
 
-Status: complete
+Status: in-progress
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -110,6 +110,7 @@ AC #2 is implementable as a rendering template and fixture-testable against synt
 - [x] [Review][Patch] Make TD-415 actually prove the requested skipped-TR branch path [packages/workflows/src/defaults/v2-pr-handoff-dag.test.ts:722]
 - [x] [Review][Patch] Normalize newline and carriage-return characters in deferred-item Markdown table cells [.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:1205]
 - [x] [Review][Patch] Add collector-level skipped-TR coverage for `pr-handoff` source selection [packages/workflows/src/defaults/v2-pr-handoff-contract.test.ts:792]
+- [ ] [Review][Patch] Make skipped-TR collector proof use a coherent gate-plan fixture and guard against copied-script drift [packages/workflows/src/defaults/v2-pr-handoff-contract.test.ts:892]
 
 ## Dev Notes
 
