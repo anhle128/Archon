@@ -1,73 +1,44 @@
-# generated: 2026-06-30 10:50:10 +0700
-# last_updated: 2026-07-08 16:59:51 +0700
+# generated: 2026-07-09 10:30:00 +0700
+# last_updated: 2026-07-09
 # project: Archon
 # project_key: NOKEY
 # tracking_system: file-system
-# story_location: /Users/dale/Desktop/workspace/OceanLabs/workflow-engine/Archon/_bmad-output/implementation-artifacts
+# active_plan: Hermes Agent Workflow Commander
+# story_location: archon/_bmad-output/implementation-artifacts
+#
+# This tracker replaces the misaligned BMAD TEA V2 tracker.
+# Do not resume Archon implementation from a1/a2/a3/a4/a5/a6 TEA story keys.
+# All Workflow Commander stories stay backlog until the shared contract fixtures exist locally.
 
-# STATUS DEFINITIONS:
-# ==================
-# Epic Status:
-#   - backlog: Epic not yet started
-#   - in-progress: Epic actively being worked on
-#   - done: All stories in epic completed
-#
-# Epic Status Transitions:
-#   - backlog -> in-progress: Automatically when first story is created via create-story
-#   - in-progress -> done: Manually when all stories reach 'done' status
-#
-# Story Status:
-#   - backlog: Story only exists in epic file
-#   - ready-for-dev: Story file created in stories folder
-#   - in-progress: Developer actively working on implementation
-#   - review: Ready for code review via Dev's code-review workflow
-#   - done: Story completed
-#
-# Retrospective Status:
-#   - optional: Can be completed but not required
-#   - done: Retrospective has been completed
-#
-# Action Item Status:
-#   - open: Committed during a retrospective, not yet addressed
-#   - in-progress: Actively being worked on
-#   - done: Completed
-#
-# WORKFLOW NOTES:
-# ===============
-# - Epic transitions to 'in-progress' automatically when first story is created
-# - Stories can be worked in parallel if team capacity allows
-# - Developer typically creates next story after previous one is 'done' to incorporate learnings
-# - Dev moves story to 'review', then runs code-review in a fresh context
-# - Retrospective appends its action items to action_items; sprint-status surfaces open ones
-
-generated: "2026-06-30 10:50:10 +0700"
+generated: "2026-07-09 10:30:00 +0700"
 last_updated: "2026-07-09"
 project: Archon
 project_key: NOKEY
 tracking_system: file-system
-story_location: /Users/dale/Desktop/workspace/OceanLabs/workflow-engine/Archon/_bmad-output/implementation-artifacts
+active_plan: Hermes Agent Workflow Commander
+story_location: archon/_bmad-output/implementation-artifacts
 
 development_status:
-  epic-a1: in-progress
-  a1-1-add-versioned-v2-workflow-baseline: done
-  a1-2-preserve-story-input-resolution: done
-  epic-a1-retrospective: optional
-  epic-a2: in-progress
-  a2-1-wire-ds-ta-cr-sequence: done
-  epic-a2-retrospective: optional
-  epic-a3: in-progress
-  a3-1-add-gate-planner-flags: done
-  a3-2-wire-rv-and-nr-sibling-branches: done
-  a3-3-join-tr-as-final-gate: done
-  epic-a3-retrospective: optional
-  epic-a4: in-progress
-  a4-1-aggregate-quality-gate-summary: done
-  a4-2-route-quality-loop-and-error-paths: done
-  epic-a4-retrospective: optional
-  epic-a5: in-progress
-  a5-1-orchestrate-decision-needed-follow-up: done
-  a5-2-generate-pr-handoff-with-evidence-links: done
-  epic-a5-retrospective: optional
-  epic-a6: backlog
-  a6-1-validate-the-vertical-slice: backlog
-  epic-a6-retrospective: optional
+  epic-3-workflow-provider-control-and-event-delivery: backlog
+  3-1-implement-archon-workflow-provider-binding-lifecycle: backlog
+  3-3a-define-shared-workflow-provider-command-envelope: backlog
+  3-3b-provide-archon-start-and-status-cli-json: backlog
+  3-3c-provide-archon-provider-decision-command-cli-json: backlog
+  3-3d-provide-archon-recovery-command-cli-json: backlog
+  3-5-produce-signed-typed-archon-workflow-events-from-outbox: backlog
+  3-7-expose-archon-workflow-event-delivery-health: backlog
+  epic-3-retrospective: optional
+
+blocked_dependencies:
+  workflow-commander-shared-contract-fixtures:
+    status: missing
+    source: ../planning-artifacts/contracts/workflow-commander/README.md
+    blocks:
+      - 3-1-implement-archon-workflow-provider-binding-lifecycle
+      - 3-3a-define-shared-workflow-provider-command-envelope
+      - 3-3b-provide-archon-start-and-status-cli-json
+      - 3-3c-provide-archon-provider-decision-command-cli-json
+      - 3-3d-provide-archon-recovery-command-cli-json
+      - 3-5-produce-signed-typed-archon-workflow-events-from-outbox
+      - 3-7-expose-archon-workflow-event-delivery-health
+    note: "Do not create or implement these stories until workflow command envelope, workflow event envelope, and workflow provider binding fixtures exist locally or are regenerated into this handoff."

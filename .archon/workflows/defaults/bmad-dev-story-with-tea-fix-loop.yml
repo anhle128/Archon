@@ -111,10 +111,10 @@ nodes:
   - id: dev-story
     prompt: |
       bmad-dev-story $ARGUMENTS
-    provider: claude
+    provider: codex
     depends_on: [prepare-bmad-state]
     context: fresh
-    model: sonnet
+    model: gpt-5.5
     idle_timeout: 900000
     output_type: dev-story
 
@@ -130,9 +130,9 @@ nodes:
 
   - id: code-review
     command: bmad-code-review
+    provider: codex
     depends_on: [tea-automate]
     context: fresh
-    provider: codex
     model: gpt-5.5
     idle_timeout: 900000
     output_format: &code_review_gate_schema
@@ -184,20 +184,20 @@ nodes:
   - id: tea-nr
     prompt: |
       bmad-testarch-nfr $ARGUMENTS
-    provider: claude
-    model: sonnet
+    provider: codex
     depends_on: [tea-rv]
     context: fresh
+    model: gpt-5.5
     idle_timeout: 900000
     output_type: nfr-findings
 
   - id: tea-tr
     prompt: |
       bmad-testarch-trace $ARGUMENTS
-    provider: claude
+    provider: codex
     depends_on: [tea-nr]
     context: fresh
-    model: sonnet
+    model: gpt-5.5
     idle_timeout: 900000
     output_type: trace-findings
 
@@ -224,7 +224,7 @@ nodes:
 
   - id: create-pull-request
     command: archon-create-pr
-    provider: claude
+    provider: codex
     depends_on: [tea-tr]
     context: fresh
-    model: sonnet
+    model: gpt-5.5
