@@ -232,7 +232,7 @@ const HANDOFF_RENDER_SCRIPT = `
       lines.push("");
       lines.push("| Finding | Title | Source | Linear Issue | Status |");
       lines.push("|---------|-------|--------|--------------|--------|");
-      const esc = (s) => String(s).replace(/\\|/g, "\\\\|");
+      const esc = (s) => String(s).replace(/\\r\\n|\\r|\\n/g, " ").replace(/\\|/g, "\\\\|");
       for (const item of h.decision_needed.deferred_items) {
         lines.push("| " + esc(item.finding_id) + " | " + esc(item.title) + " | " + esc(item.source_gate) + " | [" + esc(item.linear_issue_id) + "](" + esc(item.linear_url) + ") | " + esc(item.status) + " |");
       }
@@ -779,6 +779,47 @@ describe('Boundary rendering — special chars in deferred items (TD-411 techniq
     expect(cells[3]).toContain('TDX-789');
     expect(cells[4]).toContain('deferred');
   });
+
+  it('newlines and carriage returns in fields are normalized to spaces (TD-411 newline)', async () => {
+    const handoff = syntheticHandoff({
+      decision_needed: {
+        deferred: true,
+        deferred_count: 1,
+        deferred_items: [
+          {
+            finding_id: 'TD-F004',
+            title: 'Title with\nnewline and\r\nCRLF and\rcr',
+            source_gate: 'CR',
+            linear_issue_id: 'TDX-999',
+            linear_url: 'https://linear.app/team/issue/TDX-999',
+            status: 'deferred\npending',
+          },
+        ],
+        artifact_file: `${ARTIFACTS_DIR}/bmad-dev-story-with-tea-fix-loop/decision-needed.json`,
+      },
+    });
+    const r = await renderHandoff(JSON.stringify(handoff));
+    expect(r.code, 'rendering should succeed with newlines').toBe(0);
+
+    const dataRow = r.stdout
+      .split('\n')
+      .find(line => line.includes('TD-F004') && line.startsWith('|'));
+    expect(dataRow, 'must find the deferred-item data row on a single line').toBeDefined();
+    const cells = dataRow!
+      .slice(1, -1)
+      .split(/(?<!\\)\|/)
+      .map(c => c.trim());
+    expect(cells, 'row must have exactly 5 cells — newlines must not split the row').toHaveLength(
+      5
+    );
+    expect(cells[1]).toContain('Title with');
+    expect(cells[1]).toContain('newline');
+    expect(cells[1]).toContain('CRLF');
+    expect(cells[1]).toContain('cr');
+    expect(cells[1], 'newlines must be replaced with spaces').not.toMatch(/[\r\n]/);
+    expect(cells[4]).toContain('deferred pending');
+    expect(cells[4], 'status newlines must be replaced with spaces').not.toMatch(/[\r\n]/);
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -835,6 +876,243 @@ describe('Skipped-TR rendering — technique proof (TD-415b)', () => {
     expect(rvRow!, 'RV row must link to skipped gate JSON').toContain('tea-rv-skipped.gate.json');
     expect(trRow!, 'TR row must show tea-tr-skipped source').toContain('tea-tr-skipped');
     expect(trRow!, 'TR row must link to skipped gate JSON').toContain('tea-tr-skipped.gate.json');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TD-415c [P0] — collector-level skipped-TR proof. Unlike TD-415b (which
+// only tests rendering with a pre-built handoff JSON), this test exercises
+// the actual shell selection/mapping logic from the pr-handoff node:
+// TR_OUT="${TR_REAL:-$TR_SKIP}", source determination, and the bun -e
+// JSON assembly. Feeds empty TR_REAL + populated TR_SKIP and asserts the
+// collector produces correct JSON with tea-tr-skipped source and skipped
+// artifact paths. (AC #1)
+// ═══════════════════════════════════════════════════════════════════════════
+
+const COLLECTOR_SCRIPT = `
+  set -e
+  RV_OUT="\${RV_REAL:-\$RV_SKIP}"
+  NR_OUT="\${NR_REAL:-\$NR_SKIP}"
+  TR_OUT="\${TR_REAL:-\$TR_SKIP}"
+
+  if [ -z "$RV_OUT" ]; then echo "ERROR: no resolved RV contract." >&2; exit 1; fi
+  if [ -z "$NR_OUT" ]; then echo "ERROR: no resolved NR contract." >&2; exit 1; fi
+  if [ -z "$TR_OUT" ]; then echo "ERROR: no resolved TR contract." >&2; exit 1; fi
+
+  RV_SOURCE="tea-rv"
+  if [ -z "$RV_REAL" ]; then RV_SOURCE="tea-rv-skipped"; fi
+  NR_SOURCE="tea-nr"
+  if [ -z "$NR_REAL" ]; then NR_SOURCE="tea-nr-skipped"; fi
+  TR_SOURCE="tea-tr"
+  if [ -z "$TR_REAL" ]; then TR_SOURCE="tea-tr-skipped"; fi
+
+  HANDOFF=$(
+    PH_REF="$RESOLVED_REF" \\
+    PH_SUMMARY="$SUMMARY" \
+    PH_DNC="$DNC" \
+    PH_CR="$CR" \
+    PH_GP="$GP" \
+    PH_RV="$RV_OUT" PH_RV_SRC="$RV_SOURCE" \
+    PH_NR="$NR_OUT" PH_NR_SRC="$NR_SOURCE" \
+    PH_TR="$TR_OUT" PH_TR_SRC="$TR_SOURCE" \
+    PH_ARTIFACTS_DIR="$ARTIFACTS_DIR" \
+    bun -e '
+      const ref = process.env.PH_REF;
+      const artifactsDir = process.env.PH_ARTIFACTS_DIR || "";
+      const runFile = (name) => artifactsDir + "/bmad-dev-story-with-tea-fix-loop/" + name;
+      const nodeFile = (name) => artifactsDir + "/nodes/" + name;
+      function parse(raw, label) {
+        let c;
+        try { c = JSON.parse(raw); } catch { throw new Error(label + " is not valid JSON"); }
+        if (!c.story_ref || c.story_ref !== ref) throw new Error(label + " story_ref mismatch: " + c.story_ref + " !== " + ref);
+        return c;
+      }
+      function gateArtifact(source) {
+        if (source === "code-review-auto") return nodeFile("code-review-auto.md");
+        if (source === "tea-rv") return nodeFile("test-review-findings.md");
+        if (source === "tea-rv-skipped") return runFile("tea-rv-skipped.gate.json");
+        if (source === "tea-nr") return nodeFile("nfr-findings.md");
+        if (source === "tea-nr-skipped") return runFile("tea-nr-skipped.gate.json");
+        if (source === "tea-tr") return nodeFile("trace-findings.md");
+        if (source === "tea-tr-skipped") return runFile("tea-tr-skipped.gate.json");
+        throw new Error("unknown gate source: " + source);
+      }
+      const summary = parse(process.env.PH_SUMMARY, "quality-gate-summary");
+      const dnCheck = parse(process.env.PH_DNC, "decision-needed-check");
+      const cr = parse(process.env.PH_CR, "code-review-auto");
+      const gp = parse(process.env.PH_GP, "gate-planner");
+      const rv = parse(process.env.PH_RV, "RV");
+      const nr = parse(process.env.PH_NR, "NR");
+      const tr = parse(process.env.PH_TR, "TR");
+      const rvSrc = process.env.PH_RV_SRC;
+      const nrSrc = process.env.PH_NR_SRC;
+      const trSrc = process.env.PH_TR_SRC;
+
+      const handoff = {
+        contract_version: "1.0",
+        workflow: "bmad-dev-story-with-tea-fix-loop-v2",
+        node: "pr-handoff",
+        story_ref: ref,
+        status: "PASS",
+        quality_summary: {
+          gate: summary.gate,
+          round: summary.round,
+          blocking_count: summary.blocking_count,
+          decision_needed_count: summary.decision_needed_count,
+          findings_total: summary.findings_total,
+          artifact_file: runFile("quality-gate-summary.json")
+        },
+        gates: {
+          cr: { gate: cr.gate, source: "code-review-auto", findings_count: cr.findings_count, artifact_file: gateArtifact("code-review-auto"), report_file: cr.report_file || null },
+          rv: { gate: rv.gate, source: rvSrc, findings_count: rv.findings_count, artifact_file: gateArtifact(rvSrc), report_file: rv.report_file || null },
+          nr: { gate: nr.gate, source: nrSrc, findings_count: nr.findings_count, artifact_file: gateArtifact(nrSrc), report_file: nr.report_file || null },
+          tr: { gate: tr.gate, source: trSrc, findings_count: tr.findings_count, artifact_file: gateArtifact(trSrc), report_file: tr.report_file || null }
+        },
+        gate_plan: {
+          run_rv: gp.run_rv,
+          run_nr: gp.run_nr,
+          run_tr: gp.run_tr,
+          artifact_file: runFile("gate-planner.json")
+        },
+        decision_needed: {
+          deferred: dnCheck.deferred,
+          deferred_count: dnCheck.deferred_count,
+          deferred_items: dnCheck.deferred_items || [],
+          artifact_file: runFile("decision-needed.json")
+        }
+      };
+
+      process.stdout.write(JSON.stringify(handoff));
+    '
+  )
+  printf '%s' "$HANDOFF"
+`;
+
+interface CollectorResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+
+const runCollector = async (env: Record<string, string>): Promise<CollectorResult> => {
+  try {
+    const { stdout, stderr } = await execFileAsync('bash', ['-c', COLLECTOR_SCRIPT], {
+      env: { ...process.env, ...env },
+    });
+    return { code: 0, stdout, stderr };
+  } catch (err) {
+    const e = err as { code?: number; stdout?: string; stderr?: string };
+    return { code: e.code ?? 1, stdout: e.stdout ?? '', stderr: e.stderr ?? '' };
+  }
+};
+
+function makeContract(overrides: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    contract_version: '1.0',
+    workflow: V2_STEM,
+    story_ref: CANONICAL_REF,
+    gate: 'PASS',
+    findings_count: 0,
+    ...overrides,
+  });
+}
+
+describe('Collector-level skipped-TR — shell selection logic (TD-415c)', () => {
+  const ARTIFACTS_DIR = '/test/artifacts';
+  const baseEnv = {
+    RESOLVED_REF: CANONICAL_REF,
+    SUMMARY: makeContract({
+      node: 'quality-gate-summary',
+      round: 1,
+      blocking_count: 0,
+      decision_needed_count: 0,
+      findings_total: 0,
+    }),
+    DNC: makeContract({
+      node: 'decision-needed-check',
+      status: 'PASS',
+      deferred: false,
+      deferred_count: 0,
+      deferred_items: [],
+    }),
+    CR: makeContract({ node: 'code-review-auto', report_file: 'cr-report.md' }),
+    GP: JSON.stringify({
+      contract_version: '1.0',
+      workflow: V2_STEM,
+      story_ref: CANONICAL_REF,
+      run_rv: false,
+      run_nr: true,
+      run_tr: true,
+    }),
+    RV_REAL: '',
+    RV_SKIP: makeContract({
+      node: 'tea-rv-skipped',
+      gate: 'SKIPPED',
+      reason: 'no test files changed',
+    }),
+    NR_REAL: makeContract({ node: 'tea-nr', report_file: 'nr-report.md' }),
+    NR_SKIP: '',
+    TR_REAL: '',
+    TR_SKIP: makeContract({ node: 'tea-tr-skipped', gate: 'SKIPPED', reason: 'tr not planned' }),
+    ARTIFACTS_DIR,
+  };
+
+  it('empty TR_REAL + populated TR_SKIP → collector selects tea-tr-skipped source and skipped artifact path', async () => {
+    const r = await runCollector(baseEnv);
+    expect(r.code, `collector must succeed (stderr: ${r.stderr})`).toBe(0);
+
+    const handoff = JSON.parse(r.stdout);
+    expect(handoff.gates.tr.source, 'TR source must be tea-tr-skipped when TR_REAL is empty').toBe(
+      'tea-tr-skipped'
+    );
+    expect(handoff.gates.tr.artifact_file, 'TR artifact must point to skipped gate JSON').toBe(
+      `${ARTIFACTS_DIR}/bmad-dev-story-with-tea-fix-loop/tea-tr-skipped.gate.json`
+    );
+    expect(handoff.gates.tr.gate, 'TR gate must be SKIPPED').toBe('SKIPPED');
+  });
+
+  it('empty RV_REAL + populated RV_SKIP → collector selects tea-rv-skipped source and skipped artifact path', async () => {
+    const r = await runCollector(baseEnv);
+    expect(r.code, 'collector must succeed').toBe(0);
+
+    const handoff = JSON.parse(r.stdout);
+    expect(handoff.gates.rv.source, 'RV source must be tea-rv-skipped when RV_REAL is empty').toBe(
+      'tea-rv-skipped'
+    );
+    expect(handoff.gates.rv.artifact_file, 'RV artifact must point to skipped gate JSON').toBe(
+      `${ARTIFACTS_DIR}/bmad-dev-story-with-tea-fix-loop/tea-rv-skipped.gate.json`
+    );
+  });
+
+  it('populated NR_REAL + empty NR_SKIP → collector selects tea-nr source and real artifact path', async () => {
+    const r = await runCollector(baseEnv);
+    expect(r.code, 'collector must succeed').toBe(0);
+
+    const handoff = JSON.parse(r.stdout);
+    expect(handoff.gates.nr.source, 'NR source must be tea-nr when NR_REAL is populated').toBe(
+      'tea-nr'
+    );
+    expect(handoff.gates.nr.artifact_file, 'NR artifact must point to real node output').toBe(
+      `${ARTIFACTS_DIR}/nodes/nfr-findings.md`
+    );
+  });
+
+  it('collector emits full envelope with correct story_ref', async () => {
+    const r = await runCollector(baseEnv);
+    expect(r.code, 'collector must succeed').toBe(0);
+
+    const handoff = JSON.parse(r.stdout);
+    expect(handoff.contract_version).toBe('1.0');
+    expect(handoff.workflow).toBe(V2_STEM);
+    expect(handoff.node).toBe('pr-handoff');
+    expect(handoff.story_ref).toBe(CANONICAL_REF);
+    expect(handoff.status).toBe('PASS');
+  });
+
+  it('both RV and TR empty → collector fails closed (no resolved contract)', async () => {
+    const r = await runCollector({ ...baseEnv, RV_SKIP: '' });
+    expect(r.code, 'collector must fail when both RV_REAL and RV_SKIP are empty').not.toBe(0);
+    expect(r.stderr).toContain('no resolved RV contract');
   });
 });
 

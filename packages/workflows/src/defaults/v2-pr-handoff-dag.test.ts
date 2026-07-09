@@ -738,17 +738,16 @@ describe('Mixed branch — RV skip, NR real, TR real (TD-415)', () => {
     // When test_files_changed is 0, gate-planner sets run_rv=false, so
     // tea-rv-skipped runs instead of tea-rv. tea-nr and tea-tr both run real
     // (gate-planner always sets run_tr=true).
-    if (run.nodeState[NODE_ID] === 'completed') {
-      const artifact = await readHandoffJson(run.artifactsDir);
-      expect(artifact, 'handoff must be written when node completes').not.toBeNull();
-      const gates = artifact!.parsed.gates as Record<string, Record<string, unknown>>;
-      expect(gates.rv, 'RV must be present in gates').toBeDefined();
-      expect(gates.rv!.source, 'RV source must be tea-rv-skipped').toBe('tea-rv-skipped');
-      expect(gates.nr, 'NR must be present in gates').toBeDefined();
-      expect(gates.nr!.source, 'NR source must be tea-nr').toBe('tea-nr');
-      expect(gates.tr, 'TR must be present in gates').toBeDefined();
-      expect(gates.tr!.source, 'TR source must be tea-tr').toBe('tea-tr');
-    }
+    expect(run.nodeState[NODE_ID], 'pr-handoff must complete').toBe('completed');
+    const artifact = await readHandoffJson(run.artifactsDir);
+    expect(artifact, 'handoff must be written when node completes').not.toBeNull();
+    const gates = artifact!.parsed.gates as Record<string, Record<string, unknown>>;
+    expect(gates.rv, 'RV must be present in gates').toBeDefined();
+    expect(gates.rv!.source, 'RV source must be tea-rv-skipped').toBe('tea-rv-skipped');
+    expect(gates.nr, 'NR must be present in gates').toBeDefined();
+    expect(gates.nr!.source, 'NR source must be tea-nr').toBe('tea-nr');
+    expect(gates.tr, 'TR must be present in gates').toBeDefined();
+    expect(gates.tr!.source, 'TR source must be tea-tr').toBe('tea-tr');
   });
 });
 

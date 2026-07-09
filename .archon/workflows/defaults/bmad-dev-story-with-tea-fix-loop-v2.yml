@@ -1202,7 +1202,7 @@ nodes:
             lines.push("");
             lines.push("| Finding | Title | Source | Linear Issue | Status |");
             lines.push("|---------|-------|--------|--------------|--------|");
-            const esc = (s) => String(s).replace(/\|/g, "\\|");
+            const esc = (s) => String(s).replace(/\r\n|\r|\n/g, " ").replace(/\|/g, "\\|");
             for (const item of h.decision_needed.deferred_items) {
               lines.push("| " + esc(item.finding_id) + " | " + esc(item.title) + " | " + esc(item.source_gate) + " | [" + esc(item.linear_issue_id) + "](" + esc(item.linear_url) + ") | " + esc(item.status) + " |");
             }

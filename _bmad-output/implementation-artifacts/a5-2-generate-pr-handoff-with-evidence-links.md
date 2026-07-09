@@ -1,6 +1,6 @@
 # Story a5.2: Generate PR Handoff With Evidence Links
 
-Status: in-progress
+Status: complete
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -108,8 +108,8 @@ AC #2 is implementable as a rendering template and fixture-testable against synt
 
 - [x] [Review][Patch] Escape deferred-item Markdown table cells in `pr-handoff.md` rendering [.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:1206]
 - [x] [Review][Patch] Make TD-415 actually prove the requested skipped-TR branch path [packages/workflows/src/defaults/v2-pr-handoff-dag.test.ts:722]
-- [ ] [Review][Patch] Normalize newline and carriage-return characters in deferred-item Markdown table cells [.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:1205]
-- [ ] [Review][Patch] Add collector-level skipped-TR coverage for `pr-handoff` source selection [packages/workflows/src/defaults/v2-pr-handoff-contract.test.ts:792]
+- [x] [Review][Patch] Normalize newline and carriage-return characters in deferred-item Markdown table cells [.archon/workflows/defaults/bmad-dev-story-with-tea-fix-loop-v2.yml:1205]
+- [x] [Review][Patch] Add collector-level skipped-TR coverage for `pr-handoff` source selection [packages/workflows/src/defaults/v2-pr-handoff-contract.test.ts:792]
 
 ## Dev Notes
 
@@ -567,6 +567,8 @@ Claude (via Qoder)
 - Pre-existing core test failure (codebases.test.ts) confirmed unrelated to this change.
 - Fix pass R1-F1: Added `esc` helper to escape `|` in deferred-item Markdown table cells (YAML renderer + test HANDOFF_RENDER_SCRIPT). Strengthened TD-411 to assert exactly 5 cells per row using lookbehind pipe-split.
 - Fix pass R1-F2: Updated TD-415 description/assertions to match actual branch mix (RV skip + NR real + TR real). Added TD-415b technique proof for skipped-TR rendering with synthetic data.
+- Fix pass R2-F1: Updated `esc` function in YAML renderer and test HANDOFF_RENDER_SCRIPT to normalize `\r\n`, `\r`, `\n` to space before pipe escaping. Added TD-411 newline fixture with `\n`, `\r\n`, `\r` in title and status fields. Fixed single-quote issue in both YAML and test (changed `' '` to `" "` to avoid breaking bash single-quoted bun -e argument).
+- Fix pass R2-F2: Added TD-415c collector-level test suite (5 tests) that exercises the shell selection/mapping logic (`${TR_REAL:-$TR_SKIP}` fallback, source determination, bun -e JSON assembly) with empty TR_REAL + populated TR_SKIP. Changed TD-415 from conditional `if (completed)` wrapper to unconditional completion assertion.
 
 ### Completion Notes List
 
