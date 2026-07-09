@@ -1,0 +1,175 @@
+name: bmad-readiness-correct-course-loop
+description: |
+  Use when: User wants to run BMAD implementation readiness, automatically correct planning issues, and repeat until readiness is clean.
+  Triggers: "bmad readiness correct course loop", "check readiness until clean", "readiness correct course", "bmad implementation readiness loop".
+  Does: Validates BMAD commands, runs bmad-check-implementation-readiness, classifies the result, routes clean results to completion, and routes findings through bmad-correct-course before rerunning readiness.
+  NOT for: Story implementation, code review fix loops, or manual planning review sessions.
+
+provider: codex
+model: gpt-5.5
+tags: [BMad, Planning, Readiness]
+
+nodes:
+  - id: validate-bmad-command
+    bash: |
+      set -euo pipefail
+
+      RUN_DIR="$ARTIFACTS_DIR/bmad-readiness-correct-course-loop"
+      mkdir -p "$RUN_DIR"
+
+      for required in \
+        ".agents/skills/bmad-check-implementation-readiness/SKILL.md" \
+        ".agents/skills/bmad-correct-course/SKILL.md" \
+        "_bmad/bmm/config.yaml"
+      do
+        if [ ! -f "$required" ]; then
+          echo "Missing required BMAD file: $required"
+          echo "Run this workflow from a BMAD-enabled project root."
+          exit 1
+        fi
+      done
+
+      cat > "$RUN_DIR/state.json" << 'JSON'
+      {
+        "workflow": "bmad-readiness-correct-course-loop",
+        "status": "running",
+        "maxRounds": 20
+      }
+      JSON
+
+      echo "RUN_DIR=$RUN_DIR"
+      echo "STATE_FILE=$RUN_DIR/state.json"
+      echo "BMAD_CONFIG=_bmad/bmm/config.yaml"
+    timeout: 60000
+    output_type: bmad-readiness-state
+
+  - id: bmad-correct-course
+    prompt: |
+      bmad-correct-course
+
+      Run in automated batch mode for this Archon workflow.
+
+      Treat the latest implementation readiness result as the change trigger.
+
+      Original user request:
+      $ARGUMENTS
+
+      Latest readiness evaluator decision:
+      $readiness-evaluator.output
+
+      Latest readiness output:
+      $bmad-check-implementation-readiness.output
+
+      Requirements:
+      - Address only issues identified by bmad-check-implementation-readiness.
+      - Prefer direct updates to BMAD planning artifacts over broad replanning.
+      - Use batch mode rather than asking for incremental approval.
+      - Do not pause for user input unless the correction is impossible without missing project facts.
+      - Summarize every artifact changed and why it was changed.
+    when: "$readiness-evaluator.output.result == 'negative'"
+    context: fresh
+    idle_timeout: 900000
+    output_type: bmad-correct-course
+
+  - id: bmad-check-implementation-readiness
+    depends_on: [validate-bmad-command, bmad-correct-course]
+    trigger_rule: one_success
+    prompt: |
+      bmad-check-implementation-readiness $ARGUMENTS
+    context: fresh
+    idle_timeout: 900000
+    output_type: bmad-readiness-report
+
+  - id: readiness-evaluator
+    depends_on: [bmad-check-implementation-readiness]
+    prompt: |
+      You are the routing evaluator for a BMAD readiness/correct-course loop.
+
+      Read the latest bmad-check-implementation-readiness result and decide whether the loop is clean.
+
+      User request:
+      $ARGUMENTS
+
+      Readiness output:
+      $bmad-check-implementation-readiness.output
+
+      If the output mentions a generated readiness report, inspect that report before deciding.
+      If no path is explicit, inspect the newest matching report under _bmad-output/planning-artifacts/implementation-readiness-report-*.md when available.
+
+      Return positive only when readiness found no issues requiring correction.
+      Return negative for NOT READY, NEEDS WORK, critical issues, major issues, minor concerns, warnings, gaps, missing artifacts, or any recommended corrective action.
+
+      Do not modify files.
+      Return JSON only.
+    context: fresh
+    output_format:
+      type: object
+      properties:
+        result:
+          type: string
+          enum: [positive, negative]
+        readiness_status:
+          type: string
+          enum: [READY, NEEDS_WORK, NOT_READY, UNKNOWN]
+        issues_count:
+          type: number
+        critical_count:
+          type: number
+        major_count:
+          type: number
+        summary:
+          type: string
+        recommended_action:
+          type: string
+      required:
+        - result
+        - readiness_status
+        - issues_count
+        - critical_count
+        - major_count
+        - summary
+        - recommended_action
+    output_type: readiness-route-decision
+
+  - id: route-loop
+    depends_on: [readiness-evaluator]
+    route_loop:
+      from: readiness-evaluator
+      condition: "$readiness-evaluator.output.result == 'positive'"
+      max_iterations: 20
+      routes:
+        positive: end
+        negative: bmad-correct-course
+        exhausted: readiness-loop-error
+
+  - id: end
+    depends_on: [route-loop]
+    bash: |
+      set -euo pipefail
+
+      summary=$readiness-evaluator.output.summary
+      status=$readiness-evaluator.output.readiness_status
+
+      echo "BMAD implementation readiness is clean."
+      printf 'Status: %s\n' "$status"
+      printf 'Summary: %s\n' "$summary"
+    timeout: 60000
+
+  - id: readiness-loop-error
+    depends_on: [route-loop]
+    bash: |
+      set -euo pipefail
+
+      status=$readiness-evaluator.output.readiness_status
+      issues=$readiness-evaluator.output.issues_count
+      summary=$readiness-evaluator.output.summary
+      recommended_action=$readiness-evaluator.output.recommended_action
+
+      echo "BMAD readiness/correct-course loop exhausted its route_loop retry budget."
+      printf 'Latest status: %s\n' "$status"
+      printf 'Latest issues count: %s\n' "$issues"
+      printf 'Latest summary: %s\n' "$summary"
+      printf 'Recommended action: %s\n' "$recommended_action"
+
+      exit 1
+    timeout: 60000
