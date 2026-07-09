@@ -291,13 +291,11 @@ describe('tea-tr-skipped hygiene — timeout + typed-output + artifact write (TD
 // (AC #2, #3, #4)
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe('PR tail — resolves through decision-needed-check routing authority (TD-027)', () => {
-  it('create-pull-request depends on decision-needed-check', () => {
+describe('PR tail — resolves through pr-handoff routing authority (TD-027)', () => {
+  it('create-pull-request depends on pr-handoff', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     const deps = nodeById(v2, 'create-pull-request')!.depends_on ?? [];
-    expect(deps, 'PR tail must depend on the decision-needed-check node').toEqual([
-      'decision-needed-check',
-    ]);
+    expect(deps, 'PR tail must depend on the pr-handoff collector node').toEqual(['pr-handoff']);
   });
 });
 

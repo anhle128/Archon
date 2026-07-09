@@ -87,7 +87,7 @@ const EXPECTED_POSITIVE = NODE_ID;
 const EXPECTED_NEGATIVE = 'dev-story';
 const EXPECTED_EXHAUSTED = ERROR_NODE_ID;
 const EXPECTED_LOOP_FROM = READER_ID;
-const EXPECTED_PR_DEPS = [NODE_ID];
+const EXPECTED_PR_DEPS = ['pr-handoff'];
 
 // The full route-facing envelope the no-op success contract must carry. `status`
 // (not `gate`) — this node is never a quality gate.
@@ -348,11 +348,11 @@ describe('Seam wiring — positive retargeted, PR depends on the new node (TD-30
     );
   });
 
-  it('create-pull-request.depends_on is exactly [decision-needed-check] (was the route loop)', () => {
+  it('create-pull-request.depends_on is exactly [pr-handoff] (pr-handoff inserted after decision-needed-check)', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     expect(
       nodeById(v2, PR_ID)?.depends_on ?? [],
-      'PR preparation must gate on the decision node so a fail-closed exit blocks it'
+      'PR preparation must gate on the pr-handoff collector which sits after the decision node'
     ).toEqual(EXPECTED_PR_DEPS);
   });
 

@@ -310,10 +310,10 @@ describe('tea-tr join — fail-closed and scope-bounded (TD-010)', () => {
     expect('bash' in trSkipped!, 'tea-tr-skipped must be a bash node').toBe(true);
   });
 
-  it('create-pull-request depends on decision-needed-check', () => {
+  it('create-pull-request depends on pr-handoff', () => {
     const v2 = parseFromDisk(V2_FILE, V2_STEM);
     expect([...nodeById(v2, 'create-pull-request')!.depends_on].sort()).toEqual(
-      ['decision-needed-check'].sort()
+      ['pr-handoff'].sort()
     );
   });
 });
