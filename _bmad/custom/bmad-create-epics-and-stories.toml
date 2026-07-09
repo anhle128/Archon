@@ -1,6 +1,0 @@
-[workflow]
-epics_output_path = "{planning_artifacts}/epics-bmad-tea-workflow-orchestration-2026-06-29/epics.md"
-persistent_facts = [
-  "file:{project-root}/_bmad-output/planning-artifacts/cross-project-isolated-handoff-contract.md",
-]
-on_complete = "After saving the feature-scoped epics artifact, apply the cross-project isolated handoff contract. If archon has implementation work, create or update archon/_bmad-output/planning-artifacts/prd.md, architecture.md, and epics.md with the Archon-owned subset plus dependency notes. If BMAD-METHOD has implementation work, create or update BMAD-METHOD/_bmad-output/planning-artifacts/prd.md, architecture.md, and epics.md with the BMAD-METHOD-owned subset plus dependency notes. If BMAD-TEA has implementation work, create or update BMAD-TEA/_bmad-output/planning-artifacts/prd.md, architecture.md, and epics.md with the BMAD-TEA-owned subset plus dependency notes. Do not create or modify implementation_artifacts from the parent workspace."

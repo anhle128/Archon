@@ -1,4 +1,0 @@
-[workflow]
-persistent_facts = [
-  "file:{project-root}/_bmad-output/planning-artifacts/cross-project-isolated-handoff-contract.md",
-]
