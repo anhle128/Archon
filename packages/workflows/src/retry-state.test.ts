@@ -26,7 +26,6 @@ describe('retry DAG state projection', () => {
         id: 'review-router',
         depends_on: ['review'],
         route_loop: {
-          from: 'review',
           condition: "$review.output.result == 'positive'",
           max_iterations: 10,
           routes: {
@@ -41,7 +40,7 @@ describe('retry DAG state projection', () => {
     ] satisfies DagNode[];
 
     expect(() => getRetryInvalidatedNodeIds(nodes, 'review-router')).toThrow(
-      "Cannot retry route_loop controller node 'review-router' directly; retry its source node 'review' instead"
+      "Cannot retry route_loop controller node 'review-router' directly; retry its source dependency 'review' instead"
     );
   });
 
@@ -53,7 +52,6 @@ describe('retry DAG state projection', () => {
         id: 'review-router',
         depends_on: ['review'],
         route_loop: {
-          from: 'review',
           condition: "$review.output.result == 'positive'",
           max_iterations: 10,
           routes: {

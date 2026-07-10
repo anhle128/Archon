@@ -132,7 +132,7 @@ export interface LoopIterationEvent extends BaseSSEEvent {
 export type RouteLoopOutcome = 'positive' | 'negative' | 'exhausted';
 
 export interface RouteLoopDecisionData extends Record<string, unknown> {
-  from: string;
+  sources: string[];
   outcome: RouteLoopOutcome;
   to: string;
   condition: string;

@@ -13,15 +13,6 @@ export function RouteLoopFields({
   return (
     <>
       <TextField
-        label="From node"
-        value={data.from}
-        mono
-        placeholder="implement"
-        onChange={(from): void => {
-          onChange({ ...data, from });
-        }}
-      />
-      <TextField
         label="Condition"
         value={data.condition}
         mono

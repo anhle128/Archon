@@ -204,7 +204,7 @@ describe('core schemas', () => {
 
   test('workflowEventRowSchema validates node_routed metadata', () => {
     const data = {
-      from: 'review',
+      sources: ['review'],
       outcome: 'positive',
       to: 'done',
       condition: "$review.output.result == '<redacted>'",
@@ -236,7 +236,7 @@ describe('core schemas', () => {
       step_index: null,
       step_name: 'review-router',
       data: {
-        from: 'review',
+        sources: ['review'],
         outcome: 'maybe',
         to: 'done',
       },

@@ -124,7 +124,6 @@ describe('bundled-defaults', () => {
       expect(contents).not.toContain('gh pr create --fill --base $BASE_BRANCH');
       expect(contents).not.toContain('gh pr create --fill --base "$BASE_BRANCH"');
     });
-
   });
 
   describe('BUNDLED_WORKFLOWS', () => {
@@ -156,6 +155,17 @@ describe('bundled-defaults', () => {
       const content = BUNDLED_WORKFLOWS['bmad-create-story-with-tea'];
       expect(content).toContain('id: create-pull-request');
       expect(content).toContain('command: archon-create-pr');
+    });
+
+    it('bmad-create-and-dev-story-with-tea should create, implement, review, and create PR', () => {
+      const content = BUNDLED_WORKFLOWS['bmad-create-and-dev-story-with-tea'];
+      expect(content).toContain('id: create-story');
+      expect(content).toContain('id: dev-story');
+      expect(content).toContain('id: code-review-gate');
+      expect(content).toContain('id: create-pull-request');
+      expect(content).toContain('command: archon-create-pr');
+      expect(content).toContain('modelReasoningEffort: high');
+      expect(content).not.toContain('modelReasoningeffort');
     });
 
     it('should have valid YAML structure', () => {

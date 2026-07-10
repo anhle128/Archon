@@ -8,7 +8,6 @@ const routeLoopController = {
   id: 'review_router',
   depends_on: ['review'],
   route_loop: {
-    from: 'review',
     condition: "$review.output.status == 'approved'",
     max_iterations: 3,
     routes: {

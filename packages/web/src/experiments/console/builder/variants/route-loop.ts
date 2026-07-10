@@ -4,7 +4,6 @@ import type { RouteLoopNodeData, WireDagNode } from '../types';
 /** Default route-loop config for a freshly-created route-loop controller. */
 export function defaultRouteLoopData(): RouteLoopNodeData {
   return {
-    from: '',
     condition: '',
     max_iterations: 10,
     routes: {

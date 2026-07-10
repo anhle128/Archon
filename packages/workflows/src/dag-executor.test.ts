@@ -5825,7 +5825,6 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
           id: 'review-router',
           depends_on: ['review'],
           route_loop: {
-            from: 'review',
             condition: "$review.output.result == 'positive'",
             max_iterations: options.maxIterations ?? 10,
             routes: {
@@ -5899,7 +5898,7 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
 
     expect(routedEvents.map(event => event.data?.outcome)).toEqual(['negative', 'positive']);
     expect(routedEvents[0]?.data).toMatchObject({
-      from: 'review',
+      sources: ['review'],
       to: 'fix',
       condition: "$review.output.result == '<redacted>'",
       condition_result: false,
@@ -5909,7 +5908,7 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
       execution_seq: 1,
     });
     expect(routedEvents[1]?.data).toMatchObject({
-      from: 'review',
+      sources: ['review'],
       to: 'done',
       condition: "$review.output.result == '<redacted>'",
       condition_result: true,
@@ -5972,7 +5971,116 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
     expect(routedEvents.map(event => event.data?.outcome)).toEqual(['negative', 'positive']);
   });
 
-  it('reruns a non-root from node when the negative route targets route_loop.from directly', async () => {
+  it('does not let stale first-pass success trigger a scheduled negative-path join', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('route-loop-active-dep-run');
+    const calls: string[] = [];
+
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mock(function* (
+        _prompt: string,
+        _cwd: string,
+        _resumeSessionId?: string,
+        sendOptions?: SendQueryOptions
+      ) {
+        const nodeId = sendOptions?.nodeConfig?.nodeId;
+        if (typeof nodeId !== 'string') {
+          throw new Error('missing node id in active-dependency route-loop provider');
+        }
+        calls.push(nodeId);
+
+        if (nodeId === 'correct') {
+          throw new Error('correction failed');
+        }
+
+        if (nodeId === 'evaluator') {
+          yield { type: 'assistant' as const, content: JSON.stringify({ result: 'negative' }) };
+          yield {
+            type: 'result' as const,
+            sessionId: 'evaluator-session',
+            structuredOutput: { result: 'negative' },
+          };
+          return;
+        }
+
+        yield { type: 'assistant' as const, content: `${nodeId} complete` };
+        yield { type: 'result' as const, sessionId: `${nodeId}-session` };
+      }),
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-route-loop-active-dep',
+      testDir,
+      {
+        name: 'route-loop-active-dep',
+        mutates_checkout: false,
+        nodes: [
+          { id: 'validate', prompt: 'Validate command availability.' },
+          {
+            id: 'correct',
+            prompt: 'Correct readiness findings.',
+            when: "$evaluator.output.result == 'negative'",
+          },
+          {
+            id: 'readiness',
+            prompt: 'Check readiness.',
+            depends_on: ['validate', 'correct'],
+            trigger_rule: 'one_success',
+          },
+          {
+            id: 'evaluator',
+            prompt: 'Evaluate readiness.',
+            depends_on: ['readiness'],
+            output_format: {
+              type: 'object',
+              properties: {
+                result: { type: 'string', enum: ['positive', 'negative'] },
+              },
+              required: ['result'],
+            },
+          },
+          {
+            id: 'router',
+            depends_on: ['evaluator'],
+            route_loop: {
+              condition: "$evaluator.output.result == 'positive'",
+              max_iterations: 2,
+              routes: {
+                positive: 'done',
+                negative: 'correct',
+                exhausted: 'error',
+              },
+            },
+          },
+          { id: 'done', prompt: 'Done.', depends_on: ['router'] },
+          { id: 'error', prompt: 'Error.', depends_on: ['router'] },
+        ],
+      } as unknown as Parameters<typeof executeDagWorkflow>[4],
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(calls).toEqual(['validate', 'readiness', 'evaluator', 'correct']);
+    expect(calls.filter(nodeId => nodeId === 'readiness')).toHaveLength(1);
+    expect(store.failWorkflowRun).toHaveBeenCalledWith(
+      'route-loop-active-dep-run',
+      expect.stringContaining('correction failed')
+    );
+  });
+
+  it('reruns a non-root source node when the negative route targets the source directly', async () => {
     const store = createMockStore();
     const mockDeps = createMockDeps(store);
     const platform = createMockPlatform();
@@ -6038,7 +6146,6 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
             id: 'review-router',
             depends_on: ['review'],
             route_loop: {
-              from: 'review',
               condition: "$review.output.result == 'positive'",
               max_iterations: 2,
               routes: {
@@ -6139,7 +6246,6 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
             id: 'a-router',
             depends_on: ['a-review'],
             route_loop: {
-              from: 'a-review',
               condition: "$a-review.output.result == 'positive'",
               max_iterations: 1,
               routes: {
@@ -6168,7 +6274,6 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
             id: 'b-router',
             depends_on: ['b-review'],
             route_loop: {
-              from: 'b-review',
               condition: "$b-review.output.result == 'positive'",
               max_iterations: 1,
               routes: {
@@ -6242,7 +6347,6 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
             id: 'review-router',
             depends_on: ['review'],
             route_loop: {
-              from: 'review',
               condition: "$review.output == 'positive'",
               max_iterations: 2,
               routes: {
@@ -6382,7 +6486,6 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
     expect(calls.some(call => call.nodeId === 'done')).toBe(false);
     expect(routedEvents.map(event => event.data?.outcome)).toEqual(['negative', 'exhausted']);
     expect(routedEvents[1]?.data).toMatchObject({
-      from: 'review',
       to: 'escalation',
       condition: "$review.output.result == '<redacted>'",
       condition_result: false,
@@ -6451,7 +6554,6 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
             id: 'router-a',
             depends_on: ['review-a'],
             route_loop: {
-              from: 'review-a',
               condition: "$review-a.output.result == 'positive'",
               max_iterations: 1,
               routes: {
@@ -6465,7 +6567,6 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
             id: 'router-b',
             depends_on: ['review-b'],
             route_loop: {
-              from: 'review-b',
               condition: "$review-b.output.result == 'positive'",
               max_iterations: 1,
               routes: {
@@ -6571,7 +6672,6 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
             id: 'review-router',
             depends_on: ['review'],
             route_loop: {
-              from: 'review',
               condition: "$review.output.result == 'positive'",
               max_iterations: 10,
               routes: {
@@ -6669,7 +6769,6 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
             id: 'review-router',
             depends_on: ['review'],
             route_loop: {
-              from: 'review',
               condition: "$review.output.result == 'positive'",
               max_iterations: 10,
               routes: {
@@ -6776,7 +6875,6 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
             id: 'review-router',
             depends_on: ['review'],
             route_loop: {
-              from: 'review',
               condition: "$review.output.result == 'positive'",
               max_iterations: 10,
               routes: {

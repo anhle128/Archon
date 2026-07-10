@@ -86,7 +86,7 @@ function makeNodeRoutedEvent(runId = 'run-1'): WorkflowEmitterEvent {
     nodeId: 'review-router',
     nodeName: 'review-router',
     data: {
-      from: 'review',
+      sources: ['review'],
       outcome: 'positive',
       to: 'done',
       condition: "$review.output.result == '<redacted>'",

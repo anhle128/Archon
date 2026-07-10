@@ -13,7 +13,6 @@ function routeLoopNode(
     variant: 'route_loop',
     base: { depends_on: dependsOn },
     data: {
-      from: 'review',
       condition: "$review.output.status == 'approved'",
       max_iterations: 3,
       routes: {
@@ -76,7 +75,7 @@ describe('validateGraph', () => {
     expect(issues).toEqual([]);
   });
 
-  test('route_loop with a second input is flagged', () => {
+  test('route_loop with a second input is allowed', () => {
     const issues = validateGraph(
       wf([
         promptNode('fix'),
@@ -86,14 +85,7 @@ describe('validateGraph', () => {
         promptNode('escalate'),
       ])
     );
-    expect(
-      issues.some(
-        i =>
-          i.rule === 'graph.route_loop.input.count' &&
-          i.path.nodeId === 'review_router' &&
-          i.path.field === 'depends_on'
-      )
-    ).toBe(true);
+    expect(issues).toEqual([]);
   });
 
   test('route_loop missing a required route target is flagged', () => {
@@ -153,12 +145,12 @@ describe('validateGraph', () => {
     expect(issues).toEqual([]);
   });
 
-  test('route_loop from that does not match its input is flagged', () => {
+  test('route_loop without an input is flagged', () => {
     const issues = validateGraph(
       wf([
         promptNode('fix'),
         promptNode('review', ['fix']),
-        routeLoopNode('review_router', ['review'], { from: 'fix' }),
+        routeLoopNode('review_router', []),
         promptNode('done'),
         promptNode('escalate'),
       ])
@@ -166,9 +158,9 @@ describe('validateGraph', () => {
     expect(
       issues.some(
         i =>
-          i.rule === 'graph.route_loop.from.mismatch' &&
+          i.rule === 'graph.route_loop.input.count' &&
           i.path.nodeId === 'review_router' &&
-          i.path.field === 'route_loop.from'
+          i.path.field === 'depends_on'
       )
     ).toBe(true);
   });

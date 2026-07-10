@@ -30,7 +30,6 @@ export interface RouteLoopFixtureRoutes {
 }
 
 export interface RouteLoopFixtureConfig {
-  from: string;
   condition: string;
   routes: RouteLoopFixtureRoutes;
   max_iterations?: number;
@@ -89,7 +88,6 @@ export function makeRouteLoopWorkflowNodes(
     ...overrides.routes,
   };
   const routeLoop: RouteLoopFixtureConfig = {
-    from: ids.review,
     condition: overrides.condition ?? `$${ids.review}.output.approved == true`,
     routes,
     ...(overrides.max_iterations !== undefined ? { max_iterations: overrides.max_iterations } : {}),

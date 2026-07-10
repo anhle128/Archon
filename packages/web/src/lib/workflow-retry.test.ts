@@ -72,16 +72,16 @@ describe('workflow retry helpers', () => {
     ).toEqual({ kind: 'hidden' });
   });
 
-  test('guides retryable route-loop controllers toward route_loop.from', () => {
+  test('guides retryable route-loop controllers toward a source dependency', () => {
     expect(
       getWorkflowNodeRetryActionState(runContext({ status: 'cancelled' }), {
         nodeId: 'review-router',
         status: 'completed',
-        routeDecision: { from: 'review' },
+        routeDecision: { sources: ['review'] },
       })
     ).toEqual({
       kind: 'route-loop-guidance',
-      fromNodeId: 'review',
+      sourceNodeId: 'review',
     });
   });
 

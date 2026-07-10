@@ -31,7 +31,6 @@ describe('round-trip fidelity', () => {
     expect(node?.variant).toBe('route_loop');
     if (node?.variant === 'route_loop') {
       expect(node.base.depends_on).toEqual(['review']);
-      expect(node.data.from).toBe('review');
       expect(node.data.condition).toBe("$review.output.status == 'approved'");
       expect(node.data.routes).toEqual({
         positive: 'done',
@@ -52,7 +51,6 @@ describe('round-trip fidelity', () => {
           variant: 'route_loop',
           base: { depends_on: ['review'] },
           data: {
-            from: 'review',
             condition: "$review.output.status == 'approved'",
             max_iterations: 3,
             routes: {
@@ -70,7 +68,6 @@ describe('round-trip fidelity', () => {
       id: 'review_router',
       depends_on: ['review'],
       route_loop: {
-        from: 'review',
         condition: "$review.output.status == 'approved'",
         max_iterations: 3,
         routes: {

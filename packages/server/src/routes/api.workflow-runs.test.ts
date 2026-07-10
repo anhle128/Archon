@@ -1114,7 +1114,7 @@ describe('GET /api/workflows/runs/:runId', () => {
 
   test('returns route-loop decisions and latest route output while preserving historical attempts', async () => {
     const negativeDecision = {
-      from: 'review',
+      sources: ['review'],
       outcome: 'negative',
       to: 'fix',
       condition: "$review.output.result == '<redacted>'",
@@ -1125,7 +1125,7 @@ describe('GET /api/workflows/runs/:runId', () => {
       execution_seq: 3,
     } satisfies Record<string, unknown>;
     const positiveDecision = {
-      from: 'review',
+      sources: ['review'],
       outcome: 'positive',
       to: 'done',
       condition: "$review.output.result == '<redacted>'",

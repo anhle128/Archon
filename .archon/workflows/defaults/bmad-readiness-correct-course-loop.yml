@@ -134,7 +134,6 @@ nodes:
   - id: route-loop
     depends_on: [readiness-evaluator]
     route_loop:
-      from: readiness-evaluator
       condition: "$readiness-evaluator.output.result == 'positive'"
       max_iterations: 20
       routes:

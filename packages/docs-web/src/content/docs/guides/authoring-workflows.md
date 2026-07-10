@@ -206,7 +206,7 @@ nodes:
 | `always_run` | boolean | `false` | Opt out of resume caching: re-run this node on resume even if a prior run completed it. See [Opting Out of Resume Caching](#opting-out-of-resume-caching) |
 | `output_type` | string | — | Semantic label for this node's output (e.g. `'plan'`, `'findings'`, `'code'`). When set, the executor writes `$ARTIFACTS_DIR/nodes/<id>.md` + `<id>.meta.json` after the node completes (best-effort) so later nodes and runs can locate output by type instead of guessing filenames. See [The Artifact Chain](#the-artifact-chain) |
 
-`route_loop` controller nodes are a narrow exception to the common-field table: they must declare exactly one `depends_on` entry equal to `route_loop.from`, and they reject `when`, `trigger_rule`, and `retry`.
+`route_loop` controller nodes are a narrow exception to the common-field table: they must declare a non-empty `depends_on` source set for the condition, and they reject `when`, `trigger_rule`, and `retry`.
 They also do not use AI node options such as `provider`, `model`, `output_format`, `allowed_tools`, `hooks`, `mcp`, or `skills`.
 
 **AI node options** — apply to `command` and `prompt` nodes:
@@ -440,8 +440,8 @@ nodes:
     bash: "echo escalation"
 ```
 
-`route_loop.condition` uses the same condition grammar as `when:`, but every node reference must point at `route_loop.from`.
-Whole-output conditions do not require `output_format`; field conditions require the source field to be declared in `output_format.properties`.
+`route_loop.condition` uses the same condition grammar as `when:`, but every node reference must point at a node listed in the controller's `depends_on`.
+Whole-output conditions do not require `output_format`; field conditions require the referenced source field to be declared in `output_format.properties`.
 If the condition cannot be parsed, or a referenced field is not declared or cannot be resolved, the route-loop node fails instead of silently choosing a route.
 
 `routes.positive` is activated when the condition is true.
@@ -449,7 +449,7 @@ If the condition cannot be parsed, or a referenced field is not declared or cann
 `routes.exhausted` is activated after the false-result budget is consumed.
 Unselected route targets stay dormant and are not marked as skipped.
 
-Each decision emits `node_routed` and completes the route-loop node with JSON route metadata, including `outcome`, selected target, redacted condition, `negative_count`, `max_iterations`, attempt, and execution sequence.
+Each decision emits `node_routed` and completes the route-loop node with JSON route metadata, including `sources`, `outcome`, selected target, redacted condition, `negative_count`, `max_iterations`, attempt, and execution sequence.
 See [Route Loop Nodes](/guides/route-loop-nodes/) for validation rules, retry behavior, and Web Builder details.
 
 ### `output_format` for Structured JSON
@@ -644,7 +644,7 @@ archon workflow retry-node <run-id> <node-id>
 Manual node retry preserves completed upstream and sibling outputs, invalidates the target node plus descendants, and runs that branch again with a fresh retry epoch. For workflows that can mutate the checkout, Archon stores local checkpoint/safety refs and resets tracked files before retry execution; `mutates_checkout: false` workflows skip the checkout reset.
 
 Route-loop controller nodes are not directly retryable.
-If a route loop fails or needs a new decision, retry the node named by `route_loop.from`; Archon will run the new source output through the controller again.
+If a route loop fails or needs a new decision, retry a source dependency listed in the controller's `depends_on`; Archon will run the new source output through the controller again.
 
 **Known limitation**: AI session context from prior nodes is not restored. If a downstream node relies on in-context knowledge from a prior run's session (rather than artifacts), it may need to re-read those artifacts explicitly.
 

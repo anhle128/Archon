@@ -15,7 +15,6 @@ interface WireRouteLoopRoutes {
 }
 
 interface WireRouteLoopConfig {
-  from: string;
   condition: string;
   routes: WireRouteLoopRoutes;
   max_iterations: number;

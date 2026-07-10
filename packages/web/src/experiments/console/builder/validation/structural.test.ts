@@ -38,7 +38,6 @@ describe('validateStructural', () => {
           variant: 'route_loop',
           base: { depends_on: ['review'] },
           data: {
-            from: 'review',
             condition: '$review.output.approved == true',
             max_iterations: 3,
             routes: { positive: 'done', negative: 'fix', exhausted: 'escalate' },
@@ -59,7 +58,6 @@ describe('validateStructural', () => {
           variant: 'route_loop',
           base: { depends_on: ['review'] },
           data: {
-            from: 'review',
             condition: '$review.output.approved == true',
             max_iterations: 3,
             routes: { positive: 'done', negative: 'constructor', exhausted: 'escalate' },

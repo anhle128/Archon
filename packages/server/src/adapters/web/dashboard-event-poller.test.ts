@@ -137,7 +137,7 @@ describe('mapWorkflowEventRow', () => {
 
   test('node_routed → dag_node completed with route decision metadata', () => {
     const decision = {
-      from: 'review',
+      sources: ['review'],
       outcome: 'positive',
       to: 'done',
       condition: "$review.output.result == '<redacted>'",

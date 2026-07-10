@@ -14,8 +14,8 @@ describe('reactFlowToDagNodes route_loop serialization', () => {
           id: 'review-router',
           label: 'Route',
           nodeType: 'route_loop',
+          depends_on: ['new-review'],
           route_loop: {
-            from: 'new-review',
             condition: "$new-review.output.result == 'positive'",
             max_iterations: 3,
             routes: {
@@ -43,11 +43,10 @@ describe('reactFlowToDagNodes route_loop serialization', () => {
 
     const [routeNode] = reactFlowToDagNodes(nodes, edges);
 
-    expect(routeNode.depends_on).toEqual(['new-review']);
+    expect(routeNode.depends_on).toEqual(['old-review']);
     expect('route_loop' in routeNode).toBe(true);
     if (!('route_loop' in routeNode)) throw new Error('expected route_loop node');
     expect(routeNode.route_loop).toMatchObject({
-      from: 'new-review',
       routes: {
         positive: 'done-from-inspector',
         negative: 'fix',

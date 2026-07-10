@@ -129,7 +129,6 @@ describe('workflowDefinitionSchema route_loop shape', () => {
         id: 'review-router',
         depends_on: ['review'],
         route_loop: {
-          from: 'review',
           condition: '$review.output.approved == true',
           routes: {
             positive: 'done',
@@ -160,7 +159,6 @@ describe('workflowDefinitionSchema route_loop shape', () => {
         expect.objectContaining({
           id: 'review-router',
           route_loop: expect.objectContaining({
-            from: 'review',
             max_iterations: 10,
             routes: {
               positive: 'done',

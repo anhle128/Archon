@@ -69,7 +69,6 @@ They are not marked as skipped, because no branch condition executed on those no
 - id: review-router
   depends_on: [review]
   route_loop:
-    from: review
     condition: "$review.output.result == 'positive'"
     max_iterations: 10
     routes:
@@ -80,8 +79,7 @@ They are not marked as skipped, because no branch condition executed on those no
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `depends_on` | Yes | Must contain exactly one entry, and it must equal `route_loop.from`. |
-| `route_loop.from` | Yes | Source node whose latest completed output drives the decision. |
+| `depends_on` | Yes | Non-empty source node set allowed in `route_loop.condition`. |
 | `route_loop.condition` | Yes | Condition expression evaluated against the source node output. |
 | `route_loop.max_iterations` | No | Integer from `1` to `100`. Defaults to `10`. Counts false decisions that still route to `negative`. |
 | `route_loop.routes.positive` | Yes | Target activated when the condition evaluates true. |
@@ -90,6 +88,7 @@ They are not marked as skipped, because no branch condition executed on those no
 
 Route target ids use the same safe node-id grammar as workflow node ids: `[A-Za-z_][A-Za-z0-9_-]{0,63}`.
 The reserved ids `__proto__`, `prototype`, and `constructor` are rejected.
+Legacy `route_loop.from` is rejected.
 
 ## Condition Rules
 
@@ -102,11 +101,11 @@ condition: "$review.result == 'positive'"
 condition: "$review.output.score >= 0.9 && $review.output.blocked == false"
 ```
 
-Every node reference in the condition must reference the node declared in `route_loop.from`.
-If the route decision needs multiple inputs, add a separate aggregation node and make that node the `from` source.
+Every node reference in the condition must reference a node listed in the controller's `depends_on`.
+If the route decision needs multiple inputs, list each source node in `depends_on`.
 
 Whole-output conditions such as `$review.output == 'APPROVED'` do not require `output_format`.
-Field conditions such as `$review.output.result == 'positive'` require the source node to declare that field in `output_format.properties`.
+Field conditions such as `$review.output.result == 'positive'` require the referenced source node to declare that field in `output_format.properties`.
 An undeclared or unresolvable field fails the route-loop node instead of silently routing negative.
 
 Unlike `when:`, a route-loop condition parse failure is a node failure.
@@ -129,12 +128,16 @@ The second consecutive false decision routes to `exhausted`.
 ## Route Paths
 
 `positive` and `exhausted` must be exit paths.
-They must not lead back to `route_loop.from`.
+They must not lead back to any route-loop source dependency.
 
-`negative` may exit, or it may target a self-contained rerun path that eventually reaches `route_loop.from` and then the route-loop node again through normal `depends_on` edges.
+`negative` may exit, or it may target a self-contained rerun path that eventually reaches one or more route-loop source dependencies and then the route-loop node again through normal `depends_on` edges.
 For the common fix-review pattern, route `negative` to the first fix node in that path.
 
-Routing `negative` directly to `route_loop.from` is allowed but logged as a warning because it usually reruns review without fix work.
+Routing `negative` directly to a source dependency is allowed but logged as a warning because it usually reruns review without fix work.
+
+During a route-loop scheduled rerun, downstream join nodes evaluate their trigger rules against only the active incoming dependencies on the selected rerun path.
+Normal DAG execution still evaluates the full `depends_on` array.
+This prevents a stale success from a previous pass from satisfying `one_success` on a later negative-path pass.
 
 ## Events And Outputs
 
@@ -143,7 +146,7 @@ The route-loop node also completes with JSON output that mirrors the route metad
 
 ```json
 {
-  "from": "review",
+  "sources": ["review"],
   "outcome": "negative",
   "to": "fix",
   "condition": "$review.output.result == '<redacted>'",
@@ -172,14 +175,14 @@ Read the source node directly when downstream work needs the latest review resul
 ## Retry And Resume
 
 Do not retry a route-loop controller directly.
-Retry the source node named by `route_loop.from`, for example:
+Retry one of the source dependencies listed in the controller's `depends_on`, for example:
 
 ```bash
 archon workflow retry-node <run-id> review
 ```
 
 Retrying the source node lets the new source output flow through the controller again.
-The CLI, API, and Web UI reject direct controller retry and point you at `route_loop.from`.
+The CLI, API, and Web UI reject direct controller retry and point you at the controller dependencies.
 
 Resume preserves route-loop counters, route activations, attempts, and execution sequence metadata.
 Completed route-loop attempts stay in the event history, while run summaries and `$node.output` use the latest completed attempt.
@@ -187,7 +190,7 @@ Completed route-loop attempts stay in the event history, while run summaries and
 ## Web Builder
 
 The Workflow Builder exposes Route Loop as a distinct node type.
-The single input edge writes both `depends_on[0]` and `route_loop.from`.
+Normal input edges write the controller's `depends_on` source list.
 The three output handles write `routes.positive`, `routes.negative`, and `routes.exhausted`.
 
 Route edges are labels on the controller output handles.

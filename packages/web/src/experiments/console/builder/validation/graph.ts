@@ -43,24 +43,14 @@ function checkRouteLoopGraph(nodes: BuilderNode[], idSet: Set<string>): Issue[] 
     if (node.variant !== 'route_loop') continue;
 
     const deps = depsOf(node);
-    if (deps.length !== 1) {
+    if (deps.length === 0) {
       issues.push(
         makeIssue({
           rule: 'graph.route_loop.input.count',
           severity: 'error',
           source: 'client-debounced',
-          message: 'route_loop requires exactly one input node',
+          message: 'route_loop requires at least one input node',
           path: { nodeId: node.id, field: 'depends_on' },
-        })
-      );
-    } else if (node.data.from !== deps[0]) {
-      issues.push(
-        makeIssue({
-          rule: 'graph.route_loop.from.mismatch',
-          severity: 'error',
-          source: 'client-debounced',
-          message: `route_loop.from must match its input node '${deps[0]}'`,
-          path: { nodeId: node.id, field: 'route_loop.from' },
         })
       );
     }

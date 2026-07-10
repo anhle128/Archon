@@ -760,9 +760,10 @@ async function resolveNodeProviderAndModel(
 /** Evaluate trigger rule for a node given its upstream states */
 export function checkTriggerRule(
   node: DagNode,
-  nodeOutputs: Map<string, NodeOutput>
+  nodeOutputs: Map<string, NodeOutput>,
+  activeDependencyIds?: readonly string[]
 ): 'run' | 'skip' {
-  const nodeDeps = node.depends_on ?? [];
+  const nodeDeps = activeDependencyIds ?? node.depends_on ?? [];
   if (nodeDeps.length === 0) return 'run';
 
   const upstreams = nodeDeps.map(
@@ -890,6 +891,26 @@ function collectPathNodesToTarget(
   return pathNodes;
 }
 
+function collectPathNodesToAnyTarget(
+  startId: string,
+  targetIds: ReadonlySet<string>,
+  dependents: Map<string, string[]>
+): Set<string> | null {
+  const reachablePaths = Array.from(targetIds, targetId =>
+    collectPathNodesToTarget(startId, targetId, dependents)
+  ).filter((path): path is Set<string> => path !== null);
+
+  if (reachablePaths.length === 0) return null;
+
+  const pathNodes = new Set<string>();
+  for (const path of reachablePaths) {
+    for (const nodeId of path) {
+      pathNodes.add(nodeId);
+    }
+  }
+  return pathNodes;
+}
+
 interface RouteRerunExternalPrerequisite {
   rerunNodeId: string;
   prerequisiteNodeId: string;
@@ -897,6 +918,7 @@ interface RouteRerunExternalPrerequisite {
 
 interface RouteRerunPlan {
   rerunNodeIds: Set<string>;
+  activeDependenciesByNode: Map<string, string[]>;
   externalPrerequisites: RouteRerunExternalPrerequisite[];
 }
 
@@ -907,31 +929,47 @@ function buildSelectedRouteRerunPlan(params: {
   dependents: Map<string, string[]>;
 }): RouteRerunPlan {
   const rerunNodeIds = new Set<string>([params.selectedTargetId]);
+  const activeDependenciesByNode = new Map<string, string[]>();
   const externalPrerequisites: RouteRerunExternalPrerequisite[] = [];
-  if (!isRouteLoopNode(params.routeLoopNode)) return { rerunNodeIds, externalPrerequisites };
+  if (!isRouteLoopNode(params.routeLoopNode)) {
+    return { rerunNodeIds, activeDependenciesByNode, externalPrerequisites };
+  }
   if (params.selectedTargetId !== params.routeLoopNode.route_loop.routes.negative) {
-    return { rerunNodeIds, externalPrerequisites };
+    return { rerunNodeIds, activeDependenciesByNode, externalPrerequisites };
   }
 
-  const rerunPath = collectPathNodesToTarget(
+  const sourceNodeIds = new Set(params.routeLoopNode.depends_on ?? []);
+  const rerunPath = collectPathNodesToAnyTarget(
     params.selectedTargetId,
-    params.routeLoopNode.route_loop.from,
+    sourceNodeIds,
     params.dependents
   );
-  if (rerunPath === null) return { rerunNodeIds, externalPrerequisites };
+  if (rerunPath === null) return { rerunNodeIds, activeDependenciesByNode, externalPrerequisites };
 
   for (const nodeId of rerunPath) {
     rerunNodeIds.add(nodeId);
     const pathNode = params.nodesById.get(nodeId);
     if (pathNode === undefined) continue;
+    const activeDeps: string[] = [];
     for (const dep of pathNode.depends_on ?? []) {
-      if (!rerunPath.has(dep)) {
+      if (rerunPath.has(dep)) {
+        activeDeps.push(dep);
+      } else {
         externalPrerequisites.push({ rerunNodeId: nodeId, prerequisiteNodeId: dep });
       }
     }
+    if (activeDeps.length > 0) {
+      activeDependenciesByNode.set(nodeId, activeDeps);
+    }
   }
   rerunNodeIds.add(params.routeLoopNode.id);
-  return { rerunNodeIds, externalPrerequisites };
+  const activeRouteLoopSources = (params.routeLoopNode.depends_on ?? []).filter(dep =>
+    rerunPath.has(dep)
+  );
+  if (activeRouteLoopSources.length > 0) {
+    activeDependenciesByNode.set(params.routeLoopNode.id, activeRouteLoopSources);
+  }
+  return { rerunNodeIds, activeDependenciesByNode, externalPrerequisites };
 }
 
 function assertExternalPrerequisitesCompleted(params: {
@@ -3243,19 +3281,29 @@ export async function executeDagWorkflow(
   const initialBlockingRouteTargetIds = new Set<string>();
   const activatedRouteTargetIds = new Set<string>();
   const scheduledRouteRerunNodeIds = new Set<string>();
+  const scheduledRouteRerunActiveDependencyIds = new Map<string, Set<string>>();
   const routeRerunScheduleVersions = new Map<string, number>();
   const nodeLayerIndex = new Map<string, number>();
   const nodesById = new Map(workflow.nodes.map(node => [node.id, node]));
   const dependents = buildDependentsMap(workflow.nodes);
   let routeRerunScheduleVersion = 0;
   let routeDecisionQueue: Promise<void> = Promise.resolve();
-  const scheduleRouteRerunNode = (nodeId: string): void => {
+  const scheduleRouteRerunNode = (
+    nodeId: string,
+    activeDependencyIds?: readonly string[]
+  ): void => {
     scheduledRouteRerunNodeIds.add(nodeId);
+    if (activeDependencyIds !== undefined && activeDependencyIds.length > 0) {
+      scheduledRouteRerunActiveDependencyIds.set(nodeId, new Set(activeDependencyIds));
+    } else {
+      scheduledRouteRerunActiveDependencyIds.delete(nodeId);
+    }
     routeRerunScheduleVersion += 1;
     routeRerunScheduleVersions.set(nodeId, routeRerunScheduleVersion);
   };
   const clearRouteRerunNode = (nodeId: string): void => {
     scheduledRouteRerunNodeIds.delete(nodeId);
+    scheduledRouteRerunActiveDependencyIds.delete(nodeId);
     routeRerunScheduleVersions.delete(nodeId);
   };
   let routeLoopMetadata: RouteLoopRuntimeMetadata = hasRouteLoopNodes
@@ -3269,9 +3317,9 @@ export async function executeDagWorkflow(
       routeTargetIds.add(node.route_loop.routes.exhausted);
       initialBlockingRouteTargetIds.add(node.route_loop.routes.positive);
       initialBlockingRouteTargetIds.add(node.route_loop.routes.exhausted);
-      const negativeRerunPath = collectPathNodesToTarget(
+      const negativeRerunPath = collectPathNodesToAnyTarget(
         node.route_loop.routes.negative,
-        node.route_loop.from,
+        new Set(node.depends_on ?? []),
         dependents
       );
       if (negativeRerunPath === null) {
@@ -3380,6 +3428,12 @@ export async function executeDagWorkflow(
     const isParallelLayer = layer.length > 1;
     const layerExecutableNodes = layer.filter(isCheckpointableExecutableNode);
     const scheduledAtLayerStart = new Set(scheduledRouteRerunNodeIds);
+    const activeDependencyIdsAtLayerStart = new Map(
+      Array.from(scheduledRouteRerunActiveDependencyIds, ([nodeId, deps]) => [
+        nodeId,
+        new Set(deps),
+      ])
+    );
     const scheduleVersionsAtLayerStart = new Map(routeRerunScheduleVersions);
     const activatedRouteTargetsAtLayerStart = new Set(activatedRouteTargetIds);
     let routeJumpLayerIndex: number | undefined;
@@ -3516,7 +3570,14 @@ export async function executeDagWorkflow(
           }
 
           // 1. Evaluate trigger rule
-          const triggerDecision = checkTriggerRule(node, nodeOutputs);
+          const activeDependencyIds = scheduledAtLayerStart.has(node.id)
+            ? activeDependencyIdsAtLayerStart.get(node.id)
+            : undefined;
+          const triggerDecision = checkTriggerRule(
+            node,
+            nodeOutputs,
+            activeDependencyIds ? Array.from(activeDependencyIds) : undefined
+          );
           if (triggerDecision === 'skip') {
             getLog().info({ nodeId: node.id, reason: 'trigger_rule' }, 'dag_node_skipped');
             await logNodeSkip(logDir, workflowRun.id, node.id, 'trigger_rule').catch(
@@ -3788,16 +3849,21 @@ export async function executeDagWorkflow(
           }
 
           if (isRouteLoopNode(node)) {
-            const fromOutput = nodeOutputs.get(node.route_loop.from);
-            if (fromOutput?.state !== 'completed') {
-              return {
-                nodeId: node.id,
-                output: {
-                  state: 'failed' as const,
-                  output: '',
-                  error: `route_loop '${node.id}' cannot evaluate condition because '${node.route_loop.from}' has not completed successfully`,
-                },
-              };
+            const sourceNodeIds = node.depends_on ?? [];
+            const requiredSourceNodeIds =
+              activeDependencyIds !== undefined ? Array.from(activeDependencyIds) : sourceNodeIds;
+            for (const sourceNodeId of requiredSourceNodeIds) {
+              const sourceOutput = nodeOutputs.get(sourceNodeId);
+              if (sourceOutput?.state !== 'completed') {
+                return {
+                  nodeId: node.id,
+                  output: {
+                    state: 'failed' as const,
+                    output: '',
+                    error: `route_loop '${node.id}' cannot evaluate condition because source dependency '${sourceNodeId}' has not completed successfully`,
+                  },
+                };
+              }
             }
 
             const { result: conditionResult, parsed: conditionParsed } = evaluateCondition(
@@ -3821,6 +3887,7 @@ export async function executeDagWorkflow(
                 metadata: routeLoopMetadata,
                 routeLoopNodeId: node.id,
                 routeLoop: node.route_loop,
+                sourceNodeIds,
                 conditionResult,
               });
               assertRouteTargetCanBeActivated(nextTransition.eventData.to, nodeOutputs);
@@ -3867,7 +3934,10 @@ export async function executeDagWorkflow(
             });
             activatedRouteTargetIds.add(transition.eventData.to);
             for (const rerunNodeId of selectedRerunPlan.rerunNodeIds) {
-              scheduleRouteRerunNode(rerunNodeId);
+              scheduleRouteRerunNode(
+                rerunNodeId,
+                selectedRerunPlan.activeDependenciesByNode.get(rerunNodeId)
+              );
             }
 
             const targetLayerIndex = nodeLayerIndex.get(transition.eventData.to);

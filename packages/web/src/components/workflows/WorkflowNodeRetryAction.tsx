@@ -75,10 +75,9 @@ export function WorkflowNodeRetryAction({
             <p>
               Route-loop controller nodes are not retried directly. Select{' '}
               <code className="rounded bg-background px-1 font-mono text-[11px] text-text-primary">
-                {actionState.fromNodeId}
+                {actionState.sourceNodeId}
               </code>{' '}
-              from <code className="font-mono text-[11px]">route_loop.from</code> and retry that
-              node to rerun the route decision.
+              from the controller dependencies and retry that node to rerun the route decision.
             </p>
             {actionState.command && (
               <code className="block break-all rounded bg-background px-2 py-1 font-mono text-[11px] text-text-secondary">

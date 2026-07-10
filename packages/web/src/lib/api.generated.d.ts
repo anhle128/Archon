@@ -3678,6 +3678,7 @@ export interface components {
       always_run?: boolean;
       persist_session?: boolean;
       output_type?: string;
+      prompt_suffix?: string;
       command?: string;
       prompt?: string;
       bash?: string;
@@ -3692,7 +3693,6 @@ export interface components {
         gate_message?: string;
       };
       route_loop?: {
-        from: string;
         condition: string;
         /** @default 10 */
         max_iterations: number;
@@ -3836,7 +3836,7 @@ export interface components {
           step_index: number | null;
           step_name: string | null;
           data: {
-            from: string;
+            sources: string[];
             /** @enum {string} */
             outcome: 'positive' | 'negative' | 'exhausted';
             to: string;
@@ -3876,8 +3876,7 @@ export interface components {
       provider?: string;
       model?: string;
       tier?: string;
-      /** @enum {string} */
-      modelReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+      modelReasoningEffort?: string;
       /** @enum {string} */
       effort?: 'low' | 'medium' | 'high' | 'max';
       thinking?:

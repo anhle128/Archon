@@ -125,7 +125,7 @@ describe('workflow-events', () => {
 
     test('preserves prior route attempts and node_routed metadata in event history', async () => {
       const negativeRouteDecision = {
-        from: 'review',
+        sources: ['review'],
         outcome: 'negative',
         to: 'fix',
         condition: "$review.output.result == '<redacted>'",
@@ -136,7 +136,7 @@ describe('workflow-events', () => {
         execution_seq: 1,
       };
       const positiveRouteDecision = {
-        from: 'review',
+        sources: ['review'],
         outcome: 'positive',
         to: 'done',
         condition: "$review.output.result == '<redacted>'",
@@ -568,7 +568,7 @@ describe('workflow-events', () => {
             event_type: 'node_routed',
             step_name: 'review-router',
             data: {
-              from: 'review',
+              sources: ['review'],
               outcome: 'negative',
               to: 'fix',
               condition: "$review.output.result == '<redacted>'",
@@ -597,7 +597,7 @@ describe('workflow-events', () => {
             event_type: 'node_routed',
             step_name: 'review-router',
             data: {
-              from: 'review',
+              sources: ['review'],
               outcome: 'positive',
               to: 'done',
               condition: "$review.output.result == '<redacted>'",

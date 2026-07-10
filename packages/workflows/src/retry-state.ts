@@ -77,8 +77,13 @@ export function getRetryInvalidatedNodeIds(
     throw new Error(`Retry target node not found in current workflow DAG: ${targetNodeId}`);
   }
   if (isRouteLoopNode(targetNode)) {
+    const sources = targetNode.depends_on ?? [];
+    const sourceMessage =
+      sources.length === 1
+        ? `its source dependency '${sources[0]}'`
+        : `one of its source dependencies [${sources.join(', ')}]`;
     throw new Error(
-      `Cannot retry route_loop controller node '${targetNodeId}' directly; retry its source node '${targetNode.route_loop.from}' instead`
+      `Cannot retry route_loop controller node '${targetNodeId}' directly; retry ${sourceMessage} instead`
     );
   }
   return [targetNodeId, ...getDagDescendantNodeIds(nodes, targetNodeId)];

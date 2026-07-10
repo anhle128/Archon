@@ -57,7 +57,11 @@ function routeLoopEdgeLabel(
   };
 }
 
-function routeLoopConfigToEdges(nodeId: string, routeLoop: RouteLoopConfig): Edge[] {
+function routeLoopConfigToEdges(
+  nodeId: string,
+  routeLoop: RouteLoopConfig,
+  sourceNodeIds: readonly string[]
+): Edge[] {
   const routeEdges = ROUTE_OUTCOMES.flatMap(outcome => {
     const target = routeLoop.routes[outcome].trim();
     if (!target) return [];
@@ -72,20 +76,19 @@ function routeLoopConfigToEdges(nodeId: string, routeLoop: RouteLoopConfig): Edg
       },
     ] satisfies Edge[];
   });
-  const from = routeLoop.from.trim();
-  return [
-    ...(from
-      ? [
-          {
-            id: `${from}->${nodeId}`,
-            source: from,
-            target: nodeId,
-            type: 'smoothstep',
-          } satisfies Edge,
-        ]
-      : []),
-    ...routeEdges,
-  ];
+  const sourceEdges = sourceNodeIds.flatMap(source => {
+    const sourceId = source.trim();
+    if (!sourceId) return [];
+    return [
+      {
+        id: `${sourceId}->${nodeId}`,
+        source: sourceId,
+        target: nodeId,
+        type: 'smoothstep',
+      },
+    ] satisfies Edge[];
+  });
+  return [...sourceEdges, ...routeEdges];
 }
 
 function NodeLibraryPanel({
@@ -299,8 +302,18 @@ function WorkflowBuilderInner(): React.ReactElement {
       setNodes(nds =>
         nds.map(n => (n.id === selectedNodeId ? { ...n, data: { ...n.data, ...updates } } : n))
       );
-      const routeLoopUpdate = updates.route_loop;
-      if (selectedNodeId && routeLoopUpdate) {
+      const selectedNode = nodes.find(node => node.id === selectedNodeId);
+      const routeLoopUpdate = updates.route_loop ?? selectedNode?.data.route_loop;
+      const updatesDependsOn = Object.prototype.hasOwnProperty.call(updates, 'depends_on');
+      const shouldRebuildRouteLoopEdges =
+        selectedNodeId !== null &&
+        selectedNode?.data.nodeType === 'route_loop' &&
+        routeLoopUpdate !== undefined &&
+        (updates.route_loop !== undefined || updatesDependsOn);
+      if (selectedNodeId && shouldRebuildRouteLoopEdges) {
+        const sourceNodeIds = updatesDependsOn
+          ? (updates.depends_on ?? [])
+          : (selectedNode?.data.depends_on ?? []);
         setEdges(eds => [
           ...eds.filter(
             edge =>
@@ -311,12 +324,12 @@ function WorkflowBuilderInner(): React.ReactElement {
                   !ROUTE_OUTCOMES.some(outcome => outcome === edge.sourceHandle))
               )
           ),
-          ...routeLoopConfigToEdges(selectedNodeId, routeLoopUpdate),
+          ...routeLoopConfigToEdges(selectedNodeId, routeLoopUpdate, sourceNodeIds),
         ]);
       }
       markDirty();
     },
-    [selectedNodeId, setNodes, setEdges, markDirty]
+    [nodes, selectedNodeId, setNodes, setEdges, markDirty]
   );
 
   const handleNodeDeleteById = useCallback(

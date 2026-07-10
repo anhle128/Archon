@@ -39,7 +39,6 @@ function resolveNodeLabel(nodeType: CanvasNodeType, commandName: string): string
 
 function defaultRouteLoopConfig(): RouteLoopConfig {
   return {
-    from: '',
     condition: '',
     max_iterations: 10,
     routes: {
@@ -103,12 +102,10 @@ export function reactFlowToDagNodes(rfNodes: DagFlowNode[], rfEdges: Edge[]): Da
 
     if (node.data.nodeType === 'route_loop') {
       const existing = node.data.route_loop ?? defaultRouteLoopConfig();
-      const from = existing.from.trim();
       return {
         id: node.id,
-        depends_on: from ? [from] : undefined,
+        depends_on: deps.length > 0 ? deps : undefined,
         route_loop: {
-          from,
           condition: existing.condition || node.data.promptText || '',
           max_iterations: Number.isFinite(existing.max_iterations) ? existing.max_iterations : 10,
           routes: existing.routes,
@@ -218,13 +215,6 @@ export function WorkflowCanvas({
           ) {
             return false;
           }
-          if (
-            targetIsRouteLoop &&
-            edge.target === connection.target &&
-            !isRouteOutcome(edge.sourceHandle)
-          ) {
-            return false;
-          }
           return true;
         });
         return addEdge(
@@ -253,16 +243,14 @@ export function WorkflowCanvas({
               };
             }
             if (targetIsRouteLoop && node.id === connection.target) {
-              const existing = node.data.route_loop ?? defaultRouteLoopConfig();
+              const nextDeps = Array.from(
+                new Set([...(node.data.depends_on ?? []), connection.source ?? ''].filter(Boolean))
+              );
               return {
                 ...node,
                 data: {
                   ...node.data,
-                  depends_on: [connection.source ?? ''],
-                  route_loop: {
-                    ...existing,
-                    from: connection.source ?? '',
-                  },
+                  depends_on: nextDeps.length > 0 ? nextDeps : undefined,
                 },
               };
             }
@@ -363,25 +351,23 @@ export function WorkflowCanvas({
                 changed = true;
               }
               if (edge.target === node.id && !isRouteOutcome(edge.sourceHandle)) {
-                const replacement = edges.find(
-                  candidate =>
-                    !removedIds.has(candidate.id) &&
-                    candidate.target === node.id &&
-                    !isRouteOutcome(candidate.sourceHandle)
-                );
-                routeLoop = {
-                  ...routeLoop,
-                  from: replacement?.source ?? '',
-                };
                 changed = true;
               }
             }
             if (!changed) return node;
+            const nextDeps = edges
+              .filter(
+                candidate =>
+                  !removedIds.has(candidate.id) &&
+                  candidate.target === node.id &&
+                  !isRouteOutcome(candidate.sourceHandle)
+              )
+              .map(candidate => candidate.source);
             return {
               ...node,
               data: {
                 ...node.data,
-                depends_on: routeLoop.from ? [routeLoop.from] : undefined,
+                depends_on: nextDeps.length > 0 ? nextDeps : undefined,
                 route_loop: routeLoop,
               },
             };

@@ -55,7 +55,7 @@ describe('buildWorkflowDagNodeStates', () => {
 
   test('projects node_routed events as completed route-loop decisions', () => {
     const routeDecision = {
-      from: 'review',
+      sources: ['review'],
       outcome: 'negative',
       to: 'fix',
       condition: "$review.output.approved == '<redacted>'",

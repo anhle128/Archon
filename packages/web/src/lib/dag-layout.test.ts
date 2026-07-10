@@ -9,7 +9,6 @@ import type { DagNode } from '@/lib/api';
 
 type RouteLoopDagNode = DagNode & {
   route_loop: {
-    from: string;
     condition: string;
     max_iterations: number;
     routes: {
@@ -25,7 +24,6 @@ function routeLoopDagNodes(): DagNode[] {
     id: 'review_router',
     depends_on: ['review'],
     route_loop: {
-      from: 'review',
       condition: "$review.output.status == 'approved'",
       max_iterations: 3,
       routes: {
@@ -63,7 +61,6 @@ function routeTargetDagNodes(): DagNode[] {
     id: 'code-review-gate',
     depends_on: ['code-review'],
     route_loop: {
-      from: 'code-review',
       condition: "$code-review.output.status == 'approved'",
       max_iterations: 3,
       routes: {

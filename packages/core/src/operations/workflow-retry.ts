@@ -165,9 +165,14 @@ export async function prepareWorkflowNodeRetry(
     );
   }
   if (isRouteLoopNode(targetNode)) {
+    const sources = targetNode.depends_on ?? [];
+    const sourceMessage =
+      sources.length === 1
+        ? `its source dependency '${sources[0]}'`
+        : `one of its source dependencies [${sources.join(', ')}]`;
     throw new WorkflowRetryError(
       'node_not_retryable',
-      `Cannot retry route_loop controller node '${input.nodeId}' directly; retry its source node '${targetNode.route_loop.from}' instead`
+      `Cannot retry route_loop controller node '${input.nodeId}' directly; retry ${sourceMessage} instead`
     );
   }
 

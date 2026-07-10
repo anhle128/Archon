@@ -299,7 +299,6 @@ Archon supports eight node types. Exactly one mode field is required per node:
 - id: review-router
   depends_on: [review]
   route_loop:
-    from: review
     condition: "$review.output.result == 'positive'"
     max_iterations: 3
     routes:
@@ -308,7 +307,7 @@ Archon supports eight node types. Exactly one mode field is required per node:
       exhausted: escalation
 ```
 
-The controller reads the latest completed output from `route_loop.from`.
+The controller reads the latest completed output from the source dependencies listed in `depends_on`.
 `positive` activates the success target, `negative` activates the configured retry path while budget remains, and `exhausted` activates the fallback target after the false-result budget is consumed.
 Unselected targets stay dormant, not skipped.
 The route-loop node emits a `node_routed` event and exposes JSON route metadata as `$review-router.output`.
@@ -369,7 +368,7 @@ If the run was created from the CLI or another non-web surface, use the CLI comm
 `retry-node` is different from `resume`. `archon workflow resume <run-id>` resumes a failed run and skips completed nodes, while `retry-node` deliberately invalidates one failed node plus descendants so that branch can run again with a fresh retry epoch.
 
 Route-loop controller nodes cannot be retried directly.
-Retry the node named by `route_loop.from` so the fresh source output flows through the controller again.
+Retry a source dependency listed in the controller's `depends_on` so the fresh source output flows through the controller again.
 
 ---
 

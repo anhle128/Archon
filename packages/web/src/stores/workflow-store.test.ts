@@ -160,7 +160,7 @@ describe('handleDagNode', () => {
 
   test('stores route decision metadata from node_routed dag events', () => {
     const routeDecision = {
-      from: 'review',
+      sources: ['review'],
       outcome: 'positive',
       to: 'done',
       condition: "$review.output.approved == '<redacted>'",

@@ -65,7 +65,6 @@ describe('dagNodeComponent route-loop handles', () => {
       label: 'Review Router',
       nodeType: 'route_loop',
       route_loop: {
-        from: 'review',
         condition: '$review.output.approved == true',
         routes: {
           positive: 'done',

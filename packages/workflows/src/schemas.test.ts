@@ -295,7 +295,6 @@ describe('dagNodeSchema - RouteLoopNode', () => {
     id: 'review-router',
     depends_on: ['review'],
     route_loop: {
-      from: 'review',
       condition: '$review.output.approved == true',
       routes: {
         positive: 'done',
@@ -313,7 +312,6 @@ describe('dagNodeSchema - RouteLoopNode', () => {
       expect(isRouteLoopNode(result.data)).toBe(true);
       const node = result.data as RouteLoopNode;
       expect(node.route_loop).toEqual({
-        from: 'review',
         condition: '$review.output.approved == true',
         max_iterations: 10,
         routes: {
@@ -327,7 +325,6 @@ describe('dagNodeSchema - RouteLoopNode', () => {
 
   test('keeps explicit max_iterations inside the bounded route budget range', () => {
     const result = routeLoopConfigSchema.safeParse({
-      from: 'review',
       condition: "$review.output == 'ok'",
       max_iterations: 1,
       routes: {
@@ -341,6 +338,20 @@ describe('dagNodeSchema - RouteLoopNode', () => {
     if (result.success) {
       expect(result.data.max_iterations).toBe(1);
     }
+  });
+
+  test('rejects legacy route_loop.from', () => {
+    const result = routeLoopConfigSchema.safeParse({
+      from: 'review',
+      condition: "$review.output == 'ok'",
+      routes: {
+        positive: 'done',
+        negative: 'fix',
+        exhausted: 'escalation',
+      },
+    });
+
+    expect(result.success).toBe(false);
   });
 
   test('rejects route_loop combined with another execution mode', () => {
@@ -362,7 +373,6 @@ describe('dagNodeSchema - RouteLoopNode', () => {
       expect(dagNodeSchema.safeParse({ ...routeLoopNode, id }).success).toBe(false);
       expect(
         routeLoopConfigSchema.safeParse({
-          from: 'review',
           condition: "$review.output == 'ok'",
           routes: {
             positive: id,
@@ -535,7 +545,6 @@ describe('workflowRunSchema - route-loop runtime metadata', () => {
   };
 
   const reviewRouteLoop: RouteLoopConfig = {
-    from: 'review',
     condition: "$review.output.result == 'positive'",
     max_iterations: 10,
     routes: {
@@ -614,6 +623,7 @@ describe('workflowRunSchema - route-loop runtime metadata', () => {
         routeActivations: {},
       },
       routeLoopNodeId: 'review-router',
+      sourceNodeIds: ['review'],
       conditionResult: false,
       routeLoop: reviewRouteLoop,
     });
@@ -630,6 +640,7 @@ describe('workflowRunSchema - route-loop runtime metadata', () => {
         routeActivations: {},
       },
       routeLoopNodeId: 'review-router',
+      sourceNodeIds: ['review'],
       conditionResult: true,
       routeLoop: reviewRouteLoop,
     });
@@ -649,6 +660,7 @@ describe('workflowRunSchema - route-loop runtime metadata', () => {
         routeActivations: {},
       },
       routeLoopNodeId: 'review-router',
+      sourceNodeIds: ['review'],
       conditionResult: true,
       routeLoop: reviewRouteLoop,
     });
@@ -665,6 +677,7 @@ describe('workflowRunSchema - route-loop runtime metadata', () => {
         routeActivations: {},
       },
       routeLoopNodeId: 'review-router',
+      sourceNodeIds: ['review'],
       conditionResult: false,
       routeLoop: reviewRouteLoop,
     });
@@ -676,9 +689,9 @@ describe('workflowRunSchema - route-loop runtime metadata', () => {
     const transition = applyRouteLoopTransition({
       metadata: {},
       routeLoopNodeId: 'review-router',
+      sourceNodeIds: ['review'],
       conditionResult: false,
       routeLoop: {
-        from: 'review',
         condition: "$review.output.result == 'positive'",
         max_iterations: 10,
         routes: {
@@ -704,7 +717,7 @@ describe('workflowRunSchema - route-loop runtime metadata', () => {
       },
     });
     expect(transition.eventData).toEqual({
-      from: 'review',
+      sources: ['review'],
       outcome: 'negative',
       to: 'fix',
       condition: "$review.output.result == '<redacted>'",
@@ -725,9 +738,9 @@ describe('workflowRunSchema - route-loop runtime metadata', () => {
         routeActivations: {},
       },
       routeLoopNodeId: 'review-router',
+      sourceNodeIds: ['review'],
       conditionResult: true,
       routeLoop: {
-        from: 'review',
         condition: '$review.output.score >= 80',
         max_iterations: 10,
         routes: {
@@ -764,9 +777,9 @@ describe('workflowRunSchema - route-loop runtime metadata', () => {
         routeActivations: {},
       },
       routeLoopNodeId: 'review-router',
+      sourceNodeIds: ['review'],
       conditionResult: false,
       routeLoop: {
-        from: 'review',
         condition: "$review.output.result == 'positive'",
         max_iterations: 1,
         routes: {

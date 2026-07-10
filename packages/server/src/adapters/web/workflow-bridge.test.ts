@@ -32,7 +32,7 @@ describe('mapWorkflowEvent', () => {
 
   test('maps live node_routed events to completed dag_node events with route decision metadata', () => {
     const routeDecision = {
-      from: 'review',
+      sources: ['review'],
       outcome: 'exhausted',
       to: 'escalate',
       condition: "$review.output.approved == '<redacted>'",

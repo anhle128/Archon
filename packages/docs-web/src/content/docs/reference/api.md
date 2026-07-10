@@ -314,7 +314,7 @@ curl -X POST http://localhost:3090/api/workflows/runs/{runId}/nodes/{nodeId}/ret
 
 Retries the selected failed node and its current DAG descendants in the same run. The run must be failed, the node's latest effective status must be `failed`, and Web retry only applies to web-created runs with a web parent conversation. CLI-created or non-web runs should use `archon workflow retry-node <run-id> <node-id>`.
 Route-loop controller nodes are rejected as direct retry targets.
-Retry the node named by `route_loop.from` so the refreshed source output reaches the controller again.
+Retry a source dependency listed in the controller's `depends_on` so the refreshed source output reaches the controller again.
 
 Success returns `{ success, message, runId, nodeId, retryEpoch, invalidatedNodes, safetyCommitSha? }`. The `safetyCommitSha` field is present when Archon created a safety ref before resetting the checkout.
 

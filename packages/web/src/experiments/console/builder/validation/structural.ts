@@ -131,8 +131,8 @@ function checkRequiredFields(node: BuilderNode): Issue[] {
         invalid('loop.max_iterations', 'loop requires a positive integer max_iterations');
       break;
     case 'route_loop': {
-      if (node.data.from.trim().length === 0)
-        missing('route_loop.from', 'route_loop requires a source node');
+      if ((node.base.depends_on ?? []).length === 0)
+        missing('depends_on', 'route_loop requires at least one source dependency');
       if (node.data.condition.trim().length === 0)
         missing('route_loop.condition', 'route_loop requires a condition');
       if (!Number.isInteger(node.data.max_iterations) || node.data.max_iterations <= 0)

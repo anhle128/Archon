@@ -18,7 +18,6 @@ const ROUTE_LAYOUT_OUTCOMES = [
 ] as const satisfies readonly RouteOutcome[];
 
 interface RouteLoopConfig {
-  from: string;
   condition: string;
   max_iterations: number;
   routes: Record<RouteOutcome, string>;
@@ -31,17 +30,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function getRouteLoopConfig(dn: DagNode): RouteLoopConfig | null {
   const routeLoop = (dn as { route_loop?: unknown }).route_loop;
   if (!isRecord(routeLoop) || !isRecord(routeLoop.routes)) return null;
-  if (
-    typeof routeLoop.from !== 'string' ||
-    typeof routeLoop.condition !== 'string' ||
-    typeof routeLoop.max_iterations !== 'number'
-  ) {
+  if (typeof routeLoop.condition !== 'string' || typeof routeLoop.max_iterations !== 'number') {
     return null;
   }
   const routes = routeLoop.routes;
   if (!ROUTE_OUTCOMES.every(outcome => typeof routes[outcome] === 'string')) return null;
   return {
-    from: routeLoop.from,
     condition: routeLoop.condition,
     max_iterations: routeLoop.max_iterations,
     routes: {

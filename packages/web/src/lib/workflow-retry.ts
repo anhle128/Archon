@@ -24,7 +24,7 @@ export type WorkflowNodeRetryActionState =
   | { kind: 'hidden' }
   | { kind: 'web'; runId: string; nodeId: string }
   | { kind: 'cli'; command: string }
-  | { kind: 'route-loop-guidance'; fromNodeId: string; command?: string };
+  | { kind: 'route-loop-guidance'; sourceNodeId: string; command?: string };
 
 export function buildRetryWorkflowNodePath(runId: string, nodeId: string): string {
   return `/api/workflows/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/retry`;
@@ -44,12 +44,15 @@ function isRetryableRunStatus(status: WorkflowRunStatus): boolean {
   return status === 'failed' || status === 'cancelled';
 }
 
-export function getRouteLoopRetryFromNodeId(node: RetryableNodeState): string | null {
+export function getRouteLoopRetrySourceNodeId(node: RetryableNodeState): string | null {
   const routeDecision = node.routeDecision;
   if (!routeDecision) return null;
 
-  const fromNodeId = routeDecision.from;
-  return typeof fromNodeId === 'string' && fromNodeId.length > 0 ? fromNodeId : null;
+  const sourceNodeIds = routeDecision.sources;
+  if (!Array.isArray(sourceNodeIds)) return null;
+
+  const sourceNodeId = sourceNodeIds[0];
+  return typeof sourceNodeId === 'string' && sourceNodeId.length > 0 ? sourceNodeId : null;
 }
 
 export function getWorkflowRetryRunIneligibility(
@@ -66,14 +69,14 @@ export function getWorkflowNodeRetryActionState(
   run: WorkflowRetryRunContext,
   node: RetryableNodeState
 ): WorkflowNodeRetryActionState {
-  const routeLoopFromNodeId = getRouteLoopRetryFromNodeId(node);
-  if (isRetryableRunStatus(run.status) && routeLoopFromNodeId) {
+  const routeLoopSourceNodeId = getRouteLoopRetrySourceNodeId(node);
+  if (isRetryableRunStatus(run.status) && routeLoopSourceNodeId) {
     const ineligible = getWorkflowRetryRunIneligibility(run);
     return {
       kind: 'route-loop-guidance',
-      fromNodeId: routeLoopFromNodeId,
+      sourceNodeId: routeLoopSourceNodeId,
       ...(ineligible === 'cli-created'
-        ? { command: buildCliRetryCommand(run.runId, routeLoopFromNodeId) }
+        ? { command: buildCliRetryCommand(run.runId, routeLoopSourceNodeId) }
         : {}),
     };
   }

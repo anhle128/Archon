@@ -2105,7 +2105,7 @@ nodes:
         reviewExtra?: string;
         routerDependsOn?: string;
         routerExtra?: string;
-        from?: string;
+        routeLoopExtra?: string;
         routes?: string;
       } = {}
     ): Promise<Awaited<ReturnType<typeof discoverWorkflows>>> {
@@ -2125,8 +2125,7 @@ ${overrides.reviewExtra ?? ''}
   - id: review-router
     depends_on: ${overrides.routerDependsOn ?? '[review]'}
 ${overrides.routerExtra ?? ''}    route_loop:
-      from: ${overrides.from ?? 'review'}
-      condition: ${JSON.stringify(overrides.condition ?? '$review.output.approved == true')}
+${overrides.routeLoopExtra ?? ''}      condition: ${JSON.stringify(overrides.condition ?? '$review.output.approved == true')}
       routes:
 ${overrides.routes ?? baseRoutes}
 ${overrides.extraNodes ?? ''}
@@ -2141,7 +2140,7 @@ ${overrides.extraNodes ?? ''}
       return discoverWorkflows(testDir, { loadDefaults: false });
     }
 
-    it('accepts a route_loop with required routes and a matching source dependency', async () => {
+    it('accepts a route_loop with required routes and source dependencies', async () => {
       const result = await discoverRouteLoopWorkflow();
 
       expect(result.errors).toHaveLength(0);
@@ -2151,7 +2150,6 @@ ${overrides.extraNodes ?? ''}
           id: 'review-router',
           depends_on: ['review'],
           route_loop: expect.objectContaining({
-            from: 'review',
             max_iterations: 10,
           }),
         })
@@ -2168,11 +2166,21 @@ ${overrides.extraNodes ?? ''}
       expect(result.errors[0].error).toContain('exhausted');
     });
 
-    it('rejects a route_loop whose depends_on does not match route_loop.from', async () => {
-      const result = await discoverRouteLoopWorkflow({ routerDependsOn: '[fix]' });
+    it('rejects legacy route_loop.from', async () => {
+      const result = await discoverRouteLoopWorkflow({
+        routeLoopExtra: `      from: review
+`,
+      });
 
       expect(result.errors).toHaveLength(1);
-      expect(result.errors[0].error).toContain('depends_on[0] must equal route_loop.from');
+      expect(result.errors[0].error).toContain('from');
+    });
+
+    it('rejects a route_loop without source dependencies', async () => {
+      const result = await discoverRouteLoopWorkflow({ routerDependsOn: '[]' });
+
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain('must declare at least one depends_on entry');
     });
 
     it('rejects a route_loop target that does not exist', async () => {
@@ -2219,17 +2227,17 @@ ${overrides.extraNodes ?? ''}
       );
     });
 
-    it('rejects when on the route_loop from node', async () => {
+    it('rejects when on a route_loop source node', async () => {
       const result = await discoverRouteLoopWorkflow({
         reviewExtra: `    when: "$fix.output == 'ready'"
 `,
       });
 
       expect(result.errors).toHaveLength(1);
-      expect(result.errors[0].error).toContain("from node 'review' must not declare when");
+      expect(result.errors[0].error).toContain("source node 'review' must not declare when");
     });
 
-    it('allows trigger_rule on the route_loop from node', async () => {
+    it('allows trigger_rule on a route_loop source node', async () => {
       const result = await discoverRouteLoopWorkflow({
         reviewExtra: `    trigger_rule: all_done
 `,
@@ -2239,16 +2247,16 @@ ${overrides.extraNodes ?? ''}
       expect(result.workflows).toHaveLength(1);
     });
 
-    it('rejects route_loop.condition references to nodes other than route_loop.from', async () => {
+    it('rejects route_loop.condition references to nodes outside route_loop depends_on', async () => {
       const result = await discoverRouteLoopWorkflow({
         condition: "$fix.output == 'ready'",
       });
 
       expect(result.errors).toHaveLength(1);
-      expect(result.errors[0].error).toContain("only route_loop.from 'review' is allowed");
+      expect(result.errors[0].error).toContain('only route_loop depends_on sources [review]');
     });
 
-    it('accepts compound route_loop.condition references when every atom uses route_loop.from', async () => {
+    it('accepts compound route_loop.condition references when every atom uses a source dependency', async () => {
       const result = await discoverRouteLoopWorkflow({
         reviewOutputFormat: `    output_format:
       type: object
@@ -2264,7 +2272,25 @@ ${overrides.extraNodes ?? ''}
       expect(result.workflows).toHaveLength(1);
     });
 
-    it('rejects field references when the from node does not declare output_format.properties', async () => {
+    it('accepts condition references from multiple route_loop source dependencies', async () => {
+      const result = await discoverRouteLoopWorkflow({
+        routerDependsOn: '[review, secondary-review]',
+        condition: '$review.output.approved == true && $secondary-review.output.approved == true',
+        extraNodes: `  - id: secondary-review
+    prompt: "Secondary review"
+    output_format:
+      type: object
+      properties:
+        approved:
+          type: boolean
+`,
+      });
+
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+    });
+
+    it('rejects field references when the source node does not declare output_format.properties', async () => {
       const result = await discoverRouteLoopWorkflow({
         reviewOutputFormat: '',
       });
@@ -2273,7 +2299,7 @@ ${overrides.extraNodes ?? ''}
       expect(result.errors[0].error).toContain('must declare output_format.properties');
     });
 
-    it('rejects field references that are not declared on the from node output schema', async () => {
+    it('rejects field references that are not declared on the source node output schema', async () => {
       const result = await discoverRouteLoopWorkflow({
         condition: "$review.output.status == 'approved'",
       });
@@ -2314,7 +2340,7 @@ ${overrides.extraNodes ?? ''}
       expect(result.errors[0].error).toContain('must be an exit path');
     });
 
-    it('rejects an exhausted route that points back to route_loop.from', async () => {
+    it('rejects an exhausted route that points back to a route_loop source dependency', async () => {
       const result = await discoverRouteLoopWorkflow({
         routes: `        positive: done
         negative: fix
@@ -2326,7 +2352,7 @@ ${overrides.extraNodes ?? ''}
       expect(result.errors[0].error).toContain('must be an exit path');
     });
 
-    it('accepts a negative route that exits instead of returning to route_loop.from', async () => {
+    it('accepts a negative route that exits instead of returning to a route_loop source dependency', async () => {
       const result = await discoverRouteLoopWorkflow({
         routes: `        positive: done
         negative: escalation
@@ -2337,7 +2363,7 @@ ${overrides.extraNodes ?? ''}
       expect(result.workflows).toHaveLength(1);
     });
 
-    it('warns but accepts when the negative route targets route_loop.from directly', async () => {
+    it('warns but accepts when the negative route targets a route_loop source dependency directly', async () => {
       mockLogger.warn.mockClear();
 
       const result = await discoverRouteLoopWorkflow({
@@ -2349,7 +2375,7 @@ ${overrides.extraNodes ?? ''}
       expect(result.errors).toHaveLength(0);
       expect(result.workflows).toHaveLength(1);
       expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ nodeId: 'review-router', from: 'review' }),
+        expect.objectContaining({ nodeId: 'review-router', sources: ['review'] }),
         'route_loop_negative_targets_from_node'
       );
     });
@@ -2388,7 +2414,6 @@ nodes:
   - id: nested-router
     depends_on: [nested-review]
     route_loop:
-      from: nested-review
       condition: "$nested-review.output.ok == true"
       routes:
         positive: review
@@ -2405,7 +2430,6 @@ nodes:
   - id: review-router
     depends_on: [review]
     route_loop:
-      from: review
       condition: "$review.output.approved == true"
       routes:
         positive: done

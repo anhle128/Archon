@@ -163,7 +163,6 @@ nodes:
   - id: code-review-gate
     depends_on: [code-review]
     route_loop:
-      from: code-review
       condition: "$code-review.output.gate == 'PASS'"
       max_iterations: 20
       routes:

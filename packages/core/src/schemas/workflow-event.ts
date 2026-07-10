@@ -9,7 +9,7 @@ import { z } from '@hono/zod-openapi';
 
 export const routeLoopDecisionEventDataSchema = z
   .object({
-    from: z.string().min(1),
+    sources: z.array(z.string().min(1)).min(1),
     outcome: z.enum(['positive', 'negative', 'exhausted']),
     to: z.string().min(1),
     condition: z.string(),

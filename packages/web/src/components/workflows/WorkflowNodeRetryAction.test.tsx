@@ -59,7 +59,7 @@ function routeLoopNode(overrides: Partial<DagNodeState> = {}): DagNodeState {
     name: 'Review Router',
     status: 'completed',
     routeDecision: {
-      from: 'review',
+      sources: ['review'],
       outcome: 'negative',
       to: 'fix',
       condition: "$review.output.approved == '<redacted>'",
@@ -89,18 +89,18 @@ describe('WorkflowNodeRetryAction', () => {
     expect(markup).toContain('Retry');
   });
 
-  test('guides route-loop controllers toward route_loop.from instead of direct retry', () => {
+  test('guides route-loop controllers toward a source dependency instead of direct retry', () => {
     const markup = renderRetryAction({ node: routeLoopNode() });
 
     expect(markup).toContain('Retry the route source node');
-    expect(markup).toContain('route_loop.from');
+    expect(markup).toContain('controller dependencies');
     expect(markup).toContain('review');
     expect(markup).not.toContain('Failed node: Review Router');
     expect(markup).not.toContain('Retry selected node and descendants');
     expect(markup).not.toContain('<button');
   });
 
-  test('shows the route_loop.from CLI retry command for CLI-created runs', () => {
+  test('shows the source dependency CLI retry command for CLI-created runs', () => {
     const markup = renderRetryAction({
       node: routeLoopNode(),
       parentPlatformId: null,

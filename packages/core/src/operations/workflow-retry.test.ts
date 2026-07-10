@@ -211,7 +211,7 @@ describe('workflow retry preparation operation', () => {
     });
   });
 
-  test('guides route-loop controller retry toward the source node', async () => {
+  test('guides route-loop controller retry toward a source dependency', async () => {
     await expect(
       prepareWorkflowNodeRetry(
         makeRequest({
@@ -224,7 +224,6 @@ describe('workflow retry preparation operation', () => {
                 id: 'review-router',
                 depends_on: ['review'],
                 route_loop: {
-                  from: 'review',
                   condition: "$review.output.result == 'positive'",
                   max_iterations: 10,
                   routes: {
@@ -243,7 +242,7 @@ describe('workflow retry preparation operation', () => {
     ).rejects.toMatchObject({
       code: 'node_not_retryable',
       message:
-        "Cannot retry route_loop controller node 'review-router' directly; retry its source node 'review' instead",
+        "Cannot retry route_loop controller node 'review-router' directly; retry its source dependency 'review' instead",
     });
     expect(mockListWorkflowEvents).not.toHaveBeenCalled();
   });

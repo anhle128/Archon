@@ -279,19 +279,19 @@ function validateRouteLoopStructure(nodes: DagNode[]): string | null {
     if (!isRouteLoopNode(node)) continue;
 
     const deps = node.depends_on ?? [];
-    if (deps.length !== 1) {
-      return `Node '${node.id}' route_loop must declare exactly one depends_on entry`;
-    }
-    if (deps[0] !== node.route_loop.from) {
-      return `Node '${node.id}' route_loop depends_on[0] must equal route_loop.from '${node.route_loop.from}'`;
+    if (deps.length === 0) {
+      return `Node '${node.id}' route_loop must declare at least one depends_on entry`;
     }
 
-    const fromNode = nodesById.get(node.route_loop.from);
-    if (fromNode === undefined) {
-      return `Node '${node.id}' route_loop.from references unknown node '${node.route_loop.from}'`;
-    }
-    if (fromNode.when !== undefined) {
-      return `Node '${node.id}' route_loop from node '${fromNode.id}' must not declare when`;
+    const sourceNodeIds = new Set(deps);
+    for (const dep of deps) {
+      const sourceNode = nodesById.get(dep);
+      if (sourceNode === undefined) {
+        return `Node '${node.id}' route_loop depends_on references unknown node '${dep}'`;
+      }
+      if (sourceNode.when !== undefined) {
+        return `Node '${node.id}' route_loop source node '${sourceNode.id}' must not declare when`;
+      }
     }
 
     const routeEntries = Object.entries(node.route_loop.routes);
@@ -305,9 +305,9 @@ function validateRouteLoopStructure(nodes: DagNode[]): string | null {
     }
 
     const negativeTarget = node.route_loop.routes.negative;
-    if (negativeTarget === node.route_loop.from) {
+    if (sourceNodeIds.has(negativeTarget)) {
       getLog().warn(
-        { nodeId: node.id, from: node.route_loop.from, target: negativeTarget },
+        { nodeId: node.id, sources: deps, target: negativeTarget },
         'route_loop_negative_targets_from_node'
       );
     }
@@ -317,9 +317,11 @@ function validateRouteLoopStructure(nodes: DagNode[]): string | null {
       ['exhausted', node.route_loop.routes.exhausted],
     ] as const;
     for (const [outcome, target] of exitRouteEntries) {
-      const reentryPath = collectPathNodesToTarget(target, node.route_loop.from, dependents);
-      if (reentryPath !== null) {
-        return `Node '${node.id}' route_loop route '${outcome}' must be an exit path: target '${target}' reaches route_loop.from '${node.route_loop.from}'`;
+      for (const sourceNodeId of deps) {
+        const reentryPath = collectPathNodesToTarget(target, sourceNodeId, dependents);
+        if (reentryPath !== null) {
+          return `Node '${node.id}' route_loop route '${outcome}' must be an exit path: target '${target}' reaches route_loop source dependency '${sourceNodeId}'`;
+        }
       }
     }
 
@@ -328,17 +330,18 @@ function validateRouteLoopStructure(nodes: DagNode[]): string | null {
       return `Node '${node.id}' route_loop.condition could not be parsed: ${conditionRefs.error}`;
     }
 
-    const declaredFields = declaredFieldsFromSchema(fromNode.output_format);
     for (const ref of conditionRefs.references) {
-      if (ref.nodeId !== node.route_loop.from) {
-        return `Node '${node.id}' route_loop.condition references node '${ref.nodeId}' but only route_loop.from '${node.route_loop.from}' is allowed`;
+      if (!sourceNodeIds.has(ref.nodeId)) {
+        return `Node '${node.id}' route_loop.condition references node '${ref.nodeId}' but only route_loop depends_on sources [${deps.join(', ')}] are allowed`;
       }
       if (ref.field === undefined) continue;
+      const sourceNode = nodesById.get(ref.nodeId);
+      const declaredFields = declaredFieldsFromSchema(sourceNode?.output_format);
       if (declaredFields === undefined) {
-        return `Node '${node.id}' route_loop.condition references field '${ref.field}', but from node '${fromNode.id}' must declare output_format.properties`;
+        return `Node '${node.id}' route_loop.condition references field '${ref.field}', but source node '${ref.nodeId}' must declare output_format.properties`;
       }
       if (!declaredFields.includes(ref.field)) {
-        return `Node '${node.id}' route_loop.condition references field '${ref.field}', which is not declared in from node '${fromNode.id}' output_format.properties`;
+        return `Node '${node.id}' route_loop.condition references field '${ref.field}', which is not declared in source node '${ref.nodeId}' output_format.properties`;
       }
     }
   }

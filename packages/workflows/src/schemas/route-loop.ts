@@ -28,7 +28,6 @@ export type RouteLoopRoutes = z.infer<typeof routeLoopRoutesSchema>;
 
 export const routeLoopConfigSchema = z
   .object({
-    from: safeNodeIdSchema,
     condition: z.string().trim().min(1, 'route_loop.condition must not be empty'),
     max_iterations: z.number().int().min(1).max(100).default(10),
     routes: routeLoopRoutesSchema,

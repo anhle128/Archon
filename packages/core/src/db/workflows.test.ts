@@ -303,7 +303,7 @@ describe('workflows database', () => {
       },
     };
     const eventData = {
-      from: 'review',
+      sources: ['review'],
       outcome: 'negative',
       to: 'fix',
       condition: "$review.output.result == '<redacted>'",

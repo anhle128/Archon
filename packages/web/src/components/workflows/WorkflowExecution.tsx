@@ -119,7 +119,9 @@ function toDagNodeState(nodeState: WorkflowRunNodeState): DagNodeState {
     provider: nodeState.provider,
     model: nodeState.model,
     tier: nodeState.tier,
-    modelReasoningEffort: nodeState.modelReasoningEffort,
+    modelReasoningEffort: isRuntimeModelReasoningEffort(nodeState.modelReasoningEffort)
+      ? nodeState.modelReasoningEffort
+      : undefined,
     effort: nodeState.effort,
     thinking: nodeState.thinking,
   };

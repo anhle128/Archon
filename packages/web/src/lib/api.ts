@@ -15,7 +15,6 @@ export type RouteLoopOutcome = (typeof ROUTE_LOOP_OUTCOMES)[number];
 export type RouteLoopRoutes = Record<RouteLoopOutcome, string>;
 
 export interface RouteLoopConfig {
-  from: string;
   condition: string;
   max_iterations: number;
   routes: RouteLoopRoutes;

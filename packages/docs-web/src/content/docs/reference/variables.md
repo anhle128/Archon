@@ -68,8 +68,8 @@ In DAG workflows, nodes can reference the output of any completed upstream node.
 | `$nodeId.output` | Full output string of the referenced node | The node must be a declared dependency (in `depends_on`) |
 | `$nodeId.output.field` | A specific JSON field from the node's output | Requires the upstream node to expose structured fields through `output_format` or a route-loop output |
 
-For `route_loop.condition`, every node reference must point at the node declared in `route_loop.from`.
-Whole-output references are allowed without `output_format`; field references require the `from` node to declare that field in `output_format.properties`.
+For `route_loop.condition`, every node reference must point at a node listed in the route-loop controller's `depends_on`.
+Whole-output references are allowed without `output_format`; field references require the referenced source node to declare that field in `output_format.properties`.
 If the condition cannot be parsed, or a referenced field is not declared or cannot be resolved, the route-loop controller fails instead of routing negative.
 
 ### Shell Quoting in `bash:` vs `script:`

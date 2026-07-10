@@ -13,7 +13,6 @@ describe('detectVariant', () => {
         {
           id: 'a',
           route_loop: {
-            from: 'review',
             condition: "$review.output.status == 'approved'",
             max_iterations: 3,
             routes: { positive: 'done', negative: 'fix', exhausted: 'escalate' },
@@ -45,7 +44,6 @@ describe('detectVariant', () => {
     const node: WireDagNode = {
       id: 'review-router',
       route_loop: {
-        from: 'review',
         condition: "$review.output.status == 'approved'",
         max_iterations: 3,
         routes: {
@@ -65,7 +63,6 @@ describe('detectVariant', () => {
     const node = {
       id: 'a',
       route_loop: {
-        from: 'review',
         condition: "$review.output.status == 'approved'",
         max_iterations: 3,
         routes: { positive: 'done', negative: 'fix', exhausted: 'escalate' },

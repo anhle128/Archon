@@ -45,7 +45,6 @@ const ROUTE_OUTCOMES = [
 
 function defaultRouteLoopConfig(): RouteLoopConfig {
   return {
-    from: '',
     condition: '',
     max_iterations: 10,
     routes: {
@@ -365,22 +364,6 @@ function GeneralTab({
 
       {node.nodeType === 'route_loop' && (
         <>
-          <Field label="Route Source">
-            <input
-              type="text"
-              value={(node.route_loop ?? defaultRouteLoopConfig()).from}
-              onChange={(e): void => {
-                const from = e.target.value;
-                onUpdate({
-                  route_loop: mergeRouteLoopConfig(node.route_loop, { from }),
-                  depends_on: from.trim() ? [from] : undefined,
-                });
-              }}
-              placeholder="review"
-              className={cn(inputClass, 'font-mono')}
-            />
-          </Field>
-
           <Field label="Condition">
             <input
               type="text"
@@ -444,9 +427,6 @@ function GeneralTab({
           onChange={(deps): void => {
             onUpdate({
               depends_on: deps,
-              ...(node.nodeType === 'route_loop'
-                ? { route_loop: mergeRouteLoopConfig(node.route_loop, { from: deps?.[0] ?? '' }) }
-                : {}),
             });
           }}
         />

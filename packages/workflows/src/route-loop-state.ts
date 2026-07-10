@@ -11,11 +11,12 @@ export interface RouteLoopTransitionInput {
   metadata: Record<string, unknown>;
   routeLoopNodeId: string;
   routeLoop: RouteLoopConfig;
+  sourceNodeIds: string[];
   conditionResult: boolean;
 }
 
 export interface RouteLoopDecisionData extends Record<string, unknown> {
-  from: string;
+  sources: string[];
   outcome: RouteOutcome;
   to: string;
   condition: string;
@@ -65,7 +66,7 @@ export function applyRouteLoopTransition(
   }
 
   const eventData: RouteLoopDecisionData = {
-    from: input.routeLoop.from,
+    sources: input.sourceNodeIds,
     outcome,
     to: targetNodeId,
     condition: serializeSafeRouteCondition(input.routeLoop.condition),
