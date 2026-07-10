@@ -165,6 +165,15 @@ nodes:
     allowed_tools: []
 ```
 
+When the review result is negative, `review-router` activates only `fix`.
+The normal `fix -> review -> review-router` dependency path then produces the next decision.
+When the result is positive, it activates only `done`.
+After the false-result budget is consumed, it activates only `escalation`.
+Unselected targets stay dormant.
+
+Downstream nodes can read route metadata from `$review-router.output`, including `outcome`, `to`, `negative_count`, `max_iterations`, `attempt`, and `execution_seq`.
+Read `$review.output` directly when the downstream node needs the latest review content.
+
 ## Deterministic Script Transform
 
 ```yaml

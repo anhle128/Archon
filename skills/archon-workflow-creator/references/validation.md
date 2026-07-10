@@ -52,7 +52,9 @@ Use `--json` on list and status commands when machine-readable output is needed.
 - Every `$node.output.field` reference matches a declared property or schemaless JSON producer.
 - Every `when` expression uses supported syntax.
 - Route-loop `depends_on[0]` equals `route_loop.from`.
+- Route-loop declares `routes.positive`, `routes.negative`, and `routes.exhausted`, and each target exists.
 - Route-loop positive and exhausted routes are exit paths.
+- Route-loop nodes do not declare `when`, `trigger_rule`, or `retry`.
 - Provider IDs are registered locally.
 - Provider-specific fields match provider capabilities.
 - Human gates set root `interactive: true` when needed.
@@ -87,8 +89,27 @@ Use `max_iterations` and `until_bash` for loop retry behavior.
 `when is not supported on route_loop nodes` means the route-loop controller has a condition in the wrong place.
 Put the condition under `route_loop.condition`.
 
+`trigger_rule is not supported on route_loop nodes` or `retry is not supported on route_loop nodes` means the controller has unsupported common-node control fields.
+Remove those fields and model retry budget with `route_loop.max_iterations`.
+
 `route_loop.condition references field ... but from node must declare output_format.properties` means field routing needs a schema.
 Add `output_format` to the `from` node.
+
+`route_loop.routes.<outcome> references unknown node` means the named positive, negative, or exhausted target does not exist.
+Fix the target ID or add the node.
+
+`route_loop positive route must be an exit path` or `route_loop exhausted route must be an exit path` means a terminal route can reach `route_loop.from` again.
+Move the rerun path to `routes.negative` and keep positive and exhausted as exits.
+
+`route_loop.condition could not be evaluated` means the controller could not parse or resolve its mandatory route condition.
+Fix the expression or source output schema; route loops fail instead of silently choosing negative.
+
+Route-loop controller nodes are not valid `retry-node` targets.
+If a failed route-loop run needs a fresh route decision, retry the source node named by `route_loop.from`:
+
+```bash
+archon workflow retry-node <run-id> <from-node-id>
+```
 
 `provider does not support ... this will be ignored` means the resolved provider lacks that capability.
 Remove the field or switch providers.
