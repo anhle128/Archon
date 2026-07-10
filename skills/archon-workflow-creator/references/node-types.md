@@ -255,7 +255,8 @@ Set root `interactive: true` when using interactive loops from user-facing surfa
 
 Use `route_loop` for deterministic routing after a review or check node.
 It chooses one of three target nodes: `positive`, `negative`, or `exhausted`.
-It is different from a normal loop because it reruns a DAG path rather than repeating a single prompt.
+It is a controller node, not an AI node.
+It differs from `loop` because it reruns a DAG path rather than repeating one prompt.
 
 Required structure:
 
@@ -284,13 +285,25 @@ Required structure:
       exhausted: escalation
 ```
 
+Route-loop config:
+
+| Field                         | Required | Meaning                                                                 |
+| ----------------------------- | -------- | ----------------------------------------------------------------------- |
+| `depends_on`                  | yes      | Exactly one entry, and it must equal `route_loop.from`.                 |
+| `route_loop.from`             | yes      | Source node whose latest completed output drives the route decision.    |
+| `route_loop.condition`        | yes      | Condition expression evaluated against the source node output.          |
+| `route_loop.max_iterations`   | no       | Integer from 1 through 100. Defaults to 10. Counts false decisions.     |
+| `route_loop.routes.positive`  | yes      | Target activated when the condition evaluates true.                     |
+| `route_loop.routes.negative`  | yes      | Target activated when the condition evaluates false and budget remains. |
+| `route_loop.routes.exhausted` | yes      | Target activated when a false decision consumes the budget.             |
+
 Route-loop validation rules:
 
 - The route-loop node must declare exactly one `depends_on`.
 - That dependency must equal `route_loop.from`.
 - `route_loop.from` must reference an existing node.
 - The `from` node must not declare `when`.
-- Route targets must exist.
+- All three route targets must exist.
 - A route target must not be the route-loop node itself.
 - `positive` and `exhausted` routes must be exit paths.
 - `negative` can route back to the rerun path.
@@ -301,6 +314,37 @@ Route-loop validation rules:
 
 Route-loop condition supports the same atom grammar as `when`.
 Use field references for robust routing.
+Whole-output conditions do not require `output_format`.
+Field conditions require the source field to be declared.
+If the condition cannot be parsed, or a referenced field is missing, the route-loop node fails instead of silently routing negative.
+
+Outcome behavior:
+
+- `positive` means the condition evaluated true. It activates `routes.positive` and resets only this route-loop node's negative counter.
+- `negative` means the condition evaluated false and budget remains. It increments the negative counter, then activates `routes.negative`.
+- `exhausted` means the condition evaluated false after the budget was consumed. It activates `routes.exhausted`.
+
+With `max_iterations: 1`, the first false decision routes to `negative`.
+The second consecutive false decision routes to `exhausted`.
+Unselected route targets stay dormant and are not marked as skipped.
+
+Every route decision emits a `node_routed` workflow event.
+The route-loop node completes with JSON route metadata as `$review-router.output`, including `from`, `outcome`, `to`, redacted `condition`, `condition_result`, `negative_count`, `max_iterations`, `attempt`, and `execution_seq`.
+The route-loop output never copies the source node output; read the source node directly when downstream work needs the latest review result.
+
+Do not retry a route-loop controller directly.
+Retry the source node named by `route_loop.from`:
+
+```bash
+archon workflow retry-node <run-id> review
+```
+
+Retrying the source lets the refreshed output flow through the controller again.
+Resume preserves route-loop counters, route activations, attempts, and execution sequence metadata.
+
+In the Web Builder, the single input edge writes both `depends_on[0]` and `route_loop.from`.
+The three output handles write `routes.positive`, `routes.negative`, and `routes.exhausted`.
+Route edges are controller outcomes, not normal dependency edges, and do not make unselected branches run.
 
 ## Approval Nodes
 
