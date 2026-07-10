@@ -2,7 +2,7 @@
 title: Archon Epics Handoff - Hermes Agent Workflow Commander
 status: handoff
 created: '2026-07-02'
-updated: '2026-07-02'
+updated: '2026-07-10'
 storyOwnershipNote: >
   Story numbering is kept identical to the parent workspace's epics.md (Epic 3) so
   cross-references between Archon, hermes-agent, and the parent stay unambiguous.
@@ -18,7 +18,7 @@ This file contains the Archon-owned subset of the parent Hermes Agent Workflow C
 
 **Blocked dependency (all stories below):** every story references shared contract fixtures (workflow command envelope, workflow event envelope, workflow provider binding schema) from parent Stories 1.3a/1.3b/1.3c. As of this handoff (2026-07-02), those fixtures do not exist yet — only a README placeholder exists at `_bmad-output/planning-artifacts/contracts/workflow-commander/` in the parent workspace. No story below should move to implementation-ready until those fixtures exist here or are regenerated into this local handoff.
 
-## Archon-Owned Stories (7 of 35 parent stories)
+## Archon-Owned Stories (7 of 43 parent stories)
 
 ### Story 3.1: Implement Archon Workflow Provider Binding Lifecycle
 
