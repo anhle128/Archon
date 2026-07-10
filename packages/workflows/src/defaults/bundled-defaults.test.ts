@@ -124,7 +124,6 @@ describe('bundled-defaults', () => {
       expect(contents).not.toContain('gh pr create --fill --base $BASE_BRANCH');
       expect(contents).not.toContain('gh pr create --fill --base "$BASE_BRANCH"');
     });
-
   });
 
   describe('BUNDLED_WORKFLOWS', () => {
@@ -156,6 +155,23 @@ describe('bundled-defaults', () => {
       const content = BUNDLED_WORKFLOWS['bmad-create-story-with-tea'];
       expect(content).toContain('id: create-pull-request');
       expect(content).toContain('command: archon-create-pr');
+    });
+
+    it('bmad readiness correction loop should not wait for interactive BMAD gates', () => {
+      const content = BUNDLED_WORKFLOWS['bmad-readiness-correct-course-loop'];
+      expect(content).toContain(
+        'Do not present or wait at menus, including the Step 1 [C] checkpoint.'
+      );
+      expect(content).toContain(
+        "Treat this workflow invocation as the user's batch-mode selection and explicit approval"
+      );
+      expect(content).toContain(
+        'Do not ask for the change trigger, mode selection, proposal review, Continue/Edit, yes/no approval, or any other user confirmation.'
+      );
+      expect(content).toContain('Do not invoke bmad-help or start another interactive workflow.');
+      expect(content).not.toContain(
+        'Do not pause for user input unless the correction is impossible without missing project facts.'
+      );
     });
 
     it('should have valid YAML structure', () => {
