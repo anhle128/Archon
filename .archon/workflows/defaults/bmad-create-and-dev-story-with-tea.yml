@@ -12,7 +12,7 @@ description: |
 
 provider: codex
 modelReasoningEffort: high
-model: gpt-5.5
+model: gpt-5.6-sol
 tags: [BMad, TEA, Planning, Review]
 
 nodes:
@@ -123,7 +123,7 @@ nodes:
     provider: claude
     depends_on: [prepare-bmad-state]
     context: fresh
-    model: "claude-opus-4-6[1M]"
+    model: "sonnet"
     effort: high
     idle_timeout: 900000
     output_format:
@@ -199,7 +199,7 @@ nodes:
     provider: codex
     depends_on: [record-created-story-state]
     context: fresh
-    model: gpt-5.5
+    model: gpt-5.6-sol
     output_type: story-readiness-gate
 
   - id: design-risk-based-tests
@@ -230,7 +230,7 @@ nodes:
     provider: codex
     depends_on: [validate-story-readiness]
     context: fresh
-    model: gpt-5.5
+    model: gpt-5.6-sol
     effort: high
     output_type: risk-based-test-design
 
@@ -275,7 +275,7 @@ nodes:
     effort: high
     depends_on: [design-risk-based-tests]
     context: fresh
-    model: "claude-opus-4-6[1M]"
+    model: "sonnet"
     output_type: red-acceptance-tests
 
   - id: dev-story
@@ -301,7 +301,7 @@ nodes:
     provider: codex
     depends_on: [dev-story]
     context: fresh
-    model: gpt-5.5
+    model: gpt-5.6-sol
     idle_timeout: 900000
     output_format: &code_review_gate_schema
       type: object
