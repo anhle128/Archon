@@ -157,15 +157,21 @@ describe('bundled-defaults', () => {
       expect(content).toContain('command: archon-create-pr');
     });
 
-    it('bmad-create-and-dev-story-with-tea should create, implement, review, and create PR', () => {
-      const content = BUNDLED_WORKFLOWS['bmad-create-and-dev-story-with-tea'];
-      expect(content).toContain('id: create-story');
-      expect(content).toContain('id: dev-story');
-      expect(content).toContain('id: code-review-gate');
-      expect(content).toContain('id: create-pull-request');
-      expect(content).toContain('command: archon-create-pr');
-      expect(content).toContain('modelReasoningEffort: high');
-      expect(content).not.toContain('modelReasoningeffort');
+    it('bmad readiness correction loop should not wait for interactive BMAD gates', () => {
+      const content = BUNDLED_WORKFLOWS['bmad-readiness-correct-course-loop'];
+      expect(content).toContain(
+        'Do not present or wait at menus, including the Step 1 [C] checkpoint.'
+      );
+      expect(content).toContain(
+        "Treat this workflow invocation as the user's batch-mode selection and explicit approval"
+      );
+      expect(content).toContain(
+        'Do not ask for the change trigger, mode selection, proposal review, Continue/Edit, yes/no approval, or any other user confirmation.'
+      );
+      expect(content).toContain('Do not invoke bmad-help or start another interactive workflow.');
+      expect(content).not.toContain(
+        'Do not pause for user input unless the correction is impossible without missing project facts.'
+      );
     });
 
     it('should have valid YAML structure', () => {

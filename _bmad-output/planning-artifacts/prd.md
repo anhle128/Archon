@@ -2,7 +2,7 @@
 title: Archon Planning Handoff - Hermes Agent Workflow Commander
 status: handoff
 created: '2026-07-02'
-updated: '2026-07-02'
+updated: '2026-07-10'
 source: workflow-engine parent workspace, materialized per cross-project-isolated-handoff-contract.md
 ---
 
@@ -10,7 +10,7 @@ source: workflow-engine parent workspace, materialized per cross-project-isolate
 
 ## Purpose
 
-Hermes Agent Workflow Commander makes Hermes Agent the human-facing command center for BMAD planning, Archon workflow execution, GitHub PR state, and local project work.
+Hermes Agent Workflow Commander makes Hermes Agent the human-facing, headless command surface for BMAD planning, Archon workflow execution, GitHub PR state, and local project work.
 Archon is the first workflow provider Hermes controls. This document defines only the requirements Archon must satisfy as that provider — not the full cross-project product.
 The full parent PRD lives at `_bmad-output/planning-artifacts/prds/prd-workflow-engine-2026-06-26/prd.md` in the parent workspace; this file exists so no Archon implementation agent needs to read it.
 
@@ -18,7 +18,7 @@ The full parent PRD lives at `_bmad-output/planning-artifacts/prds/prd-workflow-
 
 Archon owns the provider `archon` implementation of: Workflow Provider Binding (reverse binding from codebase/project to controller identity), Archon CLI JSON producer contracts, workflow run state, retry/resume/cancel behavior, workflow event production, event outbox, delivery status, and signed workflow event production.
 
-Archon does **not** own: Project Binding, BMAD mount, materialization, Project Work Items, HILT gates, Story Timeline, reconciliation, or any user-facing dashboard surface — those belong to `hermes-agent` (see its own local handoff).
+Archon does **not** own Project Binding, BMAD mount, materialization, Project Work Items, HILT Gates, Story Status History, reconciliation, or Hermes user interaction; those belong to `hermes-agent`.
 
 Archon must not require Hermes-specific command names or model vocabulary — all controller identity uses generic `provider` and `name` fields.
 
@@ -65,7 +65,7 @@ Archon can report whether workflow event delivery is healthy, delayed, failed, d
 
 - Archon persists delivery status, retry status, last error, and terminal failure diagnostics independent of workflow execution success.
 - Archon does not block workflow execution solely because event delivery failed.
-- Archon exposes this status through CLI JSON so a consumer can request or display it.
+- Archon exposes this status through CLI JSON so a consumer can request and return it through structured results.
 
 ## Non-Functional Requirements Relevant To Archon
 
@@ -81,7 +81,7 @@ Archon can report whether workflow event delivery is healthy, delayed, failed, d
 
 - Archon will not expose an HTTP API for the Hermes-to-Archon state-changing control path — CLI only, per architecture AD-3.
 - Archon will not add Hermes-specific commands or model vocabulary.
-- Archon will not implement Project Binding, materialization, HILT gates, or Story Timeline — those are `hermes-agent`'s responsibility.
+- Archon will not implement Project Binding, materialization, HILT Gates, or Story Status History; those are `hermes-agent`'s responsibility.
 
 ## Glossary (Archon-relevant terms)
 
