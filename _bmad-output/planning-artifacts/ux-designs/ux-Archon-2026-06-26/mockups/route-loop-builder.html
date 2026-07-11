@@ -1,8 +1,8 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Archon Route Loop Builder Mockup</title>
     <style>
       :root {
@@ -247,7 +247,7 @@
 
       .preview {
         color: var(--text-tertiary);
-        font-family: "JetBrains Mono", ui-monospace, monospace;
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
         font-size: 10px;
         overflow: hidden;
         text-overflow: ellipsis;
@@ -267,7 +267,7 @@
         color: var(--text-secondary);
         padding: 3px 5px;
         font-size: 10px;
-        font-family: "JetBrains Mono", ui-monospace, monospace;
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
       }
 
       .handle {
@@ -300,7 +300,7 @@
         gap: 6px;
         align-items: center;
         color: var(--text-secondary);
-        font-family: "JetBrains Mono", ui-monospace, monospace;
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
         font-size: 10px;
       }
 
@@ -387,7 +387,7 @@
         background: var(--surface-elevated);
         color: var(--text-primary);
         padding: 7px 8px;
-        font-family: "JetBrains Mono", ui-monospace, monospace;
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
         font-size: 11px;
       }
 
@@ -411,7 +411,7 @@
       }
 
       .route-name {
-        font-family: "JetBrains Mono", ui-monospace, monospace;
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
       }
 
       .route-name.positive {
@@ -466,8 +466,8 @@
     <div class="app">
       <header class="toolbar">
         <span class="title">Workflow Builder</span>
-        <input class="input" value="bmad-review-gate">
-        <input class="input" value="Route failed review back to fix work">
+        <input class="input" value="bmad-review-gate" />
+        <input class="input" value="Route failed review back to fix work" />
         <button class="button">Validate</button>
         <button class="button primary">Save</button>
         <button class="button primary">Run</button>
@@ -477,40 +477,117 @@
         <aside class="library">
           <div class="panel-head">
             Node Library
-            <input class="input search" value="route">
+            <input class="input search" value="route" />
           </div>
           <div class="section">
             <p class="section-title">Quick Nodes</p>
             <div class="lib-item"><span class="dot"></span><span>Route Loop</span></div>
-            <div class="lib-item"><span class="dot" style="background: var(--prompt)"></span><span>Prompt</span></div>
-            <div class="lib-item"><span class="dot" style="background: var(--bash)"></span><span>Bash</span></div>
+            <div class="lib-item">
+              <span class="dot" style="background: var(--prompt)"></span><span>Prompt</span>
+            </div>
+            <div class="lib-item">
+              <span class="dot" style="background: var(--bash)"></span><span>Bash</span>
+            </div>
           </div>
         </aside>
 
         <section class="canvas" aria-label="Workflow graph mockup">
           <svg class="edges" viewBox="0 0 980 650" preserveAspectRatio="none" aria-hidden="true">
             <defs>
-              <marker id="arrow-neutral" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+              <marker
+                id="arrow-neutral"
+                markerWidth="8"
+                markerHeight="8"
+                refX="7"
+                refY="4"
+                orient="auto"
+                markerUnits="strokeWidth"
+              >
                 <path d="M0 0 L8 4 L0 8 Z" fill="var(--border-bright)"></path>
               </marker>
-              <marker id="arrow-success" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+              <marker
+                id="arrow-success"
+                markerWidth="8"
+                markerHeight="8"
+                refX="7"
+                refY="4"
+                orient="auto"
+                markerUnits="strokeWidth"
+              >
                 <path d="M0 0 L8 4 L0 8 Z" fill="var(--success)"></path>
               </marker>
-              <marker id="arrow-warning" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+              <marker
+                id="arrow-warning"
+                markerWidth="8"
+                markerHeight="8"
+                refX="7"
+                refY="4"
+                orient="auto"
+                markerUnits="strokeWidth"
+              >
                 <path d="M0 0 L8 4 L0 8 Z" fill="var(--warning)"></path>
               </marker>
-              <marker id="arrow-error" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+              <marker
+                id="arrow-error"
+                markerWidth="8"
+                markerHeight="8"
+                refX="7"
+                refY="4"
+                orient="auto"
+                markerUnits="strokeWidth"
+              >
                 <path d="M0 0 L8 4 L0 8 Z" fill="var(--error)"></path>
               </marker>
             </defs>
-            <path d="M185 224 V258 H375 V310" fill="none" stroke="var(--border-bright)" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter" marker-end="url(#arrow-neutral)"></path>
-            <path d="M465 350 H550" fill="none" stroke="var(--border-bright)" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter" marker-end="url(#arrow-neutral)"></path>
-            <path d="M775 330 H825 V185 H850" fill="none" stroke="var(--success)" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter" marker-end="url(#arrow-success)"></path>
-            <path d="M775 358 H810 V452 H185 V224" fill="none" stroke="var(--warning)" stroke-width="2" stroke-dasharray="8 5" stroke-linecap="square" stroke-linejoin="miter" marker-end="url(#arrow-warning)"></path>
-            <path d="M775 386 H825 V505 H850" fill="none" stroke="var(--error)" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter" marker-end="url(#arrow-error)"></path>
+            <path
+              d="M185 224 V258 H375 V310"
+              fill="none"
+              stroke="var(--border-bright)"
+              stroke-width="2"
+              stroke-linecap="square"
+              stroke-linejoin="miter"
+              marker-end="url(#arrow-neutral)"
+            ></path>
+            <path
+              d="M465 350 H550"
+              fill="none"
+              stroke="var(--border-bright)"
+              stroke-width="2"
+              stroke-linecap="square"
+              stroke-linejoin="miter"
+              marker-end="url(#arrow-neutral)"
+            ></path>
+            <path
+              d="M775 330 H825 V185 H850"
+              fill="none"
+              stroke="var(--success)"
+              stroke-width="2"
+              stroke-linecap="square"
+              stroke-linejoin="miter"
+              marker-end="url(#arrow-success)"
+            ></path>
+            <path
+              d="M775 358 H810 V452 H185 V224"
+              fill="none"
+              stroke="var(--warning)"
+              stroke-width="2"
+              stroke-dasharray="8 5"
+              stroke-linecap="square"
+              stroke-linejoin="miter"
+              marker-end="url(#arrow-warning)"
+            ></path>
+            <path
+              d="M775 386 H825 V505 H850"
+              fill="none"
+              stroke="var(--error)"
+              stroke-width="2"
+              stroke-linecap="square"
+              stroke-linejoin="miter"
+              marker-end="url(#arrow-error)"
+            ></path>
           </svg>
 
-          <div class="node" style="left: 95px; top: 145px;">
+          <div class="node" style="left: 95px; top: 145px">
             <div class="stripe bash"></div>
             <div class="node-body">
               <div class="node-head">
@@ -523,7 +600,7 @@
             <span class="handle bottom"></span>
           </div>
 
-          <div class="node" style="left: 285px; top: 310px;">
+          <div class="node" style="left: 285px; top: 310px">
             <span class="handle top"></span>
             <div class="stripe"></div>
             <div class="node-body">
@@ -532,12 +609,14 @@
                 <span class="node-title">review</span>
               </div>
               <div class="preview">$review.output.result</div>
-              <div class="pills"><span class="pill">output_format</span><span class="pill">attempt 2</span></div>
+              <div class="pills">
+                <span class="pill">output_format</span><span class="pill">attempt 2</span>
+              </div>
             </div>
             <span class="handle bottom"></span>
           </div>
 
-          <div class="node route" style="left: 550px; top: 288px;">
+          <div class="node route" style="left: 550px; top: 288px">
             <span class="handle top"></span>
             <div class="stripe route"></div>
             <div class="node-body">
@@ -546,14 +625,22 @@
                 <span class="node-title">review-router</span>
               </div>
               <div class="preview">$review.output.result == 'positive'</div>
-              <div class="pills"><span class="pill">from: review</span><span class="pill">max: 10</span></div>
+              <div class="pills">
+                <span class="pill">from: review</span><span class="pill">max: 10</span>
+              </div>
             </div>
-            <div class="route-port positive"><span>positive</span><span class="port-dot"></span></div>
-            <div class="route-port negative"><span>negative</span><span class="port-dot"></span></div>
-            <div class="route-port exhausted"><span>exhausted</span><span class="port-dot"></span></div>
+            <div class="route-port positive">
+              <span>positive</span><span class="port-dot"></span>
+            </div>
+            <div class="route-port negative">
+              <span>negative</span><span class="port-dot"></span>
+            </div>
+            <div class="route-port exhausted">
+              <span>exhausted</span><span class="port-dot"></span>
+            </div>
           </div>
 
-          <div class="node" style="left: 850px; top: 140px;">
+          <div class="node" style="left: 850px; top: 140px">
             <span class="handle top"></span>
             <div class="stripe"></div>
             <div class="node-body">
@@ -566,7 +653,7 @@
             </div>
           </div>
 
-          <div class="node" style="left: 850px; top: 470px; opacity: 0.58;">
+          <div class="node" style="left: 850px; top: 470px; opacity: 0.58">
             <span class="handle top"></span>
             <div class="stripe bash"></div>
             <div class="node-body">
@@ -580,10 +667,15 @@
           </div>
 
           <div class="problems">
-            <div class="problem-head">Problems <span style="color: var(--success); font-weight: 500;">0 errors</span></div>
+            <div class="problem-head">
+              Problems <span style="color: var(--success); font-weight: 500">0 errors</span>
+            </div>
             <div class="problem-row">
               <span class="dot" style="background: var(--success)"></span>
-              <span>Route Loop is complete. Positive, negative, and exhausted routes are connected.</span>
+              <span
+                >Route Loop is complete. Positive, negative, and exhausted routes are
+                connected.</span
+              >
             </div>
           </div>
         </section>
@@ -592,7 +684,7 @@
           <div class="inspector-title">
             <span class="dot"></span>
             <strong>review-router</strong>
-            <span style="color: var(--text-tertiary); margin-left: auto;">ROUTE</span>
+            <span style="color: var(--text-tertiary); margin-left: auto">ROUTE</span>
           </div>
           <div class="tabs">
             <span class="tab active">Route</span>
@@ -631,10 +723,10 @@
             </div>
             <div class="field">
               <label>Runtime Detail Preview</label>
-              <div class="text-field" style="line-height: 1.6;">
-                outcome: negative<br>
-                to: fix<br>
-                negative_count: 1<br>
+              <div class="text-field" style="line-height: 1.6">
+                outcome: negative<br />
+                to: fix<br />
+                negative_count: 1<br />
                 max_iterations: 10
               </div>
             </div>

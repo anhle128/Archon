@@ -6,14 +6,15 @@
  * `import.meta.url` is frozen to the build host's path.
  *
  * Resolution order:
- * 1. `CODEX_BIN_PATH` environment variable
- * 2. `assistants.codex.codexBinaryPath` in config
- * 3. `~/.archon/vendor/codex/<platform-binary>` (user-placed)
- * 4. Autodetect canonical install paths (npm prefix defaults per platform)
- * 5. Throw with install instructions
+ * 1. `CODEX_BIN_PATH` environment variable (all modes)
+ * 2. `assistants.codex.codexBinaryPath` in config (binary mode)
+ * 3. `~/.archon/vendor/codex/<platform-binary>` (binary mode, user-placed)
+ * 4. Autodetect canonical install paths (binary mode, npm prefix defaults per platform)
+ * 5. Throw with install instructions (binary mode)
  *
- * In dev mode (BUNDLED_IS_BINARY=false), returns undefined so the SDK
- * uses its normal node_modules-based resolution.
+ * In dev mode (BUNDLED_IS_BINARY=false), honors `CODEX_BIN_PATH` as an
+ * explicit escape hatch. Without it, returns undefined so the SDK uses its
+ * normal node_modules-based resolution.
  */
 import { existsSync as _existsSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -54,15 +55,15 @@ function getVendorBinaryName(): string | undefined {
 /**
  * Resolve the path to the Codex native binary.
  *
- * In dev mode: returns undefined (let SDK resolve via node_modules).
+ * In dev mode: honors `CODEX_BIN_PATH`, otherwise returns undefined (let SDK
+ * resolve via node_modules).
  * In binary mode: resolves from env/config/vendor dir, or throws with install instructions.
  */
 export async function resolveCodexBinaryPath(
   configCodexBinaryPath?: string
 ): Promise<string | undefined> {
-  if (!BUNDLED_IS_BINARY) return undefined;
-
-  // 1. Environment variable override
+  // 1. Environment variable override — honored in dev mode too, so an
+  // operator can use an updated global CLI when the SDK-pinned CLI is stale.
   const envPath = process.env.CODEX_BIN_PATH;
   if (envPath) {
     if (!fileExists(envPath)) {
@@ -74,6 +75,8 @@ export async function resolveCodexBinaryPath(
     getLog().info({ binaryPath: envPath, source: 'env' }, 'codex.binary_resolved');
     return envPath;
   }
+
+  if (!BUNDLED_IS_BINARY) return undefined;
 
   // 2. Config file override
   if (configCodexBinaryPath) {
