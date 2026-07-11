@@ -98,7 +98,7 @@ Archon reports workflow event delivery and outbox health as structured status.
 The local contract package placeholder is `contracts/workflow-commander/README.md`.
 It lists required schema and fixture families for Workflow Provider Binding, workflow command envelopes, workflow event envelopes, delivery status, Archon provider command examples, Archon provider event examples, and callback rejection examples.
 The placeholder itself does not satisfy readiness.
-Archon producer stories remain blocked until the needed JSON schemas and examples exist locally or are regenerated into this handoff package.
+Archon producer stories must not move to implementation-ready or write producer code against placeholder field names until the needed JSON schemas and examples exist locally or are regenerated into this handoff package.
 
 ## Cross-Project Dependency Record Shape
 
@@ -116,7 +116,7 @@ Acceptable examples include workflow command envelope, workflow event envelope, 
 
 ## Implementation Root And Validation
 
-The correct Archon implementation root is `/Users/dale/Desktop/workspace/OceanLabs/workflow-engine/Archon`.
+The correct Archon implementation root is `/Users/dale/Desktop/workspace/OceanLabs/workflow-engine/archon`.
 The recommended downstream validation command is `bun run validate`.
 This planning story does not require running that command because it changes only local planning handoff files.
 

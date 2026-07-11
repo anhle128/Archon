@@ -14,10 +14,15 @@ This README is a placeholder and does not satisfy downstream contract-readiness 
 ## Required Archon Provider Binding Examples
 
 - `examples/providers/archon/bindings/create-success.json`
+- `examples/providers/archon/bindings/update-success.json`
 - `examples/providers/archon/bindings/rotate-success.json`
 - `examples/providers/archon/bindings/disable-success.json`
+- `examples/providers/archon/bindings/remove-success.json`
 - `examples/providers/archon/bindings/status-valid.json`
+- `examples/providers/archon/bindings/status-missing.json`
 - `examples/providers/archon/bindings/status-stale.json`
+- `examples/providers/archon/bindings/status-disabled.json`
+- `examples/providers/archon/bindings/status-rotated.json`
 - `examples/providers/archon/bindings/status-conflicting.json`
 - `examples/providers/archon/bindings/error-malformed-request.json`
 
@@ -33,6 +38,7 @@ This README is a placeholder and does not satisfy downstream contract-readiness 
 - `examples/providers/archon/commands/error-timeout.json`
 - `examples/providers/archon/commands/error-schema-mismatch.json`
 - `examples/providers/archon/commands/error-malformed-request.json`
+- `examples/providers/archon/commands/error-unexpected-exit.json`
 - `examples/providers/archon/commands/error-unexpected-state.json`
 
 ## Required Archon Provider Event Examples
@@ -70,5 +76,5 @@ Until those schemas and JSON examples exist in this package, the affected Archon
 
 ## Implementation Root And Validation
 
-The correct Archon implementation root is `/Users/dale/Desktop/workspace/OceanLabs/workflow-engine/Archon`.
+The correct Archon implementation root is `/Users/dale/Desktop/workspace/OceanLabs/workflow-engine/archon`.
 The recommended downstream validation command is `bun run validate`.

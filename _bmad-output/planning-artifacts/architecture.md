@@ -129,9 +129,9 @@ This planning story does not create application code, migrations, tests, or impl
 
 The local contract package placeholder is `contracts/workflow-commander/README.md`.
 It does not satisfy producer story readiness by itself.
-Later producer work must create or receive local JSON schemas and examples before marking dependent stories complete.
+Later producer work must create or receive local JSON schemas and examples before moving dependent stories to implementation-ready or writing producer code against placeholder field names.
 
 ## Implementation Root And Validation
 
-The correct Archon implementation root is `/Users/dale/Desktop/workspace/OceanLabs/workflow-engine/Archon`.
+The correct Archon implementation root is `/Users/dale/Desktop/workspace/OceanLabs/workflow-engine/archon`.
 The recommended downstream validation command is `bun run validate`.
