@@ -1,0 +1,289 @@
+name: bmad-create-and-dev-story
+description: |
+  Use when: User provides a BMAD story_name/story selector and wants one workflow to create the story, validate readiness, implement the created story, run the BMAD code-review fix loop, and open a PR.
+  Triggers: "bmad create and dev story <story_name>", "create and dev bmad story <story_name>", "CS VS DS CR <story_name>".
+  Does: Runs BMAD create-story, validates the created story, runs BMAD dev-story against the created story file, reruns BMAD dev-story to fix code-review findings when needed, and creates the pull request after the review gate passes.
+  NOT for: TEA test design or ATDD generation, post-dev TEA review gates, generic Archon feature work without BMAD artifacts, or implementing an already-created story without story creation.
+
+  Decision log policy:
+  - Every finding must be written as a decision-log finding entry.
+  - Every fix must be written as a decision-log fix entry.
+  - Every finding and fix entry must explain what is wrong, how it was fixed, and why that fix decision was chosen.
+
+provider: codex
+modelReasoningEffort: high
+model: gpt-5.6-sol
+tags: [BMad, Planning, Review]
+
+nodes:
+  - id: validate-story-name-input
+    bash: |
+      set -euo pipefail
+
+      if [ -z "${ARGUMENTS:-}" ]; then
+        echo "Missing required story_name input."
+        echo "Run this workflow with a BMAD story key, story id, title, or story file path."
+        exit 1
+      fi
+
+      for required in \
+        ".agents/skills/bmad-create-story/SKILL.md" \
+        ".agents/skills/bmad-dev-story/SKILL.md" \
+        ".agents/skills/bmad-code-review/SKILL.md" \
+        "_bmad/bmm/config.yaml"
+      do
+        if [ ! -f "$required" ]; then
+          echo "Missing required BMAD file: $required"
+          echo "Run this workflow from a BMAD-enabled project checkout."
+          exit 1
+        fi
+      done
+
+      echo "story_name=$ARGUMENTS"
+    timeout: 60000
+    output_type: story-name-input
+
+  - id: prepare-bmad-state
+    bash: |
+      set -euo pipefail
+
+      RUN_DIR="$ARTIFACTS_DIR/bmad-create-dev-story"
+      mkdir -p "$RUN_DIR/findings" "$RUN_DIR/reports"
+
+      cat > "$RUN_DIR/state.json" << 'JSON'
+      {
+        "workflow": "bmad-create-dev-story",
+        "status": "running",
+        "round": 1,
+        "maxFailedReviews": 20,
+        "activeStory": "",
+        "activeStoryName": "",
+        "activeStoryFile": "",
+        "decisionLogFile": "decision-log.md",
+        "openFindingsFile": "findings/open-findings.md"
+      }
+      JSON
+
+      cat > "$RUN_DIR/decision-log.md" << 'MARKDOWN'
+      # BMAD Create Dev Story Decision Log
+
+      Every finding and every fix must be logged here.
+      Each full sentence goes on its own physical line.
+
+      ## Created Story
+
+      The created story details are recorded in state.json after the create-story node completes.
+
+      ## Required Finding Entry
+
+      ### Finding {finding_id}
+
+      - Source gate:
+      - Severity:
+      - What is wrong:
+      - Evidence:
+      - Why this is a defect:
+      - Required fix direction:
+      - Status:
+
+      ## Required Fix Entry
+
+      ### Fix {finding_id}
+
+      - What was fixed:
+      - How it was fixed:
+      - Why this fix was chosen:
+      - Alternatives considered:
+      - Files changed:
+      - Validation:
+      - Status:
+      MARKDOWN
+
+      cat > "$RUN_DIR/findings/open-findings.md" << 'MARKDOWN'
+      # Open Review Findings
+
+      No open findings yet.
+      MARKDOWN
+
+      echo "RUN_DIR=$RUN_DIR"
+      echo "STATE_FILE=$RUN_DIR/state.json"
+      echo "DECISION_LOG=$RUN_DIR/decision-log.md"
+      echo "OPEN_FINDINGS=$RUN_DIR/findings/open-findings.md"
+    depends_on: [validate-story-name-input]
+    timeout: 60000
+    output_type: bmad-state
+
+  - id: create-story
+    prompt: |
+      $bmad-create-story create detailed story for $ARGUMENTS.
+      Read all reference documents, understand the context comprehensively, and spawn sub-agents if useful.
+    provider: claude
+    depends_on: [prepare-bmad-state]
+    context: fresh
+    model: "sonnet"
+    effort: high
+    idle_timeout: 900000
+    output_format:
+      type: object
+      properties:
+        story_name:
+          type: string
+        story_key:
+          type: string
+        story_file:
+          type: string
+        sprint_status:
+          type: string
+        validation_summary:
+          type: string
+      required:
+        - story_name
+        - story_key
+        - story_file
+        - sprint_status
+        - validation_summary
+    output_type: create-story
+
+  - id: record-created-story-state
+    bash: |
+      set -euo pipefail
+
+      RUN_DIR="$ARTIFACTS_DIR/bmad-create-dev-story"
+      STATE="$RUN_DIR/state.json"
+      STORY_NAME=$create-story.output.story_name
+      STORY_KEY=$create-story.output.story_key
+      STORY_FILE=$create-story.output.story_file
+      SPRINT_STATUS=$create-story.output.sprint_status
+
+      if [ ! -f "$STATE" ]; then
+        echo "Missing BMAD create-dev-story state file: $STATE"
+        exit 1
+      fi
+
+      STATE="$STATE" \
+      STORY_NAME="$STORY_NAME" \
+      STORY_KEY="$STORY_KEY" \
+      STORY_FILE="$STORY_FILE" \
+      SPRINT_STATUS="$SPRINT_STATUS" \
+      bun -e '
+        import { readFileSync, renameSync, writeFileSync } from "fs";
+
+        const statePath = process.env.STATE;
+        if (!statePath) throw new Error("STATE is required");
+
+        const state = JSON.parse(readFileSync(statePath, "utf8"));
+        state.activeStory = process.env.STORY_KEY ?? "";
+        state.activeStoryName = process.env.STORY_NAME ?? "";
+        state.activeStoryFile = process.env.STORY_FILE ?? "";
+        state.sprintStatus = process.env.SPRINT_STATUS ?? "";
+
+        const tmpPath = `${statePath}.tmp`;
+        writeFileSync(tmpPath, `${JSON.stringify(state, null, 2)}\n`);
+        renameSync(tmpPath, statePath);
+      '
+
+      echo "ACTIVE_STORY=$STORY_KEY"
+      echo "ACTIVE_STORY_NAME=$STORY_NAME"
+      echo "ACTIVE_STORY_FILE=$STORY_FILE"
+      echo "SPRINT_STATUS=$SPRINT_STATUS"
+    depends_on: [create-story]
+    timeout: 60000
+    output_type: created-story-state
+
+  - id: validate-story-readiness
+    prompt: |
+      $bmad-create-story validate $create-story.output.story_file
+    provider: codex
+    depends_on: [record-created-story-state]
+    context: fresh
+    model: gpt-5.6-sol
+    output_type: story-readiness-gate
+
+  - id: dev-story
+    prompt: |
+      bmad-dev-story $create-story.output.story_file
+
+      Implement the story file created earlier in this workflow.
+      Before making changes, read `$ARTIFACTS_DIR/bmad-create-dev-story/findings/open-findings.md` and `$ARTIFACTS_DIR/bmad-create-dev-story/decision-log.md`.
+      If open findings exist, treat this invocation as a fix pass and append the required fix entries to the decision log.
+      On fix passes, rewrite open-findings.md so fixed findings are pending re-review and update state.json to the next review round.
+      Keep activeStoryFile in state.json set to $create-story.output.story_file.
+    provider: qodercli
+    effort: high
+    depends_on: [validate-story-readiness]
+    context: fresh
+    model: Qwen3.7-Plus
+    idle_timeout: 3600000
+    output_type: dev-story
+
+  - id: code-review
+    command: bmad-code-review
+    provider: codex
+    depends_on: [dev-story]
+    context: fresh
+    model: gpt-5.6-sol
+    idle_timeout: 900000
+    output_format: &code_review_gate_schema
+      type: object
+      properties:
+        gate:
+          type: string
+          enum: ["PASS", "FAIL"]
+        round:
+          type: number
+        findings_count:
+          type: number
+        open_findings_file:
+          type: string
+        decision_log_file:
+          type: string
+        code_review_report:
+          type: string
+      required:
+        - gate
+        - round
+        - findings_count
+        - open_findings_file
+        - decision_log_file
+        - code_review_report
+    output_type: code-review-findings
+
+  - id: code-review-gate
+    depends_on: [code-review]
+    route_loop:
+      condition: "$code-review.output.gate == 'PASS'"
+      max_iterations: 20
+      routes:
+        positive: create-pull-request
+        negative: dev-story
+        exhausted: review-loop-error
+
+  - id: create-pull-request
+    command: archon-create-pr
+    provider: codex
+    depends_on: [code-review-gate]
+    context: fresh
+    model: gpt-5.4
+    idle_timeout: 900000
+    output_type: pull-request
+
+  - id: review-loop-error
+    depends_on: [code-review-gate]
+    bash: |
+      set -euo pipefail
+
+      STATE="$ARTIFACTS_DIR/bmad-create-dev-story/state.json"
+      DECISIONS="$ARTIFACTS_DIR/bmad-create-dev-story/decision-log.md"
+      OPEN_FINDINGS="$ARTIFACTS_DIR/bmad-create-dev-story/findings/open-findings.md"
+
+      echo "BMAD code-review fix loop exhausted its retry budget."
+      echo "State: $STATE"
+      echo "Decision log: $DECISIONS"
+      echo "Open findings: $OPEN_FINDINGS"
+
+      if [ -f "$STATE" ]; then
+        cat "$STATE"
+      fi
+
+      exit 1
+    timeout: 60000

@@ -1,24 +1,29 @@
 ---
 title: Archon Epics Handoff - Hermes Agent Workflow Commander
 status: handoff
-created: '2026-07-02'
-updated: '2026-07-10'
+created: '2026-07-11'
+updated: '2026-07-11'
 storyOwnershipNote: >
-  Story numbering is kept identical to the parent workspace's epics.md (Epic 3) so
-  cross-references between Archon, hermes-agent, and the parent stay unambiguous.
-  This file contains ONLY Archon-owned stories. Parent Epic 1 (contract fixtures and
-  handoff generation) is parent-workspace work, not something Archon implements.
+  Story numbering is kept identical to the parent workspace Epic 3 story ids so cross-project references stay stable.
+  This file contains only Archon-owned implementation stories.
 ---
 
 # Archon Epics: Hermes Agent Workflow Commander
 
 ## Overview
 
-This file contains the Archon-owned subset of the parent Hermes Agent Workflow Commander epics (all from parent Epic 3: "Workflow Provider Control And Event Delivery"). It excludes all hermes-agent-owned work. Cross-project dependencies on hermes-agent are recorded explicitly per story.
+This file contains the seven Archon-owned Workflow Commander implementation stories.
+All seven stories belong to the provider producer side.
+They exclude Hermes-owned Project Binding, BMAD mount, cwd enforcement from Hermes, BMAD invocation from Hermes, materialization, Project Work Items, Phase Tasks, HILT Gates, workflow event ingress, Story Status History, reconciliation, diagnostics, and Hermes user interaction.
 
-**Blocked dependency (all stories below):** every story references shared contract fixtures (workflow command envelope, workflow event envelope, workflow provider binding schema) from parent Stories 1.3a/1.3b/1.3c. As of this handoff (2026-07-02), those fixtures do not exist yet — only a README placeholder exists at `_bmad-output/planning-artifacts/contracts/workflow-commander/` in the parent workspace. No story below should move to implementation-ready until those fixtures exist here or are regenerated into this local handoff.
+All stories below depend on local contract readiness before implementation can be considered complete.
+The local contract package placeholder is `contracts/workflow-commander/README.md`.
+The placeholder documents required schema and fixture families, but it does not satisfy readiness gates.
 
-## Archon-Owned Stories (7 of 43 parent stories)
+The correct downstream implementation root is `/Users/dale/Desktop/workspace/OceanLabs/workflow-engine/Archon`.
+The recommended downstream validation command is `bun run validate`.
+
+## Archon-Owned Stories
 
 ### Story 3.1: Implement Archon Workflow Provider Binding Lifecycle
 
@@ -30,24 +35,26 @@ So that external controllers can receive workflow events without Hermes-specific
 
 **Implementation Scope:** Archon-owned reverse workflow event binding persistence, lifecycle commands, status JSON, and diagnostics for provider `archon`.
 
-Depends on: shared Workflow Provider Binding payload schema, generic `provider`/`name` vocabulary, event route field, binding status result shape, malformed JSON failure shape (from parent Story 1.3a — blocked, see above).
-Contract needed: Workflow Provider Binding payload schema.
-Blocking behavior: Cannot be marked complete until shared Workflow Provider Binding examples and status result fixtures exist locally.
-Integration validation: Validates create, rotate, disable, status, stale, disabled, rotated, missing, and conflicting provider binding fixtures without introducing Hermes-specific fields.
+Depends on: parent Story 1.3a.
+Contract needed: Workflow Provider Binding schema, generic `provider` and `name` vocabulary, event route field, binding status result, and malformed JSON failure envelope.
+Blocking behavior: This story cannot be completed until the required provider binding schemas and examples exist locally.
+Integration validation: Archon validates create, rotate, disable, status, stale, disabled, rotated, missing, and conflicting binding examples without introducing Hermes-specific provider fields.
+
+**Hermes consumer impact:** `hermes-agent` Story 3.2 is blocked until this producer surface exists.
 
 **Acceptance Criteria:**
 
-**Given** Archon stores a workflow provider binding
+**Given** Archon stores a Workflow Provider Binding
 **When** the binding is created or updated
 **Then** Archon persists the controller by project or codebase reference plus generic `provider` and `name`
 **And** the record includes the workflow event route or target reference required for event delivery.
 
-**Given** a workflow provider binding is inspected
+**Given** a Workflow Provider Binding is inspected
 **When** Archon returns status JSON
 **Then** the response can represent missing, valid, stale, disabled, rotated, and conflicting states
-**And** the response uses the shared status result shape from the contract fixtures.
+**And** the response uses the shared status result shape.
 
-**Given** a workflow provider binding needs rotation, removal, or disabling
+**Given** a Workflow Provider Binding needs rotation, removal, or disabling
 **When** Archon performs the lifecycle action
 **Then** Archon returns parseable CLI JSON with correlation id, actor when available, timestamp, resulting binding state, and machine-readable error shape when failed
 **And** Archon does not expose Hermes-specific command names or fields.
@@ -56,11 +63,6 @@ Integration validation: Validates create, rotate, disable, status, stale, disabl
 **When** the command fails
 **Then** Archon returns a machine-readable failure envelope
 **And** downstream consumers can fail closed without inspecting human-readable text.
-
-**Depends on hermes-agent:** none directly — this is the producer-side foundation `hermes-agent` Story 3.2 consumes.
-Contract needed: Workflow Provider Binding payload schema and status result shape (this story's own output).
-Blocking behavior: `hermes-agent` Story 3.2 cannot register/diagnose bindings until this story's CLI surface exists.
-Integration validation: Both sides validate against the same shared Workflow Provider Binding fixture.
 
 ---
 
@@ -72,12 +74,12 @@ So that external controllers can fail closed and validate command output consist
 
 **Requirements Covered:** FR-8.
 
-**Implementation Scope:** Provider-neutral command result envelope, schema version, success flag, correlation id, workflow run reference, binding reference when applicable, machine-readable result payload, machine-readable error shape, timeout classification, and schema mismatch classification. Provider `archon` implements the first adapter-specific CLI mapping.
+**Implementation Scope:** Provider-neutral command result envelope, schema version, success flag, correlation id, workflow run reference, binding reference when applicable, machine-readable result payload, machine-readable error shape, timeout classification, and schema mismatch classification.
 
-Depends on: shared envelope schema (parent Story 1.3a — blocked, see above).
-Contract needed: Shared workflow command success envelope, error envelope, timeout representation, schema mismatch representation, workflow run reference, binding reference, and correlation id.
-Blocking behavior: Provider command-family stories cannot be marked complete until they use the shared envelope and return parseable JSON for success and failure.
-Integration validation: Validates shared envelope fixtures for success, failure, timeout, malformed request, schema mismatch, and unexpected state without introducing Hermes-specific command names.
+Depends on: parent Story 1.3a and Archon Story 3.1.
+Contract needed: Workflow command success envelope, workflow command error envelope, timeout representation, schema mismatch representation, workflow run reference, binding reference, and correlation id.
+Blocking behavior: Command-family producer stories cannot be completed until they use the shared envelope and return parseable JSON for success and failure.
+Integration validation: Archon validates success, failure, timeout, malformed request, schema mismatch, and unexpected-state examples without introducing Hermes-specific command names.
 
 **Acceptance Criteria:**
 
@@ -105,10 +107,12 @@ So that external controllers can create and inspect workflow references without 
 
 **Implementation Scope:** Provider `archon` workflow start and status commands using the shared envelope from Story 3.3a.
 
-Depends on: Story 3.3a (this file).
+Depends on: parent Story 1.3a, Archon Story 3.1, and Archon Story 3.3a.
 Contract needed: Workflow command start, status, timeout, success, and error envelope schemas.
-Blocking behavior: Cannot be marked complete until both commands use the shared envelope and match shared fixtures.
-Integration validation: Validates start and status fixtures for success, failure, timeout, malformed request, and unexpected state without introducing Hermes-specific command names.
+Blocking behavior: This story cannot be completed until start and status commands use the shared envelope and match local examples.
+Integration validation: Archon validates start and status examples for success, failure, timeout, malformed request, and unexpected state without introducing Hermes-specific command names.
+
+**Hermes consumer impact:** `hermes-agent` Story 3.4a is blocked until this producer surface exists.
 
 **Acceptance Criteria:**
 
@@ -120,17 +124,12 @@ Integration validation: Validates start and status fixtures for success, failure
 **Given** a workflow run is inspected from Archon CLI
 **When** Archon returns status
 **Then** the result includes run state, workflow name, workflow run reference, correlation id when available, and machine-readable error shape when failed
-**And** the result matches the shared status fixture.
+**And** the result matches the shared status example.
 
 **Given** a start or status command fails
 **When** Archon returns the failure
 **Then** the response includes schema version, success flag, correlation id if available, machine-readable error code, and diagnostic category
 **And** consumers can fail closed on malformed JSON, schema mismatch, timeout, or unexpected exit code.
-
-**Depends on hermes-agent:** none directly — `hermes-agent` Story 3.4a consumes this.
-Contract needed: start/status envelope shape (this story's own output).
-Blocking behavior: `hermes-agent` Story 3.4a cannot start/inspect provider runs until this exists.
-Integration validation: Both sides validate against the same shared start/status fixtures.
 
 ---
 
@@ -140,14 +139,16 @@ As an implementation coordinator,
 I want provider `archon` to expose approve and reject through parseable CLI JSON,
 So that human gate decisions can be sent through external controllers without relying on human-readable output.
 
-**Requirements Covered:** FR-8, FR-14.
+**Requirements Covered:** FR-8 and FR-14.
 
 **Implementation Scope:** Provider `archon` approve and reject commands using the shared envelope from Story 3.3a.
 
-Depends on: Story 3.3a, Story 3.3b (this file).
+Depends on: parent Story 1.3a, Archon Story 3.1, Archon Story 3.3a, and Archon Story 3.3b.
 Contract needed: Workflow command approve, reject, timeout, success, and error envelope schemas.
-Blocking behavior: Cannot be marked complete until approve and reject commands use the shared envelope and keep command results distinct from human gate decisions.
-Integration validation: Validates approve and reject fixtures for success, failure, timeout, malformed request, and unexpected state without introducing Hermes-specific command names.
+Blocking behavior: This story cannot be completed until approve and reject commands use the shared envelope and keep command results distinct from human gate decisions.
+Integration validation: Archon validates approve and reject examples for success, failure, timeout, malformed request, and unexpected state without introducing Hermes-specific command names.
+
+**Hermes consumer impact:** `hermes-agent` Story 3.4b sends these commands, while Hermes Epic 4 owns authoritative human decision records.
 
 **Acceptance Criteria:**
 
@@ -161,11 +162,6 @@ Integration validation: Validates approve and reject fixtures for success, failu
 **Then** the response uses the shared workflow command envelope
 **And** consumers can fail closed on malformed JSON, schema mismatch, timeout, unexpected state, or unexpected exit code.
 
-**Depends on hermes-agent:** none directly — `hermes-agent` Story 3.4b sends these commands; Story 4.3 owns the authoritative human decision record (Archon's response is transport evidence only, not proof gate evidence was sufficient).
-Contract needed: approve/reject envelope shape (this story's own output).
-Blocking behavior: `hermes-agent` cannot send decision commands until this exists.
-Integration validation: Both sides validate against the same shared approve/reject fixtures.
-
 ---
 
 ### Story 3.3d: Provide Archon Recovery Command CLI JSON
@@ -178,10 +174,12 @@ So that external controllers can route recovery actions consistently.
 
 **Implementation Scope:** Provider `archon` resume, retry, and cancel commands using the shared envelope from Story 3.3a.
 
-Depends on: Story 3.3a, Story 3.3b (this file).
+Depends on: parent Story 1.3a, Archon Story 3.1, Archon Story 3.3a, and Archon Story 3.3b.
 Contract needed: Workflow command resume, retry, cancel, timeout, success, and error envelope schemas.
-Blocking behavior: Cannot be marked complete until resume, retry, and cancel commands use the shared envelope and represent unexpected state machine outcomes.
-Integration validation: Validates resume, retry, cancel, timeout, and unexpected-state fixtures without introducing Hermes-specific command names.
+Blocking behavior: This story cannot be completed until resume, retry, and cancel commands use the shared envelope and represent unexpected state machine outcomes.
+Integration validation: Archon validates resume, retry, cancel, timeout, and unexpected-state examples without introducing Hermes-specific command names.
+
+**Hermes consumer impact:** `hermes-agent` Story 3.4c consumes this producer surface.
 
 **Acceptance Criteria:**
 
@@ -195,8 +193,6 @@ Integration validation: Validates resume, retry, cancel, timeout, and unexpected
 **Then** the response uses the shared workflow command envelope
 **And** consumers can fail closed on malformed JSON, schema mismatch, timeout, unexpected state, or unexpected exit code.
 
-**Depends on hermes-agent:** none directly — `hermes-agent` Story 3.4c consumes this.
-
 ---
 
 ### Story 3.5: Produce Signed Typed Archon Workflow Events From Outbox
@@ -209,15 +205,17 @@ So that workflow execution remains independent while Hermes receives compatible 
 
 **Implementation Scope:** Provider `archon` event producer, outbox, signature metadata, and delivery attempts.
 
-Depends on: shared workflow event envelope schema (parent Story 1.3b — blocked, see above), Story 3.1, Story 3.3a, Story 3.3b (this file).
-Contract needed: Workflow event envelope schema, workflow provider event route and binding reference, signature metadata shape, replay metadata, idempotency key, and workflow delivery status shape.
-Blocking behavior: Cannot be completed until shared workflow event examples exist locally and the provider binding surface (Story 3.1) can supply an event route and binding reference.
-Integration validation: Validates signed workflow event fixtures and Hermes event rejection fixtures without introducing Hermes-specific Archon model names.
+Depends on: parent Story 1.3b, Archon Story 3.1, Archon Story 3.3a, and Archon Story 3.3b.
+Contract needed: Workflow event envelope schema, workflow provider event route, binding reference, signature metadata, replay metadata, idempotency key, workflow delivery status shape, and rejection fixtures.
+Blocking behavior: This story cannot be completed until shared workflow event examples exist locally and the provider binding surface can supply an event route and binding reference.
+Integration validation: Archon validates signed workflow event examples and rejection examples for bad signature, stale timestamp, duplicate event id, wrong binding, unknown project, schema mismatch, and wrong-profile-secret without introducing Hermes-specific Archon model names.
+
+**Hermes consumer impact:** `hermes-agent` Stories 3.6a, 3.6b, and 3.6c consume these events.
 
 **Acceptance Criteria:**
 
 **Given** Archon emits a workflow event for a bound project or codebase
-**When** the event is eligible for Hermes notification
+**When** the event is eligible for notification
 **Then** Archon writes the event to a non-blocking event outbox
 **And** Archon workflow execution continues even if workflow event delivery later fails.
 
@@ -234,12 +232,7 @@ Integration validation: Validates signed workflow event fixtures and Hermes even
 **Given** Archon emits duplicate or retried workflow event delivery attempts
 **When** events are delivered
 **Then** each payload carries stable event id and idempotency key values
-**And** Hermes can detect duplicate-safe delivery from those fields.
-
-**Depends on hermes-agent:** `hermes-agent` Stories 3.6a/3.6b/3.6c consume these events.
-Contract needed: workflow event envelope schema (this story's own output).
-Blocking behavior: `hermes-agent` cannot validate/ingest events until this exists.
-Integration validation: Both sides validate against the same shared workflow event fixtures and rejection-case fixtures (bad signature, stale timestamp, duplicate event id, wrong binding, unknown project, schema mismatch, wrong-profile-secret).
+**And** consumers can detect duplicate-safe delivery from those fields.
 
 ---
 
@@ -253,10 +246,12 @@ So that external controllers can distinguish delayed, failed, duplicated, and te
 
 **Implementation Scope:** Provider `archon` workflow event delivery status persistence, retry status, terminal failure diagnostics, and CLI status output.
 
-Depends on: shared delivery status schema (parent Story 1.3a — blocked, see above), Story 3.1, Story 3.5 (this file).
-Contract needed: Workflow delivery status schema, retry state, terminal failure category, duplicate-safe marker, and reconciliation-needed marker.
-Blocking behavior: Cannot be marked complete until delivery status is persisted independently of workflow execution success.
-Integration validation: Validates healthy, delayed, retrying, failed, duplicated, terminal failure, and waiting-for-reconciliation fixtures without blocking workflow execution.
+Depends on: parent Story 1.3a, parent Story 1.3b, Archon Story 3.1, and Archon Story 3.5.
+Contract needed: Workflow delivery status schema, retry state, terminal failure category, duplicate-safe marker, reconciliation-needed marker, workflow run reference, and workflow event reference.
+Blocking behavior: This story cannot be completed until delivery status is persisted independently of workflow execution success.
+Integration validation: Archon validates healthy, delayed, retrying, failed, duplicated, terminal failure, and waiting-for-reconciliation examples without blocking workflow execution.
+
+**Hermes consumer impact:** `hermes-agent` Story 3.8 displays this status.
 
 **Acceptance Criteria:**
 
@@ -274,15 +269,3 @@ Integration validation: Validates healthy, delayed, retrying, failed, duplicated
 **When** Archon reports outbox health
 **Then** the status preserves event id and idempotency key
 **And** consumers can classify duplicate delivery without mutating project work.
-
-**Depends on hermes-agent:** `hermes-agent` Story 3.8 displays this status.
-Contract needed: delivery status schema (this story's own output).
-Blocking behavior: `hermes-agent` Story 3.8 cannot surface health until this exists.
-Integration validation: Both sides validate against the same shared delivery-status fixture.
-
-## Validation Command
-
-```text
-cd Archon
-bun run validate
-```
