@@ -11,7 +11,7 @@ description: |
   - Every finding and fix entry must explain what is wrong, how it was fixed, and why that fix decision was chosen.
 
 provider: codex
-modelReasoningEffort: high
+modelReasoningEffort: xhigh
 model: gpt-5.6-sol
 tags: [BMad, Planning, Review]
 
@@ -117,9 +117,9 @@ nodes:
     prompt: |
       $bmad-create-story create detailed story for $ARGUMENTS.
       Read all reference documents, understand the context comprehensively, and spawn sub-agents if useful.
-    provider: claude
     depends_on: [prepare-bmad-state]
     context: fresh
+    provider: claude
     model: "sonnet"
     effort: high
     idle_timeout: 900000
