@@ -43,6 +43,7 @@
         "workflow.retry",
         "workflow.cancel",
         "binding.create",
+        "binding.update",
         "binding.status",
         "binding.rotate",
         "binding.disable"
@@ -133,7 +134,13 @@
             "const": true
           },
           "command": {
-            "enum": ["binding.create", "binding.status", "binding.rotate", "binding.disable"]
+            "enum": [
+              "binding.create",
+              "binding.update",
+              "binding.status",
+              "binding.rotate",
+              "binding.disable"
+            ]
           }
         }
       },

@@ -38,7 +38,7 @@
       "enum": ["request", "result", "status", "error"]
     },
     "operation": {
-      "enum": ["create", "update", "rotate", "disable", "remove", "status"]
+      "enum": ["create", "update", "rotate", "disable", "status"]
     },
     "provider": {
       "type": "string",
@@ -59,16 +59,7 @@
       "$ref": "#/$defs/bindingRef"
     },
     "state": {
-      "enum": [
-        "active",
-        "missing",
-        "stale",
-        "disabled",
-        "rotated",
-        "conflicting",
-        "removed",
-        "malformed"
-      ]
+      "enum": ["active", "missing", "stale", "disabled", "rotated", "conflicting", "malformed"]
     },
     "requestedAt": {
       "type": "string",

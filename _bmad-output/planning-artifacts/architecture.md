@@ -2,7 +2,7 @@
 title: Archon Architecture Handoff - Hermes Agent Workflow Commander
 status: handoff
 created: '2026-07-11'
-updated: '2026-07-11'
+updated: '2026-07-12'
 source: local materialized Archon architecture slice
 ---
 
@@ -13,6 +13,8 @@ source: local materialized Archon architecture slice
 This file contains the Archon-owned architecture guidance for Workflow Commander v1.
 It covers Archon as the first workflow provider implementation.
 It does not assign Hermes-owned user orchestration, Project Binding, materialization, gates, reconciliation, or diagnostics to Archon.
+It also does not assign Archon Web screens, workflow builder UI, wireframes, mockups, or new in-product UI to this handoff.
+The active UX contract for Archon is headless provider ergonomics: parseable CLI JSON, signed typed events, provider binding diagnostics, and delivery health that controllers can consume safely.
 
 ## Design Paradigm
 
@@ -25,6 +27,7 @@ Archon is the first workflow provider.
 ## Archon Ownership Rules
 
 - Archon owns Workflow Provider Binding records keyed by project or codebase execution context plus generic controller `provider` and `name`.
+- Archon exposes provider binding create, update, status, rotate, and disable as explicit lifecycle command surfaces; create is not an upsert alias for update.
 - Archon owns CLI JSON producer surfaces for workflow start, status, approve, reject, resume, retry, and cancel.
 - Archon owns workflow run state, retry state, resume behavior, cancel behavior, workflow event production, non-blocking event outbox, delivery status, and signed event production.
 - Archon exposes parseable JSON for state-changing control results consumed by external controllers.
@@ -69,6 +72,7 @@ Provider binding, command-envelope, event-envelope, delivery-status, signature m
 
 Archon implementation agents use local `prd.md`, `architecture.md`, `epics.md`, and contract-package documentation in this folder.
 Implementation-critical context is local to the Archon handoff.
+Older Route Loop Routing UX artifacts, Archon Web workflow builder mockups, June 26 UX shards, and UI-only prototypes are superseded for Workflow Commander and must not be imported as architectural input.
 
 ## Consistency Conventions
 
@@ -118,20 +122,50 @@ This planning story does not create application code, migrations, tests, or impl
 
 ## Deferred Details
 
-| Deferred Decision                                                         | Owner                                | Gate Before Implementation                                                                                                                  |
-| ------------------------------------------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| Exact provider command names and argument syntax                          | Archon provider owner                | Shared command examples and schema tests exist before producer code merges.                                                                 |
-| Exact provider command JSON result schemas                                | Archon with consumer review          | Shared success and error examples pass compatibility tests in both subprojects.                                                             |
-| Exact workflow event signature algorithm, replay window, and header names | Archon with consumer security review | Signed, expired, duplicate, wrong-binding, and invalid-schema examples exist.                                                               |
-| Exact delivery retry policy                                               | Archon provider owner                | Delivery status fixtures cover healthy, delayed, retrying, failed, terminal failure, duplicate-safe, and waiting-for-reconciliation states. |
+| Deferred Decision                                                         | Owner                                | Gate Before Implementation                                                                                                              |
+| ------------------------------------------------------------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Exact provider command JSON result schemas                                | Archon with consumer review          | Shared success and error examples pass compatibility tests in both subprojects.                                                         |
+| Exact workflow event signature algorithm, replay window, and header names | Archon with consumer security review | Signed, expired, duplicate, wrong-binding, and invalid-schema examples exist.                                                           |
+| Exact delivery retry policy                                               | Archon provider owner                | Delivery status fixtures cover healthy, delayed, retrying, failed, terminal failure, duplicate-safe, and reconciliation-pending states. |
+
+## Provider Command Syntax Baseline
+
+Workflow Commander command identifiers are no longer deferred.
+The canonical JSON `command` values are the enum values in `schemas/workflow-command-envelope.schema.json`.
+The provider CLI syntax must preserve the existing `archon workflow` command family for workflow run control and add the provider-binding family seeded in this architecture.
+
+| Contract Command   | Provider CLI Syntax Baseline                                                                                              | Notes                                                                                                                                                                              |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workflow.start`   | `archon workflow run <workflow-name> [message] --json`                                                                    | May also accept existing workflow-run flags such as `--cwd`, `--branch`, `--from`, `--no-worktree`, and `--conversation-id` when those flags are already valid for `workflow run`. |
+| `workflow.status`  | `archon workflow get <run-id> --json`                                                                                     | Uses the single-run inspection surface, not the active-run list surface.                                                                                                           |
+| `workflow.approve` | `archon workflow approve <run-id> [comment] --json`                                                                       | Must keep command result recording distinct from Hermes-owned human decision authority.                                                                                            |
+| `workflow.reject`  | `archon workflow reject <run-id> [reason] --json`                                                                         | Must keep command result recording distinct from Hermes-owned human decision authority.                                                                                            |
+| `workflow.resume`  | `archon workflow resume <run-id> --json`                                                                                  | Must return the shared envelope for provider-command acknowledgement and errors.                                                                                                   |
+| `workflow.retry`   | `archon workflow retry <run-id> [--node <node-id>] --json`                                                                | Adds a JSON-compatible provider command separate from the existing streaming `retry-node` developer command.                                                                       |
+| `workflow.cancel`  | `archon workflow cancel <run-id> --json`                                                                                  | Adds a contract-named provider command; legacy `abandon` remains outside the Workflow Commander command vocabulary.                                                                |
+| `binding.create`   | `archon provider-binding create --provider archon --name <name> --project-ref <project-ref> --route <event-route> --json` | Uses generic provider and name vocabulary.                                                                                                                                         |
+| `binding.update`   | `archon provider-binding update --provider archon --name <name> --project-ref <project-ref> --route <event-route> --json` | Updates an existing provider-side binding route or metadata. This is separate from `binding.create`; create must not silently upsert.                                              |
+| `binding.status`   | `archon provider-binding status --provider archon --name <name> [--project-ref <project-ref>] --json`                     | Reports missing, valid, stale, disabled, rotated, and conflicting states.                                                                                                          |
+| `binding.rotate`   | `archon provider-binding rotate --provider archon --name <name> --json`                                                   | Rotates provider-side binding material without exposing raw secrets.                                                                                                               |
+| `binding.disable`  | `archon provider-binding disable --provider archon --name <name> --json`                                                  | Disables routing without deleting audit history.                                                                                                                                   |
+
+Story 3.3a owns finalizing tests that assert each provider CLI syntax emits the matching canonical `command` value.
+If implementation discovers an existing CLI conflict, the story must update this table and the contract examples before producer code merges.
 
 ## Local Contract Readiness
 
-The local contract package placeholder is `contracts/workflow-commander/README.md`.
-It does not satisfy producer story readiness by itself.
-Later producer work must create or receive local JSON schemas and examples before moving dependent stories to implementation-ready or writing producer code against placeholder field names.
+The local contract package is `contracts/workflow-commander/`.
+It contains the current local JSON schemas, examples, fixtures, and validator used by the Archon producer stories and Hermes consumer stories.
+Producer story readiness depends on the package validating successfully with the canonical command:
+
+```bash
+python3 _bmad-output/planning-artifacts/contracts/workflow-commander/validate_contracts.py
+```
+
+If validation fails, a required schema or example is missing, or an implementation needs a field absent from the validated package, the affected story remains blocked and must not invent contract fields.
 
 ## Implementation Root And Validation
 
-The correct Archon implementation root is `/Users/dale/Desktop/workspace/OceanLabs/workflow-engine/archon`.
+Run implementation from the active Archon repository root, the directory that contains this `_bmad-output/planning-artifacts/` handoff and the root `package.json`.
+Do not replace that with a user-local absolute path.
 The recommended downstream validation command is `bun run validate`.

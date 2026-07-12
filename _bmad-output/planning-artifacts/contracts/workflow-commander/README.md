@@ -37,6 +37,7 @@ examples/providers/archon/commands/resume-success.json
 examples/providers/archon/commands/retry-success.json
 examples/providers/archon/commands/cancel-success.json
 examples/providers/archon/commands/binding-create-success.json
+examples/providers/archon/commands/binding-update-success.json
 examples/providers/archon/commands/binding-status-success.json
 examples/providers/archon/commands/binding-rotate-success.json
 examples/providers/archon/commands/binding-disable-success.json
@@ -51,7 +52,6 @@ examples/providers/archon/bindings/create-success.json
 examples/providers/archon/bindings/update-success.json
 examples/providers/archon/bindings/rotate-success.json
 examples/providers/archon/bindings/disable-success.json
-examples/providers/archon/bindings/remove-success.json
 examples/providers/archon/bindings/status-valid.json
 examples/providers/archon/bindings/status-missing.json
 examples/providers/archon/bindings/status-stale.json
@@ -113,6 +113,9 @@ Binding payload examples do not use JSON object keys named `profile`, `agent_nam
 Request-shaped create and update payloads identify Hermes as producer and Archon as consumer.
 Result-shaped, status-shaped, and error-shaped payloads identify Archon as producer and Hermes as consumer.
 The owning subproject for persisted Workflow Provider Binding state remains `archon`.
+Create and update are separate lifecycle operations; `binding.create` must not be treated as an upsert alias for `binding.update`.
+Workflow Commander v1 does not expose a binding remove operation.
+Controllers must use disable when routing should stop while preserving audit history.
 Binding examples may use `${WORKFLOW_ENGINE_REPOSITORY_PATH}` as a portable placeholder for `projectRef.repositoryPath`.
 That placeholder is contract fixture data, not an implicit validator environment variable.
 Runtime implementations must resolve the path from their own project configuration and shared fixtures must not persist host-specific absolute paths such as `/Users/...` or `/home/...`.
@@ -187,6 +190,7 @@ If a downstream story depends on one of these shared examples and the relevant e
 
 ## Validation
 
+The validator supports Python 3.9+ and uses only the Python standard library.
 Run this command from the Archon subproject root:
 
 ```bash
