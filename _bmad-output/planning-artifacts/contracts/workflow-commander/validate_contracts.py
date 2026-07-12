@@ -109,6 +109,7 @@ REQUIRED_COMMAND_EXAMPLES = [
     'retry-success.json',
     'cancel-success.json',
     'binding-create-success.json',
+    'binding-update-success.json',
     'binding-status-success.json',
     'binding-rotate-success.json',
     'binding-disable-success.json',
@@ -125,7 +126,6 @@ REQUIRED_BINDING_EXAMPLES = [
     'update-success.json',
     'rotate-success.json',
     'disable-success.json',
-    'remove-success.json',
     'status-valid.json',
     'status-missing.json',
     'status-stale.json',
@@ -370,7 +370,7 @@ def type_matches(value: Any, expected: str) -> bool:
     if expected == 'integer':
         return isinstance(value, int) and not isinstance(value, bool)
     if expected == 'number':
-        return (isinstance(value, int | float) and not isinstance(value, bool))
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
     if expected == 'null':
         return value is None
     raise ValueError(f'unsupported schema type {expected!r}')
@@ -439,7 +439,7 @@ def schema_errors(value: Any, schema: dict[str, Any], root_schema: dict[str, Any
         if schema.get('format') == 'date-time' and not is_valid_datetime(value):
             errors.append(f'{pointer(path)} must be a valid date-time')
 
-    if isinstance(value, int | float) and not isinstance(value, bool):
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
         if 'minimum' in schema and value < schema['minimum']:
             errors.append(f'{pointer(path)} must be >= {schema["minimum"]}')
 

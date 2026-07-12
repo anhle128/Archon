@@ -2,7 +2,7 @@
 title: Archon Planning Handoff - Hermes Agent Workflow Commander
 status: handoff
 created: '2026-07-11'
-updated: '2026-07-11'
+updated: '2026-07-12'
 source: local materialized Archon slice of the headless Workflow Commander plan
 ---
 
@@ -20,6 +20,8 @@ All implementation-critical product context for Archon is local to this file and
 Workflow Commander v1 is headless.
 The user controls workflow work through Hermes commands, agent interactions, structured results, durable pending-gate queries, and existing notification transports when available.
 Archon remains a provider implementation and does not become the user-facing command center.
+The lack of Archon Web screens, workflow builder UI, wireframes, mockups, and new in-product UI is an explicit product boundary for this handoff, not a missing UX deliverable.
+The Archon-side UX requirement is satisfied through machine-consumable provider output quality and clear operational diagnostics in CLI JSON and workflow events.
 
 ## Scope Owned By Archon
 
@@ -32,6 +34,7 @@ Archon must avoid Hermes-specific provider fields such as `profile`, `agent_name
 Archon does not own Project Binding, BMAD mount, cwd enforcement from Hermes, BMAD invocation from Hermes, materialization, Project Work Items, Phase Tasks, HILT Gates, workflow event ingress, Story Status History, reconciliation, diagnostics, or Hermes user interaction.
 Those responsibilities belong to `hermes-agent`.
 Archon producer stories may identify Hermes consumer stories that are blocked by Archon output, but Archon must not implement the Hermes consumer side.
+Route Loop Routing UX artifacts, Archon Web workflow builder mockups, older June 26 UX shards, and any UI-only mockup package are superseded for Workflow Commander implementation unless a future approved planning artifact explicitly reactivates them.
 
 ## Functional Requirements Owned By Archon
 
@@ -43,6 +46,7 @@ Archon can create, update, inspect, rotate, disable, and diagnose provider-side 
 
 - Archon persists a reverse binding from project or codebase execution context to controller `provider`, controller `name`, and workflow event route.
 - Archon exposes binding status as parseable CLI JSON.
+- Archon exposes update through an explicit `binding.update` command surface; `binding.create` is not an update or upsert path.
 - Archon can represent missing, valid, stale, disabled, rotated, and conflicting binding states.
 - Archon returns machine-readable errors for malformed input or invalid lifecycle transitions.
 - Archon does not expose Hermes-specific command names or model fields.
@@ -78,7 +82,7 @@ Archon reports workflow event delivery and outbox health as structured status.
 **Consequences:**
 
 - Archon persists delivery status, retry status, last attempt time when available, last error category, terminal failure state, and affected workflow run reference.
-- Archon reports healthy, delayed, retrying, failed, duplicated, terminal failure, and waiting-for-reconciliation states when known.
+- Archon reports healthy, delayed, retrying, failed, duplicated, terminal failure, and reconciliation-pending states when known.
 - Archon exposes delivery status through CLI JSON.
 - Archon does not block workflow execution solely because event notification failed.
 
@@ -95,10 +99,15 @@ Archon reports workflow event delivery and outbox health as structured status.
 
 ## Local Contract Readiness
 
-The local contract package placeholder is `contracts/workflow-commander/README.md`.
-It lists required schema and fixture families for Workflow Provider Binding, workflow command envelopes, workflow event envelopes, delivery status, Archon provider command examples, Archon provider event examples, and callback rejection examples.
-The placeholder itself does not satisfy readiness.
-Archon producer stories must not move to implementation-ready or write producer code against placeholder field names until the needed JSON schemas and examples exist locally or are regenerated into this handoff package.
+The local contract package is `contracts/workflow-commander/`.
+It contains the current Workflow Provider Binding, workflow command envelope, workflow event envelope, delivery status, Archon provider command, Archon provider event, callback rejection, and materialization schema/example families for this handoff.
+Archon producer stories may use those contracts only when the canonical validation command succeeds as checked in:
+
+```bash
+python3 _bmad-output/planning-artifacts/contracts/workflow-commander/validate_contracts.py
+```
+
+If the validator fails, a required schema or example is missing, or a producer story needs a field that is not present in the validated package, that story must not move to implementation-ready and producer code must not invent the missing contract.
 
 ## Cross-Project Dependency Record Shape
 
@@ -116,7 +125,8 @@ Acceptable examples include workflow command envelope, workflow event envelope, 
 
 ## Implementation Root And Validation
 
-The correct Archon implementation root is `/Users/dale/Desktop/workspace/OceanLabs/workflow-engine/archon`.
+Run implementation from the active Archon repository root, the directory that contains this `_bmad-output/planning-artifacts/` handoff and the root `package.json`.
+Do not replace that with a user-local absolute path.
 The recommended downstream validation command is `bun run validate`.
 This planning story does not require running that command because it changes only local planning handoff files.
 
@@ -126,4 +136,4 @@ This planning story does not require running that command because it changes onl
 - Archon does not implement Hermes materialization, phase tasks, HILT Gates, Story Status History, reconciliation, diagnostics, or user interaction.
 - Archon does not add Hermes-specific provider vocabulary.
 - Archon does not add a state-changing HTTP control path for Workflow Commander v1.
-- Archon does not mark producer stories ready while required local schemas and fixtures are only placeholders.
+- Archon does not mark producer stories ready while required local schemas or fixtures are missing or the canonical local validator fails.
