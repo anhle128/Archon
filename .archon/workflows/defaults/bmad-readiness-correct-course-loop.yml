@@ -154,18 +154,12 @@ nodes:
     idle_timeout: 900000
     output_type: bmad-correct-course
 
-  - id: end
+  - id: create-pull-request
+    command: archon-create-pr
+    provider: codex
     depends_on: [route-loop]
-    bash: |
-      set -euo pipefail
-
-      summary=$readiness-evaluator.output.summary
-      status=$readiness-evaluator.output.readiness_status
-
-      echo "BMAD implementation readiness is clean."
-      printf 'Status: %s\n' "$status"
-      printf 'Summary: %s\n' "$summary"
-    timeout: 60000
+    context: fresh
+    model: gpt-5.4
 
   - id: readiness-loop-error
     depends_on: [route-loop]
