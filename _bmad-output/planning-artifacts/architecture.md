@@ -74,17 +74,24 @@ Archon implementation agents use local `prd.md`, `architecture.md`, `epics.md`, 
 Implementation-critical context is local to the Archon handoff.
 Older Route Loop Routing UX artifacts, Archon Web workflow builder mockups, June 26 UX shards, and UI-only prototypes are superseded for Workflow Commander and must not be imported as architectural input.
 
+### AD-11 - Separate Delivery-State Writes From Health Projection
+
+Story 3.5 owns the workflow event outbox, delivery-attempt mutations, retry-state mutations, terminal-failure recording, and all related migrations.
+Story 3.7 reads that persisted state and projects it into validated delivery-health CLI JSON.
+Story 3.7 must not create a second delivery-status write path or mutate delivery attempts while serving health queries.
+This separation preserves one source of truth, prevents duplicate migration ownership, and keeps workflow execution independent from notification delivery.
+
 ## Consistency Conventions
 
-| Concern                 | Archon Convention                                                                                                                                                                                    |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Controller naming       | Use generic `provider` and `name` vocabulary.                                                                                                                                                        |
-| Control direction       | External controllers invoke Archon through CLI JSON only for state-changing Workflow Commander control.                                                                                              |
-| Event direction         | Archon reports workflow changes through signed typed events from a non-blocking outbox.                                                                                                              |
-| Data format             | Cross-subproject contracts use JSON with explicit schema versions and shared examples.                                                                                                               |
-| Command envelope        | Command results include schema version, success flag, correlation id, workflow run reference when applicable, binding reference when applicable, result payload, and error shape.                    |
-| Workflow event envelope | Events include schema version, event id, event type, occurred timestamp, provider binding reference, workflow run reference, project or codebase reference, signature metadata, and idempotency key. |
-| Delivery status         | Delivery health is stored independently of workflow execution success.                                                                                                                               |
+| Concern                 | Archon Convention                                                                                                                                                                                                                                                        |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Controller naming       | Use generic `provider` and `name` vocabulary.                                                                                                                                                                                                                            |
+| Control direction       | External controllers invoke Archon through CLI JSON only for state-changing Workflow Commander control.                                                                                                                                                                  |
+| Event direction         | Archon reports workflow changes through signed typed events from a non-blocking outbox.                                                                                                                                                                                  |
+| Data format             | Cross-subproject contracts use JSON with explicit schema versions and shared examples.                                                                                                                                                                                   |
+| Command envelope        | Command results include schema version, success flag, correlation id, workflow run reference when applicable, binding reference when applicable, result payload, and an error shape with stable code, diagnostic category, boolean retryability, and structured details. |
+| Workflow event envelope | Events include schema version, event id, event type, occurred timestamp, provider binding reference, workflow run reference, project or codebase reference, signature metadata, and idempotency key.                                                                     |
+| Delivery status         | Delivery health is stored independently of workflow execution success.                                                                                                                                                                                                   |
 
 ## Stack
 

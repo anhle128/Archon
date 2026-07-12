@@ -1,5 +1,5 @@
 # generated: 2026-07-09 10:30:00 +0700
-# last_updated: 2026-07-09
+# last_updated: 2026-07-12
 # project: Archon
 # project_key: NOKEY
 # tracking_system: file-system
@@ -8,10 +8,10 @@
 #
 # This tracker replaces the misaligned BMAD TEA V2 tracker.
 # Do not resume Archon implementation from a1/a2/a3/a4/a5/a6 TEA story keys.
-# All Workflow Commander stories stay backlog until the shared contract fixtures exist locally.
+# All Workflow Commander stories remain backlog until their story-specific implementation gates are satisfied.
 
 generated: "2026-07-09 10:30:00 +0700"
-last_updated: "2026-07-09"
+last_updated: "2026-07-12"
 project: Archon
 project_key: NOKEY
 tracking_system: file-system
@@ -29,16 +29,11 @@ development_status:
   3-7-expose-archon-workflow-event-delivery-health: backlog
   epic-3-retrospective: optional
 
-blocked_dependencies:
+resolved_dependencies:
   workflow-commander-shared-contract-fixtures:
-    status: missing
+    status: satisfied
+    resolved_on: "2026-07-12"
     source: ../planning-artifacts/contracts/workflow-commander/README.md
-    blocks:
-      - 3-1-implement-archon-workflow-provider-binding-lifecycle
-      - 3-3a-define-shared-workflow-provider-command-envelope
-      - 3-3b-provide-archon-start-and-status-cli-json
-      - 3-3c-provide-archon-provider-decision-command-cli-json
-      - 3-3d-provide-archon-recovery-command-cli-json
-      - 3-5-produce-signed-typed-archon-workflow-events-from-outbox
-      - 3-7-expose-archon-workflow-event-delivery-health
-    note: "Do not create or implement these stories until workflow command envelope, workflow event envelope, and workflow provider binding fixtures exist locally or are regenerated into this handoff."
+    validation_command: "python3 _bmad-output/planning-artifacts/contracts/workflow-commander/validate_contracts.py"
+    validation_result: passed
+    note: "The local package validates without parent workspace traversal; story-specific contract and implementation gates still apply."

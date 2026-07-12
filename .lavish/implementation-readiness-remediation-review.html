@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en" data-theme="business">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Archon Readiness Remediation Review</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/daisyui.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/themes.css" />
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.2.4/dist/index.global.js"></script>
+    <style>
+      html {
+        scroll-behavior: smooth;
+      }
+      body {
+        overflow-wrap: anywhere;
+      }
+      .review-grid {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      @media (min-width: 1024px) {
+        .review-grid {
+          grid-template-columns: minmax(0, 2fr) minmax(18rem, 1fr);
+        }
+      }
+      .review-grid > * {
+        min-width: 0;
+      }
+      code {
+        white-space: normal;
+      }
+    </style>
+  </head>
+  <body class="min-h-screen bg-base-200 text-base-content">
+    <header class="border-b border-base-content/10 bg-base-100">
+      <div class="mx-auto max-w-7xl px-5 py-6 lg:px-8">
+        <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div class="min-w-0">
+            <div class="mb-3 flex flex-wrap gap-2">
+              <span class="badge badge-success">Approved and applied</span>
+              <span class="badge badge-info badge-soft">Batch review</span>
+              <span class="badge badge-neutral badge-outline">Moderate change</span>
+            </div>
+            <h1 class="text-3xl font-bold tracking-tight lg:text-5xl">
+              Implementation Readiness Remediation
+            </h1>
+            <p class="mt-3 max-w-3xl text-base-content/70">
+              A direct planning correction for Archon Workflow Commander. Product scope, contracts,
+              story IDs, and story order stay unchanged.
+            </p>
+          </div>
+          <div
+            class="stats stats-vertical border border-base-content/10 bg-base-100 shadow-sm sm:stats-horizontal"
+          >
+            <div class="stat py-3">
+              <div class="stat-title">Critical</div>
+              <div class="stat-value text-success">0</div>
+            </div>
+            <div class="stat py-3">
+              <div class="stat-title">Major</div>
+              <div class="stat-value text-warning">5</div>
+            </div>
+            <div class="stat py-3">
+              <div class="stat-title">Minor</div>
+              <div class="stat-value">3</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main class="mx-auto max-w-7xl px-5 py-8 lg:px-8">
+      <div class="review-grid grid gap-7">
+        <div class="space-y-7">
+          <section class="card card-border bg-base-100 shadow-sm">
+            <div class="card-body">
+              <h2 class="card-title text-2xl">Decision at a glance</h2>
+              <div class="alert alert-success alert-soft mt-2">
+                <span
+                  ><strong>Recommended:</strong> Direct Adjustment. Preserve the validated product
+                  and contract design; correct planning structure, ownership, acceptance criteria,
+                  and stale sprint state.</span
+                >
+              </div>
+              <ul class="steps steps-vertical mt-5 w-full lg:steps-horizontal">
+                <li class="step step-primary">Architecture clarity</li>
+                <li class="step step-primary">Story task gates</li>
+                <li class="step step-primary">Sprint blocker fix</li>
+                <li class="step">Readiness rerun</li>
+              </ul>
+            </div>
+          </section>
+
+          <section>
+            <div class="mb-4 flex items-end justify-between gap-4">
+              <div>
+                <p class="text-sm font-semibold uppercase tracking-widest text-primary">
+                  Proposed edits
+                </p>
+                <h2 class="text-2xl font-bold">What changes</h2>
+              </div>
+              <span class="badge badge-primary badge-outline">11 edit groups</span>
+            </div>
+
+            <div class="space-y-3">
+              <div class="collapse collapse-arrow border border-base-content/10 bg-base-100">
+                <input type="checkbox" checked />
+                <div class="collapse-title font-semibold">1. Define Archon Epic 3 explicitly</div>
+                <div class="collapse-content text-base-content/75">
+                  <p>
+                    Add a goal, user value, completion signal, and independence statement. No new
+                    epic is created.
+                  </p>
+                </div>
+              </div>
+
+              <div class="collapse collapse-arrow border border-base-content/10 bg-base-100">
+                <input type="checkbox" />
+                <div class="collapse-title font-semibold">
+                  2. Keep stable story IDs, formalize independent task gates
+                </div>
+                <div class="collapse-content text-base-content/75">
+                  <p>
+                    Stories 3.1 and 3.5 remain parent-linked umbrella IDs. Their checkpoints become
+                    separately accepted tasks with focused tests, evidence, and rollback boundaries.
+                  </p>
+                </div>
+              </div>
+
+              <div class="collapse collapse-arrow border border-base-content/10 bg-base-100">
+                <input type="checkbox" />
+                <div class="collapse-title font-semibold">
+                  3. Split Story 3.1 execution into four accepted tasks
+                </div>
+                <div class="collapse-content text-base-content/75">
+                  <p>
+                    Storage plus create/status; update; rotate/disable; diagnostics plus contract
+                    validation.
+                  </p>
+                </div>
+              </div>
+
+              <div class="collapse collapse-arrow border border-base-content/10 bg-base-100">
+                <input type="checkbox" />
+                <div class="collapse-title font-semibold">
+                  4. Make Story 3.3d recovery behavior command-specific
+                </div>
+                <div class="collapse-content text-base-content/75">
+                  <p>
+                    Add separate criteria for resume, whole-run retry, node-targeted retry, cancel,
+                    malformed input, timeout, invalid state, and the distinction from legacy
+                    <code>abandon</code>.
+                  </p>
+                </div>
+              </div>
+
+              <div class="collapse collapse-arrow border border-base-content/10 bg-base-100">
+                <input type="checkbox" />
+                <div class="collapse-title font-semibold">
+                  5. Split Story 3.5 execution into five accepted tasks
+                </div>
+                <div class="collapse-content text-base-content/75">
+                  <p>
+                    Event envelope; durable enqueue; binding-aware routing; delivery-state writer;
+                    retry and idempotency.
+                  </p>
+                </div>
+              </div>
+
+              <div class="collapse collapse-arrow border border-base-content/10 bg-base-100">
+                <input type="checkbox" />
+                <div class="collapse-title font-semibold">6. Resolve Story 3.5 / 3.7 ownership</div>
+                <div class="collapse-content text-base-content/75">
+                  <p>
+                    Story 3.5 becomes the sole write-side delivery-state and migration owner. Story
+                    3.7 becomes read-side projection and CLI status only.
+                  </p>
+                </div>
+              </div>
+
+              <div class="collapse collapse-arrow border border-base-content/10 bg-base-100">
+                <input type="checkbox" />
+                <div class="collapse-title font-semibold">
+                  7. Add Story 3.7 query-failure criteria
+                </div>
+                <div class="collapse-content text-base-content/75">
+                  <p>
+                    Cover malformed queries, unknown run/event references, schema-invalid output,
+                    and the no-mutation guarantee.
+                  </p>
+                </div>
+              </div>
+
+              <div class="collapse collapse-arrow border border-base-content/10 bg-base-100">
+                <input type="checkbox" />
+                <div class="collapse-title font-semibold">
+                  8. Trace <code>error.retryable</code> end to end
+                </div>
+                <div class="collapse-content text-base-content/75">
+                  <p>
+                    Add retryability to Story 3.3a and the architecture command-envelope convention.
+                    The contract and UX already require it.
+                  </p>
+                </div>
+              </div>
+
+              <div class="collapse collapse-arrow border border-base-content/10 bg-base-100">
+                <input type="checkbox" />
+                <div class="collapse-title font-semibold">
+                  9. Replace internal personas with outcome personas
+                </div>
+                <div class="collapse-content text-base-content/75">
+                  <p>
+                    Use workflow integration administrator, controller integrator, and workflow
+                    operator where each receives the outcome.
+                  </p>
+                </div>
+              </div>
+
+              <div class="collapse collapse-arrow border border-base-content/10 bg-base-100">
+                <input type="checkbox" />
+                <div class="collapse-title font-semibold">10. Add Architecture Decision AD-11</div>
+                <div class="collapse-content text-base-content/75">
+                  <p>
+                    Document the single write-side source of truth and read-only delivery-health
+                    projection.
+                  </p>
+                </div>
+              </div>
+
+              <div class="collapse collapse-arrow border border-base-content/10 bg-base-100">
+                <input type="checkbox" />
+                <div class="collapse-title font-semibold">
+                  11. Clear the stale sprint contract blocker
+                </div>
+                <div class="collapse-content text-base-content/75">
+                  <p>
+                    Replace the incorrect <code>missing</code> blocker with auditable
+                    passed-validation evidence. All seven stories stay in backlog.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="card card-border bg-base-100 shadow-sm">
+            <div class="card-body">
+              <h2 class="card-title text-2xl">Explicit non-changes</h2>
+              <div class="grid gap-3 sm:grid-cols-2">
+                <div class="alert alert-info alert-soft">
+                  <span>PRD and MVP scope stay unchanged.</span>
+                </div>
+                <div class="alert alert-info alert-soft">
+                  <span>UX stays unchanged and headless.</span>
+                </div>
+                <div class="alert alert-info alert-soft">
+                  <span>Contracts and examples stay unchanged.</span>
+                </div>
+                <div class="alert alert-info alert-soft">
+                  <span>Story IDs and order stay unchanged.</span>
+                </div>
+                <div class="alert alert-info alert-soft">
+                  <span>No application code is changed.</span>
+                </div>
+                <div class="alert alert-info alert-soft">
+                  <span>No migration is executed now.</span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="card card-border bg-base-100 shadow-sm">
+            <div class="card-body">
+              <h2 class="card-title text-2xl">Success criteria</h2>
+              <ul class="list-disc space-y-2 pl-5 text-base-content/75">
+                <li>Epic value and completion are explicit.</li>
+                <li>Large umbrella stories have independently accepted task gates.</li>
+                <li>Only Story 3.5 writes delivery state; Story 3.7 reads it.</li>
+                <li>Recovery and health-query failures are independently testable.</li>
+                <li>The stale global contract blocker is cleared with validator evidence.</li>
+                <li>The contract validator passes after edits.</li>
+                <li>The readiness workflow returns READY with no major finding.</li>
+              </ul>
+            </div>
+          </section>
+        </div>
+
+        <aside class="min-w-0 space-y-5 lg:sticky lg:top-5 lg:self-start">
+          <section class="card card-border bg-base-100 shadow-md">
+            <div class="card-body">
+              <h2 class="card-title">Impact</h2>
+              <div class="space-y-3 text-sm">
+                <div class="flex items-center justify-between gap-3">
+                  <span>Planning effort</span
+                  ><span class="badge badge-warning badge-soft">Medium</span>
+                </div>
+                <div class="flex items-center justify-between gap-3">
+                  <span>Risk</span><span class="badge badge-info badge-soft">Low–Medium</span>
+                </div>
+                <div class="flex items-center justify-between gap-3">
+                  <span>MVP change</span><span class="badge badge-success badge-soft">None</span>
+                </div>
+                <div class="flex items-center justify-between gap-3">
+                  <span>Code change now</span
+                  ><span class="badge badge-success badge-soft">None</span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="card card-border bg-base-100 shadow-md">
+            <div class="card-body">
+              <h2 class="card-title">Implementation complete</h2>
+              <div class="alert alert-success alert-soft">
+                <span>The approved planning correction has been applied and validated.</span>
+              </div>
+              <ul class="list-disc space-y-2 pl-5 text-sm text-base-content/70">
+                <li>Architecture and epic/story definitions updated.</li>
+                <li>Stale sprint contract blocker resolved.</li>
+                <li>Contract validation passed.</li>
+                <li>YAML parse, formatting, and diff checks passed.</li>
+              </ul>
+            </div>
+          </section>
+
+          <section class="card card-border bg-base-100 shadow-sm">
+            <div class="card-body">
+              <h2 class="card-title text-base">Source proposal</h2>
+              <p class="text-xs text-base-content/60">
+                _bmad-output/planning-artifacts/<br />sprint-change-proposal-2026-07-12-implementation-readiness-remediation.md
+              </p>
+            </div>
+          </section>
+        </aside>
+      </div>
+    </main>
+  </body>
+</html>

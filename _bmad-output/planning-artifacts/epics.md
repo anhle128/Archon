@@ -31,13 +31,27 @@ Run downstream implementation from the active Archon repository root, the direct
 Do not replace that with a user-local absolute path.
 The recommended downstream validation command is `bun run validate`.
 
+## Epic 3: Workflow Provider Control and Event Delivery
+
+**Epic Goal:** External controllers can bind projects or codebases to Archon, control workflow runs through validated CLI JSON, receive signed workflow events without blocking execution, and inspect delivery health.
+
+**User Value:** Workflow operators and controller integrators can automate Archon safely without depending on Archon Web, human-readable CLI parsing, Hermes-specific provider fields, or direct mutation of consumer-owned state.
+
+**Completion Signal:** Stories 3.1, 3.3a, 3.3b, 3.3c, 3.3d, 3.5, and 3.7 satisfy their contract gates; the canonical local validator passes; event delivery failure never blocks workflow execution; and all CLI success and failure results remain machine-consumable.
+
+**Independence:** This Archon producer slice depends only on the validated local contract package and explicitly named parent contract prerequisites.
+It does not depend on Hermes event ingress, reconciliation, Project Work Items, Phase Tasks, gates, diagnostics, user interaction, or Archon Web UI.
+
 ## Story-Level Implementation Boundaries
 
 Every story that persists provider binding, workflow outbox, or delivery status data must include the database migration or schema-change location, the SQLite and PostgreSQL adapter work, and focused tests for both database backends when SQL semantics differ.
 Every CLI JSON producer story must include success and failure examples from the local contract package in its tests.
 Every workflow event or delivery-status story must prove that event delivery failure does not block workflow execution.
-Story 3.1 and Story 3.5 require an implementation checkpoint list before code changes begin.
-The checkpoint list must preserve the slices named in each story and must not combine provider binding lifecycle work with workflow command execution, event outbox delivery, Hermes event ingress, reconciliation, diagnostics, or UI behavior.
+Story 3.1 and Story 3.5 remain stable umbrella story IDs because cross-project references depend on them.
+Their named implementation checkpoints are independently accepted implementation tasks, not an invitation to deliver the entire subsystem as one undifferentiated patch.
+Each task must define its own code scope, focused tests, completion evidence, and rollback boundary before implementation begins.
+A later task may depend on an accepted earlier task, but failure in a later task must not invalidate or require reverting an already accepted earlier task unless a documented contract incompatibility requires it.
+The task lists must preserve the slices named in each story and must not combine provider binding lifecycle work with workflow command execution, event outbox delivery, Hermes event ingress, reconciliation, diagnostics, or UI behavior.
 These boundaries sharpen implementation scope only; they do not add Hermes-owned Project Binding, materialization, Phase Task, gate, reconciliation, diagnostics, or UI work to Archon.
 No story in this handoff should add or depend on Archon Web screens, workflow builder UI, wireframes, mockups, or new in-product UI.
 Implementation agents must ignore older Route Loop Routing UX artifacts, Archon Web workflow builder mockups, June 26 UX shards, and UI-only prototypes unless a later approved Archon planning artifact explicitly reactivates them.
@@ -69,7 +83,7 @@ If implementation needs to revise a syntax entry because of an existing Archon C
 
 ### Story 3.1: Implement Archon Workflow Provider Binding Lifecycle
 
-As an implementation coordinator,
+As a workflow integration administrator,
 I want Archon to manage provider-neutral reverse event bindings with provider and name identity,
 So that external controllers can receive workflow events without Hermes-specific Archon commands or model names.
 
@@ -80,12 +94,14 @@ Lifecycle command scope explicitly includes `binding.create`, `binding.update`, 
 `binding.create` must not silently update an existing binding, and Workflow Commander v1 does not expose a binding remove command.
 Keep this story limited to four implementation slices: storage/migration, lifecycle CLI commands, status/diagnostics JSON, and schema/example validation tests.
 Do not include workflow command execution, workflow events, event delivery, or Hermes Project Binding behavior in this story.
-Implementation checkpoints are:
+Implementation task gates are:
 
-1. Storage and migration checkpoint: define the persisted binding shape, migration location, adapter behavior, and SQLite/PostgreSQL test expectations.
-2. Lifecycle command checkpoint: implement create, update, status, rotate, and disable syntax only after storage behavior is covered.
-3. Diagnostics checkpoint: return machine-readable binding health and malformed-request failures without exposing Hermes-specific fields.
-4. Contract-validation checkpoint: prove command envelopes and binding examples pass the local validator and focused tests.
+1. Binding storage and create/status task: add the persisted binding shape, migration location, SQLite and PostgreSQL adapter behavior, create behavior, status behavior, and focused backend tests.
+2. Binding update task: add explicit update behavior, prove create never silently upserts, and cover stale or conflicting transitions.
+3. Binding rotate/disable task: add rotation and disable behavior without exposing secrets or deleting audit history.
+4. Binding diagnostics and contract task: prove malformed-input failures, all required binding states, command envelopes, and checked-in binding examples.
+
+Each task is accepted separately and must have its own focused validation evidence and rollback boundary.
 
 Depends on: parent Story 1.3a.
 Contract needed: Workflow Provider Binding schema, generic `provider` and `name` vocabulary, explicit create and update operations, event route field, binding status result, and malformed JSON failure envelope.
@@ -125,7 +141,7 @@ Integration validation: Archon validates create, update, rotate, disable, status
 
 ### Story 3.3a: Define Shared Workflow Provider Command Envelope
 
-As an implementation coordinator,
+As a controller integrator,
 I want workflow provider commands to share one versioned result envelope,
 So that external controllers can fail closed and validate command output consistently.
 
@@ -146,7 +162,7 @@ Integration validation: Archon validates success, failure, timeout, malformed re
 
 **Given** any workflow control command returns a failure result
 **When** Archon serializes the response
-**Then** the result includes schema version, success flag, correlation id if available, machine-readable error code, diagnostic category, and machine-readable details.
+**Then** the result includes schema version, success flag, correlation id if available, machine-readable error code, diagnostic category, boolean retryability, and machine-readable details.
 
 **Given** a Workflow Commander provider command is implemented
 **When** its CLI syntax is exercised with `--json`
@@ -161,7 +177,7 @@ Integration validation: Archon validates success, failure, timeout, malformed re
 
 ### Story 3.3b: Provide Archon Start And Status CLI JSON
 
-As an implementation coordinator,
+As a controller integrator,
 I want provider `archon` to expose workflow start and status through parseable CLI JSON,
 So that external controllers can create and inspect workflow references without using the Archon dashboard.
 
@@ -197,7 +213,7 @@ Integration validation: Archon validates start and status examples for success, 
 
 ### Story 3.3c: Provide Archon Provider Decision Command CLI JSON
 
-As an implementation coordinator,
+As a workflow operator,
 I want provider `archon` to expose approve and reject through parseable CLI JSON,
 So that human gate decisions can be sent through external controllers without relying on human-readable output.
 
@@ -228,7 +244,7 @@ Integration validation: Archon validates approve and reject examples for success
 
 ### Story 3.3d: Provide Archon Recovery Command CLI JSON
 
-As an implementation coordinator,
+As a workflow operator,
 I want provider `archon` to expose resume, retry, and cancel through parseable CLI JSON,
 So that external controllers can route recovery actions consistently.
 
@@ -245,15 +261,30 @@ Integration validation: Archon validates resume, retry, cancel, timeout, and une
 
 **Acceptance Criteria:**
 
-**Given** a workflow run accepts resume, retry, or cancel
-**When** Archon performs the action
-**Then** Archon returns parseable JSON for the action result
-**And** the result can be consumed without relying on human-readable output.
+**Given** a workflow run is in a resumable state
+**When** Archon executes `workflow.resume`
+**Then** it returns the shared success envelope with the resumed workflow run reference and resulting run state
+**And** a non-resumable state returns an unexpected-state failure envelope without mutating the run.
 
-**Given** a resume, retry, or cancel command fails
+**Given** a workflow run can be retried from its failed work
+**When** Archon executes `workflow.retry` without `--node`
+**Then** it returns the shared success envelope for whole-run recovery
+**And** completed work is preserved or skipped according to the existing workflow retry contract.
+
+**Given** a failed workflow node is eligible for targeted retry
+**When** Archon executes `workflow.retry --node <node-id>`
+**Then** it returns the shared success envelope identifying the requested node and workflow run
+**And** an unknown or ineligible node returns a machine-readable failure without starting recovery.
+
+**Given** a workflow run is active and cancellable
+**When** Archon executes `workflow.cancel`
+**Then** it returns the shared success envelope with the resulting run state
+**And** it does not report or serialize the operation as legacy `abandon`.
+
+**Given** any recovery command receives malformed input, times out, exits unexpectedly, produces schema-invalid JSON, or targets an invalid run state
 **When** Archon returns the failure
-**Then** the response uses the shared workflow command envelope
-**And** consumers can fail closed on malformed JSON, schema mismatch, timeout, unexpected state, or unexpected exit code.
+**Then** the response uses the shared failure envelope with code, category, retryability, and structured details
+**And** no unsupported state transition is applied.
 
 ---
 
@@ -268,13 +299,16 @@ So that workflow execution remains independent while Hermes receives compatible 
 **Implementation Scope:** Provider `archon` event producer, outbox, signature metadata, and delivery attempts.
 Keep this story limited to five implementation slices: event-envelope construction, outbox persistence, binding-state routing checks, delivery-attempt status recording, and duplicate-safe idempotency tests.
 Do not include Hermes event ingress, reconciliation, Project Work Item mutation, Phase Task mutation, gate mutation, or user-facing diagnostics in this story.
-Implementation checkpoints are:
+Implementation task gates are:
 
-1. Event-envelope checkpoint: construct and validate event payloads against the local examples before adding delivery behavior.
-2. Outbox persistence checkpoint: add durable event/outbox storage and backend-specific tests before any send attempt.
-3. Routing checkpoint: block missing, stale, disabled, or conflicting bindings from delivery without blocking workflow execution.
-4. Delivery-status checkpoint: record attempts, retry state, last error category, and terminal failure state independently from workflow run success.
-5. Idempotency checkpoint: prove stable event id and idempotency key behavior for retries and duplicate-safe redelivery.
+1. Event-envelope task: construct, sign, and validate event payloads against local examples and rejection fixtures without adding delivery behavior.
+2. Durable enqueue task: add outbox storage, migrations, SQLite and PostgreSQL behavior, and enqueue-before-delivery tests.
+3. Binding-aware routing task: resolve the provider binding and record not-routable state for missing, stale, disabled, or conflicting bindings without blocking workflow execution.
+4. Delivery-state writer task: own all delivery-attempt writes, retry state, last-attempt time, last-error category, terminal failure state, and affected references.
+5. Retry and idempotency task: implement retry policy and prove stable event ID and idempotency-key behavior across duplicate-safe redelivery.
+
+Each task is accepted separately and must have focused tests, completion evidence, and a rollback boundary.
+Story 3.5 is the sole owner of delivery-state writes and related migrations.
 
 Depends on: parent Story 1.3b, Archon Story 3.1, Archon Story 3.3a, and Archon Story 3.3b.
 Contract needed: Workflow event envelope schema, workflow provider event route, binding reference, signature metadata, replay metadata, idempotency key, workflow delivery status shape, and rejection fixtures.
@@ -314,17 +348,18 @@ Integration validation: Archon validates signed workflow event examples and reje
 
 ### Story 3.7: Expose Archon Workflow Event Delivery Health
 
-As an implementation coordinator,
+As a controller integrator,
 I want provider `archon` to expose workflow event delivery and outbox health as parseable status,
 So that external controllers can distinguish delayed, failed, duplicated, and terminal event delivery states.
 
 **Requirements Covered:** FR-10.
 
-**Implementation Scope:** Provider `archon` workflow event delivery status persistence, retry status, terminal failure diagnostics, and CLI status output.
+**Implementation Scope:** Provider `archon` read-side delivery-health projection, retry and terminal-failure diagnostics, and CLI status output over delivery state written by Story 3.5.
+Story 3.7 does not own delivery-attempt mutations or delivery-state migrations.
 
 Depends on: parent Story 1.3a, parent Story 1.3b, Archon Story 3.1, and Archon Story 3.5.
 Contract needed: Workflow delivery status schema, retry state, terminal failure category, duplicate-safe marker, reconciliation-needed marker, workflow run reference, and workflow event reference.
-Blocking behavior: This story must not move to implementation-ready or be completed unless delivery status is persisted independently of workflow execution success and conforms to the validated delivery status examples.
+Blocking behavior: This story must not move to implementation-ready or be completed until Story 3.5 provides validated delivery-state writes and Story 3.7 can project that state into every checked-in delivery-status example without mutating delivery attempts.
 Integration validation: Archon validates healthy, delayed, retrying, failed, duplicated, terminal failure, and reconciliation-pending examples without blocking workflow execution.
 
 **Hermes consumer impact:** `hermes-agent` Story 3.8 displays this status.
@@ -337,7 +372,7 @@ Integration validation: Archon validates healthy, delayed, retrying, failed, dup
 **And** the status links to the affected workflow event and workflow run reference.
 
 **Given** Archon workflow event delivery reaches terminal failure
-**When** Archon records the failure
+**When** Archon reports the failure
 **Then** Archon exposes delivery status, last error category, affected event type, workflow run reference, and recovery option
 **And** Archon does not block workflow execution solely because event notification failed.
 
@@ -345,3 +380,8 @@ Integration validation: Archon validates healthy, delayed, retrying, failed, dup
 **When** Archon reports outbox health
 **Then** the status preserves event id and idempotency key
 **And** consumers can classify duplicate delivery without mutating project work.
+
+**Given** a delivery-health query is malformed, references an unknown workflow run or workflow event, or cannot produce schema-valid status JSON
+**When** Archon returns the query result
+**Then** it returns a machine-readable failure envelope with code, category, retryability, and structured details
+**And** it does not mutate workflow execution or delivery-attempt state.
