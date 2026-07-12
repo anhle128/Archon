@@ -119,7 +119,7 @@ nodes:
       condition: "$readiness-evaluator.output.result == 'positive'"
       max_iterations: 20
       routes:
-        positive: end
+        positive: create-pull-request
         negative: bmad-correct-course
         exhausted: readiness-loop-error
 
