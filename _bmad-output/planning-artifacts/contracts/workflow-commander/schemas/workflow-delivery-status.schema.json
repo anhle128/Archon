@@ -1,0 +1,258 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.oceanlabs.local/workflow-commander/schemas/workflow-delivery-status.schema.json",
+  "title": "Workflow Delivery Status",
+  "description": "Schema for Archon provider event delivery and outbox health status consumed by Hermes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "intendedProducer",
+    "intendedConsumer",
+    "owningSubproject",
+    "provider",
+    "correlationId",
+    "status",
+    "workflowRunRef",
+    "checkedAt",
+    "blockingWorkflowExecution"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "workflow-delivery-status.v1"
+    },
+    "intendedProducer": {
+      "const": "Archon"
+    },
+    "intendedConsumer": {
+      "const": "Hermes"
+    },
+    "owningSubproject": {
+      "const": "archon"
+    },
+    "provider": {
+      "type": "string",
+      "minLength": 1
+    },
+    "correlationId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "enum": [
+        "healthy",
+        "delayed",
+        "retrying",
+        "failed",
+        "duplicated",
+        "terminal-failure",
+        "reconciliation-pending"
+      ]
+    },
+    "workflowRunRef": {
+      "$ref": "#/$defs/workflowRunRef"
+    },
+    "eventRef": {
+      "$ref": "#/$defs/eventRef"
+    },
+    "deliveryAttemptRef": {
+      "$ref": "#/$defs/deliveryAttemptRef"
+    },
+    "checkedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "lastAttemptAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "nextAttemptAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "attemptCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "duplicateSafe": {
+      "type": "boolean"
+    },
+    "reconciliationNeeded": {
+      "type": "boolean"
+    },
+    "terminal": {
+      "type": "boolean"
+    },
+    "blockingWorkflowExecution": {
+      "const": false
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "recovery": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["status"],
+        "properties": {
+          "status": {
+            "const": "duplicated"
+          }
+        }
+      },
+      "then": {
+        "required": ["duplicateSafe"],
+        "properties": {
+          "duplicateSafe": {
+            "const": true
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["status"],
+        "properties": {
+          "status": {
+            "const": "failed"
+          }
+        }
+      },
+      "then": {
+        "required": ["diagnostic", "recovery"],
+        "properties": {
+          "diagnostic": {
+            "type": "object",
+            "required": ["category", "code", "actionRequired"],
+            "properties": {
+              "actionRequired": {
+                "const": true
+              }
+            },
+            "additionalProperties": true
+          },
+          "recovery": {
+            "type": "object",
+            "required": ["kind", "safeToRetry"],
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["status"],
+        "properties": {
+          "status": {
+            "const": "terminal-failure"
+          }
+        }
+      },
+      "then": {
+        "required": ["terminal", "diagnostic", "recovery"],
+        "properties": {
+          "terminal": {
+            "const": true
+          },
+          "diagnostic": {
+            "type": "object",
+            "required": ["category", "code", "actionRequired"],
+            "properties": {
+              "actionRequired": {
+                "const": true
+              }
+            },
+            "additionalProperties": true
+          },
+          "recovery": {
+            "type": "object",
+            "required": ["kind", "safeToRetry"],
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["status"],
+        "properties": {
+          "status": {
+            "const": "reconciliation-pending"
+          }
+        }
+      },
+      "then": {
+        "required": ["reconciliationNeeded"],
+        "properties": {
+          "reconciliationNeeded": {
+            "const": true
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "workflowRunRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "runId", "workflowName"],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "workflowName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "projectRef": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "eventRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eventId", "eventType"],
+      "properties": {
+        "eventId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "eventType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "idempotencyKey": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "deliveryAttemptRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attemptId"],
+      "properties": {
+        "attemptId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "target": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

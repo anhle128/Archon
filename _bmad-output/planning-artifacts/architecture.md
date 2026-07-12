@@ -1,117 +1,137 @@
 ---
 title: Archon Architecture Handoff - Hermes Agent Workflow Commander
 status: handoff
-created: '2026-07-02'
-updated: '2026-07-10'
-source_spine: workflow-engine parent workspace ARCHITECTURE-SPINE.md (architecture-workflow-engine-2026-06-26)
+created: '2026-07-11'
+updated: '2026-07-11'
+source: local materialized Archon architecture slice
 ---
 
 # Architecture: Archon Slice For Hermes Agent Workflow Commander
 
 ## Scope
 
-This is the Archon-owned slice of the Hermes Agent Workflow Commander architecture. It covers only what Archon implements as the first workflow provider. The full spine (all 10 architecture decisions, all subprojects) lives in the parent workspace; this file exists so no Archon implementation agent needs to read it.
+This file contains the Archon-owned architecture guidance for Workflow Commander v1.
+It covers Archon as the first workflow provider implementation.
+It does not assign Hermes-owned user orchestration, Project Binding, materialization, gates, reconciliation, or diagnostics to Archon.
 
-## Design Paradigm (Archon's role in it)
+## Design Paradigm
 
-The parent architecture uses Bounded Context + Ports and Adapters + Outbox/Reconciliation. Within that:
+The system uses bounded contexts plus ports and adapters plus outbox and reconciliation.
+Hermes is the human-facing command center and reconciliation owner.
+BMAD owns planning and story artifacts.
+Workflow providers own workflow execution primitives, workflow run state, retry behavior, approval pauses, event production, and delivery.
+Archon is the first workflow provider.
 
-- Archon owns workflow execution primitives, workflow run state, retry behavior, approval pauses, event production, and delivery.
-- Hermes controls Archon only through a strict CLI adapter (never HTTP, for the state-changing control path).
-- Archon reports state changes to Hermes only through signed, typed workflow events delivered via a non-blocking outbox.
+## Archon Ownership Rules
 
-## Relevant Architecture Decisions
+- Archon owns Workflow Provider Binding records keyed by project or codebase execution context plus generic controller `provider` and `name`.
+- Archon owns CLI JSON producer surfaces for workflow start, status, approve, reject, resume, retry, and cancel.
+- Archon owns workflow run state, retry state, resume behavior, cancel behavior, workflow event production, non-blocking event outbox, delivery status, and signed event production.
+- Archon exposes parseable JSON for state-changing control results consumed by external controllers.
+- Archon delivers state notifications through signed typed workflow events, not by mutating consumer state directly.
+- Archon keeps workflow execution independent from event delivery success.
 
-### AD-2 - Split Project Binding and Workflow Provider Binding ownership [ADOPTED]
+## Architecture Decisions Relevant To Archon
 
-Archon owns the reverse binding: from codebase/project execution context to generic controller `provider` + `name` + workflow event route. Archon does not know or store Hermes profile identity, cwd, or GitHub context — those belong to Hermes's forward Project Binding.
+### AD-2 - Split Project Binding And Workflow Provider Binding Ownership
 
-### AD-3 - Control workflow providers through adapters and receive signed typed workflow events [ADOPTED]
+Hermes owns forward Project Binding data such as profile, cwd, GitHub context, BMAD mount, operational status, and user interaction.
+Archon owns the reverse Workflow Provider Binding from project or codebase execution context to generic controller provider, name, and workflow event route.
 
-Archon's CLI is the only state-changing control surface Hermes uses (no HTTP). Archon CLI commands must capture and return: cwd (when applicable), stdout, stderr, exit code, timeout, correlation id, and a JSON result. Archon delivers events from its own event outbox; events are accepted by Hermes only after schema, signature, replay, idempotency, profile, and binding checks — Archon's job is producing events that can pass those checks, not performing them.
+### AD-3 - Control Workflow Providers Through Adapters And Signed Typed Events
 
-### AD-7 - Version every cross-subproject machine contract [ADOPTED]
+Hermes controls provider `archon` through CLI commands.
+Archon CLI command results must include the information needed by a strict adapter: cwd when applicable, stdout, stderr, exit code, timeout, correlation id, and parsed JSON result.
+Archon reports workflow state changes through signed typed events delivered from an outbox.
 
-Workflow command envelopes, workflow event envelopes, and workflow provider binding records that Archon produces are JSON, schema-versioned, and must be compatibility-tested against shared examples before Archon's producer code is considered complete. Archon-specific fixtures live under the provider-specific fixture namespace inside the shared contracts package.
+### AD-6 - Split Implementation Ownership By Subproject
 
-### AD-8 - Ratify the brownfield stack, avoid new runtime infrastructure for v1 [ADOPTED]
+Archon owns the provider producer side.
+Hermes owns the consumer side, event ingress, project work, gates, status history, reconciliation, diagnostics, and user interaction.
+Implementation must preserve this boundary even when both sides reference the same shared contracts.
 
-Archon stays on its existing workspace: Bun ^1.3.0, TypeScript ^5.3.0, Hono ^4.12.16, Zod ^4.4.3, Hono Zod OpenAPI ^1.4.0, `@archon/workflows` 0.4.1, `@archon/cli` 0.4.1 (workspace version 0.4.1 overall). No new database, queue, or runtime for this feature.
+### AD-7 - Version Every Cross-Subproject Machine Contract
 
-### AD-9 - Build contract-first, then split implementation by subproject [ADOPTED]
+Workflow command envelopes, workflow event envelopes, Workflow Provider Binding records, and delivery status records are JSON, schema-versioned, and compatibility-tested from shared examples before dependent producer or consumer work is complete.
+Archon-specific fixtures live under the provider-specific Archon fixture namespace inside the local contract package.
 
-Archon producer work must not start against invented field names — it consumes the shared workflow command envelope, workflow event envelope, and workflow provider binding schema/examples from the parent's contract package (see "Blocked Dependencies" in local `prd.md` — these don't exist yet as of this handoff).
+### AD-8 - Ratify The Brownfield Stack And Avoid New Runtime Infrastructure
 
-## Consistency Conventions (Archon-relevant subset)
+Archon stays on the existing Bun and TypeScript workspace.
+No new runtime, shared database, queue service, or external infrastructure is required for Workflow Commander v1.
 
-| Concern                 | Convention                                                                                                                                                                                                                         |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Controller naming       | Generic `provider` and `name` vocabulary for external controller identity — never Hermes-specific.                                                                                                                                 |
-| Control direction       | Hermes controls Archon through CLI only.                                                                                                                                                                                           |
-| Event direction         | Archon reports events to Hermes through a signed, non-blocking event outbox.                                                                                                                                                       |
-| Data format             | Cross-subproject contracts use JSON with explicit schema version and shared examples.                                                                                                                                              |
-| Command envelope        | Every state-changing command result includes schema version, success flag, correlation id, run/binding reference, machine-readable result payload, and machine-readable error shape.                                               |
-| Workflow event envelope | Every event includes schema version, event id, event type, occurred timestamp, provider binding reference, workflow run reference, project/codebase/provider execution context reference, signature metadata, and idempotency key. |
+### AD-9 - Build Contract-First, Then Split Implementation By Subproject
 
-## Stack (Archon-relevant rows)
+Archon producer work must not invent field names ahead of the shared contract examples.
+Provider binding, command-envelope, event-envelope, delivery-status, signature metadata, idempotency, and rejection fixtures are prerequisites for dependent implementation stories.
 
-| Name                     | Version  |
-| ------------------------ | -------- |
-| Archon workspace         | 0.4.1    |
-| Bun runtime              | ^1.3.0   |
-| TypeScript               | ^5.3.0   |
-| Hono                     | ^4.12.16 |
-| Zod                      | ^4.4.3   |
-| Hono Zod OpenAPI         | ^1.4.0   |
-| Archon workflows package | 0.4.1    |
-| Archon CLI package       | 0.4.1    |
+### AD-10 - Materialize Isolated Subproject Planning Handoffs Before Implementation
 
-## Source Tree Seed (Archon-owned files only)
+Archon implementation agents use local `prd.md`, `architecture.md`, `epics.md`, and contract-package documentation in this folder.
+Implementation-critical context is local to the Archon handoff.
+
+## Consistency Conventions
+
+| Concern                 | Archon Convention                                                                                                                                                                                    |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Controller naming       | Use generic `provider` and `name` vocabulary.                                                                                                                                                        |
+| Control direction       | External controllers invoke Archon through CLI JSON only for state-changing Workflow Commander control.                                                                                              |
+| Event direction         | Archon reports workflow changes through signed typed events from a non-blocking outbox.                                                                                                              |
+| Data format             | Cross-subproject contracts use JSON with explicit schema versions and shared examples.                                                                                                               |
+| Command envelope        | Command results include schema version, success flag, correlation id, workflow run reference when applicable, binding reference when applicable, result payload, and error shape.                    |
+| Workflow event envelope | Events include schema version, event id, event type, occurred timestamp, provider binding reference, workflow run reference, project or codebase reference, signature metadata, and idempotency key. |
+| Delivery status         | Delivery health is stored independently of workflow execution success.                                                                                                                               |
+
+## Stack
+
+| Name              | Version  |
+| ----------------- | -------- |
+| Archon workspace  | 0.5.0    |
+| Bun runtime       | ^1.3.0   |
+| TypeScript        | ^5.3.0   |
+| Hono              | ^4.12.16 |
+| Zod               | ^4.4.3   |
+| Hono Zod OpenAPI  | ^1.4.0   |
+| @archon/workflows | 0.5.0    |
+| @archon/cli       | 0.5.0    |
+| @archon/server    | 0.5.0    |
+| @archon/core      | 0.4.1    |
+
+## Source Tree Seed
 
 ```text
-Archon/
-  packages/cli/src/commands/
-    provider-binding.ts      # Generic provider/name binding commands.
-    workflow.ts               # Workflow control JSON output used by Hermes.
-  packages/core/src/db/
-    provider-bindings.ts      # Persistent reverse workflow event binding records.
-    workflow-event-outbox.ts  # Durable workflow event delivery state.
-  packages/workflows/src/
-    store.ts                  # Workflow run and event source of truth.
-    event-emitter.ts          # Event production integration point.
-  packages/server/src/
-    workflow-events/          # Optional delivery helpers, not Hermes control APIs.
+packages/cli/src/commands/
+  provider-binding.ts
+  workflow.ts
+packages/core/src/db/
+  provider-bindings.ts
+  workflow-event-outbox.ts
+packages/workflows/src/
+  store.ts
+  event-emitter.ts
+packages/server/src/
+  workflow-events/
 ```
 
-Cross-check against Archon's actual current package layout (`packages/cli/src/commands/`, `packages/core/src/db/`, `packages/workflows/src/`) confirms these paths are consistent with the existing codebase structure — this is additive work inside existing packages, not a new package.
+These are expected implementation areas for later Archon producer stories.
+This planning story does not create application code, migrations, tests, or implementation artifacts in those locations.
 
-## Operational Envelope (Archon-relevant rows)
+## Deferred Details
 
-| Area        | Boundary                                                                                                                                                                                  |
-| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Runtime     | Archon runs as its existing local process/CLI — no new runtime.                                                                                                                           |
-| Persistence | Archon keeps Workflow Provider Binding, workflow run state, workflow events, retry state, and event outbox status in Archon's existing persistence (SQLite/Postgres per existing config). |
-| Network     | Hermes-to-Archon control is local CLI execution only. Provider-to-Hermes notification is a configured workflow event route with signature and replay checks.                              |
+| Deferred Decision                                                         | Owner                                | Gate Before Implementation                                                                                                                  |
+| ------------------------------------------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Exact provider command names and argument syntax                          | Archon provider owner                | Shared command examples and schema tests exist before producer code merges.                                                                 |
+| Exact provider command JSON result schemas                                | Archon with consumer review          | Shared success and error examples pass compatibility tests in both subprojects.                                                             |
+| Exact workflow event signature algorithm, replay window, and header names | Archon with consumer security review | Signed, expired, duplicate, wrong-binding, and invalid-schema examples exist.                                                               |
+| Exact delivery retry policy                                               | Archon provider owner                | Delivery status fixtures cover healthy, delayed, retrying, failed, terminal failure, duplicate-safe, and waiting-for-reconciliation states. |
 
-## Capability Map (Archon-owned)
+## Local Contract Readiness
 
-| Capability                                     | Lives in                                        | Governed by      |
-| ---------------------------------------------- | ----------------------------------------------- | ---------------- |
-| CAP-4 provider control (producer side)         | Archon CLI JSON command surfaces                | AD-3, AD-7, AD-9 |
-| CAP-5 controller event routing (producer side) | Workflow Provider Binding + Archon event outbox | AD-2, AD-3, AD-7 |
+The local contract package placeholder is `contracts/workflow-commander/README.md`.
+It does not satisfy producer story readiness by itself.
+Later producer work must create or receive local JSON schemas and examples before moving dependent stories to implementation-ready or writing producer code against placeholder field names.
 
-## Deferred (Archon-relevant)
+## Implementation Root And Validation
 
-| Deferred Decision                                                     | Owner                              | Gate Before Implementation                                                              |
-| --------------------------------------------------------------------- | ---------------------------------- | --------------------------------------------------------------------------------------- |
-| Exact provider command names and argument syntax                      | Archon (provider owner)            | Shared command examples and schema tests exist before producer code merges.             |
-| Exact provider command JSON result schemas                            | Archon with Hermes consumer review | Shared success/error examples pass compatibility tests in both subprojects.             |
-| Exact workflow event signature algorithm, replay window, header names | Archon with Hermes security review | Event examples include signed, expired, duplicate, wrong-binding, invalid-schema cases. |
-
-## Blocked Dependencies
-
-Same as noted in local `prd.md`: the shared contract schemas/examples this architecture references do not exist yet in the parent workspace's `_bmad-output/planning-artifacts/contracts/workflow-commander/` (only a README placeholder as of 2026-07-02). Do not mark Archon producer stories implementation-ready until these are populated here or regenerated locally.
-
-## Source
-
-Derived from the parent workspace's `ARCHITECTURE-SPINE.md` (architecture-workflow-engine-2026-06-26, current as of 2026-07-01) and `epics.md` (current as of 2026-07-01, post `bmad-correct-course`).
+The correct Archon implementation root is `/Users/dale/Desktop/workspace/OceanLabs/workflow-engine/archon`.
+The recommended downstream validation command is `bun run validate`.

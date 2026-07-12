@@ -1,0 +1,554 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.oceanlabs.local/workflow-commander/schemas/workflow-event-envelope.schema.json",
+  "title": "Workflow Event Envelope",
+  "description": "Schema for provider workflow callback events emitted by Archon and consumed by Hermes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "intendedProducer",
+    "intendedConsumer",
+    "owningSubproject",
+    "provider",
+    "eventId",
+    "eventType",
+    "occurredAt",
+    "bindingRef",
+    "workflowRunRef",
+    "projectRef",
+    "profileRoute",
+    "idempotencyKey",
+    "signature",
+    "payload"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "workflow-event-envelope.v1"
+    },
+    "intendedProducer": {
+      "const": "Archon"
+    },
+    "intendedConsumer": {
+      "const": "Hermes"
+    },
+    "owningSubproject": {
+      "const": "archon"
+    },
+    "provider": {
+      "type": "string",
+      "minLength": 1
+    },
+    "eventId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "eventType": {
+      "enum": [
+        "workflow.run.started",
+        "workflow.run.completed",
+        "workflow.run.failed",
+        "workflow.approval.requested",
+        "workflow.delivery.failed",
+        "workflow.artifact.recorded"
+      ]
+    },
+    "occurredAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "bindingRef": {
+      "$ref": "#/$defs/bindingRef"
+    },
+    "workflowRunRef": {
+      "$ref": "#/$defs/workflowRunRef"
+    },
+    "projectRef": {
+      "$ref": "#/$defs/projectRef"
+    },
+    "profileRoute": {
+      "$ref": "#/$defs/profileRoute"
+    },
+    "idempotencyKey": {
+      "type": "string",
+      "minLength": 1
+    },
+    "signature": {
+      "$ref": "#/$defs/signature"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "delivery": {
+      "$ref": "#/$defs/delivery"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "eventType": {
+            "const": "workflow.run.started"
+          }
+        },
+        "required": ["eventType"]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "#/$defs/workflowRunStartedPayload"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "eventType": {
+            "const": "workflow.run.completed"
+          }
+        },
+        "required": ["eventType"]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "#/$defs/workflowRunCompletedPayload"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "eventType": {
+            "const": "workflow.run.failed"
+          }
+        },
+        "required": ["eventType"]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "#/$defs/workflowRunFailedPayload"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "eventType": {
+            "const": "workflow.approval.requested"
+          }
+        },
+        "required": ["eventType"]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "#/$defs/workflowApprovalRequestedPayload"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "eventType": {
+            "const": "workflow.delivery.failed"
+          }
+        },
+        "required": ["eventType"]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "#/$defs/workflowDeliveryFailedPayload"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "eventType": {
+            "const": "workflow.artifact.recorded"
+          }
+        },
+        "required": ["eventType"]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "#/$defs/workflowArtifactRecordedPayload"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "bindingRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "name", "bindingId", "projectRef"],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bindingId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "projectRef": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "workflowRunRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "runId", "workflowName", "projectRef"],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "workflowName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "projectRef": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "projectRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "codebaseRef", "repositoryPath"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "codebaseRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repositoryPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "defaultBranch": {
+          "type": "string",
+          "minLength": 1
+        },
+        "projectBindingId": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "profileRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "ingressPath", "bindingName", "secretRef", "expectedProvider"],
+      "properties": {
+        "profile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ingressPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bindingName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "secretRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expectedProvider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "routeVersion": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "keyId",
+        "signedAt",
+        "signatureHeader",
+        "timestampHeader",
+        "signatureInput",
+        "bodyDigest"
+      ],
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "minLength": 1
+        },
+        "keyId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "signedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "signatureHeader": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timestampHeader": {
+          "type": "string",
+          "minLength": 1
+        },
+        "signatureInput": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "bodyDigest": {
+          "type": "string",
+          "minLength": 1
+        },
+        "canonicalization": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "delivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deliveryId", "attempt", "receivedAt"],
+      "properties": {
+        "deliveryId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "receivedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "workflowRunStartedPayload": {
+      "type": "object",
+      "required": ["state", "phase", "commandCorrelationId", "startedAt"],
+      "properties": {
+        "state": {
+          "type": "string",
+          "minLength": 1
+        },
+        "phase": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commandCorrelationId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "startedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": true
+    },
+    "workflowRunCompletedPayload": {
+      "type": "object",
+      "required": ["state", "result"],
+      "properties": {
+        "state": {
+          "type": "string",
+          "minLength": 1
+        },
+        "result": {
+          "type": "object",
+          "required": ["outcome"],
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "minLength": 1
+            },
+            "completedAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "materializedArtifacts": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "workflowRunFailedPayload": {
+      "type": "object",
+      "required": ["state", "failure"],
+      "properties": {
+        "state": {
+          "type": "string",
+          "minLength": 1
+        },
+        "failure": {
+          "type": "object",
+          "required": ["code", "category", "retryable", "details"],
+          "properties": {
+            "code": {
+              "type": "string",
+              "minLength": 1
+            },
+            "category": {
+              "type": "string",
+              "minLength": 1
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "details": {
+              "type": "object"
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "workflowApprovalRequestedPayload": {
+      "type": "object",
+      "required": ["state", "approval"],
+      "properties": {
+        "state": {
+          "type": "string",
+          "minLength": 1
+        },
+        "approval": {
+          "type": "object",
+          "required": ["requestId", "requestedAction", "phase"],
+          "properties": {
+            "requestId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "requestedAction": {
+              "type": "string",
+              "minLength": 1
+            },
+            "phase": {
+              "type": "string",
+              "minLength": 1
+            },
+            "requiredBy": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "workflowDeliveryFailedPayload": {
+      "type": "object",
+      "required": [
+        "deliveryOnly",
+        "mutationIntent",
+        "deliveryStatus",
+        "failedDeliveryId",
+        "nextStatus",
+        "diagnosticRef"
+      ],
+      "properties": {
+        "deliveryOnly": {
+          "const": true
+        },
+        "mutationIntent": {
+          "const": "none"
+        },
+        "deliveryStatus": {
+          "type": "string",
+          "minLength": 1
+        },
+        "failedDeliveryId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "nextStatus": {
+          "type": "string",
+          "minLength": 1
+        },
+        "diagnosticRef": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": true
+    },
+    "workflowArtifactRecordedPayload": {
+      "type": "object",
+      "required": ["artifact"],
+      "properties": {
+        "artifact": {
+          "type": "object",
+          "required": ["type", "name", "uri", "digest"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "minLength": 1
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "uri": {
+              "type": "string",
+              "minLength": 1
+            },
+            "digest": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

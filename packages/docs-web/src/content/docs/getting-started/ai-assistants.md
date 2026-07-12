@@ -172,24 +172,26 @@ Native prebuilt binaries (`.dmg`, `.tar.gz`, `.exe`) are also published on the [
 
 See [OpenAI's Codex CLI docs](https://developers.openai.com/codex/cli) for the full install matrix.
 
-### Binary path configuration (compiled binaries only)
+### Binary path configuration
 
-In compiled Archon binaries, if `codex` is not on the default PATH Archon expects, supply the path via either:
+Set `CODEX_BIN_PATH` to override the SDK-pinned CLI in development or binary auto-detection in compiled Archon builds:
 
-1. **Environment variable** (highest precedence):
-   ```ini
-   CODEX_BIN_PATH=/absolute/path/to/codex
-   ```
-2. **Config file** (`~/.archon/config.yaml`):
+```ini
+CODEX_BIN_PATH=/absolute/path/to/codex
+```
+
+Compiled Archon binaries also support these fallbacks:
+
+1. **Config file** (`~/.archon/config.yaml`):
    ```yaml
    assistants:
      codex:
        codexBinaryPath: /absolute/path/to/codex
    ```
-3. **Vendor directory** (zero-config fallback): drop the native binary at `~/.archon/vendor/codex/codex` (or `codex.exe` on Windows).
-4. **Autodetect** (zero-config fallback): if the vendor directory is empty, Archon probes the common npm-global install layouts: `~/.npm-global/bin/codex` (POSIX), `/opt/homebrew/bin/codex` (macOS Apple Silicon), `/usr/local/bin/codex` (macOS Intel and Linux), `%APPDATA%\npm\codex.cmd` and `%USERPROFILE%\.npm-global\codex.cmd` (Windows). For other npm prefixes or custom layouts, set `CODEX_BIN_PATH` or the config path explicitly.
+2. **Vendor directory** (zero-config fallback): drop the native binary at `~/.archon/vendor/codex/codex` (or `codex.exe` on Windows).
+3. **Autodetect** (zero-config fallback): if the vendor directory is empty, Archon probes the common npm-global install layouts: `~/.npm-global/bin/codex` (POSIX), `/opt/homebrew/bin/codex` (macOS Apple Silicon), `/usr/local/bin/codex` (macOS Intel and Linux), `%APPDATA%\npm\codex.cmd` and `%USERPROFILE%\.npm-global\codex.cmd` (Windows). For other npm prefixes or custom layouts, set `CODEX_BIN_PATH` or the config path explicitly.
 
-Dev mode (`bun run`) does not require any of the above — the SDK resolves `codex` via `node_modules`.
+Without `CODEX_BIN_PATH`, development mode (`bun run`) resolves `codex` via the SDK's `node_modules` dependency.
 
 ### Authenticate
 

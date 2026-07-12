@@ -1,0 +1,245 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.oceanlabs.local/workflow-commander/schemas/workflow-command-envelope.schema.json",
+  "title": "Workflow Command Envelope",
+  "description": "Schema for provider command success and error result envelopes consumed by Hermes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "intendedProducer",
+    "intendedConsumer",
+    "owningSubproject",
+    "provider",
+    "command",
+    "correlationId",
+    "issuedAt",
+    "success"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "workflow-command-envelope.v1"
+    },
+    "intendedProducer": {
+      "const": "Archon"
+    },
+    "intendedConsumer": {
+      "const": "Hermes"
+    },
+    "owningSubproject": {
+      "const": "archon"
+    },
+    "provider": {
+      "type": "string",
+      "minLength": 1
+    },
+    "command": {
+      "enum": [
+        "workflow.start",
+        "workflow.status",
+        "workflow.approve",
+        "workflow.reject",
+        "workflow.resume",
+        "workflow.retry",
+        "workflow.cancel",
+        "binding.create",
+        "binding.status",
+        "binding.rotate",
+        "binding.disable"
+      ]
+    },
+    "correlationId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "issuedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "success": {
+      "type": "boolean"
+    },
+    "workflowRunRef": {
+      "$ref": "#/$defs/workflowRunRef"
+    },
+    "bindingRef": {
+      "$ref": "#/$defs/bindingRef"
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "error": {
+      "$ref": "#/$defs/error"
+    },
+    "execution": {
+      "$ref": "#/$defs/execution"
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "success": {
+          "const": true
+        }
+      },
+      "required": ["result"],
+      "not": {
+        "required": ["error"]
+      }
+    },
+    {
+      "properties": {
+        "success": {
+          "const": false
+        }
+      },
+      "required": ["error"],
+      "not": {
+        "required": ["result"]
+      }
+    }
+  ],
+  "allOf": [
+    {
+      "if": {
+        "required": ["success", "command"],
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "command": {
+            "enum": [
+              "workflow.start",
+              "workflow.status",
+              "workflow.approve",
+              "workflow.reject",
+              "workflow.resume",
+              "workflow.retry",
+              "workflow.cancel"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": ["workflowRunRef"]
+      }
+    },
+    {
+      "if": {
+        "required": ["success", "command"],
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "command": {
+            "enum": ["binding.create", "binding.status", "binding.rotate", "binding.disable"]
+          }
+        }
+      },
+      "then": {
+        "required": ["bindingRef"]
+      }
+    }
+  ],
+  "$defs": {
+    "workflowRunRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "runId", "workflowName"],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "workflowName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "projectRef": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "bindingRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "name", "bindingId"],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bindingId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "projectRef": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "category", "retryable", "details"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "category": {
+          "enum": [
+            "configuration",
+            "external_delay",
+            "implementation_defect",
+            "provider_contract",
+            "security_rejection",
+            "timeout",
+            "unexpected_state"
+          ]
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "details": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exitCode", "timedOut"],
+      "properties": {
+        "exitCode": {
+          "type": ["integer", "null"]
+        },
+        "timedOut": {
+          "type": "boolean"
+        },
+        "durationMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "stdoutRedacted": {
+          "type": "boolean"
+        },
+        "stderrRedacted": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}
