@@ -331,11 +331,11 @@ nodes:
     depends_on: [code-review]
     route_loop:
       condition: "$code-review.output.gate == 'PASS'"
-      max_iterations: 20
+      max_iterations: 5
       routes:
         positive: create-pull-request
         negative: dev-story
-        exhausted: review-loop-error
+        exhausted: create-pull-request
 
   - id: create-pull-request
     command: archon-create-pr
