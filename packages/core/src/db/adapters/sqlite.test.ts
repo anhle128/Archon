@@ -375,6 +375,335 @@ describe('SqliteAdapter', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// RED-PHASE SCAFFOLD (EXECUTABLE) — Story 3.1 "Implement Archon Workflow
+// Provider Binding Lifecycle"
+// (_bmad-output/implementation-artifacts/3-1-implement-archon-workflow-provider-binding-lifecycle.md).
+//
+// Unlike the other new scaffolds for this story, these tests are NOT
+// `test.skip()`: the boundary they exercise (a real SqliteAdapter over a
+// real bun:sqlite temp file, using raw SQL — the exact same pattern as every
+// other `describe` block above) already exists today. They import nothing
+// from the not-yet-written `packages/core/src/db/provider-bindings.ts`, so
+// there is no missing-module crash risk. They assert the DESIRED end state
+// from the Dev Notes "DB Design Proposal" table
+// (`remote_agent_workflow_provider_bindings`) and currently fail with
+// "no such table: remote_agent_workflow_provider_bindings" because Task 1
+// has not yet added the table to `createSchema()` — that IS the red phase.
+// They flip green once Task 1 adds the `CREATE TABLE IF NOT EXISTS
+// remote_agent_workflow_provider_bindings (...)` block (mirroring the
+// `remote_agent_isolation_environments` pattern already in this file, per
+// Dev Notes "DB Design Proposal" / "SQLite has no RETURNING on UPDATE/DELETE").
+// ---------------------------------------------------------------------------
+describe('remote_agent_workflow_provider_bindings (Story 3.1)', () => {
+  let db: SqliteAdapter;
+
+  afterEach(async () => {
+    if (db) {
+      await db.close();
+    }
+    try {
+      unlinkSync(currentDbPath);
+    } catch {
+      /* may not exist */
+    }
+    try {
+      unlinkSync(currentDbPath + '-wal');
+    } catch {
+      /* may not exist */
+    }
+    try {
+      unlinkSync(currentDbPath + '-shm');
+    } catch {
+      /* may not exist */
+    }
+  });
+
+  async function insertBinding(
+    id: string,
+    overrides: Partial<{
+      provider: string;
+      name: string;
+      codebaseId: string;
+      eventRoute: string;
+      state: string;
+    }> = {}
+  ): Promise<void> {
+    const v = {
+      provider: 'archon',
+      name: 'workflow-engine-primary',
+      codebaseId: 'cb-1',
+      eventRoute: 'https://hermes.example/events/workflow-engine',
+      state: 'active',
+      ...overrides,
+    };
+    await db.query(
+      `INSERT INTO remote_agent_workflow_provider_bindings
+       (id, provider, name, codebase_id, event_route, state)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [id, v.provider, v.name, v.codebaseId, v.eventRoute, v.state]
+    );
+  }
+
+  // 3.1-INT-001 [P0] — Fresh SQLite schema has FK, defaults, and unique
+  // identity. Risk: R-003, R-007.
+  test('fresh schema: insert applies defaults (state=active, binding_version=1) and both timestamps', async () => {
+    db = createTestDb();
+    await insertCodebase(db, 'cb-1');
+    await insertBinding('wpb-1');
+
+    const result = await db.query<{
+      state: string;
+      binding_version: number;
+      created_at: string | null;
+      updated_at: string | null;
+    }>(
+      `SELECT state, binding_version, created_at, updated_at
+       FROM remote_agent_workflow_provider_bindings WHERE id = $1`,
+      ['wpb-1']
+    );
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]?.state).toBe('active');
+    expect(result.rows[0]?.binding_version).toBe(1);
+    expect(result.rows[0]?.created_at).toBeTruthy();
+    expect(result.rows[0]?.updated_at).toBeTruthy();
+  });
+
+  test('fresh schema: UNIQUE(provider, name) rejects a second row for the same pair', async () => {
+    db = createTestDb();
+    await insertCodebase(db, 'cb-1');
+    await insertBinding('wpb-1');
+
+    await expect(insertBinding('wpb-2')).rejects.toThrow();
+  });
+
+  test('fresh schema: codebase_id is a foreign key that rejects an unregistered codebase', async () => {
+    db = createTestDb();
+    // No insertCodebase() call — 'cb-missing' is never registered. Match on
+    // "FOREIGN KEY" specifically (not just "any throw") so this stays a
+    // meaningful assertion once the table exists, rather than a vacuous pass
+    // driven by "no such table".
+    await expect(insertBinding('wpb-1', { codebaseId: 'cb-missing' })).rejects.toThrow(
+      /FOREIGN KEY/i
+    );
+  });
+
+  test('fresh schema: deleting the parent codebase cascades to its bindings (ON DELETE CASCADE)', async () => {
+    db = createTestDb();
+    await insertCodebase(db, 'cb-1');
+    await insertBinding('wpb-1');
+
+    await db.query('DELETE FROM remote_agent_codebases WHERE id = $1', ['cb-1']);
+
+    const result = await db.query(
+      'SELECT id FROM remote_agent_workflow_provider_bindings WHERE id = $1',
+      ['wpb-1']
+    );
+    expect(result.rows).toHaveLength(0);
+  });
+
+  // 3.1-INT-002 [P1] — Existing SQLite DB adds the table without data loss.
+  // Risk: R-007, R-013.
+  test('upgrade: constructing SqliteAdapter against a pre-existing DB (missing the new table) adds it without touching unrelated tables', async () => {
+    const dbPath = join(
+      import.meta.dir,
+      `.test-sqlite-pre-binding-${Date.now()}-${Math.random().toString(36).slice(2)}.db`
+    );
+    currentDbPath = dbPath;
+
+    // Seed a pre-Story-3.1 database: codebases table exists, has a row, but
+    // remote_agent_workflow_provider_bindings does not exist at all.
+    const raw = new Database(dbPath);
+    raw.exec(`
+      CREATE TABLE remote_agent_codebases (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        name TEXT NOT NULL,
+        default_cwd TEXT NOT NULL,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+      );
+      INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ('cb-preexisting', 'pre', '/tmp/pre');
+    `);
+    raw.close();
+
+    db = new SqliteAdapter(dbPath);
+    const cols = raw_pragma(dbPath, 'remote_agent_workflow_provider_bindings');
+    expect(cols).toContain('provider');
+    expect(cols).toContain('name');
+    expect(cols).toContain('event_route');
+
+    // The pre-existing row must survive the upgrade untouched.
+    const preserved = await db.query('SELECT name FROM remote_agent_codebases WHERE id = $1', [
+      'cb-preexisting',
+    ]);
+    expect(preserved.rows).toHaveLength(1);
+  });
+
+  // 3.1-INT-003 [P1] — Repeated SQLite init is idempotent. Risk: R-007, R-013.
+  test('repeated construction against the same file is idempotent (no duplicate-table / duplicate-index errors)', async () => {
+    db = createTestDb();
+    await db.close();
+    // Re-open the same file — createSchema()'s CREATE TABLE IF NOT EXISTS /
+    // CREATE INDEX IF NOT EXISTS must not throw on the second pass.
+    expect(() => {
+      db = new SqliteAdapter(currentDbPath);
+    }).not.toThrow();
+    await insertCodebase(db, 'cb-1');
+    await expect(insertBinding('wpb-1')).resolves.toBeUndefined();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Concurrency / races — real temp SQLite DB, Promise.all-driven interleaving.
+  // ---------------------------------------------------------------------------
+
+  // 3.1-INT-005 [P0] — Concurrent duplicate creates produce one row and one
+  // loser. Risk: R-003.
+  test('two concurrent creates for the same (provider,name) leave exactly one row', async () => {
+    db = createTestDb();
+    await insertCodebase(db, 'cb-1');
+
+    const attempt = (id: string): Promise<unknown> =>
+      db.query(
+        `INSERT INTO remote_agent_workflow_provider_bindings
+         (id, provider, name, codebase_id, event_route, state)
+         VALUES ($1, 'archon', 'workflow-engine-primary', 'cb-1', 'https://hermes.example/events/x', 'active')
+         ON CONFLICT (provider, name) DO NOTHING`,
+        [id]
+      );
+
+    await Promise.all([attempt('wpb-a'), attempt('wpb-b')]);
+
+    const rows = await db.query(
+      `SELECT id FROM remote_agent_workflow_provider_bindings WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
+    );
+    expect(rows.rows).toHaveLength(1);
+  });
+
+  // 3.1-INT-006 [P0] — Concurrent create/update yields only legal outcomes
+  // and no duplicate. Risk: R-003, R-006.
+  test('a create racing an update on the not-yet-created binding never produces two rows', async () => {
+    db = createTestDb();
+    await insertCodebase(db, 'cb-1');
+
+    const create = db.query(
+      `INSERT INTO remote_agent_workflow_provider_bindings
+       (id, provider, name, codebase_id, event_route, state)
+       VALUES ('wpb-race', 'archon', 'workflow-engine-primary', 'cb-1', 'https://hermes.example/events/x', 'active')
+       ON CONFLICT (provider, name) DO NOTHING`
+    );
+    const update = db.query(
+      `UPDATE remote_agent_workflow_provider_bindings
+       SET event_route = 'https://hermes.example/events/updated'
+       WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
+    );
+
+    await Promise.allSettled([create, update]);
+
+    const rows = await db.query(
+      `SELECT id FROM remote_agent_workflow_provider_bindings WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
+    );
+    expect(rows.rows.length).toBeLessThanOrEqual(1);
+  });
+
+  // 3.1-INT-007 [P0] — Create→update→create preserves distinct command
+  // semantics. Risk: R-003.
+  test('create, then update, then a second create for the same (provider,name) — the second create still fails', async () => {
+    db = createTestDb();
+    await insertCodebase(db, 'cb-1');
+    await insertBinding('wpb-1');
+
+    await db.query(
+      `UPDATE remote_agent_workflow_provider_bindings SET event_route = $1 WHERE provider = 'archon' AND name = 'workflow-engine-primary'`,
+      ['https://hermes.example/events/v2']
+    );
+
+    const secondCreate = await db.query(
+      `INSERT INTO remote_agent_workflow_provider_bindings
+       (id, provider, name, codebase_id, event_route, state)
+       VALUES ('wpb-2', 'archon', 'workflow-engine-primary', 'cb-1', 'https://hermes.example/events/v3', 'active')
+       ON CONFLICT (provider, name) DO NOTHING`
+    );
+    expect(secondCreate.rowCount).toBe(0);
+
+    const rows = await db.query<{ event_route: string }>(
+      `SELECT event_route FROM remote_agent_workflow_provider_bindings WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
+    );
+    expect(rows.rows).toHaveLength(1);
+    expect(rows.rows[0]?.event_route).toBe('https://hermes.example/events/v2');
+  });
+
+  // 3.1-INT-008 [P1] — Concurrent rotates are monotonic. Risk: R-006.
+  test('N concurrent rotate UPDATEs each increment binding_version by exactly 1 in total (no lost update)', async () => {
+    db = createTestDb();
+    await insertCodebase(db, 'cb-1');
+    await insertBinding('wpb-1');
+
+    const rotate = (): Promise<unknown> =>
+      db.query(
+        `UPDATE remote_agent_workflow_provider_bindings
+         SET binding_version = binding_version + 1, state = 'rotated'
+         WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
+      );
+
+    await Promise.all([rotate(), rotate(), rotate()]);
+
+    const rows = await db.query<{ binding_version: number }>(
+      `SELECT binding_version FROM remote_agent_workflow_provider_bindings WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
+    );
+    // 3 concurrent +1 UPDATEs starting from version 1 must land on exactly 4 —
+    // a lost update would land lower.
+    expect(rows.rows[0]?.binding_version).toBe(4);
+  });
+
+  // 3.1-INT-009 [P1] — Rotate racing disable has a serializable final state.
+  // Risk: R-006, R-009.
+  test('a rotate racing a disable on the same binding leaves a single coherent final state (never both half-applied)', async () => {
+    db = createTestDb();
+    await insertCodebase(db, 'cb-1');
+    await insertBinding('wpb-1');
+
+    const rotate = db.query(
+      `UPDATE remote_agent_workflow_provider_bindings
+       SET binding_version = binding_version + 1, state = 'rotated'
+       WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
+    );
+    const disable = db.query(
+      `UPDATE remote_agent_workflow_provider_bindings
+       SET state = 'disabled'
+       WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
+    );
+
+    await Promise.allSettled([rotate, disable]);
+
+    const rows = await db.query<{ state: string }>(
+      `SELECT state FROM remote_agent_workflow_provider_bindings WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
+    );
+    expect(rows.rows).toHaveLength(1);
+    expect(['rotated', 'disabled']).toContain(rows.rows[0]?.state);
+  });
+
+  // 3.1-INT-010 [P1] — Duplicate disable follows ratified idempotent
+  // semantics and retains one row. Risk: R-009.
+  test('disabling an already-disabled binding twice retains exactly one row with state=disabled', async () => {
+    db = createTestDb();
+    await insertCodebase(db, 'cb-1');
+    await insertBinding('wpb-1', { state: 'disabled' });
+
+    await db.query(
+      `UPDATE remote_agent_workflow_provider_bindings SET state = 'disabled' WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
+    );
+    await db.query(
+      `UPDATE remote_agent_workflow_provider_bindings SET state = 'disabled' WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
+    );
+
+    const rows = await db.query<{ state: string }>(
+      `SELECT state FROM remote_agent_workflow_provider_bindings WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
+    );
+    expect(rows.rows).toHaveLength(1);
+    expect(rows.rows[0]?.state).toBe('disabled');
+  });
+});
+
 function raw_pragma(dbPath: string, table: string): string[] {
   const raw = new Database(dbPath, { readonly: true });
   try {
