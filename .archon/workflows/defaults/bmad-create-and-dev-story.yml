@@ -12,7 +12,7 @@ description: |
 
 provider: codex
 modelReasoningEffort: xhigh
-model: gpt-5.6-sol
+model: gpt-5.5
 tags: [BMad, Planning, Review]
 
 nodes:
@@ -196,7 +196,7 @@ nodes:
     provider: codex
     depends_on: [record-created-story-state]
     context: fresh
-    model: gpt-5.6-sol
+    model: gpt-5.5
     output_type: story-readiness-gate
 
   - id: dev-story
@@ -221,7 +221,7 @@ nodes:
     provider: codex
     depends_on: [dev-story]
     context: fresh
-    model: gpt-5.6-sol
+    model: gpt-5.5
     idle_timeout: 900000
     output_format: &code_review_gate_schema
       type: object
