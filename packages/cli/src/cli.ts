@@ -62,6 +62,13 @@ import {
   isolationCleanupMergedCommand,
   isolationCompleteCommand,
 } from './commands/isolation';
+import {
+  providerBindingCreateCommand,
+  providerBindingUpdateCommand,
+  providerBindingStatusCommand,
+  providerBindingRotateCommand,
+  providerBindingDisableCommand,
+} from './commands/provider-binding';
 import { continueCommand } from './commands/continue';
 import { chatCommand } from './commands/chat';
 import { setupCommand } from './commands/setup';
@@ -302,6 +309,11 @@ async function main(): Promise<number> {
         status: { type: 'string' },
         limit: { type: 'string' },
         effort: { type: 'string' },
+        provider: { type: 'string' },
+        name: { type: 'string' },
+        'project-ref': { type: 'string' },
+        route: { type: 'string' },
+        'correlation-id': { type: 'string' },
       },
       allowPositionals: true,
       strict: false, // Allow unknown flags to pass through
@@ -752,6 +764,48 @@ async function main(): Promise<number> {
             return 1;
         }
         break;
+
+      case 'provider-binding': {
+        const bindingOpts = {
+          json: jsonFlag ?? false,
+          log: (line: string): void => {
+            console.log(line);
+          },
+        };
+        const bindingArgs = {
+          provider: values.provider as string | undefined,
+          name: values.name as string | undefined,
+          projectRef: values['project-ref'] as string | undefined,
+          route: values.route as string | undefined,
+          correlationId: values['correlation-id'] as string | undefined,
+        };
+        switch (subcommand) {
+          case 'create':
+            await providerBindingCreateCommand(bindingArgs, bindingOpts);
+            break;
+          case 'update':
+            await providerBindingUpdateCommand(bindingArgs, bindingOpts);
+            break;
+          case 'status':
+            await providerBindingStatusCommand(bindingArgs, bindingOpts);
+            break;
+          case 'rotate':
+            await providerBindingRotateCommand(bindingArgs, bindingOpts);
+            break;
+          case 'disable':
+            await providerBindingDisableCommand(bindingArgs, bindingOpts);
+            break;
+          default:
+            if (subcommand === undefined) {
+              console.error('Missing provider-binding subcommand');
+            } else {
+              console.error(`Unknown provider-binding subcommand: ${subcommand}`);
+            }
+            console.error('Available: create, update, status, rotate, disable');
+            return 1;
+        }
+        break;
+      }
 
       case 'validate':
         switch (subcommand) {

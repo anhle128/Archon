@@ -87,7 +87,7 @@ describe('workflow-commander contract regression (Story 3.1)', () => {
 // Activate by removing `.skip` once Task 1-3 land those three files.
 // ---------------------------------------------------------------------------
 describe('CI-002 secret/signing-material scan (Story 3.1)', () => {
-  test.skip('none of the new provider-binding implementation files contain secret/signing-material patterns', () => {
+  test('none of the new provider-binding implementation files contain secret/signing-material patterns', () => {
     const targets = [
       join(import.meta.dir, '../../../core/src/db/provider-bindings.ts'),
       join(import.meta.dir, '../../../core/src/schemas/workflow-provider-binding.ts'),

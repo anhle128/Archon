@@ -1,6 +1,6 @@
 # Story 3.1: Implement Archon Workflow Provider Binding Lifecycle
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -41,34 +41,34 @@ so that external controllers can receive workflow events without Hermes-specific
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — Binding storage, migration, and create/status (AC: 1, 3, 5)**
-  - [ ] Add `remote_agent_workflow_provider_bindings` to `migrations/000_combined.sql` (Postgres) AND `packages/core/src/db/adapters/sqlite.ts` `createSchema()` (SQLite) — see "DB Design Proposal" below for the exact columns. Both must be edited; SQLite does **not** read the SQL file.
-  - [ ] Run `bun run generate:bundled-schema` after editing the SQL (verify with `bun run check:bundled-schema`).
-  - [ ] Add `packages/core/src/schemas/workflow-provider-binding.ts` — Zod row schema mirroring the new table, **snake_case fields matching the DB columns 1:1** (e.g. `codebase_id`, `event_route`, `binding_version`, `created_at`) — this is the project convention (`env-var.ts`'s `codebaseEnvVarSchema` has `codebase_id`/`created_at`; `codebase.ts`'s `codebaseRowSchema` has `repository_url`/`default_cwd`; only the schema *variable name* is camelCase, never the row fields). Re-export from `packages/core/src/schemas/index.ts`.
-  - [ ] Add `packages/core/src/db/provider-bindings.ts` (per architecture's Source Tree Seed) with `createBinding()`, `getBinding(provider, name)`, `getBindingByCodebase(...)` as needed. `createBinding()` must use `INSERT ... ON CONFLICT (provider, name) DO NOTHING` (or equivalent) and check `rowCount === 0` to detect an existing row — **never** upsert (AC2).
-  - [ ] Add `packages/cli/src/commands/provider-binding.ts` implementing `create` and `status`. Register `provider-binding` in `packages/cli/src/cli.ts`'s command switch (alongside `workflow`/`isolation`) and add `provider`, `name`, `project-ref`, `route`, `correlation-id` to the `parseArgs` `options` map.
-  - [ ] Resolve `--project-ref` to a registered `remote_agent_codebases` row (see "Project-Ref Resolution" below). `create`/`update` fail closed (`MALFORMED_REQUEST`) if it doesn't resolve — do **not** auto-register a codebase the way `workflow run` does.
-  - [ ] Focused tests: `provider-bindings.test.ts` (mocked `pool.query`, mirror `user-provider-key-store.test.ts`) covering create-success, create-on-existing (must fail, not upsert), and status (missing + valid). CLI tests asserting `create`/`status` JSON output structurally matches `examples/providers/archon/commands/binding-create-success.json` and `binding-status-success.json` (see "Contract Fixture Test Strategy" below for field-name gotchas).
-  - [ ] Run `bun run validate` (there is no scoped/partial mode — it always runs the full monorepo check:bundled/type-check/lint/format/test suite) before moving to Task 2.
+- [x] **Task 1 — Binding storage, migration, and create/status (AC: 1, 3, 5)**
+  - [x] Add `remote_agent_workflow_provider_bindings` to `migrations/000_combined.sql` (Postgres) AND `packages/core/src/db/adapters/sqlite.ts` `createSchema()` (SQLite) — see "DB Design Proposal" below for the exact columns. Both must be edited; SQLite does **not** read the SQL file.
+  - [x] Run `bun run generate:bundled-schema` after editing the SQL (verify with `bun run check:bundled-schema`).
+  - [x] Add `packages/core/src/schemas/workflow-provider-binding.ts` — Zod row schema mirroring the new table, **snake_case fields matching the DB columns 1:1** (e.g. `codebase_id`, `event_route`, `binding_version`, `created_at`) — this is the project convention (`env-var.ts`'s `codebaseEnvVarSchema` has `codebase_id`/`created_at`; `codebase.ts`'s `codebaseRowSchema` has `repository_url`/`default_cwd`; only the schema _variable name_ is camelCase, never the row fields). Re-export from `packages/core/src/schemas/index.ts`.
+  - [x] Add `packages/core/src/db/provider-bindings.ts` (per architecture's Source Tree Seed) with `createBinding()`, `getBinding(provider, name)`, `getBindingByCodebase(...)` as needed. `createBinding()` must use `INSERT ... ON CONFLICT (provider, name) DO NOTHING` (or equivalent) and check `rowCount === 0` to detect an existing row — **never** upsert (AC2).
+  - [x] Add `packages/cli/src/commands/provider-binding.ts` implementing `create` and `status`. Register `provider-binding` in `packages/cli/src/cli.ts`'s command switch (alongside `workflow`/`isolation`) and add `provider`, `name`, `project-ref`, `route`, `correlation-id` to the `parseArgs` `options` map.
+  - [x] Resolve `--project-ref` to a registered `remote_agent_codebases` row (see "Project-Ref Resolution" below). `create`/`update` fail closed (`MALFORMED_REQUEST`) if it doesn't resolve — do **not** auto-register a codebase the way `workflow run` does.
+  - [x] Focused tests: `provider-bindings.test.ts` (mocked `pool.query`, mirror `user-provider-key-store.test.ts`) covering create-success, create-on-existing (must fail, not upsert), and status (missing + valid). CLI tests asserting `create`/`status` JSON output structurally matches `examples/providers/archon/commands/binding-create-success.json` and `binding-status-success.json` (see "Contract Fixture Test Strategy" below for field-name gotchas).
+  - [x] Run `bun run validate` (there is no scoped/partial mode — it always runs the full monorepo check:bundled/type-check/lint/format/test suite) before moving to Task 2.
 
-- [ ] **Task 2 — Update lifecycle (AC: 2)**
-  - [ ] Add `updateBinding()` in `packages/core/src/db/provider-bindings.ts` — `UPDATE ... WHERE provider=$1 AND name=$2`, check `rowCount === 0` → `BINDING_NOT_FOUND` failure (update on a nonexistent binding must fail, not create one).
-  - [ ] Add `update` subcommand to `packages/cli/src/commands/provider-binding.ts` emitting a `binding.update` command envelope (`workflow-command-envelope.v1`), matching `examples/providers/archon/commands/binding-update-success.json`.
-  - [ ] Tests: update-success (existing binding), update-on-missing (must fail closed), and a test proving `create` on an already-created `(provider, name)` still fails after an `update` was performed (i.e., update never silently creates a row `create` could have raced with).
-  - [ ] Run `bun run validate` (full monorepo check, no partial mode) before moving to Task 3.
+- [x] **Task 2 — Update lifecycle (AC: 2)**
+  - [x] Add `updateBinding()` in `packages/core/src/db/provider-bindings.ts` — `UPDATE ... WHERE provider=$1 AND name=$2`, check `rowCount === 0` → `BINDING_NOT_FOUND` failure (update on a nonexistent binding must fail, not create one).
+  - [x] Add `update` subcommand to `packages/cli/src/commands/provider-binding.ts` emitting a `binding.update` command envelope (`workflow-command-envelope.v1`), matching `examples/providers/archon/commands/binding-update-success.json`.
+  - [x] Tests: update-success (existing binding), update-on-missing (must fail closed), and a test proving `create` on an already-created `(provider, name)` still fails after an `update` was performed (i.e., update never silently creates a row `create` could have raced with).
+  - [x] Run `bun run validate` (full monorepo check, no partial mode) before moving to Task 3.
 
-- [ ] **Task 3 — Rotate and disable (AC: 4)**
-  - [ ] Add `rotateBinding()` — increments a `binding_version` counter and sets `state = 'rotated'`; implement as `UPDATE remote_agent_workflow_provider_bindings SET binding_version = binding_version + 1, state = 'rotated', updated_at = ... WHERE provider=$1 AND name=$2` then a follow-up `SELECT` (SQLite has no `RETURNING` on `UPDATE` — see `packages/core/src/db/workflows.ts:530-613` for the UPDATE-then-SELECT pattern to mirror). Per "Known Contract Gaps" below, this is a **pure version-counter bump** — do not add secret-material storage/generation.
-  - [ ] Add `disableBinding()` — `UPDATE ... SET state = 'disabled' WHERE provider=$1 AND name=$2`; must **not** delete the row (preserves audit history — Workflow Commander v1 has no remove operation).
-  - [ ] Add `rotate`/`disable` subcommands to the CLI, matching `examples/providers/archon/commands/binding-rotate-success.json` and `binding-disable-success.json`.
-  - [ ] Tests: rotate increments version and returns `previousVersion`/`activeVersion`; rotate/disable on a missing binding fails closed (`BINDING_NOT_FOUND`); disable is idempotent-safe (disabling an already-disabled binding does not error ambiguously — decide and document the exact behavior in Dev Agent Record).
-  - [ ] Run `bun run validate` (full monorepo check, no partial mode) before moving to Task 4.
+- [x] **Task 3 — Rotate and disable (AC: 4)**
+  - [x] Add `rotateBinding()` — increments a `binding_version` counter and sets `state = 'rotated'`; implement as `UPDATE remote_agent_workflow_provider_bindings SET binding_version = binding_version + 1, state = 'rotated', updated_at = ... WHERE provider=$1 AND name=$2` then a follow-up `SELECT` (SQLite has no `RETURNING` on `UPDATE` — see `packages/core/src/db/workflows.ts:530-613` for the UPDATE-then-SELECT pattern to mirror). Per "Known Contract Gaps" below, this is a **pure version-counter bump** — do not add secret-material storage/generation.
+  - [x] Add `disableBinding()` — `UPDATE ... SET state = 'disabled' WHERE provider=$1 AND name=$2`; must **not** delete the row (preserves audit history — Workflow Commander v1 has no remove operation).
+  - [x] Add `rotate`/`disable` subcommands to the CLI, matching `examples/providers/archon/commands/binding-rotate-success.json` and `binding-disable-success.json`.
+  - [x] Tests: rotate increments version and returns `previousVersion`/`activeVersion`; rotate/disable on a missing binding fails closed (`BINDING_NOT_FOUND`); disable is idempotent-safe (disabling an already-disabled binding does not error ambiguously — decide and document the exact behavior in Dev Agent Record).
+  - [x] Run `bun run validate` (full monorepo check, no partial mode) before moving to Task 4.
 
-- [ ] **Task 4 — Status diagnostics and contract validation (AC: 3, 5)**
-  - [ ] Extend `status` to detect and report all contract-defined states: `missing` (no row for `provider`+`name`), `active`/`valid`, `disabled`, `rotated`, `conflicting` (supplied `--project-ref` resolves to a different codebase than the one stored on the binding — report via `{ path: "/repositoryPath", code: "path-mismatch" }` matching `status-conflicting.json`). See "The 'stale' State" below for why `stale` needs no active detection logic in this story.
-  - [ ] Add malformed-input handling: missing `--provider`/`--name` on any subcommand returns a `MALFORMED_REQUEST` envelope with `fieldErrors: [{path: "/provider", code: "required"}, ...]`, matching `examples/providers/archon/commands/error-malformed-request.json`.
-  - [ ] Add a CLI envelope conformance test that loads every fixture under `examples/providers/archon/commands/binding-*.json` and `error-malformed-request.json` and asserts your envelope-builder's TypeScript output structurally matches each one (field-by-field, excluding the inherently dynamic `correlationId`/`issuedAt`). This is the ONLY fixture family this story's application code must conform to — see "Contract Fixture Test Strategy" and the note below on `bindings/*.json` scope.
-  - [ ] Run `python3 _bmad-output/planning-artifacts/contracts/workflow-commander/validate_contracts.py` (should already pass — this task doesn't modify the contract package; it's included here as a regression check, not a new obligation) and `bun run validate` for the full story before marking done.
+- [x] **Task 4 — Status diagnostics and contract validation (AC: 3, 5)**
+  - [x] Extend `status` to detect and report all contract-defined states: `missing` (no row for `provider`+`name`), `active`/`valid`, `disabled`, `rotated`, `conflicting` (supplied `--project-ref` resolves to a different codebase than the one stored on the binding — report via `{ path: "/repositoryPath", code: "path-mismatch" }` matching `status-conflicting.json`). See "The 'stale' State" below for why `stale` needs no active detection logic in this story.
+  - [x] Add malformed-input handling: missing `--provider`/`--name` on any subcommand returns a `MALFORMED_REQUEST` envelope with `fieldErrors: [{path: "/provider", code: "required"}, ...]`, matching `examples/providers/archon/commands/error-malformed-request.json`.
+  - [x] Add a CLI envelope conformance test that loads every fixture under `examples/providers/archon/commands/binding-*.json` and `error-malformed-request.json` and asserts your envelope-builder's TypeScript output structurally matches each one (field-by-field, excluding the inherently dynamic `correlationId`/`issuedAt`). This is the ONLY fixture family this story's application code must conform to — see "Contract Fixture Test Strategy" and the note below on `bindings/*.json` scope.
+  - [x] Run `python3 _bmad-output/planning-artifacts/contracts/workflow-commander/validate_contracts.py` (should already pass — this task doesn't modify the contract package; it's included here as a regression check, not a new obligation) and `bun run validate` for the full story before marking done.
 
 > **Scope note on `examples/providers/archon/bindings/*.json`**: do NOT write a second Zod schema or any application code to validate against this fixture family. It models a deeply nested request/result/status/error envelope (`shape`, `operation`, `bindingRef{provider,name,bindingId,projectRef}`, top-level `projectRef{id,repositoryPath,defaultBranch}`, request-only fields like `desiredState`/`capabilities` that map to no CLI flag) that has no consumer in this story's scope — there is no HTTP surface and no other Archon code path that produces or reads `workflow-provider-binding.v1` payloads in v1. These fixtures stay validated by the already-passing, contract-package-local `validate_contracts.py` (a static Python check, unaffected by anything this story changes) — that is sufficient; inventing a matching Zod schema here would be speculative scope with no current caller (YAGNI).
 
@@ -77,6 +77,7 @@ so that external controllers can receive workflow events without Hermes-specific
 ### Scope Boundary (read first)
 
 This story is **binding lifecycle only**: `binding.create`, `binding.update`, `binding.status`, `binding.rotate`, `binding.disable`. It explicitly excludes (owned by later stories, do not implement here):
+
 - `workflow.start/status/approve/reject/resume/retry/cancel` CLI commands and the generic shared command-envelope **helper/builder** (Story 3.3a/3.3b/3.3c/3.3d).
 - Workflow event production, the event outbox, signing, or delivery status (Story 3.5, 3.7).
 - Any Hermes-owned behavior: Project Binding, BMAD mount, materialization, Project Work Items, Phase Tasks, HILT Gates, reconciliation, diagnostics, user interaction.
@@ -87,20 +88,22 @@ It is fine — expected, even — for the CLI JSON output shape to overlap with 
 ### Contract Package (source of truth — read before writing any JSON shape)
 
 Local contract package: `_bmad-output/planning-artifacts/contracts/workflow-commander/`. Validate with:
+
 ```bash
 python3 _bmad-output/planning-artifacts/contracts/workflow-commander/validate_contracts.py
 ```
+
 This already passes (confirmed at story-creation time: 7 schemas, 17 command examples, 13 binding examples all validated). **Do not add, remove, or hand-edit files in `contracts/workflow-commander/`** — this story's job is to make Archon's runtime code produce output that conforms to what's already there, not to change the contract. If you find you need a field the contract doesn't have, STOP and flag it — per AD-9, do not invent it.
 
 Two **distinct** schemas are in play, both relevant to this story — do not conflate them:
 
-| | `schemas/workflow-command-envelope.schema.json` | `schemas/workflow-provider-binding.schema.json` |
-|---|---|---|
-| `schemaVersion` const | `workflow-command-envelope.v1` | `workflow-provider-binding.v1` |
-| Represents | The actual **CLI `--json` stdout** for every `archon provider-binding <verb>` invocation | The binding **domain/lifecycle payload shape** (request/result/status/error) |
-| Top-level `additionalProperties` | `false` | `false` (nested `request`/`result`/`status`/`error.details` use `machineObject`, which is `additionalProperties: true`) |
-| Fixtures | `examples/providers/archon/commands/binding-*.json` | `examples/providers/archon/bindings/*.json` |
-| Error `category` enum | 7 values: `configuration, external_delay, implementation_defect, provider_contract, security_rejection, timeout, unexpected_state` | 4 values only: `configuration, provider_contract, security_rejection, unexpected_state` (no `timeout`/`external_delay`/`implementation_defect`) |
+|                                  | `schemas/workflow-command-envelope.schema.json`                                                                                    | `schemas/workflow-provider-binding.schema.json`                                                                                                 |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schemaVersion` const            | `workflow-command-envelope.v1`                                                                                                     | `workflow-provider-binding.v1`                                                                                                                  |
+| Represents                       | The actual **CLI `--json` stdout** for every `archon provider-binding <verb>` invocation                                           | The binding **domain/lifecycle payload shape** (request/result/status/error)                                                                    |
+| Top-level `additionalProperties` | `false`                                                                                                                            | `false` (nested `request`/`result`/`status`/`error.details` use `machineObject`, which is `additionalProperties: true`)                         |
+| Fixtures                         | `examples/providers/archon/commands/binding-*.json`                                                                                | `examples/providers/archon/bindings/*.json`                                                                                                     |
+| Error `category` enum            | 7 values: `configuration, external_delay, implementation_defect, provider_contract, security_rejection, timeout, unexpected_state` | 4 values only: `configuration, provider_contract, security_rejection, unexpected_state` (no `timeout`/`external_delay`/`implementation_defect`) |
 
 **Required output**: the CLI's stdout for `--json` must conform to `workflow-command-envelope.schema.json` (that's what "Provider CLI Syntax Baseline" in epics.md/architecture.md describes, and what a controller actually parses) — validated against the `commands/binding-*.json` fixtures (Task 4). The `workflow-provider-binding.schema.json` family and its `bindings/*.json` fixtures are **out of scope for application code** in this story — see the scope note under Task 4 for why, and do not write a second schema to satisfy them.
 
@@ -143,6 +146,7 @@ UNIQUE (provider, name)
 ```
 
 Notes:
+
 - `missing`, `conflicting`, `malformed`, `stale` are **response-only** derived states, never persisted directly on the row (see "Known Contract Gaps" #2 for `stale`).
 - `bindingId` (the external `"wpb_archon_workflow_engine_primary"`-style string seen in fixtures) can be derived deterministically from `provider`/`name` at read time rather than stored — avoid a redundant column per YAGNI, but this is a judgment call, not a hard requirement.
 - Mirror `remote_agent_isolation_environments`' pattern for a lifecycle-`status`-style column: plain `TEXT` with valid values documented in a comment, not a DB-level enum. [Source: `migrations/000_combined.sql:174-217`, `packages/core/src/db/adapters/sqlite.ts:486-506`]
@@ -152,7 +156,7 @@ Notes:
 
 ### Architecture & Conventions to Follow
 
-- **Row schema**: `packages/core/src/schemas/workflow-provider-binding.ts` — camelCase *schema variable name* (e.g. `workflowProviderBindingSchema`), but **snake_case row fields** matching the DB columns 1:1 (e.g. `codebase_id`, `event_route`, `binding_version`), `z.infer<typeof ...>` for the derived type, `z` imported from `@hono/zod-openapi`, re-exported from `packages/core/src/schemas/index.ts` (pattern: `packages/core/src/schemas/env-var.ts`, full 18-line file — copy its shape exactly, including the snake_case fields).
+- **Row schema**: `packages/core/src/schemas/workflow-provider-binding.ts` — camelCase _schema variable name_ (e.g. `workflowProviderBindingSchema`), but **snake_case row fields** matching the DB columns 1:1 (e.g. `codebase_id`, `event_route`, `binding_version`), `z.infer<typeof ...>` for the derived type, `z` imported from `@hono/zod-openapi`, re-exported from `packages/core/src/schemas/index.ts` (pattern: `packages/core/src/schemas/env-var.ts`, full 18-line file — copy its shape exactly, including the snake_case fields).
 - **DB access module**: `packages/core/src/db/provider-bindings.ts` per architecture's Source Tree Seed [Source: architecture.md#Source Tree Seed]. Use `pool`/`getDialect()` from `./connection` like `packages/core/src/db/env-vars.ts`.
 - **SQLite has no `RETURNING` on UPDATE/DELETE** — enforced at `packages/core/src/db/adapters/sqlite.ts:76-85` (throws if you try). For rotate/update, do the UPDATE (checking `rowCount`), then a separate `SELECT`, mirroring `packages/core/src/db/workflows.ts:530-613`'s compare-and-swap-then-select pattern.
 - **CLI command file**: `packages/cli/src/commands/provider-binding.ts` per architecture's Source Tree Seed. Register the `provider-binding` case in `packages/cli/src/cli.ts`'s command switch, next to `case 'workflow':` (starts at `cli.ts:455`) and `case 'isolation':`. Since `provider-binding` will not be in the `noGitCommands` array (`cli.ts:340-353`), the CLI already resolves `cwd` → git repo root into `effectiveCwd` before your handler runs — you don't need to re-implement that.
@@ -160,7 +164,7 @@ Notes:
 - **`correlationId` generation**: no existing convention in the codebase (`grep -rn "correlationId" packages/` was empty at story-creation time — this is a genuinely new concept for Archon). Accept an optional `--correlation-id` (mirrors `--conversation-id`'s pattern), default to `crypto.randomUUID()` when omitted. Every operation, including `status`, must include a `correlationId` in its output (it's in both schemas' top-level `required` list unconditionally).
 - **JSON error-shape precedent**: only one existing shared helper exists anywhere in the CLI, `printJsonWriteError` in `packages/cli/src/commands/workflow.ts:1421-1425`, and it's local/unexported with a different (simpler) shape than what this story needs. There is nothing reusable to import — write a small local envelope-builder function inside `provider-binding.ts` (do not try to force-fit `printJsonWriteError`).
 - **Timestamps**: `issuedAt`/`observedAt`/`requestedAt` are `format: date-time` — use `new Date().toISOString()`.
-- **`--json` logging discipline**: when `--json` is passed, stdout must be *exactly* the JSON payload — no Pino log lines. The existing CLI already does this globally (`setLogLevel('silent')` when `jsonFlag`, `cli.ts:363-370`) — you get this for free by wiring through the existing `jsonFlag`, just don't `console.log`/`console.error` anything extra in `--json` mode.
+- **`--json` logging discipline**: when `--json` is passed, stdout must be _exactly_ the JSON payload — no Pino log lines. The existing CLI already does this globally (`setLogLevel('silent')` when `jsonFlag`, `cli.ts:363-370`) — you get this for free by wiring through the existing `jsonFlag`, just don't `console.log`/`console.error` anything extra in `--json` mode.
 
 ### Testing Requirements
 
@@ -204,8 +208,42 @@ Notes:
 
 ### Agent Model Used
 
+Qoder (Claude)
+
 ### Debug Log References
+
+- All 22 core DB-layer tests pass (provider-bindings.test.ts, workflow-provider-binding.test.ts, provider-bindings-bundled-schema.test.ts)
+- All 30 CLI command tests pass (provider-binding.test.ts) — exact fixture conformance against all 6 command envelopes
+- All 4 contract regression tests pass (provider-binding-contract.test.ts) — including validate_contracts.py gate
+- 8 E2E subprocess tests remain skipped (provider-binding.e2e.test.ts) — require a registered codebase in the test DB
+- `bun run validate` passes with exit 0 when `DEFAULT_AI_ASSISTANT` env var is not set (pre-existing codebases.test.ts env-var leak is unrelated to this story)
 
 ### Completion Notes List
 
+- **AC1 (Create/Status)**: `createBinding()` uses `ON CONFLICT DO NOTHING` + `rowCount === 0` check — never upserts. `getBinding()` returns null for missing, row for present, throws on corrupt state.
+- **AC2 (Update)**: `updateBinding()` uses `UPDATE ... WHERE provider=$1 AND name=$2` with `rowCount === 0` → `BINDING_NOT_FOUND`. Create still fails on existing (provider,name) even after update.
+- **AC3 (Status states)**: Status detects `missing`, `active`/`valid`, `disabled`, `rotated`, `conflicting` (project-ref mismatch). `stale` is representable in the type enum but no CLI path auto-produces it (documented gap per Known Contract Gaps #2).
+- **AC4 (Rotate/Disable)**: `rotateBinding()` does pre-SELECT → UPDATE (version+1, state=rotated) → post-SELECT (UPDATE-then-SELECT pattern for SQLite compat). `disableBinding()` sets state=disabled without deleting. No `actor` field added (schema is `additionalProperties: false`).
+- **AC5 (Error envelopes)**: All errors produce machine-readable `workflow-command-envelope.v1` failure envelopes with `error.code`, `error.category`, `error.retryable`, `error.details`, and `execution` block. Malformed input returns `MALFORMED_REQUEST` with `fieldErrors`.
+- **Known Contract Gap — actor field**: AC4 mentions "actor when available" but neither schema defines it. Omitted entirely per story instructions. Noted for contract-package review.
+- **Known Contract Gap — stale detection**: No trigger defined in contract/PRD. State is representable but not auto-produced. Hermes-owned reconciliation per AD-6.
+- **Disable idempotency**: Disabling an already-disabled binding succeeds (UPDATE commits, state stays 'disabled', previousState='disabled'). No ambiguous error.
+- **bindingRef.projectRef format**: Uses `project:<codebase_id>` string form (command envelope), not the structured object form (binding schema family, out of scope).
+
 ### File List
+
+- `packages/core/src/schemas/workflow-provider-binding.ts` — Zod row schema (snake_case fields)
+- `packages/core/src/schemas/index.ts` — re-export added
+- `packages/core/src/db/provider-bindings.ts` — DB access: createBinding, getBinding, updateBinding, rotateBinding, disableBinding, deriveBindingId
+- `packages/core/src/db/codebases.ts` — added `getCodebaseById` alias for `getCodebase`
+- `packages/cli/src/commands/provider-binding.ts` — CLI command implementations (create, update, status, rotate, disable) with envelope builders
+- `packages/cli/src/cli.ts` — registered `provider-binding` command switch, added CLI flags (provider, name, project-ref, route, correlation-id)
+- `migrations/000_combined.sql` — added `remote_agent_workflow_provider_bindings` table + indexes + comments
+- `packages/core/src/db/adapters/sqlite.ts` — added matching CREATE TABLE + indexes in `createSchema()`
+- `packages/core/src/db/bundled-schema.generated.ts` — regenerated via `bun run generate:bundled-schema`
+- `packages/core/src/db/provider-bindings.test.ts` — 22 mocked-query DB-layer tests
+- `packages/core/src/schemas/workflow-provider-binding.test.ts` — schema validation tests
+- `packages/core/src/db/provider-bindings-bundled-schema.test.ts` — bundled schema regression tests
+- `packages/cli/src/commands/provider-binding.test.ts` — 30 CLI command tests (fixture conformance, malformed input, status matrix, security)
+- `packages/cli/src/commands/provider-binding-contract.test.ts` — 4 contract regression tests (validator gate, fixture integrity, dynamic fields, secret scan)
+- `packages/cli/src/commands/provider-binding.e2e.test.ts` — 8 skipped E2E subprocess tests (require registered codebase)

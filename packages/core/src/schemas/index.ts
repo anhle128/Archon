@@ -68,3 +68,7 @@ export type {
   RouteLoopRuntimeMetadata,
   WorkflowRunMetadata,
 } from './workflow-run';
+
+// WorkflowProviderBinding
+export { workflowProviderBindingSchema } from './workflow-provider-binding';
+export type { WorkflowProviderBinding } from './workflow-provider-binding';

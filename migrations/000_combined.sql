@@ -17,6 +17,7 @@
 --   8. remote_agent_user_github_tokens
 --   9. remote_agent_user_provider_keys
 --   10. remote_agent_user_ai_prefs
+--   11. remote_agent_workflow_provider_bindings
 --
 -- Dropped tables (via migrations):
 --   - remote_agent_command_templates (017)
@@ -569,3 +570,36 @@ CREATE TABLE IF NOT EXISTS remote_agent_auth_verification (
   "createdAt" timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
   "updatedAt" timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
+
+-- ============================================================================
+-- Table 11: Workflow Provider Bindings
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS remote_agent_workflow_provider_bindings (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  provider        TEXT NOT NULL,
+  name            TEXT NOT NULL,
+  codebase_id     UUID NOT NULL REFERENCES remote_agent_codebases(id) ON DELETE CASCADE,
+  event_route     TEXT NOT NULL,
+  state           TEXT NOT NULL DEFAULT 'active',
+  binding_version INTEGER NOT NULL DEFAULT 1,
+  created_at      TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at      TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  UNIQUE (provider, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_provider_bindings_codebase
+  ON remote_agent_workflow_provider_bindings(codebase_id);
+CREATE INDEX IF NOT EXISTS idx_provider_bindings_provider_name
+  ON remote_agent_workflow_provider_bindings(provider, name);
+
+COMMENT ON TABLE remote_agent_workflow_provider_bindings IS
+  'Provider-neutral reverse event bindings for external controllers';
+COMMENT ON COLUMN remote_agent_workflow_provider_bindings.provider IS
+  'Controller-declared provider identity (e.g. archon)';
+COMMENT ON COLUMN remote_agent_workflow_provider_bindings.name IS
+  'Binding name (e.g. workflow-engine-primary)';
+COMMENT ON COLUMN remote_agent_workflow_provider_bindings.state IS
+  'Lifecycle state: active, disabled, rotated';
+COMMENT ON COLUMN remote_agent_workflow_provider_bindings.binding_version IS
+  'Monotonic version counter, incremented on rotate';
