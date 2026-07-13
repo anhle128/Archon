@@ -157,19 +157,26 @@ describe('bundled-defaults', () => {
       expect(content).toContain('command: archon-create-pr');
     });
 
-    it('bmad readiness correction loop should not wait for interactive BMAD gates', () => {
-      const content = BUNDLED_WORKFLOWS['bmad-readiness-correct-course-loop'];
-      expect(content).toContain(
+    it('bmad readiness correction commands should not wait for interactive BMAD gates', () => {
+      const readiness = BUNDLED_COMMANDS['bmad-check-implementation-readiness'];
+      const correctCourse = BUNDLED_COMMANDS['bmad-correct-course'];
+      const workflow = BUNDLED_WORKFLOWS['bmad-readiness-correct-course-loop'];
+
+      expect(workflow).toContain('command: bmad-check-implementation-readiness');
+      expect(workflow).toContain('command: bmad-correct-course');
+      expect(readiness).toContain(
         'Do not present or wait at menus, including the Step 1 [C] checkpoint.'
       );
-      expect(content).toContain(
+      expect(readiness).toContain(
+        'Do not invoke `bmad-help` or start another interactive workflow.'
+      );
+      expect(correctCourse).toContain(
         "Treat this workflow invocation as the user's batch-mode selection and explicit approval"
       );
-      expect(content).toContain(
+      expect(correctCourse).toContain(
         'Do not ask for the change trigger, mode selection, proposal review, Continue/Edit, yes/no approval, or any other user confirmation.'
       );
-      expect(content).toContain('Do not invoke bmad-help or start another interactive workflow.');
-      expect(content).not.toContain(
+      expect(correctCourse).not.toContain(
         'Do not pause for user input unless the correction is impossible without missing project facts.'
       );
     });

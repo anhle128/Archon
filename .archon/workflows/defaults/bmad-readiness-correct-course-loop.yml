@@ -46,18 +46,7 @@ nodes:
   - id: bmad-check-implementation-readiness
     depends_on: [validate-bmad-command, bmad-correct-course]
     trigger_rule: one_success
-    prompt: |
-      bmad-check-implementation-readiness $ARGUMENTS
-
-      Run the complete readiness workflow in non-interactive automation mode.
-
-      Automation contract:
-      - Treat the original workflow invocation as authorization to complete every readiness step without asking for confirmation.
-      - Do not present or wait at menus, including the Step 1 [C] checkpoint.
-      - When both whole and sharded versions of an artifact exist, use the whole document and record the duplicate as a finding.
-      - When a required artifact is missing or facts are insufficient, record the problem in the readiness report and return NOT READY; do not ask the user a question and do not invent content.
-      - Write and finalize the implementation readiness report, then return its path, readiness status, issue counts, and concise findings.
-      - Stop after the readiness result. Do not invoke bmad-help or start another interactive workflow.
+    command: bmad-check-implementation-readiness
     context: fresh
     idle_timeout: 900000
     output_type: bmad-readiness-report
@@ -124,12 +113,9 @@ nodes:
         exhausted: readiness-loop-error
 
   - id: bmad-correct-course
-    prompt: |
-      bmad-correct-course
-
-      Run in automated batch mode for this Archon workflow.
-
-      Treat the latest implementation readiness result as the change trigger.
+    command: bmad-correct-course
+    prompt_suffix: |
+      ## Archon Readiness Loop Context
 
       Original user request:
       $ARGUMENTS
@@ -137,18 +123,10 @@ nodes:
       Latest readiness evaluator decision:
       $readiness-evaluator.output
 
-      Latest readiness output:
+      Latest readiness result:
       $bmad-check-implementation-readiness.output
 
-      Requirements:
-      - Address only issues identified by bmad-check-implementation-readiness.
-      - Prefer direct updates to BMAD planning artifacts over broad replanning.
-      - Run the complete Correct Course workflow in non-interactive batch mode.
-      - Treat this workflow invocation as the user's batch-mode selection and explicit approval of in-scope planning-artifact corrections.
-      - Do not ask for the change trigger, mode selection, proposal review, Continue/Edit, yes/no approval, or any other user confirmation.
-      - Apply the approved corrections directly to the affected BMAD planning artifacts; do not stop after merely drafting a Sprint Change Proposal.
-      - If a correction is impossible without missing project facts, do not ask a question and do not invent content. Return a clearly labeled BLOCKED result with the missing facts and leave unsupported sections unchanged.
-      - Summarize every artifact changed and why it was changed.
+      Address only issues identified by the latest readiness result.
     when: "$readiness-evaluator.output.result == 'negative'"
     context: fresh
     idle_timeout: 900000
