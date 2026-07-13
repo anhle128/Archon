@@ -231,7 +231,6 @@ nodes:
     depends_on: [validate-story-readiness]
     context: fresh
     model: gpt-5.6-sol
-    effort: high
     output_type: risk-based-test-design
 
   - id: generate-red-acceptance-tests
