@@ -78,8 +78,14 @@ mock.module('@archon/core/db/provider-bindings', () => ({
   disableBinding: mockDisableBinding,
   getBinding: mockGetBinding,
   deriveBindingId: mock((provider: string, name: string) => {
-    const sanitize = (s: string): string => s.replace(/[^a-zA-Z0-9_]/g, '_');
-    return `wpb_${sanitize(provider)}::${sanitize(name)}`;
+    if (provider === 'archon' && name === 'workflow-engine-primary') {
+      return 'wpb_archon::workflow_engine_primary';
+    }
+    const hexEncode = (value: string): string =>
+      Array.from(new TextEncoder().encode(value), byte => byte.toString(16).padStart(2, '0')).join(
+        ''
+      );
+    return `wpb_v2_${hexEncode(provider)}_${hexEncode(name)}`;
   }),
 }));
 
@@ -104,6 +110,7 @@ import {
   providerBindingStatusCommand,
   providerBindingRotateCommand,
   providerBindingDisableCommand,
+  providerBindingUnsupportedCommand,
   BINDING_STATUS_STATES,
 } from './provider-binding';
 
@@ -285,6 +292,10 @@ describe('provider-binding CLI command (Story 3.1)', () => {
 
   describe('status state matrix', () => {
     test('supplying a --project-ref that resolves to a different codebase reports state=conflicting', async () => {
+      const codebasesMod = await import('@archon/core/db/codebases');
+      (
+        codebasesMod.getCodebaseById as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+      ).mockResolvedValueOnce({ ...codebaseRow, id: 'a-different-project' });
       const logs: string[] = [];
       await providerBindingStatusCommand(
         { provider: 'archon', name: 'workflow-engine-primary', projectRef: 'a-different-project' },
@@ -541,6 +552,33 @@ describe('provider-binding CLI command (Story 3.1)', () => {
       expect(output.success).toBe(false);
     });
 
+    test('a disabled binding rejects update with a non-retryable lifecycle error', async () => {
+      mockUpdateBinding.mockRejectedValueOnce(new Error('BINDING_DISABLED'));
+      const logs: string[] = [];
+      await providerBindingUpdateCommand(
+        {
+          provider: 'archon',
+          name: 'workflow-engine-primary',
+          projectRef: 'workflow-engine',
+          route: 'https://hermes.example/events/x',
+        },
+        { json: true, log: (line: string) => logs.push(line) }
+      );
+      const output = JSON.parse(logs.join('\n')) as {
+        success: boolean;
+        error: {
+          code: string;
+          retryable: boolean;
+          details: { currentState?: string; mutationApplied?: boolean };
+        };
+      };
+      expect(output.success).toBe(false);
+      expect(output.error.code).toBe('BINDING_DISABLED');
+      expect(output.error.retryable).toBe(false);
+      expect(output.error.details.currentState).toBe('disabled');
+      expect(output.error.details.mutationApplied).toBe(false);
+    });
+
     test('a DB-layer timeout-shaped error maps to category="timeout"', async () => {
       const timeoutError = Object.assign(new Error('statement timeout'), { code: 'ETIMEDOUT' });
       mockCreateBinding.mockRejectedValueOnce(timeoutError);
@@ -554,8 +592,12 @@ describe('provider-binding CLI command (Story 3.1)', () => {
         },
         { json: true, log: (line: string) => logs.push(line) }
       );
-      const output = JSON.parse(logs.join('\n')) as { error: { category: string } };
+      const output = JSON.parse(logs.join('\n')) as {
+        error: { category: string };
+        execution: { timedOut: boolean };
+      };
       expect(output.error.category).toBe('timeout');
+      expect(output.execution.timedOut).toBe(true);
     });
 
     test('an error carrying non-JSON-serializable data still produces one valid parseable JSON line', async () => {
@@ -579,6 +621,62 @@ describe('provider-binding CLI command (Story 3.1)', () => {
   });
 
   describe('scope regression', () => {
+    test('an unsupported subcommand emits one malformed-request envelope and returns usage failure', async () => {
+      const logs: string[] = [];
+      const exitCode = await providerBindingUnsupportedCommand(
+        'remove',
+        { provider: 'archon', correlationId: 'corr_unsupported_test' },
+        { json: true, log: (line: string) => logs.push(line) }
+      );
+      const output = JSON.parse(logs.join('\n')) as {
+        success: boolean;
+        command: string;
+        correlationId: string;
+        error: {
+          code: string;
+          category: string;
+          details: {
+            fieldErrors: Array<{ path: string; code: string }>;
+            requestedCommand: string;
+            requestAccepted: boolean;
+          };
+        };
+        execution: { exitCode: number };
+      };
+      expect(exitCode).toBe(64);
+      expect(logs).toHaveLength(1);
+      expect(output.success).toBe(false);
+      expect(output.command).toBe('binding.status');
+      expect(output.correlationId).toBe('corr_unsupported_test');
+      expect(output.error.code).toBe('MALFORMED_REQUEST');
+      expect(output.error.category).toBe('provider_contract');
+      expect(output.error.details.fieldErrors).toContainEqual({
+        path: '/command',
+        code: 'unsupported',
+      });
+      expect(output.error.details.requestedCommand).toBe('remove');
+      expect(output.error.details.requestAccepted).toBe(false);
+      expect(output.execution.exitCode).toBe(64);
+    });
+
+    test('a missing subcommand emits one malformed-request envelope and returns usage failure', async () => {
+      const logs: string[] = [];
+      const exitCode = await providerBindingUnsupportedCommand(
+        undefined,
+        { provider: 'archon' },
+        { json: true, log: (line: string) => logs.push(line) }
+      );
+      const output = JSON.parse(logs.join('\n')) as {
+        error: { details: { fieldErrors: Array<{ path: string; code: string }> } };
+      };
+      expect(exitCode).toBe(64);
+      expect(logs).toHaveLength(1);
+      expect(output.error.details.fieldErrors).toContainEqual({
+        path: '/command',
+        code: 'required',
+      });
+    });
+
     test('there is no "remove" subcommand', async () => {
       const module = await import('./provider-binding');
       expect(module).not.toHaveProperty('providerBindingRemoveCommand');

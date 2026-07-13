@@ -49,6 +49,40 @@ describe('workflowProviderBindingSchema (Story 3.1)', () => {
     }
   });
 
+  test('accepts PostgreSQL Date timestamp rows', () => {
+    const timestamp = new Date('2026-07-11T11:48:27.000Z');
+    const row = {
+      id: 'wpb-1',
+      provider: 'archon',
+      name: 'workflow-engine-primary',
+      codebase_id: 'cb-1',
+      event_route: 'https://hermes.example/events/workflow-engine',
+      state: 'active',
+      binding_version: 1,
+      created_at: timestamp,
+      updated_at: timestamp,
+    };
+
+    const parsed = workflowProviderBindingSchema.parse(row);
+    expect(parsed.created_at).toBe(timestamp);
+    expect(parsed.updated_at).toBe(timestamp);
+  });
+
+  test('rejects a state outside the persisted lifecycle enum', () => {
+    const row = {
+      id: 'wpb-1',
+      provider: 'archon',
+      name: 'workflow-engine-primary',
+      codebase_id: 'cb-1',
+      event_route: 'https://hermes.example/events/workflow-engine',
+      state: 'conflicting',
+      binding_version: 1,
+      created_at: '2026-07-11T11:48:27.000Z',
+      updated_at: '2026-07-11T11:48:27.000Z',
+    };
+    expect(() => workflowProviderBindingSchema.parse(row)).toThrow();
+  });
+
   test('rejects a row missing a required column (fail closed on corrupt data)', () => {
     const row = {
       id: 'wpb-1',

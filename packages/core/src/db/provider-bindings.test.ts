@@ -2,9 +2,20 @@ import { mock, describe, test, expect, beforeEach } from 'bun:test';
 import { createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 
 const mockQuery = mock(() => Promise.resolve(createQueryResult([])));
+const mockWithTransaction = mock(
+  async <T>(
+    fn: (query: <U>(sql: string, params?: unknown[]) => Promise<unknown>) => Promise<T>
+  ): Promise<T> => {
+    return await fn(mockQuery as <U>(sql: string, params?: unknown[]) => Promise<unknown>);
+  }
+);
 mock.module('./connection', () => ({
   pool: { query: mockQuery },
   getDialect: () => mockPostgresDialect,
+  getDatabase: () => ({
+    dialect: 'postgres',
+    withTransaction: mockWithTransaction,
+  }),
 }));
 
 mock.module('@archon/paths', () => ({
@@ -45,6 +56,7 @@ function bindingRow(overrides: Record<string, unknown> = {}): Record<string, unk
 describe('provider-bindings db layer (Story 3.1)', () => {
   beforeEach(() => {
     mockQuery.mockClear();
+    mockWithTransaction.mockClear();
   });
 
   describe('createBinding()', () => {
@@ -59,6 +71,7 @@ describe('provider-bindings db layer (Story 3.1)', () => {
         eventRoute: 'https://hermes.example/events/workflow-engine',
       });
 
+      expect(mockWithTransaction).toHaveBeenCalledTimes(1);
       const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(sql).toContain('INSERT INTO remote_agent_workflow_provider_bindings');
       expect(sql).toContain('ON CONFLICT');
@@ -88,6 +101,7 @@ describe('provider-bindings db layer (Story 3.1)', () => {
 
   describe('updateBinding()', () => {
     test('issues UPDATE ... WHERE provider=$1 AND name=$2 and never inserts', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       mockQuery.mockResolvedValueOnce(
         createQueryResult([bindingRow({ event_route: 'https://hermes.example/events/v2' })], 1)
@@ -100,7 +114,10 @@ describe('provider-bindings db layer (Story 3.1)', () => {
         eventRoute: 'https://hermes.example/events/v2',
       });
 
-      const [updateSql, updateParams] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(mockWithTransaction).toHaveBeenCalledTimes(1);
+      const [preSelectSql] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(preSelectSql).toContain('FOR UPDATE');
+      const [updateSql, updateParams] = mockQuery.mock.calls[1] as [string, unknown[]];
       expect(updateSql).toContain('UPDATE remote_agent_workflow_provider_bindings');
       expect(updateSql).not.toContain('INSERT INTO');
       expect(updateSql).toMatch(/WHERE\s+provider\s*=\s*\$\d+\s+AND\s+name\s*=\s*\$\d+/);
@@ -134,6 +151,7 @@ describe('provider-bindings db layer (Story 3.1)', () => {
         eventRoute: 'https://hermes.example/events/v1',
       });
 
+      mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
       await updateBinding({
@@ -166,6 +184,7 @@ describe('provider-bindings db layer (Story 3.1)', () => {
       const createParams = mockQuery.mock.calls[0]?.[1] as unknown[];
       expect(createParams).toContain('https://hermes.example/events/v1');
 
+      mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       mockQuery.mockResolvedValueOnce(
         createQueryResult([bindingRow({ event_route: 'https://hermes.example/events/v2' })], 1)
@@ -176,14 +195,46 @@ describe('provider-bindings db layer (Story 3.1)', () => {
         codebaseId: 'cb-1',
         eventRoute: 'https://hermes.example/events/v2',
       });
-      const updateParams = mockQuery.mock.calls[2]?.[1] as unknown[];
+      const updateParams = mockQuery.mock.calls[3]?.[1] as unknown[];
       expect(updateParams).toContain('https://hermes.example/events/v2');
       expect(updateParams).not.toContain('https://hermes.example/events/v1');
+    });
+
+    test('rejects updating a disabled binding', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow({ state: 'disabled' })], 1));
+
+      await expect(
+        updateBinding({
+          provider: 'archon',
+          name: 'workflow-engine-primary',
+          codebaseId: 'cb-2',
+          eventRoute: 'https://hermes.example/events/disabled-v2',
+        })
+      ).rejects.toThrow(/BINDING_DISABLED/);
+
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      const [preSelectSql] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(preSelectSql).toContain('FOR UPDATE');
+    });
+
+    test('rejects when a guarded update loses the row to a concurrent change', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
+
+      await expect(
+        updateBinding({
+          provider: 'archon',
+          name: 'workflow-engine-primary',
+          codebaseId: 'cb-2',
+          eventRoute: 'https://hermes.example/events/v2',
+        })
+      ).rejects.toThrow(/BINDING_CONCURRENT_MODIFICATION/);
     });
   });
 
   describe('rotateBinding()', () => {
-    test('increments binding_version by exactly 1, sets state=rotated, via atomic UPDATE then SELECT (no pre-SELECT)', async () => {
+    test('increments binding_version by exactly 1, sets state=rotated, in one transaction', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       mockQuery.mockResolvedValueOnce(
         createQueryResult([bindingRow({ state: 'rotated', binding_version: 2 })], 1)
@@ -191,26 +242,28 @@ describe('provider-bindings db layer (Story 3.1)', () => {
 
       const result = await rotateBinding('archon', 'workflow-engine-primary');
 
-      const [updateSql] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(mockWithTransaction).toHaveBeenCalledTimes(1);
+      const [preSelectSql] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(preSelectSql).toContain('FOR UPDATE');
+      const [updateSql, updateParams] = mockQuery.mock.calls[1] as [string, unknown[]];
       expect(updateSql).toContain('UPDATE remote_agent_workflow_provider_bindings');
-      expect(updateSql).toContain('binding_version = binding_version + 1');
-      expect(updateSql).toContain("state != 'disabled'");
+      expect(updateSql).toContain('binding_version = $3');
+      expect(updateSql).toContain('binding_version = $4');
+      expect(updateParams).toEqual(['archon', 'workflow-engine-primary', 2, 1, 'active']);
       expect(updateSql).not.toContain('RETURNING');
-      const [selectSql] = mockQuery.mock.calls[1] as [string, unknown[]];
+      const [selectSql] = mockQuery.mock.calls[2] as [string, unknown[]];
       expect(selectSql).toContain('SELECT');
       expect(result).toMatchObject({ previousVersion: 1, activeVersion: 2 });
     });
 
-    test('rejects with BINDING_NOT_FOUND when no row matches and diagnostic SELECT confirms absence', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
+    test('rejects with BINDING_NOT_FOUND when no row matches', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
 
       await expect(rotateBinding('archon', 'never-created')).rejects.toThrow(/BINDING_NOT_FOUND/);
-      expect(mockQuery).toHaveBeenCalledTimes(2);
+      expect(mockQuery).toHaveBeenCalledTimes(1);
     });
 
     test('rejects with BINDING_DISABLED when the binding exists but is disabled (atomic guard)', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
       mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow({ state: 'disabled' })], 1));
 
       await expect(rotateBinding('archon', 'workflow-engine-primary')).rejects.toThrow(
@@ -219,6 +272,7 @@ describe('provider-bindings db layer (Story 3.1)', () => {
     });
 
     test('throws BINDING_VANISHED_AFTER_ROTATE when post-UPDATE SELECT finds no row', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
 
@@ -236,7 +290,9 @@ describe('provider-bindings db layer (Story 3.1)', () => {
 
       await disableBinding('archon', 'workflow-engine-primary');
 
+      expect(mockWithTransaction).toHaveBeenCalledTimes(1);
       const calledSql = mockQuery.mock.calls.map(c => (c as [string, unknown[]])[0]).join('\n');
+      expect(calledSql).toContain('FOR UPDATE');
       expect(calledSql).toContain("state = 'disabled'");
       expect(calledSql).not.toContain('DELETE FROM remote_agent_workflow_provider_bindings');
     });
@@ -262,6 +318,17 @@ describe('provider-bindings db layer (Story 3.1)', () => {
       expect(row).toMatchObject({ state: 'active', binding_version: 1 });
     });
 
+    test('accepts PostgreSQL Date timestamp rows from node-postgres', async () => {
+      const timestamp = new Date('2026-07-11T11:48:27.000Z');
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([bindingRow({ created_at: timestamp, updated_at: timestamp })])
+      );
+
+      const row = await getBinding('archon', 'workflow-engine-primary');
+      expect(row?.created_at).toBe(timestamp);
+      expect(row?.updated_at).toBe(timestamp);
+    });
+
     test('returns the row unmodified when state=disabled', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow({ state: 'disabled' })]));
 
@@ -283,17 +350,40 @@ describe('provider-bindings db layer (Story 3.1)', () => {
         createQueryResult([bindingRow({ state: 'not-a-real-state' })])
       );
 
-      await expect(getBinding('archon', 'workflow-engine-primary')).rejects.toThrow();
+      await expect(getBinding('archon', 'workflow-engine-primary')).rejects.toThrow(
+        /BINDING_CORRUPT_STATE/
+      );
+    });
+
+    test('throws (fails closed) rather than returning a row missing a required column', async () => {
+      const corruptRow = bindingRow();
+      delete corruptRow.codebase_id;
+      mockQuery.mockResolvedValueOnce(createQueryResult([corruptRow]));
+
+      await expect(getBinding('archon', 'workflow-engine-primary')).rejects.toThrow(
+        /BINDING_CORRUPT_ROW/
+      );
     });
   });
 
   describe('boundary / canonicalization (Story 3.1)', () => {
-    test('deriveBindingId produces a deterministic wpb_-prefixed slug with :: separator preventing cross-identity collisions', () => {
+    test('deriveBindingId produces the deterministic wpb_-prefixed slug from the contract fixtures', () => {
       const id = deriveBindingId('archon', 'workflow-engine-primary');
       expect(id).toBe('wpb_archon::workflow_engine_primary');
-      const idA = deriveBindingId('a', 'b_c');
-      const idB = deriveBindingId('a_b', 'c');
-      expect(idA).not.toBe(idB);
+    });
+
+    test('deriveBindingId remains unique for provider/name identities that previously collided', () => {
+      const ids = [
+        deriveBindingId('a', 'b_c'),
+        deriveBindingId('a_b', 'c'),
+        deriveBindingId('a-b', 'c'),
+        deriveBindingId('a', 'b-c'),
+      ];
+
+      expect(new Set(ids).size).toBe(ids.length);
+      for (const id of ids) {
+        expect(id).toMatch(/^wpb_/);
+      }
     });
   });
 });

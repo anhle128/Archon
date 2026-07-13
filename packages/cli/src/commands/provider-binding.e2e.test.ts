@@ -1,4 +1,6 @@
 import { describe, test, expect } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 // RED-PHASE E2E SCAFFOLD (EXECUTABLE) — Story 3.1 "Implement Archon Workflow
@@ -48,6 +50,94 @@ async function runCli(args: string[], cwd: string = REPO_ROOT): Promise<CliResul
 }
 
 describe('provider-binding CLI E2E — real subprocess (Story 3.1)', () => {
+  test('malformed provider-binding JSON command still emits a single envelope outside a git repo', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'archon-provider-binding-no-git-'));
+    try {
+      const { stdout, stderr, exitCode } = await runCli(
+        ['provider-binding', 'create', '--json'],
+        cwd
+      );
+      const lines = stdout.trim().split('\n').filter(Boolean);
+      expect(lines).toHaveLength(1);
+      const parsed = JSON.parse(lines[0] as string) as {
+        success: boolean;
+        error: { code: string };
+        execution: { exitCode: number };
+      };
+      expect(parsed.success).toBe(false);
+      expect(parsed.error.code).toBe('MALFORMED_REQUEST');
+      expect(parsed.execution.exitCode).toBe(64);
+      expect(exitCode).toBe(64);
+      expect(stderr).toBe('');
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  test('a missing string flag value does not swallow --json', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'archon-provider-binding-no-git-'));
+    try {
+      const { stdout, stderr, exitCode } = await runCli(
+        [
+          'provider-binding',
+          'create',
+          '--provider',
+          '--json',
+          '--name',
+          'workflow-engine-primary',
+          '--project-ref',
+          'workflow-engine',
+          '--route',
+          'https://hermes.example/events/workflow-engine',
+        ],
+        cwd
+      );
+      const lines = stdout.trim().split('\n').filter(Boolean);
+      expect(lines).toHaveLength(1);
+      const parsed = JSON.parse(lines[0] as string) as {
+        provider: string;
+        success: boolean;
+        error: { code: string; details: { fieldErrors: Array<{ path: string; code: string }> } };
+      };
+      expect(exitCode).toBe(64);
+      expect(parsed.provider).toBe('archon');
+      expect(parsed.success).toBe(false);
+      expect(parsed.error.code).toBe('MALFORMED_REQUEST');
+      expect(parsed.error.details.fieldErrors).toContainEqual({
+        path: '/provider',
+        code: 'required',
+      });
+      expect(stderr).toBe('');
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  test('unsupported provider-binding subcommand fails closed outside a git repo', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'archon-provider-binding-no-git-'));
+    try {
+      const { stdout, stderr, exitCode } = await runCli(
+        ['provider-binding', 'remove', '--json'],
+        cwd
+      );
+      const lines = stdout.trim().split('\n').filter(Boolean);
+      expect(lines).toHaveLength(1);
+      const parsed = JSON.parse(lines[0] as string) as {
+        success: boolean;
+        error: { details: { fieldErrors: Array<{ path: string; code: string }> } };
+      };
+      expect(exitCode).toBe(64);
+      expect(parsed.success).toBe(false);
+      expect(parsed.error.details.fieldErrors).toContainEqual({
+        path: '/command',
+        code: 'unsupported',
+      });
+      expect(stderr).toBe('');
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   // 3.1-CLI-007 [P0] — Actual argv for all five verbs emits one pure JSON
   // stdout document. Risk: R-002.
   //

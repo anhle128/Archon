@@ -1,6 +1,6 @@
 # Story 3.1: Implement Archon Workflow Provider Binding Lifecycle
 
-Status: in-progress
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -87,16 +87,24 @@ so that external controllers can receive workflow events without Hermes-specific
 
 #### Round 2 Review Findings
 
-- [ ] [Review][Decision] [R2-F4] Disabled-binding transition policy is still unresolved — rotate now rejects disabled rows while update still mutates them; ratify and document one transition matrix before patching.
-- [ ] [Review][Patch] [R2-F1] The real CLI failure boundary remains open [packages/cli/src/cli.ts:782]
-- [ ] [Review][Patch] [R2-F2] Post-mutation uncertainty is still reported as an unaccepted request [packages/core/src/db/provider-bindings.ts:105]
-- [ ] [Review][Patch] [R2-F3] Lifecycle return values are still not isolated from concurrent operations [packages/core/src/db/provider-bindings.ts:105]
-- [ ] [Review][Patch] [R2-F5] The fix rewrote the contract oracle instead of conforming to it [_bmad-output/planning-artifacts/contracts/workflow-commander/examples/providers/archon/commands/binding-create-success.json:12]
-- [ ] [Review][Patch] [R2-F6] The revised binding ID algorithm is still non-injective [packages/core/src/db/provider-bindings.ts:15]
-- [ ] [Review][Patch] [R2-F7] Validation trims envelope metadata but not the identity used for storage [packages/cli/src/commands/provider-binding.ts:234]
-- [ ] [Review][Patch] [R2-F8] Project-reference handling remains backend-dependent and fabricates `project:` [packages/cli/src/commands/provider-binding.ts:188]
-- [ ] [Review][Patch] [R2-F9] Persisted rows and duplicate diagnostics are still not centrally validated [packages/core/src/schemas/workflow-provider-binding.ts:3]
-- [ ] [Review][Patch] [R2-F10] Timeout envelopes contradict their own execution metadata [packages/cli/src/commands/provider-binding.ts:116]
+- [x] [Review][Decision] [R2-F4] Disabled-binding transition policy is still unresolved — rotate now rejects disabled rows while update still mutates them; ratify and document one transition matrix before patching.
+- [x] [Review][Patch] [R2-F1] The real CLI failure boundary remains open [packages/cli/src/cli.ts:782]
+- [x] [Review][Patch] [R2-F2] Post-mutation uncertainty is still reported as an unaccepted request [packages/core/src/db/provider-bindings.ts:105]
+- [x] [Review][Patch] [R2-F3] Lifecycle return values are still not isolated from concurrent operations [packages/core/src/db/provider-bindings.ts:105]
+- [x] [Review][Patch] [R2-F5] The fix rewrote the contract oracle instead of conforming to it [_bmad-output/planning-artifacts/contracts/workflow-commander/examples/providers/archon/commands/binding-create-success.json:12]
+- [x] [Review][Patch] [R2-F6] The revised binding ID algorithm is still non-injective [packages/core/src/db/provider-bindings.ts:15]
+- [x] [Review][Patch] [R2-F7] Validation trims envelope metadata but not the identity used for storage [packages/cli/src/commands/provider-binding.ts:234]
+- [x] [Review][Patch] [R2-F8] Project-reference handling remains backend-dependent and fabricates `project:` [packages/cli/src/commands/provider-binding.ts:188]
+- [x] [Review][Patch] [R2-F9] Persisted rows and duplicate diagnostics are still not centrally validated [packages/core/src/schemas/workflow-provider-binding.ts:3]
+- [x] [Review][Patch] [R2-F10] Timeout envelopes contradict their own execution metadata [packages/cli/src/commands/provider-binding.ts:116]
+
+#### Round 3 Review Findings
+
+- [x] [Review][Patch] Enforce disabled-binding transition policy — Decision resolved: disabled bindings must reject `update` and `rotate`; `disable` remains idempotent.
+- [x] [Review][Patch] Contract fixtures were rewritten instead of runtime conforming [_bmad-output/planning-artifacts/contracts/workflow-commander/examples/providers/archon/commands/binding-create-success.json:14]
+- [x] [Review][Patch] Missing string flag values can swallow `--json` and break parseable stdout [packages/cli/src/cli.ts:280]
+- [x] [Review][Patch] Create/update still commit before row parsing and return non-isolated rows [packages/core/src/db/provider-bindings.ts:103]
+- [x] [Review][Patch] Provider binding row schema rejects PostgreSQL timestamp rows [packages/core/src/schemas/workflow-provider-binding.ts:13]
 
 ## Dev Notes
 
@@ -243,13 +251,18 @@ Qoder (Claude)
 - All 4 contract regression tests pass (provider-binding-contract.test.ts) — including validate_contracts.py gate
 - 8 E2E subprocess tests remain skipped (provider-binding.e2e.test.ts) — require a registered codebase in the test DB
 - `bun run validate` passes with exit 0 when `DEFAULT_AI_ASSISTANT` env var is not set (pre-existing codebases.test.ts env-var leak is unrelated to this story)
+- Round 3 review patch verification: `bun test packages/core/src/db/provider-bindings.test.ts packages/core/src/schemas/workflow-provider-binding.test.ts packages/cli/src/commands/provider-binding.test.ts packages/cli/src/commands/provider-binding.e2e.test.ts packages/cli/src/commands/provider-binding-contract.test.ts` passes (68 pass, 8 skip)
+- Round 3 CLI parser verification: `bun test packages/cli/src/cli.test.ts` passes (51 pass)
+- Round 3 type checks: `bun --filter @archon/core type-check` and `bun --filter @archon/cli type-check` pass
+- Live PostgreSQL integration was not run in Round 3 because `DATABASE_URL` is unset; PostgreSQL timestamp behavior is covered by DB/schema tests using `Date` rows matching `node-postgres` output.
+- Round 2 re-triage resolved all remaining unchecked review findings; full `bun run validate` passes.
 
 ### Completion Notes List
 
 - **AC1 (Create/Status)**: `createBinding()` uses `ON CONFLICT DO NOTHING` + `rowCount === 0` check — never upserts. `getBinding()` returns null for missing, row for present, throws on corrupt state.
-- **AC2 (Update)**: `updateBinding()` uses `UPDATE ... WHERE provider=$1 AND name=$2` with `rowCount === 0` → `BINDING_NOT_FOUND`. Create still fails on existing (provider,name) even after update.
+- **AC2 (Update)**: `updateBinding()` runs in a transaction, locks the existing row on PostgreSQL, rejects disabled bindings with `BINDING_DISABLED`, then updates by `(provider,name,binding_version,state)` guard. Create still fails on existing (provider,name) even after update.
 - **AC3 (Status states)**: Status detects `missing`, `active`/`valid`, `disabled`, `rotated`, `conflicting` (project-ref mismatch). `stale` is representable in the type enum but no CLI path auto-produces it (documented gap per Known Contract Gaps #2).
-- **AC4 (Rotate/Disable)**: `rotateBinding()` does pre-SELECT → UPDATE (version+1, state=rotated) → post-SELECT (UPDATE-then-SELECT pattern for SQLite compat). `disableBinding()` sets state=disabled without deleting. No `actor` field added (schema is `additionalProperties: false`).
+- **AC4 (Rotate/Disable)**: `rotateBinding()` does pre-SELECT → UPDATE (version+1, state=rotated) → post-SELECT (UPDATE-then-SELECT pattern for SQLite compat) and rejects disabled bindings. `disableBinding()` sets state=disabled without deleting. No `actor` field added (schema is `additionalProperties: false`).
 - **AC5 (Error envelopes)**: All errors produce machine-readable `workflow-command-envelope.v1` failure envelopes with `error.code`, `error.category`, `error.retryable`, `error.details`, and `execution` block. Malformed input returns `MALFORMED_REQUEST` with `fieldErrors`.
 - **Known Contract Gap — actor field**: AC4 mentions "actor when available" but neither schema defines it. Omitted entirely per story instructions. Noted for contract-package review.
 - **Known Contract Gap — stale detection**: No trigger defined in contract/PRD. State is representable but not auto-produced. Hermes-owned reconciliation per AD-6.

@@ -53,6 +53,10 @@ interface ValidatedArgs {
   route: string;
 }
 
+const EXIT_SUCCESS = 0;
+const EXIT_USAGE = 64;
+const EXIT_SOFTWARE = 70;
+
 function safeStringify(value: unknown): string {
   const seen = new WeakSet();
   return JSON.stringify(value, (_key: string, v: unknown): unknown => {
@@ -115,7 +119,7 @@ function buildErrorEnvelope(
     },
     execution: {
       exitCode: error.exitCode,
-      timedOut: false,
+      timedOut: error.category === 'timeout',
       durationMs: Date.now() - startTime,
       stdoutRedacted: true,
       stderrRedacted: true,
@@ -139,6 +143,11 @@ function isBlank(v: string | undefined): boolean {
 function nonBlank(v: string | undefined, fallback: string): string {
   if (v === undefined || v.trim().length === 0) return fallback;
   return v.trim();
+}
+
+function normalizeProjectRef(projectRef: string): string {
+  const trimmed = projectRef.trim();
+  return trimmed.startsWith('project:') ? trimmed.slice('project:'.length) : trimmed;
 }
 
 function classifyError(err: unknown): {
@@ -174,6 +183,30 @@ function classifyError(err: unknown): {
       exitCode: 78,
     };
   }
+  if (msg.includes('BINDING_CORRUPT_STATE')) {
+    return {
+      code: 'BINDING_CORRUPT_STATE',
+      category: 'unexpected_state',
+      retryable: false,
+      exitCode: 78,
+    };
+  }
+  if (msg.includes('BINDING_CORRUPT_ROW')) {
+    return {
+      code: 'BINDING_CORRUPT_ROW',
+      category: 'unexpected_state',
+      retryable: false,
+      exitCode: 78,
+    };
+  }
+  if (msg.includes('BINDING_CONCURRENT_MODIFICATION')) {
+    return {
+      code: 'BINDING_CONCURRENT_MODIFICATION',
+      category: 'unexpected_state',
+      retryable: true,
+      exitCode: 78,
+    };
+  }
   if (errCode === 'ETIMEDOUT' || msg.includes('statement timeout') || msg.includes('timeout')) {
     return { code: 'COMMAND_TIMEOUT', category: 'timeout', retryable: true, exitCode: 69 };
   }
@@ -188,14 +221,21 @@ function classifyError(err: unknown): {
 function buildBindingRef(
   provider: string,
   name: string,
-  projectRef: string
+  projectRef?: string
 ): Record<string, unknown> {
-  return {
+  const bindingRef: Record<string, unknown> = {
     provider,
     name,
     bindingId: deriveBindingId(provider, name),
-    projectRef: `project:${projectRef}`,
   };
+  const normalizedProjectRef =
+    projectRef === undefined || projectRef.trim().length === 0
+      ? undefined
+      : normalizeProjectRef(projectRef);
+  if (normalizedProjectRef !== undefined && normalizedProjectRef.length > 0) {
+    bindingRef.projectRef = `project:${normalizedProjectRef}`;
+  }
+  return bindingRef;
 }
 
 function emitEnvelope(envelope: Record<string, unknown>, opts: CommandOptions): void {
@@ -207,10 +247,10 @@ async function withFailClosed(
   args: BindingArgs,
   opts: CommandOptions,
   startTime: number,
-  fn: () => Promise<void>
-): Promise<void> {
+  fn: () => Promise<number>
+): Promise<number> {
   try {
-    await fn();
+    return await fn();
   } catch (_error) {
     const provider = nonBlank(args.provider, 'archon');
     const correlationId = nonBlank(args.correlationId, crypto.randomUUID());
@@ -228,6 +268,7 @@ async function withFailClosed(
       ),
       opts
     );
+    return EXIT_SOFTWARE;
   }
 }
 
@@ -268,10 +309,10 @@ function validateAndExtract(
   }
 
   return {
-    provider: args.provider ?? '',
-    name: args.name ?? '',
-    projectRef: args.projectRef ?? '',
-    route: args.route ?? '',
+    provider: args.provider?.trim() ?? '',
+    name: args.name?.trim() ?? '',
+    projectRef: args.projectRef === undefined ? '' : normalizeProjectRef(args.projectRef),
+    route: args.route?.trim() ?? '',
   };
 }
 
@@ -280,9 +321,10 @@ async function resolveProjectRef(
   deps: EnvelopeDeps,
   opts: CommandOptions,
   startTime: number
-): Promise<{ codebaseId: string } | null> {
+): Promise<{ codebaseId: string } | number> {
   try {
-    const codebase = await getCodebaseById(projectRef);
+    const normalizedProjectRef = normalizeProjectRef(projectRef);
+    const codebase = await getCodebaseById(normalizedProjectRef);
     if (!codebase) {
       emitEnvelope(
         buildErrorEnvelope(
@@ -301,7 +343,7 @@ async function resolveProjectRef(
         ),
         opts
       );
-      return null;
+      return EXIT_USAGE;
     }
     return { codebaseId: codebase.id };
   } catch (error) {
@@ -319,16 +361,16 @@ async function resolveProjectRef(
       ),
       opts
     );
-    return null;
+    return classified.exitCode;
   }
 }
 
 export async function providerBindingCreateCommand(
   args: BindingArgs,
   opts: CommandOptions
-): Promise<void> {
+): Promise<number> {
   const startTime = Date.now();
-  await withFailClosed('binding.create', args, opts, startTime, async () => {
+  return await withFailClosed('binding.create', args, opts, startTime, async () => {
     const correlationId = resolveCorrelationId(args.correlationId);
     const issuedAt = resolveIssuedAt();
     const provider = nonBlank(args.provider, 'archon');
@@ -341,10 +383,10 @@ export async function providerBindingCreateCommand(
       opts,
       startTime
     );
-    if (!validated) return;
+    if (!validated) return EXIT_USAGE;
 
     const resolved = await resolveProjectRef(validated.projectRef, deps, opts, startTime);
-    if (!resolved) return;
+    if (typeof resolved === 'number') return resolved;
 
     try {
       const row = await createBinding({
@@ -367,15 +409,18 @@ export async function providerBindingCreateCommand(
         ),
         opts
       );
+      return EXIT_SUCCESS;
     } catch (error) {
       const classified = classifyError(error);
       const details: Record<string, unknown> = { requestAccepted: false };
       if (error instanceof Error && error.message.includes('BINDING_ALREADY_EXISTS')) {
-        details.currentState = 'active';
+        const existing = await getBinding(validated.provider, validated.name).catch(() => null);
+        details.currentState = existing?.state ?? 'unknown';
         details.expectedStates = ['missing'];
         details.mutationApplied = false;
       }
       emitEnvelope(buildErrorEnvelope(deps, { ...classified, details }, startTime), opts);
+      return classified.exitCode;
     }
   });
 }
@@ -383,9 +428,9 @@ export async function providerBindingCreateCommand(
 export async function providerBindingUpdateCommand(
   args: BindingArgs,
   opts: CommandOptions
-): Promise<void> {
+): Promise<number> {
   const startTime = Date.now();
-  await withFailClosed('binding.update', args, opts, startTime, async () => {
+  return await withFailClosed('binding.update', args, opts, startTime, async () => {
     const correlationId = resolveCorrelationId(args.correlationId);
     const issuedAt = resolveIssuedAt();
     const provider = nonBlank(args.provider, 'archon');
@@ -398,10 +443,10 @@ export async function providerBindingUpdateCommand(
       opts,
       startTime
     );
-    if (!validated) return;
+    if (!validated) return EXIT_USAGE;
 
     const resolved = await resolveProjectRef(validated.projectRef, deps, opts, startTime);
-    if (!resolved) return;
+    if (typeof resolved === 'number') return resolved;
 
     try {
       const row = await updateBinding({
@@ -424,12 +469,17 @@ export async function providerBindingUpdateCommand(
         ),
         opts
       );
+      return EXIT_SUCCESS;
     } catch (error) {
       const classified = classifyError(error);
-      emitEnvelope(
-        buildErrorEnvelope(deps, { ...classified, details: { requestAccepted: false } }, startTime),
-        opts
-      );
+      const details: Record<string, unknown> = { requestAccepted: false };
+      if (error instanceof Error && error.message.includes('BINDING_DISABLED')) {
+        details.currentState = 'disabled';
+        details.expectedStates = ['active', 'rotated'];
+        details.mutationApplied = false;
+      }
+      emitEnvelope(buildErrorEnvelope(deps, { ...classified, details }, startTime), opts);
+      return classified.exitCode;
     }
   });
 }
@@ -437,16 +487,23 @@ export async function providerBindingUpdateCommand(
 export async function providerBindingStatusCommand(
   args: BindingArgs,
   opts: CommandOptions
-): Promise<void> {
+): Promise<number> {
   const startTime = Date.now();
-  await withFailClosed('binding.status', args, opts, startTime, async () => {
+  return await withFailClosed('binding.status', args, opts, startTime, async () => {
     const correlationId = resolveCorrelationId(args.correlationId);
     const issuedAt = resolveIssuedAt();
     const provider = nonBlank(args.provider, 'archon');
     const deps: EnvelopeDeps = { command: 'binding.status', provider, correlationId, issuedAt };
 
     const validated = validateAndExtract(args, ['provider', 'name'], deps, opts, startTime);
-    if (!validated) return;
+    if (!validated) return EXIT_USAGE;
+
+    let suppliedCodebaseId: string | undefined;
+    if (!isBlank(args.projectRef)) {
+      const resolved = await resolveProjectRef(args.projectRef ?? '', deps, opts, startTime);
+      if (typeof resolved === 'number') return resolved;
+      suppliedCodebaseId = resolved.codebaseId;
+    }
 
     try {
       const row = await getBinding(validated.provider, validated.name);
@@ -455,7 +512,7 @@ export async function providerBindingStatusCommand(
         emitEnvelope(
           buildSuccessEnvelope(
             deps,
-            buildBindingRef(validated.provider, validated.name, args.projectRef ?? ''),
+            buildBindingRef(validated.provider, validated.name, suppliedCodebaseId),
             {
               operation: 'status',
               state: 'missing' as BindingStatusState,
@@ -465,7 +522,7 @@ export async function providerBindingStatusCommand(
           ),
           opts
         );
-        return;
+        return EXIT_SUCCESS;
       }
 
       const knownStates = new Set<string>(BINDING_STATUS_STATES as unknown as string[]);
@@ -484,13 +541,12 @@ export async function providerBindingStatusCommand(
           ),
           opts
         );
-        return;
+        return 78;
       }
 
       const bindingProjectRef = row.codebase_id;
-      const suppliedProjectRef = args.projectRef;
 
-      if (suppliedProjectRef && suppliedProjectRef !== bindingProjectRef) {
+      if (suppliedCodebaseId && suppliedCodebaseId !== bindingProjectRef) {
         emitEnvelope(
           buildSuccessEnvelope(
             deps,
@@ -505,7 +561,7 @@ export async function providerBindingStatusCommand(
           ),
           opts
         );
-        return;
+        return EXIT_SUCCESS;
       }
 
       const health = row.state === 'active' ? 'valid' : row.state;
@@ -522,12 +578,15 @@ export async function providerBindingStatusCommand(
         ),
         opts
       );
+      return EXIT_SUCCESS;
     } catch (error) {
       const classified = classifyError(error);
-      emitEnvelope(
-        buildErrorEnvelope(deps, { ...classified, details: { requestAccepted: false } }, startTime),
-        opts
-      );
+      const details: Record<string, unknown> = { requestAccepted: false };
+      if (error instanceof Error && error.message.includes('BINDING_CORRUPT_STATE')) {
+        details.observedState = error.message.split(':').slice(1).join(':').trim() || 'unknown';
+      }
+      emitEnvelope(buildErrorEnvelope(deps, { ...classified, details }, startTime), opts);
+      return classified.exitCode;
     }
   });
 }
@@ -535,16 +594,16 @@ export async function providerBindingStatusCommand(
 export async function providerBindingRotateCommand(
   args: BindingArgs,
   opts: CommandOptions
-): Promise<void> {
+): Promise<number> {
   const startTime = Date.now();
-  await withFailClosed('binding.rotate', args, opts, startTime, async () => {
+  return await withFailClosed('binding.rotate', args, opts, startTime, async () => {
     const correlationId = resolveCorrelationId(args.correlationId);
     const issuedAt = resolveIssuedAt();
     const provider = nonBlank(args.provider, 'archon');
     const deps: EnvelopeDeps = { command: 'binding.rotate', provider, correlationId, issuedAt };
 
     const validated = validateAndExtract(args, ['provider', 'name'], deps, opts, startTime);
-    if (!validated) return;
+    if (!validated) return EXIT_USAGE;
 
     try {
       const result = await rotateBinding(validated.provider, validated.name);
@@ -563,6 +622,7 @@ export async function providerBindingRotateCommand(
         ),
         opts
       );
+      return EXIT_SUCCESS;
     } catch (error) {
       const classified = classifyError(error);
       const details: Record<string, unknown> = { requestAccepted: false };
@@ -572,6 +632,7 @@ export async function providerBindingRotateCommand(
         details.mutationApplied = false;
       }
       emitEnvelope(buildErrorEnvelope(deps, { ...classified, details }, startTime), opts);
+      return classified.exitCode;
     }
   });
 }
@@ -579,16 +640,16 @@ export async function providerBindingRotateCommand(
 export async function providerBindingDisableCommand(
   args: BindingArgs,
   opts: CommandOptions
-): Promise<void> {
+): Promise<number> {
   const startTime = Date.now();
-  await withFailClosed('binding.disable', args, opts, startTime, async () => {
+  return await withFailClosed('binding.disable', args, opts, startTime, async () => {
     const correlationId = resolveCorrelationId(args.correlationId);
     const issuedAt = resolveIssuedAt();
     const provider = nonBlank(args.provider, 'archon');
     const deps: EnvelopeDeps = { command: 'binding.disable', provider, correlationId, issuedAt };
 
     const validated = validateAndExtract(args, ['provider', 'name'], deps, opts, startTime);
-    if (!validated) return;
+    if (!validated) return EXIT_USAGE;
 
     try {
       const result = await disableBinding(validated.provider, validated.name);
@@ -606,12 +667,50 @@ export async function providerBindingDisableCommand(
         ),
         opts
       );
+      return EXIT_SUCCESS;
     } catch (error) {
       const classified = classifyError(error);
       emitEnvelope(
         buildErrorEnvelope(deps, { ...classified, details: { requestAccepted: false } }, startTime),
         opts
       );
+      return classified.exitCode;
     }
   });
+}
+
+export async function providerBindingUnsupportedCommand(
+  subcommand: string | undefined,
+  args: BindingArgs,
+  opts: CommandOptions
+): Promise<number> {
+  const startTime = Date.now();
+  const provider = nonBlank(args.provider, 'archon');
+  const deps: EnvelopeDeps = {
+    command: 'binding.status',
+    provider,
+    correlationId: resolveCorrelationId(args.correlationId),
+    issuedAt: resolveIssuedAt(),
+  };
+  emitEnvelope(
+    buildErrorEnvelope(
+      deps,
+      {
+        code: 'MALFORMED_REQUEST',
+        category: 'provider_contract',
+        retryable: false,
+        details: {
+          fieldErrors: [
+            { path: '/command', code: subcommand === undefined ? 'required' : 'unsupported' },
+          ],
+          requestedCommand: subcommand ?? null,
+          requestAccepted: false,
+        },
+        exitCode: EXIT_USAGE,
+      },
+      startTime
+    ),
+    opts
+  );
+  return EXIT_USAGE;
 }
