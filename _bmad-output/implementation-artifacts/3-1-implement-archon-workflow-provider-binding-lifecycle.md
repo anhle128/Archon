@@ -85,6 +85,19 @@ so that external controllers can receive workflow events without Hermes-specific
 - [x] [Review][Defer] Ambient `DEFAULT_AI_ASSISTANT` leaks into an existing core test [packages/core/src/db/codebases.test.ts:83] — deferred, pre-existing
 - [x] [Review][Defer] No live PostgreSQL DDL execution lane [packages/core/src/db/adapters/postgres.test.ts:626] — deferred, pre-existing
 
+#### Round 2 Review Findings
+
+- [ ] [Review][Decision] [R2-F4] Disabled-binding transition policy is still unresolved — rotate now rejects disabled rows while update still mutates them; ratify and document one transition matrix before patching.
+- [ ] [Review][Patch] [R2-F1] The real CLI failure boundary remains open [packages/cli/src/cli.ts:782]
+- [ ] [Review][Patch] [R2-F2] Post-mutation uncertainty is still reported as an unaccepted request [packages/core/src/db/provider-bindings.ts:105]
+- [ ] [Review][Patch] [R2-F3] Lifecycle return values are still not isolated from concurrent operations [packages/core/src/db/provider-bindings.ts:105]
+- [ ] [Review][Patch] [R2-F5] The fix rewrote the contract oracle instead of conforming to it [_bmad-output/planning-artifacts/contracts/workflow-commander/examples/providers/archon/commands/binding-create-success.json:12]
+- [ ] [Review][Patch] [R2-F6] The revised binding ID algorithm is still non-injective [packages/core/src/db/provider-bindings.ts:15]
+- [ ] [Review][Patch] [R2-F7] Validation trims envelope metadata but not the identity used for storage [packages/cli/src/commands/provider-binding.ts:234]
+- [ ] [Review][Patch] [R2-F8] Project-reference handling remains backend-dependent and fabricates `project:` [packages/cli/src/commands/provider-binding.ts:188]
+- [ ] [Review][Patch] [R2-F9] Persisted rows and duplicate diagnostics are still not centrally validated [packages/core/src/schemas/workflow-provider-binding.ts:3]
+- [ ] [Review][Patch] [R2-F10] Timeout envelopes contradict their own execution metadata [packages/cli/src/commands/provider-binding.ts:116]
+
 ## Dev Notes
 
 ### Scope Boundary (read first)
