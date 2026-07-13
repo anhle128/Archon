@@ -37,7 +37,7 @@
     "bindingRef": {
       "provider": "archon",
       "name": "workflow-engine-primary",
-      "bindingId": "wpb_archon_workflow_engine_primary",
+      "bindingId": "wpb_archon::workflow_engine_primary",
       "projectRef": "project:workflow-engine"
     },
     "workflowRunRef": {

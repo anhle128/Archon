@@ -1,5 +1,5 @@
 # generated: 2026-07-13 11:55:39 +0700
-# last_updated: 2026-07-13 11:55:39 +0700
+# last_updated: 2026-07-14
 # project: Archon
 # project_key: NOKEY
 # tracking_system: file-system
@@ -41,15 +41,15 @@
 # - Retrospective appends its action items to action_items; sprint-status surfaces open ones
 
 generated: "2026-07-13 11:55:39 +0700"
-last_updated: "2026-07-13 11:55:39 +0700"
+last_updated: "2026-07-14"
 project: Archon
 project_key: NOKEY
 tracking_system: file-system
 story_location: /Users/dale/Desktop/workspace/OceanLabs/workflow-engine/archon/_bmad-output/implementation-artifacts
 
 development_status:
-  epic-3: backlog
-  3-1-implement-archon-workflow-provider-binding-lifecycle: backlog
+  epic-3: in-progress
+  3-1-implement-archon-workflow-provider-binding-lifecycle: done
   3-3a-define-shared-workflow-provider-command-envelope: backlog
   3-3b-provide-archon-start-and-status-cli-json: backlog
   3-3c-provide-archon-provider-decision-command-cli-json: backlog

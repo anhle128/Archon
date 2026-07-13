@@ -122,6 +122,14 @@ _Focus on unobvious details that agents might otherwise miss._
 
 - Never run `git clean -fd`; it can permanently delete user work.
 - Never silently discard, reset, or overwrite worktree changes unless the user explicitly requested that destructive action.
+- Treat checked-in contracts, fixtures, PRDs, architecture docs, and story instructions as implementation oracles.
+  If runtime output disagrees with them, fix runtime code and tests to conform; do not rewrite contract examples or story docs to make the implementation pass.
+- Keep review artifacts separate from implementation patches.
+  Record findings only when explicitly asked or when the active workflow requires it; when the instruction is to fix code according to docs, avoid updating story/checklist state until the user asks.
+- Preserve business policy decisions in code-level tests.
+  For example, if a lifecycle policy says an update is allowed on a disabled record but must not reactivate delivery, add a focused DB or boundary test that locks that behavior in place.
+- Verify consumer boundaries with subprocess or end-to-end coverage when the bug can happen before command handlers run.
+  Unit tests of a handler cannot catch CLI prevalidation, dispatcher, cwd/git checks, logging, or process exit-code failures.
 - Do not autonomously mark non-terminal workflow runs or environments as failed, cancelled, destroyed, or abandoned based only on age or ambiguous ownership across processes.
 - Fail closed on missing, invalid, or untrusted JSON contracts; do not parse Markdown reports or prose as workflow route APIs.
 - Workflow route-facing contracts must preserve the same story or run identity across nodes; identity mismatch is an error, not a recoverable warning.
@@ -154,4 +162,4 @@ _Focus on unobvious details that agents might otherwise miss._
 - Review periodically for outdated rules.
 - Remove rules that become obvious or obsolete over time.
 
-Last Updated: 2026-07-06
+Last Updated: 2026-07-13

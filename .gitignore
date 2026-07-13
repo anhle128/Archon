@@ -30,6 +30,7 @@ pnpm-lock.yaml
 # Environment files
 .env
 .env.local
+.archon/.env
 
 # Per-user MCP server configs (may contain secrets/topics)
 .archon/mcp/

@@ -62,6 +62,14 @@ import {
   isolationCleanupMergedCommand,
   isolationCompleteCommand,
 } from './commands/isolation';
+import {
+  providerBindingCreateCommand,
+  providerBindingUpdateCommand,
+  providerBindingStatusCommand,
+  providerBindingRotateCommand,
+  providerBindingDisableCommand,
+  providerBindingUnsupportedCommand,
+} from './commands/provider-binding';
 import { continueCommand } from './commands/continue';
 import { chatCommand } from './commands/chat';
 import { setupCommand } from './commands/setup';
@@ -236,8 +244,34 @@ function isVersionRequest(args: string[]): boolean {
   return args.some(arg => arg === '--version' || arg === '-V' || arg === '-version');
 }
 
+function normalizeProviderBindingArgs(args: string[]): string[] {
+  if (!args.includes('provider-binding')) return args;
+
+  const stringOptions = new Set([
+    '--provider',
+    '--name',
+    '--project-ref',
+    '--route',
+    '--correlation-id',
+  ]);
+  const normalized: string[] = [];
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    normalized.push(arg);
+    if (!stringOptions.has(arg) || arg.includes('=')) continue;
+
+    const next = args[i + 1];
+    if (next === undefined || next.startsWith('-')) {
+      normalized.push('');
+    }
+  }
+
+  return normalized;
+}
+
 async function main(): Promise<number> {
-  const args = process.argv.slice(2);
+  const args = normalizeProviderBindingArgs(process.argv.slice(2));
 
   // Anonymous once-per-invocation startup event (self-gates on opt-out).
   // Emitted before any early return so EVERY invocation — including bare
@@ -302,6 +336,11 @@ async function main(): Promise<number> {
         status: { type: 'string' },
         limit: { type: 'string' },
         effort: { type: 'string' },
+        provider: { type: 'string' },
+        name: { type: 'string' },
+        'project-ref': { type: 'string' },
+        route: { type: 'string' },
+        'correlation-id': { type: 'string' },
       },
       allowPositionals: true,
       strict: false, // Allow unknown flags to pass through
@@ -349,6 +388,7 @@ async function main(): Promise<number> {
     'telemetry',
     'auth',
     'ai',
+    'provider-binding',
   ];
   const requiresGitRepo = !noGitCommands.includes(command ?? '');
 
@@ -752,6 +792,45 @@ async function main(): Promise<number> {
             return 1;
         }
         break;
+
+      case 'provider-binding': {
+        const bindingOpts = {
+          json: jsonFlag ?? false,
+          log: (line: string): void => {
+            console.log(line);
+          },
+        };
+        const bindingArgs = {
+          provider: values.provider as string | undefined,
+          name: values.name as string | undefined,
+          projectRef: values['project-ref'] as string | undefined,
+          route: values.route as string | undefined,
+          correlationId: values['correlation-id'] as string | undefined,
+        };
+        switch (subcommand) {
+          case 'create':
+            return await providerBindingCreateCommand(bindingArgs, bindingOpts);
+          case 'update':
+            return await providerBindingUpdateCommand(bindingArgs, bindingOpts);
+          case 'status':
+            return await providerBindingStatusCommand(bindingArgs, bindingOpts);
+          case 'rotate':
+            return await providerBindingRotateCommand(bindingArgs, bindingOpts);
+          case 'disable':
+            return await providerBindingDisableCommand(bindingArgs, bindingOpts);
+          default:
+            if (jsonFlag) {
+              return await providerBindingUnsupportedCommand(subcommand, bindingArgs, bindingOpts);
+            }
+            if (subcommand === undefined) {
+              console.error('Missing provider-binding subcommand');
+            } else {
+              console.error(`Unknown provider-binding subcommand: ${subcommand}`);
+            }
+            console.error('Available: create, update, status, rotate, disable');
+            return 1;
+        }
+      }
 
       case 'validate':
         switch (subcommand) {

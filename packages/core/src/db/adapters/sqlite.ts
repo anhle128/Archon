@@ -614,6 +614,25 @@ export class SqliteAdapter implements IDatabase {
       -- the comment in migrateColumns() for why this is order-sensitive.
       CREATE INDEX IF NOT EXISTS idx_user_identities_user_id
         ON remote_agent_user_identities(user_id);
+
+      -- Workflow provider bindings table
+      CREATE TABLE IF NOT EXISTS remote_agent_workflow_provider_bindings (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        provider TEXT NOT NULL,
+        name TEXT NOT NULL,
+        codebase_id TEXT NOT NULL REFERENCES remote_agent_codebases(id) ON DELETE CASCADE,
+        event_route TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'active',
+        binding_version INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')),
+        UNIQUE (provider, name)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_provider_bindings_codebase
+        ON remote_agent_workflow_provider_bindings(codebase_id);
+      CREATE INDEX IF NOT EXISTS idx_provider_bindings_provider_name
+        ON remote_agent_workflow_provider_bindings(provider, name);
     `);
     getLog().info('db.sqlite_schema_initialized');
   }

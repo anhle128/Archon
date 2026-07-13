@@ -47,6 +47,8 @@ export async function getCodebase(id: string): Promise<Codebase | null> {
   return result.rows[0] || null;
 }
 
+export { getCodebase as getCodebaseById };
+
 export async function updateCodebaseCommands(
   id: string,
   commands: Record<string, { path: string; description: string }>

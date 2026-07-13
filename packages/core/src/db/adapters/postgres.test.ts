@@ -555,3 +555,86 @@ describe('PostgreSQL workflow node checkpoint schema convergence', () => {
     () => {}
   );
 });
+
+// ---------------------------------------------------------------------------
+// RED-PHASE SCAFFOLD (EXECUTABLE) — Story 3.1 "Implement Archon Workflow
+// Provider Binding Lifecycle"
+// (_bmad-output/implementation-artifacts/3-1-implement-archon-workflow-provider-binding-lifecycle.md).
+//
+// 3.1-INT-004 [P1] — PostgreSQL combined schema has equivalent semantics in
+// schema transaction. Risk: R-007.
+//
+// Unlike the rest of this file, this test does NOT rely on the file-level
+// `mock.module('../bundled-schema', ...)` override — it feeds the REAL
+// on-disk `migrations/000_combined.sql` content into `mockSchemaSQL` (the
+// same seam `initSchema()` tests above already use) so this exercises the
+// actual migration Task 1 must edit, not a synthetic string. It fails today
+// because that file does not yet define
+// `remote_agent_workflow_provider_bindings`, and passes once Task 1 adds it
+// (Dev Notes "DB Design Proposal" — same table, same transactional
+// convergence mechanism already proven generically above).
+// ---------------------------------------------------------------------------
+describe('PostgreSQL schema convergence — remote_agent_workflow_provider_bindings (Story 3.1)', () => {
+  test('the real migrations/000_combined.sql is issued inside the advisory-lock transaction and defines the new table', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const realCombinedSql = readFileSync(
+      resolve(import.meta.dir, '../../../../../migrations/000_combined.sql'),
+      'utf8'
+    );
+
+    const issued: string[] = [];
+    mockClient = {
+      query: async (sql: string) => {
+        issued.push(sql);
+        return { rows: [], rowCount: 0 };
+      },
+      release: () => {},
+    };
+    mockSchemaSQL = realCombinedSql;
+
+    const a = new PostgresAdapter('postgresql://localhost:5432/testdb');
+    await a.query('SELECT 1');
+
+    expect(issued[0]).toBe('BEGIN');
+    expect(issued).toContain(realCombinedSql);
+    expect(issued[issued.length - 1]).toBe('COMMIT');
+    expect(realCombinedSql).toContain(
+      'CREATE TABLE IF NOT EXISTS remote_agent_workflow_provider_bindings'
+    );
+    expect(realCombinedSql).toContain('UNIQUE (provider, name)');
+  });
+
+  // 3.1-INT-011 [P1] — Schema failure rolls back where transactional and
+  // restart converges. Risk: R-007, R-013.
+  //
+  // SKIPPED: the generic mechanism this scenario needs (DDL failure inside
+  // the schema transaction → ROLLBACK → every subsequent query rejects until
+  // process restart) is ALREADY proven for arbitrary schema SQL by the
+  // `initSchema()` describe block above ("DDL failure: rolls back and causes
+  // all subsequent queries to reject"). What is missing — and can't be
+  // meaningfully asserted with the mocked `pg.Pool` this file uses — is
+  // "restart converges": that a fresh PostgresAdapter constructed AFTER a
+  // failed schema run, against a real (not mocked) database, successfully
+  // re-applies the still-pending DDL from `000_combined.sql` including the
+  // new table. That needs a real Postgres connection (test-design-epic-3.md
+  // explicitly notes "No live PostgreSQL lane exists by default" — R-007
+  // residual risk). Activate this by pointing DATABASE_URL at a disposable
+  // Postgres instance once the project adds a reusable container-backed DB
+  // test lane (see the TD's "Weekly" execution-strategy note) — do not force
+  // a new CI infrastructure dependency just for this one scenario.
+  test.skip('a fresh adapter constructed after a failed schema run re-converges once the DDL is valid (requires a real, restartable Postgres instance)', async () => {
+    // Activation seam: swap in a real `pg.Pool` against a disposable Postgres
+    // database (e.g. via DATABASE_URL) instead of the file-level mock, run
+    // once with a deliberately broken statement appended to the real
+    // combined SQL to force ROLLBACK, then construct a second adapter with
+    // the unmodified SQL and assert a query against
+    // `remote_agent_workflow_provider_bindings` now succeeds — e.g.:
+    //   const first = new PostgresAdapter(process.env.DATABASE_URL!, { schemaOverride: brokenSql });
+    //   await expect(first.query('SELECT 1')).rejects.toThrow();
+    //   const second = new PostgresAdapter(process.env.DATABASE_URL!);
+    //   await expect(
+    //     second.query('SELECT 1 FROM remote_agent_workflow_provider_bindings LIMIT 0')
+    //   ).resolves.toBeDefined();
+  });
+});

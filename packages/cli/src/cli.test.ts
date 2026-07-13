@@ -336,11 +336,23 @@ describe('CLI git repo check', () => {
   /**
    * These tests verify the command categorization logic used in cli.ts.
    * The CLI uses: requiresGitRepo = !noGitCommands.includes(command ?? '')
-   * where noGitCommands = ['version', 'help']
    */
   describe('command categorization', () => {
     // Mirror the actual noGitCommands array from cli.ts
-    const noGitCommands = ['version', 'help'];
+    const noGitCommands = [
+      'version',
+      'help',
+      'setup',
+      'chat',
+      'continue',
+      'serve',
+      'skill',
+      'doctor',
+      'telemetry',
+      'auth',
+      'ai',
+      'provider-binding',
+    ];
 
     // Helper that mirrors the CLI's logic
     const requiresGitRepo = (command: string | undefined): boolean => {
@@ -354,6 +366,10 @@ describe('CLI git repo check', () => {
 
       it('help command should not require git repo', () => {
         expect(requiresGitRepo('help')).toBe(false);
+      });
+
+      it('provider-binding command should not require git repo', () => {
+        expect(requiresGitRepo('provider-binding')).toBe(false);
       });
     });
 
