@@ -1,6 +1,6 @@
 # Story 3.1: Implement Archon Workflow Provider Binding Lifecycle
 
-Status: done
+Status: in-progress
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -71,6 +71,19 @@ so that external controllers can receive workflow events without Hermes-specific
   - [x] Run `python3 _bmad-output/planning-artifacts/contracts/workflow-commander/validate_contracts.py` (should already pass — this task doesn't modify the contract package; it's included here as a regression check, not a new obligation) and `bun run validate` for the full story before marking done.
 
 > **Scope note on `examples/providers/archon/bindings/*.json`**: do NOT write a second Zod schema or any application code to validate against this fixture family. It models a deeply nested request/result/status/error envelope (`shape`, `operation`, `bindingRef{provider,name,bindingId,projectRef}`, top-level `projectRef{id,repositoryPath,defaultBranch}`, request-only fields like `desiredState`/`capabilities` that map to no CLI flag) that has no consumer in this story's scope — there is no HTTP surface and no other Archon code path that produces or reads `workflow-provider-binding.v1` payloads in v1. These fixtures stay validated by the already-passing, contract-package-local `validate_contracts.py` (a static Python check, unaffected by anything this story changes) — that is sufficient; inventing a matching Zod schema here would be speculative scope with no current caller (YAGNI).
+
+### Review Findings
+
+- [ ] [Review][Decision] Disabled-binding update and rotation semantics were never ratified — Rotation unconditionally changes a disabled row to `rotated`; product/architecture must choose reject, retain-disabled, or reactivate semantics and the implementation must enforce/test it.
+- [ ] [Review][Patch] The real CLI failure boundary is not fail-closed [packages/cli/src/cli.ts:782]
+- [ ] [Review][Patch] Post-mutation uncertainty is advertised as safely retryable and unaccepted [packages/cli/src/commands/provider-binding.ts:166]
+- [ ] [Review][Patch] Lifecycle results are not isolated from concurrent operations [packages/core/src/db/provider-bindings.ts:105]
+- [ ] [Review][Patch] Distinct provider/name identities can share one external binding ID [packages/core/src/db/provider-bindings.ts:15]
+- [ ] [Review][Patch] Blank provider and correlation values produce schema-invalid envelopes [packages/cli/src/commands/provider-binding.ts:126]
+- [ ] [Review][Patch] Project-reference handling is dialect-dependent and can fabricate an identity [packages/cli/src/commands/provider-binding.ts:241]
+- [ ] [Review][Patch] Machine state diagnostics can be invented or returned without validation [packages/cli/src/commands/provider-binding.ts:327]
+- [x] [Review][Defer] Ambient `DEFAULT_AI_ASSISTANT` leaks into an existing core test [packages/core/src/db/codebases.test.ts:83] — deferred, pre-existing
+- [x] [Review][Defer] No live PostgreSQL DDL execution lane [packages/core/src/db/adapters/postgres.test.ts:626] — deferred, pre-existing
 
 ## Dev Notes
 
