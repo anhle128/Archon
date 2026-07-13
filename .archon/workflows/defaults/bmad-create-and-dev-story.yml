@@ -209,7 +209,7 @@ nodes:
       On fix passes, rewrite open-findings.md so fixed findings are pending re-review and update state.json to the next review round.
       Keep activeStoryFile in state.json set to $create-story.output.story_file.
     provider: qodercli
-    effort: xhigh
+    effort: high
     depends_on: [validate-story-readiness]
     context: fresh
     model: Qwen3.7-Plus
