@@ -183,8 +183,7 @@ describe('provider-bindings db layer (Story 3.1)', () => {
   });
 
   describe('rotateBinding()', () => {
-    test('increments binding_version by exactly 1, sets state=rotated, via UPDATE then a separate SELECT (no RETURNING)', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow({ binding_version: 1 })], 1));
+    test('increments binding_version by exactly 1, sets state=rotated, via atomic UPDATE then SELECT (no pre-SELECT)', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       mockQuery.mockResolvedValueOnce(
         createQueryResult([bindingRow({ state: 'rotated', binding_version: 2 })], 1)
@@ -192,29 +191,39 @@ describe('provider-bindings db layer (Story 3.1)', () => {
 
       const result = await rotateBinding('archon', 'workflow-engine-primary');
 
-      const [updateSql] = mockQuery.mock.calls[1] as [string, unknown[]];
+      const [updateSql] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(updateSql).toContain('UPDATE remote_agent_workflow_provider_bindings');
       expect(updateSql).toContain('binding_version = binding_version + 1');
+      expect(updateSql).toContain("state != 'disabled'");
       expect(updateSql).not.toContain('RETURNING');
-      const [selectSql] = mockQuery.mock.calls[2] as [string, unknown[]];
+      const [selectSql] = mockQuery.mock.calls[1] as [string, unknown[]];
       expect(selectSql).toContain('SELECT');
       expect(result).toMatchObject({ previousVersion: 1, activeVersion: 2 });
     });
 
-    test('rejects with BINDING_NOT_FOUND when the pre-SELECT finds no row', async () => {
+    test('rejects with BINDING_NOT_FOUND when no row matches and diagnostic SELECT confirms absence', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
 
       await expect(rotateBinding('archon', 'never-created')).rejects.toThrow(/BINDING_NOT_FOUND/);
-      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(mockQuery).toHaveBeenCalledTimes(2);
     });
 
-    test('when the UPDATE commits but the follow-up SELECT throws, the caller sees an explicit uncertain-outcome error', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow({ binding_version: 1 })], 1));
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-      mockQuery.mockRejectedValueOnce(new Error('connection reset'));
+    test('rejects with BINDING_DISABLED when the binding exists but is disabled (atomic guard)', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
+      mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow({ state: 'disabled' })], 1));
 
       await expect(rotateBinding('archon', 'workflow-engine-primary')).rejects.toThrow(
-        /uncertain|connection reset/i
+        /BINDING_DISABLED/
+      );
+    });
+
+    test('throws BINDING_VANISHED_AFTER_ROTATE when post-UPDATE SELECT finds no row', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+
+      await expect(rotateBinding('archon', 'workflow-engine-primary')).rejects.toThrow(
+        /BINDING_VANISHED_AFTER_ROTATE/
       );
     });
   });
@@ -279,9 +288,12 @@ describe('provider-bindings db layer (Story 3.1)', () => {
   });
 
   describe('boundary / canonicalization (Story 3.1)', () => {
-    test('deriveBindingId produces a deterministic wpb_-prefixed slug', () => {
+    test('deriveBindingId produces a deterministic wpb_-prefixed slug with :: separator preventing cross-identity collisions', () => {
       const id = deriveBindingId('archon', 'workflow-engine-primary');
-      expect(id).toBe('wpb_archon_workflow_engine_primary');
+      expect(id).toBe('wpb_archon::workflow_engine_primary');
+      const idA = deriveBindingId('a', 'b_c');
+      const idB = deriveBindingId('a_b', 'c');
+      expect(idA).not.toBe(idB);
     });
   });
 });

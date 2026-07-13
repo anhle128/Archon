@@ -22,7 +22,7 @@
   },
   "rejectionEvidence": {
     "bindingAccepted": false,
-    "expectedBindingRef": "wpb_archon_workflow_engine_primary",
+    "expectedBindingRef": "wpb_archon::workflow_engine_primary",
     "actualBindingRef": "wpb_archon_workflow_engine_secondary",
     "checkedBeforeMutation": true
   },

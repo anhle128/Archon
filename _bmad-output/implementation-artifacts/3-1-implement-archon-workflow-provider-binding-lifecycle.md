@@ -74,14 +74,14 @@ so that external controllers can receive workflow events without Hermes-specific
 
 ### Review Findings
 
-- [ ] [Review][Decision] Disabled-binding update and rotation semantics were never ratified — Rotation unconditionally changes a disabled row to `rotated`; product/architecture must choose reject, retain-disabled, or reactivate semantics and the implementation must enforce/test it.
-- [ ] [Review][Patch] The real CLI failure boundary is not fail-closed [packages/cli/src/cli.ts:782]
-- [ ] [Review][Patch] Post-mutation uncertainty is advertised as safely retryable and unaccepted [packages/cli/src/commands/provider-binding.ts:166]
-- [ ] [Review][Patch] Lifecycle results are not isolated from concurrent operations [packages/core/src/db/provider-bindings.ts:105]
-- [ ] [Review][Patch] Distinct provider/name identities can share one external binding ID [packages/core/src/db/provider-bindings.ts:15]
-- [ ] [Review][Patch] Blank provider and correlation values produce schema-invalid envelopes [packages/cli/src/commands/provider-binding.ts:126]
-- [ ] [Review][Patch] Project-reference handling is dialect-dependent and can fabricate an identity [packages/cli/src/commands/provider-binding.ts:241]
-- [ ] [Review][Patch] Machine state diagnostics can be invented or returned without validation [packages/cli/src/commands/provider-binding.ts:327]
+- [x] [Review][Decision] Disabled-binding update and rotation semantics were never ratified — Rotation unconditionally changes a disabled row to `rotated`; product/architecture must choose reject, retain-disabled, or reactivate semantics and the implementation must enforce/test it.
+- [x] [Review][Patch] The real CLI failure boundary is not fail-closed [packages/cli/src/cli.ts:782]
+- [x] [Review][Patch] Post-mutation uncertainty is advertised as safely retryable and unaccepted [packages/cli/src/commands/provider-binding.ts:166]
+- [x] [Review][Patch] Lifecycle results are not isolated from concurrent operations [packages/core/src/db/provider-bindings.ts:105]
+- [x] [Review][Patch] Distinct provider/name identities can share one external binding ID [packages/core/src/db/provider-bindings.ts:15]
+- [x] [Review][Patch] Blank provider and correlation values produce schema-invalid envelopes [packages/cli/src/commands/provider-binding.ts:126]
+- [x] [Review][Patch] Project-reference handling is dialect-dependent and can fabricate an identity [packages/cli/src/commands/provider-binding.ts:241]
+- [x] [Review][Patch] Machine state diagnostics can be invented or returned without validation [packages/cli/src/commands/provider-binding.ts:327]
 - [x] [Review][Defer] Ambient `DEFAULT_AI_ASSISTANT` leaks into an existing core test [packages/core/src/db/codebases.test.ts:83] — deferred, pre-existing
 - [x] [Review][Defer] No live PostgreSQL DDL execution lane [packages/core/src/db/adapters/postgres.test.ts:626] — deferred, pre-existing
 

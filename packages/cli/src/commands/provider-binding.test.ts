@@ -78,8 +78,8 @@ mock.module('@archon/core/db/provider-bindings', () => ({
   disableBinding: mockDisableBinding,
   getBinding: mockGetBinding,
   deriveBindingId: mock((provider: string, name: string) => {
-    const slug = `${provider}_${name}`.replace(/[^a-zA-Z0-9_]/g, '_');
-    return `wpb_${slug}`;
+    const sanitize = (s: string): string => s.replace(/[^a-zA-Z0-9_]/g, '_');
+    return `wpb_${sanitize(provider)}::${sanitize(name)}`;
   }),
 }));
 

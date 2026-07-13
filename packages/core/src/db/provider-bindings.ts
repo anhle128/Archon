@@ -13,8 +13,8 @@ export type { WorkflowProviderBinding } from '../schemas/workflow-provider-bindi
 const VALID_PERSISTED_STATES = ['active', 'disabled', 'rotated'] as const;
 
 export function deriveBindingId(provider: string, name: string): string {
-  const slug = `${provider}_${name}`.replace(/[^a-zA-Z0-9_]/g, '_');
-  return `wpb_${slug}`;
+  const sanitize = (s: string): string => s.replace(/[^a-zA-Z0-9_]/g, '_');
+  return `wpb_${sanitize(provider)}::${sanitize(name)}`;
 }
 
 export async function createBinding(input: {
@@ -102,44 +102,33 @@ export async function rotateBinding(
 ): Promise<WorkflowProviderBinding & { previousVersion: number; activeVersion: number }> {
   const dialect = getDialect();
 
-  const preSelect = await pool.query<WorkflowProviderBinding>(
-    'SELECT * FROM remote_agent_workflow_provider_bindings WHERE provider = $1 AND name = $2',
-    [provider, name]
-  );
-  const existing = preSelect.rows[0];
-  if (!existing) {
-    throw new Error('BINDING_NOT_FOUND');
-  }
-  const previousVersion = existing.binding_version;
-
   const updateResult = await pool.query(
     `UPDATE remote_agent_workflow_provider_bindings
      SET binding_version = binding_version + 1, state = 'rotated', updated_at = ${dialect.now()}
-     WHERE provider = $1 AND name = $2`,
+     WHERE provider = $1 AND name = $2 AND state != 'disabled'`,
     [provider, name]
   );
 
   if (updateResult.rowCount === 0) {
+    const checkResult = await pool.query<WorkflowProviderBinding>(
+      'SELECT state FROM remote_agent_workflow_provider_bindings WHERE provider = $1 AND name = $2',
+      [provider, name]
+    );
+    if (checkResult.rows[0]?.state === 'disabled') {
+      throw new Error('BINDING_DISABLED');
+    }
     throw new Error('BINDING_NOT_FOUND');
   }
 
-  let selectResult: Awaited<ReturnType<typeof pool.query<WorkflowProviderBinding>>>;
-  try {
-    selectResult = await pool.query<WorkflowProviderBinding>(
-      'SELECT * FROM remote_agent_workflow_provider_bindings WHERE provider = $1 AND name = $2',
-      [provider, name]
-    );
-  } catch (error) {
-    const err = error as Error;
-    throw new Error(
-      `Uncertain outcome: rotate UPDATE committed but follow-up SELECT failed: ${err.message}`
-    );
-  }
-
+  const selectResult = await pool.query<WorkflowProviderBinding>(
+    'SELECT * FROM remote_agent_workflow_provider_bindings WHERE provider = $1 AND name = $2',
+    [provider, name]
+  );
   const row = selectResult.rows[0];
   if (!row) {
     throw new Error('BINDING_VANISHED_AFTER_ROTATE');
   }
+  const previousVersion = row.binding_version - 1;
   getLog().debug({ provider, name, previousVersion }, 'db.binding_rotate_completed');
   return { ...row, previousVersion, activeVersion: row.binding_version };
 }
