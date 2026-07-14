@@ -16,8 +16,8 @@ import { join } from 'node:path';
 //      locks — matching the precedent in provider-binding-contract.test.ts's
 //      3.1-CONTRACT-003 ("should already pass ... included as a regression
 //      check, not a new obligation").
-//   2. `test.skip()` scaffolds for everything that exercises the shared
-//      module's actual exports. Per this skill's red-phase rule, `test.skip()`
+//   2. `test()` scaffolds for everything that exercises the shared
+//      module's actual exports. Per this skill's red-phase rule, `test()`
 //      is used (not left executable) because the target module does not
 //      exist yet — a static or dynamic import of a missing module produces an
 //      uninformative "Cannot find module" failure rather than the specific
@@ -156,7 +156,7 @@ describe('3.3A-CONTRACT-048 — contract package is never edited to fit runtime 
 // shared module's exports, which do not exist yet.
 // ---------------------------------------------------------------------------
 describe('3.3A-UNIT-001 — command enum exactness [P0, R-001]', () => {
-  test.skip('WORKFLOW_PROVIDER_COMMANDS exactly matches workflow-command-envelope.schema.json properties.command.enum (no extra, no missing, no reordering-sensitive gaps)', async () => {
+  test('WORKFLOW_PROVIDER_COMMANDS exactly matches workflow-command-envelope.schema.json properties.command.enum (no extra, no missing, no reordering-sensitive gaps)', async () => {
     // ACTIVATION: remove .skip once workflow-provider-command-envelope.ts
     // exports `WORKFLOW_PROVIDER_COMMANDS` (a readonly array/tuple of the
     // 12 canonical command ids).
@@ -172,7 +172,7 @@ describe('3.3A-UNIT-001 — command enum exactness [P0, R-001]', () => {
 });
 
 describe('3.3A-UNIT-002 — diagnostic category exactness [P0, R-003]', () => {
-  test.skip('ERROR_CATEGORIES exactly matches workflow-command-envelope.schema.json $defs.error.properties.category.enum', async () => {
+  test('ERROR_CATEGORIES exactly matches workflow-command-envelope.schema.json $defs.error.properties.category.enum', async () => {
     // ACTIVATION: remove .skip once the shared module exports
     // `ERROR_CATEGORIES` (configuration, external_delay,
     // implementation_defect, provider_contract, security_rejection,
@@ -189,7 +189,7 @@ describe('3.3A-UNIT-002 — diagnostic category exactness [P0, R-003]', () => {
 });
 
 describe('3.3A-UNIT-003 — workflow success envelope has workflowRunRef and result, no error [P0, R-002]', () => {
-  test.skip('buildSuccessEnvelope for a workflow.* command returns workflowRunRef + result and omits error/bindingRef', async () => {
+  test('buildSuccessEnvelope for a workflow.* command returns workflowRunRef + result and omits error/bindingRef', async () => {
     // ACTIVATION: remove .skip once buildSuccessEnvelope accepts
     // { workflowRunRef } as the ref input for workflow.* commands.
     const mod = (await import('./workflow-provider-command-envelope')) as {
@@ -225,7 +225,7 @@ describe('3.3A-UNIT-003 — workflow success envelope has workflowRunRef and res
 });
 
 describe('3.3A-UNIT-004 — binding success envelope has bindingRef and result, no error [P0, R-002]', () => {
-  test.skip('buildSuccessEnvelope for a binding.* command returns bindingRef + result and omits error/workflowRunRef', async () => {
+  test('buildSuccessEnvelope for a binding.* command returns bindingRef + result and omits error/workflowRunRef', async () => {
     // ACTIVATION: remove .skip once buildSuccessEnvelope accepts
     // { bindingRef } as the ref input for binding.* commands.
     const mod = (await import('./workflow-provider-command-envelope')) as {
@@ -266,7 +266,7 @@ describe('3.3A-UNIT-004 — binding success envelope has bindingRef and result, 
 });
 
 describe('3.3A-UNIT-005 — missing workflowRunRef is rejected before serialization [P0, R-002/R-016]', () => {
-  test.skip('buildSuccessEnvelope throws synchronously when a workflow.* command is built without a workflowRunRef', async () => {
+  test('buildSuccessEnvelope throws synchronously when a workflow.* command is built without a workflowRunRef', async () => {
     // ACTIVATION: remove .skip once buildSuccessEnvelope enforces "success
     // workflow.* commands require workflowRunRef" (Dev Notes, Command
     // Envelope Shape) by throwing rather than silently omitting the ref.
@@ -293,7 +293,7 @@ describe('3.3A-UNIT-005 — missing workflowRunRef is rejected before serializat
 });
 
 describe('3.3A-UNIT-006 — missing bindingRef is rejected before serialization [P0, R-002/R-016]', () => {
-  test.skip('buildSuccessEnvelope throws synchronously when a binding.* command is built without a bindingRef', async () => {
+  test('buildSuccessEnvelope throws synchronously when a binding.* command is built without a bindingRef', async () => {
     // ACTIVATION: remove .skip once buildSuccessEnvelope enforces "success
     // binding.* commands require bindingRef".
     const mod = (await import('./workflow-provider-command-envelope')) as {
@@ -319,7 +319,7 @@ describe('3.3A-UNIT-006 — missing bindingRef is rejected before serialization 
 });
 
 describe('3.3A-UNIT-007 — failure envelopes require a boolean error.retryable [P0, R-003]', () => {
-  test.skip('buildErrorEnvelope serializes error.retryable as the exact boolean supplied and the field is present on every failure category', async () => {
+  test('buildErrorEnvelope serializes error.retryable as the exact boolean supplied and the field is present on every failure category', async () => {
     // ACTIVATION: remove .skip once buildErrorEnvelope's error input type
     // makes `retryable: boolean` a mandatory (non-optional) field, matching
     // the readiness remediation callout in the Dev Notes.
@@ -353,7 +353,7 @@ describe('3.3A-UNIT-007 — failure envelopes require a boolean error.retryable 
 });
 
 describe('3.3A-UNIT-008 — failure envelope shape and execution metadata [P0, R-002/R-005]', () => {
-  test.skip('buildErrorEnvelope returns success=false, error present, result/refs absent, and an execution object', async () => {
+  test('buildErrorEnvelope returns success=false, error present, result/refs absent, and an execution object', async () => {
     // ACTIVATION: remove .skip once buildErrorEnvelope exists and matches
     // the closed failure shape from Dev Notes "Command Envelope Shape".
     const mod = (await import('./workflow-provider-command-envelope')) as {
@@ -389,7 +389,7 @@ describe('3.3A-UNIT-008 — failure envelope shape and execution metadata [P0, R
 });
 
 describe('3.3A-UNIT-009 — result/error exclusivity holds by construction [P0, R-002]', () => {
-  test.skip('a success envelope never carries `error` and a failure envelope never carries `result`, for every builder call', async () => {
+  test('a success envelope never carries `error` and a failure envelope never carries `result`, for every builder call', async () => {
     // ACTIVATION: remove .skip once both builders exist; this locks the
     // oneOf constraint from workflow-command-envelope.schema.json.
     const mod = (await import('./workflow-provider-command-envelope')) as {
@@ -442,7 +442,7 @@ describe('3.3A-UNIT-009 — result/error exclusivity holds by construction [P0, 
 });
 
 describe('3.3A-UNIT-010 — safe serialization of non-JSON-native values [P0, R-009]', () => {
-  test.skip('safeStringify converts bigint to string, drops functions, and replaces circular references without throwing', async () => {
+  test('safeStringify converts bigint to string, drops functions, and replaces circular references without throwing', async () => {
     // ACTIVATION: remove .skip once safeStringify is exported from the
     // shared module (moved from provider-binding.ts per Task 1).
     const mod = (await import('./workflow-provider-command-envelope')) as {
@@ -463,7 +463,7 @@ describe('3.3A-UNIT-010 — safe serialization of non-JSON-native values [P0, R-
 });
 
 describe('3.3A-UNIT-011 — correlation id behavior [P1, R-013]', () => {
-  test.skip('resolveCorrelationId trims and echoes a supplied value verbatim, and generates a UUID when omitted or blank', async () => {
+  test('resolveCorrelationId trims and echoes a supplied value verbatim, and generates a UUID when omitted or blank', async () => {
     // ACTIVATION: remove .skip once resolveCorrelationId is exported from
     // the shared module (moved from provider-binding.ts per Task 1).
     const mod = (await import('./workflow-provider-command-envelope')) as {
@@ -480,7 +480,7 @@ describe('3.3A-UNIT-011 — correlation id behavior [P1, R-013]', () => {
 });
 
 describe('3.3A-UNIT-012 — issued-at behavior [P1, R-013]', () => {
-  test.skip('resolveIssuedAt returns a value that is a valid, stable ISO date-time string', async () => {
+  test('resolveIssuedAt returns a value that is a valid, stable ISO date-time string', async () => {
     // ACTIVATION: remove .skip once resolveIssuedAt is exported from the
     // shared module (moved from provider-binding.ts per Task 1).
     const mod = (await import('./workflow-provider-command-envelope')) as {
@@ -492,7 +492,7 @@ describe('3.3A-UNIT-012 — issued-at behavior [P1, R-013]', () => {
 });
 
 describe('3.3A-UNIT-013 — invalid command/category guard [P1, R-001/R-016]', () => {
-  test.skip('buildSuccessEnvelope rejects a command outside WORKFLOW_PROVIDER_COMMANDS and buildErrorEnvelope rejects a category outside ERROR_CATEGORIES, even with a forced type cast', async () => {
+  test('buildSuccessEnvelope rejects a command outside WORKFLOW_PROVIDER_COMMANDS and buildErrorEnvelope rejects a category outside ERROR_CATEGORIES, even with a forced type cast', async () => {
     // ACTIVATION: remove .skip once both builders runtime-validate their
     // `command`/`category` inputs instead of trusting the TypeScript type
     // alone (a forced `as` cast at a call site must not silently succeed).
@@ -582,7 +582,7 @@ describe('3.3A-UNIT-014 — all five canonical failure classes are buildable [P0
   ];
 
   for (const c of cases) {
-    test.skip(`buildErrorEnvelope reproduces ${c.fixture}'s code/category/retryable exactly`, async () => {
+    test(`buildErrorEnvelope reproduces ${c.fixture}'s code/category/retryable exactly`, async () => {
       // ACTIVATION: remove .skip once buildErrorEnvelope exists. This proves
       // the helper can represent every canonical failure class the contract
       // package defines, not just the binding-lifecycle ones already
@@ -621,7 +621,7 @@ describe('3.3A-UNIT-014 — all five canonical failure classes are buildable [P0
 });
 
 describe('3.3A-UNIT-015 — execution metadata details [P1, R-005/R-009]', () => {
-  test.skip('buildErrorEnvelope populates execution.exitCode, execution.timedOut (true only for category=timeout), and redacts stdout/stderr', async () => {
+  test('buildErrorEnvelope populates execution.exitCode, execution.timedOut (true only for category=timeout), and redacts stdout/stderr', async () => {
     // ACTIVATION: remove .skip once buildErrorEnvelope exists and computes
     // `execution` the same way provider-binding.ts's current local
     // buildErrorEnvelope does (durationMs = Date.now() - startTime,
@@ -667,7 +667,7 @@ describe('3.3A-UNIT-015 — execution metadata details [P1, R-005/R-009]', () =>
 });
 
 describe('3.3A-UNIT-016 — no forbidden fields or secrets in a built envelope [P0, R-012]', () => {
-  test.skip('a recursive scan of both a success and a failure envelope finds no actor/secret/profile/agent*/signing-material key', async () => {
+  test('a recursive scan of both a success and a failure envelope finds no actor/secret/profile/agent*/signing-material key', async () => {
     // ACTIVATION: remove .skip once both builders exist. Mirrors the
     // existing provider-binding.test.ts "security / compatibility (no
     // forbidden fields)" check, but exercises the shared builder directly.
@@ -732,7 +732,7 @@ describe('3.3A-UNIT-016 — no forbidden fields or secrets in a built envelope [
 });
 
 describe('3.3A-UNIT-027 — binding-specific lifecycle classification stays out of the shared module [P1, R-007]', () => {
-  test.skip('the shared module does not export classifyError, BINDING_STATUS_STATES, or any binding-lifecycle-specific classifier', async () => {
+  test('the shared module does not export classifyError, BINDING_STATUS_STATES, or any binding-lifecycle-specific classifier', async () => {
     // ACTIVATION: remove .skip once workflow-provider-command-envelope.ts
     // exists. This proves the refactor keeps command-specific error
     // classification local to provider-binding.ts per Task 1's "keep
@@ -745,7 +745,7 @@ describe('3.3A-UNIT-027 — binding-specific lifecycle classification stays out 
 });
 
 describe('3.3A-UNIT-032 — no binding-specific vocabulary leaks into the shared module source [P1, R-007/R-011]', () => {
-  test.skip('the shared module source contains no BINDING_-prefixed error code string or binding-domain identifier', () => {
+  test('the shared module source contains no BINDING_-prefixed error code string or binding-domain identifier', () => {
     // ACTIVATION: remove .skip once workflow-provider-command-envelope.ts
     // exists. Reads the file as text (not as a module) to catch string
     // literals a type-only check would miss.
@@ -757,7 +757,7 @@ describe('3.3A-UNIT-032 — no binding-specific vocabulary leaks into the shared
 });
 
 describe('3.3A-UNIT-056 — parallel/concurrent builder calls stay independent [P1, R-013]', () => {
-  test.skip('two concurrent buildSuccessEnvelope calls with different correlationIds never leak state into each other', async () => {
+  test('two concurrent buildSuccessEnvelope calls with different correlationIds never leak state into each other', async () => {
     // ACTIVATION: remove .skip once buildSuccessEnvelope exists. Guards
     // against a module-level mutable cache/singleton being introduced.
     const mod = (await import('./workflow-provider-command-envelope')) as {
@@ -812,7 +812,7 @@ describe('3.3A-UNIT-056 — parallel/concurrent builder calls stay independent [
 // binding commands in provider-binding.test.ts).
 // ---------------------------------------------------------------------------
 describe('3.3A-CONTRACT-036 — workflow command runtime conversion is not implemented in this story [P1, R-011]', () => {
-  test.skip('the shared module exports only envelope-construction helpers and baseline data — no workflow.start/status/approve/reject/resume/retry/cancel command HANDLER (dispatcher) function', async () => {
+  test('the shared module exports only envelope-construction helpers and baseline data — no workflow.start/status/approve/reject/resume/retry/cancel command HANDLER (dispatcher) function', async () => {
     // ACTIVATION: remove .skip once the shared module exists. This is a
     // scope guard: Stories 3.3b-3.3d own runtime conversion (W-3.3A-001).
     // A future accidental handler export here would be scope creep.
@@ -855,7 +855,7 @@ describe('3.3A-CONTRACT-037 — representative success envelope for every one of
   });
 
   for (const { fixture, refKind } of REPRESENTATIVE_COMMAND_FAMILIES) {
-    test.skip(`buildSuccessEnvelope reproduces ${fixture} exactly when fed the fixture's own refs/result/metadata`, async () => {
+    test(`buildSuccessEnvelope reproduces ${fixture} exactly when fed the fixture's own refs/result/metadata`, async () => {
       // ACTIVATION: remove .skip once buildSuccessEnvelope exists. Feeding
       // the exact correlationId/issuedAt/ref/result from the fixture (rather
       // than stripping dynamic fields) proves the helper is byte-for-byte
@@ -897,7 +897,7 @@ describe('3.3A-CONTRACT-037 — representative success envelope for every one of
 });
 
 describe('3.3A-CONTRACT-038 — malformed request failure example is reproducible [P0, R-005]', () => {
-  test.skip('buildErrorEnvelope reproduces error-malformed-request.json exactly given matching inputs', async () => {
+  test('buildErrorEnvelope reproduces error-malformed-request.json exactly given matching inputs', async () => {
     // ACTIVATION: remove .skip once buildErrorEnvelope exists.
     const mod = (await import('./workflow-provider-command-envelope')) as {
       buildErrorEnvelope: (
@@ -937,7 +937,7 @@ describe('3.3A-CONTRACT-038 — malformed request failure example is reproducibl
 });
 
 describe('3.3A-CONTRACT-039 — schema mismatch failure example is reproducible [P0, R-005]', () => {
-  test.skip('buildErrorEnvelope reproduces error-schema-mismatch.json exactly given matching inputs', async () => {
+  test('buildErrorEnvelope reproduces error-schema-mismatch.json exactly given matching inputs', async () => {
     // ACTIVATION: remove .skip once buildErrorEnvelope exists.
     const mod = (await import('./workflow-provider-command-envelope')) as {
       buildErrorEnvelope: (
@@ -975,7 +975,7 @@ describe('3.3A-CONTRACT-039 — schema mismatch failure example is reproducible 
 });
 
 describe('3.3A-CONTRACT-040 — timeout failure example is reproducible (envelope shape only, no runtime timeout policy) [P0, R-005/R-017]', () => {
-  test.skip('buildErrorEnvelope reproduces error-timeout.json exactly, including a null exitCode and timedOut=true', async () => {
+  test('buildErrorEnvelope reproduces error-timeout.json exactly, including a null exitCode and timedOut=true', async () => {
     // ACTIVATION: remove .skip once buildErrorEnvelope exists. Per
     // W-3.3A-003, this only proves the envelope is REPRESENTABLE — it does
     // not assert any actual process-level timeout enforcement.
@@ -1017,7 +1017,7 @@ describe('3.3A-CONTRACT-040 — timeout failure example is reproducible (envelop
 });
 
 describe('3.3A-CONTRACT-041 — unexpected exit failure example is reproducible with redacted execution metadata [P0, R-005]', () => {
-  test.skip('buildErrorEnvelope reproduces error-unexpected-exit.json exactly given matching inputs', async () => {
+  test('buildErrorEnvelope reproduces error-unexpected-exit.json exactly given matching inputs', async () => {
     // ACTIVATION: remove .skip once buildErrorEnvelope exists.
     const mod = (await import('./workflow-provider-command-envelope')) as {
       buildErrorEnvelope: (
@@ -1062,7 +1062,7 @@ describe('3.3A-CONTRACT-041 — unexpected exit failure example is reproducible 
 });
 
 describe('3.3A-CONTRACT-042 — unexpected state failure example is reproducible and never claims mutation applied [P0, R-005]', () => {
-  test.skip('buildErrorEnvelope reproduces error-unexpected-state.json exactly, with details.mutationApplied=false', async () => {
+  test('buildErrorEnvelope reproduces error-unexpected-state.json exactly, with details.mutationApplied=false', async () => {
     // ACTIVATION: remove .skip once buildErrorEnvelope exists.
     const mod = (await import('./workflow-provider-command-envelope')) as {
       buildErrorEnvelope: (
@@ -1104,7 +1104,7 @@ describe('3.3A-CONTRACT-042 — unexpected state failure example is reproducible
 // WAIVED / NOT-A-BUN-TEST — 3.3A-CI-053 [P1] — file-scope review.
 // ---------------------------------------------------------------------------
 describe('3.3A-CI-053 — file-scope review [P1, R-011]', () => {
-  test.skip('the diff for this story touches only the files listed in the story\'s "Project Structure Notes" (manual/CI review, not a deterministic Bun assertion)', () => {
+  test('the diff for this story touches only the files listed in the story\'s "Project Structure Notes" (manual/CI review, not a deterministic Bun assertion)', () => {
     // WAIVER-STYLE SKIP (not a missing-module skip): a reliable machine
     // check needs a stable merge-base ref (e.g. `git diff --name-only
     // origin/dev...HEAD`), which is not guaranteed available or correct
