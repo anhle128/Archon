@@ -139,20 +139,20 @@ Existing success fixtures omit `execution`; do not add it to success envelopes.
 The canonical command values are the enum values in `_bmad-output/planning-artifacts/contracts/workflow-commander/schemas/workflow-command-envelope.schema.json`.
 The provider CLI syntax baseline is:
 
-| Contract Command | Provider CLI Syntax |
-| ---------------- | ------------------- |
-| `workflow.start` | `archon workflow run <workflow-name> [message] --json` |
-| `workflow.status` | `archon workflow get <run-id> --json` |
-| `workflow.approve` | `archon workflow approve <run-id> [comment] --json` |
-| `workflow.reject` | `archon workflow reject <run-id> [reason] --json` |
-| `workflow.resume` | `archon workflow resume <run-id> --json` |
-| `workflow.retry` | `archon workflow retry <run-id> [--node <node-id>] --json` |
-| `workflow.cancel` | `archon workflow cancel <run-id> --json` |
-| `binding.create` | `archon provider-binding create --provider archon --name <name> --project-ref <project-ref> --route <event-route> --json` |
-| `binding.update` | `archon provider-binding update --provider archon --name <name> --project-ref <project-ref> --route <event-route> --json` |
-| `binding.status` | `archon provider-binding status --provider archon --name <name> [--project-ref <project-ref>] --json` |
-| `binding.rotate` | `archon provider-binding rotate --provider archon --name <name> --json` |
-| `binding.disable` | `archon provider-binding disable --provider archon --name <name> --json` |
+| Contract Command   | Provider CLI Syntax                                                                                                       |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `workflow.start`   | `archon workflow run <workflow-name> [message] --json`                                                                    |
+| `workflow.status`  | `archon workflow get <run-id> --json`                                                                                     |
+| `workflow.approve` | `archon workflow approve <run-id> [comment] --json`                                                                       |
+| `workflow.reject`  | `archon workflow reject <run-id> [reason] --json`                                                                         |
+| `workflow.resume`  | `archon workflow resume <run-id> --json`                                                                                  |
+| `workflow.retry`   | `archon workflow retry <run-id> [--node <node-id>] --json`                                                                |
+| `workflow.cancel`  | `archon workflow cancel <run-id> --json`                                                                                  |
+| `binding.create`   | `archon provider-binding create --provider archon --name <name> --project-ref <project-ref> --route <event-route> --json` |
+| `binding.update`   | `archon provider-binding update --provider archon --name <name> --project-ref <project-ref> --route <event-route> --json` |
+| `binding.status`   | `archon provider-binding status --provider archon --name <name> [--project-ref <project-ref>] --json`                     |
+| `binding.rotate`   | `archon provider-binding rotate --provider archon --name <name> --json`                                                   |
+| `binding.disable`  | `archon provider-binding disable --provider archon --name <name> --json`                                                  |
 
 `workflow.cancel` is a Workflow Commander command name.
 The existing `workflow abandon` command is legacy Archon CLI vocabulary and must not be serialized as `workflow.cancel`.
@@ -247,6 +247,14 @@ The local `python3` is 3.9.6.
 That is sufficient for `validate_contracts.py`, which supports Python 3.9+ and passed.
 The BMAD customization resolver requires Python 3.11 because it imports `tomllib`, but that resolver is not part of this story's implementation or validation gate.
 
+### ATDD Artifacts
+
+- Checklist: `_bmad-output/test-artifacts/atdd-checklist-3-3a-define-shared-workflow-provider-command-envelope.md`
+- API/contract tests: `packages/cli/src/commands/workflow-provider-command-envelope.test.ts` (new; 7 executable regression locks pass today, 42 module-dependent scaffolds are `test.skip()` pending Task 1)
+- Contract/CI-static tests (extended): `packages/cli/src/commands/provider-binding-contract.test.ts` (3 pre-existing gates still pass; 3 new checks — secret scan extension, no-planning-import scan, duplicate-local-helper-removal — are genuinely red today)
+- E2E / first-party consumer surface: already covered by the unmodified `packages/cli/src/commands/provider-binding.e2e.test.ts` from Story 3.1 (3 pass / 8 pre-existing skip); no new E2E surface is introduced by this story since the shared module has no direct CLI subcommand of its own.
+- `packages/cli/package.json`'s `test` script was extended by one line to run the new envelope test file alongside `provider-binding-contract.test.ts` (both are non-mocking, so no new isolated invocation was needed).
+
 ## Project Structure Notes
 
 Expected new file:
@@ -311,4 +319,3 @@ Unexpected for this story:
 - Story is ready for development as a code refactor plus contract-test slice.
 
 ### File List
-
