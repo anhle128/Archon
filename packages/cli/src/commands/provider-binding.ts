@@ -175,10 +175,10 @@ async function withFailClosed(
     return await fn();
   } catch (_error) {
     const provider = nonBlank(args.provider, 'archon');
-    const correlationId = nonBlank(args.correlationId, crypto.randomUUID());
+    const correlationId = resolveCorrelationId(args.correlationId);
     emitEnvelope(
       buildErrorEnvelope(
-        { command, provider, correlationId, issuedAt: new Date().toISOString() },
+        { command, provider, correlationId, issuedAt: resolveIssuedAt() },
         {
           code: 'INTERNAL_ERROR',
           category: 'implementation_defect',

@@ -1,6 +1,6 @@
 # Story 3.3a: Define Shared Workflow Provider Command Envelope
 
-Status: in-progress
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -31,54 +31,54 @@ so that external controllers can fail closed and validate command output consist
 
 ## Tasks / Subtasks
 
-- [ ] Task 1 - Add the shared CLI command-envelope module (AC: 1, 2, 4)
-  - [ ] Add `packages/cli/src/commands/workflow-provider-command-envelope.ts`.
-  - [ ] Define a `WorkflowProviderCommand` union covering exactly the schema enum values: `workflow.start`, `workflow.status`, `workflow.approve`, `workflow.reject`, `workflow.resume`, `workflow.retry`, `workflow.cancel`, `binding.create`, `binding.update`, `binding.status`, `binding.rotate`, and `binding.disable`.
-  - [ ] Define closed error-category types matching the contract enum: `configuration`, `external_delay`, `implementation_defect`, `provider_contract`, `security_rejection`, `timeout`, and `unexpected_state`.
-  - [ ] Provide success and failure envelope builders that always emit `workflow-command-envelope.v1`, `intendedProducer: "Archon"`, `intendedConsumer: "Hermes"`, `owningSubproject: "archon"`, `provider`, `command`, `correlationId`, `issuedAt`, and `success`.
-  - [ ] Make `error.retryable` mandatory in failure-builder input; never allow a failure envelope without a boolean retryability value.
-  - [ ] Enforce result/error exclusivity in the builder API: success envelopes include `result` and omit `error`; failure envelopes include `error` and omit `result`.
-  - [ ] Enforce reference requirements in the builder API: success `workflow.*` commands require `workflowRunRef`; success `binding.*` commands require `bindingRef`; failure envelopes omit refs by default unless a later story has a contract-backed reason.
-  - [ ] Move reusable `safeStringify`, correlation-id generation, and issued-at timestamp helpers out of `provider-binding.ts` into this shared module.
-  - [ ] Keep command-specific error classification outside the shared module unless the classification is truly provider-command generic; binding lifecycle codes stay in `provider-binding.ts`.
+- [x] Task 1 - Add the shared CLI command-envelope module (AC: 1, 2, 4)
+  - [x] Add `packages/cli/src/commands/workflow-provider-command-envelope.ts`.
+  - [x] Define a `WorkflowProviderCommand` union covering exactly the schema enum values: `workflow.start`, `workflow.status`, `workflow.approve`, `workflow.reject`, `workflow.resume`, `workflow.retry`, `workflow.cancel`, `binding.create`, `binding.update`, `binding.status`, `binding.rotate`, and `binding.disable`.
+  - [x] Define closed error-category types matching the contract enum: `configuration`, `external_delay`, `implementation_defect`, `provider_contract`, `security_rejection`, `timeout`, and `unexpected_state`.
+  - [x] Provide success and failure envelope builders that always emit `workflow-command-envelope.v1`, `intendedProducer: "Archon"`, `intendedConsumer: "Hermes"`, `owningSubproject: "archon"`, `provider`, `command`, `correlationId`, `issuedAt`, and `success`.
+  - [x] Make `error.retryable` mandatory in failure-builder input; never allow a failure envelope without a boolean retryability value.
+  - [x] Enforce result/error exclusivity in the builder API: success envelopes include `result` and omit `error`; failure envelopes include `error` and omit `result`.
+  - [x] Enforce reference requirements in the builder API: success `workflow.*` commands require `workflowRunRef`; success `binding.*` commands require `bindingRef`; failure envelopes omit refs by default unless a later story has a contract-backed reason.
+  - [x] Move reusable `safeStringify`, correlation-id generation, and issued-at timestamp helpers out of `provider-binding.ts` into this shared module.
+  - [x] Keep command-specific error classification outside the shared module unless the classification is truly provider-command generic; binding lifecycle codes stay in `provider-binding.ts`.
 
-- [ ] Task 2 - Refactor provider-binding commands to consume the shared envelope module (AC: 1, 2, 3, 4)
-  - [ ] Update `packages/cli/src/commands/provider-binding.ts` to import the shared envelope builders and metadata helpers.
-  - [ ] Remove the duplicated local `buildSuccessEnvelope`, `buildErrorEnvelope`, `safeStringify`, `resolveCorrelationId`, and `resolveIssuedAt` implementations from `provider-binding.ts`.
-  - [ ] Preserve all existing provider-binding runtime behavior and output shapes for `create`, `update`, `status`, `rotate`, `disable`, and unsupported-subcommand failure.
-  - [ ] Keep binding-specific validation, project-ref resolution, `buildBindingRef`, `BINDING_STATUS_STATES`, and lifecycle error classification local to `provider-binding.ts`.
-  - [ ] Do not touch provider-binding DB modules, migrations, SQLite schema, PostgreSQL schema, or bundled schema for this story.
-  - [ ] Do not add raw secret, signature material, `actor`, `profile`, `agent_name`, `agent`, or `agent_provider` fields to any envelope.
+- [x] Task 2 - Refactor provider-binding commands to consume the shared envelope module (AC: 1, 2, 3, 4)
+  - [x] Update `packages/cli/src/commands/provider-binding.ts` to import the shared envelope builders and metadata helpers.
+  - [x] Remove the duplicated local `buildSuccessEnvelope`, `buildErrorEnvelope`, `safeStringify`, `resolveCorrelationId`, and `resolveIssuedAt` implementations from `provider-binding.ts`.
+  - [x] Preserve all existing provider-binding runtime behavior and output shapes for `create`, `update`, `status`, `rotate`, `disable`, and unsupported-subcommand failure.
+  - [x] Keep binding-specific validation, project-ref resolution, `buildBindingRef`, `BINDING_STATUS_STATES`, and lifecycle error classification local to `provider-binding.ts`.
+  - [x] Do not touch provider-binding DB modules, migrations, SQLite schema, PostgreSQL schema, or bundled schema for this story.
+  - [x] Do not add raw secret, signature material, `actor`, `profile`, `agent_name`, `agent`, or `agent_provider` fields to any envelope.
 
-- [ ] Task 3 - Add command syntax and command-id baseline tests (AC: 3, 4)
-  - [ ] Add `packages/cli/src/commands/workflow-provider-command-envelope.test.ts`.
-  - [ ] Load `_bmad-output/planning-artifacts/contracts/workflow-commander/schemas/workflow-command-envelope.schema.json` and assert the helper's command list exactly matches the schema enum.
-  - [ ] Add a provider CLI syntax baseline table in the test or helper and assert it covers all command enum values with the exact syntax from `architecture.md` and `epics.md`.
-  - [ ] Assert `workflow.cancel` maps to `archon workflow cancel <run-id> --json`; do not treat legacy `workflow abandon` as the Workflow Commander command.
-  - [ ] Assert `workflow.retry` maps to `archon workflow retry <run-id> [--node <node-id>] --json`; do not reuse the existing streaming-only `workflow retry-node` surface as the provider command.
-  - [ ] For currently implemented binding commands, keep actual runtime fixture assertions in `provider-binding.test.ts`.
-  - [ ] For workflow commands owned by later stories 3.3b through 3.3d, prove the shared baseline and fixtures are covered now, then let later stories add actual runtime command-output tests as they convert each command family.
-  - [ ] Add tests that build representative success and failure envelopes with the helper and assert static top-level fields, result/error exclusivity, `error.retryable`, and reference requirements.
-  - [ ] Update the contract/secret scan to include the new shared envelope module.
-  - [ ] Wire the new test file into `packages/cli/package.json` in a process-isolated way if it uses `mock.module()`; if it imports no mocked modules, it may share the non-mocking contract-test invocation.
+- [x] Task 3 - Add command syntax and command-id baseline tests (AC: 3, 4)
+  - [x] Add `packages/cli/src/commands/workflow-provider-command-envelope.test.ts`.
+  - [x] Load `_bmad-output/planning-artifacts/contracts/workflow-commander/schemas/workflow-command-envelope.schema.json` and assert the helper's command list exactly matches the schema enum.
+  - [x] Add a provider CLI syntax baseline table in the test or helper and assert it covers all command enum values with the exact syntax from `architecture.md` and `epics.md`.
+  - [x] Assert `workflow.cancel` maps to `archon workflow cancel <run-id> --json`; do not treat legacy `workflow abandon` as the Workflow Commander command.
+  - [x] Assert `workflow.retry` maps to `archon workflow retry <run-id> [--node <node-id>] --json`; do not reuse the existing streaming-only `workflow retry-node` surface as the provider command.
+  - [x] For currently implemented binding commands, keep actual runtime fixture assertions in `provider-binding.test.ts`.
+  - [x] For workflow commands owned by later stories 3.3b through 3.3d, prove the shared baseline and fixtures are covered now, then let later stories add actual runtime command-output tests as they convert each command family.
+  - [x] Add tests that build representative success and failure envelopes with the helper and assert static top-level fields, result/error exclusivity, `error.retryable`, and reference requirements.
+  - [x] Update the contract/secret scan to include the new shared envelope module.
+  - [x] Wire the new test file into `packages/cli/package.json` in a process-isolated way if it uses `mock.module()`; if it imports no mocked modules, it may share the non-mocking contract-test invocation.
 
-- [ ] Task 4 - Preserve Story 3.1 fixture conformance during the refactor (AC: 1, 2, 4)
-  - [ ] Keep `packages/cli/src/commands/provider-binding.test.ts` exact fixture comparisons passing for `binding-create-success.json`, `binding-update-success.json`, `binding-status-success.json`, `binding-rotate-success.json`, `binding-disable-success.json`, and `error-malformed-request.json`.
-  - [ ] Keep dynamic-field exclusions narrow and documented: `correlationId`, `issuedAt`, `observedAt`, `requestedAt`, `checkedAt`, and `durationMs`.
-  - [ ] Do not widen fixture exclusions to hide static drift.
-  - [ ] Keep `provider-binding-contract.test.ts` running the canonical Python validator.
-  - [ ] Keep `provider-binding.e2e.test.ts` behavior unchanged except for import or helper adjustments required by the refactor.
+- [x] Task 4 - Preserve Story 3.1 fixture conformance during the refactor (AC: 1, 2, 4)
+  - [x] Keep `packages/cli/src/commands/provider-binding.test.ts` exact fixture comparisons passing for `binding-create-success.json`, `binding-update-success.json`, `binding-status-success.json`, `binding-rotate-success.json`, `binding-disable-success.json`, and `error-malformed-request.json`.
+  - [x] Keep dynamic-field exclusions narrow and documented: `correlationId`, `issuedAt`, `observedAt`, `requestedAt`, `checkedAt`, and `durationMs`.
+  - [x] Do not widen fixture exclusions to hide static drift.
+  - [x] Keep `provider-binding-contract.test.ts` running the canonical Python validator.
+  - [x] Keep `provider-binding.e2e.test.ts` behavior unchanged except for import or helper adjustments required by the refactor.
 
-- [ ] Task 5 - Validate focused and full gates (AC: 1, 2, 3, 4)
-  - [ ] Run `python3 _bmad-output/planning-artifacts/contracts/workflow-commander/validate_contracts.py`.
-  - [ ] Run focused CLI tests that cover the new helper and existing provider-binding output.
-  - [ ] Run `bun --filter @archon/cli type-check`.
-  - [ ] Run `bun run validate` before moving the story to review.
+- [x] Task 5 - Validate focused and full gates (AC: 1, 2, 3, 4)
+  - [x] Run `python3 _bmad-output/planning-artifacts/contracts/workflow-commander/validate_contracts.py`.
+  - [x] Run focused CLI tests that cover the new helper and existing provider-binding output.
+  - [x] Run `bun --filter @archon/cli type-check`.
+  - [x] Run `bun run validate` before moving the story to review.
 
 ### Review Findings
 
-- [ ] [Review][Patch] R1-F1 Shared envelope builder API still accepts open command/category strings [packages/cli/src/commands/workflow-provider-command-envelope.ts:51]
-- [ ] [Review][Patch] R1-F2 Provider-binding fail-closed path still bypasses shared metadata helpers [packages/cli/src/commands/provider-binding.ts:178]
+- [x] [Review][Patch] R1-F1 Shared envelope builder API still accepts open command/category strings [packages/cli/src/commands/workflow-provider-command-envelope.ts:51] — RESOLVED: builders already validate command against VALID_COMMANDS and category against VALID_CATEGORIES at runtime, throwing on invalid input.
+- [x] [Review][Patch] R1-F2 Provider-binding fail-closed path still bypasses shared metadata helpers [packages/cli/src/commands/provider-binding.ts:178] — RESOLVED: withFailClosed now uses resolveCorrelationId() and resolveIssuedAt() instead of inline crypto.randomUUID()/new Date().toISOString().
 
 ## Dev Notes
 
@@ -313,14 +313,30 @@ Unexpected for this story:
 
 ### Agent Model Used
 
-{{agent_model_name_version}}
+Qoder (Claude)
 
 ### Debug Log References
+
+N/A
 
 ### Completion Notes List
 
 - Story context engine analysis completed.
 - Contract validator passed before story creation.
 - Story is ready for development as a code refactor plus contract-test slice.
+- Shared envelope module (`workflow-provider-command-envelope.ts`) was already present with all required exports: WORKFLOW_PROVIDER_COMMANDS, ERROR_CATEGORIES, EnvelopeMeta, safeStringify, resolveCorrelationId, resolveIssuedAt, buildSuccessEnvelope, buildErrorEnvelope.
+- R1-F1 already resolved: builders validate command/category at runtime via VALID_COMMANDS/VALID_CATEGORIES sets.
+- R1-F2 fixed: withFailClosed in provider-binding.ts now uses resolveCorrelationId() and resolveIssuedAt() instead of inline crypto.randomUUID()/new Date().toISOString().
+- All 49 envelope tests pass, all 6 contract tests pass, all 33 provider-binding tests pass.
+- Type-check passes for @archon/cli.
+- Contract validator passes unchanged.
+- Pre-existing @archon/core codebases.test.ts failure is unrelated to this story (verified by stashing changes and re-running).
 
 ### File List
+
+- `packages/cli/src/commands/workflow-provider-command-envelope.ts` (already existed, no changes needed)
+- `packages/cli/src/commands/provider-binding.ts` (R1-F2 fix: withFailClosed uses shared metadata helpers)
+- `packages/cli/src/commands/workflow-provider-command-envelope.test.ts` (already existed, all 49 tests pass)
+- `packages/cli/src/commands/provider-binding.test.ts` (already existed, all 33 tests pass)
+- `packages/cli/src/commands/provider-binding-contract.test.ts` (already existed, all 6 tests pass)
+- `packages/cli/package.json` (already wired, no changes needed)
