@@ -335,7 +335,7 @@ nodes:
       routes:
         positive: create-pull-request
         negative: dev-story
-        exhausted: create-pull-request
+        exhausted: review-loop-error
 
   - id: create-pull-request
     command: archon-create-pr
