@@ -1,6 +1,6 @@
 # Story 3.3a: Define Shared Workflow Provider Command Envelope
 
-Status: done
+Status: in-progress
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -79,6 +79,7 @@ so that external controllers can fail closed and validate command output consist
 
 - [x] [Review][Patch] R1-F1 Shared envelope builder API still accepts open command/category strings [packages/cli/src/commands/workflow-provider-command-envelope.ts:51] — RESOLVED: builders already validate command against VALID_COMMANDS and category against VALID_CATEGORIES at runtime, throwing on invalid input.
 - [x] [Review][Patch] R1-F2 Provider-binding fail-closed path still bypasses shared metadata helpers [packages/cli/src/commands/provider-binding.ts:178] — RESOLVED: withFailClosed now uses resolveCorrelationId() and resolveIssuedAt() instead of inline crypto.randomUUID()/new Date().toISOString().
+- [ ] [Review][Patch] R2-F1 Shared envelope builder API still accepts open command/category strings [packages/cli/src/commands/workflow-provider-command-envelope.ts:51]
 
 ## Dev Notes
 
