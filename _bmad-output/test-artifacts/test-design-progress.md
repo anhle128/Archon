@@ -9,29 +9,29 @@ stepsCompleted:
   - 'step-05-generate-output'
 lastStep: 'step-05-generate-output'
 nextStep: ''
-lastSaved: '2026-07-13'
+lastSaved: '2026-07-14'
 inputDocuments:
-  - '_bmad-output/implementation-artifacts/3-1-implement-archon-workflow-provider-binding-lifecycle.md'
+  - '_bmad-output/implementation-artifacts/3-3a-define-shared-workflow-provider-command-envelope.md'
   - '_bmad-output/project-context.md'
   - '_bmad/tea/config.yaml'
   - '_bmad-output/planning-artifacts/prd.md'
   - '_bmad-output/planning-artifacts/architecture.md'
   - '_bmad-output/planning-artifacts/epics.md'
   - '_bmad-output/planning-artifacts/implementation-readiness-report-2026-07-12.md'
+  - '_bmad-output/planning-artifacts/sprint-change-proposal-2026-07-12-implementation-readiness-remediation.md'
   - '_bmad-output/planning-artifacts/contracts/workflow-commander/README.md'
   - '_bmad-output/planning-artifacts/contracts/workflow-commander/schemas/workflow-command-envelope.schema.json'
-  - '_bmad-output/planning-artifacts/contracts/workflow-commander/schemas/workflow-provider-binding.schema.json'
-  - '_bmad-output/planning-artifacts/contracts/workflow-commander/examples/providers/archon/commands/binding-*.json'
-  - '_bmad-output/planning-artifacts/contracts/workflow-commander/examples/providers/archon/commands/error-malformed-request.json'
-  - '_bmad-output/planning-artifacts/contracts/workflow-commander/examples/providers/archon/bindings/status-*.json'
-  - 'packages/core/package.json'
+  - '_bmad-output/planning-artifacts/contracts/workflow-commander/examples/providers/archon/commands/*.json'
+  - '_bmad-output/test-artifacts/test-design-epic-3.md'
+  - '_bmad-output/test-artifacts/atdd-checklist-3-1-implement-archon-workflow-provider-binding-lifecycle.md'
   - 'packages/cli/package.json'
-  - 'packages/core/src/db/user-provider-key-store.test.ts'
-  - 'packages/core/src/db/adapters/sqlite.test.ts'
-  - 'packages/core/src/db/adapters/postgres.test.ts'
-  - 'packages/core/src/db/bundled-schema.test.ts'
   - 'packages/cli/src/cli.ts'
-  - 'packages/cli/src/cli.test.ts'
+  - 'packages/cli/src/commands/provider-binding.ts'
+  - 'packages/cli/src/commands/provider-binding.test.ts'
+  - 'packages/cli/src/commands/provider-binding-contract.test.ts'
+  - 'packages/cli/src/commands/provider-binding.e2e.test.ts'
+  - 'packages/cli/src/commands/workflow.ts'
+  - '.agents/skills/bmad-testarch-test-design/resources/tea-index.csv'
   - '.agents/skills/bmad-testarch-test-design/resources/knowledge/risk-governance.md'
   - '.agents/skills/bmad-testarch-test-design/resources/knowledge/probability-impact.md'
   - '.agents/skills/bmad-testarch-test-design/resources/knowledge/test-levels-framework.md'
@@ -43,7 +43,7 @@ inputDocuments:
   - '.agents/skills/bmad-testarch-test-design/resources/knowledge/api-request.md'
   - '.agents/skills/bmad-testarch-test-design/resources/knowledge/auth-session.md'
   - '.agents/skills/bmad-testarch-test-design/resources/knowledge/recurse.md'
-outputDocument: '_bmad-output/test-artifacts/test-design-epic-3.md'
+outputDocument: '_bmad-output/test-artifacts/test-design/test-design-3-3a-define-shared-workflow-provider-command-envelope.md'
 ---
 
 # Test Design Progress: a5.2 Generate PR Handoff With Evidence Links
@@ -427,3 +427,347 @@ Validation completed:
 - Markdown formatting and `git diff --check` pass.
 - Canonical Workflow Commander contract validation passes unchanged.
 - No browser session was opened and no temporary exploration artifact was created.
+
+---
+
+# Test Design Progress: 3.3a Define Shared Workflow Provider Command Envelope
+
+## Step 1: Detect Mode
+
+Mode selected: Epic-Level.
+
+Reason: the input is a story-level implementation artifact with explicit acceptance criteria, tasks, dev notes, predecessor intelligence, and reviewer-remediation context.
+The target path was described as not yet written, but `_bmad-output/implementation-artifacts/3-3a-define-shared-workflow-provider-command-envelope.md` exists in the current worktree and is treated as the current source of truth for this run.
+
+Prerequisite result: PASS.
+The story provides acceptance criteria and implementation scope.
+Architecture, PRD, epic, contract, predecessor-story, and implementation-readiness artifacts are available for Step 2 context loading.
+
+## Step 2: Load Context
+
+Configuration loaded: Playwright utils enabled; Pact.js utils disabled; Pact MCP disabled; browser automation `auto`; stack detection `auto`; test artifacts rooted at `_bmad-output/test-artifacts`.
+
+Detected project stack: full-stack Bun + strict TypeScript monorepo.
+Story-local scope is headless CLI/contract code under `@archon/cli`; no HTTP route, web UI, browser, server route, core DB schema, workflow engine runtime conversion, or Hermes-owned consumer behavior is in scope.
+
+Loaded requirements and architecture: Story 3.3a, FR-8, Epic 3 boundaries, Architecture AD-3/7/8/9, provider command syntax baseline, implementation-readiness evidence, sprint-change remediation for `error.retryable`, project context, command-envelope schema, all 17 Archon command fixtures, Story 3.1 predecessor test design, and current CLI/provider-binding implementation and tests.
+
+Canonical contract validation: PASS.
+The validator reports 7 schemas, 17 command examples, 13 binding examples, 7 delivery examples, 6 generic event examples, 7 provider event examples, 9 callback rejection examples, 6 materialization examples, and isolated local package validation without parent workspace traversal.
+
+Testable requirements extracted: shared success and failure builders; exact command enum union; exact diagnostic category union; mandatory `error.retryable`; result/error exclusivity; success reference requirements by command family; failure refs omitted by default; reusable safe stringify, correlation id, and timestamp helpers; provider-binding refactor without output-shape drift; provider CLI syntax baseline coverage for all command enum values; `workflow.cancel`/`workflow.retry` syntax protection; forbidden-field/secret scans; process-isolated Bun test placement; and preservation of Story 3.1 exact fixture regressions.
+
+Integration points: CLI parser and `--json` log-silence behavior; `provider-binding.ts` local helper extraction; new `workflow-provider-command-envelope.ts`; provider-binding unit/contract/E2E tests; `packages/cli/package.json` test batching; checked-in command fixtures; and the canonical Python contract validator.
+
+Existing test patterns: Bun unit tests with process-global `mock.module()` isolation; fixture equality with narrow dynamic-field exclusion; recursive forbidden-key/secret scans; subprocess CLI E2E harness using `Bun.spawn`; package scripts that split mocked tests into separate processes; and contract regression tests that import JSON files directly from `_bmad-output`.
+
+Known coverage gaps: no shared envelope helper exists yet; provider-binding still owns local envelope construction; no dedicated `workflow-provider-command-envelope.test.ts` exists; provider command syntax baseline is not yet executable against a shared constant; workflow command runtime outputs intentionally remain legacy JSON until later stories; no application JSON Schema runtime dependency should be added to `@archon/cli`.
+
+Browser exploration: not applicable.
+The approved surface is CLI JSON only, repository scan found no relevant browser target for this story, and no target URL exists.
+Playwright CLI and API/headless fragments were loaded for workflow compliance, but the selected project test levels remain Bun unit, Bun CLI integration/E2E, contract regression, and CI/static checks.
+
+## Step 3: Risk and Testability
+
+Risk scale: Probability and Impact use 1 low, 2 medium, 3 high; score is P x I.
+Scores 6-8 require mitigation and score 9 is blocking unless explicitly waived.
+Priority is promoted to P0/P1 whenever a failure can break core behavior, security, data integrity, compatibility, or cross-process contract behavior.
+
+### Risk Register
+
+| ID         | Category    | Risk                                                                                                                                                      |   P |   I | Score | Priority | Mitigation and evidence                                                                                                        | Owner / timeline                                    |
+| ---------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | --: | --: | ----: | -------- | ------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------- |
+| 3.3A-R-001 | TECH / BUS  | The helper command union drifts from `workflow-command-envelope.schema.json`, so producers emit unknown or missing command identifiers.                   |   3 |   3 |     9 | P0       | Schema-enum exactness test, baseline table coverage for all 12 values, canonical validator, no duplicated untested arrays.     | CLI implementer + contract reviewer / Task 3        |
+| 3.3A-R-002 | TECH / BUS  | Success/failure builders violate closed top-level schema, result/error exclusivity, or command-family reference requirements.                             |   3 |   3 |     9 | P0       | Builder unit tests for success/failure shape, no extra top-level keys, workflow/binding refs, and schema fixture equality.     | CLI implementer / Tasks 1 and 3                     |
+| 3.3A-R-003 | BUS / OPS   | Failure envelopes omit `error.retryable`, use open diagnostic categories, or lose stable code/details, preventing controllers from retrying safely.       |   3 |   3 |     9 | P0       | Mandatory boolean input type, negative compile/runtime tests, all five checked-in failure examples covered.                    | CLI implementer + contract owner / Task 1           |
+| 3.3A-R-004 | BUS / DATA  | Refactoring provider-binding to the shared helper changes Story 3.1 output, fixture equality, binding refs, error details, or exit behavior.              |   3 |   3 |     9 | P0       | Re-run exact provider-binding fixture tests, E2E malformed/unsupported subprocess tests, narrow dynamic-field exclusions.      | Story 3.3a owner / Task 2                           |
+| 3.3A-R-005 | OPS / BUS   | Fail-closed controller outcomes for malformed JSON, schema mismatch, timeout, unexpected exit, and unexpected state are not buildable or fixture-aligned. |   2 |   3 |     6 | P0       | Representative failure-builder tests for all failure examples, execution redaction assertions, no prose/stdout parsing.        | CLI implementer / Tasks 1 and 3                     |
+| 3.3A-R-006 | BUS / TECH  | Provider CLI syntax and canonical command id drift, especially `workflow.cancel` vs legacy `abandon` and `workflow.retry` vs streaming `retry-node`.      |   3 |   3 |     9 | P0       | Syntax baseline tests for every command, explicit negative assertions for `abandon` and `retry-node`, future story gate.       | CLI implementer + architecture reviewer / Task 3    |
+| 3.3A-R-007 | TECH        | Generic helper absorbs binding-specific or workflow-specific classification policy and couples unrelated command families.                                |   2 |   3 |     6 | P1       | Keep classification outside helper unless command-generic; tests prove provider-binding classification remains local.          | CLI implementer / Tasks 1 and 2                     |
+| 3.3A-R-008 | TECH / OPS  | Production CLI imports `_bmad-output` planning artifacts or adds a JSON Schema runtime dependency to validate envelopes.                                  |   2 |   3 |     6 | P1       | Production imports test, dependency/package diff review, constants in source tested against contract schema only in tests.     | CLI implementer + reviewer / Task 1                 |
+| 3.3A-R-009 | BUS / OPS   | `--json` output becomes multiple lines, logs/prose leak, or non-serializable values break JSON serialization.                                             |   3 |   3 |     9 | P0       | Raw stdout/stderr subprocess tests, safeStringify circular/bigint/function tests, global log-silence regression.               | CLI implementer / Tasks 1-4                         |
+| 3.3A-R-010 | TECH / OPS  | New tests using `mock.module()` are batched with incompatible files, causing process-global pollution and order-dependent results.                        |   3 |   2 |     6 | P1       | Put mocked tests in isolated package script invocation; non-mocking helper tests may share contract batch; repeat focused run. | Test implementer / Task 3                           |
+| 3.3A-R-011 | TECH / OPS  | Scope creep converts workflow runtime JSON, core DB, server routes, web UI, workflow engine, or bundled contract artifacts in this story.                 |   2 |   3 |     6 | P1       | Static file-scope review, regression that workflow command outputs remain out of scope, no contract-package edits.             | Story owner + reviewer / every task gate            |
+| 3.3A-R-012 | SEC / BUS   | Shared helper emits forbidden `actor`, `profile`, `agent*`, raw secret, signing material, stdout, or stderr content.                                      |   2 |   3 |     6 | P0       | Recursive forbidden-key scan, secret/signing-material scan including new helper, execution redacted-flag assertions.           | Security reviewer + CLI implementer / Tasks 1 and 3 |
+| 3.3A-R-013 | BUS / OPS   | Correlation id or issued-at timestamp generation/preservation changes, becomes blank, non-ISO, or unstable in one envelope.                               |   2 |   3 |     6 | P1       | Inject fixed metadata in builder tests; generated UUID/date-time tests; preserve supplied correlation id semantics.            | CLI implementer / Task 1                            |
+| 3.3A-R-014 | TECH / BUS  | Future command stories depend on an incomplete helper, because baseline tests cover examples but not helper command/ref constraints for all commands.     |   3 |   3 |     9 | P0       | Representative success builders for every command family and fixture-driven command list, even before runtime conversions.     | CLI implementer + future story owners / Task 3      |
+| 3.3A-R-015 | TECH / BUS  | Dynamic-field exclusions widen during fixture comparison and hide static drift in provider-binding or command fixtures.                                   |   2 |   3 |     6 | P1       | Contract test locks documented dynamic paths; fixture comparisons strip only correlation/time/duration fields.                 | Test implementer / Task 4                           |
+| 3.3A-R-016 | TECH / DATA | Builder input types allow blank provider/name/ref/command fields, producing schema-minLength violations or ambiguous refs.                                |   2 |   3 |     6 | P1       | Runtime guard or typed non-empty normalization tests for builder-required fields; malformed input remains command-local.       | CLI implementer / Task 1                            |
+| 3.3A-R-017 | PERF / OPS  | No runtime latency, cancellation, or command-timeout SLO exists for the helper itself; timeout is only a representable failure envelope.                  |   1 |   2 |     2 | P3       | Waive runtime timeout guarantees for this story; cover timeout envelope construction only.                                     | CLI architecture owner / follow-up on accepted SLO  |
+
+### Reviewer-Evidence Disposition
+
+| Concern                                                                                                | Disposition                                                                              |   P |   I | Score | Linked item            |
+| ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- | --: | --: | ----: | ---------------------- |
+| RC-01 Story 3.3a previously failed to trace contract-required `error.retryable`.                       | Risk: controller retry semantics break if omitted or optional.                           |   3 |   3 |     9 | 3.3A-R-003             |
+| RC-02 Schema enum is the source of truth for all command ids.                                          | Critical compatibility risk if source constants drift.                                   |   3 |   3 |     9 | 3.3A-R-001             |
+| RC-03 The command-envelope schema is closed at the top level.                                          | Critical compatibility/security risk if extra runtime-only fields are emitted.           |   3 |   3 |     9 | 3.3A-R-002, 3.3A-R-012 |
+| RC-04 Success requires `result`, failure requires `error`, and refs are conditional by command family. | Critical compatibility risk.                                                             |   3 |   3 |     9 | 3.3A-R-002             |
+| RC-05 Provider syntax baseline must cover all 12 command ids.                                          | Critical drift risk for external controllers.                                            |   3 |   3 |     9 | 3.3A-R-006, 3.3A-R-014 |
+| RC-06 `workflow.cancel` is not legacy `workflow abandon`.                                              | Critical command-contract risk.                                                          |   3 |   3 |     9 | 3.3A-R-006             |
+| RC-07 `workflow.retry` is not existing streaming-only `workflow retry-node`.                           | Critical command-contract risk.                                                          |   3 |   3 |     9 | 3.3A-R-006             |
+| RC-08 Story 3.1 waiver W-007 said Story 3.3a owns shared-builder extraction.                           | Now a required regression obligation, not a non-risk.                                    |   3 |   3 |     9 | 3.3A-R-004             |
+| RC-09 Provider-binding exact fixtures must continue to pass after refactor.                            | Critical compatibility regression risk.                                                  |   3 |   3 |     9 | 3.3A-R-004             |
+| RC-10 `safeStringify`, correlation-id, and issued-at helpers move from local code.                     | Risk if behavior changes during extraction.                                              |   2 |   3 |     6 | 3.3A-R-009, 3.3A-R-013 |
+| RC-11 Binding lifecycle classification should remain local to `provider-binding.ts`.                   | Risk of fat helper/coupled policy.                                                       |   2 |   3 |     6 | 3.3A-R-007             |
+| RC-12 Story scope excludes DB, migrations, server, web, workflow engine, event outbox, and Hermes.     | Explicit non-risk only if no files in those surfaces change.                             |   2 |   3 |     6 | 3.3A-R-011             |
+| RC-13 Contract package is immutable and validator-gated.                                               | Risk if schemas/fixtures are edited to fit runtime.                                      |   2 |   3 |     6 | 3.3A-R-001, 3.3A-R-008 |
+| RC-14 Do not add a JSON Schema runtime dependency in `@archon/cli`.                                    | Maintainability/package-boundary risk.                                                   |   2 |   3 |     6 | 3.3A-R-008             |
+| RC-15 `mock.module()` pollution requires package-test isolation.                                       | Test reliability risk.                                                                   |   3 |   2 |     6 | 3.3A-R-010             |
+| RC-16 Forbidden fields include raw secrets/signatures and Hermes-specific actor/profile/agent keys.    | Security and compatibility risk.                                                         |   2 |   3 |     6 | 3.3A-R-012             |
+| RC-17 Failure examples require execution metadata with redacted stdout/stderr flags.                   | Fail-closed compatibility risk.                                                          |   2 |   3 |     6 | 3.3A-R-005, 3.3A-R-009 |
+| RC-18 Dynamic-field exclusions must stay narrow.                                                       | Regression-mask risk.                                                                    |   2 |   3 |     6 | 3.3A-R-015             |
+| RC-19 Workflow runtime command outputs remain legacy until Stories 3.3b-3.3d.                          | Explicit non-risk for this story; converting them now is scope creep.                    |   1 |   3 |     3 | W-3.3A-001             |
+| RC-20 Later stories must use the helper created here.                                                  | Risk if helper lacks representative workflow command coverage.                           |   3 |   3 |     9 | 3.3A-R-014             |
+| RC-21 Browser, HTTP API, web UI, event delivery, and Hermes consumer behavior are excluded.            | Explicit non-risk under accepted headless CLI boundary.                                  |   1 |   2 |     2 | W-3.3A-002             |
+| RC-22 Timeout/cancellation runtime behavior is not implemented by this helper.                         | Explicit waiver for runtime timeout guarantees; envelope representation remains covered. |   1 |   2 |     2 | 3.3A-R-017, W-3.3A-003 |
+| RC-23 No application permission/auth policy exists for local CLI helper construction.                  | Explicit non-risk under current OS-process trust boundary.                               |   1 |   3 |     3 | W-3.3A-004             |
+
+### NFR Planning
+
+| NFR                         | In scope / threshold                                                                                                                                                     | Planned evidence                                                                                                                |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| Security                    | In scope. Zero raw secret/signature material; zero forbidden `actor`, `profile`, `agent`, `agent_name`, or `agent_provider` keys; failure execution output is redacted.  | Recursive envelope scan, source secret scan including new helper, fixture/schema validation, provider-binding regression tests. |
+| Reliability                 | In scope. Builders never emit invalid success/failure combinations; non-serializable values still produce one JSON document; all fail-closed examples are representable. | Builder unit tests, safeStringify tests, failure-example tests, subprocess stdout/stderr purity checks.                         |
+| Cross-process compatibility | In scope. Every envelope is `workflow-command-envelope.v1`, uses canonical command ids, obeys reference requirements, and remains fixture-compatible.                    | Schema enum exactness, syntax baseline tests, exact provider-binding fixture comparisons, canonical validator.                  |
+| Data integrity              | Narrowly in scope through regression only. No DB state changes are owned, but provider-binding refactor must not change binding refs or lifecycle result payloads.       | Story 3.1 provider-binding unit/E2E/contract regression suite.                                                                  |
+| Maintainability             | In scope. Strict TypeScript, no `any`, no production dependency on planning artifacts, no new JSON Schema runtime dependency, package-isolated tests.                    | Type-check, package script diff, production import scan, repeated focused Bun invocations, full `bun run validate`.             |
+| Performance / scalability   | UNKNOWN. No latency, throughput, or cancellation threshold is defined for local CLI envelope construction.                                                               | Waiver W-3.3A-003; only timeout-envelope construction is validated.                                                             |
+| Permission / authorization  | Current requirement is local CLI under OS-process trust; no remote or role-based policy is introduced.                                                                   | Waiver W-3.3A-004 and static scope review that no HTTP/server/web surface is added.                                             |
+| Compliance                  | No regulatory requirement is stated. Contract traceability is project quality evidence, not a compliance claim.                                                          | Validator output and traceability matrix.                                                                                       |
+
+### Highest-Priority Findings
+
+P0 acceptance blockers are 3.3A-R-001 through 3.3A-R-006, 3.3A-R-009, 3.3A-R-012, and 3.3A-R-014.
+They cover enum/source-of-truth drift, invalid envelope shape, missing retryability, provider-binding fixture regression, fail-closed failure semantics, syntax drift, pure JSON output, forbidden-field/secret leakage, and future command-family usability.
+
+All high-risk items require explicit P0/P1 scenarios in Step 4.
+No reviewer concern is treated as optional advice.
+
+## Step 4: Coverage Plan and Execution Strategy
+
+### Test-Level Allocation
+
+- **Unit (Bun):** shared envelope builders, typed constants, metadata helpers, safe serialization, failure shape, and provider-binding command-unit regressions through existing mocked DB seams.
+- **CLI integration / E2E (Bun subprocess):** actual `archon provider-binding ... --json` parsing, stdout/stderr purity, exit codes, malformed argv, unsupported subcommands, and no-git bypass behavior.
+- **Contract/static regression:** checked-in command fixtures, command-envelope schema enum/category assertions, canonical Python validator, forbidden-field/secret scans, dependency/import checks, and package-script isolation.
+- **CI validation:** focused CLI tests, `bun --filter @archon/cli type-check`, and final `bun run validate`.
+
+No API route, browser E2E, component, server, web, workflow-engine runtime conversion, or Hermes consumer test level applies to this story.
+Overlap is allowed only on P0 cross-process JSON contract paths, where each level proves a different property.
+
+### Atomic Scenario Catalog
+
+| ID                | Pri | Level               | Atomic scenario                                                                                                                                                                                              | Trace                        |
+| ----------------- | --- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------- |
+| 3.3A-UNIT-001     | P0  | Unit/contract       | The exported `WorkflowProviderCommand` values exactly equal the schema enum, with no missing, extra, reordered-by-hand, or duplicate command ids.                                                            | AC3, R-001, RC-02            |
+| 3.3A-UNIT-002     | P0  | Unit/contract       | The exported diagnostic category values exactly equal the schema enum: `configuration`, `external_delay`, `implementation_defect`, `provider_contract`, `security_rejection`, `timeout`, `unexpected_state`. | AC2, R-003                   |
+| 3.3A-UNIT-003     | P0  | Unit                | A workflow success envelope includes static metadata, `success: true`, `workflowRunRef`, and `result`, and omits `error`.                                                                                    | AC1, R-002                   |
+| 3.3A-UNIT-004     | P0  | Unit                | A binding success envelope includes static metadata, `success: true`, `bindingRef`, and `result`, and omits `error`.                                                                                         | AC1, R-002                   |
+| 3.3A-UNIT-005     | P0  | Unit                | Building a successful `workflow.*` envelope without `workflowRunRef` fails before serialization.                                                                                                             | AC1, R-002, R-016            |
+| 3.3A-UNIT-006     | P0  | Unit                | Building a successful `binding.*` envelope without `bindingRef` fails before serialization.                                                                                                                  | AC1, R-002, R-016            |
+| 3.3A-UNIT-007     | P0  | Unit                | A failure envelope requires a boolean `retryable` value and serializes `code`, `category`, `retryable`, and `details`.                                                                                       | AC2, R-003, RC-01            |
+| 3.3A-UNIT-008     | P0  | Unit                | Failure envelopes omit `result`, omit refs by default, include `execution` when supplied, and remain closed-schema compatible.                                                                               | AC2, AC4, R-002, R-005       |
+| 3.3A-UNIT-009     | P0  | Unit                | Attempts to build an envelope with both `result` and `error`, or neither, are rejected.                                                                                                                      | AC1, AC2, R-002              |
+| 3.3A-UNIT-010     | P0  | Unit                | `safeStringify` emits one parseable JSON string for bigint, functions, and circular data.                                                                                                                    | AC4, R-009                   |
+| 3.3A-UNIT-011     | P1  | Unit                | Supplied nonblank correlation id is preserved consistently within one envelope; blank/absent id generates a UUID.                                                                                            | AC1, AC2, R-013              |
+| 3.3A-UNIT-012     | P1  | Unit                | `issuedAt` is generated as valid ISO date-time and remains stable for the built envelope.                                                                                                                    | AC1, AC2, R-013              |
+| 3.3A-UNIT-013     | P1  | Unit                | Invalid command/category values cannot be passed through normal typed APIs; forced invalid casts fail a runtime guard before output.                                                                         | AC2, AC3, R-001, R-016       |
+| 3.3A-UNIT-014     | P0  | Unit                | Failure helpers can build the five canonical failure classes: malformed request, schema mismatch, timeout, unexpected exit, and unexpected state.                                                            | AC2, AC4, R-003, R-005       |
+| 3.3A-UNIT-015     | P1  | Unit                | Timeout and unexpected-exit envelopes carry correct `execution.exitCode`, `timedOut`, `durationMs`, `stdoutRedacted`, and `stderrRedacted`.                                                                  | AC4, R-005, R-009            |
+| 3.3A-UNIT-016     | P0  | Unit/static         | Recursive scan of representative envelopes rejects forbidden `actor`, `profile`, `agent`, `agent_name`, `agent_provider`, `secret`, signing-key, stdout, and stderr material.                                | AC1-AC4, R-012, RC-16        |
+| 3.3A-UNIT-017     | P1  | Static              | Production helper imports no `_bmad-output` planning artifacts, JSON schemas, fixtures, Python scripts, or test-only contract files.                                                                         | R-008, RC-13                 |
+| 3.3A-UNIT-018     | P1  | Static              | `@archon/cli` gains no JSON Schema runtime dependency just to validate command envelopes.                                                                                                                    | R-008, RC-14                 |
+| 3.3A-UNIT-019     | P1  | CI/static           | If `workflow-provider-command-envelope.test.ts` uses no `mock.module()`, it may share a non-mocking batch; if it mocks modules, it must run in its own Bun process.                                          | R-010, RC-15                 |
+| 3.3A-UNIT-020     | P0  | Unit regression     | `providerBindingCreateCommand` still matches `binding-create-success.json` excluding only documented dynamic fields.                                                                                         | AC1, R-004                   |
+| 3.3A-UNIT-021     | P0  | Unit regression     | `providerBindingUpdateCommand` still matches `binding-update-success.json`.                                                                                                                                  | AC1, R-004                   |
+| 3.3A-UNIT-022     | P0  | Unit regression     | `providerBindingStatusCommand` still matches `binding-status-success.json` for active binding.                                                                                                               | AC1, R-004                   |
+| 3.3A-UNIT-023     | P0  | Unit regression     | `providerBindingRotateCommand` still matches `binding-rotate-success.json`.                                                                                                                                  | AC1, R-004                   |
+| 3.3A-UNIT-024     | P0  | Unit regression     | `providerBindingDisableCommand` still matches `binding-disable-success.json`.                                                                                                                                | AC1, R-004                   |
+| 3.3A-UNIT-025     | P0  | Unit regression     | Malformed provider-binding create still matches `error-malformed-request.json` and includes `retryable: false`.                                                                                              | AC2, AC4, R-003, R-004       |
+| 3.3A-UNIT-026     | P1  | Unit regression     | Unsupported provider-binding subcommand fails closed with `/command` unsupported field error and no mutation.                                                                                                | AC4, R-004, R-009            |
+| 3.3A-UNIT-027     | P1  | Unit regression     | Binding-specific lifecycle classification, such as disabled update and concurrent modification, remains local and unchanged.                                                                                 | R-007, RC-11                 |
+| 3.3A-UNIT-028     | P1  | Unit regression     | DB timeout-shaped errors still map to `category: "timeout"` and `execution.timedOut: true`.                                                                                                                  | AC4, R-005                   |
+| 3.3A-UNIT-029     | P1  | Unit regression     | Non-serializable provider-binding errors still produce exactly one parseable failure envelope.                                                                                                               | AC4, R-009                   |
+| 3.3A-UNIT-030     | P1  | Contract regression | Dynamic-field exclusion list remains narrow and documented; adding new excluded static fields fails the test.                                                                                                | R-015, RC-18                 |
+| 3.3A-UNIT-031     | P1  | Static/refactor     | `provider-binding.ts` imports shared helpers and no longer defines duplicate local `buildSuccessEnvelope`, `buildErrorEnvelope`, `safeStringify`, `resolveCorrelationId`, or `resolveIssuedAt`.              | R-004, RC-08, RC-10          |
+| 3.3A-UNIT-032     | P1  | Static/refactor     | Binding-specific validation, project-ref normalization, `buildBindingRef`, DB calls, status states, and lifecycle classification remain in `provider-binding.ts`.                                            | R-007, R-011                 |
+| 3.3A-CONTRACT-033 | P0  | Contract            | Provider syntax baseline table covers all 12 schema enum values with exact syntax from architecture/epics.                                                                                                   | AC3, R-006, R-014, RC-05     |
+| 3.3A-CONTRACT-034 | P0  | Contract            | `workflow.cancel` baseline is `archon workflow cancel <run-id> --json`; legacy `workflow abandon` is not accepted as Workflow Commander syntax.                                                              | AC3, R-006, RC-06            |
+| 3.3A-CONTRACT-035 | P0  | Contract            | `workflow.retry` baseline is `archon workflow retry <run-id> [--node <node-id>] --json`; streaming `retry-node` is not accepted.                                                                             | AC3, R-006, RC-07            |
+| 3.3A-CONTRACT-036 | P1  | Static              | Story 3.3a does not convert `packages/cli/src/commands/workflow.ts` runtime output; later stories own runtime conversions.                                                                                   | R-011, RC-19, W-3.3A-001     |
+| 3.3A-CONTRACT-037 | P0  | Contract/unit       | Representative success envelopes for every command family prove future command stories can use the helper without adding command ids.                                                                        | AC1, AC3, R-014, RC-20       |
+| 3.3A-CONTRACT-038 | P0  | Contract/unit       | `error-malformed-request.json` can be built by the shared failure helper and remains validator-compatible.                                                                                                   | AC2, AC4, R-005              |
+| 3.3A-CONTRACT-039 | P0  | Contract/unit       | `error-schema-mismatch.json` can be built by the shared failure helper and remains validator-compatible.                                                                                                     | AC2, AC4, R-005              |
+| 3.3A-CONTRACT-040 | P0  | Contract/unit       | `error-timeout.json` can be built by the shared failure helper with retryable timeout semantics.                                                                                                             | AC2, AC4, R-005, R-017       |
+| 3.3A-CONTRACT-041 | P0  | Contract/unit       | `error-unexpected-exit.json` can be built by the shared failure helper with redacted execution metadata.                                                                                                     | AC2, AC4, R-005              |
+| 3.3A-CONTRACT-042 | P0  | Contract/unit       | `error-unexpected-state.json` can be built by the shared failure helper with `mutationApplied: false`.                                                                                                       | AC2, AC4, R-005              |
+| 3.3A-CLI-043      | P0  | CLI E2E             | `archon provider-binding create --json` with malformed args outside a git repo emits exactly one failure JSON document, no stderr, and exit 64.                                                              | AC4, R-004, R-009            |
+| 3.3A-CLI-044      | P1  | CLI E2E             | Missing string flag value before `--json` does not swallow `--json`; output remains one failure envelope.                                                                                                    | AC4, R-009                   |
+| 3.3A-CLI-045      | P1  | CLI E2E             | Unsupported provider-binding subcommand such as `remove` fails closed with nonzero exit and no human prose in stdout.                                                                                        | AC4, R-004, R-009            |
+| 3.3A-CLI-046      | P0  | CLI E2E             | `--json` mode emits no Pino/log/prose lines to stdout or stderr for success, malformed input, and unsupported command paths.                                                                                 | AC4, R-009, RC-17            |
+| 3.3A-CONTRACT-047 | P0  | Contract            | `validate_contracts.py` passes unchanged after implementation.                                                                                                                                               | AC1-AC4, R-001, R-004, R-008 |
+| 3.3A-CONTRACT-048 | P1  | Static              | No files under `_bmad-output/planning-artifacts/contracts/workflow-commander/` are modified to make runtime output pass.                                                                                     | R-008, R-011, RC-13          |
+| 3.3A-CI-049       | P0  | CI/static           | Source scan includes the new shared helper and provider-binding command file for raw secrets, signing material, and forbidden Hermes fields.                                                                 | R-012                        |
+| 3.3A-CI-050       | P1  | CI/static           | `packages/cli/package.json` keeps `provider-binding.test.ts` isolated and wires the new helper test into an appropriate isolated or non-mocking batch.                                                       | R-010                        |
+| 3.3A-CI-051       | P1  | CI/static           | `bun --filter @archon/cli type-check` passes with strict types and no `any` escape for the helper API.                                                                                                       | R-008, R-016                 |
+| 3.3A-CI-052       | P1  | CI/static           | `bun run validate` passes before review.                                                                                                                                                                     | R-010, R-011, R-015          |
+| 3.3A-CI-053       | P1  | Review/static       | Final file scope is limited to expected CLI helper, provider-binding refactor, provider-binding tests, helper tests, and package script wiring.                                                              | R-011, W-3.3A-002            |
+| 3.3A-UNIT-054     | P1  | Unit regression     | Provider-binding stale status remains representable and untouched by the helper extraction.                                                                                                                  | R-004, stale-data edge       |
+| 3.3A-UNIT-055     | P1  | Unit regression     | Duplicate provider-binding create still returns non-upsert failure semantics after refactor.                                                                                                                 | R-004, duplicate-action edge |
+| 3.3A-UNIT-056     | P1  | Unit                | Parallel helper calls generate independent envelopes without shared mutable state or cross-call metadata leakage.                                                                                            | R-013, concurrency/race edge |
+| 3.3A-CI-057       | P1  | Review/static       | Rollback review confirms the helper extraction can be reverted without DB/schema/contract-package rollback.                                                                                                  | R-011, rollback edge         |
+
+### Required Edge-Class Disposition
+
+| Edge class          | Scenario or waiver                                                                                                                             |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Happy path          | 3.3A-UNIT-003/004/020-024/037                                                                                                                  |
+| Negative path       | 3.3A-UNIT-007-009/025-029; 3.3A-CONTRACT-038-042                                                                                               |
+| Boundary cases      | 3.3A-UNIT-005/006/011-013/016; 3.3A-CLI-044                                                                                                    |
+| Malformed input     | 3.3A-UNIT-025; 3.3A-CONTRACT-038; 3.3A-CLI-043/044                                                                                             |
+| Stale data          | 3.3A-UNIT-054 preserves Story 3.1 stale-status representability; active stale detection remains Story 3.1 waiver scope, not new 3.3a behavior. |
+| Duplicate actions   | 3.3A-UNIT-055 preserves duplicate create/non-upsert behavior; helper itself has no mutation action.                                            |
+| Out-of-order events | W-3.3A-005, because Story 3.3a has no event ingestion, event outbox, or callback ordering surface.                                             |
+| Partial failure     | 3.3A-UNIT-028/029; 3.3A-CONTRACT-041/042                                                                                                       |
+| Dependency failure  | 3.3A-UNIT-028/029; provider-binding dependency failures remain existing mocked DB seams.                                                       |
+| Timeout             | 3.3A-CONTRACT-040 and 3.3A-UNIT-015 cover representation; W-3.3A-003 covers runtime timeout ownership.                                         |
+| Cancellation        | W-3.3A-003 for runtime cancellation; 3.3A-CONTRACT-034 protects the future `workflow.cancel` syntax.                                           |
+| Concurrency/race    | 3.3A-UNIT-056 for helper statelessness; DB concurrency is not changed by this story.                                                           |
+| Rollback            | 3.3A-CI-057 and 3.3A-CONTRACT-048.                                                                                                             |
+| Permission/auth     | W-3.3A-004.                                                                                                                                    |
+| Regression          | 3.3A-UNIT-020-032; 3.3A-CLI-043-046; 3.3A-CONTRACT-047/048.                                                                                    |
+
+### Acceptance Criteria Traceability
+
+| AC                                                                                                                                 | Scenarios / waivers                                                                                                               |
+| ---------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| AC1 success envelope includes schema version, success flag, correlation id, refs when applicable, and result payload               | 3.3A-UNIT-003-006/011/012/020-024/037                                                                                             |
+| AC2 failure envelope includes schema version, success flag, correlation id if available, code, category, retryability, and details | 3.3A-UNIT-002/007-009/011/012/014/015/025; 3.3A-CONTRACT-038-042                                                                  |
+| AC3 implemented provider command syntax with `--json` returns canonical command and tests fail on syntax/id drift                  | 3.3A-UNIT-001; 3.3A-CONTRACT-033-037; W-3.3A-001 for runtime conversions owned by later stories                                   |
+| AC4 malformed JSON, schema mismatch, timeout, unexpected exit, and unexpected state allow fail-closed controller behavior          | 3.3A-UNIT-010/014-016/026-029; 3.3A-CONTRACT-038-042; 3.3A-CLI-043-046; W-3.3A-003 for actual runtime cancellation/timeout policy |
+
+### High-Risk Traceability
+
+| Risk       | Scenarios / waivers                                |
+| ---------- | -------------------------------------------------- |
+| 3.3A-R-001 | 3.3A-UNIT-001; 3.3A-CONTRACT-047                   |
+| 3.3A-R-002 | 3.3A-UNIT-003-009                                  |
+| 3.3A-R-003 | 3.3A-UNIT-002/007/014/025; 3.3A-CONTRACT-038-042   |
+| 3.3A-R-004 | 3.3A-UNIT-020-032/054/055; 3.3A-CLI-043-045        |
+| 3.3A-R-005 | 3.3A-UNIT-014/015; 3.3A-CONTRACT-038-042           |
+| 3.3A-R-006 | 3.3A-CONTRACT-033-035                              |
+| 3.3A-R-007 | 3.3A-UNIT-027/032                                  |
+| 3.3A-R-008 | 3.3A-UNIT-017/018; 3.3A-CONTRACT-048               |
+| 3.3A-R-009 | 3.3A-UNIT-010/029; 3.3A-CLI-043-046                |
+| 3.3A-R-010 | 3.3A-UNIT-019; 3.3A-CI-050/052                     |
+| 3.3A-R-011 | 3.3A-CONTRACT-036/048; 3.3A-CI-053/057; W-3.3A-002 |
+| 3.3A-R-012 | 3.3A-UNIT-016; 3.3A-CI-049                         |
+| 3.3A-R-013 | 3.3A-UNIT-011/012/056                              |
+| 3.3A-R-014 | 3.3A-CONTRACT-033/037                              |
+| 3.3A-R-015 | 3.3A-UNIT-030                                      |
+| 3.3A-R-016 | 3.3A-UNIT-005/006/013                              |
+| 3.3A-R-017 | 3.3A-CONTRACT-040; W-3.3A-003                      |
+
+### Reviewer Concern Traceability
+
+| Concern | Scenarios / waiver                                 |
+| ------- | -------------------------------------------------- |
+| RC-01   | 3.3A-UNIT-007/014/025; 3.3A-CONTRACT-038-042       |
+| RC-02   | 3.3A-UNIT-001                                      |
+| RC-03   | 3.3A-UNIT-003/004/008/016                          |
+| RC-04   | 3.3A-UNIT-003-009                                  |
+| RC-05   | 3.3A-CONTRACT-033/037                              |
+| RC-06   | 3.3A-CONTRACT-034                                  |
+| RC-07   | 3.3A-CONTRACT-035                                  |
+| RC-08   | 3.3A-UNIT-020-032                                  |
+| RC-09   | 3.3A-UNIT-020-025/030                              |
+| RC-10   | 3.3A-UNIT-010-012/029/031                          |
+| RC-11   | 3.3A-UNIT-027/032                                  |
+| RC-12   | 3.3A-CI-053/057; W-3.3A-002                        |
+| RC-13   | 3.3A-CONTRACT-047/048                              |
+| RC-14   | 3.3A-UNIT-018                                      |
+| RC-15   | 3.3A-UNIT-019; 3.3A-CI-050                         |
+| RC-16   | 3.3A-UNIT-016; 3.3A-CI-049                         |
+| RC-17   | 3.3A-UNIT-015; 3.3A-CONTRACT-040/041; 3.3A-CLI-046 |
+| RC-18   | 3.3A-UNIT-030                                      |
+| RC-19   | 3.3A-CONTRACT-036; W-3.3A-001                      |
+| RC-20   | 3.3A-CONTRACT-033/037                              |
+| RC-21   | W-3.3A-002                                         |
+| RC-22   | 3.3A-CONTRACT-040; W-3.3A-003                      |
+| RC-23   | W-3.3A-004                                         |
+
+### Explicit Waivers
+
+| ID         | Reason                                                                                                                                                                 | Owner                             | Residual risk                                                                                      | Follow-up trigger                                                             |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| W-3.3A-001 | Story 3.3a defines the shared helper and baseline only; runtime conversion of `workflow.start/status/approve/reject/resume/retry/cancel` belongs to Stories 3.3b-3.3d. | Product + Archon CLI owner        | Future workflow commands may remain legacy JSON until their producer stories land.                 | Story 3.3b, 3.3c, or 3.3d starts implementation.                              |
+| W-3.3A-002 | Browser, HTTP API, server routes, web UI, event outbox, delivery health, and Hermes consumer behavior are explicitly outside this headless CLI story.                  | Product + architecture owners     | End-to-end consumer integration is not proven by this story.                                       | Approved story activates one of those surfaces.                               |
+| W-3.3A-003 | The helper can represent timeout/cancel failure envelopes but does not define runtime timeout, abort-signal, or cancellation policy.                                   | CLI architecture owner            | A future runtime command may hang or cancel inconsistently until its command story defines policy. | Timeout SLO, abort-signal contract, or runtime command story is accepted.     |
+| W-3.3A-004 | The current CLI helper runs under local OS-process trust and has no application-level auth/permission requirement.                                                     | Security owner                    | Local users with command access can invoke helper-backed commands according to existing CLI trust. | Remote, multi-user, service-account, or role policy is introduced.            |
+| W-3.3A-005 | Out-of-order event handling is not applicable because Story 3.3a has no event ingestion, event ledger, outbox, or callback mutation surface.                           | Workflow event architecture owner | Event-order defects are not detected here.                                                         | Story 3.5, 3.7, or Hermes callback ingress activates event ordering behavior. |
+| W-3.3A-006 | No performance/load threshold exists for local envelope construction.                                                                                                  | Product/operations owner          | Slow helper code has no numeric SLO gate beyond normal test/runtime feedback.                      | A latency SLO, remote exposure, or performance incident is accepted.          |
+
+### NFR Evidence Plan
+
+| NFR                       | Scenarios                                                              | Evidence artifact for later assessment                                      |
+| ------------------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| Security                  | 3.3A-UNIT-016; 3.3A-CI-049                                             | Bun test output and recursive source/envelope scan results                  |
+| Reliability               | 3.3A-UNIT-007-015/028/029/056; 3.3A-CONTRACT-038-042                   | Helper and provider-binding regression test output                          |
+| Compatibility             | 3.3A-UNIT-001-009/020-025/030; 3.3A-CONTRACT-033-048; 3.3A-CLI-043-046 | Fixture diffs, validator output, raw stdout/stderr captures                 |
+| Data integrity regression | 3.3A-UNIT-020-032/054/055                                              | Provider-binding fixture/regression test output                             |
+| Maintainability           | 3.3A-UNIT-017-019; 3.3A-CI-050-053/057                                 | Type-check, package-script diff, import/dependency scan, `bun run validate` |
+| Performance/scalability   | W-3.3A-006                                                             | No final assessment until threshold exists                                  |
+| Permission/auth           | W-3.3A-004                                                             | Security waiver and re-review trigger                                       |
+
+### Execution Strategy
+
+- **PR:** Run all deterministic functional and contract tests: new helper tests, provider-binding unit/E2E/contract tests, `validate_contracts.py`, `bun --filter @archon/cli type-check`, and `bun run validate` before review.
+- **Nightly:** If CI time becomes a concern, repeat subprocess JSON-purity and provider-binding regression tests for 20-50 iterations as burn-in; do not move deterministic P0/P1 tests out of PR unless measured runtime exceeds the existing project gate budget.
+- **Weekly:** No performance, browser, chaos, or live-service suite is required for this story.
+
+Philosophy: run everything deterministic in PR; defer only expensive, long-running, or infrastructure-dependent checks.
+
+### Resource Estimate
+
+| Priority               | Estimate                                                                     |
+| ---------------------- | ---------------------------------------------------------------------------- |
+| P0 scenarios           | ~18-30 hours                                                                 |
+| P1 scenarios           | ~18-34 hours                                                                 |
+| P2 scenarios           | ~0-4 hours                                                                   |
+| P3 scenarios / waivers | ~1-3 hours                                                                   |
+| Total                  | ~37-71 hours, roughly 5-9 engineering days for one implementer/reviewer loop |
+
+### Quality Gates
+
+- P0 pass rate: 100%, with no skips or quarantine on P0 scenarios.
+- P1 pass rate: 100% for deterministic helper/contract/CLI regressions, stricter than the generic 95% floor.
+- Acceptance-criterion, high-risk, and reviewer-concern disposition coverage: 100% scenario-or-waiver traceability.
+- Canonical contract validator passes unchanged.
+- Provider-binding exact fixture comparisons pass with only documented dynamic exclusions.
+- No forbidden fields, raw secrets, raw signing material, stdout/stderr body leakage, or Hermes-specific keys in helper output.
+- No production import of `_bmad-output`, fixtures, schemas, or validator scripts.
+- No new JSON Schema runtime dependency in `@archon/cli`.
+- Test batching respects `mock.module()` isolation.
+- File scope stays inside Story 3.3a boundaries.
+- `bun --filter @archon/cli type-check` and `bun run validate` pass.
+- NFR evidence source is identified for every in-scope NFR; final NFR PASS/CONCERNS/FAIL is deferred to `nfr-assess`.
+
+## Step 5: Generate Output
+
+Execution mode: sequential.
+Config requested `auto`; no explicit agent-team or subagent mode was requested for this run, and epic-level output is a single document.
+
+Final output written:
+
+- `_bmad-output/test-artifacts/test-design/test-design-3-3a-define-shared-workflow-provider-command-envelope.md`
+
+Validation completed against the workflow checklist:
+
+- 17 risks identified; 16 score >= 6 risks mapped to P0/P1 scenarios.
+- 57 atomic scenarios generated: 31 P0 and 26 P1.
+- All 4 acceptance criteria map to scenarios, with runtime workflow conversion and timeout/cancellation policy explicitly waived where out of scope.
+- All 23 reviewer concerns map to scenarios or explicit waivers.
+- Happy path, negative path, boundary cases, malformed input, stale data, duplicate actions, out-of-order events, partial failure, dependency failure, timeout, cancellation, concurrency/race, rollback, permission/auth, and regression cases are explicitly disposed.
+- 6 waivers include reason, owner, residual risk, and follow-up trigger.
+- Browser exploration was not opened, so there are no browser sessions to clean up.
