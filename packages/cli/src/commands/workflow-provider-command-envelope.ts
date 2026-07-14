@@ -50,7 +50,7 @@ const VALID_CATEGORIES = new Set<string>(ERROR_CATEGORIES);
 
 export interface EnvelopeMeta {
   provider: string;
-  command: string;
+  command: WorkflowProviderCommand;
   correlationId: string;
   issuedAt: string;
 }
@@ -120,7 +120,7 @@ export function buildErrorEnvelope(
   meta: EnvelopeMeta,
   error: {
     code: string;
-    category: string;
+    category: ErrorCategory;
     retryable: boolean;
     details: Record<string, unknown>;
     exitCode: number | null;

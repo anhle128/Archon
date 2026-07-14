@@ -15,7 +15,11 @@ import {
   buildSuccessEnvelope,
   buildErrorEnvelope,
 } from './workflow-provider-command-envelope.js';
-import type { EnvelopeMeta } from './workflow-provider-command-envelope.js';
+import type {
+  EnvelopeMeta,
+  WorkflowProviderCommand,
+  ErrorCategory,
+} from './workflow-provider-command-envelope.js';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -74,7 +78,7 @@ function normalizeProjectRef(projectRef: string): string {
 
 function classifyError(err: unknown): {
   code: string;
-  category: string;
+  category: ErrorCategory;
   retryable: boolean;
   exitCode: number;
 } {
@@ -165,7 +169,7 @@ function emitEnvelope(envelope: Record<string, unknown>, opts: CommandOptions): 
 }
 
 async function withFailClosed(
-  command: string,
+  command: WorkflowProviderCommand,
   args: BindingArgs,
   opts: CommandOptions,
   startTime: number,

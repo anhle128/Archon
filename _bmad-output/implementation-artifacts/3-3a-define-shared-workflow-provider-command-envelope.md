@@ -1,6 +1,6 @@
 # Story 3.3a: Define Shared Workflow Provider Command Envelope
 
-Status: in-progress
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -79,7 +79,7 @@ so that external controllers can fail closed and validate command output consist
 
 - [x] [Review][Patch] R1-F1 Shared envelope builder API still accepts open command/category strings [packages/cli/src/commands/workflow-provider-command-envelope.ts:51] — RESOLVED: builders already validate command against VALID_COMMANDS and category against VALID_CATEGORIES at runtime, throwing on invalid input.
 - [x] [Review][Patch] R1-F2 Provider-binding fail-closed path still bypasses shared metadata helpers [packages/cli/src/commands/provider-binding.ts:178] — RESOLVED: withFailClosed now uses resolveCorrelationId() and resolveIssuedAt() instead of inline crypto.randomUUID()/new Date().toISOString().
-- [ ] [Review][Patch] R2-F1 Shared envelope builder API still accepts open command/category strings [packages/cli/src/commands/workflow-provider-command-envelope.ts:51]
+- [x] [Review][Patch] R2-F1 Shared envelope builder API still accepts open command/category strings [packages/cli/src/commands/workflow-provider-command-envelope.ts:51] — RESOLVED: EnvelopeMeta.command narrowed from `string` to `WorkflowProviderCommand` and buildErrorEnvelope's error.category narrowed from `string` to `ErrorCategory`; TypeScript now enforces the closed schema at compile time in addition to runtime validation.
 
 ## Dev Notes
 
@@ -328,6 +328,7 @@ N/A
 - Shared envelope module (`workflow-provider-command-envelope.ts`) was already present with all required exports: WORKFLOW_PROVIDER_COMMANDS, ERROR_CATEGORIES, EnvelopeMeta, safeStringify, resolveCorrelationId, resolveIssuedAt, buildSuccessEnvelope, buildErrorEnvelope.
 - R1-F1 already resolved: builders validate command/category at runtime via VALID_COMMANDS/VALID_CATEGORIES sets.
 - R1-F2 fixed: withFailClosed in provider-binding.ts now uses resolveCorrelationId() and resolveIssuedAt() instead of inline crypto.randomUUID()/new Date().toISOString().
+- R2-F1 fixed: EnvelopeMeta.command narrowed from `string` to `WorkflowProviderCommand` and buildErrorEnvelope's error.category narrowed from `string` to `ErrorCategory`; provider-binding.ts classifyError return type and withFailClosed command parameter updated to match.
 - All 49 envelope tests pass, all 6 contract tests pass, all 33 provider-binding tests pass.
 - Type-check passes for @archon/cli.
 - Contract validator passes unchanged.
@@ -335,8 +336,8 @@ N/A
 
 ### File List
 
-- `packages/cli/src/commands/workflow-provider-command-envelope.ts` (already existed, no changes needed)
-- `packages/cli/src/commands/provider-binding.ts` (R1-F2 fix: withFailClosed uses shared metadata helpers)
+- `packages/cli/src/commands/workflow-provider-command-envelope.ts` (R2-F1 fix: EnvelopeMeta.command narrowed to WorkflowProviderCommand, buildErrorEnvelope error.category narrowed to ErrorCategory)
+- `packages/cli/src/commands/provider-binding.ts` (R1-F2 fix: withFailClosed uses shared metadata helpers; R2-F1 fix: classifyError return type and withFailClosed command parameter narrowed to match shared types)
 - `packages/cli/src/commands/workflow-provider-command-envelope.test.ts` (already existed, all 49 tests pass)
 - `packages/cli/src/commands/provider-binding.test.ts` (already existed, all 33 tests pass)
 - `packages/cli/src/commands/provider-binding-contract.test.ts` (already existed, all 6 tests pass)
