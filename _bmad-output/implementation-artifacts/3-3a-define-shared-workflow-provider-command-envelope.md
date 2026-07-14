@@ -1,6 +1,6 @@
 # Story 3.3a: Define Shared Workflow Provider Command Envelope
 
-Status: ready-for-dev
+Status: in-progress
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -74,6 +74,11 @@ so that external controllers can fail closed and validate command output consist
   - [ ] Run focused CLI tests that cover the new helper and existing provider-binding output.
   - [ ] Run `bun --filter @archon/cli type-check`.
   - [ ] Run `bun run validate` before moving the story to review.
+
+### Review Findings
+
+- [ ] [Review][Patch] R1-F1 Shared envelope builder API still accepts open command/category strings [packages/cli/src/commands/workflow-provider-command-envelope.ts:51]
+- [ ] [Review][Patch] R1-F2 Provider-binding fail-closed path still bypasses shared metadata helpers [packages/cli/src/commands/provider-binding.ts:178]
 
 ## Dev Notes
 
