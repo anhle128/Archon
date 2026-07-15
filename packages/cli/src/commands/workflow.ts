@@ -184,7 +184,8 @@ export function classifyRunError(err: unknown): ClassifiedError {
     msg.includes('mutually exclusive') ||
     msg.includes('no effect with') ||
     msg.includes('conflicts with') ||
-    msg.includes('is required')
+    msg.includes('is required') ||
+    msg.includes('worktree.enabled')
   ) {
     return {
       code: 'MALFORMED_REQUEST',
@@ -1354,14 +1355,14 @@ async function workflowRunCommandInner(
     // Persist result card for Web UI (adapter is silent in JSON mode — no stdout).
     if ('summary' in result && result.summary) {
       try {
-        await adapter.sendMessage(conversation.id, result.summary, {
+        await adapter.sendMessage(conversationId, result.summary, {
           category: 'workflow_result',
           segment: 'new',
           workflowResult: { workflowName: workflow.name, runId: result.workflowRunId },
         });
       } catch (surfaceError) {
         getLog().warn(
-          { err: surfaceError as Error, conversationId: conversation.id },
+          { err: surfaceError as Error, conversationId },
           'cli.workflow_result_surface_failed'
         );
       }
@@ -1630,8 +1631,53 @@ export async function workflowGetCommand(
   correlationId?: string
 ): Promise<number> {
   const startTime = Date.now();
+
+  if (json) {
+    let corrId = 'unknown';
+    let issuedAt = new Date(0).toISOString();
+    try {
+      corrId = resolveCorrelationId(correlationId);
+      issuedAt = resolveIssuedAt();
+      return await workflowGetCommandInner(runId, true, verbose, corrId, issuedAt, startTime);
+    } catch (_error) {
+      const meta: EnvelopeMeta = {
+        command: 'workflow.status',
+        provider: 'archon',
+        correlationId: corrId,
+        issuedAt,
+      };
+      console.log(
+        safeStringify(
+          buildErrorEnvelope(
+            meta,
+            {
+              code: 'INTERNAL_ERROR',
+              category: 'implementation_defect',
+              retryable: false,
+              details: { requestAccepted: false },
+              exitCode: EXIT_SOFTWARE,
+            },
+            startTime
+          )
+        )
+      );
+      return EXIT_SOFTWARE;
+    }
+  }
+
   const corrId = resolveCorrelationId(correlationId);
   const issuedAt = resolveIssuedAt();
+  return workflowGetCommandInner(runId, false, verbose, corrId, issuedAt, startTime);
+}
+
+async function workflowGetCommandInner(
+  runId: string,
+  json: boolean,
+  verbose: boolean | undefined,
+  corrId: string,
+  issuedAt: string,
+  startTime: number
+): Promise<number> {
   const meta: EnvelopeMeta = {
     command: 'workflow.status',
     provider: 'archon',
@@ -1646,17 +1692,22 @@ export async function workflowGetCommand(
     const err = error as Error;
     getLog().error({ err, runId }, 'cli.workflow_get_failed');
     if (json) {
-      const classified = classifyRunError(err);
       console.log(
         safeStringify(
           buildErrorEnvelope(
             meta,
-            { ...classified, details: { requestAccepted: false } },
+            {
+              code: 'INTERNAL_ERROR',
+              category: 'implementation_defect',
+              retryable: false,
+              details: { requestAccepted: false },
+              exitCode: EXIT_SOFTWARE,
+            },
             startTime
           )
         )
       );
-      return classified.exitCode;
+      return EXIT_SOFTWARE;
     }
     throw new Error(`Failed to get workflow run: ${err.message}`);
   }
@@ -1684,8 +1735,6 @@ export async function workflowGetCommand(
     return 1;
   }
 
-  // getWorkflowRun returns the base WorkflowRun (no current_step_name) — derive
-  // per-node detail from the event log, and only when verbose is requested.
   let events: WorkflowEventRow[] | undefined;
   let eventsFailed = false;
   if (verbose) {
@@ -1704,8 +1753,8 @@ export async function workflowGetCommand(
     if (contractState.actionRequired) resultPayload.actionRequired = true;
     if (contractState.gateRef) resultPayload.gateRef = contractState.gateRef;
     if (events) resultPayload.events = eventsFailed ? [] : sanitizeEventsForEnvelope(events);
-    if (run.status === 'failed' && run.metadata.error) {
-      resultPayload.failure = { hasError: true };
+    if (run.status === 'failed') {
+      resultPayload.failure = { hasError: Boolean(run.metadata.error) };
     }
 
     console.log(

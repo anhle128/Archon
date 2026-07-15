@@ -207,6 +207,52 @@ describe('3.3B-CONTRACT-036 [P0] forbidden-key scan on parsed emitted envelopes 
       consoleSpy.mockRestore();
     }
   });
+
+  test('a verbose workflow.status success envelope sanitizes forbidden keys from event data (RF-21)', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'test-run-verbose',
+      workflow_name: 'assist',
+      status: 'completed',
+      codebase_id: null,
+      working_path: '/test/path',
+      started_at: new Date(),
+      metadata: {},
+    });
+    const workflowEventsDb = await import('@archon/core/db/workflow-events');
+    (workflowEventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce([
+      {
+        id: 'evt-1',
+        workflow_run_id: 'test-run-verbose',
+        conversation_id: 'conv-1',
+        event_type: 'step_started',
+        data: { message: 'should be stripped', stdout: 'also stripped', nodeId: 'step-1' },
+        created_at: new Date(),
+      },
+      {
+        id: 'evt-2',
+        workflow_run_id: 'test-run-verbose',
+        conversation_id: 'conv-1',
+        event_type: 'step_completed',
+        data: { nested: { agent: 'should-be-stripped', displayText: 'also stripped' }, ok: true },
+        created_at: new Date(),
+      },
+    ]);
+
+    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await workflowGetCommand('test-run-verbose', true, true);
+      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const envelope = JSON.parse(raw) as Record<string, unknown>;
+      expect(envelope.success).toBe(true);
+      expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
+      expect(scanForForbiddenKeys(envelope)).toEqual([]);
+      const result = envelope.result as Record<string, unknown>;
+      expect(Array.isArray(result.events)).toBe(true);
+    } finally {
+      consoleSpy.mockRestore();
+    }
+  });
 });
 
 describe('3.3B-CONTRACT-037 [P1] fixture conformance with the documented field delta (R-014, W-3.3B-002)', () => {
