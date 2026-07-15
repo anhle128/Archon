@@ -107,6 +107,12 @@ so that external controllers can create and inspect workflow references without 
 - [x] [Review][Patch] Failed status envelopes still expose only an opaque failure flag [`packages/cli/src/commands/workflow.ts`:1757]
 - [x] [Review][Patch] JSON result-card persistence has no regression test covering `workflow_result` DB persistence [`packages/cli/src/commands/workflow.test.ts`:2125]
 - [x] [Review][Patch] JSON worktree-policy mismatch classification has no focused regression coverage [`packages/cli/src/commands/workflow.test.ts`:1182]
+- [ ] [Review][Patch] Missing `--correlation-id` values still do not consistently fail closed as `MALFORMED_REQUEST` JSON envelopes [`packages/cli/src/cli.ts`:590]
+- [ ] [Review][Patch] `workflow run/get --json` can still fail before the envelope handlers when cwd is not a git repository [`packages/cli/src/cli.ts`:471]
+- [ ] [Review][Patch] `workflow run --json=true` bypasses the JSON fail-closed boundary and can print plain errors [`packages/cli/src/commands/workflow.ts`:572]
+- [ ] [Review][Patch] The start-command error classifier can still report infrastructure "not found" errors as workflow-name lookup failures [`packages/cli/src/commands/workflow.ts`:172]
+- [ ] [Review][Patch] Failed status envelopes still expose an opaque failure object rather than a machine-readable failure shape [`packages/cli/src/commands/workflow.ts`:1779]
+- [ ] [Review][Patch] Verbose status event sanitization does not recurse into nested arrays, so forbidden text keys can still leak [`packages/cli/src/commands/workflow.ts`:244]
 
 ## Dev Notes
 
