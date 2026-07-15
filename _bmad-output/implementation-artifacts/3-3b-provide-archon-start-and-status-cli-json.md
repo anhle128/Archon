@@ -96,6 +96,12 @@ so that external controllers can create and inspect workflow references without 
 - [x] [Review][Patch] Non-JSON direct blank workflow-name behavior is still changed [`packages/cli/src/commands/workflow.ts`:583]
 - [x] [Review][Patch] Generic `not found` classification can mislabel status DB failures [`packages/cli/src/commands/workflow.ts`:168]
 - [x] [Review][Patch] JSON E2E tests set `DATABASE_URL=sqlite:...`, which selects Postgres [`packages/cli/src/commands/workflow-json.e2e.test.ts`:47]
+- [ ] [Review][Patch] Missing `--correlation-id` value still escapes or misclassifies JSON fail-closed handling [`packages/cli/src/commands/workflow.ts`:573]
+- [ ] [Review][Patch] JSON start result-card persistence uses DB conversation id instead of platform conversation id [`packages/cli/src/commands/workflow.ts`:1357]
+- [ ] [Review][Patch] Failed status envelope still lacks the required machine-readable failure shape [`packages/cli/src/commands/workflow.ts`:1707]
+- [ ] [Review][Patch] Status DB errors can still classify as workflow-domain not-found [`packages/cli/src/commands/workflow.ts`:1648]
+- [ ] [Review][Patch] Verbose status forbidden-key regression coverage is missing [`packages/cli/src/commands/workflow-command-contract.test.ts`:166]
+- [ ] [Review][Patch] JSON worktree-policy flag mismatches can be emitted as internal errors [`packages/cli/src/commands/workflow.ts`:737]
 
 ## Dev Notes
 
