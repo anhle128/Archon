@@ -171,7 +171,12 @@ export function classifyRunError(err: unknown): ClassifiedError {
 
   if (
     (msg.includes('not found') || msg.includes('Not found')) &&
-    (msg.includes('Workflow') || msg.includes('workflow'))
+    (msg.includes('Workflow') || msg.includes('workflow')) &&
+    !msg.includes('table') &&
+    !msg.includes('column') &&
+    !msg.includes('database') &&
+    !msg.includes('relation') &&
+    !msg.includes('schema')
   ) {
     return {
       code: 'WORKFLOW_NOT_FOUND',
@@ -242,16 +247,23 @@ function stripForbiddenKeys(obj: Record<string, unknown>): Record<string, unknow
     if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
       clean[key] = stripForbiddenKeys(value as Record<string, unknown>);
     } else if (Array.isArray(value)) {
-      clean[key] = value.map((item: unknown) =>
-        item !== null && typeof item === 'object' && !Array.isArray(item)
-          ? stripForbiddenKeys(item as Record<string, unknown>)
-          : item
-      );
+      clean[key] = stripForbiddenKeysFromArray(value);
     } else {
       clean[key] = value;
     }
   }
   return clean;
+}
+
+function stripForbiddenKeysFromArray(arr: unknown[]): unknown[] {
+  return arr.map((item: unknown) => {
+    if (item !== null && typeof item === 'object' && !Array.isArray(item)) {
+      return stripForbiddenKeys(item as Record<string, unknown>);
+    } else if (Array.isArray(item)) {
+      return stripForbiddenKeysFromArray(item);
+    }
+    return item;
+  });
 }
 
 function sanitizeEventsForEnvelope(events: WorkflowEventRow[]): Record<string, unknown>[] {
@@ -569,7 +581,7 @@ export async function workflowRunCommand(
   options: WorkflowRunOptions = {}
 ): Promise<number> {
   const startTime = Date.now();
-  const jsonMode = options.json === true && options.detach !== true;
+  const jsonMode = Boolean(options.json) && options.detach !== true;
 
   if (jsonMode) {
     let correlationId = 'unknown';
@@ -1780,6 +1792,8 @@ async function workflowGetCommandInner(
       resultPayload.failure = {
         hasError: Boolean(run.metadata.error),
         errorType: run.metadata.error ? 'execution_error' : 'unknown',
+        terminal: true,
+        retryable: RETRYABLE_WORKFLOW_STATUSES.includes(run.status),
       };
     }
 

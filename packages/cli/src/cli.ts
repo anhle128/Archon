@@ -472,6 +472,43 @@ async function main(): Promise<number> {
     let effectiveCwd = cwd;
     if (requiresGitRepo) {
       if (!existsSync(cwd)) {
+        if (jsonFlag) {
+          const {
+            safeStringify: ss,
+            resolveCorrelationId: rci,
+            resolveIssuedAt: ria,
+            buildErrorEnvelope: bee,
+          } = await import('./commands/workflow-provider-command-envelope.js');
+          let corrId = 'unknown';
+          let issuedAt = new Date(0).toISOString();
+          try {
+            corrId = rci(values['correlation-id'] as string | undefined);
+            issuedAt = ria();
+          } catch {
+            // Helpers currently never throw
+          }
+          const cmd =
+            command === 'workflow' && subcommand === 'get' ? 'workflow.status' : 'workflow.start';
+          console.log(
+            ss(
+              bee(
+                { command: cmd, provider: 'archon', correlationId: corrId, issuedAt },
+                {
+                  code: 'MALFORMED_REQUEST',
+                  category: 'provider_contract',
+                  retryable: false,
+                  details: {
+                    fieldErrors: [{ path: '/cwd', code: 'directory_not_found' }],
+                    requestAccepted: false,
+                  },
+                  exitCode: 64,
+                },
+                Date.now()
+              )
+            )
+          );
+          return 64;
+        }
         console.error(`Error: Directory does not exist: ${cwd}`);
         return 1;
       }
@@ -479,6 +516,43 @@ async function main(): Promise<number> {
       // Validate git repository and resolve to root
       const repoRoot = await git.findRepoRoot(cwd);
       if (!repoRoot) {
+        if (jsonFlag) {
+          const {
+            safeStringify: ss,
+            resolveCorrelationId: rci,
+            resolveIssuedAt: ria,
+            buildErrorEnvelope: bee,
+          } = await import('./commands/workflow-provider-command-envelope.js');
+          let corrId = 'unknown';
+          let issuedAt = new Date(0).toISOString();
+          try {
+            corrId = rci(values['correlation-id'] as string | undefined);
+            issuedAt = ria();
+          } catch {
+            // Helpers currently never throw
+          }
+          const cmd =
+            command === 'workflow' && subcommand === 'get' ? 'workflow.status' : 'workflow.start';
+          console.log(
+            ss(
+              bee(
+                { command: cmd, provider: 'archon', correlationId: corrId, issuedAt },
+                {
+                  code: 'MALFORMED_REQUEST',
+                  category: 'provider_contract',
+                  retryable: false,
+                  details: {
+                    fieldErrors: [{ path: '/cwd', code: 'not_a_git_repository' }],
+                    requestAccepted: false,
+                  },
+                  exitCode: 64,
+                },
+                Date.now()
+              )
+            )
+          );
+          return 64;
+        }
         console.error('Error: Not in a git repository.');
         console.error('The Archon CLI must be run from within a git repository.');
         console.error('Either navigate to a git repo or use --cwd to specify one.');
@@ -607,7 +681,14 @@ async function main(): Promise<number> {
                   resolveIssuedAt: ria,
                   buildErrorEnvelope: bee,
                 } = await import('./commands/workflow-provider-command-envelope.js');
-                const corrId = rci(values['correlation-id'] as string | undefined);
+                let corrId = 'unknown';
+                let issuedAt = new Date(0).toISOString();
+                try {
+                  corrId = rci(values['correlation-id'] as string | undefined);
+                  issuedAt = ria();
+                } catch {
+                  // Helpers currently never throw, but guard against future changes
+                }
                 console.log(
                   ss(
                     bee(
@@ -615,7 +696,7 @@ async function main(): Promise<number> {
                         command: 'workflow.status',
                         provider: 'archon',
                         correlationId: corrId,
-                        issuedAt: ria(),
+                        issuedAt,
                       },
                       {
                         code: 'MALFORMED_REQUEST',

@@ -107,12 +107,12 @@ so that external controllers can create and inspect workflow references without 
 - [x] [Review][Patch] Failed status envelopes still expose only an opaque failure flag [`packages/cli/src/commands/workflow.ts`:1757]
 - [x] [Review][Patch] JSON result-card persistence has no regression test covering `workflow_result` DB persistence [`packages/cli/src/commands/workflow.test.ts`:2125]
 - [x] [Review][Patch] JSON worktree-policy mismatch classification has no focused regression coverage [`packages/cli/src/commands/workflow.test.ts`:1182]
-- [ ] [Review][Patch] Missing `--correlation-id` values still do not consistently fail closed as `MALFORMED_REQUEST` JSON envelopes [`packages/cli/src/cli.ts`:590]
-- [ ] [Review][Patch] `workflow run/get --json` can still fail before the envelope handlers when cwd is not a git repository [`packages/cli/src/cli.ts`:471]
-- [ ] [Review][Patch] `workflow run --json=true` bypasses the JSON fail-closed boundary and can print plain errors [`packages/cli/src/commands/workflow.ts`:572]
-- [ ] [Review][Patch] The start-command error classifier can still report infrastructure "not found" errors as workflow-name lookup failures [`packages/cli/src/commands/workflow.ts`:172]
-- [ ] [Review][Patch] Failed status envelopes still expose an opaque failure object rather than a machine-readable failure shape [`packages/cli/src/commands/workflow.ts`:1779]
-- [ ] [Review][Patch] Verbose status event sanitization does not recurse into nested arrays, so forbidden text keys can still leak [`packages/cli/src/commands/workflow.ts`:244]
+- [x] [Review][Patch] Missing `--correlation-id` values still do not consistently fail closed as `MALFORMED_REQUEST` JSON envelopes [`packages/cli/src/cli.ts`:590]
+- [x] [Review][Patch] `workflow run/get --json` can still fail before the envelope handlers when cwd is not a git repository [`packages/cli/src/cli.ts`:471]
+- [x] [Review][Patch] `workflow run --json=true` bypasses the JSON fail-closed boundary and can print plain errors [`packages/cli/src/commands/workflow.ts`:572]
+- [x] [Review][Patch] The start-command error classifier can still report infrastructure "not found" errors as workflow-name lookup failures [`packages/cli/src/commands/workflow.ts`:172]
+- [x] [Review][Patch] Failed status envelopes still expose an opaque failure object rather than a machine-readable failure shape [`packages/cli/src/commands/workflow.ts`:1779]
+- [x] [Review][Patch] Verbose status event sanitization does not recurse into nested arrays, so forbidden text keys can still leak [`packages/cli/src/commands/workflow.ts`:244]
 
 ## Dev Notes
 
@@ -269,45 +269,52 @@ Unexpected for this story:
 - **Fix pass 2 (RF-09 through RF-16):** All 8 second-review findings addressed. RF-09: moved `resolveCorrelationId`/`resolveIssuedAt` inside JSON-mode try/catch. RF-10: added `sanitizeEventsForEnvelope`/`stripForbiddenKeys` to strip contract-forbidden keys from verbose event data. RF-11: added `failure: { hasError: true }` to failed-run status without leaking raw error text. RF-12: added result-card persistence (`adapter.sendMessage`) to JSON success path. RF-13: moved flag validation before workflow resolution for JSON mode only. RF-14: guarded empty-name throw with `if (options.json)` to preserve non-JSON behavior. RF-15: narrowed `classifyRunError` 'not found' pattern to require 'Workflow' context. RF-16: removed `DATABASE_URL` from E2E child env (was incorrectly selecting Postgres).
 - **Fix pass 3 (RF-17 through RF-22):** All 6 third-review findings addressed. RF-17: restructured `workflowGetCommand` to wrap JSON path in fail-closed try/catch (mirrors `workflowRunCommand` pattern), extracting `workflowGetCommandInner` for shared JSON/human logic. RF-18: changed JSON-mode result-card persistence to use platform `conversationId` instead of DB `conversation.id`, matching the non-JSON path. RF-19: changed failed status check from `run.status === 'failed' && run.metadata.error` to `run.status === 'failed'` with `hasError: Boolean(run.metadata.error)`, ensuring all failed runs get the failure shape. RF-20: replaced `classifyRunError` in the status DB error catch block with a fixed `INTERNAL_ERROR`/`implementation_defect`/70 classification, since DB error messages can contain both 'not found' and 'workflow' and be misclassified. RF-21: added verbose status forbidden-key regression test (CONTRACT-036 third test) that verifies event data with forbidden keys is properly sanitized. RF-22: added `'worktree.enabled'` pattern to `classifyRunError`'s MALFORMED_REQUEST check, so worktree-policy flag mismatch errors are correctly classified as user errors.
 - **Fix pass 4 (RF-23 through RF-27):** All 5 fourth-review findings addressed. RF-23: added JSON envelope emission in `cli.ts` parseArgs catch block when `--json` is detected in `process.argv`, so parse-time failures (e.g., missing `--correlation-id` value) emit `MALFORMED_REQUEST` envelopes instead of plain-text errors. RF-24: added timeout detection (ETIMEDOUT code or 'statement timeout'/'timeout' message patterns) before the fixed INTERNAL_ERROR classification in `workflowGetCommandInner`'s DB error catch block, so timeouts emit `COMMAND_TIMEOUT`/`retryable: true`/exitCode 69. RF-25: enriched failed status envelope's `failure` shape with `errorType` field (`'execution_error'` when metadata.error present, `'unknown'` otherwise), providing machine-readable categorization without leaking raw error text. RF-26: added regression test verifying JSON mode persists result cards via `adapter.sendMessage` with `category: 'workflow_result'` and correct metadata. RF-27: added regression test verifying JSON mode classifies worktree-policy mismatches as `MALFORMED_REQUEST`/`provider_contract`/exitCode 64 envelopes.
+- **Fix pass 5 (RF-28 through RF-33):** All 6 fifth-review findings addressed. RF-28: wrapped `rci()`/`ria()` calls in the `workflow get --json` missing-run-id handler with try/catch and fallback values, ensuring no error escapes the fail-closed boundary. RF-29: added JSON envelope emission in the git repo validation block at cli.ts, so `--json` invocations that fail cwd/git validation get `MALFORMED_REQUEST` envelopes instead of plain-text errors. RF-30: changed `options.json === true` to `Boolean(options.json)` to handle non-boolean truthy values that could bypass the JSON fail-closed boundary. RF-31: added exclusion patterns (`table`, `column`, `database`, `relation`, `schema`) to `classifyRunError`'s "not found" check, preventing infrastructure DB errors from being misclassified as workflow-name lookup failures. RF-32: enriched the failed status failure shape with `terminal: true` and `retryable` fields, giving consumers machine-readable information about retry capability. RF-33: extracted `stripForbiddenKeysFromArray` helper that recursively processes nested arrays, preventing forbidden text keys from leaking through arrays-of-arrays in verbose event data.
 
 ### File List
 
-- `packages/cli/src/commands/workflow.ts` — main implementation: `workflowRunCommand`, `workflowGetCommand`, `mapWorkflowRunToContractState`, `classifyRunError`, `buildWorkflowRunRef`, `sanitizeEventsForEnvelope`, `stripForbiddenKeys`
+- `packages/cli/src/commands/workflow.ts` — main implementation: `workflowRunCommand`, `workflowGetCommand`, `mapWorkflowRunToContractState`, `classifyRunError`, `buildWorkflowRunRef`, `sanitizeEventsForEnvelope`, `stripForbiddenKeys`, `stripForbiddenKeysFromArray`
 - `packages/cli/src/commands/workflow.test.ts` — unit tests including `3.3B-UNIT-016b` for paused interactive-loop, RF-26 result-card persistence, RF-27 worktree-policy mismatch
 - `packages/cli/src/commands/workflow-command-contract.test.ts` — contract tests for start/status envelope shape
 - `packages/cli/src/commands/workflow-json.e2e.test.ts` — E2E subprocess tests with isolated ARCHON_HOME/DATABASE_URL
 - `packages/cli/src/adapters/cli-adapter.ts` — CLIAdapter `silent` mode (no changes needed — already supported)
-- `packages/cli/src/cli.ts` — parseArgs catch block emits JSON envelope when --json detected (RF-23)
+- `packages/cli/src/cli.ts` — parseArgs catch block emits JSON envelope when --json detected (RF-23); git repo validation emits JSON envelopes (RF-29); `workflow get` missing-run-id handler wraps helpers in try/catch (RF-28)
 - `packages/cli/src/commands/workflow-provider-command-envelope.ts` — shared envelope builder from Story 3.3a (unchanged)
 
 ### Fix Pass Record
 
-| Finding | Description                                       | Fix                                                             | Files                               |
-| ------- | ------------------------------------------------- | --------------------------------------------------------------- | ----------------------------------- |
-| RF-01   | Resume console.log corrupts JSON stdout           | Added `if (!options.json)` guard                                | `workflow.ts`                       |
-| RF-02   | `'failed to load'` misclassifies resume errors    | Replaced with `'is required'` pattern                           | `workflow.ts`                       |
-| RF-03   | Error envelope re-resolves `issuedAt`             | Reused command-level `issuedAt` variable                        | `workflow.ts`                       |
-| RF-04   | Non-JSON error message changed                    | Restored to `'Workflow name is required'`                       | `workflow.ts`                       |
-| RF-05   | Missing paused interactive-loop test              | Added `3.3B-UNIT-016b`                                          | `workflow.test.ts`                  |
-| RF-06   | Fixture delta not documented                      | Added Completion Notes entry                                    | story file                          |
-| RF-07   | Contract tests pass against error envelope        | Added `success` assertions + `getWorkflowRun` mocks             | `workflow-command-contract.test.ts` |
-| RF-08   | E2E tests use ambient state                       | Added isolated `ARCHON_HOME`/`DATABASE_URL`                     | `workflow-json.e2e.test.ts`         |
-| RF-09   | `--correlation-id` escape from fail-closed        | Moved `resolveCorrelationId`/`resolveIssuedAt` inside try/catch | `workflow.ts`                       |
-| RF-10   | Verbose events embed forbidden keys               | Added `sanitizeEventsForEnvelope` with recursive stripping      | `workflow.ts`                       |
-| RF-11   | Failed status lacks failure shape                 | Added `failure: { hasError: true }` (no raw text)               | `workflow.ts`                       |
-| RF-12   | JSON start bypasses result-card persistence       | Added `adapter.sendMessage` in JSON success path                | `workflow.ts`                       |
-| RF-13   | Bad-flag misclassified as lookup failure          | Moved flag validation before resolution (JSON mode)             | `workflow.ts`                       |
-| RF-14   | Non-JSON blank name behavior changed              | Guarded name check with `if (options.json)`                     | `workflow.ts`                       |
-| RF-15   | Generic 'not found' mislabels DB failures         | Narrowed pattern to require 'Workflow' context                  | `workflow.ts`                       |
-| RF-16   | E2E tests DATABASE_URL selects Postgres           | Removed DATABASE_URL from child env                             | `workflow-json.e2e.test.ts`         |
-| RF-17   | `workflowGetCommand` JSON path not fail-closed    | Restructured to wrap JSON path in try/catch, extracted inner    | `workflow.ts`                       |
-| RF-18   | Result-card uses DB id instead of platform id     | Changed `conversation.id` to `conversationId` in JSON path      | `workflow.ts`                       |
-| RF-19   | Failed status lacks failure shape without error   | Changed to `run.status === 'failed'` with `hasError: Boolean()` | `workflow.ts`                       |
-| RF-20   | Status DB errors misclassified as not-found       | Replaced `classifyRunError` with fixed INTERNAL_ERROR           | `workflow.ts`                       |
-| RF-21   | Verbose status forbidden-key test missing         | Added third CONTRACT-036 test for verbose events                | `workflow-command-contract.test.ts` |
-| RF-22   | Worktree-policy errors classified as internal     | Added `'worktree.enabled'` to MALFORMED_REQUEST patterns        | `workflow.ts`                       |
-| RF-23   | parseArgs failures escape JSON fail-closed        | Added JSON envelope emission in parseArgs catch block           | `cli.ts`                            |
-| RF-24   | DB timeouts emitted as INTERNAL_ERROR             | Added timeout detection before fixed classification             | `workflow.ts`                       |
-| RF-25   | Failed status lacks machine-readable failure info | Enriched failure shape with errorType field                     | `workflow.ts`                       |
-| RF-26   | JSON result-card persistence untested             | Added regression test for workflow_result persistence           | `workflow.test.ts`                  |
-| RF-27   | JSON worktree-policy mismatch untested            | Added regression test for MALFORMED_REQUEST classification      | `workflow.test.ts`                  |
+| Finding | Description                                         | Fix                                                             | Files                               |
+| ------- | --------------------------------------------------- | --------------------------------------------------------------- | ----------------------------------- |
+| RF-01   | Resume console.log corrupts JSON stdout             | Added `if (!options.json)` guard                                | `workflow.ts`                       |
+| RF-02   | `'failed to load'` misclassifies resume errors      | Replaced with `'is required'` pattern                           | `workflow.ts`                       |
+| RF-03   | Error envelope re-resolves `issuedAt`               | Reused command-level `issuedAt` variable                        | `workflow.ts`                       |
+| RF-04   | Non-JSON error message changed                      | Restored to `'Workflow name is required'`                       | `workflow.ts`                       |
+| RF-05   | Missing paused interactive-loop test                | Added `3.3B-UNIT-016b`                                          | `workflow.test.ts`                  |
+| RF-06   | Fixture delta not documented                        | Added Completion Notes entry                                    | story file                          |
+| RF-07   | Contract tests pass against error envelope          | Added `success` assertions + `getWorkflowRun` mocks             | `workflow-command-contract.test.ts` |
+| RF-08   | E2E tests use ambient state                         | Added isolated `ARCHON_HOME`/`DATABASE_URL`                     | `workflow-json.e2e.test.ts`         |
+| RF-09   | `--correlation-id` escape from fail-closed          | Moved `resolveCorrelationId`/`resolveIssuedAt` inside try/catch | `workflow.ts`                       |
+| RF-10   | Verbose events embed forbidden keys                 | Added `sanitizeEventsForEnvelope` with recursive stripping      | `workflow.ts`                       |
+| RF-11   | Failed status lacks failure shape                   | Added `failure: { hasError: true }` (no raw text)               | `workflow.ts`                       |
+| RF-12   | JSON start bypasses result-card persistence         | Added `adapter.sendMessage` in JSON success path                | `workflow.ts`                       |
+| RF-13   | Bad-flag misclassified as lookup failure            | Moved flag validation before resolution (JSON mode)             | `workflow.ts`                       |
+| RF-14   | Non-JSON blank name behavior changed                | Guarded name check with `if (options.json)`                     | `workflow.ts`                       |
+| RF-15   | Generic 'not found' mislabels DB failures           | Narrowed pattern to require 'Workflow' context                  | `workflow.ts`                       |
+| RF-16   | E2E tests DATABASE_URL selects Postgres             | Removed DATABASE_URL from child env                             | `workflow-json.e2e.test.ts`         |
+| RF-17   | `workflowGetCommand` JSON path not fail-closed      | Restructured to wrap JSON path in try/catch, extracted inner    | `workflow.ts`                       |
+| RF-18   | Result-card uses DB id instead of platform id       | Changed `conversation.id` to `conversationId` in JSON path      | `workflow.ts`                       |
+| RF-19   | Failed status lacks failure shape without error     | Changed to `run.status === 'failed'` with `hasError: Boolean()` | `workflow.ts`                       |
+| RF-20   | Status DB errors misclassified as not-found         | Replaced `classifyRunError` with fixed INTERNAL_ERROR           | `workflow.ts`                       |
+| RF-21   | Verbose status forbidden-key test missing           | Added third CONTRACT-036 test for verbose events                | `workflow-command-contract.test.ts` |
+| RF-22   | Worktree-policy errors classified as internal       | Added `'worktree.enabled'` to MALFORMED_REQUEST patterns        | `workflow.ts`                       |
+| RF-23   | parseArgs failures escape JSON fail-closed          | Added JSON envelope emission in parseArgs catch block           | `cli.ts`                            |
+| RF-24   | DB timeouts emitted as INTERNAL_ERROR               | Added timeout detection before fixed classification             | `workflow.ts`                       |
+| RF-25   | Failed status lacks machine-readable failure info   | Enriched failure shape with errorType field                     | `workflow.ts`                       |
+| RF-26   | JSON result-card persistence untested               | Added regression test for workflow_result persistence           | `workflow.test.ts`                  |
+| RF-27   | JSON worktree-policy mismatch untested              | Added regression test for MALFORMED_REQUEST classification      | `workflow.test.ts`                  |
+| RF-28   | `--correlation-id` escape in `workflow get` handler | Wrapped `rci()`/`ria()` in try/catch with fallback values       | `cli.ts`                            |
+| RF-29   | Git repo validation fails before JSON envelopes     | Added JSON envelope emission in git validation block            | `cli.ts`                            |
+| RF-30   | `--json=true` bypasses fail-closed boundary         | Changed `=== true` to `Boolean()` truthy check                  | `workflow.ts`                       |
+| RF-31   | Infrastructure "not found" misclassified            | Added exclusion patterns for DB context words                   | `workflow.ts`                       |
+| RF-32   | Failed status lacks retry/terminal info             | Enriched failure shape with `terminal` and `retryable` fields   | `workflow.ts`                       |
+| RF-33   | Nested arrays not sanitized for forbidden keys      | Extracted `stripForbiddenKeysFromArray` with recursion          | `workflow.ts`                       |
