@@ -1,0 +1,219 @@
+# Story 3.3b: Provide Archon Start And Status CLI JSON
+
+Status: ready-for-dev
+
+<!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
+
+## Story
+
+As a controller integrator,
+I want provider `archon` to expose workflow start and status through parseable CLI JSON,
+so that external controllers can create and inspect workflow references without using the Archon dashboard.
+
+## Acceptance Criteria
+
+1. **Given** a workflow run can be started from Archon CLI
+   **When** Archon starts the run
+   **Then** Archon returns parseable JSON with schema version, success flag, correlation id, workflow run reference, binding reference when applicable, and machine-readable result payload
+   **And** the command accepts the project cwd or codebase reference needed by the controller contract.
+
+2. **Given** a workflow run is inspected from Archon CLI
+   **When** Archon returns status
+   **Then** the result includes run state, workflow name, workflow run reference, correlation id when available, and machine-readable error shape when failed
+   **And** the result matches the shared status example.
+
+3. **Given** a start or status command fails
+   **When** Archon returns the failure
+   **Then** the response includes schema version, success flag, correlation id if available, machine-readable error code, and diagnostic category
+   **And** consumers can fail closed on malformed JSON, schema mismatch, timeout, or unexpected exit code.
+
+## Tasks / Subtasks
+
+- [ ] Task 1 - Convert `archon workflow run <name> [message] --json` to emit the `workflow.start` envelope (AC: 1, 3)
+  - [ ] In `packages/cli/src/commands/workflow.ts`, change `workflowRunCommand`'s return type from `Promise<void>` to `Promise<number>` (mirrors `workflowGetCommand`'s existing `Promise<number>` pattern) so `--json` failures return a classified exit code instead of relying on `cli.ts`'s generic plain-text catch.
+  - [ ] Wrap the body in a fail-closed boundary (a local helper analogous to `provider-binding.ts`'s `withFailClosed`, duplicated locally per the project's rule-of-three convention — do not force-extract a shared helper yet) so that **when `options.json` is true**, every thrown `Error` (bad flags, unknown workflow, DB/codebase lookup failure, worktree creation failure, `executeWorkflow` failure) is caught and converted into a `buildErrorEnvelope(...)` line via `console.log(safeStringify(...))`, returning the classified exit code — never let a `--json` invocation reach `cli.ts`'s plain-text `catch` block.
+  - [ ] When `options.json` is falsy, preserve ALL existing behavior byte-for-byte: same thrown `Error` messages, same human `console.log` lines, same execution flow. Do not touch the non-JSON path.
+  - [ ] **Scope the envelope conversion to the foreground (non-`--detach`) path only.** Do NOT touch the existing `--detach` JSON ack (`workflow.ts:549-564`, `{ ok: true, action: 'run', detached: true, ... }`). Reason: at the moment the detach ack is emitted, the child process has not yet created the workflow-run DB row, so no real `runId` exists to satisfy `workflowRunRef`'s required `runId` field. The architecture.md Provider Command Syntax Baseline row for `workflow.start` lists `--cwd`, `--branch`, `--from`, `--no-worktree`, `--conversation-id` as accepted flags and does **not** mention `--detach` — treat this as confirmation that `--detach` is outside this story's provider-command surface. Leave `workflowRunCommand`'s `--detach` branch (including its own `if (options.json)` block) completely unchanged.
+  - [ ] For the foreground path, after `executeWorkflow` resolves (`workflow.ts:996-1022`), branch on `options.json`:
+    - Human mode (unchanged): keep the existing `console.log('\nWorkflow paused...')` / `console.log('\nWorkflow completed successfully.')` / `throw new Error('Workflow failed: ...')` behavior exactly as today.
+    - JSON mode (new): build a `workflow.start` success envelope via `buildSuccessEnvelope` covering the completed, paused, AND failed outcomes (do not throw for a failed workflow when `options.json` is true — emit a failure envelope instead, matching the never-throw-under-json convention already used by `workflowGetCommand`).
+  - [ ] Build `workflowRunRef` as `{ provider: 'archon', runId: result.workflowRunId, workflowName: workflow.name, projectRef: codebase?.id ? \`project:${codebase.id}\` : undefined }` (omit `projectRef` entirely when no codebase resolved — the schema's `projectRef` is optional). Use `executeWorkflow`'s return value's `workflowRunId` field (confirmed present on all three return shapes: success/paused/failed — see Dev Notes).
+  - [ ] Build `result` for the success envelope as `{ operation: 'start', state: <mapped-state>, terminal: <bool>, accepted: true }` plus, only when the run is paused on an approval gate, `actionRequired: true` and `gateRef: { gateId: metadata.approval.nodeId, kind: 'human-decision' }` (see Dev Notes "State Mapping" for the exact mapping table and the `phase`/`projectBindingRef` fixture-field scoping decision).
+  - [ ] For a failed execution (`result.success === false`) under `--json`, emit a `buildErrorEnvelope` with `code: 'WORKFLOW_EXECUTION_FAILED'`, `category: 'unexpected_state'`, `retryable: true` (the run is resumable — see `RESUMABLE_WORKFLOW_STATUSES`), `details: { runId: result.workflowRunId }`, `exitCode: 78`. Do NOT include the raw `result.error` string in `details` (NFR-14: machine-readable detail, not raw diagnostic text) — log it via `getLog().error(...)` instead, same as existing behavior.
+  - [ ] Add a local `classifyRunError(err: unknown)` mirroring `provider-binding.ts`'s `classifyError` shape (`{ code, category, retryable, exitCode }`) for the earlier-stage throw points (bad flags → `MALFORMED_REQUEST`/`provider_contract`/64; unknown workflow name → `WORKFLOW_NOT_FOUND`/`unexpected_state`/78; DB/codebase/worktree failures → `INTERNAL_ERROR`/`implementation_defect`/70, with a timeout-message-pattern branch → `COMMAND_TIMEOUT`/`timeout`/69, matching `provider-binding.ts:136-138`). Do not duplicate the exact `BINDING_*` codes — invent workflow-scoped codes.
+  - [ ] Wire a `--correlation-id` flag through: add `correlationId?: string` to `WorkflowRunOptions` (`workflow.ts:74-103`), resolve it once via the existing `resolveCorrelationId`/`resolveIssuedAt` helpers from `workflow-provider-command-envelope.ts`, and pass it into every envelope built for this command.
+
+- [ ] Task 2 - Convert `archon workflow get <run-id> --json` to emit the `workflow.status` envelope (AC: 2, 3)
+  - [ ] In `packages/cli/src/commands/workflow.ts`, add an optional 4th parameter `correlationId?: string` to `workflowGetCommand` (`workflow.ts:1258-1261`) — additive, preserves existing 2-arg and 3-arg call sites.
+  - [ ] Replace the DB-error JSON branch (`workflow.ts:1271-1274`, currently `{ ok: false, runId, error: err.message }`) with a `buildErrorEnvelope` call: classify via the same timeout-pattern check as Task 1's `classifyRunError` (or share it — same file, same command family), default `INTERNAL_ERROR`/`implementation_defect`/70. Do not leak `err.message` into `details`; log it via `getLog().error(...)` (already present) instead.
+  - [ ] Replace the not-found JSON branch (`workflow.ts:1281-1282`, currently `{ ok: false, runId, error: 'not_found' }`) with a `buildErrorEnvelope` call: `code: 'WORKFLOW_RUN_NOT_FOUND'`, `category: 'unexpected_state'`, `retryable: false`, `exitCode: 78`, `details: { runId }`. Keep the exit code `1` for the human (non-JSON) not-found path unchanged.
+  - [ ] Replace the success JSON branch (`workflow.ts:1299-1303`, currently the raw `WorkflowRun` row, optionally spread with `events`) with a `buildSuccessEnvelope` call. Build `workflowRunRef` the same way as Task 1 (`provider: 'archon', runId: run.id, workflowName: run.workflow_name, projectRef: run.codebase_id ? \`project:${run.codebase_id}\` : undefined`). Build `result` as `{ operation: 'status', state: <mapped-state>, terminal: <bool> }` plus `actionRequired`/`gateRef` when paused-for-approval (same mapping as Task 1), plus `events: events ?? []` **only** when `verbose` is true (preserves the existing verbose-events feature, relocated from top-level into `result.events`).
+  - [ ] Return the envelope's matching numeric exit code from every branch (0 success, 78 not-found, 70 DB-error) instead of the current ad hoc `0`/`1`.
+  - [ ] Update the `cli.ts` `workflow get` dispatch (`cli.ts:555-568`) to also pass `values['correlation-id'] as string | undefined` as the new 4th argument.
+
+- [ ] Task 3 - State mapping helper (AC: 1, 2)
+  - [ ] Add a small shared function (co-located in `workflow.ts`, not the shared envelope module — this mapping is workflow-command-specific, not generic to all provider commands) that maps a `WorkflowRun` (`status` + `metadata`) to the contract-facing `{ state, terminal, actionRequired?, gateRef? }` shape. Use the exact mapping table in Dev Notes ("State Mapping"). Reuse `TERMINAL_WORKFLOW_STATUSES` (already imported indirectly via `@archon/workflows/schemas/workflow-run`) for the `terminal` boolean, and `isApprovalContext` (same module) to detect an approval-gate pause safely.
+  - [ ] Unit-test the mapping function directly for all six `WorkflowRunStatus` values, plus the paused+approval-context and paused+interactive-loop-context sub-cases.
+
+- [ ] Task 4 - Contract and regression tests (AC: 1, 2, 3)
+  - [ ] Update `packages/cli/src/commands/workflow.test.ts`'s `describe('workflowGetCommand', ...)` (currently `workflow.ts` test lines ~1819-1942) to assert the new envelope shape for: not-found, DB-error, success (non-verbose), success (verbose, `events` now under `result.events`). Follow the same "exact fixture comparison with a narrow, documented dynamic-field exclusion list" pattern established in `provider-binding.test.ts` (dynamic fields here: `correlationId`, `issuedAt`, `runId`, `startedAt`/similar timestamps if added).
+  - [ ] Add new tests for `workflowRunCommand`'s foreground `--json` path: success/completed, success/paused, and failed-execution envelopes, plus at least one early-throw case (unknown workflow name) converted to an error envelope. Do not remove or alter the existing `describe('workflowRunCommand — detach', ...)` tests (`workflow.ts` test lines ~2216-2314) — they must keep passing unchanged, proving `--detach` truly stayed out of scope.
+  - [ ] Add a companion contract test (mirroring `provider-binding-contract.test.ts`'s pattern) that runs `python3 _bmad-output/planning-artifacts/contracts/workflow-commander/validate_contracts.py` and scans `workflow.ts` for the same forbidden-key list already enforced for provider-binding (no `actor`, `profile`, `agent_name`, `agent`, `agent_provider`, and no `COMMAND_FORBIDDEN_TEXT_KEYS` such as `message`/`stdout`/`stderr`/`displayText` inside emitted envelopes).
+  - [ ] Reconcile against the checked-in fixtures `start-success.json` and `status-success.json`: these illustrate `phase` and `projectBindingRef` (start) / `phase` and `gateRef` (status) fields that do not generalize to non-BMAD Archon workflows (see Dev Notes). Do not invent a fake `phase` value to force a byte-for-byte match — write the fixture-conformance test to assert the fields this story's design table actually produces (`operation`, `state`, `terminal`, `accepted`/`actionRequired`/`gateRef` where applicable) and document the intentional field-set delta in the story's Completion Notes rather than silently passing a weakened test.
+  - [ ] Confirm `packages/cli/package.json`'s `test` script placement: `workflow.test.ts` already runs in its own isolated `bun test` invocation (`... && bun test src/commands/workflow.test.ts && ...`) — no script change should be needed unless a new file is added, in which case follow the existing isolation-group rules (non-mocking files may share an invocation; anything using `mock.module()` differently from an existing grouped file needs its own).
+
+- [ ] Task 5 - Validate focused and full gates (AC: 1, 2, 3)
+  - [ ] Run `python3 _bmad-output/planning-artifacts/contracts/workflow-commander/validate_contracts.py`.
+  - [ ] Run `bun test packages/cli/src/commands/workflow.test.ts`.
+  - [ ] Run `bun test packages/cli/src/commands/workflow-provider-command-envelope.test.ts` (regression — this story must not modify the shared envelope module's behavior).
+  - [ ] Run `bun --filter @archon/cli type-check`.
+  - [ ] Run `bun run validate` before moving the story to review.
+
+## Dev Notes
+
+### Scope Boundary
+
+This story converts the runtime JSON output of exactly two existing CLI commands:
+
+- `archon workflow run <workflow-name> [message] --json` (foreground/synchronous path only) → `workflow.start`.
+- `archon workflow get <run-id> --json` → `workflow.status`.
+
+It does **not** touch: `--detach` ack output, `workflow status` (the active-runs list surface — different from `workflow get`), `workflow resume`/`approve`/`reject`/`abandon`/`retry-node`/`runs`/`cleanup`/`reset-sessions` (Stories 3.3c/3.3d own the decision/recovery command families), the workflow event outbox (Story 3.5), or delivery health (Story 3.7). It does not add HTTP routes, Web UI, or a state-changing HTTP control path (PRD FR-8 explicitly forbids one for Workflow Commander v1).
+
+Story 3.3a already shipped the shared envelope builder module (`packages/cli/src/commands/workflow-provider-command-envelope.ts`) fully implemented and tested — `buildSuccessEnvelope`, `buildErrorEnvelope`, `safeStringify`, `resolveCorrelationId`, `resolveIssuedAt`. **Do not modify that module.** Its own test file (`workflow-provider-command-envelope.test.ts`, tests `3.3A-CONTRACT-036`/`037`) already proves the builder reproduces `start-success.json`/`status-success.json` byte-for-byte when fed the right `refs`/`result` arguments — this story's job is purely to compute the right `refs`/`result` from real `WorkflowRun`/`executeWorkflow` data and call the existing builder, the same way `provider-binding.ts` does for binding commands.
+
+### Contract Source Of Truth
+
+```bash
+python3 _bmad-output/planning-artifacts/contracts/workflow-commander/validate_contracts.py
+```
+
+Do not edit schemas or fixtures to make runtime code pass. If a genuinely new top-level envelope field is needed, stop and raise a contract change — but note `result` is `"additionalProperties": true` in `workflow-command-envelope.schema.json`, so anything placed inside `result` needs no schema change; only new **top-level** envelope fields would.
+
+### Command Envelope Shape (recap from Story 3.3a)
+
+Top-level fields are fixed: `schemaVersion`, `intendedProducer`, `intendedConsumer`, `owningSubproject`, `provider`, `command`, `correlationId`, `issuedAt`, `success`, `workflowRunRef`, `bindingRef`, `result`, `error`, `execution`. Success envelopes require `result` and forbid `error`; failure envelopes require `error` and forbid `result`. Successful `workflow.*` commands require `workflowRunRef` (`provider`, `runId`, `workflowName`, optional `projectRef`). Failure envelopes omit `workflowRunRef` by default (established convention from Story 3.1/3.3a) — keep that default here too, even though a `runId` is often known on a failed-execution path.
+
+### State Mapping (new design work for this story — no prior art)
+
+Archon's real `WorkflowRunStatus` (`packages/workflows/src/schemas/workflow-run.ts:10-17`) is `'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused'`. The contract's illustrative fixtures use `state: "running"` (start) and `state: "waiting-for-approval"` (status) — `"waiting-for-approval"` is **not** a literal Archon status; it is Hermes/BMAD-facing vocabulary for a `paused` run that is specifically gated on human approval (as opposed to an interactive-loop pause). Map as follows:
+
+| Archon `run.status` | `metadata.approval` (via `isApprovalContext`) | `result.state` | `result.terminal` |
+| --- | --- | --- | --- |
+| `pending` | — | `pending` | `false` |
+| `running` | — | `running` | `false` |
+| `paused` | present, `type !== 'interactive_loop'` (or `type` absent) | `waiting-for-approval` | `false` |
+| `paused` | present, `type === 'interactive_loop'` | `paused` | `false` |
+| `paused` | absent/malformed | `paused` | `false` |
+| `completed` | — | `completed` | `true` |
+| `failed` | — | `failed` | `true` |
+| `cancelled` | — | `cancelled` | `true` |
+
+`terminal` = `TERMINAL_WORKFLOW_STATUSES.includes(run.status)` (already exported from `workflow-run.ts`). When `result.state === 'waiting-for-approval'`, also set `actionRequired: true` and `gateRef: { gateId: metadata.approval.nodeId, kind: 'human-decision' }` (best-effort — `gateRef` is not schema-required, `result` is fully open).
+
+**`phase` and `projectBindingRef` are explicitly out of scope.** They are BMAD-story-phase / Hermes Project-Binding concepts (`phase: "implementation"`, `phase: "done-verification"`) that epics.md explicitly excludes from Archon's ownership (epics.md line 17: "...exclude Hermes-owned Project Binding, ... Phase Tasks, HILT Gates..."). A generic Archon DAG workflow run has no equivalent generic "phase" concept. Do not invent one. If strict byte-for-byte fixture parity for these two illustrative fields is later required, that needs its own contract discussion — flag it, do not silently fabricate a `phase` string.
+
+### Blocking Execution Model — Deliberate Design Choice (read before implementing)
+
+Today, `workflowRunCommand`'s foreground path (no `--detach`) calls `await executeWorkflow(...)` and blocks until the run reaches a terminal state or a pause — this is unchanged, complex, load-bearing behavior (worktree creation, DB writes, SIGTERM/SIGINT handling, event subscription for stderr rendering, Web UI dispatch messages). **This story keeps that blocking model exactly as-is** and only adds envelope-shaped output around the existing synchronous result. It does **not** make `workflow run --json` return early with a `state: "running"` reference the way the `start-success.json` fixture illustrates (that fixture's `state: "running"` depicts a run still in progress at response time, i.e., a genuinely asynchronous "accept and return a reference" model).
+
+Rationale for this choice: (1) building true async start semantics would require either pre-creating the run row before spawning a child (a real architecture change to the `--detach` machinery, which currently has the child do all DB work) or leaving a bare in-process fire-and-forget promise dangling when the CLI process exits — both are materially riskier than this story's stated scope; (2) none of the three ACs above explicitly mandate non-blocking behavior — AC1's "the command accepts the project cwd or codebase reference" is about accepted **input**, not response timing; (3) the existing `--detach` path already covers the "don't block" use case, just not yet in envelope shape (and is explicitly out of scope here — see Task 1).
+
+**Flag this to the story owner before/while implementing:** the fixture's non-terminal `"state": "running"` example is a real signal that Hermes may expect `workflow.start` to be non-blocking in production. If so, that is meaningfully larger scope (a new async-start execution path) that should be an explicit follow-up story, not silently absorbed here. This story's envelope will, in practice, almost always report a terminal or paused state (never a genuinely in-flight `"running"` snapshot), because by construction the process only responds after `executeWorkflow` resolves.
+
+### Existing Code State To Preserve
+
+- `packages/cli/src/commands/workflow.ts:412-1048` — `workflowRunCommand`. Flag validation (`workflow.ts:462-484`), auto-registration of unregistered repos (`workflow.ts:631-650` — deliberately more permissive than `provider-binding.ts`'s fail-closed stance; this story does not change that), worktree creation/reuse (`workflow.ts:652-834`), SIGTERM/SIGINT cleanup handlers (`workflow.ts:909-939`), and the Web UI dispatch/result-card messages (`workflow.ts:951-967`, `1024-1047`) are all untouched by this story except for the final json/non-json branch at the very end.
+- `packages/cli/src/commands/workflow.ts:1258-1321` — `workflowGetCommand`. `fetchVerboseEvents` (verbose node-event lookup) stays as-is; only its landing spot in the JSON output moves from top-level `events` to `result.events`.
+- `packages/cli/src/cli.ts:501-568` — the `workflow run`/`workflow get` dispatch cases. `--correlation-id` is already a registered global `parseArgs` option (`cli.ts:343`, added for `provider-binding` in Story 3.1) but is **not currently read** in either case — this story adds that wiring for these two commands only (do not touch the `provider-binding` case).
+- `packages/cli/src/commands/workflow-provider-command-envelope.ts` — the shared builder from Story 3.3a. No changes expected; its own test file already proves it reproduces the target fixtures when given correct inputs.
+- `packages/cli/src/commands/provider-binding.ts` — the reference pattern for wiring the shared builder into a command (`withFailClosed`, `classifyError`, `emitEnvelope`/`safeStringify` usage, exit-code conventions 64/69/70/78). Read it before writing Tasks 1-2; do not import from it (duplicate the small pattern locally in `workflow.ts`, per the project's rule-of-three convention — this becomes the second occurrence, not yet a third).
+- `packages/workflows/src/executor.ts:913,915,999` — `executeWorkflow`'s three return shapes: `{ success: true, workflowRunId, summary }` (completed), `{ success: true, paused: true, workflowRunId }` (paused), `{ success: false, workflowRunId, error }` (failed). All three carry `workflowRunId` — use it directly, do not re-query the DB for the run id.
+- `packages/workflows/src/schemas/workflow-run.ts` — `WorkflowRun`, `WorkflowRunStatus`, `TERMINAL_WORKFLOW_STATUSES`, `RESUMABLE_WORKFLOW_STATUSES`, `ApprovalContext`, `isApprovalContext`. All already imported into `workflow.ts` except `isApprovalContext`, `TERMINAL_WORKFLOW_STATUSES`, and `ApprovalContext` (add these to the existing import block at `workflow.ts:31-35`).
+
+### Previous Story Intelligence
+
+Story 3.3a (`3-3a-define-shared-workflow-provider-command-envelope.md`) established:
+
+- `binding.create`/`binding.update` stay distinct; not relevant here but the same "explicit operation, no upsert" discipline applies conceptually — `workflow.start` always creates or resumes a specific run, never silently no-ops.
+- `actor` is not present in the closed command-envelope schema and must not be emitted.
+- Command fixtures and binding-domain fixtures are separate families; don't conflate result keys.
+- `bindingRef.projectRef` / (by direct analogy) `workflowRunRef.projectRef` is a plain string `"project:<codebase_id>"`, built by stripping any existing `project:` prefix before storage/comparison and re-adding it on emission (see `provider-binding.ts:74-77,147-165`'s `normalizeProjectRef`/`buildBindingRef` for the exact pattern — do not re-derive this differently).
+- The separate test-design file for 3.3a (`_bmad-output/test-artifacts/test-design/test-design-3-3a-define-shared-workflow-provider-command-envelope.md`) contains waiver `W-3.3A-001`: *"Story 3.3a defines the shared helper and baseline only; runtime conversion of workflow command families belongs to Stories 3.3b-3.3d."* This story (3.3b) is exactly what closes that waiver for `workflow.start`/`workflow.status`.
+
+Deferred work from 3.1/3.3a not in scope here: ambient `DEFAULT_AI_ASSISTANT` leak in `packages/core/src/db/codebases.test.ts`; no disposable live PostgreSQL DDL/restart-convergence lane.
+
+### Git Intelligence
+
+Recent CLI-package history (most recent first): Story 3.3a's `workflow-provider-command-envelope.ts` + test file were added and wired into `packages/cli/package.json`'s isolation-group chain in the same invocation as `provider-binding-contract.test.ts` (no `mock.module()` conflict). A follow-up code-review commit narrowed `EnvelopeMeta.command`/`classifyError` return types from `string` to the closed `WorkflowProviderCommand`/`ErrorCategory` unions — follow that same discipline for any new local types this story introduces (e.g., a `classifyRunError` return type should use `ErrorCategory` from the shared module, not a bare `string`).
+
+### Testing Requirements
+
+Use `bun run test` or focused package/file invocations; never root `bun test`. `workflow.test.ts` already runs in its own isolated `bun test` invocation in `packages/cli/package.json` — no script change needed unless a genuinely new test file is added.
+
+Recommended focused checks:
+
+```bash
+python3 _bmad-output/planning-artifacts/contracts/workflow-commander/validate_contracts.py
+bun test packages/cli/src/commands/workflow.test.ts
+bun test packages/cli/src/commands/workflow-provider-command-envelope.test.ts
+bun --filter @archon/cli type-check
+bun run validate
+```
+
+### Latest Technical Information
+
+No external library upgrade or new framework needed. Bun/TypeScript/strict-ESM conventions from `_bmad-output/project-context.md` apply unchanged. `tsconfig.json`'s `resolveJsonModule: true` lets tests import fixture JSON directly; production code must not import `_bmad-output` planning artifacts at runtime.
+
+## Project Structure Notes
+
+Expected updates (no new files needed — this is a conversion of existing command output, not new commands):
+
+- `packages/cli/src/commands/workflow.ts` (`workflowRunCommand`, `workflowGetCommand`, new local state-mapping + error-classification helpers)
+- `packages/cli/src/cli.ts` (`workflow get` dispatch: thread `--correlation-id` through; `workflow run` dispatch already threads `json`/`detach`/etc., no change needed there beyond what `workflowRunCommand`'s options already accept)
+- `packages/cli/src/commands/workflow.test.ts` (updated/added tests per Task 4)
+- Possibly a new `packages/cli/src/commands/workflow-command-contract.test.ts` or an extension of the existing contract-scan pattern (Task 4) — if added, follow the existing test-isolation rules in `packages/cli/package.json`.
+
+Unexpected for this story:
+
+- No `packages/core` changes.
+- No `migrations` changes.
+- No `packages/server` routes.
+- No `packages/web` UI.
+- No changes to `--detach` output shape.
+- No changes to `workflow-provider-command-envelope.ts` (the shared builder from 3.3a).
+- No edits to `_bmad-output/planning-artifacts/contracts/workflow-commander/` fixtures/schemas.
+
+## References
+
+- [Source: _bmad-output/planning-artifacts/epics.md#Story 3.3b: Provide Archon Start And Status CLI JSON]
+- [Source: _bmad-output/planning-artifacts/epics.md#Provider Command Syntax Baseline]
+- [Source: _bmad-output/planning-artifacts/architecture.md#Provider Command Syntax Baseline]
+- [Source: _bmad-output/planning-artifacts/architecture.md#Consistency Conventions]
+- [Source: _bmad-output/planning-artifacts/prd.md#FR-8: Expose Provider Workflow Control Through CLI JSON]
+- [Source: _bmad-output/planning-artifacts/contracts/workflow-commander/schemas/workflow-command-envelope.schema.json]
+- [Source: _bmad-output/planning-artifacts/contracts/workflow-commander/examples/providers/archon/commands/start-success.json]
+- [Source: _bmad-output/planning-artifacts/contracts/workflow-commander/examples/providers/archon/commands/status-success.json]
+- [Source: _bmad-output/planning-artifacts/contracts/workflow-commander/examples/providers/archon/commands/error-*.json]
+- [Source: _bmad-output/planning-artifacts/contracts/workflow-commander/README.md#Command Envelope Rules]
+- [Source: _bmad-output/test-artifacts/test-design/test-design-3-3a-define-shared-workflow-provider-command-envelope.md#Waivers, W-3.3A-001]
+- [Source: _bmad-output/implementation-artifacts/3-3a-define-shared-workflow-provider-command-envelope.md#Dev Notes]
+- [Source: packages/cli/src/commands/workflow-provider-command-envelope.ts]
+- [Source: packages/cli/src/commands/provider-binding.ts]
+- [Source: packages/cli/src/commands/workflow.ts]
+- [Source: packages/cli/src/commands/workflow.test.ts]
+- [Source: packages/cli/src/cli.ts]
+- [Source: packages/workflows/src/executor.ts]
+- [Source: packages/workflows/src/schemas/workflow-run.ts]
+- [Source: packages/cli/package.json]
+- [Source: _bmad-output/project-context.md]
+
+## Dev Agent Record
+
+### Agent Model Used
+
+### Debug Log References
+
+### Completion Notes List
+
+### File List
