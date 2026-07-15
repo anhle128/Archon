@@ -347,6 +347,46 @@ async function main(): Promise<number> {
     });
   } catch (error) {
     const err = error as Error;
+    const jsonRequested = process.argv.includes('--json');
+    if (jsonRequested) {
+      const {
+        safeStringify: ss,
+        resolveCorrelationId: rci,
+        resolveIssuedAt: ria,
+        buildErrorEnvelope: bee,
+      } = await import('./commands/workflow-provider-command-envelope.js');
+      const corrId = rci(undefined);
+      const issuedAt = ria();
+      const startTime = Date.now();
+      const command =
+        process.argv[2] === 'workflow' && process.argv[3] === 'get'
+          ? 'workflow.status'
+          : process.argv[2] === 'workflow' && process.argv[3] === 'run'
+            ? 'workflow.start'
+            : 'workflow.start';
+      console.log(
+        ss(
+          bee(
+            {
+              command: command as 'workflow.start',
+              provider: 'archon',
+              correlationId: corrId,
+              issuedAt,
+            },
+            {
+              code: 'MALFORMED_REQUEST',
+              category: 'provider_contract',
+              retryable: false,
+              details: { parseError: err.message },
+              exitCode: 64,
+            },
+            startTime
+          )
+        )
+      );
+      await shutdownTelemetry();
+      return 64;
+    }
     console.error(`Error parsing arguments: ${err.message}`);
     printUsage();
     await shutdownTelemetry();

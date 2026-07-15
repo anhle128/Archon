@@ -1690,8 +1690,31 @@ async function workflowGetCommandInner(
     run = await workflowDb.getWorkflowRun(runId);
   } catch (error) {
     const err = error as Error;
+    const errCode = (error as { code?: string })?.code;
     getLog().error({ err, runId }, 'cli.workflow_get_failed');
     if (json) {
+      const isTimeout =
+        errCode === 'ETIMEDOUT' ||
+        err.message.includes('statement timeout') ||
+        err.message.includes('timeout');
+      if (isTimeout) {
+        console.log(
+          safeStringify(
+            buildErrorEnvelope(
+              meta,
+              {
+                code: 'COMMAND_TIMEOUT',
+                category: 'timeout',
+                retryable: true,
+                details: { runId },
+                exitCode: EXIT_TIMEOUT,
+              },
+              startTime
+            )
+          )
+        );
+        return EXIT_TIMEOUT;
+      }
       console.log(
         safeStringify(
           buildErrorEnvelope(
@@ -1754,7 +1777,10 @@ async function workflowGetCommandInner(
     if (contractState.gateRef) resultPayload.gateRef = contractState.gateRef;
     if (events) resultPayload.events = eventsFailed ? [] : sanitizeEventsForEnvelope(events);
     if (run.status === 'failed') {
-      resultPayload.failure = { hasError: Boolean(run.metadata.error) };
+      resultPayload.failure = {
+        hasError: Boolean(run.metadata.error),
+        errorType: run.metadata.error ? 'execution_error' : 'unknown',
+      };
     }
 
     console.log(

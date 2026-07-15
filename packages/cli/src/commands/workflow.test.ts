@@ -2216,6 +2216,77 @@ describe('workflowRunCommand — JSON envelope (Story 3.3b)', () => {
     expect((envelopeA.workflowRunRef as Record<string, unknown>).runId).toBe('run-A');
     expect((envelopeB.workflowRunRef as Record<string, unknown>).runId).toBe('run-B');
   });
+
+  // RF-26: JSON result-card persistence regression test
+  it('persists result cards via adapter.sendMessage in JSON mode', async () => {
+    await primeCommonMocks();
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const workflowDb = await import('@archon/core/db/workflows');
+    const messagesDb = await import('@archon/core/db/messages');
+
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-result-persist',
+      summary: 'Workflow completed.',
+    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-result-persist',
+      workflow_name: 'assist',
+      status: 'completed',
+      codebase_id: null,
+      working_path: '/test/path',
+      started_at: new Date(),
+      metadata: {},
+    });
+    (messagesDb.addMessage as ReturnType<typeof mock>).mockClear();
+
+    await workflowRunCommand('/test/path', 'assist', 'hello', { json: true, noWorktree: true });
+
+    const resultCalls = (messagesDb.addMessage as ReturnType<typeof mock>).mock.calls.filter(
+      (args: unknown[]) => {
+        const meta = args[3] as Record<string, unknown> | undefined;
+        return meta?.category === 'workflow_result';
+      }
+    );
+    expect(resultCalls.length).toBeGreaterThanOrEqual(1);
+    const resultCall = resultCalls[0];
+    expect(resultCall[1]).toBe('assistant');
+    expect(resultCall[2]).toBe('Workflow completed.');
+    const meta = resultCall[3] as Record<string, unknown>;
+    expect(meta.category).toBe('workflow_result');
+    expect(meta.workflowResult).toEqual({
+      workflowName: 'assist',
+      runId: 'run-result-persist',
+    });
+  });
+
+  // RF-27: JSON worktree-policy mismatch classification regression test
+  it('classifies worktree-policy mismatch as MALFORMED_REQUEST in JSON mode', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [
+        makeTestWorkflowWithSource({
+          name: 'triage',
+          description: 'Read-only triage',
+          worktree: { enabled: false },
+        }),
+      ],
+      errors: [],
+    });
+
+    await workflowRunCommand('/test/path', 'triage', 'go', {
+      json: true,
+      branchName: 'feat-x',
+    });
+
+    const envelope = lastStdoutJson();
+    expect(envelope.success).toBe(false);
+    expect(envelope.error.code).toBe('MALFORMED_REQUEST');
+    expect(envelope.error.category).toBe('provider_contract');
+    expect(envelope.error.retryable).toBe(false);
+    expect(envelope.execution.exitCode).toBe(64);
+  });
 });
 
 describe('workflowStatusCommand', () => {
