@@ -102,6 +102,11 @@ so that external controllers can create and inspect workflow references without 
 - [x] [Review][Patch] Status DB errors can still classify as workflow-domain not-found [`packages/cli/src/commands/workflow.ts`:1648]
 - [x] [Review][Patch] Verbose status forbidden-key regression coverage is missing [`packages/cli/src/commands/workflow-command-contract.test.ts`:166]
 - [x] [Review][Patch] JSON worktree-policy flag mismatches can be emitted as internal errors [`packages/cli/src/commands/workflow.ts`:737]
+- [ ] [Review][Patch] Missing `--correlation-id` value still escapes or misclassifies JSON fail-closed handling [`packages/cli/src/cli.ts`:550]
+- [ ] [Review][Patch] `workflow get --json` DB lookup timeouts are emitted as internal errors [`packages/cli/src/commands/workflow.ts`:1691]
+- [ ] [Review][Patch] Failed status envelopes still expose only an opaque failure flag [`packages/cli/src/commands/workflow.ts`:1757]
+- [ ] [Review][Patch] JSON result-card persistence has no regression test covering `workflow_result` DB persistence [`packages/cli/src/commands/workflow.test.ts`:2125]
+- [ ] [Review][Patch] JSON worktree-policy mismatch classification has no focused regression coverage [`packages/cli/src/commands/workflow.test.ts`:1182]
 
 ## Dev Notes
 
