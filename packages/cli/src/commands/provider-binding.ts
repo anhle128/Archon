@@ -8,6 +8,18 @@ import {
 } from '@archon/core/db/provider-bindings';
 import { getCodebaseById } from '@archon/core/db/codebases';
 import { createLogger } from '@archon/paths';
+import {
+  safeStringify,
+  resolveCorrelationId,
+  resolveIssuedAt,
+  buildSuccessEnvelope,
+  buildErrorEnvelope,
+} from './workflow-provider-command-envelope.js';
+import type {
+  EnvelopeMeta,
+  WorkflowProviderCommand,
+  ErrorCategory,
+} from './workflow-provider-command-envelope.js';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -39,13 +51,6 @@ interface BindingArgs {
   correlationId?: string;
 }
 
-interface EnvelopeDeps {
-  command: string;
-  provider: string;
-  correlationId: string;
-  issuedAt: string;
-}
-
 interface ValidatedArgs {
   provider: string;
   name: string;
@@ -56,85 +61,6 @@ interface ValidatedArgs {
 const EXIT_SUCCESS = 0;
 const EXIT_USAGE = 64;
 const EXIT_SOFTWARE = 70;
-
-function safeStringify(value: unknown): string {
-  const seen = new WeakSet();
-  return JSON.stringify(value, (_key: string, v: unknown): unknown => {
-    if (typeof v === 'bigint') return v.toString();
-    if (typeof v === 'function') return undefined;
-    if (typeof v === 'object' && v !== null) {
-      if (seen.has(v)) return '[Circular]';
-      seen.add(v);
-    }
-    return v;
-  });
-}
-
-function buildSuccessEnvelope(
-  deps: EnvelopeDeps,
-  bindingRef: Record<string, unknown>,
-  result: Record<string, unknown>
-): Record<string, unknown> {
-  return {
-    schemaVersion: 'workflow-command-envelope.v1',
-    intendedProducer: 'Archon',
-    intendedConsumer: 'Hermes',
-    owningSubproject: 'archon',
-    provider: deps.provider,
-    command: deps.command,
-    correlationId: deps.correlationId,
-    issuedAt: deps.issuedAt,
-    success: true,
-    bindingRef,
-    result,
-  };
-}
-
-function buildErrorEnvelope(
-  deps: EnvelopeDeps,
-  error: {
-    code: string;
-    category: string;
-    retryable: boolean;
-    details: Record<string, unknown>;
-    exitCode: number;
-  },
-  startTime: number
-): Record<string, unknown> {
-  return {
-    schemaVersion: 'workflow-command-envelope.v1',
-    intendedProducer: 'Archon',
-    intendedConsumer: 'Hermes',
-    owningSubproject: 'archon',
-    provider: deps.provider,
-    command: deps.command,
-    correlationId: deps.correlationId,
-    issuedAt: deps.issuedAt,
-    success: false,
-    error: {
-      code: error.code,
-      category: error.category,
-      retryable: error.retryable,
-      details: error.details,
-    },
-    execution: {
-      exitCode: error.exitCode,
-      timedOut: error.category === 'timeout',
-      durationMs: Date.now() - startTime,
-      stdoutRedacted: true,
-      stderrRedacted: true,
-    },
-  };
-}
-
-function resolveCorrelationId(supplied: string | undefined): string {
-  if (supplied === undefined || supplied.trim().length === 0) return crypto.randomUUID();
-  return supplied.trim();
-}
-
-function resolveIssuedAt(): string {
-  return new Date().toISOString();
-}
 
 function isBlank(v: string | undefined): boolean {
   return v === undefined || v.trim().length === 0;
@@ -152,7 +78,7 @@ function normalizeProjectRef(projectRef: string): string {
 
 function classifyError(err: unknown): {
   code: string;
-  category: string;
+  category: ErrorCategory;
   retryable: boolean;
   exitCode: number;
 } {
@@ -243,7 +169,7 @@ function emitEnvelope(envelope: Record<string, unknown>, opts: CommandOptions): 
 }
 
 async function withFailClosed(
-  command: string,
+  command: WorkflowProviderCommand,
   args: BindingArgs,
   opts: CommandOptions,
   startTime: number,
@@ -253,10 +179,10 @@ async function withFailClosed(
     return await fn();
   } catch (_error) {
     const provider = nonBlank(args.provider, 'archon');
-    const correlationId = nonBlank(args.correlationId, crypto.randomUUID());
+    const correlationId = resolveCorrelationId(args.correlationId);
     emitEnvelope(
       buildErrorEnvelope(
-        { command, provider, correlationId, issuedAt: new Date().toISOString() },
+        { command, provider, correlationId, issuedAt: resolveIssuedAt() },
         {
           code: 'INTERNAL_ERROR',
           category: 'implementation_defect',
@@ -275,7 +201,7 @@ async function withFailClosed(
 function validateAndExtract(
   args: BindingArgs,
   required: ('provider' | 'name' | 'projectRef' | 'route')[],
-  deps: EnvelopeDeps,
+  deps: EnvelopeMeta,
   opts: CommandOptions,
   startTime: number
 ): ValidatedArgs | null {
@@ -318,7 +244,7 @@ function validateAndExtract(
 
 async function resolveProjectRef(
   projectRef: string,
-  deps: EnvelopeDeps,
+  deps: EnvelopeMeta,
   opts: CommandOptions,
   startTime: number
 ): Promise<{ codebaseId: string } | number> {
@@ -374,7 +300,7 @@ export async function providerBindingCreateCommand(
     const correlationId = resolveCorrelationId(args.correlationId);
     const issuedAt = resolveIssuedAt();
     const provider = nonBlank(args.provider, 'archon');
-    const deps: EnvelopeDeps = { command: 'binding.create', provider, correlationId, issuedAt };
+    const deps: EnvelopeMeta = { command: 'binding.create', provider, correlationId, issuedAt };
 
     const validated = validateAndExtract(
       args,
@@ -399,7 +325,7 @@ export async function providerBindingCreateCommand(
       emitEnvelope(
         buildSuccessEnvelope(
           deps,
-          buildBindingRef(validated.provider, validated.name, resolved.codebaseId),
+          { bindingRef: buildBindingRef(validated.provider, validated.name, resolved.codebaseId) },
           {
             operation: 'create',
             state: row.state,
@@ -434,7 +360,7 @@ export async function providerBindingUpdateCommand(
     const correlationId = resolveCorrelationId(args.correlationId);
     const issuedAt = resolveIssuedAt();
     const provider = nonBlank(args.provider, 'archon');
-    const deps: EnvelopeDeps = { command: 'binding.update', provider, correlationId, issuedAt };
+    const deps: EnvelopeMeta = { command: 'binding.update', provider, correlationId, issuedAt };
 
     const validated = validateAndExtract(
       args,
@@ -459,7 +385,7 @@ export async function providerBindingUpdateCommand(
       emitEnvelope(
         buildSuccessEnvelope(
           deps,
-          buildBindingRef(validated.provider, validated.name, resolved.codebaseId),
+          { bindingRef: buildBindingRef(validated.provider, validated.name, resolved.codebaseId) },
           {
             operation: 'update',
             state: row.state,
@@ -493,7 +419,7 @@ export async function providerBindingStatusCommand(
     const correlationId = resolveCorrelationId(args.correlationId);
     const issuedAt = resolveIssuedAt();
     const provider = nonBlank(args.provider, 'archon');
-    const deps: EnvelopeDeps = { command: 'binding.status', provider, correlationId, issuedAt };
+    const deps: EnvelopeMeta = { command: 'binding.status', provider, correlationId, issuedAt };
 
     const validated = validateAndExtract(args, ['provider', 'name'], deps, opts, startTime);
     if (!validated) return EXIT_USAGE;
@@ -512,7 +438,7 @@ export async function providerBindingStatusCommand(
         emitEnvelope(
           buildSuccessEnvelope(
             deps,
-            buildBindingRef(validated.provider, validated.name, suppliedCodebaseId),
+            { bindingRef: buildBindingRef(validated.provider, validated.name, suppliedCodebaseId) },
             {
               operation: 'status',
               state: 'missing' as BindingStatusState,
@@ -550,7 +476,7 @@ export async function providerBindingStatusCommand(
         emitEnvelope(
           buildSuccessEnvelope(
             deps,
-            buildBindingRef(validated.provider, validated.name, bindingProjectRef),
+            { bindingRef: buildBindingRef(validated.provider, validated.name, bindingProjectRef) },
             {
               operation: 'status',
               state: 'conflicting' as BindingStatusState,
@@ -568,7 +494,7 @@ export async function providerBindingStatusCommand(
       emitEnvelope(
         buildSuccessEnvelope(
           deps,
-          buildBindingRef(validated.provider, validated.name, bindingProjectRef),
+          { bindingRef: buildBindingRef(validated.provider, validated.name, bindingProjectRef) },
           {
             operation: 'status',
             state: row.state,
@@ -600,7 +526,7 @@ export async function providerBindingRotateCommand(
     const correlationId = resolveCorrelationId(args.correlationId);
     const issuedAt = resolveIssuedAt();
     const provider = nonBlank(args.provider, 'archon');
-    const deps: EnvelopeDeps = { command: 'binding.rotate', provider, correlationId, issuedAt };
+    const deps: EnvelopeMeta = { command: 'binding.rotate', provider, correlationId, issuedAt };
 
     const validated = validateAndExtract(args, ['provider', 'name'], deps, opts, startTime);
     if (!validated) return EXIT_USAGE;
@@ -612,7 +538,7 @@ export async function providerBindingRotateCommand(
       emitEnvelope(
         buildSuccessEnvelope(
           deps,
-          buildBindingRef(validated.provider, validated.name, projectRef),
+          { bindingRef: buildBindingRef(validated.provider, validated.name, projectRef) },
           {
             operation: 'rotate',
             state: result.state,
@@ -646,7 +572,7 @@ export async function providerBindingDisableCommand(
     const correlationId = resolveCorrelationId(args.correlationId);
     const issuedAt = resolveIssuedAt();
     const provider = nonBlank(args.provider, 'archon');
-    const deps: EnvelopeDeps = { command: 'binding.disable', provider, correlationId, issuedAt };
+    const deps: EnvelopeMeta = { command: 'binding.disable', provider, correlationId, issuedAt };
 
     const validated = validateAndExtract(args, ['provider', 'name'], deps, opts, startTime);
     if (!validated) return EXIT_USAGE;
@@ -658,7 +584,7 @@ export async function providerBindingDisableCommand(
       emitEnvelope(
         buildSuccessEnvelope(
           deps,
-          buildBindingRef(validated.provider, validated.name, projectRef),
+          { bindingRef: buildBindingRef(validated.provider, validated.name, projectRef) },
           {
             operation: 'disable',
             previousState: result.previousState,
@@ -686,7 +612,7 @@ export async function providerBindingUnsupportedCommand(
 ): Promise<number> {
   const startTime = Date.now();
   const provider = nonBlank(args.provider, 'archon');
-  const deps: EnvelopeDeps = {
+  const deps: EnvelopeMeta = {
     command: 'binding.status',
     provider,
     correlationId: resolveCorrelationId(args.correlationId),

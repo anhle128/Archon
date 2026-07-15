@@ -50,7 +50,7 @@ story_location: /Users/dale/Desktop/workspace/OceanLabs/workflow-engine/archon/_
 development_status:
   epic-3: in-progress
   3-1-implement-archon-workflow-provider-binding-lifecycle: done
-  3-3a-define-shared-workflow-provider-command-envelope: backlog
+  3-3a-define-shared-workflow-provider-command-envelope: done
   3-3b-provide-archon-start-and-status-cli-json: backlog
   3-3c-provide-archon-provider-decision-command-cli-json: backlog
   3-3d-provide-archon-recovery-command-cli-json: backlog

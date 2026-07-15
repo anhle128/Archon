@@ -76,27 +76,80 @@ describe('workflow-commander contract regression (Story 3.1)', () => {
 
 // ---------------------------------------------------------------------------
 // 3.1-CI-002 [P0] — No secret/signing material is introduced in code, schema,
-// DB, or output. Risk: R-008.
+// DB, or output. Risk: R-008. Story 3.1's three target files now exist, so
+// this scan runs for real (not vacuously) on all of them.
 //
-// SKIPPED (not a vacuous scan): the target files this scenario must scan —
-// packages/core/src/db/provider-bindings.ts, packages/core/src/schemas/
-// workflow-provider-binding.ts, packages/cli/src/commands/provider-binding.ts
-// — do not exist yet. A recursive secret-pattern scan over paths that don't
-// exist would trivially "pass" today without checking anything, which is a
-// meaningless green, not a meaningful red — worse than an honest skip.
-// Activate by removing `.skip` once Task 1-3 land those three files.
+// 3.3A-CI-049 [P0, R-012] extends this same scan to the new Story 3.3a shared
+// envelope module. That file does not exist yet
+// (packages/cli/src/commands/workflow-provider-command-envelope.ts), so this
+// test is RED today via a genuine `readFileSync` ENOENT — not a vacuous pass
+// — and turns green the moment Task 1 creates the file without secret
+// material in it. Do not remove this target to make the test pass; create
+// the file instead.
 // ---------------------------------------------------------------------------
-describe('CI-002 secret/signing-material scan (Story 3.1)', () => {
-  test('none of the new provider-binding implementation files contain secret/signing-material patterns', () => {
+describe('CI-002 / 3.3A-CI-049 secret/signing-material scan (Stories 3.1 and 3.3a)', () => {
+  test('none of the provider-binding or shared envelope implementation files contain secret/signing-material patterns', () => {
     const targets = [
       join(import.meta.dir, '../../../core/src/db/provider-bindings.ts'),
       join(import.meta.dir, '../../../core/src/schemas/workflow-provider-binding.ts'),
       join(import.meta.dir, './provider-binding.ts'),
+      join(import.meta.dir, './workflow-provider-command-envelope.ts'),
     ];
     const forbidden = /secret|signing[_-]?key|private[_-]?key|BEGIN (RSA|EC|OPENSSH) PRIVATE KEY/i;
     for (const path of targets) {
       const content = readFileSync(path, 'utf8');
       expect(forbidden.test(content)).toBe(false);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3.3A-UNIT-017 [P1, R-008] — Production CLI code does not import
+// `_bmad-output` planning artifacts, fixtures, schemas, or validator scripts
+// at runtime (Dev Notes: "Production CLI code should not import `_bmad-output`
+// planning artifacts at runtime; use typed constants in source and test them
+// against the contract schema.").
+//
+// RED via genuine ENOENT until Task 1 creates
+// packages/cli/src/commands/workflow-provider-command-envelope.ts — this is
+// intentionally not `.skip()`-ed because the scan mechanism (readFileSync +
+// regex) already exists as a boundary; only the target file is missing, and
+// a missing-file failure here is a meaningful, not vacuous, red signal.
+// ---------------------------------------------------------------------------
+describe('3.3A-UNIT-017 no production _bmad-output import in the shared envelope module', () => {
+  test('workflow-provider-command-envelope.ts does not import from `_bmad-output`', () => {
+    const path = join(import.meta.dir, './workflow-provider-command-envelope.ts');
+    const content = readFileSync(path, 'utf8');
+    expect(content).not.toContain('_bmad-output');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3.3A-UNIT-031 [P1, R-004] — Duplicate local envelope helpers are removed
+// from provider-binding.ts once it consumes the shared module (Task 2:
+// "Remove the duplicated local buildSuccessEnvelope, buildErrorEnvelope,
+// safeStringify, resolveCorrelationId, and resolveIssuedAt implementations
+// from provider-binding.ts.").
+//
+// RED TODAY (not skipped): provider-binding.ts currently defines all five of
+// these locally (Story 3.1's intentional temporary duplication per W-007).
+// This is an executable regression lock, not a missing-module scaffold — the
+// target file already exists, so this test genuinely fails right now and
+// will pass only once Task 2's refactor deletes the local definitions in
+// favor of importing them from workflow-provider-command-envelope.ts.
+// ---------------------------------------------------------------------------
+describe('3.3A-UNIT-031 provider-binding.ts no longer defines its own envelope helpers after the refactor', () => {
+  test('provider-binding.ts source contains no local buildSuccessEnvelope/buildErrorEnvelope/safeStringify/resolveCorrelationId/resolveIssuedAt function declarations', () => {
+    const content = readFileSync(join(import.meta.dir, './provider-binding.ts'), 'utf8');
+    const localHelperDeclarations = [
+      'function buildSuccessEnvelope(',
+      'function buildErrorEnvelope(',
+      'function safeStringify(',
+      'function resolveCorrelationId(',
+      'function resolveIssuedAt(',
+    ];
+    for (const declaration of localHelperDeclarations) {
+      expect(content).not.toContain(declaration);
     }
   });
 });
