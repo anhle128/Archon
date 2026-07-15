@@ -88,6 +88,14 @@ so that external controllers can create and inspect workflow references without 
 - [x] [Review][Patch] Fixture field-set delta is not documented in Completion Notes [`_bmad-output/implementation-artifacts/3-3b-provide-archon-start-and-status-cli-json.md`:229]
 - [x] [Review][Patch] Contract tests named as start success checks can pass against an error envelope [`packages/cli/src/commands/workflow-command-contract.test.ts`:124]
 - [x] [Review][Patch] Workflow JSON E2E subprocess tests use ambient Archon home and database state [`packages/cli/src/commands/workflow-json.e2e.test.ts`:30]
+- [ ] [Review][Patch] Missing `--correlation-id` value can escape the JSON fail-closed boundary [`packages/cli/src/commands/workflow.ts`:527]
+- [ ] [Review][Patch] Verbose status JSON can embed forbidden event text keys [`packages/cli/src/commands/workflow.ts`:1613]
+- [ ] [Review][Patch] Failed workflow status lacks a machine-readable failure shape [`packages/cli/src/commands/workflow.ts`:1604]
+- [ ] [Review][Patch] Foreground JSON start success bypasses workflow result-card persistence [`packages/cli/src/commands/workflow.ts`:1277]
+- [ ] [Review][Patch] JSON bad-flag requests can be misclassified as workflow lookup failures [`packages/cli/src/commands/workflow.ts`:605]
+- [ ] [Review][Patch] Non-JSON direct blank workflow-name behavior is still changed [`packages/cli/src/commands/workflow.ts`:583]
+- [ ] [Review][Patch] Generic `not found` classification can mislabel status DB failures [`packages/cli/src/commands/workflow.ts`:168]
+- [ ] [Review][Patch] JSON E2E tests set `DATABASE_URL=sqlite:...`, which selects Postgres [`packages/cli/src/commands/workflow-json.e2e.test.ts`:47]
 
 ## Dev Notes
 
