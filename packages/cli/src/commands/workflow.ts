@@ -169,7 +169,10 @@ export function classifyRunError(err: unknown): ClassifiedError {
   const msg = err instanceof Error ? err.message : String(err);
   const errCode = (err as { code?: string })?.code;
 
-  if (msg.includes('not found') || msg.includes('Not found')) {
+  if (
+    (msg.includes('not found') || msg.includes('Not found')) &&
+    (msg.includes('Workflow') || msg.includes('workflow'))
+  ) {
     return {
       code: 'WORKFLOW_NOT_FOUND',
       category: 'unexpected_state',
@@ -216,6 +219,48 @@ function buildWorkflowRunRef(run: WorkflowRun): Record<string, unknown> {
     ref.projectRef = `project:${run.codebase_id}`;
   }
   return ref;
+}
+
+const ENVELOPE_FORBIDDEN_KEYS = new Set([
+  'actor',
+  'secret',
+  'profile',
+  'agent_name',
+  'agent',
+  'agent_provider',
+  'message',
+  'stdout',
+  'stderr',
+  'displaytext',
+]);
+
+function stripForbiddenKeys(obj: Record<string, unknown>): Record<string, unknown> {
+  const clean: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (ENVELOPE_FORBIDDEN_KEYS.has(key.toLowerCase())) continue;
+    if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+      clean[key] = stripForbiddenKeys(value as Record<string, unknown>);
+    } else if (Array.isArray(value)) {
+      clean[key] = value.map((item: unknown) =>
+        item !== null && typeof item === 'object' && !Array.isArray(item)
+          ? stripForbiddenKeys(item as Record<string, unknown>)
+          : item
+      );
+    } else {
+      clean[key] = value;
+    }
+  }
+  return clean;
+}
+
+function sanitizeEventsForEnvelope(events: WorkflowEventRow[]): Record<string, unknown>[] {
+  return events.map(event => {
+    const { data, ...safeFields } = event;
+    return {
+      ...safeFields,
+      data: stripForbiddenKeys(data ?? {}),
+    };
+  });
 }
 
 /**
@@ -524,11 +569,13 @@ export async function workflowRunCommand(
 ): Promise<number> {
   const startTime = Date.now();
   const jsonMode = options.json === true && options.detach !== true;
-  const correlationId = resolveCorrelationId(options.correlationId);
-  const issuedAt = resolveIssuedAt();
 
   if (jsonMode) {
+    let correlationId = 'unknown';
+    let issuedAt = new Date(0).toISOString();
     try {
+      correlationId = resolveCorrelationId(options.correlationId);
+      issuedAt = resolveIssuedAt();
       return await workflowRunCommandInner(
         cwd,
         workflowName,
@@ -560,6 +607,8 @@ export async function workflowRunCommand(
     }
   }
 
+  const correlationId = resolveCorrelationId(options.correlationId);
+  const issuedAt = resolveIssuedAt();
   return await workflowRunCommandInner(
     cwd,
     workflowName,
@@ -581,7 +630,34 @@ async function workflowRunCommandInner(
   startTime: number
 ): Promise<number> {
   if (!workflowName?.trim()) {
-    throw new Error('Workflow name is required');
+    if (options.json) throw new Error('Workflow name is required');
+  }
+
+  // Validate mutually exclusive flags early in JSON mode — before workflow
+  // resolution — so --json classifies them as MALFORMED_REQUEST rather than
+  // WORKFLOW_NOT_FOUND. Non-JSON mode validates after resolution (original order).
+  if (options.json) {
+    if (options.branchName !== undefined && options.noWorktree) {
+      throw new Error(
+        '--branch and --no-worktree are mutually exclusive.\n' +
+          '  --branch creates an isolated worktree (safe).\n' +
+          '  --no-worktree runs directly in your repo (no isolation).\n' +
+          'Use one or the other.'
+      );
+    }
+    if (options.noWorktree && options.fromBranch !== undefined) {
+      throw new Error(
+        '--from/--from-branch has no effect with --no-worktree.\n' +
+          'Remove --from or drop --no-worktree.'
+      );
+    }
+    if (options.resume && options.branchName !== undefined) {
+      throw new Error(
+        '--resume and --branch are mutually exclusive.\n' +
+          '  --resume reuses the existing worktree from the failed run.\n' +
+          '  Remove --branch when using --resume.'
+      );
+    }
   }
 
   const effectiveDiscoveryCwd = options.discoveryCwd ?? cwd;
@@ -628,28 +704,29 @@ async function workflowRunCommandInner(
     );
   }
 
-  // Validate mutually exclusive flags (defensive — cli.ts checks these for UX, but
-  // workflowRunCommand is the authoritative boundary for programmatic callers)
-  if (options.branchName !== undefined && options.noWorktree) {
-    throw new Error(
-      '--branch and --no-worktree are mutually exclusive.\n' +
-        '  --branch creates an isolated worktree (safe).\n' +
-        '  --no-worktree runs directly in your repo (no isolation).\n' +
-        'Use one or the other.'
-    );
-  }
-  if (options.noWorktree && options.fromBranch !== undefined) {
-    throw new Error(
-      '--from/--from-branch has no effect with --no-worktree.\n' +
-        'Remove --from or drop --no-worktree.'
-    );
-  }
-  if (options.resume && options.branchName !== undefined) {
-    throw new Error(
-      '--resume and --branch are mutually exclusive.\n' +
-        '  --resume reuses the existing worktree from the failed run.\n' +
-        '  Remove --branch when using --resume.'
-    );
+  // Validate mutually exclusive flags for non-JSON mode (JSON mode validates earlier).
+  if (!options.json) {
+    if (options.branchName !== undefined && options.noWorktree) {
+      throw new Error(
+        '--branch and --no-worktree are mutually exclusive.\n' +
+          '  --branch creates an isolated worktree (safe).\n' +
+          '  --no-worktree runs directly in your repo (no isolation).\n' +
+          'Use one or the other.'
+      );
+    }
+    if (options.noWorktree && options.fromBranch !== undefined) {
+      throw new Error(
+        '--from/--from-branch has no effect with --no-worktree.\n' +
+          'Remove --from or drop --no-worktree.'
+      );
+    }
+    if (options.resume && options.branchName !== undefined) {
+      throw new Error(
+        '--resume and --branch are mutually exclusive.\n' +
+          '  --resume reuses the existing worktree from the failed run.\n' +
+          '  Remove --branch when using --resume.'
+      );
+    }
   }
 
   // Reconcile workflow-level worktree policy with invocation flags.
@@ -1274,6 +1351,22 @@ async function workflowRunCommandInner(
       return EXIT_SOFTWARE;
     }
 
+    // Persist result card for Web UI (adapter is silent in JSON mode — no stdout).
+    if ('summary' in result && result.summary) {
+      try {
+        await adapter.sendMessage(conversation.id, result.summary, {
+          category: 'workflow_result',
+          segment: 'new',
+          workflowResult: { workflowName: workflow.name, runId: result.workflowRunId },
+        });
+      } catch (surfaceError) {
+        getLog().warn(
+          { err: surfaceError as Error, conversationId: conversation.id },
+          'cli.workflow_result_surface_failed'
+        );
+      }
+    }
+
     const contractState = mapWorkflowRunToContractState(persistedRun);
     const resultPayload: Record<string, unknown> = {
       operation: 'start',
@@ -1610,7 +1703,10 @@ export async function workflowGetCommand(
     };
     if (contractState.actionRequired) resultPayload.actionRequired = true;
     if (contractState.gateRef) resultPayload.gateRef = contractState.gateRef;
-    if (events) resultPayload.events = eventsFailed ? [] : events;
+    if (events) resultPayload.events = eventsFailed ? [] : sanitizeEventsForEnvelope(events);
+    if (run.status === 'failed' && run.metadata.error) {
+      resultPayload.failure = { hasError: true };
+    }
 
     console.log(
       safeStringify(

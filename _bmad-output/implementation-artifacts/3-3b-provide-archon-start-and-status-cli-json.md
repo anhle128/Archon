@@ -88,14 +88,14 @@ so that external controllers can create and inspect workflow references without 
 - [x] [Review][Patch] Fixture field-set delta is not documented in Completion Notes [`_bmad-output/implementation-artifacts/3-3b-provide-archon-start-and-status-cli-json.md`:229]
 - [x] [Review][Patch] Contract tests named as start success checks can pass against an error envelope [`packages/cli/src/commands/workflow-command-contract.test.ts`:124]
 - [x] [Review][Patch] Workflow JSON E2E subprocess tests use ambient Archon home and database state [`packages/cli/src/commands/workflow-json.e2e.test.ts`:30]
-- [ ] [Review][Patch] Missing `--correlation-id` value can escape the JSON fail-closed boundary [`packages/cli/src/commands/workflow.ts`:527]
-- [ ] [Review][Patch] Verbose status JSON can embed forbidden event text keys [`packages/cli/src/commands/workflow.ts`:1613]
-- [ ] [Review][Patch] Failed workflow status lacks a machine-readable failure shape [`packages/cli/src/commands/workflow.ts`:1604]
-- [ ] [Review][Patch] Foreground JSON start success bypasses workflow result-card persistence [`packages/cli/src/commands/workflow.ts`:1277]
-- [ ] [Review][Patch] JSON bad-flag requests can be misclassified as workflow lookup failures [`packages/cli/src/commands/workflow.ts`:605]
-- [ ] [Review][Patch] Non-JSON direct blank workflow-name behavior is still changed [`packages/cli/src/commands/workflow.ts`:583]
-- [ ] [Review][Patch] Generic `not found` classification can mislabel status DB failures [`packages/cli/src/commands/workflow.ts`:168]
-- [ ] [Review][Patch] JSON E2E tests set `DATABASE_URL=sqlite:...`, which selects Postgres [`packages/cli/src/commands/workflow-json.e2e.test.ts`:47]
+- [x] [Review][Patch] Missing `--correlation-id` value can escape the JSON fail-closed boundary [`packages/cli/src/commands/workflow.ts`:527]
+- [x] [Review][Patch] Verbose status JSON can embed forbidden event text keys [`packages/cli/src/commands/workflow.ts`:1613]
+- [x] [Review][Patch] Failed workflow status lacks a machine-readable failure shape [`packages/cli/src/commands/workflow.ts`:1604]
+- [x] [Review][Patch] Foreground JSON start success bypasses workflow result-card persistence [`packages/cli/src/commands/workflow.ts`:1277]
+- [x] [Review][Patch] JSON bad-flag requests can be misclassified as workflow lookup failures [`packages/cli/src/commands/workflow.ts`:605]
+- [x] [Review][Patch] Non-JSON direct blank workflow-name behavior is still changed [`packages/cli/src/commands/workflow.ts`:583]
+- [x] [Review][Patch] Generic `not found` classification can mislabel status DB failures [`packages/cli/src/commands/workflow.ts`:168]
+- [x] [Review][Patch] JSON E2E tests set `DATABASE_URL=sqlite:...`, which selects Postgres [`packages/cli/src/commands/workflow-json.e2e.test.ts`:47]
 
 ## Dev Notes
 
@@ -249,10 +249,11 @@ Unexpected for this story:
 
 - **Fixture field-set delta (W-3.3B-002):** The illustrative fixtures `start-success.json` and `status-success.json` contain `phase` and `projectBindingRef` (start) / `phase` and `gateRef` (status) fields that are BMAD/Hermes-owned concepts excluded from Archon's scope by epics.md line 17. This story's runtime envelopes intentionally omit `phase` and `projectBindingRef` — no fake values are fabricated. The `gateRef` field IS emitted when a run is paused on an approval gate (matching the status fixture's `gateRef` shape). Contract test `3.3B-CONTRACT-037` explicitly asserts this delta. The `result` object is `"additionalProperties": true` in the schema, so omitting these fields requires no contract change.
 - **Fix pass 1 (RF-01 through RF-08):** All 8 review findings addressed in a single fix pass. RF-01: guarded resume console.log with `if (!options.json)`. RF-02: removed `'failed to load'` from MALFORMED_REQUEST pattern, added `'is required'`. RF-03: reused command-level `issuedAt` in error envelope catch block instead of re-resolving. RF-04: restored non-JSON error message to `'Workflow name is required'`. RF-05: added `3.3B-UNIT-016b` test for paused interactive-loop JSON mode. RF-06: documented fixture field-set delta in these Completion Notes. RF-07: added `expect(envelope.success)` assertions and `getWorkflowRun` mocks to CONTRACT-036/037. RF-08: added isolated `ARCHON_HOME`/`DATABASE_URL` to E2E subprocess tests.
+- **Fix pass 2 (RF-09 through RF-16):** All 8 second-review findings addressed. RF-09: moved `resolveCorrelationId`/`resolveIssuedAt` inside JSON-mode try/catch. RF-10: added `sanitizeEventsForEnvelope`/`stripForbiddenKeys` to strip contract-forbidden keys from verbose event data. RF-11: added `failure: { hasError: true }` to failed-run status without leaking raw error text. RF-12: added result-card persistence (`adapter.sendMessage`) to JSON success path. RF-13: moved flag validation before workflow resolution for JSON mode only. RF-14: guarded empty-name throw with `if (options.json)` to preserve non-JSON behavior. RF-15: narrowed `classifyRunError` 'not found' pattern to require 'Workflow' context. RF-16: removed `DATABASE_URL` from E2E child env (was incorrectly selecting Postgres).
 
 ### File List
 
-- `packages/cli/src/commands/workflow.ts` — main implementation: `workflowRunCommand`, `workflowGetCommand`, `mapWorkflowRunToContractState`, `classifyRunError`, `buildWorkflowRunRef`
+- `packages/cli/src/commands/workflow.ts` — main implementation: `workflowRunCommand`, `workflowGetCommand`, `mapWorkflowRunToContractState`, `classifyRunError`, `buildWorkflowRunRef`, `sanitizeEventsForEnvelope`, `stripForbiddenKeys`
 - `packages/cli/src/commands/workflow.test.ts` — unit tests including `3.3B-UNIT-016b` for paused interactive-loop
 - `packages/cli/src/commands/workflow-command-contract.test.ts` — contract tests for start/status envelope shape
 - `packages/cli/src/commands/workflow-json.e2e.test.ts` — E2E subprocess tests with isolated ARCHON_HOME/DATABASE_URL
@@ -261,13 +262,21 @@ Unexpected for this story:
 
 ### Fix Pass Record
 
-| Finding | Description                                    | Fix                                                 | Files                               |
-| ------- | ---------------------------------------------- | --------------------------------------------------- | ----------------------------------- |
-| RF-01   | Resume console.log corrupts JSON stdout        | Added `if (!options.json)` guard                    | `workflow.ts`                       |
-| RF-02   | `'failed to load'` misclassifies resume errors | Replaced with `'is required'` pattern               | `workflow.ts`                       |
-| RF-03   | Error envelope re-resolves `issuedAt`          | Reused command-level `issuedAt` variable            | `workflow.ts`                       |
-| RF-04   | Non-JSON error message changed                 | Restored to `'Workflow name is required'`           | `workflow.ts`                       |
-| RF-05   | Missing paused interactive-loop test           | Added `3.3B-UNIT-016b`                              | `workflow.test.ts`                  |
-| RF-06   | Fixture delta not documented                   | Added Completion Notes entry                        | story file                          |
-| RF-07   | Contract tests pass against error envelope     | Added `success` assertions + `getWorkflowRun` mocks | `workflow-command-contract.test.ts` |
-| RF-08   | E2E tests use ambient state                    | Added isolated `ARCHON_HOME`/`DATABASE_URL`         | `workflow-json.e2e.test.ts`         |
+| Finding | Description                                    | Fix                                                             | Files                               |
+| ------- | ---------------------------------------------- | --------------------------------------------------------------- | ----------------------------------- |
+| RF-01   | Resume console.log corrupts JSON stdout        | Added `if (!options.json)` guard                                | `workflow.ts`                       |
+| RF-02   | `'failed to load'` misclassifies resume errors | Replaced with `'is required'` pattern                           | `workflow.ts`                       |
+| RF-03   | Error envelope re-resolves `issuedAt`          | Reused command-level `issuedAt` variable                        | `workflow.ts`                       |
+| RF-04   | Non-JSON error message changed                 | Restored to `'Workflow name is required'`                       | `workflow.ts`                       |
+| RF-05   | Missing paused interactive-loop test           | Added `3.3B-UNIT-016b`                                          | `workflow.test.ts`                  |
+| RF-06   | Fixture delta not documented                   | Added Completion Notes entry                                    | story file                          |
+| RF-07   | Contract tests pass against error envelope     | Added `success` assertions + `getWorkflowRun` mocks             | `workflow-command-contract.test.ts` |
+| RF-08   | E2E tests use ambient state                    | Added isolated `ARCHON_HOME`/`DATABASE_URL`                     | `workflow-json.e2e.test.ts`         |
+| RF-09   | `--correlation-id` escape from fail-closed     | Moved `resolveCorrelationId`/`resolveIssuedAt` inside try/catch | `workflow.ts`                       |
+| RF-10   | Verbose events embed forbidden keys            | Added `sanitizeEventsForEnvelope` with recursive stripping      | `workflow.ts`                       |
+| RF-11   | Failed status lacks failure shape              | Added `failure: { hasError: true }` (no raw text)               | `workflow.ts`                       |
+| RF-12   | JSON start bypasses result-card persistence    | Added `adapter.sendMessage` in JSON success path                | `workflow.ts`                       |
+| RF-13   | Bad-flag misclassified as lookup failure       | Moved flag validation before resolution (JSON mode)             | `workflow.ts`                       |
+| RF-14   | Non-JSON blank name behavior changed           | Guarded name check with `if (options.json)`                     | `workflow.ts`                       |
+| RF-15   | Generic 'not found' mislabels DB failures      | Narrowed pattern to require 'Workflow' context                  | `workflow.ts`                       |
+| RF-16   | E2E tests DATABASE_URL selects Postgres        | Removed DATABASE_URL from child env                             | `workflow-json.e2e.test.ts`         |

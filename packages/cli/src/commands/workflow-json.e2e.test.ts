@@ -40,15 +40,16 @@ interface CliResult {
 }
 
 async function runCli(args: string[], cwd: string = REPO_ROOT): Promise<CliResult> {
+  const childEnv: Record<string, string> = {
+    ...(process.env as Record<string, string>),
+    ARCHON_HOME: isolatedHome,
+  };
+  delete childEnv.DATABASE_URL;
   const proc = Bun.spawn(['bun', CLI_ENTRY, ...args], {
     cwd,
     stdout: 'pipe',
     stderr: 'pipe',
-    env: {
-      ...process.env,
-      ARCHON_HOME: isolatedHome,
-      DATABASE_URL: `sqlite:${join(isolatedHome, 'test.db')}`,
-    },
+    env: childEnv,
   });
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(proc.stdout).text(),

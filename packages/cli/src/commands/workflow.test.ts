@@ -370,11 +370,14 @@ describe('workflowListCommand', () => {
 describe('workflowRunCommand', () => {
   let consoleSpy: ReturnType<typeof spyOn>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
     mockLogger.warn.mockClear();
     mockLogger.error.mockClear();
     mockLogger.info.mockClear();
+    // Clear workflow discovery mock to prevent leaks from previous tests
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockClear();
   });
 
   afterEach(() => {
