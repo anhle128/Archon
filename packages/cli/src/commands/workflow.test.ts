@@ -17,7 +17,10 @@ import {
   workflowCleanupCommand,
   workflowResetSessionsCommand,
   buildDetachedRunCmd,
+  mapWorkflowRunToContractState,
+  classifyRunError,
 } from './workflow';
+import type { WorkflowRunOptions } from './workflow';
 
 const mockLogger = {
   fatal: mock(() => undefined),
@@ -154,6 +157,10 @@ mock.module('@archon/core/db/workflows', () => ({
 mock.module('@archon/core/db/workflow-events', () => ({
   listWorkflowEvents: mock(() => Promise.resolve([])),
   createWorkflowEvent: mock(() => Promise.resolve()),
+}));
+
+mock.module('@archon/core/db/users', () => ({
+  findOrCreateUserByPlatformIdentity: mock(() => Promise.resolve({ id: 'user-123' })),
 }));
 
 // Reset-sessions runs the real resetWorkflowNodeSessions operation over this mocked
@@ -1523,7 +1530,7 @@ describe('workflowRunCommand', () => {
     // Should not throw — the CLIAdapter swallows the DB error and logs a warn
     await expect(
       workflowRunCommand('/test/path', 'assist', 'hello', { noWorktree: true })
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(0);
 
     // CLIAdapter logs 'cli_message_persist_failed' when addMessage throws internally
     expect(mockLogger.warn).toHaveBeenCalledWith(
@@ -1561,7 +1568,7 @@ describe('workflowRunCommand', () => {
     // Should not throw — dispatch failure must not block workflow execution
     await expect(
       workflowRunCommand('/test/path', 'assist', 'hello', { noWorktree: true })
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(0);
 
     // executeWorkflow was still called despite dispatch failure
     expect(executeWorkflow).toHaveBeenCalledTimes(1);
@@ -1627,13 +1634,8 @@ describe('workflowRunCommand', () => {
 // "Working directory: ...", "\nWorkflow completed successfully.") and never
 // builds an envelope, so these fail for real, not vacuously.
 //
-// `correlationId` is not yet a field on `WorkflowRunOptions` (Task 1 adds
-// it) — tests that need it use a local structural-superset type instead of
-// `@ts-expect-error`, so no suppression comment needs to be removed later.
+// `correlationId` is now a real field on `WorkflowRunOptions` (added by Story 3.3b).
 // ---------------------------------------------------------------------------
-type WorkflowRunOptionsWithCorrelation = Parameters<typeof workflowRunCommand>[3] & {
-  correlationId?: string;
-};
 
 describe('workflowRunCommand — JSON envelope (Story 3.3b)', () => {
   let consoleSpy: ReturnType<typeof spyOn>;
@@ -1892,7 +1894,7 @@ describe('workflowRunCommand — JSON envelope (Story 3.3b)', () => {
         json: true,
         noWorktree: true,
       })
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(78);
 
     const envelope = lastStdoutJson();
     expect(envelope.success).toBe(false);
@@ -1912,6 +1914,9 @@ describe('workflowRunCommand — JSON envelope (Story 3.3b)', () => {
     await primeCommonMocks();
     const { executeWorkflow } = await import('@archon/workflows/executor');
     const workflowDb = await import('@archon/core/db/workflows');
+
+    // Clear mock call history so we can detect when executeWorkflow is called in this test
+    (executeWorkflow as ReturnType<typeof mock>).mockClear();
 
     let resolveExec: (value: { success: true; workflowRunId: string }) => void = () => {};
     (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(
@@ -1936,9 +1941,14 @@ describe('workflowRunCommand — JSON envelope (Story 3.3b)', () => {
     });
 
     try {
-      // Give pending microtasks a chance to run — no envelope should exist yet.
-      await Promise.resolve();
-      await Promise.resolve();
+      // Wait for executeWorkflow to actually be called (it has many async ops before it).
+      // Check every microtask for up to 100ms.
+      let waited = 0;
+      while ((executeWorkflow as ReturnType<typeof mock>).mock.calls.length === 0 && waited < 100) {
+        await Promise.resolve();
+        waited++;
+      }
+      // Now that executeWorkflow is pending, no envelope should exist yet.
       expect(consoleSpy).not.toHaveBeenCalled();
     } finally {
       // Always unblock executeWorkflow so runPromise settles, even if the
@@ -2040,7 +2050,7 @@ describe('workflowRunCommand — JSON envelope (Story 3.3b)', () => {
         metadata: {},
       });
 
-      const opts: WorkflowRunOptionsWithCorrelation = {
+      const opts: WorkflowRunOptions = {
         json: true,
         noWorktree: true,
         correlationId: 'corr-story-3-3b-success',
@@ -2058,7 +2068,7 @@ describe('workflowRunCommand — JSON envelope (Story 3.3b)', () => {
         errors: [],
       });
 
-      const opts: WorkflowRunOptionsWithCorrelation = {
+      const opts: WorkflowRunOptions = {
         json: true,
         noWorktree: true,
         correlationId: 'corr-story-3-3b-error',
@@ -2133,7 +2143,7 @@ describe('workflowRunCommand — JSON envelope (Story 3.3b)', () => {
       started_at: new Date(),
       metadata: {},
     });
-    const optsA: WorkflowRunOptionsWithCorrelation = {
+    const optsA: WorkflowRunOptions = {
       json: true,
       noWorktree: true,
       correlationId: 'corr-A',
@@ -2154,7 +2164,7 @@ describe('workflowRunCommand — JSON envelope (Story 3.3b)', () => {
       started_at: new Date(),
       metadata: {},
     });
-    const optsB: WorkflowRunOptionsWithCorrelation = {
+    const optsB: WorkflowRunOptions = {
       json: true,
       noWorktree: true,
       correlationId: 'corr-B',
@@ -2564,16 +2574,7 @@ describe('workflowGetCommand', () => {
       const workflowDb = await import('@archon/core/db/workflows');
       (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
 
-      // 4th positional param `correlationId` does not exist yet (Task 2 adds
-      // it additively) — cast through unknown to call the future signature
-      // without a `@ts-expect-error` that would need manual removal later.
-      const call = workflowGetCommand as unknown as (
-        runId: string,
-        json?: boolean,
-        verbose?: boolean,
-        correlationId?: string
-      ) => Promise<number>;
-      await call('nope', true, false, 'corr-get-not-found');
+      await workflowGetCommand('nope', true, false, 'corr-get-not-found');
 
       const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
       expect(envelope.correlationId).toBe('corr-get-not-found');
@@ -2591,13 +2592,7 @@ describe('workflowGetCommand', () => {
         metadata: {},
       });
 
-      const call = workflowGetCommand as unknown as (
-        runId: string,
-        json?: boolean,
-        verbose?: boolean,
-        correlationId?: string
-      ) => Promise<number>;
-      await call('run-corr', true, false, 'corr-get-success');
+      await workflowGetCommand('run-corr', true, false, 'corr-get-success');
 
       const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
       expect(envelope.correlationId).toBe('corr-get-success');
@@ -2719,76 +2714,110 @@ describe('workflowGetCommand', () => {
 // `./workflow`, replace the `it.skip(...)` calls below with `it(...)`,
 // and import the real function(s) at the top of each block.
 // ---------------------------------------------------------------------------
-describe('workflow.ts run-state → contract-state mapping helper (Story 3.3b Task 3 — not yet implemented)', () => {
+describe('workflow.ts run-state → contract-state mapping helper (Story 3.3b Task 3)', () => {
   // 3.3B-UNIT-002 [P0] R-006
-  it.skip('3.3B-UNIT-002: status="pending" maps to { state: "pending", terminal: false }', () => {
-    // Expected once implemented: mapFn({ status: 'pending', metadata: {} })
-    //   → { state: 'pending', terminal: false }
+  it('3.3B-UNIT-002: status="pending" maps to { state: "pending", terminal: false }', () => {
+    const result = mapWorkflowRunToContractState({ status: 'pending', metadata: {} });
+    expect(result).toEqual({ state: 'pending', terminal: false });
   });
 
   // 3.3B-UNIT-003 [P0] R-006
-  it.skip('3.3B-UNIT-003: status="running" maps to { state: "running", terminal: false } (never a fake terminal)', () => {
-    // Expected: mapFn({ status: 'running', metadata: {} })
-    //   → { state: 'running', terminal: false }
+  it('3.3B-UNIT-003: status="running" maps to { state: "running", terminal: false }', () => {
+    const result = mapWorkflowRunToContractState({ status: 'running', metadata: {} });
+    expect(result).toEqual({ state: 'running', terminal: false });
   });
 
   // 3.3B-UNIT-004 [P0] R-006
-  it.skip('3.3B-UNIT-004: paused + approval context (type !== "interactive_loop") maps to waiting-for-approval with actionRequired/gateRef', () => {
-    // Expected: mapFn({ status: 'paused', metadata: { approval: { nodeId: 'n1', message: 'm' } } })
-    //   → { state: 'waiting-for-approval', terminal: false, actionRequired: true,
-    //       gateRef: { gateId: 'n1', kind: 'human-decision' } }
+  it('3.3B-UNIT-004: paused + approval context (type !== "interactive_loop") maps to waiting-for-approval with actionRequired/gateRef', () => {
+    const result = mapWorkflowRunToContractState({
+      status: 'paused',
+      metadata: { approval: { nodeId: 'n1', message: 'm' } },
+    });
+    expect(result.state).toBe('waiting-for-approval');
+    expect(result.terminal).toBe(false);
+    expect(result.actionRequired).toBe(true);
+    expect(result.gateRef).toEqual({ gateId: 'n1', kind: 'human-decision' });
   });
 
   // 3.3B-UNIT-005 [P0] R-006
-  it.skip('3.3B-UNIT-005: paused + interactive-loop context maps to "paused" with NO human-decision gate', () => {
-    // Expected: mapFn({ status: 'paused', metadata: { approval: { nodeId: 'n1', message: 'm', type: 'interactive_loop' } } })
-    //   → { state: 'paused', terminal: false } (no actionRequired, no gateRef)
+  it('3.3B-UNIT-005: paused + interactive-loop context maps to "paused" with NO human-decision gate', () => {
+    const result = mapWorkflowRunToContractState({
+      status: 'paused',
+      metadata: { approval: { nodeId: 'n1', message: 'm', type: 'interactive_loop' } },
+    });
+    expect(result).toEqual({ state: 'paused', terminal: false });
   });
 
   // 3.3B-UNIT-006 [P0] R-006
-  it.skip('3.3B-UNIT-006: paused + absent/malformed approval metadata conservatively maps to "paused"', () => {
-    // Expected: mapFn({ status: 'paused', metadata: {} })
-    //   → { state: 'paused', terminal: false }
-    // Expected: mapFn({ status: 'paused', metadata: { approval: { nodeId: 'n1' } } }) // missing `message` — isApprovalContext() rejects it
-    //   → { state: 'paused', terminal: false }
+  it('3.3B-UNIT-006: paused + absent/malformed approval metadata conservatively maps to "paused"', () => {
+    expect(mapWorkflowRunToContractState({ status: 'paused', metadata: {} })).toEqual({
+      state: 'paused',
+      terminal: false,
+    });
+    expect(
+      mapWorkflowRunToContractState({
+        status: 'paused',
+        metadata: { approval: { nodeId: 'n1' } },
+      })
+    ).toEqual({ state: 'paused', terminal: false });
   });
 
   // 3.3B-UNIT-007 [P0] R-006,R-014
-  it.skip('3.3B-UNIT-007: completed/failed/cancelled all map terminal:true and never invent a "phase" field (W-3.3B-002)', () => {
-    // Expected: mapFn({ status: 'completed', metadata: {} }) → { state: 'completed', terminal: true }
-    // Expected: mapFn({ status: 'failed', metadata: {} })    → { state: 'failed', terminal: true }
-    // Expected: mapFn({ status: 'cancelled', metadata: {} }) → { state: 'cancelled', terminal: true }
-    // None of the three results may contain a `phase` key.
+  it('3.3B-UNIT-007: completed/failed/cancelled all map terminal:true and never invent a "phase" field', () => {
+    const completed = mapWorkflowRunToContractState({ status: 'completed', metadata: {} });
+    expect(completed).toEqual({ state: 'completed', terminal: true });
+    expect('phase' in completed).toBe(false);
+
+    const failed = mapWorkflowRunToContractState({ status: 'failed', metadata: {} });
+    expect(failed).toEqual({ state: 'failed', terminal: true });
+    expect('phase' in failed).toBe(false);
+
+    const cancelled = mapWorkflowRunToContractState({ status: 'cancelled', metadata: {} });
+    expect(cancelled).toEqual({ state: 'cancelled', terminal: true });
+    expect('phase' in cancelled).toBe(false);
   });
 
   // 3.3B-UNIT-030 [P1] R-006,R-018
-  it.skip('3.3B-UNIT-030: cancelled maps to terminal:true (OS-level kill guarantee is waived, W-3.3B-006)', () => {
-    // Expected: mapFn({ status: 'cancelled', metadata: {} }) → { state: 'cancelled', terminal: true }
-    // This only locks the STATE MAPPING for an already-recorded cancellation —
-    // it does not assert anything about whether an externally-killed process
-    // reliably reaches this code path at all (waived, see W-3.3B-006).
+  it('3.3B-UNIT-030: cancelled maps to terminal:true', () => {
+    const result = mapWorkflowRunToContractState({ status: 'cancelled', metadata: {} });
+    expect(result).toEqual({ state: 'cancelled', terminal: true });
   });
 });
 
-describe('workflow.ts classifyRunError helper (Story 3.3b Task 1 — not yet implemented)', () => {
-  // 3.3B-UNIT-017 [P1] R-009,R-018 — table-driven classification for the
-  // four documented exit codes, mirroring provider-binding.ts's
-  // classifyError shape ({ code, category, retryable, exitCode }).
-  it.skip('3.3B-UNIT-017: classifies bad-flags/unknown-workflow/internal/timeout into the documented {code,category,retryable,exitCode} table', () => {
-    // Expected table (Dev Notes "Existing Code State To Preserve" + Task 1):
-    //   bad flags / mutually-exclusive flag combo → { code: 'MALFORMED_REQUEST', category: 'provider_contract', retryable: false, exitCode: 64 }
-    //   unknown workflow name                     → { code: 'WORKFLOW_NOT_FOUND', category: 'unexpected_state', retryable: false, exitCode: 78 }
-    //   DB / codebase / worktree failure          → { code: 'INTERNAL_ERROR', category: 'implementation_defect', retryable: false, exitCode: 70 }
-    //   timeout-message-pattern error              → { code: 'COMMAND_TIMEOUT', category: 'timeout', retryable: true, exitCode: 69 }
+describe('workflow.ts classifyRunError helper (Story 3.3b Task 1)', () => {
+  // 3.3B-UNIT-017 [P1] R-009,R-018
+  it('3.3B-UNIT-017: classifies bad-flags/unknown-workflow/internal/timeout into the documented table', () => {
+    expect(
+      classifyRunError(new Error('--branch and --no-worktree are mutually exclusive.'))
+    ).toEqual({
+      code: 'MALFORMED_REQUEST',
+      category: 'provider_contract',
+      retryable: false,
+      exitCode: 64,
+    });
+    expect(classifyRunError(new Error("Workflow 'foo' not found."))).toEqual({
+      code: 'WORKFLOW_NOT_FOUND',
+      category: 'unexpected_state',
+      retryable: false,
+      exitCode: 78,
+    });
+    expect(classifyRunError(new Error('some internal failure'))).toEqual({
+      code: 'INTERNAL_ERROR',
+      category: 'implementation_defect',
+      retryable: false,
+      exitCode: 70,
+    });
   });
 
-  // 3.3B-UNIT-029 [P1] R-009,R-018 — a timeout-shaped error (matching
-  // provider-binding.ts:136-138's pattern: `err.code === 'ETIMEDOUT'` or a
-  // message containing "timeout"/"statement timeout") classifies as
-  // COMMAND_TIMEOUT, not a generic INTERNAL_ERROR.
-  it.skip('3.3B-UNIT-029: a timeout-shaped error classifies as COMMAND_TIMEOUT (not INTERNAL_ERROR)', () => {
-    // Expected: classifyRunError(Object.assign(new Error('statement timeout'), { code: 'ETIMEDOUT' }))
-    //   → { code: 'COMMAND_TIMEOUT', category: 'timeout', retryable: true, exitCode: 69 }
+  // 3.3B-UNIT-029 [P1] R-009,R-018
+  it('3.3B-UNIT-029: a timeout-shaped error classifies as COMMAND_TIMEOUT', () => {
+    const err = Object.assign(new Error('statement timeout'), { code: 'ETIMEDOUT' });
+    expect(classifyRunError(err)).toEqual({
+      code: 'COMMAND_TIMEOUT',
+      category: 'timeout',
+      retryable: true,
+      exitCode: 69,
+    });
   });
 });
 

@@ -501,33 +501,41 @@ async function main(): Promise<number> {
           case 'run': {
             const workflowName = positionals[2];
             if (!workflowName) {
-              console.error('Usage: archon workflow run <name> [message]');
-              return 1;
+              if (jsonFlag) {
+                // Let workflowRunCommand handle the missing name as a MALFORMED_REQUEST envelope.
+                // Pass an empty string; the function's discovery + resolveWorkflowName will throw
+                // "not found" which the fail-closed boundary converts to the envelope.
+              } else {
+                console.error('Usage: archon workflow run <name> [message]');
+                return 1;
+              }
             }
             const userMessage = positionals.slice(3).join(' ') || '';
-            if (branchName !== undefined && noWorktree) {
-              console.error(
-                'Error: --branch and --no-worktree are mutually exclusive.\n' +
-                  '  --branch creates an isolated worktree (safe).\n' +
-                  '  --no-worktree runs directly in your repo (no isolation).\n' +
-                  'Use one or the other.'
-              );
-              return 1;
-            }
-            if (noWorktree && fromBranch !== undefined) {
-              console.error(
-                'Error: --from/--from-branch has no effect with --no-worktree.\n' +
-                  'Remove --from or drop --no-worktree.'
-              );
-              return 1;
-            }
-            if (resumeFlag && branchName !== undefined) {
-              console.error(
-                'Error: --resume and --branch are mutually exclusive.\n' +
-                  '  --resume reuses the existing worktree from the failed run.\n' +
-                  '  Remove --branch when using --resume.'
-              );
-              return 1;
+            if (!jsonFlag) {
+              if (branchName !== undefined && noWorktree) {
+                console.error(
+                  'Error: --branch and --no-worktree are mutually exclusive.\n' +
+                    '  --branch creates an isolated worktree (safe).\n' +
+                    '  --no-worktree runs directly in your repo (no isolation).\n' +
+                    'Use one or the other.'
+                );
+                return 1;
+              }
+              if (noWorktree && fromBranch !== undefined) {
+                console.error(
+                  'Error: --from/--from-branch has no effect with --no-worktree.\n' +
+                    'Remove --from or drop --no-worktree.'
+                );
+                return 1;
+              }
+              if (resumeFlag && branchName !== undefined) {
+                console.error(
+                  'Error: --resume and --branch are mutually exclusive.\n' +
+                    '  --resume reuses the existing worktree from the failed run.\n' +
+                    '  Remove --branch when using --resume.'
+                );
+                return 1;
+              }
             }
             const options = {
               branchName,
@@ -536,16 +544,12 @@ async function main(): Promise<number> {
               resume: resumeFlag,
               quiet: values.quiet as boolean | undefined,
               verbose: values.verbose as boolean | undefined,
-              // Stable scope for persist_session across separate CLI invocations. Without
-              // it each run gets a fresh conversation UUID, so persisted sessions never
-              // resume between runs (they only resume within chat/REST, which reuse a
-              // conversation). Pass the same id on each run to opt into cross-run resume.
               conversationId: values['conversation-id'] as string | undefined,
               detach: detachFlag,
               json: jsonFlag,
+              correlationId: values['correlation-id'] as string | undefined,
             };
-            await workflowRunCommand(effectiveCwd, workflowName, userMessage, options);
-            break;
+            return await workflowRunCommand(effectiveCwd, workflowName ?? '', userMessage, options);
           }
 
           case 'status':
@@ -555,15 +559,48 @@ async function main(): Promise<number> {
           case 'get': {
             const getRunId = positionals[2];
             if (!getRunId) {
+              if (jsonFlag) {
+                // Emit a workflow.status MALFORMED_REQUEST envelope for missing run id.
+                const {
+                  safeStringify: ss,
+                  resolveCorrelationId: rci,
+                  resolveIssuedAt: ria,
+                  buildErrorEnvelope: bee,
+                } = await import('./commands/workflow-provider-command-envelope.js');
+                const corrId = rci(values['correlation-id'] as string | undefined);
+                console.log(
+                  ss(
+                    bee(
+                      {
+                        command: 'workflow.status',
+                        provider: 'archon',
+                        correlationId: corrId,
+                        issuedAt: ria(),
+                      },
+                      {
+                        code: 'MALFORMED_REQUEST',
+                        category: 'provider_contract',
+                        retryable: false,
+                        details: {
+                          fieldErrors: [{ path: '/runId', code: 'required' }],
+                          requestAccepted: false,
+                        },
+                        exitCode: 64,
+                      },
+                      Date.now()
+                    )
+                  )
+                );
+                return 64;
+              }
               console.error('Usage: archon workflow get <run-id> [--json] [--verbose]');
               return 1;
             }
-            // Propagate the command's exit code so `get <id> && ...` and CI
-            // pipelines see a non-zero status when the run is missing.
             return await workflowGetCommand(
               getRunId,
               jsonFlag,
-              values.verbose as boolean | undefined
+              values.verbose as boolean | undefined,
+              values['correlation-id'] as string | undefined
             );
           }
 

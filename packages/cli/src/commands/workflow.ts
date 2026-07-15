@@ -30,7 +30,9 @@ import type {
 } from '@archon/workflows/schemas/workflow';
 import {
   RETRYABLE_WORKFLOW_STATUSES,
+  TERMINAL_WORKFLOW_STATUSES,
   workflowRunStatusSchema,
+  isApprovalContext,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import {
@@ -52,6 +54,14 @@ import * as userDb from '@archon/core/db/users';
 import * as git from '@archon/git';
 import { CLIAdapter } from '../adapters/cli-adapter';
 import { resolveCliUserId } from './auth';
+import {
+  safeStringify,
+  resolveCorrelationId,
+  resolveIssuedAt,
+  buildSuccessEnvelope,
+  buildErrorEnvelope,
+} from './workflow-provider-command-envelope.js';
+import type { EnvelopeMeta, ErrorCategory } from './workflow-provider-command-envelope.js';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -100,6 +110,8 @@ export interface WorkflowRunOptions {
    * `--json` alone still suppresses CLI logs but does not change the output).
    */
   json?: boolean;
+  /** Correlation ID for provider command envelopes (echoed in every envelope). */
+  correlationId?: string;
 }
 
 /**
@@ -109,6 +121,101 @@ function generateConversationId(): string {
   const timestamp = Date.now();
   const random = Math.random().toString(36).substring(2, 8);
   return `cli-${String(timestamp)}-${random}`;
+}
+
+const EXIT_SUCCESS = 0;
+const EXIT_USAGE = 64;
+const EXIT_TIMEOUT = 69;
+const EXIT_SOFTWARE = 70;
+const EXIT_RUNTIME = 78;
+
+interface ContractState {
+  state: string;
+  terminal: boolean;
+  actionRequired?: boolean;
+  gateRef?: { gateId: string; kind: string };
+}
+
+export function mapWorkflowRunToContractState(run: {
+  status: WorkflowRunStatus;
+  metadata: Record<string, unknown>;
+}): ContractState {
+  const terminal = TERMINAL_WORKFLOW_STATUSES.includes(run.status);
+
+  if (run.status === 'paused' && isApprovalContext(run.metadata.approval)) {
+    const approval = run.metadata.approval as { nodeId: string; type?: string };
+    if (approval.type === 'interactive_loop') {
+      return { state: 'paused', terminal: false };
+    }
+    return {
+      state: 'waiting-for-approval',
+      terminal: false,
+      actionRequired: true,
+      gateRef: { gateId: approval.nodeId, kind: 'human-decision' },
+    };
+  }
+
+  return { state: run.status, terminal };
+}
+
+interface ClassifiedError {
+  code: string;
+  category: ErrorCategory;
+  retryable: boolean;
+  exitCode: number;
+}
+
+export function classifyRunError(err: unknown): ClassifiedError {
+  const msg = err instanceof Error ? err.message : String(err);
+  const errCode = (err as { code?: string })?.code;
+
+  if (msg.includes('not found') || msg.includes('Not found')) {
+    return {
+      code: 'WORKFLOW_NOT_FOUND',
+      category: 'unexpected_state',
+      retryable: false,
+      exitCode: EXIT_RUNTIME,
+    };
+  }
+  if (
+    msg.includes('mutually exclusive') ||
+    msg.includes('no effect with') ||
+    msg.includes('conflicts with') ||
+    msg.includes('failed to load')
+  ) {
+    return {
+      code: 'MALFORMED_REQUEST',
+      category: 'provider_contract',
+      retryable: false,
+      exitCode: EXIT_USAGE,
+    };
+  }
+  if (errCode === 'ETIMEDOUT' || msg.includes('statement timeout') || msg.includes('timeout')) {
+    return {
+      code: 'COMMAND_TIMEOUT',
+      category: 'timeout',
+      retryable: true,
+      exitCode: EXIT_TIMEOUT,
+    };
+  }
+  return {
+    code: 'INTERNAL_ERROR',
+    category: 'implementation_defect',
+    retryable: false,
+    exitCode: EXIT_SOFTWARE,
+  };
+}
+
+function buildWorkflowRunRef(run: WorkflowRun): Record<string, unknown> {
+  const ref: Record<string, unknown> = {
+    provider: 'archon',
+    runId: run.id,
+    workflowName: run.workflow_name,
+  };
+  if (run.codebase_id) {
+    ref.projectRef = `project:${run.codebase_id}`;
+  }
+  return ref;
 }
 
 /**
@@ -414,7 +521,69 @@ export async function workflowRunCommand(
   workflowName: string,
   userMessage: string,
   options: WorkflowRunOptions = {}
-): Promise<void> {
+): Promise<number> {
+  const startTime = Date.now();
+  const jsonMode = options.json === true && options.detach !== true;
+  const correlationId = resolveCorrelationId(options.correlationId);
+  const issuedAt = resolveIssuedAt();
+
+  if (jsonMode) {
+    try {
+      return await workflowRunCommandInner(
+        cwd,
+        workflowName,
+        userMessage,
+        options,
+        correlationId,
+        issuedAt,
+        startTime
+      );
+    } catch (error) {
+      const classified = classifyRunError(error);
+      const provider = 'archon';
+      const meta: EnvelopeMeta = {
+        command: 'workflow.start',
+        provider,
+        correlationId,
+        issuedAt: resolveIssuedAt(),
+      };
+      console.log(
+        safeStringify(
+          buildErrorEnvelope(
+            meta,
+            { ...classified, details: { requestAccepted: false } },
+            startTime
+          )
+        )
+      );
+      return classified.exitCode;
+    }
+  }
+
+  return await workflowRunCommandInner(
+    cwd,
+    workflowName,
+    userMessage,
+    options,
+    correlationId,
+    issuedAt,
+    startTime
+  );
+}
+
+async function workflowRunCommandInner(
+  cwd: string,
+  workflowName: string,
+  userMessage: string,
+  options: WorkflowRunOptions,
+  correlationId: string,
+  issuedAt: string,
+  startTime: number
+): Promise<number> {
+  if (!workflowName?.trim()) {
+    throw new Error('Workflow name is required (mutually exclusive flags or missing name)');
+  }
+
   const effectiveDiscoveryCwd = options.discoveryCwd ?? cwd;
   const { workflows: workflowEntries, errors } = await loadWorkflows(effectiveDiscoveryCwd);
   const sourceCounts = countWorkflowSources(workflowEntries);
@@ -567,15 +736,17 @@ export async function workflowRunCommand(
       console.log('Track it with: archon workflow runs');
       if (logPath) console.log(`Child output: ${logPath}`);
     }
-    return;
+    return EXIT_SUCCESS;
   }
 
-  console.log(`Running workflow: ${workflowName}`);
-  console.log(`Working directory: ${cwd}`);
-  console.log('');
+  if (!options.json) {
+    console.log(`Running workflow: ${workflowName}`);
+    console.log(`Working directory: ${cwd}`);
+    console.log('');
+  }
 
-  // Create CLI adapter
-  const adapter = new CLIAdapter();
+  // Create CLI adapter (silent in JSON mode to keep stdout pure for the envelope)
+  const adapter = new CLIAdapter(options.json ? { silent: true } : undefined);
 
   // Generate conversation ID
   const conversationId = options.conversationId ?? generateConversationId();
@@ -1022,6 +1193,107 @@ export async function workflowRunCommand(
   }
 
   // Check result and exit appropriately
+  if (options.json) {
+    const meta: EnvelopeMeta = {
+      command: 'workflow.start',
+      provider: 'archon',
+      correlationId,
+      issuedAt,
+    };
+
+    if (!result.success) {
+      const runId = (result as { workflowRunId?: string }).workflowRunId;
+      if (runId) {
+        getLog().error({ err: result.error, runId }, 'cli.workflow_run_execution_failed');
+        console.log(
+          safeStringify(
+            buildErrorEnvelope(
+              meta,
+              {
+                code: 'WORKFLOW_EXECUTION_FAILED',
+                category: 'unexpected_state',
+                retryable: true,
+                details: { runId },
+                exitCode: EXIT_RUNTIME,
+              },
+              startTime
+            )
+          )
+        );
+        return EXIT_RUNTIME;
+      }
+      getLog().error({ err: result.error }, 'cli.workflow_run_execution_failed_no_run');
+      console.log(
+        safeStringify(
+          buildErrorEnvelope(
+            meta,
+            {
+              code: 'INTERNAL_ERROR',
+              category: 'implementation_defect',
+              retryable: true,
+              details: { requestAccepted: false },
+              exitCode: EXIT_SOFTWARE,
+            },
+            startTime
+          )
+        )
+      );
+      return EXIT_SOFTWARE;
+    }
+
+    let persistedRun: WorkflowRun;
+    try {
+      const loaded = await workflowDb.getWorkflowRun(result.workflowRunId);
+      if (!loaded) {
+        throw new Error('run row not found after execution');
+      }
+      persistedRun = loaded;
+    } catch (error) {
+      const err = error as Error;
+      getLog().error(
+        { err, runId: result.workflowRunId },
+        'cli.workflow_run_persisted_reload_failed'
+      );
+      console.log(
+        safeStringify(
+          buildErrorEnvelope(
+            meta,
+            {
+              code: 'INTERNAL_ERROR',
+              category: 'implementation_defect',
+              retryable: false,
+              details: { runId: result.workflowRunId },
+              exitCode: EXIT_SOFTWARE,
+            },
+            startTime
+          )
+        )
+      );
+      return EXIT_SOFTWARE;
+    }
+
+    const contractState = mapWorkflowRunToContractState(persistedRun);
+    const resultPayload: Record<string, unknown> = {
+      operation: 'start',
+      state: contractState.state,
+      terminal: contractState.terminal,
+      accepted: true,
+    };
+    if (contractState.actionRequired) resultPayload.actionRequired = true;
+    if (contractState.gateRef) resultPayload.gateRef = contractState.gateRef;
+
+    console.log(
+      safeStringify(
+        buildSuccessEnvelope(
+          meta,
+          { workflowRunRef: buildWorkflowRunRef(persistedRun) },
+          resultPayload
+        )
+      )
+    );
+    return EXIT_SUCCESS;
+  }
+
   if (result.success && 'paused' in result && result.paused) {
     console.log('\nWorkflow paused — waiting for approval.');
   } else if (result.success) {
@@ -1045,6 +1317,7 @@ export async function workflowRunCommand(
   } else {
     throw new Error(`Workflow failed: ${result.error}`);
   }
+  return EXIT_SUCCESS;
 }
 
 /**
@@ -1258,31 +1531,61 @@ export async function workflowStatusCommand(json?: boolean, verbose?: boolean): 
 export async function workflowGetCommand(
   runId: string,
   json?: boolean,
-  verbose?: boolean
+  verbose?: boolean,
+  correlationId?: string
 ): Promise<number> {
+  const startTime = Date.now();
+  const corrId = resolveCorrelationId(correlationId);
+  const issuedAt = resolveIssuedAt();
+  const meta: EnvelopeMeta = {
+    command: 'workflow.status',
+    provider: 'archon',
+    correlationId: corrId,
+    issuedAt,
+  };
+
   let run: WorkflowRun | null;
   try {
     run = await workflowDb.getWorkflowRun(runId);
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, runId }, 'cli.workflow_get_failed');
-    // In --json mode never throw — emit one parseable {ok:false} line (same
-    // contract as the write commands) so a parsing agent always gets JSON.
     if (json) {
-      console.log(JSON.stringify({ ok: false, runId, error: err.message }, null, 2));
-      return 1;
+      const classified = classifyRunError(err);
+      console.log(
+        safeStringify(
+          buildErrorEnvelope(
+            meta,
+            { ...classified, details: { requestAccepted: false } },
+            startTime
+          )
+        )
+      );
+      return classified.exitCode;
     }
     throw new Error(`Failed to get workflow run: ${err.message}`);
   }
 
   if (!run) {
-    // Not-found exits non-zero so `get <id> && ...` and CI checks see the
-    // failure (the JSON envelope already carries ok:false for parsers).
     if (json) {
-      console.log(JSON.stringify({ ok: false, runId, error: 'not_found' }, null, 2));
-    } else {
-      console.log(`Workflow run not found: ${runId}`);
+      console.log(
+        safeStringify(
+          buildErrorEnvelope(
+            meta,
+            {
+              code: 'WORKFLOW_RUN_NOT_FOUND',
+              category: 'unexpected_state',
+              retryable: false,
+              details: { runId },
+              exitCode: EXIT_RUNTIME,
+            },
+            startTime
+          )
+        )
+      );
+      return EXIT_RUNTIME;
     }
+    console.log(`Workflow run not found: ${runId}`);
     return 1;
   }
 
@@ -1297,9 +1600,22 @@ export async function workflowGetCommand(
   }
 
   if (json) {
-    const output = verbose ? { ...run, events: events ?? [] } : run;
-    console.log(JSON.stringify(output, null, 2));
-    return 0;
+    const contractState = mapWorkflowRunToContractState(run);
+    const resultPayload: Record<string, unknown> = {
+      operation: 'status',
+      state: contractState.state,
+      terminal: contractState.terminal,
+    };
+    if (contractState.actionRequired) resultPayload.actionRequired = true;
+    if (contractState.gateRef) resultPayload.gateRef = contractState.gateRef;
+    if (events) resultPayload.events = eventsFailed ? [] : events;
+
+    console.log(
+      safeStringify(
+        buildSuccessEnvelope(meta, { workflowRunRef: buildWorkflowRunRef(run) }, resultPayload)
+      )
+    );
+    return EXIT_SUCCESS;
   }
 
   console.log(`  ID:     ${run.id}`);

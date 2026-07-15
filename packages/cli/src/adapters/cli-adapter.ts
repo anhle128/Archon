@@ -17,14 +17,18 @@ function getLog(): ReturnType<typeof createLogger> {
 export interface CLIAdapterOptions {
   /** Streaming mode - 'stream' for real-time output, 'batch' for accumulated output */
   streamingMode?: 'stream' | 'batch';
+  /** When true, suppress console.log in sendMessage (DB persistence unchanged). Used by --json mode. */
+  silent?: boolean;
 }
 
 export class CLIAdapter implements IPlatformAdapter {
   private readonly streamingMode: 'stream' | 'batch';
+  private readonly silent: boolean;
   private readonly dbIdMap = new Map<string, string>(); // platform_conversation_id → DB UUID
 
   constructor(options?: CLIAdapterOptions) {
     this.streamingMode = options?.streamingMode ?? 'batch';
+    this.silent = options?.silent === true;
   }
 
   /**
@@ -40,8 +44,9 @@ export class CLIAdapter implements IPlatformAdapter {
     message: string,
     metadata?: MessageMetadata
   ): Promise<void> {
-    // Output to stdout
-    console.log(message);
+    if (!this.silent) {
+      console.log(message);
+    }
 
     // Persist assistant message for Web UI history
     const dbId = this.dbIdMap.get(conversationId);
