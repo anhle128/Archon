@@ -1,6 +1,6 @@
 # Story 3.3b: Provide Archon Start And Status CLI JSON
 
-Status: ready-for-dev
+Status: in-progress
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -77,6 +77,17 @@ so that external controllers can create and inspect workflow references without 
   - [ ] Run `bun test packages/cli/src/commands/workflow-provider-command-envelope.test.ts` (regression — this story must not modify the shared envelope module's behavior).
   - [ ] Run `bun --filter @archon/cli type-check`.
   - [ ] Run `bun run validate` before moving the story to review.
+
+### Review Findings
+
+- [ ] [Review][Patch] `workflow run --resume --json` can corrupt stdout before the envelope [`packages/cli/src/commands/workflow.ts`:887]
+- [ ] [Review][Patch] Resume hydration failures can be misclassified as provider-contract malformed requests [`packages/cli/src/commands/workflow.ts`:180]
+- [ ] [Review][Patch] JSON start error envelopes re-resolve `issuedAt` instead of using the command-level timestamp [`packages/cli/src/commands/workflow.ts`:548]
+- [ ] [Review][Patch] Non-JSON `workflowRunCommand` behavior changed for missing workflow names [`packages/cli/src/commands/workflow.ts`:583]
+- [ ] [Review][Patch] Required command-level paused interactive-loop JSON test is missing [`packages/cli/src/commands/workflow.test.ts`:2001]
+- [ ] [Review][Patch] Fixture field-set delta is not documented in Completion Notes [`_bmad-output/implementation-artifacts/3-3b-provide-archon-start-and-status-cli-json.md`:229]
+- [ ] [Review][Patch] Contract tests named as start success checks can pass against an error envelope [`packages/cli/src/commands/workflow-command-contract.test.ts`:124]
+- [ ] [Review][Patch] Workflow JSON E2E subprocess tests use ambient Archon home and database state [`packages/cli/src/commands/workflow-json.e2e.test.ts`:30]
 
 ## Dev Notes
 
