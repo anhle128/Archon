@@ -113,6 +113,12 @@ so that external controllers can create and inspect workflow references without 
 - [x] [Review][Patch] The start-command error classifier can still report infrastructure "not found" errors as workflow-name lookup failures [`packages/cli/src/commands/workflow.ts`:172]
 - [x] [Review][Patch] Failed status envelopes still expose an opaque failure object rather than a machine-readable failure shape [`packages/cli/src/commands/workflow.ts`:1779]
 - [x] [Review][Patch] Verbose status event sanitization does not recurse into nested arrays, so forbidden text keys can still leak [`packages/cli/src/commands/workflow.ts`:244]
+- [ ] [Review][Patch] Missing `--correlation-id` values still classify as internal errors [`packages/cli/src/cli.ts`:664]
+- [ ] [Review][Patch] Git-preflight JSON fallback emits `workflow.start` for unrelated JSON commands [`packages/cli/src/cli.ts`:490]
+- [ ] [Review][Patch] Assigned non-boolean JSON flag values are silently accepted as JSON mode [`packages/cli/src/commands/workflow.ts`:572]
+- [ ] [Review][Patch] Start error classifier still overmatches infrastructure "not found" failures [`packages/cli/src/commands/workflow.ts`:172]
+- [ ] [Review][Patch] Failed status envelopes still lack code/category/details in `result.failure` [`packages/cli/src/commands/workflow.ts`:1791]
+- [ ] [Review][Patch] Nested-array verbose-event sanitizer has no regression test [`packages/cli/src/commands/workflow-command-contract.test.ts`:223]
 
 ## Dev Notes
 
