@@ -1,5 +1,7 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 // RED-PHASE E2E SCAFFOLD (EXECUTABLE) — Story 3.3b "Provide Archon Start And
 // Status CLI JSON". First-party consumer surface: a real controller (Hermes)
@@ -21,6 +23,16 @@ import { join } from 'node:path';
 const REPO_ROOT = join(import.meta.dir, '..', '..', '..', '..');
 const CLI_ENTRY = join(import.meta.dir, '..', 'cli.ts');
 
+let isolatedHome: string;
+
+beforeAll(() => {
+  isolatedHome = mkdtempSync(join(tmpdir(), 'archon-workflow-json-e2e-'));
+});
+
+afterAll(() => {
+  rmSync(isolatedHome, { recursive: true, force: true });
+});
+
 interface CliResult {
   stdout: string;
   stderr: string;
@@ -32,6 +44,11 @@ async function runCli(args: string[], cwd: string = REPO_ROOT): Promise<CliResul
     cwd,
     stdout: 'pipe',
     stderr: 'pipe',
+    env: {
+      ...process.env,
+      ARCHON_HOME: isolatedHome,
+      DATABASE_URL: `sqlite:${join(isolatedHome, 'test.db')}`,
+    },
   });
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(proc.stdout).text(),

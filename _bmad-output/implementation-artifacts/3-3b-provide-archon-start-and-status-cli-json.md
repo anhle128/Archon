@@ -80,14 +80,14 @@ so that external controllers can create and inspect workflow references without 
 
 ### Review Findings
 
-- [ ] [Review][Patch] `workflow run --resume --json` can corrupt stdout before the envelope [`packages/cli/src/commands/workflow.ts`:887]
-- [ ] [Review][Patch] Resume hydration failures can be misclassified as provider-contract malformed requests [`packages/cli/src/commands/workflow.ts`:180]
-- [ ] [Review][Patch] JSON start error envelopes re-resolve `issuedAt` instead of using the command-level timestamp [`packages/cli/src/commands/workflow.ts`:548]
-- [ ] [Review][Patch] Non-JSON `workflowRunCommand` behavior changed for missing workflow names [`packages/cli/src/commands/workflow.ts`:583]
-- [ ] [Review][Patch] Required command-level paused interactive-loop JSON test is missing [`packages/cli/src/commands/workflow.test.ts`:2001]
-- [ ] [Review][Patch] Fixture field-set delta is not documented in Completion Notes [`_bmad-output/implementation-artifacts/3-3b-provide-archon-start-and-status-cli-json.md`:229]
-- [ ] [Review][Patch] Contract tests named as start success checks can pass against an error envelope [`packages/cli/src/commands/workflow-command-contract.test.ts`:124]
-- [ ] [Review][Patch] Workflow JSON E2E subprocess tests use ambient Archon home and database state [`packages/cli/src/commands/workflow-json.e2e.test.ts`:30]
+- [x] [Review][Patch] `workflow run --resume --json` can corrupt stdout before the envelope [`packages/cli/src/commands/workflow.ts`:887]
+- [x] [Review][Patch] Resume hydration failures can be misclassified as provider-contract malformed requests [`packages/cli/src/commands/workflow.ts`:180]
+- [x] [Review][Patch] JSON start error envelopes re-resolve `issuedAt` instead of using the command-level timestamp [`packages/cli/src/commands/workflow.ts`:548]
+- [x] [Review][Patch] Non-JSON `workflowRunCommand` behavior changed for missing workflow names [`packages/cli/src/commands/workflow.ts`:583]
+- [x] [Review][Patch] Required command-level paused interactive-loop JSON test is missing [`packages/cli/src/commands/workflow.test.ts`:2001]
+- [x] [Review][Patch] Fixture field-set delta is not documented in Completion Notes [`_bmad-output/implementation-artifacts/3-3b-provide-archon-start-and-status-cli-json.md`:229]
+- [x] [Review][Patch] Contract tests named as start success checks can pass against an error envelope [`packages/cli/src/commands/workflow-command-contract.test.ts`:124]
+- [x] [Review][Patch] Workflow JSON E2E subprocess tests use ambient Archon home and database state [`packages/cli/src/commands/workflow-json.e2e.test.ts`:30]
 
 ## Dev Notes
 
@@ -239,4 +239,27 @@ Unexpected for this story:
 
 ### Completion Notes List
 
+- **Fixture field-set delta (W-3.3B-002):** The illustrative fixtures `start-success.json` and `status-success.json` contain `phase` and `projectBindingRef` (start) / `phase` and `gateRef` (status) fields that are BMAD/Hermes-owned concepts excluded from Archon's scope by epics.md line 17. This story's runtime envelopes intentionally omit `phase` and `projectBindingRef` — no fake values are fabricated. The `gateRef` field IS emitted when a run is paused on an approval gate (matching the status fixture's `gateRef` shape). Contract test `3.3B-CONTRACT-037` explicitly asserts this delta. The `result` object is `"additionalProperties": true` in the schema, so omitting these fields requires no contract change.
+- **Fix pass 1 (RF-01 through RF-08):** All 8 review findings addressed in a single fix pass. RF-01: guarded resume console.log with `if (!options.json)`. RF-02: removed `'failed to load'` from MALFORMED_REQUEST pattern, added `'is required'`. RF-03: reused command-level `issuedAt` in error envelope catch block instead of re-resolving. RF-04: restored non-JSON error message to `'Workflow name is required'`. RF-05: added `3.3B-UNIT-016b` test for paused interactive-loop JSON mode. RF-06: documented fixture field-set delta in these Completion Notes. RF-07: added `expect(envelope.success)` assertions and `getWorkflowRun` mocks to CONTRACT-036/037. RF-08: added isolated `ARCHON_HOME`/`DATABASE_URL` to E2E subprocess tests.
+
 ### File List
+
+- `packages/cli/src/commands/workflow.ts` — main implementation: `workflowRunCommand`, `workflowGetCommand`, `mapWorkflowRunToContractState`, `classifyRunError`, `buildWorkflowRunRef`
+- `packages/cli/src/commands/workflow.test.ts` — unit tests including `3.3B-UNIT-016b` for paused interactive-loop
+- `packages/cli/src/commands/workflow-command-contract.test.ts` — contract tests for start/status envelope shape
+- `packages/cli/src/commands/workflow-json.e2e.test.ts` — E2E subprocess tests with isolated ARCHON_HOME/DATABASE_URL
+- `packages/cli/src/adapters/cli-adapter.ts` — CLIAdapter `silent` mode (no changes needed — already supported)
+- `packages/cli/src/commands/workflow-provider-command-envelope.ts` — shared envelope builder from Story 3.3a (unchanged)
+
+### Fix Pass Record
+
+| Finding | Description                                    | Fix                                                 | Files                               |
+| ------- | ---------------------------------------------- | --------------------------------------------------- | ----------------------------------- |
+| RF-01   | Resume console.log corrupts JSON stdout        | Added `if (!options.json)` guard                    | `workflow.ts`                       |
+| RF-02   | `'failed to load'` misclassifies resume errors | Replaced with `'is required'` pattern               | `workflow.ts`                       |
+| RF-03   | Error envelope re-resolves `issuedAt`          | Reused command-level `issuedAt` variable            | `workflow.ts`                       |
+| RF-04   | Non-JSON error message changed                 | Restored to `'Workflow name is required'`           | `workflow.ts`                       |
+| RF-05   | Missing paused interactive-loop test           | Added `3.3B-UNIT-016b`                              | `workflow.test.ts`                  |
+| RF-06   | Fixture delta not documented                   | Added Completion Notes entry                        | story file                          |
+| RF-07   | Contract tests pass against error envelope     | Added `success` assertions + `getWorkflowRun` mocks | `workflow-command-contract.test.ts` |
+| RF-08   | E2E tests use ambient state                    | Added isolated `ARCHON_HOME`/`DATABASE_URL`         | `workflow-json.e2e.test.ts`         |

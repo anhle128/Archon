@@ -2029,6 +2029,42 @@ describe('workflowRunCommand — JSON envelope (Story 3.3b)', () => {
     expect(result.gateRef).toMatchObject({ gateId: 'review', kind: 'human-decision' });
   });
 
+  // 3.3B-UNIT-016b [P0] R-002,R-006 — a paused interactive-loop start emits
+  // state:'paused' (NOT 'waiting-for-approval') with no actionRequired/gateRef.
+  // This is the command-level counterpart of the mapping-helper test 3.3B-UNIT-005.
+  it('3.3B-UNIT-016b: paused interactive-loop start emits one envelope with state paused (no gateRef)', async () => {
+    await primeCommonMocks();
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const workflowDb = await import('@archon/core/db/workflows');
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-loop',
+      paused: true,
+    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-loop',
+      workflow_name: 'assist',
+      status: 'paused',
+      codebase_id: null,
+      working_path: '/test/path',
+      started_at: new Date(),
+      metadata: {
+        approval: { nodeId: 'loop-node', message: 'Loop iteration', type: 'interactive_loop' },
+      },
+    });
+
+    await workflowRunCommand('/test/path', 'assist', 'hello', { json: true, noWorktree: true });
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = lastStdoutJson();
+    expect(envelope.success).toBe(true);
+    const result = envelope.result as Record<string, unknown>;
+    expect(result.state).toBe('paused');
+    expect(result.terminal).toBe(false);
+    expect(result.actionRequired).toBeUndefined();
+    expect(result.gateRef).toBeUndefined();
+  });
+
   // 3.3B-UNIT-018 [P1] R-010 — a supplied --correlation-id is echoed
   // verbatim in both success and error envelopes.
   describe('3.3B-UNIT-018: correlation id threading', () => {

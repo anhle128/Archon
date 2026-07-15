@@ -181,7 +181,7 @@ export function classifyRunError(err: unknown): ClassifiedError {
     msg.includes('mutually exclusive') ||
     msg.includes('no effect with') ||
     msg.includes('conflicts with') ||
-    msg.includes('failed to load')
+    msg.includes('is required')
   ) {
     return {
       code: 'MALFORMED_REQUEST',
@@ -545,7 +545,7 @@ export async function workflowRunCommand(
         command: 'workflow.start',
         provider,
         correlationId,
-        issuedAt: resolveIssuedAt(),
+        issuedAt,
       };
       console.log(
         safeStringify(
@@ -581,7 +581,7 @@ async function workflowRunCommandInner(
   startTime: number
 ): Promise<number> {
   if (!workflowName?.trim()) {
-    throw new Error('Workflow name is required (mutually exclusive flags or missing name)');
+    throw new Error('Workflow name is required');
   }
 
   const effectiveDiscoveryCwd = options.discoveryCwd ?? cwd;
@@ -884,9 +884,11 @@ async function workflowRunCommandInner(
       );
     }
 
-    console.log(`Resuming workflow run: ${resumable.id}`);
-    console.log(`Working path: ${workingCwd}`);
-    console.log('');
+    if (!options.json) {
+      console.log(`Resuming workflow run: ${resumable.id}`);
+      console.log(`Working path: ${workingCwd}`);
+      console.log('');
+    }
   }
 
   if (wantsIsolation && codebase) {

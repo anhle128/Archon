@@ -170,15 +170,23 @@ describe('3.3B-CONTRACT-036 [P0] forbidden-key scan on parsed emitted envelopes 
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
       errors: [],
     });
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'test-run-id',
+      workflow_name: 'assist',
+      status: 'completed',
+      codebase_id: null,
+      working_path: '/test/path',
+      started_at: new Date(),
+      metadata: {},
+    });
 
     const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
     try {
       await workflowRunCommand('/test/path', 'assist', 'hello', { json: true, noWorktree: true });
-      // Genuinely red today: current stdout is multiple human lines, not one
-      // JSON document — JSON.parse on the first call throws, or the shape
-      // has no schemaVersion.
       const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
       const envelope = JSON.parse(raw) as Record<string, unknown>;
+      expect(envelope.success).toBe(true);
       expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
       expect(scanForForbiddenKeys(envelope)).toEqual([]);
     } finally {
@@ -192,8 +200,7 @@ describe('3.3B-CONTRACT-036 [P0] forbidden-key scan on parsed emitted envelopes 
       await workflowGetCommand('does-not-exist', true);
       const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
       const envelope = JSON.parse(raw) as Record<string, unknown>;
-      // Genuinely red today: legacy shape is `{ok:false, runId, error:'not_found'}`
-      // — no `schemaVersion` key at all.
+      expect(envelope.success).toBe(false);
       expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
       expect(scanForForbiddenKeys(envelope)).toEqual([]);
     } finally {
@@ -221,6 +228,16 @@ describe('3.3B-CONTRACT-037 [P1] fixture conformance with the documented field d
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
       errors: [],
+    });
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'test-run-id',
+      workflow_name: 'assist',
+      status: 'completed',
+      codebase_id: null,
+      working_path: '/test/path',
+      started_at: new Date(),
+      metadata: {},
     });
 
     const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
