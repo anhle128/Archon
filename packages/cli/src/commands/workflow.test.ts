@@ -1838,37 +1838,36 @@ describe('workflowGetCommand', () => {
     expect(code).toBe(1);
   });
 
-  it('emits {ok:false, error:not_found} JSON and exits non-zero for a missing run', async () => {
+  it('emits shared error envelope JSON and exits non-zero for a missing run', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
 
     const code = await workflowGetCommand('nope', true);
 
     expect(consoleSpy).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(consoleSpy.mock.calls[0][0] as string)).toEqual({
-      ok: false,
-      runId: 'nope',
-      error: 'not_found',
-    });
+    const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(parsed.success).toBe(false);
+    expect(parsed.command).toBe('workflow.status');
+    expect(parsed.schemaVersion).toBe('workflow-command-envelope.v1');
+    const error = parsed.error as Record<string, unknown>;
+    expect(error.code).toBe('NOT_FOUND');
     expect(code).toBe(1);
   });
 
-  it('emits {ok:false} JSON (never throws) when the DB lookup fails', async () => {
+  it('emits shared error envelope JSON (never throws) when the DB lookup fails', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockRejectedValueOnce(
       new Error('connection refused')
     );
 
-    await workflowGetCommand('run-x', true);
+    const code = await workflowGetCommand('run-x', true);
 
-    const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as {
-      ok: boolean;
-      runId: string;
-      error: string;
-    };
-    expect(parsed.ok).toBe(false);
-    expect(parsed.runId).toBe('run-x');
-    expect(parsed.error).toContain('connection refused');
+    const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(parsed.success).toBe(false);
+    expect(parsed.command).toBe('workflow.status');
+    const error = parsed.error as Record<string, unknown>;
+    expect(error.code).toBe('INTERNAL_ERROR');
+    expect(code).toBe(1);
   });
 
   it('prints run detail (human) including the error from metadata', async () => {
@@ -1890,7 +1889,7 @@ describe('workflowGetCommand', () => {
     expect(consoleSpy).toHaveBeenCalledWith('  Error:  Step failed: build');
   });
 
-  it('emits the raw run as a single clean JSON object', async () => {
+  it('emits a shared success envelope with status result in JSON mode', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-json',
@@ -1904,16 +1903,18 @@ describe('workflowGetCommand', () => {
     const code = await workflowGetCommand('run-json', true);
 
     expect(consoleSpy).toHaveBeenCalledTimes(1);
-    const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as {
-      id: string;
-      status: string;
-    };
-    expect(parsed.id).toBe('run-json');
-    expect(parsed.status).toBe('completed');
+    const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(parsed.schemaVersion).toBe('workflow-command-envelope.v1');
+    expect(parsed.success).toBe(true);
+    expect(parsed.command).toBe('workflow.status');
+    const result = parsed.result as Record<string, unknown>;
+    expect(result.operation).toBe('status');
+    expect(result.state).toBe('completed');
+    expect(result.terminal).toBe(true);
     expect(code).toBe(0);
   });
 
-  it('attaches events in verbose JSON mode', async () => {
+  it('emits the shared envelope in verbose JSON mode (verbose events are human-only)', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const eventsDb = await import('@archon/core/db/workflow-events');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -1935,9 +1936,13 @@ describe('workflowGetCommand', () => {
 
     await workflowGetCommand('run-v', true, true);
 
-    const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as { events: unknown[] };
-    expect(Array.isArray(parsed.events)).toBe(true);
-    expect(parsed.events).toHaveLength(1);
+    const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(parsed.schemaVersion).toBe('workflow-command-envelope.v1');
+    expect(parsed.success).toBe(true);
+    expect(parsed.command).toBe('workflow.status');
+    const result = parsed.result as Record<string, unknown>;
+    expect(result.operation).toBe('status');
+    expect(result.state).toBe('running');
   });
 });
 

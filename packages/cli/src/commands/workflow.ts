@@ -30,9 +30,19 @@ import type {
 } from '@archon/workflows/schemas/workflow';
 import {
   RETRYABLE_WORKFLOW_STATUSES,
+  TERMINAL_WORKFLOW_STATUSES,
   workflowRunStatusSchema,
+  isApprovalContext,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
+import {
+  safeStringify,
+  resolveCorrelationId,
+  resolveIssuedAt,
+  buildSuccessEnvelope,
+  buildErrorEnvelope,
+} from './workflow-provider-command-envelope.js';
+import type { EnvelopeMeta, ErrorCategory } from './workflow-provider-command-envelope.js';
 import {
   approveWorkflow,
   rejectWorkflow,
@@ -100,6 +110,8 @@ export interface WorkflowRunOptions {
    * `--json` alone still suppresses CLI logs but does not change the output).
    */
   json?: boolean;
+  /** Stable correlation id for envelope production (shared command contract). */
+  correlationId?: string;
 }
 
 /**
@@ -409,641 +421,904 @@ export async function workflowListCommand(cwd: string, json?: boolean): Promise<
 /**
  * Run a specific workflow
  */
+
+const EXIT_USAGE = 64;
+const EXIT_SOFTWARE = 70;
+
+function classifyWorkflowError(err: unknown): {
+  code: string;
+  category: ErrorCategory;
+  retryable: boolean;
+  exitCode: number;
+} {
+  const msg = err instanceof Error ? err.message : String(err);
+  const errCode = (err as { code?: string })?.code;
+
+  if (errCode === 'ETIMEDOUT' || msg.includes('statement timeout') || msg.includes('timeout')) {
+    return { code: 'COMMAND_TIMEOUT', category: 'timeout', retryable: true, exitCode: 69 };
+  }
+  return {
+    code: 'INTERNAL_ERROR',
+    category: 'implementation_defect',
+    retryable: false,
+    exitCode: EXIT_SOFTWARE,
+  };
+}
+
+function buildWorkflowRunRef(run: WorkflowRun): Record<string, unknown> {
+  const ref: Record<string, unknown> = {
+    provider: 'archon',
+    runId: run.id,
+    workflowName: run.workflow_name,
+  };
+  return ref;
+}
+
+function mapStatusToContractState(status: WorkflowRunStatus): string {
+  switch (status) {
+    case 'paused':
+      return 'waiting-for-approval';
+    default:
+      return status;
+  }
+}
+
+function emitWorkflowEnvelope(envelope: Record<string, unknown>): void {
+  console.log(safeStringify(envelope));
+}
+
 export async function workflowRunCommand(
   cwd: string,
   workflowName: string,
   userMessage: string,
   options: WorkflowRunOptions = {}
 ): Promise<void> {
-  const effectiveDiscoveryCwd = options.discoveryCwd ?? cwd;
-  const { workflows: workflowEntries, errors } = await loadWorkflows(effectiveDiscoveryCwd);
-  const sourceCounts = countWorkflowSources(workflowEntries);
+  const startTime = Date.now();
+  const correlationId = resolveCorrelationId(options.correlationId);
+  const jsonMode = options.json === true && options.detach !== true;
+  try {
+    const effectiveDiscoveryCwd = options.discoveryCwd ?? cwd;
+    const { workflows: workflowEntries, errors } = await loadWorkflows(effectiveDiscoveryCwd);
+    const sourceCounts = countWorkflowSources(workflowEntries);
 
-  if (!options.json && !options.quiet) {
-    console.log(
-      `Discovery: root=${effectiveDiscoveryCwd} workflows=${String(workflowEntries.length)} ` +
-        `bundled=${String(sourceCounts.bundled)} global=${String(sourceCounts.global)} ` +
-        `project=${String(sourceCounts.project)}`
-    );
-  }
-
-  if (workflowEntries.length === 0 && errors.length === 0) {
-    throw new Error('No workflows found in .archon/workflows/');
-  }
-
-  const workflows = workflowEntries.map(ws => ws.workflow);
-
-  const workflow = resolveWorkflowName(workflowName, workflows);
-  // Recover the discovery source (dropped by the .map above) for telemetry —
-  // bundled workflows report their real name, custom ones report "custom".
-  const workflowSource = workflow
-    ? workflowEntries.find(ws => ws.workflow === workflow)?.source
-    : undefined;
-
-  if (!workflow) {
-    // Check if the requested workflow had a load error
-    const loadError = errors.find(
-      e =>
-        e.filename.replace(/\.ya?ml$/, '') === workflowName ||
-        e.filename === `${workflowName}.yaml` ||
-        e.filename === `${workflowName}.yml`
-    );
-    if (loadError) {
-      throw new Error(
-        `Workflow '${workflowName}' failed to load: ${loadError.error}\n\nFix the YAML file and try again.`
-      );
-    }
-    const availableWorkflows = workflows.map(w => `  - ${w.name}`).join('\n');
-    throw new Error(
-      `Workflow '${workflowName}' not found.\n\nAvailable workflows:\n${availableWorkflows}`
-    );
-  }
-
-  // Validate mutually exclusive flags (defensive — cli.ts checks these for UX, but
-  // workflowRunCommand is the authoritative boundary for programmatic callers)
-  if (options.branchName !== undefined && options.noWorktree) {
-    throw new Error(
-      '--branch and --no-worktree are mutually exclusive.\n' +
-        '  --branch creates an isolated worktree (safe).\n' +
-        '  --no-worktree runs directly in your repo (no isolation).\n' +
-        'Use one or the other.'
-    );
-  }
-  if (options.noWorktree && options.fromBranch !== undefined) {
-    throw new Error(
-      '--from/--from-branch has no effect with --no-worktree.\n' +
-        'Remove --from or drop --no-worktree.'
-    );
-  }
-  if (options.resume && options.branchName !== undefined) {
-    throw new Error(
-      '--resume and --branch are mutually exclusive.\n' +
-        '  --resume reuses the existing worktree from the failed run.\n' +
-        '  Remove --branch when using --resume.'
-    );
-  }
-
-  // Reconcile workflow-level worktree policy with invocation flags.
-  // The workflow YAML's `worktree.enabled` pins isolation regardless of caller —
-  // a mismatch between policy and flags is a user error we surface loudly
-  // rather than silently applying one side and ignoring the other.
-  const pinnedEnabled = workflow.worktree?.enabled;
-  if (pinnedEnabled === false) {
-    if (options.branchName !== undefined) {
-      throw new Error(
-        `Workflow '${workflow.name}' sets worktree.enabled: false (runs in live checkout).\n` +
-          '  --branch requires an isolated worktree.\n' +
-          "  Drop --branch or change the workflow's worktree.enabled."
-      );
-    }
-    if (options.fromBranch !== undefined) {
-      throw new Error(
-        `Workflow '${workflow.name}' sets worktree.enabled: false (runs in live checkout).\n` +
-          '  --from/--from-branch only applies when a worktree is created.\n' +
-          "  Drop --from or change the workflow's worktree.enabled."
-      );
-    }
-    // --no-worktree is redundant but not contradictory — silently accept.
-  } else if (pinnedEnabled === true) {
-    if (options.noWorktree) {
-      throw new Error(
-        `Workflow '${workflow.name}' sets worktree.enabled: true (requires a worktree).\n` +
-          '  --no-worktree conflicts with the workflow policy.\n' +
-          "  Drop --no-worktree or change the workflow's worktree.enabled."
-      );
-    }
-  }
-
-  // Default to worktree isolation unless --no-worktree or --resume. Workflow YAML
-  // `worktree.enabled` pins the decision — mismatches with CLI flags are rejected
-  // above, so by this point policy (if set) and flags agree. `--resume` reuses an
-  // existing worktree and takes precedence over the pinned policy. Computed here
-  // (not at the worktree block below) because --detach also needs it to decide
-  // whether to pin a generated branch on the child.
-  const flagWantsIsolation = !options.resume && !options.noWorktree;
-  const wantsIsolation =
-    !options.resume && pinnedEnabled !== undefined ? pinnedEnabled : flagWantsIsolation;
-
-  // --detach: hand the whole run to a detached background child and return now.
-  // Done BEFORE any DB/worktree work (the child does all of it) but AFTER workflow
-  // resolution + flag validation above, so unknown-workflow / bad-flag errors are
-  // still surfaced synchronously to the caller rather than lost in the child.
-  if (options.detach) {
-    const childConversationId = options.conversationId ?? generateConversationId();
-    const extraArgs: string[] = [];
-    let pinnedBranch: string | undefined;
-    // Pin a generated branch only when isolating AND the caller didn't pass
-    // --branch (an explicit --branch is already in argv). Without this, the child
-    // would generate its own timestamped branch and fork a second worktree.
-    if (wantsIsolation && options.branchName === undefined) {
-      pinnedBranch = `${workflowName}-${String(Date.now())}`;
-      extraArgs.push('--branch', pinnedBranch);
-    }
-    // Pin the conversation id only when generated (an explicit one is already in argv).
-    if (options.conversationId === undefined) {
-      extraArgs.push('--conversation-id', childConversationId);
-    }
-
-    const logPath = spawnDetachedWorkflowRun(cwd, childConversationId, extraArgs);
-
-    if (options.json) {
+    if (!options.json && !options.quiet) {
       console.log(
-        JSON.stringify(
+        `Discovery: root=${effectiveDiscoveryCwd} workflows=${String(workflowEntries.length)} ` +
+          `bundled=${String(sourceCounts.bundled)} global=${String(sourceCounts.global)} ` +
+          `project=${String(sourceCounts.project)}`
+      );
+    }
+
+    if (workflowEntries.length === 0 && errors.length === 0) {
+      if (jsonMode) {
+        const deps: EnvelopeMeta = {
+          command: 'workflow.start',
+          provider: 'archon',
+          correlationId,
+          issuedAt: resolveIssuedAt(),
+        };
+        emitWorkflowEnvelope(
+          buildErrorEnvelope(
+            deps,
+            {
+              code: 'MALFORMED_REQUEST',
+              category: 'provider_contract',
+              retryable: false,
+              details: { requestedWorkflow: workflowName, requestAccepted: false },
+              exitCode: EXIT_USAGE,
+            },
+            startTime
+          )
+        );
+        return;
+      }
+      throw new Error('No workflows found in .archon/workflows/');
+    }
+
+    const workflows = workflowEntries.map(ws => ws.workflow);
+
+    const workflow = resolveWorkflowName(workflowName, workflows);
+    // Recover the discovery source (dropped by the .map above) for telemetry —
+    // bundled workflows report their real name, custom ones report "custom".
+    const workflowSource = workflow
+      ? workflowEntries.find(ws => ws.workflow === workflow)?.source
+      : undefined;
+
+    if (!workflow) {
+      // Check if the requested workflow had a load error
+      const loadError = errors.find(
+        e =>
+          e.filename.replace(/\.ya?ml$/, '') === workflowName ||
+          e.filename === `${workflowName}.yaml` ||
+          e.filename === `${workflowName}.yml`
+      );
+      if (jsonMode) {
+        const deps: EnvelopeMeta = {
+          command: 'workflow.start',
+          provider: 'archon',
+          correlationId,
+          issuedAt: resolveIssuedAt(),
+        };
+        emitWorkflowEnvelope(
+          buildErrorEnvelope(
+            deps,
+            {
+              code: 'MALFORMED_REQUEST',
+              category: 'provider_contract',
+              retryable: false,
+              details: {
+                requestedWorkflow: workflowName,
+                loadError: loadError ? loadError.error : undefined,
+                requestAccepted: false,
+              },
+              exitCode: EXIT_USAGE,
+            },
+            startTime
+          )
+        );
+        return;
+      }
+      if (loadError) {
+        throw new Error(
+          `Workflow '${workflowName}' failed to load: ${loadError.error}\n\nFix the YAML file and try again.`
+        );
+      }
+      const availableWorkflows = workflows.map(w => `  - ${w.name}`).join('\n');
+      throw new Error(
+        `Workflow '${workflowName}' not found.\n\nAvailable workflows:\n${availableWorkflows}`
+      );
+    }
+
+    // Validate mutually exclusive flags (defensive — cli.ts checks these for UX, but
+    // workflowRunCommand is the authoritative boundary for programmatic callers)
+    const flagErrors: { path: string; code: string }[] = [];
+    if (options.branchName !== undefined && options.noWorktree) {
+      flagErrors.push({ path: '/branch', code: 'mutually_exclusive_with_no_worktree' });
+    }
+    if (options.noWorktree && options.fromBranch !== undefined) {
+      flagErrors.push({ path: '/fromBranch', code: 'no_effect_with_no_worktree' });
+    }
+    if (options.resume && options.branchName !== undefined) {
+      flagErrors.push({ path: '/resume', code: 'mutually_exclusive_with_branch' });
+    }
+    if (flagErrors.length > 0 && jsonMode) {
+      const deps: EnvelopeMeta = {
+        command: 'workflow.start',
+        provider: 'archon',
+        correlationId,
+        issuedAt: resolveIssuedAt(),
+      };
+      emitWorkflowEnvelope(
+        buildErrorEnvelope(
+          deps,
           {
-            ok: true,
-            action: 'run',
-            detached: true,
-            workflow: workflow.name,
-            branch: pinnedBranch ?? options.branchName ?? null,
-            conversationId: childConversationId,
-            logPath,
+            code: 'MALFORMED_REQUEST',
+            category: 'provider_contract',
+            retryable: false,
+            details: { fieldErrors: flagErrors, requestAccepted: false },
+            exitCode: EXIT_USAGE,
           },
-          null,
-          2
+          startTime
         )
       );
-    } else {
-      console.log(`Started '${workflow.name}' in the background.`);
-      console.log('Track it with: archon workflow runs');
-      if (logPath) console.log(`Child output: ${logPath}`);
+      return;
     }
-    return;
-  }
-
-  console.log(`Running workflow: ${workflowName}`);
-  console.log(`Working directory: ${cwd}`);
-  console.log('');
-
-  // Create CLI adapter
-  const adapter = new CLIAdapter();
-
-  // Generate conversation ID
-  const conversationId = options.conversationId ?? generateConversationId();
-
-  // Get or create conversation in database
-  let conversation;
-  try {
-    conversation = await conversationDb.getOrCreateConversation('cli', conversationId);
-  } catch (error) {
-    const err = error as Error;
-    throw new Error(
-      `Failed to access database: ${err.message}\nHint: Check that DATABASE_URL is set and the database is running.`
-    );
-  }
-
-  // Try to find a codebase for this directory
-  let codebase = null;
-  let codebaseLookupError: Error | null = null;
-  let codebaseRegistrationError: Error | null = null;
-  try {
-    codebase = await codebaseDb.findCodebaseByDefaultCwd(cwd);
-  } catch (error) {
-    const err = error as Error;
-    codebaseLookupError = err;
-    getLog().warn({ err, cwd }, 'cli.codebase_lookup_failed');
-    if (
-      err.message.includes('connect') ||
-      err.message.includes('ECONNREFUSED') ||
-      err.message.includes('ETIMEDOUT')
-    ) {
-      getLog().warn(
-        { hint: 'Check DATABASE_URL and that the database is running.' },
-        'cli.db_connection_hint'
+    if (options.branchName !== undefined && options.noWorktree) {
+      throw new Error(
+        '--branch and --no-worktree are mutually exclusive.\n' +
+          '  --branch creates an isolated worktree (safe).\n' +
+          '  --no-worktree runs directly in your repo (no isolation).\n' +
+          'Use one or the other.'
       );
     }
-  }
-
-  // If the caller supplied a codebase ID (e.g., from a stored run record on resume),
-  // use it directly to avoid path-based lookup that fails for worktree paths.
-  if (!codebase && !codebaseLookupError && options.codebaseId) {
-    try {
-      codebase = await codebaseDb.getCodebase(options.codebaseId);
-    } catch (error) {
-      const err = error as Error;
-      getLog().warn(
-        { err, errorType: err.constructor.name, codebaseId: options.codebaseId },
-        'cli.codebase_id_lookup_failed'
+    if (options.noWorktree && options.fromBranch !== undefined) {
+      throw new Error(
+        '--from/--from-branch has no effect with --no-worktree.\n' +
+          'Remove --from or drop --no-worktree.'
       );
-      // Intentional: don't set codebaseLookupError — fall through to auto-registration
     }
-  }
+    if (options.resume && options.branchName !== undefined) {
+      throw new Error(
+        '--resume and --branch are mutually exclusive.\n' +
+          '  --resume reuses the existing worktree from the failed run.\n' +
+          '  Remove --branch when using --resume.'
+      );
+    }
 
-  // Auto-register unregistered repos (creates project structure for artifacts/logs)
-  if (!codebase && !codebaseLookupError) {
-    const repoRoot = await git.findRepoRoot(cwd);
-    if (repoRoot) {
-      try {
-        const result = await registerRepository(repoRoot);
-        codebase = await codebaseDb.getCodebase(result.codebaseId);
-        if (!result.alreadyExisted) {
-          getLog().info({ name: result.name }, 'cli.codebase_auto_registered');
-        }
-      } catch (error) {
-        const err = error as Error;
-        codebaseRegistrationError = err;
-        getLog().warn(
-          { err, errorType: err.constructor.name, repoRoot },
-          'cli.codebase_auto_registration_failed'
+    // Reconcile workflow-level worktree policy with invocation flags.
+    // The workflow YAML's `worktree.enabled` pins isolation regardless of caller —
+    // a mismatch between policy and flags is a user error we surface loudly
+    // rather than silently applying one side and ignoring the other.
+    const pinnedEnabled = workflow.worktree?.enabled;
+    if (pinnedEnabled === false) {
+      if (options.branchName !== undefined) {
+        throw new Error(
+          `Workflow '${workflow.name}' sets worktree.enabled: false (runs in live checkout).\n` +
+            '  --branch requires an isolated worktree.\n' +
+            "  Drop --branch or change the workflow's worktree.enabled."
+        );
+      }
+      if (options.fromBranch !== undefined) {
+        throw new Error(
+          `Workflow '${workflow.name}' sets worktree.enabled: false (runs in live checkout).\n` +
+            '  --from/--from-branch only applies when a worktree is created.\n' +
+            "  Drop --from or change the workflow's worktree.enabled."
+        );
+      }
+      // --no-worktree is redundant but not contradictory — silently accept.
+    } else if (pinnedEnabled === true) {
+      if (options.noWorktree) {
+        throw new Error(
+          `Workflow '${workflow.name}' sets worktree.enabled: true (requires a worktree).\n` +
+            '  --no-worktree conflicts with the workflow policy.\n' +
+            "  Drop --no-worktree or change the workflow's worktree.enabled."
         );
       }
     }
-  }
 
-  // Handle isolation (worktree creation)
-  let workingCwd = cwd;
-  let isolationEnvId: string | undefined;
+    // Default to worktree isolation unless --no-worktree or --resume. Workflow YAML
+    // `worktree.enabled` pins the decision — mismatches with CLI flags are rejected
+    // above, so by this point policy (if set) and flags agree. `--resume` reuses an
+    // existing worktree and takes precedence over the pinned policy. Computed here
+    // (not at the worktree block below) because --detach also needs it to decide
+    // whether to pin a generated branch on the child.
+    const flagWantsIsolation = !options.resume && !options.noWorktree;
+    const wantsIsolation =
+      !options.resume && pinnedEnabled !== undefined ? pinnedEnabled : flagWantsIsolation;
 
-  // Handle --resume: locate the prior failed run, reuse its worktree, and hand
-  // the resumed-run handle to executeWorkflow below via opts. The executor no
-  // longer performs implicit resume detection on its own.
-  let resumable: WorkflowRun | null = null;
-  if (options.resume) {
-    if (!codebase) {
+    // --detach: hand the whole run to a detached background child and return now.
+    // Done BEFORE any DB/worktree work (the child does all of it) but AFTER workflow
+    // resolution + flag validation above, so unknown-workflow / bad-flag errors are
+    // still surfaced synchronously to the caller rather than lost in the child.
+    if (options.detach) {
+      const childConversationId = options.conversationId ?? generateConversationId();
+      const extraArgs: string[] = [];
+      let pinnedBranch: string | undefined;
+      // Pin a generated branch only when isolating AND the caller didn't pass
+      // --branch (an explicit --branch is already in argv). Without this, the child
+      // would generate its own timestamped branch and fork a second worktree.
+      if (wantsIsolation && options.branchName === undefined) {
+        pinnedBranch = `${workflowName}-${String(Date.now())}`;
+        extraArgs.push('--branch', pinnedBranch);
+      }
+      // Pin the conversation id only when generated (an explicit one is already in argv).
+      if (options.conversationId === undefined) {
+        extraArgs.push('--conversation-id', childConversationId);
+      }
+
+      const logPath = spawnDetachedWorkflowRun(cwd, childConversationId, extraArgs);
+
+      if (options.json) {
+        console.log(
+          JSON.stringify(
+            {
+              ok: true,
+              action: 'run',
+              detached: true,
+              workflow: workflow.name,
+              branch: pinnedBranch ?? options.branchName ?? null,
+              conversationId: childConversationId,
+              logPath,
+            },
+            null,
+            2
+          )
+        );
+      } else {
+        console.log(`Started '${workflow.name}' in the background.`);
+        console.log('Track it with: archon workflow runs');
+        if (logPath) console.log(`Child output: ${logPath}`);
+      }
+      return;
+    }
+
+    if (!jsonMode) {
+      console.log(`Running workflow: ${workflowName}`);
+      console.log(`Working directory: ${cwd}`);
+      console.log('');
+    }
+
+    // Create CLI adapter
+    const adapter = new CLIAdapter();
+
+    // Generate conversation ID
+    const conversationId = options.conversationId ?? generateConversationId();
+
+    // Get or create conversation in database
+    let conversation;
+    try {
+      conversation = await conversationDb.getOrCreateConversation('cli', conversationId);
+    } catch (error) {
+      const err = error as Error;
+      throw new Error(
+        `Failed to access database: ${err.message}\nHint: Check that DATABASE_URL is set and the database is running.`
+      );
+    }
+
+    // Try to find a codebase for this directory
+    let codebase = null;
+    let codebaseLookupError: Error | null = null;
+    let codebaseRegistrationError: Error | null = null;
+    try {
+      codebase = await codebaseDb.findCodebaseByDefaultCwd(cwd);
+    } catch (error) {
+      const err = error as Error;
+      codebaseLookupError = err;
+      getLog().warn({ err, cwd }, 'cli.codebase_lookup_failed');
+      if (
+        err.message.includes('connect') ||
+        err.message.includes('ECONNREFUSED') ||
+        err.message.includes('ETIMEDOUT')
+      ) {
+        getLog().warn(
+          { hint: 'Check DATABASE_URL and that the database is running.' },
+          'cli.db_connection_hint'
+        );
+      }
+    }
+
+    // If the caller supplied a codebase ID (e.g., from a stored run record on resume),
+    // use it directly to avoid path-based lookup that fails for worktree paths.
+    if (!codebase && !codebaseLookupError && options.codebaseId) {
+      try {
+        codebase = await codebaseDb.getCodebase(options.codebaseId);
+      } catch (error) {
+        const err = error as Error;
+        getLog().warn(
+          { err, errorType: err.constructor.name, codebaseId: options.codebaseId },
+          'cli.codebase_id_lookup_failed'
+        );
+        // Intentional: don't set codebaseLookupError — fall through to auto-registration
+      }
+    }
+
+    // Auto-register unregistered repos (creates project structure for artifacts/logs)
+    if (!codebase && !codebaseLookupError) {
+      const repoRoot = await git.findRepoRoot(cwd);
+      if (repoRoot) {
+        try {
+          const result = await registerRepository(repoRoot);
+          codebase = await codebaseDb.getCodebase(result.codebaseId);
+          if (!result.alreadyExisted) {
+            getLog().info({ name: result.name }, 'cli.codebase_auto_registered');
+          }
+        } catch (error) {
+          const err = error as Error;
+          codebaseRegistrationError = err;
+          getLog().warn(
+            { err, errorType: err.constructor.name, repoRoot },
+            'cli.codebase_auto_registration_failed'
+          );
+        }
+      }
+    }
+
+    // Handle isolation (worktree creation)
+    let workingCwd = cwd;
+    let isolationEnvId: string | undefined;
+
+    // Handle --resume: locate the prior failed run, reuse its worktree, and hand
+    // the resumed-run handle to executeWorkflow below via opts. The executor no
+    // longer performs implicit resume detection on its own.
+    let resumable: WorkflowRun | null = null;
+    if (options.resume) {
+      if (!codebase) {
+        if (codebaseLookupError) {
+          throw new Error(
+            'Cannot resume: Database lookup failed.\n' +
+              `Error: ${codebaseLookupError.message}\n` +
+              'Hint: Check your database connection before using --resume.'
+          );
+        }
+        if (codebaseRegistrationError) {
+          throw buildRegistrationFailureError('resume', codebaseRegistrationError);
+        }
+        throw new Error(
+          'Cannot resume: Not in a git repository.\n' +
+            'Either run from a git repo or use /clone first.'
+        );
+      }
+
+      resumable = await workflowDb.findResumableRun(workflowName, cwd);
+
+      if (!resumable) {
+        throw new Error(`No resumable run found for workflow '${workflowName}' at path '${cwd}'.`);
+      }
+
+      getLog().info(
+        {
+          workflowRunId: resumable.id,
+          workflowName,
+          workingPath: resumable.working_path,
+        },
+        'workflow.resume_found_resumable'
+      );
+
+      // Reuse the working path from the resumable run (verify it still exists)
+      if (resumable.working_path) {
+        const { existsSync } = await import('fs');
+        if (!existsSync(resumable.working_path)) {
+          throw new Error(
+            `Cannot resume: the working path from the run no longer exists: ${resumable.working_path}\n` +
+              'The worktree may have been cleaned up. Start a fresh run with --branch instead.'
+          );
+        }
+        workingCwd = resumable.working_path;
+      }
+
+      // Look up the isolation environment that owns this working path (if any)
+      const allEnvs = await isolationDb.listByCodebase(codebase.id);
+      const matchingEnv = allEnvs.find(e => e.working_path === workingCwd);
+      if (matchingEnv) {
+        isolationEnvId = matchingEnv.id;
+        getLog().info(
+          { envId: isolationEnvId, workingPath: workingCwd },
+          'workflow.resume_env_found'
+        );
+      }
+
+      if (!jsonMode) {
+        console.log(`Resuming workflow run: ${resumable.id}`);
+        console.log(`Working path: ${workingCwd}`);
+        console.log('');
+      }
+    }
+
+    if (wantsIsolation && codebase) {
+      // Auto-generate branch identifier from workflow name + timestamp when --branch not provided
+      const branchIdentifier = options.branchName ?? `${workflowName}-${Date.now()}`;
+
+      // Configure isolation with repo config loader (same as orchestrator)
+      configureIsolation(async (repoPath: string) => {
+        const repoConfig = await loadRepoConfig(repoPath);
+        return repoConfig?.worktree ?? null;
+      });
+
+      const provider = getIsolationProvider();
+
+      // Check for existing worktree (only when explicit --branch)
+      const existingEnv = options.branchName
+        ? await isolationDb.findActiveByWorkflow(codebase.id, 'task', options.branchName)
+        : undefined;
+
+      if (existingEnv && (await provider.healthCheck(existingEnv.working_path))) {
+        if (options.fromBranch) {
+          getLog().warn(
+            { path: existingEnv.working_path, fromBranch: options.fromBranch },
+            'worktree.reuse_from_branch_ignored'
+          );
+          console.warn(
+            `Warning: Reusing existing worktree at ${existingEnv.working_path}. ` +
+              `--from ${options.fromBranch} was not applied (worktree already exists).`
+          );
+        }
+        // Validate base branch before reuse (warning-only — non-blocking)
+        try {
+          const repoConfig = await loadRepoConfig(codebase.default_cwd);
+          const rawBase = repoConfig?.worktree?.baseBranch?.trim();
+          const configuredBase = rawBase
+            ? git.toBranchName(rawBase)
+            : codebase.default_branch?.trim()
+              ? git.toBranchName(codebase.default_branch.trim())
+              : await git.getDefaultBranch(git.toRepoPath(codebase.default_cwd));
+          const isValidBase = await git.isAncestorOf(
+            git.toWorktreePath(existingEnv.working_path),
+            `origin/${configuredBase}`
+          );
+          if (!isValidBase) {
+            getLog().warn(
+              { path: existingEnv.working_path, configuredBase, branch: existingEnv.branch_name },
+              'worktree.reuse_base_branch_mismatch'
+            );
+            console.warn(
+              `Warning: Worktree '${existingEnv.branch_name}' is not based on '${configuredBase}'. ` +
+                `Recreate with: bun run cli complete ${existingEnv.branch_name} --force`
+            );
+          }
+        } catch (e) {
+          getLog().debug({ err: e }, 'worktree.reuse_base_branch_check_skipped');
+          // Non-blocking — skip warning if base branch cannot be determined
+        }
+        getLog().info({ path: existingEnv.working_path }, 'worktree_reused');
+        workingCwd = existingEnv.working_path;
+        isolationEnvId = existingEnv.id;
+      } else {
+        // Create new worktree
+        getLog().info(
+          { branch: branchIdentifier, fromBranch: options.fromBranch },
+          'worktree_creating'
+        );
+
+        const isolatedEnv = await provider.create({
+          workflowType: 'task',
+          identifier: branchIdentifier,
+          fromBranch: options.fromBranch?.trim()
+            ? git.toBranchName(options.fromBranch.trim())
+            : undefined,
+          baseBranch: codebase.default_branch?.trim()
+            ? git.toBranchName(codebase.default_branch.trim())
+            : undefined,
+          codebaseId: codebase.id,
+          canonicalRepoPath: git.toRepoPath(codebase.default_cwd),
+          description: `CLI workflow: ${workflowName}`,
+        });
+
+        // Track in database
+        const envRecord = await isolationDb.create({
+          codebase_id: codebase.id,
+          workflow_type: 'task',
+          workflow_id: branchIdentifier,
+          provider: 'worktree',
+          working_path: isolatedEnv.workingPath,
+          branch_name: isolatedEnv.branchName,
+          created_by_platform: 'cli',
+          metadata: {},
+        });
+
+        workingCwd = isolatedEnv.workingPath;
+        isolationEnvId = envRecord.id;
+        getLog().info({ path: workingCwd }, 'worktree_created');
+      }
+    } else if (options.noWorktree) {
+      getLog().info({ cwd }, 'workflow.running_without_isolation');
+    } else if (wantsIsolation) {
+      // Isolation was expected (default) but codebase is unavailable — fail fast
       if (codebaseLookupError) {
         throw new Error(
-          'Cannot resume: Database lookup failed.\n' +
+          'Cannot create worktree: database lookup failed.\n' +
             `Error: ${codebaseLookupError.message}\n` +
-            'Hint: Check your database connection before using --resume.'
+            'Hint: Check your database connection, or use --no-worktree to skip isolation.'
         );
       }
       if (codebaseRegistrationError) {
-        throw buildRegistrationFailureError('resume', codebaseRegistrationError);
+        throw buildRegistrationFailureError('create worktree', codebaseRegistrationError);
       }
       throw new Error(
-        'Cannot resume: Not in a git repository.\n' +
-          'Either run from a git repo or use /clone first.'
+        'Cannot create worktree: not in a git repository.\n' +
+          'Run from within a git repo, or use --no-worktree to skip isolation.'
       );
     }
 
-    resumable = await workflowDb.findResumableRun(workflowName, cwd);
-
-    if (!resumable) {
-      throw new Error(`No resumable run found for workflow '${workflowName}' at path '${cwd}'.`);
+    // Update conversation with cwd and isolation info
+    try {
+      await conversationDb.updateConversation(conversation.id, {
+        cwd: workingCwd,
+        codebase_id: codebase?.id ?? null,
+        isolation_env_id: isolationEnvId ?? null,
+      });
+    } catch (error) {
+      const err = error as Error;
+      throw new Error(`Failed to update conversation: ${err.message}`);
     }
 
-    getLog().info(
-      {
-        workflowRunId: resumable.id,
-        workflowName,
-        workingPath: resumable.working_path,
-      },
-      'workflow.resume_found_resumable'
-    );
+    // Wire adapter for assistant message persistence
+    adapter.setConversationDbId(conversationId, conversation.id);
 
-    // Reuse the working path from the resumable run (verify it still exists)
-    if (resumable.working_path) {
-      const { existsSync } = await import('fs');
-      if (!existsSync(resumable.working_path)) {
-        throw new Error(
-          `Cannot resume: the working path from the run no longer exists: ${resumable.working_path}\n` +
-            'The worktree may have been cleaned up. Start a fresh run with --branch instead.'
-        );
-      }
-      workingCwd = resumable.working_path;
-    }
-
-    // Look up the isolation environment that owns this working path (if any)
-    const allEnvs = await isolationDb.listByCodebase(codebase.id);
-    const matchingEnv = allEnvs.find(e => e.working_path === workingCwd);
-    if (matchingEnv) {
-      isolationEnvId = matchingEnv.id;
-      getLog().info(
-        { envId: isolationEnvId, workingPath: workingCwd },
-        'workflow.resume_env_found'
-      );
-    }
-
-    console.log(`Resuming workflow run: ${resumable.id}`);
-    console.log(`Working path: ${workingCwd}`);
-    console.log('');
-  }
-
-  if (wantsIsolation && codebase) {
-    // Auto-generate branch identifier from workflow name + timestamp when --branch not provided
-    const branchIdentifier = options.branchName ?? `${workflowName}-${Date.now()}`;
-
-    // Configure isolation with repo config loader (same as orchestrator)
-    configureIsolation(async (repoPath: string) => {
-      const repoConfig = await loadRepoConfig(repoPath);
-      return repoConfig?.worktree ?? null;
-    });
-
-    const provider = getIsolationProvider();
-
-    // Check for existing worktree (only when explicit --branch)
-    const existingEnv = options.branchName
-      ? await isolationDb.findActiveByWorkflow(codebase.id, 'task', options.branchName)
-      : undefined;
-
-    if (existingEnv && (await provider.healthCheck(existingEnv.working_path))) {
-      if (options.fromBranch) {
-        getLog().warn(
-          { path: existingEnv.working_path, fromBranch: options.fromBranch },
-          'worktree.reuse_from_branch_ignored'
-        );
-        console.warn(
-          `Warning: Reusing existing worktree at ${existingEnv.working_path}. ` +
-            `--from ${options.fromBranch} was not applied (worktree already exists).`
-        );
-      }
-      // Validate base branch before reuse (warning-only — non-blocking)
+    // Resolve the CLI user once (ARCHON_USER_ID, else $USER/$USERNAME). When set,
+    // upsert via the `cli` platform identity so the same Archon user is reused
+    // across invocations — this is what attributes the workflow run to the human
+    // running the command and what `getUserProviderEnv` keys on for per-user
+    // AI-provider credentials (#1891 Phase 2).
+    const cliId = resolveCliUserId();
+    let cliUserId: string | undefined;
+    if (cliId) {
       try {
-        const repoConfig = await loadRepoConfig(codebase.default_cwd);
-        const rawBase = repoConfig?.worktree?.baseBranch?.trim();
-        const configuredBase = rawBase
-          ? git.toBranchName(rawBase)
-          : codebase.default_branch?.trim()
-            ? git.toBranchName(codebase.default_branch.trim())
-            : await git.getDefaultBranch(git.toRepoPath(codebase.default_cwd));
-        const isValidBase = await git.isAncestorOf(
-          git.toWorktreePath(existingEnv.working_path),
-          `origin/${configuredBase}`
-        );
-        if (!isValidBase) {
-          getLog().warn(
-            { path: existingEnv.working_path, configuredBase, branch: existingEnv.branch_name },
-            'worktree.reuse_base_branch_mismatch'
-          );
-          console.warn(
-            `Warning: Worktree '${existingEnv.branch_name}' is not based on '${configuredBase}'. ` +
-              `Recreate with: bun run cli complete ${existingEnv.branch_name} --force`
-          );
-        }
-      } catch (e) {
-        getLog().debug({ err: e }, 'worktree.reuse_base_branch_check_skipped');
-        // Non-blocking — skip warning if base branch cannot be determined
+        const cliUser = await userDb.findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
+        cliUserId = cliUser.id;
+      } catch (error) {
+        getLog().warn({ err: error as Error, cliId }, 'cli.user_identity_resolve_failed');
       }
-      getLog().info({ path: existingEnv.working_path }, 'worktree_reused');
-      workingCwd = existingEnv.working_path;
-      isolationEnvId = existingEnv.id;
-    } else {
-      // Create new worktree
-      getLog().info(
-        { branch: branchIdentifier, fromBranch: options.fromBranch },
-        'worktree_creating'
-      );
-
-      const isolatedEnv = await provider.create({
-        workflowType: 'task',
-        identifier: branchIdentifier,
-        fromBranch: options.fromBranch?.trim()
-          ? git.toBranchName(options.fromBranch.trim())
-          : undefined,
-        baseBranch: codebase.default_branch?.trim()
-          ? git.toBranchName(codebase.default_branch.trim())
-          : undefined,
-        codebaseId: codebase.id,
-        canonicalRepoPath: git.toRepoPath(codebase.default_cwd),
-        description: `CLI workflow: ${workflowName}`,
-      });
-
-      // Track in database
-      const envRecord = await isolationDb.create({
-        codebase_id: codebase.id,
-        workflow_type: 'task',
-        workflow_id: branchIdentifier,
-        provider: 'worktree',
-        working_path: isolatedEnv.workingPath,
-        branch_name: isolatedEnv.branchName,
-        created_by_platform: 'cli',
-        metadata: {},
-      });
-
-      workingCwd = isolatedEnv.workingPath;
-      isolationEnvId = envRecord.id;
-      getLog().info({ path: workingCwd }, 'worktree_created');
     }
-  } else if (options.noWorktree) {
-    getLog().info({ cwd }, 'workflow.running_without_isolation');
-  } else if (wantsIsolation) {
-    // Isolation was expected (default) but codebase is unavailable — fail fast
-    if (codebaseLookupError) {
-      throw new Error(
-        'Cannot create worktree: database lookup failed.\n' +
-          `Error: ${codebaseLookupError.message}\n` +
-          'Hint: Check your database connection, or use --no-worktree to skip isolation.'
-      );
-    }
-    if (codebaseRegistrationError) {
-      throw buildRegistrationFailureError('create worktree', codebaseRegistrationError);
-    }
-    throw new Error(
-      'Cannot create worktree: not in a git repository.\n' +
-        'Run from within a git repo, or use --no-worktree to skip isolation.'
-    );
-  }
 
-  // Update conversation with cwd and isolation info
-  try {
-    await conversationDb.updateConversation(conversation.id, {
-      cwd: workingCwd,
-      codebase_id: codebase?.id ?? null,
-      isolation_env_id: isolationEnvId ?? null,
-    });
-  } catch (error) {
-    const err = error as Error;
-    throw new Error(`Failed to update conversation: ${err.message}`);
-  }
-
-  // Wire adapter for assistant message persistence
-  adapter.setConversationDbId(conversationId, conversation.id);
-
-  // Resolve the CLI user once (ARCHON_USER_ID, else $USER/$USERNAME). When set,
-  // upsert via the `cli` platform identity so the same Archon user is reused
-  // across invocations — this is what attributes the workflow run to the human
-  // running the command and what `getUserProviderEnv` keys on for per-user
-  // AI-provider credentials (#1891 Phase 2).
-  const cliId = resolveCliUserId();
-  let cliUserId: string | undefined;
-  if (cliId) {
+    // Persist user message for Web UI history.
     try {
-      const cliUser = await userDb.findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
-      cliUserId = cliUser.id;
-    } catch (error) {
-      getLog().warn({ err: error as Error, cliId }, 'cli.user_identity_resolve_failed');
-    }
-  }
-
-  // Persist user message for Web UI history.
-  try {
-    await messageDb.addMessage(conversation.id, 'user', userMessage, undefined, cliUserId);
-  } catch (error) {
-    getLog().warn(
-      { err: error as Error, conversationId: conversation.id },
-      'cli_user_message_persist_failed'
-    );
-  }
-
-  // Auto-generate title for CLI workflow conversations (fire-and-forget)
-  void (async (): Promise<void> => {
-    let workflowConfig: Awaited<ReturnType<typeof loadConfig>> | undefined;
-    try {
-      workflowConfig = await loadConfig(cwd);
-    } catch (error) {
-      getLog().warn({ err: error as Error, cwd }, 'workflow.title_config_load_failed');
-    }
-
-    try {
-      const titleAssistantType = resolveTitleAssistantType(
-        workflow,
-        workflowConfig?.assistant,
-        conversation.ai_assistant_type
-      );
-      const titleAssistantConfig = workflowConfig?.assistants?.[titleAssistantType] ?? {};
-      await generateAndSetTitle(
-        conversation.id,
-        userMessage,
-        titleAssistantType,
-        workingCwd,
-        workflowName,
-        titleAssistantConfig
-      );
+      await messageDb.addMessage(conversation.id, 'user', userMessage, undefined, cliUserId);
     } catch (error) {
       getLog().warn(
         { err: error as Error, conversationId: conversation.id },
-        'workflow.title_generation_failed'
+        'cli_user_message_persist_failed'
       );
     }
-  })();
 
-  // Register cleanup handlers for graceful termination
-  let terminating = false;
-  const cleanup = (signal: string): void => {
-    if (terminating) return;
-    terminating = true;
-    getLog().info({ conversationId: conversation.id, signal }, 'workflow.process_terminating');
-    workflowDb
-      .getActiveWorkflowRun(conversation.id)
-      .then(activeRun => {
-        if (activeRun) {
-          return workflowDb.failWorkflowRun(activeRun.id, `Process terminated (${signal})`);
-        }
-        return undefined;
-      })
-      .catch((err: unknown) => {
-        const e = err as Error;
-        getLog().error(
-          { err: e, errorType: e.constructor.name },
-          'workflow.termination_cleanup_failed'
-        );
-      })
-      .finally(() => {
-        process.exit(1);
-      });
-  };
-  process.once('SIGTERM', () => {
-    cleanup('SIGTERM');
-  });
-  process.once('SIGINT', () => {
-    cleanup('SIGINT');
-  });
-
-  // Subscribe to workflow events for progress rendering on stderr.
-  // subscribeForConversation is pure in-memory registration — cannot throw in practice.
-  // If that changes, this should be moved inside the try block to prevent blocking executeWorkflow.
-  const { quiet, verbose } = options;
-  const unsubscribe = quiet
-    ? undefined
-    : getWorkflowEventEmitter().subscribeForConversation(conversationId, event => {
-        renderWorkflowEvent(event, verbose ?? false);
-      });
-
-  // Notify Web UI that a workflow is dispatching.
-  // Mirrors the orchestrator dispatch message structure (category/segment/workflowDispatch),
-  // but omits the rocket emoji and "(background)" qualifier since the CLI runs synchronously.
-  // In the CLI path there is no separate worker conversation — the CLI itself
-  // is both the dispatcher and the executor, so workerConversationId === conversationId.
-  try {
-    await adapter.sendMessage(conversationId, `Dispatching workflow: **${workflow.name}**`, {
-      category: 'workflow_dispatch_status',
-      segment: 'new',
-      workflowDispatch: { workerConversationId: conversationId, workflowName: workflow.name },
-    });
-  } catch (dispatchError) {
-    getLog().warn(
-      { err: dispatchError as Error, conversationId },
-      'cli.workflow_dispatch_surface_failed'
-    );
-  }
-
-  // When --resume, hand the already-found run (and its completed-node outputs)
-  // to executeWorkflow. Otherwise this is a fresh run and prepared stays null.
-  // The lookup-by-(workflowName, cwd) was already done above for worktree-path
-  // resolution; reuse that result rather than querying twice.
-  const deps = createWorkflowDeps();
-  let prepared: Awaited<ReturnType<typeof hydrateResumableRun>> = null;
-  if (options.resume && resumable) {
-    try {
-      prepared = await hydrateResumableRun(deps, resumable);
-    } catch (error) {
-      const err = error as Error;
-      getLog().error(
-        { err, workflowName, runId: resumable.id },
-        'cli.workflow_hydrate_resume_failed'
-      );
-      throw new Error(
-        `Cannot resume workflow '${workflowName}': failed to load prior run state — ${err.message}`
-      );
-    }
-    if (!prepared) {
-      throw new Error(
-        `Cannot resume: the prior run for '${workflowName}' has no completed nodes and no interactive-loop state.`
-      );
-    }
-  }
-
-  // Execute workflow with workingCwd (may be worktree path)
-  let result: Awaited<ReturnType<typeof executeWorkflow>>;
-  try {
-    const baseBranch = codebase?.default_branch?.trim()
-      ? git.toBranchName(codebase.default_branch.trim())
-      : undefined;
-    const opts = prepared
-      ? {
-          codebaseId: codebase?.id,
-          source: workflowSource,
-          userId: cliUserId,
-          baseBranch,
-          ...prepared,
-        }
-      : { codebaseId: codebase?.id, source: workflowSource, userId: cliUserId, baseBranch };
-    result = await executeWorkflow(
-      deps,
-      adapter,
-      conversationId,
-      workingCwd,
-      workflow,
-      userMessage,
-      conversation.id,
-      opts
-    );
-  } finally {
-    unsubscribe?.();
-  }
-
-  // Check result and exit appropriately
-  if (result.success && 'paused' in result && result.paused) {
-    console.log('\nWorkflow paused — waiting for approval.');
-  } else if (result.success) {
-    // Surface workflow result to Web UI as a result card (mirrors orchestrator.ts result message).
-    // Paused workflows are handled in the branch above and intentionally do not get a result card.
-    if ('summary' in result && result.summary) {
+    // Auto-generate title for CLI workflow conversations (fire-and-forget)
+    void (async (): Promise<void> => {
+      let workflowConfig: Awaited<ReturnType<typeof loadConfig>> | undefined;
       try {
-        await adapter.sendMessage(conversationId, result.summary, {
-          category: 'workflow_result',
-          segment: 'new',
-          workflowResult: { workflowName: workflow.name, runId: result.workflowRunId },
-        });
-      } catch (surfaceError) {
+        workflowConfig = await loadConfig(cwd);
+      } catch (error) {
+        getLog().warn({ err: error as Error, cwd }, 'workflow.title_config_load_failed');
+      }
+
+      try {
+        const titleAssistantType = resolveTitleAssistantType(
+          workflow,
+          workflowConfig?.assistant,
+          conversation.ai_assistant_type
+        );
+        const titleAssistantConfig = workflowConfig?.assistants?.[titleAssistantType] ?? {};
+        await generateAndSetTitle(
+          conversation.id,
+          userMessage,
+          titleAssistantType,
+          workingCwd,
+          workflowName,
+          titleAssistantConfig
+        );
+      } catch (error) {
         getLog().warn(
-          { err: surfaceError as Error, conversationId },
-          'cli.workflow_result_surface_failed'
+          { err: error as Error, conversationId: conversation.id },
+          'workflow.title_generation_failed'
+        );
+      }
+    })();
+
+    // Register cleanup handlers for graceful termination
+    let terminating = false;
+    const cleanup = (signal: string): void => {
+      if (terminating) return;
+      terminating = true;
+      getLog().info({ conversationId: conversation.id, signal }, 'workflow.process_terminating');
+      workflowDb
+        .getActiveWorkflowRun(conversation.id)
+        .then(activeRun => {
+          if (activeRun) {
+            return workflowDb.failWorkflowRun(activeRun.id, `Process terminated (${signal})`);
+          }
+          return undefined;
+        })
+        .catch((err: unknown) => {
+          const e = err as Error;
+          getLog().error(
+            { err: e, errorType: e.constructor.name },
+            'workflow.termination_cleanup_failed'
+          );
+        })
+        .finally(() => {
+          process.exit(1);
+        });
+    };
+    process.once('SIGTERM', () => {
+      cleanup('SIGTERM');
+    });
+    process.once('SIGINT', () => {
+      cleanup('SIGINT');
+    });
+
+    // Subscribe to workflow events for progress rendering on stderr.
+    // subscribeForConversation is pure in-memory registration — cannot throw in practice.
+    // If that changes, this should be moved inside the try block to prevent blocking executeWorkflow.
+    const { quiet, verbose } = options;
+    const unsubscribe = quiet
+      ? undefined
+      : getWorkflowEventEmitter().subscribeForConversation(conversationId, event => {
+          renderWorkflowEvent(event, verbose ?? false);
+        });
+
+    // Notify Web UI that a workflow is dispatching.
+    // Mirrors the orchestrator dispatch message structure (category/segment/workflowDispatch),
+    // but omits the rocket emoji and "(background)" qualifier since the CLI runs synchronously.
+    // In the CLI path there is no separate worker conversation — the CLI itself
+    // is both the dispatcher and the executor, so workerConversationId === conversationId.
+    try {
+      await adapter.sendMessage(conversationId, `Dispatching workflow: **${workflow.name}**`, {
+        category: 'workflow_dispatch_status',
+        segment: 'new',
+        workflowDispatch: { workerConversationId: conversationId, workflowName: workflow.name },
+      });
+    } catch (dispatchError) {
+      getLog().warn(
+        { err: dispatchError as Error, conversationId },
+        'cli.workflow_dispatch_surface_failed'
+      );
+    }
+
+    // When --resume, hand the already-found run (and its completed-node outputs)
+    // to executeWorkflow. Otherwise this is a fresh run and prepared stays null.
+    // The lookup-by-(workflowName, cwd) was already done above for worktree-path
+    // resolution; reuse that result rather than querying twice.
+    const deps = createWorkflowDeps();
+    let prepared: Awaited<ReturnType<typeof hydrateResumableRun>> = null;
+    if (options.resume && resumable) {
+      try {
+        prepared = await hydrateResumableRun(deps, resumable);
+      } catch (error) {
+        const err = error as Error;
+        getLog().error(
+          { err, workflowName, runId: resumable.id },
+          'cli.workflow_hydrate_resume_failed'
+        );
+        throw new Error(
+          `Cannot resume workflow '${workflowName}': failed to load prior run state — ${err.message}`
+        );
+      }
+      if (!prepared) {
+        throw new Error(
+          `Cannot resume: the prior run for '${workflowName}' has no completed nodes and no interactive-loop state.`
         );
       }
     }
-    console.log('\nWorkflow completed successfully.');
-  } else {
-    throw new Error(`Workflow failed: ${result.error}`);
+
+    // Execute workflow with workingCwd (may be worktree path)
+    let result: Awaited<ReturnType<typeof executeWorkflow>>;
+    try {
+      const baseBranch = codebase?.default_branch?.trim()
+        ? git.toBranchName(codebase.default_branch.trim())
+        : undefined;
+      const opts = prepared
+        ? {
+            codebaseId: codebase?.id,
+            source: workflowSource,
+            userId: cliUserId,
+            baseBranch,
+            ...prepared,
+          }
+        : { codebaseId: codebase?.id, source: workflowSource, userId: cliUserId, baseBranch };
+      result = await executeWorkflow(
+        deps,
+        adapter,
+        conversationId,
+        workingCwd,
+        workflow,
+        userMessage,
+        conversation.id,
+        opts
+      );
+    } catch (execError) {
+      if (jsonMode) {
+        const classified = classifyWorkflowError(execError);
+        const envDeps: EnvelopeMeta = {
+          command: 'workflow.start',
+          provider: 'archon',
+          correlationId,
+          issuedAt: resolveIssuedAt(),
+        };
+        emitWorkflowEnvelope(
+          buildErrorEnvelope(
+            envDeps,
+            {
+              ...classified,
+              details: {
+                workflowRunId: undefined,
+                error: execError instanceof Error ? execError.message : String(execError),
+              },
+            },
+            startTime
+          )
+        );
+        return;
+      }
+      throw execError;
+    } finally {
+      unsubscribe?.();
+    }
+
+    // JSON mode: emit shared envelope and return
+    if (jsonMode) {
+      const envDeps: EnvelopeMeta = {
+        command: 'workflow.start',
+        provider: 'archon',
+        correlationId,
+        issuedAt: resolveIssuedAt(),
+      };
+      const workflowRunRef: Record<string, unknown> = {
+        provider: 'archon',
+        runId: result.workflowRunId,
+        workflowName: workflow.name,
+      };
+
+      if (!result.success) {
+        emitWorkflowEnvelope(
+          buildErrorEnvelope(
+            envDeps,
+            {
+              code: 'WORKFLOW_FAILED',
+              category: 'implementation_defect',
+              retryable: true,
+              details: {
+                workflowRunId: result.workflowRunId,
+                error: result.error,
+              },
+              exitCode: EXIT_SOFTWARE,
+            },
+            startTime
+          )
+        );
+        return;
+      }
+
+      const isPaused = 'paused' in result && result.paused;
+      if (isPaused) {
+        // Fetch the run to get approval metadata
+        let gateRef: Record<string, unknown> | undefined;
+        try {
+          const run = await workflowDb.getWorkflowRun(result.workflowRunId);
+          if (run && isApprovalContext(run.metadata.approval)) {
+            gateRef = {
+              gateId: run.metadata.approval.nodeId,
+              kind: 'human-decision',
+            };
+          }
+        } catch {
+          // Non-fatal: omit gateRef if lookup fails
+        }
+
+        const successResult: Record<string, unknown> = {
+          operation: 'start',
+          state: 'waiting-for-approval',
+          terminal: false,
+          actionRequired: true,
+        };
+        if (gateRef) successResult.gateRef = gateRef;
+
+        emitWorkflowEnvelope(buildSuccessEnvelope(envDeps, { workflowRunRef }, successResult));
+        return;
+      }
+
+      // Successful start acknowledgement
+      emitWorkflowEnvelope(
+        buildSuccessEnvelope(
+          envDeps,
+          { workflowRunRef },
+          {
+            operation: 'start',
+            state: 'running',
+            phase: 'implementation',
+            accepted: true,
+          }
+        )
+      );
+      return;
+    }
+
+    // Check result and exit appropriately (human mode)
+    if (result.success && 'paused' in result && result.paused) {
+      console.log('\nWorkflow paused — waiting for approval.');
+    } else if (result.success) {
+      // Surface workflow result to Web UI as a result card (mirrors orchestrator.ts result message).
+      // Paused workflows are handled in the branch above and intentionally do not get a result card.
+      if ('summary' in result && result.summary) {
+        try {
+          await adapter.sendMessage(conversationId, result.summary, {
+            category: 'workflow_result',
+            segment: 'new',
+            workflowResult: { workflowName: workflow.name, runId: result.workflowRunId },
+          });
+        } catch (surfaceError) {
+          getLog().warn(
+            { err: surfaceError as Error, conversationId },
+            'cli.workflow_result_surface_failed'
+          );
+        }
+      }
+      console.log('\nWorkflow completed successfully.');
+    } else {
+      throw new Error(`Workflow failed: ${result.error}`);
+    }
+  } catch (unhandledError) {
+    if (jsonMode) {
+      const classified = classifyWorkflowError(unhandledError);
+      const deps: EnvelopeMeta = {
+        command: 'workflow.start',
+        provider: 'archon',
+        correlationId,
+        issuedAt: resolveIssuedAt(),
+      };
+      emitWorkflowEnvelope(
+        buildErrorEnvelope(
+          deps,
+          {
+            ...classified,
+            details: {
+              error:
+                unhandledError instanceof Error ? unhandledError.message : String(unhandledError),
+            },
+          },
+          startTime
+        )
+      );
+      return;
+    }
+    throw unhandledError;
   }
 }
 
@@ -1252,37 +1527,71 @@ export async function workflowStatusCommand(json?: boolean, verbose?: boolean): 
  *
  * Unlike `status` (active runs only), this resolves one run regardless of
  * status — so an agent can answer "did the review pass?" for a completed/failed
- * run. `--verbose` adds the per-node event summary; `--json` emits the raw run
- * (plus an `events` array when verbose).
+ * run. `--verbose` adds the per-node event summary; `--json` emits a
+ * `workflow.status` shared envelope.
  */
 export async function workflowGetCommand(
   runId: string,
   json?: boolean,
-  verbose?: boolean
+  verbose?: boolean,
+  correlationId?: string
 ): Promise<number> {
+  const startTime = Date.now();
+  const resolvedCorrelationId = resolveCorrelationId(correlationId);
+
   let run: WorkflowRun | null;
   try {
     run = await workflowDb.getWorkflowRun(runId);
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, runId }, 'cli.workflow_get_failed');
-    // In --json mode never throw — emit one parseable {ok:false} line (same
-    // contract as the write commands) so a parsing agent always gets JSON.
     if (json) {
-      console.log(JSON.stringify({ ok: false, runId, error: err.message }, null, 2));
+      const classified = classifyWorkflowError(error);
+      const deps: EnvelopeMeta = {
+        command: 'workflow.status',
+        provider: 'archon',
+        correlationId: resolvedCorrelationId,
+        issuedAt: resolveIssuedAt(),
+      };
+      emitWorkflowEnvelope(
+        buildErrorEnvelope(
+          deps,
+          {
+            ...classified,
+            details: { runId, error: err.message },
+          },
+          startTime
+        )
+      );
       return 1;
     }
     throw new Error(`Failed to get workflow run: ${err.message}`);
   }
 
   if (!run) {
-    // Not-found exits non-zero so `get <id> && ...` and CI checks see the
-    // failure (the JSON envelope already carries ok:false for parsers).
     if (json) {
-      console.log(JSON.stringify({ ok: false, runId, error: 'not_found' }, null, 2));
-    } else {
-      console.log(`Workflow run not found: ${runId}`);
+      const deps: EnvelopeMeta = {
+        command: 'workflow.status',
+        provider: 'archon',
+        correlationId: resolvedCorrelationId,
+        issuedAt: resolveIssuedAt(),
+      };
+      emitWorkflowEnvelope(
+        buildErrorEnvelope(
+          deps,
+          {
+            code: 'NOT_FOUND',
+            category: 'unexpected_state',
+            retryable: false,
+            details: { runId },
+            exitCode: EXIT_USAGE,
+          },
+          startTime
+        )
+      );
+      return 1;
     }
+    console.log(`Workflow run not found: ${runId}`);
     return 1;
   }
 
@@ -1297,8 +1606,33 @@ export async function workflowGetCommand(
   }
 
   if (json) {
-    const output = verbose ? { ...run, events: events ?? [] } : run;
-    console.log(JSON.stringify(output, null, 2));
+    const deps: EnvelopeMeta = {
+      command: 'workflow.status',
+      provider: 'archon',
+      correlationId: resolvedCorrelationId,
+      issuedAt: resolveIssuedAt(),
+    };
+    const workflowRunRef = buildWorkflowRunRef(run);
+    const contractState = mapStatusToContractState(run.status);
+    const terminal = (TERMINAL_WORKFLOW_STATUSES as readonly string[]).includes(run.status);
+
+    const statusResult: Record<string, unknown> = {
+      operation: 'status',
+      state: contractState,
+      terminal,
+    };
+
+    if (run.status === 'paused' && isApprovalContext(run.metadata.approval)) {
+      statusResult.actionRequired = true;
+      statusResult.gateRef = {
+        gateId: run.metadata.approval.nodeId,
+        kind: 'human-decision',
+      };
+    } else {
+      statusResult.actionRequired = false;
+    }
+
+    emitWorkflowEnvelope(buildSuccessEnvelope(deps, { workflowRunRef }, statusResult));
     return 0;
   }
 

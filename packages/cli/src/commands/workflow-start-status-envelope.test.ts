@@ -8,7 +8,7 @@
  * functions when `--json` is passed, verifying they produce shared-envelope
  * JSON matching the checked-in contract fixtures.
  *
- * All tests are `test.skip()` because:
+ * All tests are `test()` because:
  *   - The production code does not yet emit shared-envelope JSON in the
  *     foreground `workflow run --json` path (it only suppresses logs).
  *   - The `workflowGetCommand` still emits the legacy `{ ok, runId, error }`
@@ -246,18 +246,40 @@ mock.module('@archon/core/operations/workflow-operations', () => ({
   resetWorkflowNodeSessions: mock(() => Promise.resolve({ deleted: 0 })),
 }));
 
+mock.module('@archon/workflows/router', () => ({
+  resolveWorkflowName: mock(() => null),
+}));
+
+mock.module('@archon/core/workflows/store-adapter', () => ({
+  createWorkflowDeps: mock(() => ({})),
+}));
+
+mock.module('../adapters/cli-adapter', () => ({
+  CLIAdapter: mock(() => ({
+    setConversationDbId: mock(() => {}),
+    sendMessage: mock(() => Promise.resolve()),
+  })),
+}));
+
+mock.module('./auth', () => ({
+  resolveCliUserId: mock(() => null),
+}));
+
 // ---------------------------------------------------------------------------
 // Static imports — must appear AFTER mock.module() calls above so that
 // bun:test's hoisted mock.module intercepts all transitive dependencies.
 // This matches the pattern used in workflow.test.ts.
 // ---------------------------------------------------------------------------
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
+import { resolveWorkflowName } from '@archon/workflows/router';
 import { workflowRunCommand, workflowGetCommand } from './workflow';
 
 // ---------------------------------------------------------------------------
 // Reusable test data
 // ---------------------------------------------------------------------------
 const TEST_WORKFLOW = makeTestWorkflowWithSource({ name: 'implement', description: 'Implement' });
+
+(resolveWorkflowName as ReturnType<typeof mock>).mockReturnValue(TEST_WORKFLOW.workflow);
 
 const RUNNING_RUN = {
   id: 'run-001',
@@ -328,7 +350,7 @@ describe('3.3B-START-001 — foreground workflow run --json emits workflow.start
     consoleSpy.mockRestore();
   });
 
-  test.skip('successful foreground run emits a workflow.start envelope with correct structure', async () => {
+  test('successful foreground run emits a workflow.start envelope with correct structure', async () => {
     // SKIP REASON: workflowRunCommand foreground path does not yet build/emit
     // a shared-envelope JSON for workflow.start. Currently it only suppresses
     // human logs when json=true but emits no JSON output.
@@ -384,7 +406,7 @@ describe('3.3B-START-001 — foreground workflow run --json emits workflow.start
     assertNoForbiddenKeys(envelope);
   });
 
-  test.skip('successful foreground run with supplied correlation-id echoes it in the envelope', async () => {
+  test('successful foreground run with supplied correlation-id echoes it in the envelope', async () => {
     // SKIP REASON: WorkflowRunOptions does not yet have a correlationId field,
     // and cli.ts does not thread --correlation-id into workflow run.
     // ACTIVATE: once Slice 1 adds correlationId to WorkflowRunOptions and
@@ -411,7 +433,7 @@ describe('3.3B-START-001 — foreground workflow run --json emits workflow.start
     expect(envelope.correlationId).toBe('corr_fixed_value');
   });
 
-  test.skip('no human-text console output in foreground json mode', async () => {
+  test('no human-text console output in foreground json mode', async () => {
     // SKIP REASON: foreground path doesn't emit envelope yet; once it does,
     // this test asserts that stdout has exactly one JSON line and nothing else.
     // ACTIVATE: once Slice 1 suppresses all human console.log and emits envelope.
@@ -448,7 +470,7 @@ describe('3.3B-START-002 — paused foreground workflow run --json emits waiting
     consoleSpy.mockRestore();
   });
 
-  test.skip('paused run emits success envelope with state waiting-for-approval', async () => {
+  test('paused run emits success envelope with state waiting-for-approval', async () => {
     // SKIP REASON: foreground path doesn't build envelope for paused result.
     // ACTIVATE: once Slice 1 handles paused case in envelope construction.
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
@@ -496,7 +518,7 @@ describe('3.3B-START-003 — projectBindingRef population [P1, AC#1]', () => {
     consoleSpy.mockRestore();
   });
 
-  test.skip('projectBindingRef is omitted when no binding exists (valid per schema)', async () => {
+  test('projectBindingRef is omitted when no binding exists (valid per schema)', async () => {
     // SKIP REASON: foreground path doesn't build envelope yet.
     // ACTIVATE: once Slice 1 handles the no-binding case.
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
@@ -536,7 +558,7 @@ describe('3.3B-START-ERR-001 — failed workflow emits WORKFLOW_FAILED error env
     consoleSpy.mockRestore();
   });
 
-  test.skip('executeWorkflow returning success:false emits error envelope with WORKFLOW_FAILED', async () => {
+  test('executeWorkflow returning success:false emits error envelope with WORKFLOW_FAILED', async () => {
     // SKIP REASON: foreground path throws on failure rather than emitting
     // an error envelope in JSON mode.
     // ACTIVATE: once Slice 2 wraps foreground path in withFailClosed-style
@@ -597,12 +619,13 @@ describe('3.3B-START-ERR-002 — workflow not found emits MALFORMED_REQUEST erro
     consoleSpy.mockRestore();
   });
 
-  test.skip('non-existent workflow name emits error envelope with MALFORMED_REQUEST', async () => {
+  test('non-existent workflow name emits error envelope with MALFORMED_REQUEST', async () => {
     // SKIP REASON: workflowRunCommand throws an Error for not-found workflows
     // instead of emitting an error envelope in JSON mode.
     // ACTIVATE: once Slice 2 catches not-found and emits MALFORMED_REQUEST.
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
 
+    (resolveWorkflowName as ReturnType<typeof mock>).mockReturnValueOnce(null);
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [TEST_WORKFLOW],
       errors: [],
@@ -636,7 +659,7 @@ describe('3.3B-START-ERR-003 — flag validation failure emits MALFORMED_REQUEST
     consoleSpy.mockRestore();
   });
 
-  test.skip('mutually exclusive flags emit MALFORMED_REQUEST with fieldErrors', async () => {
+  test('mutually exclusive flags emit MALFORMED_REQUEST with fieldErrors', async () => {
     // SKIP REASON: workflowRunCommand throws plain Error for flag validation
     // instead of emitting an error envelope.
     // ACTIVATE: once Slice 2 catches flag validation errors in JSON mode.
@@ -677,7 +700,7 @@ describe('3.3B-START-ERR-004 — timeout error emits COMMAND_TIMEOUT envelope [P
     consoleSpy.mockRestore();
   });
 
-  test.skip('ETIMEDOUT from executeWorkflow produces COMMAND_TIMEOUT error envelope', async () => {
+  test('ETIMEDOUT from executeWorkflow produces COMMAND_TIMEOUT error envelope', async () => {
     // SKIP REASON: no classifyWorkflowError helper exists yet, and foreground
     // path doesn't catch/classify timeout errors.
     // ACTIVATE: once Slice 2 adds timeout classification and envelope emission.
@@ -722,7 +745,7 @@ describe('3.3B-START-ERR-005 — unhandled exception emits INTERNAL_ERROR envelo
     consoleSpy.mockRestore();
   });
 
-  test.skip('unexpected throw in foreground path emits INTERNAL_ERROR, never unstructured stderr', async () => {
+  test('unexpected throw in foreground path emits INTERNAL_ERROR, never unstructured stderr', async () => {
     // SKIP REASON: foreground path propagates exceptions as plain throws.
     // ACTIVATE: once Slice 2 wraps the entire foreground path in withFailClosed.
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
@@ -766,7 +789,7 @@ describe('3.3B-STATUS-001 — workflow get --json emits workflow.status success 
     consoleSpy.mockRestore();
   });
 
-  test.skip('running run emits workflow.status envelope with terminal:false', async () => {
+  test('running run emits workflow.status envelope with terminal:false', async () => {
     // SKIP REASON: workflowGetCommand --json currently emits the raw
     // WorkflowRun row, not the shared envelope.
     // ACTIVATE: once Slice 3 replaces legacy shape with shared envelope.
@@ -822,7 +845,7 @@ describe('3.3B-STATUS-002 — status enum mapping covers all WorkflowRunStatus v
   ];
 
   for (const { dbStatus, expectedState, expectedTerminal } of STATUS_MAP) {
-    test.skip(`status '${dbStatus}' maps to state '${expectedState}' with terminal=${String(expectedTerminal)}`, async () => {
+    test(`status '${dbStatus}' maps to state '${expectedState}' with terminal=${String(expectedTerminal)}`, async () => {
       // SKIP REASON: workflowGetCommand --json emits raw run, not envelope.
       // ACTIVATE: once Slice 3 implements status-to-state mapping.
       const workflowDb = await import('@archon/core/db/workflows');
@@ -855,7 +878,7 @@ describe('3.3B-STATUS-003 — paused run with approval context includes gateRef 
     consoleSpy.mockRestore();
   });
 
-  test.skip('paused run emits gateRef derived from metadata.approval', async () => {
+  test('paused run emits gateRef derived from metadata.approval', async () => {
     // SKIP REASON: workflowGetCommand --json emits raw run, not envelope.
     // ACTIVATE: once Slice 3 derives gateRef from isApprovalContext.
     const workflowDb = await import('@archon/core/db/workflows');
@@ -887,7 +910,7 @@ describe('3.3B-STATUS-004 — completed run has terminal:true, no actionRequired
     consoleSpy.mockRestore();
   });
 
-  test.skip('completed run emits terminal:true and actionRequired:false', async () => {
+  test('completed run emits terminal:true and actionRequired:false', async () => {
     // SKIP REASON: workflowGetCommand --json emits raw run, not envelope.
     // ACTIVATE: once Slice 3 derives terminal from TERMINAL_WORKFLOW_STATUSES.
     const workflowDb = await import('@archon/core/db/workflows');
@@ -914,20 +937,16 @@ describe('3.3B-STATUS-005 — correlation-id plumbed to workflow get [P1, AC#2]'
     consoleSpy.mockRestore();
   });
 
-  test.skip('supplied correlation-id appears in status envelope', async () => {
+  test('supplied correlation-id appears in status envelope', async () => {
     // SKIP REASON: workflowGetCommand does not accept correlationId parameter.
     // ACTIVATE: once Slice 3 adds correlationId param and cli.ts plumbing.
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(RUNNING_RUN);
 
-    // Once the signature changes to accept correlationId:
-    // await workflowGetCommand('run-001', true, false, 'corr_test_status');
-    // For now just call with existing sig to demonstrate the test shape:
-    await workflowGetCommand('run-001', true);
+    await workflowGetCommand('run-001', true, false, 'corr_test_status');
 
     const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
-    // After implementation: expect(envelope.correlationId).toBe('corr_test_status');
-    expect(typeof envelope.correlationId).toBe('string');
+    expect(envelope.correlationId).toBe('corr_test_status');
   });
 });
 
@@ -945,7 +964,7 @@ describe('3.3B-STATUS-ERR-001 — not-found run emits NOT_FOUND error envelope [
     consoleSpy.mockRestore();
   });
 
-  test.skip('non-existent run ID emits NOT_FOUND envelope instead of legacy {ok:false}', async () => {
+  test('non-existent run ID emits NOT_FOUND envelope instead of legacy {ok:false}', async () => {
     // SKIP REASON: workflowGetCommand --json emits legacy { ok: false, runId,
     // error: 'not_found' } instead of a shared error envelope.
     // ACTIVATE: once Slice 4 replaces legacy shape with shared error envelope.
@@ -981,7 +1000,7 @@ describe('3.3B-STATUS-ERR-002 — DB error emits INTERNAL_ERROR envelope [P0, AC
     consoleSpy.mockRestore();
   });
 
-  test.skip('DB query failure emits INTERNAL_ERROR envelope with execution metadata', async () => {
+  test('DB query failure emits INTERNAL_ERROR envelope with execution metadata', async () => {
     // SKIP REASON: workflowGetCommand --json emits legacy { ok: false } shape
     // for DB errors.
     // ACTIVATE: once Slice 4 classifies DB errors into shared error envelopes.
@@ -1021,7 +1040,7 @@ describe('3.3B-STATUS-ERR-003 — DB timeout emits COMMAND_TIMEOUT envelope [P1,
     consoleSpy.mockRestore();
   });
 
-  test.skip('DB statement timeout emits COMMAND_TIMEOUT envelope', async () => {
+  test('DB statement timeout emits COMMAND_TIMEOUT envelope', async () => {
     // SKIP REASON: no timeout classification exists for workflowGetCommand.
     // ACTIVATE: once Slice 4 classifies timeout errors.
     const workflowDb = await import('@archon/core/db/workflows');
@@ -1058,7 +1077,7 @@ describe('3.3B-CONTRACT-001 — start success envelope matches fixture field-by-
     consoleSpy.mockRestore();
   });
 
-  test.skip('runtime-produced start envelope matches start-success.json fixture (dynamic fields excluded)', async () => {
+  test('runtime-produced start envelope matches start-success.json fixture (dynamic fields excluded)', async () => {
     // SKIP REASON: foreground path doesn't produce shared envelope yet.
     // ACTIVATE: once Slices 1+5 are complete.
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
@@ -1113,7 +1132,7 @@ describe('3.3B-CONTRACT-002 — status success envelope matches fixture field-by
     consoleSpy.mockRestore();
   });
 
-  test.skip('runtime-produced status envelope matches status-success.json fixture (dynamic fields excluded)', async () => {
+  test('runtime-produced status envelope matches status-success.json fixture (dynamic fields excluded)', async () => {
     // SKIP REASON: workflowGetCommand --json emits raw run, not envelope.
     // ACTIVATE: once Slices 3+5 are complete.
     const workflowDb = await import('@archon/core/db/workflows');
@@ -1149,7 +1168,7 @@ describe('3.3B-CONTRACT-003 — forbidden keys absent from all envelopes [P0, AC
     consoleSpy.mockRestore();
   });
 
-  test.skip('start success envelope contains no forbidden keys', async () => {
+  test('start success envelope contains no forbidden keys', async () => {
     // SKIP REASON: foreground path doesn't produce shared envelope yet.
     // ACTIVATE: once Slice 1 is implemented.
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
@@ -1173,7 +1192,7 @@ describe('3.3B-CONTRACT-003 — forbidden keys absent from all envelopes [P0, AC
     assertNoForbiddenKeys(envelope);
   });
 
-  test.skip('status success envelope contains no forbidden keys', async () => {
+  test('status success envelope contains no forbidden keys', async () => {
     // SKIP REASON: workflowGetCommand --json emits raw run, not envelope.
     // ACTIVATE: once Slice 3 is implemented.
     const workflowDb = await import('@archon/core/db/workflows');
@@ -1185,7 +1204,7 @@ describe('3.3B-CONTRACT-003 — forbidden keys absent from all envelopes [P0, AC
     assertNoForbiddenKeys(envelope);
   });
 
-  test.skip('error envelope contains no forbidden keys', async () => {
+  test('error envelope contains no forbidden keys', async () => {
     // SKIP REASON: workflowGetCommand --json emits legacy shape for errors.
     // ACTIVATE: once Slice 4 is implemented.
     const workflowDb = await import('@archon/core/db/workflows');
@@ -1360,7 +1379,7 @@ describe('3.3B-NOSIDEEFFECT-001 — workflow get --json is a pure read [P1, AC#2
     consoleSpy.mockRestore();
   });
 
-  test.skip('workflow get --json does not call any mutating DB operations', async () => {
+  test('workflow get --json does not call any mutating DB operations', async () => {
     // SKIP REASON: workflowGetCommand --json emits raw run, not envelope, so
     // testing would pass vacuously against the legacy shape rather than the
     // new envelope path.
@@ -1392,7 +1411,7 @@ describe('3.3B-CONCURRENCY-001 — auto-generated correlation IDs are unique per
     consoleSpy.mockRestore();
   });
 
-  test.skip('two sequential foreground runs produce different correlationIds', async () => {
+  test('two sequential foreground runs produce different correlationIds', async () => {
     // SKIP REASON: foreground path doesn't produce shared envelope yet.
     // ACTIVATE: once Slice 1 is implemented.
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
