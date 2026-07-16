@@ -239,6 +239,9 @@ mock.module('@archon/core/db/users', () => ({
 
 mock.module('@archon/core/db/provider-bindings', () => ({
   listBindingsByCodebase: mock(() => Promise.resolve([])),
+  deriveBindingId: mock(
+    (provider: string, name: string) => `wpb_${provider}_${name.replace(/-/g, '_')}`
+  ),
 }));
 
 mock.module('@archon/core/operations/workflow-operations', () => ({
@@ -1660,6 +1663,290 @@ describe('3.3B-CONCURRENCY-001 — auto-generated correlation IDs are unique per
     const env2 = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
 
     expect(env1.correlationId).not.toBe(env2.correlationId);
+  });
+});
+
+// ==========================================================================
+// SLICE 5 (continued): Runtime proof tests for review findings 13-16
+// ==========================================================================
+
+describe('3.3B-CONTRACT-007 — failed-run status envelope uses no forbidden keys [P0, AC#2]', () => {
+  let consoleSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    consoleSpy.mockRestore();
+  });
+
+  test('failed run with metadata.error emits status envelope with no forbidden keys', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(FAILED_RUN);
+
+    await workflowGetCommand('run-003', true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(true);
+    expect(envelope.command).toBe('workflow.status');
+
+    const result = envelope.result as Record<string, unknown>;
+    expect(result.operation).toBe('status');
+    expect(result.state).toBe('failed');
+    expect(result.failureDetail).toBe('Node build-step failed');
+    expect(result).not.toHaveProperty('error');
+
+    assertNoForbiddenKeys(envelope);
+  });
+});
+
+describe('3.3B-CONTRACT-008 — projectBindingRef uses deriveBindingId format [P0, AC#1]', () => {
+  let consoleSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    consoleSpy.mockRestore();
+  });
+
+  test('start envelope projectBindingRef.bindingId is a deterministic contract ID not a DB UUID', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const providerBindings = await import('@archon/core/db/provider-bindings');
+    const codebaseDb = await import('@archon/core/db/codebases');
+
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-auto',
+      name: 'test/repo',
+      repository_url: null,
+      default_cwd: '/test/path',
+      commands: [],
+      created_at: new Date(),
+    });
+    (providerBindings.listBindingsByCodebase as ReturnType<typeof mock>).mockResolvedValueOnce([
+      {
+        id: 'db-uuid-should-not-appear',
+        provider: 'archon',
+        name: 'test-binding',
+        codebase_id: 'cb-auto',
+        event_route: 'workflow',
+        state: 'active',
+        binding_version: 1,
+      },
+    ]);
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [TEST_WORKFLOW],
+      errors: [],
+    });
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-bind-001',
+    });
+
+    await workflowRunCommand('/test/path', 'implement', 'Add auth', {
+      json: true,
+      noWorktree: true,
+    });
+
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    const result = envelope.result as Record<string, unknown>;
+    expect(result.projectBindingRef).toBeDefined();
+
+    const bindingRef = result.projectBindingRef as Record<string, unknown>;
+    expect(bindingRef.provider).toBe('archon');
+    expect(bindingRef.name).toBe('test-binding');
+    expect(bindingRef.bindingId).toBe('wpb_archon_test_binding');
+    expect(bindingRef.bindingId).not.toBe('db-uuid-should-not-appear');
+    expect(typeof bindingRef.bindingId).toBe('string');
+    expect((bindingRef.bindingId as string).startsWith('wpb_')).toBe(true);
+  });
+
+  test('status envelope projectBindingRef.bindingId is a deterministic contract ID', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const providerBindings = await import('@archon/core/db/provider-bindings');
+    const codebaseDb = await import('@archon/core/db/codebases');
+
+    (codebaseDb.getCodebase as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-auto',
+      name: 'test/repo',
+      repository_url: null,
+      default_cwd: '/test/path',
+      commands: [],
+      created_at: new Date(),
+    });
+    (providerBindings.listBindingsByCodebase as ReturnType<typeof mock>).mockResolvedValueOnce([
+      {
+        id: 'db-row-uuid-999',
+        provider: 'archon',
+        name: 'status-binding',
+        codebase_id: 'cb-auto',
+        event_route: 'workflow',
+        state: 'active',
+        binding_version: 1,
+      },
+    ]);
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(RUNNING_RUN);
+
+    await workflowGetCommand('run-001', true);
+
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    const result = envelope.result as Record<string, unknown>;
+    expect(result.projectBindingRef).toBeDefined();
+
+    const bindingRef = result.projectBindingRef as Record<string, unknown>;
+    expect(bindingRef.bindingId).toBe('wpb_archon_status_binding');
+    expect(bindingRef.bindingId).not.toBe('db-row-uuid-999');
+  });
+});
+
+describe('3.3B-CONTRACT-009 — paused start includes projectBindingRef [P0, AC#1]', () => {
+  let consoleSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    consoleSpy.mockRestore();
+  });
+
+  test('paused start envelope includes projectBindingRef when binding exists', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const workflowDb = await import('@archon/core/db/workflows');
+    const providerBindings = await import('@archon/core/db/provider-bindings');
+    const codebaseDb = await import('@archon/core/db/codebases');
+
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-auto',
+      name: 'test/repo',
+      repository_url: null,
+      default_cwd: '/test/path',
+      commands: [],
+      created_at: new Date(),
+    });
+    (providerBindings.listBindingsByCodebase as ReturnType<typeof mock>).mockResolvedValueOnce([
+      {
+        id: 'db-uuid-paused',
+        provider: 'archon',
+        name: 'paused-binding',
+        codebase_id: 'cb-auto',
+        event_route: 'workflow',
+        state: 'active',
+        binding_version: 1,
+      },
+    ]);
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [TEST_WORKFLOW],
+      errors: [],
+    });
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      paused: true,
+      workflowRunId: 'run-paused-bind-001',
+    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      ...RUNNING_RUN,
+      id: 'run-paused-bind-001',
+      status: 'paused',
+      metadata: {
+        approval: { nodeId: 'review-gate', message: 'Review', type: 'approval' as const },
+      },
+    });
+
+    await workflowRunCommand('/test/path', 'implement', 'Add auth', {
+      json: true,
+      noWorktree: true,
+    });
+
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(true);
+    expect(envelope.command).toBe('workflow.start');
+
+    const result = envelope.result as Record<string, unknown>;
+    expect(result.state).toBe('waiting-for-approval');
+    expect(result.projectBindingRef).toBeDefined();
+
+    const bindingRef = result.projectBindingRef as Record<string, unknown>;
+    expect(bindingRef.provider).toBe('archon');
+    expect(bindingRef.name).toBe('paused-binding');
+    expect(bindingRef.bindingId).toBe('wpb_archon_paused_binding');
+    expect(bindingRef.bindingId).not.toBe('db-uuid-paused');
+
+    assertNoForbiddenKeys(envelope);
+  });
+});
+
+describe('3.3B-CONTRACT-010 — deep fixture conformance for projectBindingRef [P0, AC#1]', () => {
+  let consoleSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    consoleSpy.mockRestore();
+  });
+
+  test('start envelope projectBindingRef matches fixture structure exactly', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const providerBindings = await import('@archon/core/db/provider-bindings');
+    const codebaseDb = await import('@archon/core/db/codebases');
+
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-auto',
+      name: 'workflow-engine',
+      repository_url: null,
+      default_cwd: '/test/path',
+      commands: [],
+      created_at: new Date(),
+    });
+    (providerBindings.listBindingsByCodebase as ReturnType<typeof mock>).mockResolvedValueOnce([
+      {
+        id: 'some-db-uuid',
+        provider: 'archon',
+        name: 'workflow-engine-primary',
+        codebase_id: 'cb-auto',
+        event_route: 'workflow',
+        state: 'active',
+        binding_version: 1,
+      },
+    ]);
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [TEST_WORKFLOW],
+      errors: [],
+    });
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'archon-run-story-1-3a-001',
+    });
+
+    await workflowRunCommand('/test/path', 'implement', 'Add auth', {
+      json: true,
+      noWorktree: true,
+    });
+
+    const fixture = loadFixture('start-success.json');
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+
+    const fixtureResult = fixture.result as Record<string, unknown>;
+    const envelopeResult = envelope.result as Record<string, unknown>;
+
+    const fixtureBinding = fixtureResult.projectBindingRef as Record<string, unknown>;
+    const envelopeBinding = envelopeResult.projectBindingRef as Record<string, unknown>;
+
+    expect(envelopeBinding).toBeDefined();
+    expect(envelopeBinding.provider).toBe(fixtureBinding.provider);
+    expect(envelopeBinding.name).toBe(fixtureBinding.name);
+    expect(typeof envelopeBinding.bindingId).toBe('string');
+    expect((envelopeBinding.bindingId as string).length).toBeGreaterThan(0);
+    expect(envelopeBinding.projectRef).toBe(fixtureBinding.projectRef);
+
+    const fixtureBindingKeys = new Set(Object.keys(fixtureBinding));
+    for (const key of Object.keys(envelopeBinding)) {
+      expect(fixtureBindingKeys.has(key)).toBe(true);
+    }
   });
 });
 

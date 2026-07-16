@@ -59,6 +59,7 @@ import * as workflowDb from '@archon/core/db/workflows';
 import * as workflowEventsDb from '@archon/core/db/workflow-events';
 import type { WorkflowEventRow } from '@archon/core/db/workflow-events';
 import * as providerBindingDb from '@archon/core/db/provider-bindings';
+import { deriveBindingId } from '@archon/core/db/provider-bindings';
 import * as userDb from '@archon/core/db/users';
 import * as git from '@archon/git';
 import { CLIAdapter } from '../adapters/cli-adapter';
@@ -508,7 +509,7 @@ async function buildProjectBindingRef(
     const ref: Record<string, unknown> = {
       provider: binding.provider,
       name: binding.name,
-      bindingId: binding.id,
+      bindingId: deriveBindingId(binding.provider, binding.name),
     };
     if (projectRef) ref.projectRef = projectRef;
     return ref;
@@ -1390,6 +1391,9 @@ export async function workflowRunCommand(
           // Non-fatal: omit gateRef if lookup fails
         }
 
+        const projectRef = codebase?.name ? `project:${codebase.name}` : undefined;
+        const projectBindingRef = await buildProjectBindingRef(codebase?.id, projectRef);
+
         const successResult: Record<string, unknown> = {
           operation: 'start',
           state: 'waiting-for-approval',
@@ -1397,6 +1401,7 @@ export async function workflowRunCommand(
           actionRequired: true,
         };
         if (gateRef) successResult.gateRef = gateRef;
+        if (projectBindingRef) successResult.projectBindingRef = projectBindingRef;
 
         emitWorkflowEnvelope(buildSuccessEnvelope(envDeps, { workflowRunRef }, successResult));
         return 0;
@@ -1794,7 +1799,7 @@ export async function workflowGetCommand(
     }
 
     if (run.status === 'failed' && typeof run.metadata.error === 'string') {
-      statusResult.error = { message: run.metadata.error };
+      statusResult.failureDetail = run.metadata.error;
     }
 
     if (projectBindingRef) statusResult.projectBindingRef = projectBindingRef;
