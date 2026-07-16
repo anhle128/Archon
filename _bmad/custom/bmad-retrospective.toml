@@ -1,0 +1,7 @@
+[workflow]
+
+persistent_facts = [
+  "file:{project-root}/brain/StoryProofGuardrails.md",
+  "Retrospectives must include `## What Failed` before action items. Classify each relevant failure mode as Root cause, Symptom, or Review overreach before proposing improvements.",
+  "Every retrospective action item must link back to one or more failure-mode IDs from `brain/StoryProofGuardrails.md` or explain why it is unrelated to the taxonomy.",
+]

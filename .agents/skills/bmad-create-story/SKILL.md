@@ -10,6 +10,9 @@ description: 'Creates a dedicated story file with all the context the agent will
 **Your Role:** Story context engine that prevents LLM developer mistakes, omissions, or disasters.
 - Communicate all responses in {communication_language} and generate all documents in {document_output_language}
 - Your purpose is NOT to copy from epics - it's to create a comprehensive, optimized story file that gives the DEV agent EVERYTHING needed for flawless implementation
+- A story is not ready when it only has acceptance criteria, tasks, and proof commands. It must define the complete solution surface, invariant ownership, lifecycle and state behavior, material failure modes, implementation slices, and executable proof design.
+- Do not set `Status: ready-for-dev` until solution-readiness validation and proof-readiness validation have both passed.
+- If canonical planning artifacts conflict with prior story decisions or current code, stop with a planning blocker instead of hiding the conflict in Dev Notes.
 - COMMON LLM MISTAKES TO PREVENT: reinventing wheels, wrong libraries, wrong file locations, breaking regressions, ignoring UX, vague implementations, lying about completion, not learning from past work
 - EXHAUSTIVE ANALYSIS REQUIRED: You must thoroughly analyze ALL artifacts to extract critical context - do NOT be lazy or skim! This is the most important function in the entire development process!
 - UTILIZE SUBPROCESSES AND SUBAGENTS: Use research subagents, subprocesses or parallel processing if available to thoroughly analyze different artifacts simultaneously and thoroughly
@@ -77,6 +80,8 @@ Activation is complete. If `activation_steps_prepend` or `activation_steps_appen
 - `ux_file` = `{planning_artifacts}/*ux*.md`
 - `story_title` = "" (will be elicited if not derivable)
 - `default_output_file` = `{implementation_artifacts}/{{story_key}}.md`
+- `solution_readiness_checker` = `{project-root}/_bmad/scripts/check_story_solution_readiness.py`
+- `proof_readiness_checker` = `{project-root}/_bmad/scripts/check_story_proof_readiness.py`
 
 ## Input Files
 
@@ -263,6 +268,11 @@ Activation is complete. If `activation_steps_prepend` or `activation_steps_appen
   <action>Extract our story ({{epic_num}}-{{story_num}}) details:</action> **STORY FOUNDATION:** - User story statement
   (As a, I want, so that) - Detailed acceptance criteria (already BDD formatted) - Technical requirements specific to this story -
   Business context and value - Success criteria <!-- Previous story analysis for context continuity -->
+  <action>Build the Canonical Artifact Reconciliation before drafting tasks:
+    - Compare the story requirements against PRD, epics, architecture, UX, prior completed stories, persistent facts, and current code contracts.
+    - Record every material agreement, conflict, and superseding decision in the story.
+    - If a material conflict cannot be resolved from existing authoritative artifacts, keep the story in draft and report the blocker instead of marking it ready-for-dev.
+  </action>
   <check if="story_num > 1">
     <action>Find {{previous_story_num}}: scan {implementation_artifacts} for the story file in epic {{epic_num}} with the highest story number less than {{story_num}}</action>
     <action>Load previous story file: {implementation_artifacts}/{{epic_num}}-{{previous_story_num}}-*.md</action> **PREVIOUS STORY INTELLIGENCE:** -
@@ -317,6 +327,21 @@ Activation is complete. If `activation_steps_prepend` or `activation_steps_appen
   <critical>A story implementation must leave the system working end-to-end — not just satisfy its stated ACs.
   If a behavior is required for the feature to work correctly in the existing system, it is a requirement
   whether or not it is explicitly written in the story. The dev agent owns this.</critical>
+  <critical>Before creating tasks, produce the story's solution-readiness model:
+    - Feature and System Context.
+    - Canonical Artifact Reconciliation.
+    - Solution Surface Map.
+    - Invariant and Ownership Map.
+    - Lifecycle and State Analysis.
+    - Failure, Concurrency, Security, and Compatibility Analysis.
+    - Solution Design and Decision Record.
+    - Implementation Slices.
+    - Executable Proof Design.
+    - Explicit Boundary and Deferral Record.
+  </critical>
+  <action>Each implementation slice must represent a complete behavior or invariant across all owned surfaces, not an isolated file edit.</action>
+  <action>Every invariant must identify its source of truth, enforcement owner, creation/transformation points, persistence/transmission points, consumers, and proof.</action>
+  <action>Every lifecycle or stateful story must define valid states, transitions, interruption behavior, cleanup behavior, and recovery behavior.</action>
 </step>
 
 <step n="4" goal="Web research for latest technical specifics">
@@ -388,15 +413,30 @@ Activation is complete. If `activation_steps_prepend` or `activation_steps_appen
   <template-output file="{default_output_file}">
   story_completion_status</template-output>
 
-  <!-- CRITICAL: Set status to ready-for-dev -->
-  <action>Set story Status to: "ready-for-dev"</action>
-  <action>Add completion note: "Ultimate
-  context engine analysis completed - comprehensive developer guide created"</action>
+  <critical>Leave story Status as "draft" until Step 6 validation passes.</critical>
+  <action>Add completion note: "Solution-readiness draft completed; ready-for-dev is blocked until validation passes."</action>
 </step>
 
 <step n="6" goal="Update sprint status and finalize">
   <action>Validate the newly created story file {default_output_file} against `./checklist.md` and apply any required fixes before finalizing</action>
-  <action>Save story document unconditionally</action>
+  <action>Run: `python3 {solution_readiness_checker} {default_output_file}`</action>
+  <check if="solution-readiness validation fails">
+    <action>Keep story Status as "draft"</action>
+    <action>Do not update {{sprint_status}}</action>
+    <output>Story remains draft because solution-readiness validation failed. Fix the reported sections before development.</output>
+    <action>HALT - Story is not ready-for-dev</action>
+  </check>
+  <check if="{proof_readiness_checker} exists">
+    <action>Run: `python3 {proof_readiness_checker} {default_output_file}`</action>
+    <check if="proof-readiness validation fails">
+      <action>Keep story Status as "draft"</action>
+      <action>Do not update {{sprint_status}}</action>
+      <output>Story remains draft because proof-readiness validation failed. Fix the reported proof gaps before development.</output>
+      <action>HALT - Story is not ready-for-dev</action>
+    </check>
+  </check>
+  <action>Set story Status to: "ready-for-dev" only after both readiness validations pass</action>
+  <action>Save story document</action>
 
   <!-- Update sprint status -->
   <check if="sprint status file exists">
@@ -410,7 +450,7 @@ Activation is complete. If `activation_steps_prepend` or `activation_steps_appen
   </check>
 
   <action>Report completion</action>
-  <output>**🎯 ULTIMATE BMad Method STORY CONTEXT CREATED, {user_name}!**
+  <output>**BMad story context created and readiness-validated, {user_name}.**
 
     **Story Details:**
     - Story ID: {{story_id}}
@@ -419,12 +459,12 @@ Activation is complete. If `activation_steps_prepend` or `activation_steps_appen
     - Status: ready-for-dev
 
     **Next Steps:**
-    1. Review the comprehensive story in {{story_file}}
+    1. Review the solution-readiness sections in {{story_file}}
     2. Run dev agents `dev-story` for optimized implementation
     3. Run `code-review` when complete (auto-marks done)
     4. Optional: If Test Architect module installed, run `/bmad:tea:automate` after `dev-story` to generate guardrail tests
 
-    **The developer now has everything needed for flawless implementation!**
+    **The developer now has a broad and deep solution contract, not only a test checklist.**
   </output>
   <action>Run: `python3 {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --key workflow.on_complete` — if the resolved value is non-empty, follow it as the final terminal instruction before exiting.</action>
 </step>

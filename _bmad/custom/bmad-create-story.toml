@@ -1,0 +1,12 @@
+[workflow]
+
+persistent_facts = [
+  "file:{project-root}/brain/StoryProofGuardrails.md",
+  "file:{project-root}/brain/StorySolutionReadiness.md",
+  "Every new BMAD story must remain `Status: draft` until solution-readiness and proof-readiness validation both pass.",
+  "Every new BMAD story must include the ten solution-readiness sections from `brain/StorySolutionReadiness.md` under `## Dev Notes` before it can become ready-for-dev.",
+  "If canonical artifacts conflict with prior story decisions or current code, keep the story draft and report the planning blocker instead of updating sprint status.",
+  "Every new BMAD story must include `## Failure Analysis & Proof Readiness` before `## Dev Agent Record`. Populate the failure-mode scan and AC proof matrix from the story's acceptance criteria before marking the story ready-for-dev.",
+  "For each acceptance criterion, include Proof Command/Test, Failing-Path Evidence, Ownership Boundary, and Deferral Decision. Use `N/A` only with a concrete reason.",
+  "For cleanup or refactor stories, call out preserved-behavior regression tests in the proof matrix before cleanup work is accepted.",
+]
