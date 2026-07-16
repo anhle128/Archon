@@ -9,11 +9,12 @@ stepsCompleted:
   - 'step-05-generate-output'
 lastStep: 'step-05-generate-output'
 nextStep: ''
-lastSaved: '2026-07-14'
+lastSaved: '2026-07-16'
 inputDocuments:
-  - '_bmad-output/implementation-artifacts/3-3a-define-shared-workflow-provider-command-envelope.md'
+  - '_bmad-output/implementation-artifacts/3-3b-provide-archon-start-and-status-cli-json.md'
   - '_bmad-output/project-context.md'
   - '_bmad/tea/config.yaml'
+  - '_bmad-output/implementation-artifacts/sprint-status.yaml'
   - '_bmad-output/planning-artifacts/prd.md'
   - '_bmad-output/planning-artifacts/architecture.md'
   - '_bmad-output/planning-artifacts/epics.md'
@@ -21,16 +22,24 @@ inputDocuments:
   - '_bmad-output/planning-artifacts/sprint-change-proposal-2026-07-12-implementation-readiness-remediation.md'
   - '_bmad-output/planning-artifacts/contracts/workflow-commander/README.md'
   - '_bmad-output/planning-artifacts/contracts/workflow-commander/schemas/workflow-command-envelope.schema.json'
-  - '_bmad-output/planning-artifacts/contracts/workflow-commander/examples/providers/archon/commands/*.json'
+  - '_bmad-output/planning-artifacts/contracts/workflow-commander/examples/providers/archon/commands/start-success.json'
+  - '_bmad-output/planning-artifacts/contracts/workflow-commander/examples/providers/archon/commands/status-success.json'
+  - '_bmad-output/planning-artifacts/contracts/workflow-commander/examples/providers/archon/commands/error-*.json'
+  - '_bmad-output/planning-artifacts/contracts/workflow-commander/validate_contracts.py'
   - '_bmad-output/test-artifacts/test-design-epic-3.md'
-  - '_bmad-output/test-artifacts/atdd-checklist-3-1-implement-archon-workflow-provider-binding-lifecycle.md'
+  - '_bmad-output/test-artifacts/test-design/test-design-3-3a-define-shared-workflow-provider-command-envelope.md'
+  - 'package.json'
   - 'packages/cli/package.json'
   - 'packages/cli/src/cli.ts'
+  - 'packages/cli/src/commands/workflow.ts'
+  - 'packages/cli/src/commands/workflow.test.ts'
+  - 'packages/cli/src/commands/workflow-provider-command-envelope.ts'
+  - 'packages/cli/src/commands/workflow-provider-command-envelope.test.ts'
   - 'packages/cli/src/commands/provider-binding.ts'
   - 'packages/cli/src/commands/provider-binding.test.ts'
   - 'packages/cli/src/commands/provider-binding-contract.test.ts'
   - 'packages/cli/src/commands/provider-binding.e2e.test.ts'
-  - 'packages/cli/src/commands/workflow.ts'
+  - 'packages/workflows/src/schemas/workflow-run.ts'
   - '.agents/skills/bmad-testarch-test-design/resources/tea-index.csv'
   - '.agents/skills/bmad-testarch-test-design/resources/knowledge/risk-governance.md'
   - '.agents/skills/bmad-testarch-test-design/resources/knowledge/probability-impact.md'
@@ -43,8 +52,266 @@ inputDocuments:
   - '.agents/skills/bmad-testarch-test-design/resources/knowledge/api-request.md'
   - '.agents/skills/bmad-testarch-test-design/resources/knowledge/auth-session.md'
   - '.agents/skills/bmad-testarch-test-design/resources/knowledge/recurse.md'
-outputDocument: '_bmad-output/test-artifacts/test-design/test-design-3-3a-define-shared-workflow-provider-command-envelope.md'
+outputDocument: '_bmad-output/test-artifacts/test-design/test-design-3-3b-provide-archon-start-and-status-cli-json.md'
 ---
+
+# Test Design Progress: 3.3b Provide Archon Start And Status CLI JSON
+
+## Step 1: Detect Mode
+
+Mode selected: Epic-Level.
+
+Reason: the supplied input is a story-level implementation artifact with explicit acceptance criteria for Story 3.3b.
+The BMad sprint status file exists and marks `3-3b-provide-archon-start-and-status-cli-json` as `ready-for-dev`, which also selects Epic-Level mode under the file-based detection rule.
+
+Prerequisite result: PASS.
+`_bmad-output/implementation-artifacts/3-3b-provide-archon-start-and-status-cli-json.md` exists and provides story requirements, acceptance criteria, tasks, solution context, known risks, and proof expectations.
+Architecture and contract context will be loaded in Step 2 where available.
+
+## Step 2: Load Context
+
+Configuration loaded: Playwright utils enabled; Pact.js utils disabled; Pact MCP disabled; browser automation `auto`; test stack detection `auto`; test artifacts rooted at `_bmad-output/test-artifacts`; test design output rooted at `_bmad-output/test-artifacts/test-design`.
+
+Detected stack: full-stack Bun + strict TypeScript monorepo by package dependencies, with this story scoped to headless CLI JSON producer behavior in `@archon/cli`.
+No package test file uses `page.goto` or `page.locator`; `playwright-cli` is not installed in this environment, and browser exploration is not applicable because the story has no UI/browser target.
+
+Loaded requirements and architecture: Story 3.3b, Epic 3, FR-8, Architecture AD-3/AD-6/AD-9 syntax baseline, implementation readiness notes, sprint change remediation, project context, and sprint status.
+Loaded contract authorities: Workflow Commander README, `workflow-command-envelope.schema.json`, `start-success.json`, `status-success.json`, and all command error fixtures.
+Loaded prior design context: Epic 3 test design and Story 3.3a shared-envelope test design.
+
+Current implementation evidence: foreground `workflow run --json` suppresses the initial discovery log but still prints human text on the foreground path; `workflow get --json` emits legacy raw run or `{ ok: false }` shapes; `cli.ts` does not yet pass `--correlation-id` into workflow run/get.
+The shared envelope builders already exist and enforce command/category vocabularies and success reference requirements.
+
+Existing test patterns: `packages/cli/package.json` runs CLI tests in separate Bun invocations to avoid `mock.module()` pollution.
+Provider-binding tests demonstrate exact fixture comparison with narrow dynamic-field stripping, recursive forbidden-key checks, malformed-argv subprocess checks, and contract validator regression.
+Existing workflow tests already cover `workflowGetCommand`, but those assertions currently lock the legacy JSON shape and must be replaced.
+
+Loaded TEA knowledge fragments: risk governance, probability-impact scoring, test-level selection, test-priority mapping, NFR criteria, contract testing, Playwright CLI, and the API-only Playwright Utils profile (`overview`, `api-request`, `auth-session`, `recurse`).
+Pact.js implementation fragments were not loaded because Pact is disabled and the local Workflow Commander contract package is the relevant producer/consumer contract authority.
+
+Missing input assessment: no blocker.
+Two clarifications remain as test-design risks rather than prerequisites: `projectBindingRef` lookup source is not fully specified, and runtime cancellation/timeout enforcement for a hung foreground command is not defined beyond timeout classification.
+
+## Step 3: Risk And Testability
+
+Risk scale: Probability and Impact use 1 low, 2 medium, 3 high.
+Score is Probability x Impact.
+Scores 6-8 require mitigation; score 9 blocks acceptance until mitigated or formally waived.
+Priority is promoted to P0/P1 when the issue can break core behavior, security, data integrity, compatibility, or cross-process controller contracts.
+
+### Risk Register
+
+| ID | Category | Risk | P | I | Score | Pri | Mitigation / evidence | Owner / timeline |
+| --- | --- | --- | ---: | ---: | ---: | --- | --- | --- |
+| 3.3B-R-001 | BUS/OPS | Foreground `workflow run --json` emits no `workflow.start` envelope or leaks human progress text to stdout, so controllers cannot parse start results. | 3 | 3 | 9 | P0 | Unit and subprocess tests asserting exactly one JSON envelope, no prose, fixture-conformant start success, and unchanged non-json behavior. | CLI implementer / Slice 1 |
+| 3.3B-R-002 | BUS/OPS | `workflow get --json` keeps the legacy raw run or `{ ok:false }` shape instead of `workflow.status`, breaking shared status consumers. | 3 | 3 | 9 | P0 | Replace JSON path and update existing workflow tests to assert shared envelope success/error fixtures. | CLI implementer / Slices 3-4 |
+| 3.3B-R-003 | TECH/BUS | Produced envelopes pass loose schema but drift from canonical fixtures through extra/missing result fields, wrong command id, or wrong top-level refs. | 3 | 3 | 9 | P0 | Exact fixture comparisons for start/status and all five error examples, schema validation, and recursive forbidden-key checks. | CLI implementer + contract reviewer / Slices 1-5 |
+| 3.3B-R-004 | BUS/OPS | Exceptions before or during foreground workflow execution throw unstructured errors, exit unexpectedly, or print non-JSON diagnostics in `--json` mode. | 3 | 3 | 9 | P0 | Wrap all `workflow.start` JSON path work in fail-closed handling, including workflow resolution, flag validation, DB/codebase/isolation lookup, execute errors, and serialization errors. | CLI implementer / Slice 2 |
+| 3.3B-R-005 | BUS/OPS | `cli.ts` prevalidation failures for missing args, mutually exclusive flags, or missing string values return usage prose before the command-layer fail-closed logic can emit an envelope. | 3 | 3 | 9 | P0 | Subprocess argv tests for malformed start/status invocations; route JSON prevalidation through envelope-producing functions or equivalent dispatch guard. | CLI implementer / Slices 2 and 5 |
+| 3.3B-R-006 | BUS/OPS | Timeout, schema mismatch, malformed request, unexpected state, and unexpected exit are misclassified or lack retryability/diagnostic category. | 2 | 3 | 6 | P0 | Fault-injection tests for each error class and exact comparison to command error fixtures where the command matches. | CLI implementer / Slices 2 and 4 |
+| 3.3B-R-007 | BUS/OPS | `--correlation-id` is not plumbed into workflow run/get, blank IDs are mishandled, or generated IDs are invalid/unstable. | 2 | 3 | 6 | P1 | Fixed supplied-ID tests, generated UUID format tests, and `cli.ts` dispatch tests for run/get. | CLI implementer / Slices 1 and 3 |
+| 3.3B-R-008 | BUS/DATA | `workflowRunRef` is missing, uses the wrong workflow name, drops projectRef, or depends on a stale/failing post-execution DB lookup. | 2 | 3 | 6 | P1 | Unit tests for run rows with/without codebase, lookup failure classification, and exact `workflowRunRef` fixture shape. | CLI implementer / Slices 1 and 3 |
+| 3.3B-R-009 | BUS/TECH | `projectBindingRef` source is underspecified; implementation may emit a wrong binding, fail when no binding exists, or silently omit a registered binding. | 2 | 3 | 6 | P1 | Binding-present, binding-absent, binding-lookup-failure, and ambiguous binding scenarios; waiver only if lookup ownership stays undefined. | CLI + provider-binding owners / Slice 1 |
+| 3.3B-R-010 | BUS/TECH | Paused runs are not mapped to `waiting-for-approval`, `actionRequired`, and `gateRef`, or malformed approval metadata crashes status. | 2 | 3 | 6 | P1 | Status/start paused tests using `isApprovalContext`; malformed metadata negative tests; interactive-loop pause handling explicitly classified. | CLI implementer / Slices 1 and 3 |
+| 3.3B-R-011 | BUS/TECH | Workflow status mapping, terminal derivation, actionRequired, or phase derivation is wrong for `pending`, `running`, `completed`, `failed`, `cancelled`, and `paused`. | 2 | 3 | 6 | P1 | Table-driven mapping tests using `TERMINAL_WORKFLOW_STATUSES`; fixture-specific phase assertion; unknown/missing phase behavior defined. | CLI implementer / Slice 3 |
+| 3.3B-R-012 | BUS/OPS | Success after a completed foreground run is emitted as `completed` instead of the contract's start acknowledgement shape (`running`, `accepted: true`), or adds status-only fields to start. | 2 | 3 | 6 | P1 | Start-success fixture comparison and negative assertion that non-paused start result omits `terminal`. | CLI implementer / Slice 1 |
+| 3.3B-R-013 | BUS/OPS | `--detach --json` existing ack shape changes while this story is intended to preserve it. | 2 | 3 | 6 | P1 | Regression test for current detached ack fields and no shared-envelope conversion. | CLI implementer / Slice 5 |
+| 3.3B-R-014 | SEC/BUS | Envelopes include forbidden prose/display/stdout/stderr fields or leak secrets, paths, raw errors, or unredacted execution output. | 2 | 3 | 6 | P0 | Recursive forbidden-key scan, secret-pattern scan, redacted execution metadata assertions, and stderr/stdout capture. | Security reviewer + CLI implementer / Slices 2 and 5 |
+| 3.3B-R-015 | TECH/BUS | Contract fixtures or planning artifacts are edited/imported to fit runtime instead of changing runtime to conform. | 2 | 3 | 6 | P1 | Contract validator regression, no production `_bmad-output` import scan, and git diff review for fixture immutability. | Contract reviewer / Slice 5 |
+| 3.3B-R-016 | TECH/OPS | New mocked tests pollute Bun's process-global module cache and make CLI tests order-dependent. | 3 | 2 | 6 | P1 | Add the new test file as its own `bun test` invocation and run package-level tests. | Test implementer / Slice 6 |
+| 3.3B-R-017 | DATA/BUS | Status reads during workflow transition or with stale/malformed metadata produce an impossible composite status envelope. | 2 | 3 | 6 | P1 | Snapshot-style DB-row tests, paused-to-completed race simulation, and malformed metadata fail-closed tests. | CLI + workflow-store owners / Slice 3 |
+| 3.3B-R-018 | OPS/BUS | A hung command, process signal, or cancellation path leaves the controller without a parseable terminal envelope. | 2 | 3 | 6 | P1 | Classify known timeout rejections; document runtime-signal waiver until the CLI has a process-level timeout/cancellation contract. | CLI architecture owner / before remote supervision |
+| 3.3B-R-019 | BUS/TECH | `--verbose --json` status or event-fetch failures append non-fixture event data, throw, or change the envelope contract. | 2 | 3 | 6 | P1 | Decide behavior; test verbose ignored/forbidden/contained explicitly; inject event-fetch failure. | CLI implementer / Slice 3 |
+| 3.3B-R-020 | BUS/OPS | The replacement of legacy `workflow get --json` breaks an undiscovered CLI consumer. | 1 | 3 | 3 | P1 | Consumer search found docs/tests only; update docs/tests and re-run `rg` before PR. | Story owner / pre-PR |
+| 3.3B-R-021 | TECH/BUS | Scope creep converts approve/reject/recovery/HTTP routes in this story, creating unreviewed contracts. | 2 | 3 | 6 | P1 | File-scope review: only start/status plus minimal shared helpers/tests; no state-changing HTTP route. | Story owner + reviewer / every slice |
+| 3.3B-R-022 | OPS/BUS | JSON serialization fails for circular, BigInt, or non-plain error details if `safeStringify` is bypassed. | 2 | 3 | 6 | P1 | Serialization fault-injection test and assertion that envelope emission uses shared `safeStringify`. | CLI implementer / Slices 2 and 4 |
+
+### Reviewer-Evidence Disposition
+
+Every known concern is treated as evidence, not optional advice.
+
+| Concern | Disposition | P | I | Score | Scenario or waiver |
+| --- | --- | ---: | ---: | ---: | --- |
+| RC-01 Foreground `workflow run --json` currently has no shared-envelope output. | Risk: breaks start contract. | 3 | 3 | 9 | R-001; Step 4 start success/error scenarios |
+| RC-02 Foreground JSON path still prints `Running workflow`, `Working directory`, pause/completion text. | Risk: parse failure from mixed stdout. | 3 | 3 | 9 | R-001/R-014 |
+| RC-03 `workflow get --json` emits legacy raw run or `{ ok:false }`. | Risk: breaks status contract. | 3 | 3 | 9 | R-002 |
+| RC-04 `cli.ts` does not pass `--correlation-id` into workflow run/get. | Risk: metadata contract failure. | 2 | 3 | 6 | R-007 |
+| RC-05 Workflow-not-found and flag-validation failures must be `MALFORMED_REQUEST`. | Risk: unstructured or wrong diagnostic category. | 3 | 3 | 9 | R-004/R-005/R-006 |
+| RC-06 Timeout errors must classify as `COMMAND_TIMEOUT`/`timeout`/retryable. | Risk: controller retry behavior breaks. | 2 | 3 | 6 | R-006/R-018 |
+| RC-07 DB query failure for status must classify timeout versus internal error. | Risk: fail-closed error shape wrong. | 2 | 3 | 6 | R-006/R-004 |
+| RC-08 `executeWorkflow` returning `success:false` must emit `WORKFLOW_FAILED`, not throw. | Risk: false unstructured failure. | 3 | 3 | 9 | R-004/R-006 |
+| RC-09 Contract fixtures must not be edited; runtime must conform. | Risk: source-of-truth drift. | 2 | 3 | 6 | R-003/R-015 |
+| RC-10 Shared builders from 3.3a must be used directly. | Risk: duplicate manual envelope logic drifts. | 2 | 3 | 6 | R-003/R-022 |
+| RC-11 Error fixtures cover malformed request, schema mismatch, timeout, unexpected exit, unexpected state. | Risk: incomplete fail-closed coverage. | 2 | 3 | 6 | R-006 |
+| RC-12 Start success fixture includes `operation`, `state`, `phase`, `accepted`, and optional `projectBindingRef`. | Risk: fixture drift and optional binding ambiguity. | 2 | 3 | 6 | R-009/R-012 |
+| RC-13 Status success fixture includes `terminal`, `actionRequired`, and `gateRef`. | Risk: paused/status semantics drift. | 2 | 3 | 6 | R-010/R-011 |
+| RC-14 `WorkflowRunStatus` must map all current enum values. | Risk: unsupported status or wrong terminal state. | 2 | 3 | 6 | R-011 |
+| RC-15 `gateRef` comes only from valid approval metadata. | Risk: stale/malformed metadata crash or false action requirement. | 2 | 3 | 6 | R-010/R-017 |
+| RC-16 `--detach --json` must preserve existing ack shape. | Risk: backward compatibility regression. | 2 | 3 | 6 | R-013 |
+| RC-17 Forbidden keys such as `displayText`, `humanText`, `message`, `prose`, `stderr`, and `stdout` must be absent. | Security/compatibility risk. | 2 | 3 | 6 | R-014 |
+| RC-18 Existing package test isolation must be preserved. | Test reliability risk. | 3 | 2 | 6 | R-016 |
+| RC-19 Legacy `workflow get --json` consumer search is required before shipping. | Low-probability compatibility risk; not a blocker after current search found docs/tests only. | 1 | 3 | 3 | R-020 plus pre-PR recheck |
+| RC-20 Approve/reject/recovery command envelopes are deferred. | Explicit non-risk for this story if scope stays clean. | 1 | 2 | 2 | W-3.3B-001 |
+| RC-21 State-changing HTTP control path is forbidden for v1. | Explicit non-risk if no server route is added; risk if scope creeps. | 1 | 3 | 3 | R-021 |
+| RC-22 Runtime cancellation/signal behavior is not specified beyond timeout classification. | Operational waiver; cannot be claimed complete without future process-level contract. | 2 | 3 | 6 | W-3.3B-002 and R-018 |
+| RC-23 Local CLI has no application auth requirement. | Explicit non-risk under OS-process trust; re-review if exposed remotely or multi-user. | 1 | 3 | 3 | W-3.3B-003 |
+
+### NFR Planning
+
+| NFR | In-scope threshold | Planned evidence | Risk link |
+| --- | --- | --- | --- |
+| Security | No forbidden prose/stdout/stderr fields; no secret/signing material; failure execution metadata redacts stdout/stderr. | Recursive output scan, source secret scan, error-envelope assertions. | R-014 |
+| Reliability | Start/status JSON paths never throw unstructured errors for known failure classes; malformed metadata fails closed. | Fault injection, malformed metadata, timeout, DB failure, and serialization tests. | R-004/R-006/R-017/R-022 |
+| Compatibility | Every emitted start/status/error JSON parses as one `workflow-command-envelope.v1`, matches fixtures except documented dynamic fields, and preserves `--detach --json`. | Fixture diff, schema validation, subprocess stdout capture, detach regression. | R-001/R-002/R-003/R-013 |
+| Data integrity | Status/start refs describe one persisted workflow run snapshot and do not invent project or binding identity. | Mocked DB-row mapping tests, binding present/absent/failure tests, stale-read simulation. | R-008/R-009/R-017 |
+| Maintainability | Strict TypeScript, no production planning-artifact imports, package-isolated tests, full validation gate. | Type-check, import scan, `packages/cli/package.json` script review, `bun run validate`. | R-015/R-016 |
+| Performance / timeout | UNKNOWN: no foreground command runtime timeout SLO exists. Timeout errors must be classifiable when surfaced. | Timeout classification tests and W-3.3B-002. | R-018 |
+| Permission/auth | Local OS-process trust; no application role policy in this story. | W-3.3B-003 and scope review that no remote control route is added. | RC-23 |
+| Compliance | No regulatory requirement stated. Contract traceability is the project-specific gate. | Contract validator and traceability matrix. | R-003/R-015 |
+
+### Waivers
+
+| Waiver | Reason | Owner | Residual risk | Follow-up trigger |
+| --- | --- | --- | --- | --- |
+| W-3.3B-001 Deferred decision/recovery envelopes | Stories 3.3c and 3.3d own approve/reject/resume/retry/cancel conversion. | Epic 3 owner | Those commands keep legacy JSON until their stories run. | Start Story 3.3c or 3.3d, or any controller needs those commands before then. |
+| W-3.3B-002 Process-level cancellation and hard timeout guarantee | Story requires timeout classification, but no accepted CLI process timeout/cancellation contract exists for foreground `workflow run`. | CLI architecture owner | A killed or indefinitely hung process may not emit a terminal envelope. | Remote supervision, controller SLA, or explicit timeout flag becomes accepted. |
+| W-3.3B-003 Application auth/permission policy | Current surface is local CLI under OS-process trust and no HTTP control route is allowed. | Security reviewer | Local users with shell access can invoke commands according to OS permissions. | Remote/multi-user invocation, server route, or role-scoped Workflow Commander control is introduced. |
+
+Highest-priority findings: R-001 through R-006 and R-014 are acceptance blockers because they directly affect parseability, fail-closed behavior, and the shared controller contract.
+No P0/P1 item may be considered covered by implied happy-path tests.
+
+## Step 4: Coverage Plan
+
+### Test-Level Allocation
+
+- Unit/command tests in Bun: primary level for `workflowRunCommand`, `workflowGetCommand`, result mapping, classification, correlation IDs, metadata, and dependency/fault injection.
+- CLI subprocess tests in Bun: limited to argv prevalidation, exit code propagation, stdout/stderr purity, and missing-value parser behavior that unit tests cannot catch.
+- Contract/static tests in Bun plus `validate_contracts.py`: fixture equality, JSON schema validation, forbidden fields, immutable contract package, production import boundaries, and test isolation.
+- No browser, component, HTTP API, DB-migration, or Playwright E2E layer is applicable for this story.
+
+### Atomic Scenario Catalog
+
+| ID | Pri | Level | Atomic scenario | Trace |
+| --- | --- | --- | --- | --- |
+| 3.3B-UNIT-001 | P0 | Unit/command | Foreground `workflow run --json` success emits exactly one `workflow.start` envelope matching `start-success.json` except documented dynamic fields. | AC1, R-001, R-003, RC-01 |
+| 3.3B-UNIT-002 | P0 | Unit/command | Foreground JSON success stdout contains no `Running workflow`, working-directory text, completion text, or other prose. | AC1, AC3, R-001, R-014, RC-02 |
+| 3.3B-UNIT-003 | P1 | Unit/command | Non-json foreground run keeps existing human-readable output behavior. | Regression |
+| 3.3B-UNIT-004 | P1 | Unit/command | Start result with a registered binding includes `projectBindingRef` with provider/name/bindingId/projectRef. | AC1, R-009, RC-12 |
+| 3.3B-UNIT-005 | P1 | Unit/command | Start result without a registered binding omits `projectBindingRef` and still matches schema. | AC1, R-009 |
+| 3.3B-UNIT-006 | P1 | Unit/command | Binding lookup failure after run acceptance is classified explicitly and never emits a false binding reference. | AC1, R-009, partial failure |
+| 3.3B-UNIT-007 | P1 | Unit/command | Non-paused start acknowledgement uses `operation:start`, `state:running`, `phase:implementation`, `accepted:true`, and omits status-only fields such as `terminal`. | AC1, R-012, RC-12 |
+| 3.3B-UNIT-008 | P1 | Unit/command | Paused run start emits success with `state:waiting-for-approval`, `terminal:false`, `actionRequired:true`, and valid gateRef when approval metadata exists. | AC1, R-010, RC-13 |
+| 3.3B-UNIT-009 | P0 | Unit/command | Workflow-not-found in `workflow run --json` emits `MALFORMED_REQUEST` error envelope with requested workflow details. | AC3, R-004, R-006, RC-05 |
+| 3.3B-UNIT-010 | P0 | Unit/command | Flag conflict (`--branch` with `--no-worktree`) emits `MALFORMED_REQUEST` envelope and no prose. | AC3, R-005, RC-05 |
+| 3.3B-UNIT-011 | P1 | Unit/command | Workflow load error emits structured provider-contract failure, not a stack trace. | AC3, R-004 |
+| 3.3B-UNIT-012 | P1 | Unit/command | Conversation DB failure before execute emits classified error envelope. | AC3, R-004, dependency failure |
+| 3.3B-UNIT-013 | P1 | Unit/command | Codebase lookup or isolation dependency failure emits one classified envelope and no false success. | AC1, AC3, R-004, partial failure |
+| 3.3B-UNIT-014 | P0 | Unit/command | `executeWorkflow` returns `success:false`; command emits `WORKFLOW_FAILED` with workflowRunId/error details and nonzero outcome. | AC3, R-004, RC-08 |
+| 3.3B-UNIT-015 | P0 | Unit/command | `executeWorkflow` throws; command emits structured implementation-defect or unexpected-exit envelope. | AC3, R-004, R-006 |
+| 3.3B-UNIT-016 | P0 | Unit/command | ETIMEDOUT and statement-timeout errors in start map to `COMMAND_TIMEOUT`/`timeout`/`retryable:true`. | AC3, R-006, R-018, RC-06 |
+| 3.3B-UNIT-017 | P1 | Unit/command | Circular, BigInt, or function-valued error details still serialize as one JSON envelope via `safeStringify`. | AC3, R-022 |
+| 3.3B-UNIT-018 | P1 | Unit/command | Supplied `--correlation-id` is preserved exactly for start and status. | AC1, AC2, R-007, RC-04 |
+| 3.3B-UNIT-019 | P1 | Unit/command | Missing or blank correlation ID generates a nonblank UUID for start and status. | AC1, AC2, R-007 |
+| 3.3B-UNIT-020 | P0 | Unit/command | `workflow get --json` running run emits `workflow.status` success envelope with workflowRunRef, state `running`, `terminal:false`, and no error. | AC2, R-002, R-003, RC-03 |
+| 3.3B-UNIT-021 | P0 | Unit/command | Paused status with valid approval metadata matches `status-success.json` except dynamic fields. | AC2, R-010, R-011, RC-13, RC-15 |
+| 3.3B-UNIT-022 | P1 | Unit/command | Completed, failed, cancelled, pending, running, and paused statuses map table-driven to contract states and `TERMINAL_WORKFLOW_STATUSES`. | AC2, R-011, RC-14 |
+| 3.3B-UNIT-023 | P1 | Unit/command | Failed status includes a machine-readable result error shape from run metadata without turning the status response into a failure envelope. | AC2, R-011 |
+| 3.3B-UNIT-024 | P1 | Unit/command | Paused run with malformed approval metadata does not throw; gateRef/actionRequired behavior is explicitly asserted. | AC2, R-010, R-017, RC-15 |
+| 3.3B-UNIT-025 | P1 | Unit/command | Missing/unknown phase source uses the defined fallback or emits a classified error; no invented fixture-only phase. | AC2, R-011 |
+| 3.3B-UNIT-026 | P0 | Unit/command | Status not found emits `NOT_FOUND`/`unexpected_state`/`retryable:false` envelope and exits nonzero. | AC3, R-002, R-006 |
+| 3.3B-UNIT-027 | P0 | Unit/command | Status DB timeout emits `COMMAND_TIMEOUT` envelope. | AC3, R-006, RC-07 |
+| 3.3B-UNIT-028 | P1 | Unit/command | Status non-timeout DB failure emits `INTERNAL_ERROR` envelope with redacted execution metadata. | AC3, R-006, RC-07 |
+| 3.3B-UNIT-029 | P1 | Unit/command | `--verbose --json` status behavior is explicitly defined and tested; event-fetch failure cannot corrupt the envelope. | AC2, R-019 |
+| 3.3B-UNIT-030 | P1 | Unit/command | Status read during transition uses one coherent row snapshot and never combines stale status with newer metadata. | AC2, R-017, stale data |
+| 3.3B-UNIT-031 | P1 | Unit/command | Out-of-order workflow events do not affect status envelope unless phase derivation explicitly uses sorted event data. | AC2, out-of-order events |
+| 3.3B-UNIT-032 | P1 | Unit/command | Duplicate status queries for the same run are side-effect free and each emits a valid envelope. | AC2, duplicate actions |
+| 3.3B-UNIT-033 | P1 | Unit/command | Concurrent start/status command calls do not leak correlation IDs or metadata between envelopes. | R-007, concurrency/race |
+| 3.3B-UNIT-034 | P1 | Unit/command | `--detach --json` still emits the existing ack shape and is not converted to shared envelope. | R-013, RC-16 |
+| 3.3B-CLI-035 | P0 | CLI subprocess | `archon workflow run --json` with missing workflow name emits one `workflow.start` malformed-request envelope to stdout and exits nonzero. | AC3, R-005 |
+| 3.3B-CLI-036 | P0 | CLI subprocess | Missing string flag value before `--json` does not swallow `--json`; output remains one failure envelope. | AC3, R-005, malformed input |
+| 3.3B-CLI-037 | P0 | CLI subprocess | Mutually exclusive run flags through real argv produce one envelope, no stderr prose, and nonzero exit. | AC3, R-005 |
+| 3.3B-CLI-038 | P0 | CLI subprocess | `archon workflow get --json` with missing run ID emits one `workflow.status` malformed-request envelope and exits nonzero. | AC3, R-005 |
+| 3.3B-CLI-039 | P0 | CLI subprocess | `workflow get <missing> --json` raw stdout is exactly one JSON document; process exit code is nonzero. | AC3, R-002, R-014 |
+| 3.3B-CLI-040 | P0 | CLI subprocess | Representative start/status JSON invocations capture stdout and stderr; stdout is pure JSON and stderr contains no contract-relevant prose. | AC1, AC2, R-001, R-002, R-014 |
+| 3.3B-CONTRACT-041 | P0 | Contract | Runtime-produced start and status envelopes validate against `workflow-command-envelope.schema.json`. | AC1, AC2, R-003 |
+| 3.3B-CONTRACT-042 | P0 | Contract | Runtime-produced start/status success envelopes match `start-success.json` and `status-success.json` field-by-field except documented dynamic fields. | AC1, AC2, R-003, RC-09 |
+| 3.3B-CONTRACT-043 | P0 | Contract | Runtime-produced malformed, schema-mismatch, timeout, unexpected-exit, and unexpected-state envelopes match the five command error fixtures where command id applies. | AC3, R-006, RC-11 |
+| 3.3B-CONTRACT-044 | P0 | Contract/static | Recursive scan proves `displayText`, `humanText`, `message`, `prose`, `stderr`, `stdout`, raw secrets, and signing material are absent from emitted envelopes. | R-014, RC-17 |
+| 3.3B-CONTRACT-045 | P1 | Contract/static | `validate_contracts.py` passes and command fixtures are not modified by this story. | R-015, RC-09 |
+| 3.3B-STATIC-046 | P1 | Static | Production CLI code does not import `_bmad-output` schemas, fixtures, or validator scripts. | R-015, RC-10 |
+| 3.3B-STATIC-047 | P1 | Static | No state-changing HTTP route, web UI surface, approve/reject/recovery envelope conversion, or contract fixture edit is introduced. | R-021, RC-20, RC-21 |
+| 3.3B-STATIC-048 | P1 | Static | New mocked test file is isolated in `packages/cli/package.json` as its own `bun test` invocation. | R-016, RC-18 |
+| 3.3B-STATIC-049 | P1 | Static/regression | Search confirms no production consumer depends on the old `workflow get --json` raw shape; docs/tests are updated deliberately. | R-020, RC-19 |
+| 3.3B-STATIC-050 | P1 | Static/rollback | Rollback scope is limited to `packages/cli` command/tests/package script and docs if updated; no DB migration or server rollback needed. | rollback |
+| 3.3B-SEC-051 | P1 | Static/security | No new remote control path or app-level auth bypass is added; local OS trust waiver remains valid. | W-3.3B-003, permission/auth |
+| 3.3B-OPS-052 | P1 | Unit/waiver boundary | Timeout rejection is covered, and process signal/hard cancellation behavior is recorded under W-3.3B-002 rather than implied complete. | R-018, cancellation |
+
+### AC Coverage Matrix
+
+| AC | Covered by scenarios | Waiver |
+| --- | --- | --- |
+| AC1 start success JSON, cwd/codebase/ref/binding payload | UNIT-001 through UNIT-008, UNIT-018/019, CLI-040, CONTRACT-041/042 | None |
+| AC2 status JSON, state/workflow/ref/correlation/error shape, shared example | UNIT-020 through UNIT-033, CLI-039/040, CONTRACT-041/042 | None |
+| AC3 start/status failure envelopes and fail-closed malformed/schema/timeout/exit handling | UNIT-009 through UNIT-017, UNIT-026 through UNIT-028, CLI-035 through CLI-039, CONTRACT-043/044 | W-3.3B-002 only for OS-signal/hard-cancel envelope guarantee |
+
+### Risk and Reviewer Coverage
+
+Every P0/P1 risk maps to at least one scenario above.
+R-018 has both scenario coverage for timeout rejection and waiver W-3.3B-002 for process-level signal/cancellation behavior.
+Reviewer concerns RC-01 through RC-19 map to scenario IDs in the reviewer-evidence table from Step 3.
+RC-20 maps to W-3.3B-001, RC-21 maps to STATIC-047, RC-22 maps to W-3.3B-002 plus OPS-052, and RC-23 maps to W-3.3B-003 plus SEC-051.
+
+### NFR Evidence Plan
+
+| NFR | Scenarios | Evidence artifact |
+| --- | --- | --- |
+| Security | CONTRACT-044, SEC-051 | Bun test output, scan output, file-scope diff |
+| Reliability | UNIT-009 through UNIT-017, UNIT-024, UNIT-026 through UNIT-031, OPS-052 | Focused command test output and fault-injection logs |
+| Compatibility | UNIT-001/020/021, CLI-035 through CLI-040, CONTRACT-041 through CONTRACT-045, STATIC-049 | Fixture diffs, schema validation, subprocess stdout/stderr capture |
+| Data integrity/reference accuracy | UNIT-004 through UNIT-006, UNIT-022 through UNIT-025, UNIT-030 through UNIT-033 | Mocked row snapshots and mapping assertions |
+| Maintainability | STATIC-046 through STATIC-050 | Type-check, package script review, import scan, `bun run validate` |
+| Timeout/cancellation | UNIT-016, UNIT-027, OPS-052 | Timeout tests and W-3.3B-002 waiver |
+| Permission/auth | SEC-051 | Scope review and W-3.3B-003 |
+
+### Execution Strategy
+
+- PR: all new unit/command, contract/static, focused subprocess tests, `bun --filter @archon/cli test`, `bun --filter @archon/cli type-check`, and the contract validator.
+- Pre-PR: `bun run validate` because CI requires bundled checks, type-check, lint, format check, and package-isolated tests.
+- Nightly/weekly: not required unless future timeout/cancellation or remote supervision SLO introduces long-running tests.
+
+### Estimates and Gates
+
+- P0 scenarios: ~24-40 hours.
+- P1 scenarios: ~28-52 hours.
+- Total: ~52-92 hours, roughly 1.5-2.5 engineering weeks for implementation plus review depending on subprocess harness and binding lookup complexity.
+
+Quality gates:
+
+- P0 pass rate: 100%.
+- P1 pass rate: 100% for this story unless an explicit owner-approved waiver is recorded.
+- All score >= 6 risks have passing scenarios or a waiver with owner, residual risk, and trigger.
+- Every acceptance criterion and reviewer concern has scenario-or-waiver traceability.
+- `bun run validate` passes before PR.
+
+## Step 5: Generate Output
+
+Resolved execution mode: sequential.
+Reason: Epic-Level mode produces one output artifact and no explicit user request required agent-team or subagent orchestration.
+
+Final output written:
+
+- `_bmad-output/test-artifacts/test-design/test-design-3-3b-provide-archon-start-and-status-cli-json.md`
+
+Validation checklist result: PASS by manual checklist review.
+The output contains risk assessment, NFR planning, coverage matrix, NFR evidence mapping, execution strategy, resource estimates, quality gates, explicit waivers, and scenario-or-waiver traceability for every acceptance criterion, high-risk item, and reviewer concern.
+
+Browser/session cleanup: not applicable.
+No Playwright CLI session was opened because this story has no browser target and `playwright-cli` is not installed.
+
+Contract validation evidence:
+
+- `python3 _bmad-output/planning-artifacts/contracts/workflow-commander/validate_contracts.py`
+- Result: passed; validated 7 schemas, 17 command examples, 13 binding examples, 7 delivery examples, 6 generic event examples, 7 provider event examples, 9 callback rejection examples, 6 materialization examples, and isolated local package traversal.
 
 # Test Design Progress: a5.2 Generate PR Handoff With Evidence Links
 
