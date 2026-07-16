@@ -128,8 +128,50 @@ function getWorkflowCommandEnvelopeCommand(
   return undefined;
 }
 
-function isJsonRequestedArg(args: string[]): boolean {
-  return args.some(arg => arg === '--json' || arg.startsWith('--json='));
+interface RawWorkflowProviderOptions {
+  jsonRequested: boolean;
+  jsonAssigned: boolean;
+  correlationIdValue: string | undefined;
+  correlationIdMissingValue: boolean;
+}
+
+function scanRawWorkflowProviderOptions(args: string[]): RawWorkflowProviderOptions {
+  const end = args.indexOf('--');
+  const scanArgs = end === -1 ? args : args.slice(0, end);
+  const result: RawWorkflowProviderOptions = {
+    jsonRequested: false,
+    jsonAssigned: false,
+    correlationIdValue: undefined,
+    correlationIdMissingValue: false,
+  };
+
+  for (let i = 0; i < scanArgs.length; i += 1) {
+    const arg = scanArgs[i];
+    if (arg === '--json') {
+      result.jsonRequested = true;
+      continue;
+    }
+    if (arg.startsWith('--json=')) {
+      result.jsonRequested = true;
+      result.jsonAssigned = true;
+      continue;
+    }
+    if (arg === '--correlation-id') {
+      const next = scanArgs[i + 1];
+      if (next === undefined || next.startsWith('--')) {
+        result.correlationIdMissingValue = true;
+        continue;
+      }
+      result.correlationIdValue = next;
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith('--correlation-id=')) {
+      result.correlationIdValue = arg.slice('--correlation-id='.length);
+    }
+  }
+
+  return result;
 }
 
 function isBlankString(value: unknown): value is string {
@@ -326,6 +368,7 @@ function normalizeProviderBindingArgs(args: string[]): string[] {
 
 async function main(): Promise<number> {
   const args = normalizeProviderBindingArgs(process.argv.slice(2));
+  const rawWorkflowProviderOptions = scanRawWorkflowProviderOptions(args);
 
   // Anonymous once-per-invocation startup event (self-gates on opt-out).
   // Emitted before any early return so EVERY invocation — including bare
@@ -401,14 +444,17 @@ async function main(): Promise<number> {
     });
   } catch (error) {
     const err = error as Error;
-    const jsonRequested = isJsonRequestedArg(args);
-    if (jsonRequested) {
+    if (rawWorkflowProviderOptions.jsonRequested) {
       const envelopeCommand = getWorkflowCommandEnvelopeCommand(args[0], args[1]);
       if (envelopeCommand !== undefined) {
-        const exitCode = await emitWorkflowCommandMalformedEnvelope(envelopeCommand, {
-          parseError: err.message,
-          requestAccepted: false,
-        });
+        const exitCode = await emitWorkflowCommandMalformedEnvelope(
+          envelopeCommand,
+          {
+            parseError: err.message,
+            requestAccepted: false,
+          },
+          rawWorkflowProviderOptions.correlationIdValue
+        );
         await shutdownTelemetry();
         return exitCode;
       }
@@ -428,7 +474,9 @@ async function main(): Promise<number> {
   const noWorktree = values['no-worktree'] as boolean | undefined;
   const resumeFlag = values.resume as boolean | undefined;
   const spawnFlag = values.spawn as boolean | undefined;
-  const jsonFlag = values.json as boolean | undefined;
+  const rawJsonValue = values.json;
+  const invalidJsonFlag = rawJsonValue !== undefined && typeof rawJsonValue !== 'boolean';
+  const jsonFlag = rawJsonValue === true ? true : undefined;
   const detachFlag = values.detach as boolean | undefined;
   // Handle help flag
   if (values.help) {
@@ -440,6 +488,10 @@ async function main(): Promise<number> {
   // Get command and subcommand
   const command = positionals[0];
   const subcommand = positionals[1];
+  const envelopeCommand = getWorkflowCommandEnvelopeCommand(command, subcommand);
+  const workflowProviderJsonRequested =
+    envelopeCommand !== undefined &&
+    (jsonFlag === true || invalidJsonFlag || rawWorkflowProviderOptions.jsonRequested);
 
   // Commands that don't require git repo validation
   const noGitCommands = [
@@ -469,12 +521,35 @@ async function main(): Promise<number> {
     // (not just lower to 'warn' — warnings still print at that level): every
     // --json command surfaces failures inside its own { ok: false } envelope, so
     // no diagnostic the caller needs is lost.
-    if (jsonFlag) {
+    if (jsonFlag || workflowProviderJsonRequested) {
       setLogLevel('silent');
     } else if (values.quiet || suppressByDefault) {
       setLogLevel('warn');
     } else if (values.verbose) {
       setLogLevel('debug');
+    }
+
+    if (workflowProviderJsonRequested && envelopeCommand !== undefined) {
+      const parsedCorrelationId = values['correlation-id'];
+      if (
+        rawWorkflowProviderOptions.correlationIdMissingValue ||
+        isBlankString(parsedCorrelationId)
+      ) {
+        return await emitWorkflowCommandMalformedEnvelope(envelopeCommand, {
+          fieldErrors: [{ path: '/correlationId', code: 'required' }],
+          requestAccepted: false,
+        });
+      }
+      if (invalidJsonFlag || rawWorkflowProviderOptions.jsonAssigned) {
+        return await emitWorkflowCommandMalformedEnvelope(
+          envelopeCommand,
+          {
+            fieldErrors: [{ path: '/json', code: 'must_be_boolean_flag' }],
+            requestAccepted: false,
+          },
+          parsedCorrelationId as string | undefined
+        );
+      }
     }
 
     // Note: orphaned run cleanup moved to `workflow cleanup` command only.

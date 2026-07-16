@@ -169,7 +169,7 @@ export function classifyRunError(err: unknown): ClassifiedError {
   const msg = err instanceof Error ? err.message : String(err);
   const errCode = (err as { code?: string })?.code;
 
-  if (/^Workflow '[^']+' not found\./.test(msg)) {
+  if (/^Workflow '[\s\S]+' not found\.(?:\n\nAvailable workflows:\n[\s\S]*)?$/.test(msg)) {
     return {
       code: 'WORKFLOW_NOT_FOUND',
       category: 'unexpected_state',
@@ -581,11 +581,11 @@ export async function workflowRunCommand(
     let correlationId = 'unknown';
     let issuedAt = new Date(0).toISOString();
     try {
+      correlationId = resolveCorrelationId(options.correlationId);
+      issuedAt = resolveIssuedAt();
       if (invalidJsonOption) {
         throw new Error('--json must be a boolean flag');
       }
-      correlationId = resolveCorrelationId(options.correlationId);
-      issuedAt = resolveIssuedAt();
       return await workflowRunCommandInner(
         cwd,
         workflowName,
@@ -1640,15 +1640,21 @@ export async function workflowGetCommand(
   correlationId?: string
 ): Promise<number> {
   const startTime = Date.now();
+  const invalidJsonOption = json !== undefined && typeof json !== 'boolean';
+  const jsonMode = json === true || invalidJsonOption;
 
-  if (json) {
+  if (jsonMode) {
     let corrId = 'unknown';
     let issuedAt = new Date(0).toISOString();
     try {
       corrId = resolveCorrelationId(correlationId);
       issuedAt = resolveIssuedAt();
+      if (invalidJsonOption) {
+        throw new Error('--json must be a boolean flag');
+      }
       return await workflowGetCommandInner(runId, true, verbose, corrId, issuedAt, startTime);
-    } catch (_error) {
+    } catch (error) {
+      const classified = classifyRunError(error);
       const meta: EnvelopeMeta = {
         command: 'workflow.status',
         provider: 'archon',
@@ -1660,17 +1666,17 @@ export async function workflowGetCommand(
           buildErrorEnvelope(
             meta,
             {
-              code: 'INTERNAL_ERROR',
-              category: 'implementation_defect',
-              retryable: false,
+              code: classified.code,
+              category: classified.category,
+              retryable: classified.retryable,
               details: { requestAccepted: false },
-              exitCode: EXIT_SOFTWARE,
+              exitCode: classified.exitCode,
             },
             startTime
           )
         )
       );
-      return EXIT_SOFTWARE;
+      return classified.exitCode;
     }
   }
 

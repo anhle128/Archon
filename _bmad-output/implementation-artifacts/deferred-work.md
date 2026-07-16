@@ -8,3 +8,5 @@
 ## Deferred from: code review of 3-3b-provide-archon-start-and-status-cli-json (2026-07-16)
 
 - `bun run validate` failed in the full parallel package test phase on unrelated core/server test output, while focused Story 3.3b checks passed; reproduce separately against the base branch before treating it as caused by this story.
+- Workflow Commander canonical command examples still encode BMAD-specific semantics (`bmad-dev-story`, `phase`, and `projectBindingRef`).
+  Hermes-agent reuse should be designed around generic controller contracts, with BMAD-specific examples moved to a separate fixture family or adapter-level documentation.

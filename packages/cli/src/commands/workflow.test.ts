@@ -1913,6 +1913,7 @@ describe('workflowRunCommand — JSON envelope (Story 3.3b)', () => {
       workflowRunCommand('/test/path', 'assist', 'hello', {
         json: 'true' as unknown as boolean,
         noWorktree: true,
+        correlationId: 'corr-invalid-json-run',
       })
     ).resolves.toBe(64);
 
@@ -1922,6 +1923,7 @@ describe('workflowRunCommand — JSON envelope (Story 3.3b)', () => {
     const error = envelope.error as Record<string, unknown>;
     expect(error.code).toBe('MALFORMED_REQUEST');
     expect(error.category).toBe('provider_contract');
+    expect(envelope.correlationId).toBe('corr-invalid-json-run');
   });
 
   // 3.3B-UNIT-013 [P1] R-015, W-3.3B-003 — the foreground command remains
@@ -2604,6 +2606,25 @@ describe('workflowGetCommand', () => {
     expect(code).toBe(70);
   });
 
+  it('RF-40: non-boolean json option values emit a workflow.status malformed-request envelope', async () => {
+    const code = await workflowGetCommand(
+      'run-invalid-json',
+      'true' as unknown as boolean,
+      false,
+      'corr-invalid-json-get'
+    );
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.status');
+    expect(envelope.success).toBe(false);
+    expect(envelope.correlationId).toBe('corr-invalid-json-get');
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('MALFORMED_REQUEST');
+    expect(error.category).toBe('provider_contract');
+    expect(code).toBe(64);
+  });
+
   // 3.3B-UNIT-021 [P0] R-001,R-005 — a completed run now emits a
   // `workflow.status` success envelope (not the raw WorkflowRun row),
   // terminal:true, exit 0.
@@ -2934,6 +2955,26 @@ describe('workflow.ts classifyRunError helper (Story 3.3b Task 1)', () => {
       category: 'unexpected_state',
       retryable: false,
       exitCode: 78,
+    });
+    expect(
+      classifyRunError(
+        new Error("Workflow 'team's-flow' not found.\n\nAvailable workflows:\n  - assist")
+      )
+    ).toEqual({
+      code: 'WORKFLOW_NOT_FOUND',
+      category: 'unexpected_state',
+      retryable: false,
+      exitCode: 78,
+    });
+    expect(
+      classifyRunError(
+        new Error("Workflow 'foo' not found. database relation 'workflow_runs' not found")
+      )
+    ).toEqual({
+      code: 'INTERNAL_ERROR',
+      category: 'implementation_defect',
+      retryable: false,
+      exitCode: 70,
     });
     expect(classifyRunError(new Error('some internal failure'))).toEqual({
       code: 'INTERNAL_ERROR',

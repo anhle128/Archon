@@ -222,6 +222,87 @@ describe('workflow run/get --json CLI dispatch E2E — real subprocess (Story 3.
       'run',
       'archon-assist',
       '--json=true',
+      '--correlation-id',
+      'corr-rf-36-run',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.start');
+    expect(envelope.success).toBe(false);
+    expect(envelope.correlationId).toBe('corr-rf-36-run');
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(error?.category).toBe('provider_contract');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  test('RF-36: `workflow run --json=true` without a supplied correlation id still emits one malformed-request envelope', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'run',
+      'archon-assist',
+      '--json=true',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.start');
+    expect(envelope.success).toBe(false);
+    expect(typeof envelope.correlationId).toBe('string');
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(error?.category).toBe('provider_contract');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  test('RF-40: `workflow get --json=true` emits a malformed-request envelope', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'get',
+      '00000000-0000-0000-0000-000000000000',
+      '--json=true',
+      '--correlation-id',
+      'corr-rf-40-get',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.status');
+    expect(envelope.success).toBe(false);
+    expect(envelope.correlationId).toBe('corr-rf-40-get');
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(error?.category).toBe('provider_contract');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  test('RF-41: bare `--correlation-id` cannot consume `--json` and bypass the get envelope path', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'get',
+      '00000000-0000-0000-0000-000000000000',
+      '--correlation-id',
+      '--json',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.status');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(error?.category).toBe('provider_contract');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  test('RF-41: bare `--correlation-id` cannot consume `--json` and bypass the run envelope path', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'run',
+      'archon-assist',
+      '--correlation-id',
+      '--json',
     ]);
 
     const envelope = parseSoleJsonLine(stdout);
@@ -232,6 +313,21 @@ describe('workflow run/get --json CLI dispatch E2E — real subprocess (Story 3.
     expect(error?.category).toBe('provider_contract');
     expect(exitCode).toBe(64);
     expect(stderr).toBe('');
+  });
+
+  test('RF-44: `--json=true` after `--` stays positional and does not emit a workflow.start envelope', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'run',
+      'totally-nonexistent-workflow-story-3-3b',
+      '--',
+      '--json=true',
+    ]);
+
+    expect(exitCode).toBe(1);
+    expect(stdout).not.toContain('workflow-command-envelope.v1');
+    expect(stdout).not.toContain('"command":"workflow.start"');
+    expect(stderr).toContain("Workflow 'totally-nonexistent-workflow-story-3-3b' not found.");
   });
 
   test('RF-34: git-preflight JSON fallback does not emit workflow.start for unrelated workflow JSON commands', async () => {
