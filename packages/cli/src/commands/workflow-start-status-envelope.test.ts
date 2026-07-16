@@ -1219,6 +1219,9 @@ describe('3.3B-CONTRACT-001 — start success envelope matches fixture field-by-
     // Schema-driven conformance (validates required fields, types, no extra keys)
     assertEnvelopeConforms(envelope);
 
+    // Forbidden-key scan (recursive — catches forbidden keys at any depth)
+    assertNoForbiddenKeys(envelope);
+
     const strippedFixture = stripDynamicFields(fixture);
     const strippedEnvelope = stripDynamicFields(envelope);
 
@@ -1277,6 +1280,9 @@ describe('3.3B-CONTRACT-002 — status success envelope matches fixture field-by
 
     // Schema-driven conformance (validates required fields, types, no extra keys)
     assertEnvelopeConforms(envelope);
+
+    // Forbidden-key scan (recursive — catches forbidden keys at any depth)
+    assertNoForbiddenKeys(envelope);
 
     const strippedFixture = stripDynamicFields(fixture);
     const strippedEnvelope = stripDynamicFields(envelope);

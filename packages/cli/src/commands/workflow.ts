@@ -706,7 +706,7 @@ export async function workflowRunCommand(
                     {
                       path: '/branch',
                       code: 'conflicts_with_workflow_policy',
-                      message: `Workflow '${workflow.name}' sets worktree.enabled: false`,
+                      detail: `Workflow '${workflow.name}' sets worktree.enabled: false`,
                     },
                   ],
                   requestAccepted: false,
@@ -744,7 +744,7 @@ export async function workflowRunCommand(
                     {
                       path: '/fromBranch',
                       code: 'conflicts_with_workflow_policy',
-                      message: `Workflow '${workflow.name}' sets worktree.enabled: false`,
+                      detail: `Workflow '${workflow.name}' sets worktree.enabled: false`,
                     },
                   ],
                   requestAccepted: false,
@@ -784,7 +784,7 @@ export async function workflowRunCommand(
                     {
                       path: '/noWorktree',
                       code: 'conflicts_with_workflow_policy',
-                      message: `Workflow '${workflow.name}' sets worktree.enabled: true`,
+                      detail: `Workflow '${workflow.name}' sets worktree.enabled: true`,
                     },
                   ],
                   requestAccepted: false,

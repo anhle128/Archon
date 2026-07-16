@@ -85,11 +85,11 @@ so that external controllers can create and inspect workflow references without 
 - [x] [Review][Patch] `projectBindingRef` can still select the wrong binding or silently disappear on lookup errors [packages/cli/src/commands/workflow.ts:500]
 - [x] [Review][Patch] Failed-run status envelopes still use a raw string instead of a machine-readable failure shape [packages/cli/src/commands/workflow.ts:1801]
 - [x] [Review][Patch] Contract tests still use partial fixture checks and manual schema mirroring instead of runtime fixture/schema validation [packages/cli/src/commands/workflow-start-status-envelope.test.ts:1114]
-- [ ] [Review][Patch] JSON-mode missing `--correlation-id` values still throw prose TypeError instead of a shared error envelope [packages/cli/src/cli.ts:556]
-- [ ] [Review][Patch] JSON-mode workflow policy errors can emit forbidden `message` keys in envelope details [packages/cli/src/commands/workflow.ts:704]
-- [ ] [Review][Patch] `projectBindingRef` can still select the wrong binding or silently disappear on lookup errors [packages/cli/src/commands/workflow.ts:500]
-- [ ] [Review][Patch] Failed-run status envelopes still lack a stable machine-readable failure shape [packages/cli/src/commands/workflow.ts:1805]
-- [ ] [Review][Patch] Contract tests still use partial fixture checks and manual schema mirroring instead of runtime fixture/schema validation [packages/cli/src/commands/workflow-start-status-envelope.test.ts:1222]
+- [x] [Review][Patch] JSON-mode missing `--correlation-id` values still throw prose TypeError instead of a shared error envelope [packages/cli/src/cli.ts:556]
+- [x] [Review][Patch] JSON-mode workflow policy errors can emit forbidden `message` keys in envelope details [packages/cli/src/commands/workflow.ts:704]
+- [x] [Review][Patch] `projectBindingRef` can still select the wrong binding or silently disappear on lookup errors [packages/cli/src/commands/workflow.ts:500]
+- [x] [Review][Patch] Failed-run status envelopes still lack a stable machine-readable failure shape [packages/cli/src/commands/workflow.ts:1805]
+- [x] [Review][Patch] Contract tests still use partial fixture checks and manual schema mirroring instead of runtime fixture/schema validation [packages/cli/src/commands/workflow-start-status-envelope.test.ts:1222]
 
 ## Dev Notes
 
@@ -265,7 +265,7 @@ Qoder (anthropic)
 
 ### Debug Log References
 
-All 20 review findings from the story were addressed across four fix passes. No open findings remain.
+All 22 review findings from the story were addressed across five fix passes. No open findings remain.
 
 ### Completion Notes List
 
@@ -289,18 +289,20 @@ All 20 review findings from the story were addressed across four fix passes. No 
 - Fix Review-18: Added getLog().warn in buildProjectBindingRef catch block so binding lookup failures are logged rather than silently swallowed.
 - Fix Review-19: Changed failureDetail from flat string to structured object `{ reason: string }` avoiding forbidden `message` key. Updated CONTRACT-007 test assertion.
 - Fix Review-20: Extracted assertEnvelopeConforms to module level, added schema-driven validation calls to CONTRACT-001/002, removed duplicate helpers from CONTRACT-005b.
+- Fix Review-21: Renamed forbidden `message` key to `detail` in 3 fieldErrors items (workflow policy conflicts for /branch, /fromBranch, /noWorktree). The `message` key matches the FORBIDDEN_KEYS regex and must never appear at any depth in an envelope.
+- Fix Review-22: Added `assertNoForbiddenKeys(envelope)` calls to CONTRACT-001 and CONTRACT-002 tests. These tests previously called `assertEnvelopeConforms` but did not recursively scan for forbidden keys.
 - Type-check: passes for all packages.
 - Lint: zero warnings.
 - Format: all files conform.
-- CLI tests: 463 pass in workflow.test.ts; 50 pass in workflow-start-status-envelope.test.ts; 0 fail across all batches.
+- CLI tests: 463 CLI tests pass in workflow.test.ts; 50 pass in workflow-start-status-envelope.test.ts; 0 fail across all batches.
 - Pre-existing @archon/core test failure is unrelated to these changes (CLI-only scope).
 
 ### File List
 
-- packages/cli/src/commands/workflow.ts — failureDetail rename to { reason }, deriveBindingId import+usage, paused start projectBindingRef, buildProjectBindingRef logging
+- packages/cli/src/commands/workflow.ts — failureDetail rename to { reason }, deriveBindingId import+usage, paused start projectBindingRef, buildProjectBindingRef logging, fieldErrors `message` → `detail` rename
 - packages/cli/src/cli.ts — MALFORMED_REQUEST envelope for missing get run-id, exit code 64 propagation, parser-level JSON-mode envelope emission
 - packages/cli/src/adapters/cli-adapter.ts — Added `silent` option to suppress console.log
 - packages/core/src/db/provider-bindings.ts — Added listBindingsByCodebase function
 - packages/cli/src/commands/workflow.test.ts — Added provider-bindings mock, updated 2 exit code assertions (64, 70)
-- packages/cli/src/commands/workflow-start-status-envelope.test.ts — Module-level assertEnvelopeConforms, CONTRACT-001/002 schema conformance calls, CONTRACT-007 { reason } shape, deriveBindingId mock, CONTRACT-007/008/009/010 test groups
-- \_bmad-output/implementation-artifacts/3-3b-provide-archon-start-and-status-cli-json.md — Marked all 16 review findings done
+- packages/cli/src/commands/workflow-start-status-envelope.test.ts — Module-level assertEnvelopeConforms, CONTRACT-001/002 schema conformance calls, CONTRACT-007 { reason } shape, deriveBindingId mock, CONTRACT-007/008/009/010 test groups, assertNoForbiddenKeys added to CONTRACT-001/002
+- \_bmad-output/implementation-artifacts/3-3b-provide-archon-start-and-status-cli-json.md — Marked all review findings done
