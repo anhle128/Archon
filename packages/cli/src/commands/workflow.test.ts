@@ -1523,7 +1523,7 @@ describe('workflowRunCommand', () => {
     // Should not throw — the CLIAdapter swallows the DB error and logs a warn
     await expect(
       workflowRunCommand('/test/path', 'assist', 'hello', { noWorktree: true })
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(0);
 
     // CLIAdapter logs 'cli_message_persist_failed' when addMessage throws internally
     expect(mockLogger.warn).toHaveBeenCalledWith(
@@ -1561,7 +1561,7 @@ describe('workflowRunCommand', () => {
     // Should not throw — dispatch failure must not block workflow execution
     await expect(
       workflowRunCommand('/test/path', 'assist', 'hello', { noWorktree: true })
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(0);
 
     // executeWorkflow was still called despite dispatch failure
     expect(executeWorkflow).toHaveBeenCalledTimes(1);

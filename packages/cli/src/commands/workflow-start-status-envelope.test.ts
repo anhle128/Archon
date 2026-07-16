@@ -1337,6 +1337,123 @@ describe('3.3B-CONTRACT-005 — contract schema structural checks [P0, AC#1/2/3]
   });
 });
 
+describe('3.3B-CONTRACT-005b — runtime envelope schema conformance [P0, AC#1/2/3]', () => {
+  const SCHEMA_REQUIRED_FIELDS = [
+    'schemaVersion',
+    'intendedProducer',
+    'intendedConsumer',
+    'owningSubproject',
+    'provider',
+    'command',
+    'correlationId',
+    'issuedAt',
+    'success',
+  ];
+
+  const SCHEMA_KNOWN_TOP_LEVEL = new Set([
+    ...SCHEMA_REQUIRED_FIELDS,
+    'result',
+    'error',
+    'execution',
+    'workflowRunRef',
+    'bindingRef',
+  ]);
+
+  function assertEnvelopeConforms(envelope: Record<string, unknown>): void {
+    for (const field of SCHEMA_REQUIRED_FIELDS) {
+      expect(envelope).toHaveProperty(field);
+    }
+    expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
+    expect(envelope.intendedProducer).toBe('Archon');
+    expect(envelope.intendedConsumer).toBe('Hermes');
+    expect(envelope.owningSubproject).toBe('archon');
+    expect(typeof envelope.correlationId).toBe('string');
+    expect(typeof envelope.issuedAt).toBe('string');
+    expect(typeof envelope.success).toBe('boolean');
+
+    for (const key of Object.keys(envelope)) {
+      expect(SCHEMA_KNOWN_TOP_LEVEL.has(key)).toBe(true);
+    }
+
+    if (envelope.success === true) {
+      expect(envelope).toHaveProperty('result');
+      expect(envelope).not.toHaveProperty('error');
+    } else {
+      expect(envelope).toHaveProperty('error');
+      expect(envelope).not.toHaveProperty('result');
+      const error = envelope.error as Record<string, unknown>;
+      expect(typeof error.code).toBe('string');
+      expect(typeof error.category).toBe('string');
+      expect(typeof error.retryable).toBe('boolean');
+      expect(typeof error.details).toBe('object');
+      expect(envelope).toHaveProperty('execution');
+      const execution = envelope.execution as Record<string, unknown>;
+      expect(typeof execution.timedOut).toBe('boolean');
+      expect(execution.stdoutRedacted).toBe(true);
+      expect(execution.stderrRedacted).toBe(true);
+    }
+  }
+
+  let consoleSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    consoleSpy.mockRestore();
+  });
+
+  test('start success envelope conforms to schema structure', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [TEST_WORKFLOW],
+      errors: [],
+    });
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-schema-001',
+    });
+
+    await workflowRunCommand('/test/path', 'implement', 'Add auth', {
+      json: true,
+      noWorktree: true,
+    });
+
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    assertEnvelopeConforms(envelope);
+    expect(envelope.command).toBe('workflow.start');
+    const ref = envelope.workflowRunRef as Record<string, unknown>;
+    expect(ref).toBeDefined();
+    expect(typeof ref.provider).toBe('string');
+    expect(typeof ref.runId).toBe('string');
+    expect(typeof ref.workflowName).toBe('string');
+  });
+
+  test('status success envelope conforms to schema structure', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(RUNNING_RUN);
+
+    await workflowGetCommand('run-001', true);
+
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    assertEnvelopeConforms(envelope);
+    expect(envelope.command).toBe('workflow.status');
+  });
+
+  test('status error envelope conforms to schema structure', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+
+    await workflowGetCommand('nonexistent', true);
+
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    assertEnvelopeConforms(envelope);
+    expect(envelope.command).toBe('workflow.status');
+  });
+});
+
 describe('3.3B-CONTRACT-006 — result/error exclusivity in fixture examples [P0, AC#1/2/3]', () => {
   test('success fixtures have result and no error; error fixtures have error and no result', () => {
     const successFixtures = ['start-success.json', 'status-success.json'];

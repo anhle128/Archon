@@ -445,12 +445,18 @@ function classifyWorkflowError(err: unknown): {
   };
 }
 
-function buildWorkflowRunRef(run: WorkflowRun): Record<string, unknown> {
+function buildWorkflowRunRef(
+  run: WorkflowRun,
+  opts?: { projectRef?: string }
+): Record<string, unknown> {
   const ref: Record<string, unknown> = {
     provider: 'archon',
     runId: run.id,
     workflowName: run.workflow_name,
   };
+  if (opts?.projectRef) {
+    ref.projectRef = opts.projectRef;
+  }
   return ref;
 }
 
@@ -472,7 +478,7 @@ export async function workflowRunCommand(
   workflowName: string,
   userMessage: string,
   options: WorkflowRunOptions = {}
-): Promise<void> {
+): Promise<number> {
   const startTime = Date.now();
   const correlationId = resolveCorrelationId(options.correlationId);
   const jsonMode = options.json === true && options.detach !== true;
@@ -510,7 +516,7 @@ export async function workflowRunCommand(
             startTime
           )
         );
-        return;
+        return 1;
       }
       throw new Error('No workflows found in .archon/workflows/');
     }
@@ -556,7 +562,7 @@ export async function workflowRunCommand(
             startTime
           )
         );
-        return;
+        return 1;
       }
       if (loadError) {
         throw new Error(
@@ -601,7 +607,7 @@ export async function workflowRunCommand(
           startTime
         )
       );
-      return;
+      return 1;
     }
     if (options.branchName !== undefined && options.noWorktree) {
       throw new Error(
@@ -709,7 +715,7 @@ export async function workflowRunCommand(
         console.log('Track it with: archon workflow runs');
         if (logPath) console.log(`Child output: ${logPath}`);
       }
-      return;
+      return 0;
     }
 
     if (!jsonMode) {
@@ -1099,17 +1105,19 @@ export async function workflowRunCommand(
     // but omits the rocket emoji and "(background)" qualifier since the CLI runs synchronously.
     // In the CLI path there is no separate worker conversation — the CLI itself
     // is both the dispatcher and the executor, so workerConversationId === conversationId.
-    try {
-      await adapter.sendMessage(conversationId, `Dispatching workflow: **${workflow.name}**`, {
-        category: 'workflow_dispatch_status',
-        segment: 'new',
-        workflowDispatch: { workerConversationId: conversationId, workflowName: workflow.name },
-      });
-    } catch (dispatchError) {
-      getLog().warn(
-        { err: dispatchError as Error, conversationId },
-        'cli.workflow_dispatch_surface_failed'
-      );
+    if (!jsonMode) {
+      try {
+        await adapter.sendMessage(conversationId, `Dispatching workflow: **${workflow.name}**`, {
+          category: 'workflow_dispatch_status',
+          segment: 'new',
+          workflowDispatch: { workerConversationId: conversationId, workflowName: workflow.name },
+        });
+      } catch (dispatchError) {
+        getLog().warn(
+          { err: dispatchError as Error, conversationId },
+          'cli.workflow_dispatch_surface_failed'
+        );
+      }
     }
 
     // When --resume, hand the already-found run (and its completed-node outputs)
@@ -1185,7 +1193,7 @@ export async function workflowRunCommand(
             startTime
           )
         );
-        return;
+        return 1;
       }
       throw execError;
     } finally {
@@ -1205,6 +1213,9 @@ export async function workflowRunCommand(
         runId: result.workflowRunId,
         workflowName: workflow.name,
       };
+      if (codebase?.name) {
+        workflowRunRef.projectRef = `project:${codebase.name}`;
+      }
 
       if (!result.success) {
         emitWorkflowEnvelope(
@@ -1223,7 +1234,7 @@ export async function workflowRunCommand(
             startTime
           )
         );
-        return;
+        return 1;
       }
 
       const isPaused = 'paused' in result && result.paused;
@@ -1251,7 +1262,7 @@ export async function workflowRunCommand(
         if (gateRef) successResult.gateRef = gateRef;
 
         emitWorkflowEnvelope(buildSuccessEnvelope(envDeps, { workflowRunRef }, successResult));
-        return;
+        return 0;
       }
 
       // Successful start acknowledgement
@@ -1267,7 +1278,7 @@ export async function workflowRunCommand(
           }
         )
       );
-      return;
+      return 0;
     }
 
     // Check result and exit appropriately (human mode)
@@ -1294,6 +1305,7 @@ export async function workflowRunCommand(
     } else {
       throw new Error(`Workflow failed: ${result.error}`);
     }
+    return 0;
   } catch (unhandledError) {
     if (jsonMode) {
       const classified = classifyWorkflowError(unhandledError);
@@ -1316,7 +1328,7 @@ export async function workflowRunCommand(
           startTime
         )
       );
-      return;
+      return 1;
     }
     throw unhandledError;
   }
@@ -1612,7 +1624,16 @@ export async function workflowGetCommand(
       correlationId: resolvedCorrelationId,
       issuedAt: resolveIssuedAt(),
     };
-    const workflowRunRef = buildWorkflowRunRef(run);
+    let projectRef: string | undefined;
+    if (run.codebase_id) {
+      try {
+        const cb = await codebaseDb.getCodebase(run.codebase_id);
+        if (cb?.name) projectRef = `project:${cb.name}`;
+      } catch {
+        // Non-fatal: omit projectRef if lookup fails
+      }
+    }
+    const workflowRunRef = buildWorkflowRunRef(run, { projectRef });
     const contractState = mapStatusToContractState(run.status);
     const terminal = (TERMINAL_WORKFLOW_STATUSES as readonly string[]).includes(run.status);
 
@@ -1630,6 +1651,10 @@ export async function workflowGetCommand(
       };
     } else {
       statusResult.actionRequired = false;
+    }
+
+    if (run.status === 'failed' && typeof run.metadata.error === 'string') {
+      statusResult.error = run.metadata.error;
     }
 
     emitWorkflowEnvelope(buildSuccessEnvelope(deps, { workflowRunRef }, statusResult));

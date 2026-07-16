@@ -57,6 +57,12 @@ import {
 } from './commands/workflow';
 import { WORKFLOW_EVENT_TYPES } from '@archon/workflows/store';
 import {
+  safeStringify,
+  resolveCorrelationId,
+  resolveIssuedAt,
+  buildErrorEnvelope,
+} from './commands/workflow-provider-command-envelope.js';
+import {
   isolationListCommand,
   isolationCleanupCommand,
   isolationCleanupMergedCommand,
@@ -500,34 +506,64 @@ async function main(): Promise<number> {
 
           case 'run': {
             const workflowName = positionals[2];
+            const runJsonMode = jsonFlag === true && !detachFlag;
             if (!workflowName) {
+              if (runJsonMode) {
+                const corrId = resolveCorrelationId(values['correlation-id'] as string | undefined);
+                console.log(
+                  safeStringify(
+                    buildErrorEnvelope(
+                      {
+                        command: 'workflow.start',
+                        provider: 'archon',
+                        correlationId: corrId,
+                        issuedAt: resolveIssuedAt(),
+                      },
+                      {
+                        code: 'MALFORMED_REQUEST',
+                        category: 'provider_contract',
+                        retryable: false,
+                        details: {
+                          fieldErrors: [{ path: '/name', code: 'required' }],
+                          requestAccepted: false,
+                        },
+                        exitCode: 64,
+                      },
+                      Date.now()
+                    )
+                  )
+                );
+                return 1;
+              }
               console.error('Usage: archon workflow run <name> [message]');
               return 1;
             }
             const userMessage = positionals.slice(3).join(' ') || '';
-            if (branchName !== undefined && noWorktree) {
-              console.error(
-                'Error: --branch and --no-worktree are mutually exclusive.\n' +
-                  '  --branch creates an isolated worktree (safe).\n' +
-                  '  --no-worktree runs directly in your repo (no isolation).\n' +
-                  'Use one or the other.'
-              );
-              return 1;
-            }
-            if (noWorktree && fromBranch !== undefined) {
-              console.error(
-                'Error: --from/--from-branch has no effect with --no-worktree.\n' +
-                  'Remove --from or drop --no-worktree.'
-              );
-              return 1;
-            }
-            if (resumeFlag && branchName !== undefined) {
-              console.error(
-                'Error: --resume and --branch are mutually exclusive.\n' +
-                  '  --resume reuses the existing worktree from the failed run.\n' +
-                  '  Remove --branch when using --resume.'
-              );
-              return 1;
+            if (!runJsonMode) {
+              if (branchName !== undefined && noWorktree) {
+                console.error(
+                  'Error: --branch and --no-worktree are mutually exclusive.\n' +
+                    '  --branch creates an isolated worktree (safe).\n' +
+                    '  --no-worktree runs directly in your repo (no isolation).\n' +
+                    'Use one or the other.'
+                );
+                return 1;
+              }
+              if (noWorktree && fromBranch !== undefined) {
+                console.error(
+                  'Error: --from/--from-branch has no effect with --no-worktree.\n' +
+                    'Remove --from or drop --no-worktree.'
+                );
+                return 1;
+              }
+              if (resumeFlag && branchName !== undefined) {
+                console.error(
+                  'Error: --resume and --branch are mutually exclusive.\n' +
+                    '  --resume reuses the existing worktree from the failed run.\n' +
+                    '  Remove --branch when using --resume.'
+                );
+                return 1;
+              }
             }
             const options = {
               branchName,
@@ -545,8 +581,7 @@ async function main(): Promise<number> {
               json: jsonFlag,
               correlationId: values['correlation-id'] as string | undefined,
             };
-            await workflowRunCommand(effectiveCwd, workflowName, userMessage, options);
-            break;
+            return await workflowRunCommand(effectiveCwd, workflowName, userMessage, options);
           }
 
           case 'status':
