@@ -25,7 +25,7 @@ so that external controllers can create and inspect workflow references without 
   - [ ] Extend `WorkflowRunOptions` with `correlationId?: string`.
   - [ ] In `workflowRunCommand`, when `options.json && !options.detach` (foreground JSON mode): after `executeWorkflow` returns, build and emit a `workflow.start` success envelope via `buildSuccessEnvelope` with `workflowRunRef` and `result` matching the `start-success.json` fixture shape.
   - [ ] For `result.success && result.paused`: emit success envelope with `state: 'waiting-for-approval'`, `terminal: false`, `actionRequired: true`, and `gateRef` from approval context metadata.
-  - [ ] For `result.success && !paused`: emit success envelope with `state: 'completed'`, `terminal: true`, `accepted: true`.
+  - [ ] For `result.success && !paused`: emit a fixture-conformant start acknowledgement with `state: 'running'`, `phase: 'implementation'`, and `accepted: true`; do not add status-only fields such as `terminal` to the `workflow.start` result unless the contract fixture/schema is updated first.
   - [ ] Populate `projectBindingRef` in result when a codebase with a registered provider binding exists; omit the field otherwise.
   - [ ] Suppress all human-readable `console.log` output in JSON mode (discovery, "Running workflow:", progress, completion/pause text).
   - [ ] Positive proof: unit test asserting a successful foreground run emits a `workflow.start` envelope matching the contract fixture (field-by-field, excluding dynamic fields).
@@ -69,7 +69,7 @@ so that external controllers can create and inspect workflow references without 
 
 - Outcome: `archon workflow run <name> [message] --json` and `archon workflow get <run-id> --json` produce machine-parseable shared-envelope JSON that external controllers (Hermes) consume for workflow start and status inspection.
 - Architectural role: CLI JSON producer surfaces for the `workflow.start` and `workflow.status` commands in the Workflow Commander contract. These are the first two workflow command envelopes (Story 3.3c adds decision commands, 3.3d adds recovery commands).
-- Upstream authorities: Shared command envelope module from Story 3.3a (`workflow-provider-command-envelope.ts`); contract fixtures at `contracts/workflow-commander/examples/providers/archon/commands/`; architecture AD-3, AD-9.
+- Upstream authorities: Shared command envelope module from Story 3.3a (`workflow-provider-command-envelope.ts`); contract fixtures at `_bmad-output/planning-artifacts/contracts/workflow-commander/examples/providers/archon/commands/`; architecture AD-3, AD-9.
 - Downstream consumers: `hermes-agent` Story 3.4a is blocked until this producer surface exists. Stories 3.3c and 3.3d depend on patterns established here.
 - User-visible or system-visible behavior: When `--json` is passed to `workflow run` (foreground) or `workflow get`, stdout is exclusively the envelope JSON (no human text mixed in). Without `--json`, behavior is unchanged.
 
@@ -82,7 +82,7 @@ so that external controllers can create and inspect workflow references without 
 | Epics file | `workflow.start` maps to `archon workflow run <workflow-name> [message] --json` | `--json` flag already parsed in `cli.ts`, already in `WorkflowRunOptions`, but foreground path ignores it (only suppresses logs; no JSON output) | Extend foreground path to emit envelope |
 | Epics file | `workflow.status` maps to `archon workflow get <run-id> --json` | `workflowGetCommand` has `--json` support, but emits legacy `{ ...run }` or `{ ok: false }` shapes | Replace with shared envelope |
 | Contract envelope schema | Success `workflow.*` requires `workflowRunRef` | Shared builder enforces this | Must populate `workflowRunRef` from `WorkflowRun` data for both start and status |
-| Contract `start-success.json` | Result includes `operation`, `state`, `phase`, `accepted`, `projectBindingRef` | No current code produces this | Build `result` object from `WorkflowExecutionResult` + `WorkflowRun` + optional binding |
+| Contract `start-success.json` | Result includes `operation: 'start'`, `state: 'running'`, `phase: 'implementation'`, `accepted: true`, and `projectBindingRef` when applicable | No current code produces this | Build `result` object from `WorkflowExecutionResult` + `WorkflowRun` + optional binding, matching the fixture exactly for static fields |
 | Contract `status-success.json` | Result includes `operation`, `state`, `phase`, `terminal`, `actionRequired`, `gateRef` | No current code produces this | Build `result` from `WorkflowRun` status + metadata |
 | Story 3.3a review R2-F1 | Shared builder types now narrow `command` to `WorkflowProviderCommand` and `category` to `ErrorCategory` | Compile-time enforcement matches runtime validation | Use the typed builders directly — no manual type widening needed |
 | Story 3.1 review R1/R2/R3 | Contract fixtures must never be edited — runtime must conform | Established as a hard rule | Fixture conformance tests load fixtures and diff against runtime output |
@@ -104,7 +104,7 @@ so that external controllers can create and inspect workflow references without 
 
 | Invariant | Source of truth | Enforcement owner | Created or transformed at | Persisted or transmitted at | Consumed by | Proof |
 | --- | --- | --- | --- | --- | --- | --- |
-| Envelope matches `workflow-command-envelope.v1` schema | `contracts/workflow-commander/schemas/workflow-command-envelope.schema.json` | Shared builders (`buildSuccessEnvelope`/`buildErrorEnvelope`) + fixture conformance tests | `workflowRunCommand` and `workflowGetCommand` when `json: true` | stdout (single JSON line per invocation) | External controllers (Hermes) | Schema validation test + fixture diff test |
+| Envelope matches `workflow-command-envelope.v1` schema | `_bmad-output/planning-artifacts/contracts/workflow-commander/schemas/workflow-command-envelope.schema.json` | Shared builders (`buildSuccessEnvelope`/`buildErrorEnvelope`) + fixture conformance tests | `workflowRunCommand` and `workflowGetCommand` when `json: true` | stdout (single JSON line per invocation) | External controllers (Hermes) | Schema validation test + fixture diff test |
 | Success envelope always includes `workflowRunRef` for `workflow.*` commands | `buildSuccessEnvelope` runtime check | Shared builder throws if missing | After `executeWorkflow` result and `workflowDb.getWorkflowRun` | stdout | External controllers | Builder unit test (from 3.3a) + integration test |
 | Error envelopes never include `result`; success envelopes never include `error` | Schema `oneOf` + builder construction | Builder constructors | At envelope creation | stdout | External controllers | Fixture conformance test |
 | `--json` mode emits only the envelope to stdout — no human text | `workflowRunCommand` / `workflowGetCommand` code paths | Guard checks on `options.json` | All `console.log` calls gated on `!options.json` in foreground path | stdout | External controllers (parse-safety) | Test asserting single valid JSON object on stdout |
@@ -162,7 +162,7 @@ so that external controllers can create and inspect workflow references without 
 
 | Acceptance Criterion | Proof command or test | Positive assertion | Failing-path assertion | Required state or side effect | Prohibited side effect | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
-| AC #1 (start success) | `bun test packages/cli/src/commands/workflow-start-status-envelope.test.ts` | Mock `executeWorkflow` returning `{ success: true, workflowRunId: 'test-id' }`. Assert stdout is valid JSON matching `start-success.json` structure: has `schemaVersion`, `command: 'workflow.start'`, `success: true`, `workflowRunRef`, `result.operation: 'start'`, `result.state`, `result.accepted: true` | Mock `executeWorkflow` returning `{ success: true, paused: true, workflowRunId: 'test-id' }`. Assert `result.state: 'waiting-for-approval'`, `result.terminal: false`, `result.actionRequired: true` | Mocked workflow discovery, mocked DB, mocked executeWorkflow | No human-text console.log in stdout; no `error` key in success envelope; no forbidden keys | JSON parse succeeds; field-by-field fixture diff passes |
+| AC #1 (start success) | `bun test packages/cli/src/commands/workflow-start-status-envelope.test.ts` | Mock `executeWorkflow` returning `{ success: true, workflowRunId: 'test-id' }`. Assert stdout is valid JSON matching `start-success.json` structure: has `schemaVersion`, `command: 'workflow.start'`, `success: true`, `workflowRunRef`, `result.operation: 'start'`, `result.state: 'running'`, `result.phase: 'implementation'`, and `result.accepted: true` | Mock `executeWorkflow` returning `{ success: true, paused: true, workflowRunId: 'test-id' }`. Assert `result.state: 'waiting-for-approval'`, `result.terminal: false`, `result.actionRequired: true` | Mocked workflow discovery, mocked DB, mocked executeWorkflow | No human-text console.log in stdout; no `error` key in success envelope; no forbidden keys | JSON parse succeeds; field-by-field fixture diff passes |
 | AC #2 (status success) | `bun test packages/cli/src/commands/workflow-start-status-envelope.test.ts` | Mock `getWorkflowRun` returning a `WorkflowRun` with `status: 'running'`. Assert stdout is valid JSON matching `status-success.json` structure: has `command: 'workflow.status'`, `success: true`, `workflowRunRef`, `result.operation: 'status'`, `result.terminal: false` | Mock run with `status: 'paused'` and valid `metadata.approval`. Assert `result.state: 'waiting-for-approval'`, `result.actionRequired: true`, `gateRef` populated | Mocked `workflowDb.getWorkflowRun` | No `result` key in error envelope; no forbidden keys | JSON parse succeeds; field-by-field fixture diff passes |
 | AC #3 (error envelopes) | `bun test packages/cli/src/commands/workflow-start-status-envelope.test.ts` | Mock `executeWorkflow` returning `{ success: false, error: 'node X failed' }`. Assert stdout has `success: false`, `error.code`, `error.category`, `error.retryable`, `execution` block | Mock workflow not found → `MALFORMED_REQUEST`; mock DB timeout → `COMMAND_TIMEOUT`; mock run not found → `NOT_FOUND` | Mocked workflow discovery, mocked DB | No `result` key in error envelope; no forbidden keys; no unstructured throws to stderr | JSON parse succeeds; error shape matches contract error fixtures |
 
@@ -190,16 +190,17 @@ so that external controllers can create and inspect workflow references without 
 
 ### References
 
-- [Source: contracts/workflow-commander/schemas/workflow-command-envelope.schema.json] — envelope JSON Schema
-- [Source: contracts/workflow-commander/examples/providers/archon/commands/start-success.json] — start success fixture
-- [Source: contracts/workflow-commander/examples/providers/archon/commands/status-success.json] — status success fixture
-- [Source: contracts/workflow-commander/examples/providers/archon/commands/error-*.json] — error fixtures (5 files)
+- [Source: _bmad-output/planning-artifacts/contracts/workflow-commander/schemas/workflow-command-envelope.schema.json] — envelope JSON Schema
+- [Source: _bmad-output/planning-artifacts/contracts/workflow-commander/examples/providers/archon/commands/start-success.json] — start success fixture
+- [Source: _bmad-output/planning-artifacts/contracts/workflow-commander/examples/providers/archon/commands/status-success.json] — status success fixture
+- [Source: _bmad-output/planning-artifacts/contracts/workflow-commander/examples/providers/archon/commands/error-*.json] — error fixtures (5 files)
 - [Source: packages/cli/src/commands/workflow-provider-command-envelope.ts] — shared envelope builders (Story 3.3a)
 - [Source: packages/cli/src/commands/provider-binding.ts] — reference pattern for `classifyError`, `emitEnvelope`, `withFailClosed`
 - [Source: packages/cli/src/commands/workflow.ts:412-1048] — `workflowRunCommand` (modify for start envelope)
 - [Source: packages/cli/src/commands/workflow.ts:1258-1321] — `workflowGetCommand` (modify for status envelope)
 - [Source: packages/cli/src/cli.ts:343] — `--correlation-id` flag declaration
-- [Source: packages/cli/src/cli.ts:808] — correlation-id currently only threaded to provider-binding
+- [Source: packages/cli/src/cli.ts:532] — workflow run options currently omit correlation-id
+- [Source: packages/cli/src/cli.ts:563] — workflow get currently calls `workflowGetCommand` without correlation-id
 - [Source: packages/workflows/src/schemas/workflow-run.ts:168-184] — `WorkflowRun` schema
 - [Source: packages/workflows/src/schemas/workflow-run.ts:186-217] — `ApprovalContext` and `isApprovalContext`
 - [Source: packages/workflows/src/schemas/workflow-run.ts:22-26] — `TERMINAL_WORKFLOW_STATUSES`
