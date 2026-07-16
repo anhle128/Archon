@@ -81,6 +81,10 @@ so that external controllers can create and inspect workflow references without 
 - [x] [Review][Patch] `projectBindingRef` can select the wrong binding and emits database row ids instead of contract binding ids [packages/cli/src/commands/workflow.ts:511]
 - [x] [Review][Patch] Paused starts and binding lookup failures can silently drop required binding context [packages/cli/src/commands/workflow.ts:1393]
 - [x] [Review][Patch] Contract tests still do not prove runtime fixture or JSON Schema conformance [packages/cli/src/commands/workflow-start-status-envelope.test.ts:1380]
+- [ ] [Review][Patch] JSON-mode workflow parser-level failures can still print human prose before shared envelope handling [packages/cli/src/cli.ts:354]
+- [ ] [Review][Patch] `projectBindingRef` can still select the wrong binding or silently disappear on lookup errors [packages/cli/src/commands/workflow.ts:500]
+- [ ] [Review][Patch] Failed-run status envelopes still use a raw string instead of a machine-readable failure shape [packages/cli/src/commands/workflow.ts:1801]
+- [ ] [Review][Patch] Contract tests still use partial fixture checks and manual schema mirroring instead of runtime fixture/schema validation [packages/cli/src/commands/workflow-start-status-envelope.test.ts:1114]
 
 ## Dev Notes
 
