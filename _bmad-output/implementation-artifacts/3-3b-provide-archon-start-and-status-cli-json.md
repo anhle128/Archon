@@ -1,6 +1,6 @@
 # Story 3.3b: Provide Archon Start And Status CLI JSON
 
-Status: complete
+Status: in-progress
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -71,6 +71,12 @@ so that external controllers can create and inspect workflow references without 
 - [x] [Review][Patch] Start envelopes omit project and provider-binding references for bound projects [packages/cli/src/commands/workflow.ts:1203]
 - [x] [Review][Patch] Status envelopes omit required status payload fields for fixture and failed-run conformance [packages/cli/src/commands/workflow.ts:1619]
 - [x] [Review][Patch] Contract tests only partially compare fixtures and do not validate runtime envelopes against the JSON Schema [packages/cli/src/commands/workflow-start-status-envelope.test.ts:1070]
+- [ ] [Review][Patch] Foreground `workflow run --json` can still write executor/platform messages to stdout via CLIAdapter [packages/cli/src/commands/workflow.ts:727]
+- [ ] [Review][Patch] JSON-mode status/start validation still bypasses `MALFORMED_REQUEST` envelopes for missing status ids and workflow policy conflicts [packages/cli/src/cli.ts:591]
+- [ ] [Review][Patch] Start envelopes still omit `projectBindingRef` for projects with a registered provider binding [packages/cli/src/commands/workflow.ts:1268]
+- [ ] [Review][Patch] Status envelopes still omit `phase`, use raw failed-run error strings, and can report paused runs as not action-required [packages/cli/src/commands/workflow.ts:1640]
+- [ ] [Review][Patch] Contract tests still use partial fixture comparisons and manual schema checks instead of runtime fixture/schema validation [packages/cli/src/commands/workflow-start-status-envelope.test.ts:1106]
+- [ ] [Review][Patch] JSON error envelopes report classified execution exit codes while the command returns generic process status 1 [packages/cli/src/commands/workflow.ts:499]
 
 ## Dev Notes
 
