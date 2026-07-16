@@ -123,7 +123,7 @@ nodes:
     provider: claude
     depends_on: [prepare-bmad-state]
     context: fresh
-    model: "sonnet"
+    model: "claude-opus-4-6[1M]"
     effort: high
     idle_timeout: 900000
     output_format:
@@ -274,7 +274,7 @@ nodes:
     effort: high
     depends_on: [design-risk-based-tests]
     context: fresh
-    model: "sonnet"
+    model: "claude-opus-4-6[1M]"
     output_type: red-acceptance-tests
 
   - id: dev-story

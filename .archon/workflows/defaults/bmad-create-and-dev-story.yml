@@ -120,7 +120,7 @@ nodes:
     depends_on: [prepare-bmad-state]
     context: fresh
     provider: claude
-    model: "sonnet"
+    model: "claude-opus-4-6[1M]"
     effort: high
     idle_timeout: 900000
     output_format:
