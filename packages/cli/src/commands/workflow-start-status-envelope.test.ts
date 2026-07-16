@@ -78,6 +78,114 @@ function assertNoForbiddenKeys(obj: unknown): void {
 }
 
 // ---------------------------------------------------------------------------
+// Schema-driven conformance helpers (used by CONTRACT-001, 002, 005b)
+// ---------------------------------------------------------------------------
+const _schema = JSON.parse(readFileSync(SCHEMA_PATH, 'utf8')) as {
+  required: string[];
+  properties: Record<string, unknown>;
+  $defs: Record<string, { required: string[]; properties: Record<string, unknown> }>;
+};
+const SCHEMA_REQUIRED_FIELDS = _schema.required;
+const SCHEMA_KNOWN_TOP_LEVEL = new Set([
+  ...SCHEMA_REQUIRED_FIELDS,
+  'result',
+  'error',
+  'execution',
+  'workflowRunRef',
+  'bindingRef',
+]);
+const WORKFLOW_COMMANDS_SET = new Set([
+  'workflow.start',
+  'workflow.status',
+  'workflow.approve',
+  'workflow.reject',
+  'workflow.resume',
+  'workflow.retry',
+  'workflow.cancel',
+]);
+const VALID_CATEGORIES_SET = new Set([
+  'configuration',
+  'external_delay',
+  'implementation_defect',
+  'provider_contract',
+  'security_rejection',
+  'timeout',
+  'unexpected_state',
+]);
+
+function assertNoExtraKeys(obj: Record<string, unknown>, allowed: Set<string>, path: string): void {
+  for (const key of Object.keys(obj)) {
+    if (!allowed.has(key)) {
+      throw new Error(`Unexpected key "${key}" at ${path}`);
+    }
+  }
+}
+
+function assertEnvelopeConforms(envelope: Record<string, unknown>): void {
+  for (const field of SCHEMA_REQUIRED_FIELDS) {
+    expect(envelope).toHaveProperty(field);
+  }
+  expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
+  expect(envelope.intendedProducer).toBe('Archon');
+  expect(envelope.intendedConsumer).toBe('Hermes');
+  expect(envelope.owningSubproject).toBe('archon');
+  expect(typeof envelope.correlationId).toBe('string');
+  expect((envelope.correlationId as string).length).toBeGreaterThan(0);
+  expect(typeof envelope.issuedAt).toBe('string');
+  expect(typeof envelope.success).toBe('boolean');
+  expect(typeof envelope.provider).toBe('string');
+  expect((envelope.provider as string).length).toBeGreaterThan(0);
+  expect(typeof envelope.command).toBe('string');
+
+  assertNoExtraKeys(envelope, SCHEMA_KNOWN_TOP_LEVEL, 'top-level');
+
+  if (envelope.success === true) {
+    expect(envelope).toHaveProperty('result');
+    expect(envelope).not.toHaveProperty('error');
+    expect(typeof envelope.result).toBe('object');
+
+    if (WORKFLOW_COMMANDS_SET.has(envelope.command as string)) {
+      expect(envelope).toHaveProperty('workflowRunRef');
+      const ref = envelope.workflowRunRef as Record<string, unknown>;
+      assertNoExtraKeys(
+        ref,
+        new Set(['provider', 'runId', 'workflowName', 'projectRef', 'projectBindingRef']),
+        'workflowRunRef'
+      );
+      expect(typeof ref.provider).toBe('string');
+      expect(typeof ref.runId).toBe('string');
+      expect(typeof ref.workflowName).toBe('string');
+      if (ref.projectRef !== undefined) {
+        expect(typeof ref.projectRef).toBe('string');
+      }
+    }
+  } else {
+    expect(envelope).toHaveProperty('error');
+    expect(envelope).not.toHaveProperty('result');
+    expect(envelope).toHaveProperty('execution');
+
+    const error = envelope.error as Record<string, unknown>;
+    assertNoExtraKeys(error, new Set(['code', 'category', 'retryable', 'details']), 'error');
+    expect(typeof error.code).toBe('string');
+    expect((error.code as string).length).toBeGreaterThan(0);
+    expect(VALID_CATEGORIES_SET.has(error.category as string)).toBe(true);
+    expect(typeof error.retryable).toBe('boolean');
+    expect(typeof error.details).toBe('object');
+
+    const execution = envelope.execution as Record<string, unknown>;
+    assertNoExtraKeys(
+      execution,
+      new Set(['exitCode', 'timedOut', 'durationMs', 'stdoutRedacted', 'stderrRedacted']),
+      'execution'
+    );
+    expect(execution.exitCode === null || typeof execution.exitCode === 'number').toBe(true);
+    expect(typeof execution.timedOut).toBe('boolean');
+    expect(execution.stdoutRedacted).toBe(true);
+    expect(execution.stderrRedacted).toBe(true);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Module mocks — identical module-level shape as workflow.test.ts but in a
 // separate process (this file runs in its own `bun test` invocation).
 // ---------------------------------------------------------------------------
@@ -1108,6 +1216,9 @@ describe('3.3B-CONTRACT-001 — start success envelope matches fixture field-by-
     const fixture = loadFixture('start-success.json');
     const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
 
+    // Schema-driven conformance (validates required fields, types, no extra keys)
+    assertEnvelopeConforms(envelope);
+
     const strippedFixture = stripDynamicFields(fixture);
     const strippedEnvelope = stripDynamicFields(envelope);
 
@@ -1163,6 +1274,9 @@ describe('3.3B-CONTRACT-002 — status success envelope matches fixture field-by
 
     const fixture = loadFixture('status-success.json');
     const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+
+    // Schema-driven conformance (validates required fields, types, no extra keys)
+    assertEnvelopeConforms(envelope);
 
     const strippedFixture = stripDynamicFields(fixture);
     const strippedEnvelope = stripDynamicFields(envelope);
@@ -1381,115 +1495,6 @@ describe('3.3B-CONTRACT-005 — contract schema structural checks [P0, AC#1/2/3]
 });
 
 describe('3.3B-CONTRACT-005b — runtime envelope schema conformance [P0, AC#1/2/3]', () => {
-  const schema = JSON.parse(readFileSync(SCHEMA_PATH, 'utf8')) as {
-    required: string[];
-    properties: Record<string, unknown>;
-    $defs: Record<string, { required: string[]; properties: Record<string, unknown> }>;
-  };
-  const SCHEMA_REQUIRED_FIELDS = schema.required;
-  const SCHEMA_KNOWN_TOP_LEVEL = new Set([
-    ...SCHEMA_REQUIRED_FIELDS,
-    'result',
-    'error',
-    'execution',
-    'workflowRunRef',
-    'bindingRef',
-  ]);
-  const WORKFLOW_COMMANDS = new Set([
-    'workflow.start',
-    'workflow.status',
-    'workflow.approve',
-    'workflow.reject',
-    'workflow.resume',
-    'workflow.retry',
-    'workflow.cancel',
-  ]);
-  const VALID_CATEGORIES = new Set([
-    'configuration',
-    'external_delay',
-    'implementation_defect',
-    'provider_contract',
-    'security_rejection',
-    'timeout',
-    'unexpected_state',
-  ]);
-
-  function assertNoExtraKeys(
-    obj: Record<string, unknown>,
-    allowed: Set<string>,
-    _path: string
-  ): void {
-    for (const key of Object.keys(obj)) {
-      if (!allowed.has(key)) {
-        throw new Error(`Unexpected key "${key}" at ${_path}`);
-      }
-    }
-  }
-
-  function assertEnvelopeConforms(envelope: Record<string, unknown>): void {
-    for (const field of SCHEMA_REQUIRED_FIELDS) {
-      expect(envelope).toHaveProperty(field);
-    }
-    expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
-    expect(envelope.intendedProducer).toBe('Archon');
-    expect(envelope.intendedConsumer).toBe('Hermes');
-    expect(envelope.owningSubproject).toBe('archon');
-    expect(typeof envelope.correlationId).toBe('string');
-    expect((envelope.correlationId as string).length).toBeGreaterThan(0);
-    expect(typeof envelope.issuedAt).toBe('string');
-    expect(typeof envelope.success).toBe('boolean');
-    expect(typeof envelope.provider).toBe('string');
-    expect((envelope.provider as string).length).toBeGreaterThan(0);
-    expect(typeof envelope.command).toBe('string');
-
-    assertNoExtraKeys(envelope, SCHEMA_KNOWN_TOP_LEVEL, 'top-level');
-
-    if (envelope.success === true) {
-      expect(envelope).toHaveProperty('result');
-      expect(envelope).not.toHaveProperty('error');
-      expect(typeof envelope.result).toBe('object');
-
-      if (WORKFLOW_COMMANDS.has(envelope.command as string)) {
-        expect(envelope).toHaveProperty('workflowRunRef');
-        const ref = envelope.workflowRunRef as Record<string, unknown>;
-        assertNoExtraKeys(
-          ref,
-          new Set(['provider', 'runId', 'workflowName', 'projectRef']),
-          'workflowRunRef'
-        );
-        expect(typeof ref.provider).toBe('string');
-        expect(typeof ref.runId).toBe('string');
-        expect(typeof ref.workflowName).toBe('string');
-        if (ref.projectRef !== undefined) {
-          expect(typeof ref.projectRef).toBe('string');
-        }
-      }
-    } else {
-      expect(envelope).toHaveProperty('error');
-      expect(envelope).not.toHaveProperty('result');
-      expect(envelope).toHaveProperty('execution');
-
-      const error = envelope.error as Record<string, unknown>;
-      assertNoExtraKeys(error, new Set(['code', 'category', 'retryable', 'details']), 'error');
-      expect(typeof error.code).toBe('string');
-      expect((error.code as string).length).toBeGreaterThan(0);
-      expect(VALID_CATEGORIES.has(error.category as string)).toBe(true);
-      expect(typeof error.retryable).toBe('boolean');
-      expect(typeof error.details).toBe('object');
-
-      const execution = envelope.execution as Record<string, unknown>;
-      assertNoExtraKeys(
-        execution,
-        new Set(['exitCode', 'timedOut', 'durationMs', 'stdoutRedacted', 'stderrRedacted']),
-        'execution'
-      );
-      expect(execution.exitCode === null || typeof execution.exitCode === 'number').toBe(true);
-      expect(typeof execution.timedOut).toBe('boolean');
-      expect(execution.stdoutRedacted).toBe(true);
-      expect(execution.stderrRedacted).toBe(true);
-    }
-  }
-
   let consoleSpy: ReturnType<typeof spyOn>;
 
   beforeEach(() => {
@@ -1694,7 +1699,7 @@ describe('3.3B-CONTRACT-007 — failed-run status envelope uses no forbidden key
     const result = envelope.result as Record<string, unknown>;
     expect(result.operation).toBe('status');
     expect(result.state).toBe('failed');
-    expect(result.failureDetail).toBe('Node build-step failed');
+    expect(result.failureDetail).toEqual({ reason: 'Node build-step failed' });
     expect(result).not.toHaveProperty('error');
 
     assertNoForbiddenKeys(envelope);

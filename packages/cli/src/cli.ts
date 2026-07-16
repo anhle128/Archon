@@ -353,6 +353,50 @@ async function main(): Promise<number> {
     });
   } catch (error) {
     const err = error as Error;
+    // In JSON mode, emit a machine-readable envelope instead of human prose
+    const jsonMode = process.argv.includes('--json');
+    if (jsonMode) {
+      // Determine command from positionals (argv[0] = runtime, argv[1] = script, argv[2] = command, argv[3] = subcommand)
+      const subcommand = process.argv[3];
+      const command = subcommand === 'get' ? 'workflow.status' : 'workflow.start';
+      // Extract --correlation-id from raw argv (parser failed, so values isn't available)
+      const corrIdIdx = process.argv.findIndex(
+        arg => arg === '--correlation-id' || arg.startsWith('--correlation-id=')
+      );
+      let corrIdRaw: string | undefined;
+      if (corrIdIdx >= 0) {
+        const arg = process.argv[corrIdIdx];
+        if (arg.includes('=')) {
+          corrIdRaw = arg.split('=')[1];
+        } else {
+          const next = process.argv[corrIdIdx + 1];
+          if (next && !next.startsWith('--')) corrIdRaw = next;
+        }
+      }
+      const corrId = resolveCorrelationId(corrIdRaw);
+      console.log(
+        safeStringify(
+          buildErrorEnvelope(
+            {
+              command,
+              provider: 'archon',
+              correlationId: corrId,
+              issuedAt: resolveIssuedAt(),
+            },
+            {
+              code: 'MALFORMED_REQUEST',
+              category: 'provider_contract',
+              retryable: false,
+              details: { error: err.message },
+              exitCode: 64,
+            },
+            Date.now()
+          )
+        )
+      );
+      await shutdownTelemetry();
+      return 64;
+    }
     console.error(`Error parsing arguments: ${err.message}`);
     printUsage();
     await shutdownTelemetry();

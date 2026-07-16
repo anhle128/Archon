@@ -81,10 +81,10 @@ so that external controllers can create and inspect workflow references without 
 - [x] [Review][Patch] `projectBindingRef` can select the wrong binding and emits database row ids instead of contract binding ids [packages/cli/src/commands/workflow.ts:511]
 - [x] [Review][Patch] Paused starts and binding lookup failures can silently drop required binding context [packages/cli/src/commands/workflow.ts:1393]
 - [x] [Review][Patch] Contract tests still do not prove runtime fixture or JSON Schema conformance [packages/cli/src/commands/workflow-start-status-envelope.test.ts:1380]
-- [ ] [Review][Patch] JSON-mode workflow parser-level failures can still print human prose before shared envelope handling [packages/cli/src/cli.ts:354]
-- [ ] [Review][Patch] `projectBindingRef` can still select the wrong binding or silently disappear on lookup errors [packages/cli/src/commands/workflow.ts:500]
-- [ ] [Review][Patch] Failed-run status envelopes still use a raw string instead of a machine-readable failure shape [packages/cli/src/commands/workflow.ts:1801]
-- [ ] [Review][Patch] Contract tests still use partial fixture checks and manual schema mirroring instead of runtime fixture/schema validation [packages/cli/src/commands/workflow-start-status-envelope.test.ts:1114]
+- [x] [Review][Patch] JSON-mode workflow parser-level failures can still print human prose before shared envelope handling [packages/cli/src/cli.ts:354]
+- [x] [Review][Patch] `projectBindingRef` can still select the wrong binding or silently disappear on lookup errors [packages/cli/src/commands/workflow.ts:500]
+- [x] [Review][Patch] Failed-run status envelopes still use a raw string instead of a machine-readable failure shape [packages/cli/src/commands/workflow.ts:1801]
+- [x] [Review][Patch] Contract tests still use partial fixture checks and manual schema mirroring instead of runtime fixture/schema validation [packages/cli/src/commands/workflow-start-status-envelope.test.ts:1114]
 
 ## Dev Notes
 
@@ -260,7 +260,7 @@ Qoder (anthropic)
 
 ### Debug Log References
 
-All 16 review findings from the story were addressed across three fix passes. No open findings remain.
+All 20 review findings from the story were addressed across four fix passes. No open findings remain.
 
 ### Completion Notes List
 
@@ -280,6 +280,10 @@ All 16 review findings from the story were addressed across three fix passes. No
 - Fix Review-14: Replaced `binding.id` (DB row UUID) with `deriveBindingId(binding.provider, binding.name)` for deterministic contract binding IDs in projectBindingRef.
 - Fix Review-15: Added `buildProjectBindingRef` call to paused start path, ensuring projectBindingRef is populated consistently with the non-paused path.
 - Fix Review-16: Added CONTRACT-007/008/009/010 test groups proving forbidden-key absence on failed runs, deriveBindingId format, paused start binding, and deep fixture conformance. 50 tests pass total.
+- Fix Review-17: Parser catch block in cli.ts now detects --json in process.argv and emits MALFORMED_REQUEST error envelope to stdout (exit 64) instead of human prose to stderr.
+- Fix Review-18: Added getLog().warn in buildProjectBindingRef catch block so binding lookup failures are logged rather than silently swallowed.
+- Fix Review-19: Changed failureDetail from flat string to structured object `{ reason: string }` avoiding forbidden `message` key. Updated CONTRACT-007 test assertion.
+- Fix Review-20: Extracted assertEnvelopeConforms to module level, added schema-driven validation calls to CONTRACT-001/002, removed duplicate helpers from CONTRACT-005b.
 - Type-check: passes for all packages.
 - Lint: zero warnings.
 - Format: all files conform.
@@ -288,10 +292,10 @@ All 16 review findings from the story were addressed across three fix passes. No
 
 ### File List
 
-- packages/cli/src/commands/workflow.ts — failureDetail rename, deriveBindingId import+usage, paused start projectBindingRef
-- packages/cli/src/cli.ts — MALFORMED_REQUEST envelope for missing get run-id, exit code 64 propagation
+- packages/cli/src/commands/workflow.ts — failureDetail rename to { reason }, deriveBindingId import+usage, paused start projectBindingRef, buildProjectBindingRef logging
+- packages/cli/src/cli.ts — MALFORMED_REQUEST envelope for missing get run-id, exit code 64 propagation, parser-level JSON-mode envelope emission
 - packages/cli/src/adapters/cli-adapter.ts — Added `silent` option to suppress console.log
 - packages/core/src/db/provider-bindings.ts — Added listBindingsByCodebase function
 - packages/cli/src/commands/workflow.test.ts — Added provider-bindings mock, updated 2 exit code assertions (64, 70)
-- packages/cli/src/commands/workflow-start-status-envelope.test.ts — Added deriveBindingId mock, codebase mock overrides, CONTRACT-007/008/009/010 test groups (5 new tests), updated 3 exit code assertions (64, 69, 70)
+- packages/cli/src/commands/workflow-start-status-envelope.test.ts — Module-level assertEnvelopeConforms, CONTRACT-001/002 schema conformance calls, CONTRACT-007 { reason } shape, deriveBindingId mock, CONTRACT-007/008/009/010 test groups
 - \_bmad-output/implementation-artifacts/3-3b-provide-archon-start-and-status-cli-json.md — Marked all 16 review findings done

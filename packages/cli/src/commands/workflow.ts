@@ -513,7 +513,11 @@ async function buildProjectBindingRef(
     };
     if (projectRef) ref.projectRef = projectRef;
     return ref;
-  } catch {
+  } catch (err) {
+    getLog().warn(
+      { err, codebaseId },
+      'buildProjectBindingRef lookup failed; omitting projectBindingRef'
+    );
     return undefined;
   }
 }
@@ -1799,7 +1803,7 @@ export async function workflowGetCommand(
     }
 
     if (run.status === 'failed' && typeof run.metadata.error === 'string') {
-      statusResult.failureDetail = run.metadata.error;
+      statusResult.failureDetail = { reason: run.metadata.error };
     }
 
     if (projectBindingRef) statusResult.projectBindingRef = projectBindingRef;
