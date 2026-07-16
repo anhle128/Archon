@@ -202,12 +202,6 @@ nodes:
   - id: dev-story
     prompt: |
       bmad-dev-story $create-story.output.story_file
-
-      Implement the story file created earlier in this workflow.
-      Before making changes, read `$ARTIFACTS_DIR/bmad-create-dev-story/findings/open-findings.md` and `$ARTIFACTS_DIR/bmad-create-dev-story/decision-log.md`.
-      If open findings exist, treat this invocation as a fix pass and append the required fix entries to the decision log.
-      On fix passes, rewrite open-findings.md so fixed findings are pending re-review and update state.json to the next review round.
-      Keep activeStoryFile in state.json set to $create-story.output.story_file.
     provider: qodercli
     effort: high
     depends_on: [validate-story-readiness]
