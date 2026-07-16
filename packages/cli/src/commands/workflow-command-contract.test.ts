@@ -237,6 +237,19 @@ describe('3.3B-CONTRACT-036 [P0] forbidden-key scan on parsed emitted envelopes 
         data: { nested: { agent: 'should-be-stripped', displayText: 'also stripped' }, ok: true },
         created_at: new Date(),
       },
+      {
+        id: 'evt-3',
+        workflow_run_id: 'test-run-verbose',
+        conversation_id: 'conv-1',
+        event_type: 'step_completed',
+        data: {
+          nestedArray: [
+            [{ message: 'strip from nested array', keep: true }],
+            { stderr: 'strip from array object', nested: [{ stdout: 'strip deeply', ok: true }] },
+          ],
+        },
+        created_at: new Date(),
+      },
     ]);
 
     const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
@@ -249,6 +262,12 @@ describe('3.3B-CONTRACT-036 [P0] forbidden-key scan on parsed emitted envelopes 
       expect(scanForForbiddenKeys(envelope)).toEqual([]);
       const result = envelope.result as Record<string, unknown>;
       expect(Array.isArray(result.events)).toBe(true);
+      const events = result.events as Array<Record<string, unknown>>;
+      expect(events).toHaveLength(3);
+      expect(JSON.stringify(events[2])).toContain('"keep":true');
+      expect(JSON.stringify(events[2])).not.toContain('strip from nested array');
+      expect(JSON.stringify(events[2])).not.toContain('strip from array object');
+      expect(JSON.stringify(events[2])).not.toContain('strip deeply');
     } finally {
       consoleSpy.mockRestore();
     }

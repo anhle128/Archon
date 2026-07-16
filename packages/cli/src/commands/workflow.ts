@@ -169,15 +169,7 @@ export function classifyRunError(err: unknown): ClassifiedError {
   const msg = err instanceof Error ? err.message : String(err);
   const errCode = (err as { code?: string })?.code;
 
-  if (
-    (msg.includes('not found') || msg.includes('Not found')) &&
-    (msg.includes('Workflow') || msg.includes('workflow')) &&
-    !msg.includes('table') &&
-    !msg.includes('column') &&
-    !msg.includes('database') &&
-    !msg.includes('relation') &&
-    !msg.includes('schema')
-  ) {
+  if (/^Workflow '[^']+' not found\./.test(msg)) {
     return {
       code: 'WORKFLOW_NOT_FOUND',
       category: 'unexpected_state',
@@ -190,6 +182,7 @@ export function classifyRunError(err: unknown): ClassifiedError {
     msg.includes('no effect with') ||
     msg.includes('conflicts with') ||
     msg.includes('is required') ||
+    msg.includes('must be a boolean flag') ||
     msg.includes('worktree.enabled')
   ) {
     return {
@@ -581,12 +574,16 @@ export async function workflowRunCommand(
   options: WorkflowRunOptions = {}
 ): Promise<number> {
   const startTime = Date.now();
-  const jsonMode = Boolean(options.json) && options.detach !== true;
+  const invalidJsonOption = options.json !== undefined && typeof options.json !== 'boolean';
+  const jsonMode = (options.json === true || invalidJsonOption) && options.detach !== true;
 
   if (jsonMode) {
     let correlationId = 'unknown';
     let issuedAt = new Date(0).toISOString();
     try {
+      if (invalidJsonOption) {
+        throw new Error('--json must be a boolean flag');
+      }
       correlationId = resolveCorrelationId(options.correlationId);
       issuedAt = resolveIssuedAt();
       return await workflowRunCommandInner(
@@ -1790,10 +1787,16 @@ async function workflowGetCommandInner(
     if (events) resultPayload.events = eventsFailed ? [] : sanitizeEventsForEnvelope(events);
     if (run.status === 'failed') {
       resultPayload.failure = {
+        code: 'WORKFLOW_EXECUTION_FAILED',
+        category: 'unexpected_state',
         hasError: Boolean(run.metadata.error),
         errorType: run.metadata.error ? 'execution_error' : 'unknown',
         terminal: true,
         retryable: RETRYABLE_WORKFLOW_STATUSES.includes(run.status),
+        details: {
+          runId: run.id,
+          hasError: Boolean(run.metadata.error),
+        },
       };
     }
 

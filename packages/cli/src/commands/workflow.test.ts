@@ -1908,6 +1908,22 @@ describe('workflowRunCommand — JSON envelope (Story 3.3b)', () => {
     expect(execution.exitCode).toBe(78);
   });
 
+  it('RF-36: non-boolean json option values fail closed instead of enabling JSON mode silently', async () => {
+    await expect(
+      workflowRunCommand('/test/path', 'assist', 'hello', {
+        json: 'true' as unknown as boolean,
+        noWorktree: true,
+      })
+    ).resolves.toBe(64);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = lastStdoutJson();
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('MALFORMED_REQUEST');
+    expect(error.category).toBe('provider_contract');
+  });
+
   // 3.3B-UNIT-013 [P1] R-015, W-3.3B-003 — the foreground command remains
   // genuinely blocking: the envelope is only written to stdout AFTER
   // executeWorkflow resolves, and the reported state is never a live
@@ -2673,6 +2689,14 @@ describe('workflowGetCommand', () => {
     const result = envelope.result as Record<string, unknown>;
     expect(result.state).toBe('failed');
     expect(result.terminal).toBe(true);
+    expect(result.failure).toMatchObject({
+      code: 'WORKFLOW_EXECUTION_FAILED',
+      category: 'unexpected_state',
+      details: {
+        runId: 'run-failed',
+        hasError: true,
+      },
+    });
     expect(JSON.stringify(result)).not.toContain('ECONNRESET');
     expect(code).toBe(0);
   });
@@ -2916,6 +2940,30 @@ describe('workflow.ts classifyRunError helper (Story 3.3b Task 1)', () => {
       category: 'implementation_defect',
       retryable: false,
       exitCode: 70,
+    });
+  });
+
+  it('RF-37: does not classify infrastructure not-found errors as missing workflow names', () => {
+    expect(classifyRunError(new Error('Workflow database index not found during lookup'))).toEqual({
+      code: 'INTERNAL_ERROR',
+      category: 'implementation_defect',
+      retryable: false,
+      exitCode: 70,
+    });
+    expect(classifyRunError(new Error('workflow configuration file not found on disk'))).toEqual({
+      code: 'INTERNAL_ERROR',
+      category: 'implementation_defect',
+      retryable: false,
+      exitCode: 70,
+    });
+  });
+
+  it('RF-36: classifies non-boolean json option values as malformed requests', () => {
+    expect(classifyRunError(new Error('--json must be a boolean flag'))).toEqual({
+      code: 'MALFORMED_REQUEST',
+      category: 'provider_contract',
+      retryable: false,
+      exitCode: 64,
     });
   });
 

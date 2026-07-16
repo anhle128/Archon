@@ -93,6 +93,7 @@ import {
 } from './commands/ai';
 import { telemetryStatusCommand, telemetryResetCommand } from './commands/telemetry';
 import { closeDatabase } from '@archon/core';
+import type { WorkflowProviderCommand } from './commands/workflow-provider-command-envelope';
 import {
   setLogLevel,
   createLogger,
@@ -110,6 +111,59 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('cli');
   return cachedLog;
+}
+
+type WorkflowCommandEnvelopeCommand = Extract<
+  WorkflowProviderCommand,
+  'workflow.start' | 'workflow.status'
+>;
+
+function getWorkflowCommandEnvelopeCommand(
+  command: string | undefined,
+  subcommand: string | undefined
+): WorkflowCommandEnvelopeCommand | undefined {
+  if (command !== 'workflow') return undefined;
+  if (subcommand === 'run') return 'workflow.start';
+  if (subcommand === 'get') return 'workflow.status';
+  return undefined;
+}
+
+function isJsonRequestedArg(args: string[]): boolean {
+  return args.some(arg => arg === '--json' || arg.startsWith('--json='));
+}
+
+function isBlankString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length === 0;
+}
+
+async function emitWorkflowCommandMalformedEnvelope(
+  command: WorkflowCommandEnvelopeCommand,
+  details: Record<string, unknown>,
+  correlationId?: string
+): Promise<number> {
+  const { safeStringify, resolveCorrelationId, resolveIssuedAt, buildErrorEnvelope } =
+    await import('./commands/workflow-provider-command-envelope.js');
+  console.log(
+    safeStringify(
+      buildErrorEnvelope(
+        {
+          command,
+          provider: 'archon',
+          correlationId: resolveCorrelationId(correlationId),
+          issuedAt: resolveIssuedAt(),
+        },
+        {
+          code: 'MALFORMED_REQUEST',
+          category: 'provider_contract',
+          retryable: false,
+          details,
+          exitCode: 64,
+        },
+        Date.now()
+      )
+    )
+  );
+  return 64;
 }
 
 /**
@@ -347,45 +401,17 @@ async function main(): Promise<number> {
     });
   } catch (error) {
     const err = error as Error;
-    const jsonRequested = process.argv.includes('--json');
+    const jsonRequested = isJsonRequestedArg(args);
     if (jsonRequested) {
-      const {
-        safeStringify: ss,
-        resolveCorrelationId: rci,
-        resolveIssuedAt: ria,
-        buildErrorEnvelope: bee,
-      } = await import('./commands/workflow-provider-command-envelope.js');
-      const corrId = rci(undefined);
-      const issuedAt = ria();
-      const startTime = Date.now();
-      const command =
-        process.argv[2] === 'workflow' && process.argv[3] === 'get'
-          ? 'workflow.status'
-          : process.argv[2] === 'workflow' && process.argv[3] === 'run'
-            ? 'workflow.start'
-            : 'workflow.start';
-      console.log(
-        ss(
-          bee(
-            {
-              command: command as 'workflow.start',
-              provider: 'archon',
-              correlationId: corrId,
-              issuedAt,
-            },
-            {
-              code: 'MALFORMED_REQUEST',
-              category: 'provider_contract',
-              retryable: false,
-              details: { parseError: err.message },
-              exitCode: 64,
-            },
-            startTime
-          )
-        )
-      );
-      await shutdownTelemetry();
-      return 64;
+      const envelopeCommand = getWorkflowCommandEnvelopeCommand(args[0], args[1]);
+      if (envelopeCommand !== undefined) {
+        const exitCode = await emitWorkflowCommandMalformedEnvelope(envelopeCommand, {
+          parseError: err.message,
+          requestAccepted: false,
+        });
+        await shutdownTelemetry();
+        return exitCode;
+      }
     }
     console.error(`Error parsing arguments: ${err.message}`);
     printUsage();
@@ -472,42 +498,16 @@ async function main(): Promise<number> {
     let effectiveCwd = cwd;
     if (requiresGitRepo) {
       if (!existsSync(cwd)) {
-        if (jsonFlag) {
-          const {
-            safeStringify: ss,
-            resolveCorrelationId: rci,
-            resolveIssuedAt: ria,
-            buildErrorEnvelope: bee,
-          } = await import('./commands/workflow-provider-command-envelope.js');
-          let corrId = 'unknown';
-          let issuedAt = new Date(0).toISOString();
-          try {
-            corrId = rci(values['correlation-id'] as string | undefined);
-            issuedAt = ria();
-          } catch {
-            // Helpers currently never throw
-          }
-          const cmd =
-            command === 'workflow' && subcommand === 'get' ? 'workflow.status' : 'workflow.start';
-          console.log(
-            ss(
-              bee(
-                { command: cmd, provider: 'archon', correlationId: corrId, issuedAt },
-                {
-                  code: 'MALFORMED_REQUEST',
-                  category: 'provider_contract',
-                  retryable: false,
-                  details: {
-                    fieldErrors: [{ path: '/cwd', code: 'directory_not_found' }],
-                    requestAccepted: false,
-                  },
-                  exitCode: 64,
-                },
-                Date.now()
-              )
-            )
+        const envelopeCommand = getWorkflowCommandEnvelopeCommand(command, subcommand);
+        if (jsonFlag && envelopeCommand !== undefined) {
+          return await emitWorkflowCommandMalformedEnvelope(
+            envelopeCommand,
+            {
+              fieldErrors: [{ path: '/cwd', code: 'directory_not_found' }],
+              requestAccepted: false,
+            },
+            values['correlation-id'] as string | undefined
           );
-          return 64;
         }
         console.error(`Error: Directory does not exist: ${cwd}`);
         return 1;
@@ -516,42 +516,16 @@ async function main(): Promise<number> {
       // Validate git repository and resolve to root
       const repoRoot = await git.findRepoRoot(cwd);
       if (!repoRoot) {
-        if (jsonFlag) {
-          const {
-            safeStringify: ss,
-            resolveCorrelationId: rci,
-            resolveIssuedAt: ria,
-            buildErrorEnvelope: bee,
-          } = await import('./commands/workflow-provider-command-envelope.js');
-          let corrId = 'unknown';
-          let issuedAt = new Date(0).toISOString();
-          try {
-            corrId = rci(values['correlation-id'] as string | undefined);
-            issuedAt = ria();
-          } catch {
-            // Helpers currently never throw
-          }
-          const cmd =
-            command === 'workflow' && subcommand === 'get' ? 'workflow.status' : 'workflow.start';
-          console.log(
-            ss(
-              bee(
-                { command: cmd, provider: 'archon', correlationId: corrId, issuedAt },
-                {
-                  code: 'MALFORMED_REQUEST',
-                  category: 'provider_contract',
-                  retryable: false,
-                  details: {
-                    fieldErrors: [{ path: '/cwd', code: 'not_a_git_repository' }],
-                    requestAccepted: false,
-                  },
-                  exitCode: 64,
-                },
-                Date.now()
-              )
-            )
+        const envelopeCommand = getWorkflowCommandEnvelopeCommand(command, subcommand);
+        if (jsonFlag && envelopeCommand !== undefined) {
+          return await emitWorkflowCommandMalformedEnvelope(
+            envelopeCommand,
+            {
+              fieldErrors: [{ path: '/cwd', code: 'not_a_git_repository' }],
+              requestAccepted: false,
+            },
+            values['correlation-id'] as string | undefined
           );
-          return 64;
         }
         console.error('Error: Not in a git repository.');
         console.error('The Archon CLI must be run from within a git repository.');
@@ -614,6 +588,13 @@ async function main(): Promise<number> {
 
           case 'run': {
             const workflowName = positionals[2];
+            const correlationId = values['correlation-id'];
+            if (jsonFlag && isBlankString(correlationId)) {
+              return await emitWorkflowCommandMalformedEnvelope('workflow.start', {
+                fieldErrors: [{ path: '/correlationId', code: 'required' }],
+                requestAccepted: false,
+              });
+            }
             if (!workflowName) {
               if (jsonFlag) {
                 // Let workflowRunCommand handle the missing name as a MALFORMED_REQUEST envelope.
@@ -661,7 +642,7 @@ async function main(): Promise<number> {
               conversationId: values['conversation-id'] as string | undefined,
               detach: detachFlag,
               json: jsonFlag,
-              correlationId: values['correlation-id'] as string | undefined,
+              correlationId: correlationId as string | undefined,
             };
             return await workflowRunCommand(effectiveCwd, workflowName ?? '', userMessage, options);
           }
@@ -672,6 +653,13 @@ async function main(): Promise<number> {
 
           case 'get': {
             const getRunId = positionals[2];
+            const correlationId = values['correlation-id'];
+            if (jsonFlag && isBlankString(correlationId)) {
+              return await emitWorkflowCommandMalformedEnvelope('workflow.status', {
+                fieldErrors: [{ path: '/correlationId', code: 'required' }],
+                requestAccepted: false,
+              });
+            }
             if (!getRunId) {
               if (jsonFlag) {
                 // Emit a workflow.status MALFORMED_REQUEST envelope for missing run id.
@@ -721,7 +709,7 @@ async function main(): Promise<number> {
               getRunId,
               jsonFlag,
               values.verbose as boolean | undefined,
-              values['correlation-id'] as string | undefined
+              correlationId as string | undefined
             );
           }
 

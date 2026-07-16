@@ -177,4 +177,77 @@ describe('workflow run/get --json CLI dispatch E2E — real subprocess (Story 3.
       expect(envelope.correlationId).toBe('corr-cli-034-get');
     });
   });
+
+  test('RF-35: `workflow run --json --correlation-id=` emits MALFORMED_REQUEST, not an internal or lookup error', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'run',
+      'totally-nonexistent-workflow-story-3-3b',
+      '--json',
+      '--correlation-id=',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.start');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(error?.category).toBe('provider_contract');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  test('RF-35: `workflow get --json --correlation-id=` emits MALFORMED_REQUEST, not an internal error', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'get',
+      '00000000-0000-0000-0000-000000000000',
+      '--json',
+      '--correlation-id=',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.status');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(error?.category).toBe('provider_contract');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  test('RF-36: `workflow run --json=true` emits a malformed-request envelope', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'run',
+      'archon-assist',
+      '--json=true',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.start');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(error?.category).toBe('provider_contract');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  test('RF-34: git-preflight JSON fallback does not emit workflow.start for unrelated workflow JSON commands', async () => {
+    const nonGitCwd = mkdtempSync(join(tmpdir(), 'archon-non-git-'));
+    try {
+      const { stdout, exitCode } = await runCli(['workflow', 'list', '--json'], nonGitCwd);
+
+      expect(exitCode).not.toBe(0);
+      if (stdout.trim().length > 0) {
+        const envelope = parseSoleJsonLine(stdout);
+        expect(envelope.command).not.toBe('workflow.start');
+      } else {
+        expect(stdout).not.toContain('workflow.start');
+      }
+    } finally {
+      rmSync(nonGitCwd, { recursive: true, force: true });
+    }
+  });
 });
