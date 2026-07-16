@@ -1,6 +1,6 @@
 # Story 3.3b: Provide Archon Start And Status CLI JSON
 
-Status: ready-for-dev
+Status: in-progress
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -62,6 +62,15 @@ so that external controllers can create and inspect workflow references without 
 - [ ] Slice 6: Wire test isolation and validate (AC: #1, #2, #3)
   - [ ] Add new test file(s) to `packages/cli/package.json` test script in their own `bun test` invocation(s), separated from existing test files to avoid `mock.module()` pollution.
   - [ ] Run `bun run validate` to confirm type-check, lint (zero warnings), format, bundled checks, and all tests pass.
+
+### Review Findings
+
+- [ ] [Review][Patch] JSON-mode foreground start still writes dispatch prose to stdout via CLIAdapter [packages/cli/src/commands/workflow.ts:1103]
+- [ ] [Review][Patch] JSON-mode malformed CLI validation can return human prose instead of a shared error envelope [packages/cli/src/cli.ts:503]
+- [ ] [Review][Patch] `workflow run --json` error envelopes still exit with process status 0 [packages/cli/src/commands/workflow.ts:500]
+- [ ] [Review][Patch] Start envelopes omit project and provider-binding references for bound projects [packages/cli/src/commands/workflow.ts:1203]
+- [ ] [Review][Patch] Status envelopes omit required status payload fields for fixture and failed-run conformance [packages/cli/src/commands/workflow.ts:1619]
+- [ ] [Review][Patch] Contract tests only partially compare fixtures and do not validate runtime envelopes against the JSON Schema [packages/cli/src/commands/workflow-start-status-envelope.test.ts:1070]
 
 ## Dev Notes
 
