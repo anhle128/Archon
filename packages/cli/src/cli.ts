@@ -533,7 +533,7 @@ async function main(): Promise<number> {
                     )
                   )
                 );
-                return 1;
+                return 64;
               }
               console.error('Usage: archon workflow run <name> [message]');
               return 1;
@@ -591,6 +591,33 @@ async function main(): Promise<number> {
           case 'get': {
             const getRunId = positionals[2];
             if (!getRunId) {
+              if (jsonFlag) {
+                const corrId = resolveCorrelationId(values['correlation-id'] as string | undefined);
+                console.log(
+                  safeStringify(
+                    buildErrorEnvelope(
+                      {
+                        command: 'workflow.status',
+                        provider: 'archon',
+                        correlationId: corrId,
+                        issuedAt: resolveIssuedAt(),
+                      },
+                      {
+                        code: 'MALFORMED_REQUEST',
+                        category: 'provider_contract',
+                        retryable: false,
+                        details: {
+                          fieldErrors: [{ path: '/runId', code: 'required' }],
+                          requestAccepted: false,
+                        },
+                        exitCode: 64,
+                      },
+                      Date.now()
+                    )
+                  )
+                );
+                return 64;
+              }
               console.error('Usage: archon workflow get <run-id> [--json] [--verbose]');
               return 1;
             }

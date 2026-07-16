@@ -237,6 +237,10 @@ mock.module('@archon/core/db/users', () => ({
   ),
 }));
 
+mock.module('@archon/core/db/provider-bindings', () => ({
+  listBindingsByCodebase: mock(() => Promise.resolve([])),
+}));
+
 mock.module('@archon/core/operations/workflow-operations', () => ({
   approveWorkflow: mock(() => Promise.resolve({ ok: true })),
   rejectWorkflow: mock(() => Promise.resolve({ ok: true })),
@@ -316,6 +320,7 @@ const PAUSED_RUN = {
   id: 'run-004',
   status: 'paused' as const,
   metadata: {
+    phase: 'done-verification',
     approval: {
       nodeId: 'review-gate',
       message: 'Please review the implementation',
@@ -973,7 +978,7 @@ describe('3.3B-STATUS-ERR-001 — not-found run emits NOT_FOUND error envelope [
 
     const code = await workflowGetCommand('nonexistent-run', true);
 
-    expect(code).toBe(1);
+    expect(code).toBe(64);
     expect(consoleSpy).toHaveBeenCalledTimes(1);
     const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
 
@@ -1011,7 +1016,7 @@ describe('3.3B-STATUS-ERR-002 — DB error emits INTERNAL_ERROR envelope [P0, AC
 
     const code = await workflowGetCommand('run-db-err', true);
 
-    expect(code).toBe(1);
+    expect(code).toBe(70);
     const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
 
     expect(envelope.success).toBe(false);
@@ -1049,7 +1054,7 @@ describe('3.3B-STATUS-ERR-003 — DB timeout emits COMMAND_TIMEOUT envelope [P1,
 
     const code = await workflowGetCommand('run-timeout', true);
 
-    expect(code).toBe(1);
+    expect(code).toBe(69);
     const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
 
     expect(envelope.success).toBe(false);
@@ -1103,6 +1108,21 @@ describe('3.3B-CONTRACT-001 — start success envelope matches fixture field-by-
     const strippedFixture = stripDynamicFields(fixture);
     const strippedEnvelope = stripDynamicFields(envelope);
 
+    // Structural parity: runtime keys are a subset of fixture keys
+    // (projectBindingRef is optional — only present when a binding exists)
+    const fixtureKeys = new Set(Object.keys(strippedFixture));
+    for (const key of Object.keys(strippedEnvelope)) {
+      expect(fixtureKeys.has(key)).toBe(true);
+    }
+
+    // Result structural parity: runtime result keys are a subset of fixture result keys
+    const fixtureResult = strippedFixture.result as Record<string, unknown>;
+    const envelopeResult = strippedEnvelope.result as Record<string, unknown>;
+    const fixtureResultKeys = new Set(Object.keys(fixtureResult));
+    for (const key of Object.keys(envelopeResult)) {
+      expect(fixtureResultKeys.has(key)).toBe(true);
+    }
+
     // Static structural fields must match exactly
     expect(strippedEnvelope.schemaVersion).toEqual(strippedFixture.schemaVersion);
     expect(strippedEnvelope.intendedProducer).toEqual(strippedFixture.intendedProducer);
@@ -1112,9 +1132,7 @@ describe('3.3B-CONTRACT-001 — start success envelope matches fixture field-by-
     expect(strippedEnvelope.command).toEqual(strippedFixture.command);
     expect(strippedEnvelope.success).toEqual(strippedFixture.success);
 
-    // Result shape fields match
-    const fixtureResult = strippedFixture.result as Record<string, unknown>;
-    const envelopeResult = strippedEnvelope.result as Record<string, unknown>;
+    // Result field values match
     expect(envelopeResult.operation).toBe(fixtureResult.operation);
     expect(envelopeResult.state).toBe(fixtureResult.state);
     expect(envelopeResult.phase).toBe(fixtureResult.phase);
@@ -1146,15 +1164,37 @@ describe('3.3B-CONTRACT-002 — status success envelope matches fixture field-by
     const strippedFixture = stripDynamicFields(fixture);
     const strippedEnvelope = stripDynamicFields(envelope);
 
+    // Structural parity: runtime keys are a subset of fixture keys
+    const fixtureKeys = new Set(Object.keys(strippedFixture));
+    for (const key of Object.keys(strippedEnvelope)) {
+      expect(fixtureKeys.has(key)).toBe(true);
+    }
+
     expect(strippedEnvelope.schemaVersion).toEqual(strippedFixture.schemaVersion);
     expect(strippedEnvelope.command).toEqual(strippedFixture.command);
     expect(strippedEnvelope.success).toEqual(strippedFixture.success);
 
+    // Result structural parity: runtime result keys are a subset of fixture result keys
     const fixtureResult = strippedFixture.result as Record<string, unknown>;
     const envelopeResult = strippedEnvelope.result as Record<string, unknown>;
+    const fixtureResultKeys = new Set(Object.keys(fixtureResult));
+    for (const key of Object.keys(envelopeResult)) {
+      expect(fixtureResultKeys.has(key)).toBe(true);
+    }
+
     expect(envelopeResult.operation).toBe(fixtureResult.operation);
+    expect(envelopeResult.state).toBe(fixtureResult.state);
+    expect(envelopeResult.phase).toBe(fixtureResult.phase);
     expect(envelopeResult.terminal).toBe(fixtureResult.terminal);
     expect(envelopeResult.actionRequired).toBe(fixtureResult.actionRequired);
+
+    // gateRef structure matches
+    if (fixtureResult.gateRef) {
+      expect(envelopeResult.gateRef).toBeDefined();
+      const fixtureGate = fixtureResult.gateRef as Record<string, unknown>;
+      const envelopeGate = envelopeResult.gateRef as Record<string, unknown>;
+      expect(envelopeGate.kind).toBe(fixtureGate.kind);
+    }
   });
 });
 
@@ -1338,18 +1378,12 @@ describe('3.3B-CONTRACT-005 — contract schema structural checks [P0, AC#1/2/3]
 });
 
 describe('3.3B-CONTRACT-005b — runtime envelope schema conformance [P0, AC#1/2/3]', () => {
-  const SCHEMA_REQUIRED_FIELDS = [
-    'schemaVersion',
-    'intendedProducer',
-    'intendedConsumer',
-    'owningSubproject',
-    'provider',
-    'command',
-    'correlationId',
-    'issuedAt',
-    'success',
-  ];
-
+  const schema = JSON.parse(readFileSync(SCHEMA_PATH, 'utf8')) as {
+    required: string[];
+    properties: Record<string, unknown>;
+    $defs: Record<string, { required: string[]; properties: Record<string, unknown> }>;
+  };
+  const SCHEMA_REQUIRED_FIELDS = schema.required;
   const SCHEMA_KNOWN_TOP_LEVEL = new Set([
     ...SCHEMA_REQUIRED_FIELDS,
     'result',
@@ -1358,6 +1392,36 @@ describe('3.3B-CONTRACT-005b — runtime envelope schema conformance [P0, AC#1/2
     'workflowRunRef',
     'bindingRef',
   ]);
+  const WORKFLOW_COMMANDS = new Set([
+    'workflow.start',
+    'workflow.status',
+    'workflow.approve',
+    'workflow.reject',
+    'workflow.resume',
+    'workflow.retry',
+    'workflow.cancel',
+  ]);
+  const VALID_CATEGORIES = new Set([
+    'configuration',
+    'external_delay',
+    'implementation_defect',
+    'provider_contract',
+    'security_rejection',
+    'timeout',
+    'unexpected_state',
+  ]);
+
+  function assertNoExtraKeys(
+    obj: Record<string, unknown>,
+    allowed: Set<string>,
+    _path: string
+  ): void {
+    for (const key of Object.keys(obj)) {
+      if (!allowed.has(key)) {
+        throw new Error(`Unexpected key "${key}" at ${_path}`);
+      }
+    }
+  }
 
   function assertEnvelopeConforms(envelope: Record<string, unknown>): void {
     for (const field of SCHEMA_REQUIRED_FIELDS) {
@@ -1368,26 +1432,55 @@ describe('3.3B-CONTRACT-005b — runtime envelope schema conformance [P0, AC#1/2
     expect(envelope.intendedConsumer).toBe('Hermes');
     expect(envelope.owningSubproject).toBe('archon');
     expect(typeof envelope.correlationId).toBe('string');
+    expect((envelope.correlationId as string).length).toBeGreaterThan(0);
     expect(typeof envelope.issuedAt).toBe('string');
     expect(typeof envelope.success).toBe('boolean');
+    expect(typeof envelope.provider).toBe('string');
+    expect((envelope.provider as string).length).toBeGreaterThan(0);
+    expect(typeof envelope.command).toBe('string');
 
-    for (const key of Object.keys(envelope)) {
-      expect(SCHEMA_KNOWN_TOP_LEVEL.has(key)).toBe(true);
-    }
+    assertNoExtraKeys(envelope, SCHEMA_KNOWN_TOP_LEVEL, 'top-level');
 
     if (envelope.success === true) {
       expect(envelope).toHaveProperty('result');
       expect(envelope).not.toHaveProperty('error');
+      expect(typeof envelope.result).toBe('object');
+
+      if (WORKFLOW_COMMANDS.has(envelope.command as string)) {
+        expect(envelope).toHaveProperty('workflowRunRef');
+        const ref = envelope.workflowRunRef as Record<string, unknown>;
+        assertNoExtraKeys(
+          ref,
+          new Set(['provider', 'runId', 'workflowName', 'projectRef']),
+          'workflowRunRef'
+        );
+        expect(typeof ref.provider).toBe('string');
+        expect(typeof ref.runId).toBe('string');
+        expect(typeof ref.workflowName).toBe('string');
+        if (ref.projectRef !== undefined) {
+          expect(typeof ref.projectRef).toBe('string');
+        }
+      }
     } else {
       expect(envelope).toHaveProperty('error');
       expect(envelope).not.toHaveProperty('result');
+      expect(envelope).toHaveProperty('execution');
+
       const error = envelope.error as Record<string, unknown>;
+      assertNoExtraKeys(error, new Set(['code', 'category', 'retryable', 'details']), 'error');
       expect(typeof error.code).toBe('string');
-      expect(typeof error.category).toBe('string');
+      expect((error.code as string).length).toBeGreaterThan(0);
+      expect(VALID_CATEGORIES.has(error.category as string)).toBe(true);
       expect(typeof error.retryable).toBe('boolean');
       expect(typeof error.details).toBe('object');
-      expect(envelope).toHaveProperty('execution');
+
       const execution = envelope.execution as Record<string, unknown>;
+      assertNoExtraKeys(
+        execution,
+        new Set(['exitCode', 'timedOut', 'durationMs', 'stdoutRedacted', 'stderrRedacted']),
+        'execution'
+      );
+      expect(execution.exitCode === null || typeof execution.exitCode === 'number').toBe(true);
       expect(typeof execution.timedOut).toBe('boolean');
       expect(execution.stdoutRedacted).toBe(true);
       expect(execution.stderrRedacted).toBe(true);

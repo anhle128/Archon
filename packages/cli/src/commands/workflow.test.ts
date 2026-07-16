@@ -166,6 +166,10 @@ mock.module('@archon/core/db/workflow-node-sessions', () => ({
   upsertWorkflowNodeSession: mock(() => Promise.resolve()),
 }));
 
+mock.module('@archon/core/db/provider-bindings', () => ({
+  listBindingsByCodebase: mock(() => Promise.resolve([])),
+}));
+
 describe('workflowListCommand', () => {
   let consoleSpy: ReturnType<typeof spyOn>;
 
@@ -1851,7 +1855,7 @@ describe('workflowGetCommand', () => {
     expect(parsed.schemaVersion).toBe('workflow-command-envelope.v1');
     const error = parsed.error as Record<string, unknown>;
     expect(error.code).toBe('NOT_FOUND');
-    expect(code).toBe(1);
+    expect(code).toBe(64);
   });
 
   it('emits shared error envelope JSON (never throws) when the DB lookup fails', async () => {
@@ -1867,7 +1871,7 @@ describe('workflowGetCommand', () => {
     expect(parsed.command).toBe('workflow.status');
     const error = parsed.error as Record<string, unknown>;
     expect(error.code).toBe('INTERNAL_ERROR');
-    expect(code).toBe(1);
+    expect(code).toBe(70);
   });
 
   it('prints run detail (human) including the error from metadata', async () => {

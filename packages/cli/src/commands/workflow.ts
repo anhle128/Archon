@@ -58,6 +58,7 @@ import * as messageDb from '@archon/core/db/messages';
 import * as workflowDb from '@archon/core/db/workflows';
 import * as workflowEventsDb from '@archon/core/db/workflow-events';
 import type { WorkflowEventRow } from '@archon/core/db/workflow-events';
+import * as providerBindingDb from '@archon/core/db/provider-bindings';
 import * as userDb from '@archon/core/db/users';
 import * as git from '@archon/git';
 import { CLIAdapter } from '../adapters/cli-adapter';
@@ -469,8 +470,51 @@ function mapStatusToContractState(status: WorkflowRunStatus): string {
   }
 }
 
+function derivePhaseFromStatus(
+  status: WorkflowRunStatus,
+  metadata: Record<string, unknown>
+): string {
+  if (typeof metadata.phase === 'string') return metadata.phase;
+  switch (status) {
+    case 'completed':
+      return 'done-verification';
+    case 'cancelled':
+      return 'cancelled';
+    case 'pending':
+      return 'pending';
+    case 'failed':
+      return 'implementation';
+    case 'paused':
+      return 'implementation';
+    case 'running':
+    default:
+      return 'implementation';
+  }
+}
+
 function emitWorkflowEnvelope(envelope: Record<string, unknown>): void {
   console.log(safeStringify(envelope));
+}
+
+async function buildProjectBindingRef(
+  codebaseId: string | null | undefined,
+  projectRef: string | undefined
+): Promise<Record<string, unknown> | undefined> {
+  if (!codebaseId) return undefined;
+  try {
+    const bindings = await providerBindingDb.listBindingsByCodebase(codebaseId);
+    if (bindings.length === 0) return undefined;
+    const binding = bindings[0];
+    const ref: Record<string, unknown> = {
+      provider: binding.provider,
+      name: binding.name,
+      bindingId: binding.id,
+    };
+    if (projectRef) ref.projectRef = projectRef;
+    return ref;
+  } catch {
+    return undefined;
+  }
 }
 
 export async function workflowRunCommand(
@@ -516,7 +560,7 @@ export async function workflowRunCommand(
             startTime
           )
         );
-        return 1;
+        return EXIT_USAGE;
       }
       throw new Error('No workflows found in .archon/workflows/');
     }
@@ -562,7 +606,7 @@ export async function workflowRunCommand(
             startTime
           )
         );
-        return 1;
+        return EXIT_USAGE;
       }
       if (loadError) {
         throw new Error(
@@ -607,7 +651,7 @@ export async function workflowRunCommand(
           startTime
         )
       );
-      return 1;
+      return EXIT_USAGE;
     }
     if (options.branchName !== undefined && options.noWorktree) {
       throw new Error(
@@ -638,6 +682,37 @@ export async function workflowRunCommand(
     const pinnedEnabled = workflow.worktree?.enabled;
     if (pinnedEnabled === false) {
       if (options.branchName !== undefined) {
+        if (jsonMode) {
+          const policyDeps: EnvelopeMeta = {
+            command: 'workflow.start',
+            provider: 'archon',
+            correlationId,
+            issuedAt: resolveIssuedAt(),
+          };
+          emitWorkflowEnvelope(
+            buildErrorEnvelope(
+              policyDeps,
+              {
+                code: 'MALFORMED_REQUEST',
+                category: 'provider_contract',
+                retryable: false,
+                details: {
+                  fieldErrors: [
+                    {
+                      path: '/branch',
+                      code: 'conflicts_with_workflow_policy',
+                      message: `Workflow '${workflow.name}' sets worktree.enabled: false`,
+                    },
+                  ],
+                  requestAccepted: false,
+                },
+                exitCode: EXIT_USAGE,
+              },
+              startTime
+            )
+          );
+          return EXIT_USAGE;
+        }
         throw new Error(
           `Workflow '${workflow.name}' sets worktree.enabled: false (runs in live checkout).\n` +
             '  --branch requires an isolated worktree.\n' +
@@ -645,6 +720,37 @@ export async function workflowRunCommand(
         );
       }
       if (options.fromBranch !== undefined) {
+        if (jsonMode) {
+          const policyDeps: EnvelopeMeta = {
+            command: 'workflow.start',
+            provider: 'archon',
+            correlationId,
+            issuedAt: resolveIssuedAt(),
+          };
+          emitWorkflowEnvelope(
+            buildErrorEnvelope(
+              policyDeps,
+              {
+                code: 'MALFORMED_REQUEST',
+                category: 'provider_contract',
+                retryable: false,
+                details: {
+                  fieldErrors: [
+                    {
+                      path: '/fromBranch',
+                      code: 'conflicts_with_workflow_policy',
+                      message: `Workflow '${workflow.name}' sets worktree.enabled: false`,
+                    },
+                  ],
+                  requestAccepted: false,
+                },
+                exitCode: EXIT_USAGE,
+              },
+              startTime
+            )
+          );
+          return EXIT_USAGE;
+        }
         throw new Error(
           `Workflow '${workflow.name}' sets worktree.enabled: false (runs in live checkout).\n` +
             '  --from/--from-branch only applies when a worktree is created.\n' +
@@ -654,6 +760,37 @@ export async function workflowRunCommand(
       // --no-worktree is redundant but not contradictory — silently accept.
     } else if (pinnedEnabled === true) {
       if (options.noWorktree) {
+        if (jsonMode) {
+          const policyDeps: EnvelopeMeta = {
+            command: 'workflow.start',
+            provider: 'archon',
+            correlationId,
+            issuedAt: resolveIssuedAt(),
+          };
+          emitWorkflowEnvelope(
+            buildErrorEnvelope(
+              policyDeps,
+              {
+                code: 'MALFORMED_REQUEST',
+                category: 'provider_contract',
+                retryable: false,
+                details: {
+                  fieldErrors: [
+                    {
+                      path: '/noWorktree',
+                      code: 'conflicts_with_workflow_policy',
+                      message: `Workflow '${workflow.name}' sets worktree.enabled: true`,
+                    },
+                  ],
+                  requestAccepted: false,
+                },
+                exitCode: EXIT_USAGE,
+              },
+              startTime
+            )
+          );
+          return EXIT_USAGE;
+        }
         throw new Error(
           `Workflow '${workflow.name}' sets worktree.enabled: true (requires a worktree).\n` +
             '  --no-worktree conflicts with the workflow policy.\n' +
@@ -724,8 +861,8 @@ export async function workflowRunCommand(
       console.log('');
     }
 
-    // Create CLI adapter
-    const adapter = new CLIAdapter();
+    // Create CLI adapter (silent in JSON mode to protect envelope contract)
+    const adapter = new CLIAdapter({ silent: jsonMode });
 
     // Generate conversation ID
     const conversationId = options.conversationId ?? generateConversationId();
@@ -1193,7 +1330,7 @@ export async function workflowRunCommand(
             startTime
           )
         );
-        return 1;
+        return classified.exitCode;
       }
       throw execError;
     } finally {
@@ -1234,7 +1371,7 @@ export async function workflowRunCommand(
             startTime
           )
         );
-        return 1;
+        return EXIT_SOFTWARE;
       }
 
       const isPaused = 'paused' in result && result.paused;
@@ -1266,18 +1403,16 @@ export async function workflowRunCommand(
       }
 
       // Successful start acknowledgement
-      emitWorkflowEnvelope(
-        buildSuccessEnvelope(
-          envDeps,
-          { workflowRunRef },
-          {
-            operation: 'start',
-            state: 'running',
-            phase: 'implementation',
-            accepted: true,
-          }
-        )
-      );
+      const projectRef = codebase?.name ? `project:${codebase.name}` : undefined;
+      const projectBindingRef = await buildProjectBindingRef(codebase?.id, projectRef);
+      const startResult: Record<string, unknown> = {
+        operation: 'start',
+        state: 'running',
+        phase: 'implementation',
+        accepted: true,
+      };
+      if (projectBindingRef) startResult.projectBindingRef = projectBindingRef;
+      emitWorkflowEnvelope(buildSuccessEnvelope(envDeps, { workflowRunRef }, startResult));
       return 0;
     }
 
@@ -1328,7 +1463,7 @@ export async function workflowRunCommand(
           startTime
         )
       );
-      return 1;
+      return classified.exitCode;
     }
     throw unhandledError;
   }
@@ -1575,7 +1710,7 @@ export async function workflowGetCommand(
           startTime
         )
       );
-      return 1;
+      return classified.exitCode;
     }
     throw new Error(`Failed to get workflow run: ${err.message}`);
   }
@@ -1601,7 +1736,7 @@ export async function workflowGetCommand(
           startTime
         )
       );
-      return 1;
+      return EXIT_USAGE;
     }
     console.log(`Workflow run not found: ${runId}`);
     return 1;
@@ -1636,26 +1771,33 @@ export async function workflowGetCommand(
     const workflowRunRef = buildWorkflowRunRef(run, { projectRef });
     const contractState = mapStatusToContractState(run.status);
     const terminal = (TERMINAL_WORKFLOW_STATUSES as readonly string[]).includes(run.status);
+    const phase = derivePhaseFromStatus(run.status, run.metadata);
+    const projectBindingRef = await buildProjectBindingRef(run.codebase_id, projectRef);
 
     const statusResult: Record<string, unknown> = {
       operation: 'status',
       state: contractState,
+      phase,
       terminal,
     };
 
-    if (run.status === 'paused' && isApprovalContext(run.metadata.approval)) {
+    if (run.status === 'paused') {
       statusResult.actionRequired = true;
-      statusResult.gateRef = {
-        gateId: run.metadata.approval.nodeId,
-        kind: 'human-decision',
-      };
+      if (isApprovalContext(run.metadata.approval)) {
+        statusResult.gateRef = {
+          gateId: run.metadata.approval.nodeId,
+          kind: 'human-decision',
+        };
+      }
     } else {
       statusResult.actionRequired = false;
     }
 
     if (run.status === 'failed' && typeof run.metadata.error === 'string') {
-      statusResult.error = run.metadata.error;
+      statusResult.error = { message: run.metadata.error };
     }
+
+    if (projectBindingRef) statusResult.projectBindingRef = projectBindingRef;
 
     emitWorkflowEnvelope(buildSuccessEnvelope(deps, { workflowRunRef }, statusResult));
     return 0;

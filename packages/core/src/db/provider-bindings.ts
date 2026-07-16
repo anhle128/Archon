@@ -250,3 +250,13 @@ export async function disableBinding(
     return { ...parseBindingRow(row), previousState };
   });
 }
+
+export async function listBindingsByCodebase(
+  codebaseId: string
+): Promise<WorkflowProviderBinding[]> {
+  const result = await pool.query<WorkflowProviderBinding>(
+    'SELECT * FROM remote_agent_workflow_provider_bindings WHERE codebase_id = $1 AND state = $2 ORDER BY created_at',
+    [codebaseId, 'active']
+  );
+  return result.rows.map(row => parseBindingRow(row));
+}

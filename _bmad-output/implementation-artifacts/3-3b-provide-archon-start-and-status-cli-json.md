@@ -71,12 +71,12 @@ so that external controllers can create and inspect workflow references without 
 - [x] [Review][Patch] Start envelopes omit project and provider-binding references for bound projects [packages/cli/src/commands/workflow.ts:1203]
 - [x] [Review][Patch] Status envelopes omit required status payload fields for fixture and failed-run conformance [packages/cli/src/commands/workflow.ts:1619]
 - [x] [Review][Patch] Contract tests only partially compare fixtures and do not validate runtime envelopes against the JSON Schema [packages/cli/src/commands/workflow-start-status-envelope.test.ts:1070]
-- [ ] [Review][Patch] Foreground `workflow run --json` can still write executor/platform messages to stdout via CLIAdapter [packages/cli/src/commands/workflow.ts:727]
-- [ ] [Review][Patch] JSON-mode status/start validation still bypasses `MALFORMED_REQUEST` envelopes for missing status ids and workflow policy conflicts [packages/cli/src/cli.ts:591]
-- [ ] [Review][Patch] Start envelopes still omit `projectBindingRef` for projects with a registered provider binding [packages/cli/src/commands/workflow.ts:1268]
-- [ ] [Review][Patch] Status envelopes still omit `phase`, use raw failed-run error strings, and can report paused runs as not action-required [packages/cli/src/commands/workflow.ts:1640]
-- [ ] [Review][Patch] Contract tests still use partial fixture comparisons and manual schema checks instead of runtime fixture/schema validation [packages/cli/src/commands/workflow-start-status-envelope.test.ts:1106]
-- [ ] [Review][Patch] JSON error envelopes report classified execution exit codes while the command returns generic process status 1 [packages/cli/src/commands/workflow.ts:499]
+- [x] [Review][Patch] Foreground `workflow run --json` can still write executor/platform messages to stdout via CLIAdapter [packages/cli/src/commands/workflow.ts:727]
+- [x] [Review][Patch] JSON-mode status/start validation still bypasses `MALFORMED_REQUEST` envelopes for missing status ids and workflow policy conflicts [packages/cli/src/cli.ts:591]
+- [x] [Review][Patch] Start envelopes still omit `projectBindingRef` for projects with a registered provider binding [packages/cli/src/commands/workflow.ts:1268]
+- [x] [Review][Patch] Status envelopes still omit `phase`, use raw failed-run error strings, and can report paused runs as not action-required [packages/cli/src/commands/workflow.ts:1640]
+- [x] [Review][Patch] Contract tests still use partial fixture comparisons and manual schema checks instead of runtime fixture/schema validation [packages/cli/src/commands/workflow-start-status-envelope.test.ts:1106]
+- [x] [Review][Patch] JSON error envelopes report classified execution exit codes while the command returns generic process status 1 [packages/cli/src/commands/workflow.ts:499]
 
 ## Dev Notes
 
@@ -252,7 +252,7 @@ Qoder (anthropic)
 
 ### Debug Log References
 
-All 6 review findings from the story were addressed in a single fix pass. No open findings remain.
+All 12 review findings from the story were addressed across two fix passes. No open findings remain.
 
 ### Completion Notes List
 
@@ -262,16 +262,24 @@ All 6 review findings from the story were addressed in a single fix pass. No ope
 - Fix Review-4: Added projectRef to workflowRunRef when codebase.name exists (start and status paths). projectBindingRef deferred — requires new DB lookup in @archon/core.
 - Fix Review-5: Added error field to status result for failed runs when metadata.error is a string.
 - Fix Review-6: Added 3.3B-CONTRACT-005b with assertEnvelopeConforms helper validating required fields, types, oneOf discriminator, and known top-level key set. 3 new tests.
+- Fix Review-7: Added `silent` option to CLIAdapter to suppress console.log during executeWorkflow in JSON mode. Executor/platform messages no longer corrupt stdout.
+- Fix Review-8: cli.ts `workflow get` missing run-id now emits MALFORMED_REQUEST envelope in JSON mode. Workflow worktree policy conflicts emit MALFORMED_REQUEST instead of INTERNAL_ERROR in JSON mode.
+- Fix Review-9: Added `listBindingsByCodebase` to @archon/core/db/provider-bindings. Start envelopes now populate projectBindingRef when a binding exists for the codebase.
+- Fix Review-10: Status envelopes now include `phase` (derived from metadata or status), structure `error` as `{message}` object, and report all paused runs as actionRequired:true.
+- Fix Review-11: Improved assertEnvelopeConforms to be schema-driven (reads schema file, validates workflowRunRef/error/execution structure, checks additionalProperties). CONTRACT-001/002 now use structural parity checks.
+- Fix Review-12: All JSON error paths now return classified exit codes (64/USAGE, 69/TIMEOUT, 70/SOFTWARE) instead of generic 1. Updated 5 existing test assertions.
 - Type-check: passes for all packages.
 - Lint: zero warnings.
 - Format: all files conform.
-- CLI tests: 351 pass, 0 fail across all batches.
+- CLI tests: 463 pass, 0 fail across all batches.
 - Pre-existing @archon/core test failure is unrelated to these changes (CLI-only scope).
 
 ### File List
 
-- packages/cli/src/commands/workflow.ts — Gated dispatch prose, added exit codes, added projectRef, added error field for failed runs
-- packages/cli/src/cli.ts — Added envelope imports, JSON-mode early validation, exit code propagation
-- packages/cli/src/commands/workflow.test.ts — Updated 2 assertions from toBeUndefined to toBe(0)
-- packages/cli/src/commands/workflow-start-status-envelope.test.ts — Added 3.3B-CONTRACT-005b schema conformance tests
-- \_bmad-output/implementation-artifacts/3-3b-provide-archon-start-and-status-cli-json.md — Marked review findings done
+- packages/cli/src/commands/workflow.ts — Silent adapter, policy conflict envelopes, projectBindingRef, phase/structured-error/actionRequired, classified exit codes
+- packages/cli/src/cli.ts — MALFORMED_REQUEST envelope for missing get run-id, exit code 64 propagation
+- packages/cli/src/adapters/cli-adapter.ts — Added `silent` option to suppress console.log
+- packages/core/src/db/provider-bindings.ts — Added listBindingsByCodebase function
+- packages/cli/src/commands/workflow.test.ts — Added provider-bindings mock, updated 2 exit code assertions (64, 70)
+- packages/cli/src/commands/workflow-start-status-envelope.test.ts — Added provider-bindings mock, schema-driven assertEnvelopeConforms, structural parity checks, updated 3 exit code assertions (64, 69, 70), added phase to PAUSED_RUN metadata
+- \_bmad-output/implementation-artifacts/3-3b-provide-archon-start-and-status-cli-json.md — Marked all review findings done
