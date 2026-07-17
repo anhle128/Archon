@@ -191,4 +191,59 @@ describe('CLIAdapter', () => {
       expect(result).toBeUndefined();
     });
   });
+
+  // ---------------------------------------------------------------------
+  // RED-PHASE SCAFFOLD (EXECUTABLE) — Story 3.3b "Provide Archon Start And
+  // Status CLI JSON", Task 1: `CLIAdapterOptions.silent?: boolean` so
+  // foreground `workflow run --json` can suppress `CLIAdapter.sendMessage`'s
+  // stdout side effect while keeping DB persistence (RC-06 — `quiet` is not
+  // enough; it only controls progress-event rendering in workflow.ts, not
+  // adapter stdout).
+  //
+  // `CLIAdapter` already exists and `CLIAdapterOptions` is a plain object
+  // type, so passing `{ silent: true }` today does not throw — the extra
+  // property is simply ignored by the current constructor. That makes this
+  // a genuine executable red test (not `test.skip()`): the adapter runs for
+  // real and still calls `console.log`, so the assertion below fails
+  // against the CURRENT implementation, not vacuously.
+  // ---------------------------------------------------------------------
+  describe('silent mode (Story 3.3b — not yet implemented)', () => {
+    it('3.3B-UNIT-014: a silent adapter does not write to stdout but still persists the message', async () => {
+      const silentAdapter = new CLIAdapter({ silent: true } as ConstructorParameters<
+        typeof CLIAdapter
+      >[0]);
+      silentAdapter.setConversationDbId('conv-id', 'conv-db-silent');
+
+      await silentAdapter.sendMessage('conv-id', 'Dispatching workflow: **assist**');
+
+      expect(consoleSpy).not.toHaveBeenCalled();
+      expect(mockAddMessage).toHaveBeenCalledWith(
+        'conv-db-silent',
+        'assistant',
+        'Dispatching workflow: **assist**',
+        undefined
+      );
+    });
+
+    it('3.3B-UNIT-027: a silent adapter still logs (does not swallow) a persistence failure', async () => {
+      mockAddMessage.mockRejectedValueOnce(new Error('DB connection failed'));
+      const silentAdapter = new CLIAdapter({ silent: true } as ConstructorParameters<
+        typeof CLIAdapter
+      >[0]);
+      silentAdapter.setConversationDbId('conv-id', 'conv-db-silent-fail');
+
+      await expect(
+        silentAdapter.sendMessage('conv-id', 'Dispatching workflow: **assist**')
+      ).resolves.toBeUndefined();
+
+      expect(consoleSpy).not.toHaveBeenCalled();
+      expect(mockLogger.warn).toHaveBeenCalled();
+    });
+
+    it('a non-silent adapter (default) is unaffected — still writes to stdout', async () => {
+      const defaultAdapter = new CLIAdapter();
+      await defaultAdapter.sendMessage('conv-id', 'hello');
+      expect(consoleSpy).toHaveBeenCalledWith('hello');
+    });
+  });
 });

@@ -17,7 +17,7 @@ function getLog(): ReturnType<typeof createLogger> {
 export interface CLIAdapterOptions {
   /** Streaming mode - 'stream' for real-time output, 'batch' for accumulated output */
   streamingMode?: 'stream' | 'batch';
-  /** When true, suppress console.log output (for JSON-mode envelope contracts). DB persistence still runs. */
+  /** When true, suppress console.log in sendMessage (DB persistence unchanged). Used by --json mode. */
   silent?: boolean;
 }
 
@@ -44,7 +44,6 @@ export class CLIAdapter implements IPlatformAdapter {
     message: string,
     metadata?: MessageMetadata
   ): Promise<void> {
-    // Output to stdout (suppressed in silent/JSON mode to protect envelope contract)
     if (!this.silent) {
       console.log(message);
     }
