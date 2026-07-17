@@ -1,0 +1,8 @@
+[workflow]
+
+persistent_facts = [
+  "file:{project-root}/brain/StoryProofGuardrails.md",
+  "Before moving a story to `review`, update `## Failure Analysis & Proof Readiness` with real proof commands/tests, failing-path evidence, ownership boundaries, and deferral decisions for every acceptance criterion.",
+  "Run `python3 _bmad/scripts/check_story_proof_readiness.py <story-file>` before Step 9 changes story status to `review`. If it fails, keep the story in progress and fix the proof gaps first.",
+  "Do not count optional helper scripts as proof unless the mandated validation command also invokes the real gate claimed by the story.",
+]

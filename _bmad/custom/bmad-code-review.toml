@@ -1,0 +1,13 @@
+[workflow]
+
+persistent_facts = [
+  "file:{project-root}/brain/StoryProofGuardrails.md",
+  "file:{project-root}/brain/Gotchas.md",
+  "For Channel/client code review, do not file validation patches merely because malformed server-owned data is imaginable. Classify as patch only when the client owns the invariant, realistic client behavior breaks, an architecture/package boundary is violated, or the current story explicitly owns the DTO/schema. Server-owned data correctness and later-story DTO ownership should be deferred or dismissed rather than converted into manual client validators.",
+  "During code-review triage, treat Blind Hunter and Edge Case Hunter outputs as candidate findings, not final action items. Apply product scope, current-story ownership, and server-vs-client responsibility before writing findings into a story file.",
+  "Before persisting a BMAD review finding, run an ownership gate: patch only if this story owns the invariant, the changed client code owns the boundary, realistic current behavior breaks, or an architecture/package guardrail is bypassed. Otherwise dismiss or defer with a short reason.",
+  "For F1.1 and early contract hardening, do not promote theoretical server-produced malformed values into client validation work. GlobalCommitIndex overflow, calendar-perfect timestamp validation, UUID canonical encoding, schemaVersion literal typing, and exhaustive fixture UUID-shape policing are dismissed unless the user explicitly asks for that hardening or a current owned boundary demonstrably breaks.",
+  "If the selected review target is a branch/commit diff but the working tree is dirty, check whether each candidate finding is already fixed in the working tree before presenting it as active patch work. Mark branch-target-only findings clearly or drop them from current action items.",
+  "Do not use code review as the first proof-design pass. If the story is missing `## Failure Analysis & Proof Readiness` or the AC proof matrix is incomplete, report a readiness blocker instead of inventing review-time proof obligations.",
+  "Every review candidate must be classified as Patch, Defer, or Dismiss with an ownership reason. Defer entries must name the owner, future story, and reason.",
+]

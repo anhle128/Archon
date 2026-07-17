@@ -2,7 +2,7 @@ name: bmad-create-and-dev-story-with-tea
 description: |
   Use when: User provides a BMAD story_name/story selector and wants one workflow to create the story, validate readiness, produce TEA test design and red ATDD, implement the created story, and run the BMAD code-review fix loop before opening a PR.
   Triggers: "bmad create dev story with tea <story_name>", "create and dev bmad story with tea <story_name>", "CS VS TD AT DS CR <story_name>".
-  Does: Runs BMAD create-story, validates the created story, runs TEA test design and red ATDD, runs BMAD dev-story against the created story file, reruns BMAD dev-story to fix code-review findings when needed, and creates the pull request after the review gate passes.
+  Does: Runs BMAD create-story, validates the created story, runs TEA test design and red ATDD, runs BMAD dev-story against the created story file, reruns BMAD dev-story to fix code-review findings when needed, and creates the pull request after the review gate passes. If the code-review fix loop exhausts its retry budget, runs one final salvage dev-story pass and then creates the pull request.
   NOT for: Post-dev TEA review gates, generic Archon feature work without BMAD artifacts, or implementing an already-created story without story creation.
 
   Decision log policy:
@@ -123,7 +123,7 @@ nodes:
     provider: claude
     depends_on: [prepare-bmad-state]
     context: fresh
-    model: "sonnet"
+    model: "claude-opus-4-6[1M]"
     effort: high
     idle_timeout: 900000
     output_format:
@@ -274,19 +274,12 @@ nodes:
     effort: high
     depends_on: [design-risk-based-tests]
     context: fresh
-    model: "sonnet"
+    model: "claude-opus-4-6[1M]"
     output_type: red-acceptance-tests
 
   - id: dev-story
     prompt: |
       bmad-dev-story $create-story.output.story_file
-
-      Implement the story file created earlier in this workflow.
-      Use the TEA risk-based test design and red acceptance scaffolds produced by earlier nodes as implementation guidance.
-      Before making changes, read `$ARTIFACTS_DIR/bmad-create-dev-story-with-tea/findings/open-findings.md` and `$ARTIFACTS_DIR/bmad-create-dev-story-with-tea/decision-log.md`.
-      If open findings exist, treat this invocation as a fix pass and append the required fix entries to the decision log.
-      On fix passes, rewrite open-findings.md so fixed findings are pending re-review and update state.json to the next review round.
-      Keep activeStoryFile in state.json set to $create-story.output.story_file.
     provider: qodercli
     effort: high
     depends_on: [generate-red-acceptance-tests]
@@ -335,7 +328,7 @@ nodes:
       routes:
         positive: create-pull-request
         negative: dev-story
-        exhausted: review-loop-error
+        exhausted: dev-story-2
 
   - id: create-pull-request
     command: archon-create-pr
@@ -346,23 +339,22 @@ nodes:
     idle_timeout: 900000
     output_type: pull-request
 
-  - id: review-loop-error
+  - id: dev-story-2
+    prompt: |
+      bmad-dev-story $create-story.output.story_file
+    provider: qodercli
+    effort: high
     depends_on: [code-review-gate]
-    bash: |
-      set -e
+    context: fresh
+    model: Qwen3.7-Plus
+    idle_timeout: 3600000
+    output_type: dev-story
 
-      STATE="$ARTIFACTS_DIR/bmad-create-dev-story-with-tea/state.json"
-      DECISIONS="$ARTIFACTS_DIR/bmad-create-dev-story-with-tea/decision-log.md"
-      OPEN_FINDINGS="$ARTIFACTS_DIR/bmad-create-dev-story-with-tea/findings/open-findings.md"
-
-      echo "BMAD code-review fix loop exhausted its retry budget."
-      echo "State: $STATE"
-      echo "Decision log: $DECISIONS"
-      echo "Open findings: $OPEN_FINDINGS"
-
-      if [ -f "$STATE" ]; then
-        cat "$STATE"
-      fi
-
-      exit 1
-    timeout: 60000
+  - id: create-pull-request-2
+    command: archon-create-pr
+    provider: codex
+    depends_on: [dev-story-2]
+    context: fresh
+    model: gpt-5.4
+    idle_timeout: 900000
+    output_type: pull-request

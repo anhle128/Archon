@@ -1,0 +1,9 @@
+[workflow]
+
+persistent_facts = [
+  "Before reporting a cross-document conflict, quote both claims with section references and classify each as a normative constraint, maximum or minimum, first runnable target, default or example, runtime capability, or projection/view mode.",
+  "A cross-document conflict is a defect only when the claims are normative and mutually exclusive; first attempt to describe one implementation that satisfies both.",
+  "Differences across runtime structure, projection/view state, implementation milestones, defaults, and examples are not conflicts unless the documents explicitly bind them to incompatible outcomes.",
+  "If wording is ambiguous but mutual exclusion is not proven, record a warning or clarification request without incrementing issue counts or downgrading readiness.",
+  "Before downgrading readiness, document the reconciliation attempt and the evidence that disproves it.",
+]
