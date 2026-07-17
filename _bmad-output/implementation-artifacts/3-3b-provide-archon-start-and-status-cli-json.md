@@ -90,6 +90,11 @@ so that external controllers can create and inspect workflow references without 
 - [x] [Review][Patch] `projectBindingRef` can still select the wrong binding or silently disappear on lookup errors [packages/cli/src/commands/workflow.ts:500]
 - [x] [Review][Patch] Failed-run status envelopes still lack a stable machine-readable failure shape [packages/cli/src/commands/workflow.ts:1805]
 - [x] [Review][Patch] Contract tests still use partial fixture checks and manual schema mirroring instead of runtime fixture/schema validation [packages/cli/src/commands/workflow-start-status-envelope.test.ts:1222]
+- [ ] [Review][Patch] JSON-mode missing `--correlation-id` values still throw prose TypeError instead of a shared error envelope [packages/cli/src/cli.ts:556]
+- [ ] [Review][Patch] JSON-mode workflow cwd/git prevalidation can still emit human prose instead of a shared error envelope [packages/cli/src/cli.ts:481]
+- [ ] [Review][Patch] `projectBindingRef` can still select the wrong binding or silently disappear on lookup errors [packages/cli/src/commands/workflow.ts:500]
+- [ ] [Review][Patch] Failed-run status envelopes still lack a stable machine-readable failure shape [packages/cli/src/commands/workflow.ts:1805]
+- [ ] [Review][Patch] Contract tests still use partial fixture checks and manual schema mirroring instead of runtime fixture/schema validation [packages/cli/src/commands/workflow-start-status-envelope.test.ts:1228]
 
 ## Dev Notes
 
