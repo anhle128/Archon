@@ -20,16 +20,17 @@ These variables are substituted by the workflow executor in all node types (`com
 | `$ARGUMENTS` | The user's input message that triggered the workflow | Primary way to pass user input to commands |
 | `$USER_MESSAGE` | Same as `$ARGUMENTS` | Alias |
 | `$WORKFLOW_ID` | Unique ID for the current workflow run | Useful for artifact naming and log correlation |
-| `$ARTIFACTS_DIR` | Pre-created external artifacts directory (`~/.archon/workspaces/<owner>/<repo>/artifacts/runs/<id>/`) | Always exists before node execution; stored outside the repo to avoid polluting the working tree |
-| `$BASE_BRANCH` | Base branch for git operations | Auto-detected from the repository's default branch, or set via `worktree.baseBranch` in `.archon/config.yaml`. Throws an error if referenced in a prompt but cannot be resolved |
+| `$ARTIFACTS_DIR` | Pre-created external artifacts directory (`~/.archon/workspaces/<owner>/<repo>/artifacts/runs/<id>/`) | Always exists before node execution; stored outside the repo to avoid polluting the working tree. **Container runs (`--container`):** this host path is **not mounted into the container**, so a node that writes *directly* to `$ARTIFACTS_DIR` from inside the container will fail — write to the workspace instead. Engine-written typed-output sidecars still work (they are written on the host from captured stdout). |
+| `$BASE_BRANCH` | Base branch for git operations | Resolved in order: `worktree.baseBranch` in `.archon/config.yaml`, then the registered codebase's stored default branch, then git auto-detection. Throws an error if referenced in a prompt but cannot be resolved |
 | `$PR_REMOTE` | Git remote whose repository is the pull request target | Configured via `github.prRemote` in `.archon/config.yaml`. Defaults to `origin` |
 | `$DOCS_DIR` | Documentation directory path | Configured via `docs.path` in `.archon/config.yaml`. Defaults to `docs/` when not set. Never throws |
 | `$CONTEXT` | GitHub issue or PR context, if available | Populated when the workflow is triggered from a GitHub issue/PR. Replaced with empty string when unavailable |
 | `$EXTERNAL_CONTEXT` | Same as `$CONTEXT` | Alias |
 | `$ISSUE_CONTEXT` | Same as `$CONTEXT` | Alias |
-| `$LOOP_USER_INPUT` | User feedback from an interactive loop approval gate | Only populated on the first iteration of a resumed interactive loop. Empty string on all other iterations |
+| `$LOOP_USER_INPUT` | User feedback from an interactive loop approval gate | Only populated on the first iteration of a resumed interactive loop. Empty string on all other iterations. On a signal-bearing gate, a bare approve (no feedback) finalizes the node without a new iteration, so the variable is never read |
 | `$REJECTION_REASON` | Reviewer feedback from an approval node rejection | Only available in `on_reject` prompts. Empty string elsewhere |
 | `$LOOP_PREV_OUTPUT` | Cleaned output of the previous loop iteration (loop nodes only) | Empty string on the first iteration. Useful for `fresh_context: true` loops that need to reference the prior pass without carrying the full session history |
+| `$LOOP_PREV.<nodeId>.output` | A body node's output from the previous iteration (loop_group body nodes only) | Empty string on iteration 1. `$LOOP_PREV.<nodeId>.output.<field>` accesses structured-output fields with the same strict semantics as `$nodeId.output.field`. See [Cross-Node Loops](/guides/loop-nodes/#cross-node-loops-with-loop_group) |
 
 ### Context Variable Behavior
 
@@ -41,8 +42,9 @@ If issue context is present but no context variable appears in the prompt, the c
 
 Unlike other variables, `$BASE_BRANCH` will cause the workflow to **fail immediately** if:
 - The variable is referenced in a prompt, AND
-- Auto-detection from git fails, AND
-- `worktree.baseBranch` is not set in `.archon/config.yaml`
+- `worktree.baseBranch` is not set in `.archon/config.yaml`, AND
+- The registered codebase has no stored default branch, AND
+- Auto-detection from git fails
 
 If the variable is not referenced, no error occurs even if the base branch cannot be determined.
 
@@ -119,6 +121,10 @@ Variables are substituted in a defined order:
 2. **Context variables** -- `$CONTEXT`, `$EXTERNAL_CONTEXT`, `$ISSUE_CONTEXT`
 3. **Node output references** -- `$nodeId.output`, `$nodeId.output.field`
 
+Inside a `loop_group` body, `$LOOP_PREV.<nodeId>.output` refs are resolved
+first (before `$LOOP_USER_INPUT` is spliced in, so user-provided text is never
+re-processed as a workflow ref), then the node's normal substitution runs.
+
 Positional arguments (`$1` through `$9`) are substituted separately by the command handler and are only available when commands are invoked directly, not through workflow nodes.
 
 ## Variable Availability by Context
@@ -136,6 +142,7 @@ Positional arguments (`$1` through `$9`) are substituted separately by the comma
 | `$LOOP_USER_INPUT` | Yes (loop nodes) | No | No | No |
 | `$REJECTION_REASON` | Yes (`on_reject` only) | No | No | No |
 | `$LOOP_PREV_OUTPUT` | Yes (loop nodes) | No | No | No |
+| `$LOOP_PREV.<nodeId>.output` | Yes (loop_group body nodes) | No | No | No |
 | `$nodeId.output` | Yes (DAG nodes) | No | Yes | Yes, source node only |
 
 ## Authentication Environment Variables

@@ -18,7 +18,7 @@ loadArchonEnv(process.cwd());
 
 import { parseArgs } from 'util';
 import { resolve } from 'path';
-import { existsSync } from 'fs';
+import { existsSync, realpathSync } from 'fs';
 
 // Smart defaults for Claude auth
 // If no explicit tokens, default to global auth from `claude /login`
@@ -236,7 +236,7 @@ Commands:
   complete <branch> [...]    Complete branch lifecycle (remove worktree + branches)
   serve                      Start the web UI server (downloads web UI on first run)
   skill install [path]       Install the bundled Archon skill into .claude/skills/archon
-  doctor                     Verify your Archon setup (Claude binary, gh auth, DB, adapters)
+  doctor [--full]            Verify your Archon setup (Claude/Codex binaries, gh auth, DB, adapters; --full also probes the OpenCode runtime SDK)
   auth github                Connect your GitHub identity via device flow (multi-user installs)
   ai key set <provider>      Connect an AI provider API key (multi-user installs; key read from prompt/stdin)
   ai login <provider>        Connect a subscription (claude/copilot) via OAuth — codex is API-key only
@@ -248,7 +248,7 @@ Commands:
   ai alias set <@n> <p> <m>  Set a @custom model alias [--effort <e>] [--scope user|install]
   ai alias list [--json]     Show configured @custom aliases (install + yours)
   ai alias unset <@name>     Remove a @custom alias [--scope user|install]
-  ai default <provider>      Set the default assistant [--scope user|install]
+  ai default <p> [<model>]   Set the default assistant (+ chat model) [--scope user|install]
   telemetry status           Show anonymous telemetry state (enabled, reason, ID, host)
   telemetry reset            Rotate the anonymous install UUID
   validate workflows [name]  Validate workflow definitions and their references
@@ -261,6 +261,7 @@ Options:
   --branch, -b <name>        Create worktree for branch (or reuse existing)
   --from, --from-branch <name> Create new branch from specific start point
   --no-worktree              Run on branch directly without worktree isolation
+  --folder                   Register the current non-git directory as a folder project and run in place
   --resume                   Resume the most recent failed run of the workflow (mutually exclusive with --branch)
   --spawn                    Open setup wizard in a new terminal window (for setup command)
   --quiet, -q                Reduce log verbosity to warnings and errors only
@@ -285,6 +286,7 @@ Examples:
   archon workflow run plan --cwd /path/to/repo "Add dark mode"
   archon workflow run implement --branch feature-auth "Implement auth"
   archon workflow run quick-fix --no-worktree "Fix typo"
+  archon workflow run assist --folder "List every repo under this multi-repo root"
   archon workflow run archon-assist --detach "Investigate the flaky test"
   archon workflow runs --json
   archon workflow get <run-id> --json
@@ -409,6 +411,8 @@ async function main(): Promise<number> {
         from: { type: 'string' },
         'from-branch': { type: 'string' },
         'no-worktree': { type: 'boolean' },
+        folder: { type: 'boolean' },
+        container: { type: 'boolean' },
         resume: { type: 'boolean' },
         spawn: { type: 'boolean' },
         quiet: { type: 'boolean', short: 'q' },
@@ -438,6 +442,7 @@ async function main(): Promise<number> {
         'project-ref': { type: 'string' },
         route: { type: 'string' },
         'correlation-id': { type: 'string' },
+        full: { type: 'boolean' },
       },
       allowPositionals: true,
       strict: false, // Allow unknown flags to pass through
@@ -472,6 +477,8 @@ async function main(): Promise<number> {
   const fromBranch =
     (values.from as string | undefined) ?? (values['from-branch'] as string | undefined);
   const noWorktree = values['no-worktree'] as boolean | undefined;
+  const folderFlag = values.folder as boolean | undefined;
+  const containerFlag = values.container as boolean | undefined;
   const resumeFlag = values.resume as boolean | undefined;
   const spawnFlag = values.spawn as boolean | undefined;
   const rawJsonValue = values.json;
@@ -590,25 +597,84 @@ async function main(): Promise<number> {
 
       // Validate git repository and resolve to root
       const repoRoot = await git.findRepoRoot(cwd);
-      if (!repoRoot) {
-        const envelopeCommand = getWorkflowCommandEnvelopeCommand(command, subcommand);
-        if (jsonFlag && envelopeCommand !== undefined) {
-          return await emitWorkflowCommandMalformedEnvelope(
-            envelopeCommand,
-            {
-              fieldErrors: [{ path: '/cwd', code: 'not_a_git_repository' }],
-              requestAccepted: false,
-            },
-            values['correlation-id'] as string | undefined
+      if (repoRoot) {
+        // Use repo root as working directory (handles subdirectory case)
+        effectiveCwd = repoRoot;
+      } else {
+        // Not a git repo. It may still be a registered FOLDER project (a
+        // multi-repo root or plain ops folder). Consult the DB before rejecting.
+        // Canonicalize symlinks first so the lookup matches the realpath'd
+        // default_cwd that registration stores: process.cwd() resolves symlinks,
+        // but an explicit --cwd does not, so realpath here covers both. (cwd is
+        // already validated to exist above; fall back to cwd if realpath fails.)
+        let realCwd = cwd;
+        try {
+          realCwd = realpathSync(cwd);
+        } catch {
+          // keep the resolved cwd
+        }
+        // The DB may be unreachable. A lookup failure must NOT crash pre-dispatch
+        // (workflow/isolation commands still need to surface a clear error rather
+        // than a stack trace) — capture it and, if connection-shaped, report
+        // "database unavailable" instead of the misleading "not a git repository".
+        let folderCodebase: { default_cwd: string; kind: 'repo' | 'folder' } | null = null;
+        let gateLookupError: Error | null = null;
+        try {
+          const codebaseDb = await import('@archon/core/db/codebases');
+          folderCodebase =
+            (await codebaseDb.findCodebaseByDefaultCwd(realCwd)) ??
+            (await codebaseDb.findCodebaseByPathPrefix(realCwd));
+        } catch (dbError) {
+          gateLookupError = dbError as Error;
+          getLog().warn(
+            { err: gateLookupError, cwd: realCwd },
+            'cli.folder_project_gate_lookup_failed'
           );
         }
-        console.error('Error: Not in a git repository.');
-        console.error('The Archon CLI must be run from within a git repository.');
-        console.error('Either navigate to a git repo or use --cwd to specify one.');
-        return 1;
+
+        const looksLikeConnectionError = (e: Error): boolean => {
+          const m = e.message.toLowerCase();
+          return m.includes('econnrefused') || m.includes('etimedout') || m.includes('connect');
+        };
+
+        if (folderCodebase?.kind === 'folder') {
+          // Registered folder project — run in place at its root.
+          effectiveCwd = folderCodebase.default_cwd;
+        } else if (folderFlag && command === 'workflow' && subcommand === 'run') {
+          // First-use `workflow run --folder` from an unregistered non-git dir:
+          // let it through so the run command registers the folder project.
+          effectiveCwd = realCwd;
+        } else if (gateLookupError && looksLikeConnectionError(gateLookupError)) {
+          // A DB outage would otherwise be mis-reported as "not a git repository".
+          console.error(
+            'Error: Could not verify project registration — the database is unavailable.'
+          );
+          console.error(`  ${gateLookupError.message}`);
+          console.error(
+            '  Check that your database is running (or DATABASE_URL is set), then retry.'
+          );
+          return 1;
+        } else {
+          const envelopeCommand = getWorkflowCommandEnvelopeCommand(command, subcommand);
+          if (jsonFlag && envelopeCommand !== undefined) {
+            return await emitWorkflowCommandMalformedEnvelope(
+              envelopeCommand,
+              {
+                fieldErrors: [{ path: '/cwd', code: 'not_a_git_repository' }],
+                requestAccepted: false,
+              },
+              values['correlation-id'] as string | undefined
+            );
+          }
+          console.error('Error: Not in a git repository.');
+          console.error('The Archon CLI must be run from within a git repository.');
+          console.error('Either navigate to a git repo or use --cwd to specify one.');
+          console.error(
+            'Or register this folder as a project: run with --folder, or use /register-project in chat.'
+          );
+          return 1;
+        }
       }
-      // Use repo root as working directory (handles subdirectory case)
-      effectiveCwd = repoRoot;
     }
 
     switch (command) {
@@ -711,6 +777,8 @@ async function main(): Promise<number> {
               branchName,
               fromBranch,
               noWorktree,
+              folder: folderFlag,
+              container: containerFlag,
               resume: resumeFlag,
               quiet: values.quiet as boolean | undefined,
               verbose: values.verbose as boolean | undefined,
@@ -784,6 +852,7 @@ async function main(): Promise<number> {
               getRunId,
               jsonFlag,
               values.verbose as boolean | undefined,
+              effectiveCwd,
               correlationId as string | undefined
             );
           }
@@ -813,7 +882,7 @@ async function main(): Promise<number> {
               console.error('Usage: archon workflow resume <run-id>');
               return 1;
             }
-            await workflowResumeCommand(resumeRunId, jsonFlag);
+            await workflowResumeCommand(resumeRunId, jsonFlag, effectiveCwd);
             break;
           }
 
@@ -840,7 +909,7 @@ async function main(): Promise<number> {
               console.error('Usage: archon workflow abandon <run-id>');
               return 1;
             }
-            await workflowAbandonCommand(abandonRunId, jsonFlag);
+            await workflowAbandonCommand(abandonRunId, jsonFlag, effectiveCwd);
             break;
           }
 
@@ -850,10 +919,14 @@ async function main(): Promise<number> {
               console.error('Usage: archon workflow approve <run-id> [comment]');
               return 1;
             }
-            // Accept comment as positional args (everything after run ID) or --comment flag
-            const approveComment =
-              (values.comment as string | undefined) || positionals.slice(3).join(' ') || undefined;
-            await workflowApproveCommand(approveRunId, approveComment, jsonFlag);
+            // Accept comment as positional args (everything after run ID) or --comment flag.
+            // Explicit empty→undefined conversion (not `|| undefined`): "no comment" must
+            // reach approveWorkflow as undefined so a signal-bearing interactive-loop gate
+            // finalizes instead of re-running (#2074, loop_feedback_given).
+            const rawApproveComment =
+              (values.comment as string | undefined) || positionals.slice(3).join(' ');
+            const approveComment = rawApproveComment.length > 0 ? rawApproveComment : undefined;
+            await workflowApproveCommand(approveRunId, approveComment, jsonFlag, effectiveCwd);
             break;
           }
 
@@ -863,9 +936,10 @@ async function main(): Promise<number> {
               console.error('Usage: archon workflow reject <run-id> [reason]');
               return 1;
             }
-            const rejectReason =
-              (values.reason as string | undefined) || positionals.slice(3).join(' ') || undefined;
-            await workflowRejectCommand(rejectRunId, rejectReason, jsonFlag);
+            const rawRejectReason =
+              (values.reason as string | undefined) || positionals.slice(3).join(' ');
+            const rejectReason = rawRejectReason.length > 0 ? rawRejectReason : undefined;
+            await workflowRejectCommand(rejectRunId, rejectReason, jsonFlag, effectiveCwd);
             break;
           }
 
@@ -1109,7 +1183,7 @@ async function main(): Promise<number> {
       }
 
       case 'doctor': {
-        return await doctorCommand();
+        return await doctorCommand(undefined, Boolean(values.full));
       }
 
       case 'auth': {
@@ -1190,7 +1264,11 @@ async function main(): Promise<number> {
             }
           }
           case 'default':
-            return await aiDefaultCommand(positionals[2], values.scope as string | undefined);
+            return await aiDefaultCommand(
+              positionals[2],
+              positionals[3],
+              values.scope as string | undefined
+            );
           default:
             if (subcommand === undefined) {
               console.error('Missing ai subcommand');
@@ -1198,7 +1276,7 @@ async function main(): Promise<number> {
               console.error(`Unknown ai subcommand: ${subcommand}`);
             }
             console.error(
-              'Available: key set <provider>, login <provider>, list, logout <provider>, tier set|list|unset, alias set|list|unset, default <provider>'
+              'Available: key set <provider>, login <provider>, list, logout <provider>, tier set|list|unset, alias set|list|unset, default <provider> [<model>]'
             );
             return 1;
         }

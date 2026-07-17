@@ -13,6 +13,7 @@
     "start": "bun --filter @archon/server start",
     "build": "bun --filter '*' build",
     "build:binaries": "bash scripts/build-binaries.sh",
+    "build:runner-image": "bash scripts/build-runner-image.sh",
     "build:checksums": "bash scripts/checksums.sh",
     "generate:bundled": "bun run scripts/generate-bundled-defaults.ts",
     "check:bundled": "bun run scripts/generate-bundled-defaults.ts --check",
@@ -46,9 +47,9 @@
     "eslint-config-prettier": "10.1.8",
     "husky": "^9.1.7",
     "lint-staged": "^15.2.0",
+    "pino-pretty": "^13",
     "prettier": "^3.7.4",
     "typescript": "^5.3.0",
-    "pino-pretty": "^13",
     "typescript-eslint": "^8.48.0"
   },
   "engines": {
@@ -64,7 +65,7 @@
     "@hono/node-server": "^1.19.13"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.193",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.209",
     "@opencode-ai/sdk": "^1.17.3"
   }
 }

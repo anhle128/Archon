@@ -715,7 +715,7 @@ export interface paths {
     delete?: never;
     options?: never;
     head?: never;
-    /** Set (or clear with null) the current web user’s default assistant */
+    /** Set (or clear with null) the current web user’s default assistant + default chat model (written atomically; omitted model clears any pin) */
     patch: {
       parameters: {
         query?: never;
@@ -725,7 +725,7 @@ export interface paths {
       };
       requestBody: {
         content: {
-          'application/json': components['schemas']['UpdateUserDefaultProviderBody'];
+          'application/json': components['schemas']['UpdateUserDefaultBody'];
         };
       };
       responses: {
@@ -1848,7 +1848,7 @@ export interface paths {
     };
     get?: never;
     put?: never;
-    /** Abandon a workflow run (mark as failed) */
+    /** Abandon a workflow run (mark as cancelled) */
     post: {
       parameters: {
         query?: never;
@@ -3247,6 +3247,7 @@ export interface components {
         [key: string]: components['schemas']['TierEntry'];
       };
       defaultProvider?: string;
+      defaultModel?: string;
     };
     UserTiersConfig: {
       small?: components['schemas']['TierEntry'];
@@ -3271,8 +3272,9 @@ export interface components {
         [key: string]: components['schemas']['TierEntry'] & unknown;
       };
     };
-    UpdateUserDefaultProviderBody: {
+    UpdateUserDefaultBody: {
       provider: string | null;
+      model?: string | null;
     };
     ConversationListResponse: components['schemas']['Conversation'][];
     Conversation: {
@@ -3334,6 +3336,8 @@ export interface components {
       default_cwd: string;
       default_branch: string | null;
       ai_assistant_type: string;
+      /** @enum {string} */
+      kind: 'repo' | 'folder';
       commands: {
         [key: string]: {
           path: string;
@@ -3380,7 +3384,6 @@ export interface components {
       modelReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
       /** @enum {string} */
       webSearchMode?: 'disabled' | 'cached' | 'live';
-      additionalDirectories?: string[];
       interactive?: boolean;
       /** @enum {string} */
       effort?: 'low' | 'medium' | 'high' | 'max';
@@ -3434,6 +3437,11 @@ export interface components {
       worktree?: {
         enabled?: boolean;
       };
+      container?: {
+        enabled?: boolean;
+        /** @enum {string} */
+        write_back?: 'approve' | 'auto';
+      };
       mutates_checkout?: boolean;
       persist_sessions?: boolean;
       tags?: string[];
@@ -3442,6 +3450,7 @@ export interface components {
     };
     DagNode: {
       id: string;
+      description?: string;
       depends_on?: string[];
       when?: string;
       /** @enum {string} */
@@ -3624,6 +3633,13 @@ export interface components {
           maxTurns?: number;
         };
       };
+      pi?: {
+        enableExtensions?: boolean;
+        interactive?: boolean;
+        extensionFlags?: {
+          [key: string]: boolean | string;
+        };
+      };
       /** @enum {string} */
       effort?: 'low' | 'medium' | 'high' | 'max';
       thinking?:
@@ -3683,7 +3699,6 @@ export interface components {
       prompt?: string;
       bash?: string;
       loop?: {
-        prompt: string;
         until: string;
         max_iterations: number;
         /** @default false */
@@ -3691,6 +3706,8 @@ export interface components {
         until_bash?: string;
         interactive?: boolean;
         gate_message?: string;
+        signal_completes?: boolean;
+        prompt: string;
       };
       route_loop?: {
         condition: string;
@@ -3702,6 +3719,17 @@ export interface components {
           exhausted: string;
         };
       };
+      loop_group?: {
+        until: string;
+        max_iterations: number;
+        /** @default false */
+        fresh_context: boolean;
+        until_bash?: string;
+        interactive?: boolean;
+        gate_message?: string;
+        signal_completes?: boolean;
+        nodes: components['schemas']['DagNode'][];
+      };
       approval?: {
         message: string;
         capture_response?: boolean;
@@ -3711,6 +3739,8 @@ export interface components {
         };
       };
       cancel?: string;
+      include?: string;
+      with?: unknown;
       script?: string;
       /** @enum {string} */
       runtime?: 'bun' | 'uv';

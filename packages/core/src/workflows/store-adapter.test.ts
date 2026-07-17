@@ -32,6 +32,8 @@ mock.module('../db/workflows', () => ({
   cancelWorkflowRun: mockCancelWorkflowRun,
   pauseWorkflowRun: mockPauseWorkflowRun,
   persistRouteDecisionTransition: mockPersistRouteDecisionTransition,
+  claimWriteback: mock(() => Promise.resolve({ claimed: true })),
+  releaseWritebackClaim: mock(() => Promise.resolve()),
 }));
 
 const mockCreateWorkflowEvent = mock(() => Promise.resolve());
@@ -125,6 +127,8 @@ describe('createWorkflowStore', () => {
       'completeWorkflowRun',
       'failWorkflowRun',
       'pauseWorkflowRun',
+      'claimWriteback',
+      'releaseWritebackClaim',
       'cancelWorkflowRun',
       'persistRouteDecisionTransition',
       'createWorkflowEvent',

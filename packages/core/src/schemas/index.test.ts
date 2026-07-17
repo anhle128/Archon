@@ -109,6 +109,7 @@ describe('core schemas', () => {
       default_cwd: '/home/user/projects/my-project',
       default_branch: 'main',
       ai_assistant_type: 'claude',
+      kind: 'repo',
       commands: { plan: { path: '/cmds/plan.md', description: 'Plan' } },
       created_at: new Date(),
       updated_at: new Date(),

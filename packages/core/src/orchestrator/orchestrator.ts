@@ -134,7 +134,10 @@ export async function validateAndResolveIsolation(
           id: codebase.id,
           defaultCwd: codebase.default_cwd,
           name: codebase.name,
-          defaultBranch: codebase.default_branch ? toBranchName(codebase.default_branch) : null,
+          defaultBranch: codebase.default_branch?.trim()
+            ? toBranchName(codebase.default_branch.trim())
+            : null,
+          kind: codebase.kind,
         }
       : null,
     hints,
@@ -326,8 +329,8 @@ export async function dispatchBackgroundWorkflow(
         `Cannot dispatch workflow "${workflow.name}": codebase ${ctx.codebaseId} not found`
       );
     }
-    codebaseBaseBranch = codebase.default_branch
-      ? toBranchName(codebase.default_branch)
+    codebaseBaseBranch = codebase.default_branch?.trim()
+      ? toBranchName(codebase.default_branch.trim())
       : undefined;
     const result = await validateAndResolveIsolation(
       workerConv,

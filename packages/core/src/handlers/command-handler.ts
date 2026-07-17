@@ -8,7 +8,7 @@ import { type Conversation, type CommandResult, ConversationNotFoundError } from
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
-import { listWorktrees, execFileAsync, toRepoPath } from '@archon/git';
+import { listWorktrees, execFileAsync, listChildRepos, toRepoPath } from '@archon/git';
 import { getIsolationProvider } from '@archon/isolation';
 import * as isolationEnvDb from '../db/isolation-environments';
 import {
@@ -34,8 +34,7 @@ import {
   abandonWorkflow,
   resetWorkflowNodeSessions,
 } from '../operations/workflow-operations';
-import { getTriggerForCommand, type DeactivatingCommand } from '../state/session-transitions';
-import { SessionNotFoundError } from '../db/sessions';
+import { safeDeactivateSession } from '../state/session-transitions';
 import { createLogger } from '@archon/paths';
 import { resolveConversationCwd } from '../utils/conversation-cwd';
 
@@ -140,17 +139,35 @@ async function getCurrentBranch(repoPath: string): Promise<string> {
 }
 
 /**
+ * Format a folder project's contained git repos for status display.
+ * Truncates the visible list at 10 and appends a "(+N more)" count.
+ */
+function formatChildRepos(childRepos: string[]): string {
+  const MAX_SHOWN = 10;
+  const shown = childRepos.slice(0, MAX_SHOWN);
+  const remaining = childRepos.length - shown.length;
+  const suffix = remaining > 0 ? `, … (+${String(remaining)} more)` : '';
+  return `Contains ${String(childRepos.length)} git repo${childRepos.length === 1 ? '' : 's'}: ${shown.join(', ')}${suffix}`;
+}
+
+/**
  * Format repository context for user-facing display.
  * Shows "owner/repo @ branch" instead of filesystem paths.
  *
  * @returns Formatted context string. Never throws - falls back gracefully on errors.
  */
 async function formatRepoContext(
-  codebase: { name: string; default_cwd: string } | null,
+  codebase: { name: string; default_cwd: string; kind?: 'repo' | 'folder' } | null,
   isolationEnvId: string | null
 ): Promise<string> {
   if (!codebase) {
     return 'No codebase configured';
+  }
+
+  // Folder projects have no git — show an honest "no git" label instead of a
+  // branch (a folder root may not be a repo at all).
+  if (codebase.kind === 'folder') {
+    return `${codebase.name} (folder — no git)`;
   }
 
   // If in a worktree, use the worktree's branch name from database
@@ -248,29 +265,6 @@ function findWorkflowLoadError(
   return loadErrors.find(error => error.filename.replace(/\.ya?ml$/, '') === workflowName);
 }
 
-/**
- * Safely deactivate a session with TOCTOU race handling.
- * Between getActiveSession() and deactivateSession(), another process
- * (cleanup service, concurrent command) may have already deactivated it.
- * Treats SessionNotFoundError as benign in that case.
- */
-async function safeDeactivateSession(
-  sessionId: string,
-  commandName: DeactivatingCommand
-): Promise<void> {
-  const trigger = getTriggerForCommand(commandName);
-  try {
-    await sessionDb.deactivateSession(sessionId, trigger);
-    getLog().debug({ sessionId, trigger }, 'session_deactivated');
-  } catch (error) {
-    if (error instanceof SessionNotFoundError) {
-      getLog().debug({ sessionId, trigger }, 'session_already_deactivated');
-    } else {
-      throw error;
-    }
-  }
-}
-
 async function handleWorktreeCommand(
   conversation: Conversation,
   args: string[]
@@ -285,6 +279,15 @@ async function handleWorktreeCommand(
   const codebase = await codebaseDb.getCodebase(conversation.codebase_id);
   if (!codebase) {
     return { success: false, message: 'Codebase not found.' };
+  }
+
+  // Worktrees are a git-repo concept — folder projects run in place and have no
+  // worktree lifecycle. Reject clearly rather than failing deep in git.
+  if (codebase.kind === 'folder') {
+    return {
+      success: false,
+      message: `/worktree is not applicable to folder projects. "${codebase.name}" runs in place (no git worktree).`,
+    };
   }
 
   const mainPath = codebase.default_cwd;
@@ -851,7 +854,13 @@ async function handleWorkflowCommand(
           message: 'Usage: /workflow approve <id> [comment]\n\nApproves a paused workflow run.',
         };
       }
-      const comment = args.slice(2).join(' ') || 'Approved';
+      // Pass the RAW comment through (undefined when the user typed none) —
+      // approveWorkflow defaults the recorded comment internally, but "no
+      // feedback" must survive so a signal-bearing interactive-loop gate
+      // finalizes instead of re-running (#2074, loop_feedback_given). Mirrors
+      // the HTTP route and CLI.
+      const rawComment = args.slice(2).join(' ');
+      const comment = rawComment.length > 0 ? rawComment : undefined;
       try {
         const result = await approveWorkflow(runId, comment);
         const pathInfo = result.workingPath ? `\nPath: \`${result.workingPath}\`` : '';
@@ -1071,6 +1080,7 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
       const codebase = conversation.codebase_id
         ? await codebaseDb.getCodebase(conversation.codebase_id)
         : null;
+      const isFolderProject = codebase?.kind === 'folder';
 
       if (codebase?.name) {
         const repoContext = await formatRepoContext(codebase, conversation.isolation_env_id);
@@ -1078,6 +1088,13 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
         msg += `\n\n## Conversation Context\n- Project: ${repoContext}`;
         if (cwdResolution) {
           msg += `\n- Working Directory: ${cwdResolution.cwd}`;
+        }
+        // For a folder project, surface the git repos contained under its root.
+        if (isFolderProject) {
+          const childRepos = await listChildRepos(codebase.default_cwd);
+          if (childRepos.length > 0) {
+            msg += `\n- ${formatChildRepos(childRepos)}`;
+          }
         }
       } else {
         msg += '\n\n## Conversation Context\n- Project: None — orchestrator will route as needed';
@@ -1115,8 +1132,9 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
         );
       }
 
-      // Add worktree breakdown if codebase is configured
-      if (codebase) {
+      // Add worktree breakdown if codebase is configured. Folder projects run in
+      // place and have no worktrees — skip the breakdown entirely.
+      if (codebase && !isFolderProject) {
         try {
           const breakdown = await getWorktreeStatusBreakdown(codebase.id, codebase.default_cwd);
           msg += `\n\nWorktrees: ${String(breakdown.total)} active`;
@@ -1183,13 +1201,22 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
       return handleWorkflowCommand(conversation, args);
 
     case 'init': {
-      // Create .archon structure in current repo
-      const cwdResolution = await resolveConversationCwd(conversation);
+      // Create .archon structure in the effective working directory:
+      // the explicit runtime override (conversation.cwd) when set, else the
+      // selected project's root. Web-created project conversations have
+      // codebase_id but null cwd (issue #1993), so the fallback is what
+      // makes /init work there.
+      const initCodebase = conversation.codebase_id
+        ? await codebaseDb.getCodebase(conversation.codebase_id)
+        : null;
+      const cwdResolution = await resolveConversationCwd(conversation, {
+        ...(initCodebase ? { codebase: initCodebase } : {}),
+      });
       if (!cwdResolution) {
         return {
           success: false,
           message:
-            'No working directory set. Register or select a project first with /register-project or /setproject.',
+            'No project selected. Pick one with /setproject <name> (register it first with /register-project if needed).',
         };
       }
 
@@ -1236,8 +1263,7 @@ description: Example command
 This is an example command.
 
 Arguments:
-- $1 - First positional argument
-- $ARGUMENTS - All arguments as string
+- $ARGUMENTS - The full trigger message
 
 Task: $ARGUMENTS
 `;

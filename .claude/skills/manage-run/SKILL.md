@@ -45,6 +45,7 @@ workflows, setup, or config, use the broader **`archon`** skill instead.
 | **Active** runs only (running/paused) | `archon workflow status --json` |
 | **Start** a run, non-blocking | `archon workflow run <workflow> "<message>" --detach` |
 | **Approve** a paused gate | `archon workflow approve <run-id> "looks good" --json` |
+| **Accept & complete** a signal-bearing loop gate | `archon workflow approve <run-id> --json` (NO comment) |
 | **Reject** a paused gate | `archon workflow reject <run-id> "fix X first" --json` |
 | **Retry** one failed DAG node | `archon workflow retry-node <run-id> <node-id>` |
 | **Cancel** a non-terminal run | `archon workflow abandon <run-id> --json` |
@@ -101,6 +102,22 @@ Retry invalidates the selected failed node plus descendants, preserves successfu
 upstream/sibling outputs, and reuses the same run row. For mutating workflows Archon
 creates local checkpoint/safety refs before resetting tracked files; untracked files
 are preserved.
+
+### Interactive-loop gates: no comment = accept & complete
+
+When a paused **interactive loop** gate detected its completion signal
+(`archon workflow get <run-id> --json` → `.metadata.approval.completionSignaled` is
+`true`), approving with **no comment** accepts the completion — on resume the node
+finalizes from the already-computed output with **no re-run**. Approving **with** a
+comment runs another iteration using it as feedback. Read the gate state first, then
+choose deliberately:
+```bash
+archon workflow get <run-id> --json | jq .metadata.approval.completionSignaled
+archon workflow approve <run-id> --json          # accept & complete (finalize, no re-run)
+archon workflow approve <run-id> "redo X" --json # run another iteration with feedback
+```
+(In project-scoped chat, the `manage_run` tool's approve action mirrors this: no
+`message` — or `accept: true` — finalizes; a `message` iterates.)
 
 ## Reference
 
