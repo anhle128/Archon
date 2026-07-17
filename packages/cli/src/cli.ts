@@ -93,6 +93,7 @@ import {
 } from './commands/ai';
 import { telemetryStatusCommand, telemetryResetCommand } from './commands/telemetry';
 import { closeDatabase } from '@archon/core';
+import type { WorkflowProviderCommand } from './commands/workflow-provider-command-envelope';
 import {
   setLogLevel,
   createLogger,
@@ -110,6 +111,101 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('cli');
   return cachedLog;
+}
+
+type WorkflowCommandEnvelopeCommand = Extract<
+  WorkflowProviderCommand,
+  'workflow.start' | 'workflow.status'
+>;
+
+function getWorkflowCommandEnvelopeCommand(
+  command: string | undefined,
+  subcommand: string | undefined
+): WorkflowCommandEnvelopeCommand | undefined {
+  if (command !== 'workflow') return undefined;
+  if (subcommand === 'run') return 'workflow.start';
+  if (subcommand === 'get') return 'workflow.status';
+  return undefined;
+}
+
+interface RawWorkflowProviderOptions {
+  jsonRequested: boolean;
+  jsonAssigned: boolean;
+  correlationIdValue: string | undefined;
+  correlationIdMissingValue: boolean;
+}
+
+function scanRawWorkflowProviderOptions(args: string[]): RawWorkflowProviderOptions {
+  const end = args.indexOf('--');
+  const scanArgs = end === -1 ? args : args.slice(0, end);
+  const result: RawWorkflowProviderOptions = {
+    jsonRequested: false,
+    jsonAssigned: false,
+    correlationIdValue: undefined,
+    correlationIdMissingValue: false,
+  };
+
+  for (let i = 0; i < scanArgs.length; i += 1) {
+    const arg = scanArgs[i];
+    if (arg === '--json') {
+      result.jsonRequested = true;
+      continue;
+    }
+    if (arg.startsWith('--json=')) {
+      result.jsonRequested = true;
+      result.jsonAssigned = true;
+      continue;
+    }
+    if (arg === '--correlation-id') {
+      const next = scanArgs[i + 1];
+      if (next === undefined || next.startsWith('--')) {
+        result.correlationIdMissingValue = true;
+        continue;
+      }
+      result.correlationIdValue = next;
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith('--correlation-id=')) {
+      result.correlationIdValue = arg.slice('--correlation-id='.length);
+    }
+  }
+
+  return result;
+}
+
+function isBlankString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length === 0;
+}
+
+async function emitWorkflowCommandMalformedEnvelope(
+  command: WorkflowCommandEnvelopeCommand,
+  details: Record<string, unknown>,
+  correlationId?: string
+): Promise<number> {
+  const { safeStringify, resolveCorrelationId, resolveIssuedAt, buildErrorEnvelope } =
+    await import('./commands/workflow-provider-command-envelope.js');
+  console.log(
+    safeStringify(
+      buildErrorEnvelope(
+        {
+          command,
+          provider: 'archon',
+          correlationId: resolveCorrelationId(correlationId),
+          issuedAt: resolveIssuedAt(),
+        },
+        {
+          code: 'MALFORMED_REQUEST',
+          category: 'provider_contract',
+          retryable: false,
+          details,
+          exitCode: 64,
+        },
+        Date.now()
+      )
+    )
+  );
+  return 64;
 }
 
 /**
@@ -272,6 +368,7 @@ function normalizeProviderBindingArgs(args: string[]): string[] {
 
 async function main(): Promise<number> {
   const args = normalizeProviderBindingArgs(process.argv.slice(2));
+  const rawWorkflowProviderOptions = scanRawWorkflowProviderOptions(args);
 
   // Anonymous once-per-invocation startup event (self-gates on opt-out).
   // Emitted before any early return so EVERY invocation — including bare
@@ -347,6 +444,21 @@ async function main(): Promise<number> {
     });
   } catch (error) {
     const err = error as Error;
+    if (rawWorkflowProviderOptions.jsonRequested) {
+      const envelopeCommand = getWorkflowCommandEnvelopeCommand(args[0], args[1]);
+      if (envelopeCommand !== undefined) {
+        const exitCode = await emitWorkflowCommandMalformedEnvelope(
+          envelopeCommand,
+          {
+            parseError: err.message,
+            requestAccepted: false,
+          },
+          rawWorkflowProviderOptions.correlationIdValue
+        );
+        await shutdownTelemetry();
+        return exitCode;
+      }
+    }
     console.error(`Error parsing arguments: ${err.message}`);
     printUsage();
     await shutdownTelemetry();
@@ -362,7 +474,9 @@ async function main(): Promise<number> {
   const noWorktree = values['no-worktree'] as boolean | undefined;
   const resumeFlag = values.resume as boolean | undefined;
   const spawnFlag = values.spawn as boolean | undefined;
-  const jsonFlag = values.json as boolean | undefined;
+  const rawJsonValue = values.json;
+  const invalidJsonFlag = rawJsonValue !== undefined && typeof rawJsonValue !== 'boolean';
+  const jsonFlag = rawJsonValue === true ? true : undefined;
   const detachFlag = values.detach as boolean | undefined;
   // Handle help flag
   if (values.help) {
@@ -374,6 +488,10 @@ async function main(): Promise<number> {
   // Get command and subcommand
   const command = positionals[0];
   const subcommand = positionals[1];
+  const envelopeCommand = getWorkflowCommandEnvelopeCommand(command, subcommand);
+  const workflowProviderJsonRequested =
+    envelopeCommand !== undefined &&
+    (jsonFlag === true || invalidJsonFlag || rawWorkflowProviderOptions.jsonRequested);
 
   // Commands that don't require git repo validation
   const noGitCommands = [
@@ -403,12 +521,35 @@ async function main(): Promise<number> {
     // (not just lower to 'warn' — warnings still print at that level): every
     // --json command surfaces failures inside its own { ok: false } envelope, so
     // no diagnostic the caller needs is lost.
-    if (jsonFlag) {
+    if (jsonFlag || workflowProviderJsonRequested) {
       setLogLevel('silent');
     } else if (values.quiet || suppressByDefault) {
       setLogLevel('warn');
     } else if (values.verbose) {
       setLogLevel('debug');
+    }
+
+    if (workflowProviderJsonRequested && envelopeCommand !== undefined) {
+      const parsedCorrelationId = values['correlation-id'];
+      if (
+        rawWorkflowProviderOptions.correlationIdMissingValue ||
+        isBlankString(parsedCorrelationId)
+      ) {
+        return await emitWorkflowCommandMalformedEnvelope(envelopeCommand, {
+          fieldErrors: [{ path: '/correlationId', code: 'required' }],
+          requestAccepted: false,
+        });
+      }
+      if (invalidJsonFlag || rawWorkflowProviderOptions.jsonAssigned) {
+        return await emitWorkflowCommandMalformedEnvelope(
+          envelopeCommand,
+          {
+            fieldErrors: [{ path: '/json', code: 'must_be_boolean_flag' }],
+            requestAccepted: false,
+          },
+          parsedCorrelationId as string | undefined
+        );
+      }
     }
 
     // Note: orphaned run cleanup moved to `workflow cleanup` command only.
@@ -432,6 +573,17 @@ async function main(): Promise<number> {
     let effectiveCwd = cwd;
     if (requiresGitRepo) {
       if (!existsSync(cwd)) {
+        const envelopeCommand = getWorkflowCommandEnvelopeCommand(command, subcommand);
+        if (jsonFlag && envelopeCommand !== undefined) {
+          return await emitWorkflowCommandMalformedEnvelope(
+            envelopeCommand,
+            {
+              fieldErrors: [{ path: '/cwd', code: 'directory_not_found' }],
+              requestAccepted: false,
+            },
+            values['correlation-id'] as string | undefined
+          );
+        }
         console.error(`Error: Directory does not exist: ${cwd}`);
         return 1;
       }
@@ -439,6 +591,17 @@ async function main(): Promise<number> {
       // Validate git repository and resolve to root
       const repoRoot = await git.findRepoRoot(cwd);
       if (!repoRoot) {
+        const envelopeCommand = getWorkflowCommandEnvelopeCommand(command, subcommand);
+        if (jsonFlag && envelopeCommand !== undefined) {
+          return await emitWorkflowCommandMalformedEnvelope(
+            envelopeCommand,
+            {
+              fieldErrors: [{ path: '/cwd', code: 'not_a_git_repository' }],
+              requestAccepted: false,
+            },
+            values['correlation-id'] as string | undefined
+          );
+        }
         console.error('Error: Not in a git repository.');
         console.error('The Archon CLI must be run from within a git repository.');
         console.error('Either navigate to a git repo or use --cwd to specify one.');
@@ -500,34 +663,49 @@ async function main(): Promise<number> {
 
           case 'run': {
             const workflowName = positionals[2];
+            const correlationId = values['correlation-id'];
+            if (jsonFlag && isBlankString(correlationId)) {
+              return await emitWorkflowCommandMalformedEnvelope('workflow.start', {
+                fieldErrors: [{ path: '/correlationId', code: 'required' }],
+                requestAccepted: false,
+              });
+            }
             if (!workflowName) {
-              console.error('Usage: archon workflow run <name> [message]');
-              return 1;
+              if (jsonFlag) {
+                // Let workflowRunCommand handle the missing name as a MALFORMED_REQUEST envelope.
+                // Pass an empty string; the function's discovery + resolveWorkflowName will throw
+                // "not found" which the fail-closed boundary converts to the envelope.
+              } else {
+                console.error('Usage: archon workflow run <name> [message]');
+                return 1;
+              }
             }
             const userMessage = positionals.slice(3).join(' ') || '';
-            if (branchName !== undefined && noWorktree) {
-              console.error(
-                'Error: --branch and --no-worktree are mutually exclusive.\n' +
-                  '  --branch creates an isolated worktree (safe).\n' +
-                  '  --no-worktree runs directly in your repo (no isolation).\n' +
-                  'Use one or the other.'
-              );
-              return 1;
-            }
-            if (noWorktree && fromBranch !== undefined) {
-              console.error(
-                'Error: --from/--from-branch has no effect with --no-worktree.\n' +
-                  'Remove --from or drop --no-worktree.'
-              );
-              return 1;
-            }
-            if (resumeFlag && branchName !== undefined) {
-              console.error(
-                'Error: --resume and --branch are mutually exclusive.\n' +
-                  '  --resume reuses the existing worktree from the failed run.\n' +
-                  '  Remove --branch when using --resume.'
-              );
-              return 1;
+            if (!jsonFlag) {
+              if (branchName !== undefined && noWorktree) {
+                console.error(
+                  'Error: --branch and --no-worktree are mutually exclusive.\n' +
+                    '  --branch creates an isolated worktree (safe).\n' +
+                    '  --no-worktree runs directly in your repo (no isolation).\n' +
+                    'Use one or the other.'
+                );
+                return 1;
+              }
+              if (noWorktree && fromBranch !== undefined) {
+                console.error(
+                  'Error: --from/--from-branch has no effect with --no-worktree.\n' +
+                    'Remove --from or drop --no-worktree.'
+                );
+                return 1;
+              }
+              if (resumeFlag && branchName !== undefined) {
+                console.error(
+                  'Error: --resume and --branch are mutually exclusive.\n' +
+                    '  --resume reuses the existing worktree from the failed run.\n' +
+                    '  Remove --branch when using --resume.'
+                );
+                return 1;
+              }
             }
             const options = {
               branchName,
@@ -536,16 +714,12 @@ async function main(): Promise<number> {
               resume: resumeFlag,
               quiet: values.quiet as boolean | undefined,
               verbose: values.verbose as boolean | undefined,
-              // Stable scope for persist_session across separate CLI invocations. Without
-              // it each run gets a fresh conversation UUID, so persisted sessions never
-              // resume between runs (they only resume within chat/REST, which reuse a
-              // conversation). Pass the same id on each run to opt into cross-run resume.
               conversationId: values['conversation-id'] as string | undefined,
               detach: detachFlag,
               json: jsonFlag,
+              correlationId: correlationId as string | undefined,
             };
-            await workflowRunCommand(effectiveCwd, workflowName, userMessage, options);
-            break;
+            return await workflowRunCommand(effectiveCwd, workflowName ?? '', userMessage, options);
           }
 
           case 'status':
@@ -554,16 +728,63 @@ async function main(): Promise<number> {
 
           case 'get': {
             const getRunId = positionals[2];
+            const correlationId = values['correlation-id'];
+            if (jsonFlag && isBlankString(correlationId)) {
+              return await emitWorkflowCommandMalformedEnvelope('workflow.status', {
+                fieldErrors: [{ path: '/correlationId', code: 'required' }],
+                requestAccepted: false,
+              });
+            }
             if (!getRunId) {
+              if (jsonFlag) {
+                // Emit a workflow.status MALFORMED_REQUEST envelope for missing run id.
+                const {
+                  safeStringify: ss,
+                  resolveCorrelationId: rci,
+                  resolveIssuedAt: ria,
+                  buildErrorEnvelope: bee,
+                } = await import('./commands/workflow-provider-command-envelope.js');
+                let corrId = 'unknown';
+                let issuedAt = new Date(0).toISOString();
+                try {
+                  corrId = rci(values['correlation-id'] as string | undefined);
+                  issuedAt = ria();
+                } catch {
+                  // Helpers currently never throw, but guard against future changes
+                }
+                console.log(
+                  ss(
+                    bee(
+                      {
+                        command: 'workflow.status',
+                        provider: 'archon',
+                        correlationId: corrId,
+                        issuedAt,
+                      },
+                      {
+                        code: 'MALFORMED_REQUEST',
+                        category: 'provider_contract',
+                        retryable: false,
+                        details: {
+                          fieldErrors: [{ path: '/runId', code: 'required' }],
+                          requestAccepted: false,
+                        },
+                        exitCode: 64,
+                      },
+                      Date.now()
+                    )
+                  )
+                );
+                return 64;
+              }
               console.error('Usage: archon workflow get <run-id> [--json] [--verbose]');
               return 1;
             }
-            // Propagate the command's exit code so `get <id> && ...` and CI
-            // pipelines see a non-zero status when the run is missing.
             return await workflowGetCommand(
               getRunId,
               jsonFlag,
-              values.verbose as boolean | undefined
+              values.verbose as boolean | undefined,
+              correlationId as string | undefined
             );
           }
 

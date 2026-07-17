@@ -41,7 +41,7 @@
 # - Retrospective appends its action items to action_items; sprint-status surfaces open ones
 
 generated: "2026-07-13 11:55:39 +0700"
-last_updated: "2026-07-14"
+last_updated: "2026-07-16"
 project: Archon
 project_key: NOKEY
 tracking_system: file-system
@@ -51,9 +51,27 @@ development_status:
   epic-3: in-progress
   3-1-implement-archon-workflow-provider-binding-lifecycle: done
   3-3a-define-shared-workflow-provider-command-envelope: done
-  3-3b-provide-archon-start-and-status-cli-json: backlog
+  3-3b-provide-archon-start-and-status-cli-json: done
   3-3c-provide-archon-provider-decision-command-cli-json: backlog
   3-3d-provide-archon-recovery-command-cli-json: backlog
   3-5-produce-signed-typed-archon-workflow-events-from-outbox: backlog
   3-7-expose-archon-workflow-event-delivery-health: backlog
   epic-3-retrospective: optional
+
+action_items:
+  - epic: 3
+    action: "Deepen create-story output for remaining Epic 3 stories with contract fixtures, failure paths, CLI parser/preflight/dispatch boundaries or event-delivery boundaries, DB edge cases, stdout/stderr rules where relevant, classifier cases, and required tests before development starts."
+    owner: "Amelia (Developer)"
+    status: open
+  - epic: 3
+    action: "Revise or regenerate story files for 3-3c, 3-3d, 3-5, and 3-7 before implementation so code review validates implementation instead of discovering missing story requirements."
+    owner: "Amelia (Developer)"
+    status: open
+  - epic: 3
+    action: "Add a review-risk checklist from 3-1 and 3-3b findings to each remaining Epic 3 story, with explicit evidence required before moving to review."
+    owner: "Murat (Test Architect)"
+    status: open
+  - epic: 3
+    action: "Escalate unresolved contract or policy decisions before implementation instead of coding around missing schema fields, ambiguous fixture deltas, undefined lifecycle transitions, or unsupported runtime behavior."
+    owner: "Winston (System Architect)"
+    status: open

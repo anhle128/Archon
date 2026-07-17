@@ -30,7 +30,9 @@ import type {
 } from '@archon/workflows/schemas/workflow';
 import {
   RETRYABLE_WORKFLOW_STATUSES,
+  TERMINAL_WORKFLOW_STATUSES,
   workflowRunStatusSchema,
+  isApprovalContext,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import {
@@ -52,6 +54,14 @@ import * as userDb from '@archon/core/db/users';
 import * as git from '@archon/git';
 import { CLIAdapter } from '../adapters/cli-adapter';
 import { resolveCliUserId } from './auth';
+import {
+  safeStringify,
+  resolveCorrelationId,
+  resolveIssuedAt,
+  buildSuccessEnvelope,
+  buildErrorEnvelope,
+} from './workflow-provider-command-envelope.js';
+import type { EnvelopeMeta, ErrorCategory } from './workflow-provider-command-envelope.js';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -100,6 +110,8 @@ export interface WorkflowRunOptions {
    * `--json` alone still suppresses CLI logs but does not change the output).
    */
   json?: boolean;
+  /** Correlation ID for provider command envelopes (echoed in every envelope). */
+  correlationId?: string;
 }
 
 /**
@@ -109,6 +121,152 @@ function generateConversationId(): string {
   const timestamp = Date.now();
   const random = Math.random().toString(36).substring(2, 8);
   return `cli-${String(timestamp)}-${random}`;
+}
+
+const EXIT_SUCCESS = 0;
+const EXIT_USAGE = 64;
+const EXIT_TIMEOUT = 69;
+const EXIT_SOFTWARE = 70;
+const EXIT_RUNTIME = 78;
+
+interface ContractState {
+  state: string;
+  terminal: boolean;
+  actionRequired?: boolean;
+  gateRef?: { gateId: string; kind: string };
+}
+
+export function mapWorkflowRunToContractState(run: {
+  status: WorkflowRunStatus;
+  metadata: Record<string, unknown>;
+}): ContractState {
+  const terminal = TERMINAL_WORKFLOW_STATUSES.includes(run.status);
+
+  if (run.status === 'paused' && isApprovalContext(run.metadata.approval)) {
+    const approval = run.metadata.approval as { nodeId: string; type?: string };
+    if (approval.type === 'interactive_loop') {
+      return { state: 'paused', terminal: false };
+    }
+    return {
+      state: 'waiting-for-approval',
+      terminal: false,
+      actionRequired: true,
+      gateRef: { gateId: approval.nodeId, kind: 'human-decision' },
+    };
+  }
+
+  return { state: run.status, terminal };
+}
+
+interface ClassifiedError {
+  code: string;
+  category: ErrorCategory;
+  retryable: boolean;
+  exitCode: number;
+}
+
+export function classifyRunError(err: unknown): ClassifiedError {
+  const msg = err instanceof Error ? err.message : String(err);
+  const errCode = (err as { code?: string })?.code;
+
+  if (/^Workflow '[\s\S]+' not found\.(?:\n\nAvailable workflows:\n[\s\S]*)?$/.test(msg)) {
+    return {
+      code: 'WORKFLOW_NOT_FOUND',
+      category: 'unexpected_state',
+      retryable: false,
+      exitCode: EXIT_RUNTIME,
+    };
+  }
+  if (
+    msg.includes('mutually exclusive') ||
+    msg.includes('no effect with') ||
+    msg.includes('conflicts with') ||
+    msg.includes('is required') ||
+    msg.includes('must be a boolean flag') ||
+    msg.includes('worktree.enabled')
+  ) {
+    return {
+      code: 'MALFORMED_REQUEST',
+      category: 'provider_contract',
+      retryable: false,
+      exitCode: EXIT_USAGE,
+    };
+  }
+  if (errCode === 'ETIMEDOUT' || msg.includes('statement timeout') || msg.includes('timeout')) {
+    return {
+      code: 'COMMAND_TIMEOUT',
+      category: 'timeout',
+      retryable: true,
+      exitCode: EXIT_TIMEOUT,
+    };
+  }
+  return {
+    code: 'INTERNAL_ERROR',
+    category: 'implementation_defect',
+    retryable: false,
+    exitCode: EXIT_SOFTWARE,
+  };
+}
+
+function buildWorkflowRunRef(run: WorkflowRun): Record<string, unknown> {
+  const ref: Record<string, unknown> = {
+    provider: 'archon',
+    runId: run.id,
+    workflowName: run.workflow_name,
+  };
+  if (run.codebase_id) {
+    ref.projectRef = `project:${run.codebase_id}`;
+  }
+  return ref;
+}
+
+const ENVELOPE_FORBIDDEN_KEYS = new Set([
+  'actor',
+  'secret',
+  'profile',
+  'agent_name',
+  'agent',
+  'agent_provider',
+  'message',
+  'stdout',
+  'stderr',
+  'displaytext',
+]);
+
+function stripForbiddenKeys(obj: Record<string, unknown>): Record<string, unknown> {
+  const clean: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (ENVELOPE_FORBIDDEN_KEYS.has(key.toLowerCase())) continue;
+    if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+      clean[key] = stripForbiddenKeys(value as Record<string, unknown>);
+    } else if (Array.isArray(value)) {
+      clean[key] = stripForbiddenKeysFromArray(value);
+    } else {
+      clean[key] = value;
+    }
+  }
+  return clean;
+}
+
+function stripForbiddenKeysFromArray(arr: unknown[]): unknown[] {
+  return arr.map((item: unknown) => {
+    if (item !== null && typeof item === 'object' && !Array.isArray(item)) {
+      return stripForbiddenKeys(item as Record<string, unknown>);
+    } else if (Array.isArray(item)) {
+      return stripForbiddenKeysFromArray(item);
+    }
+    return item;
+  });
+}
+
+function sanitizeEventsForEnvelope(events: WorkflowEventRow[]): Record<string, unknown>[] {
+  return events.map(event => {
+    const { data, ...safeFields } = event;
+    return {
+      ...safeFields,
+      data: stripForbiddenKeys(data ?? {}),
+    };
+  });
 }
 
 /**
@@ -414,7 +572,104 @@ export async function workflowRunCommand(
   workflowName: string,
   userMessage: string,
   options: WorkflowRunOptions = {}
-): Promise<void> {
+): Promise<number> {
+  const startTime = Date.now();
+  const invalidJsonOption = options.json !== undefined && typeof options.json !== 'boolean';
+  const jsonMode = (options.json === true || invalidJsonOption) && options.detach !== true;
+
+  if (jsonMode) {
+    let correlationId = 'unknown';
+    let issuedAt = new Date(0).toISOString();
+    try {
+      correlationId = resolveCorrelationId(options.correlationId);
+      issuedAt = resolveIssuedAt();
+      if (invalidJsonOption) {
+        throw new Error('--json must be a boolean flag');
+      }
+      return await workflowRunCommandInner(
+        cwd,
+        workflowName,
+        userMessage,
+        options,
+        correlationId,
+        issuedAt,
+        startTime
+      );
+    } catch (error) {
+      const classified = classifyRunError(error);
+      const provider = 'archon';
+      const meta: EnvelopeMeta = {
+        command: 'workflow.start',
+        provider,
+        correlationId,
+        issuedAt,
+      };
+      console.log(
+        safeStringify(
+          buildErrorEnvelope(
+            meta,
+            { ...classified, details: { requestAccepted: false } },
+            startTime
+          )
+        )
+      );
+      return classified.exitCode;
+    }
+  }
+
+  const correlationId = resolveCorrelationId(options.correlationId);
+  const issuedAt = resolveIssuedAt();
+  return await workflowRunCommandInner(
+    cwd,
+    workflowName,
+    userMessage,
+    options,
+    correlationId,
+    issuedAt,
+    startTime
+  );
+}
+
+async function workflowRunCommandInner(
+  cwd: string,
+  workflowName: string,
+  userMessage: string,
+  options: WorkflowRunOptions,
+  correlationId: string,
+  issuedAt: string,
+  startTime: number
+): Promise<number> {
+  if (!workflowName?.trim()) {
+    if (options.json) throw new Error('Workflow name is required');
+  }
+
+  // Validate mutually exclusive flags early in JSON mode — before workflow
+  // resolution — so --json classifies them as MALFORMED_REQUEST rather than
+  // WORKFLOW_NOT_FOUND. Non-JSON mode validates after resolution (original order).
+  if (options.json) {
+    if (options.branchName !== undefined && options.noWorktree) {
+      throw new Error(
+        '--branch and --no-worktree are mutually exclusive.\n' +
+          '  --branch creates an isolated worktree (safe).\n' +
+          '  --no-worktree runs directly in your repo (no isolation).\n' +
+          'Use one or the other.'
+      );
+    }
+    if (options.noWorktree && options.fromBranch !== undefined) {
+      throw new Error(
+        '--from/--from-branch has no effect with --no-worktree.\n' +
+          'Remove --from or drop --no-worktree.'
+      );
+    }
+    if (options.resume && options.branchName !== undefined) {
+      throw new Error(
+        '--resume and --branch are mutually exclusive.\n' +
+          '  --resume reuses the existing worktree from the failed run.\n' +
+          '  Remove --branch when using --resume.'
+      );
+    }
+  }
+
   const effectiveDiscoveryCwd = options.discoveryCwd ?? cwd;
   const { workflows: workflowEntries, errors } = await loadWorkflows(effectiveDiscoveryCwd);
   const sourceCounts = countWorkflowSources(workflowEntries);
@@ -459,28 +714,29 @@ export async function workflowRunCommand(
     );
   }
 
-  // Validate mutually exclusive flags (defensive — cli.ts checks these for UX, but
-  // workflowRunCommand is the authoritative boundary for programmatic callers)
-  if (options.branchName !== undefined && options.noWorktree) {
-    throw new Error(
-      '--branch and --no-worktree are mutually exclusive.\n' +
-        '  --branch creates an isolated worktree (safe).\n' +
-        '  --no-worktree runs directly in your repo (no isolation).\n' +
-        'Use one or the other.'
-    );
-  }
-  if (options.noWorktree && options.fromBranch !== undefined) {
-    throw new Error(
-      '--from/--from-branch has no effect with --no-worktree.\n' +
-        'Remove --from or drop --no-worktree.'
-    );
-  }
-  if (options.resume && options.branchName !== undefined) {
-    throw new Error(
-      '--resume and --branch are mutually exclusive.\n' +
-        '  --resume reuses the existing worktree from the failed run.\n' +
-        '  Remove --branch when using --resume.'
-    );
+  // Validate mutually exclusive flags for non-JSON mode (JSON mode validates earlier).
+  if (!options.json) {
+    if (options.branchName !== undefined && options.noWorktree) {
+      throw new Error(
+        '--branch and --no-worktree are mutually exclusive.\n' +
+          '  --branch creates an isolated worktree (safe).\n' +
+          '  --no-worktree runs directly in your repo (no isolation).\n' +
+          'Use one or the other.'
+      );
+    }
+    if (options.noWorktree && options.fromBranch !== undefined) {
+      throw new Error(
+        '--from/--from-branch has no effect with --no-worktree.\n' +
+          'Remove --from or drop --no-worktree.'
+      );
+    }
+    if (options.resume && options.branchName !== undefined) {
+      throw new Error(
+        '--resume and --branch are mutually exclusive.\n' +
+          '  --resume reuses the existing worktree from the failed run.\n' +
+          '  Remove --branch when using --resume.'
+      );
+    }
   }
 
   // Reconcile workflow-level worktree policy with invocation flags.
@@ -567,15 +823,17 @@ export async function workflowRunCommand(
       console.log('Track it with: archon workflow runs');
       if (logPath) console.log(`Child output: ${logPath}`);
     }
-    return;
+    return EXIT_SUCCESS;
   }
 
-  console.log(`Running workflow: ${workflowName}`);
-  console.log(`Working directory: ${cwd}`);
-  console.log('');
+  if (!options.json) {
+    console.log(`Running workflow: ${workflowName}`);
+    console.log(`Working directory: ${cwd}`);
+    console.log('');
+  }
 
-  // Create CLI adapter
-  const adapter = new CLIAdapter();
+  // Create CLI adapter (silent in JSON mode to keep stdout pure for the envelope)
+  const adapter = new CLIAdapter(options.json ? { silent: true } : undefined);
 
   // Generate conversation ID
   const conversationId = options.conversationId ?? generateConversationId();
@@ -713,9 +971,11 @@ export async function workflowRunCommand(
       );
     }
 
-    console.log(`Resuming workflow run: ${resumable.id}`);
-    console.log(`Working path: ${workingCwd}`);
-    console.log('');
+    if (!options.json) {
+      console.log(`Resuming workflow run: ${resumable.id}`);
+      console.log(`Working path: ${workingCwd}`);
+      console.log('');
+    }
   }
 
   if (wantsIsolation && codebase) {
@@ -1022,6 +1282,123 @@ export async function workflowRunCommand(
   }
 
   // Check result and exit appropriately
+  if (options.json) {
+    const meta: EnvelopeMeta = {
+      command: 'workflow.start',
+      provider: 'archon',
+      correlationId,
+      issuedAt,
+    };
+
+    if (!result.success) {
+      const runId = (result as { workflowRunId?: string }).workflowRunId;
+      if (runId) {
+        getLog().error({ err: result.error, runId }, 'cli.workflow_run_execution_failed');
+        console.log(
+          safeStringify(
+            buildErrorEnvelope(
+              meta,
+              {
+                code: 'WORKFLOW_EXECUTION_FAILED',
+                category: 'unexpected_state',
+                retryable: true,
+                details: { runId },
+                exitCode: EXIT_RUNTIME,
+              },
+              startTime
+            )
+          )
+        );
+        return EXIT_RUNTIME;
+      }
+      getLog().error({ err: result.error }, 'cli.workflow_run_execution_failed_no_run');
+      console.log(
+        safeStringify(
+          buildErrorEnvelope(
+            meta,
+            {
+              code: 'INTERNAL_ERROR',
+              category: 'implementation_defect',
+              retryable: true,
+              details: { requestAccepted: false },
+              exitCode: EXIT_SOFTWARE,
+            },
+            startTime
+          )
+        )
+      );
+      return EXIT_SOFTWARE;
+    }
+
+    let persistedRun: WorkflowRun;
+    try {
+      const loaded = await workflowDb.getWorkflowRun(result.workflowRunId);
+      if (!loaded) {
+        throw new Error('run row not found after execution');
+      }
+      persistedRun = loaded;
+    } catch (error) {
+      const err = error as Error;
+      getLog().error(
+        { err, runId: result.workflowRunId },
+        'cli.workflow_run_persisted_reload_failed'
+      );
+      console.log(
+        safeStringify(
+          buildErrorEnvelope(
+            meta,
+            {
+              code: 'INTERNAL_ERROR',
+              category: 'implementation_defect',
+              retryable: false,
+              details: { runId: result.workflowRunId },
+              exitCode: EXIT_SOFTWARE,
+            },
+            startTime
+          )
+        )
+      );
+      return EXIT_SOFTWARE;
+    }
+
+    // Persist result card for Web UI (adapter is silent in JSON mode — no stdout).
+    if ('summary' in result && result.summary) {
+      try {
+        await adapter.sendMessage(conversationId, result.summary, {
+          category: 'workflow_result',
+          segment: 'new',
+          workflowResult: { workflowName: workflow.name, runId: result.workflowRunId },
+        });
+      } catch (surfaceError) {
+        getLog().warn(
+          { err: surfaceError as Error, conversationId },
+          'cli.workflow_result_surface_failed'
+        );
+      }
+    }
+
+    const contractState = mapWorkflowRunToContractState(persistedRun);
+    const resultPayload: Record<string, unknown> = {
+      operation: 'start',
+      state: contractState.state,
+      terminal: contractState.terminal,
+      accepted: true,
+    };
+    if (contractState.actionRequired) resultPayload.actionRequired = true;
+    if (contractState.gateRef) resultPayload.gateRef = contractState.gateRef;
+
+    console.log(
+      safeStringify(
+        buildSuccessEnvelope(
+          meta,
+          { workflowRunRef: buildWorkflowRunRef(persistedRun) },
+          resultPayload
+        )
+      )
+    );
+    return EXIT_SUCCESS;
+  }
+
   if (result.success && 'paused' in result && result.paused) {
     console.log('\nWorkflow paused — waiting for approval.');
   } else if (result.success) {
@@ -1045,6 +1422,7 @@ export async function workflowRunCommand(
   } else {
     throw new Error(`Workflow failed: ${result.error}`);
   }
+  return EXIT_SUCCESS;
 }
 
 /**
@@ -1258,36 +1636,143 @@ export async function workflowStatusCommand(json?: boolean, verbose?: boolean): 
 export async function workflowGetCommand(
   runId: string,
   json?: boolean,
-  verbose?: boolean
+  verbose?: boolean,
+  correlationId?: string
 ): Promise<number> {
+  const startTime = Date.now();
+  const invalidJsonOption = json !== undefined && typeof json !== 'boolean';
+  const jsonMode = json === true || invalidJsonOption;
+
+  if (jsonMode) {
+    let corrId = 'unknown';
+    let issuedAt = new Date(0).toISOString();
+    try {
+      corrId = resolveCorrelationId(correlationId);
+      issuedAt = resolveIssuedAt();
+      if (invalidJsonOption) {
+        throw new Error('--json must be a boolean flag');
+      }
+      return await workflowGetCommandInner(runId, true, verbose, corrId, issuedAt, startTime);
+    } catch (error) {
+      const classified = classifyRunError(error);
+      const meta: EnvelopeMeta = {
+        command: 'workflow.status',
+        provider: 'archon',
+        correlationId: corrId,
+        issuedAt,
+      };
+      console.log(
+        safeStringify(
+          buildErrorEnvelope(
+            meta,
+            {
+              code: classified.code,
+              category: classified.category,
+              retryable: classified.retryable,
+              details: { requestAccepted: false },
+              exitCode: classified.exitCode,
+            },
+            startTime
+          )
+        )
+      );
+      return classified.exitCode;
+    }
+  }
+
+  const corrId = resolveCorrelationId(correlationId);
+  const issuedAt = resolveIssuedAt();
+  return workflowGetCommandInner(runId, false, verbose, corrId, issuedAt, startTime);
+}
+
+async function workflowGetCommandInner(
+  runId: string,
+  json: boolean,
+  verbose: boolean | undefined,
+  corrId: string,
+  issuedAt: string,
+  startTime: number
+): Promise<number> {
+  const meta: EnvelopeMeta = {
+    command: 'workflow.status',
+    provider: 'archon',
+    correlationId: corrId,
+    issuedAt,
+  };
+
   let run: WorkflowRun | null;
   try {
     run = await workflowDb.getWorkflowRun(runId);
   } catch (error) {
     const err = error as Error;
+    const errCode = (error as { code?: string })?.code;
     getLog().error({ err, runId }, 'cli.workflow_get_failed');
-    // In --json mode never throw — emit one parseable {ok:false} line (same
-    // contract as the write commands) so a parsing agent always gets JSON.
     if (json) {
-      console.log(JSON.stringify({ ok: false, runId, error: err.message }, null, 2));
-      return 1;
+      const isTimeout =
+        errCode === 'ETIMEDOUT' ||
+        err.message.includes('statement timeout') ||
+        err.message.includes('timeout');
+      if (isTimeout) {
+        console.log(
+          safeStringify(
+            buildErrorEnvelope(
+              meta,
+              {
+                code: 'COMMAND_TIMEOUT',
+                category: 'timeout',
+                retryable: true,
+                details: { runId },
+                exitCode: EXIT_TIMEOUT,
+              },
+              startTime
+            )
+          )
+        );
+        return EXIT_TIMEOUT;
+      }
+      console.log(
+        safeStringify(
+          buildErrorEnvelope(
+            meta,
+            {
+              code: 'INTERNAL_ERROR',
+              category: 'implementation_defect',
+              retryable: false,
+              details: { requestAccepted: false },
+              exitCode: EXIT_SOFTWARE,
+            },
+            startTime
+          )
+        )
+      );
+      return EXIT_SOFTWARE;
     }
     throw new Error(`Failed to get workflow run: ${err.message}`);
   }
 
   if (!run) {
-    // Not-found exits non-zero so `get <id> && ...` and CI checks see the
-    // failure (the JSON envelope already carries ok:false for parsers).
     if (json) {
-      console.log(JSON.stringify({ ok: false, runId, error: 'not_found' }, null, 2));
-    } else {
-      console.log(`Workflow run not found: ${runId}`);
+      console.log(
+        safeStringify(
+          buildErrorEnvelope(
+            meta,
+            {
+              code: 'WORKFLOW_RUN_NOT_FOUND',
+              category: 'unexpected_state',
+              retryable: false,
+              details: { runId },
+              exitCode: EXIT_RUNTIME,
+            },
+            startTime
+          )
+        )
+      );
+      return EXIT_RUNTIME;
     }
+    console.log(`Workflow run not found: ${runId}`);
     return 1;
   }
 
-  // getWorkflowRun returns the base WorkflowRun (no current_step_name) — derive
-  // per-node detail from the event log, and only when verbose is requested.
   let events: WorkflowEventRow[] | undefined;
   let eventsFailed = false;
   if (verbose) {
@@ -1297,9 +1782,36 @@ export async function workflowGetCommand(
   }
 
   if (json) {
-    const output = verbose ? { ...run, events: events ?? [] } : run;
-    console.log(JSON.stringify(output, null, 2));
-    return 0;
+    const contractState = mapWorkflowRunToContractState(run);
+    const resultPayload: Record<string, unknown> = {
+      operation: 'status',
+      state: contractState.state,
+      terminal: contractState.terminal,
+    };
+    if (contractState.actionRequired) resultPayload.actionRequired = true;
+    if (contractState.gateRef) resultPayload.gateRef = contractState.gateRef;
+    if (events) resultPayload.events = eventsFailed ? [] : sanitizeEventsForEnvelope(events);
+    if (run.status === 'failed') {
+      resultPayload.failure = {
+        code: 'WORKFLOW_EXECUTION_FAILED',
+        category: 'unexpected_state',
+        hasError: Boolean(run.metadata.error),
+        errorType: run.metadata.error ? 'execution_error' : 'unknown',
+        terminal: true,
+        retryable: RETRYABLE_WORKFLOW_STATUSES.includes(run.status),
+        details: {
+          runId: run.id,
+          hasError: Boolean(run.metadata.error),
+        },
+      };
+    }
+
+    console.log(
+      safeStringify(
+        buildSuccessEnvelope(meta, { workflowRunRef: buildWorkflowRunRef(run) }, resultPayload)
+      )
+    );
+    return EXIT_SUCCESS;
   }
 
   console.log(`  ID:     ${run.id}`);
