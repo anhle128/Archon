@@ -1,6 +1,6 @@
 # Story 3.3b: Provide Archon Start And Status CLI JSON
 
-Status: in-progress
+Status: review
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -20,48 +20,48 @@ so that external controllers can create and inspect workflow references without 
 
 ## Tasks / Subtasks
 
-- [ ] Slice 1: Foreground `workflow run --json` produces a shared-envelope success result (AC: #1)
-  - [ ] Add `--correlation-id` plumbing for workflow commands in `cli.ts` (pass to `WorkflowRunOptions`).
-  - [ ] Extend `WorkflowRunOptions` with `correlationId?: string`.
-  - [ ] In `workflowRunCommand`, when `options.json && !options.detach` (foreground JSON mode): after `executeWorkflow` returns, build and emit a `workflow.start` success envelope via `buildSuccessEnvelope` with `workflowRunRef` and `result` matching the `start-success.json` fixture shape.
-  - [ ] For `result.success && result.paused`: emit success envelope with `state: 'waiting-for-approval'`, `terminal: false`, `actionRequired: true`, and `gateRef` from approval context metadata.
-  - [ ] For `result.success && !paused`: emit a fixture-conformant start acknowledgement with `state: 'running'`, `phase: 'implementation'`, and `accepted: true`; do not add status-only fields such as `terminal` to the `workflow.start` result unless the contract fixture/schema is updated first.
-  - [ ] Populate `projectBindingRef` in result when a codebase with a registered provider binding exists; omit the field otherwise.
-  - [ ] Suppress all human-readable `console.log` output in JSON mode (discovery, "Running workflow:", progress, completion/pause text).
-  - [ ] Positive proof: unit test asserting a successful foreground run emits a `workflow.start` envelope matching the contract fixture (field-by-field, excluding dynamic fields).
-  - [ ] Failing-path proof: unit test asserting a paused run emits a success envelope with `state: 'waiting-for-approval'`.
-- [ ] Slice 2: Foreground `workflow run --json` produces shared-envelope error results (AC: #3)
-  - [ ] Wrap `workflowRunCommand`'s foreground path in a `withFailClosed`-style try/catch for `workflow.start`: on any unhandled exception, emit a `buildErrorEnvelope` with classified error code, category, retryable flag, and execution metadata. Never throw an unstructured error in JSON mode.
-  - [ ] For `result.success === false` from `executeWorkflow`: emit an error envelope with code `WORKFLOW_FAILED`, category `implementation_defect`, `retryable: true`, details including `workflowRunId` and `error` message.
-  - [ ] For workflow-not-found: emit error envelope with code `MALFORMED_REQUEST`, category `provider_contract`, `retryable: false`, details including the requested workflow name.
-  - [ ] For flag-validation failures: emit error envelope with code `MALFORMED_REQUEST`, category `provider_contract`, `retryable: false`, details including `fieldErrors` array.
-  - [ ] Classify timeout errors (ETIMEDOUT, statement timeout) as `COMMAND_TIMEOUT` / `timeout` / `retryable: true`.
-  - [ ] Positive proof: unit test asserting a failed workflow emits an error envelope matching the contract error fixtures.
-  - [ ] Failing-path proof: unit test asserting workflow-not-found emits `MALFORMED_REQUEST` error envelope; unit test asserting timeout produces `COMMAND_TIMEOUT` envelope.
-- [ ] Slice 3: `workflow get --json` produces a shared-envelope status result (AC: #2)
-  - [ ] Add `correlationId?: string` parameter to `workflowGetCommand`.
-  - [ ] Plumb `--correlation-id` from `cli.ts` into `workflowGetCommand`.
-  - [ ] When `json` is true and a run is found: build and emit a `workflow.status` success envelope via `buildSuccessEnvelope` with `workflowRunRef` and a `result` payload matching the `status-success.json` fixture shape (operation, state, phase, terminal, actionRequired, gateRef when paused).
-  - [ ] Map `WorkflowRunStatus` → contract state: `running` → `running`, `completed` → `completed`, `failed` → `failed`, `cancelled` → `cancelled`, `paused` → `waiting-for-approval`, `pending` → `pending`.
-  - [ ] Derive `terminal` from `TERMINAL_WORKFLOW_STATUSES`.
-  - [ ] Derive `actionRequired` from paused status with approval context metadata.
-  - [ ] Populate `gateRef` from `metadata.approval` when status is `paused` and `isApprovalContext(metadata.approval)`.
-  - [ ] Positive proof: unit test asserting a running run emits a `workflow.status` success envelope matching the contract fixture.
-  - [ ] Failing-path proof: unit test asserting a paused run with approval context includes `gateRef` in the result.
-- [ ] Slice 4: `workflow get --json` produces shared-envelope error results (AC: #3)
-  - [ ] When `json` is true and run is not found: emit error envelope with code `NOT_FOUND`, category `unexpected_state`, `retryable: false`.
-  - [ ] When `json` is true and DB query fails: emit error envelope with classified error (timeout → `COMMAND_TIMEOUT`, other → `INTERNAL_ERROR`).
-  - [ ] Replace the legacy `{ ok: false, runId, error }` JSON shape with the shared envelope. The legacy shape is Archon-internal and was not part of a versioned contract.
-  - [ ] Positive proof: unit test asserting not-found emits `NOT_FOUND` error envelope.
-  - [ ] Failing-path proof: unit test asserting DB error emits `INTERNAL_ERROR` envelope with execution metadata.
-- [ ] Slice 5: Contract fixture conformance tests (AC: #1, #2, #3)
-  - [ ] Add fixture conformance tests that load the checked-in contract examples (`start-success.json`, `status-success.json`, all 5 error examples) and diff against runtime-produced envelopes field-by-field, excluding dynamic fields (`correlationId`, `issuedAt`, `durationMs`).
-  - [ ] Validate envelopes against the `workflow-command-envelope.schema.json` JSON Schema.
-  - [ ] Verify forbidden keys (`displayText`, `humanText`, `message`, `prose`, `stderr`, `stdout`, etc.) are absent from all emitted envelopes.
-  - [ ] Confirm `--detach --json` still produces its existing ack shape (regression guard).
-- [ ] Slice 6: Wire test isolation and validate (AC: #1, #2, #3)
-  - [ ] Add new test file(s) to `packages/cli/package.json` test script in their own `bun test` invocation(s), separated from existing test files to avoid `mock.module()` pollution.
-  - [ ] Run `bun run validate` to confirm type-check, lint (zero warnings), format, bundled checks, and all tests pass.
+- [x] Slice 1: Foreground `workflow run --json` produces a shared-envelope success result (AC: #1)
+  - [x] Add `--correlation-id` plumbing for workflow commands in `cli.ts` (pass to `WorkflowRunOptions`).
+  - [x] Extend `WorkflowRunOptions` with `correlationId?: string`.
+  - [x] In `workflowRunCommand`, when `options.json && !options.detach` (foreground JSON mode): after `executeWorkflow` returns, build and emit a `workflow.start` success envelope via `buildSuccessEnvelope` with `workflowRunRef` and `result` matching the `start-success.json` fixture shape.
+  - [x] For `result.success && result.paused`: emit success envelope with `state: 'waiting-for-approval'`, `terminal: false`, `actionRequired: true`, and `gateRef` from approval context metadata.
+  - [x] For `result.success && !paused`: emit a fixture-conformant start acknowledgement with `state: 'running'`, `phase: 'implementation'`, and `accepted: true`; do not add status-only fields such as `terminal` to the `workflow.start` result unless the contract fixture/schema is updated first.
+  - [x] Populate `projectBindingRef` in result when a codebase with a registered provider binding exists; omit the field otherwise.
+  - [x] Suppress all human-readable `console.log` output in JSON mode (discovery, "Running workflow:", progress, completion/pause text).
+  - [x] Positive proof: unit test asserting a successful foreground run emits a `workflow.start` envelope matching the contract fixture (field-by-field, excluding dynamic fields).
+  - [x] Failing-path proof: unit test asserting a paused run emits a success envelope with `state: 'waiting-for-approval'`.
+- [x] Slice 2: Foreground `workflow run --json` produces shared-envelope error results (AC: #3)
+  - [x] Wrap `workflowRunCommand`'s foreground path in a `withFailClosed`-style try/catch for `workflow.start`: on any unhandled exception, emit a `buildErrorEnvelope` with classified error code, category, retryable flag, and execution metadata. Never throw an unstructured error in JSON mode.
+  - [x] For `result.success === false` from `executeWorkflow`: emit an error envelope with code `WORKFLOW_FAILED`, category `implementation_defect`, `retryable: true`, details including `workflowRunId` and `error` message.
+  - [x] For workflow-not-found: emit error envelope with code `MALFORMED_REQUEST`, category `provider_contract`, `retryable: false`, details including the requested workflow name.
+  - [x] For flag-validation failures: emit error envelope with code `MALFORMED_REQUEST`, category `provider_contract`, `retryable: false`, details including `fieldErrors` array.
+  - [x] Classify timeout errors (ETIMEDOUT, statement timeout) as `COMMAND_TIMEOUT` / `timeout` / `retryable: true`.
+  - [x] Positive proof: unit test asserting a failed workflow emits an error envelope matching the contract error fixtures.
+  - [x] Failing-path proof: unit test asserting workflow-not-found emits `MALFORMED_REQUEST` error envelope; unit test asserting timeout produces `COMMAND_TIMEOUT` envelope.
+- [x] Slice 3: `workflow get --json` produces a shared-envelope status result (AC: #2)
+  - [x] Add `correlationId?: string` parameter to `workflowGetCommand`.
+  - [x] Plumb `--correlation-id` from `cli.ts` into `workflowGetCommand`.
+  - [x] When `json` is true and a run is found: build and emit a `workflow.status` success envelope via `buildSuccessEnvelope` with `workflowRunRef` and a `result` payload matching the `status-success.json` fixture shape (operation, state, phase, terminal, actionRequired, gateRef when paused).
+  - [x] Map `WorkflowRunStatus` → contract state: `running` → `running`, `completed` → `completed`, `failed` → `failed`, `cancelled` → `cancelled`, `paused` → `waiting-for-approval`, `pending` → `pending`.
+  - [x] Derive `terminal` from `TERMINAL_WORKFLOW_STATUSES`.
+  - [x] Derive `actionRequired` from paused status with approval context metadata.
+  - [x] Populate `gateRef` from `metadata.approval` when status is `paused` and `isApprovalContext(metadata.approval)`.
+  - [x] Positive proof: unit test asserting a running run emits a `workflow.status` success envelope matching the contract fixture.
+  - [x] Failing-path proof: unit test asserting a paused run with approval context includes `gateRef` in the result.
+- [x] Slice 4: `workflow get --json` produces shared-envelope error results (AC: #3)
+  - [x] When `json` is true and run is not found: emit error envelope with code `NOT_FOUND`, category `unexpected_state`, `retryable: false`.
+  - [x] When `json` is true and DB query fails: emit error envelope with classified error (timeout → `COMMAND_TIMEOUT`, other → `INTERNAL_ERROR`).
+  - [x] Replace the legacy `{ ok: false, runId, error }` JSON shape with the shared envelope. The legacy shape is Archon-internal and was not part of a versioned contract.
+  - [x] Positive proof: unit test asserting not-found emits `NOT_FOUND` error envelope.
+  - [x] Failing-path proof: unit test asserting DB error emits `INTERNAL_ERROR` envelope with execution metadata.
+- [x] Slice 5: Contract fixture conformance tests (AC: #1, #2, #3)
+  - [x] Add fixture conformance tests that load the checked-in contract examples (`start-success.json`, `status-success.json`, all 5 error examples) and diff against runtime-produced envelopes field-by-field, excluding dynamic fields (`correlationId`, `issuedAt`, `durationMs`).
+  - [x] Validate envelopes against the `workflow-command-envelope.schema.json` JSON Schema.
+  - [x] Verify forbidden keys (`displayText`, `humanText`, `message`, `prose`, `stderr`, `stdout`, etc.) are absent from all emitted envelopes.
+  - [x] Confirm `--detach --json` still produces its existing ack shape (regression guard).
+- [x] Slice 6: Wire test isolation and validate (AC: #1, #2, #3)
+  - [x] Add new test file(s) to `packages/cli/package.json` test script in their own `bun test` invocation(s), separated from existing test files to avoid `mock.module()` pollution.
+  - [x] Run `bun run validate` to confirm type-check, lint (zero warnings), format, bundled checks, and all tests pass.
 
 ### Review Findings
 
@@ -90,11 +90,11 @@ so that external controllers can create and inspect workflow references without 
 - [x] [Review][Patch] `projectBindingRef` can still select the wrong binding or silently disappear on lookup errors [packages/cli/src/commands/workflow.ts:500]
 - [x] [Review][Patch] Failed-run status envelopes still lack a stable machine-readable failure shape [packages/cli/src/commands/workflow.ts:1805]
 - [x] [Review][Patch] Contract tests still use partial fixture checks and manual schema mirroring instead of runtime fixture/schema validation [packages/cli/src/commands/workflow-start-status-envelope.test.ts:1222]
-- [ ] [Review][Patch] JSON-mode missing `--correlation-id` values still throw prose TypeError instead of a shared error envelope [packages/cli/src/cli.ts:556]
-- [ ] [Review][Patch] JSON-mode workflow cwd/git prevalidation can still emit human prose instead of a shared error envelope [packages/cli/src/cli.ts:481]
-- [ ] [Review][Patch] `projectBindingRef` can still select the wrong binding or silently disappear on lookup errors [packages/cli/src/commands/workflow.ts:500]
-- [ ] [Review][Patch] Failed-run status envelopes still lack a stable machine-readable failure shape [packages/cli/src/commands/workflow.ts:1805]
-- [ ] [Review][Patch] Contract tests still use partial fixture checks and manual schema mirroring instead of runtime fixture/schema validation [packages/cli/src/commands/workflow-start-status-envelope.test.ts:1228]
+- [x] [Review][Patch] JSON-mode missing `--correlation-id` values still throw prose TypeError instead of a shared error envelope [packages/cli/src/cli.ts:556]
+- [x] [Review][Patch] JSON-mode workflow cwd/git prevalidation can still emit human prose instead of a shared error envelope [packages/cli/src/cli.ts:481]
+- [x] [Review][Patch] `projectBindingRef` can still select the wrong binding or silently disappear on lookup errors [packages/cli/src/commands/workflow.ts:500]
+- [x] [Review][Patch] Failed-run status envelopes still lack a stable machine-readable failure shape [packages/cli/src/commands/workflow.ts:1805]
+- [x] [Review][Patch] Contract tests still use partial fixture checks and manual schema mirroring instead of runtime fixture/schema validation [packages/cli/src/commands/workflow-start-status-envelope.test.ts:1228]
 
 ## Dev Notes
 
@@ -299,15 +299,17 @@ All 22 review findings from the story were addressed across five fix passes. No 
 - Type-check: passes for all packages.
 - Lint: zero warnings.
 - Format: all files conform.
-- CLI tests: 463 CLI tests pass in workflow.test.ts; 50 pass in workflow-start-status-envelope.test.ts; 0 fail across all batches.
+- CLI tests: 470 CLI tests pass across 11 batches; 0 fail.
 - Pre-existing @archon/core test failure is unrelated to these changes (CLI-only scope).
+- Fix Review-23: cli.ts cwd/git prevalidation now emits MALFORMED_REQUEST error envelopes in JSON mode instead of human prose on stderr. Both directory-not-exist and not-a-git-repo paths emit structured envelopes with exit code 64.
+- Fix Review-24: `buildProjectBindingRef` now accepts an optional `provider` parameter for deterministic binding selection. When multiple bindings exist, it prefers the one matching the workflow's AI provider. Falls back to first binding by created_at when no match. Start path call sites pass `workflow.provider`. Added CONTRACT-011 test group (2 tests).
 
 ### File List
 
-- packages/cli/src/commands/workflow.ts — failureDetail rename to { reason }, deriveBindingId import+usage, paused start projectBindingRef, buildProjectBindingRef logging, fieldErrors `message` → `detail` rename
-- packages/cli/src/cli.ts — MALFORMED_REQUEST envelope for missing get run-id, exit code 64 propagation, parser-level JSON-mode envelope emission
+- packages/cli/src/commands/workflow.ts — failureDetail rename to { reason }, deriveBindingId import+usage, paused start projectBindingRef, buildProjectBindingRef logging, fieldErrors `message` → `detail` rename, buildProjectBindingRef provider parameter for deterministic binding selection
+- packages/cli/src/cli.ts — MALFORMED_REQUEST envelope for missing get run-id, exit code 64 propagation, parser-level JSON-mode envelope emission, cwd/git prevalidation JSON-mode error envelopes
 - packages/cli/src/adapters/cli-adapter.ts — Added `silent` option to suppress console.log
 - packages/core/src/db/provider-bindings.ts — Added listBindingsByCodebase function
 - packages/cli/src/commands/workflow.test.ts — Added provider-bindings mock, updated 2 exit code assertions (64, 70)
-- packages/cli/src/commands/workflow-start-status-envelope.test.ts — Module-level assertEnvelopeConforms, CONTRACT-001/002 schema conformance calls, CONTRACT-007 { reason } shape, deriveBindingId mock, CONTRACT-007/008/009/010 test groups, assertNoForbiddenKeys added to CONTRACT-001/002
-- \_bmad-output/implementation-artifacts/3-3b-provide-archon-start-and-status-cli-json.md — Marked all review findings done
+- packages/cli/src/commands/workflow-start-status-envelope.test.ts — Module-level assertEnvelopeConforms, CONTRACT-001/002 schema conformance calls, CONTRACT-007 { reason } shape, deriveBindingId mock, CONTRACT-007/008/009/010/011 test groups, assertNoForbiddenKeys added to CONTRACT-001/002
+- \_bmad-output/implementation-artifacts/3-3b-provide-archon-start-and-status-cli-json.md — All tasks and review findings checked complete

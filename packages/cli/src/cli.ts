@@ -482,6 +482,32 @@ async function main(): Promise<number> {
     let effectiveCwd = cwd;
     if (requiresGitRepo) {
       if (!existsSync(cwd)) {
+        if (jsonFlag) {
+          const corrId = resolveCorrelationId(undefined);
+          const cmd =
+            command === 'workflow' && subcommand === 'get' ? 'workflow.status' : 'workflow.start';
+          console.log(
+            safeStringify(
+              buildErrorEnvelope(
+                {
+                  command: cmd,
+                  provider: 'archon',
+                  correlationId: corrId,
+                  issuedAt: resolveIssuedAt(),
+                },
+                {
+                  code: 'MALFORMED_REQUEST',
+                  category: 'provider_contract',
+                  retryable: false,
+                  details: { reason: `Directory does not exist: ${cwd}` },
+                  exitCode: 64,
+                },
+                Date.now()
+              )
+            )
+          );
+          return 64;
+        }
         console.error(`Error: Directory does not exist: ${cwd}`);
         return 1;
       }
@@ -489,6 +515,32 @@ async function main(): Promise<number> {
       // Validate git repository and resolve to root
       const repoRoot = await git.findRepoRoot(cwd);
       if (!repoRoot) {
+        if (jsonFlag) {
+          const corrId = resolveCorrelationId(undefined);
+          const cmd =
+            command === 'workflow' && subcommand === 'get' ? 'workflow.status' : 'workflow.start';
+          console.log(
+            safeStringify(
+              buildErrorEnvelope(
+                {
+                  command: cmd,
+                  provider: 'archon',
+                  correlationId: corrId,
+                  issuedAt: resolveIssuedAt(),
+                },
+                {
+                  code: 'MALFORMED_REQUEST',
+                  category: 'provider_contract',
+                  retryable: false,
+                  details: { reason: 'Not in a git repository' },
+                  exitCode: 64,
+                },
+                Date.now()
+              )
+            )
+          );
+          return 64;
+        }
         console.error('Error: Not in a git repository.');
         console.error('The Archon CLI must be run from within a git repository.');
         console.error('Either navigate to a git repo or use --cwd to specify one.');

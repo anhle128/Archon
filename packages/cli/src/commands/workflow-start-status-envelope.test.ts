@@ -1962,6 +1962,149 @@ describe('3.3B-CONTRACT-010 — deep fixture conformance for projectBindingRef [
 });
 
 // ==========================================================================
+// CONTRACT-011 — provider-based binding selection
+// ==========================================================================
+
+describe('3.3B-CONTRACT-011 — buildProjectBindingRef prefers binding matching workflow provider [P1, AC#1]', () => {
+  let consoleSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    consoleSpy.mockRestore();
+  });
+
+  test('start envelope selects binding matching workflow provider over oldest binding', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const providerBindings = await import('@archon/core/db/provider-bindings');
+    const codebaseDb = await import('@archon/core/db/codebases');
+
+    const codexWorkflow = makeTestWorkflowWithSource({
+      name: 'implement',
+      description: 'Implement',
+      provider: 'codex',
+    });
+    (resolveWorkflowName as ReturnType<typeof mock>).mockReturnValue(codexWorkflow.workflow);
+
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-multi',
+      name: 'test/repo',
+      repository_url: null,
+      default_cwd: '/test/path',
+      commands: [],
+      created_at: new Date(),
+    });
+    (providerBindings.listBindingsByCodebase as ReturnType<typeof mock>).mockResolvedValueOnce([
+      {
+        id: 'db-uuid-oldest',
+        provider: 'claude',
+        name: 'oldest-binding',
+        codebase_id: 'cb-multi',
+        event_route: 'workflow',
+        state: 'active',
+        binding_version: 1,
+      },
+      {
+        id: 'db-uuid-newer',
+        provider: 'codex',
+        name: 'newer-binding',
+        codebase_id: 'cb-multi',
+        event_route: 'workflow',
+        state: 'active',
+        binding_version: 1,
+      },
+    ]);
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [codexWorkflow],
+      errors: [],
+    });
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-provider-match',
+    });
+
+    await workflowRunCommand('/test/path', 'implement', 'Add feature', {
+      json: true,
+      noWorktree: true,
+    });
+
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    const result = envelope.result as Record<string, unknown>;
+    expect(result.projectBindingRef).toBeDefined();
+
+    const bindingRef = result.projectBindingRef as Record<string, unknown>;
+    expect(bindingRef.provider).toBe('codex');
+    expect(bindingRef.name).toBe('newer-binding');
+  });
+
+  test('start envelope falls back to first binding when no provider match', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const providerBindings = await import('@archon/core/db/provider-bindings');
+    const codebaseDb = await import('@archon/core/db/codebases');
+
+    const piWorkflow = makeTestWorkflowWithSource({
+      name: 'implement',
+      description: 'Implement',
+      provider: 'pi',
+    });
+    (resolveWorkflowName as ReturnType<typeof mock>).mockReturnValue(piWorkflow.workflow);
+
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-nomatch',
+      name: 'test/repo',
+      repository_url: null,
+      default_cwd: '/test/path',
+      commands: [],
+      created_at: new Date(),
+    });
+    (providerBindings.listBindingsByCodebase as ReturnType<typeof mock>).mockResolvedValueOnce([
+      {
+        id: 'db-uuid-first',
+        provider: 'claude',
+        name: 'first-binding',
+        codebase_id: 'cb-nomatch',
+        event_route: 'workflow',
+        state: 'active',
+        binding_version: 1,
+      },
+      {
+        id: 'db-uuid-second',
+        provider: 'codex',
+        name: 'second-binding',
+        codebase_id: 'cb-nomatch',
+        event_route: 'workflow',
+        state: 'active',
+        binding_version: 1,
+      },
+    ]);
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [piWorkflow],
+      errors: [],
+    });
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-no-match',
+    });
+
+    await workflowRunCommand('/test/path', 'implement', 'Add feature', {
+      json: true,
+      noWorktree: true,
+    });
+
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    const result = envelope.result as Record<string, unknown>;
+    expect(result.projectBindingRef).toBeDefined();
+
+    const bindingRef = result.projectBindingRef as Record<string, unknown>;
+    expect(bindingRef.provider).toBe('claude');
+    expect(bindingRef.name).toBe('first-binding');
+  });
+});
+
+// ==========================================================================
 // CONTRACT FIXTURE INVENTORY GUARD
 // ==========================================================================
 

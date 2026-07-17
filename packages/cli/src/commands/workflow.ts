@@ -499,13 +499,14 @@ function emitWorkflowEnvelope(envelope: Record<string, unknown>): void {
 
 async function buildProjectBindingRef(
   codebaseId: string | null | undefined,
-  projectRef: string | undefined
+  projectRef: string | undefined,
+  provider?: string
 ): Promise<Record<string, unknown> | undefined> {
   if (!codebaseId) return undefined;
   try {
     const bindings = await providerBindingDb.listBindingsByCodebase(codebaseId);
     if (bindings.length === 0) return undefined;
-    const binding = bindings[0];
+    const binding = (provider && bindings.find(b => b.provider === provider)) || bindings[0];
     const ref: Record<string, unknown> = {
       provider: binding.provider,
       name: binding.name,
@@ -1396,7 +1397,11 @@ export async function workflowRunCommand(
         }
 
         const projectRef = codebase?.name ? `project:${codebase.name}` : undefined;
-        const projectBindingRef = await buildProjectBindingRef(codebase?.id, projectRef);
+        const projectBindingRef = await buildProjectBindingRef(
+          codebase?.id,
+          projectRef,
+          workflow.provider
+        );
 
         const successResult: Record<string, unknown> = {
           operation: 'start',
@@ -1413,7 +1418,11 @@ export async function workflowRunCommand(
 
       // Successful start acknowledgement
       const projectRef = codebase?.name ? `project:${codebase.name}` : undefined;
-      const projectBindingRef = await buildProjectBindingRef(codebase?.id, projectRef);
+      const projectBindingRef = await buildProjectBindingRef(
+        codebase?.id,
+        projectRef,
+        workflow.provider
+      );
       const startResult: Record<string, unknown> = {
         operation: 'start',
         state: 'running',
