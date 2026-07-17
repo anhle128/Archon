@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -20,17 +21,20 @@ import { tmpdir } from 'node:os';
 // `workflow get <uuid> --json` for a not-found run prints the legacy
 // `{ok:false, runId, error:'not_found'}` shape with no `correlationId`.
 
-const REPO_ROOT = join(import.meta.dir, '..', '..', '..', '..');
 const CLI_ENTRY = join(import.meta.dir, '..', 'cli.ts');
 
 let isolatedHome: string;
+let isolatedRepo: string;
 
 beforeAll(() => {
   isolatedHome = mkdtempSync(join(tmpdir(), 'archon-workflow-json-e2e-'));
+  isolatedRepo = mkdtempSync(join(tmpdir(), 'archon-workflow-json-repo-'));
+  execFileSync('git', ['init', isolatedRepo], { stdio: 'ignore' });
 });
 
 afterAll(() => {
   rmSync(isolatedHome, { recursive: true, force: true });
+  rmSync(isolatedRepo, { recursive: true, force: true });
 });
 
 interface CliResult {
@@ -39,7 +43,7 @@ interface CliResult {
   exitCode: number;
 }
 
-async function runCli(args: string[], cwd: string = REPO_ROOT): Promise<CliResult> {
+async function runCli(args: string[], cwd: string = isolatedRepo): Promise<CliResult> {
   const childEnv: Record<string, string> = {
     ...(process.env as Record<string, string>),
     ARCHON_HOME: isolatedHome,
