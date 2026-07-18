@@ -1,6 +1,6 @@
 # Story 3.3c: Provide Archon Provider Decision Command CLI JSON
 
-Status: review
+Status: in-progress
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -109,6 +109,8 @@ so that human gate decisions can be sent through external controllers without re
 - [x] [Review][Patch] Full validation gate still fails while story claims `bun run validate` passes [packages/core/src/db/codebases.test.ts:88]
 - [x] [Review][Patch] Runtime approve/reject envelopes are not schema-validated by contract tests [packages/cli/src/commands/workflow-command-contract.test.ts:399]
 - [x] [Review][Patch] Approve/reject pre-handler dependency E2E coverage is incomplete [packages/cli/src/commands/workflow-json.e2e.test.ts:559]
+- [ ] [Review][Patch] Runtime approve/reject envelope tests still do not validate emitted envelopes against the actual JSON Schema [packages/cli/src/commands/workflow-command-contract.test.ts:611]
+- [ ] [Review][Patch] Reject-from-non-git pre-handler E2E coverage is still missing [packages/cli/src/commands/workflow-json.e2e.test.ts:559]
 
 ## Dev Notes
 
