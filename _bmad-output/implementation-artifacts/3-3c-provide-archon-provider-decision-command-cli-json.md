@@ -1,6 +1,6 @@
 # Story 3.3c: Provide Archon Provider Decision Command CLI JSON
 
-Status: in-progress
+Status: review
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -113,8 +113,8 @@ so that human gate decisions can be sent through external controllers without re
 - [x] [Review][Patch] Reject-from-non-git pre-handler E2E coverage is still missing [packages/cli/src/commands/workflow-json.e2e.test.ts:559]
 - [x] [Review][Patch] Runtime approve/reject schema tests still use a partial local schema interpreter instead of the existing contract validator pattern [packages/cli/src/commands/workflow-command-contract.test.ts:614]
 - [x] [Review][Patch] Reject-from-non-git E2E test still does not assert the required `/cwd=not_a_git_repository` field error [packages/cli/src/commands/workflow-json.e2e.test.ts:581]
-- [ ] [Review][Patch] Successful JSON approve/reject envelopes can report a resolved decision as `state: "waiting-for-approval"` [packages/cli/src/commands/workflow.ts:3046]
-- [ ] [Review][Patch] Several pre-dispatch malformed-request E2E tests still do not assert the required field-level diagnostics [packages/cli/src/commands/workflow-json.e2e.test.ts:432]
+- [x] [Review][Patch] Successful JSON approve/reject envelopes can report a resolved decision as `state: "waiting-for-approval"` [packages/cli/src/commands/workflow.ts:3046]
+- [x] [Review][Patch] Several pre-dispatch malformed-request E2E tests still do not assert the required field-level diagnostics [packages/cli/src/commands/workflow-json.e2e.test.ts:432]
 
 ## Dev Notes
 
@@ -463,17 +463,19 @@ Qoder (Claude)
 - ✅ RF9: Added `3.3C-CLI-014` E2E test proving `workflow reject --json` from a non-git directory emits `MALFORMED_REQUEST` envelope (mirror of `3.3C-CLI-011` for approve)
 - ✅ RF10: Replaced hand-rolled `createSchemaValidator()` (partial local JSON Schema interpreter) with `validateRuntimeEnvelope()` that delegates to the existing `validate_contracts.py` `schema_errors()` function via a subprocess helper at `test-helpers/validate_runtime_envelope.py`
 - ✅ RF11: Added `fieldErrors` assertion to `3.3C-CLI-014` (reject-from-non-git E2E) proving `details.fieldErrors` contains `{ path: '/cwd', code: 'not_a_git_repository' }`
+- ✅ RF12: `mapWorkflowRunToContractState` now checks `isGateResolved` — resolved gates (approved/rejected) report `state: 'paused'` instead of `state: 'waiting-for-approval'`. Added `3.3C-UNIT-STATE-001` unit test and updated approve/reject success test mocks to include `resolved` field in post-decision re-fetch.
+- ✅ RF13: All 11 pre-dispatch malformed-request E2E tests now assert field-level diagnostics: missing run-id asserts `details.missingArgument`, blank correlation-id asserts `fieldErrors[{path:'/correlationId',code:'required'}]`, invalid JSON flag asserts `fieldErrors[{path:'/json',code:'must_be_boolean_flag'}]`, bare --correlation-id asserts `fieldErrors[{path:'/correlationId',code:'required'}]`, non-git directory asserts `fieldErrors[{path:'/cwd',code:'not_a_git_repository'}]`, nonexistent --cwd asserts `fieldErrors[{path:'/cwd',code:'directory_not_found'}]`
 
 ### File List
 
-- `packages/cli/src/commands/workflow.ts` — approve/reject JSON envelope conversion, classifier extension, exit code propagation (RF1), readback error message fix (RF2), ambiguous run-id classifier (RF4)
+- `packages/cli/src/commands/workflow.ts` — approve/reject JSON envelope conversion, classifier extension, exit code propagation (RF1), readback error message fix (RF2), ambiguous run-id classifier (RF4), `isGateResolved` check in `mapWorkflowRunToContractState` (RF12)
 - `packages/cli/src/cli.ts` — envelope command mapping, correlation-id threading, missing run-id guard, `return await` for approve/reject dispatch (RF1)
-- `packages/cli/src/commands/workflow.test.ts` — unit tests for approve/reject envelopes, classifier patterns, exit code assertions (RF1), post-decision readback tests (RF2), ambiguous run-id classifier test (RF4)
+- `packages/cli/src/commands/workflow.test.ts` — unit tests for approve/reject envelopes, classifier patterns, exit code assertions (RF1), post-decision readback tests (RF2), ambiguous run-id classifier test (RF4), resolved-gate state mapping test (RF12)
 - `packages/cli/src/commands/workflow-command-contract.test.ts` — unskipped forbidden-key and fixture-delta contract tests, added missing DB mocks, runtime envelope schema validation (RF6), replaced partial local schema interpreter with subprocess call to existing contract validator (RF10)
 - `packages/core/src/operations/workflow-operations.ts` — reject missing-approval-context guard (RF3)
 - `packages/core/src/operations/workflow-operations.test.ts` — reject missing-approval-context test (RF3)
 - `packages/core/src/db/codebases.test.ts` — env var isolation fix for `DEFAULT_AI_ASSISTANT` (RF5)
-- `packages/cli/src/commands/workflow-json.e2e.test.ts` — `--cwd /nonexistent` E2E tests for approve/reject (RF7), reject-from-non-git E2E test (RF9), fieldError assertion for reject-from-non-git (RF11)
+- `packages/cli/src/commands/workflow-json.e2e.test.ts` — `--cwd /nonexistent` E2E tests for approve/reject (RF7), reject-from-non-git E2E test (RF9), fieldError assertion for reject-from-non-git (RF11), field-level diagnostics for all pre-dispatch malformed-request tests (RF13)
 - `packages/cli/src/commands/test-helpers/validate_runtime_envelope.py` — Python helper that delegates runtime envelope schema validation to `validate_contracts.py` `schema_errors()` (RF10)
 
 ### Change Log
@@ -483,3 +485,4 @@ Qoder (Claude)
 - 2026-07-19: Addressed 3 remaining code review findings — codebases test env var isolation (RF5), runtime envelope schema validation (RF6), pre-handler --cwd E2E coverage (RF7)
 - 2026-07-19: Addressed final 2 code review findings — schema-driven envelope validation against actual JSON Schema (RF8), reject-from-non-git E2E coverage (RF9)
 - 2026-07-19: Addressed last 2 code review findings — replaced partial local schema interpreter with existing contract validator pattern via subprocess (RF10), added /cwd field error assertion to reject-from-non-git E2E (RF11)
+- 2026-07-19: Addressed final 2 code review findings — `mapWorkflowRunToContractState` now checks `isGateResolved` to avoid reporting resolved decisions as `waiting-for-approval` (RF12), all pre-dispatch malformed-request E2E tests now assert field-level diagnostics (RF13)

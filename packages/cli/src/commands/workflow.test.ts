@@ -3439,6 +3439,29 @@ describe('workflow.ts run-state → contract-state mapping helper (Story 3.3b Ta
     expect(result).toEqual({ state: 'paused', terminal: false });
   });
 
+  it('3.3C-UNIT-STATE-001: paused + resolved approval gate maps to "paused" not "waiting-for-approval"', () => {
+    const approved = mapWorkflowRunToContractState({
+      status: 'paused',
+      metadata: {
+        approval: { nodeId: 'n1', message: 'm', resolved: 'approved' },
+      },
+    });
+    expect(approved.state).toBe('paused');
+    expect(approved.terminal).toBe(false);
+    expect(approved.actionRequired).toBeUndefined();
+    expect(approved.gateRef).toBeUndefined();
+
+    const rejected = mapWorkflowRunToContractState({
+      status: 'paused',
+      metadata: {
+        approval: { nodeId: 'n1', message: 'm', resolved: 'rejected' },
+      },
+    });
+    expect(rejected.state).toBe('paused');
+    expect(rejected.terminal).toBe(false);
+    expect(rejected.actionRequired).toBeUndefined();
+  });
+
   // 3.3B-UNIT-006 [P0] R-006
   it('3.3B-UNIT-006: paused + absent/malformed approval metadata conservatively maps to "paused"', () => {
     expect(mapWorkflowRunToContractState({ status: 'paused', metadata: {} })).toEqual({
@@ -4016,9 +4039,13 @@ describe('write command --json output', () => {
       user_message: 'go',
       metadata: { approval: { nodeId: 'gate', message: 'ok?' } },
     };
+    const approvedRun = {
+      ...pausedRun,
+      metadata: { approval: { nodeId: 'gate', message: 'ok?', resolved: 'approved' } },
+    };
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
       .mockResolvedValueOnce(pausedRun)
-      .mockResolvedValueOnce(pausedRun);
+      .mockResolvedValueOnce(approvedRun);
     const discoverSpy = discovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>;
     discoverSpy.mockClear();
 
@@ -4039,6 +4066,8 @@ describe('write command --json output', () => {
       operation: 'approve',
       decision: { outcome: 'approved', recorded: true },
       resumable: true,
+      state: 'paused',
+      terminal: false,
     });
     // No inline resume → workflowRunCommand (whose first step is discovery) never ran
     expect(discoverSpy).not.toHaveBeenCalled();
@@ -4056,9 +4085,20 @@ describe('write command --json output', () => {
         approval: { nodeId: 'loop-node', type: 'interactive_loop', message: 'feedback?' },
       },
     };
+    const resolvedLoopRun = {
+      ...loopRun,
+      metadata: {
+        approval: {
+          nodeId: 'loop-node',
+          type: 'interactive_loop',
+          message: 'feedback?',
+          resolved: 'approved',
+        },
+      },
+    };
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
       .mockResolvedValueOnce(loopRun)
-      .mockResolvedValueOnce(loopRun);
+      .mockResolvedValueOnce(resolvedLoopRun);
 
     await workflowApproveCommand('run-loop', 'looks good', true);
 
@@ -4070,6 +4110,8 @@ describe('write command --json output', () => {
     expect(result.operation).toBe('approve');
     expect((result.decision as Record<string, unknown>).outcome).toBe('approved');
     expect((result.decision as Record<string, unknown>).recorded).toBe(true);
+    expect(result.state).toBe('paused');
+    expect(result.terminal).toBe(false);
   });
 
   it('approve --json error: run not paused → UNEXPECTED_STATE', async () => {
@@ -4269,9 +4311,22 @@ describe('write command --json output', () => {
         },
       },
     };
+    const rejectedRun = {
+      ...pausedRun,
+      metadata: {
+        approval: {
+          nodeId: 'gate',
+          message: 'ok?',
+          onRejectPrompt: 'Fix the issues',
+          onRejectMaxAttempts: 3,
+          rejectionCount: 0,
+          resolved: 'rejected',
+        },
+      },
+    };
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
       .mockResolvedValueOnce(pausedRun)
-      .mockResolvedValueOnce(pausedRun);
+      .mockResolvedValueOnce(rejectedRun);
 
     await workflowRejectCommand('run-rj-rework', 'needs work', true);
 
@@ -4282,6 +4337,8 @@ describe('write command --json output', () => {
     const result = envelope.result as Record<string, unknown>;
     expect(result.cancelled).toBe(false);
     expect(result.resumable).toBe(true);
+    expect(result.state).toBe('paused');
+    expect(result.terminal).toBe(false);
   });
 
   it('reject --json success (max attempts reached) emits cancelled:true, maxAttemptsReached:true', async () => {

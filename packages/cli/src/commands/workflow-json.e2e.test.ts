@@ -380,6 +380,8 @@ describe('workflow approve/reject --json CLI dispatch E2E — real subprocess (S
     expect(envelope.success).toBe(false);
     const error = envelope.error as Record<string, unknown> | undefined;
     expect(error?.code).toBe('MALFORMED_REQUEST');
+    const details = error?.details as Record<string, unknown> | undefined;
+    expect(details?.missingArgument).toBe('run-id');
     expect(exitCode).toBe(64);
     expect(stderr).toBe('');
   });
@@ -394,6 +396,8 @@ describe('workflow approve/reject --json CLI dispatch E2E — real subprocess (S
     expect(envelope.success).toBe(false);
     const error = envelope.error as Record<string, unknown> | undefined;
     expect(error?.code).toBe('MALFORMED_REQUEST');
+    const details = error?.details as Record<string, unknown> | undefined;
+    expect(details?.missingArgument).toBe('run-id');
     expect(exitCode).toBe(64);
     expect(stderr).toBe('');
   });
@@ -445,6 +449,10 @@ describe('workflow approve/reject --json CLI dispatch E2E — real subprocess (S
     const error = envelope.error as Record<string, unknown> | undefined;
     expect(error?.code).toBe('MALFORMED_REQUEST');
     expect(error?.category).toBe('provider_contract');
+    const details005 = error?.details as Record<string, unknown> | undefined;
+    const fieldErrors005 = details005?.fieldErrors as Array<Record<string, unknown>> | undefined;
+    expect(fieldErrors005).toBeDefined();
+    expect(fieldErrors005).toContainEqual({ path: '/correlationId', code: 'required' });
     expect(exitCode).toBe(64);
     expect(stderr).toBe('');
   });
@@ -466,6 +474,10 @@ describe('workflow approve/reject --json CLI dispatch E2E — real subprocess (S
     const error = envelope.error as Record<string, unknown> | undefined;
     expect(error?.code).toBe('MALFORMED_REQUEST');
     expect(error?.category).toBe('provider_contract');
+    const details006 = error?.details as Record<string, unknown> | undefined;
+    const fieldErrors006 = details006?.fieldErrors as Array<Record<string, unknown>> | undefined;
+    expect(fieldErrors006).toBeDefined();
+    expect(fieldErrors006).toContainEqual({ path: '/correlationId', code: 'required' });
     expect(exitCode).toBe(64);
     expect(stderr).toBe('');
   });
@@ -488,6 +500,10 @@ describe('workflow approve/reject --json CLI dispatch E2E — real subprocess (S
     const error = envelope.error as Record<string, unknown> | undefined;
     expect(error?.code).toBe('MALFORMED_REQUEST');
     expect(error?.category).toBe('provider_contract');
+    const details007 = error?.details as Record<string, unknown> | undefined;
+    const fieldErrors007 = details007?.fieldErrors as Array<Record<string, unknown>> | undefined;
+    expect(fieldErrors007).toBeDefined();
+    expect(fieldErrors007).toContainEqual({ path: '/json', code: 'must_be_boolean_flag' });
     expect(exitCode).toBe(64);
     expect(stderr).toBe('');
   });
@@ -511,6 +527,10 @@ describe('workflow approve/reject --json CLI dispatch E2E — real subprocess (S
     const error = envelope.error as Record<string, unknown> | undefined;
     expect(error?.code).toBe('MALFORMED_REQUEST');
     expect(error?.category).toBe('provider_contract');
+    const details008 = error?.details as Record<string, unknown> | undefined;
+    const fieldErrors008 = details008?.fieldErrors as Array<Record<string, unknown>> | undefined;
+    expect(fieldErrors008).toBeDefined();
+    expect(fieldErrors008).toContainEqual({ path: '/json', code: 'must_be_boolean_flag' });
     expect(exitCode).toBe(64);
     expect(stderr).toBe('');
   });
@@ -531,6 +551,10 @@ describe('workflow approve/reject --json CLI dispatch E2E — real subprocess (S
     const error = envelope.error as Record<string, unknown> | undefined;
     expect(error?.code).toBe('MALFORMED_REQUEST');
     expect(error?.category).toBe('provider_contract');
+    const details009 = error?.details as Record<string, unknown> | undefined;
+    const fieldErrors009 = details009?.fieldErrors as Array<Record<string, unknown>> | undefined;
+    expect(fieldErrors009).toBeDefined();
+    expect(fieldErrors009).toContainEqual({ path: '/correlationId', code: 'required' });
     expect(exitCode).toBe(64);
     expect(stderr).toBe('');
   });
@@ -552,6 +576,10 @@ describe('workflow approve/reject --json CLI dispatch E2E — real subprocess (S
     const error = envelope.error as Record<string, unknown> | undefined;
     expect(error?.code).toBe('MALFORMED_REQUEST');
     expect(error?.category).toBe('provider_contract');
+    const details010 = error?.details as Record<string, unknown> | undefined;
+    const fieldErrors010 = details010?.fieldErrors as Array<Record<string, unknown>> | undefined;
+    expect(fieldErrors010).toBeDefined();
+    expect(fieldErrors010).toContainEqual({ path: '/correlationId', code: 'required' });
     expect(exitCode).toBe(64);
     expect(stderr).toBe('');
   });
@@ -571,6 +599,11 @@ describe('workflow approve/reject --json CLI dispatch E2E — real subprocess (S
       expect(envelope.success).toBe(false);
       const error = envelope.error as Record<string, unknown> | undefined;
       expect(error?.code).toBe('MALFORMED_REQUEST');
+      const details011 = error?.details as Record<string, unknown> | undefined;
+      const fieldErrors011 = details011?.fieldErrors as Array<Record<string, unknown>> | undefined;
+      expect(fieldErrors011).toBeDefined();
+      expect(fieldErrors011?.length).toBeGreaterThanOrEqual(1);
+      expect(fieldErrors011).toContainEqual({ path: '/cwd', code: 'not_a_git_repository' });
       expect(exitCode).toBe(64);
       expect(stderr).toBe('');
     } finally {
@@ -622,6 +655,10 @@ describe('workflow approve/reject --json CLI dispatch E2E — real subprocess (S
     expect(envelope.success).toBe(false);
     const error = envelope.error as Record<string, unknown> | undefined;
     expect(error?.code).toBe('MALFORMED_REQUEST');
+    const details012 = error?.details as Record<string, unknown> | undefined;
+    const fieldErrors012 = details012?.fieldErrors as Array<Record<string, unknown>> | undefined;
+    expect(fieldErrors012).toBeDefined();
+    expect(fieldErrors012).toContainEqual({ path: '/cwd', code: 'directory_not_found' });
     expect(exitCode).toBe(64);
     expect(stderr).toBe('');
   });
@@ -644,6 +681,10 @@ describe('workflow approve/reject --json CLI dispatch E2E — real subprocess (S
     expect(envelope.success).toBe(false);
     const error = envelope.error as Record<string, unknown> | undefined;
     expect(error?.code).toBe('MALFORMED_REQUEST');
+    const details013 = error?.details as Record<string, unknown> | undefined;
+    const fieldErrors013 = details013?.fieldErrors as Array<Record<string, unknown>> | undefined;
+    expect(fieldErrors013).toBeDefined();
+    expect(fieldErrors013).toContainEqual({ path: '/cwd', code: 'directory_not_found' });
     expect(exitCode).toBe(64);
     expect(stderr).toBe('');
   });

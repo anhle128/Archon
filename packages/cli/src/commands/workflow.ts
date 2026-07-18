@@ -44,6 +44,7 @@ import {
   TERMINAL_WORKFLOW_STATUSES,
   workflowRunStatusSchema,
   isApprovalContext,
+  isGateResolved,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import {
@@ -229,7 +230,14 @@ export function mapWorkflowRunToContractState(run: {
   const terminal = TERMINAL_WORKFLOW_STATUSES.includes(run.status);
 
   if (run.status === 'paused' && isApprovalContext(run.metadata.approval)) {
-    const approval = run.metadata.approval as { nodeId: string; type?: string };
+    const approval = run.metadata.approval as {
+      nodeId: string;
+      type?: string;
+      resolved?: string | null;
+    };
+    if (isGateResolved(approval as Parameters<typeof isGateResolved>[0])) {
+      return { state: 'paused', terminal: false };
+    }
     if (approval.type === 'interactive_loop') {
       return { state: 'paused', terminal: false };
     }
