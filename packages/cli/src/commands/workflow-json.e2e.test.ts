@@ -351,3 +351,230 @@ describe('workflow run/get --json CLI dispatch E2E — real subprocess (Story 3.
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// RED-PHASE E2E SCAFFOLD — Story 3.3c "Provide Archon Provider Decision
+// Command CLI JSON". First-party consumer surface: a real controller (Hermes)
+// invokes `archon workflow approve <run-id> --json` / `archon workflow reject
+// <run-id> --json` as a subprocess and parses stdout.
+//
+// Tests below drive the REAL CLI entry point (cli.ts) as a subprocess.
+// Currently genuinely red: today's `workflow approve --json` with a missing
+// run-id prints "Usage: ..." to stderr and exits 1 (no MALFORMED_REQUEST
+// envelope), and `workflow reject --json` behaves the same.
+//
+// ACTIVATION: getWorkflowCommandEnvelopeCommand in cli.ts must map
+// 'approve' → 'workflow.approve' and 'reject' → 'workflow.reject', and
+// the missing-run-id handler must emit a MALFORMED_REQUEST envelope in
+// JSON mode.
+// ---------------------------------------------------------------------------
+
+describe('workflow approve/reject --json CLI dispatch E2E — real subprocess (Story 3.3c)', () => {
+  // 3.3C-CLI-001 [P0] AC #2 — missing run-id on approve --json
+  test('3.3C-CLI-001: `workflow approve --json` with no run-id emits one MALFORMED_REQUEST envelope, exit 64', async () => {
+    const { stdout, stderr, exitCode } = await runCli(['workflow', 'approve', '--json']);
+
+    expect(stdout.trim()).not.toBe('');
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.approve');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3C-CLI-002 [P0] AC #2 — missing run-id on reject --json
+  test('3.3C-CLI-002: `workflow reject --json` with no run-id emits one MALFORMED_REQUEST envelope, exit 64', async () => {
+    const { stdout, stderr, exitCode } = await runCli(['workflow', 'reject', '--json']);
+
+    expect(stdout.trim()).not.toBe('');
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.reject');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3C-CLI-003 [P1] AC #2 — correlation-id threaded on approve --json
+  test('3.3C-CLI-003: --correlation-id is echoed on a `workflow approve --json` envelope', async () => {
+    const { stdout } = await runCli([
+      'workflow',
+      'approve',
+      '00000000-0000-0000-0000-000000000000',
+      '--json',
+      '--correlation-id',
+      'corr-cli-003-approve',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.correlationId).toBe('corr-cli-003-approve');
+  });
+
+  // 3.3C-CLI-004 [P1] AC #2 — correlation-id threaded on reject --json
+  test('3.3C-CLI-004: --correlation-id is echoed on a `workflow reject --json` envelope', async () => {
+    const { stdout } = await runCli([
+      'workflow',
+      'reject',
+      '00000000-0000-0000-0000-000000000000',
+      'some reason',
+      '--json',
+      '--correlation-id',
+      'corr-cli-004-reject',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.correlationId).toBe('corr-cli-004-reject');
+  });
+
+  // 3.3C-CLI-005 [P0] AC #2 — blank correlation-id on approve emits MALFORMED_REQUEST
+  test('3.3C-CLI-005: `workflow approve --json --correlation-id=` emits MALFORMED_REQUEST', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'approve',
+      '00000000-0000-0000-0000-000000000000',
+      '--json',
+      '--correlation-id=',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.approve');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(error?.category).toBe('provider_contract');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3C-CLI-006 [P0] AC #2 — blank correlation-id on reject emits MALFORMED_REQUEST
+  test('3.3C-CLI-006: `workflow reject --json --correlation-id=` emits MALFORMED_REQUEST', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'reject',
+      '00000000-0000-0000-0000-000000000000',
+      'reason',
+      '--json',
+      '--correlation-id=',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.reject');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(error?.category).toBe('provider_contract');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3C-CLI-007 [P1] AC #2 — invalid JSON flag (--json=true) on approve
+  test('3.3C-CLI-007: `workflow approve --json=true` emits MALFORMED_REQUEST envelope', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'approve',
+      '00000000-0000-0000-0000-000000000000',
+      '--json=true',
+      '--correlation-id',
+      'corr-cli-007',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.approve');
+    expect(envelope.success).toBe(false);
+    expect(envelope.correlationId).toBe('corr-cli-007');
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(error?.category).toBe('provider_contract');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3C-CLI-008 [P1] AC #2 — invalid JSON flag (--json=true) on reject
+  test('3.3C-CLI-008: `workflow reject --json=true` emits MALFORMED_REQUEST envelope', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'reject',
+      '00000000-0000-0000-0000-000000000000',
+      'reason',
+      '--json=true',
+      '--correlation-id',
+      'corr-cli-008',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.reject');
+    expect(envelope.success).toBe(false);
+    expect(envelope.correlationId).toBe('corr-cli-008');
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(error?.category).toBe('provider_contract');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3C-CLI-009 [P1] — bare --correlation-id consuming --json on approve
+  test('3.3C-CLI-009: bare `--correlation-id` cannot consume `--json` and bypass the approve envelope path', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'approve',
+      '00000000-0000-0000-0000-000000000000',
+      '--correlation-id',
+      '--json',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.approve');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(error?.category).toBe('provider_contract');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3C-CLI-010 [P1] — bare --correlation-id consuming --json on reject
+  test('3.3C-CLI-010: bare `--correlation-id` cannot consume `--json` and bypass the reject envelope path', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'reject',
+      '00000000-0000-0000-0000-000000000000',
+      'reason',
+      '--correlation-id',
+      '--json',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.reject');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(error?.category).toBe('provider_contract');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3C-CLI-011 [P0] — not-a-git-repo emits envelope (inherited from cli.ts guard)
+  test('3.3C-CLI-011: `workflow approve --json` from a non-git directory emits MALFORMED_REQUEST', async () => {
+    const nonGitCwd = mkdtempSync(join(tmpdir(), 'archon-non-git-3c-'));
+    try {
+      const { stdout, stderr, exitCode } = await runCli(
+        ['workflow', 'approve', '00000000-0000-0000-0000-000000000000', '--json'],
+        nonGitCwd
+      );
+
+      expect(stdout.trim()).not.toBe('');
+      const envelope = parseSoleJsonLine(stdout);
+      expect(envelope.command).toBe('workflow.approve');
+      expect(envelope.success).toBe(false);
+      const error = envelope.error as Record<string, unknown> | undefined;
+      expect(error?.code).toBe('MALFORMED_REQUEST');
+      expect(exitCode).toBe(64);
+      expect(stderr).toBe('');
+    } finally {
+      rmSync(nonGitCwd, { recursive: true, force: true });
+    }
+  });
+});
