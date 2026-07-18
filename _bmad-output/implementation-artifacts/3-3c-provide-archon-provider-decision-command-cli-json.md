@@ -115,6 +115,7 @@ so that human gate decisions can be sent through external controllers without re
 - [x] [Review][Patch] Reject-from-non-git E2E test still does not assert the required `/cwd=not_a_git_repository` field error [packages/cli/src/commands/workflow-json.e2e.test.ts:581]
 - [x] [Review][Patch] Successful JSON approve/reject envelopes can report a resolved decision as `state: "waiting-for-approval"` [packages/cli/src/commands/workflow.ts:3046]
 - [x] [Review][Patch] Several pre-dispatch malformed-request E2E tests still do not assert the required field-level diagnostics [packages/cli/src/commands/workflow-json.e2e.test.ts:432]
+- [ ] [Review][Patch] Reject JSON missing approval context lacks command-level envelope proof [packages/cli/src/commands/workflow.test.ts:4380]
 
 ## Dev Notes
 
