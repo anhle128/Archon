@@ -1,6 +1,6 @@
 # Story 3.3c: Provide Archon Provider Decision Command CLI JSON
 
-Status: review
+Status: in-progress
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -119,6 +119,7 @@ so that human gate decisions can be sent through external controllers without re
 - [x] [Review][Patch] Reject write-back success proof is still skipped [packages/cli/src/commands/workflow.test.ts:6754]
 - [x] [Review][Patch] Timeout fail-closed command envelope proof is missing [packages/cli/src/commands/workflow.test.ts:7066]
 - [x] [Review][Patch] Approve already-resolved command proof exercises the missing-context branch [packages/cli/src/commands/workflow.test.ts:4147]
+- [ ] [Review][Patch] Write-back reject JSON proof is active but still incomplete [packages/cli/src/commands/workflow.test.ts:6794]
 
 ## Dev Notes
 
