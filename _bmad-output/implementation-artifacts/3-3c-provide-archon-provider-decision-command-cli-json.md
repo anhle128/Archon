@@ -1,6 +1,6 @@
 # Story 3.3c: Provide Archon Provider Decision Command CLI JSON
 
-Status: review
+Status: in-progress
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -116,6 +116,9 @@ so that human gate decisions can be sent through external controllers without re
 - [x] [Review][Patch] Successful JSON approve/reject envelopes can report a resolved decision as `state: "waiting-for-approval"` [packages/cli/src/commands/workflow.ts:3046]
 - [x] [Review][Patch] Several pre-dispatch malformed-request E2E tests still do not assert the required field-level diagnostics [packages/cli/src/commands/workflow-json.e2e.test.ts:432]
 - [x] [Review][Patch] Reject JSON missing approval context lacks command-level envelope proof [packages/cli/src/commands/workflow.test.ts:4380]
+- [ ] [Review][Patch] Reject write-back success proof is still skipped [packages/cli/src/commands/workflow.test.ts:6754]
+- [ ] [Review][Patch] Timeout fail-closed command envelope proof is missing [packages/cli/src/commands/workflow.test.ts:7066]
+- [ ] [Review][Patch] Approve already-resolved command proof exercises the missing-context branch [packages/cli/src/commands/workflow.test.ts:4147]
 
 ## Dev Notes
 
