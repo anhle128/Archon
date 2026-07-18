@@ -1,6 +1,6 @@
 # Story 3.3c: Provide Archon Provider Decision Command CLI JSON
 
-Status: review
+Status: in-progress
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -113,6 +113,8 @@ so that human gate decisions can be sent through external controllers without re
 - [x] [Review][Patch] Reject-from-non-git pre-handler E2E coverage is still missing [packages/cli/src/commands/workflow-json.e2e.test.ts:559]
 - [x] [Review][Patch] Runtime approve/reject schema tests still use a partial local schema interpreter instead of the existing contract validator pattern [packages/cli/src/commands/workflow-command-contract.test.ts:614]
 - [x] [Review][Patch] Reject-from-non-git E2E test still does not assert the required `/cwd=not_a_git_repository` field error [packages/cli/src/commands/workflow-json.e2e.test.ts:581]
+- [ ] [Review][Patch] Successful JSON approve/reject envelopes can report a resolved decision as `state: "waiting-for-approval"` [packages/cli/src/commands/workflow.ts:3046]
+- [ ] [Review][Patch] Several pre-dispatch malformed-request E2E tests still do not assert the required field-level diagnostics [packages/cli/src/commands/workflow-json.e2e.test.ts:432]
 
 ## Dev Notes
 
