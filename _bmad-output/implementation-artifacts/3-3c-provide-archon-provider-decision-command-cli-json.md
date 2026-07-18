@@ -1,6 +1,6 @@
 # Story 3.3c: Provide Archon Provider Decision Command CLI JSON
 
-Status: review
+Status: in-progress
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -106,6 +106,9 @@ so that human gate decisions can be sent through external controllers without re
 - [x] [Review][Patch] Post-decision missing readback is classified as run-not-found instead of internal error [packages/cli/src/commands/workflow.ts:3041]
 - [x] [Review][Patch] Reject on paused run with missing approval context can cancel the run instead of failing closed [packages/core/src/operations/workflow-operations.ts:330]
 - [x] [Review][Patch] Ambiguous short run-id matches are classified as internal errors [packages/cli/src/commands/workflow.ts:2842]
+- [ ] [Review][Patch] Full validation gate still fails while story claims `bun run validate` passes [packages/core/src/db/codebases.test.ts:88]
+- [ ] [Review][Patch] Runtime approve/reject envelopes are not schema-validated by contract tests [packages/cli/src/commands/workflow-command-contract.test.ts:399]
+- [ ] [Review][Patch] Approve/reject pre-handler dependency E2E coverage is incomplete [packages/cli/src/commands/workflow-json.e2e.test.ts:559]
 
 ## Dev Notes
 
