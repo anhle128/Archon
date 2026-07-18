@@ -1,6 +1,6 @@
 # Story 3.3c: Provide Archon Provider Decision Command CLI JSON
 
-Status: in-progress
+Status: review
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -106,9 +106,9 @@ so that human gate decisions can be sent through external controllers without re
 - [x] [Review][Patch] Post-decision missing readback is classified as run-not-found instead of internal error [packages/cli/src/commands/workflow.ts:3041]
 - [x] [Review][Patch] Reject on paused run with missing approval context can cancel the run instead of failing closed [packages/core/src/operations/workflow-operations.ts:330]
 - [x] [Review][Patch] Ambiguous short run-id matches are classified as internal errors [packages/cli/src/commands/workflow.ts:2842]
-- [ ] [Review][Patch] Full validation gate still fails while story claims `bun run validate` passes [packages/core/src/db/codebases.test.ts:88]
-- [ ] [Review][Patch] Runtime approve/reject envelopes are not schema-validated by contract tests [packages/cli/src/commands/workflow-command-contract.test.ts:399]
-- [ ] [Review][Patch] Approve/reject pre-handler dependency E2E coverage is incomplete [packages/cli/src/commands/workflow-json.e2e.test.ts:559]
+- [x] [Review][Patch] Full validation gate still fails while story claims `bun run validate` passes [packages/core/src/db/codebases.test.ts:88]
+- [x] [Review][Patch] Runtime approve/reject envelopes are not schema-validated by contract tests [packages/cli/src/commands/workflow-command-contract.test.ts:399]
+- [x] [Review][Patch] Approve/reject pre-handler dependency E2E coverage is incomplete [packages/cli/src/commands/workflow-json.e2e.test.ts:559]
 
 ## Dev Notes
 
@@ -450,6 +450,9 @@ Qoder (Claude)
 - ✅ RF2: Post-decision readback error messages changed from "Workflow run not found after approval/rejection" to "Failed to read back workflow run after approval/rejection" — now correctly classified as INTERNAL_ERROR instead of WORKFLOW_RUN_NOT_FOUND
 - ✅ RF3: `rejectWorkflow` now throws "missing approval context" when paused run has no approval context, preventing silent cancellation via `resolveAndCancelApprovalGate`
 - ✅ RF4: `classifyRunError` now matches "matches more than one run" → MALFORMED_REQUEST/64 instead of falling through to INTERNAL_ERROR
+- ✅ RF5: Fixed `codebases.test.ts` env var leak — test "creates codebase with optional fields omitted" now saves/clears/restores `DEFAULT_AI_ASSISTANT` so `bun run validate` passes regardless of environment
+- ✅ RF6: Added `validateEnvelopeSchema` helper and `3.3C-CONTRACT-005` describe block with 4 tests validating runtime approve/reject envelopes against JSON schema required fields and types
+- ✅ RF7: Added `3.3C-CLI-012` and `3.3C-CLI-013` E2E tests proving `--cwd /nonexistent` emits `MALFORMED_REQUEST` envelope for both approve and reject
 
 ### File List
 
@@ -459,8 +462,12 @@ Qoder (Claude)
 - `packages/cli/src/commands/workflow-command-contract.test.ts` — unskipped forbidden-key and fixture-delta contract tests, added missing DB mocks
 - `packages/core/src/operations/workflow-operations.ts` — reject missing-approval-context guard (RF3)
 - `packages/core/src/operations/workflow-operations.test.ts` — reject missing-approval-context test (RF3)
+- `packages/core/src/db/codebases.test.ts` — env var isolation fix for `DEFAULT_AI_ASSISTANT` (RF5)
+- `packages/cli/src/commands/workflow-command-contract.test.ts` — runtime envelope schema validation (RF6)
+- `packages/cli/src/commands/workflow-json.e2e.test.ts` — `--cwd /nonexistent` E2E tests for approve/reject (RF7)
 
 ### Change Log
 
 - 2026-07-19: Implemented all 6 slices — approve/reject envelope conversion, CLI wiring, classifier extension, contract/unit/E2E tests, validation gates
 - 2026-07-19: Addressed 4 code review findings — exit code propagation (RF1), post-decision readback classification (RF2), reject missing-context guard (RF3), ambiguous run-id classification (RF4)
+- 2026-07-19: Addressed 3 remaining code review findings — codebases test env var isolation (RF5), runtime envelope schema validation (RF6), pre-handler --cwd E2E coverage (RF7)

@@ -73,22 +73,28 @@ describe('codebases', () => {
     });
 
     test('creates codebase with optional fields omitted', async () => {
-      const codebaseWithoutOptional: Codebase = {
-        ...mockCodebase,
-        repository_url: null,
-      };
-      mockQuery.mockResolvedValueOnce(createQueryResult([codebaseWithoutOptional]));
+      const saved = process.env.DEFAULT_AI_ASSISTANT;
+      delete process.env.DEFAULT_AI_ASSISTANT;
+      try {
+        const codebaseWithoutOptional: Codebase = {
+          ...mockCodebase,
+          repository_url: null,
+        };
+        mockQuery.mockResolvedValueOnce(createQueryResult([codebaseWithoutOptional]));
 
-      const result = await createCodebase({
-        name: 'test-project',
-        default_cwd: '/workspace/test-project',
-      });
+        const result = await createCodebase({
+          name: 'test-project',
+          default_cwd: '/workspace/test-project',
+        });
 
-      expect(result).toEqual(codebaseWithoutOptional);
-      expect(mockQuery).toHaveBeenCalledWith(
-        'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, default_branch, ai_assistant_type, kind) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-        ['test-project', null, '/workspace/test-project', null, 'claude', 'repo']
-      );
+        expect(result).toEqual(codebaseWithoutOptional);
+        expect(mockQuery).toHaveBeenCalledWith(
+          'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, default_branch, ai_assistant_type, kind) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+          ['test-project', null, '/workspace/test-project', null, 'claude', 'repo']
+        );
+      } finally {
+        if (saved !== undefined) process.env.DEFAULT_AI_ASSISTANT = saved;
+      }
     });
 
     test('defaults ai_assistant_type to claude when no env var set', async () => {

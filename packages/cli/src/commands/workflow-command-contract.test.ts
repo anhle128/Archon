@@ -601,6 +601,169 @@ describe('3.3C-CONTRACT-003 [P1] canonical validator still passes (regression)',
   });
 });
 
+// ---------------------------------------------------------------------------
+// RF6: Runtime schema validation — validates emitted envelopes against the
+// JSON schema's required fields and types. This is distinct from the forbidden-
+// key scan (CONTRACT-001) and the fixture validator (CONTRACT-003, which
+// validates static fixtures, not runtime output).
+// ---------------------------------------------------------------------------
+
+function validateEnvelopeSchema(envelope: Record<string, unknown>): string[] {
+  const errors: string[] = [];
+  const required = [
+    'schemaVersion',
+    'intendedProducer',
+    'intendedConsumer',
+    'owningSubproject',
+    'provider',
+    'command',
+    'correlationId',
+    'issuedAt',
+    'success',
+  ];
+  for (const field of required) {
+    if (!(field in envelope)) {
+      errors.push(`missing required field: ${field}`);
+    }
+  }
+  if (typeof envelope.schemaVersion !== 'string') {
+    errors.push('schemaVersion must be a string');
+  }
+  if (typeof envelope.success !== 'boolean') {
+    errors.push('success must be a boolean');
+  }
+  if (typeof envelope.provider !== 'string' || !envelope.provider) {
+    errors.push('provider must be a non-empty string');
+  }
+  if (typeof envelope.command !== 'string') {
+    errors.push('command must be a string');
+  }
+  if (envelope.success === true) {
+    if (!('workflowRunRef' in envelope)) {
+      errors.push('success envelope missing workflowRunRef');
+    }
+    if (!('result' in envelope)) {
+      errors.push('success envelope missing result');
+    }
+  } else if (envelope.success === false) {
+    if (!('error' in envelope)) {
+      errors.push('error envelope missing error');
+    } else {
+      const error = envelope.error as Record<string, unknown>;
+      if (typeof error.code !== 'string') errors.push('error.code must be a string');
+      if (typeof error.category !== 'string') errors.push('error.category must be a string');
+      if (typeof error.retryable !== 'boolean') errors.push('error.retryable must be a boolean');
+    }
+    if (!('execution' in envelope)) {
+      errors.push('error envelope missing execution');
+    } else {
+      const execution = envelope.execution as Record<string, unknown>;
+      if (typeof execution.exitCode !== 'number') {
+        errors.push('execution.exitCode must be a number');
+      }
+    }
+  }
+  return errors;
+}
+
+describe('3.3C-CONTRACT-005 [P0] runtime envelope schema validation (RF6)', () => {
+  test('a runtime workflow.approve success envelope validates against the schema', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-schema-ap',
+      workflow_name: 'assist',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      user_message: 'go',
+      metadata: { approval: { type: 'approval', nodeId: 'gate', message: 'ok?' } },
+    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-schema-ap',
+      workflow_name: 'assist',
+      status: 'paused',
+      codebase_id: null,
+      working_path: '/tmp/wt',
+      metadata: { approval: { type: 'approval', nodeId: 'gate', resolved: 'approved' } },
+    });
+
+    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await workflowApproveCommand('run-schema-ap', 'lgtm', true);
+      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const envelope = JSON.parse(raw) as Record<string, unknown>;
+      const errors = validateEnvelopeSchema(envelope);
+      expect(errors).toEqual([]);
+    } finally {
+      consoleSpy.mockRestore();
+    }
+  });
+
+  test('a runtime workflow.approve error envelope validates against the schema', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+
+    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await workflowApproveCommand('nonexistent-schema', undefined, true);
+      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const envelope = JSON.parse(raw) as Record<string, unknown>;
+      const errors = validateEnvelopeSchema(envelope);
+      expect(errors).toEqual([]);
+    } finally {
+      consoleSpy.mockRestore();
+    }
+  });
+
+  test('a runtime workflow.reject success envelope validates against the schema', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-schema-rj',
+      workflow_name: 'assist',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      user_message: 'go',
+      metadata: { approval: { type: 'approval', nodeId: 'gate', message: 'ok?' } },
+    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-schema-rj',
+      workflow_name: 'assist',
+      status: 'cancelled',
+      codebase_id: null,
+      working_path: '/tmp/wt',
+      metadata: {},
+    });
+
+    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await workflowRejectCommand('run-schema-rj', 'nope', true);
+      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const envelope = JSON.parse(raw) as Record<string, unknown>;
+      const errors = validateEnvelopeSchema(envelope);
+      expect(errors).toEqual([]);
+    } finally {
+      consoleSpy.mockRestore();
+    }
+  });
+
+  test('a runtime workflow.reject error envelope validates against the schema', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+
+    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await workflowRejectCommand('nonexistent-schema-rj', 'nope', true);
+      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const envelope = JSON.parse(raw) as Record<string, unknown>;
+      const errors = validateEnvelopeSchema(envelope);
+      expect(errors).toEqual([]);
+    } finally {
+      consoleSpy.mockRestore();
+    }
+  });
+});
+
 describe('3.3C-CONTRACT-004 [P1] shared envelope module unmodified (regression gate)', () => {
   test('the shared envelope module tests pass without modification', async () => {
     const proc = Bun.spawn(

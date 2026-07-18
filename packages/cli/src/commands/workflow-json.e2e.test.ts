@@ -577,4 +577,47 @@ describe('workflow approve/reject --json CLI dispatch E2E — real subprocess (S
       rmSync(nonGitCwd, { recursive: true, force: true });
     }
   });
+
+  // 3.3C-CLI-012 [P0] — nonexistent --cwd emits envelope (inherited from cli.ts guard)
+  test('3.3C-CLI-012: `workflow approve --json --cwd /nonexistent` emits MALFORMED_REQUEST', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'approve',
+      '00000000-0000-0000-0000-000000000000',
+      '--json',
+      '--cwd',
+      '/nonexistent-dir-archon-e2e',
+    ]);
+
+    expect(stdout.trim()).not.toBe('');
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.approve');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3C-CLI-013 [P0] — nonexistent --cwd emits envelope for reject too
+  test('3.3C-CLI-013: `workflow reject --json --cwd /nonexistent` emits MALFORMED_REQUEST', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'reject',
+      '00000000-0000-0000-0000-000000000000',
+      'reason',
+      '--json',
+      '--cwd',
+      '/nonexistent-dir-archon-e2e',
+    ]);
+
+    expect(stdout.trim()).not.toBe('');
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.reject');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
 });
