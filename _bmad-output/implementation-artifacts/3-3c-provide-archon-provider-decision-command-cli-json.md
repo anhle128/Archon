@@ -1,6 +1,6 @@
 # Story 3.3c: Provide Archon Provider Decision Command CLI JSON
 
-Status: review
+Status: in-progress
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -99,6 +99,13 @@ so that human gate decisions can be sent through external controllers without re
   - [x] Run `bun test packages/cli/src/commands/workflow-command-contract.test.ts`.
   - [x] Run `bun --filter @archon/cli type-check`.
   - [x] Run `bun run validate` before moving to review.
+
+### Review Findings
+
+- [ ] [Review][Patch] JSON decision command failures still exit 0 [packages/cli/src/commands/workflow.ts:3064]
+- [ ] [Review][Patch] Post-decision missing readback is classified as run-not-found instead of internal error [packages/cli/src/commands/workflow.ts:3041]
+- [ ] [Review][Patch] Reject on paused run with missing approval context can cancel the run instead of failing closed [packages/core/src/operations/workflow-operations.ts:330]
+- [ ] [Review][Patch] Ambiguous short run-id matches are classified as internal errors [packages/cli/src/commands/workflow.ts:2842]
 
 ## Dev Notes
 
