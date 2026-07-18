@@ -1,6 +1,6 @@
 # Story 3.3c: Provide Archon Provider Decision Command CLI JSON
 
-Status: in-progress
+Status: review
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -119,7 +119,7 @@ so that human gate decisions can be sent through external controllers without re
 - [x] [Review][Patch] Reject write-back success proof is still skipped [packages/cli/src/commands/workflow.test.ts:6754]
 - [x] [Review][Patch] Timeout fail-closed command envelope proof is missing [packages/cli/src/commands/workflow.test.ts:7066]
 - [x] [Review][Patch] Approve already-resolved command proof exercises the missing-context branch [packages/cli/src/commands/workflow.test.ts:4147]
-- [ ] [Review][Patch] Write-back reject JSON proof is active but still incomplete [packages/cli/src/commands/workflow.test.ts:6794]
+- [x] [Review][Patch] Write-back reject JSON proof is active but still incomplete [packages/cli/src/commands/workflow.test.ts:6794]
 
 ## Dev Notes
 
@@ -474,6 +474,7 @@ Qoder (Claude)
 - ✅ RF15: Unskipped `3.3C-UNIT-014` — reject write-back success proof now runs and passes, asserting `cancelled: false` envelope for container write-back rejection via `resolveApprovalGate` CAS path
 - ✅ RF16: Added approve and reject timeout fail-closed envelope proofs — both assert `COMMAND_TIMEOUT`/`timeout`/`retryable: true`/`exitCode: 69` when `getWorkflowRun` throws `ETIMEDOUT` inside the JSON try/catch boundary
 - ✅ RF17: Fixed `approve --json error: already resolved` test mock to include `message: 'ok?'` in the approval context — `isApprovalContext` requires both `nodeId` AND `message`; without `message` the test was exercising the missing-context branch instead of the already-resolved branch
+- ✅ RF18: Completed write-back reject JSON proof (3.3C-UNIT-014) with full envelope shape assertions — `schemaVersion`, `command`, `workflowRunRef`, `operation`, `decision.outcome`, `decision.recorded`, `cancelled`, `resumable`, `maxAttemptsReached`, `state`, `terminal`, and no `error` property (14 expect() calls, up from 3)
 
 ### File List
 
@@ -497,3 +498,4 @@ Qoder (Claude)
 - 2026-07-19: Addressed final 2 code review findings — `mapWorkflowRunToContractState` now checks `isGateResolved` to avoid reporting resolved decisions as `waiting-for-approval` (RF12), all pre-dispatch malformed-request E2E tests now assert field-level diagnostics (RF13)
 - 2026-07-19: Addressed last code review finding — added reject missing-approval-context envelope proof test (RF14)
 - 2026-07-19: Addressed final 3 code review findings — unskipped write-back rejection proof (RF15), added timeout fail-closed envelope proofs for approve/reject (RF16), fixed already-resolved test mock to include required `message` field (RF17)
+- 2026-07-19: Addressed last code review finding — completed write-back reject JSON proof with full envelope shape assertions (RF18)

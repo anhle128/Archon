@@ -6822,9 +6822,20 @@ describe('workflowRejectCommand — JSON envelope mode (Story 3.3c)', () => {
 
     expect(consoleSpy).toHaveBeenCalledTimes(1);
     const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
+    expect(envelope.command).toBe('workflow.reject');
     expect(envelope.success).toBe(true);
+    expect(envelope).toHaveProperty('workflowRunRef');
+    expect(envelope).not.toHaveProperty('error');
     const result = envelope.result as Record<string, unknown>;
+    expect(result.operation).toBe('reject');
+    expect((result.decision as Record<string, unknown>).outcome).toBe('rejected');
+    expect((result.decision as Record<string, unknown>).recorded).toBe(true);
     expect(result.cancelled).toBe(false);
+    expect(result.resumable).toBe(true);
+    expect(result.maxAttemptsReached).toBe(false);
+    expect(result.state).toBe('paused');
+    expect(result.terminal).toBe(false);
   });
 
   // 3.3C-UNIT-015 [P0] AC #2 — reject error: run not paused
