@@ -127,6 +127,7 @@ mock.module('@archon/workflows/event-emitter', () => ({
 
 mock.module('@archon/git', () => ({
   findRepoRoot: mock(() => Promise.resolve(null)),
+  syncWorkspace: mock(() => Promise.resolve({})),
   getRemoteUrl: mock(() => Promise.resolve(null)),
   checkout: mock(() => Promise.resolve()),
   toRepoPath: mock((path: string) => path),
@@ -568,6 +569,11 @@ describe('workflowRunCommand', () => {
     // Clear workflow discovery mock to prevent leaks from previous tests
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockClear();
+    const git = await import('@archon/git');
+    (git.findRepoRoot as ReturnType<typeof mock>).mockClear();
+    (git.findRepoRoot as ReturnType<typeof mock>).mockResolvedValue(null);
+    (git.syncWorkspace as ReturnType<typeof mock>).mockClear();
+    (git.syncWorkspace as ReturnType<typeof mock>).mockResolvedValue({});
   });
 
   afterEach(() => {
@@ -584,6 +590,83 @@ describe('workflowRunCommand', () => {
     await expect(workflowRunCommand('/test/path', 'assist', 'hello')).rejects.toThrow(
       'No workflows found in .archon/workflows/'
     );
+  });
+
+  it('syncs an isolated Git workspace before discovering its workflow', async () => {
+    const git = await import('@archon/git');
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const calls: string[] = [];
+    (git.findRepoRoot as ReturnType<typeof mock>).mockResolvedValueOnce('/repo/source');
+    (git.syncWorkspace as ReturnType<typeof mock>).mockImplementationOnce(() => {
+      calls.push('sync');
+      return Promise.resolve({});
+    });
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockImplementationOnce(() => {
+      calls.push('discover');
+      return Promise.resolve({ workflows: [], errors: [] });
+    });
+
+    await expect(workflowRunCommand('/repo/source', 'assist', 'hello')).rejects.toThrow(
+      'No workflows found in .archon/workflows/'
+    );
+
+    expect(calls).toEqual(['sync', 'discover']);
+    expect(git.syncWorkspace).toHaveBeenCalledWith('/repo/source');
+  });
+
+  it('continues CLI discovery when the pre-discovery sync fails', async () => {
+    const git = await import('@archon/git');
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    (git.findRepoRoot as ReturnType<typeof mock>).mockResolvedValueOnce('/repo/source');
+    (git.syncWorkspace as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new Error('network unavailable')
+    );
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [],
+      errors: [],
+    });
+
+    await expect(workflowRunCommand('/repo/source', 'assist', 'hello')).rejects.toThrow(
+      'No workflows found in .archon/workflows/'
+    );
+
+    expect(discoverWorkflowsWithConfig).toHaveBeenCalled();
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: '/repo/source' }),
+      'cli.workflow_discovery_sync_failed'
+    );
+  });
+
+  it('does not synchronize explicit live workflow runs', async () => {
+    const git = await import('@archon/git');
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [],
+      errors: [],
+    });
+
+    await expect(
+      workflowRunCommand('/repo/source', 'assist', 'hello', { noWorktree: true })
+    ).rejects.toThrow('No workflows found in .archon/workflows/');
+
+    expect(git.findRepoRoot).not.toHaveBeenCalled();
+    expect(git.syncWorkspace).not.toHaveBeenCalled();
+  });
+
+  it('does not synchronize folder workflow runs', async () => {
+    const git = await import('@archon/git');
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [],
+      errors: [],
+    });
+
+    await expect(
+      workflowRunCommand('/folder/project', 'assist', 'hello', { folder: true })
+    ).rejects.toThrow('No workflows found in .archon/workflows/');
+
+    expect(git.findRepoRoot).not.toHaveBeenCalled();
+    expect(git.syncWorkspace).not.toHaveBeenCalled();
   });
 
   it('logs effective discovery root and source breakdown for every run', async () => {
@@ -1338,7 +1421,9 @@ describe('workflowRunCommand', () => {
       id: 'conv-123',
     });
     (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
-    (gitModule.findRepoRoot as ReturnType<typeof mock>).mockResolvedValueOnce('/test/path');
+    (gitModule.findRepoRoot as ReturnType<typeof mock>)
+      .mockResolvedValueOnce('/test/path')
+      .mockResolvedValueOnce('/test/path');
     (registerRepository as ReturnType<typeof mock>).mockRejectedValueOnce(
       new Error(
         'Source symlink at /home/test/.archon/workspaces/acme/widget/source already points to ' +
@@ -1373,7 +1458,9 @@ describe('workflowRunCommand', () => {
       id: 'conv-123',
     });
     (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
-    (gitModule.findRepoRoot as ReturnType<typeof mock>).mockResolvedValueOnce('/test/path');
+    (gitModule.findRepoRoot as ReturnType<typeof mock>)
+      .mockResolvedValueOnce('/test/path')
+      .mockResolvedValueOnce('/test/path');
     (registerRepository as ReturnType<typeof mock>).mockRejectedValueOnce(
       new Error(
         'Source symlink at /home/test/.archon/workspaces/acme/widget/source already points to ' +
@@ -1408,7 +1495,9 @@ describe('workflowRunCommand', () => {
       id: 'conv-123',
     });
     (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
-    (gitModule.findRepoRoot as ReturnType<typeof mock>).mockResolvedValueOnce('/test/path');
+    (gitModule.findRepoRoot as ReturnType<typeof mock>)
+      .mockResolvedValueOnce('/test/path')
+      .mockResolvedValueOnce('/test/path');
     (registerRepository as ReturnType<typeof mock>).mockRejectedValueOnce(
       new Error("EACCES: permission denied, mkdir '/home/test/.archon/workspaces/acme'")
     );
