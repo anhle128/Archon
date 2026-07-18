@@ -1,6 +1,6 @@
 # Story 3.3c: Provide Archon Provider Decision Command CLI JSON
 
-Status: review
+Status: done
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
