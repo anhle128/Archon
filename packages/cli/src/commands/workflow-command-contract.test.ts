@@ -1,6 +1,7 @@
 import { describe, test, expect, spyOn, mock } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 // RED-PHASE SCAFFOLD (MIXED) — Story 3.3b "Provide Archon Start And Status
 // CLI JSON", Task 4's "companion contract test (mirroring
@@ -609,150 +610,29 @@ describe('3.3C-CONTRACT-003 [P1] canonical validator still passes (regression)',
 // (CONTRACT-003, which validates static fixtures, not runtime output).
 // ---------------------------------------------------------------------------
 
-const SCHEMA_PATH = join(CONTRACTS_ROOT, 'schemas', 'workflow-command-envelope.schema.json');
+const RUNTIME_VALIDATOR = join(import.meta.dir, 'test-helpers', 'validate_runtime_envelope.py');
 
-function createSchemaValidator(): (envelope: Record<string, unknown>) => string[] {
-  const schema = JSON.parse(readFileSync(SCHEMA_PATH, 'utf8')) as Record<string, unknown>;
-  const defs = schema.$defs as Record<string, Record<string, unknown>>;
-
-  return (envelope: Record<string, unknown>): string[] => {
-    const errors: string[] = [];
-    const required = schema.required as string[];
-    for (const field of required) {
-      if (!(field in envelope)) errors.push(`missing required field: ${field}`);
-    }
-
-    const props = schema.properties as Record<string, Record<string, unknown>>;
-    for (const [key, propSchema] of Object.entries(props)) {
-      if (!(key in envelope)) continue;
-      const val = envelope[key];
-      if ('const' in propSchema && val !== propSchema.const) {
-        errors.push(
-          `${key} must be const ${JSON.stringify(propSchema.const)}, got ${JSON.stringify(val)}`
-        );
-      }
-      if ('enum' in propSchema && !(propSchema.enum as unknown[]).includes(val)) {
-        errors.push(
-          `${key} must be one of ${JSON.stringify(propSchema.enum)}, got ${JSON.stringify(val)}`
-        );
-      }
-      if (propSchema.type === 'string' && typeof val !== 'string') {
-        errors.push(`${key} must be a string`);
-      }
-      if (propSchema.type === 'boolean' && typeof val !== 'boolean') {
-        errors.push(`${key} must be a boolean`);
-      }
-      if (
-        propSchema.type === 'string' &&
-        typeof val === 'string' &&
-        propSchema.minLength &&
-        val.length < (propSchema.minLength as number)
-      ) {
-        errors.push(`${key} must have minLength >= ${propSchema.minLength}`);
-      }
-    }
-
-    const oneOf = schema.oneOf as Array<Record<string, unknown>>;
-    if (envelope.success === true) {
-      const successBranch = oneOf[0];
-      const branchRequired = (successBranch.required ?? []) as string[];
-      for (const field of branchRequired) {
-        if (!(field in envelope)) errors.push(`success branch requires ${field}`);
-      }
-      const notRequired = ((successBranch.not as Record<string, unknown>)?.required ??
-        []) as string[];
-      for (const field of notRequired) {
-        if (field in envelope) errors.push(`success branch must not have ${field}`);
-      }
-    } else if (envelope.success === false) {
-      const errorBranch = oneOf[1];
-      const branchRequired = (errorBranch.required ?? []) as string[];
-      for (const field of branchRequired) {
-        if (!(field in envelope)) errors.push(`error branch requires ${field}`);
-      }
-      const notRequired = ((errorBranch.not as Record<string, unknown>)?.required ??
-        []) as string[];
-      for (const field of notRequired) {
-        if (field in envelope) errors.push(`error branch must not have ${field}`);
-      }
-    }
-
-    const allOf = schema.allOf as Array<Record<string, unknown>>;
-    for (const clause of allOf) {
-      const ifClause = clause.if as Record<string, unknown> | undefined;
-      const thenClause = clause.then as Record<string, unknown> | undefined;
-      if (!ifClause || !thenClause) continue;
-      const ifProps = ifClause.properties as Record<string, Record<string, unknown>> | undefined;
-      let matches = true;
-      if (ifProps) {
-        for (const [key, cond] of Object.entries(ifProps)) {
-          if ('const' in cond && envelope[key] !== cond.const) matches = false;
-          if ('enum' in cond && !(cond.enum as unknown[]).includes(envelope[key])) matches = false;
-        }
-      }
-      if (matches) {
-        const thenRequired = (thenClause.required ?? []) as string[];
-        for (const field of thenRequired) {
-          if (!(field in envelope))
-            errors.push(`conditional requires ${field} when if-clause matches`);
-        }
-      }
-    }
-
-    if ('error' in envelope && typeof envelope.error === 'object' && envelope.error !== null) {
-      const errorDef = defs.error as Record<string, unknown>;
-      const errorRequired = (errorDef.required ?? []) as string[];
-      for (const field of errorRequired) {
-        if (!(field in (envelope.error as Record<string, unknown>)))
-          errors.push(`error missing required field: ${field}`);
-      }
-      const errorProps = errorDef.properties as Record<string, Record<string, unknown>>;
-      const err = envelope.error as Record<string, unknown>;
-      for (const [key, propSchema] of Object.entries(errorProps)) {
-        if (!(key in err)) continue;
-        if (propSchema.type === 'string' && typeof err[key] !== 'string')
-          errors.push(`error.${key} must be a string`);
-        if (propSchema.type === 'boolean' && typeof err[key] !== 'boolean')
-          errors.push(`error.${key} must be a boolean`);
-        if ('enum' in propSchema && !(propSchema.enum as unknown[]).includes(err[key])) {
-          errors.push(`error.${key} must be one of ${JSON.stringify(propSchema.enum)}`);
-        }
-      }
-    }
-
-    if (
-      'execution' in envelope &&
-      typeof envelope.execution === 'object' &&
-      envelope.execution !== null
-    ) {
-      const execDef = defs.execution as Record<string, unknown>;
-      const execRequired = (execDef.required ?? []) as string[];
-      for (const field of execRequired) {
-        if (!(field in (envelope.execution as Record<string, unknown>)))
-          errors.push(`execution missing required field: ${field}`);
-      }
-    }
-
-    if (
-      'workflowRunRef' in envelope &&
-      typeof envelope.workflowRunRef === 'object' &&
-      envelope.workflowRunRef !== null
-    ) {
-      const refDef = defs.workflowRunRef as Record<string, unknown>;
-      const refRequired = (refDef.required ?? []) as string[];
-      for (const field of refRequired) {
-        if (!(field in (envelope.workflowRunRef as Record<string, unknown>)))
-          errors.push(`workflowRunRef missing required field: ${field}`);
-      }
-    }
-
-    return errors;
-  };
+async function validateRuntimeEnvelope(envelope: Record<string, unknown>): Promise<string[]> {
+  const tmpFile = join(
+    tmpdir(),
+    `archon-envelope-${Date.now()}-${Math.random().toString(36).slice(2)}.json`
+  );
+  const { writeFileSync, unlinkSync } = await import('node:fs');
+  writeFileSync(tmpFile, JSON.stringify(envelope));
+  try {
+    const proc = Bun.spawn(['python3', RUNTIME_VALIDATOR, tmpFile], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const [stderr, exitCode] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
+    if (exitCode === 0) return [];
+    return stderr.trim().split('\n').filter(Boolean);
+  } finally {
+    unlinkSync(tmpFile);
+  }
 }
 
-const validateEnvelopeSchema = createSchemaValidator();
-
-describe('3.3C-CONTRACT-005 [P0] runtime envelope JSON Schema validation via ajv (RF6, RF8)', () => {
+describe('3.3C-CONTRACT-005 [P0] runtime envelope JSON Schema validation via contract validator (RF6, RF8, RF10)', () => {
   test('a runtime workflow.approve success envelope validates against the schema', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -778,7 +658,7 @@ describe('3.3C-CONTRACT-005 [P0] runtime envelope JSON Schema validation via ajv
       await workflowApproveCommand('run-schema-ap', 'lgtm', true);
       const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
       const envelope = JSON.parse(raw) as Record<string, unknown>;
-      const errors = validateEnvelopeSchema(envelope);
+      const errors = await validateRuntimeEnvelope(envelope);
       expect(errors).toEqual([]);
     } finally {
       consoleSpy.mockRestore();
@@ -794,7 +674,7 @@ describe('3.3C-CONTRACT-005 [P0] runtime envelope JSON Schema validation via ajv
       await workflowApproveCommand('nonexistent-schema', undefined, true);
       const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
       const envelope = JSON.parse(raw) as Record<string, unknown>;
-      const errors = validateEnvelopeSchema(envelope);
+      const errors = await validateRuntimeEnvelope(envelope);
       expect(errors).toEqual([]);
     } finally {
       consoleSpy.mockRestore();
@@ -826,7 +706,7 @@ describe('3.3C-CONTRACT-005 [P0] runtime envelope JSON Schema validation via ajv
       await workflowRejectCommand('run-schema-rj', 'nope', true);
       const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
       const envelope = JSON.parse(raw) as Record<string, unknown>;
-      const errors = validateEnvelopeSchema(envelope);
+      const errors = await validateRuntimeEnvelope(envelope);
       expect(errors).toEqual([]);
     } finally {
       consoleSpy.mockRestore();
@@ -842,7 +722,7 @@ describe('3.3C-CONTRACT-005 [P0] runtime envelope JSON Schema validation via ajv
       await workflowRejectCommand('nonexistent-schema-rj', 'nope', true);
       const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
       const envelope = JSON.parse(raw) as Record<string, unknown>;
-      const errors = validateEnvelopeSchema(envelope);
+      const errors = await validateRuntimeEnvelope(envelope);
       expect(errors).toEqual([]);
     } finally {
       consoleSpy.mockRestore();

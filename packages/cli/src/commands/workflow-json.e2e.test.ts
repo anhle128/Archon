@@ -578,8 +578,8 @@ describe('workflow approve/reject --json CLI dispatch E2E — real subprocess (S
     }
   });
 
-  // 3.3C-CLI-014 [P0] — reject from non-git directory emits envelope (RF-09)
-  test('3.3C-CLI-014: `workflow reject --json` from a non-git directory emits MALFORMED_REQUEST', async () => {
+  // 3.3C-CLI-014 [P0] — reject from non-git directory emits envelope (RF-09, RF-11)
+  test('3.3C-CLI-014: `workflow reject --json` from a non-git directory emits MALFORMED_REQUEST with /cwd field error', async () => {
     const nonGitCwd = mkdtempSync(join(tmpdir(), 'archon-non-git-3c-rj-'));
     try {
       const { stdout, stderr, exitCode } = await runCli(
@@ -593,6 +593,11 @@ describe('workflow approve/reject --json CLI dispatch E2E — real subprocess (S
       expect(envelope.success).toBe(false);
       const error = envelope.error as Record<string, unknown> | undefined;
       expect(error?.code).toBe('MALFORMED_REQUEST');
+      const details = error?.details as Record<string, unknown> | undefined;
+      const fieldErrors = details?.fieldErrors as Array<Record<string, unknown>> | undefined;
+      expect(fieldErrors).toBeDefined();
+      expect(fieldErrors?.length).toBeGreaterThanOrEqual(1);
+      expect(fieldErrors).toContainEqual({ path: '/cwd', code: 'not_a_git_repository' });
       expect(exitCode).toBe(64);
       expect(stderr).toBe('');
     } finally {

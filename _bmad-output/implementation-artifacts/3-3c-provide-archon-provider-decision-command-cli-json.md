@@ -1,6 +1,6 @@
 # Story 3.3c: Provide Archon Provider Decision Command CLI JSON
 
-Status: in-progress
+Status: review
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -111,8 +111,8 @@ so that human gate decisions can be sent through external controllers without re
 - [x] [Review][Patch] Approve/reject pre-handler dependency E2E coverage is incomplete [packages/cli/src/commands/workflow-json.e2e.test.ts:559]
 - [x] [Review][Patch] Runtime approve/reject envelope tests still do not validate emitted envelopes against the actual JSON Schema [packages/cli/src/commands/workflow-command-contract.test.ts:611]
 - [x] [Review][Patch] Reject-from-non-git pre-handler E2E coverage is still missing [packages/cli/src/commands/workflow-json.e2e.test.ts:559]
-- [ ] [Review][Patch] Runtime approve/reject schema tests still use a partial local schema interpreter instead of the existing contract validator pattern [packages/cli/src/commands/workflow-command-contract.test.ts:614]
-- [ ] [Review][Patch] Reject-from-non-git E2E test still does not assert the required `/cwd=not_a_git_repository` field error [packages/cli/src/commands/workflow-json.e2e.test.ts:581]
+- [x] [Review][Patch] Runtime approve/reject schema tests still use a partial local schema interpreter instead of the existing contract validator pattern [packages/cli/src/commands/workflow-command-contract.test.ts:614]
+- [x] [Review][Patch] Reject-from-non-git E2E test still does not assert the required `/cwd=not_a_git_repository` field error [packages/cli/src/commands/workflow-json.e2e.test.ts:581]
 
 ## Dev Notes
 
@@ -459,17 +459,20 @@ Qoder (Claude)
 - ✅ RF7: Added `3.3C-CLI-012` and `3.3C-CLI-013` E2E tests proving `--cwd /nonexistent` emits `MALFORMED_REQUEST` envelope for both approve and reject
 - ✅ RF8: Replaced hand-rolled `validateEnvelopeSchema` with schema-driven validator that reads actual `workflow-command-envelope.schema.json` and validates against its `required[]`, `oneOf`, `allOf`, and `$defs` constraints (no external library — guard test 3.3A-UNIT-018 forbids JSON Schema deps in @archon/cli)
 - ✅ RF9: Added `3.3C-CLI-014` E2E test proving `workflow reject --json` from a non-git directory emits `MALFORMED_REQUEST` envelope (mirror of `3.3C-CLI-011` for approve)
+- ✅ RF10: Replaced hand-rolled `createSchemaValidator()` (partial local JSON Schema interpreter) with `validateRuntimeEnvelope()` that delegates to the existing `validate_contracts.py` `schema_errors()` function via a subprocess helper at `test-helpers/validate_runtime_envelope.py`
+- ✅ RF11: Added `fieldErrors` assertion to `3.3C-CLI-014` (reject-from-non-git E2E) proving `details.fieldErrors` contains `{ path: '/cwd', code: 'not_a_git_repository' }`
 
 ### File List
 
 - `packages/cli/src/commands/workflow.ts` — approve/reject JSON envelope conversion, classifier extension, exit code propagation (RF1), readback error message fix (RF2), ambiguous run-id classifier (RF4)
 - `packages/cli/src/cli.ts` — envelope command mapping, correlation-id threading, missing run-id guard, `return await` for approve/reject dispatch (RF1)
 - `packages/cli/src/commands/workflow.test.ts` — unit tests for approve/reject envelopes, classifier patterns, exit code assertions (RF1), post-decision readback tests (RF2), ambiguous run-id classifier test (RF4)
-- `packages/cli/src/commands/workflow-command-contract.test.ts` — unskipped forbidden-key and fixture-delta contract tests, added missing DB mocks, runtime envelope schema validation (RF6), schema-driven validator reading actual JSON Schema file (RF8)
+- `packages/cli/src/commands/workflow-command-contract.test.ts` — unskipped forbidden-key and fixture-delta contract tests, added missing DB mocks, runtime envelope schema validation (RF6), replaced partial local schema interpreter with subprocess call to existing contract validator (RF10)
 - `packages/core/src/operations/workflow-operations.ts` — reject missing-approval-context guard (RF3)
 - `packages/core/src/operations/workflow-operations.test.ts` — reject missing-approval-context test (RF3)
 - `packages/core/src/db/codebases.test.ts` — env var isolation fix for `DEFAULT_AI_ASSISTANT` (RF5)
-- `packages/cli/src/commands/workflow-json.e2e.test.ts` — `--cwd /nonexistent` E2E tests for approve/reject (RF7), reject-from-non-git E2E test (RF9)
+- `packages/cli/src/commands/workflow-json.e2e.test.ts` — `--cwd /nonexistent` E2E tests for approve/reject (RF7), reject-from-non-git E2E test (RF9), fieldError assertion for reject-from-non-git (RF11)
+- `packages/cli/src/commands/test-helpers/validate_runtime_envelope.py` — Python helper that delegates runtime envelope schema validation to `validate_contracts.py` `schema_errors()` (RF10)
 
 ### Change Log
 
@@ -477,3 +480,4 @@ Qoder (Claude)
 - 2026-07-19: Addressed 4 code review findings — exit code propagation (RF1), post-decision readback classification (RF2), reject missing-context guard (RF3), ambiguous run-id classification (RF4)
 - 2026-07-19: Addressed 3 remaining code review findings — codebases test env var isolation (RF5), runtime envelope schema validation (RF6), pre-handler --cwd E2E coverage (RF7)
 - 2026-07-19: Addressed final 2 code review findings — schema-driven envelope validation against actual JSON Schema (RF8), reject-from-non-git E2E coverage (RF9)
+- 2026-07-19: Addressed last 2 code review findings — replaced partial local schema interpreter with existing contract validator pattern via subprocess (RF10), added /cwd field error assertion to reject-from-non-git E2E (RF11)
