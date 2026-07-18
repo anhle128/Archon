@@ -4419,6 +4419,30 @@ describe('write command --json output', () => {
     expect(error.code).toBe('UNEXPECTED_STATE');
   });
 
+  it('reject --json error: missing approval context → UNEXPECTED_STATE', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-no-ctx-rj',
+      workflow_name: 'implement',
+      status: 'paused',
+      metadata: {},
+    });
+
+    const exitCode = await workflowRejectCommand('run-no-ctx-rj', undefined, true);
+
+    expect(exitCode).toBe(78);
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(false);
+    expect(envelope.command).toBe('workflow.reject');
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('UNEXPECTED_STATE');
+    expect(error.category).toBe('unexpected_state');
+    expect(error.retryable).toBe(false);
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(78);
+  });
+
   it('reject --json error: run not found → WORKFLOW_RUN_NOT_FOUND', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
