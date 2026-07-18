@@ -58,9 +58,10 @@ so that human gate decisions can be sent through external controllers without re
     - `'already resolved'` or `'already approved'` or `'already rejected'` or `'awaiting resume'` → `UNEXPECTED_STATE`/`unexpected_state`/`retryable: false`/78. These come from `approveWorkflow`/`rejectWorkflow` in `packages/core/src/operations/workflow-operations.ts` when the gate was already resolved by a concurrent approve or the gate was resolved and awaiting resume.
     - `'Cannot approve run with status'` or `'Cannot reject run with status'` (noting that `rejectWorkflow` internally calls `approveWorkflow` through the same `getRunOrThrow` for the status check — **actually no**: `rejectWorkflow` has its own status check; verify both throw messages) → `UNEXPECTED_STATE`/`unexpected_state`/`retryable: false`/78.
     - `'missing approval context'` → `UNEXPECTED_STATE`/`unexpected_state`/`retryable: false`/78.
+    - `'Workflow run not found'` → `WORKFLOW_RUN_NOT_FOUND`/`unexpected_state`/`retryable: false`/78. This comes from `resolveRunIdArg` short-id/full-id resolution before `approveWorkflow`/`rejectWorkflow` runs; it must not fall through to `INTERNAL_ERROR`.
   - [ ] These patterns must NOT overmatch. Use `.includes()` with short, specific substrings that appear only in the operation-layer error messages. Do not match `'resolved'` alone (too broad).
   - [ ] Delete `printJsonWriteError` (`workflow.ts:2547-2551`) — after Slices 1 and 2, its only callers were `workflowApproveCommand` and `workflowRejectCommand`; confirm `workflowAbandonCommand` (`workflow.ts:2960-2975`) and `workflowResumeCommand` are still using it before deleting; if `workflowAbandonCommand` still uses it, defer deletion to Story 3-3d.
-  - [ ] Add unit tests for the new classifier patterns.
+  - [ ] Add unit tests for the new classifier patterns, including a negative test proving generic `'Workflow not found'` or prose containing `'resolved'` alone does not match the decision-command patterns.
 
 - [ ] Slice 5: Contract and regression tests (AC: 1, 2)
   - [ ] Update `packages/cli/src/commands/workflow.test.ts` to add tests for `workflowApproveCommand` JSON mode:
@@ -69,7 +70,7 @@ so that human gate decisions can be sent through external controllers without re
     - Approve failure — run not paused: assert `command: 'workflow.approve'`, `success: false`, `error.code: 'UNEXPECTED_STATE'`, `error.category: 'unexpected_state'`, `error.retryable: false`.
     - Approve failure — already resolved: assert `UNEXPECTED_STATE` envelope.
     - Approve failure — missing approval context: assert `UNEXPECTED_STATE` envelope.
-    - Approve failure — run not found: assert `INTERNAL_ERROR` or appropriate code.
+    - Approve failure — run not found from `resolveRunIdArg`: assert `WORKFLOW_RUN_NOT_FOUND`/`unexpected_state`/`retryable: false`/78.
     - Approve failure — DB error on post-approval run fetch: assert `INTERNAL_ERROR`/`implementation_defect` envelope.
   - [ ] Update `packages/cli/src/commands/workflow.test.ts` to add tests for `workflowRejectCommand` JSON mode:
     - Reject success — cancelled (no on_reject): assert `result.cancelled: true`, `result.resumable: false`.
@@ -78,6 +79,7 @@ so that human gate decisions can be sent through external controllers without re
     - Reject success — container write-back rejection: assert `result.cancelled: false`.
     - Reject failure — run not paused: assert `UNEXPECTED_STATE` envelope.
     - Reject failure — already resolved: assert `UNEXPECTED_STATE` envelope.
+    - Reject failure — run not found from `resolveRunIdArg`: assert `WORKFLOW_RUN_NOT_FOUND`/`unexpected_state`/`retryable: false`/78.
   - [ ] Add or update E2E subprocess tests (`packages/cli/src/commands/workflow-json.e2e.test.ts` or a new file) proving:
     - `workflow approve --json` with missing run ID emits `MALFORMED_REQUEST` envelope.
     - `workflow reject --json` with missing run ID emits `MALFORMED_REQUEST` envelope.
@@ -218,8 +220,10 @@ so that human gate decisions can be sent through external controllers without re
 | AC #2 — Approve error (not paused) | `bun test workflow.test.ts` — `workflowApproveCommand --json error (not paused)` | N/A | `command: 'workflow.approve'`, `success: false`, `error.code: 'UNEXPECTED_STATE'`, `error.category: 'unexpected_state'`, `error.retryable: false`, `execution.exitCode: 78` | Mock: `approveWorkflow` throws `'Cannot approve run with status "completed"'` | No raw error message in `details` | stdout = single JSON line |
 | AC #2 — Approve error (already resolved) | `bun test workflow.test.ts` — `workflowApproveCommand --json error (already resolved)` | N/A | `error.code: 'UNEXPECTED_STATE'` | Mock: `approveWorkflow` throws `'already approved and is awaiting resume'` | No raw error message in `details` | stdout = single JSON line |
 | AC #2 — Approve error (missing context) | `bun test workflow.test.ts` — `workflowApproveCommand --json error (missing context)` | N/A | `error.code: 'UNEXPECTED_STATE'` | Mock: `approveWorkflow` throws `'missing approval context'` | No raw error message in `details` | stdout = single JSON line |
+| AC #2 — Approve error (run not found) | `bun test workflow.test.ts` — `workflowApproveCommand --json error (run not found)` | N/A | `error.code: 'WORKFLOW_RUN_NOT_FOUND'`, `error.category: 'unexpected_state'`, `error.retryable: false`, `execution.exitCode: 78` | Mock: `resolveRunIdArg` path throws `'Workflow run not found: <id>'` | No fallback to `INTERNAL_ERROR`; no raw stack trace | stdout = single JSON line |
 | AC #2 — Approve error (DB error on post-approval fetch) | `bun test workflow.test.ts` | N/A | `error.code: 'INTERNAL_ERROR'`, `error.category: 'implementation_defect'`, `execution.exitCode: 70` | Mock: `approveWorkflow` succeeds, `getWorkflowRun` throws | Error logged via `getLog().error(...)` | stdout = single JSON line |
 | AC #2 — Reject error (not paused) | `bun test workflow.test.ts` | N/A | `error.code: 'UNEXPECTED_STATE'` | Mock: `rejectWorkflow` throws | Same as approve error tests | stdout = single JSON line |
+| AC #2 — Reject error (run not found) | `bun test workflow.test.ts` — `workflowRejectCommand --json error (run not found)` | N/A | `error.code: 'WORKFLOW_RUN_NOT_FOUND'`, `error.category: 'unexpected_state'`, `error.retryable: false`, `execution.exitCode: 78` | Mock: `resolveRunIdArg` path throws `'Workflow run not found: <id>'` | No fallback to `INTERNAL_ERROR`; no raw stack trace | stdout = single JSON line |
 | AC #2 — Missing run-id (approve) | `workflow-json.e2e.test.ts` subprocess | N/A | `command: 'workflow.approve'`, `error.code: 'MALFORMED_REQUEST'`, `execution.exitCode: 64` | No positional arg after `approve` | No plain-text usage string | stdout = single JSON line |
 | AC #2 — Missing run-id (reject) | `workflow-json.e2e.test.ts` subprocess | N/A | `command: 'workflow.reject'`, `error.code: 'MALFORMED_REQUEST'`, `execution.exitCode: 64` | No positional arg after `reject` | No plain-text usage string | stdout = single JSON line |
 | AC #2 — Blank correlation-id | `workflow-json.e2e.test.ts` subprocess | N/A | `error.code: 'MALFORMED_REQUEST'`, `error.details.fieldErrors[0].path: '/correlationId'` | `--json --correlation-id ""` | No plain-text error | Inherited from existing cli.ts guard |
@@ -406,6 +410,7 @@ New patterns to add to `classifyRunError`:
 | AC #1 — Reject JSON returns parseable envelope | `bun test workflow.test.ts` — reject success (cancelled), reject success (rework), reject success (max attempts), reject success (write-back) | N/A (positive path) | `workflowRejectCommand` JSON branch | N/A |
 | AC #2 — Approve error uses shared envelope | `bun test workflow.test.ts` — approve error (not paused), approve error (already resolved), approve error (missing context), approve error (DB fetch failure) | Each test asserts `success: false`, `error.code`, `error.category`, `error.retryable`, no raw error text in `details` | `workflowApproveCommand` fail-closed catch + `classifyRunError` | N/A |
 | AC #2 — Reject error uses shared envelope | `bun test workflow.test.ts` — reject error (not paused), reject error (already resolved) | Same assertions as approve errors | `workflowRejectCommand` fail-closed catch + `classifyRunError` | N/A |
+| AC #2 — Run not found fails closed | `bun test workflow.test.ts` — approve/reject run-not-found JSON errors | Tests assert `WORKFLOW_RUN_NOT_FOUND`/`unexpected_state`/`retryable: false`/78 instead of `INTERNAL_ERROR` | `resolveRunIdArg` + `classifyRunError` | N/A |
 | AC #2 — Pre-handler failures emit envelopes | `workflow-json.e2e.test.ts` — missing run-id (approve), missing run-id (reject), blank correlation-id, invalid JSON flag | Each test asserts `MALFORMED_REQUEST` envelope, no plain-text output, correct `exitCode: 64` | `cli.ts` pre-dispatch guards + `getWorkflowCommandEnvelopeCommand` expansion | N/A |
 | AC #2 — Consumers can fail closed | `workflow-command-contract.test.ts` — no forbidden keys, schema validation | Contract test asserts envelope structure, no forbidden keys, schema compliance | Shared contract test infrastructure from 3-3b | Fixture delta for `decision.gateId`/`nextPhase` documented as W-3.3C-001 |
 | Regression — Non-JSON unchanged | Existing `workflowApproveCommand`/`workflowRejectCommand` non-JSON tests pass | Existing tests passing proves no regression | This story does not modify `if (!json)` paths | N/A |
