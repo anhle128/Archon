@@ -689,3 +689,437 @@ describe('workflow approve/reject --json CLI dispatch E2E — real subprocess (S
     expect(stderr).toBe('');
   });
 });
+
+// ---------------------------------------------------------------------------
+// RED-PHASE E2E SCAFFOLD — Story 3.3d "Provide Archon Recovery Command CLI
+// JSON". First-party consumer surface: a real controller (Hermes) invokes
+// `archon workflow resume/cancel/retry <run-id> --json` as a subprocess and
+// parses stdout.
+//
+// Tests below drive the REAL CLI entry point (cli.ts) as a subprocess.
+// Currently genuinely red: today's `workflow resume --json` with a missing
+// run-id prints "Usage: ..." to stderr and exits 1 (no MALFORMED_REQUEST
+// envelope); `workflow cancel` and `workflow retry` do not exist as
+// subcommands at all (unknown subcommand → generic error).
+//
+// ACTIVATION: getWorkflowCommandEnvelopeCommand in cli.ts must map
+// 'resume' → 'workflow.resume', 'cancel' → 'workflow.cancel', and
+// 'retry' → 'workflow.retry'; the missing-run-id handler must emit a
+// MALFORMED_REQUEST envelope in JSON mode; and new `case 'cancel'`/
+// `case 'retry'` dispatch must exist.
+// ---------------------------------------------------------------------------
+
+describe('workflow resume/cancel/retry --json CLI dispatch E2E — real subprocess (Story 3.3d)', () => {
+  // 3.3D-CLI-001 [P0] AC #5 — missing run-id on resume --json
+  test('3.3D-CLI-001: `workflow resume --json` with no run-id emits one MALFORMED_REQUEST envelope, exit 64', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'resume',
+      '--json',
+      '--correlation-id',
+      'corr-3d-001',
+    ]);
+
+    expect(stdout.trim()).not.toBe('');
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.resume');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    const details = error?.details as Record<string, unknown> | undefined;
+    expect(details?.missingArgument).toBe('run-id');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-002 [P0] AC #5 — missing run-id on cancel --json
+  test('3.3D-CLI-002: `workflow cancel --json` with no run-id emits one MALFORMED_REQUEST envelope, exit 64', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'cancel',
+      '--json',
+      '--correlation-id',
+      'corr-3d-002',
+    ]);
+
+    expect(stdout.trim()).not.toBe('');
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.cancel');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    const details = error?.details as Record<string, unknown> | undefined;
+    expect(details?.missingArgument).toBe('run-id');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-003 [P0] AC #5 — missing run-id on retry --json
+  test('3.3D-CLI-003: `workflow retry --json` with no run-id emits one MALFORMED_REQUEST envelope, exit 64', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'retry',
+      '--json',
+      '--correlation-id',
+      'corr-3d-003',
+    ]);
+
+    expect(stdout.trim()).not.toBe('');
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.retry');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    const details = error?.details as Record<string, unknown> | undefined;
+    expect(details?.missingArgument).toBe('run-id');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-004 [P1] AC #5 — correlation-id threaded on resume --json
+  test('3.3D-CLI-004: --correlation-id is echoed on a `workflow resume --json` envelope', async () => {
+    const { stdout } = await runCli([
+      'workflow',
+      'resume',
+      '00000000-0000-0000-0000-000000000000',
+      '--json',
+      '--correlation-id',
+      'corr-3d-004-resume',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.correlationId).toBe('corr-3d-004-resume');
+  });
+
+  // 3.3D-CLI-005 [P1] AC #5 — correlation-id threaded on cancel --json
+  test('3.3D-CLI-005: --correlation-id is echoed on a `workflow cancel --json` envelope', async () => {
+    const { stdout } = await runCli([
+      'workflow',
+      'cancel',
+      '00000000-0000-0000-0000-000000000000',
+      '--json',
+      '--correlation-id',
+      'corr-3d-005-cancel',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.correlationId).toBe('corr-3d-005-cancel');
+  });
+
+  // 3.3D-CLI-006 [P1] AC #5 — correlation-id threaded on retry --json
+  test('3.3D-CLI-006: --correlation-id is echoed on a `workflow retry --json` envelope', async () => {
+    const { stdout } = await runCli([
+      'workflow',
+      'retry',
+      '00000000-0000-0000-0000-000000000000',
+      '--json',
+      '--correlation-id',
+      'corr-3d-006-retry',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.correlationId).toBe('corr-3d-006-retry');
+  });
+
+  // 3.3D-CLI-007 [P0] AC #5 — blank correlation-id on resume emits MALFORMED_REQUEST
+  test('3.3D-CLI-007: `workflow resume --json --correlation-id=` emits MALFORMED_REQUEST', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'resume',
+      '00000000-0000-0000-0000-000000000000',
+      '--json',
+      '--correlation-id=',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.resume');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(error?.category).toBe('provider_contract');
+    const details = error?.details as Record<string, unknown> | undefined;
+    const fieldErrors = details?.fieldErrors as Array<Record<string, unknown>> | undefined;
+    expect(fieldErrors).toBeDefined();
+    expect(fieldErrors).toContainEqual({ path: '/correlationId', code: 'required' });
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-008 [P0] AC #5 — blank correlation-id on cancel emits MALFORMED_REQUEST
+  test('3.3D-CLI-008: `workflow cancel --json --correlation-id=` emits MALFORMED_REQUEST', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'cancel',
+      '00000000-0000-0000-0000-000000000000',
+      '--json',
+      '--correlation-id=',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.cancel');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(error?.category).toBe('provider_contract');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-009 [P0] AC #5 — blank correlation-id on retry emits MALFORMED_REQUEST
+  test('3.3D-CLI-009: `workflow retry --json --correlation-id=` emits MALFORMED_REQUEST', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'retry',
+      '00000000-0000-0000-0000-000000000000',
+      '--json',
+      '--correlation-id=',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.retry');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(error?.category).toBe('provider_contract');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-010 [P1] AC #5 — invalid JSON flag (--json=true) on resume
+  test('3.3D-CLI-010: `workflow resume --json=true` emits MALFORMED_REQUEST envelope', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'resume',
+      '00000000-0000-0000-0000-000000000000',
+      '--json=true',
+      '--correlation-id',
+      'corr-3d-010',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.resume');
+    expect(envelope.success).toBe(false);
+    expect(envelope.correlationId).toBe('corr-3d-010');
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(error?.category).toBe('provider_contract');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-011 [P1] AC #5 — invalid JSON flag (--json=true) on cancel
+  test('3.3D-CLI-011: `workflow cancel --json=true` emits MALFORMED_REQUEST envelope', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'cancel',
+      '00000000-0000-0000-0000-000000000000',
+      '--json=true',
+      '--correlation-id',
+      'corr-3d-011',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.cancel');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-012 [P1] AC #5 — invalid JSON flag (--json=true) on retry
+  test('3.3D-CLI-012: `workflow retry --json=true` emits MALFORMED_REQUEST envelope', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'retry',
+      '00000000-0000-0000-0000-000000000000',
+      '--json=true',
+      '--correlation-id',
+      'corr-3d-012',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.retry');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-013 [P0] AC #5 — nonexistent --cwd emits envelope for resume
+  test('3.3D-CLI-013: `workflow resume --json --cwd /nonexistent` emits MALFORMED_REQUEST', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'resume',
+      '00000000-0000-0000-0000-000000000000',
+      '--json',
+      '--cwd',
+      '/nonexistent-dir-archon-e2e-3d',
+    ]);
+
+    expect(stdout.trim()).not.toBe('');
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.resume');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    const details = error?.details as Record<string, unknown> | undefined;
+    const fieldErrors = details?.fieldErrors as Array<Record<string, unknown>> | undefined;
+    expect(fieldErrors).toBeDefined();
+    expect(fieldErrors).toContainEqual({ path: '/cwd', code: 'directory_not_found' });
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-014 [P0] AC #5 — nonexistent --cwd emits envelope for cancel
+  test('3.3D-CLI-014: `workflow cancel --json --cwd /nonexistent` emits MALFORMED_REQUEST', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'cancel',
+      '00000000-0000-0000-0000-000000000000',
+      '--json',
+      '--cwd',
+      '/nonexistent-dir-archon-e2e-3d',
+    ]);
+
+    expect(stdout.trim()).not.toBe('');
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.cancel');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    const details = error?.details as Record<string, unknown> | undefined;
+    const fieldErrors = details?.fieldErrors as Array<Record<string, unknown>> | undefined;
+    expect(fieldErrors).toBeDefined();
+    expect(fieldErrors).toContainEqual({ path: '/cwd', code: 'directory_not_found' });
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-015 [P0] AC #5 — non-git directory emits MALFORMED_REQUEST for resume
+  test('3.3D-CLI-015: `workflow resume --json` from non-git directory emits not_a_git_repository', async () => {
+    const nonGitCwd = mkdtempSync(join(tmpdir(), 'archon-non-git-3d-'));
+    try {
+      const { stdout, stderr, exitCode } = await runCli(
+        [
+          'workflow',
+          'resume',
+          '00000000-0000-0000-0000-000000000000',
+          '--json',
+          '--correlation-id',
+          'corr-3d-015',
+        ],
+        nonGitCwd
+      );
+
+      expect(stdout.trim()).not.toBe('');
+      const envelope = parseSoleJsonLine(stdout);
+      expect(envelope.command).toBe('workflow.resume');
+      expect(envelope.success).toBe(false);
+      const error = envelope.error as Record<string, unknown> | undefined;
+      expect(error?.code).toBe('MALFORMED_REQUEST');
+      const details = error?.details as Record<string, unknown> | undefined;
+      const fieldErrors = details?.fieldErrors as Array<Record<string, unknown>> | undefined;
+      expect(fieldErrors).toBeDefined();
+      expect(fieldErrors).toContainEqual({ path: '/cwd', code: 'not_a_git_repository' });
+      expect(exitCode).toBe(64);
+      expect(stderr).toBe('');
+    } finally {
+      rmSync(nonGitCwd, { recursive: true, force: true });
+    }
+  });
+
+  // 3.3D-CLI-016 [P0] AC #5 — non-git directory emits MALFORMED_REQUEST for cancel
+  test('3.3D-CLI-016: `workflow cancel --json` from non-git directory emits not_a_git_repository', async () => {
+    const nonGitCwd = mkdtempSync(join(tmpdir(), 'archon-non-git-3d-'));
+    try {
+      const { stdout, stderr, exitCode } = await runCli(
+        [
+          'workflow',
+          'cancel',
+          '00000000-0000-0000-0000-000000000000',
+          '--json',
+          '--correlation-id',
+          'corr-3d-016',
+        ],
+        nonGitCwd
+      );
+
+      expect(stdout.trim()).not.toBe('');
+      const envelope = parseSoleJsonLine(stdout);
+      expect(envelope.command).toBe('workflow.cancel');
+      expect(envelope.success).toBe(false);
+      const error = envelope.error as Record<string, unknown> | undefined;
+      expect(error?.code).toBe('MALFORMED_REQUEST');
+      const details = error?.details as Record<string, unknown> | undefined;
+      const fieldErrors = details?.fieldErrors as Array<Record<string, unknown>> | undefined;
+      expect(fieldErrors).toBeDefined();
+      expect(fieldErrors).toContainEqual({ path: '/cwd', code: 'not_a_git_repository' });
+      expect(exitCode).toBe(64);
+      expect(stderr).toBe('');
+    } finally {
+      rmSync(nonGitCwd, { recursive: true, force: true });
+    }
+  });
+
+  // 3.3D-CLI-017 [P1] AC #5 — bare --correlation-id consuming --json on resume
+  test('3.3D-CLI-017: bare `--correlation-id` cannot consume `--json` and bypass the resume envelope path', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'resume',
+      '00000000-0000-0000-0000-000000000000',
+      '--correlation-id',
+      '--json',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.resume');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(error?.category).toBe('provider_contract');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-018 [P1] AC #5 — bare --correlation-id consuming --json on cancel
+  test('3.3D-CLI-018: bare `--correlation-id` cannot consume `--json` and bypass the cancel envelope path', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'cancel',
+      '00000000-0000-0000-0000-000000000000',
+      '--correlation-id',
+      '--json',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.cancel');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(error?.category).toBe('provider_contract');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-019 [P1] AC #5 — bare --correlation-id consuming --json on retry
+  test('3.3D-CLI-019: bare `--correlation-id` cannot consume `--json` and bypass the retry envelope path', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'retry',
+      '00000000-0000-0000-0000-000000000000',
+      '--correlation-id',
+      '--json',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.retry');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(error?.category).toBe('provider_contract');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+});

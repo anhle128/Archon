@@ -7131,3 +7131,1097 @@ describe('classifyRunError — decision-specific patterns (Story 3.3c Slice 4)',
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// RED-PHASE SCAFFOLD — Story 3.3d "Provide Archon Recovery Command CLI JSON"
+// Tests for `workflowResumeCommand`, `workflowCancelCommand`, and
+// `workflowRetryCommand` JSON envelope mode, plus `classifyRunError`
+// extensions for recovery-specific error patterns.
+//
+// Target: packages/cli/src/commands/workflow.ts
+// Test design: _bmad-output/implementation-artifacts/3-3d-provide-archon-
+// recovery-command-cli-json.md
+//
+// The RESUME envelope conversion (Slice 1) does not exist yet — the JSON branch
+// currently emits the legacy `{ok:true, runId, action:'resume', executed:false}`
+// shape. `workflowCancelCommand` and `workflowRetryCommand` do not exist yet as
+// exported functions. Each skip states what implementation makes it activatable.
+//
+// ACTIVATION: remove `.skip` once:
+// - Slice 1 lands: workflowResumeCommand JSON branch uses buildSuccessEnvelope/
+//   buildErrorEnvelope with a fail-closed try/catch.
+// - Slice 2 lands: workflowCancelCommand is exported.
+// - Slice 3 lands: workflowRetryCommand is exported.
+// - Slice 5 lands: classifyRunError handles WorkflowRetryError instanceof and
+//   'Cannot resume/abandon run with status' patterns.
+// ---------------------------------------------------------------------------
+
+describe('workflowResumeCommand — JSON envelope mode (Story 3.3d)', () => {
+  let consoleSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    mockLogger.error.mockClear();
+  });
+
+  afterEach(() => {
+    consoleSpy.mockRestore();
+  });
+
+  // 3.3D-UNIT-001 [P0] AC #1 — resume success from failed state
+  it.skip('3.3D-UNIT-001: emits workflow.resume success envelope for a failed run', async () => {
+    // ACTIVATION: workflowResumeCommand JSON branch uses buildSuccessEnvelope
+    // with command 'workflow.resume', workflowRunRef, and result containing
+    // operation/previousState/state/resumed.
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-resume-failed-1',
+      workflow_name: 'implement',
+      status: 'failed',
+      working_path: '/tmp/wt',
+      codebase_id: 'cb-1',
+      metadata: {},
+    });
+    // Post-validation re-fetch for envelope state mapping
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-resume-failed-1',
+      workflow_name: 'implement',
+      status: 'failed',
+      working_path: '/tmp/wt',
+      codebase_id: 'cb-1',
+      metadata: {},
+    });
+
+    await workflowResumeCommand('run-resume-failed-1', true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const raw = consoleSpy.mock.calls[0][0] as string;
+    const envelope = JSON.parse(raw) as Record<string, unknown>;
+    expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
+    expect(envelope.command).toBe('workflow.resume');
+    expect(envelope.success).toBe(true);
+    expect(envelope).toHaveProperty('workflowRunRef');
+    const ref = envelope.workflowRunRef as Record<string, unknown>;
+    expect(ref.runId).toBe('run-resume-failed-1');
+    expect(ref.workflowName).toBe('implement');
+    const result = envelope.result as Record<string, unknown>;
+    expect(result.operation).toBe('resume');
+    expect(result.previousState).toBe('failed');
+    expect(result.state).toBe('failed');
+    expect(result.resumed).toBe(true);
+    expect(envelope).not.toHaveProperty('error');
+  });
+
+  // 3.3D-UNIT-002 [P0] AC #1 — resume success from paused state
+  it.skip('3.3D-UNIT-002: emits workflow.resume success envelope for a paused run', async () => {
+    // ACTIVATION: same as 3.3D-UNIT-001; paused variant
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-resume-paused-1',
+      workflow_name: 'plan',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      metadata: {},
+    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-resume-paused-1',
+      workflow_name: 'plan',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      metadata: {},
+    });
+
+    await workflowResumeCommand('run-resume-paused-1', true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.resume');
+    expect(envelope.success).toBe(true);
+    const result = envelope.result as Record<string, unknown>;
+    expect(result.previousState).toBe('paused');
+    expect(result.state).toBe('paused');
+    expect(result.resumed).toBe(true);
+  });
+
+  // 3.3D-UNIT-003 [P0] AC #1 — resume error: run not resumable (completed)
+  it.skip('3.3D-UNIT-003: emits UNEXPECTED_STATE envelope when resume called on completed run', async () => {
+    // ACTIVATION: classifyRunError handles 'Cannot resume run with status' and
+    // workflowResumeCommand JSON branch wraps in fail-closed try/catch.
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-completed',
+      workflow_name: 'implement',
+      status: 'completed',
+      metadata: {},
+    });
+
+    await workflowResumeCommand('run-completed', true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.resume');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('UNEXPECTED_STATE');
+    expect(error.category).toBe('unexpected_state');
+    expect(error.retryable).toBe(false);
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(78);
+    expect(envelope).not.toHaveProperty('workflowRunRef');
+    expect(envelope).not.toHaveProperty('result');
+  });
+
+  // 3.3D-UNIT-004 [P0] AC #1 — resume error: run not resumable (cancelled)
+  it.skip('3.3D-UNIT-004: emits UNEXPECTED_STATE envelope when resume called on cancelled run', async () => {
+    // ACTIVATION: same as 3.3D-UNIT-003; 'Cannot resume run with status "cancelled"'
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-cancelled',
+      workflow_name: 'implement',
+      status: 'cancelled',
+      metadata: {},
+    });
+
+    await workflowResumeCommand('run-cancelled', true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.resume');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('UNEXPECTED_STATE');
+    expect(error.category).toBe('unexpected_state');
+    expect(error.retryable).toBe(false);
+  });
+
+  // 3.3D-UNIT-005 [P0] AC #1 — resume error: run not found
+  it.skip('3.3D-UNIT-005: emits WORKFLOW_RUN_NOT_FOUND envelope when run does not exist', async () => {
+    // ACTIVATION: workflowResumeCommand JSON branch catches resolveRunIdArg throw
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+
+    await workflowResumeCommand('nonexistent-resume-id', true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.resume');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('WORKFLOW_RUN_NOT_FOUND');
+    expect(error.category).toBe('unexpected_state');
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(78);
+  });
+
+  // 3.3D-UNIT-006 [P0] AC #5 — resume error: DB error on post-validation fetch
+  it.skip('3.3D-UNIT-006: emits INTERNAL_ERROR envelope when post-validation run fetch fails', async () => {
+    // ACTIVATION: after resumeWorkflowOp validates, the re-fetch via
+    // getWorkflowRun throws (DB failure). Must produce INTERNAL_ERROR/70.
+    const workflowDb = await import('@archon/core/db/workflows');
+    // resumeWorkflowOp validates via getWorkflowRun (first call succeeds)
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-db-fail',
+      workflow_name: 'implement',
+      status: 'failed',
+      metadata: {},
+    });
+    // Post-validation re-fetch throws (DB down)
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new Error('database connection lost')
+    );
+
+    await workflowResumeCommand('run-db-fail', true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.resume');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('INTERNAL_ERROR');
+    expect(error.category).toBe('implementation_defect');
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(70);
+  });
+
+  // 3.3D-UNIT-007 [P0] AC #5 — resume error: timeout
+  it.skip('3.3D-UNIT-007: emits COMMAND_TIMEOUT envelope on timeout error', async () => {
+    // ACTIVATION: classifyRunError handles ETIMEDOUT for resume path
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockRejectedValueOnce(
+      Object.assign(new Error('statement timeout'), { code: 'ETIMEDOUT' })
+    );
+
+    await workflowResumeCommand('run-timeout', true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.resume');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('COMMAND_TIMEOUT');
+    expect(error.category).toBe('timeout');
+    expect(error.retryable).toBe(true);
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(69);
+  });
+
+  // 3.3D-UNIT-008 [P0] AC #1 — resume JSON does NOT execute workflow inline
+  it.skip('3.3D-UNIT-008: resume JSON mode does not trigger workflowRunCommand execution', async () => {
+    // ACTIVATION: workflowResumeCommand JSON branch returns after envelope
+    // emission without calling workflowRunCommand for re-execution.
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-no-exec',
+      workflow_name: 'implement',
+      status: 'failed',
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      metadata: {},
+    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-no-exec',
+      workflow_name: 'implement',
+      status: 'failed',
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      metadata: {},
+    });
+
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    (executeWorkflow as ReturnType<typeof mock>).mockClear();
+
+    await workflowResumeCommand('run-no-exec', true);
+
+    expect(executeWorkflow).not.toHaveBeenCalled();
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(true);
+  });
+});
+
+describe('workflowCancelCommand — JSON envelope mode (Story 3.3d)', () => {
+  let consoleSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    mockLogger.error.mockClear();
+  });
+
+  afterEach(() => {
+    consoleSpy.mockRestore();
+  });
+
+  // 3.3D-UNIT-009 [P0] AC #4 — cancel success from running state
+  it.skip('3.3D-UNIT-009: emits workflow.cancel success envelope for a running run', async () => {
+    // ACTIVATION: workflowCancelCommand exists and uses buildSuccessEnvelope
+    // with command 'workflow.cancel'.
+    // SKIP REASON: workflowCancelCommand is not yet exported from workflow.ts.
+    // Implementation: Slice 2 creates the function.
+    const { workflowCancelCommand: cancelCmd } = await import('./workflow');
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
+      .mockResolvedValueOnce({
+        id: 'run-cancel-running',
+        workflow_name: 'implement',
+        status: 'running',
+        working_path: '/tmp/wt',
+        codebase_id: 'cb-1',
+        metadata: {},
+      });
+    (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      cancelled: true,
+    });
+    // Post-cancel re-fetch
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-cancel-running',
+      workflow_name: 'implement',
+      status: 'cancelled',
+      working_path: '/tmp/wt',
+      codebase_id: 'cb-1',
+      metadata: {},
+    });
+
+    await cancelCmd('run-cancel-running', true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
+    expect(envelope.command).toBe('workflow.cancel');
+    expect(envelope.success).toBe(true);
+    const ref = envelope.workflowRunRef as Record<string, unknown>;
+    expect(ref.runId).toBe('run-cancel-running');
+    const result = envelope.result as Record<string, unknown>;
+    expect(result.operation).toBe('cancel');
+    expect(result.previousState).toBe('running');
+    expect(result.state).toBe('cancelled');
+    expect(result.terminal).toBe(true);
+    // AC #4: no 'abandon' anywhere in the envelope
+    expect(JSON.stringify(envelope)).not.toContain('abandon');
+  });
+
+  // 3.3D-UNIT-010 [P0] AC #4 — cancel success from paused state
+  it.skip('3.3D-UNIT-010: emits workflow.cancel success envelope for a paused run', async () => {
+    // SKIP REASON: workflowCancelCommand not yet exported.
+    const { workflowCancelCommand: cancelCmd } = await import('./workflow');
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-cancel-paused',
+      workflow_name: 'plan',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      metadata: {},
+    });
+    (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      cancelled: true,
+    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-cancel-paused',
+      workflow_name: 'plan',
+      status: 'cancelled',
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      metadata: {},
+    });
+
+    await cancelCmd('run-cancel-paused', true);
+
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.cancel');
+    expect(envelope.success).toBe(true);
+    const result = envelope.result as Record<string, unknown>;
+    expect(result.previousState).toBe('paused');
+    expect(result.state).toBe('cancelled');
+    expect(result.terminal).toBe(true);
+  });
+
+  // 3.3D-UNIT-011 [P0] AC #4 — cancel success from failed state
+  it.skip('3.3D-UNIT-011: emits workflow.cancel success envelope for a failed run', async () => {
+    // SKIP REASON: workflowCancelCommand not yet exported.
+    const { workflowCancelCommand: cancelCmd } = await import('./workflow');
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-cancel-failed',
+      workflow_name: 'implement',
+      status: 'failed',
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      metadata: {},
+    });
+    (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      cancelled: true,
+    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-cancel-failed',
+      workflow_name: 'implement',
+      status: 'cancelled',
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      metadata: {},
+    });
+
+    await cancelCmd('run-cancel-failed', true);
+
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.cancel');
+    expect(envelope.success).toBe(true);
+    const result = envelope.result as Record<string, unknown>;
+    expect(result.previousState).toBe('failed');
+    expect(result.state).toBe('cancelled');
+    expect(result.terminal).toBe(true);
+  });
+
+  // 3.3D-UNIT-012 [P0] AC #4 — cancel error: already terminal (completed)
+  it.skip('3.3D-UNIT-012: emits UNEXPECTED_STATE envelope when cancel called on completed run', async () => {
+    // SKIP REASON: workflowCancelCommand not yet exported.
+    // ACTIVATION: classifyRunError handles 'Cannot abandon run with status'.
+    const { workflowCancelCommand: cancelCmd } = await import('./workflow');
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-cancel-completed',
+      workflow_name: 'implement',
+      status: 'completed',
+      metadata: {},
+    });
+
+    await cancelCmd('run-cancel-completed', true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.cancel');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('UNEXPECTED_STATE');
+    expect(error.category).toBe('unexpected_state');
+    expect(error.retryable).toBe(false);
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(78);
+  });
+
+  // 3.3D-UNIT-013 [P0] AC #4 — cancel error: already terminal (cancelled)
+  it.skip('3.3D-UNIT-013: emits UNEXPECTED_STATE envelope when cancel called on already-cancelled run', async () => {
+    // SKIP REASON: workflowCancelCommand not yet exported.
+    const { workflowCancelCommand: cancelCmd } = await import('./workflow');
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-cancel-already',
+      workflow_name: 'implement',
+      status: 'cancelled',
+      metadata: {},
+    });
+
+    await cancelCmd('run-cancel-already', true);
+
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.cancel');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('UNEXPECTED_STATE');
+    expect(error.category).toBe('unexpected_state');
+    expect(error.retryable).toBe(false);
+  });
+
+  // 3.3D-UNIT-014 [P0] AC #5 — cancel error: run not found
+  it.skip('3.3D-UNIT-014: emits WORKFLOW_RUN_NOT_FOUND envelope when run does not exist', async () => {
+    // SKIP REASON: workflowCancelCommand not yet exported.
+    const { workflowCancelCommand: cancelCmd } = await import('./workflow');
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+
+    await cancelCmd('nonexistent-cancel-id', true);
+
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.cancel');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('WORKFLOW_RUN_NOT_FOUND');
+    expect(error.category).toBe('unexpected_state');
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(78);
+  });
+
+  // 3.3D-UNIT-015 [P0] AC #5 — cancel error: DB error on post-cancel fetch
+  it.skip('3.3D-UNIT-015: emits INTERNAL_ERROR envelope when post-cancel fetch fails', async () => {
+    // SKIP REASON: workflowCancelCommand not yet exported.
+    const { workflowCancelCommand: cancelCmd } = await import('./workflow');
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-cancel-db-fail',
+      workflow_name: 'implement',
+      status: 'running',
+      metadata: {},
+    });
+    (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      cancelled: true,
+    });
+    // Post-cancel re-fetch throws
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new Error('database connection lost')
+    );
+
+    await cancelCmd('run-cancel-db-fail', true);
+
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.cancel');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('INTERNAL_ERROR');
+    expect(error.category).toBe('implementation_defect');
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(70);
+  });
+
+  // 3.3D-UNIT-016 [P0] AC #4 — cancel envelope contains no 'abandon' string
+  it.skip('3.3D-UNIT-016: cancel envelope never contains the string "abandon"', async () => {
+    // SKIP REASON: workflowCancelCommand not yet exported.
+    const { workflowCancelCommand: cancelCmd } = await import('./workflow');
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-cancel-no-abandon',
+      workflow_name: 'plan',
+      status: 'running',
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      metadata: {},
+    });
+    (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      cancelled: true,
+    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-cancel-no-abandon',
+      workflow_name: 'plan',
+      status: 'cancelled',
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      metadata: {},
+    });
+
+    await cancelCmd('run-cancel-no-abandon', true);
+
+    const raw = consoleSpy.mock.calls[0][0] as string;
+    expect(raw.toLowerCase()).not.toContain('abandon');
+    // Also verify it parses as valid JSON and is a success envelope
+    const envelope = JSON.parse(raw) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.cancel');
+    expect(envelope.success).toBe(true);
+  });
+});
+
+describe('workflowRetryCommand — JSON envelope mode (Story 3.3d)', () => {
+  let consoleSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    mockLogger.error.mockClear();
+  });
+
+  afterEach(() => {
+    consoleSpy.mockRestore();
+  });
+
+  // 3.3D-UNIT-017 [P0] AC #2 — retry success (whole-run, from failed)
+  it.skip('3.3D-UNIT-017: emits workflow.retry success envelope for whole-run retry (failed)', async () => {
+    // SKIP REASON: workflowRetryCommand is not yet exported from workflow.ts.
+    // Implementation: Slice 3 creates the function.
+    const { workflowRetryCommand: retryCmd } = await import('./workflow');
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-retry-whole-failed',
+      workflow_name: 'implement',
+      status: 'failed',
+      working_path: '/tmp/wt',
+      codebase_id: 'cb-1',
+      metadata: {},
+    });
+
+    await retryCmd('run-retry-whole-failed', undefined, true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
+    expect(envelope.command).toBe('workflow.retry');
+    expect(envelope.success).toBe(true);
+    const result = envelope.result as Record<string, unknown>;
+    expect(result.operation).toBe('retry');
+    expect(result.mode).toBe('whole-run');
+    expect(result.state).toBe('failed');
+    expect(result.retryable).toBe(true);
+  });
+
+  // 3.3D-UNIT-018 [P0] AC #2 — retry success (whole-run, from cancelled)
+  it.skip('3.3D-UNIT-018: emits workflow.retry success envelope for whole-run retry (cancelled)', async () => {
+    // SKIP REASON: workflowRetryCommand not yet exported.
+    const { workflowRetryCommand: retryCmd } = await import('./workflow');
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-retry-whole-cancelled',
+      workflow_name: 'plan',
+      status: 'cancelled',
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      metadata: {},
+    });
+
+    await retryCmd('run-retry-whole-cancelled', undefined, true);
+
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.retry');
+    expect(envelope.success).toBe(true);
+    const result = envelope.result as Record<string, unknown>;
+    expect(result.mode).toBe('whole-run');
+    expect(result.state).toBe('cancelled');
+    expect(result.retryable).toBe(true);
+  });
+
+  // 3.3D-UNIT-019 [P0] AC #3 — retry success (node targeted)
+  it.skip('3.3D-UNIT-019: emits workflow.retry success envelope for node-targeted retry', async () => {
+    // SKIP REASON: workflowRetryCommand not yet exported.
+    // ACTIVATION: workflowRetryCommand calls prepareWorkflowNodeRetry and
+    // builds an envelope with result.mode='node', result.nodeId, result.retryEpoch,
+    // and workflowRunRef pointing to the pre-created run.
+    const { workflowRetryCommand: retryCmd } = await import('./workflow');
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-retry-node',
+      workflow_name: 'implement',
+      status: 'failed',
+      working_path: '/tmp/wt',
+      codebase_id: 'cb-1',
+      metadata: {},
+    });
+
+    // Mock prepareWorkflowNodeRetry returning a prepared result
+    // (the actual mock must be set up for the operations module)
+    // The prepared result includes a pre-created run:
+    const preparedResult = {
+      preCreatedRun: {
+        id: 'new-retry-run-123',
+        workflow_name: 'implement',
+        status: 'running',
+        working_path: '/tmp/wt',
+        codebase_id: 'cb-1',
+        metadata: {},
+      },
+      retryEpoch: 2,
+      nodeId: 'build-step',
+    };
+    // This mock would need to intercept the prepareWorkflowNodeRetry call
+    // in the production code path
+
+    await retryCmd('run-retry-node', 'build-step', true, undefined, '/tmp/wt');
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.retry');
+    expect(envelope.success).toBe(true);
+    const result = envelope.result as Record<string, unknown>;
+    expect(result.operation).toBe('retry');
+    expect(result.mode).toBe('node');
+    expect(result.nodeId).toBe('build-step');
+    expect(typeof result.retryEpoch).toBe('number');
+    const ref = envelope.workflowRunRef as Record<string, unknown>;
+    expect(ref.runId).toBe('new-retry-run-123');
+  });
+
+  // 3.3D-UNIT-020 [P0] AC #2 — retry error: whole-run not retryable (running)
+  it.skip('3.3D-UNIT-020: emits UNEXPECTED_STATE when whole-run retry called on running run', async () => {
+    // SKIP REASON: workflowRetryCommand not yet exported.
+    const { workflowRetryCommand: retryCmd } = await import('./workflow');
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-retry-running',
+      workflow_name: 'implement',
+      status: 'running',
+      metadata: {},
+    });
+
+    await retryCmd('run-retry-running', undefined, true);
+
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.retry');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('UNEXPECTED_STATE');
+    expect(error.category).toBe('unexpected_state');
+    expect(error.retryable).toBe(false);
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(78);
+  });
+
+  // 3.3D-UNIT-021 [P0] AC #2 — retry error: whole-run not retryable (paused)
+  it.skip('3.3D-UNIT-021: emits UNEXPECTED_STATE when whole-run retry called on paused run', async () => {
+    // SKIP REASON: workflowRetryCommand not yet exported.
+    const { workflowRetryCommand: retryCmd } = await import('./workflow');
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-retry-paused',
+      workflow_name: 'implement',
+      status: 'paused',
+      metadata: {},
+    });
+
+    await retryCmd('run-retry-paused', undefined, true);
+
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.retry');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('UNEXPECTED_STATE');
+  });
+
+  // 3.3D-UNIT-022 [P0] AC #3 — retry error: node not found
+  it.skip('3.3D-UNIT-022: emits NODE_NOT_FOUND envelope for WorkflowRetryError(node_not_found)', async () => {
+    // SKIP REASON: workflowRetryCommand not yet exported.
+    // ACTIVATION: classifyRunError handles WorkflowRetryError instanceof with
+    // code 'node_not_found' → NODE_NOT_FOUND.
+    const { workflowRetryCommand: retryCmd } = await import('./workflow');
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-retry-nonode',
+      workflow_name: 'implement',
+      status: 'failed',
+      working_path: '/tmp/wt',
+      codebase_id: 'cb-1',
+      metadata: {},
+    });
+    // prepareWorkflowNodeRetry throws WorkflowRetryError('node_not_found')
+
+    await retryCmd('run-retry-nonode', 'nonexistent-node', true, undefined, '/tmp/wt');
+
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.retry');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('NODE_NOT_FOUND');
+    expect(error.category).toBe('unexpected_state');
+    expect(error.retryable).toBe(false);
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(78);
+  });
+
+  // 3.3D-UNIT-023 [P0] AC #3 — retry error: node not retryable
+  it.skip('3.3D-UNIT-023: emits NODE_NOT_RETRYABLE envelope for WorkflowRetryError(node_not_retryable)', async () => {
+    // SKIP REASON: workflowRetryCommand not yet exported.
+    const { workflowRetryCommand: retryCmd } = await import('./workflow');
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-retry-nodenotretry',
+      workflow_name: 'implement',
+      status: 'failed',
+      working_path: '/tmp/wt',
+      codebase_id: 'cb-1',
+      metadata: {},
+    });
+
+    await retryCmd('run-retry-nodenotretry', 'completed-node', true, undefined, '/tmp/wt');
+
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.retry');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('NODE_NOT_RETRYABLE');
+    expect(error.category).toBe('unexpected_state');
+    expect(error.retryable).toBe(false);
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(78);
+  });
+
+  // 3.3D-UNIT-024 [P0] AC #3 — retry error: CAS miss (retryable)
+  it.skip('3.3D-UNIT-024: emits UNEXPECTED_STATE with retryable:true for CAS miss', async () => {
+    // SKIP REASON: workflowRetryCommand not yet exported.
+    // CAS miss is transient (concurrent retry won the race), so retryable.
+    const { workflowRetryCommand: retryCmd } = await import('./workflow');
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-retry-cas',
+      workflow_name: 'implement',
+      status: 'failed',
+      working_path: '/tmp/wt',
+      codebase_id: 'cb-1',
+      metadata: {},
+    });
+
+    await retryCmd('run-retry-cas', 'build-step', true, undefined, '/tmp/wt');
+
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.retry');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('UNEXPECTED_STATE');
+    expect(error.category).toBe('unexpected_state');
+    expect(error.retryable).toBe(true);
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(78);
+  });
+
+  // 3.3D-UNIT-025 [P0] AC #3 — retry error: path in use
+  it.skip('3.3D-UNIT-025: emits UNEXPECTED_STATE for path_in_use error', async () => {
+    // SKIP REASON: workflowRetryCommand not yet exported.
+    const { workflowRetryCommand: retryCmd } = await import('./workflow');
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-retry-path',
+      workflow_name: 'implement',
+      status: 'failed',
+      working_path: '/tmp/wt',
+      codebase_id: 'cb-1',
+      metadata: {},
+    });
+
+    await retryCmd('run-retry-path', 'build-step', true, undefined, '/tmp/wt');
+
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('UNEXPECTED_STATE');
+    expect(error.retryable).toBe(false);
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(78);
+  });
+
+  // 3.3D-UNIT-026 [P0] AC #3 — retry error: checkpoint unavailable
+  it.skip('3.3D-UNIT-026: emits implementation_defect/70 for checkpoint_unavailable', async () => {
+    // SKIP REASON: workflowRetryCommand not yet exported.
+    const { workflowRetryCommand: retryCmd } = await import('./workflow');
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-retry-ckpt',
+      workflow_name: 'implement',
+      status: 'failed',
+      working_path: '/tmp/wt',
+      codebase_id: 'cb-1',
+      metadata: {},
+    });
+
+    await retryCmd('run-retry-ckpt', 'build-step', true, undefined, '/tmp/wt');
+
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('UNEXPECTED_STATE');
+    expect(error.category).toBe('implementation_defect');
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(70);
+  });
+
+  // 3.3D-UNIT-027 [P0] AC #3 — retry error: git reset failed
+  it.skip('3.3D-UNIT-027: emits INTERNAL_ERROR/70 for git_reset_failed', async () => {
+    // SKIP REASON: workflowRetryCommand not yet exported.
+    const { workflowRetryCommand: retryCmd } = await import('./workflow');
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-retry-git',
+      workflow_name: 'implement',
+      status: 'failed',
+      working_path: '/tmp/wt',
+      codebase_id: 'cb-1',
+      metadata: {},
+    });
+
+    await retryCmd('run-retry-git', 'build-step', true, undefined, '/tmp/wt');
+
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('INTERNAL_ERROR');
+    expect(error.category).toBe('implementation_defect');
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(70);
+  });
+
+  // 3.3D-UNIT-028 [P0] AC #3 — retry error: run not found
+  it.skip('3.3D-UNIT-028: emits WORKFLOW_RUN_NOT_FOUND for retry on nonexistent run', async () => {
+    // SKIP REASON: workflowRetryCommand not yet exported.
+    const { workflowRetryCommand: retryCmd } = await import('./workflow');
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+
+    await retryCmd('nonexistent-retry-id', undefined, true);
+
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.retry');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('WORKFLOW_RUN_NOT_FOUND');
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(78);
+  });
+});
+
+describe('classifyRunError — recovery-specific patterns (Story 3.3d Slice 5)', () => {
+  // 3.3D-UNIT-029 [P0] AC #5 — 'Cannot resume run with status' → UNEXPECTED_STATE
+  it.skip('3.3D-UNIT-029: classifies "Cannot resume run with status" as UNEXPECTED_STATE/78', () => {
+    // ACTIVATION: classifyRunError adds substring pattern for resume.
+    expect(
+      classifyRunError(new Error('Cannot resume run with status "completed". Only failed or paused runs can be resumed.'))
+    ).toEqual({
+      code: 'UNEXPECTED_STATE',
+      category: 'unexpected_state',
+      retryable: false,
+      exitCode: 78,
+    });
+  });
+
+  // 3.3D-UNIT-030 [P0] AC #5 — 'Cannot abandon run with status' → UNEXPECTED_STATE
+  it.skip('3.3D-UNIT-030: classifies "Cannot abandon run with status" as UNEXPECTED_STATE/78', () => {
+    // ACTIVATION: classifyRunError adds substring pattern for abandon/cancel.
+    expect(
+      classifyRunError(new Error('Cannot abandon run with status "completed". Only running, paused, or failed runs can be abandoned.'))
+    ).toEqual({
+      code: 'UNEXPECTED_STATE',
+      category: 'unexpected_state',
+      retryable: false,
+      exitCode: 78,
+    });
+  });
+
+  // 3.3D-UNIT-031 [P0] AC #5 — WorkflowRetryError(run_not_found) → WORKFLOW_RUN_NOT_FOUND
+  it.skip('3.3D-UNIT-031: classifies WorkflowRetryError(run_not_found) as WORKFLOW_RUN_NOT_FOUND/78', () => {
+    // ACTIVATION: classifyRunError checks instanceof WorkflowRetryError BEFORE
+    // substring matching.
+    // SKIP REASON: WorkflowRetryError instanceof check not yet in classifyRunError.
+    const { WorkflowRetryError } = require('@archon/core/operations/workflow-retry');
+    const err = new WorkflowRetryError('run_not_found', 'Workflow run not found: abc123');
+    expect(classifyRunError(err)).toEqual({
+      code: 'WORKFLOW_RUN_NOT_FOUND',
+      category: 'unexpected_state',
+      retryable: false,
+      exitCode: 78,
+    });
+  });
+
+  // 3.3D-UNIT-032 [P0] AC #5 — WorkflowRetryError(run_not_retryable) → UNEXPECTED_STATE
+  it.skip('3.3D-UNIT-032: classifies WorkflowRetryError(run_not_retryable) as UNEXPECTED_STATE/78', () => {
+    const { WorkflowRetryError } = require('@archon/core/operations/workflow-retry');
+    const err = new WorkflowRetryError('run_not_retryable', 'Cannot retry workflow run');
+    expect(classifyRunError(err)).toEqual({
+      code: 'UNEXPECTED_STATE',
+      category: 'unexpected_state',
+      retryable: false,
+      exitCode: 78,
+    });
+  });
+
+  // 3.3D-UNIT-033 [P0] AC #3 — WorkflowRetryError(node_not_found) → NODE_NOT_FOUND
+  it.skip('3.3D-UNIT-033: classifies WorkflowRetryError(node_not_found) as NODE_NOT_FOUND/78', () => {
+    const { WorkflowRetryError } = require('@archon/core/operations/workflow-retry');
+    const err = new WorkflowRetryError('node_not_found', 'Node "xyz" not found in graph');
+    expect(classifyRunError(err)).toEqual({
+      code: 'NODE_NOT_FOUND',
+      category: 'unexpected_state',
+      retryable: false,
+      exitCode: 78,
+    });
+  });
+
+  // 3.3D-UNIT-034 [P0] AC #3 — WorkflowRetryError(node_not_retryable) → NODE_NOT_RETRYABLE
+  it.skip('3.3D-UNIT-034: classifies WorkflowRetryError(node_not_retryable) as NODE_NOT_RETRYABLE/78', () => {
+    const { WorkflowRetryError } = require('@archon/core/operations/workflow-retry');
+    const err = new WorkflowRetryError('node_not_retryable', 'Node "xyz" is not in a retryable state');
+    expect(classifyRunError(err)).toEqual({
+      code: 'NODE_NOT_RETRYABLE',
+      category: 'unexpected_state',
+      retryable: false,
+      exitCode: 78,
+    });
+  });
+
+  // 3.3D-UNIT-035 [P0] AC #3 — WorkflowRetryError(cas_miss) → UNEXPECTED_STATE/retryable:true
+  it.skip('3.3D-UNIT-035: classifies WorkflowRetryError(cas_miss) as UNEXPECTED_STATE/retryable:true/78', () => {
+    const { WorkflowRetryError } = require('@archon/core/operations/workflow-retry');
+    const err = new WorkflowRetryError('cas_miss', 'Concurrent retry claim won');
+    expect(classifyRunError(err)).toEqual({
+      code: 'UNEXPECTED_STATE',
+      category: 'unexpected_state',
+      retryable: true,
+      exitCode: 78,
+    });
+  });
+
+  // 3.3D-UNIT-036 [P0] AC #3 — WorkflowRetryError(path_in_use) → UNEXPECTED_STATE
+  it.skip('3.3D-UNIT-036: classifies WorkflowRetryError(path_in_use) as UNEXPECTED_STATE/78', () => {
+    const { WorkflowRetryError } = require('@archon/core/operations/workflow-retry');
+    const err = new WorkflowRetryError('path_in_use', 'Working path in use by another run');
+    expect(classifyRunError(err)).toEqual({
+      code: 'UNEXPECTED_STATE',
+      category: 'unexpected_state',
+      retryable: false,
+      exitCode: 78,
+    });
+  });
+
+  // 3.3D-UNIT-037 [P0] AC #5 — WorkflowRetryError(checkpoint_unavailable) → implementation_defect/70
+  it.skip('3.3D-UNIT-037: classifies WorkflowRetryError(checkpoint_unavailable) as UNEXPECTED_STATE/implementation_defect/70', () => {
+    const { WorkflowRetryError } = require('@archon/core/operations/workflow-retry');
+    const err = new WorkflowRetryError('checkpoint_unavailable', 'No checkpoint recorded for node');
+    expect(classifyRunError(err)).toEqual({
+      code: 'UNEXPECTED_STATE',
+      category: 'implementation_defect',
+      retryable: false,
+      exitCode: 70,
+    });
+  });
+
+  // 3.3D-UNIT-038 [P0] AC #5 — WorkflowRetryError(git_reset_failed) → INTERNAL_ERROR/70
+  it.skip('3.3D-UNIT-038: classifies WorkflowRetryError(git_reset_failed) as INTERNAL_ERROR/70', () => {
+    const { WorkflowRetryError } = require('@archon/core/operations/workflow-retry');
+    const err = new WorkflowRetryError('git_reset_failed', 'git reset --hard failed');
+    expect(classifyRunError(err)).toEqual({
+      code: 'INTERNAL_ERROR',
+      category: 'implementation_defect',
+      retryable: false,
+      exitCode: 70,
+    });
+  });
+
+  // 3.3D-UNIT-039 [P0] AC #5 — WorkflowRetryError(dispatch_failed) → INTERNAL_ERROR/70
+  it.skip('3.3D-UNIT-039: classifies WorkflowRetryError(dispatch_failed) as INTERNAL_ERROR/70', () => {
+    const { WorkflowRetryError } = require('@archon/core/operations/workflow-retry');
+    const err = new WorkflowRetryError('dispatch_failed', 'Failed to dispatch retry execution');
+    expect(classifyRunError(err)).toEqual({
+      code: 'INTERNAL_ERROR',
+      category: 'implementation_defect',
+      retryable: false,
+      exitCode: 70,
+    });
+  });
+
+  // 3.3D-UNIT-040 [P1] AC #5 — negative: plain Error with "Workflow run not found" still hits generic pattern
+  it.skip('3.3D-UNIT-040: plain Error containing "Workflow run not found" hits generic pattern (not WorkflowRetryError path)', () => {
+    // ACTIVATION: instanceof check is BEFORE substring matching; a plain Error
+    // does NOT match instanceof WorkflowRetryError, so it falls to the existing
+    // generic 'Workflow run not found' substring pattern.
+    const err = new Error('Workflow run not found: abc123');
+    expect(classifyRunError(err)).toEqual({
+      code: 'WORKFLOW_RUN_NOT_FOUND',
+      category: 'unexpected_state',
+      retryable: false,
+      exitCode: 78,
+    });
+  });
+
+  // 3.3D-UNIT-041 [P1] AC #5 — negative: partial substring 'Cannot resume' alone does NOT match
+  it.skip('3.3D-UNIT-041: "Cannot resume workflow" without "run with status" does NOT match resume pattern', () => {
+    // ACTIVATION: substring match is specifically 'Cannot resume run with status',
+    // not just 'Cannot resume'.
+    const err = new Error('Cannot resume workflow');
+    // Should fall to INTERNAL_ERROR (default), NOT UNEXPECTED_STATE
+    expect(classifyRunError(err)).toEqual({
+      code: 'INTERNAL_ERROR',
+      category: 'implementation_defect',
+      retryable: false,
+      exitCode: 70,
+    });
+  });
+
+  // 3.3D-UNIT-042 [P1] AC #5 — negative: partial substring 'Cannot abandon' alone does NOT match
+  it.skip('3.3D-UNIT-042: "Cannot abandon" without "run with status" does NOT match abandon pattern', () => {
+    const err = new Error('Cannot abandon task');
+    expect(classifyRunError(err)).toEqual({
+      code: 'INTERNAL_ERROR',
+      category: 'implementation_defect',
+      retryable: false,
+      exitCode: 70,
+    });
+  });
+
+  // 3.3D-UNIT-043 [P1] — existing patterns unaffected (regression)
+  it.skip('3.3D-UNIT-043: existing classifier patterns continue to work after recovery additions', () => {
+    // ACTIVATION: classifyRunError additions must not break 3.3b/3.3c patterns
+    expect(
+      classifyRunError(new Error('--branch and --no-worktree are mutually exclusive.'))
+    ).toEqual({
+      code: 'MALFORMED_REQUEST',
+      category: 'provider_contract',
+      retryable: false,
+      exitCode: 64,
+    });
+    expect(classifyRunError(new Error("Workflow 'bar' not found."))).toEqual({
+      code: 'WORKFLOW_NOT_FOUND',
+      category: 'unexpected_state',
+      retryable: false,
+      exitCode: 78,
+    });
+    expect(classifyRunError(new Error('Cannot approve run with status "completed"'))).toEqual({
+      code: 'UNEXPECTED_STATE',
+      category: 'unexpected_state',
+      retryable: false,
+      exitCode: 78,
+    });
+    expect(classifyRunError(new Error('Cannot reject run with status "running"'))).toEqual({
+      code: 'UNEXPECTED_STATE',
+      category: 'unexpected_state',
+      retryable: false,
+      exitCode: 78,
+    });
+    const timeoutErr = Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' });
+    expect(classifyRunError(timeoutErr)).toEqual({
+      code: 'COMMAND_TIMEOUT',
+      category: 'timeout',
+      retryable: true,
+      exitCode: 69,
+    });
+  });
+});
