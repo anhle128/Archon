@@ -18,6 +18,7 @@ nodes:
   - id: codex-node
     prompt: "Say 'codex-ok' and nothing else."
     provider: codex
+    effort: xhigh
     model: gpt-5.6-luna
     idle_timeout: 30000
 

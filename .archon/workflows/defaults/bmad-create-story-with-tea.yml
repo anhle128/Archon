@@ -6,7 +6,7 @@ description: |
   NOT for: Implementing the story or running post-dev review and fix loops.
 
 provider: codex
-modelReasoningEffort: xhigh
+effort: xhigh
 model: gpt-5.5
 tags: [BMad, TEA, Planning]
 

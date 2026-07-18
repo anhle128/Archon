@@ -144,6 +144,7 @@ nodes:
       the report path and a one-line verdict, then end with `REVIEW_PLAN_DONE`.
     depends_on: [plan]
     context: fresh
+    effort: xhigh
 
   # ───────────────────────────────────────────────────────────────────
   # STEP 4 / 5 — Codex implements the whole plan via ultragoal
@@ -173,6 +174,7 @@ nodes:
       results.
     depends_on: [review-plan]
     context: fresh
+    effort: xhigh
 
   # ───────────────────────────────────────────────────────────────────
   # STEP 5a — Codex makes the full suite green (/test)
@@ -197,6 +199,7 @@ nodes:
       When finished, print the final test results (pass/fail counts).
     depends_on: [build]
     context: fresh
+    effort: xhigh
 
   # ───────────────────────────────────────────────────────────────────
   # STEP 5b — Codex reviews the diff (/review), writes a report file
@@ -224,3 +227,4 @@ nodes:
       `REVIEW_DONE`.
     depends_on: [test]
     context: fresh
+    effort: xhigh

@@ -38,6 +38,7 @@ Create deterministic helper scripts under `.archon/scripts/` when shell would be
 - Use `allowed_tools: []` on classifier or formatting nodes that should not touch the repo.
 - Use `context: fresh` when an AI node should not inherit the previous sequential AI session.
 - Use `interactive: true` at the workflow root when approval nodes or interactive loops must be foreground-visible.
+- For Codex-only workflows, prefer root `effort: xhigh`; Qoder CLI uses `effort: max` for its maximum level. In mixed-provider workflows, set effort only on the matching provider nodes so other providers do not inherit it.
 - Validate with `bun run cli validate workflows <workflow-name>` before reporting success.
 - Inspect workflow engine source only if local validation contradicts these references or the project clearly changed after this skill was written.
 

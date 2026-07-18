@@ -6,6 +6,7 @@ description: |
   NOT for: Story implementation, code review fix loops, or manual planning review sessions.
 
 provider: codex
+effort: xhigh
 model: gpt-5.5
 tags: [BMad, Planning, Readiness]
 

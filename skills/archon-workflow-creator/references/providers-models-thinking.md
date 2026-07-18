@@ -228,6 +228,12 @@ Common Codex reasoning examples:
 The workflow schema accepts root `modelReasoningEffort` as a legacy fallback and `webSearchMode`.
 There is no per-node `modelReasoningEffort` field; use node `effort` instead.
 
+Migration rule:
+
+- In a Codex-only workflow, set root `effort: xhigh` so inheriting AI nodes receive it.
+- In a mixed-provider workflow, set `effort: xhigh` only on Codex AI nodes.
+- Remove root `modelReasoningEffort` from mixed-provider workflows because it is a provider-neutral legacy fallback and can be inherited by non-Codex nodes.
+
 ## Pi
 
 Use Pi for community multi-backend models.
@@ -273,8 +279,10 @@ Qoder CLI accepts raw workflow/node/tier/alias `effort` through its `--reasoning
 ```yaml
 provider: qodercli
 model: qoder-pro
-effort: high
+effort: max
 ```
+
+Qoder CLI 1.0.x documents `low`, `medium`, `high`, and `max`; use `max` for its highest reasoning level. Do not use Codex's `xhigh` value for Qoder.
 
 `assistants.qodercli.modelReasoningEffort` remains a legacy provider default when no more specific effort is set.
 

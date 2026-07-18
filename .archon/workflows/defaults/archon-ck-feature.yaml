@@ -162,6 +162,7 @@ nodes:
       then end with `VERIFY_DONE`.
     depends_on: [resolve-plan]
     provider: codex
+    effort: xhigh
     model: gpt-5.5
     context: fresh
 
@@ -173,4 +174,5 @@ nodes:
       $ultragoal $resolve-plan.output
     depends_on: [verify-fix]
     provider: codex
+    effort: xhigh
     context: fresh

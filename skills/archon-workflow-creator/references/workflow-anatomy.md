@@ -99,6 +99,10 @@ Optional root fields:
 Do not use `steps:`.
 The loader rejects legacy step workflows.
 
+For Codex-only workflows, set root `effort: xhigh` when every inheriting AI node resolves to Codex.
+For mixed-provider workflows, set `effort: xhigh` on each Codex AI node instead; a root effort is inherited by non-Codex nodes too.
+Qoder CLI's maximum value is `effort: max`; place it on Qoder nodes in mixed-provider workflows.
+
 ## Runtime Variables
 
 These variables are substituted in prompts, command files, loop prompts, bash, and scripts as applicable.

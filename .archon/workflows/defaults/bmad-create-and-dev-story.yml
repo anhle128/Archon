@@ -11,7 +11,6 @@ description: |
   - Every finding and fix entry must explain what is wrong, how it was fixed, and why that fix decision was chosen.
 
 provider: codex
-modelReasoningEffort: xhigh
 model: gpt-5.5
 tags: [BMad, Planning, Review]
 
@@ -194,6 +193,7 @@ nodes:
     prompt: |
       $bmad-create-story validate $create-story.output.story_file
     provider: codex
+    effort: xhigh
     depends_on: [record-created-story-state]
     context: fresh
     model: gpt-5.5
@@ -203,7 +203,7 @@ nodes:
     prompt: |
       bmad-dev-story $create-story.output.story_file
     provider: qodercli
-    effort: high
+    effort: max
     depends_on: [validate-story-readiness]
     context: fresh
     model: Qwen3.7-Plus
@@ -213,6 +213,7 @@ nodes:
   - id: code-review
     command: bmad-code-review
     provider: codex
+    effort: xhigh
     depends_on: [dev-story]
     context: fresh
     model: gpt-5.5
@@ -255,6 +256,7 @@ nodes:
   - id: create-pull-request
     command: archon-create-pr
     provider: codex
+    effort: xhigh
     depends_on: [code-review-gate]
     context: fresh
     model: gpt-5.4

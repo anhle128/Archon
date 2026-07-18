@@ -68,7 +68,7 @@ AI-oriented fields:
 | `persist_session` | Cross-run node session persistence for eligible AI nodes.                            |
 
 AI-oriented fields on bash and script nodes are stripped or ignored.
-AI-oriented fields on loop nodes are mostly ignored except `provider` and `model`.
+AI-oriented fields on loop nodes are mostly ignored except `provider`, `model`, `pi`, and `effort`.
 
 ## Prompt Nodes
 
