@@ -3439,6 +3439,29 @@ describe('workflow.ts run-state → contract-state mapping helper (Story 3.3b Ta
     expect(result).toEqual({ state: 'paused', terminal: false });
   });
 
+  it('3.3C-UNIT-STATE-001: paused + resolved approval gate maps to "paused" not "waiting-for-approval"', () => {
+    const approved = mapWorkflowRunToContractState({
+      status: 'paused',
+      metadata: {
+        approval: { nodeId: 'n1', message: 'm', resolved: 'approved' },
+      },
+    });
+    expect(approved.state).toBe('paused');
+    expect(approved.terminal).toBe(false);
+    expect(approved.actionRequired).toBeUndefined();
+    expect(approved.gateRef).toBeUndefined();
+
+    const rejected = mapWorkflowRunToContractState({
+      status: 'paused',
+      metadata: {
+        approval: { nodeId: 'n1', message: 'm', resolved: 'rejected' },
+      },
+    });
+    expect(rejected.state).toBe('paused');
+    expect(rejected.terminal).toBe(false);
+    expect(rejected.actionRequired).toBeUndefined();
+  });
+
   // 3.3B-UNIT-006 [P0] R-006
   it('3.3B-UNIT-006: paused + absent/malformed approval metadata conservatively maps to "paused"', () => {
     expect(mapWorkflowRunToContractState({ status: 'paused', metadata: {} })).toEqual({
@@ -3747,22 +3770,28 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
     (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
       { id: FULL_ID },
     ]);
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+    const pausedRun = {
       id: FULL_ID,
       workflow_name: 'implement',
-      status: 'paused',
+      status: 'paused' as const,
       working_path: '/tmp/wt',
       codebase_id: 'cb',
       conversation_id: 'conv',
       user_message: 'go',
       metadata: { approval: { nodeId: 'gate', message: 'ok?' } },
-    });
+    };
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
+      .mockResolvedValueOnce(pausedRun)
+      .mockResolvedValueOnce(pausedRun);
 
-    await workflowApproveCommand('0b1ee8da', 'lgtm', true, '/repo');
+    await workflowApproveCommand('0b1ee8da', 'lgtm', true, undefined, '/repo');
 
     expect(workflowDb.getWorkflowRun).toHaveBeenCalledWith(FULL_ID);
-    const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
-    expect(parsed).toMatchObject({ ok: true, runId: FULL_ID, action: 'approve' });
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
+    expect(envelope.command).toBe('workflow.approve');
+    expect(envelope.success).toBe(true);
+    expect((envelope.workflowRunRef as Record<string, unknown>).runId).toBe(FULL_ID);
   });
 
   it('rejects by short prefix and reports the resolved full id', async () => {
@@ -3774,30 +3803,31 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
     (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
       { id: FULL_ID },
     ]);
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+    const pausedRun = {
       id: FULL_ID,
       workflow_name: 'implement',
-      status: 'paused',
+      status: 'paused' as const,
       working_path: '/tmp/wt',
       codebase_id: 'cb',
       conversation_id: 'conv',
       user_message: 'go',
       metadata: { approval: { nodeId: 'gate', message: 'ok?' } },
-    });
+    };
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
+      .mockResolvedValueOnce(pausedRun)
+      .mockResolvedValueOnce({ ...pausedRun, status: 'cancelled' });
     (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       cancelled: true,
     });
 
-    await workflowRejectCommand('0b1ee8da', 'nope', true, '/repo');
+    await workflowRejectCommand('0b1ee8da', 'nope', true, undefined, '/repo');
 
     expect(workflowDb.getWorkflowRun).toHaveBeenCalledWith(FULL_ID);
-    const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
-    expect(parsed).toMatchObject({
-      ok: true,
-      runId: FULL_ID,
-      action: 'reject',
-      cancelled: true,
-    });
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
+    expect(envelope.command).toBe('workflow.reject');
+    expect(envelope.success).toBe(true);
+    expect((envelope.workflowRunRef as Record<string, unknown>).runId).toBe(FULL_ID);
   });
 
   it('skips resolution when no cwd is provided (exact lookup only)', async () => {
@@ -3999,46 +4029,283 @@ describe('write command --json output', () => {
   it('approve --json records the decision and does NOT auto-resume', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const discovery = await import('@archon/workflows/workflow-discovery');
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+    const pausedRun = {
       id: 'run-ap',
       workflow_name: 'implement',
-      status: 'paused',
+      status: 'paused' as const,
       working_path: '/tmp/wt',
       codebase_id: 'cb',
       conversation_id: 'conv',
       user_message: 'go',
       metadata: { approval: { nodeId: 'gate', message: 'ok?' } },
-    });
+    };
+    const approvedRun = {
+      ...pausedRun,
+      metadata: { approval: { nodeId: 'gate', message: 'ok?', resolved: 'approved' } },
+    };
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
+      .mockResolvedValueOnce(pausedRun)
+      .mockResolvedValueOnce(approvedRun);
     const discoverSpy = discovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>;
     discoverSpy.mockClear();
 
-    await workflowApproveCommand('run-ap', 'lgtm', true);
+    const exitCode = await workflowApproveCommand('run-ap', 'lgtm', true);
 
-    const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
-    expect(parsed).toMatchObject({
-      ok: true,
+    expect(exitCode).toBe(0);
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
+    expect(envelope.command).toBe('workflow.approve');
+    expect(envelope.success).toBe(true);
+    expect(envelope.workflowRunRef).toMatchObject({
+      provider: 'archon',
       runId: 'run-ap',
-      action: 'approve',
-      type: 'approval_gate',
+      workflowName: 'implement',
+    });
+    expect(envelope.result).toMatchObject({
+      operation: 'approve',
+      decision: { outcome: 'approved', recorded: true },
       resumable: true,
+      state: 'paused',
+      terminal: false,
     });
     // No inline resume → workflowRunCommand (whose first step is discovery) never ran
     expect(discoverSpy).not.toHaveBeenCalled();
   });
 
-  it('reject --json reports cancelled + resumable correctly without auto-resume', async () => {
+  it('approve --json success on interactive loop gate emits same envelope shape', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
-    const discovery = await import('@archon/workflows/workflow-discovery');
+    const loopRun = {
+      id: 'run-loop',
+      workflow_name: 'implement',
+      status: 'paused' as const,
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      metadata: {
+        approval: { nodeId: 'loop-node', type: 'interactive_loop', message: 'feedback?' },
+      },
+    };
+    const resolvedLoopRun = {
+      ...loopRun,
+      metadata: {
+        approval: {
+          nodeId: 'loop-node',
+          type: 'interactive_loop',
+          message: 'feedback?',
+          resolved: 'approved',
+        },
+      },
+    };
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
+      .mockResolvedValueOnce(loopRun)
+      .mockResolvedValueOnce(resolvedLoopRun);
+
+    await workflowApproveCommand('run-loop', 'looks good', true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.approve');
+    expect(envelope.success).toBe(true);
+    const result = envelope.result as Record<string, unknown>;
+    expect(result.operation).toBe('approve');
+    expect((result.decision as Record<string, unknown>).outcome).toBe('approved');
+    expect((result.decision as Record<string, unknown>).recorded).toBe(true);
+    expect(result.state).toBe('paused');
+    expect(result.terminal).toBe(false);
+  });
+
+  it('approve --json error: run not paused → UNEXPECTED_STATE', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'run-rj',
+      id: 'run-completed',
+      workflow_name: 'implement',
+      status: 'completed',
+      metadata: {},
+    });
+
+    const exitCode = await workflowApproveCommand('run-completed', undefined, true);
+
+    expect(exitCode).toBe(78);
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(false);
+    expect(envelope.command).toBe('workflow.approve');
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('UNEXPECTED_STATE');
+    expect(error.category).toBe('unexpected_state');
+    expect(error.retryable).toBe(false);
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(78);
+  });
+
+  it('approve --json error: already resolved → UNEXPECTED_STATE', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-resolved',
       workflow_name: 'implement',
       status: 'paused',
+      metadata: { approval: { nodeId: 'gate', message: 'ok?', resolved: 'approved' } },
+    });
+
+    await workflowApproveCommand('run-resolved', undefined, true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('UNEXPECTED_STATE');
+  });
+
+  it('approve --json error: missing approval context → UNEXPECTED_STATE', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    // approveWorkflow will throw 'missing approval context' when the run is paused
+    // but has no approval metadata
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-no-ctx',
+      workflow_name: 'implement',
+      status: 'paused',
+      metadata: {},
+    });
+
+    await workflowApproveCommand('run-no-ctx', undefined, true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('UNEXPECTED_STATE');
+    expect(error.category).toBe('unexpected_state');
+  });
+
+  it('approve --json error: run not found → WORKFLOW_RUN_NOT_FOUND', async () => {
+    // resolveRunIdArg falls through to approveWorkflow which calls getWorkflowRun
+    // and gets null → throws 'Workflow run not found: ...'
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+
+    await workflowApproveCommand('nonexistent-id', undefined, true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('WORKFLOW_RUN_NOT_FOUND');
+    expect(error.category).toBe('unexpected_state');
+    expect(error.retryable).toBe(false);
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(78);
+  });
+
+  it('approve --json error: DB failure on post-approval fetch → INTERNAL_ERROR', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    // First call: approveWorkflow's internal lookup succeeds
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-db-fail',
+      workflow_name: 'implement',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      metadata: { approval: { nodeId: 'gate', message: 'ok?' } },
+    });
+    // Second call: post-approval fetch fails
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new Error('DB transient error')
+    );
+
+    const exitCode = await workflowApproveCommand('run-db-fail', undefined, true);
+
+    expect(exitCode).toBe(70);
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('INTERNAL_ERROR');
+    expect(error.category).toBe('implementation_defect');
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(70);
+  });
+
+  it('approve --json error: post-approval readback returns null → INTERNAL_ERROR (not RUN_NOT_FOUND)', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    // First call: approveWorkflow's internal lookup succeeds
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-null-readback',
+      workflow_name: 'implement',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      metadata: { approval: { nodeId: 'gate', message: 'ok?' } },
+    });
+    // Second call: post-approval fetch returns null (row vanished)
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+
+    const exitCode = await workflowApproveCommand('run-null-readback', undefined, true);
+
+    expect(exitCode).toBe(70);
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('INTERNAL_ERROR');
+    expect(error.category).toBe('implementation_defect');
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(70);
+  });
+
+  it('approve --json error: timeout → COMMAND_TIMEOUT envelope (fail-closed)', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const timeoutErr = Object.assign(new Error('statement timeout'), { code: 'ETIMEDOUT' });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockRejectedValueOnce(timeoutErr);
+
+    const exitCode = await workflowApproveCommand('run-timeout', undefined, true);
+
+    expect(exitCode).toBe(69);
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.approve');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('COMMAND_TIMEOUT');
+    expect(error.category).toBe('timeout');
+    expect(error.retryable).toBe(true);
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(69);
+  });
+
+  it('reject --json error: timeout → COMMAND_TIMEOUT envelope (fail-closed)', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const timeoutErr = Object.assign(new Error('statement timeout'), { code: 'ETIMEDOUT' });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockRejectedValueOnce(timeoutErr);
+
+    const exitCode = await workflowRejectCommand('run-timeout', 'nope', true);
+
+    expect(exitCode).toBe(69);
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.reject');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('COMMAND_TIMEOUT');
+    expect(error.category).toBe('timeout');
+    expect(error.retryable).toBe(true);
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(69);
+  });
+
+  it('reject --json success (cancelled) emits workflow.reject envelope', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const discovery = await import('@archon/workflows/workflow-discovery');
+    const pausedRun = {
+      id: 'run-rj',
+      workflow_name: 'implement',
+      status: 'paused' as const,
       working_path: '/tmp/wt',
       codebase_id: 'cb',
       conversation_id: 'conv',
       user_message: 'go',
       metadata: { approval: { nodeId: 'gate', message: 'ok?' } },
-    });
+    };
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
+      .mockResolvedValueOnce(pausedRun)
+      .mockResolvedValueOnce({ ...pausedRun, status: 'cancelled' });
     (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       cancelled: true,
     });
@@ -4047,16 +4314,222 @@ describe('write command --json output', () => {
 
     await workflowRejectCommand('run-rj', 'nope', true);
 
-    const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
-    // No onRejectPrompt in approval metadata → run is cancelled, not resumable
-    expect(parsed).toMatchObject({
-      ok: true,
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
+    expect(envelope.command).toBe('workflow.reject');
+    expect(envelope.success).toBe(true);
+    expect(envelope.workflowRunRef).toMatchObject({
+      provider: 'archon',
       runId: 'run-rj',
-      action: 'reject',
-      cancelled: true,
-      resumable: false,
+      workflowName: 'implement',
     });
+    const result = envelope.result as Record<string, unknown>;
+    expect(result.operation).toBe('reject');
+    expect((result.decision as Record<string, unknown>).outcome).toBe('rejected');
+    expect((result.decision as Record<string, unknown>).recorded).toBe(true);
+    expect(result.cancelled).toBe(true);
+    expect(result.resumable).toBe(false);
     expect(discoverSpy).not.toHaveBeenCalled();
+  });
+
+  it('reject --json success (rework, not cancelled) emits resumable:true', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const pausedRun = {
+      id: 'run-rj-rework',
+      workflow_name: 'implement',
+      status: 'paused' as const,
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      metadata: {
+        approval: {
+          nodeId: 'gate',
+          message: 'ok?',
+          onRejectPrompt: 'Fix the issues',
+          onRejectMaxAttempts: 3,
+          rejectionCount: 0,
+        },
+      },
+    };
+    const rejectedRun = {
+      ...pausedRun,
+      metadata: {
+        approval: {
+          nodeId: 'gate',
+          message: 'ok?',
+          onRejectPrompt: 'Fix the issues',
+          onRejectMaxAttempts: 3,
+          rejectionCount: 0,
+          resolved: 'rejected',
+        },
+      },
+    };
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
+      .mockResolvedValueOnce(pausedRun)
+      .mockResolvedValueOnce(rejectedRun);
+
+    await workflowRejectCommand('run-rj-rework', 'needs work', true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(true);
+    expect(envelope.command).toBe('workflow.reject');
+    const result = envelope.result as Record<string, unknown>;
+    expect(result.cancelled).toBe(false);
+    expect(result.resumable).toBe(true);
+    expect(result.state).toBe('paused');
+    expect(result.terminal).toBe(false);
+  });
+
+  it('reject --json success (max attempts reached) emits cancelled:true, maxAttemptsReached:true', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const pausedRun = {
+      id: 'run-rj-max',
+      workflow_name: 'implement',
+      status: 'paused' as const,
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      metadata: {
+        rejection_count: 2,
+        approval: {
+          nodeId: 'gate',
+          message: 'ok?',
+          onRejectPrompt: 'Fix the issues',
+          onRejectMaxAttempts: 3,
+        },
+      },
+    };
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
+      .mockResolvedValueOnce(pausedRun)
+      .mockResolvedValueOnce({ ...pausedRun, status: 'cancelled' });
+    (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      cancelled: true,
+    });
+
+    await workflowRejectCommand('run-rj-max', 'still bad', true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(true);
+    const result = envelope.result as Record<string, unknown>;
+    expect(result.cancelled).toBe(true);
+    expect(result.maxAttemptsReached).toBe(true);
+    expect(result.resumable).toBe(false);
+  });
+
+  it('reject --json error: run not paused → UNEXPECTED_STATE', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-completed',
+      workflow_name: 'implement',
+      status: 'completed',
+      metadata: {},
+    });
+
+    const exitCode = await workflowRejectCommand('run-completed', undefined, true);
+
+    expect(exitCode).toBe(78);
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(false);
+    expect(envelope.command).toBe('workflow.reject');
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('UNEXPECTED_STATE');
+    expect(error.category).toBe('unexpected_state');
+    expect(error.retryable).toBe(false);
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(78);
+  });
+
+  it('reject --json error: already resolved → UNEXPECTED_STATE', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-resolved',
+      workflow_name: 'implement',
+      status: 'paused',
+      metadata: { approval: { nodeId: 'gate', message: 'ok?', resolved: 'rejected' } },
+    });
+
+    await workflowRejectCommand('run-resolved', undefined, true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('UNEXPECTED_STATE');
+  });
+
+  it('reject --json error: missing approval context → UNEXPECTED_STATE', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-no-ctx-rj',
+      workflow_name: 'implement',
+      status: 'paused',
+      metadata: {},
+    });
+
+    const exitCode = await workflowRejectCommand('run-no-ctx-rj', undefined, true);
+
+    expect(exitCode).toBe(78);
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(false);
+    expect(envelope.command).toBe('workflow.reject');
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('UNEXPECTED_STATE');
+    expect(error.category).toBe('unexpected_state');
+    expect(error.retryable).toBe(false);
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(78);
+  });
+
+  it('reject --json error: run not found → WORKFLOW_RUN_NOT_FOUND', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+
+    await workflowRejectCommand('nonexistent-id', undefined, true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('WORKFLOW_RUN_NOT_FOUND');
+    expect(error.category).toBe('unexpected_state');
+    expect(error.retryable).toBe(false);
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(78);
+  });
+
+  it('reject --json error: post-rejection readback returns null → INTERNAL_ERROR (not RUN_NOT_FOUND)', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const discovery = await import('@archon/workflows/workflow-discovery');
+    const pausedRun = {
+      id: 'run-null-reject',
+      workflow_name: 'implement',
+      status: 'paused' as const,
+      working_path: '/tmp/wt',
+      codebase_id: 'cb',
+      conversation_id: 'conv',
+      metadata: { approval: { nodeId: 'gate', message: 'ok?' } },
+    };
+    // First call: rejectWorkflow's internal lookup succeeds
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(pausedRun);
+    // Second call: post-rejection fetch returns null
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+    const discoverSpy = discovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>;
+    discoverSpy.mockClear();
+
+    const exitCode = await workflowRejectCommand('run-null-reject', undefined, true);
+
+    expect(exitCode).toBe(70);
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('INTERNAL_ERROR');
+    expect(error.category).toBe('implementation_defect');
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(70);
   });
 
   it('resume --json validates resumability without executing (executed:false)', async () => {
@@ -5831,5 +6304,830 @@ describe('resolveContainerBackendConfig', () => {
   it('rejects a non-integer / non-positive pidsLimit', () => {
     expect(() => resolveContainerBackendConfig({ pidsLimit: 10.5 })).toThrow(/positive integer/);
     expect(() => resolveContainerBackendConfig({ pidsLimit: 0 })).toThrow(/positive integer/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RED-PHASE SCAFFOLD — Story 3.3c "Provide Archon Provider Decision Command
+// CLI JSON". Tests for `workflowApproveCommand` and `workflowRejectCommand`
+// JSON envelope mode, plus `classifyRunError` extensions for decision-specific
+// error patterns.
+//
+// Target: packages/cli/src/commands/workflow.ts
+// Test design: _bmad-output/implementation-artifacts/3-3c-provide-archon-
+// provider-decision-command-cli-json.md
+//
+// These are `test.skip()` scaffolds: the envelope conversion (Slices 1-4) does
+// not exist yet — the JSON branch currently emits the legacy `{ok:true/false}`
+// shape. Each skip states what implementation makes it activatable.
+//
+// ACTIVATION: remove `.skip` once workflowApproveCommand / workflowRejectCommand
+// JSON branches use buildSuccessEnvelope/buildErrorEnvelope with a fail-closed
+// try/catch, and classifyRunError has the decision-specific patterns.
+// ---------------------------------------------------------------------------
+
+describe('workflowApproveCommand — JSON envelope mode (Story 3.3c)', () => {
+  let consoleSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    mockLogger.error.mockClear();
+  });
+
+  afterEach(() => {
+    consoleSpy.mockRestore();
+  });
+
+  // 3.3C-UNIT-001 [P0] AC #1 — approve success on a standard approval gate
+  it.skip('3.3C-UNIT-001: emits workflow.approve success envelope for an approval gate', async () => {
+    // ACTIVATION: workflowApproveCommand JSON branch uses buildSuccessEnvelope
+    // with command 'workflow.approve' and result containing operation/decision.
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-approve-env-1',
+      workflow_name: 'implement',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      codebase_id: 'cb-1',
+      conversation_id: 'conv-1',
+      user_message: 'go',
+      metadata: { approval: { type: 'approval', nodeId: 'gate', message: 'Approve?' } },
+    });
+    // Post-approval re-fetch for envelope state mapping
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-approve-env-1',
+      workflow_name: 'implement',
+      status: 'paused',
+      codebase_id: 'cb-1',
+      working_path: '/tmp/wt',
+      metadata: {
+        approval: { type: 'approval', nodeId: 'gate', message: 'Approve?', resolved: 'approved' },
+      },
+    });
+
+    await workflowApproveCommand('run-approve-env-1', 'lgtm', true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const raw = consoleSpy.mock.calls[0][0] as string;
+    const envelope = JSON.parse(raw) as Record<string, unknown>;
+    expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
+    expect(envelope.command).toBe('workflow.approve');
+    expect(envelope.success).toBe(true);
+    expect(envelope).toHaveProperty('workflowRunRef');
+    const ref = envelope.workflowRunRef as Record<string, unknown>;
+    expect(ref.runId).toBe('run-approve-env-1');
+    expect(ref.workflowName).toBe('implement');
+    const result = envelope.result as Record<string, unknown>;
+    expect(result.operation).toBe('approve');
+    const decision = result.decision as Record<string, unknown>;
+    expect(decision.outcome).toBe('approved');
+    expect(decision.recorded).toBe(true);
+    expect(envelope).not.toHaveProperty('error');
+  });
+
+  // 3.3C-UNIT-002 [P0] AC #1 — approve success on an interactive loop gate
+  it.skip('3.3C-UNIT-002: emits workflow.approve success envelope for an interactive loop gate', async () => {
+    // ACTIVATION: same as 3.3C-UNIT-001; interactive loop type in approval context
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-approve-loop',
+      workflow_name: 'implement',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      user_message: 'go',
+      metadata: {
+        approval: { type: 'interactive_loop', nodeId: 'loop-node', message: 'Continue?' },
+      },
+    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-approve-loop',
+      workflow_name: 'implement',
+      status: 'paused',
+      codebase_id: null,
+      working_path: '/tmp/wt',
+      metadata: {
+        approval: {
+          type: 'interactive_loop',
+          nodeId: 'loop-node',
+          message: 'Continue?',
+          resolved: 'approved',
+        },
+      },
+    });
+
+    await workflowApproveCommand('run-approve-loop', undefined, true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.approve');
+    expect(envelope.success).toBe(true);
+    const result = envelope.result as Record<string, unknown>;
+    expect(result.operation).toBe('approve');
+    expect((result.decision as Record<string, unknown>).outcome).toBe('approved');
+  });
+
+  // 3.3C-UNIT-003 [P0] AC #2 — approve error: run not paused
+  it.skip('3.3C-UNIT-003: emits UNEXPECTED_STATE envelope when approve called on a non-paused run', async () => {
+    // ACTIVATION: classifyRunError handles 'Cannot approve run with status'
+    // and workflowApproveCommand JSON branch wraps in fail-closed try/catch.
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-not-paused',
+      workflow_name: 'implement',
+      status: 'completed',
+      metadata: {},
+    });
+
+    await workflowApproveCommand('run-not-paused', undefined, true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.approve');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('UNEXPECTED_STATE');
+    expect(error.category).toBe('unexpected_state');
+    expect(error.retryable).toBe(false);
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(78);
+    expect(envelope).not.toHaveProperty('workflowRunRef');
+    expect(envelope).not.toHaveProperty('result');
+  });
+
+  // 3.3C-UNIT-004 [P0] AC #2 — approve error: already resolved
+  it.skip('3.3C-UNIT-004: emits UNEXPECTED_STATE envelope when gate is already resolved', async () => {
+    // ACTIVATION: classifyRunError handles 'already resolved'/'already approved'/
+    // 'awaiting resume' patterns, and the JSON branch catches them.
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-already-resolved',
+      workflow_name: 'implement',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      metadata: { approval: { nodeId: 'gate', message: 'ok?', resolved: 'approved' } },
+    });
+    // approveWorkflow throws when gate is already resolved
+    (workflowDb.resolveApprovalGate as ReturnType<typeof mock>).mockResolvedValueOnce({
+      resolved: false,
+    });
+
+    await workflowApproveCommand('run-already-resolved', undefined, true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('UNEXPECTED_STATE');
+    expect(error.category).toBe('unexpected_state');
+    expect(error.retryable).toBe(false);
+  });
+
+  // 3.3C-UNIT-005 [P0] AC #2 — approve error: missing approval context
+  it.skip('3.3C-UNIT-005: emits UNEXPECTED_STATE envelope when approval context is missing', async () => {
+    // ACTIVATION: classifyRunError handles 'missing approval context' and the
+    // JSON branch catches it.
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-no-ctx',
+      workflow_name: 'implement',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      metadata: {},
+    });
+
+    await workflowApproveCommand('run-no-ctx', undefined, true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(false);
+    expect((envelope.error as Record<string, unknown>).code).toBe('UNEXPECTED_STATE');
+  });
+
+  // 3.3C-UNIT-006 [P0] AC #2 — approve error: run not found via resolveRunIdArg
+  it.skip('3.3C-UNIT-006: emits WORKFLOW_RUN_NOT_FOUND envelope when run does not exist', async () => {
+    // ACTIVATION: classifyRunError handles 'Workflow run not found' and the
+    // JSON branch catches it with WORKFLOW_RUN_NOT_FOUND.
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+
+    await workflowApproveCommand('nonexistent-run-id', undefined, true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.approve');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('WORKFLOW_RUN_NOT_FOUND');
+    expect(error.category).toBe('unexpected_state');
+    expect(error.retryable).toBe(false);
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(78);
+  });
+
+  // 3.3C-UNIT-007 [P1] AC #2 — approve error: DB error on post-approval fetch
+  it.skip('3.3C-UNIT-007: emits INTERNAL_ERROR envelope when post-approval run fetch fails', async () => {
+    // ACTIVATION: after approveWorkflow succeeds, the code fetches the run for
+    // the envelope; if getWorkflowRun throws, emit INTERNAL_ERROR.
+    const workflowDb = await import('@archon/core/db/workflows');
+    // First call: approveWorkflow succeeds (lookup + CAS)
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-db-err',
+      workflow_name: 'implement',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      user_message: 'go',
+      metadata: { approval: { type: 'approval', nodeId: 'gate', message: 'Approve?' } },
+    });
+    // Second call: post-approval re-fetch throws DB error
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new Error('database connection lost')
+    );
+
+    await workflowApproveCommand('run-db-err', undefined, true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('INTERNAL_ERROR');
+    expect(error.category).toBe('implementation_defect');
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(70);
+  });
+
+  // 3.3C-UNIT-008 [P0] — JSON approve does NOT auto-resume (preserved invariant)
+  it.skip('3.3C-UNIT-008: JSON approve does not invoke workflowRunCommand (no auto-resume)', async () => {
+    // ACTIVATION: same as 3.3C-UNIT-001; verifies the non-resume invariant
+    // documented at workflow.ts:2986-2993.
+    const workflowDb = await import('@archon/core/db/workflows');
+    const discovery = await import('@archon/workflows/workflow-discovery');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-no-resume',
+      workflow_name: 'implement',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      codebase_id: 'cb',
+      user_message: 'go',
+      metadata: { approval: { type: 'approval', nodeId: 'gate', message: 'Approve?' } },
+    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-no-resume',
+      workflow_name: 'implement',
+      status: 'paused',
+      codebase_id: 'cb',
+      working_path: '/tmp/wt',
+      metadata: { approval: { type: 'approval', nodeId: 'gate', resolved: 'approved' } },
+    });
+    const discoverSpy = discovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>;
+    discoverSpy.mockClear();
+
+    await workflowApproveCommand('run-no-resume', 'lgtm', true);
+
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(true);
+    // No inline resume → workflowRunCommand (whose first step is discovery) never ran
+    expect(discoverSpy).not.toHaveBeenCalled();
+  });
+
+  // 3.3C-UNIT-009 [P1] — exactly one stdout line, no human text
+  it.skip('3.3C-UNIT-009: JSON mode approve writes exactly one stdout line with no human text', async () => {
+    // ACTIVATION: envelope conversion replaces legacy JSON.stringify
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-one-line',
+      workflow_name: 'assist',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      user_message: 'go',
+      metadata: { approval: { type: 'approval', nodeId: 'gate', message: 'ok?' } },
+    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-one-line',
+      workflow_name: 'assist',
+      status: 'paused',
+      codebase_id: null,
+      working_path: '/tmp/wt',
+      metadata: { approval: { type: 'approval', nodeId: 'gate', resolved: 'approved' } },
+    });
+
+    await workflowApproveCommand('run-one-line', undefined, true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const raw = consoleSpy.mock.calls[0][0] as string;
+    expect(() => JSON.parse(raw)).not.toThrow();
+    expect(raw).not.toContain('Approved workflow');
+    expect(raw).not.toContain('Resuming');
+  });
+
+  // 3.3C-UNIT-010 [P1] — correlationId echoed in approve envelope
+  it.skip('3.3C-UNIT-010: correlationId is echoed in approve success envelope', async () => {
+    // ACTIVATION: workflowApproveCommand accepts correlationId as 4th positional
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-corr',
+      workflow_name: 'assist',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      user_message: 'go',
+      metadata: { approval: { type: 'approval', nodeId: 'gate', message: 'ok?' } },
+    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-corr',
+      workflow_name: 'assist',
+      status: 'paused',
+      codebase_id: null,
+      working_path: '/tmp/wt',
+      metadata: { approval: { type: 'approval', nodeId: 'gate', resolved: 'approved' } },
+    });
+
+    await workflowApproveCommand('run-corr', 'lgtm', true, undefined, 'corr-3c-approve');
+
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.correlationId).toBe('corr-3c-approve');
+  });
+});
+
+describe('workflowRejectCommand — JSON envelope mode (Story 3.3c)', () => {
+  let consoleSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    mockLogger.error.mockClear();
+  });
+
+  afterEach(() => {
+    consoleSpy.mockRestore();
+  });
+
+  // 3.3C-UNIT-011 [P0] AC #1 — reject success: cancelled (no on_reject)
+  it.skip('3.3C-UNIT-011: emits workflow.reject success envelope with cancelled=true, resumable=false', async () => {
+    // ACTIVATION: workflowRejectCommand JSON branch uses buildSuccessEnvelope
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-reject-cancel',
+      workflow_name: 'implement',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      codebase_id: 'cb-1',
+      user_message: 'go',
+      metadata: { approval: { type: 'approval', nodeId: 'gate', message: 'Approve?' } },
+    });
+    // Post-rejection re-fetch
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-reject-cancel',
+      workflow_name: 'implement',
+      status: 'cancelled',
+      codebase_id: 'cb-1',
+      working_path: '/tmp/wt',
+      metadata: {},
+    });
+
+    await workflowRejectCommand('run-reject-cancel', 'not good', true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
+    expect(envelope.command).toBe('workflow.reject');
+    expect(envelope.success).toBe(true);
+    expect(envelope).toHaveProperty('workflowRunRef');
+    const result = envelope.result as Record<string, unknown>;
+    expect(result.operation).toBe('reject');
+    expect((result.decision as Record<string, unknown>).outcome).toBe('rejected');
+    expect((result.decision as Record<string, unknown>).recorded).toBe(true);
+    expect(result.cancelled).toBe(true);
+    expect(result.resumable).toBe(false);
+    expect(envelope).not.toHaveProperty('error');
+  });
+
+  // 3.3C-UNIT-012 [P0] AC #1 — reject success: not cancelled (has on_reject rework)
+  it.skip('3.3C-UNIT-012: emits workflow.reject success envelope with cancelled=false, resumable=true', async () => {
+    // ACTIVATION: same as above; rework-resumable path
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-reject-rework',
+      workflow_name: 'implement',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      user_message: 'go',
+      metadata: {
+        approval: {
+          type: 'approval',
+          nodeId: 'gate',
+          message: 'Approve?',
+          onRejectPrompt: 'Fix: $REJECTION_REASON',
+          onRejectMaxAttempts: 3,
+        },
+        rejection_count: 0,
+      },
+    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-reject-rework',
+      workflow_name: 'implement',
+      status: 'paused',
+      codebase_id: null,
+      working_path: '/tmp/wt',
+      metadata: {
+        approval: { type: 'approval', nodeId: 'gate', resolved: 'rejected' },
+        rejection_count: 1,
+      },
+    });
+
+    await workflowRejectCommand('run-reject-rework', 'needs work', true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.reject');
+    expect(envelope.success).toBe(true);
+    const result = envelope.result as Record<string, unknown>;
+    expect(result.cancelled).toBe(false);
+    expect(result.resumable).toBe(true);
+  });
+
+  // 3.3C-UNIT-013 [P0] AC #1 — reject success: max attempts reached
+  it.skip('3.3C-UNIT-013: emits workflow.reject envelope with maxAttemptsReached=true, cancelled=true', async () => {
+    // ACTIVATION: same as above; max attempts path
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-reject-max',
+      workflow_name: 'implement',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      user_message: 'go',
+      metadata: {
+        approval: {
+          type: 'approval',
+          nodeId: 'gate',
+          message: 'Approve?',
+          onRejectPrompt: 'Fix',
+          onRejectMaxAttempts: 3,
+        },
+        rejection_count: 2,
+      },
+    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-reject-max',
+      workflow_name: 'implement',
+      status: 'cancelled',
+      codebase_id: null,
+      working_path: '/tmp/wt',
+      metadata: {},
+    });
+
+    await workflowRejectCommand('run-reject-max', 'still bad', true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(true);
+    const result = envelope.result as Record<string, unknown>;
+    expect(result.maxAttemptsReached).toBe(true);
+    expect(result.cancelled).toBe(true);
+    expect(result.resumable).toBe(false);
+  });
+
+  // 3.3C-UNIT-014 [P1] AC #1 — reject success: container write-back rejection
+  it('3.3C-UNIT-014: emits workflow.reject envelope for container write-back rejection (cancelled=false)', async () => {
+    // ACTIVATION: envelope conversion of the write-back rejection path
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-reject-wb',
+      workflow_name: 'implement',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      user_message: 'go',
+      metadata: {
+        approval: { type: 'writeback', nodeId: '__writeback__', message: 'Apply changes?' },
+        pending_writeback: { envId: 'env-1' },
+      },
+    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-reject-wb',
+      workflow_name: 'implement',
+      status: 'paused',
+      codebase_id: null,
+      working_path: '/tmp/wt',
+      metadata: {
+        approval: { type: 'writeback', nodeId: '__writeback__', resolved: 'rejected' },
+        pending_writeback: { envId: 'env-1' },
+      },
+    });
+
+    await workflowRejectCommand('run-reject-wb', 'discard changes', true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
+    expect(envelope.command).toBe('workflow.reject');
+    expect(envelope.success).toBe(true);
+    expect(envelope).toHaveProperty('workflowRunRef');
+    expect(envelope).not.toHaveProperty('error');
+    const result = envelope.result as Record<string, unknown>;
+    expect(result.operation).toBe('reject');
+    expect((result.decision as Record<string, unknown>).outcome).toBe('rejected');
+    expect((result.decision as Record<string, unknown>).recorded).toBe(true);
+    expect(result.cancelled).toBe(false);
+    expect(result.resumable).toBe(true);
+    expect(result.maxAttemptsReached).toBe(false);
+    expect(result.state).toBe('paused');
+    expect(result.terminal).toBe(false);
+  });
+
+  // 3.3C-UNIT-015 [P0] AC #2 — reject error: run not paused
+  it.skip('3.3C-UNIT-015: emits UNEXPECTED_STATE envelope when reject called on non-paused run', async () => {
+    // ACTIVATION: classifyRunError handles 'Cannot reject run with status'
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-reject-np',
+      workflow_name: 'implement',
+      status: 'running',
+      metadata: {},
+    });
+
+    await workflowRejectCommand('run-reject-np', 'nope', true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.reject');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('UNEXPECTED_STATE');
+    expect(error.category).toBe('unexpected_state');
+    expect(error.retryable).toBe(false);
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(78);
+  });
+
+  // 3.3C-UNIT-016 [P0] AC #2 — reject error: already resolved
+  it.skip('3.3C-UNIT-016: emits UNEXPECTED_STATE envelope when reject gate is already resolved', async () => {
+    // ACTIVATION: classifyRunError handles 'already resolved'
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-reject-resolved',
+      workflow_name: 'implement',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      metadata: { approval: { nodeId: 'gate', message: 'ok?', resolved: 'rejected' } },
+    });
+    (workflowDb.resolveApprovalGate as ReturnType<typeof mock>).mockResolvedValueOnce({
+      resolved: false,
+    });
+
+    await workflowRejectCommand('run-reject-resolved', 'nope', true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(false);
+    expect((envelope.error as Record<string, unknown>).code).toBe('UNEXPECTED_STATE');
+  });
+
+  // 3.3C-UNIT-017 [P0] AC #2 — reject error: run not found
+  it.skip('3.3C-UNIT-017: emits WORKFLOW_RUN_NOT_FOUND envelope when rejected run does not exist', async () => {
+    // ACTIVATION: classifyRunError handles 'Workflow run not found'
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+
+    await workflowRejectCommand('nonexistent-reject', 'nope', true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.reject');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('WORKFLOW_RUN_NOT_FOUND');
+    expect(error.category).toBe('unexpected_state');
+    expect(error.retryable).toBe(false);
+    expect((envelope.execution as Record<string, unknown>).exitCode).toBe(78);
+  });
+
+  // 3.3C-UNIT-018 [P0] — JSON reject does NOT auto-resume
+  it.skip('3.3C-UNIT-018: JSON reject does not invoke workflowRunCommand (no auto-resume)', async () => {
+    // ACTIVATION: envelope conversion preserves the no-resume invariant
+    const workflowDb = await import('@archon/core/db/workflows');
+    const discovery = await import('@archon/workflows/workflow-discovery');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-no-resume-rj',
+      workflow_name: 'implement',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      user_message: 'go',
+      metadata: { approval: { type: 'approval', nodeId: 'gate', message: 'ok?' } },
+    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-no-resume-rj',
+      workflow_name: 'implement',
+      status: 'cancelled',
+      codebase_id: null,
+      working_path: '/tmp/wt',
+      metadata: {},
+    });
+    const discoverSpy = discovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>;
+    discoverSpy.mockClear();
+
+    await workflowRejectCommand('run-no-resume-rj', 'nope', true);
+
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(true);
+    expect(discoverSpy).not.toHaveBeenCalled();
+  });
+
+  // 3.3C-UNIT-019 [P1] — correlationId echoed in reject envelope
+  it.skip('3.3C-UNIT-019: correlationId is echoed in reject success envelope', async () => {
+    // ACTIVATION: workflowRejectCommand accepts correlationId parameter
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-corr-rj',
+      workflow_name: 'assist',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      user_message: 'go',
+      metadata: { approval: { type: 'approval', nodeId: 'gate', message: 'ok?' } },
+    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-corr-rj',
+      workflow_name: 'assist',
+      status: 'cancelled',
+      codebase_id: null,
+      working_path: '/tmp/wt',
+      metadata: {},
+    });
+
+    await workflowRejectCommand('run-corr-rj', 'nope', true, undefined, 'corr-3c-reject');
+
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.correlationId).toBe('corr-3c-reject');
+  });
+});
+
+describe('classifyRunError — decision-specific patterns (Story 3.3c Slice 4)', () => {
+  // 3.3C-UNIT-020 [P0] — 'already resolved' pattern
+  it('3.3C-UNIT-020: already-resolved error classifies as UNEXPECTED_STATE', () => {
+    // ACTIVATION: classifyRunError adds 'already resolved'/'already approved'/
+    // 'awaiting resume' patterns
+    expect(
+      classifyRunError(new Error('Workflow run abc was already approved and is awaiting resume.'))
+    ).toEqual({
+      code: 'UNEXPECTED_STATE',
+      category: 'unexpected_state',
+      retryable: false,
+      exitCode: 78,
+    });
+
+    expect(
+      classifyRunError(new Error('Gate was already resolved by a concurrent approve'))
+    ).toEqual({
+      code: 'UNEXPECTED_STATE',
+      category: 'unexpected_state',
+      retryable: false,
+      exitCode: 78,
+    });
+  });
+
+  // 3.3C-UNIT-021 [P0] — 'Cannot approve/reject run with status' pattern
+  it('3.3C-UNIT-021: cannot-approve/reject-status error classifies as UNEXPECTED_STATE', () => {
+    // ACTIVATION: classifyRunError adds 'Cannot approve run with status'
+    // and 'Cannot reject run with status' patterns
+    expect(classifyRunError(new Error('Cannot approve run with status "completed"'))).toEqual({
+      code: 'UNEXPECTED_STATE',
+      category: 'unexpected_state',
+      retryable: false,
+      exitCode: 78,
+    });
+
+    expect(classifyRunError(new Error('Cannot reject run with status "running"'))).toEqual({
+      code: 'UNEXPECTED_STATE',
+      category: 'unexpected_state',
+      retryable: false,
+      exitCode: 78,
+    });
+  });
+
+  // 3.3C-UNIT-022 [P0] — 'missing approval context' pattern
+  it('3.3C-UNIT-022: missing-approval-context error classifies as UNEXPECTED_STATE', () => {
+    // ACTIVATION: classifyRunError adds 'missing approval context' pattern
+    expect(
+      classifyRunError(new Error('Workflow run is paused but missing approval context.'))
+    ).toEqual({
+      code: 'UNEXPECTED_STATE',
+      category: 'unexpected_state',
+      retryable: false,
+      exitCode: 78,
+    });
+  });
+
+  // 3.3C-UNIT-023 [P0] — 'Workflow run not found' pattern (distinct from workflow-name not-found)
+  it('3.3C-UNIT-023: workflow-run-not-found classifies as WORKFLOW_RUN_NOT_FOUND', () => {
+    // ACTIVATION: classifyRunError adds 'Workflow run not found' pattern
+    expect(classifyRunError(new Error('Workflow run not found: abc123'))).toEqual({
+      code: 'WORKFLOW_RUN_NOT_FOUND',
+      category: 'unexpected_state',
+      retryable: false,
+      exitCode: 78,
+    });
+  });
+
+  // 3.3C-UNIT-024 [P0] — negative: patterns must not overmatch
+  it('3.3C-UNIT-024: decision-specific patterns do not overmatch related strings', () => {
+    // ACTIVATION: same patterns as above; negative cases
+    // 'resolved' alone should NOT match
+    expect(classifyRunError(new Error('The task was resolved successfully'))).toEqual({
+      code: 'INTERNAL_ERROR',
+      category: 'implementation_defect',
+      retryable: false,
+      exitCode: 70,
+    });
+
+    // 'Workflow not found' (no 'run') should NOT match WORKFLOW_RUN_NOT_FOUND
+    // (it already matches the existing WORKFLOW_NOT_FOUND regex for name lookups)
+    expect(classifyRunError(new Error("Workflow 'foo' not found."))).toEqual({
+      code: 'WORKFLOW_NOT_FOUND',
+      category: 'unexpected_state',
+      retryable: false,
+      exitCode: 78,
+    });
+
+    // 'Cannot resume run with status' should NOT match the decision-specific patterns
+    expect(classifyRunError(new Error('Cannot resume run with status "completed"'))).not.toEqual(
+      expect.objectContaining({ code: 'UNEXPECTED_STATE' })
+    );
+  });
+
+  // RF-3c-001 — ambiguous short run-id → MALFORMED_REQUEST (not INTERNAL_ERROR)
+  it('RF-3c-001: ambiguous short run-id classifies as MALFORMED_REQUEST', () => {
+    expect(
+      classifyRunError(
+        new Error(
+          "Run id 'abc' matches more than one run in this project — use more characters or the full id (from 'archon workflow runs --json')."
+        )
+      )
+    ).toEqual({
+      code: 'MALFORMED_REQUEST',
+      category: 'provider_contract',
+      retryable: false,
+      exitCode: 64,
+    });
+  });
+
+  // RF-3c-002 — post-decision readback failure does NOT match WORKFLOW_RUN_NOT_FOUND
+  it('RF-3c-002: post-decision readback failure classifies as INTERNAL_ERROR, not RUN_NOT_FOUND', () => {
+    expect(
+      classifyRunError(new Error('Failed to read back workflow run after approval: run-123'))
+    ).toEqual({
+      code: 'INTERNAL_ERROR',
+      category: 'implementation_defect',
+      retryable: false,
+      exitCode: 70,
+    });
+    expect(
+      classifyRunError(new Error('Failed to read back workflow run after rejection: run-456'))
+    ).toEqual({
+      code: 'INTERNAL_ERROR',
+      category: 'implementation_defect',
+      retryable: false,
+      exitCode: 70,
+    });
+  });
+
+  // 3.3C-UNIT-025 [P1] — existing patterns unaffected (regression)
+  it('3.3C-UNIT-025: existing classifier patterns continue to work (regression)', () => {
+    // ACTIVATION: classifyRunError additions must not break existing patterns
+    // Existing: mutually exclusive flags → MALFORMED_REQUEST
+    expect(
+      classifyRunError(new Error('--branch and --no-worktree are mutually exclusive.'))
+    ).toEqual({
+      code: 'MALFORMED_REQUEST',
+      category: 'provider_contract',
+      retryable: false,
+      exitCode: 64,
+    });
+    // Existing: workflow name not found → WORKFLOW_NOT_FOUND
+    expect(classifyRunError(new Error("Workflow 'bar' not found."))).toEqual({
+      code: 'WORKFLOW_NOT_FOUND',
+      category: 'unexpected_state',
+      retryable: false,
+      exitCode: 78,
+    });
+    // Existing: timeout → COMMAND_TIMEOUT
+    const timeoutErr = Object.assign(new Error('statement timeout'), { code: 'ETIMEDOUT' });
+    expect(classifyRunError(timeoutErr)).toEqual({
+      code: 'COMMAND_TIMEOUT',
+      category: 'timeout',
+      retryable: true,
+      exitCode: 69,
+    });
+    // Existing: fallback → INTERNAL_ERROR
+    expect(classifyRunError(new Error('some internal failure'))).toEqual({
+      code: 'INTERNAL_ERROR',
+      category: 'implementation_defect',
+      retryable: false,
+      exitCode: 70,
+    });
   });
 });

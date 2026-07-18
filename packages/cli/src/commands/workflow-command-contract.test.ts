@@ -1,6 +1,7 @@
 import { describe, test, expect, spyOn, mock } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 // RED-PHASE SCAFFOLD (MIXED) — Story 3.3b "Provide Archon Start And Status
 // CLI JSON", Task 4's "companion contract test (mirroring
@@ -129,6 +130,9 @@ mock.module('@archon/core/db/workflows', () => ({
   resumeWorkflowRun: mock(() => Promise.resolve(null)),
   getWorkflowRun: mock(() => Promise.resolve(null)),
   updateWorkflowRun: mock(() => Promise.resolve()),
+  resolveApprovalGate: mock(() => Promise.resolve({ resolved: true })),
+  resolveAndCancelApprovalGate: mock(() => Promise.resolve({ resolved: true })),
+  findWorkflowRunsByIdPrefix: mock(() => Promise.resolve([])),
   listWorkflowRuns: mock(() => Promise.resolve([])),
 }));
 mock.module('@archon/core/db/workflow-events', () => ({
@@ -373,5 +377,371 @@ describe('3.3B-CONTRACT-040 [P1] no contract edits / no runtime _bmad-output imp
   test('cli.ts does not import from `_bmad-output` at runtime', () => {
     const content = readFileSync(join(import.meta.dir, '..', 'cli.ts'), 'utf8');
     expect(content).not.toContain('_bmad-output');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RED-PHASE SCAFFOLD — Story 3.3c "Provide Archon Provider Decision Command
+// CLI JSON". Contract tests for approve/reject envelope forbidden-key scans
+// and fixture delta documentation.
+//
+// These extend the existing 3.3b contract test pattern: invoke the real
+// command functions against mocked deps, parse the emitted JSON, and verify
+// contract compliance. Skipped because the envelope conversion does not exist
+// yet — today's output is the legacy `{ok:true/false}` shape without
+// `schemaVersion`.
+//
+// ACTIVATION: remove `.skip` once workflowApproveCommand/workflowRejectCommand
+// JSON branches emit buildSuccessEnvelope/buildErrorEnvelope envelopes.
+// ---------------------------------------------------------------------------
+
+import { workflowApproveCommand, workflowRejectCommand } from './workflow';
+
+describe('3.3C-CONTRACT-001 [P0] forbidden-key scan on approve/reject envelopes (AC #2)', () => {
+  test('a workflow.approve success envelope contains no forbidden key', async () => {
+    // ACTIVATION: workflowApproveCommand JSON branch emits shared envelope
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-contract-ap',
+      workflow_name: 'assist',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      user_message: 'go',
+      metadata: { approval: { type: 'approval', nodeId: 'gate', message: 'ok?' } },
+    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-contract-ap',
+      workflow_name: 'assist',
+      status: 'paused',
+      codebase_id: null,
+      working_path: '/tmp/wt',
+      metadata: { approval: { type: 'approval', nodeId: 'gate', resolved: 'approved' } },
+    });
+
+    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await workflowApproveCommand('run-contract-ap', 'lgtm', true);
+      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const envelope = JSON.parse(raw) as Record<string, unknown>;
+      expect(envelope.success).toBe(true);
+      expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
+      expect(scanForForbiddenKeys(envelope)).toEqual([]);
+    } finally {
+      consoleSpy.mockRestore();
+    }
+  });
+
+  test('a workflow.approve error envelope contains no forbidden key', async () => {
+    // ACTIVATION: workflowApproveCommand JSON error path emits buildErrorEnvelope
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+
+    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await workflowApproveCommand('nonexistent', undefined, true);
+      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const envelope = JSON.parse(raw) as Record<string, unknown>;
+      expect(envelope.success).toBe(false);
+      expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
+      expect(scanForForbiddenKeys(envelope)).toEqual([]);
+    } finally {
+      consoleSpy.mockRestore();
+    }
+  });
+
+  test('a workflow.reject success envelope contains no forbidden key', async () => {
+    // ACTIVATION: workflowRejectCommand JSON branch emits shared envelope
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-contract-rj',
+      workflow_name: 'assist',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      user_message: 'go',
+      metadata: { approval: { type: 'approval', nodeId: 'gate', message: 'ok?' } },
+    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-contract-rj',
+      workflow_name: 'assist',
+      status: 'cancelled',
+      codebase_id: null,
+      working_path: '/tmp/wt',
+      metadata: {},
+    });
+
+    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await workflowRejectCommand('run-contract-rj', 'nope', true);
+      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const envelope = JSON.parse(raw) as Record<string, unknown>;
+      expect(envelope.success).toBe(true);
+      expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
+      expect(scanForForbiddenKeys(envelope)).toEqual([]);
+    } finally {
+      consoleSpy.mockRestore();
+    }
+  });
+
+  test('a workflow.reject error envelope contains no forbidden key', async () => {
+    // ACTIVATION: workflowRejectCommand JSON error path emits buildErrorEnvelope
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+
+    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await workflowRejectCommand('nonexistent-rj', 'nope', true);
+      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const envelope = JSON.parse(raw) as Record<string, unknown>;
+      expect(envelope.success).toBe(false);
+      expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
+      expect(scanForForbiddenKeys(envelope)).toEqual([]);
+    } finally {
+      consoleSpy.mockRestore();
+    }
+  });
+});
+
+describe('3.3C-CONTRACT-002 [P1] fixture delta documentation (AC #1, W-3.3C-001)', () => {
+  test('approve-success.json fixture has decision.gateId (BMAD-specific, intentionally omitted by Archon)', () => {
+    const fixture = JSON.parse(
+      readFileSync(join(COMMANDS_DIR, 'approve-success.json'), 'utf8')
+    ) as Record<string, unknown>;
+    const result = fixture.result as Record<string, unknown>;
+    const decision = result.decision as Record<string, unknown>;
+    // The fixture's gateId is a BMAD-specific concept. Archon's envelopes
+    // intentionally omit it (result is "additionalProperties": true).
+    expect(typeof decision.gateId).toBe('string');
+  });
+
+  test('reject-success.json fixture has nextPhase (BMAD-specific, intentionally omitted by Archon)', () => {
+    const fixture = JSON.parse(
+      readFileSync(join(COMMANDS_DIR, 'reject-success.json'), 'utf8')
+    ) as Record<string, unknown>;
+    const result = fixture.result as Record<string, unknown>;
+    // The fixture's nextPhase is a BMAD-specific concept. Archon has no generic
+    // "phase" concept and intentionally omits it.
+    expect(typeof result.nextPhase).toBe('string');
+  });
+
+  test('a real workflow.approve success envelope intentionally omits decision.gateId and does not fabricate it', async () => {
+    // ACTIVATION: workflowApproveCommand JSON branch emits shared envelope
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-delta-ap',
+      workflow_name: 'assist',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      user_message: 'go',
+      metadata: { approval: { type: 'approval', nodeId: 'gate', message: 'ok?' } },
+    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-delta-ap',
+      workflow_name: 'assist',
+      status: 'paused',
+      codebase_id: null,
+      working_path: '/tmp/wt',
+      metadata: { approval: { type: 'approval', nodeId: 'gate', resolved: 'approved' } },
+    });
+
+    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await workflowApproveCommand('run-delta-ap', undefined, true);
+      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const envelope = JSON.parse(raw) as Record<string, unknown>;
+      const result = (envelope.result ?? {}) as Record<string, unknown>;
+      const decision = (result.decision ?? {}) as Record<string, unknown>;
+      expect('gateId' in decision).toBe(false);
+    } finally {
+      consoleSpy.mockRestore();
+    }
+  });
+
+  test('a real workflow.reject success envelope intentionally omits nextPhase and does not fabricate it', async () => {
+    // ACTIVATION: workflowRejectCommand JSON branch emits shared envelope
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-delta-rj',
+      workflow_name: 'assist',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      user_message: 'go',
+      metadata: { approval: { type: 'approval', nodeId: 'gate', message: 'ok?' } },
+    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-delta-rj',
+      workflow_name: 'assist',
+      status: 'cancelled',
+      codebase_id: null,
+      working_path: '/tmp/wt',
+      metadata: {},
+    });
+
+    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await workflowRejectCommand('run-delta-rj', 'nope', true);
+      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const envelope = JSON.parse(raw) as Record<string, unknown>;
+      const result = (envelope.result ?? {}) as Record<string, unknown>;
+      expect('nextPhase' in result).toBe(false);
+    } finally {
+      consoleSpy.mockRestore();
+    }
+  });
+});
+
+describe('3.3C-CONTRACT-003 [P1] canonical validator still passes (regression)', () => {
+  test('validate_contracts.py passes and no contract file was edited by this story', async () => {
+    const proc = Bun.spawn(['python3', VALIDATOR], { stdout: 'pipe', stderr: 'pipe' });
+    const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain('contract validation passed');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RF6/RF8: Runtime schema validation — validates emitted envelopes against the
+// ACTUAL workflow-command-envelope.schema.json by reading the file and driving
+// validation from its required[], oneOf, allOf, and $defs constraints. This is
+// distinct from the forbidden-key scan (CONTRACT-001) and the fixture validator
+// (CONTRACT-003, which validates static fixtures, not runtime output).
+// ---------------------------------------------------------------------------
+
+const RUNTIME_VALIDATOR = join(import.meta.dir, 'test-helpers', 'validate_runtime_envelope.py');
+
+async function validateRuntimeEnvelope(envelope: Record<string, unknown>): Promise<string[]> {
+  const tmpFile = join(
+    tmpdir(),
+    `archon-envelope-${Date.now()}-${Math.random().toString(36).slice(2)}.json`
+  );
+  const { writeFileSync, unlinkSync } = await import('node:fs');
+  writeFileSync(tmpFile, JSON.stringify(envelope));
+  try {
+    const proc = Bun.spawn(['python3', RUNTIME_VALIDATOR, tmpFile], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const [stderr, exitCode] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
+    if (exitCode === 0) return [];
+    return stderr.trim().split('\n').filter(Boolean);
+  } finally {
+    unlinkSync(tmpFile);
+  }
+}
+
+describe('3.3C-CONTRACT-005 [P0] runtime envelope JSON Schema validation via contract validator (RF6, RF8, RF10)', () => {
+  test('a runtime workflow.approve success envelope validates against the schema', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-schema-ap',
+      workflow_name: 'assist',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      user_message: 'go',
+      metadata: { approval: { type: 'approval', nodeId: 'gate', message: 'ok?' } },
+    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-schema-ap',
+      workflow_name: 'assist',
+      status: 'paused',
+      codebase_id: null,
+      working_path: '/tmp/wt',
+      metadata: { approval: { type: 'approval', nodeId: 'gate', resolved: 'approved' } },
+    });
+
+    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await workflowApproveCommand('run-schema-ap', 'lgtm', true);
+      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const envelope = JSON.parse(raw) as Record<string, unknown>;
+      const errors = await validateRuntimeEnvelope(envelope);
+      expect(errors).toEqual([]);
+    } finally {
+      consoleSpy.mockRestore();
+    }
+  });
+
+  test('a runtime workflow.approve error envelope validates against the schema', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+
+    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await workflowApproveCommand('nonexistent-schema', undefined, true);
+      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const envelope = JSON.parse(raw) as Record<string, unknown>;
+      const errors = await validateRuntimeEnvelope(envelope);
+      expect(errors).toEqual([]);
+    } finally {
+      consoleSpy.mockRestore();
+    }
+  });
+
+  test('a runtime workflow.reject success envelope validates against the schema', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-schema-rj',
+      workflow_name: 'assist',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      user_message: 'go',
+      metadata: { approval: { type: 'approval', nodeId: 'gate', message: 'ok?' } },
+    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-schema-rj',
+      workflow_name: 'assist',
+      status: 'cancelled',
+      codebase_id: null,
+      working_path: '/tmp/wt',
+      metadata: {},
+    });
+
+    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await workflowRejectCommand('run-schema-rj', 'nope', true);
+      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const envelope = JSON.parse(raw) as Record<string, unknown>;
+      const errors = await validateRuntimeEnvelope(envelope);
+      expect(errors).toEqual([]);
+    } finally {
+      consoleSpy.mockRestore();
+    }
+  });
+
+  test('a runtime workflow.reject error envelope validates against the schema', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+
+    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await workflowRejectCommand('nonexistent-schema-rj', 'nope', true);
+      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const envelope = JSON.parse(raw) as Record<string, unknown>;
+      const errors = await validateRuntimeEnvelope(envelope);
+      expect(errors).toEqual([]);
+    } finally {
+      consoleSpy.mockRestore();
+    }
+  });
+});
+
+describe('3.3C-CONTRACT-004 [P1] shared envelope module unmodified (regression gate)', () => {
+  test('the shared envelope module tests pass without modification', async () => {
+    const proc = Bun.spawn(
+      ['bun', 'test', 'src/commands/workflow-provider-command-envelope.test.ts'],
+      {
+        cwd: join(import.meta.dir, '..', '..'),
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }
+    );
+    const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+    expect(exitCode).toBe(0);
+    expect(stdout).not.toContain('(fail)');
   });
 });

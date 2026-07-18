@@ -44,6 +44,7 @@ import {
   TERMINAL_WORKFLOW_STATUSES,
   workflowRunStatusSchema,
   isApprovalContext,
+  isGateResolved,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import {
@@ -229,7 +230,14 @@ export function mapWorkflowRunToContractState(run: {
   const terminal = TERMINAL_WORKFLOW_STATUSES.includes(run.status);
 
   if (run.status === 'paused' && isApprovalContext(run.metadata.approval)) {
-    const approval = run.metadata.approval as { nodeId: string; type?: string };
+    const approval = run.metadata.approval as {
+      nodeId: string;
+      type?: string;
+      resolved?: string | null;
+    };
+    if (isGateResolved(approval as Parameters<typeof isGateResolved>[0])) {
+      return { state: 'paused', terminal: false };
+    }
     if (approval.type === 'interactive_loop') {
       return { state: 'paused', terminal: false };
     }
@@ -263,13 +271,38 @@ export function classifyRunError(err: unknown): ClassifiedError {
       exitCode: EXIT_RUNTIME,
     };
   }
+  if (msg.includes('Workflow run not found')) {
+    return {
+      code: 'WORKFLOW_RUN_NOT_FOUND',
+      category: 'unexpected_state',
+      retryable: false,
+      exitCode: EXIT_RUNTIME,
+    };
+  }
+  if (
+    msg.includes('already resolved') ||
+    msg.includes('already approved') ||
+    msg.includes('already rejected') ||
+    msg.includes('awaiting resume') ||
+    msg.includes('Cannot approve run with status') ||
+    msg.includes('Cannot reject run with status') ||
+    msg.includes('missing approval context')
+  ) {
+    return {
+      code: 'UNEXPECTED_STATE',
+      category: 'unexpected_state',
+      retryable: false,
+      exitCode: EXIT_RUNTIME,
+    };
+  }
   if (
     msg.includes('mutually exclusive') ||
     msg.includes('no effect with') ||
     msg.includes('conflicts with') ||
     msg.includes('is required') ||
     msg.includes('must be a boolean flag') ||
-    msg.includes('worktree.enabled')
+    msg.includes('worktree.enabled') ||
+    msg.includes('matches more than one run')
   ) {
     return {
       code: 'MALFORMED_REQUEST',
@@ -2998,34 +3031,73 @@ export async function workflowApproveCommand(
   runId: string,
   comment?: string,
   json?: boolean,
+  correlationId?: string,
   cwd?: string
-): Promise<void> {
+): Promise<number> {
   // JSON mode records the approval and returns a structured ack WITHOUT the
   // inline auto-resume (resuming executes the workflow and streams output to
   // stdout, which would corrupt the JSON contract). The run becomes resumable
   // — drive it to completion with a backgrounded `resume`/`run --resume`.
   if (json) {
+    const startTime = Date.now();
+    let metaCorrelationId = 'unknown';
+    let metaIssuedAt = new Date(0).toISOString();
     try {
+      metaCorrelationId = resolveCorrelationId(correlationId);
+      metaIssuedAt = resolveIssuedAt();
       const resolvedId = await resolveRunIdArg(runId, cwd);
-      const result = await approveWorkflow(resolvedId, comment);
-      console.log(
-        JSON.stringify(
-          {
-            ok: true,
-            runId: resolvedId,
-            action: 'approve',
-            type: result.type,
-            workflowName: result.workflowName,
-            resumable: true,
-          },
-          null,
-          2
-        )
+      await approveWorkflow(resolvedId, comment);
+      const persistedRun = await workflowDb.getWorkflowRun(resolvedId);
+      if (!persistedRun) {
+        throw new Error(`Failed to read back workflow run after approval: ${resolvedId}`);
+      }
+      const { state, terminal } = mapWorkflowRunToContractState(persistedRun);
+      const meta: EnvelopeMeta = {
+        provider: 'archon',
+        command: 'workflow.approve',
+        correlationId: metaCorrelationId,
+        issuedAt: metaIssuedAt,
+      };
+      const envelope = buildSuccessEnvelope(
+        meta,
+        { workflowRunRef: buildWorkflowRunRef(persistedRun) },
+        {
+          operation: 'approve',
+          decision: { outcome: 'approved', recorded: true },
+          resumable: true,
+          state,
+          terminal,
+        }
       );
+      console.log(safeStringify(envelope));
+      return 0;
     } catch (error) {
-      printJsonWriteError(runId, 'approve', error);
+      const classified = classifyRunError(error);
+      const err = error instanceof Error ? error : new Error(String(error));
+      getLog().error(
+        { err, runId, correlationId: metaCorrelationId },
+        'cli.workflow_approve_json_failed'
+      );
+      const meta: EnvelopeMeta = {
+        provider: 'archon',
+        command: 'workflow.approve',
+        correlationId: metaCorrelationId,
+        issuedAt: metaIssuedAt,
+      };
+      const errorEnvelope = buildErrorEnvelope(
+        meta,
+        {
+          code: classified.code,
+          category: classified.category,
+          retryable: classified.retryable,
+          details: { runId },
+          exitCode: classified.exitCode,
+        },
+        startTime
+      );
+      console.log(safeStringify(errorEnvelope));
+      return classified.exitCode;
     }
-    return;
   }
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
@@ -3087,6 +3159,7 @@ export async function workflowApproveCommand(
         `The approval was recorded. Run 'bun run cli workflow resume ${resolvedId}' to retry.`
     );
   }
+  return 0;
 }
 
 /**
@@ -3100,35 +3173,75 @@ export async function workflowRejectCommand(
   runId: string,
   reason?: string,
   json?: boolean,
+  correlationId?: string,
   cwd?: string
-): Promise<void> {
+): Promise<number> {
   // JSON mode records the rejection and returns a structured ack WITHOUT the
   // inline auto-resume (an on_reject rework executes the workflow and streams
   // to stdout, corrupting the JSON contract). When `cancelled` is false the run
   // is resumable for the rework pass — drive it with a backgrounded `resume`.
   if (json) {
+    const startTime = Date.now();
+    let metaCorrelationId = 'unknown';
+    let metaIssuedAt = new Date(0).toISOString();
     try {
+      metaCorrelationId = resolveCorrelationId(correlationId);
+      metaIssuedAt = resolveIssuedAt();
       const resolvedId = await resolveRunIdArg(runId, cwd);
       const result = await rejectWorkflow(resolvedId, reason);
-      console.log(
-        JSON.stringify(
-          {
-            ok: true,
-            runId: resolvedId,
-            action: 'reject',
-            cancelled: result.cancelled,
-            maxAttemptsReached: result.maxAttemptsReached,
-            workflowName: result.workflowName,
-            resumable: !result.cancelled,
-          },
-          null,
-          2
-        )
+      const persistedRun = await workflowDb.getWorkflowRun(resolvedId);
+      if (!persistedRun) {
+        throw new Error(`Failed to read back workflow run after rejection: ${resolvedId}`);
+      }
+      const { state, terminal } = mapWorkflowRunToContractState(persistedRun);
+      const meta: EnvelopeMeta = {
+        provider: 'archon',
+        command: 'workflow.reject',
+        correlationId: metaCorrelationId,
+        issuedAt: metaIssuedAt,
+      };
+      const envelope = buildSuccessEnvelope(
+        meta,
+        { workflowRunRef: buildWorkflowRunRef(persistedRun) },
+        {
+          operation: 'reject',
+          decision: { outcome: 'rejected', recorded: true },
+          cancelled: result.cancelled,
+          maxAttemptsReached: result.maxAttemptsReached,
+          resumable: !result.cancelled,
+          state,
+          terminal,
+        }
       );
+      console.log(safeStringify(envelope));
+      return 0;
     } catch (error) {
-      printJsonWriteError(runId, 'reject', error);
+      const classified = classifyRunError(error);
+      const err = error instanceof Error ? error : new Error(String(error));
+      getLog().error(
+        { err, runId, correlationId: metaCorrelationId },
+        'cli.workflow_reject_json_failed'
+      );
+      const meta: EnvelopeMeta = {
+        provider: 'archon',
+        command: 'workflow.reject',
+        correlationId: metaCorrelationId,
+        issuedAt: metaIssuedAt,
+      };
+      const errorEnvelope = buildErrorEnvelope(
+        meta,
+        {
+          code: classified.code,
+          category: classified.category,
+          retryable: classified.retryable,
+          details: { runId },
+          exitCode: classified.exitCode,
+        },
+        startTime
+      );
+      console.log(safeStringify(errorEnvelope));
+      return classified.exitCode;
     }
-    return;
   }
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
@@ -3137,7 +3250,7 @@ export async function workflowRejectCommand(
   if (result.cancelled) {
     const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
     console.log(`Rejected and cancelled${suffix}: ${result.workflowName}`);
-    return;
+    return 0;
   }
 
   // Not cancelled = either an on_reject rework (DAG approval gate) or a container
@@ -3200,6 +3313,7 @@ export async function workflowRejectCommand(
         `The rejection was recorded. Run 'bun run cli workflow resume ${resolvedId}' to retry.`
     );
   }
+  return 0;
 }
 
 /**

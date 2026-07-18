@@ -339,7 +339,12 @@ export async function rejectWorkflow(
       `Workflow run ${runId} was already ${String(approval.resolved)} and is awaiting resume.`
     );
   }
-  const isWriteBack = approval?.type === 'writeback';
+  if (!approval) {
+    throw new Error(
+      `Workflow run ${runId} is paused but missing approval context — cannot reject.`
+    );
+  }
+  const isWriteBack = approval.type === 'writeback';
 
   // Engine-level container write-back gate (Phase C): reject means DISCARD the
   // overlay, but the RUN itself succeeded — keep it resumable (never cancel) so

@@ -603,6 +603,16 @@ describe('rejectWorkflow', () => {
       "Cannot reject run with status 'completed'"
     );
   });
+
+  test('throws on paused run with missing approval context instead of cancelling', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ metadata: {} }));
+
+    await expect(rejectWorkflow('run-1')).rejects.toThrow('missing approval context');
+
+    // Must NOT have called resolveAndCancelApprovalGate — the run must not be cancelled
+    expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
+    expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+  });
 });
 
 describe('getWorkflowStatus', () => {
