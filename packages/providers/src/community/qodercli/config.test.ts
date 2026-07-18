@@ -23,21 +23,15 @@ describe('parseQoderCliConfig', () => {
     expect(() => parseQoderCliConfig({ model: '   ' })).toThrow('non-empty string');
   });
 
-  test('parses valid reasoning efforts', () => {
-    for (const value of ['low', 'medium', 'high', 'max'] as const) {
-      expect(parseQoderCliConfig({ modelReasoningEffort: value })).toEqual({
-        modelReasoningEffort: value,
-      });
-    }
+  test('preserves raw reasoning effort exactly', () => {
+    expect(parseQoderCliConfig({ modelReasoningEffort: '  future-qoder  ' })).toEqual({
+      modelReasoningEffort: '  future-qoder  ',
+    });
   });
 
-  test('rejects unknown reasoning efforts', () => {
-    expect(() => parseQoderCliConfig({ modelReasoningEffort: 'xhigh' })).toThrow(
-      'modelReasoningEffort'
-    );
-    expect(() => parseQoderCliConfig({ modelReasoningEffort: 'minimal' })).toThrow(
-      'modelReasoningEffort'
-    );
+  test('rejects empty or non-string reasoning effort', () => {
+    expect(() => parseQoderCliConfig({ modelReasoningEffort: '' })).toThrow('non-empty string');
+    expect(() => parseQoderCliConfig({ modelReasoningEffort: 42 })).toThrow('non-empty string');
   });
 
   test('parses binary and config paths', () => {

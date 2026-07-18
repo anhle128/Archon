@@ -539,24 +539,16 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
                     />
 
                     <label htmlFor="reasoning">Reasoning Effort</label>
-                    <select
+                    <Input
                       id="reasoning"
-                      value={
-                        (providerSettings.modelReasoningEffort as string | undefined) ?? 'medium'
-                      }
+                      value={(providerSettings.modelReasoningEffort as string | undefined) ?? ''}
                       onChange={e => {
                         updateProviderSettings('codex', {
                           modelReasoningEffort: e.target.value,
                         });
                       }}
-                      className={selectClass}
-                    >
-                      <option value="minimal">minimal</option>
-                      <option value="low">low</option>
-                      <option value="medium">medium</option>
-                      <option value="high">high</option>
-                      <option value="xhigh">xhigh</option>
-                    </select>
+                      placeholder="inherit (e.g. xhigh)"
+                    />
 
                     <label htmlFor="web-search">Web Search</label>
                     <select

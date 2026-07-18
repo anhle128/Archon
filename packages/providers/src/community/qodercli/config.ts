@@ -2,7 +2,6 @@ import type { QoderCliProviderDefaults } from '../../types';
 
 export type { QoderCliProviderDefaults };
 
-const QODER_REASONING_EFFORTS = ['low', 'medium', 'high', 'max'] as const;
 const QODER_PERMISSION_MODES = [
   'default',
   'accept_edits',
@@ -12,13 +11,8 @@ const QODER_PERMISSION_MODES = [
 ] as const;
 const QODER_SETTING_SOURCES = ['user', 'project', 'local'] as const;
 
-type QoderReasoningEffort = (typeof QODER_REASONING_EFFORTS)[number];
 type QoderPermissionMode = (typeof QODER_PERMISSION_MODES)[number];
 type QoderSettingSource = (typeof QODER_SETTING_SOURCES)[number];
-
-function isQoderReasoningEffort(value: unknown): value is QoderReasoningEffort {
-  return typeof value === 'string' && QODER_REASONING_EFFORTS.includes(value as never);
-}
 
 function isQoderPermissionMode(value: unknown): value is QoderPermissionMode {
   return typeof value === 'string' && QODER_PERMISSION_MODES.includes(value as never);
@@ -60,11 +54,11 @@ function describeInvalidValue(value: unknown): string {
   }
 }
 
-function parseReasoningEffort(value: unknown): QoderReasoningEffort | undefined {
+function parseReasoningEffort(value: unknown): string | undefined {
   if (value === undefined) return undefined;
-  if (isQoderReasoningEffort(value)) return value;
+  if (typeof value === 'string' && value.length > 0) return value;
   throw new Error(
-    `Invalid assistants.qodercli.modelReasoningEffort '${describeInvalidValue(value)}'. Valid values: ${QODER_REASONING_EFFORTS.join(', ')}.`
+    `Invalid assistants.qodercli.modelReasoningEffort '${describeInvalidValue(value)}'. Expected a non-empty string.`
   );
 }
 

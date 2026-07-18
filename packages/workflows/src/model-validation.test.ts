@@ -3,12 +3,9 @@ import { describe, expect, test } from 'bun:test';
 import {
   buildAiProfile,
   isLiteralSpec,
-  isEffortValidForProvider,
   resolveModelSpec,
   resolveTierWithFallback,
-  routePresetEffort,
   TIER_NAMES,
-  validEffortsForProvider,
   type ModelAliasPreset,
   type ResolvedAiProfile,
 } from './model-validation';
@@ -527,26 +524,35 @@ describe('isLiteralSpec type guard', () => {
   });
 });
 
-describe('effort routing', () => {
-  test('routes qodercli tier effort to modelReasoningEffort', () => {
-    expect(routePresetEffort('qodercli', 'high')).toEqual({
-      field: 'modelReasoningEffort',
-      value: 'high',
+describe('raw effort presets', () => {
+  test('preserves future and whitespace-bearing values exactly', () => {
+    const profile = buildAiProfile('claude', {
+      repoTiers: {
+        large: { provider: 'codex', model: 'gpt-future', effort: '  ultra  ' },
+      },
     });
-    expect(routePresetEffort('qodercli', 'max')).toEqual({
-      field: 'modelReasoningEffort',
-      value: 'max',
-    });
+    expect(profile.aliases.large?.effort).toBe('  ultra  ');
   });
 
-  test('rejects unsupported qodercli effort values', () => {
-    expect(routePresetEffort('qodercli', 'minimal')).toBeNull();
-    expect(routePresetEffort('qodercli', 'xhigh')).toBeNull();
+  test('rejects only the structurally empty value', () => {
+    expect(() =>
+      buildAiProfile('claude', {
+        repoAliases: { '@bad': { provider: 'claude', model: 'opus', effort: '' } },
+      })
+    ).toThrow('invalid effort');
   });
 
-  test('validates qodercli effort vocabulary up front', () => {
-    expect(validEffortsForProvider('qodercli')).toEqual(['low', 'medium', 'high', 'max']);
-    expect(isEffortValidForProvider('qodercli', 'high')).toBe(true);
-    expect(isEffortValidForProvider('qodercli', 'xhigh')).toBe(false);
+  test('rejects a non-string effort from untyped config input', () => {
+    expect(() =>
+      buildAiProfile('claude', {
+        repoAliases: {
+          '@bad': {
+            provider: 'claude',
+            model: 'opus',
+            effort: 42 as unknown as string,
+          },
+        },
+      })
+    ).toThrow('invalid effort');
   });
 });

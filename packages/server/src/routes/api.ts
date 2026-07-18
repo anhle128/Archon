@@ -89,7 +89,7 @@ import {
   isGateResolved,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
-import type { EffortLevel, ThinkingConfig } from '@archon/workflows/schemas/dag-node';
+import type { ThinkingConfig } from '@archon/workflows/schemas/dag-node';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 import type { MessageRow } from '@archon/core/schemas/message';
 import type { DashboardWorkflowRun } from '@archon/core/schemas/workflow-run';
@@ -115,12 +115,8 @@ interface ApiWorkflowNodeState {
   model?: string;
   tier?: string;
   modelReasoningEffort?: string;
-  effort?: EffortLevel;
+  effort?: string;
   thinking?: ThinkingConfig;
-}
-
-function isEffortLevel(value: unknown): value is EffortLevel {
-  return value === 'low' || value === 'medium' || value === 'high' || value === 'max';
 }
 
 function isThinkingConfig(value: unknown): value is ThinkingConfig {
@@ -137,10 +133,10 @@ function projectRuntimeNodeMetadata(data: Record<string, unknown>): Partial<ApiW
     ...(typeof data.provider === 'string' ? { provider: data.provider } : {}),
     ...(typeof data.model === 'string' ? { model: data.model } : {}),
     ...(typeof data.tier === 'string' ? { tier: data.tier } : {}),
-    ...(typeof data.modelReasoningEffort === 'string'
+    ...(typeof data.modelReasoningEffort === 'string' && data.modelReasoningEffort.length > 0
       ? { modelReasoningEffort: data.modelReasoningEffort }
       : {}),
-    ...(isEffortLevel(data.effort) ? { effort: data.effort } : {}),
+    ...(typeof data.effort === 'string' && data.effort.length > 0 ? { effort: data.effort } : {}),
     ...(isThinkingConfig(data.thinking) ? { thinking: data.thinking } : {}),
   };
 }
@@ -292,11 +288,7 @@ import {
   updateAliasesBodySchema,
   codebaseEnvironmentsResponseSchema,
 } from './schemas/config.schemas';
-import {
-  TIER_NAMES,
-  isEffortValidForProvider,
-  validEffortsForProvider,
-} from '@archon/workflows/model-validation';
+import { TIER_NAMES } from '@archon/workflows/model-validation';
 import {
   providerListResponseSchema,
   piModelListResponseSchema,
@@ -1104,7 +1096,7 @@ const patchAliasesConfigRoute = createRoute({
       content: { 'application/json': { schema: configResponseSchema } },
       description: 'Updated configuration',
     },
-    400: jsonError('Invalid alias name, unknown provider, or invalid effort'),
+    400: jsonError('Invalid alias name, unknown provider, or empty effort'),
     500: jsonError('Server error'),
   },
 });
@@ -1350,7 +1342,7 @@ const userAiPrefsTiersRoute = createRoute({
       content: { 'application/json': { schema: userAiPrefsResponseSchema } },
       description: 'Updated prefs',
     },
-    400: jsonError('Unknown provider or invalid effort'),
+    400: jsonError('Unknown provider or empty effort'),
     401: jsonError('Web auth required'),
     500: jsonError('Server error'),
   },
@@ -1372,7 +1364,7 @@ const userAiPrefsAliasesRoute = createRoute({
       content: { 'application/json': { schema: userAiPrefsResponseSchema } },
       description: 'Updated prefs',
     },
-    400: jsonError('Invalid alias name, unknown provider, or invalid effort'),
+    400: jsonError('Invalid alias name, unknown provider, or empty effort'),
     401: jsonError('Web auth required'),
     500: jsonError('Server error'),
   },
@@ -1874,7 +1866,7 @@ export function registerApiRoutes(
   // Identity-gated (requireWebUser) but NOT gated on TOKEN_ENCRYPTION_KEY —
   // prefs are model names, not secrets. Highest-precedence resolver layer.
 
-  /** Validate a tier/alias entry's provider + effort. Returns an error message or null. */
+  /** Validate a tier/alias entry's provider. Effort shape is enforced by Zod. */
   function validatePresetEntry(
     label: string,
     entry: { provider: string; model: string; effort?: string }
@@ -1883,12 +1875,6 @@ export function registerApiRoutes(
       return `Unknown provider '${entry.provider}' for ${label}. Available: ${getProviderInfoList()
         .map(p => p.id)
         .join(', ')}`;
-    }
-    if (entry.effort !== undefined && !isEffortValidForProvider(entry.provider, entry.effort)) {
-      return (
-        `Invalid effort '${entry.effort}' for provider '${entry.provider}' (${label}). ` +
-        `Valid: ${validEffortsForProvider(entry.provider)?.join(', ') ?? '(none)'}`
-      );
     }
     return null;
   }
@@ -4589,6 +4575,16 @@ export function registerApiRoutes(
               .map(p => p.id)
               .join(', ')}`
           );
+        }
+        for (const [providerId, defaults] of Object.entries(body.assistants)) {
+          const effort = defaults.modelReasoningEffort;
+          if (effort !== undefined && (typeof effort !== 'string' || effort.length === 0)) {
+            return apiError(
+              c,
+              400,
+              `Invalid assistants.${providerId}.modelReasoningEffort: expected a non-empty string.`
+            );
+          }
         }
         updates.assistants = body.assistants;
       }

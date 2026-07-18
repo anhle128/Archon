@@ -98,6 +98,12 @@ function assertValidEntry(name: string, entry: RawAliasEntry): void {
   if (typeof entry.model !== 'string' || entry.model.length === 0) {
     throw new Error(`Alias '${name}' has invalid model — must be a non-empty string.`);
   }
+  if (
+    entry.effort !== undefined &&
+    (typeof entry.effort !== 'string' || entry.effort.length === 0)
+  ) {
+    throw new Error(`Alias '${name}' has invalid effort — must be a non-empty string.`);
+  }
 }
 
 function assertValidTierName(name: string): asserts name is TierName {
@@ -223,71 +229,4 @@ export function resolveModelSpec(profile: ResolvedAiProfile, ref: string): Resol
 /** Type guard — narrows ResolvedModelSpec to its `{ literal }` variant. */
 export function isLiteralSpec(spec: ResolvedModelSpec): spec is { literal: string } {
   return 'literal' in spec;
-}
-
-/** Effort vocabularies per provider. Claude uses the generic node `effort`;
- *  Codex and Qoder CLI use provider defaults (`modelReasoningEffort`). */
-export const CLAUDE_EFFORTS: ReadonlySet<string> = new Set(['low', 'medium', 'high', 'max']);
-export const CODEX_REASONING_EFFORTS: ReadonlySet<string> = new Set([
-  'minimal',
-  'low',
-  'medium',
-  'high',
-  'xhigh',
-]);
-export const QODERCLI_REASONING_EFFORTS: ReadonlySet<string> = new Set([
-  'low',
-  'medium',
-  'high',
-  'max',
-]);
-
-/** Where a preset's `effort` should land for the resolved provider. */
-export type EffortRouting =
-  | { field: 'effort'; value: string }
-  | { field: 'modelReasoningEffort'; value: string };
-
-/**
- * Route a preset's `effort` to the field the resolved provider understands —
- * Claude's generic node `effort` or provider-level `modelReasoningEffort`. Returns
- * `null` when the value isn't valid for that provider (e.g. a cross-provider
- * mismatch like `effort: 'max'` on Codex); callers MUST surface that rather
- * than silently dropping it. Single source of truth for both the DAG executor
- * and the chat orchestrator.
- */
-export function routePresetEffort(provider: string, effort: string): EffortRouting | null {
-  if (provider === 'claude' && CLAUDE_EFFORTS.has(effort)) {
-    return { field: 'effort', value: effort };
-  }
-  if (provider === 'codex' && CODEX_REASONING_EFFORTS.has(effort)) {
-    return { field: 'modelReasoningEffort', value: effort };
-  }
-  if (provider === 'qodercli' && QODERCLI_REASONING_EFFORTS.has(effort)) {
-    return { field: 'modelReasoningEffort', value: effort };
-  }
-  return null;
-}
-
-/**
- * The effort vocabulary for a provider, or `null` if the provider has no known
- * effort concept (Pi/OpenRouter/Copilot/OpenCode — effort doesn't route there).
- * Lets the tier-config write path (route + CLI) validate `effort` UP FRONT
- * instead of letting `routePresetEffort` silently drop an unknown value at run
- * time (so `--effort ultra` errors instead of succeeding with no effect).
- */
-export function validEffortsForProvider(provider: string): readonly string[] | null {
-  if (provider === 'claude') return [...CLAUDE_EFFORTS];
-  if (provider === 'codex') return [...CODEX_REASONING_EFFORTS];
-  if (provider === 'qodercli') return [...QODERCLI_REASONING_EFFORTS];
-  return null;
-}
-
-/**
- * True if `effort` is acceptable for `provider`. Providers WITHOUT a known
- * effort vocabulary accept any value (we don't block what we can't validate;
- * it's a no-op for them, not an error).
- */
-export function isEffortValidForProvider(provider: string, effort: string): boolean {
-  const valid = validEffortsForProvider(provider);
-  return valid === null || valid.includes(effort);
 }

@@ -14,9 +14,8 @@ description: |
         the repo ships no Codex install out of the box.
 
 # Most nodes are Codex; only planning runs on Claude Opus (overridden per node).
-# Codex reasoning effort is taken from assistants.codex.modelReasoningEffort in
-# .archon/config.yaml (there is no per-node modelReasoningEffort field) — set it to
-# `xhigh` there for maximum Codex reasoning across these nodes.
+# Codex reasoning effort may be set with workflow/node `effort`; legacy
+# assistants.codex.modelReasoningEffort remains the provider default.
 provider: codex
 
 nodes:

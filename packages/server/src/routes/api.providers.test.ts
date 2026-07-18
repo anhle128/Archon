@@ -229,6 +229,38 @@ describe('GET /api/providers', () => {
   });
 });
 
+describe('PATCH /api/config/assistants', () => {
+  beforeEach(() => {
+    mockUpdateGlobalConfig.mockClear();
+  });
+
+  function patch(assistants: unknown): Promise<Response> {
+    return makeApp().request('/api/config/assistants', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ assistants }),
+    });
+  }
+
+  test('persists a raw legacy provider effort byte-for-byte', async () => {
+    const response = await patch({
+      codex: { modelReasoningEffort: '  future-codex  ' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(mockUpdateGlobalConfig).toHaveBeenCalledWith({
+      assistants: { codex: { modelReasoningEffort: '  future-codex  ' } },
+    });
+  });
+
+  test('rejects an explicitly empty legacy provider effort', async () => {
+    const response = await patch({ codex: { modelReasoningEffort: '' } });
+
+    expect(response.status).toBe(400);
+    expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Tests: PATCH /api/config/tiers (ungated — solo-OK)
 // ---------------------------------------------------------------------------
@@ -263,8 +295,21 @@ describe('PATCH /api/config/tiers', () => {
     expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
   });
 
-  test('invalid effort for the provider → 400, no write (not silently dropped)', async () => {
-    const res = await patch({ large: { provider: 'claude', model: 'opus', effort: 'ultra' } });
+  test('provider-specific effort is persisted byte-for-byte', async () => {
+    const res = await patch({
+      large: { provider: 'claude', model: 'opus', effort: '  future-claude  ' },
+    });
+    expect(res.status).toBe(200);
+    const arg = mockUpdateGlobalConfig.mock.calls[0]?.[0] as { tiers: Record<string, unknown> };
+    expect(arg.tiers.large).toEqual({
+      provider: 'claude',
+      model: 'opus',
+      effort: '  future-claude  ',
+    });
+  });
+
+  test('empty effort → 400, no write', async () => {
+    const res = await patch({ large: { provider: 'claude', model: 'opus', effort: '' } });
     expect(res.status).toBe(400);
     expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
   });
@@ -338,8 +383,21 @@ describe('PATCH /api/config/aliases', () => {
     expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
   });
 
-  test('invalid effort for the provider → 400, no write', async () => {
-    const res = await patch({ '@fast': { provider: 'claude', model: 'haiku', effort: 'ultra' } });
+  test('provider-specific effort is persisted byte-for-byte', async () => {
+    const res = await patch({
+      '@fast': { provider: 'claude', model: 'haiku', effort: '  future-claude  ' },
+    });
+    expect(res.status).toBe(200);
+    const arg = mockUpdateGlobalConfig.mock.calls[0]?.[0] as { aliases: Record<string, unknown> };
+    expect(arg.aliases['@fast']).toEqual({
+      provider: 'claude',
+      model: 'haiku',
+      effort: '  future-claude  ',
+    });
+  });
+
+  test('empty effort → 400, no write', async () => {
+    const res = await patch({ '@fast': { provider: 'claude', model: 'haiku', effort: '' } });
     expect(res.status).toBe(400);
     expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
   });

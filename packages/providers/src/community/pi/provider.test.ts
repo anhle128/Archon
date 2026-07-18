@@ -1004,19 +1004,19 @@ describe('PiProvider', () => {
     expect(callArgs.thinkingLevel).toBe('high');
   });
 
-  test('nodeConfig.effort=medium passes thinkingLevel when thinking absent', async () => {
+  test('raw node effort passes unchanged to thinkingLevel when thinking is absent', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
 
     await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, {
         model: 'google/gemini-2.5-pro',
-        nodeConfig: { effort: 'medium' },
+        nodeConfig: { effort: '  future-pi  ' },
       })
     );
 
     const [callArgs] = mockCreateAgentSession.mock.calls[0] as [Record<string, unknown>];
-    expect(callArgs.thinkingLevel).toBe('medium');
+    expect(callArgs.thinkingLevel).toBe('  future-pi  ');
   });
 
   test('nodeConfig.thinking=off omits thinkingLevel (Pi runs without explicit thinking)', async () => {

@@ -83,7 +83,7 @@ describe('CodexProvider', () => {
         structuredOutput: 'enforced',
         envInjection: true,
         costControl: false,
-        effortControl: false,
+        effortControl: true,
         thinkingControl: false,
         fallbackModel: false,
         sandbox: false,
@@ -804,6 +804,51 @@ describe('CodexProvider', () => {
           additionalDirectories: ['/other/repo'],
         })
       );
+    });
+
+    test('node effort overrides legacy config and reaches Codex unchanged', async () => {
+      for await (const _ of client.sendQuery('test prompt', '/workspace', undefined, {
+        nodeConfig: { effort: '  future-ultra  ' },
+        assistantConfig: { modelReasoningEffort: 'low' },
+      })) {
+        // consume
+      }
+
+      expect(mockStartThread).toHaveBeenCalledWith(
+        expect.objectContaining({ modelReasoningEffort: '  future-ultra  ' })
+      );
+    });
+
+    test('rejects an empty node effort before starting a Codex thread', async () => {
+      const consume = async (): Promise<void> => {
+        for await (const _ of client.sendQuery('test prompt', '/workspace', undefined, {
+          nodeConfig: { effort: '' },
+          assistantConfig: { modelReasoningEffort: 'low' },
+        })) {
+          // consume
+        }
+      };
+
+      await expect(consume()).rejects.toThrow('Codex effort must be a non-empty string.');
+      expect(mockStartThread).not.toHaveBeenCalled();
+    });
+
+    test('surfaces Codex rejection without retrying a legacy fallback', async () => {
+      mockStartThread.mockImplementationOnce(() => {
+        throw new Error("unsupported reasoning effort 'future-ultra'");
+      });
+
+      const consume = async (): Promise<void> => {
+        for await (const _ of client.sendQuery('test prompt', '/workspace', undefined, {
+          nodeConfig: { effort: 'future-ultra' },
+          assistantConfig: { modelReasoningEffort: 'low' },
+        })) {
+          // consume
+        }
+      };
+
+      await expect(consume()).rejects.toThrow("unsupported reasoning effort 'future-ultra'");
+      expect(mockStartThread).toHaveBeenCalledTimes(1);
     });
 
     test('normalizes outputFormat schema (adds additionalProperties:false) before sending as outputSchema', async () => {

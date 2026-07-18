@@ -10,7 +10,7 @@
  * - Conversation-scoped subscriptions via registerRun() mapping
  */
 import { EventEmitter } from 'events';
-import type { ArtifactType, EffortLevel, ThinkingConfig } from './schemas';
+import type { ArtifactType, ThinkingConfig } from './schemas';
 import type { RouteLoopDecisionData } from './route-loop-state';
 import { createLogger } from '@archon/paths';
 
@@ -89,7 +89,7 @@ interface NodeStartedEvent {
   model?: string; // resolved model string (absent for bash/script nodes)
   tier?: 'small' | 'medium' | 'large'; // only set when node.model was a tier keyword
   modelReasoningEffort?: string;
-  effort?: EffortLevel;
+  effort?: string;
   thinking?: ThinkingConfig;
 }
 

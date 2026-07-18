@@ -12,7 +12,7 @@ import type {
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import { providerOptionHint } from '../lib/agent-status';
-import { effortOptionsForAgent, normalizeEffortForAgent } from '../lib/model-options';
+import { effortForProviderSwitch } from '../lib/model-options';
 import { useCancelledRef } from '../lib/use-cancelled-ref';
 import { SettingsSection } from './SettingsSection';
 import { ScopeToggle } from './ScopeToggle';
@@ -143,7 +143,9 @@ export function AliasesPanel(): ReactElement {
       ) : (
         <div className="flex flex-col gap-[11px]">
           {rows.map((row, i) => {
-            const effortOptions = effortOptionsForAgent(row.provider);
+            const effortSupported =
+              providers.find(provider => provider.id === row.provider)?.capabilities
+                .effortControl === true;
             return (
               <div
                 // Index key is intentional: rows are positional edit buffers and
@@ -164,12 +166,13 @@ export function AliasesPanel(): ReactElement {
                   <select
                     value={row.provider}
                     onChange={e => {
-                      // Carry effort across the switch only when the new agent's
-                      // vocabulary accepts it (see ModelTiersPanel).
                       const provider = e.target.value;
+                      const supportsEffort =
+                        providers.find(candidate => candidate.id === provider)?.capabilities
+                          .effortControl === true;
                       setRow(i, {
                         provider,
-                        effort: normalizeEffortForAgent(provider, row.effort),
+                        effort: effortForProviderSwitch(supportsEffort, row.effort),
                       });
                     }}
                     aria-label="Provider"
@@ -198,24 +201,16 @@ export function AliasesPanel(): ReactElement {
                   agents={keyData?.agents}
                   piModels={piModels}
                 />
-                {effortOptions !== null ? (
-                  <SelectShell className="w-[110px] shrink-0">
-                    <select
-                      value={row.effort}
-                      onChange={e => {
-                        setRow(i, { effort: e.target.value });
-                      }}
-                      aria-label="Effort"
-                      className={SELECT_CLASS}
-                    >
-                      <option value="">effort</option>
-                      {effortOptions.map(o => (
-                        <option key={o} value={o}>
-                          {o}
-                        </option>
-                      ))}
-                    </select>
-                  </SelectShell>
+                {effortSupported ? (
+                  <input
+                    value={row.effort}
+                    onChange={e => {
+                      setRow(i, { effort: e.target.value });
+                    }}
+                    aria-label="Effort"
+                    placeholder="effort"
+                    className={`${INPUT_CLASS} w-[110px] shrink-0`}
+                  />
                 ) : null}
                 <button
                   type="button"

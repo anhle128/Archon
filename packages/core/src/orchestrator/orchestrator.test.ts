@@ -872,7 +872,7 @@ describe('orchestrator-agent handleMessage', () => {
         expect.anything(),
         expect.objectContaining({
           model: 'gpt-5.5',
-          assistantConfig: expect.objectContaining({ modelReasoningEffort: 'high' }),
+          nodeConfig: expect.objectContaining({ effort: 'high' }),
         })
       );
       expect(mockGenerateAndSetTitle).toHaveBeenCalledWith(

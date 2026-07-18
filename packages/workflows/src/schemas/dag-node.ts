@@ -33,11 +33,17 @@ export type TriggerRule = z.infer<typeof triggerRuleSchema>;
 export const TRIGGER_RULES: readonly TriggerRule[] = triggerRuleSchema.options;
 
 // ---------------------------------------------------------------------------
-// Claude SDK option schemas
+// Provider option schemas
 // ---------------------------------------------------------------------------
 
-/** Claude Agent SDK effort level — controls reasoning depth. Different from Codex modelReasoningEffort. */
-export const effortLevelSchema = z.enum(['low', 'medium', 'high', 'max']);
+/**
+ * Provider-owned effort value.
+ *
+ * Archon deliberately validates only that a value was supplied. Provider
+ * vocabularies evolve independently, so the exact string must reach the
+ * selected provider unchanged and the provider/API remains authoritative.
+ */
+export const effortLevelSchema = z.string().min(1, "'effort' must be a non-empty string");
 
 export type EffortLevel = z.infer<typeof effortLevelSchema>;
 
@@ -286,7 +292,8 @@ export type PromptNode = z.infer<typeof promptNodeSchema> & {
 
 /**
  * Bash node schema — extends base with `bash` (shell script) and `timeout` (ms).
- * AI-specific fields from the base are present in the type but ignored at runtime with a warning.
+ * Most AI-specific fields from the base are ignored at runtime with a warning.
+ * `provider`, `model`, `pi`, and raw `effort` are preserved for each iteration.
  */
 export const bashNodeSchema = dagNodeBaseSchema.extend({
   bash: z.string(),
@@ -550,7 +557,7 @@ export const SCRIPT_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS;
  * leak, #2073).
  */
 export const LOOP_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS.filter(
-  f => f !== 'model' && f !== 'provider' && f !== 'pi'
+  f => f !== 'model' && f !== 'provider' && f !== 'pi' && f !== 'effort'
 );
 
 /**
@@ -922,15 +929,14 @@ export const dagNodeSchema = dagNodeBaseSchema
       return { ...base, ...aiOnly, loop_group: data.loop_group } as LoopGroupNode;
     }
     // loop — guaranteed by superRefine to be defined at this point.
-    // Unlike the rest of aiOnly (dropped for loops — model/provider inherit from
-    // the workflow level), `pi` posture IS kept: the loop's per-iteration Pi
-    // sendQuery is exactly where plannotator planning mode leaks (#2073/#2133),
-    // so the portable `pi:` block must reach it. Excluded from LOOP_NODE_AI_FIELDS
-    // so the loader doesn't warn it's ignored.
+    // Unlike the rest of aiOnly, `pi` posture and raw `effort` are kept because
+    // this loop performs the per-iteration sendQuery. Both are excluded from
+    // LOOP_NODE_AI_FIELDS so the loader does not warn that they are ignored.
     if (!data.loop) throw new Error('unreachable: loop must be defined after superRefine');
     return {
       ...base,
       ...(data.pi !== undefined ? { pi: data.pi } : {}),
+      ...(data.effort !== undefined ? { effort: data.effort } : {}),
       loop: data.loop,
     } as LoopNode;
   })

@@ -5,10 +5,8 @@ export type { CopilotProviderDefaults };
 /**
  * Parse raw `assistants.copilot` config into a typed `CopilotProviderDefaults`.
  *
- * Fallback behavior: fields with unexpected types (or enum values outside the
- * declared set) are silently omitted rather than throwing. A broken user
- * config must not prevent provider registration or workflow discovery.
- * Callers that want strict validation should validate upstream.
+ * Provider-owned effort values are preserved verbatim; the SDK/API validates
+ * its current vocabulary.
  */
 export function parseCopilotConfig(raw: Record<string, unknown>): CopilotProviderDefaults {
   const config: CopilotProviderDefaults = {};
@@ -17,16 +15,13 @@ export function parseCopilotConfig(raw: Record<string, unknown>): CopilotProvide
     config.model = raw.model;
   }
 
-  if (typeof raw.modelReasoningEffort === 'string') {
-    const v = raw.modelReasoningEffort;
-    if (v === 'low' || v === 'medium' || v === 'high' || v === 'xhigh') {
-      config.modelReasoningEffort = v;
-    } else if (v === 'max') {
-      // Accept Archon's workflow-schema alias for the top tier. Normalizing
-      // at parse time keeps `CopilotProviderDefaults.modelReasoningEffort`
-      // aligned with the SDK's enum (which has no 'max').
-      config.modelReasoningEffort = 'xhigh';
+  if (raw.modelReasoningEffort !== undefined) {
+    if (typeof raw.modelReasoningEffort !== 'string' || raw.modelReasoningEffort.length === 0) {
+      throw new Error(
+        'Invalid assistants.copilot.modelReasoningEffort: expected a non-empty string.'
+      );
     }
+    config.modelReasoningEffort = raw.modelReasoningEffort;
   }
 
   if (typeof raw.copilotCliPath === 'string') {

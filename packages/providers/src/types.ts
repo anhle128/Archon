@@ -26,8 +26,8 @@ export interface ClaudeProviderDefaults {
 export interface CodexProviderDefaults {
   [key: string]: unknown;
   model?: string;
-  /** Structurally matches @archon/workflows ModelReasoningEffort */
-  modelReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+  /** Raw provider-owned value passed to Codex as `modelReasoningEffort`. */
+  modelReasoningEffort?: string;
   /** Structurally matches @archon/workflows WebSearchMode */
   webSearchMode?: 'disabled' | 'cached' | 'live';
   additionalDirectories?: string[];
@@ -47,7 +47,7 @@ export interface CopilotProviderDefaults {
    * mirrors `CodexProviderDefaults.modelReasoningEffort` so users get one
    * consistent key across cross-provider configs.
    */
-  modelReasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
+  modelReasoningEffort?: string;
   /**
    * Absolute path to the Copilot CLI binary. Required in compiled Archon
    * builds when `COPILOT_BIN_PATH` env var is not set. Dev-mode builds let
@@ -86,7 +86,7 @@ export interface QoderCliProviderDefaults {
   /** Default model name/modelID passed to `qodercli --model`. */
   model?: string;
   /** Reasoning level passed to `qodercli --reasoning-effort`. */
-  modelReasoningEffort?: 'low' | 'medium' | 'high' | 'max';
+  modelReasoningEffort?: string;
   /**
    * Absolute path to the qodercli executable. Overrides PATH/autodetect.
    * Environment variable `QODERCLI_BIN_PATH` has higher precedence.

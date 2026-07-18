@@ -58,7 +58,7 @@ AI-oriented fields:
 | `hooks`           | Static provider hook responses.                                                      |
 | `skills`          | Skill names available to supporting providers.                                       |
 | `agents`          | Inline sub-agent definitions for supporting providers.                               |
-| `effort`          | `low`, `medium`, `high`, `max`.                                                      |
+| `effort`          | Non-empty provider-specific string, passed through exactly.                          |
 | `thinking`        | Claude-style thinking config.                                                        |
 | `maxBudgetUsd`    | Claude cost cap.                                                                     |
 | `systemPrompt`    | Non-empty system prompt string.                                                      |

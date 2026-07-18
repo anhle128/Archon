@@ -37,11 +37,6 @@ import { parseCopilotConfig, type CopilotProviderDefaults } from './config';
 import { resolveCopilotBinaryPath } from './binary-resolver';
 import { bridgeSession } from './event-bridge';
 
-// `ReasoningEffort` is defined in the SDK but not re-exported from its barrel
-// (as of @github/copilot-sdk@0.2.2). Mirror the enum literally so we don't
-// depend on an internal subpath.
-type CopilotReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
-
 /**
  * Auth env vars, split by intent.
  *
@@ -109,7 +104,7 @@ function resolveGenericGitHubToken(env: Record<string, string>): string | undefi
 
 // ─── Reasoning ──────────────────────────────────────────────────────────────
 
-function normalizeReasoning(value: unknown): CopilotReasoningEffort | undefined {
+function normalizeReasoning(value: unknown): SessionConfig['reasoningEffort'] | undefined {
   if (value === 'max') return 'xhigh';
   if (value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh') return value;
   return undefined;
@@ -120,14 +115,13 @@ function normalizeReasoning(value: unknown): CopilotReasoningEffort | undefined 
  * Precedence:
  *   nodeConfig.thinking > nodeConfig.effort > config.modelReasoningEffort
  *
- * Archon's `effort` schema is `'low' | 'medium' | 'high' | 'max'` — we map
- * `'max'` to the SDK's `'xhigh'`. The `'off'` sentinel disables reasoning.
- * The object form of `thinking` (Claude-specific) returns a warning.
+ * The separate `thinking` input keeps its legacy shorthand normalization.
+ * `effort` is passed through raw and the Copilot SDK/API validates it.
  */
 function resolveCopilotReasoning(
   nodeConfig: SendQueryOptions['nodeConfig'] | undefined,
   copilotConfig: CopilotProviderDefaults
-): { effort: CopilotReasoningEffort | undefined; warning?: string } {
+): { effort: string | undefined; warning?: string } {
   if (!nodeConfig) {
     return { effort: copilotConfig.modelReasoningEffort };
   }
@@ -135,27 +129,30 @@ function resolveCopilotReasoning(
   const rawThinking = nodeConfig.thinking;
   const rawEffort = nodeConfig.effort;
 
-  if (rawThinking === 'off' || rawEffort === 'off') return { effort: undefined };
+  if (rawThinking === 'off') return { effort: undefined };
 
   const fromThinking = normalizeReasoning(rawThinking);
   if (fromThinking) return { effort: fromThinking };
 
-  const fromEffort = normalizeReasoning(rawEffort);
-  if (fromEffort) return { effort: fromEffort };
+  if (typeof rawEffort === 'string') {
+    if (rawEffort.length === 0) {
+      throw new Error('Copilot effort must be a non-empty string.');
+    }
+    return { effort: rawEffort };
+  }
 
   if (rawThinking !== undefined && rawThinking !== null && typeof rawThinking === 'object') {
     return {
       effort: undefined,
       warning:
-        'Copilot ignored `thinking` (object form is Claude-specific). Use `effort: low|medium|high|max` instead.',
+        'Copilot ignored `thinking` (object form is Claude-specific). Use a provider-supported `effort` string instead.',
     };
   }
 
-  if (typeof rawThinking === 'string' || typeof rawEffort === 'string') {
-    const offender = typeof rawThinking === 'string' ? rawThinking : rawEffort;
+  if (typeof rawThinking === 'string') {
     return {
       effort: undefined,
-      warning: `Copilot ignored unknown reasoning level '${String(offender)}'. Valid: low, medium, high, xhigh, max, off.`,
+      warning: `Copilot ignored unknown thinking level '${rawThinking}'. Valid: low, medium, high, xhigh, max, off.`,
     };
   }
 
@@ -332,7 +329,9 @@ async function buildSessionConfig(
 
   const sessionConfig: SessionConfig = {
     model: resolvedModel,
-    reasoningEffort: reasoning.effort,
+    // Copilot's SDK union may lag the CLI/API vocabulary. Pass the exact raw
+    // value and let the provider reject unsupported values without fallback.
+    reasoningEffort: reasoning.effort as SessionConfig['reasoningEffort'],
     workingDirectory: cwd,
     // configDir moved to the client level in copilot-sdk 1.0 (baseDirectory —
     // sets COPILOT_HOME on the spawned runtime); applied in sendQuery's

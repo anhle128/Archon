@@ -12,9 +12,8 @@ description: |
         (use archon-plan-to-pr for an existing plan).
 
 # Default provider for ck:plan (Claude Opus). The verify-fix and cook nodes override
-# to codex. Codex reasoning effort is taken from assistants.codex.modelReasoningEffort
-# in .archon/config.yaml (there is no per-node modelReasoningEffort field) — set it to
-# `xhigh` there for maximum Codex reasoning across these nodes.
+# to codex. Codex reasoning effort may be set with workflow/node `effort`; legacy
+# assistants.codex.modelReasoningEffort remains the provider default.
 provider: claude
 
 nodes:

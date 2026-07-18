@@ -1416,20 +1416,33 @@ describe('ClaudeProvider', () => {
       });
     });
 
-    test('passes effort to SDK via nodeConfig', async () => {
+    test('passes raw effort to SDK via nodeConfig unchanged', async () => {
       mockQuery.mockImplementation(async function* () {
         yield { type: 'result', session_id: 'sid' };
       });
 
       for await (const _ of client.sendQuery('test', '/tmp', undefined, {
-        nodeConfig: { effort: 'high' },
+        nodeConfig: { effort: '  future-claude  ' },
       })) {
         // consume
       }
 
       expect(mockQuery).toHaveBeenCalledTimes(1);
       const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
-      expect(callArgs.options.effort).toBe('high');
+      expect(callArgs.options.effort).toBe('  future-claude  ');
+    });
+
+    test('rejects an explicitly empty effort before invoking the SDK', async () => {
+      const consume = async (): Promise<void> => {
+        for await (const _ of client.sendQuery('test', '/tmp', undefined, {
+          nodeConfig: { effort: '' },
+        })) {
+          // consume
+        }
+      };
+
+      await expect(consume()).rejects.toThrow('non-empty string');
+      expect(mockQuery).not.toHaveBeenCalled();
     });
 
     test('omits effort from SDK when not provided in nodeConfig', async () => {

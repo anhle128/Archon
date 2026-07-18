@@ -118,7 +118,8 @@ description: |
 # Optional workflow-level configuration
 provider: claude
 model: sonnet
-modelReasoningEffort: medium     # Codex only
+effort: high                     # Provider-specific value, preserved exactly
+modelReasoningEffort: medium     # Legacy fallback when `effort` is not set
 webSearchMode: live              # Codex only
 interactive: true                # Web only: run in foreground instead of background
 requires: [github]               # Optional: hard-block invocation unless the triggering
@@ -224,7 +225,7 @@ They also do not use AI node options such as `provider`, `model`, `output_format
 | `mcp` | string | — | Path to MCP server config JSON file. Codex and Claude. See [MCP Servers](/guides/mcp-servers/) |
 | `skills` | string[] | — | Skills to preload. Claude only. See [Skills](/guides/skills/) |
 | `agents` | object | — | Inline sub-agent definitions keyed by kebab-case ID. Claude only. See [Inline sub-agents](#inline-sub-agents) |
-| `effort` | `'low'`\|`'medium'`\|`'high'`\|`'max'` | — | Reasoning depth. Claude only. Also settable at workflow level |
+| `effort` | non-empty string | — | Provider-specific reasoning value, preserved exactly. Also settable at workflow level |
 | `thinking` | string \| object | — | Thinking mode: `'adaptive'`, `'disabled'`, or `{type:'enabled', budgetTokens:N}`. Claude only. Also settable at workflow level |
 | `maxBudgetUsd` | number | — | USD cost cap; node fails if exceeded. Claude only. Per-node only |
 | `systemPrompt` | string | — | Override the default `claude_code` system prompt for this node. Claude only. Per-node only |
@@ -232,16 +233,20 @@ They also do not use AI node options such as `provider`, `model`, `output_format
 | `betas` | string[] | — | SDK beta feature flags (e.g., `'context-1m-2025-08-07'`). Claude only. Also settable at workflow level |
 | `sandbox` | object | — | OS-level filesystem/network restrictions for the Claude subprocess. Claude only. Also settable at workflow level |
 
-### Claude SDK Advanced Options
+### Advanced Reasoning Options
 
-These fields map directly to Claude Agent SDK options. All are Claude-only — Codex nodes emit a warning and ignore them. They can be set **per-node** or at the **workflow level** as defaults (per-node takes precedence). `maxBudgetUsd` and `systemPrompt` are per-node only.
+`effort` is provider-aware: Claude receives SDK `effort`, Codex receives `modelReasoningEffort`, Qoder receives `--reasoning-effort`, Pi receives its SDK reasoning level, and Copilot receives `reasoningEffort`. Archon does not trim, normalize, translate, or validate a shared vocabulary. The selected provider decides whether a value is valid and any rejection fails the node. Providers that declare no effort control fail before dispatch.
+
+Resolution order is: node `effort` → workflow `effort` → legacy workflow `modelReasoningEffort` → tier/alias `effort` → legacy `assistants.<provider>.modelReasoningEffort` → provider default. The separate `thinking` field keeps its existing provider-specific shorthand behavior.
+
+The other fields below map directly to Claude Agent SDK options and remain Claude-only. They can be set **per-node** or at the **workflow level** as defaults (per-node takes precedence). `maxBudgetUsd` and `systemPrompt` are per-node only.
 
 **effort** — reasoning depth:
 
 ```yaml
 - id: thorough-review
   command: review
-  effort: high   # 'low' | 'medium' | 'high' | 'max'
+  effort: high   # Exact value accepted by the selected provider
 ```
 
 **thinking** — extended thinking mode (string shorthand or object form):
@@ -300,7 +305,7 @@ These fields map directly to Claude Agent SDK options. All are Claude-only — C
       denyWrite: ['/etc', '/usr']
 ```
 
-**Workflow-level defaults** (inherited by all Claude nodes unless overridden per-node):
+**Workflow-level defaults** (`effort` applies to any supporting provider; the remaining fields shown are Claude-specific):
 
 ```yaml
 name: my-workflow
@@ -979,14 +984,12 @@ If the SDK rejects a literal string at request time, the node fails loudly with 
 name: my-workflow
 provider: codex
 model: gpt-5.6-sol
-modelReasoningEffort: medium    # 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+effort: xhigh                  # Passed exactly to Codex modelReasoningEffort
+# modelReasoningEffort: medium # Legacy fallback, still supported
 webSearchMode: live             # 'disabled' | 'cached' | 'live'
 ```
 
-**Model reasoning effort:**
-- `minimal`, `low` - Fast, cheaper
-- `medium` - Balanced (default)
-- `high`, `xhigh` - More thorough, expensive
+**Model reasoning effort:** `effort` is passed unchanged to Codex as `modelReasoningEffort`. Examples include `minimal`, `low`, `medium`, `high`, and `xhigh`, but Archon intentionally does not keep an allow-list.
 
 **Web search mode:**
 - `disabled` - No web access (default)
@@ -1543,7 +1546,7 @@ Before deploying a workflow:
 11. **`mcp:`** — attach per-node MCP servers via JSON config (Codex and Claude)
 12. **`skills:`** — preload skills into Claude nodes for domain expertise
 13. **`agents:`** — inline Claude sub-agent definitions invokable via the `Task` tool
-14. **`effort` / `thinking`** — control reasoning depth and thinking mode per node or workflow (Claude only)
+14. **`effort` / `thinking`** — `effort` passes a raw provider-specific reasoning value; `thinking` retains provider-specific shorthand behavior
 15. **`maxBudgetUsd`** — set a USD cost cap per node; fails with error if exceeded (Claude only)
 16. **`systemPrompt`** — override the default system prompt per node (Claude only)
 17. **`sandbox`** — OS-level filesystem/network restrictions per node or workflow (Claude only)

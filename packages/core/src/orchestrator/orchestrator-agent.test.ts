@@ -147,13 +147,14 @@ mock.module('@archon/workflows/executor', () => ({
   hydrateResumableRun: mockHydrateResumableRun,
 }));
 
+const mockGetProviderCapabilities = mock(() => ({ envInjection: true, effortControl: true }));
 mock.module('@archon/providers', () => ({
   getAgentProvider: mock(() => ({
     sendQuery: mockSendQuery,
     getType: mock(() => 'claude'),
     getCapabilities: mock(() => ({})),
   })),
-  getProviderCapabilities: mock(() => ({ envInjection: true })),
+  getProviderCapabilities: mockGetProviderCapabilities,
   getRegisteredProviders: mock(() => []),
   // Vendor → env-var map consumed by credentials/delivery (#1955). A realistic
   // subset of the generated map (the chat inject tests deliver through it).
@@ -1278,7 +1279,7 @@ describe('discoverAllWorkflows — remote sync', () => {
   test('appends the run-management section (and no native tool) for a project-scoped non-native-tool provider', async () => {
     const providers = await import('@archon/providers');
     const capsMock = providers.getProviderCapabilities as ReturnType<typeof mock>;
-    capsMock.mockReturnValue({ envInjection: true, nativeTools: false });
+    capsMock.mockReturnValue({ envInjection: true, effortControl: true, nativeTools: false });
     const codebase = makeCodebaseForSync();
     mockGetOrCreateConversation.mockReturnValueOnce(
       Promise.resolve(makeConversation({ ai_assistant_type: 'codex', codebase_id: 'codebase-1' }))
@@ -1296,14 +1297,14 @@ describe('discoverAllWorkflows — remote sync', () => {
       // Providers without native tools get NO in-process tool — bash CLI only.
       expect(requestOptions.nativeTools).toBeUndefined();
     } finally {
-      capsMock.mockReturnValue({ envInjection: true });
+      capsMock.mockReturnValue({ envInjection: true, effortControl: true });
     }
   });
 
   test('omits the run-management section and injects the native tool for a project-scoped native-tool provider', async () => {
     const providers = await import('@archon/providers');
     const capsMock = providers.getProviderCapabilities as ReturnType<typeof mock>;
-    capsMock.mockReturnValue({ envInjection: true, nativeTools: true });
+    capsMock.mockReturnValue({ envInjection: true, effortControl: true, nativeTools: true });
     const codebase = makeCodebaseForSync();
     mockGetOrCreateConversation.mockReturnValueOnce(
       Promise.resolve(makeConversation({ ai_assistant_type: 'claude', codebase_id: 'codebase-1' }))
@@ -1323,7 +1324,7 @@ describe('discoverAllWorkflows — remote sync', () => {
       // Native-tool provider gets the manage_run tool instead.
       expect(Array.isArray(requestOptions.nativeTools)).toBe(true);
     } finally {
-      capsMock.mockReturnValue({ envInjection: true });
+      capsMock.mockReturnValue({ envInjection: true, effortControl: true });
     }
   });
 });
@@ -3541,6 +3542,11 @@ describe('per-user AI prefs in chat + tier-fallback nudge', () => {
     mockGetUserAiPrefsDb.mockImplementation(async () => ({}));
     mockSendQuery.mockClear();
     mockParseCommand.mockReturnValue(null);
+    mockGetProviderCapabilities.mockReset();
+    mockGetProviderCapabilities.mockImplementation(() => ({
+      envInjection: true,
+      effortControl: true,
+    }));
   });
 
   test("a user's tier override wins for the chat model", async () => {
@@ -3557,6 +3563,45 @@ describe('per-user AI prefs in chat + tier-fallback nudge', () => {
     expect(mockGetUserAiPrefsDb).toHaveBeenCalledWith('user-9');
     const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
     expect(requestOptions.model).toBe('gpt-5.5');
+  });
+
+  test("a user's raw effort reaches direct chat byte-for-byte", async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ user_id: 'user-9' } as Partial<Conversation>))
+    );
+    mockGetUserAiPrefsDb.mockImplementation(async () => ({
+      tiers: {
+        large: { provider: 'codex', model: 'gpt-5.5', effort: '  future-codex  ' },
+      },
+    }));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'Hello');
+
+    const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
+    expect(requestOptions.nodeConfig).toEqual({ effort: '  future-codex  ' });
+  });
+
+  test('an explicit effort fails before dispatch when the provider lacks effort control', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ user_id: 'user-9' } as Partial<Conversation>))
+    );
+    mockGetUserAiPrefsDb.mockImplementation(async () => ({
+      tiers: { large: { provider: 'codex', model: 'gpt-5.5', effort: 'high' } },
+    }));
+    mockGetProviderCapabilities.mockImplementation(() => ({
+      envInjection: true,
+      effortControl: false,
+    }));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'Hello');
+
+    expect(mockSendQuery).not.toHaveBeenCalled();
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'conv-1',
+      "Error: Model preset sets effort but provider 'codex' does not support effortControl."
+    );
   });
 
   test('prefs are not consulted when the conversation has no user_id', async () => {

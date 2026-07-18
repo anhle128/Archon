@@ -99,44 +99,17 @@ export function curatedOptionsForAgent(agentId: string): readonly ModelOption[] 
 }
 
 // ---------------------------------------------------------------------------
-// Effort. Tier/alias `effort` only ROUTES on Claude (node `effort`) and Codex
-// (`modelReasoningEffort`) — `routePresetEffort` in
-// packages/workflows/src/model-validation.ts returns null for everything else,
-// and the PATCH routes validate via `isEffortValidForProvider`. The web
-// package cannot import @archon/workflows, so the vocabularies are mirrored
-// here (same convention as REASONING_EFFORTS in the Defaults panel).
+// Effort. Values are provider-owned free text: the UI only uses the provider's
+// effortControl capability to decide whether the field is meaningful.
 // ---------------------------------------------------------------------------
 
-/** Mirrors CLAUDE_EFFORTS in packages/workflows/src/model-validation.ts. */
-export const CLAUDE_EFFORT_OPTIONS = ['low', 'medium', 'high', 'max'] as const;
-/** Mirrors CODEX_REASONING_EFFORTS in packages/workflows/src/model-validation.ts. */
-export const CODEX_EFFORT_OPTIONS = ['minimal', 'low', 'medium', 'high', 'xhigh'] as const;
-
-export type ClaudeEffort = (typeof CLAUDE_EFFORT_OPTIONS)[number];
-export type CodexEffort = (typeof CODEX_EFFORT_OPTIONS)[number];
-/** Any effort value an agent's vocabulary can produce. */
-export type EffortOption = ClaudeEffort | CodexEffort;
-
 /**
- * The effort vocabulary an agent's tier/alias `effort` accepts, or null when
- * effort doesn't route there (Pi/OpenCode/Copilot presets drop it) — null
- * hides the field entirely instead of offering a no-op input.
+ * Carry an exact effort string across a provider switch only when the new
+ * provider advertises support. Clearing it for unsupported providers prevents
+ * a hidden stale value from being saved while the input is absent.
  */
-export function effortOptionsForAgent(agentId: string): readonly EffortOption[] | null {
-  if (agentId === 'claude') return CLAUDE_EFFORT_OPTIONS;
-  if (agentId === 'codex') return CODEX_EFFORT_OPTIONS;
-  return null;
-}
-
-/**
- * Carry an effort value across a provider switch: keep it when the new agent's
- * vocabulary accepts it (e.g. codex→claude keeps 'high'), clear it otherwise
- * (including agents with no effort concept, where the field is hidden and a
- * stale value would be invisible state).
- */
-export function normalizeEffortForAgent(agentId: string, effort: string): EffortOption | '' {
-  const valid = effortOptionsForAgent(agentId);
-  return valid?.find(v => v === effort) ?? '';
+export function effortForProviderSwitch(supportsEffort: boolean, effort: string): string {
+  return supportsEffort ? effort : '';
 }
 
 // ---------------------------------------------------------------------------

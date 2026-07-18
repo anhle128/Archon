@@ -300,12 +300,28 @@ describe('PATCH /api/auth/me/ai-prefs/tiers', () => {
     expect(mockSetTiers).not.toHaveBeenCalled();
   });
 
-  test('invalid effort for provider → 400', async () => {
+  test('provider-specific effort is stored byte-for-byte', async () => {
     const res = await makeApp().request('/api/auth/me/ai-prefs/tiers', {
       method: 'PATCH',
       headers: JSON_HEADERS,
       body: JSON.stringify({
-        tiers: { large: { provider: 'claude', model: 'opus', effort: 'ultra' } },
+        tiers: {
+          large: { provider: 'claude', model: 'opus', effort: '  future-claude  ' },
+        },
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(mockSetTiers).toHaveBeenCalledWith('user-from-alice', {
+      large: { provider: 'claude', model: 'opus', effort: '  future-claude  ' },
+    });
+  });
+
+  test('empty effort → 400, nothing stored', async () => {
+    const res = await makeApp().request('/api/auth/me/ai-prefs/tiers', {
+      method: 'PATCH',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        tiers: { large: { provider: 'claude', model: 'opus', effort: '' } },
       }),
     });
     expect(res.status).toBe(400);
@@ -352,6 +368,34 @@ describe('PATCH /api/auth/me/ai-prefs/aliases', () => {
       body: JSON.stringify({ aliases: { fast: { provider: 'claude', model: 'haiku' } } }),
     });
     expect(res.status).toBe(400);
+  });
+
+  test('provider-specific effort is stored byte-for-byte', async () => {
+    const res = await makeApp().request('/api/auth/me/ai-prefs/aliases', {
+      method: 'PATCH',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        aliases: {
+          '@fast': { provider: 'claude', model: 'haiku', effort: '  future-claude  ' },
+        },
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(mockSetAliases).toHaveBeenCalledWith('user-from-alice', {
+      '@fast': { provider: 'claude', model: 'haiku', effort: '  future-claude  ' },
+    });
+  });
+
+  test('empty effort → 400, nothing stored', async () => {
+    const res = await makeApp().request('/api/auth/me/ai-prefs/aliases', {
+      method: 'PATCH',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        aliases: { '@fast': { provider: 'claude', model: 'haiku', effort: '' } },
+      }),
+    });
+    expect(res.status).toBe(400);
+    expect(mockSetAliases).not.toHaveBeenCalled();
   });
 
   test('null unsets an alias', async () => {

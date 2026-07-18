@@ -107,15 +107,28 @@ describe('buildQoderCliArgs', () => {
     expect(result.sessionId.length).toBeGreaterThan(0);
   });
 
-  test('node effort overrides config reasoning effort', () => {
+  test('node effort overrides config unchanged and is reported as the effective value', () => {
     const result = buildQoderCliArgs({
       prompt: 'hello',
       cwd: '/repo',
       config: { modelReasoningEffort: 'low' },
-      requestOptions: { nodeConfig: { effort: 'max' } },
+      requestOptions: { nodeConfig: { effort: '  future-qoder  ' } },
     });
     const effortIndex = result.args.indexOf('--reasoning-effort');
-    expect(result.args[effortIndex + 1]).toBe('max');
+    expect(result.args[effortIndex + 1]).toBe('  future-qoder  ');
+    expect(result.reasoningEffort).toBe('  future-qoder  ');
+  });
+
+  test('keeps legacy thinking precedence separate from raw effort', () => {
+    const result = buildQoderCliArgs({
+      prompt: 'hello',
+      cwd: '/repo',
+      config: { modelReasoningEffort: 'low' },
+      requestOptions: { nodeConfig: { thinking: 'high', effort: 'future-qoder' } },
+    });
+    const effortIndex = result.args.indexOf('--reasoning-effort');
+    expect(result.args[effortIndex + 1]).toBe('high');
+    expect(result.reasoningEffort).toBe('high');
   });
 
   test('resume uses prior session id without creating a new session flag', () => {

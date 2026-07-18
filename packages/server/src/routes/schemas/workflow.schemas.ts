@@ -147,7 +147,7 @@ export const workflowNodeStateSchema = z
     provider: z.string().optional(),
     model: z.string().optional(),
     tier: z.string().optional(),
-    modelReasoningEffort: z.string().optional(),
+    modelReasoningEffort: z.string().min(1).optional(),
     effort: effortLevelSchema.optional(),
     thinking: thinkingConfigSchema.optional(),
   })

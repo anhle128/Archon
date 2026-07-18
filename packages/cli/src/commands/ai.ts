@@ -53,9 +53,7 @@ import { isRegisteredProvider, getProviderInfoList } from '@archon/providers';
 import {
   TIER_NAMES,
   buildAiProfile,
-  isEffortValidForProvider,
   isTierName as isTierNameStrict,
-  validEffortsForProvider,
 } from '@archon/workflows/model-validation';
 import type { TierName, RawAliasEntry } from '@archon/workflows/model-validation';
 import * as userDb from '@archon/core/db/users';
@@ -341,17 +339,14 @@ function registeredProvidersList(): string {
     .join(', ');
 }
 
-/** Validate provider + effort for a tier/alias entry; prints and returns false on error. */
+/** Validate provider identity plus the provider-owned effort's structural shape. */
 function validateEntryInputs(provider: string, effort: string | undefined): boolean {
   if (!isRegisteredProvider(provider)) {
     console.error(`Unknown provider '${provider}'. Available: ${registeredProvidersList()}.`);
     return false;
   }
-  if (effort !== undefined && !isEffortValidForProvider(provider, effort)) {
-    console.error(
-      `Invalid effort '${effort}' for provider '${provider}'. ` +
-        `Valid: ${validEffortsForProvider(provider)?.join(', ') ?? '(this provider has no effort setting)'}.`
-    );
+  if (effort?.length === 0) {
+    console.error('Invalid effort: expected a non-empty string.');
     return false;
   }
   return true;
@@ -374,7 +369,11 @@ export async function aiTierSetCommand(
     return 1;
   }
   if (!validateEntryInputs(provider, effort)) return 1;
-  const entry: RawAliasEntry = { provider, model, ...(effort ? { effort } : {}) };
+  const entry: RawAliasEntry = {
+    provider,
+    model,
+    ...(effort !== undefined ? { effort } : {}),
+  };
   try {
     if (resolvedScope === 'user') {
       const user = await resolveUser();
@@ -387,7 +386,7 @@ export async function aiTierSetCommand(
     }
     const scopeLabel = resolvedScope === 'user' ? ' (just you)' : '';
     console.log(
-      `✓ Set tier '${tier}' → ${provider}/${model}${effort ? ` (effort: ${effort})` : ''}${scopeLabel}.`
+      `✓ Set tier '${tier}' → ${provider}/${model}${effort !== undefined ? ` (effort: ${effort})` : ''}${scopeLabel}.`
     );
     return 0;
   } catch (err) {
@@ -554,7 +553,11 @@ export async function aiAliasSetCommand(
   }
   if (!validateAliasName(name)) return 1;
   if (!validateEntryInputs(provider, effort)) return 1;
-  const entry: RawAliasEntry = { provider, model, ...(effort ? { effort } : {}) };
+  const entry: RawAliasEntry = {
+    provider,
+    model,
+    ...(effort !== undefined ? { effort } : {}),
+  };
   try {
     if (resolvedScope === 'user') {
       const user = await resolveUser();
@@ -565,7 +568,7 @@ export async function aiAliasSetCommand(
     }
     const scopeLabel = resolvedScope === 'user' ? ' (just you)' : '';
     console.log(
-      `✓ Set alias '${name}' → ${provider}/${model}${effort ? ` (effort: ${effort})` : ''}${scopeLabel}.`
+      `✓ Set alias '${name}' → ${provider}/${model}${effort !== undefined ? ` (effort: ${effort})` : ''}${scopeLabel}.`
     );
     return 0;
   } catch (err) {

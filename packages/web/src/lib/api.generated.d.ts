@@ -604,7 +604,7 @@ export interface paths {
             'application/json': components['schemas']['UserAiPrefs'];
           };
         };
-        /** @description Unknown provider or invalid effort */
+        /** @description Unknown provider or empty effort */
         400: {
           headers: {
             [name: string]: unknown;
@@ -671,7 +671,7 @@ export interface paths {
             'application/json': components['schemas']['UserAiPrefs'];
           };
         };
-        /** @description Invalid alias name, unknown provider, or invalid effort */
+        /** @description Invalid alias name, unknown provider, or empty effort */
         400: {
           headers: {
             [name: string]: unknown;
@@ -2865,7 +2865,7 @@ export interface paths {
             'application/json': components['schemas']['ConfigResponse'];
           };
         };
-        /** @description Invalid alias name, unknown provider, or invalid effort */
+        /** @description Invalid alias name, unknown provider, or empty effort */
         400: {
           headers: {
             [name: string]: unknown;
@@ -3380,13 +3380,11 @@ export interface components {
       description: string;
       provider?: string;
       model?: string;
-      /** @enum {string} */
-      modelReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+      modelReasoningEffort?: string;
       /** @enum {string} */
       webSearchMode?: 'disabled' | 'cached' | 'live';
       interactive?: boolean;
-      /** @enum {string} */
-      effort?: 'low' | 'medium' | 'high' | 'max';
+      effort?: string;
       thinking?:
         | {
             /** @enum {string} */
@@ -3640,8 +3638,7 @@ export interface components {
           [key: string]: boolean | string;
         };
       };
-      /** @enum {string} */
-      effort?: 'low' | 'medium' | 'high' | 'max';
+      effort?: string;
       thinking?:
         | {
             /** @enum {string} */
@@ -3907,8 +3904,7 @@ export interface components {
       model?: string;
       tier?: string;
       modelReasoningEffort?: string;
-      /** @enum {string} */
-      effort?: 'low' | 'medium' | 'high' | 'max';
+      effort?: string;
       thinking?:
         | {
             /** @enum {string} */
