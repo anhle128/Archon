@@ -4144,7 +4144,7 @@ describe('write command --json output', () => {
       id: 'run-resolved',
       workflow_name: 'implement',
       status: 'paused',
-      metadata: { approval: { nodeId: 'gate', resolved: 'approved' } },
+      metadata: { approval: { nodeId: 'gate', message: 'ok?', resolved: 'approved' } },
     });
 
     await workflowApproveCommand('run-resolved', undefined, true);
@@ -4248,6 +4248,46 @@ describe('write command --json output', () => {
     expect(error.category).toBe('implementation_defect');
     const execution = envelope.execution as Record<string, unknown>;
     expect(execution.exitCode).toBe(70);
+  });
+
+  it('approve --json error: timeout → COMMAND_TIMEOUT envelope (fail-closed)', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const timeoutErr = Object.assign(new Error('statement timeout'), { code: 'ETIMEDOUT' });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockRejectedValueOnce(timeoutErr);
+
+    const exitCode = await workflowApproveCommand('run-timeout', undefined, true);
+
+    expect(exitCode).toBe(69);
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.approve');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('COMMAND_TIMEOUT');
+    expect(error.category).toBe('timeout');
+    expect(error.retryable).toBe(true);
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(69);
+  });
+
+  it('reject --json error: timeout → COMMAND_TIMEOUT envelope (fail-closed)', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const timeoutErr = Object.assign(new Error('statement timeout'), { code: 'ETIMEDOUT' });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockRejectedValueOnce(timeoutErr);
+
+    const exitCode = await workflowRejectCommand('run-timeout', 'nope', true);
+
+    expect(exitCode).toBe(69);
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.reject');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('COMMAND_TIMEOUT');
+    expect(error.category).toBe('timeout');
+    expect(error.retryable).toBe(true);
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(69);
   });
 
   it('reject --json success (cancelled) emits workflow.reject envelope', async () => {
@@ -6751,7 +6791,7 @@ describe('workflowRejectCommand — JSON envelope mode (Story 3.3c)', () => {
   });
 
   // 3.3C-UNIT-014 [P1] AC #1 — reject success: container write-back rejection
-  it.skip('3.3C-UNIT-014: emits workflow.reject envelope for container write-back rejection (cancelled=false)', async () => {
+  it('3.3C-UNIT-014: emits workflow.reject envelope for container write-back rejection (cancelled=false)', async () => {
     // ACTIVATION: envelope conversion of the write-back rejection path
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({

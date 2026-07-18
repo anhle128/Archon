@@ -1,6 +1,6 @@
 # Story 3.3c: Provide Archon Provider Decision Command CLI JSON
 
-Status: in-progress
+Status: review
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -116,9 +116,9 @@ so that human gate decisions can be sent through external controllers without re
 - [x] [Review][Patch] Successful JSON approve/reject envelopes can report a resolved decision as `state: "waiting-for-approval"` [packages/cli/src/commands/workflow.ts:3046]
 - [x] [Review][Patch] Several pre-dispatch malformed-request E2E tests still do not assert the required field-level diagnostics [packages/cli/src/commands/workflow-json.e2e.test.ts:432]
 - [x] [Review][Patch] Reject JSON missing approval context lacks command-level envelope proof [packages/cli/src/commands/workflow.test.ts:4380]
-- [ ] [Review][Patch] Reject write-back success proof is still skipped [packages/cli/src/commands/workflow.test.ts:6754]
-- [ ] [Review][Patch] Timeout fail-closed command envelope proof is missing [packages/cli/src/commands/workflow.test.ts:7066]
-- [ ] [Review][Patch] Approve already-resolved command proof exercises the missing-context branch [packages/cli/src/commands/workflow.test.ts:4147]
+- [x] [Review][Patch] Reject write-back success proof is still skipped [packages/cli/src/commands/workflow.test.ts:6754]
+- [x] [Review][Patch] Timeout fail-closed command envelope proof is missing [packages/cli/src/commands/workflow.test.ts:7066]
+- [x] [Review][Patch] Approve already-resolved command proof exercises the missing-context branch [packages/cli/src/commands/workflow.test.ts:4147]
 
 ## Dev Notes
 
@@ -470,12 +470,15 @@ Qoder (Claude)
 - ✅ RF12: `mapWorkflowRunToContractState` now checks `isGateResolved` — resolved gates (approved/rejected) report `state: 'paused'` instead of `state: 'waiting-for-approval'`. Added `3.3C-UNIT-STATE-001` unit test and updated approve/reject success test mocks to include `resolved` field in post-decision re-fetch.
 - ✅ RF13: All 11 pre-dispatch malformed-request E2E tests now assert field-level diagnostics: missing run-id asserts `details.missingArgument`, blank correlation-id asserts `fieldErrors[{path:'/correlationId',code:'required'}]`, invalid JSON flag asserts `fieldErrors[{path:'/json',code:'must_be_boolean_flag'}]`, bare --correlation-id asserts `fieldErrors[{path:'/correlationId',code:'required'}]`, non-git directory asserts `fieldErrors[{path:'/cwd',code:'not_a_git_repository'}]`, nonexistent --cwd asserts `fieldErrors[{path:'/cwd',code:'directory_not_found'}]`
 - ✅ RF14: Added `reject --json error: missing approval context → UNEXPECTED_STATE` unit test proving the command-level envelope shape (`command: 'workflow.reject'`, `success: false`, `error.code: 'UNEXPECTED_STATE'`, `error.category: 'unexpected_state'`, `error.retryable: false`, `execution.exitCode: 78`) when `rejectWorkflow` throws on a paused run with no approval metadata
+- ✅ RF15: Unskipped `3.3C-UNIT-014` — reject write-back success proof now runs and passes, asserting `cancelled: false` envelope for container write-back rejection via `resolveApprovalGate` CAS path
+- ✅ RF16: Added approve and reject timeout fail-closed envelope proofs — both assert `COMMAND_TIMEOUT`/`timeout`/`retryable: true`/`exitCode: 69` when `getWorkflowRun` throws `ETIMEDOUT` inside the JSON try/catch boundary
+- ✅ RF17: Fixed `approve --json error: already resolved` test mock to include `message: 'ok?'` in the approval context — `isApprovalContext` requires both `nodeId` AND `message`; without `message` the test was exercising the missing-context branch instead of the already-resolved branch
 
 ### File List
 
 - `packages/cli/src/commands/workflow.ts` — approve/reject JSON envelope conversion, classifier extension, exit code propagation (RF1), readback error message fix (RF2), ambiguous run-id classifier (RF4), `isGateResolved` check in `mapWorkflowRunToContractState` (RF12)
 - `packages/cli/src/cli.ts` — envelope command mapping, correlation-id threading, missing run-id guard, `return await` for approve/reject dispatch (RF1)
-- `packages/cli/src/commands/workflow.test.ts` — unit tests for approve/reject envelopes, classifier patterns, exit code assertions (RF1), post-decision readback tests (RF2), ambiguous run-id classifier test (RF4), resolved-gate state mapping test (RF12), reject missing-approval-context envelope proof (RF14)
+- `packages/cli/src/commands/workflow.test.ts` — unit tests for approve/reject envelopes, classifier patterns, exit code assertions (RF1), post-decision readback tests (RF2), ambiguous run-id classifier test (RF4), resolved-gate state mapping test (RF12), reject missing-approval-context envelope proof (RF14), write-back rejection unskipped (RF15), timeout fail-closed envelope proofs (RF16), already-resolved mock fix (RF17)
 - `packages/cli/src/commands/workflow-command-contract.test.ts` — unskipped forbidden-key and fixture-delta contract tests, added missing DB mocks, runtime envelope schema validation (RF6), replaced partial local schema interpreter with subprocess call to existing contract validator (RF10)
 - `packages/core/src/operations/workflow-operations.ts` — reject missing-approval-context guard (RF3)
 - `packages/core/src/operations/workflow-operations.test.ts` — reject missing-approval-context test (RF3)
@@ -492,3 +495,4 @@ Qoder (Claude)
 - 2026-07-19: Addressed last 2 code review findings — replaced partial local schema interpreter with existing contract validator pattern via subprocess (RF10), added /cwd field error assertion to reject-from-non-git E2E (RF11)
 - 2026-07-19: Addressed final 2 code review findings — `mapWorkflowRunToContractState` now checks `isGateResolved` to avoid reporting resolved decisions as `waiting-for-approval` (RF12), all pre-dispatch malformed-request E2E tests now assert field-level diagnostics (RF13)
 - 2026-07-19: Addressed last code review finding — added reject missing-approval-context envelope proof test (RF14)
+- 2026-07-19: Addressed final 3 code review findings — unskipped write-back rejection proof (RF15), added timeout fail-closed envelope proofs for approve/reject (RF16), fixed already-resolved test mock to include required `message` field (RF17)
