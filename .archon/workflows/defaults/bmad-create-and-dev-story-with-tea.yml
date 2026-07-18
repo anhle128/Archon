@@ -324,7 +324,7 @@ nodes:
     depends_on: [code-review]
     route_loop:
       condition: "$code-review.output.gate == 'PASS'"
-      max_iterations: 5
+      max_iterations: 10
       routes:
         positive: create-pull-request
         negative: dev-story
