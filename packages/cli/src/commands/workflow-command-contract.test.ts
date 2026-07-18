@@ -129,6 +129,9 @@ mock.module('@archon/core/db/workflows', () => ({
   resumeWorkflowRun: mock(() => Promise.resolve(null)),
   getWorkflowRun: mock(() => Promise.resolve(null)),
   updateWorkflowRun: mock(() => Promise.resolve()),
+  resolveApprovalGate: mock(() => Promise.resolve({ resolved: true })),
+  resolveAndCancelApprovalGate: mock(() => Promise.resolve({ resolved: true })),
+  findWorkflowRunsByIdPrefix: mock(() => Promise.resolve([])),
   listWorkflowRuns: mock(() => Promise.resolve([])),
 }));
 mock.module('@archon/core/db/workflow-events', () => ({
@@ -394,7 +397,7 @@ describe('3.3B-CONTRACT-040 [P1] no contract edits / no runtime _bmad-output imp
 import { workflowApproveCommand, workflowRejectCommand } from './workflow';
 
 describe('3.3C-CONTRACT-001 [P0] forbidden-key scan on approve/reject envelopes (AC #2)', () => {
-  test.skip('a workflow.approve success envelope contains no forbidden key', async () => {
+  test('a workflow.approve success envelope contains no forbidden key', async () => {
     // ACTIVATION: workflowApproveCommand JSON branch emits shared envelope
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -428,7 +431,7 @@ describe('3.3C-CONTRACT-001 [P0] forbidden-key scan on approve/reject envelopes 
     }
   });
 
-  test.skip('a workflow.approve error envelope contains no forbidden key', async () => {
+  test('a workflow.approve error envelope contains no forbidden key', async () => {
     // ACTIVATION: workflowApproveCommand JSON error path emits buildErrorEnvelope
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
@@ -446,7 +449,7 @@ describe('3.3C-CONTRACT-001 [P0] forbidden-key scan on approve/reject envelopes 
     }
   });
 
-  test.skip('a workflow.reject success envelope contains no forbidden key', async () => {
+  test('a workflow.reject success envelope contains no forbidden key', async () => {
     // ACTIVATION: workflowRejectCommand JSON branch emits shared envelope
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -480,7 +483,7 @@ describe('3.3C-CONTRACT-001 [P0] forbidden-key scan on approve/reject envelopes 
     }
   });
 
-  test.skip('a workflow.reject error envelope contains no forbidden key', async () => {
+  test('a workflow.reject error envelope contains no forbidden key', async () => {
     // ACTIVATION: workflowRejectCommand JSON error path emits buildErrorEnvelope
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
@@ -521,7 +524,7 @@ describe('3.3C-CONTRACT-002 [P1] fixture delta documentation (AC #1, W-3.3C-001)
     expect(typeof result.nextPhase).toBe('string');
   });
 
-  test.skip('a real workflow.approve success envelope intentionally omits decision.gateId and does not fabricate it', async () => {
+  test('a real workflow.approve success envelope intentionally omits decision.gateId and does not fabricate it', async () => {
     // ACTIVATION: workflowApproveCommand JSON branch emits shared envelope
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -555,7 +558,7 @@ describe('3.3C-CONTRACT-002 [P1] fixture delta documentation (AC #1, W-3.3C-001)
     }
   });
 
-  test.skip('a real workflow.reject success envelope intentionally omits nextPhase and does not fabricate it', async () => {
+  test('a real workflow.reject success envelope intentionally omits nextPhase and does not fabricate it', async () => {
     // ACTIVATION: workflowRejectCommand JSON branch emits shared envelope
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({

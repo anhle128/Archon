@@ -1,5 +1,5 @@
 # generated: 2026-07-13 11:55:39 +0700
-# last_updated: 2026-07-14
+# last_updated: 2026-07-19
 # project: Archon
 # project_key: NOKEY
 # tracking_system: file-system
@@ -52,7 +52,7 @@ development_status:
   3-1-implement-archon-workflow-provider-binding-lifecycle: done
   3-3a-define-shared-workflow-provider-command-envelope: done
   3-3b-provide-archon-start-and-status-cli-json: done
-  3-3c-provide-archon-provider-decision-command-cli-json: ready-for-dev
+  3-3c-provide-archon-provider-decision-command-cli-json: review
   3-3d-provide-archon-recovery-command-cli-json: backlog
   3-5-produce-signed-typed-archon-workflow-events-from-outbox: backlog
   3-7-expose-archon-workflow-event-delivery-health: backlog

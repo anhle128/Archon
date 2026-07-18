@@ -115,7 +115,7 @@ function getLog(): ReturnType<typeof createLogger> {
 
 type WorkflowCommandEnvelopeCommand = Extract<
   WorkflowProviderCommand,
-  'workflow.start' | 'workflow.status'
+  'workflow.start' | 'workflow.status' | 'workflow.approve' | 'workflow.reject'
 >;
 
 function getWorkflowCommandEnvelopeCommand(
@@ -125,6 +125,8 @@ function getWorkflowCommandEnvelopeCommand(
   if (command !== 'workflow') return undefined;
   if (subcommand === 'run') return 'workflow.start';
   if (subcommand === 'get') return 'workflow.status';
+  if (subcommand === 'approve') return 'workflow.approve';
+  if (subcommand === 'reject') return 'workflow.reject';
   return undefined;
 }
 
@@ -916,6 +918,16 @@ async function main(): Promise<number> {
           case 'approve': {
             const approveRunId = positionals[2];
             if (!approveRunId) {
+              if (workflowProviderJsonRequested && envelopeCommand) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    missingArgument: 'run-id',
+                    usage: 'archon workflow approve <run-id> [comment]',
+                  },
+                  rawWorkflowProviderOptions.correlationIdValue
+                );
+              }
               console.error('Usage: archon workflow approve <run-id> [comment]');
               return 1;
             }
@@ -926,20 +938,39 @@ async function main(): Promise<number> {
             const rawApproveComment =
               (values.comment as string | undefined) || positionals.slice(3).join(' ');
             const approveComment = rawApproveComment.length > 0 ? rawApproveComment : undefined;
-            await workflowApproveCommand(approveRunId, approveComment, jsonFlag, effectiveCwd);
+            await workflowApproveCommand(
+              approveRunId,
+              approveComment,
+              jsonFlag,
+              values['correlation-id'] as string | undefined,
+              effectiveCwd
+            );
             break;
           }
 
           case 'reject': {
             const rejectRunId = positionals[2];
             if (!rejectRunId) {
+              if (workflowProviderJsonRequested && envelopeCommand) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  { missingArgument: 'run-id', usage: 'archon workflow reject <run-id> [reason]' },
+                  rawWorkflowProviderOptions.correlationIdValue
+                );
+              }
               console.error('Usage: archon workflow reject <run-id> [reason]');
               return 1;
             }
             const rawRejectReason =
               (values.reason as string | undefined) || positionals.slice(3).join(' ');
             const rejectReason = rawRejectReason.length > 0 ? rawRejectReason : undefined;
-            await workflowRejectCommand(rejectRunId, rejectReason, jsonFlag, effectiveCwd);
+            await workflowRejectCommand(
+              rejectRunId,
+              rejectReason,
+              jsonFlag,
+              values['correlation-id'] as string | undefined,
+              effectiveCwd
+            );
             break;
           }
 

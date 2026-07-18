@@ -263,6 +263,30 @@ export function classifyRunError(err: unknown): ClassifiedError {
       exitCode: EXIT_RUNTIME,
     };
   }
+  if (msg.includes('Workflow run not found')) {
+    return {
+      code: 'WORKFLOW_RUN_NOT_FOUND',
+      category: 'unexpected_state',
+      retryable: false,
+      exitCode: EXIT_RUNTIME,
+    };
+  }
+  if (
+    msg.includes('already resolved') ||
+    msg.includes('already approved') ||
+    msg.includes('already rejected') ||
+    msg.includes('awaiting resume') ||
+    msg.includes('Cannot approve run with status') ||
+    msg.includes('Cannot reject run with status') ||
+    msg.includes('missing approval context')
+  ) {
+    return {
+      code: 'UNEXPECTED_STATE',
+      category: 'unexpected_state',
+      retryable: false,
+      exitCode: EXIT_RUNTIME,
+    };
+  }
   if (
     msg.includes('mutually exclusive') ||
     msg.includes('no effect with') ||
@@ -2998,6 +3022,7 @@ export async function workflowApproveCommand(
   runId: string,
   comment?: string,
   json?: boolean,
+  correlationId?: string,
   cwd?: string
 ): Promise<void> {
   // JSON mode records the approval and returns a structured ack WITHOUT the
@@ -3005,25 +3030,62 @@ export async function workflowApproveCommand(
   // stdout, which would corrupt the JSON contract). The run becomes resumable
   // — drive it to completion with a backgrounded `resume`/`run --resume`.
   if (json) {
+    const startTime = Date.now();
+    let metaCorrelationId = 'unknown';
+    let metaIssuedAt = new Date(0).toISOString();
     try {
+      metaCorrelationId = resolveCorrelationId(correlationId);
+      metaIssuedAt = resolveIssuedAt();
       const resolvedId = await resolveRunIdArg(runId, cwd);
-      const result = await approveWorkflow(resolvedId, comment);
-      console.log(
-        JSON.stringify(
-          {
-            ok: true,
-            runId: resolvedId,
-            action: 'approve',
-            type: result.type,
-            workflowName: result.workflowName,
-            resumable: true,
-          },
-          null,
-          2
-        )
+      await approveWorkflow(resolvedId, comment);
+      const persistedRun = await workflowDb.getWorkflowRun(resolvedId);
+      if (!persistedRun) {
+        throw new Error(`Workflow run not found after approval: ${resolvedId}`);
+      }
+      const { state, terminal } = mapWorkflowRunToContractState(persistedRun);
+      const meta: EnvelopeMeta = {
+        provider: 'archon',
+        command: 'workflow.approve',
+        correlationId: metaCorrelationId,
+        issuedAt: metaIssuedAt,
+      };
+      const envelope = buildSuccessEnvelope(
+        meta,
+        { workflowRunRef: buildWorkflowRunRef(persistedRun) },
+        {
+          operation: 'approve',
+          decision: { outcome: 'approved', recorded: true },
+          resumable: true,
+          state,
+          terminal,
+        }
       );
+      console.log(safeStringify(envelope));
     } catch (error) {
-      printJsonWriteError(runId, 'approve', error);
+      const classified = classifyRunError(error);
+      const err = error instanceof Error ? error : new Error(String(error));
+      getLog().error(
+        { err, runId, correlationId: metaCorrelationId },
+        'cli.workflow_approve_json_failed'
+      );
+      const meta: EnvelopeMeta = {
+        provider: 'archon',
+        command: 'workflow.approve',
+        correlationId: metaCorrelationId,
+        issuedAt: metaIssuedAt,
+      };
+      const errorEnvelope = buildErrorEnvelope(
+        meta,
+        {
+          code: classified.code,
+          category: classified.category,
+          retryable: classified.retryable,
+          details: { runId },
+          exitCode: classified.exitCode,
+        },
+        startTime
+      );
+      console.log(safeStringify(errorEnvelope));
     }
     return;
   }
@@ -3100,6 +3162,7 @@ export async function workflowRejectCommand(
   runId: string,
   reason?: string,
   json?: boolean,
+  correlationId?: string,
   cwd?: string
 ): Promise<void> {
   // JSON mode records the rejection and returns a structured ack WITHOUT the
@@ -3107,26 +3170,64 @@ export async function workflowRejectCommand(
   // to stdout, corrupting the JSON contract). When `cancelled` is false the run
   // is resumable for the rework pass — drive it with a backgrounded `resume`.
   if (json) {
+    const startTime = Date.now();
+    let metaCorrelationId = 'unknown';
+    let metaIssuedAt = new Date(0).toISOString();
     try {
+      metaCorrelationId = resolveCorrelationId(correlationId);
+      metaIssuedAt = resolveIssuedAt();
       const resolvedId = await resolveRunIdArg(runId, cwd);
       const result = await rejectWorkflow(resolvedId, reason);
-      console.log(
-        JSON.stringify(
-          {
-            ok: true,
-            runId: resolvedId,
-            action: 'reject',
-            cancelled: result.cancelled,
-            maxAttemptsReached: result.maxAttemptsReached,
-            workflowName: result.workflowName,
-            resumable: !result.cancelled,
-          },
-          null,
-          2
-        )
+      const persistedRun = await workflowDb.getWorkflowRun(resolvedId);
+      if (!persistedRun) {
+        throw new Error(`Workflow run not found after rejection: ${resolvedId}`);
+      }
+      const { state, terminal } = mapWorkflowRunToContractState(persistedRun);
+      const meta: EnvelopeMeta = {
+        provider: 'archon',
+        command: 'workflow.reject',
+        correlationId: metaCorrelationId,
+        issuedAt: metaIssuedAt,
+      };
+      const envelope = buildSuccessEnvelope(
+        meta,
+        { workflowRunRef: buildWorkflowRunRef(persistedRun) },
+        {
+          operation: 'reject',
+          decision: { outcome: 'rejected', recorded: true },
+          cancelled: result.cancelled,
+          maxAttemptsReached: result.maxAttemptsReached,
+          resumable: !result.cancelled,
+          state,
+          terminal,
+        }
       );
+      console.log(safeStringify(envelope));
     } catch (error) {
-      printJsonWriteError(runId, 'reject', error);
+      const classified = classifyRunError(error);
+      const err = error instanceof Error ? error : new Error(String(error));
+      getLog().error(
+        { err, runId, correlationId: metaCorrelationId },
+        'cli.workflow_reject_json_failed'
+      );
+      const meta: EnvelopeMeta = {
+        provider: 'archon',
+        command: 'workflow.reject',
+        correlationId: metaCorrelationId,
+        issuedAt: metaIssuedAt,
+      };
+      const errorEnvelope = buildErrorEnvelope(
+        meta,
+        {
+          code: classified.code,
+          category: classified.category,
+          retryable: classified.retryable,
+          details: { runId },
+          exitCode: classified.exitCode,
+        },
+        startTime
+      );
+      console.log(safeStringify(errorEnvelope));
     }
     return;
   }
