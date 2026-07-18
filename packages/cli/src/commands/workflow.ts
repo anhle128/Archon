@@ -293,7 +293,8 @@ export function classifyRunError(err: unknown): ClassifiedError {
     msg.includes('conflicts with') ||
     msg.includes('is required') ||
     msg.includes('must be a boolean flag') ||
-    msg.includes('worktree.enabled')
+    msg.includes('worktree.enabled') ||
+    msg.includes('matches more than one run')
   ) {
     return {
       code: 'MALFORMED_REQUEST',
@@ -3024,7 +3025,7 @@ export async function workflowApproveCommand(
   json?: boolean,
   correlationId?: string,
   cwd?: string
-): Promise<void> {
+): Promise<number> {
   // JSON mode records the approval and returns a structured ack WITHOUT the
   // inline auto-resume (resuming executes the workflow and streams output to
   // stdout, which would corrupt the JSON contract). The run becomes resumable
@@ -3040,7 +3041,7 @@ export async function workflowApproveCommand(
       await approveWorkflow(resolvedId, comment);
       const persistedRun = await workflowDb.getWorkflowRun(resolvedId);
       if (!persistedRun) {
-        throw new Error(`Workflow run not found after approval: ${resolvedId}`);
+        throw new Error(`Failed to read back workflow run after approval: ${resolvedId}`);
       }
       const { state, terminal } = mapWorkflowRunToContractState(persistedRun);
       const meta: EnvelopeMeta = {
@@ -3061,6 +3062,7 @@ export async function workflowApproveCommand(
         }
       );
       console.log(safeStringify(envelope));
+      return 0;
     } catch (error) {
       const classified = classifyRunError(error);
       const err = error instanceof Error ? error : new Error(String(error));
@@ -3086,8 +3088,8 @@ export async function workflowApproveCommand(
         startTime
       );
       console.log(safeStringify(errorEnvelope));
+      return classified.exitCode;
     }
-    return;
   }
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
@@ -3149,6 +3151,7 @@ export async function workflowApproveCommand(
         `The approval was recorded. Run 'bun run cli workflow resume ${resolvedId}' to retry.`
     );
   }
+  return 0;
 }
 
 /**
@@ -3164,7 +3167,7 @@ export async function workflowRejectCommand(
   json?: boolean,
   correlationId?: string,
   cwd?: string
-): Promise<void> {
+): Promise<number> {
   // JSON mode records the rejection and returns a structured ack WITHOUT the
   // inline auto-resume (an on_reject rework executes the workflow and streams
   // to stdout, corrupting the JSON contract). When `cancelled` is false the run
@@ -3180,7 +3183,7 @@ export async function workflowRejectCommand(
       const result = await rejectWorkflow(resolvedId, reason);
       const persistedRun = await workflowDb.getWorkflowRun(resolvedId);
       if (!persistedRun) {
-        throw new Error(`Workflow run not found after rejection: ${resolvedId}`);
+        throw new Error(`Failed to read back workflow run after rejection: ${resolvedId}`);
       }
       const { state, terminal } = mapWorkflowRunToContractState(persistedRun);
       const meta: EnvelopeMeta = {
@@ -3203,6 +3206,7 @@ export async function workflowRejectCommand(
         }
       );
       console.log(safeStringify(envelope));
+      return 0;
     } catch (error) {
       const classified = classifyRunError(error);
       const err = error instanceof Error ? error : new Error(String(error));
@@ -3228,8 +3232,8 @@ export async function workflowRejectCommand(
         startTime
       );
       console.log(safeStringify(errorEnvelope));
+      return classified.exitCode;
     }
-    return;
   }
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
@@ -3238,7 +3242,7 @@ export async function workflowRejectCommand(
   if (result.cancelled) {
     const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
     console.log(`Rejected and cancelled${suffix}: ${result.workflowName}`);
-    return;
+    return 0;
   }
 
   // Not cancelled = either an on_reject rework (DAG approval gate) or a container
@@ -3301,6 +3305,7 @@ export async function workflowRejectCommand(
         `The rejection was recorded. Run 'bun run cli workflow resume ${resolvedId}' to retry.`
     );
   }
+  return 0;
 }
 
 /**

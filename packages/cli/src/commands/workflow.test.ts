@@ -4022,8 +4022,9 @@ describe('write command --json output', () => {
     const discoverSpy = discovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>;
     discoverSpy.mockClear();
 
-    await workflowApproveCommand('run-ap', 'lgtm', true);
+    const exitCode = await workflowApproveCommand('run-ap', 'lgtm', true);
 
+    expect(exitCode).toBe(0);
     expect(consoleSpy).toHaveBeenCalledTimes(1);
     const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
     expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
@@ -4080,8 +4081,9 @@ describe('write command --json output', () => {
       metadata: {},
     });
 
-    await workflowApproveCommand('run-completed', undefined, true);
+    const exitCode = await workflowApproveCommand('run-completed', undefined, true);
 
+    expect(exitCode).toBe(78);
     expect(consoleSpy).toHaveBeenCalledTimes(1);
     const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
     expect(envelope.success).toBe(false);
@@ -4167,8 +4169,35 @@ describe('write command --json output', () => {
       new Error('DB transient error')
     );
 
-    await workflowApproveCommand('run-db-fail', undefined, true);
+    const exitCode = await workflowApproveCommand('run-db-fail', undefined, true);
 
+    expect(exitCode).toBe(70);
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('INTERNAL_ERROR');
+    expect(error.category).toBe('implementation_defect');
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(70);
+  });
+
+  it('approve --json error: post-approval readback returns null → INTERNAL_ERROR (not RUN_NOT_FOUND)', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    // First call: approveWorkflow's internal lookup succeeds
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-null-readback',
+      workflow_name: 'implement',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      metadata: { approval: { nodeId: 'gate', message: 'ok?' } },
+    });
+    // Second call: post-approval fetch returns null (row vanished)
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+
+    const exitCode = await workflowApproveCommand('run-null-readback', undefined, true);
+
+    expect(exitCode).toBe(70);
     expect(consoleSpy).toHaveBeenCalledTimes(1);
     const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
     expect(envelope.success).toBe(false);
@@ -4300,8 +4329,9 @@ describe('write command --json output', () => {
       metadata: {},
     });
 
-    await workflowRejectCommand('run-completed', undefined, true);
+    const exitCode = await workflowRejectCommand('run-completed', undefined, true);
 
+    expect(exitCode).toBe(78);
     expect(consoleSpy).toHaveBeenCalledTimes(1);
     const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
     expect(envelope.success).toBe(false);
@@ -4347,6 +4377,38 @@ describe('write command --json output', () => {
     expect(error.retryable).toBe(false);
     const execution = envelope.execution as Record<string, unknown>;
     expect(execution.exitCode).toBe(78);
+  });
+
+  it('reject --json error: post-rejection readback returns null → INTERNAL_ERROR (not RUN_NOT_FOUND)', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const discovery = await import('@archon/workflows/workflow-discovery');
+    const pausedRun = {
+      id: 'run-null-reject',
+      workflow_name: 'implement',
+      status: 'paused' as const,
+      working_path: '/tmp/wt',
+      codebase_id: 'cb',
+      conversation_id: 'conv',
+      metadata: { approval: { nodeId: 'gate', message: 'ok?' } },
+    };
+    // First call: rejectWorkflow's internal lookup succeeds
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(pausedRun);
+    // Second call: post-rejection fetch returns null
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+    const discoverSpy = discovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>;
+    discoverSpy.mockClear();
+
+    const exitCode = await workflowRejectCommand('run-null-reject', undefined, true);
+
+    expect(exitCode).toBe(70);
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('INTERNAL_ERROR');
+    expect(error.category).toBe('implementation_defect');
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(70);
   });
 
   it('resume --json validates resumability without executing (executed:false)', async () => {
@@ -6863,6 +6925,42 @@ describe('classifyRunError — decision-specific patterns (Story 3.3c Slice 4)',
     expect(classifyRunError(new Error('Cannot resume run with status "completed"'))).not.toEqual(
       expect.objectContaining({ code: 'UNEXPECTED_STATE' })
     );
+  });
+
+  // RF-3c-001 — ambiguous short run-id → MALFORMED_REQUEST (not INTERNAL_ERROR)
+  it('RF-3c-001: ambiguous short run-id classifies as MALFORMED_REQUEST', () => {
+    expect(
+      classifyRunError(
+        new Error(
+          "Run id 'abc' matches more than one run in this project — use more characters or the full id (from 'archon workflow runs --json')."
+        )
+      )
+    ).toEqual({
+      code: 'MALFORMED_REQUEST',
+      category: 'provider_contract',
+      retryable: false,
+      exitCode: 64,
+    });
+  });
+
+  // RF-3c-002 — post-decision readback failure does NOT match WORKFLOW_RUN_NOT_FOUND
+  it('RF-3c-002: post-decision readback failure classifies as INTERNAL_ERROR, not RUN_NOT_FOUND', () => {
+    expect(
+      classifyRunError(new Error('Failed to read back workflow run after approval: run-123'))
+    ).toEqual({
+      code: 'INTERNAL_ERROR',
+      category: 'implementation_defect',
+      retryable: false,
+      exitCode: 70,
+    });
+    expect(
+      classifyRunError(new Error('Failed to read back workflow run after rejection: run-456'))
+    ).toEqual({
+      code: 'INTERNAL_ERROR',
+      category: 'implementation_defect',
+      retryable: false,
+      exitCode: 70,
+    });
   });
 
   // 3.3C-UNIT-025 [P1] — existing patterns unaffected (regression)

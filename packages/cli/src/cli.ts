@@ -938,14 +938,13 @@ async function main(): Promise<number> {
             const rawApproveComment =
               (values.comment as string | undefined) || positionals.slice(3).join(' ');
             const approveComment = rawApproveComment.length > 0 ? rawApproveComment : undefined;
-            await workflowApproveCommand(
+            return await workflowApproveCommand(
               approveRunId,
               approveComment,
               jsonFlag,
               values['correlation-id'] as string | undefined,
               effectiveCwd
             );
-            break;
           }
 
           case 'reject': {
@@ -964,14 +963,13 @@ async function main(): Promise<number> {
             const rawRejectReason =
               (values.reason as string | undefined) || positionals.slice(3).join(' ');
             const rejectReason = rawRejectReason.length > 0 ? rawRejectReason : undefined;
-            await workflowRejectCommand(
+            return await workflowRejectCommand(
               rejectRunId,
               rejectReason,
               jsonFlag,
               values['correlation-id'] as string | undefined,
               effectiveCwd
             );
-            break;
           }
 
           case 'cleanup': {

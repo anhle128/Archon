@@ -1,6 +1,6 @@
 # Story 3.3c: Provide Archon Provider Decision Command CLI JSON
 
-Status: in-progress
+Status: review
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -102,10 +102,10 @@ so that human gate decisions can be sent through external controllers without re
 
 ### Review Findings
 
-- [ ] [Review][Patch] JSON decision command failures still exit 0 [packages/cli/src/commands/workflow.ts:3064]
-- [ ] [Review][Patch] Post-decision missing readback is classified as run-not-found instead of internal error [packages/cli/src/commands/workflow.ts:3041]
-- [ ] [Review][Patch] Reject on paused run with missing approval context can cancel the run instead of failing closed [packages/core/src/operations/workflow-operations.ts:330]
-- [ ] [Review][Patch] Ambiguous short run-id matches are classified as internal errors [packages/cli/src/commands/workflow.ts:2842]
+- [x] [Review][Patch] JSON decision command failures still exit 0 [packages/cli/src/commands/workflow.ts:3064]
+- [x] [Review][Patch] Post-decision missing readback is classified as run-not-found instead of internal error [packages/cli/src/commands/workflow.ts:3041]
+- [x] [Review][Patch] Reject on paused run with missing approval context can cancel the run instead of failing closed [packages/core/src/operations/workflow-operations.ts:330]
+- [x] [Review][Patch] Ambiguous short run-id matches are classified as internal errors [packages/cli/src/commands/workflow.ts:2842]
 
 ## Dev Notes
 
@@ -443,14 +443,21 @@ Qoder (Claude)
 - ✅ Slice 4: `classifyRunError` extended with 6 decision-specific patterns (already resolved, cannot approve/reject status, missing approval context, workflow run not found)
 - ✅ Slice 5: 225 unit tests pass, 26 E2E tests pass, 20 contract tests pass (including 6 unskipped forbidden-key/fixture-delta tests)
 - ✅ Slice 6: `validate_contracts.py` passes, type-check passes, `bun run validate` passes (one pre-existing `@archon/core` test failure unrelated to this story)
+- ✅ RF1: Approve/reject JSON errors now return non-zero exit codes via `Promise<number>` return type; cli.ts dispatch uses `return await` to propagate
+- ✅ RF2: Post-decision readback error messages changed from "Workflow run not found after approval/rejection" to "Failed to read back workflow run after approval/rejection" — now correctly classified as INTERNAL_ERROR instead of WORKFLOW_RUN_NOT_FOUND
+- ✅ RF3: `rejectWorkflow` now throws "missing approval context" when paused run has no approval context, preventing silent cancellation via `resolveAndCancelApprovalGate`
+- ✅ RF4: `classifyRunError` now matches "matches more than one run" → MALFORMED_REQUEST/64 instead of falling through to INTERNAL_ERROR
 
 ### File List
 
-- `packages/cli/src/commands/workflow.ts` — approve/reject JSON envelope conversion, classifier extension
-- `packages/cli/src/cli.ts` — envelope command mapping, correlation-id threading, missing run-id guard
-- `packages/cli/src/commands/workflow.test.ts` — unit tests for approve/reject envelopes, classifier patterns
+- `packages/cli/src/commands/workflow.ts` — approve/reject JSON envelope conversion, classifier extension, exit code propagation (RF1), readback error message fix (RF2), ambiguous run-id classifier (RF4)
+- `packages/cli/src/cli.ts` — envelope command mapping, correlation-id threading, missing run-id guard, `return await` for approve/reject dispatch (RF1)
+- `packages/cli/src/commands/workflow.test.ts` — unit tests for approve/reject envelopes, classifier patterns, exit code assertions (RF1), post-decision readback tests (RF2), ambiguous run-id classifier test (RF4)
 - `packages/cli/src/commands/workflow-command-contract.test.ts` — unskipped forbidden-key and fixture-delta contract tests, added missing DB mocks
+- `packages/core/src/operations/workflow-operations.ts` — reject missing-approval-context guard (RF3)
+- `packages/core/src/operations/workflow-operations.test.ts` — reject missing-approval-context test (RF3)
 
 ### Change Log
 
 - 2026-07-19: Implemented all 6 slices — approve/reject envelope conversion, CLI wiring, classifier extension, contract/unit/E2E tests, validation gates
+- 2026-07-19: Addressed 4 code review findings — exit code propagation (RF1), post-decision readback classification (RF2), reject missing-context guard (RF3), ambiguous run-id classification (RF4)
