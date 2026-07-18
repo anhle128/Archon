@@ -11,7 +11,7 @@ description: |
   - Every finding and fix entry must explain what is wrong, how it was fixed, and why that fix decision was chosen.
 
 provider: codex
-modelReasoningEffort: high
+modelReasoningEffort: xhigh
 model: gpt-5.5
 tags: [BMad, TEA, Planning, Review]
 
