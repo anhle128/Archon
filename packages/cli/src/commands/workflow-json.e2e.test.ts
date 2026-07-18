@@ -578,6 +578,28 @@ describe('workflow approve/reject --json CLI dispatch E2E — real subprocess (S
     }
   });
 
+  // 3.3C-CLI-014 [P0] — reject from non-git directory emits envelope (RF-09)
+  test('3.3C-CLI-014: `workflow reject --json` from a non-git directory emits MALFORMED_REQUEST', async () => {
+    const nonGitCwd = mkdtempSync(join(tmpdir(), 'archon-non-git-3c-rj-'));
+    try {
+      const { stdout, stderr, exitCode } = await runCli(
+        ['workflow', 'reject', '00000000-0000-0000-0000-000000000000', 'reason', '--json'],
+        nonGitCwd
+      );
+
+      expect(stdout.trim()).not.toBe('');
+      const envelope = parseSoleJsonLine(stdout);
+      expect(envelope.command).toBe('workflow.reject');
+      expect(envelope.success).toBe(false);
+      const error = envelope.error as Record<string, unknown> | undefined;
+      expect(error?.code).toBe('MALFORMED_REQUEST');
+      expect(exitCode).toBe(64);
+      expect(stderr).toBe('');
+    } finally {
+      rmSync(nonGitCwd, { recursive: true, force: true });
+    }
+  });
+
   // 3.3C-CLI-012 [P0] — nonexistent --cwd emits envelope (inherited from cli.ts guard)
   test('3.3C-CLI-012: `workflow approve --json --cwd /nonexistent` emits MALFORMED_REQUEST', async () => {
     const { stdout, stderr, exitCode } = await runCli([
