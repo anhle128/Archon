@@ -15,7 +15,10 @@ import {
 // Shared enum schemas
 // ---------------------------------------------------------------------------
 
-export const modelReasoningEffortSchema = z.enum(['minimal', 'low', 'medium', 'high', 'xhigh']);
+/** Legacy workflow spelling retained as a raw-string compatibility fallback. */
+export const modelReasoningEffortSchema = z
+  .string()
+  .min(1, "'modelReasoningEffort' must be a non-empty string");
 
 export type ModelReasoningEffort = z.infer<typeof modelReasoningEffortSchema>;
 

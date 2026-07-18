@@ -4,12 +4,11 @@ import {
   CODEX_MODEL_OPTIONS,
   COPILOT_MODEL_OPTIONS,
   curatedOptionsForAgent,
-  effortOptionsForAgent,
+  effortForProviderSwitch,
   filterModelOptions,
   findPiModel,
   modelPickerShape,
   modelRefBackend,
-  normalizeEffortForAgent,
   opencodeBackendOptions,
   piDisconnectedBackendHint,
   piModelHint,
@@ -78,33 +77,13 @@ describe('curatedOptionsForAgent', () => {
   });
 });
 
-describe('effortOptionsForAgent', () => {
-  test('claude and codex expose their (distinct) vocabularies', () => {
-    expect(effortOptionsForAgent('claude')).toEqual(['low', 'medium', 'high', 'max']);
-    expect(effortOptionsForAgent('codex')).toEqual(['minimal', 'low', 'medium', 'high', 'xhigh']);
+describe('effortForProviderSwitch', () => {
+  test('preserves the exact raw value for a provider with effort capability', () => {
+    expect(effortForProviderSwitch(true, '  future-ultra  ')).toBe('  future-ultra  ');
   });
 
-  test('agents where tier effort does not route get null (field hidden)', () => {
-    expect(effortOptionsForAgent('pi')).toBeNull();
-    expect(effortOptionsForAgent('opencode')).toBeNull();
-    expect(effortOptionsForAgent('copilot')).toBeNull();
-    expect(effortOptionsForAgent('')).toBeNull();
-  });
-});
-
-describe('normalizeEffortForAgent', () => {
-  test('keeps a value the new vocabulary accepts (codex→claude keeps high)', () => {
-    expect(normalizeEffortForAgent('claude', 'high')).toBe('high');
-  });
-
-  test('clears values the new vocabulary rejects (claude max → codex)', () => {
-    expect(normalizeEffortForAgent('codex', 'max')).toBe('');
-    expect(normalizeEffortForAgent('claude', 'minimal')).toBe('');
-  });
-
-  test('clears any value for agents without an effort concept', () => {
-    expect(normalizeEffortForAgent('pi', 'high')).toBe('');
-    expect(normalizeEffortForAgent('', 'high')).toBe('');
+  test('clears hidden stale effort for a provider without effort capability', () => {
+    expect(effortForProviderSwitch(false, 'future-ultra')).toBe('');
   });
 });
 

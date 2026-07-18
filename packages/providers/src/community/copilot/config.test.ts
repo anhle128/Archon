@@ -17,24 +17,15 @@ describe('parseCopilotConfig', () => {
     expect(parseCopilotConfig({ model: [] })).toEqual({});
   });
 
-  test('parses each valid reasoning effort value', () => {
-    for (const v of ['low', 'medium', 'high', 'xhigh'] as const) {
-      expect(parseCopilotConfig({ modelReasoningEffort: v })).toEqual({
-        modelReasoningEffort: v,
-      });
-    }
-  });
-
-  test('drops unknown reasoning effort value', () => {
-    expect(parseCopilotConfig({ modelReasoningEffort: 'minimal' })).toEqual({});
-    expect(parseCopilotConfig({ modelReasoningEffort: 'extreme' })).toEqual({});
-    expect(parseCopilotConfig({ modelReasoningEffort: 42 })).toEqual({});
-  });
-
-  test('normalizes Archon alias `max` to SDK `xhigh`', () => {
-    expect(parseCopilotConfig({ modelReasoningEffort: 'max' })).toEqual({
-      modelReasoningEffort: 'xhigh',
+  test('preserves raw reasoning effort exactly', () => {
+    expect(parseCopilotConfig({ modelReasoningEffort: '  future-copilot  ' })).toEqual({
+      modelReasoningEffort: '  future-copilot  ',
     });
+  });
+
+  test('rejects empty or non-string reasoning effort', () => {
+    expect(() => parseCopilotConfig({ modelReasoningEffort: '' })).toThrow('non-empty string');
+    expect(() => parseCopilotConfig({ modelReasoningEffort: 42 })).toThrow('non-empty string');
   });
 
   test('parses copilotCliPath string', () => {
@@ -91,7 +82,7 @@ describe('parseCopilotConfig', () => {
 
   test('does not throw on malformed input', () => {
     expect(() => parseCopilotConfig({ model: null })).not.toThrow();
-    expect(() => parseCopilotConfig({ modelReasoningEffort: {} })).not.toThrow();
+    expect(() => parseCopilotConfig({ copilotCliPath: {} })).not.toThrow();
     expect(() => parseCopilotConfig({ logLevel: null })).not.toThrow();
   });
 

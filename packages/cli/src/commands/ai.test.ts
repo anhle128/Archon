@@ -327,9 +327,18 @@ describe('aiTierSetCommand', () => {
     expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
   });
 
-  it('invalid effort for the provider → 1, no write', async () => {
-    expect(await aiTierSetCommand('large', 'claude', 'opus', 'ultra')).toBe(1);
-    expect(out()).toContain('Invalid effort');
+  it('provider-specific effort is written byte-for-byte', async () => {
+    expect(await aiTierSetCommand('large', 'claude', 'opus', '  future-claude  ')).toBe(0);
+    expect(mockUpdateGlobalConfig).toHaveBeenCalledWith({
+      tiers: {
+        large: { provider: 'claude', model: 'opus', effort: '  future-claude  ' },
+      },
+    });
+  });
+
+  it('empty effort → 1, no write', async () => {
+    expect(await aiTierSetCommand('large', 'claude', 'opus', '')).toBe(1);
+    expect(out()).toContain('Invalid effort: expected a non-empty string');
     expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
   });
 
@@ -479,6 +488,23 @@ describe('aiAliasSetCommand', () => {
 
   it('unknown provider → 1, no write', async () => {
     expect(await aiAliasSetCommand('@fast', 'bogus', 'x', undefined, undefined)).toBe(1);
+    expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
+  });
+
+  it('provider-specific effort is written byte-for-byte', async () => {
+    expect(await aiAliasSetCommand('@deep', 'claude', 'opus', '  future-claude  ', undefined)).toBe(
+      0
+    );
+    expect(mockUpdateGlobalConfig).toHaveBeenCalledWith({
+      aliases: {
+        '@deep': { provider: 'claude', model: 'opus', effort: '  future-claude  ' },
+      },
+    });
+  });
+
+  it('empty effort → 1, no write', async () => {
+    expect(await aiAliasSetCommand('@deep', 'claude', 'opus', '', undefined)).toBe(1);
+    expect(out()).toContain('Invalid effort: expected a non-empty string');
     expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
   });
 });

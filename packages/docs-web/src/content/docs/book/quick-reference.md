@@ -112,7 +112,8 @@ archon workflow run my-workflow "auth refresh-tokens"
 | `nodes` | Yes | array | DAG nodes (see Node Options below) |
 | `provider` | No | string | Registered provider identifier (e.g. `claude`, `codex`). Default: `claude` |
 | `model` | No | string | Model for all nodes (`sonnet`, `opus`, `haiku`, or full model ID) |
-| `modelReasoningEffort` | No | string | Codex only: `minimal` \| `low` \| `medium` \| `high` \| `xhigh` |
+| `effort` | No | non-empty string | Provider-specific reasoning value, preserved exactly |
+| `modelReasoningEffort` | No | non-empty string | Legacy workflow fallback for `effort`, preserved for compatibility |
 | `webSearchMode` | No | string | Codex only: `disabled` \| `cached` \| `live` |
 
 ### Node Options (DAG)

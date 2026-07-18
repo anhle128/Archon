@@ -52,6 +52,7 @@ description: |
   9. Reports results back to the GitHub issue with follow-up suggestions
 
 provider: codex
+effort: xhigh
 model: gpt-5.5
 
 nodes:

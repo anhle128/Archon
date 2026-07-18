@@ -10,7 +10,7 @@ export const CODEX_CAPABILITIES: ProviderCapabilities = {
   structuredOutput: 'enforced', // SDK outputSchema grammar-constrains decoding
   envInjection: true,
   costControl: false,
-  effortControl: false,
+  effortControl: true,
   thinkingControl: false,
   fallbackModel: false,
   sandbox: false,

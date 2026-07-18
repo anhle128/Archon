@@ -88,9 +88,9 @@ Optional root fields:
 | `tags`                  | string array                                           | UI and discovery metadata.                                                                          |
 | `requires`              | `[github]`                                             | Blocks early when per-user GitHub identity is required and absent.                                  |
 | `additionalDirectories` | string array                                           | Accepted by schema; prefer Codex assistant config for runtime effect.                               |
-| `modelReasoningEffort`  | `minimal`, `low`, `medium`, `high`, `xhigh`            | Accepted by schema; prefer Codex assistant config or tier preset effort for runtime effect.         |
+| `modelReasoningEffort`  | non-empty provider-specific string                     | Legacy workflow fallback for `effort`; preserved for compatibility.                                 |
 | `webSearchMode`         | `disabled`, `cached`, `live`                           | Accepted by schema; prefer Codex assistant config for runtime effect.                               |
-| `effort`                | `low`, `medium`, `high`, `max`                         | Workflow default for providers that support Archon effort.                                          |
+| `effort`                | non-empty provider-specific string                     | Preserved exactly and passed to providers that support effort.                                      |
 | `thinking`              | `adaptive`, `enabled`, `disabled`, or object form      | Workflow default for Claude-style thinking.                                                         |
 | `fallbackModel`         | non-empty string                                       | Claude-only capability.                                                                             |
 | `betas`                 | non-empty string array                                 | Claude SDK beta headers.                                                                            |
@@ -98,6 +98,10 @@ Optional root fields:
 
 Do not use `steps:`.
 The loader rejects legacy step workflows.
+
+For Codex-only workflows, set root `effort: xhigh` when every inheriting AI node resolves to Codex.
+For mixed-provider workflows, set `effort: xhigh` on each Codex AI node instead; a root effort is inherited by non-Codex nodes too.
+Qoder CLI's maximum value is `effort: max`; place it on Qoder nodes in mixed-provider workflows.
 
 ## Runtime Variables
 

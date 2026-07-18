@@ -9,7 +9,7 @@ export type { CodexProviderDefaults } from '../types';
 
 /**
  * Parse raw assistantConfig into typed Codex defaults.
- * Defensive: invalid fields are silently dropped.
+ * Effort is kept raw because Codex, not Archon, owns its vocabulary.
  */
 export function parseCodexConfig(raw: Record<string, unknown>): CodexProviderDefaults {
   const result: CodexProviderDefaults = {};
@@ -18,13 +18,13 @@ export function parseCodexConfig(raw: Record<string, unknown>): CodexProviderDef
     result.model = raw.model;
   }
 
-  const validEfforts = ['minimal', 'low', 'medium', 'high', 'xhigh'];
-  if (
-    typeof raw.modelReasoningEffort === 'string' &&
-    validEfforts.includes(raw.modelReasoningEffort)
-  ) {
-    result.modelReasoningEffort =
-      raw.modelReasoningEffort as CodexProviderDefaults['modelReasoningEffort'];
+  if (raw.modelReasoningEffort !== undefined) {
+    if (typeof raw.modelReasoningEffort !== 'string' || raw.modelReasoningEffort.length === 0) {
+      throw new Error(
+        'Invalid assistants.codex.modelReasoningEffort: expected a non-empty string.'
+      );
+    }
+    result.modelReasoningEffort = raw.modelReasoningEffort;
   }
 
   const validSearchModes = ['disabled', 'cached', 'live'];

@@ -12,7 +12,7 @@ description: |
   NOT for: When a spec already exists (use archon-speckit-plan-to-tasks instead).
   NOT for: Spec generation only without planning (use archon-speckit-spec instead).
 provider: codex
-modelReasoningEffort: xhigh
+effort: xhigh
 
 nodes:
   - id: setup

@@ -136,7 +136,7 @@ effort: high
 thinking: adaptive
 ```
 
-Claude effort values:
+Common Claude effort examples:
 
 - `low`
 - `medium`
@@ -179,8 +179,8 @@ Use `fallbackModel` only with Claude-capable paths.
 ## Codex
 
 Use Codex for OpenAI-backed coding workflows.
-Codex supports session resume, MCP, filesystem-discovered skills, env injection, and enforced structured output.
-Codex does not support Archon node-level `effort`, `thinking`, `fallbackModel`, `sandbox`, `hooks`, inline agents, or tool restrictions.
+Codex supports session resume, MCP, filesystem-discovered skills, env injection, enforced structured output, and raw `effort` passthrough.
+Codex does not support `thinking`, `fallbackModel`, `sandbox`, `hooks`, inline agents, or tool restrictions.
 
 Configure Codex reasoning through assistant config:
 
@@ -192,7 +192,7 @@ assistants:
     webSearchMode: disabled
 ```
 
-Or configure tier presets with `effort`:
+Workflow, node, tier, and alias presets can use `effort`:
 
 ```yaml
 tiers:
@@ -204,9 +204,14 @@ Then use the tier from workflow YAML:
 ```yaml
 provider: codex
 model: large
+
+nodes:
+  - id: deep-review
+    prompt: 'Review the implementation.'
+    effort: xhigh
 ```
 
-Codex reasoning values:
+Common Codex reasoning examples:
 
 - `minimal`
 - `low`
@@ -220,9 +225,14 @@ Codex reasoning values:
 - `cached`
 - `live`
 
-The workflow schema accepts root `modelReasoningEffort` and `webSearchMode`.
-For reliable runtime behavior, prefer `assistants.codex` config or tier preset `effort`.
-There is no per-node `modelReasoningEffort` field.
+The workflow schema accepts root `modelReasoningEffort` as a legacy fallback and `webSearchMode`.
+There is no per-node `modelReasoningEffort` field; use node `effort` instead.
+
+Migration rule:
+
+- In a Codex-only workflow, set root `effort: xhigh` so inheriting AI nodes receive it.
+- In a mixed-provider workflow, set `effort: xhigh` only on Codex AI nodes.
+- Remove root `modelReasoningEffort` from mixed-provider workflows because it is a provider-neutral legacy fallback and can be inherited by non-Codex nodes.
 
 ## Pi
 
@@ -244,8 +254,7 @@ nodes:
     effort: high
 ```
 
-YAML effort values are `low`, `medium`, `high`, and `max`.
-Pi maps `max` to `xhigh`.
+Archon passes `effort` exactly to Pi's SDK reasoning field. Do not rely on Archon translating `max` to `xhigh`; use the exact Pi value you intend.
 Do not use Claude object-form `thinking` with Pi.
 
 Optional Pi assistant config:
@@ -262,6 +271,20 @@ assistants:
 ```
 
 Only enable extensions for trusted repos because extension discovery can load code from the workflow cwd.
+
+## Qoder CLI
+
+Qoder CLI accepts raw workflow/node/tier/alias `effort` through its `--reasoning-effort` flag. Archon does not translate or allow-list the value.
+
+```yaml
+provider: qodercli
+model: qoder-pro
+effort: max
+```
+
+Qoder CLI 1.0.x documents `low`, `medium`, `high`, and `max`; use `max` for its highest reasoning level. Do not use Codex's `xhigh` value for Qoder.
+
+`assistants.qodercli.modelReasoningEffort` remains a legacy provider default when no more specific effort is set.
 
 ## OpenCode
 
@@ -314,8 +337,14 @@ Node-level `effort` can set Copilot reasoning:
   prompt: 'Create the implementation plan.'
 ```
 
-Copilot maps `max` to `xhigh`.
+Archon passes node `effort` exactly to Copilot `reasoningEffort`; use `xhigh` when that is the provider value you intend. The separate string `thinking` shorthand retains its legacy `max` to `xhigh` mapping.
 Use `effort` rather than Claude object-form `thinking`.
+
+## Effort Resolution and Validation
+
+Archon does not use a shared effort vocabulary. It preserves any non-empty string exactly, including whitespace, so users must enter the value expected by the selected provider. Provider rejection is surfaced and does not fall back to a lower-precedence value.
+
+Resolution order is node `effort`, workflow `effort`, legacy workflow `modelReasoningEffort`, tier/alias `effort`, legacy `assistants.<provider>.modelReasoningEffort`, then the provider default. A provider with `effortControl: false` fails before dispatch when explicit effort is resolved.
 
 ## Tool and Structured-output Guidance
 

@@ -534,9 +534,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       };
     }
 
-    // Parse workflow-level fields using WorkflowBaseSchema for validation
-    // Note: modelReasoningEffort and webSearchMode use warn-and-ignore for invalid values
-    // (consistent with original behavior) rather than schema-level rejection.
+    // Parse workflow-level fields using the same schemas as WorkflowBase.
     const provider =
       typeof raw.provider === 'string' && raw.provider.length > 0 ? raw.provider : undefined;
     const model = typeof raw.model === 'string' ? raw.model : undefined;
@@ -612,14 +610,24 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       }
     }
 
-    // Validate modelReasoningEffort / webSearchMode — warn and ignore invalid values.
-    const modelReasoningEffort = parseOptionalField(
-      raw.modelReasoningEffort,
-      modelReasoningEffortSchema,
-      filename,
-      'invalid_model_reasoning_effort',
-      { valid: modelReasoningEffortSchema.options }
-    );
+    // Legacy modelReasoningEffort remains accepted as a raw-string fallback.
+    // Empty or non-string values are structural errors: silently dropping an
+    // explicitly supplied effort could activate an unrelated provider default.
+    let modelReasoningEffort: string | undefined;
+    if (raw.modelReasoningEffort !== undefined) {
+      const result = modelReasoningEffortSchema.safeParse(raw.modelReasoningEffort);
+      if (!result.success) {
+        return {
+          workflow: null,
+          error: {
+            filename,
+            error: "'modelReasoningEffort' must be a non-empty string",
+            errorType: 'validation_error',
+          },
+        };
+      }
+      modelReasoningEffort = result.data;
+    }
     const webSearchMode = parseOptionalField(
       raw.webSearchMode,
       webSearchModeSchema,
@@ -777,8 +785,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       getLog().warn({ filename, value: raw.requires }, 'invalid_workflow_requires_block_ignored');
     }
 
-    // Parse workflow-level fallback fields. Same warn-and-drop pattern as
-    // `modelReasoningEffort` / `webSearchMode` above. These are declared on
+    // Parse workflow-level fallback fields. These are declared on
     // `workflowBaseSchema` and consumed by the DAG executor's
     // `workflowLevelOptions` (the object literal at the top of
     // `executeDagWorkflow`, reading `workflow.effort` etc.) as defaults that
@@ -786,13 +793,21 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
     // that sets e.g. `effort: high` at the root would be dropped here and the
     // executor would read undefined, so a node without its own `effort` would
     // never inherit the workflow-level default.
-    const effort = parseOptionalField(
-      raw.effort,
-      effortLevelSchema,
-      filename,
-      'invalid_workflow_effort_value_ignored',
-      { valid: effortLevelSchema.options }
-    );
+    let effort: string | undefined;
+    if (raw.effort !== undefined) {
+      const result = effortLevelSchema.safeParse(raw.effort);
+      if (!result.success) {
+        return {
+          workflow: null,
+          error: {
+            filename,
+            error: "'effort' must be a non-empty string",
+            errorType: 'validation_error',
+          },
+        };
+      }
+      effort = result.data;
+    }
     const thinking = parseOptionalField(
       raw.thinking,
       thinkingConfigSchema,

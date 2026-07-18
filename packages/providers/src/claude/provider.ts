@@ -498,6 +498,11 @@ async function applyNodeConfig(
 
   // effort
   if (nodeConfig.effort !== undefined) {
+    if (nodeConfig.effort.length === 0) {
+      throw new Error('Invalid nodeConfig.effort: expected a non-empty string.');
+    }
+    // Claude's CLI/API is authoritative; the SDK union may lag newly added
+    // effort values, so keep the raw string unchanged at the boundary.
     options.effort = nodeConfig.effort as Options['effort'];
   }
 

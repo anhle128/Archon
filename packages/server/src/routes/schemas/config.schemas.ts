@@ -17,7 +17,7 @@ export const tierEntrySchema = z
   .object({
     provider: z.string().min(1),
     model: z.string().min(1),
-    effort: z.string().optional(),
+    effort: z.string().min(1).optional(),
     thinking: z.unknown().optional(),
   })
   .openapi('TierEntry');

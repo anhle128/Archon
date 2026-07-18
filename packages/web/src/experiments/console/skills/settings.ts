@@ -142,8 +142,7 @@ export function buildTiersUpdate(form: TiersForm): UpdateTiersBody {
     const model = row.model.trim();
     if (provider && model) {
       const entry: TierEntry = { provider, model };
-      const effort = row.effort.trim();
-      if (effort) entry.effort = effort;
+      if (row.effort.length > 0) entry.effort = row.effort;
       tiers[tier] = entry;
     } else {
       tiers[tier] = null;
@@ -257,8 +256,7 @@ export function buildAliasesUpdate(
     const model = row.model.trim();
     if (!name || !provider || !model) continue;
     const entry: TierEntry = { provider, model };
-    const effort = row.effort.trim();
-    if (effort) entry.effort = effort;
+    if (row.effort.length > 0) entry.effort = row.effort;
     aliases[name] = entry;
   }
   return { aliases };

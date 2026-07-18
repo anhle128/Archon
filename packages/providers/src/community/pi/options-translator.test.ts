@@ -56,22 +56,22 @@ describe('resolvePiThinkingLevel', () => {
     expect(resolvePiThinkingLevel({ thinking: 'minimal' })).toEqual({ level: 'minimal' });
   });
 
-  test('maps valid effort string directly', () => {
-    expect(resolvePiThinkingLevel({ effort: 'medium' })).toEqual({ level: 'medium' });
-    expect(resolvePiThinkingLevel({ effort: 'low' })).toEqual({ level: 'low' });
+  test('passes raw effort strings through exactly', () => {
+    expect(resolvePiThinkingLevel({ effort: '  future-pi  ' })).toEqual({
+      level: '  future-pi  ',
+    });
   });
 
   test('thinking takes precedence when both set', () => {
     expect(resolvePiThinkingLevel({ thinking: 'high', effort: 'low' })).toEqual({ level: 'high' });
   });
 
-  test("'off' on either field returns undefined", () => {
+  test("thinking 'off' retains its legacy disable behavior", () => {
     expect(resolvePiThinkingLevel({ thinking: 'off' })).toEqual({ level: undefined });
-    expect(resolvePiThinkingLevel({ effort: 'off' })).toEqual({ level: undefined });
   });
 
-  test("'max' (Archon EffortLevel enum) translates to Pi 'xhigh'", () => {
-    expect(resolvePiThinkingLevel({ effort: 'max' })).toEqual({ level: 'xhigh' });
+  test("raw effort 'max' is not translated while thinking 'max' keeps legacy mapping", () => {
+    expect(resolvePiThinkingLevel({ effort: 'max' })).toEqual({ level: 'max' });
     expect(resolvePiThinkingLevel({ thinking: 'max' })).toEqual({ level: 'xhigh' });
   });
 
@@ -89,10 +89,8 @@ describe('resolvePiThinkingLevel', () => {
     expect(result.warning).toContain("unknown thinking level 'ultra'");
   });
 
-  test('warns on unknown string effort value', () => {
-    const result = resolvePiThinkingLevel({ effort: 'crushing' });
-    expect(result.level).toBeUndefined();
-    expect(result.warning).toContain("unknown thinking level 'crushing'");
+  test('does not warn or drop a future effort value', () => {
+    expect(resolvePiThinkingLevel({ effort: 'crushing' })).toEqual({ level: 'crushing' });
   });
 
   test('no warning when both fields are simply absent', () => {

@@ -15,11 +15,11 @@ import { TIER_ORDER } from '../skills';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import { providerOptionHint } from '../lib/agent-status';
-import { effortOptionsForAgent, normalizeEffortForAgent } from '../lib/model-options';
+import { effortForProviderSwitch } from '../lib/model-options';
 import { useCancelledRef } from '../lib/use-cancelled-ref';
 import { SettingsSection } from './SettingsSection';
 import { ScopeToggle } from './ScopeToggle';
-import { SELECT_CLASS, SelectShell } from './SettingsFormPrimitives';
+import { INPUT_CLASS, SELECT_CLASS, SelectShell } from './SettingsFormPrimitives';
 import { ModelPickerField } from './ModelPickerField';
 
 /** Seed the editable tier form from a tier map (configured tiers only). */
@@ -159,7 +159,9 @@ export function ModelTiersPanel(): ReactElement {
         {TIER_ORDER.map(tier => {
           const row = form[tier];
           const unset = row.provider === '';
-          const effortOptions = effortOptionsForAgent(row.provider);
+          const effortSupported =
+            providers.find(provider => provider.id === row.provider)?.capabilities.effortControl ===
+            true;
           return (
             <div
               key={tier}
@@ -172,13 +174,13 @@ export function ModelTiersPanel(): ReactElement {
                 <select
                   value={row.provider}
                   onChange={e => {
-                    // Carry effort across the switch only when the new agent's
-                    // vocabulary accepts it; clear it otherwise (the field
-                    // hides for agents where tier effort doesn't route).
                     const provider = e.target.value;
+                    const supportsEffort =
+                      providers.find(candidate => candidate.id === provider)?.capabilities
+                        .effortControl === true;
                     setRow(tier, {
                       provider,
-                      effort: normalizeEffortForAgent(provider, row.effort),
+                      effort: effortForProviderSwitch(supportsEffort, row.effort),
                     });
                   }}
                   className={SELECT_CLASS}
@@ -210,29 +212,17 @@ export function ModelTiersPanel(): ReactElement {
                 agents={keyData?.agents}
                 piModels={piModels}
               />
-              {effortOptions !== null ? (
-                <SelectShell className="w-[110px] shrink-0">
-                  <select
-                    value={row.effort}
-                    onChange={e => {
-                      setRow(tier, { effort: e.target.value });
-                    }}
-                    // Currently unreachable while disabled (unset rows have no
-                    // effort vocabulary), but every row control rides the
-                    // shared disabled state so a future widening of `unset`
-                    // can't silently skip this one.
-                    disabled={unset}
-                    aria-label={`${tier} effort`}
-                    className={`${SELECT_CLASS} ${unset ? 'opacity-50' : ''}`}
-                  >
-                    <option value="">effort</option>
-                    {effortOptions.map(o => (
-                      <option key={o} value={o}>
-                        {o}
-                      </option>
-                    ))}
-                  </select>
-                </SelectShell>
+              {effortSupported ? (
+                <input
+                  value={row.effort}
+                  onChange={e => {
+                    setRow(tier, { effort: e.target.value });
+                  }}
+                  disabled={unset}
+                  aria-label={`${tier} effort`}
+                  placeholder="effort"
+                  className={`${INPUT_CLASS} w-[110px] shrink-0 ${unset ? 'opacity-50' : ''}`}
+                />
               ) : null}
             </div>
           );

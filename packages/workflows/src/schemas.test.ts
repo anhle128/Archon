@@ -401,15 +401,15 @@ describe('dagNodeSchema - RouteLoopNode', () => {
 // dagNodeSchema — Claude SDK options
 // ---------------------------------------------------------------------------
 
-describe('dagNodeSchema — new Claude SDK options', () => {
-  test('parses effort enum on prompt node', () => {
-    const result = dagNodeSchema.safeParse({ id: 'n', prompt: 'do it', effort: 'high' });
+describe('dagNodeSchema — provider options', () => {
+  test('parses a future raw effort on prompt node unchanged', () => {
+    const result = dagNodeSchema.safeParse({ id: 'n', prompt: 'do it', effort: '  ultra  ' });
     expect(result.success).toBe(true);
-    if (result.success) expect((result.data as PromptNode).effort).toBe('high');
+    if (result.success) expect((result.data as PromptNode).effort).toBe('  ultra  ');
   });
 
-  test('rejects invalid effort value', () => {
-    const result = dagNodeSchema.safeParse({ id: 'n', prompt: 'do it', effort: 'ultra' });
+  test('rejects an empty effort value', () => {
+    const result = dagNodeSchema.safeParse({ id: 'n', prompt: 'do it', effort: '' });
     expect(result.success).toBe(false);
   });
 
@@ -591,6 +591,22 @@ describe('workflowRunSchema - route-loop runtime metadata', () => {
     });
 
     expect(result.success).toBe(true);
+  });
+
+  test('keeps legacy effort metadata on old workflow-run records', () => {
+    const result = workflowRunSchema.safeParse({
+      ...baseRun,
+      metadata: {
+        modelReasoningEffort: 'xhigh',
+        effort: 'future-ultra',
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.metadata.modelReasoningEffort).toBe('xhigh');
+      expect(result.data.metadata.effort).toBe('future-ultra');
+    }
   });
 
   test('rejects malformed route-loop runtime metadata before route decisions mutate state', () => {
@@ -839,13 +855,12 @@ describe('dagNodeSchema — per-node Pi posture (pi:)', () => {
     }
   });
 
-  test('preserves a pi: block on a loop node (the plannotator leak seam, #2073)', () => {
-    // Loops drop model/provider in the transform, but pi MUST survive — the loop
-    // is exactly where the implement node needs its posture scoped down.
+  test('preserves pi posture and exact raw effort on a loop node', () => {
     const result = dagNodeSchema.safeParse({
       id: 'implement',
       loop: { prompt: 'do work', until: 'DONE', max_iterations: 5 },
       pi: { interactive: false, extensionFlags: { plan: false } },
+      effort: '  future-loop  ',
     });
     expect(result.success).toBe(true);
     if (result.success) {
@@ -854,6 +869,7 @@ describe('dagNodeSchema — per-node Pi posture (pi:)', () => {
         interactive: false,
         extensionFlags: { plan: false },
       });
+      expect(result.data.effort).toBe('  future-loop  ');
     }
   });
 
@@ -1143,9 +1159,11 @@ describe('SCRIPT_NODE_AI_FIELDS', () => {
 // ---------------------------------------------------------------------------
 
 describe('LOOP_NODE_AI_FIELDS', () => {
-  test('excludes model and provider (loop nodes support them)', () => {
+  test('excludes model, provider, pi, and effort because loop nodes support them', () => {
     expect(LOOP_NODE_AI_FIELDS).not.toContain('model');
     expect(LOOP_NODE_AI_FIELDS).not.toContain('provider');
+    expect(LOOP_NODE_AI_FIELDS).not.toContain('pi');
+    expect(LOOP_NODE_AI_FIELDS).not.toContain('effort');
   });
 
   test('contains all other AI-specific fields from BASH_NODE_AI_FIELDS', () => {
@@ -1157,7 +1175,6 @@ describe('LOOP_NODE_AI_FIELDS', () => {
       'hooks',
       'mcp',
       'skills',
-      'effort',
       'thinking',
       'maxBudgetUsd',
       'systemPrompt',
@@ -1285,13 +1302,17 @@ describe('LOOP_GROUP_NODE_AI_FIELDS', () => {
     expect(LOOP_GROUP_NODE_AI_FIELDS).not.toContain('provider');
   });
 
-  test('differs from LOOP_NODE_AI_FIELDS only on pi (#2133)', () => {
-    // A plain loop: node calls sendQuery itself, so pi IS honored there (not warned).
-    // A loop_group node never calls sendQuery — body nodes carry their own pi — so
-    // pi is warned-ignored on the group. That single-key difference is intentional.
+  test('differs from LOOP_NODE_AI_FIELDS on per-sendQuery pi and effort fields', () => {
+    // A plain loop calls sendQuery itself, so pi and effort are honored there.
+    // A loop_group never calls sendQuery — body nodes carry their own values — so
+    // both fields remain warned-ignored on the group.
     expect(LOOP_NODE_AI_FIELDS).not.toContain('pi');
+    expect(LOOP_NODE_AI_FIELDS).not.toContain('effort');
     expect(LOOP_GROUP_NODE_AI_FIELDS).toContain('pi');
-    expect(LOOP_GROUP_NODE_AI_FIELDS.filter(f => f !== 'pi')).toEqual([...LOOP_NODE_AI_FIELDS]);
+    expect(LOOP_GROUP_NODE_AI_FIELDS).toContain('effort');
+    expect(LOOP_GROUP_NODE_AI_FIELDS.filter(f => f !== 'pi' && f !== 'effort')).toEqual([
+      ...LOOP_NODE_AI_FIELDS,
+    ]);
   });
 });
 

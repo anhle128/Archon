@@ -7,6 +7,7 @@ import { createLogger } from '@archon/paths';
 // package.json read at module load (see the header note below). Used only to
 // annotate the per-call ResourceLoader local.
 import type { DefaultResourceLoader } from '@earendil-works/pi-coding-agent';
+import type { ThinkingLevel } from '@earendil-works/pi-ai';
 
 import type {
   IAgentProvider,
@@ -576,7 +577,9 @@ export class PiProvider implements IAgentProvider {
       sessionManager,
       settingsManager,
       resourceLoader,
-      ...(thinkingLevel ? { thinkingLevel } : {}),
+      // Pi's SDK union may lag backend-specific values. The backend is the
+      // authority, so preserve raw `effort` strings at the final boundary.
+      ...(thinkingLevel ? { thinkingLevel: thinkingLevel as ThinkingLevel } : {}),
       // Pi 0.68+: `tools` was repurposed as a string[] allowlist of built-in
       // tool names; the actual Tool[] payload now goes through `customTools`.
       // `noTools: "builtin"` suppresses the default built-in set so our

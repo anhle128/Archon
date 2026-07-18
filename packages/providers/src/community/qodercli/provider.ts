@@ -60,6 +60,7 @@ interface BuildQoderCliArgsInput {
 interface BuildQoderCliArgsResult {
   args: string[];
   sessionId: string;
+  reasoningEffort?: string;
   warnings: ProviderWarning[];
 }
 
@@ -148,26 +149,32 @@ function resolveReasoning(
   const rawThinking = nodeConfig?.thinking;
   const rawEffort = nodeConfig?.effort;
 
-  if (rawThinking === 'off' || rawEffort === 'off') return undefined;
+  // Preserve the pre-existing `thinking` semantics independently from the new
+  // raw effort transport: a valid thinking shorthand still wins, and `off`
+  // still disables Qoder reasoning.
+  if (rawThinking === 'off') return undefined;
 
   const thinkingEffort = normalizeReasoning(rawThinking);
   if (thinkingEffort) return thinkingEffort;
 
-  const nodeEffort = normalizeReasoning(rawEffort);
-  if (nodeEffort) return nodeEffort;
+  if (typeof rawEffort === 'string') {
+    if (rawEffort.length === 0) {
+      throw new Error('Qoder CLI effort must be a non-empty string.');
+    }
+    return rawEffort;
+  }
 
   if (rawThinking !== undefined && rawThinking !== null && typeof rawThinking === 'object') {
     warnings.push({
       message:
-        'Qoder CLI ignored `thinking` object config. Use `effort: low|medium|high|max` instead.',
+        'Qoder CLI ignored `thinking` object config. Use a Qoder-supported `effort` string instead.',
     });
     return config.modelReasoningEffort;
   }
 
-  if (typeof rawThinking === 'string' || typeof rawEffort === 'string') {
-    const ignored = typeof rawThinking === 'string' ? rawThinking : rawEffort;
+  if (typeof rawThinking === 'string') {
     warnings.push({
-      message: `Qoder CLI ignored unknown reasoning level '${ignored}'. Valid: low, medium, high, max, off.`,
+      message: `Qoder CLI ignored unknown thinking level '${rawThinking}'. Valid: low, medium, high, max, off.`,
     });
   }
 
@@ -241,7 +248,7 @@ export function buildQoderCliArgs(input: BuildQoderCliArgsInput): BuildQoderCliA
   }
 
   args.push('--', input.prompt);
-  return { args, sessionId, warnings };
+  return { args, sessionId, reasoningEffort: reasoning, warnings };
 }
 
 async function readStream(stream: ReadableStream<Uint8Array> | null): Promise<string> {
@@ -435,7 +442,7 @@ export class QoderCliProvider implements IAgentProvider {
       ? augmentPromptForJsonSchema(prompt, outputFormat.schema)
       : prompt;
     const mcp = await resolveMcpConfigJson(requestOptions, cwd, env);
-    const { args, sessionId, warnings } = buildQoderCliArgs({
+    const { args, sessionId, reasoningEffort, warnings } = buildQoderCliArgs({
       prompt: effectivePrompt,
       cwd,
       config: qoderConfig,
@@ -453,7 +460,7 @@ export class QoderCliProvider implements IAgentProvider {
       {
         cwd,
         model: requestOptions?.model ?? qoderConfig.model,
-        reasoningEffort: qoderConfig.modelReasoningEffort,
+        reasoningEffort,
         resumed: resumeSessionId !== undefined,
         forked: requestOptions?.forkSession === true,
       },

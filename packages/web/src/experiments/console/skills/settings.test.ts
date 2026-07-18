@@ -53,7 +53,7 @@ describe('buildAssistantUpdate', () => {
     });
   });
 
-  test('codex enums attach even when its model is blank (effort-only edit)', () => {
+  test('codex options attach even when its model is blank (effort-only edit)', () => {
     const body = buildAssistantUpdate(
       form({ models: { codex: '' }, modelReasoningEffort: 'medium' })
     );
@@ -114,11 +114,11 @@ describe('buildTiersUpdate', () => {
     expect(body.tiers.large).toBeNull();
   });
 
-  test('trims whitespace on every field', () => {
+  test('trims identity fields but preserves effort byte-for-byte', () => {
     const body = buildTiersUpdate(
       tierForm({ large: { provider: '  claude ', model: ' opus ', effort: ' high ' } })
     );
-    expect(body.tiers.large).toEqual({ provider: 'claude', model: 'opus', effort: 'high' });
+    expect(body.tiers.large).toEqual({ provider: 'claude', model: 'opus', effort: ' high ' });
   });
 });
 
@@ -133,6 +133,18 @@ describe('buildAliasesUpdate / seedAliasRows', () => {
     );
     expect(body.aliases['@fast']).toEqual({ provider: 'claude', model: 'haiku' });
     expect(body.aliases['@deep']).toEqual({ provider: 'codex', model: 'gpt-5.5', effort: 'high' });
+  });
+
+  test('preserves alias effort byte-for-byte', () => {
+    const body = buildAliasesUpdate(
+      [{ name: '@deep', provider: 'codex', model: 'gpt-5.5', effort: '  future-codex  ' }],
+      []
+    );
+    expect(body.aliases['@deep']).toEqual({
+      provider: 'codex',
+      model: 'gpt-5.5',
+      effort: '  future-codex  ',
+    });
   });
 
   test('baseline names missing from the rows are sent as null (delete)', () => {

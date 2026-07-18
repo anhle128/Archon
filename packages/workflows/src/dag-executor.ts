@@ -110,8 +110,6 @@ import {
   isLiteralSpec,
   isTierName,
   resolveModelSpec,
-  routePresetEffort,
-  validEffortsForProvider,
   type ModelAliasPreset,
   type ResolvedAiProfile,
   type TierName,
@@ -254,12 +252,10 @@ export interface McpFailureEntry {
 }
 
 function applyPresetOptions(
-  provider: string,
   preset: ModelAliasPreset | undefined,
   node: DagNode,
   workflowLevelOptions: WorkflowLevelOptions,
-  nodeConfig: NodeConfig,
-  assistantConfig: Record<string, unknown>
+  nodeConfig: NodeConfig
 ): void {
   if (!preset) return;
 
@@ -274,27 +270,13 @@ function applyPresetOptions(
   if (
     preset.effort === undefined ||
     node.effort !== undefined ||
-    workflowLevelOptions.effort !== undefined
+    workflowLevelOptions.effort !== undefined ||
+    workflowLevelOptions.modelReasoningEffort !== undefined
   ) {
     return;
   }
 
-  const routed = routePresetEffort(provider, preset.effort);
-  if (!routed) {
-    // Cross-provider effort mismatch (e.g. a `tiers:` entry sets `effort: max`
-    // on a Codex tier). Warn rather than silently drop it — fail-loud per the
-    // project's fail-fast guideline.
-    getLog().warn(
-      { provider, effort: preset.effort, nodeId: node.id },
-      'dag.preset_effort_unsupported'
-    );
-    return;
-  }
-  if (routed.field === 'effort') {
-    nodeConfig.effort = routed.value;
-  } else {
-    assistantConfig.modelReasoningEffort = routed.value;
-  }
+  nodeConfig.effort = preset.effort;
 }
 
 /**
@@ -350,9 +332,11 @@ export async function loadConfiguredMcpServerNames(
   }
 }
 
-/** Workflow-level Claude SDK options — per-node overrides take precedence via ?? */
+/** Workflow-level provider options — per-node overrides take precedence via ?? */
 interface WorkflowLevelOptions {
   effort?: EffortLevel;
+  /** Legacy spelling; lower precedence than workflow `effort`. */
+  modelReasoningEffort?: string;
   thinking?: ThinkingConfig;
   fallbackModel?: string;
   betas?: string[];
@@ -377,20 +361,21 @@ interface NodeObservabilityMetadata {
 }
 
 function buildNodeObservabilityMetadata(
-  provider: string,
+  _provider: string,
   tier: string | undefined,
   model: string | undefined,
   nodeOptions: SendQueryOptions | undefined
 ): NodeObservabilityMetadata {
   const resolvedTier = tier && isTierName(tier) ? tier : undefined;
+  const rawEffort = nodeOptions?.nodeConfig?.effort;
   const rawModelReasoningEffort = nodeOptions?.assistantConfig?.modelReasoningEffort;
-  const providerEfforts = validEffortsForProvider(provider);
   const modelReasoningEffort =
+    rawEffort === undefined &&
     typeof rawModelReasoningEffort === 'string' &&
-    providerEfforts?.includes(rawModelReasoningEffort) === true
+    rawModelReasoningEffort.length > 0
       ? rawModelReasoningEffort
       : undefined;
-  const effort = effortLevelSchema.safeParse(nodeOptions?.nodeConfig?.effort);
+  const effort = effortLevelSchema.safeParse(rawEffort);
   const thinking = thinkingConfigSchema.safeParse(nodeOptions?.nodeConfig?.thinking);
 
   return {
@@ -939,6 +924,20 @@ async function resolveNodeProviderAndModel(
 
   // Get provider capabilities for capability warnings (static lookup, no instantiation)
   const caps = getProviderCapabilities(provider);
+  const requestedEffort =
+    node.effort ??
+    workflowLevelOptions.effort ??
+    workflowLevelOptions.modelReasoningEffort ??
+    effectivePreset?.effort;
+
+  // An explicit portable effort value must never disappear at a provider that
+  // cannot honor it. Provider legacy config is intentionally excluded here: it
+  // belongs to that provider and remains its own compatibility/default layer.
+  if (requestedEffort !== undefined && !caps.effortControl) {
+    throw new Error(
+      `Node '${node.id}' sets effort but provider '${provider}' does not support effortControl.`
+    );
+  }
 
   // Runtime backstop for container dispatch: the run-start pre-scan
   // (collectContainerIncompatibleProviders) hand-mirrors this same provider
@@ -963,7 +962,6 @@ async function resolveNodeProviderAndModel(
     ['mcp', 'mcp', node.mcp !== undefined],
     ['skills', 'skills', node.skills !== undefined && node.skills.length > 0],
     ['agents', 'agents', node.agents !== undefined],
-    ['effort', 'effortControl', (node.effort ?? workflowLevelOptions.effort) !== undefined],
     ['thinking', 'thinkingControl', (node.thinking ?? workflowLevelOptions.thinking) !== undefined],
     ['maxBudgetUsd', 'costControl', node.maxBudgetUsd !== undefined],
     [
@@ -1044,7 +1042,7 @@ async function resolveNodeProviderAndModel(
     pi: node.pi,
     allowed_tools: node.allowed_tools,
     denied_tools: node.denied_tools,
-    effort: node.effort ?? workflowLevelOptions.effort,
+    effort: node.effort ?? workflowLevelOptions.effort ?? workflowLevelOptions.modelReasoningEffort,
     thinking: node.thinking ?? workflowLevelOptions.thinking,
     sandbox: node.sandbox ?? workflowLevelOptions.sandbox,
     betas: node.betas ?? workflowLevelOptions.betas,
@@ -1056,14 +1054,7 @@ async function resolveNodeProviderAndModel(
 
   // Pass assistantConfig from config — provider parses internally
   const assistantConfig: Record<string, unknown> = { ...(config.assistants[provider] ?? {}) };
-  applyPresetOptions(
-    provider,
-    effectivePreset,
-    node,
-    workflowLevelOptions,
-    nodeConfig,
-    assistantConfig
-  );
+  applyPresetOptions(effectivePreset, node, workflowLevelOptions, nodeConfig);
 
   const options: SendQueryOptions = {
     ...baseOptions,
@@ -6697,6 +6688,7 @@ export async function executeDagWorkflow(
       : undefined;
   const workflowLevelOptions = {
     effort: workflow.effort,
+    modelReasoningEffort: workflow.modelReasoningEffort,
     thinking: workflow.thinking,
     fallbackModel: workflow.fallbackModel,
     betas: workflow.betas,

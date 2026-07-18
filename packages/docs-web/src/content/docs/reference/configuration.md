@@ -74,7 +74,7 @@ assistants:
     # claudeBinaryPath: /absolute/path/to/claude
   codex:
     model: gpt-5.5
-    modelReasoningEffort: medium
+    modelReasoningEffort: medium # Legacy provider default; prefer preset/workflow/node `effort`
     webSearchMode: disabled
     additionalDirectories:
       - /absolute/path/to/other/repo
@@ -110,6 +110,8 @@ aliases:
 ```
 
 The `tiers:` block above is no longer hand-edit-only -- you can also set the `small`/`medium`/`large` presets from the console **AI Settings** -> **Model Tiers** panel, or from the CLI with [`archon ai tier set`](/reference/cli/#ai). Connecting your own provider API key or subscription is covered in [Per-user credentials and AI Settings](/getting-started/ai-assistants/#per-user-credentials-and-ai-settings).
+
+`effort` is a non-empty, provider-specific string. Archon preserves it exactly and passes it to the selected provider instead of translating it through a shared vocabulary. This lets new provider values work without an Archon release; a value the provider does not accept fails at the provider boundary. Resolution order is node `effort`, workflow `effort`, legacy workflow `modelReasoningEffort`, tier/alias `effort`, legacy `assistants.<provider>.modelReasoningEffort`, then the provider default.
 
 ## Repository Configuration
 

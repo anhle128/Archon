@@ -50,12 +50,14 @@ mock.module('@archon/paths', () => ({
 // --- Bootstrap provider registry (after path mocks, before dag-executor import) ---
 import {
   registerBuiltinProviders,
+  registerOpencodeProvider,
   registerPiProvider,
   registerQoderCliProvider,
   clearRegistry,
 } from '@archon/providers';
 clearRegistry();
 registerBuiltinProviders();
+registerOpencodeProvider();
 // Pi is a community provider (best-effort structured output) — register it so the
 // reask-loop tests can resolve `getProviderCapabilities('pi')` to 'best-effort'.
 // deps.getAgentProvider is mocked, so the real Pi SDK is never loaded.
@@ -187,7 +189,7 @@ const mockClaudeCapabilities = () => ({
   fallbackModel: true,
   sandbox: true,
 });
-/** Limited capabilities for Codex mock */
+/** Capabilities for Codex mock */
 const mockCodexCapabilities = () => ({
   sessionResume: true,
   mcp: true,
@@ -198,7 +200,7 @@ const mockCodexCapabilities = () => ({
   structuredOutput: 'enforced' as const,
   envInjection: true,
   costControl: false,
-  effortControl: false,
+  effortControl: true,
   thinkingControl: false,
   fallbackModel: false,
   sandbox: false,
@@ -1201,7 +1203,7 @@ describe('executeDagWorkflow -- tool restrictions', () => {
     expect(nodeConfig?.allowed_tools).toEqual(['Read', 'Grep']);
   });
 
-  it('routes Codex tier effort to assistantConfig.modelReasoningEffort', async () => {
+  it('passes a raw Codex tier effort through nodeConfig', async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
       getType: () => 'codex',
@@ -1212,7 +1214,7 @@ describe('executeDagWorkflow -- tool restrictions', () => {
     const workflowRun = makeWorkflowRun();
     const aiProfile = buildAiProfile('claude', {
       repoTiers: {
-        medium: { provider: 'codex', model: 'gpt-5.5', effort: 'medium' },
+        medium: { provider: 'codex', model: 'gpt-5.5', effort: '  ultra  ' },
       },
     });
 
@@ -1243,13 +1245,11 @@ describe('executeDagWorkflow -- tool restrictions', () => {
     expect(mockGetAgentProviderDag.mock.calls[0][0]).toBe('codex');
     const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
     expect(optionsArg.model).toBe('gpt-5.5');
-    const assistantConfig = optionsArg.assistantConfig as Record<string, unknown>;
     const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
-    expect(assistantConfig.modelReasoningEffort).toBe('medium');
-    expect(nodeConfig.effort).toBeUndefined();
+    expect(nodeConfig.effort).toBe('  ultra  ');
   });
 
-  it('routes Qoder tier max effort to assistantConfig and node-start metadata', async () => {
+  it('passes Qoder tier effort through nodeConfig and node-start metadata', async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
       getType: () => 'qodercli',
@@ -1267,7 +1267,7 @@ describe('executeDagWorkflow -- tool restrictions', () => {
     const workflowRun = makeWorkflowRun();
     const aiProfile = buildAiProfile('claude', {
       repoTiers: {
-        large: { provider: 'qodercli', model: 'qoder-pro', effort: 'max' },
+        large: { provider: 'qodercli', model: 'qoder-pro', effort: 'future-qoder' },
       },
     });
 
@@ -1298,10 +1298,8 @@ describe('executeDagWorkflow -- tool restrictions', () => {
     expect(mockGetAgentProviderDag.mock.calls[0][0]).toBe('qodercli');
     const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
     expect(optionsArg.model).toBe('qoder-pro');
-    const assistantConfig = optionsArg.assistantConfig as Record<string, unknown>;
     const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
-    expect(assistantConfig.modelReasoningEffort).toBe('max');
-    expect(nodeConfig.effort).toBeUndefined();
+    expect(nodeConfig.effort).toBe('future-qoder');
 
     const nodeStartedCall = store.createWorkflowEvent.mock.calls.find(
       call => call[0].event_type === 'node_started'
@@ -1310,7 +1308,7 @@ describe('executeDagWorkflow -- tool restrictions', () => {
       provider: 'qodercli',
       model: 'qoder-pro',
       tier: 'large',
-      modelReasoningEffort: 'max',
+      effort: 'future-qoder',
     });
   });
 
@@ -1358,10 +1356,8 @@ describe('executeDagWorkflow -- tool restrictions', () => {
     expect(mockGetAgentProviderDag.mock.calls[0][0]).toBe('codex');
     const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
     expect(optionsArg.model).toBe('gpt-5.5');
-    const assistantConfig = optionsArg.assistantConfig as Record<string, unknown>;
     const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
-    expect(assistantConfig.modelReasoningEffort).toBe('high');
-    expect(nodeConfig.effort).toBeUndefined();
+    expect(nodeConfig.effort).toBe('high');
   });
 
   it('routes Claude tier effort to nodeConfig.effort', async () => {
@@ -10425,16 +10421,175 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
     expect(nodeConfig?.effort).toBe('max');
   });
 
-  it('warns user when Codex node has Claude-only options (effort)', async () => {
+  it('preserves exact loop-node effort and applies it over workflow effort', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: '<promise>DONE</promise>' };
+      yield { type: 'result', sessionId: 'loop-effort-session' };
+    });
+
+    await executeDagWorkflow(
+      createMockDeps(),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      {
+        name: 'loop-node-effort-override-test',
+        nodes: [
+          dagNodeSchema.parse({
+            id: 'loop-step',
+            loop: { prompt: 'Work.', until: 'DONE', max_iterations: 1 },
+            effort: '  future-loop  ',
+          }),
+        ],
+        effort: 'workflow-effort',
+      },
+      makeWorkflowRun(),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
+    expect(nodeConfig.effort).toBe('  future-loop  ');
+  });
+
+  it('applies the complete effort precedence chain without rewriting values', async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
       getType: () => 'codex',
       getCapabilities: mockCodexCapabilities,
     }));
 
-    const mockDeps = createMockDeps();
+    const cases: Array<{
+      label: string;
+      nodeEffort?: string;
+      workflowEffort?: string;
+      workflowLegacyEffort?: string;
+      presetEffort?: string;
+      providerConfigEffort?: string;
+      expectedNodeEffort?: string;
+    }> = [
+      {
+        label: 'node',
+        nodeEffort: '  node  ',
+        workflowEffort: 'workflow',
+        workflowLegacyEffort: 'legacy',
+        presetEffort: 'preset',
+        providerConfigEffort: 'config',
+        expectedNodeEffort: '  node  ',
+      },
+      {
+        label: 'workflow',
+        workflowEffort: '  workflow  ',
+        workflowLegacyEffort: 'legacy',
+        presetEffort: 'preset',
+        providerConfigEffort: 'config',
+        expectedNodeEffort: '  workflow  ',
+      },
+      {
+        label: 'workflow legacy',
+        workflowLegacyEffort: '  legacy  ',
+        presetEffort: 'preset',
+        providerConfigEffort: 'config',
+        expectedNodeEffort: '  legacy  ',
+      },
+      {
+        label: 'preset',
+        presetEffort: '  preset  ',
+        providerConfigEffort: 'config',
+        expectedNodeEffort: '  preset  ',
+      },
+      {
+        label: 'provider legacy config',
+        providerConfigEffort: '  config  ',
+      },
+      { label: 'provider default' },
+    ];
+
+    for (const testCase of cases) {
+      mockSendQueryDag.mockClear();
+      const workflow: WorkflowDefinition = {
+        name: `effort-precedence-${testCase.label}`,
+        nodes: [
+          {
+            id: 'step1',
+            command: 'my-cmd',
+            ...(testCase.nodeEffort !== undefined ? { effort: testCase.nodeEffort } : {}),
+          },
+        ],
+        ...(testCase.workflowEffort !== undefined ? { effort: testCase.workflowEffort } : {}),
+        ...(testCase.workflowLegacyEffort !== undefined
+          ? { modelReasoningEffort: testCase.workflowLegacyEffort }
+          : {}),
+      };
+      const workflowPreset =
+        testCase.presetEffort !== undefined
+          ? { provider: 'codex', model: 'gpt-5.5', effort: testCase.presetEffort }
+          : undefined;
+
+      await executeDagWorkflow(
+        createMockDeps(),
+        createMockPlatform(),
+        'conv-dag',
+        testDir,
+        workflow,
+        makeWorkflowRun(),
+        'codex',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        {
+          ...minimalConfig,
+          assistant: 'codex',
+          assistants: {
+            ...minimalConfig.assistants,
+            codex:
+              testCase.providerConfigEffort !== undefined
+                ? { modelReasoningEffort: testCase.providerConfigEffort }
+                : {},
+          },
+        },
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        workflowPreset
+      );
+
+      const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+      const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
+      const assistantConfig = optionsArg.assistantConfig as Record<string, unknown>;
+      expect({ label: testCase.label, effort: nodeConfig.effort }).toEqual({
+        label: testCase.label,
+        effort: testCase.expectedNodeEffort,
+      });
+      expect({
+        label: testCase.label,
+        effort: assistantConfig.modelReasoningEffort,
+      }).toEqual({
+        label: testCase.label,
+        effort: testCase.providerConfigEffort,
+      });
+    }
+  });
+
+  it('fails before dispatch when the resolved provider cannot honor explicit effort', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'opencode',
+      getCapabilities: () => ({ ...mockCodexCapabilities(), effortControl: false }),
+    }));
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
     const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun();
 
     await executeDagWorkflow(
       mockDeps,
@@ -10442,23 +10597,24 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
       'conv-dag',
       testDir,
       {
-        name: 'codex-claude-opts-test',
-        nodes: [{ id: 'step1', command: 'my-cmd', provider: 'codex', effort: 'high' }],
+        name: 'unsupported-effort-test',
+        nodes: [{ id: 'step1', command: 'my-cmd', provider: 'opencode', effort: 'ultra' }],
       },
-      workflowRun,
-      'codex',
+      makeWorkflowRun(),
+      'opencode',
       undefined,
       join(testDir, 'artifacts'),
       join(testDir, 'logs'),
       'main',
       'docs/',
-      { ...minimalConfig, assistant: 'codex' }
+      { ...minimalConfig, assistant: 'opencode' }
     );
 
-    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
-    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
-    const warning = messages.find(m => m.includes('effort') && m.toLowerCase().includes('codex'));
-    expect(warning).toBeDefined();
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
+    const failedEvent = store.createWorkflowEvent.mock.calls.find(
+      call => call[0].event_type === 'node_failed'
+    );
+    expect(failedEvent?.[0].data?.error).toContain('does not support effortControl');
   });
 });
 

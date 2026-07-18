@@ -10,10 +10,9 @@ import type {
 } from '../skills';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
-import { CODEX_EFFORT_OPTIONS } from '../lib/model-options';
 import { useCancelledRef } from '../lib/use-cancelled-ref';
 import { SettingsSection } from './SettingsSection';
-import { SELECT_CLASS_COMPACT, SelectShell } from './SettingsFormPrimitives';
+import { INPUT_CLASS, SELECT_CLASS_COMPACT, SelectShell } from './SettingsFormPrimitives';
 import { ModelPickerField } from './ModelPickerField';
 
 const WEB_SEARCH_MODES = ['disabled', 'cached', 'live'] as const;
@@ -314,22 +313,15 @@ export function AssistantConfigPanel(): ReactElement {
                   <div className="mt-[11px] flex flex-wrap items-center justify-end gap-5">
                     <label className="flex items-center gap-[9px] font-mono text-[12px] text-text-tertiary">
                       <span>effort</span>
-                      <SelectShell>
-                        <select
-                          value={form.modelReasoningEffort}
-                          onChange={e => {
-                            patch({ modelReasoningEffort: e.target.value });
-                          }}
-                          className={SELECT_CLASS_COMPACT}
-                        >
-                          <option value="">inherit</option>
-                          {CODEX_EFFORT_OPTIONS.map(o => (
-                            <option key={o} value={o}>
-                              {o}
-                            </option>
-                          ))}
-                        </select>
-                      </SelectShell>
+                      <input
+                        value={form.modelReasoningEffort}
+                        onChange={e => {
+                          patch({ modelReasoningEffort: e.target.value });
+                        }}
+                        placeholder="inherit"
+                        aria-label="Codex effort"
+                        className={`${INPUT_CLASS} w-[130px] py-[7px] text-[12.5px]`}
+                      />
                     </label>
                     <label className="flex items-center gap-[9px] font-mono text-[12px] text-text-tertiary">
                       <span>web search</span>

@@ -70,17 +70,11 @@ type WorkflowRunNodeState = NonNullable<
 >[number];
 
 function isRuntimeModelReasoningEffort(value: unknown): value is RuntimeModelReasoningEffort {
-  return (
-    value === 'minimal' ||
-    value === 'low' ||
-    value === 'medium' ||
-    value === 'high' ||
-    value === 'xhigh'
-  );
+  return typeof value === 'string' && value.length > 0;
 }
 
 function isRuntimeEffortLevel(value: unknown): value is RuntimeEffortLevel {
-  return value === 'low' || value === 'medium' || value === 'high' || value === 'max';
+  return typeof value === 'string' && value.length > 0;
 }
 
 function isRuntimeThinkingMetadata(value: unknown): value is RuntimeThinkingMetadata {

@@ -514,7 +514,6 @@ nodes:
       const yaml = `name: bad
 description: invalid fallback fields are dropped
 provider: claude
-effort: nuclear
 thinking:
   type: enhanced
 fallbackModel: ''
@@ -530,7 +529,6 @@ nodes:
       expect(result.errors).toEqual([]);
       expect(result.workflows).toHaveLength(1);
       const wf = result.workflows[0].workflow as Record<string, unknown>;
-      expect(wf.effort).toBeUndefined();
       expect(wf.thinking).toBeUndefined();
       expect(wf.fallbackModel).toBeUndefined();
       expect(wf.betas).toBeUndefined();
@@ -538,11 +536,29 @@ nodes:
 
       // The structured warn events are the operator-facing surface — assert each fired.
       const events = mockLogger.warn.mock.calls.map(call => call[1]);
-      expect(events).toContain('invalid_workflow_effort_value_ignored');
       expect(events).toContain('invalid_workflow_thinking_value_ignored');
       expect(events).toContain('invalid_workflow_fallback_model_value_ignored');
       expect(events).toContain('invalid_workflow_betas_value_ignored');
       expect(events).toContain('invalid_workflow_sandbox_value_ignored');
+    });
+
+    it('should preserve raw workflow effort and reject an explicitly empty value', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(
+        join(workflowDir, 'raw.yaml'),
+        `name: raw\ndescription: raw effort\neffort: '  ultra  '\nnodes:\n  - id: only\n    prompt: p\n`
+      );
+      await writeFile(
+        join(workflowDir, 'empty.yaml'),
+        `name: empty\ndescription: empty effort\neffort: ''\nnodes:\n  - id: only\n    prompt: p\n`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows).toHaveLength(1);
+      expect(result.workflows[0]?.workflow.effort).toBe('  ultra  ');
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]?.error).toContain("'effort' must be a non-empty string");
     });
 
     it('should accept the thinking string shorthand at the workflow level', async () => {

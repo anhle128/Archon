@@ -14,9 +14,8 @@ description: |
         the repo ships no Codex install out of the box.
 
 # Most nodes are Codex; only planning runs on Claude Opus (overridden per node).
-# Codex reasoning effort is taken from assistants.codex.modelReasoningEffort in
-# .archon/config.yaml (there is no per-node modelReasoningEffort field) — set it to
-# `xhigh` there for maximum Codex reasoning across these nodes.
+# Codex reasoning effort may be set with workflow/node `effort`; legacy
+# assistants.codex.modelReasoningEffort remains the provider default.
 provider: codex
 
 nodes:
@@ -145,6 +144,7 @@ nodes:
       the report path and a one-line verdict, then end with `REVIEW_PLAN_DONE`.
     depends_on: [plan]
     context: fresh
+    effort: xhigh
 
   # ───────────────────────────────────────────────────────────────────
   # STEP 4 / 5 — Codex implements the whole plan via ultragoal
@@ -174,6 +174,7 @@ nodes:
       results.
     depends_on: [review-plan]
     context: fresh
+    effort: xhigh
 
   # ───────────────────────────────────────────────────────────────────
   # STEP 5a — Codex makes the full suite green (/test)
@@ -198,6 +199,7 @@ nodes:
       When finished, print the final test results (pass/fail counts).
     depends_on: [build]
     context: fresh
+    effort: xhigh
 
   # ───────────────────────────────────────────────────────────────────
   # STEP 5b — Codex reviews the diff (/review), writes a report file
@@ -225,3 +227,4 @@ nodes:
       `REVIEW_DONE`.
     depends_on: [test]
     context: fresh
+    effort: xhigh

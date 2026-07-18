@@ -76,7 +76,6 @@ import {
   isTierName,
   resolveModelSpec,
   resolveTierWithFallback,
-  routePresetEffort,
   TIER_NAMES,
   type ModelAliasPreset,
   type TierName,
@@ -106,20 +105,13 @@ function applyPresetToRequestOptions(
 
   if (preset.effort === undefined) return;
 
-  const routed = routePresetEffort(provider, preset.effort);
-  if (!routed) {
-    // Cross-provider effort mismatch — warn instead of silently dropping.
-    getLog().warn({ provider, effort: preset.effort }, 'orchestrator.preset_effort_unsupported');
-    return;
+  const capabilities = getProviderCapabilities(provider);
+  if (!capabilities.effortControl) {
+    throw new Error(
+      `Model preset sets effort but provider '${provider}' does not support effortControl.`
+    );
   }
-  if (routed.field === 'effort') {
-    options.nodeConfig = { ...(options.nodeConfig ?? {}), effort: routed.value };
-  } else {
-    options.assistantConfig = {
-      ...(options.assistantConfig ?? {}),
-      modelReasoningEffort: routed.value,
-    };
-  }
+  options.nodeConfig = { ...(options.nodeConfig ?? {}), effort: preset.effort };
 }
 
 function withAssistantModelTierFallback(

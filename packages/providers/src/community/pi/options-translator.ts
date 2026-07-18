@@ -58,17 +58,13 @@ function getPiToolFactories(): PiToolFactoryApi {
 
 /**
  * Pi's ThinkingLevel = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'.
- * Archon's common surface includes 'off' (from Codex's modelReasoningEffort)
- * and 'max' (from Claude's EffortLevel enum). Map into Pi's vocabulary:
+ * The legacy `thinking` surface maps its shorthands into Pi's vocabulary:
  *  - 'off'    → undefined (no explicit thinkingLevel; Pi's implicit off)
  *  - 'max'    → 'xhigh'  (Archon's EffortLevel doesn't have xhigh)
  *  - others pass through if they're already Pi-native
  *
- * See packages/workflows/src/schemas/dag-node.ts#effortLevelSchema for
- * the Archon schema enum (`low | medium | high | max`). Workflow YAML can
- * only carry Archon-enum values; Pi-native `minimal` / `xhigh` are accepted
- * here for programmatic callers (orchestrator, tests) that bypass the
- * schema validator.
+ * Raw `effort` bypasses this normalizer and is asserted only at the SDK
+ * boundary so backend-specific future values are not rewritten or dropped.
  */
 const PI_NATIVE_LEVELS: ReadonlySet<ThinkingLevel> = new Set<ThinkingLevel>([
   'minimal',
@@ -86,8 +82,8 @@ function normalizeToThinkingLevel(v: unknown): ThinkingLevel | undefined {
 }
 
 export interface ResolvedThinkingLevel {
-  /** ThinkingLevel to pass to Pi, or undefined for Pi's default (implicit off) */
-  level: ThinkingLevel | undefined;
+  /** Raw level to pass to Pi, or undefined for Pi's default (implicit off). */
+  level: string | undefined;
   /** Human-readable warning to surface as a system chunk, if the input shape wasn't usable */
   warning?: string;
 }
@@ -96,7 +92,7 @@ export interface ResolvedThinkingLevel {
  * Resolve Archon's `effort` / `thinking` node fields to Pi's `ThinkingLevel`.
  *
  * Precedence: `thinking` > `effort` (when both are set and valid).
- * 'off' on either → `level: undefined` (Pi runs without explicit thinking).
+ * `thinking: off` → `level: undefined` (Pi runs without explicit thinking).
  * Claude-shape `thinking: { type: 'enabled', budget_tokens: N }` object form →
  * warning, not applied.
  */
@@ -105,15 +101,19 @@ export function resolvePiThinkingLevel(nodeConfig?: NodeConfig): ResolvedThinkin
 
   const { thinking, effort } = nodeConfig;
 
-  // Explicit off on either field disables thinking entirely.
-  if (thinking === 'off' || effort === 'off') return { level: undefined };
+  // Preserve the pre-change semantics of the separate `thinking` input.
+  if (thinking === 'off') return { level: undefined };
 
   // thinking takes precedence over effort when both are valid strings.
   const thinkingLevel = normalizeToThinkingLevel(thinking);
   if (thinkingLevel) return { level: thinkingLevel };
 
-  const effortLevel = normalizeToThinkingLevel(effort);
-  if (effortLevel) return { level: effortLevel };
+  if (typeof effort === 'string') {
+    if (effort.length === 0) {
+      throw new Error('Pi effort must be a non-empty string.');
+    }
+    return { level: effort };
+  }
 
   // Claude uses a structured `{ type: 'enabled', budget_tokens: N }` shape —
   // Pi doesn't understand it. Surface the mismatch so users can fix their YAML.
@@ -121,16 +121,15 @@ export function resolvePiThinkingLevel(nodeConfig?: NodeConfig): ResolvedThinkin
     return {
       level: undefined,
       warning:
-        'Pi ignored `thinking` (object form is Claude-specific). Use `effort: low|medium|high|max` in YAML (max → xhigh on Pi).',
+        'Pi ignored `thinking` (object form is Claude-specific). Use a provider-supported `effort` string in YAML.',
     };
   }
 
   // String that isn't a known level (e.g. 'ultra') — warn so users fix it.
-  if (typeof thinking === 'string' || typeof effort === 'string') {
-    const offender = typeof thinking === 'string' ? thinking : effort;
+  if (typeof thinking === 'string') {
     return {
       level: undefined,
-      warning: `Pi ignored unknown thinking level '${String(offender)}'. Valid: minimal, low, medium, high, xhigh, max, off.`,
+      warning: `Pi ignored unknown thinking level '${thinking}'. Valid: minimal, low, medium, high, xhigh, max, off.`,
     };
   }
 

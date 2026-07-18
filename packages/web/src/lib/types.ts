@@ -12,8 +12,8 @@ export type WorkflowRunStatus =
   | 'paused';
 export type WorkflowStepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
 export type ArtifactType = 'pr' | 'commit' | 'file_created' | 'file_modified' | 'branch';
-export type RuntimeModelReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
-export type RuntimeEffortLevel = 'low' | 'medium' | 'high' | 'max';
+export type RuntimeModelReasoningEffort = string;
+export type RuntimeEffortLevel = string;
 
 export type RuntimeThinkingMetadata =
   | { type: 'adaptive' }

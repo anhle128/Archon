@@ -234,7 +234,7 @@ You can configure Codex's behavior in `.archon/config.yaml`:
 assistants:
   codex:
     model: gpt-5.6-sol
-    modelReasoningEffort: medium  # 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+    modelReasoningEffort: medium  # Legacy provider default; passed through unchanged
     webSearchMode: live           # 'disabled' | 'cached' | 'live'
     additionalDirectories:
       - /absolute/path/to/other/repo
@@ -293,7 +293,7 @@ Archon also probes `~/.archon/vendor/qodercli/qodercli`, `~/.local/bin/qodercli`
 assistants:
   qodercli:
     model: qoder-pro
-    modelReasoningEffort: high  # 'low' | 'medium' | 'high' | 'max'
+    modelReasoningEffort: high  # Legacy provider default; passed through unchanged
     permissionMode: bypass_permissions
     settingSources:
       - project
@@ -301,7 +301,7 @@ assistants:
 ```
 
 `model` maps to `qodercli --model`.
-`modelReasoningEffort` maps to `qodercli --reasoning-effort`.
+`modelReasoningEffort` maps unchanged to `qodercli --reasoning-effort` as a legacy provider default. A tier, alias, workflow, or node `effort` overrides it and is also passed unchanged.
 Workflow tiers and aliases can also route `effort` to Qoder:
 
 ```yaml
@@ -604,7 +604,7 @@ nodes:
 | Extensions (community + local) | ✅ (default on) | `enableExtensions: false` to disable; `interactive: false` to load without UI bridge; `extensionFlags: { <name>: true }` per extension. Scope per node with a `pi:` block (`pi: { interactive, enableExtensions, extensionFlags }`) — see [Scoping extension posture per node](#scoping-extension-posture-per-node) |
 | Session resume | ✅ | automatic (Archon persists `sessionId`) |
 | Tool restrictions | ✅ | `allowed_tools` / `denied_tools` (read, bash, edit, write, grep, find, ls) |
-| Thinking level | ✅ | `effort: low\|medium\|high\|max` (max → xhigh) |
+| Thinking level | ✅ | `effort:` is passed unchanged to Pi's SDK reasoning level; provider rejection surfaces |
 | Skills | ✅ | `skills: [name]` (searches `.agents/skills`, `.claude/skills`, user-global) |
 | Inline sub-agents | ❌ | `agents:` is Claude-only; ignored with a warning on Pi |
 | System prompt override | ✅ | `systemPrompt:` |
@@ -675,7 +675,7 @@ You can configure Copilot's behavior in `.archon/config.yaml`:
 assistants:
   copilot:
     model: gpt-5-mini             # 'gpt-5', 'gpt-5-mini', 'claude-sonnet-4.5', 'auto', etc.
-    modelReasoningEffort: medium  # 'low' | 'medium' | 'high' | 'xhigh' | 'max' (alias for xhigh)
+    modelReasoningEffort: medium  # Legacy provider default; passed through unchanged
     # configDir: /absolute/path/to/copilot-config
     # enableConfigDiscovery: false  # only enable for trusted repos — bypasses Archon's workflow MCP/skill validation
     # useLoggedInUser: false        # opt into env-token auth (GH_TOKEN / GITHUB_TOKEN); default uses `copilot login`
@@ -689,7 +689,7 @@ Copilot accepts OpenAI models (`gpt-5`, `gpt-5-mini`), Anthropic via BYOK (`clau
 | Feature | Support | Notes |
 |---|---|---|
 | Session resume | ✅ | Returns `sessionId`; reused on resume |
-| Reasoning control | ✅ | `effort:` / string `thinking:` → Copilot `reasoningEffort`; `max` maps to SDK `xhigh` |
+| Reasoning control | ✅ | `effort:` → Copilot `reasoningEffort` unchanged; string `thinking:` keeps its legacy shorthand mapping |
 | System prompt override | ✅ | `systemPrompt:` |
 | Codebase env vars | ✅ | merged into the spawned Copilot CLI environment |
 | Tool restrictions | ✅ | `allowed_tools` → `availableTools`, `denied_tools` → `excludedTools` |

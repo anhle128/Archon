@@ -213,14 +213,15 @@ describe('CopilotProvider.sendQuery', () => {
     );
   });
 
-  test('reasoningEffort from nodeConfig.effort passes through', async () => {
+  test('raw node effort overrides legacy config and passes through exactly', async () => {
     const session = makeFakeSession();
     nextCreateSessionResult = session;
 
     const p = new CopilotProvider();
     const gen = p.sendQuery('hi', '/w', undefined, {
       model: 'gpt-5',
-      nodeConfig: { effort: 'high' },
+      nodeConfig: { effort: '  future-copilot  ' },
+      assistantConfig: { modelReasoningEffort: 'low' },
     });
 
     const first = gen.next();
@@ -230,10 +231,10 @@ describe('CopilotProvider.sendQuery', () => {
     await collect(gen);
 
     const opts = createSessionSpy.mock.calls[0]![0] as { reasoningEffort?: string };
-    expect(opts.reasoningEffort).toBe('high');
+    expect(opts.reasoningEffort).toBe('  future-copilot  ');
   });
 
-  test('workflow `effort: max` maps to SDK `xhigh`', async () => {
+  test('raw max effort is not translated', async () => {
     const session = makeFakeSession();
     nextCreateSessionResult = session;
 
@@ -249,17 +250,17 @@ describe('CopilotProvider.sendQuery', () => {
     await collect(gen);
 
     const opts = createSessionSpy.mock.calls[0]![0] as { reasoningEffort?: string };
-    expect(opts.reasoningEffort).toBe('xhigh');
+    expect(opts.reasoningEffort).toBe('max');
   });
 
-  test('invalid effort value is dropped (not passed to SDK)', async () => {
+  test('future effort value is not dropped', async () => {
     const session = makeFakeSession();
     nextCreateSessionResult = session;
 
     const p = new CopilotProvider();
     const gen = p.sendQuery('hi', '/w', undefined, {
       model: 'gpt-5',
-      nodeConfig: { effort: 'minimal' }, // Copilot doesn't support
+      nodeConfig: { effort: 'future-ultra' },
     });
     const first = gen.next();
     await new Promise(resolve => setTimeout(resolve, 5));
@@ -268,7 +269,26 @@ describe('CopilotProvider.sendQuery', () => {
     await collect(gen);
 
     const opts = createSessionSpy.mock.calls[0]![0] as { reasoningEffort?: string };
-    expect(opts.reasoningEffort).toBeUndefined();
+    expect(opts.reasoningEffort).toBe('future-ultra');
+  });
+
+  test('keeps legacy thinking precedence over raw effort', async () => {
+    const session = makeFakeSession();
+    nextCreateSessionResult = session;
+
+    const p = new CopilotProvider();
+    const gen = p.sendQuery('hi', '/w', undefined, {
+      model: 'gpt-5',
+      nodeConfig: { thinking: 'max', effort: 'future-ultra' },
+    });
+    const first = gen.next();
+    await new Promise(resolve => setTimeout(resolve, 5));
+    session.resolveSend(undefined);
+    await first;
+    await collect(gen);
+
+    const opts = createSessionSpy.mock.calls[0]![0] as { reasoningEffort?: string };
+    expect(opts.reasoningEffort).toBe('xhigh');
   });
 
   test('systemPrompt wraps to systemMessage with append mode', async () => {

@@ -79,20 +79,28 @@ async function getCodex(configCodexBinaryPath?: string): Promise<Codex> {
 function buildThreadOptions(
   cwd: string,
   model?: string,
-  assistantConfig?: Record<string, unknown>
+  assistantConfig?: Record<string, unknown>,
+  nodeEffort?: string
 ): ThreadOptions {
+  if (nodeEffort?.length === 0) {
+    throw new Error('Codex effort must be a non-empty string.');
+  }
   const config = parseCodexConfig(assistantConfig ?? {});
-  return {
+  const rawEffort = nodeEffort ?? config.modelReasoningEffort;
+  const options = {
     workingDirectory: cwd,
     skipGitRepoCheck: true,
     sandboxMode: 'danger-full-access',
     networkAccessEnabled: true,
     approvalPolicy: 'never',
     model: model ?? config.model,
-    modelReasoningEffort: config.modelReasoningEffort,
+    // The Codex CLI/API vocabulary can advance before this SDK union. Widen
+    // only the provider-owned field and keep every other option type-checked.
+    modelReasoningEffort: rawEffort as ThreadOptions['modelReasoningEffort'],
     webSearchMode: config.webSearchMode,
     additionalDirectories: config.additionalDirectories,
-  };
+  } satisfies ThreadOptions;
+  return options;
 }
 
 function buildCodexEnv(requestEnv: Record<string, string>): Record<string, string> {
@@ -812,7 +820,12 @@ export class CodexProvider implements IAgentProvider {
       requestOptions?.env,
       codexConfigOverrides
     );
-    const threadOptions = buildThreadOptions(cwd, requestOptions?.model, assistantConfig);
+    const threadOptions = buildThreadOptions(
+      cwd,
+      requestOptions?.model,
+      assistantConfig,
+      requestOptions?.nodeConfig?.effort
+    );
 
     if (requestOptions?.abortSignal?.aborted) {
       throw new Error('Query aborted');
