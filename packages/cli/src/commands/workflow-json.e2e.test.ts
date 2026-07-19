@@ -1425,4 +1425,91 @@ describe('workflow resume/cancel/retry --json CLI dispatch E2E — real subproce
     expect(exitCode).toBe(64);
     expect(stderr).toBe('');
   });
+
+  // 3.3D-CLI-031 [P0] R8-F1 — resume with --node (unsupported option) emits MALFORMED_REQUEST
+  test('3.3D-CLI-031: `workflow resume <id> --node foo --json` emits MALFORMED_REQUEST with unsupported_option on /node', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'resume',
+      '00000000-0000-0000-0000-000000000000',
+      '--node',
+      'some-node',
+      '--json',
+      '--correlation-id',
+      'corr-3d-031',
+    ]);
+
+    expect(stdout.trim()).not.toBe('');
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.resume');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    const details = error?.details as Record<string, unknown> | undefined;
+    const fieldErrors = details?.fieldErrors as Array<Record<string, unknown>> | undefined;
+    expect(fieldErrors).toBeDefined();
+    expect(fieldErrors).toContainEqual(
+      expect.objectContaining({ path: '/node', code: 'unsupported_option' })
+    );
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-032 [P0] R8-F1 — cancel with --node (unsupported option) emits MALFORMED_REQUEST
+  test('3.3D-CLI-032: `workflow cancel <id> --node foo --json` emits MALFORMED_REQUEST with unsupported_option on /node', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'cancel',
+      '00000000-0000-0000-0000-000000000000',
+      '--node',
+      'some-node',
+      '--json',
+      '--correlation-id',
+      'corr-3d-032',
+    ]);
+
+    expect(stdout.trim()).not.toBe('');
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.cancel');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    const details = error?.details as Record<string, unknown> | undefined;
+    const fieldErrors = details?.fieldErrors as Array<Record<string, unknown>> | undefined;
+    expect(fieldErrors).toBeDefined();
+    expect(fieldErrors).toContainEqual(
+      expect.objectContaining({ path: '/node', code: 'unsupported_option' })
+    );
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-033 [P0] R8-F1 — retry with --comment (unsupported option) emits MALFORMED_REQUEST
+  test('3.3D-CLI-033: `workflow retry <id> --comment foo --json` emits MALFORMED_REQUEST with unsupported_option on /comment', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'retry',
+      '00000000-0000-0000-0000-000000000000',
+      '--comment',
+      'foo',
+      '--json',
+      '--correlation-id',
+      'corr-3d-033',
+    ]);
+
+    expect(stdout.trim()).not.toBe('');
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.retry');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    const details = error?.details as Record<string, unknown> | undefined;
+    const fieldErrors = details?.fieldErrors as Array<Record<string, unknown>> | undefined;
+    expect(fieldErrors).toBeDefined();
+    expect(fieldErrors).toContainEqual(
+      expect.objectContaining({ path: '/comment', code: 'unsupported_option' })
+    );
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
 });

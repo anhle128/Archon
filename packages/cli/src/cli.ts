@@ -141,6 +141,18 @@ function getWorkflowCommandEnvelopeCommand(
   return undefined;
 }
 
+const RECOVERY_COMMAND_ALLOWED_OPTIONS: Record<string, Set<string>> = {
+  resume: new Set(['json', 'correlation-id', 'cwd', 'verbose', 'quiet']),
+  cancel: new Set(['json', 'correlation-id', 'cwd', 'verbose', 'quiet']),
+  retry: new Set(['json', 'correlation-id', 'cwd', 'node', 'verbose', 'quiet']),
+};
+
+function findUnsupportedOptions(subcommand: string, values: Record<string, unknown>): string[] {
+  const allowed = RECOVERY_COMMAND_ALLOWED_OPTIONS[subcommand];
+  if (!allowed) return [];
+  return Object.keys(values).filter(k => !allowed.has(k));
+}
+
 interface RawWorkflowProviderOptions {
   jsonRequested: boolean;
   jsonAssigned: boolean;
@@ -967,12 +979,31 @@ async function main(): Promise<number> {
               console.error(`Error: unexpected positional argument(s): ${resumeExtras.join(' ')}`);
               return 1;
             }
-            return await workflowResumeCommand(
+            if (workflowProviderJsonRequested && envelopeCommand) {
+              const unsupportedResume = findUnsupportedOptions('resume', values);
+              if (unsupportedResume.length > 0) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    fieldErrors: unsupportedResume.map(k => ({
+                      path: `/${k}`,
+                      code: 'unsupported_option',
+                      detail: `--${k} is not supported by 'workflow resume'`,
+                    })),
+                    requestAccepted: false,
+                  },
+                  values['correlation-id'] as string | undefined
+                );
+              }
+            }
+            const resumeExitCode = await workflowResumeCommand(
               resumeRunId,
               jsonFlag,
               values['correlation-id'] as string | undefined,
               effectiveCwd
             );
+            if (resumeExitCode !== 0) return resumeExitCode;
+            break;
           }
 
           case 'retry-node': {
@@ -1040,12 +1071,31 @@ async function main(): Promise<number> {
               console.error(`Error: unexpected positional argument(s): ${cancelExtras.join(' ')}`);
               return 1;
             }
-            return await workflowCancelCommand(
+            if (workflowProviderJsonRequested && envelopeCommand) {
+              const unsupportedCancel = findUnsupportedOptions('cancel', values);
+              if (unsupportedCancel.length > 0) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    fieldErrors: unsupportedCancel.map(k => ({
+                      path: `/${k}`,
+                      code: 'unsupported_option',
+                      detail: `--${k} is not supported by 'workflow cancel'`,
+                    })),
+                    requestAccepted: false,
+                  },
+                  values['correlation-id'] as string | undefined
+                );
+              }
+            }
+            const cancelExitCode = await workflowCancelCommand(
               cancelRunId,
               jsonFlag,
               values['correlation-id'] as string | undefined,
               effectiveCwd
             );
+            if (cancelExitCode !== 0) return cancelExitCode;
+            break;
           }
 
           case 'retry': {
@@ -1151,13 +1201,32 @@ async function main(): Promise<number> {
               );
               return 1;
             }
-            return await workflowRetryCommand(
+            if (workflowProviderJsonRequested && envelopeCommand) {
+              const unsupportedRetry = findUnsupportedOptions('retry', values);
+              if (unsupportedRetry.length > 0) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    fieldErrors: unsupportedRetry.map(k => ({
+                      path: `/${k}`,
+                      code: 'unsupported_option',
+                      detail: `--${k} is not supported by 'workflow retry'`,
+                    })),
+                    requestAccepted: false,
+                  },
+                  values['correlation-id'] as string | undefined
+                );
+              }
+            }
+            const retryExitCode = await workflowRetryCommand(
               retryRunId,
               retryNodeId,
               jsonFlag,
               values['correlation-id'] as string | undefined,
               effectiveCwd
             );
+            if (retryExitCode !== 0) return retryExitCode;
+            break;
           }
 
           case 'approve': {

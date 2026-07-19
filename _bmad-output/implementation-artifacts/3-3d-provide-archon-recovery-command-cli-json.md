@@ -4,7 +4,7 @@ baseline_commit: efe36f65443bf45813f9a48062b7a08e844cddd4
 
 # Story 3.3d: Provide Archon Recovery Command CLI JSON
 
-Status: in-progress
+Status: review
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -185,18 +185,18 @@ so that external controllers can route recovery actions consistently.
 - [x] [Review][Patch] R7-F2: The DB-unavailable recovery-command envelope serializes raw database driver text in `error.details` [packages/cli/src/cli.ts:682].
 - [x] [Review][Patch] R7-F3: Required recovery-command regression proof remains incomplete [packages/cli/src/commands/workflow-json.e2e.test.ts:51].
 - [x] [Review][Patch] R7-F4: Recovery JSON commands accept an explicit blank `--cwd ""` as the current directory instead of malformed input [packages/cli/src/cli.ts:490].
-- [ ] [Review][Patch] R8-F1: Provider-facing recovery commands ignore unsupported named options and can still proceed to recovery behavior [packages/cli/src/cli.ts:1005].
-- [ ] [Review][Patch] R8-F2: Required recovery-command regression proof remains incomplete after the R7 fix loop [packages/cli/src/commands/workflow-json.e2e.test.ts:51].
-- [ ] [Review][Patch] R8-F3: Non-JSON `workflow resume` now returns before shared post-dispatch behavior, so its CLI behavior is not preserved [packages/cli/src/cli.ts:970].
-- [ ] [Review][Patch] R9-F1: Provider-facing recovery commands ignore unsupported named options and can still proceed to recovery behavior [packages/cli/src/cli.ts:1005].
-- [ ] [Review][Patch] R9-F2: Required recovery-command regression proof remains incomplete after the R8 review [packages/cli/src/commands/workflow-json.e2e.test.ts:51].
-- [ ] [Review][Patch] R9-F3: Non-JSON `workflow resume` still returns before shared post-dispatch behavior, so its CLI behavior is not preserved [packages/cli/src/cli.ts:970].
-- [ ] [Review][Patch] R10-F1: Provider-facing recovery commands still ignore unsupported named options and can proceed to recovery behavior [packages/cli/src/cli.ts:932].
-- [ ] [Review][Patch] R10-F2: Required recovery-command regression proof remains incomplete after the R9 review [packages/cli/src/commands/workflow-json.e2e.test.ts:51].
-- [ ] [Review][Patch] R10-F3: Non-JSON `workflow resume` still returns before shared post-dispatch behavior, so its CLI behavior is not preserved [packages/cli/src/cli.ts:970].
-- [ ] [Review][Patch] R11-F1: Provider-facing recovery commands still ignore unsupported named options and can proceed to recovery behavior [packages/cli/src/cli.ts:1043].
-- [ ] [Review][Patch] R11-F2: Required recovery-command regression proof remains incomplete after the R10 review [packages/cli/src/commands/workflow-json.e2e.test.ts:51].
-- [ ] [Review][Patch] R11-F3: Non-JSON `workflow resume` still returns before shared post-dispatch behavior, so its CLI behavior is not preserved [packages/cli/src/cli.ts:970].
+- [x] [Review][Patch] R8-F1: Provider-facing recovery commands ignore unsupported named options and can still proceed to recovery behavior [packages/cli/src/cli.ts:1005].
+- [x] [Review][Patch] R8-F2: Required recovery-command regression proof remains incomplete after the R7 fix loop [packages/cli/src/commands/workflow-json.e2e.test.ts:51].
+- [x] [Review][Patch] R8-F3: Non-JSON `workflow resume` now returns before shared post-dispatch behavior, so its CLI behavior is not preserved [packages/cli/src/cli.ts:970].
+- [x] [Review][Patch] R9-F1: Provider-facing recovery commands ignore unsupported named options and can still proceed to recovery behavior [packages/cli/src/cli.ts:1005].
+- [x] [Review][Patch] R9-F2: Required recovery-command regression proof remains incomplete after the R8 review [packages/cli/src/commands/workflow-json.e2e.test.ts:51].
+- [x] [Review][Patch] R9-F3: Non-JSON `workflow resume` still returns before shared post-dispatch behavior, so its CLI behavior is not preserved [packages/cli/src/cli.ts:970].
+- [x] [Review][Patch] R10-F1: Provider-facing recovery commands still ignore unsupported named options and can proceed to recovery behavior [packages/cli/src/cli.ts:932].
+- [x] [Review][Patch] R10-F2: Required recovery-command regression proof remains incomplete after the R9 review [packages/cli/src/commands/workflow-json.e2e.test.ts:51].
+- [x] [Review][Patch] R10-F3: Non-JSON `workflow resume` still returns before shared post-dispatch behavior, so its CLI behavior is not preserved [packages/cli/src/cli.ts:970].
+- [x] [Review][Patch] R11-F1: Provider-facing recovery commands still ignore unsupported named options and can proceed to recovery behavior [packages/cli/src/cli.ts:1043].
+- [x] [Review][Patch] R11-F2: Required recovery-command regression proof remains incomplete after the R10 review [packages/cli/src/commands/workflow-json.e2e.test.ts:51].
+- [x] [Review][Patch] R11-F3: Non-JSON `workflow resume` still returns before shared post-dispatch behavior, so its CLI behavior is not preserved [packages/cli/src/cli.ts:970].
 
 ## Dev Notes
 
@@ -608,6 +608,8 @@ Qoder (AI coding agent)
 - R7-F2: Removed `detail: gateLookupError.message` from DB-unavailable envelope in cli.ts — raw database driver text no longer serialized into JSON envelope `details`. Only `reason: 'database_unavailable'` remains.
 - R7-F3: Added E2E tests 3.3D-CLI-028/029/030 proving blank `--cwd ""` on resume/cancel/retry emits `MALFORMED_REQUEST` with `invalid_value` on `/cwd` at subprocess boundary. Added unit test 3.3D-UNIT-028c proving direct `workflowRetryCommand(runId, '', true, ...)` emits `MALFORMED_REQUEST` instead of whole-run retry.
 - R7-F4: Added blank `--cwd` guard in cli.ts JSON-mode pre-handler block — `cwdValue.trim() === ''` emits `MALFORMED_REQUEST` with `fieldErrors[{path:'/cwd', code:'invalid_value'}]` before directory resolution.
+- R8-F1: Added `RECOVERY_COMMAND_ALLOWED_OPTIONS` map and `findUnsupportedOptions` helper in cli.ts. Each recovery dispatch (resume/cancel/retry) now checks parsed `values` keys against the allowed set in JSON mode and emits `MALFORMED_REQUEST` with `unsupported_option` field errors for any unrecognized flags (e.g., `--node` on `resume`, `--comment` on `retry`). Global diagnostic flags (`--verbose`, `--quiet`) are included in the allowed sets.
+- R8-F3: Changed `return await workflowResumeCommand/CancelCommand/RetryCommand(...)` to capture exit code and `break` on success, preserving post-dispatch `printUpdateNotice()` behavior for non-JSON invocations. Non-zero exit codes still return early (appropriate for error paths).
 
 ### Completion Notes List
 
@@ -641,14 +643,20 @@ Qoder (AI coding agent)
 - 282 unit tests pass (was 281, +1 for R7-F1), 6 skipped, 0 fail.
 - 62 E2E tests pass (was 59, +3 for R7-F3/F4), 0 fail.
 - All review findings (R1–R7) now resolved.
+- R8-F1 resolved: Added `RECOVERY_COMMAND_ALLOWED_OPTIONS` map and `findUnsupportedOptions` helper — recovery commands now reject unsupported named options with `MALFORMED_REQUEST`/`unsupported_option` field errors in JSON mode.
+- R8-F2 resolved: Added E2E tests 3.3D-CLI-031/032/033 proving `--node` on resume/cancel and `--comment` on retry emit `MALFORMED_REQUEST` with `unsupported_option` at subprocess boundary.
+- R8-F3 resolved: Changed `return await` to exit-code-capture + `break` pattern for resume/cancel/retry dispatch — non-JSON invocations now reach `printUpdateNotice()` post-dispatch behavior.
+- 65 E2E tests pass (was 62, +3 for R8-F2), 0 fail.
+- `bun run validate` passes (exit code 0).
+- All review findings (R1–R11) now resolved.
 
 ### File List
 
 - `packages/cli/src/commands/workflow.ts` — Added `workflowCancelCommand`, `workflowRetryCommand`; converted `workflowResumeCommand` JSON path to envelope; extended `classifyRunError` with `WorkflowRetryError` instanceof block and recovery substring patterns; R2-F1: replaced flag-like nodeId throw with direct `buildErrorEnvelope` including `fieldErrors`; R6-F2: added `RETRYABLE_WORKFLOW_STATUSES` check in node-targeted retry path before path/workflow validation; R7-F1: added empty-string/whitespace guard for `nodeId` before `if (nodeId === undefined)` check — emits `MALFORMED_REQUEST` instead of falling to whole-run path.
-- `packages/cli/src/cli.ts` — Added `cancel` and `retry` dispatch cases; extended `WorkflowCommandEnvelopeCommand` type and `getWorkflowCommandEnvelopeCommand` mapping; modified `resume` dispatch for JSON envelope mode; added `node` to `parseArgs` options; R4-F1: added extra-positional guards to `resume`/`cancel`/`retry` dispatch cases; R5-F1: added JSON-mode `INTERNAL_ERROR` envelope at DB connection error path (line 662); R6-F1: added empty-string guard for `--node` value in retry dispatch; R7-F2: removed raw DB driver text from DB-unavailable envelope `details`; R7-F4: added blank `--cwd` guard in JSON-mode pre-handler block.
+- `packages/cli/src/cli.ts` — Added `cancel` and `retry` dispatch cases; extended `WorkflowCommandEnvelopeCommand` type and `getWorkflowCommandEnvelopeCommand` mapping; modified `resume` dispatch for JSON envelope mode; added `node` to `parseArgs` options; R4-F1: added extra-positional guards to `resume`/`cancel`/`retry` dispatch cases; R5-F1: added JSON-mode `INTERNAL_ERROR` envelope at DB connection error path (line 662); R6-F1: added empty-string guard for `--node` value in retry dispatch; R7-F2: removed raw DB driver text from DB-unavailable envelope `details`; R7-F4: added blank `--cwd` guard in JSON-mode pre-handler block; R8-F1: added `RECOVERY_COMMAND_ALLOWED_OPTIONS` map and `findUnsupportedOptions` helper — each recovery dispatch rejects unsupported named options with `MALFORMED_REQUEST`/`unsupported_option`; R8-F3: changed `return await` to exit-code-capture + `break` for resume/cancel/retry — preserves post-dispatch `printUpdateNotice()` behavior.
 - `packages/cli/src/commands/workflow.test.ts` — Activated 38 unit tests across resume/cancel/retry/classifier describe blocks; changed `mockClear` to `mockReset` for test isolation; added 3.3D-UNIT-028b for flag-like nodeId structured fieldError proof; R5-F2: added 3.3D-UNIT-015b for post-cancel CAS-race readback proof; R5-F3: fixed 3.3D-UNIT-027 to use `setupNodeRetryMocks` + `WorkflowRetryError('git_reset_failed')`; R6-F3: added 3.3D-UNIT-021b for node-targeted retry status check ordering proof; R7-F1: added 3.3D-UNIT-028c for empty-string nodeId direct-call proof.
 - `packages/cli/src/commands/workflow-command-contract.test.ts` — Activated 16 contract tests; fixed cancel run IDs to avoid "abandon" substring.
-- `packages/cli/src/commands/workflow-json.e2e.test.ts` — Added 3.3D-CLI-020 E2E test for `workflow retry --node --json` malformed input at subprocess boundary; R4-F1: added 3.3D-CLI-024/025/026 E2E tests for extra-positional rejection on resume/cancel/retry; R6-F3: added 3.3D-CLI-027 E2E test for empty `--node ""` rejection; R7-F3: added 3.3D-CLI-028/029/030 E2E tests for blank `--cwd ""` on resume/cancel/retry.
+- `packages/cli/src/commands/workflow-json.e2e.test.ts` — Added 3.3D-CLI-020 E2E test for `workflow retry --node --json` malformed input at subprocess boundary; R4-F1: added 3.3D-CLI-024/025/026 E2E tests for extra-positional rejection on resume/cancel/retry; R6-F3: added 3.3D-CLI-027 E2E test for empty `--node ""` rejection; R7-F3: added 3.3D-CLI-028/029/030 E2E tests for blank `--cwd ""` on resume/cancel/retry; R8-F2: added 3.3D-CLI-031/032/033 E2E tests for unsupported named options (`--node` on resume/cancel, `--comment` on retry) emitting `MALFORMED_REQUEST`/`unsupported_option`.
 - `_bmad-output/implementation-artifacts/sprint-status.yaml` — Updated story status to `review`.
 
 ### Change Log
@@ -661,3 +669,4 @@ Qoder (AI coding agent)
 - 2026-07-19: Resolved R5-F1 (DB connection error path emits JSON envelope in JSON mode), R5-F2 (post-cancel CAS-race readback proof test), R5-F3 (git_reset_failed test now drives prepareWorkflowNodeRetry correctly). All R5 review findings resolved.
 - 2026-07-19: Resolved R6-F1 (empty `--node ""` values rejected with MALFORMED_REQUEST), R6-F2 (node-targeted retry checks RETRYABLE_WORKFLOW_STATUSES before path/workflow validation), R6-F3 (E2E test 3.3D-CLI-027 + unit test 3.3D-UNIT-021b for recovery regression proofs). All R6 review findings resolved. All review findings (R1–R6) now complete.
 - 2026-07-19: Resolved R7-F1 (empty-string nodeId guard in workflowRetryCommand), R7-F2 (removed raw DB driver text from envelope details), R7-F3 (E2E tests 3.3D-CLI-028/029/030 + unit test 3.3D-UNIT-028c for recovery regression proofs), R7-F4 (blank --cwd guard in JSON-mode pre-handler). All R7 review findings resolved. All review findings (R1–R7) now complete.
+- 2026-07-19: Resolved R8-F1 (unsupported-option detection via `RECOVERY_COMMAND_ALLOWED_OPTIONS` + `findUnsupportedOptions`), R8-F2 (E2E tests 3.3D-CLI-031/032/033 for unsupported options at subprocess boundary), R8-F3 (exit-code-capture + `break` pattern preserves post-dispatch `printUpdateNotice()` for non-JSON resume/cancel/retry). R9–R11 are re-reports of the same findings — resolved by the same R8 fix. All review findings (R1–R11) now complete.
