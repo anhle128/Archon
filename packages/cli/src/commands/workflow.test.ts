@@ -7914,6 +7914,32 @@ describe('workflowRetryCommand — JSON envelope mode (Story 3.3d)', () => {
     expect(error.code).toBe('UNEXPECTED_STATE');
   });
 
+  // 3.3D-UNIT-021b [P0] R6-F2 — node-targeted retry checks status before path/workflow validation
+  it('3.3D-UNIT-021b: emits UNEXPECTED_STATE when node-targeted retry called on non-retryable run', async () => {
+    const { workflowRetryCommand: retryCmd } = await import('./workflow');
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-retry-node-running',
+      workflow_name: 'implement',
+      status: 'running',
+      working_path: '/tmp',
+      codebase_id: undefined,
+      metadata: {},
+    });
+
+    await retryCmd('run-retry-node-running', 'some-node', true);
+
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.retry');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('UNEXPECTED_STATE');
+    expect(error.category).toBe('unexpected_state');
+    expect(error.retryable).toBe(false);
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(78);
+  });
+
   // 3.3D-UNIT-022 [P0] AC #3 — retry error: node not found
   it('3.3D-UNIT-022: emits NODE_NOT_FOUND envelope for WorkflowRetryError(node_not_found)', async () => {
     const { workflowRetryCommand: retryCmd } = await import('./workflow');

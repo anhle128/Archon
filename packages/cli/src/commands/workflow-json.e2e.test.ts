@@ -1315,4 +1315,33 @@ describe('workflow resume/cancel/retry --json CLI dispatch E2E — real subproce
     expect(exitCode).toBe(64);
     expect(stderr).toBe('');
   });
+
+  // 3.3D-CLI-027 [P0] R6-F1/F3 — retry with empty --node value emits MALFORMED_REQUEST
+  test('3.3D-CLI-027: `workflow retry <id> --node "" --json` emits MALFORMED_REQUEST with invalid_value on /node', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'retry',
+      '00000000-0000-0000-0000-000000000000',
+      '--node',
+      '',
+      '--json',
+      '--correlation-id',
+      'corr-3d-027',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.retry');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(error?.category).toBe('provider_contract');
+    expect(error?.retryable).toBe(false);
+    const details = error?.details as Record<string, unknown> | undefined;
+    const fieldErrors = details?.fieldErrors as Array<Record<string, unknown>> | undefined;
+    expect(fieldErrors).toBeDefined();
+    expect(fieldErrors?.[0]?.path).toBe('/node');
+    expect(fieldErrors?.[0]?.code).toBe('invalid_value');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
 });

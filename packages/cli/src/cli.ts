@@ -1098,7 +1098,27 @@ async function main(): Promise<number> {
               console.error('Error: --node requires a value.');
               return 1;
             }
-            const retryNodeId = rawNodeValue || undefined;
+            if (typeof rawNodeValue === 'string' && rawNodeValue.trim() === '') {
+              if (workflowProviderJsonRequested && envelopeCommand) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    fieldErrors: [
+                      {
+                        path: '/node',
+                        code: 'invalid_value',
+                        detail: '--node value must not be empty',
+                      },
+                    ],
+                    requestAccepted: false,
+                  },
+                  values['correlation-id'] as string | undefined
+                );
+              }
+              console.error('Error: --node value must not be empty.');
+              return 1;
+            }
+            const retryNodeId = rawNodeValue;
             if (retryNodeId?.startsWith('--')) {
               if (workflowProviderJsonRequested && envelopeCommand) {
                 return await emitWorkflowCommandMalformedEnvelope(

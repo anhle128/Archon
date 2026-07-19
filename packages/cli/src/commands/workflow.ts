@@ -3323,6 +3323,11 @@ export async function workflowRetryCommand(
       if (!run) {
         throw new Error(`Workflow run not found: ${resolvedId}`);
       }
+      if (!RETRYABLE_WORKFLOW_STATUSES.includes(run.status)) {
+        throw new Error(
+          `Cannot retry workflow run '${resolvedId}' with status '${run.status}'. Only failed or cancelled runs can be retried.`
+        );
+      }
       const pathContext = await verifyRetryWorkingPath(run);
       const { workflow } = await loadWorkflowForRetryCommand(run, pathContext.discoveryCwd);
       const { prepareWorkflowNodeRetry } = await import('@archon/core/operations/workflow-retry');

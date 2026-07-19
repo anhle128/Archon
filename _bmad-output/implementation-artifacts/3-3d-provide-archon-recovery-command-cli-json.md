@@ -4,7 +4,7 @@ baseline_commit: efe36f65443bf45813f9a48062b7a08e844cddd4
 
 # Story 3.3d: Provide Archon Recovery Command CLI JSON
 
-Status: in-progress
+Status: review
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -178,9 +178,9 @@ so that external controllers can route recovery actions consistently.
 - [x] [Review][Patch] R5-F1: Recovery JSON commands can still emit plain human stderr when project registration lookup fails before the envelope path [packages/cli/src/cli.ts:662].
 - [x] [Review][Patch] R5-F2: Required post-cancel non-cancelled readback proof is still missing, leaving the CAS-race guard unproved [packages/cli/src/commands/workflow.test.ts:7419].
 - [x] [Review][Patch] R5-F3: The `git_reset_failed` command-level retry test does not drive `prepareWorkflowNodeRetry` to throw that error [packages/cli/src/commands/workflow.test.ts:8003].
-- [ ] [Review][Patch] R6-F1: Empty retry `--node` values are accepted as whole-run retry [packages/cli/src/cli.ts:1101].
-- [ ] [Review][Patch] R6-F2: Targeted retry validates path/workflow before retryable run state [packages/cli/src/commands/workflow.ts:3322].
-- [ ] [Review][Patch] R6-F3: Required recovery-command regression proof remains incomplete [packages/cli/src/commands/workflow-json.e2e.test.ts:51].
+- [x] [Review][Patch] R6-F1: Empty retry `--node` values are accepted as whole-run retry [packages/cli/src/cli.ts:1101].
+- [x] [Review][Patch] R6-F2: Targeted retry validates path/workflow before retryable run state [packages/cli/src/commands/workflow.ts:3322].
+- [x] [Review][Patch] R6-F3: Required recovery-command regression proof remains incomplete [packages/cli/src/commands/workflow-json.e2e.test.ts:51].
 
 ## Dev Notes
 
@@ -585,6 +585,9 @@ Qoder (AI coding agent)
 - R5-F1: Added JSON-mode branch at cli.ts:662 DB connection error path — emits `INTERNAL_ERROR`/`implementation_defect`/70 envelope to stdout instead of plain `console.error` to stderr when `workflowProviderJsonRequested && envelopeCommand`.
 - R5-F2: Added test 3.3D-UNIT-015b proving post-cancel CAS-race readback (re-fetch shows `completed` instead of `cancelled`) emits `UNEXPECTED_STATE`/78 instead of misleading success.
 - R5-F3: Fixed test 3.3D-UNIT-027 to use `setupNodeRetryMocks` + explicit `WorkflowRetryError('git_reset_failed')` mock, so `prepareWorkflowNodeRetry` actually throws the expected error code instead of failing at an earlier step.
+- R6-F1: Added empty-string guard for `--node` value in cli.ts retry dispatch — `rawNodeValue.trim() === ''` emits `MALFORMED_REQUEST` with `invalid_value` on `/node`. Changed `retryNodeId` assignment from `rawNodeValue || undefined` to `rawNodeValue` (now correctly `undefined` only when `--node` is not provided).
+- R6-F2: Added `RETRYABLE_WORKFLOW_STATUSES` check in node-targeted retry path (workflow.ts:3326) immediately after run fetch and before `verifyRetryWorkingPath`/`loadWorkflowForRetryCommand`. Matches the same validation order used in the whole-run path and the legacy `retryWorkflowNode` function.
+- R6-F3: Added E2E test 3.3D-CLI-027 proving `workflow retry <id> --node "" --json` emits `MALFORMED_REQUEST` with `invalid_value` on `/node` at subprocess boundary. Added unit test 3.3D-UNIT-021b proving node-targeted retry on non-retryable run (running status) returns `UNEXPECTED_STATE`/78 before path/workflow validation.
 
 ### Completion Notes List
 
@@ -605,14 +608,20 @@ Qoder (AI coding agent)
 - R5-F3 resolved: Test 3.3D-UNIT-027 now uses `setupNodeRetryMocks` + `WorkflowRetryError('git_reset_failed')` to drive the correct error path.
 - 280 unit tests pass (was 279, +1 for R5-F2), 6 skipped, 0 fail.
 - `bun run validate` passes (exit code 0).
+- R6-F1 resolved: Empty `--node ""` values now rejected with `MALFORMED_REQUEST`/`invalid_value` on `/node` in cli.ts retry dispatch.
+- R6-F2 resolved: Node-targeted retry now checks `RETRYABLE_WORKFLOW_STATUSES` before path/workflow validation — matching the whole-run path and legacy `retryWorkflowNode` validation order.
+- R6-F3 resolved: E2E test 3.3D-CLI-027 proves empty `--node` rejection at subprocess boundary; unit test 3.3D-UNIT-021b proves node-targeted retry status check ordering.
+- 57 E2E tests pass (was 56, +1 for R6-F3), 0 fail.
+- 281 unit tests pass (was 280, +1 for R6-F3), 6 skipped, 0 fail.
+- All review findings (R1–R6) now resolved.
 
 ### File List
 
-- `packages/cli/src/commands/workflow.ts` — Added `workflowCancelCommand`, `workflowRetryCommand`; converted `workflowResumeCommand` JSON path to envelope; extended `classifyRunError` with `WorkflowRetryError` instanceof block and recovery substring patterns; R2-F1: replaced flag-like nodeId throw with direct `buildErrorEnvelope` including `fieldErrors`.
-- `packages/cli/src/cli.ts` — Added `cancel` and `retry` dispatch cases; extended `WorkflowCommandEnvelopeCommand` type and `getWorkflowCommandEnvelopeCommand` mapping; modified `resume` dispatch for JSON envelope mode; added `node` to `parseArgs` options; R4-F1: added extra-positional guards to `resume`/`cancel`/`retry` dispatch cases; R5-F1: added JSON-mode `INTERNAL_ERROR` envelope at DB connection error path (line 662).
-- `packages/cli/src/commands/workflow.test.ts` — Activated 38 unit tests across resume/cancel/retry/classifier describe blocks; changed `mockClear` to `mockReset` for test isolation; added 3.3D-UNIT-028b for flag-like nodeId structured fieldError proof; R5-F2: added 3.3D-UNIT-015b for post-cancel CAS-race readback proof; R5-F3: fixed 3.3D-UNIT-027 to use `setupNodeRetryMocks` + `WorkflowRetryError('git_reset_failed')`.
+- `packages/cli/src/commands/workflow.ts` — Added `workflowCancelCommand`, `workflowRetryCommand`; converted `workflowResumeCommand` JSON path to envelope; extended `classifyRunError` with `WorkflowRetryError` instanceof block and recovery substring patterns; R2-F1: replaced flag-like nodeId throw with direct `buildErrorEnvelope` including `fieldErrors`; R6-F2: added `RETRYABLE_WORKFLOW_STATUSES` check in node-targeted retry path before path/workflow validation.
+- `packages/cli/src/cli.ts` — Added `cancel` and `retry` dispatch cases; extended `WorkflowCommandEnvelopeCommand` type and `getWorkflowCommandEnvelopeCommand` mapping; modified `resume` dispatch for JSON envelope mode; added `node` to `parseArgs` options; R4-F1: added extra-positional guards to `resume`/`cancel`/`retry` dispatch cases; R5-F1: added JSON-mode `INTERNAL_ERROR` envelope at DB connection error path (line 662); R6-F1: added empty-string guard for `--node` value in retry dispatch.
+- `packages/cli/src/commands/workflow.test.ts` — Activated 38 unit tests across resume/cancel/retry/classifier describe blocks; changed `mockClear` to `mockReset` for test isolation; added 3.3D-UNIT-028b for flag-like nodeId structured fieldError proof; R5-F2: added 3.3D-UNIT-015b for post-cancel CAS-race readback proof; R5-F3: fixed 3.3D-UNIT-027 to use `setupNodeRetryMocks` + `WorkflowRetryError('git_reset_failed')`; R6-F3: added 3.3D-UNIT-021b for node-targeted retry status check ordering proof.
 - `packages/cli/src/commands/workflow-command-contract.test.ts` — Activated 16 contract tests; fixed cancel run IDs to avoid "abandon" substring.
-- `packages/cli/src/commands/workflow-json.e2e.test.ts` — Added 3.3D-CLI-020 E2E test for `workflow retry --node --json` malformed input at subprocess boundary; R4-F1: added 3.3D-CLI-024/025/026 E2E tests for extra-positional rejection on resume/cancel/retry.
+- `packages/cli/src/commands/workflow-json.e2e.test.ts` — Added 3.3D-CLI-020 E2E test for `workflow retry --node --json` malformed input at subprocess boundary; R4-F1: added 3.3D-CLI-024/025/026 E2E tests for extra-positional rejection on resume/cancel/retry; R6-F3: added 3.3D-CLI-027 E2E test for empty `--node ""` rejection.
 - `_bmad-output/implementation-artifacts/sprint-status.yaml` — Updated story status to `review`.
 
 ### Change Log
@@ -623,3 +632,4 @@ Qoder (AI coding agent)
 - 2026-07-19: Resolved R2-F1 (structured fieldErrors for flag-like nodeId in direct workflowRetryCommand calls) and R2-F2 (E2E proof for retry --node --json malformed input).
 - 2026-07-19: Resolved R4-F1 (extra-positional guards for resume/cancel/retry dispatch; E2E tests 3.3D-CLI-024/025/026). All review findings now resolved.
 - 2026-07-19: Resolved R5-F1 (DB connection error path emits JSON envelope in JSON mode), R5-F2 (post-cancel CAS-race readback proof test), R5-F3 (git_reset_failed test now drives prepareWorkflowNodeRetry correctly). All R5 review findings resolved.
+- 2026-07-19: Resolved R6-F1 (empty `--node ""` values rejected with MALFORMED_REQUEST), R6-F2 (node-targeted retry checks RETRYABLE_WORKFLOW_STATUSES before path/workflow validation), R6-F3 (E2E test 3.3D-CLI-027 + unit test 3.3D-UNIT-021b for recovery regression proofs). All R6 review findings resolved. All review findings (R1–R6) now complete.
