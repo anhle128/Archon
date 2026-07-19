@@ -16,6 +16,7 @@ import { resolve, join } from 'path';
 import * as fsPromises from 'fs/promises';
 import * as gitUtils from '@archon/git';
 import * as pathValidation from '../utils/path-validation';
+import * as worktreeSync from '../utils/worktree-sync';
 import * as workflowDiscovery from '@archon/workflows/workflow-discovery';
 
 // Create mock functions for database modules (safe to mock - no standalone tests)
@@ -50,6 +51,8 @@ const mockCreateWorkflowEvent = mock(() => Promise.resolve());
 // Spies for internal modules (use spyOn instead of mock.module to avoid global pollution)
 let spyIsPathWithinWorkspace: ReturnType<typeof spyOn>;
 let spyExecFileAsync: ReturnType<typeof spyOn>;
+let spySyncWorkspace: ReturnType<typeof spyOn>;
+let spySyncArchonToWorktree: ReturnType<typeof spyOn>;
 let spyWorktreeExists: ReturnType<typeof spyOn>;
 let spyListWorktrees: ReturnType<typeof spyOn>;
 let spyRemoveWorktree: ReturnType<typeof spyOn>;
@@ -276,6 +279,10 @@ function setupSpies(): void {
 
   // Git utility spies
   spyExecFileAsync = spyOn(gitUtils, 'execFileAsync').mockResolvedValue({ stdout: '', stderr: '' });
+  spySyncWorkspace = spyOn(gitUtils, 'syncWorkspace').mockResolvedValue(
+    {} as Awaited<ReturnType<typeof gitUtils.syncWorkspace>>
+  );
+  spySyncArchonToWorktree = spyOn(worktreeSync, 'syncArchonToWorktree').mockResolvedValue(false);
   spyWorktreeExists = spyOn(gitUtils, 'worktreeExists').mockResolvedValue(false);
   spyListWorktrees = spyOn(gitUtils, 'listWorktrees').mockResolvedValue([]);
   spyRemoveWorktree = spyOn(gitUtils, 'removeWorktree').mockResolvedValue();
@@ -311,6 +318,8 @@ function setupSpies(): void {
 function restoreSpies(): void {
   spyIsPathWithinWorkspace?.mockRestore();
   spyExecFileAsync?.mockRestore();
+  spySyncWorkspace?.mockRestore();
+  spySyncArchonToWorktree?.mockRestore();
   spyWorktreeExists?.mockRestore();
   spyListWorktrees?.mockRestore();
   spyRemoveWorktree?.mockRestore();
@@ -1578,6 +1587,62 @@ describe('CommandHandler', () => {
     });
 
     describe('/workflow resume', () => {
+      test('syncs the repository before rediscovering a resumed workflow', async () => {
+        const conversationWithCodebase: Conversation = {
+          ...baseConversation,
+          codebase_id: 'codebase-123',
+        };
+        const calls: string[] = [];
+        mockGetCodebase.mockResolvedValueOnce({
+          id: 'codebase-123',
+          name: 'owner/repo',
+          kind: 'repo',
+          repository_url: 'https://github.com/owner/repo',
+          default_cwd: '/workspace/source',
+          default_branch: 'dev',
+          commands: {},
+          created_at: new Date(),
+          updated_at: new Date(),
+        });
+        mockGetWorkflowRun.mockResolvedValueOnce({
+          id: 'run-fresh-resume',
+          workflow_name: 'implement',
+          conversation_id: 'conv-1',
+          parent_conversation_id: null,
+          codebase_id: 'codebase-123',
+          status: 'failed' as const,
+          user_message: 'test',
+          metadata: {},
+          started_at: new Date(),
+          completed_at: null,
+          last_activity_at: null,
+          working_path: '/workspace/wt',
+        });
+        spySyncWorkspace.mockImplementation(async () => {
+          calls.push('sync');
+          return {} as Awaited<ReturnType<typeof gitUtils.syncWorkspace>>;
+        });
+        spySyncArchonToWorktree.mockImplementation(async () => {
+          calls.push('worktree-sync');
+          return false;
+        });
+        spyDiscoverWorkflows.mockImplementation(async () => {
+          calls.push('discover');
+          return {
+            workflows: [makeTestWorkflowWithSource({ name: 'implement' })],
+            errors: [],
+          };
+        });
+
+        const result = await handleCommand(
+          conversationWithCodebase,
+          '/workflow resume run-fresh-resume'
+        );
+
+        expect(result.success).toBe(true);
+        expect(calls).toEqual(['sync', 'worktree-sync', 'discover']);
+      });
+
       test('should return workflow dispatch data for failed run resume', async () => {
         const run = {
           id: 'run-123',
@@ -1898,6 +1963,85 @@ describe('CommandHandler', () => {
         expect(result.workflow).toBeDefined();
         expect(result.workflow?.definition.name).toBe('test-workflow');
         expect(result.workflow?.args).toBe('');
+      });
+
+      test('syncs the repository before selecting the workflow definition', async () => {
+        const calls: string[] = [];
+        spySyncWorkspace.mockImplementation(async () => {
+          calls.push('sync');
+          return {} as Awaited<ReturnType<typeof gitUtils.syncWorkspace>>;
+        });
+        spySyncArchonToWorktree.mockImplementation(async () => {
+          calls.push('worktree-sync');
+          return false;
+        });
+        spyDiscoverWorkflows.mockImplementation(async () => {
+          calls.push('discover');
+          return {
+            workflows: [
+              makeTestWorkflowWithSource({
+                name: 'fresh-workflow',
+                nodes: [{ id: 'codex-node', prompt: 'Run', effort: 'xhigh' }],
+              }),
+            ],
+            errors: [],
+          };
+        });
+
+        const result = await handleCommand(
+          conversationWithCodebase,
+          '/workflow run fresh-workflow'
+        );
+
+        expect(calls).toEqual(['sync', 'worktree-sync', 'discover']);
+        expect(result.workflow?.definition.nodes[0]?.effort).toBe('xhigh');
+      });
+
+      test('continues discovery when the pre-discovery sync fails', async () => {
+        mockLogger.warn.mockClear();
+        spySyncWorkspace.mockRejectedValueOnce(new Error('network unavailable'));
+        spyDiscoverWorkflows.mockResolvedValueOnce({
+          workflows: [makeTestWorkflowWithSource({ name: 'local-workflow' })],
+          errors: [],
+        });
+
+        const result = await handleCommand(
+          conversationWithCodebase,
+          '/workflow run local-workflow'
+        );
+
+        expect(result.success).toBe(true);
+        expect(spyDiscoverWorkflows).toHaveBeenCalled();
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.objectContaining({ codebaseId: 'codebase-123' }),
+          'cmd.workflow_discovery_sync_failed'
+        );
+      });
+
+      test('skips Git synchronization for folder projects', async () => {
+        mockGetCodebase.mockResolvedValueOnce({
+          id: 'codebase-123',
+          name: 'folder-project',
+          kind: 'folder',
+          repository_url: null,
+          default_cwd: '/workspace/folder-project',
+          commands: {},
+          created_at: new Date(),
+          updated_at: new Date(),
+        });
+        spyDiscoverWorkflows.mockResolvedValueOnce({
+          workflows: [makeTestWorkflowWithSource({ name: 'folder-workflow' })],
+          errors: [],
+        });
+
+        const result = await handleCommand(
+          conversationWithCodebase,
+          '/workflow run folder-workflow'
+        );
+
+        expect(result.success).toBe(true);
+        expect(spySyncWorkspace).not.toHaveBeenCalled();
+        expect(spySyncArchonToWorktree).not.toHaveBeenCalled();
       });
 
       test('should pass arguments to workflow', async () => {

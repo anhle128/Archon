@@ -721,6 +721,30 @@ async function loadWorkflows(cwd: string): Promise<WorkflowLoadResult> {
   }
 }
 
+/**
+ * Refresh a Git-backed discovery root before selecting a workflow for an
+ * isolated run. Worktree creation synchronizes again as a safety boundary, but
+ * that is too late for workflow selection: the parsed definition would already
+ * be held in memory. Explicit live and folder runs intentionally keep their
+ * local checkout semantics.
+ */
+async function syncBeforeWorkflowDiscovery(
+  cwd: string,
+  options: WorkflowRunOptions
+): Promise<void> {
+  if (options.noWorktree || options.folder) return;
+
+  try {
+    const repoRoot = await git.findRepoRoot(cwd);
+    if (!repoRoot) return;
+    await git.syncWorkspace(repoRoot);
+  } catch (error) {
+    // Match the server's discovery posture: a fetch problem must not prevent a
+    // run from using the local definition already available on disk.
+    getLog().warn({ err: error as Error, cwd }, 'cli.workflow_discovery_sync_failed');
+  }
+}
+
 function countWorkflowSources(
   workflows: readonly WorkflowWithSource[]
 ): Record<WorkflowSource, number> {
@@ -909,6 +933,7 @@ async function workflowRunCommandInner(
   }
 
   const effectiveDiscoveryCwd = options.discoveryCwd ?? cwd;
+  await syncBeforeWorkflowDiscovery(effectiveDiscoveryCwd, options);
   const { workflows: workflowEntries, errors } = await loadWorkflows(effectiveDiscoveryCwd);
   const sourceCounts = countWorkflowSources(workflowEntries);
 

@@ -8,7 +8,14 @@ import { type Conversation, type CommandResult, ConversationNotFoundError } from
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
-import { listWorktrees, execFileAsync, listChildRepos, toRepoPath } from '@archon/git';
+import {
+  listWorktrees,
+  execFileAsync,
+  listChildRepos,
+  syncWorkspace,
+  toBranchName,
+  toRepoPath,
+} from '@archon/git';
 import { getIsolationProvider } from '@archon/isolation';
 import * as isolationEnvDb from '../db/isolation-environments';
 import {
@@ -37,6 +44,7 @@ import {
 import { safeDeactivateSession } from '../state/session-transitions';
 import { createLogger } from '@archon/paths';
 import { resolveConversationCwd } from '../utils/conversation-cwd';
+import { syncArchonToWorktree } from '../utils/worktree-sync';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -609,6 +617,31 @@ async function handleWorkflowCommand(
     ? (conversation.cwd ?? codebase.default_cwd)
     : getArchonWorkspacesPath();
 
+  const syncBeforeDiscovery = async (): Promise<void> => {
+    if (!codebase || codebase.kind === 'folder') return;
+
+    try {
+      await syncWorkspace(
+        toRepoPath(codebase.default_cwd),
+        codebase.default_branch ? toBranchName(codebase.default_branch) : undefined
+      );
+    } catch (error) {
+      getLog().warn(
+        { err: error as Error, codebaseId: codebase.id, repoPath: codebase.default_cwd },
+        'cmd.workflow_discovery_sync_failed'
+      );
+    }
+
+    try {
+      await syncArchonToWorktree(workflowCwd);
+    } catch (error) {
+      getLog().warn(
+        { err: error as Error, codebaseId: codebase.id, workflowCwd },
+        'cmd.workflow_discovery_worktree_sync_failed'
+      );
+    }
+  };
+
   switch (subcommand) {
     case 'list':
     case 'ls': {
@@ -746,6 +779,7 @@ async function handleWorkflowCommand(
       }
       try {
         const run = await resumeWorkflow(runId);
+        await syncBeforeDiscovery();
         let workflowEntries: readonly WorkflowWithSource[];
         let loadErrors: readonly WorkflowLoadError[];
         try {
@@ -921,6 +955,8 @@ async function handleWorkflowCommand(
             'Usage: /workflow run <name> [args]\n\nUse /workflow list to see available workflows.',
         };
       }
+
+      await syncBeforeDiscovery();
 
       getLog().debug(
         { workflowName, args: workflowArgs, cwd: workflowCwd },
