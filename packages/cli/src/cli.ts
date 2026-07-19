@@ -661,6 +661,36 @@ async function main(): Promise<number> {
           effectiveCwd = realCwd;
         } else if (gateLookupError && looksLikeConnectionError(gateLookupError)) {
           // A DB outage would otherwise be mis-reported as "not a git repository".
+          if (workflowProviderJsonRequested && envelopeCommand !== undefined) {
+            const { safeStringify, resolveCorrelationId, resolveIssuedAt, buildErrorEnvelope } =
+              await import('./commands/workflow-provider-command-envelope.js');
+            console.log(
+              safeStringify(
+                buildErrorEnvelope(
+                  {
+                    command: envelopeCommand,
+                    provider: 'archon',
+                    correlationId: resolveCorrelationId(
+                      rawWorkflowProviderOptions.correlationIdValue
+                    ),
+                    issuedAt: resolveIssuedAt(),
+                  },
+                  {
+                    code: 'INTERNAL_ERROR',
+                    category: 'implementation_defect',
+                    retryable: false,
+                    details: {
+                      reason: 'database_unavailable',
+                      detail: gateLookupError.message,
+                    },
+                    exitCode: 70,
+                  },
+                  Date.now()
+                )
+              )
+            );
+            return 70;
+          }
           console.error(
             'Error: Could not verify project registration — the database is unavailable.'
           );

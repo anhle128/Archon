@@ -7649,6 +7649,49 @@ describe('workflowCancelCommand — JSON envelope mode (Story 3.3d)', () => {
     expect(execution.exitCode).toBe(70);
   });
 
+  // 3.3D-UNIT-015b [P0] R5-F2 — cancel CAS-race: post-cancel readback shows non-cancelled status
+  it('3.3D-UNIT-015b: emits UNEXPECTED_STATE when post-cancel readback shows non-cancelled status (CAS race)', async () => {
+    const { workflowCancelCommand: cancelCmd } = await import('./workflow');
+    const workflowDb = await import('@archon/core/db/workflows');
+    // Pre-CAS fetch: run is 'running' (abandonWorkflow's getRunOrThrow)
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-cancel-race',
+      workflow_name: 'implement',
+      status: 'running',
+      working_path: '/tmp/wt',
+      codebase_id: 'cb-1',
+      metadata: {},
+    });
+    // CAS succeeds — but a concurrent completion won the race
+    (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      cancelled: true,
+    });
+    // Post-cancel re-fetch: another operation moved the run to 'completed'
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-cancel-race',
+      workflow_name: 'implement',
+      status: 'completed',
+      working_path: '/tmp/wt',
+      codebase_id: 'cb-1',
+      metadata: {},
+    });
+
+    const exitCode = await cancelCmd('run-cancel-race', true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.cancel');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('UNEXPECTED_STATE');
+    expect(error.category).toBe('unexpected_state');
+    expect(error.retryable).toBe(false);
+    const execution = envelope.execution as Record<string, unknown>;
+    expect(execution.exitCode).toBe(78);
+    // Must not produce a misleading success envelope
+    expect(exitCode).toBe(78);
+  });
+
   // 3.3D-UNIT-016 [P0] AC #4 — cancel envelope contains no 'abandon' string
   it('3.3D-UNIT-016: cancel envelope never contains the string "abandon"', async () => {
     // SKIP REASON: workflowCancelCommand not yet exported.
@@ -8002,17 +8045,16 @@ describe('workflowRetryCommand — JSON envelope mode (Story 3.3d)', () => {
 
   // 3.3D-UNIT-027 [P0] AC #3 — retry error: git reset failed
   it('3.3D-UNIT-027: emits INTERNAL_ERROR/70 for git_reset_failed', async () => {
-    // SKIP REASON: workflowRetryCommand not yet exported.
     const { workflowRetryCommand: retryCmd } = await import('./workflow');
-    const workflowDb = await import('@archon/core/db/workflows');
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+    const { retryMod } = await setupNodeRetryMocks({
       id: 'run-retry-git',
       workflow_name: 'implement',
       status: 'failed',
-      working_path: '/tmp/wt',
-      codebase_id: 'cb-1',
-      metadata: {},
     });
+    const { WorkflowRetryError } = await import('@archon/core/operations/workflow-retry');
+    (retryMod.prepareWorkflowNodeRetry as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new WorkflowRetryError('git_reset_failed', 'git reset --hard origin/dev failed')
+    );
 
     await retryCmd('run-retry-git', 'build-step', true, undefined, '/tmp/wt');
 
