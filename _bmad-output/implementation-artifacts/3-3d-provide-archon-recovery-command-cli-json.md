@@ -4,7 +4,7 @@ baseline_commit: efe36f65443bf45813f9a48062b7a08e844cddd4
 
 # Story 3.3d: Provide Archon Recovery Command CLI JSON
 
-Status: review
+Status: in-progress
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -181,6 +181,10 @@ so that external controllers can route recovery actions consistently.
 - [x] [Review][Patch] R6-F1: Empty retry `--node` values are accepted as whole-run retry [packages/cli/src/cli.ts:1101].
 - [x] [Review][Patch] R6-F2: Targeted retry validates path/workflow before retryable run state [packages/cli/src/commands/workflow.ts:3322].
 - [x] [Review][Patch] R6-F3: Required recovery-command regression proof remains incomplete [packages/cli/src/commands/workflow-json.e2e.test.ts:51].
+- [ ] [Review][Patch] R7-F1: Direct `workflowRetryCommand(runId, '', true, ...)` still converts an empty targeted node retry into a whole-run retry path [packages/cli/src/commands/workflow.ts:3292].
+- [ ] [Review][Patch] R7-F2: The DB-unavailable recovery-command envelope serializes raw database driver text in `error.details` [packages/cli/src/cli.ts:682].
+- [ ] [Review][Patch] R7-F3: Required recovery-command regression proof remains incomplete [packages/cli/src/commands/workflow-json.e2e.test.ts:51].
+- [ ] [Review][Patch] R7-F4: Recovery JSON commands accept an explicit blank `--cwd ""` as the current directory instead of malformed input [packages/cli/src/cli.ts:490].
 
 ## Dev Notes
 
