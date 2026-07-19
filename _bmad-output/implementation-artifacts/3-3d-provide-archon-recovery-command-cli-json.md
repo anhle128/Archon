@@ -4,7 +4,7 @@ baseline_commit: efe36f65443bf45813f9a48062b7a08e844cddd4
 
 # Story 3.3d: Provide Archon Recovery Command CLI JSON
 
-Status: review
+Status: in-progress
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -178,6 +178,9 @@ so that external controllers can route recovery actions consistently.
 - [x] [Review][Patch] R5-F1: Recovery JSON commands can still emit plain human stderr when project registration lookup fails before the envelope path [packages/cli/src/cli.ts:662].
 - [x] [Review][Patch] R5-F2: Required post-cancel non-cancelled readback proof is still missing, leaving the CAS-race guard unproved [packages/cli/src/commands/workflow.test.ts:7419].
 - [x] [Review][Patch] R5-F3: The `git_reset_failed` command-level retry test does not drive `prepareWorkflowNodeRetry` to throw that error [packages/cli/src/commands/workflow.test.ts:8003].
+- [ ] [Review][Patch] R6-F1: Empty retry `--node` values are accepted as whole-run retry [packages/cli/src/cli.ts:1101].
+- [ ] [Review][Patch] R6-F2: Targeted retry validates path/workflow before retryable run state [packages/cli/src/commands/workflow.ts:3322].
+- [ ] [Review][Patch] R6-F3: Required recovery-command regression proof remains incomplete [packages/cli/src/commands/workflow-json.e2e.test.ts:51].
 
 ## Dev Notes
 
