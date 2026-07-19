@@ -169,6 +169,8 @@ so that external controllers can route recovery actions consistently.
 - [x] [Review][Patch] R1-F5: Required node-targeted retry proof remains skipped, leaving the mutating retry path unproved [packages/cli/src/commands/workflow.test.ts:7744].
 - [x] [Review][Patch] R1-F6: CLI usage/help text omits the new `workflow cancel` and `workflow retry` recovery commands [packages/cli/src/cli.ts:237].
 - [x] [Review][Patch] R1-F7: Resume JSON can emit a success envelope after readback observes a non-resumable terminal state [packages/cli/src/commands/workflow.ts:2997].
+- [ ] [Review][Patch] R2-F1: Direct `workflowRetryCommand(..., nodeId, true, ...)` calls with a flag-like `nodeId` emit a generic malformed-request envelope without the required structured `/node` field error [packages/cli/src/commands/workflow.ts:3260].
+- [ ] [Review][Patch] R2-F2: Required retry-specific malformed-input E2E proof is missing for the recovery command subprocess boundary [packages/cli/src/commands/workflow-json.e2e.test.ts:950].
 
 ## Dev Notes
 
