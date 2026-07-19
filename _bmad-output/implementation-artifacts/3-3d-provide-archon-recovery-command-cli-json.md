@@ -4,7 +4,7 @@ baseline_commit: efe36f65443bf45813f9a48062b7a08e844cddd4
 
 # Story 3.3d: Provide Archon Recovery Command CLI JSON
 
-Status: review
+Status: in-progress
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -175,6 +175,9 @@ so that external controllers can route recovery actions consistently.
 - [x] [Review][Patch] R3-F2: `workflow retry <run-id> --node --json` still bypasses JSON pre-handler cwd/git error envelopes when cwd validation fails before retry dispatch [packages/cli/src/cli.ts:598].
 - [x] [Review][Patch] R3-F3: R2-F2 retry cwd/non-git subprocess proof remains missing even though the story/test-design requires it [packages/cli/src/commands/workflow-json.e2e.test.ts:950].
 - [x] [Review][Patch] R4-F1: Provider-facing recovery commands ignore unexpected extra positional arguments after the run ID instead of treating the request as malformed [packages/cli/src/cli.ts:893].
+- [ ] [Review][Patch] R5-F1: Recovery JSON commands can still emit plain human stderr when project registration lookup fails before the envelope path [packages/cli/src/cli.ts:662].
+- [ ] [Review][Patch] R5-F2: Required post-cancel non-cancelled readback proof is still missing, leaving the CAS-race guard unproved [packages/cli/src/commands/workflow.test.ts:7419].
+- [ ] [Review][Patch] R5-F3: The `git_reset_failed` command-level retry test does not drive `prepareWorkflowNodeRetry` to throw that error [packages/cli/src/commands/workflow.test.ts:8003].
 
 ## Dev Notes
 
