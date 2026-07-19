@@ -596,8 +596,7 @@ async function main(): Promise<number> {
     let effectiveCwd = cwd;
     if (requiresGitRepo) {
       if (!existsSync(cwd)) {
-        const envelopeCommand = getWorkflowCommandEnvelopeCommand(command, subcommand);
-        if (jsonFlag && envelopeCommand !== undefined) {
+        if (workflowProviderJsonRequested && envelopeCommand !== undefined) {
           return await emitWorkflowCommandMalformedEnvelope(
             envelopeCommand,
             {
@@ -671,8 +670,7 @@ async function main(): Promise<number> {
           );
           return 1;
         } else {
-          const envelopeCommand = getWorkflowCommandEnvelopeCommand(command, subcommand);
-          if (jsonFlag && envelopeCommand !== undefined) {
+          if (workflowProviderJsonRequested && envelopeCommand !== undefined) {
             return await emitWorkflowCommandMalformedEnvelope(
               envelopeCommand,
               {
@@ -983,7 +981,28 @@ async function main(): Promise<number> {
               console.error('Usage: archon workflow retry <run-id> [--node <node-id>]');
               return 1;
             }
-            const retryNodeId = (values.node as string | undefined) || undefined;
+            const rawNodeValue = values.node;
+            if (rawNodeValue !== undefined && typeof rawNodeValue !== 'string') {
+              if (workflowProviderJsonRequested && envelopeCommand) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    fieldErrors: [
+                      {
+                        path: '/node',
+                        code: 'missing_value',
+                        detail: '--node requires a value',
+                      },
+                    ],
+                    requestAccepted: false,
+                  },
+                  values['correlation-id'] as string | undefined
+                );
+              }
+              console.error('Error: --node requires a value.');
+              return 1;
+            }
+            const retryNodeId = rawNodeValue || undefined;
             if (retryNodeId?.startsWith('--')) {
               if (workflowProviderJsonRequested && envelopeCommand) {
                 return await emitWorkflowCommandMalformedEnvelope(

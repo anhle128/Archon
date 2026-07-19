@@ -1150,4 +1150,87 @@ describe('workflow resume/cancel/retry --json CLI dispatch E2E — real subproce
     expect(exitCode).toBe(64);
     expect(stderr).toBe('');
   });
+
+  // 3.3D-CLI-021 [P0] R3-F1 — retry --json --node (node without value) emits MALFORMED_REQUEST, not TypeError
+  test('3.3D-CLI-021: `workflow retry <id> --json --node` emits MALFORMED_REQUEST with /node missing_value', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'retry',
+      '00000000-0000-0000-0000-000000000000',
+      '--json',
+      '--node',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.retry');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(error?.category).toBe('provider_contract');
+    const details = error?.details as Record<string, unknown> | undefined;
+    const fieldErrors = details?.fieldErrors as Array<Record<string, unknown>> | undefined;
+    expect(fieldErrors).toBeDefined();
+    expect(fieldErrors?.[0]?.path).toBe('/node');
+    expect(fieldErrors?.[0]?.code).toBe('missing_value');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-022 [P0] R3-F3 — retry --json --cwd /nonexistent emits MALFORMED_REQUEST with directory_not_found
+  test('3.3D-CLI-022: `workflow retry --json --cwd /nonexistent` emits MALFORMED_REQUEST', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'retry',
+      '00000000-0000-0000-0000-000000000000',
+      '--json',
+      '--cwd',
+      '/nonexistent-dir-archon-e2e-3d',
+    ]);
+
+    expect(stdout.trim()).not.toBe('');
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.retry');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    const details = error?.details as Record<string, unknown> | undefined;
+    const fieldErrors = details?.fieldErrors as Array<Record<string, unknown>> | undefined;
+    expect(fieldErrors).toBeDefined();
+    expect(fieldErrors).toContainEqual({ path: '/cwd', code: 'directory_not_found' });
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-023 [P0] R3-F3 — retry --json from non-git directory emits not_a_git_repository
+  test('3.3D-CLI-023: `workflow retry --json` from non-git directory emits not_a_git_repository', async () => {
+    const nonGitCwd = mkdtempSync(join(tmpdir(), 'archon-non-git-3d-'));
+    try {
+      const { stdout, stderr, exitCode } = await runCli(
+        [
+          'workflow',
+          'retry',
+          '00000000-0000-0000-0000-000000000000',
+          '--json',
+          '--correlation-id',
+          'corr-3d-023',
+        ],
+        nonGitCwd
+      );
+
+      expect(stdout.trim()).not.toBe('');
+      const envelope = parseSoleJsonLine(stdout);
+      expect(envelope.command).toBe('workflow.retry');
+      expect(envelope.success).toBe(false);
+      const error = envelope.error as Record<string, unknown> | undefined;
+      expect(error?.code).toBe('MALFORMED_REQUEST');
+      const details = error?.details as Record<string, unknown> | undefined;
+      const fieldErrors = details?.fieldErrors as Array<Record<string, unknown>> | undefined;
+      expect(fieldErrors).toBeDefined();
+      expect(fieldErrors).toContainEqual({ path: '/cwd', code: 'not_a_git_repository' });
+      expect(exitCode).toBe(64);
+      expect(stderr).toBe('');
+    } finally {
+      rmSync(nonGitCwd, { recursive: true, force: true });
+    }
+  });
 });
