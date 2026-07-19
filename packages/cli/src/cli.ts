@@ -46,6 +46,8 @@ import {
   workflowResumeCommand,
   workflowRetryNodeCommand,
   workflowAbandonCommand,
+  workflowCancelCommand,
+  workflowRetryCommand,
   workflowApproveCommand,
   workflowRejectCommand,
   workflowCleanupCommand,
@@ -115,7 +117,13 @@ function getLog(): ReturnType<typeof createLogger> {
 
 type WorkflowCommandEnvelopeCommand = Extract<
   WorkflowProviderCommand,
-  'workflow.start' | 'workflow.status' | 'workflow.approve' | 'workflow.reject'
+  | 'workflow.start'
+  | 'workflow.status'
+  | 'workflow.approve'
+  | 'workflow.reject'
+  | 'workflow.resume'
+  | 'workflow.retry'
+  | 'workflow.cancel'
 >;
 
 function getWorkflowCommandEnvelopeCommand(
@@ -127,6 +135,9 @@ function getWorkflowCommandEnvelopeCommand(
   if (subcommand === 'get') return 'workflow.status';
   if (subcommand === 'approve') return 'workflow.approve';
   if (subcommand === 'reject') return 'workflow.reject';
+  if (subcommand === 'resume') return 'workflow.resume';
+  if (subcommand === 'cancel') return 'workflow.cancel';
+  if (subcommand === 'retry') return 'workflow.retry';
   return undefined;
 }
 
@@ -881,11 +892,25 @@ async function main(): Promise<number> {
           case 'resume': {
             const resumeRunId = positionals[2];
             if (!resumeRunId) {
+              if (workflowProviderJsonRequested && envelopeCommand) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    missingArgument: 'run-id',
+                    usage: 'archon workflow resume <run-id>',
+                  },
+                  rawWorkflowProviderOptions.correlationIdValue
+                );
+              }
               console.error('Usage: archon workflow resume <run-id>');
               return 1;
             }
-            await workflowResumeCommand(resumeRunId, jsonFlag, effectiveCwd);
-            break;
+            return await workflowResumeCommand(
+              resumeRunId,
+              jsonFlag,
+              values['correlation-id'] as string | undefined,
+              effectiveCwd
+            );
           }
 
           case 'retry-node': {
@@ -913,6 +938,56 @@ async function main(): Promise<number> {
             }
             await workflowAbandonCommand(abandonRunId, jsonFlag, effectiveCwd);
             break;
+          }
+
+          case 'cancel': {
+            const cancelRunId = positionals[2];
+            if (!cancelRunId) {
+              if (workflowProviderJsonRequested && envelopeCommand) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    missingArgument: 'run-id',
+                    usage: 'archon workflow cancel <run-id>',
+                  },
+                  rawWorkflowProviderOptions.correlationIdValue
+                );
+              }
+              console.error('Usage: archon workflow cancel <run-id>');
+              return 1;
+            }
+            return await workflowCancelCommand(
+              cancelRunId,
+              jsonFlag,
+              values['correlation-id'] as string | undefined,
+              effectiveCwd
+            );
+          }
+
+          case 'retry': {
+            const retryRunId = positionals[2];
+            if (!retryRunId) {
+              if (workflowProviderJsonRequested && envelopeCommand) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    missingArgument: 'run-id',
+                    usage: 'archon workflow retry <run-id> [--node <node-id>]',
+                  },
+                  rawWorkflowProviderOptions.correlationIdValue
+                );
+              }
+              console.error('Usage: archon workflow retry <run-id> [--node <node-id>]');
+              return 1;
+            }
+            const retryNodeId = (values.node as string | undefined) || undefined;
+            return await workflowRetryCommand(
+              retryRunId,
+              retryNodeId,
+              jsonFlag,
+              values['correlation-id'] as string | undefined,
+              effectiveCwd
+            );
           }
 
           case 'approve': {
@@ -1081,7 +1156,7 @@ async function main(): Promise<number> {
               console.error(`Unknown workflow subcommand: ${subcommand}`);
             }
             console.error(
-              'Available: list, run, status, get, runs, resume, abandon, approve, reject, cleanup, event, search, install'
+              'Available: list, run, status, get, runs, resume, retry, retry-node, cancel, abandon, approve, reject, cleanup, event, search, install'
             );
             return 1;
         }

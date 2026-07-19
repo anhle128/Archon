@@ -55,6 +55,7 @@ import {
   getWorkflowStatus,
   resetWorkflowNodeSessions,
 } from '@archon/core/operations/workflow-operations';
+import { WorkflowRetryError } from '@archon/core/operations/workflow-retry';
 import * as conversationDb from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
 import * as isolationDb from '@archon/core/db/isolation-environments';
@@ -263,6 +264,81 @@ export function classifyRunError(err: unknown): ClassifiedError {
   const msg = err instanceof Error ? err.message : String(err);
   const errCode = (err as { code?: string })?.code;
 
+  if (err instanceof WorkflowRetryError) {
+    switch (err.code) {
+      case 'run_not_found':
+        return {
+          code: 'WORKFLOW_RUN_NOT_FOUND',
+          category: 'unexpected_state',
+          retryable: false,
+          exitCode: EXIT_RUNTIME,
+        };
+      case 'run_not_retryable':
+        return {
+          code: 'UNEXPECTED_STATE',
+          category: 'unexpected_state',
+          retryable: false,
+          exitCode: EXIT_RUNTIME,
+        };
+      case 'node_not_found':
+        return {
+          code: 'NODE_NOT_FOUND',
+          category: 'unexpected_state',
+          retryable: false,
+          exitCode: EXIT_RUNTIME,
+        };
+      case 'node_not_failed':
+        return {
+          code: 'UNEXPECTED_STATE',
+          category: 'unexpected_state',
+          retryable: false,
+          exitCode: EXIT_RUNTIME,
+        };
+      case 'node_not_retryable':
+        return {
+          code: 'NODE_NOT_RETRYABLE',
+          category: 'unexpected_state',
+          retryable: false,
+          exitCode: EXIT_RUNTIME,
+        };
+      case 'cas_miss':
+        return {
+          code: 'UNEXPECTED_STATE',
+          category: 'unexpected_state',
+          retryable: true,
+          exitCode: EXIT_RUNTIME,
+        };
+      case 'path_in_use':
+        return {
+          code: 'UNEXPECTED_STATE',
+          category: 'unexpected_state',
+          retryable: false,
+          exitCode: EXIT_RUNTIME,
+        };
+      case 'checkpoint_unavailable':
+        return {
+          code: 'UNEXPECTED_STATE',
+          category: 'implementation_defect',
+          retryable: false,
+          exitCode: EXIT_SOFTWARE,
+        };
+      case 'git_reset_failed':
+        return {
+          code: 'INTERNAL_ERROR',
+          category: 'implementation_defect',
+          retryable: false,
+          exitCode: EXIT_SOFTWARE,
+        };
+      case 'dispatch_failed':
+        return {
+          code: 'INTERNAL_ERROR',
+          category: 'implementation_defect',
+          retryable: false,
+          exitCode: EXIT_SOFTWARE,
+        };
+    }
+  }
+
   if (/^Workflow '[\s\S]+' not found\.(?:\n\nAvailable workflows:\n[\s\S]*)?$/.test(msg)) {
     return {
       code: 'WORKFLOW_NOT_FOUND',
@@ -286,6 +362,9 @@ export function classifyRunError(err: unknown): ClassifiedError {
     msg.includes('awaiting resume') ||
     msg.includes('Cannot approve run with status') ||
     msg.includes('Cannot reject run with status') ||
+    msg.includes('Cannot resume run with status') ||
+    msg.includes('Cannot abandon run with status') ||
+    msg.includes('Cannot retry workflow run') ||
     msg.includes('missing approval context')
   ) {
     return {
@@ -2899,36 +2978,75 @@ async function resolveDiscoveryCwdForCodebase(
 export async function workflowResumeCommand(
   runId: string,
   json?: boolean,
+  correlationId?: string,
   cwd?: string
-): Promise<void> {
+): Promise<number> {
   // JSON mode is a non-blocking control-plane ack: validate the run is resumable
   // and report its state, but do NOT re-execute the workflow inline (execution
   // streams workflow output to stdout, which would corrupt the JSON contract).
   // To actually execute a resumable run, use the blocking `resume` (no --json,
   // run as a background task) or `run <name> --resume --detach`.
   if (json) {
+    const startTime = Date.now();
+    let metaCorrelationId = 'unknown';
+    let metaIssuedAt = new Date(0).toISOString();
     try {
+      metaCorrelationId = resolveCorrelationId(correlationId);
+      metaIssuedAt = resolveIssuedAt();
       const resolvedId = await resolveRunIdArg(runId, cwd);
-      const run = await resumeWorkflowOp(resolvedId);
-      console.log(
-        JSON.stringify(
-          {
-            ok: true,
-            runId: resolvedId,
-            action: 'resume',
-            executed: false,
-            status: run.status,
-            workflowName: run.workflow_name,
-            workingPath: run.working_path,
-          },
-          null,
-          2
-        )
+      const validatedRun = await resumeWorkflowOp(resolvedId);
+      const previousState = validatedRun.status;
+      const persistedRun = await workflowDb.getWorkflowRun(resolvedId);
+      if (!persistedRun) {
+        throw new Error(`Failed to read back workflow run after resume validation: ${resolvedId}`);
+      }
+      const { terminal } = mapWorkflowRunToContractState(persistedRun);
+      const meta: EnvelopeMeta = {
+        provider: 'archon',
+        command: 'workflow.resume',
+        correlationId: metaCorrelationId,
+        issuedAt: metaIssuedAt,
+      };
+      const envelope = buildSuccessEnvelope(
+        meta,
+        { workflowRunRef: buildWorkflowRunRef(persistedRun) },
+        {
+          operation: 'resume',
+          previousState,
+          state: persistedRun.status,
+          resumed: true,
+          terminal,
+        }
       );
+      console.log(safeStringify(envelope));
+      return 0;
     } catch (error) {
-      printJsonWriteError(runId, 'resume', error);
+      const classified = classifyRunError(error);
+      const err = error instanceof Error ? error : new Error(String(error));
+      getLog().error(
+        { err, runId, correlationId: metaCorrelationId },
+        'cli.workflow_resume_json_failed'
+      );
+      const meta: EnvelopeMeta = {
+        provider: 'archon',
+        command: 'workflow.resume',
+        correlationId: metaCorrelationId,
+        issuedAt: metaIssuedAt,
+      };
+      const errorEnvelope = buildErrorEnvelope(
+        meta,
+        {
+          code: classified.code,
+          category: classified.category,
+          retryable: classified.retryable,
+          details: { runId },
+          exitCode: classified.exitCode,
+        },
+        startTime
+      );
+      console.log(safeStringify(errorEnvelope));
+      return classified.exitCode;
     }
-    return;
   }
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
@@ -2967,6 +3085,7 @@ export async function workflowResumeCommand(
     );
     throw new Error(`Failed to resume workflow '${run.workflow_name}': ${err.message}`);
   }
+  return 0;
 }
 
 /**
@@ -3013,6 +3132,225 @@ export async function workflowAbandonCommand(
   const run = await abandonWorkflow(resolvedId);
   console.log(`Abandoned workflow run: ${resolvedId}`);
   console.log(`Workflow: ${run.workflow_name}`);
+}
+
+/**
+ * Cancel a workflow run by ID (Workflow Commander surface).
+ *
+ * Uses the same `abandonWorkflow` operation as the legacy `abandon` command but
+ * emits the `workflow.cancel` envelope — never serializes or reports as `abandon`.
+ * The legacy `workflowAbandonCommand` is left completely untouched.
+ *
+ * `runId` may be the short id printed by `workflow runs` (see resolveRunIdArg).
+ */
+export async function workflowCancelCommand(
+  runId: string,
+  json?: boolean,
+  correlationId?: string,
+  cwd?: string
+): Promise<number> {
+  if (json) {
+    const startTime = Date.now();
+    let metaCorrelationId = 'unknown';
+    let metaIssuedAt = new Date(0).toISOString();
+    try {
+      metaCorrelationId = resolveCorrelationId(correlationId);
+      metaIssuedAt = resolveIssuedAt();
+      const resolvedId = await resolveRunIdArg(runId, cwd);
+      const preCasRun = await abandonWorkflow(resolvedId);
+      const previousState = preCasRun.status;
+      const persistedRun = await workflowDb.getWorkflowRun(resolvedId);
+      if (!persistedRun) {
+        throw new Error(`Failed to read back workflow run after cancel: ${resolvedId}`);
+      }
+      if (persistedRun.status !== 'cancelled') {
+        throw new Error(
+          `Cannot cancel run with status '${persistedRun.status}'. Only running, paused, or failed runs can be cancelled.`
+        );
+      }
+      const meta: EnvelopeMeta = {
+        provider: 'archon',
+        command: 'workflow.cancel',
+        correlationId: metaCorrelationId,
+        issuedAt: metaIssuedAt,
+      };
+      const envelope = buildSuccessEnvelope(
+        meta,
+        { workflowRunRef: buildWorkflowRunRef(persistedRun) },
+        {
+          operation: 'cancel',
+          previousState,
+          state: 'cancelled',
+          terminal: true,
+        }
+      );
+      console.log(safeStringify(envelope));
+      return 0;
+    } catch (error) {
+      const classified = classifyRunError(error);
+      const err = error instanceof Error ? error : new Error(String(error));
+      getLog().error(
+        { err, runId, correlationId: metaCorrelationId },
+        'cli.workflow_cancel_json_failed'
+      );
+      const meta: EnvelopeMeta = {
+        provider: 'archon',
+        command: 'workflow.cancel',
+        correlationId: metaCorrelationId,
+        issuedAt: metaIssuedAt,
+      };
+      const errorEnvelope = buildErrorEnvelope(
+        meta,
+        {
+          code: classified.code,
+          category: classified.category,
+          retryable: classified.retryable,
+          details: { runId },
+          exitCode: classified.exitCode,
+        },
+        startTime
+      );
+      console.log(safeStringify(errorEnvelope));
+      return classified.exitCode;
+    }
+  }
+
+  const resolvedId = await resolveRunIdArg(runId, cwd);
+  const run = await abandonWorkflow(resolvedId);
+  console.log(`Cancelled workflow run: ${resolvedId}`);
+  console.log(`Workflow: ${run.workflow_name}`);
+  return 0;
+}
+
+/**
+ * Retry a workflow run by ID (Workflow Commander surface).
+ *
+ * Two modes:
+ * - Whole-run (no nodeId): validates the run is retryable (failed/cancelled) and
+ *   returns an ack envelope. Does NOT execute — consumer drives execution.
+ * - Node-targeted (with nodeId): calls prepareWorkflowNodeRetry which performs
+ *   CAS, creates a new run, and resets git state. Returns an envelope with the
+ *   new run reference. Does NOT execute the DAG — consumer drives execution.
+ *
+ * `runId` may be the short id printed by `workflow runs` (see resolveRunIdArg).
+ */
+export async function workflowRetryCommand(
+  runId: string,
+  nodeId: string | undefined,
+  json?: boolean,
+  correlationId?: string,
+  cwd?: string
+): Promise<number> {
+  if (json) {
+    const startTime = Date.now();
+    let metaCorrelationId = 'unknown';
+    let metaIssuedAt = new Date(0).toISOString();
+    try {
+      metaCorrelationId = resolveCorrelationId(correlationId);
+      metaIssuedAt = resolveIssuedAt();
+      const resolvedId = await resolveRunIdArg(runId, cwd);
+
+      if (nodeId?.startsWith('--')) {
+        throw new Error('matches more than one run');
+      }
+
+      if (!nodeId) {
+        const run = await workflowDb.getWorkflowRun(resolvedId);
+        if (!run) {
+          throw new Error(`Workflow run not found: ${resolvedId}`);
+        }
+        if (!RETRYABLE_WORKFLOW_STATUSES.includes(run.status)) {
+          throw new Error(
+            `Cannot retry workflow run '${resolvedId}' with status '${run.status}'. Only failed or cancelled runs can be retried.`
+          );
+        }
+        const meta: EnvelopeMeta = {
+          provider: 'archon',
+          command: 'workflow.retry',
+          correlationId: metaCorrelationId,
+          issuedAt: metaIssuedAt,
+        };
+        const envelope = buildSuccessEnvelope(
+          meta,
+          { workflowRunRef: buildWorkflowRunRef(run) },
+          {
+            operation: 'retry',
+            mode: 'whole-run',
+            state: run.status,
+            retryable: true,
+          }
+        );
+        console.log(safeStringify(envelope));
+        return 0;
+      }
+
+      const run = await workflowDb.getWorkflowRun(resolvedId);
+      if (!run) {
+        throw new Error(`Workflow run not found: ${resolvedId}`);
+      }
+      const pathContext = await verifyRetryWorkingPath(run);
+      const { workflow } = await loadWorkflowForRetryCommand(run, pathContext.discoveryCwd);
+      const requesterUserId = await resolveRetryCliUserId();
+      const { prepareWorkflowNodeRetry } = await import('@archon/core/operations/workflow-retry');
+      const prepared = await prepareWorkflowNodeRetry({
+        runId: resolvedId,
+        nodeId,
+        workflow,
+        requesterSurface: 'cli',
+        requesterUserId,
+        authorizationBasis: requesterUserId === 'unavailable' ? 'cli/solo' : 'workflow.retry',
+      });
+      const meta: EnvelopeMeta = {
+        provider: 'archon',
+        command: 'workflow.retry',
+        correlationId: metaCorrelationId,
+        issuedAt: metaIssuedAt,
+      };
+      const envelope = buildSuccessEnvelope(
+        meta,
+        { workflowRunRef: buildWorkflowRunRef(prepared.preCreatedRun) },
+        {
+          operation: 'retry',
+          mode: 'node',
+          nodeId,
+          state: 'running',
+          retryEpoch: prepared.retryEpoch,
+        }
+      );
+      console.log(safeStringify(envelope));
+      return 0;
+    } catch (error) {
+      const classified = classifyRunError(error);
+      const err = error instanceof Error ? error : new Error(String(error));
+      getLog().error(
+        { err, runId, correlationId: metaCorrelationId },
+        'cli.workflow_retry_json_failed'
+      );
+      const meta: EnvelopeMeta = {
+        provider: 'archon',
+        command: 'workflow.retry',
+        correlationId: metaCorrelationId,
+        issuedAt: metaIssuedAt,
+      };
+      const errorEnvelope = buildErrorEnvelope(
+        meta,
+        {
+          code: classified.code,
+          category: classified.category,
+          retryable: classified.retryable,
+          details: { runId, ...(nodeId ? { nodeId } : {}) },
+          exitCode: classified.exitCode,
+        },
+        startTime
+      );
+      console.log(safeStringify(errorEnvelope));
+      return classified.exitCode;
+    }
+  }
+
+  throw new Error(
+    '`workflow retry` requires --json. For interactive retry, use `workflow retry-node`.'
+  );
 }
 
 /**
