@@ -573,6 +573,16 @@ async function main(): Promise<number> {
           parsedCorrelationId as string | undefined
         );
       }
+      if (typeof cwdValue === 'string' && cwdValue.trim() === '') {
+        return await emitWorkflowCommandMalformedEnvelope(
+          envelopeCommand,
+          {
+            fieldErrors: [{ path: '/cwd', code: 'invalid_value' }],
+            requestAccepted: false,
+          },
+          parsedCorrelationId as string | undefined
+        );
+      }
     }
 
     // Note: orphaned run cleanup moved to `workflow cleanup` command only.
@@ -681,7 +691,6 @@ async function main(): Promise<number> {
                     retryable: false,
                     details: {
                       reason: 'database_unavailable',
-                      detail: gateLookupError.message,
                     },
                     exitCode: 70,
                   },

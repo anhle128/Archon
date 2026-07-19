@@ -3289,7 +3289,38 @@ export async function workflowRetryCommand(
         return EXIT_USAGE;
       }
 
-      if (!nodeId) {
+      if (typeof nodeId === 'string' && nodeId.trim() === '') {
+        const meta: EnvelopeMeta = {
+          provider: 'archon',
+          command: 'workflow.retry',
+          correlationId: metaCorrelationId,
+          issuedAt: metaIssuedAt,
+        };
+        const envelope = buildErrorEnvelope(
+          meta,
+          {
+            code: 'MALFORMED_REQUEST',
+            category: 'provider_contract',
+            retryable: false,
+            details: {
+              fieldErrors: [
+                {
+                  path: '/node',
+                  code: 'invalid_value',
+                  detail: '--node value must not be empty',
+                },
+              ],
+              requestAccepted: false,
+            },
+            exitCode: EXIT_USAGE,
+          },
+          startTime
+        );
+        console.log(safeStringify(envelope));
+        return EXIT_USAGE;
+      }
+
+      if (nodeId === undefined) {
         const run = await workflowDb.getWorkflowRun(resolvedId);
         if (!run) {
           throw new Error(`Workflow run not found: ${resolvedId}`);

@@ -1344,4 +1344,85 @@ describe('workflow resume/cancel/retry --json CLI dispatch E2E — real subproce
     expect(exitCode).toBe(64);
     expect(stderr).toBe('');
   });
+
+  // 3.3D-CLI-028 [P0] R7-F3/F4 — blank --cwd "" on resume emits MALFORMED_REQUEST
+  test('3.3D-CLI-028: `workflow resume <id> --json --cwd ""` emits MALFORMED_REQUEST with invalid_value on /cwd', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'resume',
+      '00000000-0000-0000-0000-000000000000',
+      '--json',
+      '--cwd',
+      '',
+      '--correlation-id',
+      'corr-3d-028',
+    ]);
+
+    expect(stdout.trim()).not.toBe('');
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.resume');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    const details = error?.details as Record<string, unknown> | undefined;
+    const fieldErrors = details?.fieldErrors as Array<Record<string, unknown>> | undefined;
+    expect(fieldErrors).toBeDefined();
+    expect(fieldErrors).toContainEqual({ path: '/cwd', code: 'invalid_value' });
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-029 [P0] R7-F3/F4 — blank --cwd "" on cancel emits MALFORMED_REQUEST
+  test('3.3D-CLI-029: `workflow cancel <id> --json --cwd ""` emits MALFORMED_REQUEST with invalid_value on /cwd', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'cancel',
+      '00000000-0000-0000-0000-000000000000',
+      '--json',
+      '--cwd',
+      '',
+      '--correlation-id',
+      'corr-3d-029',
+    ]);
+
+    expect(stdout.trim()).not.toBe('');
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.cancel');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    const details = error?.details as Record<string, unknown> | undefined;
+    const fieldErrors = details?.fieldErrors as Array<Record<string, unknown>> | undefined;
+    expect(fieldErrors).toBeDefined();
+    expect(fieldErrors).toContainEqual({ path: '/cwd', code: 'invalid_value' });
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-030 [P0] R7-F3/F4 — blank --cwd "" on retry emits MALFORMED_REQUEST
+  test('3.3D-CLI-030: `workflow retry <id> --json --cwd ""` emits MALFORMED_REQUEST with invalid_value on /cwd', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'retry',
+      '00000000-0000-0000-0000-000000000000',
+      '--json',
+      '--cwd',
+      '',
+      '--correlation-id',
+      'corr-3d-030',
+    ]);
+
+    expect(stdout.trim()).not.toBe('');
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.retry');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    const details = error?.details as Record<string, unknown> | undefined;
+    const fieldErrors = details?.fieldErrors as Array<Record<string, unknown>> | undefined;
+    expect(fieldErrors).toBeDefined();
+    expect(fieldErrors).toContainEqual({ path: '/cwd', code: 'invalid_value' });
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
 });

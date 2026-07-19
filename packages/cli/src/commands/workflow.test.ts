@@ -8117,6 +8117,28 @@ describe('workflowRetryCommand — JSON envelope mode (Story 3.3d)', () => {
     expect(execution.exitCode).toBe(64);
   });
 
+  // 3.3D-UNIT-028c [P0] R7-F1 — empty string nodeId emits MALFORMED_REQUEST, not whole-run retry
+  it('3.3D-UNIT-028c: emits MALFORMED_REQUEST when nodeId is empty string (direct call)', async () => {
+    const { workflowRetryCommand: retryCmd } = await import('./workflow');
+
+    const exitCode = await retryCmd('run-retry-empty-node', '', true, 'corr-r7f1');
+
+    expect(exitCode).toBe(64);
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.retry');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(error?.category).toBe('provider_contract');
+    expect(error?.retryable).toBe(false);
+    const details = error?.details as Record<string, unknown> | undefined;
+    const fieldErrors = details?.fieldErrors as Array<Record<string, unknown>> | undefined;
+    expect(fieldErrors).toBeDefined();
+    expect(fieldErrors?.[0]?.path).toBe('/node');
+    expect(fieldErrors?.[0]?.code).toBe('invalid_value');
+  });
+
   // 3.3D-UNIT-028 [P0] AC #3 — retry error: run not found
   it('3.3D-UNIT-028: emits WORKFLOW_RUN_NOT_FOUND for retry on nonexistent run', async () => {
     // SKIP REASON: workflowRetryCommand not yet exported.
