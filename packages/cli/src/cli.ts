@@ -906,6 +906,28 @@ async function main(): Promise<number> {
               console.error('Usage: archon workflow resume <run-id>');
               return 1;
             }
+            const resumeExtras = positionals.slice(3);
+            if (resumeExtras.length > 0) {
+              if (workflowProviderJsonRequested && envelopeCommand) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    fieldErrors: [
+                      {
+                        path: '/run-id',
+                        code: 'unexpected_positional',
+                        detail: `unexpected positional argument(s): ${resumeExtras.join(' ')}`,
+                      },
+                    ],
+                    requestAccepted: false,
+                  },
+                  values['correlation-id'] as string | undefined
+                );
+              }
+              console.error('Usage: archon workflow resume <run-id>');
+              console.error(`Error: unexpected positional argument(s): ${resumeExtras.join(' ')}`);
+              return 1;
+            }
             return await workflowResumeCommand(
               resumeRunId,
               jsonFlag,
@@ -957,6 +979,28 @@ async function main(): Promise<number> {
               console.error('Usage: archon workflow cancel <run-id>');
               return 1;
             }
+            const cancelExtras = positionals.slice(3);
+            if (cancelExtras.length > 0) {
+              if (workflowProviderJsonRequested && envelopeCommand) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    fieldErrors: [
+                      {
+                        path: '/run-id',
+                        code: 'unexpected_positional',
+                        detail: `unexpected positional argument(s): ${cancelExtras.join(' ')}`,
+                      },
+                    ],
+                    requestAccepted: false,
+                  },
+                  values['correlation-id'] as string | undefined
+                );
+              }
+              console.error('Usage: archon workflow cancel <run-id>');
+              console.error(`Error: unexpected positional argument(s): ${cancelExtras.join(' ')}`);
+              return 1;
+            }
             return await workflowCancelCommand(
               cancelRunId,
               jsonFlag,
@@ -979,6 +1023,28 @@ async function main(): Promise<number> {
                 );
               }
               console.error('Usage: archon workflow retry <run-id> [--node <node-id>]');
+              return 1;
+            }
+            const retryExtras = positionals.slice(3);
+            if (retryExtras.length > 0) {
+              if (workflowProviderJsonRequested && envelopeCommand) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    fieldErrors: [
+                      {
+                        path: '/run-id',
+                        code: 'unexpected_positional',
+                        detail: `unexpected positional argument(s): ${retryExtras.join(' ')}`,
+                      },
+                    ],
+                    requestAccepted: false,
+                  },
+                  values['correlation-id'] as string | undefined
+                );
+              }
+              console.error('Usage: archon workflow retry <run-id> [--node <node-id>]');
+              console.error(`Error: unexpected positional argument(s): ${retryExtras.join(' ')}`);
               return 1;
             }
             const rawNodeValue = values.node;

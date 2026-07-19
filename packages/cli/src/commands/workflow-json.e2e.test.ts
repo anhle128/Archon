@@ -1233,4 +1233,86 @@ describe('workflow resume/cancel/retry --json CLI dispatch E2E — real subproce
       rmSync(nonGitCwd, { recursive: true, force: true });
     }
   });
+
+  // 3.3D-CLI-024 [P0] R4-F1 — resume with extra positional args emits MALFORMED_REQUEST
+  test('3.3D-CLI-024: `workflow resume <id> extra --json` emits MALFORMED_REQUEST with unexpected_positional', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'resume',
+      '00000000-0000-0000-0000-000000000000',
+      'extra-arg',
+      '--json',
+      '--correlation-id',
+      'corr-3d-024',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.resume');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(error?.category).toBe('provider_contract');
+    expect(error?.retryable).toBe(false);
+    const details = error?.details as Record<string, unknown> | undefined;
+    const fieldErrors = details?.fieldErrors as Array<Record<string, unknown>> | undefined;
+    expect(fieldErrors).toBeDefined();
+    expect(fieldErrors?.[0]?.path).toBe('/run-id');
+    expect(fieldErrors?.[0]?.code).toBe('unexpected_positional');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-025 [P0] R4-F1 — cancel with extra positional args emits MALFORMED_REQUEST
+  test('3.3D-CLI-025: `workflow cancel <id> extra --json` emits MALFORMED_REQUEST with unexpected_positional', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'cancel',
+      '00000000-0000-0000-0000-000000000000',
+      'extra-arg',
+      '--json',
+      '--correlation-id',
+      'corr-3d-025',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.cancel');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(error?.category).toBe('provider_contract');
+    const details = error?.details as Record<string, unknown> | undefined;
+    const fieldErrors = details?.fieldErrors as Array<Record<string, unknown>> | undefined;
+    expect(fieldErrors).toBeDefined();
+    expect(fieldErrors?.[0]?.path).toBe('/run-id');
+    expect(fieldErrors?.[0]?.code).toBe('unexpected_positional');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-026 [P0] R4-F1 — retry with extra positional args emits MALFORMED_REQUEST
+  test('3.3D-CLI-026: `workflow retry <id> extra --json` emits MALFORMED_REQUEST with unexpected_positional', async () => {
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'retry',
+      '00000000-0000-0000-0000-000000000000',
+      'extra-arg',
+      '--json',
+      '--correlation-id',
+      'corr-3d-026',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.retry');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(error?.category).toBe('provider_contract');
+    const details = error?.details as Record<string, unknown> | undefined;
+    const fieldErrors = details?.fieldErrors as Array<Record<string, unknown>> | undefined;
+    expect(fieldErrors).toBeDefined();
+    expect(fieldErrors?.[0]?.path).toBe('/run-id');
+    expect(fieldErrors?.[0]?.code).toBe('unexpected_positional');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
 });
