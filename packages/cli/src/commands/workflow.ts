@@ -3258,7 +3258,35 @@ export async function workflowRetryCommand(
       const resolvedId = await resolveRunIdArg(runId, cwd);
 
       if (nodeId?.startsWith('--')) {
-        throw new Error('--node value must be a boolean flag');
+        const meta: EnvelopeMeta = {
+          provider: 'archon',
+          command: 'workflow.retry',
+          correlationId: metaCorrelationId,
+          issuedAt: metaIssuedAt,
+        };
+        const envelope = buildErrorEnvelope(
+          meta,
+          {
+            code: 'MALFORMED_REQUEST',
+            category: 'provider_contract',
+            retryable: false,
+            details: {
+              fieldErrors: [
+                {
+                  path: '/node',
+                  code: 'invalid_value',
+                  detail:
+                    '--node value looks like a flag; quote the node id or place --json before --node',
+                },
+              ],
+              requestAccepted: false,
+            },
+            exitCode: EXIT_USAGE,
+          },
+          startTime
+        );
+        console.log(safeStringify(envelope));
+        return EXIT_USAGE;
       }
 
       if (!nodeId) {
