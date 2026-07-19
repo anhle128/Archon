@@ -4,7 +4,7 @@ baseline_commit: efe36f65443bf45813f9a48062b7a08e844cddd4
 
 # Story 3.3d: Provide Archon Recovery Command CLI JSON
 
-Status: review
+Status: in-progress
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -185,6 +185,9 @@ so that external controllers can route recovery actions consistently.
 - [x] [Review][Patch] R7-F2: The DB-unavailable recovery-command envelope serializes raw database driver text in `error.details` [packages/cli/src/cli.ts:682].
 - [x] [Review][Patch] R7-F3: Required recovery-command regression proof remains incomplete [packages/cli/src/commands/workflow-json.e2e.test.ts:51].
 - [x] [Review][Patch] R7-F4: Recovery JSON commands accept an explicit blank `--cwd ""` as the current directory instead of malformed input [packages/cli/src/cli.ts:490].
+- [ ] [Review][Patch] R8-F1: Provider-facing recovery commands ignore unsupported named options and can still proceed to recovery behavior [packages/cli/src/cli.ts:1005].
+- [ ] [Review][Patch] R8-F2: Required recovery-command regression proof remains incomplete after the R7 fix loop [packages/cli/src/commands/workflow-json.e2e.test.ts:51].
+- [ ] [Review][Patch] R8-F3: Non-JSON `workflow resume` now returns before shared post-dispatch behavior, so its CLI behavior is not preserved [packages/cli/src/cli.ts:970].
 
 ## Dev Notes
 
