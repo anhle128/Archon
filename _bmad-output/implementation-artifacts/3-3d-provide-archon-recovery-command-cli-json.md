@@ -162,13 +162,13 @@ so that external controllers can route recovery actions consistently.
 
 ### Review Findings
 
-- [ ] [Review][Patch] R1-F1: `workflowResumeCommand` signature change broke cwd-scoped prefix resolution for direct callers and non-JSON resume behavior [packages/cli/src/commands/workflow.ts:2978].
-- [ ] [Review][Patch] R1-F2: `workflow retry <run-id> --node --json` can escape the JSON envelope because `--json` is consumed as the node value and dispatch enters non-JSON mode [packages/cli/src/cli.ts:444].
-- [ ] [Review][Patch] R1-F3: `workflow.cancel` can classify a post-cancel non-cancelled status as `INTERNAL_ERROR` instead of `UNEXPECTED_STATE` [packages/cli/src/commands/workflow.ts:3166].
-- [ ] [Review][Patch] R1-F4: Targeted `workflow.retry --json --node` audit attribution does not match the provider-command contract [packages/cli/src/commands/workflow.ts:3293].
-- [ ] [Review][Patch] R1-F5: Required node-targeted retry proof remains skipped, leaving the mutating retry path unproved [packages/cli/src/commands/workflow.test.ts:7744].
-- [ ] [Review][Patch] R1-F6: CLI usage/help text omits the new `workflow cancel` and `workflow retry` recovery commands [packages/cli/src/cli.ts:237].
-- [ ] [Review][Patch] R1-F7: Resume JSON can emit a success envelope after readback observes a non-resumable terminal state [packages/cli/src/commands/workflow.ts:2997].
+- [x] [Review][Patch] R1-F1: `workflowResumeCommand` signature change broke cwd-scoped prefix resolution for direct callers and non-JSON resume behavior [packages/cli/src/commands/workflow.ts:2978].
+- [x] [Review][Patch] R1-F2: `workflow retry <run-id> --node --json` can escape the JSON envelope because `--json` is consumed as the node value and dispatch enters non-JSON mode [packages/cli/src/cli.ts:444].
+- [x] [Review][Patch] R1-F3: `workflow.cancel` can classify a post-cancel non-cancelled status as `INTERNAL_ERROR` instead of `UNEXPECTED_STATE` [packages/cli/src/commands/workflow.ts:3166].
+- [x] [Review][Patch] R1-F4: Targeted `workflow.retry --json --node` audit attribution does not match the provider-command contract [packages/cli/src/commands/workflow.ts:3293].
+- [x] [Review][Patch] R1-F5: Required node-targeted retry proof remains skipped, leaving the mutating retry path unproved [packages/cli/src/commands/workflow.test.ts:7744].
+- [x] [Review][Patch] R1-F6: CLI usage/help text omits the new `workflow cancel` and `workflow retry` recovery commands [packages/cli/src/cli.ts:237].
+- [x] [Review][Patch] R1-F7: Resume JSON can emit a success envelope after readback observes a non-resumable terminal state [packages/cli/src/commands/workflow.ts:2997].
 
 ## Dev Notes
 

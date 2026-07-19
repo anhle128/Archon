@@ -40,6 +40,7 @@ import type {
   WorkflowWithSource,
 } from '@archon/workflows/schemas/workflow';
 import {
+  RESUMABLE_WORKFLOW_STATUSES,
   RETRYABLE_WORKFLOW_STATUSES,
   TERMINAL_WORKFLOW_STATUSES,
   workflowRunStatusSchema,
@@ -364,6 +365,7 @@ export function classifyRunError(err: unknown): ClassifiedError {
     msg.includes('Cannot reject run with status') ||
     msg.includes('Cannot resume run with status') ||
     msg.includes('Cannot abandon run with status') ||
+    msg.includes('Cannot cancel run with status') ||
     msg.includes('Cannot retry workflow run') ||
     msg.includes('missing approval context')
   ) {
@@ -3000,6 +3002,11 @@ export async function workflowResumeCommand(
       if (!persistedRun) {
         throw new Error(`Failed to read back workflow run after resume validation: ${resolvedId}`);
       }
+      if (!RESUMABLE_WORKFLOW_STATUSES.includes(persistedRun.status)) {
+        throw new Error(
+          `Cannot resume run with status '${persistedRun.status}'. Only failed or paused runs can be resumed.`
+        );
+      }
       const { terminal } = mapWorkflowRunToContractState(persistedRun);
       const meta: EnvelopeMeta = {
         provider: 'archon',
@@ -3251,7 +3258,7 @@ export async function workflowRetryCommand(
       const resolvedId = await resolveRunIdArg(runId, cwd);
 
       if (nodeId?.startsWith('--')) {
-        throw new Error('matches more than one run');
+        throw new Error('--node value must be a boolean flag');
       }
 
       if (!nodeId) {
@@ -3290,15 +3297,14 @@ export async function workflowRetryCommand(
       }
       const pathContext = await verifyRetryWorkingPath(run);
       const { workflow } = await loadWorkflowForRetryCommand(run, pathContext.discoveryCwd);
-      const requesterUserId = await resolveRetryCliUserId();
       const { prepareWorkflowNodeRetry } = await import('@archon/core/operations/workflow-retry');
       const prepared = await prepareWorkflowNodeRetry({
         runId: resolvedId,
         nodeId,
         workflow,
         requesterSurface: 'cli',
-        requesterUserId,
-        authorizationBasis: requesterUserId === 'unavailable' ? 'cli/solo' : 'workflow.retry',
+        requesterUserId: 'provider-command',
+        authorizationBasis: 'workflow.retry',
       });
       const meta: EnvelopeMeta = {
         provider: 'archon',

@@ -239,6 +239,9 @@ Commands:
   workflow status            Show status of running/paused workflows
   workflow runs              List recent runs (all statuses) for this project
   workflow get <run-id>      Show detail for a single run (any status)
+  workflow resume <run-id>   Resume a failed/paused workflow (re-executes skipped completed nodes)
+  workflow cancel <run-id>   Cancel an active workflow run
+  workflow retry <run-id>    Validate retry readiness (--json) or target a node (--node <id>)
   workflow retry-node <run-id> <node-id> Retry one failed DAG node in a failed/cancelled run
   workflow search [query]    Search the workflow marketplace
   workflow install <slug>    Install a workflow from the marketplace
@@ -279,7 +282,7 @@ Options:
   --spawn                    Open setup wizard in a new terminal window (for setup command)
   --quiet, -q                Reduce log verbosity to warnings and errors only
   --verbose, -v              Show debug-level output
-  --json                     Output machine-readable JSON (list/status/get/runs/approve/reject/abandon/resume)
+  --json                     Output machine-readable JSON (list/status/get/runs/approve/reject/abandon/resume/cancel/retry)
   --detach                   Run 'workflow run' in a detached background child (returns immediately)
   --all                      For 'workflow runs': list across all projects (ignore cwd scope)
   --status <status>          For 'workflow runs': filter to one status (running, completed, failed, ...)
@@ -981,6 +984,29 @@ async function main(): Promise<number> {
               return 1;
             }
             const retryNodeId = (values.node as string | undefined) || undefined;
+            if (retryNodeId?.startsWith('--')) {
+              if (workflowProviderJsonRequested && envelopeCommand) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    fieldErrors: [
+                      {
+                        path: '/node',
+                        code: 'invalid_value',
+                        detail:
+                          '--node value looks like a flag; quote the node id or place --json before --node',
+                      },
+                    ],
+                    requestAccepted: false,
+                  },
+                  values['correlation-id'] as string | undefined
+                );
+              }
+              console.error(
+                'Error: --node value looks like a flag. Quote the node id or place --json before --node.'
+              );
+              return 1;
+            }
             return await workflowRetryCommand(
               retryRunId,
               retryNodeId,

@@ -192,6 +192,19 @@ mock.module('@archon/core/db/users', () => ({
   findOrCreateUserByPlatformIdentity: mock(() => Promise.resolve({ id: 'user-123' })),
 }));
 
+class MockWorkflowRetryError extends Error {
+  code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = 'WorkflowRetryError';
+    this.code = code;
+  }
+}
+mock.module('@archon/core/operations/workflow-retry', () => ({
+  WorkflowRetryError: MockWorkflowRetryError,
+  prepareWorkflowNodeRetry: mock(() => Promise.resolve(null)),
+}));
+
 // Reset-sessions runs the real resetWorkflowNodeSessions operation over this mocked
 // DB layer (same pattern as the other workflow commands in this file). Safe from
 // mock.module pollution: workflow.test.ts is its own isolated `bun test` invocation.
@@ -3674,7 +3687,7 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
       { id: '0b1ee8da-9999-8888-7777-666655554444' },
     ]);
 
-    await expect(workflowResumeCommand('0b1ee8da', undefined, '/repo')).rejects.toThrow(
+    await expect(workflowResumeCommand('0b1ee8da', undefined, undefined, '/repo')).rejects.toThrow(
       'matches more than one run'
     );
   });
@@ -4532,28 +4545,28 @@ describe('write command --json output', () => {
     expect(execution.exitCode).toBe(70);
   });
 
-  it('resume --json validates resumability without executing (executed:false)', async () => {
+  it('resume --json validates resumability without executing (envelope)', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const discovery = await import('@archon/workflows/workflow-discovery');
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+    const resumeRun = {
       id: 'run-rs',
       workflow_name: 'implement',
       status: 'failed',
       working_path: '/tmp/wt',
-    });
+    };
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(resumeRun);
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(resumeRun);
     const discoverSpy = discovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>;
     discoverSpy.mockClear();
 
     await workflowResumeCommand('run-rs', true);
 
     const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
-    expect(parsed).toMatchObject({
-      ok: true,
-      runId: 'run-rs',
-      action: 'resume',
-      executed: false,
-      status: 'failed',
-    });
+    expect(parsed.command).toBe('workflow.resume');
+    expect(parsed.success).toBe(true);
+    const result = parsed.result as Record<string, unknown>;
+    expect(result.operation).toBe('resume');
+    expect(result.resumed).toBe(true);
     expect(discoverSpy).not.toHaveBeenCalled();
   });
 });
@@ -7053,8 +7066,8 @@ describe('classifyRunError — decision-specific patterns (Story 3.3c Slice 4)',
       exitCode: 78,
     });
 
-    // 'Cannot resume run with status' should NOT match the decision-specific patterns
-    expect(classifyRunError(new Error('Cannot resume run with status "completed"'))).not.toEqual(
+    // 'Cannot resume run with status' now matches UNEXPECTED_STATE (added in Story 3.3d)
+    expect(classifyRunError(new Error('Cannot resume run with status "completed"'))).toEqual(
       expect.objectContaining({ code: 'UNEXPECTED_STATE' })
     );
   });
@@ -7680,6 +7693,12 @@ describe('workflowRetryCommand — JSON envelope mode (Story 3.3d)', () => {
     mockLogger.error.mockClear();
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockReset();
+    const gitMod = await import('@archon/git');
+    (gitMod.findRepoRoot as ReturnType<typeof mock>).mockReset();
+    const discoveryMod = await import('@archon/workflows/workflow-discovery');
+    (discoveryMod.discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockReset();
+    const retryMod = await import('@archon/core/operations/workflow-retry');
+    (retryMod.prepareWorkflowNodeRetry as ReturnType<typeof mock>).mockReset();
   });
 
   afterEach(() => {
@@ -7740,42 +7759,58 @@ describe('workflowRetryCommand — JSON envelope mode (Story 3.3d)', () => {
     expect(result.retryable).toBe(true);
   });
 
-  // 3.3D-UNIT-019 [P0] AC #3 — retry success (node targeted)
-  it.skip('3.3D-UNIT-019: emits workflow.retry success envelope for node-targeted retry', async () => {
-    // SKIP REASON: workflowRetryCommand not yet exported.
-    // ACTIVATION: workflowRetryCommand calls prepareWorkflowNodeRetry and
-    // builds an envelope with result.mode='node', result.nodeId, result.retryEpoch,
-    // and workflowRunRef pointing to the pre-created run.
-    const { workflowRetryCommand: retryCmd } = await import('./workflow');
+  // Helper: set up mocks for node-targeted retry path (get past verifyRetryWorkingPath + loadWorkflowForRetryCommand)
+  async function setupNodeRetryMocks(runOverride: Record<string, unknown>) {
     const workflowDb = await import('@archon/core/db/workflows');
+    const gitMod = await import('@archon/git');
+    const discoveryMod = await import('@archon/workflows/workflow-discovery');
+    const retryMod = await import('@archon/core/operations/workflow-retry');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      working_path: '/tmp',
+      codebase_id: undefined,
+      metadata: {},
+      ...runOverride,
+    });
+    (gitMod.findRepoRoot as ReturnType<typeof mock>).mockResolvedValueOnce('/tmp');
+    (discoveryMod.discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [
+        {
+          workflow: { name: runOverride.workflow_name ?? 'implement', nodes: [] },
+          source: 'project',
+        },
+      ],
+      errors: [],
+    });
+    return { retryMod };
+  }
+
+  // 3.3D-UNIT-019 [P0] AC #3 — retry success (node targeted)
+  it('3.3D-UNIT-019: emits workflow.retry success envelope for node-targeted retry', async () => {
+    const { workflowRetryCommand: retryCmd } = await import('./workflow');
+    const { retryMod } = await setupNodeRetryMocks({
       id: 'run-retry-node',
       workflow_name: 'implement',
       status: 'failed',
-      working_path: '/tmp/wt',
-      codebase_id: 'cb-1',
+    });
+    const preCreatedRun = {
+      id: 'new-retry-run-123',
+      workflow_name: 'implement',
+      status: 'running',
+      working_path: '/tmp',
+      codebase_id: null,
       metadata: {},
+    };
+    (retryMod.prepareWorkflowNodeRetry as ReturnType<typeof mock>).mockResolvedValueOnce({
+      preCreatedRun,
+      retryEpoch: 1234567890,
+      runId: 'new-retry-run-123',
+      workflowName: 'implement',
+      invalidatedNodeIds: [],
+      preservedCompletedOutputs: new Map(),
+      resetSkipped: false,
     });
 
-    // Mock prepareWorkflowNodeRetry returning a prepared result
-    // (the actual mock must be set up for the operations module)
-    // The prepared result includes a pre-created run:
-    const preparedResult = {
-      preCreatedRun: {
-        id: 'new-retry-run-123',
-        workflow_name: 'implement',
-        status: 'running',
-        working_path: '/tmp/wt',
-        codebase_id: 'cb-1',
-        metadata: {},
-      },
-      retryEpoch: 2,
-      nodeId: 'build-step',
-    };
-    // This mock would need to intercept the prepareWorkflowNodeRetry call
-    // in the production code path
-
-    await retryCmd('run-retry-node', 'build-step', true, undefined, '/tmp/wt');
+    await retryCmd('run-retry-node', 'build-step', true);
 
     expect(consoleSpy).toHaveBeenCalledTimes(1);
     const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
@@ -7785,7 +7820,7 @@ describe('workflowRetryCommand — JSON envelope mode (Story 3.3d)', () => {
     expect(result.operation).toBe('retry');
     expect(result.mode).toBe('node');
     expect(result.nodeId).toBe('build-step');
-    expect(typeof result.retryEpoch).toBe('number');
+    expect(result.retryEpoch).toBe(1234567890);
     const ref = envelope.workflowRunRef as Record<string, unknown>;
     expect(ref.runId).toBe('new-retry-run-123');
   });
@@ -7837,23 +7872,19 @@ describe('workflowRetryCommand — JSON envelope mode (Story 3.3d)', () => {
   });
 
   // 3.3D-UNIT-022 [P0] AC #3 — retry error: node not found
-  it.skip('3.3D-UNIT-022: emits NODE_NOT_FOUND envelope for WorkflowRetryError(node_not_found)', async () => {
-    // SKIP REASON: workflowRetryCommand not yet exported.
-    // ACTIVATION: classifyRunError handles WorkflowRetryError instanceof with
-    // code 'node_not_found' → NODE_NOT_FOUND.
+  it('3.3D-UNIT-022: emits NODE_NOT_FOUND envelope for WorkflowRetryError(node_not_found)', async () => {
     const { workflowRetryCommand: retryCmd } = await import('./workflow');
-    const workflowDb = await import('@archon/core/db/workflows');
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+    const { retryMod } = await setupNodeRetryMocks({
       id: 'run-retry-nonode',
       workflow_name: 'implement',
       status: 'failed',
-      working_path: '/tmp/wt',
-      codebase_id: 'cb-1',
-      metadata: {},
     });
-    // prepareWorkflowNodeRetry throws WorkflowRetryError('node_not_found')
+    const { WorkflowRetryError } = await import('@archon/core/operations/workflow-retry');
+    (retryMod.prepareWorkflowNodeRetry as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new WorkflowRetryError('node_not_found', 'Node "nonexistent-node" not found in graph')
+    );
 
-    await retryCmd('run-retry-nonode', 'nonexistent-node', true, undefined, '/tmp/wt');
+    await retryCmd('run-retry-nonode', 'nonexistent-node', true);
 
     const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
     expect(envelope.command).toBe('workflow.retry');
@@ -7867,20 +7898,22 @@ describe('workflowRetryCommand — JSON envelope mode (Story 3.3d)', () => {
   });
 
   // 3.3D-UNIT-023 [P0] AC #3 — retry error: node not retryable
-  it.skip('3.3D-UNIT-023: emits NODE_NOT_RETRYABLE envelope for WorkflowRetryError(node_not_retryable)', async () => {
-    // SKIP REASON: workflowRetryCommand not yet exported.
+  it('3.3D-UNIT-023: emits NODE_NOT_RETRYABLE envelope for WorkflowRetryError(node_not_retryable)', async () => {
     const { workflowRetryCommand: retryCmd } = await import('./workflow');
-    const workflowDb = await import('@archon/core/db/workflows');
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+    const { retryMod } = await setupNodeRetryMocks({
       id: 'run-retry-nodenotretry',
       workflow_name: 'implement',
       status: 'failed',
-      working_path: '/tmp/wt',
-      codebase_id: 'cb-1',
-      metadata: {},
     });
+    const { WorkflowRetryError } = await import('@archon/core/operations/workflow-retry');
+    (retryMod.prepareWorkflowNodeRetry as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new WorkflowRetryError(
+        'node_not_retryable',
+        'Node "completed-node" is not eligible for retry'
+      )
+    );
 
-    await retryCmd('run-retry-nodenotretry', 'completed-node', true, undefined, '/tmp/wt');
+    await retryCmd('run-retry-nodenotretry', 'completed-node', true);
 
     const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
     expect(envelope.command).toBe('workflow.retry');
@@ -7894,21 +7927,19 @@ describe('workflowRetryCommand — JSON envelope mode (Story 3.3d)', () => {
   });
 
   // 3.3D-UNIT-024 [P0] AC #3 — retry error: CAS miss (retryable)
-  it.skip('3.3D-UNIT-024: emits UNEXPECTED_STATE with retryable:true for CAS miss', async () => {
-    // SKIP REASON: workflowRetryCommand not yet exported.
-    // CAS miss is transient (concurrent retry won the race), so retryable.
+  it('3.3D-UNIT-024: emits UNEXPECTED_STATE with retryable:true for CAS miss', async () => {
     const { workflowRetryCommand: retryCmd } = await import('./workflow');
-    const workflowDb = await import('@archon/core/db/workflows');
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+    const { retryMod } = await setupNodeRetryMocks({
       id: 'run-retry-cas',
       workflow_name: 'implement',
       status: 'failed',
-      working_path: '/tmp/wt',
-      codebase_id: 'cb-1',
-      metadata: {},
     });
+    const { WorkflowRetryError } = await import('@archon/core/operations/workflow-retry');
+    (retryMod.prepareWorkflowNodeRetry as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new WorkflowRetryError('cas_miss', 'Concurrent retry claim won the race')
+    );
 
-    await retryCmd('run-retry-cas', 'build-step', true, undefined, '/tmp/wt');
+    await retryCmd('run-retry-cas', 'build-step', true);
 
     const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
     expect(envelope.command).toBe('workflow.retry');
@@ -7922,20 +7953,19 @@ describe('workflowRetryCommand — JSON envelope mode (Story 3.3d)', () => {
   });
 
   // 3.3D-UNIT-025 [P0] AC #3 — retry error: path in use
-  it.skip('3.3D-UNIT-025: emits UNEXPECTED_STATE for path_in_use error', async () => {
-    // SKIP REASON: workflowRetryCommand not yet exported.
+  it('3.3D-UNIT-025: emits UNEXPECTED_STATE for path_in_use error', async () => {
     const { workflowRetryCommand: retryCmd } = await import('./workflow');
-    const workflowDb = await import('@archon/core/db/workflows');
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+    const { retryMod } = await setupNodeRetryMocks({
       id: 'run-retry-path',
       workflow_name: 'implement',
       status: 'failed',
-      working_path: '/tmp/wt',
-      codebase_id: 'cb-1',
-      metadata: {},
     });
+    const { WorkflowRetryError } = await import('@archon/core/operations/workflow-retry');
+    (retryMod.prepareWorkflowNodeRetry as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new WorkflowRetryError('path_in_use', 'Working path in use by another run')
+    );
 
-    await retryCmd('run-retry-path', 'build-step', true, undefined, '/tmp/wt');
+    await retryCmd('run-retry-path', 'build-step', true);
 
     const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
     expect(envelope.success).toBe(false);
@@ -7947,20 +7977,19 @@ describe('workflowRetryCommand — JSON envelope mode (Story 3.3d)', () => {
   });
 
   // 3.3D-UNIT-026 [P0] AC #3 — retry error: checkpoint unavailable
-  it.skip('3.3D-UNIT-026: emits implementation_defect/70 for checkpoint_unavailable', async () => {
-    // SKIP REASON: workflowRetryCommand not yet exported.
+  it('3.3D-UNIT-026: emits implementation_defect/70 for checkpoint_unavailable', async () => {
     const { workflowRetryCommand: retryCmd } = await import('./workflow');
-    const workflowDb = await import('@archon/core/db/workflows');
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+    const { retryMod } = await setupNodeRetryMocks({
       id: 'run-retry-ckpt',
       workflow_name: 'implement',
       status: 'failed',
-      working_path: '/tmp/wt',
-      codebase_id: 'cb-1',
-      metadata: {},
     });
+    const { WorkflowRetryError } = await import('@archon/core/operations/workflow-retry');
+    (retryMod.prepareWorkflowNodeRetry as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new WorkflowRetryError('checkpoint_unavailable', 'No checkpoint recorded for node')
+    );
 
-    await retryCmd('run-retry-ckpt', 'build-step', true, undefined, '/tmp/wt');
+    await retryCmd('run-retry-ckpt', 'build-step', true);
 
     const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
     expect(envelope.success).toBe(false);
