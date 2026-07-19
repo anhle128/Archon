@@ -188,6 +188,9 @@ so that external controllers can route recovery actions consistently.
 - [ ] [Review][Patch] R8-F1: Provider-facing recovery commands ignore unsupported named options and can still proceed to recovery behavior [packages/cli/src/cli.ts:1005].
 - [ ] [Review][Patch] R8-F2: Required recovery-command regression proof remains incomplete after the R7 fix loop [packages/cli/src/commands/workflow-json.e2e.test.ts:51].
 - [ ] [Review][Patch] R8-F3: Non-JSON `workflow resume` now returns before shared post-dispatch behavior, so its CLI behavior is not preserved [packages/cli/src/cli.ts:970].
+- [ ] [Review][Patch] R9-F1: Provider-facing recovery commands ignore unsupported named options and can still proceed to recovery behavior [packages/cli/src/cli.ts:1005].
+- [ ] [Review][Patch] R9-F2: Required recovery-command regression proof remains incomplete after the R8 review [packages/cli/src/commands/workflow-json.e2e.test.ts:51].
+- [ ] [Review][Patch] R9-F3: Non-JSON `workflow resume` still returns before shared post-dispatch behavior, so its CLI behavior is not preserved [packages/cli/src/cli.ts:970].
 
 ## Dev Notes
 
