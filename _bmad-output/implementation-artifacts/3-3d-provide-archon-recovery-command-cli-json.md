@@ -174,6 +174,7 @@ so that external controllers can route recovery actions consistently.
 - [x] [Review][Patch] R3-F1: `workflow retry <run-id> --json --node` can throw a plain TypeError instead of returning a recovery-command error envelope [packages/cli/src/cli.ts:986].
 - [x] [Review][Patch] R3-F2: `workflow retry <run-id> --node --json` still bypasses JSON pre-handler cwd/git error envelopes when cwd validation fails before retry dispatch [packages/cli/src/cli.ts:598].
 - [x] [Review][Patch] R3-F3: R2-F2 retry cwd/non-git subprocess proof remains missing even though the story/test-design requires it [packages/cli/src/commands/workflow-json.e2e.test.ts:950].
+- [ ] [Review][Patch] R4-F1: Provider-facing recovery commands ignore unexpected extra positional arguments after the run ID instead of treating the request as malformed [packages/cli/src/cli.ts:893].
 
 ## Dev Notes
 
