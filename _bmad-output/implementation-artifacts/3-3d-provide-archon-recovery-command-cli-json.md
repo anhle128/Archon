@@ -4,7 +4,7 @@ baseline_commit: efe36f65443bf45813f9a48062b7a08e844cddd4
 
 # Story 3.3d: Provide Archon Recovery Command CLI JSON
 
-Status: review
+Status: in-progress
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -171,6 +171,9 @@ so that external controllers can route recovery actions consistently.
 - [x] [Review][Patch] R1-F7: Resume JSON can emit a success envelope after readback observes a non-resumable terminal state [packages/cli/src/commands/workflow.ts:2997].
 - [x] [Review][Patch] R2-F1: Direct `workflowRetryCommand(..., nodeId, true, ...)` calls with a flag-like `nodeId` emit a generic malformed-request envelope without the required structured `/node` field error [packages/cli/src/commands/workflow.ts:3260].
 - [x] [Review][Patch] R2-F2: Required retry-specific malformed-input E2E proof is missing for the recovery command subprocess boundary [packages/cli/src/commands/workflow-json.e2e.test.ts:950].
+- [ ] [Review][Patch] R3-F1: `workflow retry <run-id> --json --node` can throw a plain TypeError instead of returning a recovery-command error envelope [packages/cli/src/cli.ts:986].
+- [ ] [Review][Patch] R3-F2: `workflow retry <run-id> --node --json` still bypasses JSON pre-handler cwd/git error envelopes when cwd validation fails before retry dispatch [packages/cli/src/cli.ts:598].
+- [ ] [Review][Patch] R3-F3: R2-F2 retry cwd/non-git subprocess proof remains missing even though the story/test-design requires it [packages/cli/src/commands/workflow-json.e2e.test.ts:950].
 
 ## Dev Notes
 
