@@ -1,6 +1,6 @@
 # Story 3.3d: Provide Archon Recovery Command CLI JSON
 
-Status: review
+Status: in-progress
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -114,6 +114,10 @@ so that external controllers can route recovery actions consistently without rel
 - [x] [Review][Patch] R1-F25: Whole-run retry still does not guarantee that the detached worker claims the exact requested run. [packages/cli/src/commands/workflow.ts:3024]
 - [x] [Review][Patch] R1-F26: The provider cancel fix changed legacy `workflow abandon`/shared cancellation behavior for `pending` runs. [packages/core/src/operations/workflow-operations.ts:115]
 - [x] [Review][Patch] R1-F27: Required executable recovery proofs are still incomplete despite the story marking proof tasks resolved. [packages/cli/src/commands/workflow-json.e2e.test.ts:1165]
+- [ ] [Review][Patch] R1-F28: Pending `workflow abandon` uses a stale read followed by an unguarded update, so it can overwrite a run that has already left `pending`. [packages/core/src/operations/workflow-operations.ts:144]
+- [ ] [Review][Patch] R1-F29: JSON resume can report `resumable: true` for a run whose persisted execution context is no longer usable. [packages/cli/src/commands/workflow.ts:2967]
+- [ ] [Review][Patch] R1-F30: Required recovery proofs still stop at parent envelopes and leave detached workers or durable side effects unobserved. [packages/cli/src/commands/workflow-json.e2e.test.ts:1165]
+- [ ] [Review][Patch] R1-F31: Malformed recovery-command JSON errors echo raw unexpected positional argument values. [packages/cli/src/cli.ts:939]
 
 ## Dev Notes
 
