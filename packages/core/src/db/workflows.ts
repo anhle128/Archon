@@ -1116,6 +1116,32 @@ export async function cancelWorkflowRun(id: string): Promise<{ cancelled: boolea
 }
 
 /**
+ * Atomically transition a pending run to cancelled (story 3.3d R1-F28).
+ *
+ * `cancelWorkflowRun` excludes 'pending' from its CAS allowlist (running/paused/failed).
+ * Legacy `abandonWorkflow` falls back to this function for pending runs so the
+ * transition is guarded — if the run has already left 'pending' (e.g., started
+ * executing between the read and the update), the CAS loses safely instead of
+ * overwriting the new status.
+ */
+export async function cancelPendingWorkflowRun(id: string): Promise<{ cancelled: boolean }> {
+  let result: Awaited<ReturnType<typeof pool.query>>;
+  try {
+    result = await pool.query(
+      `UPDATE remote_agent_workflow_runs
+       SET status = 'cancelled', completed_at = ${getDialect().now()}
+       WHERE id = $1 AND status = 'pending'`,
+      [id]
+    );
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err }, 'db.workflow_run_cancel_pending_failed');
+    throw new Error(`Failed to cancel pending workflow run: ${err.message}`);
+  }
+  return { cancelled: (result.rowCount ?? 0) > 0 };
+}
+
+/**
  * Pause a running workflow run for human approval.
  * Sets status to 'paused' and stores approval context in metadata.
  * Does NOT set completed_at — the run is not finished.

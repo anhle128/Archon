@@ -936,14 +936,14 @@ async function main(): Promise<number> {
                 return await emitWorkflowCommandMalformedEnvelope(
                   envelopeCommand,
                   {
-                    parseError: `Unexpected extra argument: '${positionals[3]}'`,
+                    parseError: 'Unexpected extra argument after run-id',
                     requestAccepted: false,
                   },
                   rawWorkflowProviderOptions.correlationIdValue
                 );
               }
               console.error(
-                `Error: unexpected extra argument '${positionals[3]}'. Usage: archon workflow resume <run-id> [--json]`
+                'Error: unexpected extra argument after run-id. Usage: archon workflow resume <run-id> [--json]'
               );
               return 1;
             }
@@ -1013,14 +1013,14 @@ async function main(): Promise<number> {
                 return await emitWorkflowCommandMalformedEnvelope(
                   envelopeCommand,
                   {
-                    parseError: `Unexpected extra argument: '${positionals[3]}'`,
+                    parseError: 'Unexpected extra argument after run-id',
                     requestAccepted: false,
                   },
                   rawWorkflowProviderOptions.correlationIdValue
                 );
               }
               console.error(
-                `Error: unexpected extra argument '${positionals[3]}'. Usage: archon workflow retry <run-id> [--node <node-id>] --json`
+                'Error: unexpected extra argument after run-id. Usage: archon workflow retry <run-id> [--node <node-id>] --json'
               );
               return 1;
             }
@@ -1093,14 +1093,14 @@ async function main(): Promise<number> {
                 return await emitWorkflowCommandMalformedEnvelope(
                   envelopeCommand,
                   {
-                    parseError: `Unexpected extra argument: '${positionals[3]}'`,
+                    parseError: 'Unexpected extra argument after run-id',
                     requestAccepted: false,
                   },
                   rawWorkflowProviderOptions.correlationIdValue
                 );
               }
               console.error(
-                `Error: unexpected extra argument '${positionals[3]}'. Usage: archon workflow cancel <run-id> --json`
+                'Error: unexpected extra argument after run-id. Usage: archon workflow cancel <run-id> --json'
               );
               return 1;
             }

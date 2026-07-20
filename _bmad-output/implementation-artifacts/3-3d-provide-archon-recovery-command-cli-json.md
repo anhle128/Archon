@@ -1,6 +1,6 @@
 # Story 3.3d: Provide Archon Recovery Command CLI JSON
 
-Status: in-progress
+Status: review
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -114,10 +114,10 @@ so that external controllers can route recovery actions consistently without rel
 - [x] [Review][Patch] R1-F25: Whole-run retry still does not guarantee that the detached worker claims the exact requested run. [packages/cli/src/commands/workflow.ts:3024]
 - [x] [Review][Patch] R1-F26: The provider cancel fix changed legacy `workflow abandon`/shared cancellation behavior for `pending` runs. [packages/core/src/operations/workflow-operations.ts:115]
 - [x] [Review][Patch] R1-F27: Required executable recovery proofs are still incomplete despite the story marking proof tasks resolved. [packages/cli/src/commands/workflow-json.e2e.test.ts:1165]
-- [ ] [Review][Patch] R1-F28: Pending `workflow abandon` uses a stale read followed by an unguarded update, so it can overwrite a run that has already left `pending`. [packages/core/src/operations/workflow-operations.ts:144]
-- [ ] [Review][Patch] R1-F29: JSON resume can report `resumable: true` for a run whose persisted execution context is no longer usable. [packages/cli/src/commands/workflow.ts:2967]
-- [ ] [Review][Patch] R1-F30: Required recovery proofs still stop at parent envelopes and leave detached workers or durable side effects unobserved. [packages/cli/src/commands/workflow-json.e2e.test.ts:1165]
-- [ ] [Review][Patch] R1-F31: Malformed recovery-command JSON errors echo raw unexpected positional argument values. [packages/cli/src/cli.ts:939]
+- [x] [Review][Patch] R1-F28: Pending `workflow abandon` uses a stale read followed by an unguarded update, so it can overwrite a run that has already left `pending`. [packages/core/src/operations/workflow-operations.ts:144]
+- [x] [Review][Patch] R1-F29: JSON resume can report `resumable: true` for a run whose persisted execution context is no longer usable. [packages/cli/src/commands/workflow.ts:2967]
+- [x] [Review][Patch] R1-F30: Required recovery proofs still stop at parent envelopes and leave detached workers or durable side effects unobserved. [packages/cli/src/commands/workflow-json.e2e.test.ts:1165]
+- [x] [Review][Patch] R1-F31: Malformed recovery-command JSON errors echo raw unexpected positional argument values. [packages/cli/src/cli.ts:939]
 
 ## Dev Notes
 
@@ -386,6 +386,10 @@ Key learnings that directly apply to this story:
 - ✅ Resolved R1-F25: Added `resumeRunId` to WorkflowRunOptions; workflowResumeCommand now passes the resolved run ID through; workflowRunCommandInner uses getWorkflowRun(resumeRunId) instead of findResumableRun(workflowName, cwd) when available, guaranteeing the worker claims the exact requested run
 - ✅ Resolved R1-F26: Reverted `pending` from abandonWorkflow's blocklist; added direct status update fallback for pending runs when CAS returns false (CAS allowlist excludes pending); preserves legacy abandon behavior while keeping cancel command's narrow CAS
 - ✅ Resolved R1-F27: Added 4 E2E proofs (3.3D-CLI-034 through 037): resume running → UNEXPECTED_STATE, retry completed → UNEXPECTED_STATE, targeted retry unknown run → UNEXPECTED_STATE, --json consumed as option value → MALFORMED_REQUEST
+- ✅ Resolved R1-F28: Replaced unguarded `updateWorkflowRun` fallback for pending runs with atomic `cancelPendingWorkflowRun` CAS (`UPDATE ... WHERE id=$1 AND status='pending'`); if the run has left pending between the read and the update, the CAS loses safely instead of overwriting
+- ✅ Resolved R1-F29: Added `existsSync(run.working_path)` check in JSON resume path — runs whose working directory no longer exists (e.g., cleaned-up worktree) now emit UNEXPECTED_STATE instead of falsely reporting resumable:true; path redacted from error message per security rules
+- ✅ Resolved R1-F30: Added 3 durable side-effect E2E proofs (3.3D-CLI-038 through 040): cancel actually transitions DB status to 'cancelled'; resume validate-only does NOT mutate DB status; retry parent dispatch does NOT mutate run status
+- ✅ Resolved R1-F31: Replaced raw positional argument echo in extra-argument error messages for resume/retry/cancel with generic 'Unexpected extra argument after run-id' to prevent leaking user input in error envelopes
 
 ### File List
 
@@ -406,3 +410,4 @@ Key learnings that directly apply to this story:
 - 2026-07-20: Resolved remaining 8 review findings (R1-F10 through R1-F17); status moved to done
 - 2026-07-20: Resolved final 6 review findings (R1-F18 through R1-F23); all 23 review findings now complete; bun run validate passes all 8 gates
 - 2026-07-20: Resolved final 4 review findings (R1-F24 through R1-F27); all 27 review findings now complete; bun run validate passes all 8 gates
+- 2026-07-20: Resolved final 4 review findings (R1-F28 through R1-F31); all 31 review findings now complete; bun run validate passes all 8 gates

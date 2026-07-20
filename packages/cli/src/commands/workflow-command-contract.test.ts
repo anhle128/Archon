@@ -49,6 +49,12 @@ mock.module('@archon/paths', () => ({
   BUNDLED_IS_BINARY: false,
 }));
 
+const actualFs = await import('node:fs');
+mock.module('node:fs', () => ({
+  ...actualFs,
+  existsSync: mock(() => true),
+}));
+
 mock.module('@archon/isolation', () => ({
   configureIsolation: mock(() => undefined),
   getIsolationProvider: mock(() => ({

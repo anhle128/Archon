@@ -21,7 +21,7 @@ import {
 import type { ExecutionContext, ContainerBackend, ContainerBackendConfig } from '@archon/isolation';
 import { createLogger, getArchonHome, BUNDLED_IS_BINARY } from '@archon/paths';
 import { join, sep } from 'node:path';
-import { mkdirSync, openSync, closeSync } from 'node:fs';
+import { mkdirSync, openSync, closeSync, existsSync } from 'node:fs';
 import { realpath } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
@@ -2967,6 +2967,11 @@ export async function workflowResumeCommand(
       if (!run.working_path) {
         throw new Error(
           `Cannot resume run with status '${run.status}'. No working path recorded — run cannot be resumed.`
+        );
+      }
+      if (!existsSync(run.working_path)) {
+        throw new Error(
+          `Cannot resume run with status '${run.status}'. Working path no longer exists — run context is unusable.`
         );
       }
       const contractState = mapWorkflowRunToContractState(run);

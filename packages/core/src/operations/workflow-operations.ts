@@ -143,13 +143,12 @@ export async function abandonWorkflow(runId: string): Promise<WorkflowRun> {
   // while keeping the cancel command's narrow CAS (story 3.3d R1-F26).
   if (!cancelled && run.status === 'pending') {
     try {
-      await workflowDb.updateWorkflowRun(runId, { status: 'cancelled' });
-      cancelled = true;
+      ({ cancelled } = await workflowDb.cancelPendingWorkflowRun(runId));
     } catch (error) {
       const err = error as Error;
       getLog().error(
         { err, errorType: err.constructor.name, runId },
-        'operations.workflow_abandon_pending_direct_failed'
+        'operations.workflow_abandon_pending_cas_failed'
       );
       throw new Error(`Failed to abandon pending workflow run ${runId}: ${err.message}`);
     }

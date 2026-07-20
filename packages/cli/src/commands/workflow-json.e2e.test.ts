@@ -114,6 +114,19 @@ async function seedRunWithStatus(
   }
 }
 
+function queryRunStatus(runId: string): string | null {
+  const dbPath = join(isolatedHome, 'archon.db');
+  const db = new Database(dbPath);
+  try {
+    const row = db
+      .query('SELECT status FROM remote_agent_workflow_runs WHERE id = ?')
+      .get(runId) as { status: string } | undefined;
+    return row?.status ?? null;
+  } finally {
+    db.close();
+  }
+}
+
 describe('workflow run/get --json CLI dispatch E2E — real subprocess (Story 3.3b)', () => {
   // 3.3B-CLI-031 [P0] R-003,RC-09,RC-10 — a missing `workflow run` name under
   // --json must become a `workflow.start` MALFORMED_REQUEST envelope with
@@ -1500,6 +1513,59 @@ describe('workflow resume/retry/cancel --json CLI dispatch E2E — real subproce
     expect(error?.code).toBe('MALFORMED_REQUEST');
     expect(exitCode).toBe(64);
     expect(stderr).toBe('');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R1-F30 — Durable side-effect proofs: verify DB state after recovery commands
+// ---------------------------------------------------------------------------
+describe('R1-F30 — durable side-effect proofs (Story 3.3d)', () => {
+  // 3.3D-CLI-038 [P0] — cancel actually transitions the DB row to 'cancelled'
+  test('3.3D-CLI-038: `workflow cancel --json` durably transitions run status to cancelled in DB', async () => {
+    const runId = 'aaaa1111-bbbb-cccc-dddd-eeeeeeeeeeee';
+    await seedRunWithStatus(runId, isolatedRepo, 'paused');
+    expect(queryRunStatus(runId)).toBe('paused');
+
+    const { stdout, exitCode } = await runCli(['workflow', 'cancel', runId, '--json']);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.success).toBe(true);
+    expect(exitCode).toBe(0);
+
+    const statusAfter = queryRunStatus(runId);
+    expect(statusAfter).toBe('cancelled');
+  });
+
+  // 3.3D-CLI-039 [P0] — resume validate-only does NOT mutate DB state
+  test('3.3D-CLI-039: `workflow resume --json` does not mutate run status in DB (validate-only)', async () => {
+    const runId = 'bbbb2222-cccc-dddd-eeee-ffffffffffff';
+    await seedRunWithStatus(runId, isolatedRepo, 'paused');
+    expect(queryRunStatus(runId)).toBe('paused');
+
+    const { stdout, exitCode } = await runCli(['workflow', 'resume', runId, '--json']);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.success).toBe(true);
+    expect(exitCode).toBe(0);
+
+    const statusAfter = queryRunStatus(runId);
+    expect(statusAfter).toBe('paused');
+  });
+
+  // 3.3D-CLI-040 [P0] — retry parent dispatch does NOT mutate run status in DB
+  test('3.3D-CLI-040: `workflow retry --json` parent dispatch does not mutate run status in DB', async () => {
+    const runId = 'cccc3333-dddd-eeee-ffff-aaaaaaaaaaaa';
+    await seedFailedRun(runId, isolatedRepo);
+    expect(queryRunStatus(runId)).toBe('failed');
+
+    const { stdout, exitCode } = await runCli(['workflow', 'retry', runId, '--json']);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.success).toBe(true);
+    expect(exitCode).toBe(0);
+
+    const statusAfter = queryRunStatus(runId);
+    expect(statusAfter).toBe('failed');
   });
 });
 

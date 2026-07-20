@@ -43,6 +43,15 @@ mock.module('@archon/paths', () => ({
   BUNDLED_IS_BINARY: false,
 }));
 
+// Mock node:fs — existsSync returns true so resume JSON tests don't fail on
+// non-existent working_path directories (R1-F29). Other functions pass through
+// to the real implementations where needed.
+const actualFs = await import('node:fs');
+mock.module('node:fs', () => ({
+  ...actualFs,
+  existsSync: mock(() => true),
+}));
+
 // Mock @archon/isolation (getIsolationProvider moved here from @archon/core)
 mock.module('@archon/isolation', () => ({
   configureIsolation: mock(() => undefined),
