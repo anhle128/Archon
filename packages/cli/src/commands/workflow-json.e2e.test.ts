@@ -851,8 +851,7 @@ describe('workflow resume/retry/cancel --json CLI dispatch E2E — real subproce
     const envelope = parseSoleJsonLine(stdout);
     expect(envelope.success).toBe(false);
     const error = envelope.error as Record<string, unknown> | undefined;
-    // Should be WORKFLOW_RUN_NOT_FOUND or UNEXPECTED_STATE
-    expect(['WORKFLOW_RUN_NOT_FOUND', 'UNEXPECTED_STATE']).toContain(error?.code);
+    expect(error?.code).toBe('UNEXPECTED_STATE');
     expect(error?.category).toBe('unexpected_state');
     expect(exitCode).toBe(78);
     expect(stderr).toBe('');

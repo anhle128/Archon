@@ -2946,7 +2946,17 @@ export async function workflowResumeCommand(
     };
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
-      const run = await resumeWorkflowOp(resolvedId);
+      let run: Awaited<ReturnType<typeof resumeWorkflowOp>>;
+      try {
+        run = await resumeWorkflowOp(resolvedId);
+      } catch (innerErr) {
+        if (innerErr instanceof Error && innerErr.message.includes('Workflow run not found')) {
+          throw new Error(
+            `Cannot resume run with status 'unknown'. Run '${resolvedId}' does not exist.`
+          );
+        }
+        throw innerErr;
+      }
       const contractState = mapWorkflowRunToContractState(run);
       console.log(
         safeStringify(
@@ -3100,19 +3110,33 @@ export async function workflowRetryCommand(
     const resolvedId = await resolveRunIdArg(runId, cwd);
     const run = await workflowDb.getWorkflowRun(resolvedId);
     if (!run) {
-      throw new Error(`Workflow run not found: ${resolvedId}`);
+      throw new Error(`Cannot retry workflow run '${resolvedId}': run not found.`);
     }
-    if (!RETRYABLE_WORKFLOW_STATUSES.includes(run.status)) {
-      throw new Error(
-        `Cannot retry workflow run '${resolvedId}' with status '${run.status}'. Only failed or cancelled runs can be retried.`
-      );
+    if (nodeId?.trim() === '') {
+      throw new Error('node ID is required and must not be blank when --node is specified.');
+    }
+    if (nodeId) {
+      if (!RETRYABLE_WORKFLOW_STATUSES.includes(run.status)) {
+        throw new Error(
+          `Cannot retry workflow run '${resolvedId}' with status '${run.status}'. Only failed or cancelled runs can be retried.`
+        );
+      }
+    } else {
+      if (run.status !== 'failed') {
+        throw new Error(
+          `Cannot retry workflow run '${resolvedId}' with status '${run.status}'. Only failed runs can be retried as a whole run.`
+        );
+      }
     }
 
-    const workingPath = run.working_path ?? cwd ?? process.cwd();
+    if (!run.working_path) {
+      throw new Error(`Cannot retry workflow run '${resolvedId}': no working path recorded.`);
+    }
+    const workingPath = run.working_path;
 
     const workerArgs = nodeId
-      ? ['workflow', 'retry-node', resolvedId, nodeId]
-      : ['workflow', 'resume', resolvedId];
+      ? ['workflow', 'retry-node', run.id, nodeId]
+      : ['workflow', 'resume', run.id];
 
     const baseCmd = BUNDLED_IS_BINARY ? [process.execPath] : [process.execPath, process.argv[1]];
     const cmd = [...baseCmd, ...workerArgs, '--cwd', workingPath];
@@ -3121,7 +3145,7 @@ export async function workflowRetryCommand(
     try {
       const logDir = join(getArchonHome(), 'logs');
       mkdirSync(logDir, { recursive: true });
-      const logPath = join(logDir, `detached-retry-${resolvedId}-${Date.now()}.log`);
+      const logPath = join(logDir, `detached-retry-${run.id}-${Date.now()}.log`);
       try {
         logFd = openSync(logPath, 'a');
       } catch {
@@ -3132,17 +3156,19 @@ export async function workflowRetryCommand(
     }
 
     try {
-      const child = Bun.spawn({
-        cmd,
+      const child = spawn(cmd[0], cmd.slice(1), {
         cwd: workingPath,
         env: process.env,
-        stdout: logFd !== undefined ? logFd : 'ignore',
-        stderr: logFd !== undefined ? logFd : 'ignore',
         detached: true,
+        windowsHide: true,
+        stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'],
       });
-      if (!child.pid) {
+      if (child.pid === undefined) {
         throw new Error(`Failed to start detached retry worker (executable: ${cmd[0]})`);
       }
+      child.on('error', () => {
+        /* spawn errors surface via the error event; parent already acked dispatch */
+      });
       child.unref();
     } finally {
       if (logFd !== undefined) {
@@ -3220,9 +3246,11 @@ export async function workflowCancelCommand(
     const resolvedId = await resolveRunIdArg(runId, cwd);
     const run = await workflowDb.getWorkflowRun(resolvedId);
     if (!run) {
-      throw new Error(`Workflow run not found: ${resolvedId}`);
+      throw new Error(
+        `Cannot cancel run with status 'unknown'. Run '${resolvedId}' does not exist.`
+      );
     }
-    if (run.status === 'completed' || run.status === 'cancelled') {
+    if (run.status !== 'running' && run.status !== 'paused' && run.status !== 'failed') {
       throw new Error(
         `Cannot cancel run with status '${run.status}'. Only running, paused, or failed runs can be cancelled.`
       );

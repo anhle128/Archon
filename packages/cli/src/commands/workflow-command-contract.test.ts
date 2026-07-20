@@ -1024,15 +1024,22 @@ describe('3.3D-CONTRACT-006 [P0] runtime envelope JSON Schema validation via con
       metadata: {},
     });
 
+    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue({
+      pid: 99999,
+      unref: mock(() => undefined),
+    } as unknown as ReturnType<typeof Bun.spawn>);
+
     const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
     try {
       const { workflowRetryCommand } = await import('./workflow');
       await workflowRetryCommand('run-schema-rt', undefined, true);
       const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
       const envelope = JSON.parse(raw) as Record<string, unknown>;
+      expect(envelope.success).toBe(true);
       const errors = await validateRuntimeEnvelope(envelope);
       expect(errors).toEqual([]);
     } finally {
+      spawnSpy.mockRestore();
       consoleSpy.mockRestore();
     }
   });

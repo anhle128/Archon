@@ -7442,9 +7442,10 @@ describe('workflowResumeCommand — JSON envelope mode (Story 3.3d)', () => {
   });
 
   // 3.3D-UNIT-006 [P0] AC #1 — resume error: run not found
-  it('3.3D-UNIT-006: emits WORKFLOW_RUN_NOT_FOUND envelope when run does not exist', async () => {
-    // ACTIVATION: classifyRunError handles 'Workflow run not found' and the
-    // JSON branch catches it.
+  it('3.3D-UNIT-006: emits UNEXPECTED_STATE envelope when run does not exist', async () => {
+    // ACTIVATION: resume handler intercepts 'Workflow run not found' from
+    // resumeWorkflowOp and re-throws with a message matching the UNEXPECTED_STATE
+    // classifier pattern (R1-F1: recovery commands use UNEXPECTED_STATE for missing runs).
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
 
@@ -7455,7 +7456,7 @@ describe('workflowResumeCommand — JSON envelope mode (Story 3.3d)', () => {
     expect(envelope.command).toBe('workflow.resume');
     expect(envelope.success).toBe(false);
     const error = envelope.error as Record<string, unknown>;
-    expect(error.code).toBe('WORKFLOW_RUN_NOT_FOUND');
+    expect(error.code).toBe('UNEXPECTED_STATE');
     expect(error.category).toBe('unexpected_state');
     const execution = envelope.execution as Record<string, unknown>;
     expect(execution.exitCode).toBe(78);
@@ -7711,12 +7712,7 @@ describe('workflowCancelCommand — JSON envelope mode (Story 3.3d)', () => {
   });
 
   // 3.3D-UNIT-016 [P0] AC #4 — cancel error: CAS race loser → UNEXPECTED_STATE
-  // NOTE: This test passes in isolation (`bun test -t "3.3D-UNIT-016"`) but fails when
-  // run with the full suite due to Bun mock.module() pollution. The implementation is
-  // correct (verified by manual testing and isolation run). This is a test infrastructure
-  // issue with Bun's mock isolation, not an implementation defect. Skipping for now to
-  // unblock validation; needs separate investigation of Bun mock behavior.
-  it.skip('3.3D-UNIT-016: emits UNEXPECTED_STATE envelope when CAS returns cancelled=false', async () => {
+  it('3.3D-UNIT-016: emits UNEXPECTED_STATE envelope when CAS returns cancelled=false', async () => {
     // ACTIVATION: workflowCancelCommand uses cancelWorkflowRun directly and
     // checks the `cancelled` boolean; false means CAS lost.
     const workflowDb = await import('@archon/core/db/workflows');
@@ -7729,25 +7725,24 @@ describe('workflowCancelCommand — JSON envelope mode (Story 3.3d)', () => {
       metadata: {},
     });
     const cancelMock = workflowDb.cancelWorkflowRun as ReturnType<typeof mock>;
-    cancelMock.mockReturnValue(Promise.resolve({ cancelled: false }));
+    cancelMock.mockReset();
+    cancelMock.mockResolvedValueOnce({ cancelled: false });
 
-    try {
-      const { workflowCancelCommand } = await import('./workflow');
-      await workflowCancelCommand('run-cas-loser', true);
+    const { workflowCancelCommand } = await import('./workflow');
+    await workflowCancelCommand('run-cas-loser', true);
 
-      const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
-      expect(envelope.success).toBe(false);
-      const error = envelope.error as Record<string, unknown>;
-      expect(error.code).toBe('UNEXPECTED_STATE');
-      expect(error.category).toBe('unexpected_state');
-    } finally {
-      cancelMock.mockReturnValue(Promise.resolve({ cancelled: true }));
-    }
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('UNEXPECTED_STATE');
+    expect(error.category).toBe('unexpected_state');
+    cancelMock.mockImplementation(() => Promise.resolve({ cancelled: true }));
   });
 
-  // 3.3D-UNIT-017 [P0] AC #4 — cancel error: run not found
-  it('3.3D-UNIT-017: emits WORKFLOW_RUN_NOT_FOUND envelope when run does not exist for cancel', async () => {
-    // ACTIVATION: classifyRunError handles 'Workflow run not found'
+  // 3.3D-UNIT-017 [P0] AC #4 — cancel error: run not found → UNEXPECTED_STATE (R1-F1)
+  it('3.3D-UNIT-017: emits UNEXPECTED_STATE envelope when run does not exist for cancel', async () => {
+    // ACTIVATION: cancel handler throws with 'Cannot cancel run with status' message
+    // which classifies as UNEXPECTED_STATE (R1-F1: recovery commands use UNEXPECTED_STATE).
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
 
@@ -7758,7 +7753,7 @@ describe('workflowCancelCommand — JSON envelope mode (Story 3.3d)', () => {
     expect(envelope.command).toBe('workflow.cancel');
     expect(envelope.success).toBe(false);
     const error = envelope.error as Record<string, unknown>;
-    expect(error.code).toBe('WORKFLOW_RUN_NOT_FOUND');
+    expect(error.code).toBe('UNEXPECTED_STATE');
     const execution = envelope.execution as Record<string, unknown>;
     expect(execution.exitCode).toBe(78);
   });
@@ -7927,9 +7922,10 @@ describe('workflowRetryCommand — JSON envelope mode (Story 3.3d)', () => {
     expect((envelope.error as Record<string, unknown>).code).toBe('UNEXPECTED_STATE');
   });
 
-  // 3.3D-UNIT-023 [P0] AC #2 — retry error: run not found
-  it('3.3D-UNIT-023: emits WORKFLOW_RUN_NOT_FOUND envelope when run does not exist for retry', async () => {
-    // ACTIVATION: classifyRunError handles 'Workflow run not found'
+  // 3.3D-UNIT-023 [P0] AC #2 — retry error: run not found → UNEXPECTED_STATE (R1-F1)
+  it('3.3D-UNIT-023: emits UNEXPECTED_STATE envelope when run does not exist for retry', async () => {
+    // ACTIVATION: retry handler throws with 'Cannot retry workflow run' message
+    // which classifies as UNEXPECTED_STATE (R1-F1: recovery commands use UNEXPECTED_STATE).
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
 
@@ -7940,7 +7936,7 @@ describe('workflowRetryCommand — JSON envelope mode (Story 3.3d)', () => {
     expect(envelope.command).toBe('workflow.retry');
     expect(envelope.success).toBe(false);
     const error = envelope.error as Record<string, unknown>;
-    expect(error.code).toBe('WORKFLOW_RUN_NOT_FOUND');
+    expect(error.code).toBe('UNEXPECTED_STATE');
   });
 
   // 3.3D-UNIT-024 [P0] AC #2 — retry error: spawn failure → INTERNAL_ERROR
