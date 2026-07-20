@@ -859,6 +859,7 @@ const cancelWorkflowRunRoute = createRoute({
     },
     400: jsonError('Bad request'),
     404: jsonError('Not found'),
+    409: jsonError('Conflict'),
     500: jsonError('Server error'),
   },
 });
@@ -913,6 +914,7 @@ const abandonWorkflowRunRoute = createRoute({
     },
     400: jsonError('Bad request'),
     404: jsonError('Not found'),
+    409: jsonError('Conflict'),
     500: jsonError('Server error'),
   },
 });

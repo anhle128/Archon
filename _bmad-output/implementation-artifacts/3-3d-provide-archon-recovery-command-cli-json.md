@@ -1,6 +1,6 @@
 # Story 3.3d: Provide Archon Recovery Command CLI JSON
 
-Status: in-progress
+Status: review
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -125,11 +125,11 @@ so that external controllers can route recovery actions consistently without rel
 - [x] [Review][Patch] R1-F36: Legacy abandon paths can still report success when no cancellation CAS won. [packages/core/src/operations/workflow-operations.ts:144]
 - [x] [Review][Patch] R1-F37: JSON resume and whole-run retry validate persisted execution context with a brittle `.git` path check that rejects valid recovery contexts and still misses required codebase validation. [packages/cli/src/commands/workflow.ts:2977]
 - [x] [Review][Patch] R1-F38: Required executable recovery proofs are still incomplete and one retry side-effect proof is timing-dependent. [packages/cli/src/commands/workflow-json.e2e.test.ts:1179]
-- [ ] [Review][Patch] R1-F39: JSON resume and retry still reject valid folder-project recovery contexts. [packages/cli/src/commands/workflow.ts:2977]
-- [ ] [Review][Patch] R1-F40: Recovery JSON DB preflight can bypass the shared failure envelope. [packages/cli/src/cli.ts:686]
-- [ ] [Review][Patch] R1-F41: Option-looking targeted retry node values can be consumed as node IDs instead of malformed input. [packages/cli/src/cli.ts:1027]
-- [ ] [Review][Patch] R1-F42: Required recovery proof still stops at parent retry envelopes and omits targeted runtime contract validation. [packages/cli/src/commands/workflow-json.e2e.test.ts:1205]
-- [ ] [Review][Patch] R1-F43: New cancel and abandon 409 responses are not declared in the OpenAPI route definitions. [packages/server/src/routes/api.ts:849]
+- [x] [Review][Patch] R1-F39: JSON resume and retry still reject valid folder-project recovery contexts. [packages/cli/src/commands/workflow.ts:2977]
+- [x] [Review][Patch] R1-F40: Recovery JSON DB preflight can bypass the shared failure envelope. [packages/cli/src/cli.ts:686]
+- [x] [Review][Patch] R1-F41: Option-looking targeted retry node values can be consumed as node IDs instead of malformed input. [packages/cli/src/cli.ts:1027]
+- [x] [Review][Patch] R1-F42: Required recovery proof still stops at parent retry envelopes and omits targeted runtime contract validation. [packages/cli/src/commands/workflow-json.e2e.test.ts:1205]
+- [x] [Review][Patch] R1-F43: New cancel and abandon 409 responses are not declared in the OpenAPI route definitions. [packages/server/src/routes/api.ts:849]
 
 ## Dev Notes
 
@@ -409,6 +409,11 @@ Key learnings that directly apply to this story:
 - ✅ Resolved R1-F36: Legacy abandon paths now use atomic CAS for pending runs via `cancelPendingWorkflowRun` and throw if no CAS wins, preventing false success reports when no cancellation transition occurred
 - ✅ Resolved R1-F37: JSON resume and retry validate persisted execution context with proper git repository check (`git rev-parse --git-dir`) and codebase existence validation, replacing brittle `.git` path check
 - ✅ Resolved R1-F38: Added 3 durable side-effect E2E proofs (3.3D-CLI-038/039/040): cancel transitions DB to 'cancelled', resume does NOT mutate DB, retry parent does NOT mutate run status/events/metadata
+- ✅ Resolved R1-F39: Moved codebase lookup before git rev-parse check in both workflowResumeCommand and workflowRetryCommand; folder projects (kind:'folder') skip the git check entirely, allowing recovery for non-git registered directories
+- ✅ Resolved R1-F40: Added JSON envelope guard to DB connection error branch in cli.ts preflight; JSON provider commands now emit a structured MALFORMED_REQUEST envelope with database_unavailable field error instead of plain text on stderr
+- ✅ Resolved R1-F41: Added `rawNodeId.startsWith('--')` check to --node value validation; option-looking values are now rejected as MALFORMED_REQUEST instead of being consumed as node IDs
+- ✅ Resolved R1-F42: Enhanced E2E test 3.3D-CLI-024 with full envelope contract validation matching retry-node-success.json canonical fixture shape (schemaVersion, intendedProducer, intendedConsumer, owningSubproject, provider, workflowRunRef, issuedAt) plus negative assertions for worker-derived fields
+- ✅ Resolved R1-F43: Added `409: jsonError('Conflict')` to both cancelWorkflowRunRoute and abandonWorkflowRunRoute OpenAPI route definitions, matching the actual handler behavior on CAS loss
 
 ### File List
 
@@ -434,3 +439,4 @@ Key learnings that directly apply to this story:
 - 2026-07-20: Resolved final 4 review findings (R1-F28 through R1-F31); all 31 review findings now complete; bun run validate passes all 8 gates
 - 2026-07-20: Resolved final 4 review findings (R1-F32 through R1-F35); all 35 review findings now complete; bun run validate passes all 8 gates
 - 2026-07-20: Resolved final 3 review findings (R1-F36 through R1-F38); all 38 review findings now complete; bun run validate passes all 8 gates
+- 2026-07-20: Resolved final 5 review findings (R1-F39 through R1-F43); all 43 review findings now complete; bun run validate passes all 8 gates

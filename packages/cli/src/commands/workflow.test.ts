@@ -7599,6 +7599,57 @@ describe('workflowResumeCommand — JSON envelope mode (Story 3.3d)', () => {
     const execution = envelope.execution as Record<string, unknown>;
     expect(execution.exitCode).toBe(70);
   });
+
+  // 3.3D-UNIT-039 [P1] R1-F39 — folder project resume skips git check
+  it('3.3D-UNIT-039: resume JSON succeeds for a folder project run even when git check would fail', async () => {
+    const codebaseDb = await import('@archon/core/db/codebases');
+    (codebaseDb.getCodebase as ReturnType<typeof mock>).mockReset();
+    (codebaseDb.getCodebase as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-folder',
+      name: 'ops-folder',
+      repository_url: null,
+      default_cwd: '/tmp/ops-folder',
+      kind: 'folder',
+      commands: {},
+    });
+
+    const git = await import('@archon/git');
+    const origExecFileAsync = git.execFileAsync;
+    (git.execFileAsync as ReturnType<typeof mock>).mockImplementation((...args: unknown[]) => {
+      // Simulate git rev-parse --git-dir failing for folder projects
+      const callArgs = args[1] as string[] | undefined;
+      if (callArgs && callArgs.includes('rev-parse')) {
+        return Promise.reject(new Error('not a git repository'));
+      }
+      return (origExecFileAsync as ReturnType<typeof mock>)(...args);
+    });
+
+    try {
+      const workflowDb = await import('@archon/core/db/workflows');
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+        id: 'run-folder-resume',
+        workflow_name: 'assist',
+        status: 'paused',
+        working_path: '/tmp/ops-folder',
+        codebase_id: 'cb-folder',
+        metadata: {},
+      });
+
+      await workflowResumeCommand('run-folder-resume', true);
+
+      expect(consoleSpy).toHaveBeenCalledTimes(1);
+      const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+      expect(envelope.success).toBe(true);
+      expect(envelope.command).toBe('workflow.resume');
+      const result = envelope.result as Record<string, unknown>;
+      expect(result.resumable).toBe(true);
+      expect(result.executed).toBe(false);
+    } finally {
+      (git.execFileAsync as ReturnType<typeof mock>).mockImplementation(() =>
+        Promise.resolve({ stdout: '.git\n', stderr: '' })
+      );
+    }
+  });
 });
 
 describe('workflowCancelCommand — JSON envelope mode (Story 3.3d)', () => {
@@ -8121,5 +8172,62 @@ describe('workflowRetryCommand — JSON envelope mode (Story 3.3d)', () => {
     const cwdIdx = args.indexOf('--cwd');
     expect(cwdIdx).toBeGreaterThan(-1);
     expect(args[cwdIdx + 1]).toBe(workingPath);
+  });
+
+  // 3.3D-UNIT-040 [P1] R1-F39 — folder project retry skips git check
+  it('3.3D-UNIT-040: retry JSON succeeds for a folder project run even when git check would fail', async () => {
+    const codebaseDb = await import('@archon/core/db/codebases');
+    (codebaseDb.getCodebase as ReturnType<typeof mock>).mockReset();
+    (codebaseDb.getCodebase as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-folder-retry',
+      name: 'ops-folder',
+      repository_url: null,
+      default_cwd: '/tmp/ops-folder',
+      kind: 'folder',
+      commands: {},
+    });
+
+    const git = await import('@archon/git');
+    const origExecFileAsync = git.execFileAsync;
+    (git.execFileAsync as ReturnType<typeof mock>).mockImplementation((...args: unknown[]) => {
+      const callArgs = args[1] as string[] | undefined;
+      if (callArgs && callArgs.includes('rev-parse')) {
+        return Promise.reject(new Error('not a git repository'));
+      }
+      return (origExecFileAsync as ReturnType<typeof mock>)(...args);
+    });
+
+    try {
+      const workflowDb = await import('@archon/core/db/workflows');
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+        id: 'run-folder-retry',
+        workflow_name: 'implement',
+        status: 'failed',
+        working_path: '/tmp/ops-folder',
+        codebase_id: 'cb-folder-retry',
+        metadata: {},
+      });
+
+      mockChildProcessSpawn.mockReturnValueOnce({
+        pid: 88888,
+        on: mock(() => undefined),
+        unref: mock(() => undefined),
+      } as unknown as ReturnType<typeof mockChildProcessSpawn>);
+
+      const { workflowRetryCommand } = await import('./workflow');
+      await workflowRetryCommand('run-folder-retry', undefined, true);
+
+      expect(consoleSpy).toHaveBeenCalledTimes(1);
+      const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+      expect(envelope.success).toBe(true);
+      expect(envelope.command).toBe('workflow.retry');
+      const result = envelope.result as Record<string, unknown>;
+      expect(result.dispatched).toBe(true);
+      expect(result.detached).toBe(true);
+    } finally {
+      (git.execFileAsync as ReturnType<typeof mock>).mockImplementation(() =>
+        Promise.resolve({ stdout: '.git\n', stderr: '' })
+      );
+    }
   });
 });

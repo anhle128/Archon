@@ -1265,8 +1265,8 @@ describe('workflow resume/retry/cancel --json CLI dispatch E2E — real subproce
     expect(stderr).toBe('');
   });
 
-  // 3.3D-CLI-024 [P1] R1-F14, R1-F34 — targeted-node retry success envelope + worker spawn evidence
-  test('3.3D-CLI-024: `workflow retry <failed-run> --node <id> --json` emits success envelope with scope=node and creates a detached worker log', async () => {
+  // 3.3D-CLI-024 [P0] R1-F14, R1-F34, R1-F42 — targeted-node retry success envelope + full contract validation + worker spawn evidence
+  test('3.3D-CLI-024: `workflow retry <failed-run> --node <id> --json` emits success envelope with scope=node matching retry-node-success.json contract and creates a detached worker log', async () => {
     const runId = 'cccccccc-dddd-eeee-ffff-aaaaaaaaaaaa';
     await seedFailedRun(runId, isolatedRepo);
 
@@ -1282,9 +1282,22 @@ describe('workflow resume/retry/cancel --json CLI dispatch E2E — real subproce
     ]);
 
     const envelope = parseSoleJsonLine(stdout);
+
+    // R1-F42: full envelope contract validation against retry-node-success.json shape
+    expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
+    expect(envelope.intendedProducer).toBe('Archon');
+    expect(envelope.intendedConsumer).toBe('Hermes');
+    expect(envelope.owningSubproject).toBe('archon');
+    expect(envelope.provider).toBe('archon');
     expect(envelope.command).toBe('workflow.retry');
     expect(envelope.success).toBe(true);
     expect(envelope.correlationId).toBe('corr-cli-024-retry-node');
+    expect(typeof envelope.issuedAt).toBe('string');
+
+    const wfRef = envelope.workflowRunRef as Record<string, unknown> | undefined;
+    expect(wfRef?.provider).toBe('archon');
+    expect(wfRef?.runId).toBe(runId);
+    expect(wfRef?.workflowName).toBe('test-workflow');
 
     const result = envelope.result as Record<string, unknown> | undefined;
     expect(result?.operation).toBe('retry');
@@ -1292,6 +1305,11 @@ describe('workflow resume/retry/cancel --json CLI dispatch E2E — real subproce
     expect(result?.nodeId).toBe('implement-story');
     expect(result?.dispatched).toBe(true);
     expect(result?.detached).toBe(true);
+
+    // No worker-derived fields in the parent result
+    expect(result).not.toHaveProperty('state');
+    expect(result).not.toHaveProperty('resumed');
+    expect(result).not.toHaveProperty('attempt');
 
     expect(exitCode).toBe(0);
     expect(stderr).toBe('');
@@ -1613,6 +1631,30 @@ describe('R1-F30 — durable side-effect proofs (Story 3.3d)', () => {
     expect(queryRunStatus(runId)).toBe('failed');
     expect(queryEventCount(runId)).toBe(0);
     expect(queryRunMetadata(runId)).toEqual(metadataBefore);
+  });
+
+  // 3.3D-CLI-041 [P1] R1-F41 — option-looking --node values rejected as MALFORMED_REQUEST
+  test('3.3D-CLI-041: `workflow retry <run> --node --correlation-id <val> --json` rejects option-looking node value', async () => {
+    const runId = 'f1f1f1f1-a2a2-b3b3-c4c4-d5d5d5d5d5d5';
+    await seedFailedRun(runId, isolatedRepo);
+
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'retry',
+      runId,
+      '--node',
+      '--correlation-id',
+      'corr-cli-041',
+      '--json',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.retry');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
   });
 });
 

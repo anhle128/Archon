@@ -2974,18 +2974,22 @@ export async function workflowResumeCommand(
           `Cannot resume run with status '${run.status}'. Working path no longer exists — run context is unusable.`
         );
       }
-      try {
-        await git.execFileAsync('git', ['rev-parse', '--git-dir'], { cwd: run.working_path });
-      } catch {
-        throw new Error(
-          `Cannot resume run with status '${run.status}'. Working path is not a valid git repository — run context is unusable.`
-        );
-      }
+      let isFolderProject = false;
       if (run.codebase_id) {
         const codebase = await codebaseDb.getCodebase(run.codebase_id);
         if (!codebase) {
           throw new Error(
             `Cannot resume run with status '${run.status}'. Associated codebase no longer registered — run context is unusable.`
+          );
+        }
+        isFolderProject = codebase.kind === 'folder';
+      }
+      if (!isFolderProject) {
+        try {
+          await git.execFileAsync('git', ['rev-parse', '--git-dir'], { cwd: run.working_path });
+        } catch {
+          throw new Error(
+            `Cannot resume run with status '${run.status}'. Working path is not a valid git repository — run context is unusable.`
           );
         }
       }
@@ -3170,18 +3174,22 @@ export async function workflowRetryCommand(
         `Cannot retry workflow run '${resolvedId}': working path no longer exists — run context is unusable.`
       );
     }
-    try {
-      await git.execFileAsync('git', ['rev-parse', '--git-dir'], { cwd: run.working_path });
-    } catch {
-      throw new Error(
-        `Cannot retry workflow run '${resolvedId}': working path is not a valid git repository — run context is unusable.`
-      );
-    }
+    let isFolderProject = false;
     if (run.codebase_id) {
       const codebase = await codebaseDb.getCodebase(run.codebase_id);
       if (!codebase) {
         throw new Error(
           `Cannot retry workflow run '${resolvedId}': associated codebase no longer registered — run context is unusable.`
+        );
+      }
+      isFolderProject = codebase.kind === 'folder';
+    }
+    if (!isFolderProject) {
+      try {
+        await git.execFileAsync('git', ['rev-parse', '--git-dir'], { cwd: run.working_path });
+      } catch {
+        throw new Error(
+          `Cannot retry workflow run '${resolvedId}': working path is not a valid git repository — run context is unusable.`
         );
       }
     }

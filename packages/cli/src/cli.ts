@@ -685,6 +685,16 @@ async function main(): Promise<number> {
           effectiveCwd = realCwd;
         } else if (gateLookupError && looksLikeConnectionError(gateLookupError)) {
           // A DB outage would otherwise be mis-reported as "not a git repository".
+          if (jsonFlag && envelopeCommand !== undefined) {
+            return await emitWorkflowCommandMalformedEnvelope(
+              envelopeCommand,
+              {
+                fieldErrors: [{ path: '/cwd', code: 'database_unavailable' }],
+                requestAccepted: false,
+              },
+              values['correlation-id'] as string | undefined
+            );
+          }
           console.error(
             'Error: Could not verify project registration — the database is unavailable.'
           );
@@ -694,7 +704,6 @@ async function main(): Promise<number> {
           );
           return 1;
         } else {
-          const envelopeCommand = getWorkflowCommandEnvelopeCommand(command, subcommand);
           if (jsonFlag && envelopeCommand !== undefined) {
             return await emitWorkflowCommandMalformedEnvelope(
               envelopeCommand,
@@ -1027,7 +1036,9 @@ async function main(): Promise<number> {
             const rawNodeId = values.node;
             if (
               rawNodeId !== undefined &&
-              (typeof rawNodeId !== 'string' || rawNodeId.trim() === '')
+              (typeof rawNodeId !== 'string' ||
+                rawNodeId.trim() === '' ||
+                rawNodeId.startsWith('--'))
             ) {
               if (envelopeCommand) {
                 return await emitWorkflowCommandMalformedEnvelope(
