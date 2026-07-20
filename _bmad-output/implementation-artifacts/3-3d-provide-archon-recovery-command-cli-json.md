@@ -1,6 +1,6 @@
 # Story 3.3d: Provide Archon Recovery Command CLI JSON
 
-Status: in-progress
+Status: done
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -96,14 +96,14 @@ so that external controllers can route recovery actions consistently without rel
 - [x] [Review][Patch] R1-F7: Whole-run retry accepts cancelled runs even though the spawned worker uses the resume path, which cannot resume cancelled runs. [packages/cli/src/commands/workflow.ts:3105]
 - [x] [Review][Patch] R1-F8: The required cancel CAS-race proof is skipped while the story marks that proof complete. [packages/cli/src/commands/workflow.test.ts:7719]
 - [x] [Review][Patch] R1-F9: The runtime retry "success" contract test can pass on an error envelope and can start a real detached worker. [packages/cli/src/commands/workflow-command-contract.test.ts:1016]
-- [ ] [Review][Patch] R1-F10: Malformed targeted retry `--node` inputs can bypass the JSON envelope or return the wrong error category. [packages/cli/src/cli.ts:935]
-- [ ] [Review][Patch] R1-F11: Whole-run retry still does not guarantee that the detached worker resumes the exact requested run. [packages/cli/src/commands/workflow.ts:3137]
-- [ ] [Review][Patch] R1-F12: Detached retry attaches the spawn `error` listener after the pid failure check. [packages/cli/src/commands/workflow.ts:3159]
-- [ ] [Review][Patch] R1-F13: Retry tests mock `Bun.spawn` while the implementation uses `node:child_process.spawn`. [packages/cli/src/commands/workflow.test.ts:7816]
-- [ ] [Review][Patch] R1-F14: Required real-subprocess success and worker-boundary proofs are still missing. [packages/cli/src/commands/workflow-json.e2e.test.ts:712]
-- [ ] [Review][Patch] R1-F15: Provider JSON recovery commands can still emit update-notice text on stderr in bundled binaries. [packages/cli/src/cli.ts:1450]
-- [ ] [Review][Patch] R1-F16: Extra positional arguments after recovery run IDs are ignored instead of rejected as malformed input. [packages/cli/src/cli.ts:941]
-- [ ] [Review][Patch] R1-F17: The TEA test design still expects whole-run retry of cancelled runs even though that behavior was rejected. [_bmad-output/test-artifacts/test-design/test-design-3-3d-provide-archon-recovery-command-cli-json.md:182]
+- [x] [Review][Patch] R1-F10: Malformed targeted retry `--node` inputs can bypass the JSON envelope or return the wrong error category. [packages/cli/src/cli.ts:935]
+- [x] [Review][Patch] R1-F11: Whole-run retry still does not guarantee that the detached worker resumes the exact requested run. [packages/cli/src/commands/workflow.ts:3137]
+- [x] [Review][Patch] R1-F12: Detached retry attaches the spawn `error` listener after the pid failure check. [packages/cli/src/commands/workflow.ts:3159]
+- [x] [Review][Patch] R1-F13: Retry tests mock `Bun.spawn` while the implementation uses `node:child_process.spawn`. [packages/cli/src/commands/workflow.test.ts:7816]
+- [x] [Review][Patch] R1-F14: Required real-subprocess success and worker-boundary proofs are still missing. [packages/cli/src/commands/workflow-json.e2e.test.ts:712]
+- [x] [Review][Patch] R1-F15: Provider JSON recovery commands can still emit update-notice text on stderr in bundled binaries. [packages/cli/src/cli.ts:1450]
+- [x] [Review][Patch] R1-F16: Extra positional arguments after recovery run IDs are ignored instead of rejected as malformed input. [packages/cli/src/cli.ts:941]
+- [x] [Review][Patch] R1-F17: The TEA test design still expects whole-run retry of cancelled runs even though that behavior was rejected. [_bmad-output/test-artifacts/test-design/test-design-3-3d-provide-archon-recovery-command-cli-json.md:182]
 
 ## Dev Notes
 
@@ -354,6 +354,14 @@ Key learnings that directly apply to this story:
 - ✅ Resolved R1-F7: Whole-run retry rejects cancelled runs (only 'failed' accepted); targeted retry accepts failed+cancelled via RETRYABLE_WORKFLOW_STATUSES
 - ✅ Resolved R1-F8: UNIT-016 CAS-race loser test un-skipped using mockReset()+mockResolvedValueOnce+mockImplementation restore pattern
 - ✅ Resolved R1-F9: Contract retry success test now mocks Bun.spawn and asserts envelope.success===true before schema check
+- ✅ Resolved R1-F10: Blank --node value emits MALFORMED_REQUEST envelope with /node must_be_non_blank_string field error
+- ✅ Resolved R1-F11: Added unit test proving worker argv uses run.id (persisted UUID), not caller-supplied prefix
+- ✅ Resolved R1-F12: Moved child.on('error') before child.pid check in retry dispatch
+- ✅ Resolved R1-F13: Migrated all retry tests from Bun.spawn mock to node:child_process.spawn mock with correct call signature
+- ✅ Resolved R1-F14: Added 3 real-subprocess E2E tests (3.3D-CLI-022/023/024) for retry success envelope, worker boundary, and targeted-node retry
+- ✅ Resolved R1-F15: Suppressed update notice for JSON provider commands to prevent stderr contamination
+- ✅ Resolved R1-F16: Added extra positional args rejection for resume/retry/cancel with MALFORMED_REQUEST envelope
+- ✅ Resolved R1-F17: Updated test design 3.3D-UNIT-018 to expect UNEXPECTED_STATE for cancelled whole-run retry (not success)
 
 ### File List
 
@@ -368,3 +376,4 @@ Key learnings that directly apply to this story:
 - 2026-07-20: Implemented all 6 story slices (resume/retry/cancel JSON envelopes, classifier extensions, dispatcher mappings, tests)
 - 2026-07-20: Resolved all 9 review findings (R1-F1 through R1-F9); status moved to review
 - 2026-07-20: All validation gates pass (bundled checks, type-check, lint, format, unit/contract/E2E tests)
+- 2026-07-20: Resolved remaining 8 review findings (R1-F10 through R1-F17); status moved to done

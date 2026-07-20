@@ -905,6 +905,22 @@ async function main(): Promise<number> {
               console.error('Usage: archon workflow resume <run-id>');
               return 1;
             }
+            if (positionals[3] !== undefined) {
+              if (jsonFlag && envelopeCommand) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    parseError: `Unexpected extra argument: '${positionals[3]}'`,
+                    requestAccepted: false,
+                  },
+                  rawWorkflowProviderOptions.correlationIdValue
+                );
+              }
+              console.error(
+                `Error: unexpected extra argument '${positionals[3]}'. Usage: archon workflow resume <run-id> [--json]`
+              );
+              return 1;
+            }
             await workflowResumeCommand(
               resumeRunId,
               jsonFlag,
@@ -953,7 +969,37 @@ async function main(): Promise<number> {
               console.error('Usage: archon workflow retry <run-id> [--node <node-id>] --json');
               return 1;
             }
+            if (positionals[3] !== undefined) {
+              if (envelopeCommand) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    parseError: `Unexpected extra argument: '${positionals[3]}'`,
+                    requestAccepted: false,
+                  },
+                  rawWorkflowProviderOptions.correlationIdValue
+                );
+              }
+              console.error(
+                `Error: unexpected extra argument '${positionals[3]}'. Usage: archon workflow retry <run-id> [--node <node-id>] --json`
+              );
+              return 1;
+            }
             const nodeId = values.node as string | undefined;
+            if (nodeId?.trim() === '') {
+              if (envelopeCommand) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    fieldErrors: [{ path: '/node', code: 'must_be_non_blank_string' }],
+                    requestAccepted: false,
+                  },
+                  rawWorkflowProviderOptions.correlationIdValue
+                );
+              }
+              console.error('Error: --node value must be a non-blank string');
+              return 1;
+            }
             await workflowRetryCommand(
               retryRunId,
               nodeId,
@@ -984,6 +1030,22 @@ async function main(): Promise<number> {
                 );
               }
               console.error('Usage: archon workflow cancel <run-id> --json');
+              return 1;
+            }
+            if (positionals[3] !== undefined) {
+              if (envelopeCommand) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    parseError: `Unexpected extra argument: '${positionals[3]}'`,
+                    requestAccepted: false,
+                  },
+                  rawWorkflowProviderOptions.correlationIdValue
+                );
+              }
+              console.error(
+                `Error: unexpected extra argument '${positionals[3]}'. Usage: archon workflow cancel <run-id> --json`
+              );
               return 1;
             }
             await workflowCancelCommand(
@@ -1447,7 +1509,9 @@ async function main(): Promise<number> {
         printUsage();
         return 1;
     }
-    await printUpdateNotice(values.quiet as boolean | undefined);
+    if (!workflowProviderJsonRequested) {
+      await printUpdateNotice(values.quiet as boolean | undefined);
+    }
     return typeof process.exitCode === 'number' ? process.exitCode : 0;
   } catch (error) {
     const err = error as Error;

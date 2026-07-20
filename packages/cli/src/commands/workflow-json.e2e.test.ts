@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { Database } from 'bun:sqlite';
 
 // RED-PHASE E2E SCAFFOLD (EXECUTABLE) — Story 3.3b "Provide Archon Start And
 // Status CLI JSON". First-party consumer surface: a real controller (Hermes)
@@ -67,6 +68,26 @@ function parseSoleJsonLine(stdout: string): Record<string, unknown> {
   const lines = stdout.trim().split('\n').filter(Boolean);
   expect(lines).toHaveLength(1);
   return JSON.parse(lines[0] as string) as Record<string, unknown>;
+}
+
+async function seedFailedRun(runId: string, workingPath: string): Promise<void> {
+  await runCli(['workflow', 'list', '--json']);
+  const dbPath = join(isolatedHome, 'archon.db');
+  const db = new Database(dbPath);
+  try {
+    db.run('PRAGMA foreign_keys = OFF');
+    db.run(
+      `INSERT OR IGNORE INTO remote_agent_conversations (id, platform_type, platform_conversation_id)
+       VALUES ('seed-conv-e2e', 'cli', 'seed-conv-e2e')`
+    );
+    db.run(
+      `INSERT INTO remote_agent_workflow_runs (id, conversation_id, workflow_name, user_message, status, working_path, metadata)
+       VALUES (?, 'seed-conv-e2e', 'test-workflow', 'seed failed run', 'failed', ?, '{}')`,
+      [runId, workingPath]
+    );
+  } finally {
+    db.close();
+  }
 }
 
 describe('workflow run/get --json CLI dispatch E2E — real subprocess (Story 3.3b)', () => {
@@ -1114,6 +1135,93 @@ describe('workflow resume/retry/cancel --json CLI dispatch E2E — real subproce
     expect(error?.code).toBe('MALFORMED_REQUEST');
     expect(error?.category).toBe('provider_contract');
     expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-022 [P0] R1-F14 — real-subprocess retry success envelope
+  test('3.3D-CLI-022: `workflow retry <failed-run> --json` emits a success envelope matching retry-success.json shape', async () => {
+    const runId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    await seedFailedRun(runId, isolatedRepo);
+
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'retry',
+      runId,
+      '--json',
+      '--correlation-id',
+      'corr-cli-022-retry-success',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
+    expect(envelope.command).toBe('workflow.retry');
+    expect(envelope.success).toBe(true);
+    expect(envelope.correlationId).toBe('corr-cli-022-retry-success');
+
+    const wfRef = envelope.workflowRunRef as Record<string, unknown> | undefined;
+    expect(wfRef?.provider).toBe('archon');
+    expect(wfRef?.runId).toBe(runId);
+    expect(wfRef?.workflowName).toBe('test-workflow');
+
+    const result = envelope.result as Record<string, unknown> | undefined;
+    expect(result?.operation).toBe('retry');
+    expect(result?.scope).toBe('run');
+    expect(result?.dispatched).toBe(true);
+    expect(result?.detached).toBe(true);
+
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-023 [P0] R1-F14 — worker-boundary proof: parent succeeds regardless
+  // of detached worker outcome. The spawned child runs `workflow resume <id>`
+  // which will fail (no real workflow engine), but the parent already emitted
+  // success and exited 0.
+  test('3.3D-CLI-023: retry dispatch parent exits 0 with success envelope even though detached worker will fail', async () => {
+    const runId = 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff';
+    await seedFailedRun(runId, isolatedRepo);
+
+    const { stdout, stderr, exitCode } = await runCli(['workflow', 'retry', runId, '--json']);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.success).toBe(true);
+    const result = envelope.result as Record<string, unknown> | undefined;
+    expect(result?.dispatched).toBe(true);
+    expect(result?.detached).toBe(true);
+
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-024 [P1] R1-F14 — targeted-node retry success envelope
+  test('3.3D-CLI-024: `workflow retry <failed-run> --node <id> --json` emits success envelope with scope=node', async () => {
+    const runId = 'cccccccc-dddd-eeee-ffff-aaaaaaaaaaaa';
+    await seedFailedRun(runId, isolatedRepo);
+
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'retry',
+      runId,
+      '--node',
+      'implement-story',
+      '--json',
+      '--correlation-id',
+      'corr-cli-024-retry-node',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.retry');
+    expect(envelope.success).toBe(true);
+    expect(envelope.correlationId).toBe('corr-cli-024-retry-node');
+
+    const result = envelope.result as Record<string, unknown> | undefined;
+    expect(result?.operation).toBe('retry');
+    expect(result?.scope).toBe('node');
+    expect(result?.nodeId).toBe('implement-story');
+    expect(result?.dispatched).toBe(true);
+    expect(result?.detached).toBe(true);
+
+    expect(exitCode).toBe(0);
     expect(stderr).toBe('');
   });
 });

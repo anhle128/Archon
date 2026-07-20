@@ -203,6 +203,15 @@ mock.module('@archon/core/db/workflow-node-sessions', () => ({
   upsertWorkflowNodeSession: mock(() => Promise.resolve()),
 }));
 
+const mockChildProcessSpawn = mock(() => ({
+  pid: 99999,
+  on: mock(() => undefined),
+  unref: mock(() => undefined),
+}));
+mock.module('node:child_process', () => ({
+  spawn: mockChildProcessSpawn,
+}));
+
 describe('workflowListCommand', () => {
   let consoleSpy: ReturnType<typeof spyOn>;
 
@@ -4674,43 +4683,46 @@ describe('workflowRunCommand — detach', () => {
     });
 
     const execBefore = (executeWorkflow as ReturnType<typeof mock>).mock.calls.length;
-    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue({
+    mockChildProcessSpawn.mockReturnValueOnce({
       pid: 12345,
+      on: mock(() => undefined),
       unref: mock(() => undefined),
-    } as unknown as ReturnType<typeof Bun.spawn>);
+    } as unknown as ReturnType<typeof mockChildProcessSpawn>);
     const savedArgv = process.argv;
     process.argv = ['bun', '/abs/cli.ts', 'workflow', 'run', 'assist', 'hello', '--detach'];
 
-    // Capture call data BEFORE mockRestore() — restoring a spy clears its recorded calls.
+    // Capture call data BEFORE mockReset() — resetting clears recorded calls.
     let spawnCallCount = 0;
     let spawnCmd: string[] = [];
-    let spawnOptions:
-      | { cwd: string; cmd: string[]; detached?: boolean; windowsHide?: boolean }
-      | undefined;
+    let spawnOpts: { cwd: string; detached?: boolean; windowsHide?: boolean } | undefined;
     try {
       await workflowRunCommand('/test/path', 'assist', 'hello', { detach: true });
-      spawnCallCount = spawnSpy.mock.calls.length;
-      spawnOptions = spawnSpy.mock.calls[0]?.[0] as
-        | { cwd: string; cmd: string[]; detached?: boolean; windowsHide?: boolean }
-        | undefined;
-      spawnCmd = (spawnOptions?.cmd ?? []).slice();
+      spawnCallCount = mockChildProcessSpawn.mock.calls.length;
+      const call = mockChildProcessSpawn.mock.calls[0];
+      if (call) {
+        const exec = call[0] as string;
+        const args = (call[1] ?? []) as string[];
+        spawnCmd = [exec, ...args];
+        spawnOpts = call[2] as
+          | { cwd: string; detached?: boolean; windowsHide?: boolean }
+          | undefined;
+      }
     } finally {
       process.argv = savedArgv;
-      spawnSpy.mockRestore();
     }
 
     expect(spawnCallCount).toBe(1);
     // The actual Windows fix: the child must be spawned into its own process
     // group, or the launching shell's teardown kills it (~1s in).
-    expect(spawnOptions?.detached).toBe(true);
-    expect(spawnOptions?.windowsHide).toBe(true);
+    expect(spawnOpts?.detached).toBe(true);
+    expect(spawnOpts?.windowsHide).toBe(true);
     expect(spawnCmd).not.toContain('--detach');
     expect(spawnCmd).toContain('--branch');
     expect(spawnCmd).toContain('--conversation-id');
     expect(spawnCmd).toContain('--cwd');
     const cwdIdx = spawnCmd.indexOf('--cwd');
     expect(spawnCmd[cwdIdx + 1]).toBe('/test/path');
-    expect(spawnOptions?.cwd).toBe('/test/path');
+    expect(spawnOpts?.cwd).toBe('/test/path');
     // Generated branch is `assist-<timestamp>`
     const branchIdx = spawnCmd.indexOf('--branch');
     expect(spawnCmd[branchIdx + 1]).toMatch(/^assist-\d+$/);
@@ -4740,21 +4752,25 @@ describe('workflowRunCommand — detach', () => {
       kind: 'folder',
     });
 
-    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue({
+    mockChildProcessSpawn.mockReturnValueOnce({
       pid: 12345,
+      on: mock(() => undefined),
       unref: mock(() => undefined),
-    } as unknown as ReturnType<typeof Bun.spawn>);
+    } as unknown as ReturnType<typeof mockChildProcessSpawn>);
     const savedArgv = process.argv;
     process.argv = ['bun', '/abs/cli.ts', 'workflow', 'run', 'assist', 'hello', '--detach'];
     let spawnCmd: string[] = [];
+    const callsBefore = mockChildProcessSpawn.mock.calls.length;
     try {
       await workflowRunCommand('/test/path', 'assist', 'hello', { detach: true });
-      spawnCmd = (
-        (spawnSpy.mock.calls[0]?.[0] as { cmd: string[] } | undefined)?.cmd ?? []
-      ).slice();
+      const call = mockChildProcessSpawn.mock.calls[callsBefore];
+      if (call) {
+        const exec = call[0] as string;
+        const args = (call[1] ?? []) as string[];
+        spawnCmd = [exec, ...args];
+      }
     } finally {
       process.argv = savedArgv;
-      spawnSpy.mockRestore();
     }
 
     expect(spawnCmd).not.toContain('--detach');
@@ -4772,10 +4788,11 @@ describe('workflowRunCommand — detach', () => {
     (paths.getArchonHome as ReturnType<typeof mock>).mockImplementationOnce(() => {
       throw new Error('no home in test');
     });
-    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue({
+    mockChildProcessSpawn.mockReturnValueOnce({
       pid: 12345,
+      on: mock(() => undefined),
       unref: mock(() => undefined),
-    } as unknown as ReturnType<typeof Bun.spawn>);
+    } as unknown as ReturnType<typeof mockChildProcessSpawn>);
     const savedArgv = process.argv;
     process.argv = [
       'bun',
@@ -4792,7 +4809,6 @@ describe('workflowRunCommand — detach', () => {
       await workflowRunCommand('/test/path', 'assist', 'hello', { detach: true, json: true });
     } finally {
       process.argv = savedArgv;
-      spawnSpy.mockRestore();
     }
 
     const parsed = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
@@ -4812,10 +4828,11 @@ describe('workflowRunCommand — detach', () => {
     });
     // Node's spawn does not throw synchronously on a bad executable — the only
     // synchronous failure signal is an undefined pid.
-    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue({
+    mockChildProcessSpawn.mockReturnValueOnce({
       pid: undefined,
+      on: mock(() => undefined),
       unref: mock(() => undefined),
-    } as unknown as ReturnType<typeof Bun.spawn>);
+    } as unknown as ReturnType<typeof mockChildProcessSpawn>);
     const savedArgv = process.argv;
     process.argv = ['bun', '/abs/cli.ts', 'workflow', 'run', 'assist', 'hello', '--detach'];
 
@@ -4825,7 +4842,6 @@ describe('workflowRunCommand — detach', () => {
       ).rejects.toThrow(/Failed to start detached workflow child/);
     } finally {
       process.argv = savedArgv;
-      spawnSpy.mockRestore();
     }
     // The success ack must never have been printed.
     const logged = consoleSpy.mock.calls.map(call => String(call[0]));
@@ -7813,16 +7829,13 @@ describe('workflowRetryCommand — JSON envelope mode (Story 3.3d)', () => {
       metadata: {},
     });
 
-    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue({
+    mockChildProcessSpawn.mockReturnValueOnce({
       pid: 99999,
+      on: mock(() => undefined),
       unref: mock(() => undefined),
-    } as unknown as ReturnType<typeof Bun.spawn>);
-    try {
-      const { workflowRetryCommand } = await import('./workflow');
-      await workflowRetryCommand('run-retry-whole', undefined, true);
-    } finally {
-      spawnSpy.mockRestore();
-    }
+    } as unknown as ReturnType<typeof mockChildProcessSpawn>);
+    const { workflowRetryCommand } = await import('./workflow');
+    await workflowRetryCommand('run-retry-whole', undefined, true);
 
     expect(consoleSpy).toHaveBeenCalledTimes(1);
     const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
@@ -7856,16 +7869,13 @@ describe('workflowRetryCommand — JSON envelope mode (Story 3.3d)', () => {
       metadata: {},
     });
 
-    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue({
+    mockChildProcessSpawn.mockReturnValueOnce({
       pid: 88888,
+      on: mock(() => undefined),
       unref: mock(() => undefined),
-    } as unknown as ReturnType<typeof Bun.spawn>);
-    try {
-      const { workflowRetryCommand } = await import('./workflow');
-      await workflowRetryCommand('run-retry-node', 'step-3', true);
-    } finally {
-      spawnSpy.mockRestore();
-    }
+    } as unknown as ReturnType<typeof mockChildProcessSpawn>);
+    const { workflowRetryCommand } = await import('./workflow');
+    await workflowRetryCommand('run-retry-node', 'step-3', true);
 
     expect(consoleSpy).toHaveBeenCalledTimes(1);
     const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
@@ -7953,16 +7963,13 @@ describe('workflowRetryCommand — JSON envelope mode (Story 3.3d)', () => {
       metadata: {},
     });
 
-    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue({
+    mockChildProcessSpawn.mockReturnValueOnce({
       pid: undefined,
+      on: mock(() => undefined),
       unref: mock(() => undefined),
-    } as unknown as ReturnType<typeof Bun.spawn>);
-    try {
-      const { workflowRetryCommand } = await import('./workflow');
-      await workflowRetryCommand('run-spawn-fail', undefined, true);
-    } finally {
-      spawnSpy.mockRestore();
-    }
+    } as unknown as ReturnType<typeof mockChildProcessSpawn>);
+    const { workflowRetryCommand } = await import('./workflow');
+    await workflowRetryCommand('run-spawn-fail', undefined, true);
 
     const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
     expect(envelope.success).toBe(false);
@@ -7988,17 +7995,14 @@ describe('workflowRetryCommand — JSON envelope mode (Story 3.3d)', () => {
       metadata: {},
     });
 
-    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue({
+    mockChildProcessSpawn.mockReturnValueOnce({
       pid: 77777,
+      on: mock(() => undefined),
       unref: mock(() => undefined),
-    } as unknown as ReturnType<typeof Bun.spawn>);
+    } as unknown as ReturnType<typeof mockChildProcessSpawn>);
     const callsBefore = getRun.mock.calls.length;
-    try {
-      const { workflowRetryCommand } = await import('./workflow');
-      await workflowRetryCommand('run-no-node-check', 'possibly-invalid-node', true);
-    } finally {
-      spawnSpy.mockRestore();
-    }
+    const { workflowRetryCommand } = await import('./workflow');
+    await workflowRetryCommand('run-no-node-check', 'possibly-invalid-node', true);
 
     // Only ONE call to getWorkflowRun (run lookup), no second call for node validation
     expect(getRun.mock.calls.length - callsBefore).toBe(1);
@@ -8020,16 +8024,13 @@ describe('workflowRetryCommand — JSON envelope mode (Story 3.3d)', () => {
       metadata: {},
     });
 
-    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue({
+    mockChildProcessSpawn.mockReturnValueOnce({
       pid: 66666,
+      on: mock(() => undefined),
       unref: mock(() => undefined),
-    } as unknown as ReturnType<typeof Bun.spawn>);
-    try {
-      const { workflowRetryCommand } = await import('./workflow');
-      await workflowRetryCommand('run-no-worker-fields', undefined, true);
-    } finally {
-      spawnSpy.mockRestore();
-    }
+    } as unknown as ReturnType<typeof mockChildProcessSpawn>);
+    const { workflowRetryCommand } = await import('./workflow');
+    await workflowRetryCommand('run-no-worker-fields', undefined, true);
 
     const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
     const result = envelope.result as Record<string, unknown>;
@@ -8038,5 +8039,40 @@ describe('workflowRetryCommand — JSON envelope mode (Story 3.3d)', () => {
     expect(result).not.toHaveProperty('attempt');
     expect(result).not.toHaveProperty('retryEpoch');
     expect(result).not.toHaveProperty('safetyRef');
+  });
+
+  // R1-F11: whole-run retry worker argv must use the persisted run.id, not the caller input
+  it('R1-F11: whole-run retry detached worker argv contains run.id (persisted UUID), not the caller-supplied input', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const persistedId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const getRun = workflowDb.getWorkflowRun as ReturnType<typeof mock>;
+    getRun.mockResolvedValueOnce({
+      id: persistedId,
+      workflow_name: 'implement',
+      status: 'failed',
+      codebase_id: null,
+      working_path: '/tmp/wt',
+      metadata: {},
+    });
+
+    mockChildProcessSpawn.mockReturnValueOnce({
+      pid: 55555,
+      on: mock(() => undefined),
+      unref: mock(() => undefined),
+    } as unknown as ReturnType<typeof mockChildProcessSpawn>);
+    const callsBefore = mockChildProcessSpawn.mock.calls.length;
+    const { workflowRetryCommand } = await import('./workflow');
+    // Caller supplies a short prefix; the handler resolves to persistedId via getWorkflowRun.
+    await workflowRetryCommand('short-prefix', undefined, true);
+
+    // Exactly one new spawn call from this test
+    expect(mockChildProcessSpawn.mock.calls.length - callsBefore).toBe(1);
+    const call = mockChildProcessSpawn.mock.calls[callsBefore];
+    const args = (call[1] ?? []) as string[];
+    // The worker argv must contain the persisted UUID, not the caller's 'short-prefix'.
+    expect(args).toContain(persistedId);
+    expect(args).not.toContain('short-prefix');
+    // Worker runs `workflow resume <run.id>`, not `workflow retry`
+    expect(args).toContain('resume');
   });
 });

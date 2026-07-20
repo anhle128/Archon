@@ -140,6 +140,15 @@ mock.module('@archon/core/db/workflow-events', () => ({
   createWorkflowEvent: mock(() => Promise.resolve()),
 }));
 
+const mockChildProcessSpawn = mock(() => ({
+  pid: 99999,
+  on: mock(() => undefined),
+  unref: mock(() => undefined),
+}));
+mock.module('node:child_process', () => ({
+  spawn: mockChildProcessSpawn,
+}));
+
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import { workflowRunCommand, workflowGetCommand } from './workflow';
 
@@ -819,10 +828,11 @@ describe('3.3D-CONTRACT-001 [P0] forbidden-key scan on recovery envelopes (AC #1
       metadata: {},
     });
 
-    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue({
+    mockChildProcessSpawn.mockReturnValueOnce({
       pid: 99999,
+      on: mock(() => undefined),
       unref: mock(() => undefined),
-    } as unknown as ReturnType<typeof Bun.spawn>);
+    } as unknown as ReturnType<typeof mockChildProcessSpawn>);
 
     const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
     try {
@@ -834,7 +844,7 @@ describe('3.3D-CONTRACT-001 [P0] forbidden-key scan on recovery envelopes (AC #1
       expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
       expect(scanForForbiddenKeys(envelope)).toEqual([]);
     } finally {
-      spawnSpy.mockRestore();
+      mockChildProcessSpawn.mockReset();
       consoleSpy.mockRestore();
     }
   });
@@ -1024,10 +1034,11 @@ describe('3.3D-CONTRACT-006 [P0] runtime envelope JSON Schema validation via con
       metadata: {},
     });
 
-    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue({
+    mockChildProcessSpawn.mockReturnValueOnce({
       pid: 99999,
+      on: mock(() => undefined),
       unref: mock(() => undefined),
-    } as unknown as ReturnType<typeof Bun.spawn>);
+    } as unknown as ReturnType<typeof mockChildProcessSpawn>);
 
     const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
     try {
@@ -1039,7 +1050,7 @@ describe('3.3D-CONTRACT-006 [P0] runtime envelope JSON Schema validation via con
       const errors = await validateRuntimeEnvelope(envelope);
       expect(errors).toEqual([]);
     } finally {
-      spawnSpy.mockRestore();
+      mockChildProcessSpawn.mockReset();
       consoleSpy.mockRestore();
     }
   });

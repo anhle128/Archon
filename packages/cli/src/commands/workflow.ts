@@ -3163,12 +3163,12 @@ export async function workflowRetryCommand(
         windowsHide: true,
         stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'],
       });
-      if (child.pid === undefined) {
-        throw new Error(`Failed to start detached retry worker (executable: ${cmd[0]})`);
-      }
       child.on('error', () => {
         /* spawn errors surface via the error event; parent already acked dispatch */
       });
+      if (child.pid === undefined) {
+        throw new Error(`Failed to start detached retry worker (executable: ${cmd[0]})`);
+      }
       child.unref();
     } finally {
       if (logFd !== undefined) {
