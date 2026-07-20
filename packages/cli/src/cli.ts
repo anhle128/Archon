@@ -44,7 +44,9 @@ import {
   workflowGetCommand,
   workflowRunsCommand,
   workflowResumeCommand,
+  workflowRetryCommand,
   workflowRetryNodeCommand,
+  workflowCancelCommand,
   workflowAbandonCommand,
   workflowApproveCommand,
   workflowRejectCommand,
@@ -115,7 +117,13 @@ function getLog(): ReturnType<typeof createLogger> {
 
 type WorkflowCommandEnvelopeCommand = Extract<
   WorkflowProviderCommand,
-  'workflow.start' | 'workflow.status' | 'workflow.approve' | 'workflow.reject'
+  | 'workflow.start'
+  | 'workflow.status'
+  | 'workflow.approve'
+  | 'workflow.reject'
+  | 'workflow.resume'
+  | 'workflow.retry'
+  | 'workflow.cancel'
 >;
 
 function getWorkflowCommandEnvelopeCommand(
@@ -127,6 +135,9 @@ function getWorkflowCommandEnvelopeCommand(
   if (subcommand === 'get') return 'workflow.status';
   if (subcommand === 'approve') return 'workflow.approve';
   if (subcommand === 'reject') return 'workflow.reject';
+  if (subcommand === 'resume') return 'workflow.resume';
+  if (subcommand === 'retry') return 'workflow.retry';
+  if (subcommand === 'cancel') return 'workflow.cancel';
   return undefined;
 }
 
@@ -881,10 +892,25 @@ async function main(): Promise<number> {
           case 'resume': {
             const resumeRunId = positionals[2];
             if (!resumeRunId) {
+              if (jsonFlag && envelopeCommand) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    missingArgument: 'run-id',
+                    usage: 'archon workflow resume <run-id> [--json]',
+                  },
+                  rawWorkflowProviderOptions.correlationIdValue
+                );
+              }
               console.error('Usage: archon workflow resume <run-id>');
               return 1;
             }
-            await workflowResumeCommand(resumeRunId, jsonFlag, effectiveCwd);
+            await workflowResumeCommand(
+              resumeRunId,
+              jsonFlag,
+              effectiveCwd,
+              values['correlation-id'] as string | undefined
+            );
             break;
           }
 
@@ -902,6 +928,70 @@ async function main(): Promise<number> {
               return 1;
             }
             await workflowRetryNodeCommand(retryRunId, retryNodeId, jsonFlag);
+            break;
+          }
+
+          case 'retry': {
+            if (!jsonFlag) {
+              console.error(
+                'Error: `workflow retry` requires --json. For interactive retry, use `workflow retry-node <run-id> <node-id>`.'
+              );
+              return 1;
+            }
+            const retryRunId = positionals[2];
+            if (!retryRunId) {
+              if (envelopeCommand) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    missingArgument: 'run-id',
+                    usage: 'archon workflow retry <run-id> [--node <node-id>] --json',
+                  },
+                  rawWorkflowProviderOptions.correlationIdValue
+                );
+              }
+              console.error('Usage: archon workflow retry <run-id> [--node <node-id>] --json');
+              return 1;
+            }
+            const nodeId = values.node as string | undefined;
+            await workflowRetryCommand(
+              retryRunId,
+              nodeId,
+              jsonFlag,
+              effectiveCwd,
+              values['correlation-id'] as string | undefined
+            );
+            break;
+          }
+
+          case 'cancel': {
+            if (!jsonFlag) {
+              console.error(
+                'Error: `workflow cancel` requires --json. Use `workflow abandon <run-id>` to cancel a run interactively.'
+              );
+              return 1;
+            }
+            const cancelRunId = positionals[2];
+            if (!cancelRunId) {
+              if (envelopeCommand) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    missingArgument: 'run-id',
+                    usage: 'archon workflow cancel <run-id> --json',
+                  },
+                  rawWorkflowProviderOptions.correlationIdValue
+                );
+              }
+              console.error('Usage: archon workflow cancel <run-id> --json');
+              return 1;
+            }
+            await workflowCancelCommand(
+              cancelRunId,
+              jsonFlag,
+              effectiveCwd,
+              values['correlation-id'] as string | undefined
+            );
             break;
           }
 
@@ -1081,7 +1171,7 @@ async function main(): Promise<number> {
               console.error(`Unknown workflow subcommand: ${subcommand}`);
             }
             console.error(
-              'Available: list, run, status, get, runs, resume, abandon, approve, reject, cleanup, event, search, install'
+              'Available: list, run, status, get, runs, resume, retry, retry-node, cancel, abandon, approve, reject, cleanup, event, search, install'
             );
             return 1;
         }
@@ -1358,7 +1448,7 @@ async function main(): Promise<number> {
         return 1;
     }
     await printUpdateNotice(values.quiet as boolean | undefined);
-    return 0;
+    return typeof process.exitCode === 'number' ? process.exitCode : 0;
   } catch (error) {
     const err = error as Error;
     console.error(`Error: ${err.message}`);

@@ -808,8 +808,7 @@ describe('3.3D-CONTRACT-001 [P0] forbidden-key scan on recovery envelopes (AC #1
     }
   });
 
-  test.skip('a workflow.retry success envelope contains no forbidden key', async () => {
-    // ACTIVATION: workflowRetryCommand exists and emits shared envelope
+  test('a workflow.retry success envelope contains no forbidden key', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-contract-rt',
@@ -819,6 +818,11 @@ describe('3.3D-CONTRACT-001 [P0] forbidden-key scan on recovery envelopes (AC #1
       codebase_id: null,
       metadata: {},
     });
+
+    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue({
+      pid: 99999,
+      unref: mock(() => undefined),
+    } as unknown as ReturnType<typeof Bun.spawn>);
 
     const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
     try {
@@ -830,12 +834,12 @@ describe('3.3D-CONTRACT-001 [P0] forbidden-key scan on recovery envelopes (AC #1
       expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
       expect(scanForForbiddenKeys(envelope)).toEqual([]);
     } finally {
+      spawnSpy.mockRestore();
       consoleSpy.mockRestore();
     }
   });
 
-  test.skip('a workflow.cancel success envelope contains no forbidden key', async () => {
-    // ACTIVATION: workflowCancelCommand exists and emits shared envelope
+  test('a workflow.cancel success envelope contains no forbidden key', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-contract-cn',
@@ -1009,8 +1013,7 @@ describe('3.3D-CONTRACT-006 [P0] runtime envelope JSON Schema validation via con
     }
   });
 
-  test.skip('a runtime workflow.retry success envelope validates against the schema', async () => {
-    // ACTIVATION: workflowRetryCommand exists
+  test('a runtime workflow.retry success envelope validates against the schema', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-schema-rt',
@@ -1034,8 +1037,7 @@ describe('3.3D-CONTRACT-006 [P0] runtime envelope JSON Schema validation via con
     }
   });
 
-  test.skip('a runtime workflow.cancel success envelope validates against the schema', async () => {
-    // ACTIVATION: workflowCancelCommand exists
+  test('a runtime workflow.cancel success envelope validates against the schema', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-schema-cn',
