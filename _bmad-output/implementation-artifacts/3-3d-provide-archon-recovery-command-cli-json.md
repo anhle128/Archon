@@ -1,6 +1,6 @@
 # Story 3.3d: Provide Archon Recovery Command CLI JSON
 
-Status: review
+Status: in-progress
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -110,6 +110,10 @@ so that external controllers can route recovery actions consistently without rel
 - [x] [Review][Patch] R1-F21: `workflow resume --json` can report `resumable: true` for a run that has no persisted `working_path`. [packages/cli/src/commands/workflow.ts:2947]
 - [x] [Review][Patch] R1-F22: The cancel command's durable CAS still uses a broader database transition than the story allows. [packages/core/src/db/workflows.ts:1095]
 - [x] [Review][Patch] R1-F23: The required executable proof suite remains incomplete despite the story marking the proof tasks complete. [packages/cli/src/commands/workflow-json.e2e.test.ts:1141]
+- [ ] [Review][Patch] R1-F24: Raw `--json` tokens consumed as string option values can bypass the provider JSON failure envelope. [packages/cli/src/cli.ts:528]
+- [ ] [Review][Patch] R1-F25: Whole-run retry still does not guarantee that the detached worker claims the exact requested run. [packages/cli/src/commands/workflow.ts:3024]
+- [ ] [Review][Patch] R1-F26: The provider cancel fix changed legacy `workflow abandon`/shared cancellation behavior for `pending` runs. [packages/core/src/operations/workflow-operations.ts:115]
+- [ ] [Review][Patch] R1-F27: Required executable recovery proofs are still incomplete despite the story marking proof tasks resolved. [packages/cli/src/commands/workflow-json.e2e.test.ts:1165]
 
 ## Dev Notes
 
