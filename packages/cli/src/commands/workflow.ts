@@ -111,6 +111,7 @@ export interface WorkflowRunOptions {
    */
   container?: boolean;
   resume?: boolean;
+  resumeRunId?: string;
   codebaseId?: string; // Skips path-based codebase lookup when resume/approve/reject already resolved it
   /**
    * Override the directory used for workflow YAML discovery.
@@ -1293,10 +1294,16 @@ async function workflowRunCommandInner(
       );
     }
 
-    resumable = await workflowDb.findResumableRun(workflowName, cwd);
+    resumable = options.resumeRunId
+      ? await workflowDb.getWorkflowRun(options.resumeRunId)
+      : await workflowDb.findResumableRun(workflowName, cwd);
 
     if (!resumable) {
-      throw new Error(`No resumable run found for workflow '${workflowName}' at path '${cwd}'.`);
+      throw new Error(
+        options.resumeRunId
+          ? `No resumable run found with id '${options.resumeRunId}'.`
+          : `No resumable run found for workflow '${workflowName}' at path '${cwd}'.`
+      );
     }
 
     getLog().info(
@@ -3022,11 +3029,12 @@ export async function workflowResumeCommand(
     : undefined;
 
   // Re-execute via workflowRunCommand with --resume: it locates the prior failed
-  // run via findResumableRun and skips already-completed nodes (the executor
+  // run by ID (resumeRunId) and skips already-completed nodes (the executor
   // itself no longer auto-detects resumable runs).
   try {
     await workflowRunCommand(run.working_path, run.workflow_name, run.user_message ?? '', {
       resume: true,
+      resumeRunId: resolvedId,
       codebaseId: run.codebase_id ?? undefined,
       discoveryCwd,
     });

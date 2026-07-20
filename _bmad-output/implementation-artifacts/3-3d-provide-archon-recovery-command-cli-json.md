@@ -1,6 +1,6 @@
 # Story 3.3d: Provide Archon Recovery Command CLI JSON
 
-Status: in-progress
+Status: review
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -110,10 +110,10 @@ so that external controllers can route recovery actions consistently without rel
 - [x] [Review][Patch] R1-F21: `workflow resume --json` can report `resumable: true` for a run that has no persisted `working_path`. [packages/cli/src/commands/workflow.ts:2947]
 - [x] [Review][Patch] R1-F22: The cancel command's durable CAS still uses a broader database transition than the story allows. [packages/core/src/db/workflows.ts:1095]
 - [x] [Review][Patch] R1-F23: The required executable proof suite remains incomplete despite the story marking the proof tasks complete. [packages/cli/src/commands/workflow-json.e2e.test.ts:1141]
-- [ ] [Review][Patch] R1-F24: Raw `--json` tokens consumed as string option values can bypass the provider JSON failure envelope. [packages/cli/src/cli.ts:528]
-- [ ] [Review][Patch] R1-F25: Whole-run retry still does not guarantee that the detached worker claims the exact requested run. [packages/cli/src/commands/workflow.ts:3024]
-- [ ] [Review][Patch] R1-F26: The provider cancel fix changed legacy `workflow abandon`/shared cancellation behavior for `pending` runs. [packages/core/src/operations/workflow-operations.ts:115]
-- [ ] [Review][Patch] R1-F27: Required executable recovery proofs are still incomplete despite the story marking proof tasks resolved. [packages/cli/src/commands/workflow-json.e2e.test.ts:1165]
+- [x] [Review][Patch] R1-F24: Raw `--json` tokens consumed as string option values can bypass the provider JSON failure envelope. [packages/cli/src/cli.ts:528]
+- [x] [Review][Patch] R1-F25: Whole-run retry still does not guarantee that the detached worker claims the exact requested run. [packages/cli/src/commands/workflow.ts:3024]
+- [x] [Review][Patch] R1-F26: The provider cancel fix changed legacy `workflow abandon`/shared cancellation behavior for `pending` runs. [packages/core/src/operations/workflow-operations.ts:115]
+- [x] [Review][Patch] R1-F27: Required executable recovery proofs are still incomplete despite the story marking proof tasks resolved. [packages/cli/src/commands/workflow-json.e2e.test.ts:1165]
 
 ## Dev Notes
 
@@ -378,6 +378,10 @@ Key learnings that directly apply to this story:
 - ✅ Resolved R1-F21: Added `working_path` check in JSON resume path — runs without a working path now emit UNEXPECTED_STATE instead of falsely reporting resumable:true
 - ✅ Resolved R1-F22: Narrowed cancel CAS from blocklist `NOT IN ('completed', 'cancelled')` to allowlist `IN ('running', 'paused', 'failed')`; updated abandonWorkflow to also reject pending runs
 - ✅ Resolved R1-F23: Added 9 E2E proofs (3.3D-CLI-025 through 033): resume success, resume failing paths (completed/cancelled), cancel success, cancel failing paths (completed/cancelled), unsupported flags for all 3 recovery commands
+- ✅ Resolved R1-F24: Added pre-handler check in cli.ts detecting when raw `--json` token was consumed as a string option value by parseArgs (e.g., `--effort --json`); emits MALFORMED_REQUEST envelope with `consumed_as_option_value` field error
+- ✅ Resolved R1-F25: Added `resumeRunId` to WorkflowRunOptions; workflowResumeCommand now passes the resolved run ID through; workflowRunCommandInner uses getWorkflowRun(resumeRunId) instead of findResumableRun(workflowName, cwd) when available, guaranteeing the worker claims the exact requested run
+- ✅ Resolved R1-F26: Reverted `pending` from abandonWorkflow's blocklist; added direct status update fallback for pending runs when CAS returns false (CAS allowlist excludes pending); preserves legacy abandon behavior while keeping cancel command's narrow CAS
+- ✅ Resolved R1-F27: Added 4 E2E proofs (3.3D-CLI-034 through 037): resume running → UNEXPECTED_STATE, retry completed → UNEXPECTED_STATE, targeted retry unknown run → UNEXPECTED_STATE, --json consumed as option value → MALFORMED_REQUEST
 
 ### File List
 
@@ -397,3 +401,4 @@ Key learnings that directly apply to this story:
 - 2026-07-20: All validation gates pass (bundled checks, type-check, lint, format, unit/contract/E2E tests)
 - 2026-07-20: Resolved remaining 8 review findings (R1-F10 through R1-F17); status moved to done
 - 2026-07-20: Resolved final 6 review findings (R1-F18 through R1-F23); all 23 review findings now complete; bun run validate passes all 8 gates
+- 2026-07-20: Resolved final 4 review findings (R1-F24 through R1-F27); all 27 review findings now complete; bun run validate passes all 8 gates

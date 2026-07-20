@@ -586,6 +586,16 @@ async function main(): Promise<number> {
           parsedCorrelationId as string | undefined
         );
       }
+      if (rawWorkflowProviderOptions.jsonRequested && jsonFlag === undefined && !invalidJsonFlag) {
+        return await emitWorkflowCommandMalformedEnvelope(
+          envelopeCommand,
+          {
+            fieldErrors: [{ path: '/json', code: 'consumed_as_option_value' }],
+            requestAccepted: false,
+          },
+          parsedCorrelationId as string | undefined
+        );
+      }
     }
 
     // Note: orphaned run cleanup moved to `workflow cleanup` command only.
