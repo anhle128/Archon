@@ -1,6 +1,6 @@
 # Story 3.3d: Provide Archon Recovery Command CLI JSON
 
-Status: review
+Status: in-progress
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -84,6 +84,18 @@ so that external controllers can route recovery actions consistently without rel
   - [x] Add contract conformance tests: parse runtime envelope output against the 4 canonical recovery fixtures (`resume-success.json`, `retry-success.json`, `retry-node-success.json`, `cancel-success.json`).
   - [x] Add E2E subprocess tests using real CLI subprocess boundary with isolated `ARCHON_HOME`, SQLite, temp git repo, no network.
   - [x] Run `bun run validate` — all eight gates must pass.
+
+### Review Findings
+
+- [ ] [Review][Patch] R1-F1: Recovery commands return `WORKFLOW_RUN_NOT_FOUND` for missing runs instead of the required `UNEXPECTED_STATE`. [packages/cli/src/commands/workflow.ts:274]
+- [ ] [Review][Patch] R1-F2: `workflow cancel --json` can cancel `pending` runs even though only `running`, `paused`, and `failed` are eligible. [packages/cli/src/commands/workflow.ts:3225]
+- [ ] [Review][Patch] R1-F3: Blank targeted retry node IDs fall through to whole-run retry instead of returning `MALFORMED_REQUEST`. [packages/cli/src/commands/workflow.ts:3113]
+- [ ] [Review][Patch] R1-F4: Retry dispatch uses `Bun.spawn` instead of the existing detached `node:child_process.spawn` pattern required by the story. [packages/cli/src/commands/workflow.ts:3135]
+- [ ] [Review][Patch] R1-F5: Retry dispatch falls back to caller `cwd` or `process.cwd()` when the run has no persisted `working_path`. [packages/cli/src/commands/workflow.ts:3111]
+- [ ] [Review][Patch] R1-F6: Whole-run retry does not preserve exact run identity after spawning its worker. [packages/cli/src/commands/workflow.ts:3113]
+- [ ] [Review][Patch] R1-F7: Whole-run retry accepts cancelled runs even though the spawned worker uses the resume path, which cannot resume cancelled runs. [packages/cli/src/commands/workflow.ts:3105]
+- [ ] [Review][Patch] R1-F8: The required cancel CAS-race proof is skipped while the story marks that proof complete. [packages/cli/src/commands/workflow.test.ts:7719]
+- [ ] [Review][Patch] R1-F9: The runtime retry "success" contract test can pass on an error envelope and can start a real detached worker. [packages/cli/src/commands/workflow-command-contract.test.ts:1016]
 
 ## Dev Notes
 
