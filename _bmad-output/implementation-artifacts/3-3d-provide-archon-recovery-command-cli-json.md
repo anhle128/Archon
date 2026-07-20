@@ -1,6 +1,6 @@
 # Story 3.3d: Provide Archon Recovery Command CLI JSON
 
-Status: review
+Status: in-progress
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -122,6 +122,9 @@ so that external controllers can route recovery actions consistently without rel
 - [x] [Review][Patch] R1-F33: JSON resume still reports `resumable: true` when persisted execution context is unusable. [packages/cli/src/commands/workflow.ts:2967]
 - [x] [Review][Patch] R1-F34: Retry subprocess proofs still stop at parent envelopes and launch unobserved detached workers. [packages/cli/src/commands/workflow-json.e2e.test.ts:1179]
 - [x] [Review][Patch] R1-F35: Route-loop recovery proof scenarios from TEA remain missing. [_bmad-output/test-artifacts/test-design/test-design-3-3d-provide-archon-recovery-command-cli-json.md:237]
+- [ ] [Review][Patch] R1-F36: Legacy abandon paths can still report success when no cancellation CAS won. [packages/core/src/operations/workflow-operations.ts:144]
+- [ ] [Review][Patch] R1-F37: JSON resume and whole-run retry validate persisted execution context with a brittle `.git` path check that rejects valid recovery contexts and still misses required codebase validation. [packages/cli/src/commands/workflow.ts:2977]
+- [ ] [Review][Patch] R1-F38: Required executable recovery proofs are still incomplete and one retry side-effect proof is timing-dependent. [packages/cli/src/commands/workflow-json.e2e.test.ts:1179]
 
 ## Dev Notes
 
