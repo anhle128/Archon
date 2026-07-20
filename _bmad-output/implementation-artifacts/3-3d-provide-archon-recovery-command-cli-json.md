@@ -1,6 +1,6 @@
 # Story 3.3d: Provide Archon Recovery Command CLI JSON
 
-Status: done
+Status: in-progress
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -104,6 +104,12 @@ so that external controllers can route recovery actions consistently without rel
 - [x] [Review][Patch] R1-F15: Provider JSON recovery commands can still emit update-notice text on stderr in bundled binaries. [packages/cli/src/cli.ts:1450]
 - [x] [Review][Patch] R1-F16: Extra positional arguments after recovery run IDs are ignored instead of rejected as malformed input. [packages/cli/src/cli.ts:941]
 - [x] [Review][Patch] R1-F17: The TEA test design still expects whole-run retry of cancelled runs even though that behavior was rejected. [_bmad-output/test-artifacts/test-design/test-design-3-3d-provide-archon-recovery-command-cli-json.md:182]
+- [ ] [Review][Patch] R1-F18: Bare targeted retry `--node` inputs still bypass the provider JSON failure envelope. [packages/cli/src/cli.ts:988]
+- [ ] [Review][Patch] R1-F19: Provider JSON recovery commands ignore unsupported flags instead of classifying them as malformed input. [packages/cli/src/cli.ts:457]
+- [ ] [Review][Patch] R1-F20: Whole-run retry still does not guarantee that the detached worker resumes the exact requested run. [packages/cli/src/commands/workflow.ts:3137]
+- [ ] [Review][Patch] R1-F21: `workflow resume --json` can report `resumable: true` for a run that has no persisted `working_path`. [packages/cli/src/commands/workflow.ts:2947]
+- [ ] [Review][Patch] R1-F22: The cancel command's durable CAS still uses a broader database transition than the story allows. [packages/core/src/db/workflows.ts:1095]
+- [ ] [Review][Patch] R1-F23: The required executable proof suite remains incomplete despite the story marking the proof tasks complete. [packages/cli/src/commands/workflow-json.e2e.test.ts:1141]
 
 ## Dev Notes
 
