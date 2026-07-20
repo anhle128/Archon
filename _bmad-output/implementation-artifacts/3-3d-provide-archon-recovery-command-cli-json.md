@@ -1,6 +1,6 @@
 # Story 3.3d: Provide Archon Recovery Command CLI JSON
 
-Status: review
+Status: in-progress
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -125,6 +125,11 @@ so that external controllers can route recovery actions consistently without rel
 - [x] [Review][Patch] R1-F36: Legacy abandon paths can still report success when no cancellation CAS won. [packages/core/src/operations/workflow-operations.ts:144]
 - [x] [Review][Patch] R1-F37: JSON resume and whole-run retry validate persisted execution context with a brittle `.git` path check that rejects valid recovery contexts and still misses required codebase validation. [packages/cli/src/commands/workflow.ts:2977]
 - [x] [Review][Patch] R1-F38: Required executable recovery proofs are still incomplete and one retry side-effect proof is timing-dependent. [packages/cli/src/commands/workflow-json.e2e.test.ts:1179]
+- [ ] [Review][Patch] R1-F39: JSON resume and retry still reject valid folder-project recovery contexts. [packages/cli/src/commands/workflow.ts:2977]
+- [ ] [Review][Patch] R1-F40: Recovery JSON DB preflight can bypass the shared failure envelope. [packages/cli/src/cli.ts:686]
+- [ ] [Review][Patch] R1-F41: Option-looking targeted retry node values can be consumed as node IDs instead of malformed input. [packages/cli/src/cli.ts:1027]
+- [ ] [Review][Patch] R1-F42: Required recovery proof still stops at parent retry envelopes and omits targeted runtime contract validation. [packages/cli/src/commands/workflow-json.e2e.test.ts:1205]
+- [ ] [Review][Patch] R1-F43: New cancel and abandon 409 responses are not declared in the OpenAPI route definitions. [packages/server/src/routes/api.ts:849]
 
 ## Dev Notes
 
