@@ -1727,6 +1727,7 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
   beforeEach(() => {
     mockGetWorkflowRun.mockReset();
     mockCancelWorkflowRun.mockReset();
+    mockCancelPendingWorkflowRun.mockReset();
   });
 
   test('returns 404 when run not found', async () => {
@@ -1768,6 +1769,7 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
 
   test('returns 200 and calls cancelWorkflowRun for running run', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(MOCK_RUNNING_RUN);
+    mockCancelWorkflowRun.mockImplementationOnce(async () => ({ cancelled: true }));
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/run-uuid-1/abandon', {
       method: 'POST',
@@ -1783,6 +1785,7 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
   // abandonable — the HTTP route previously rejected it, contradicting CLI/chat.
   test('returns 200 and calls cancelWorkflowRun for failed run', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(MOCK_FAILED_RUN);
+    mockCancelWorkflowRun.mockImplementationOnce(async () => ({ cancelled: true }));
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/run-uuid-4/abandon', {
       method: 'POST',
@@ -1792,6 +1795,17 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
     expect(body.success).toBe(true);
     expect(body.message).toContain('Abandoned');
     expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-uuid-4');
+  });
+
+  // R1-F36: CAS loss returns 409 instead of misleading success
+  test('returns 409 when CAS is lost (run already transitioned)', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(MOCK_RUNNING_RUN);
+    mockCancelWorkflowRun.mockImplementationOnce(async () => ({ cancelled: false }));
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-1/abandon', {
+      method: 'POST',
+    });
+    expect(response.status).toBe(409);
   });
 });
 

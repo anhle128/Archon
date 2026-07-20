@@ -144,6 +144,7 @@ mock.module('@archon/git', () => ({
   toBranchName: mock((branch: string) => branch),
   getDefaultBranch: mock(() => Promise.resolve('dev')),
   isAncestorOf: mock(() => Promise.resolve(true)),
+  execFileAsync: mock(() => Promise.resolve({ stdout: '.git\n', stderr: '' })),
 }));
 
 mock.module('@archon/core/db/conversations', () => ({
@@ -157,7 +158,15 @@ mock.module('@archon/core/db/conversations', () => ({
 mock.module('@archon/core/db/codebases', () => ({
   findCodebaseByDefaultCwd: mock(() => Promise.resolve(null)),
   findCodebaseByPathPrefix: mock(() => Promise.resolve(null)),
-  getCodebase: mock(() => Promise.resolve(null)),
+  getCodebase: mock(() =>
+    Promise.resolve({
+      id: 'cb-default',
+      name: 'test/repo',
+      repository_url: null,
+      default_cwd: '/tmp/repo',
+      commands: {},
+    })
+  ),
 }));
 
 mock.module('@archon/core/db/isolation-environments', () => ({
@@ -7327,9 +7336,20 @@ describe('classifyRunError — decision-specific patterns (Story 3.3c Slice 4)',
 describe('workflowResumeCommand — JSON envelope mode (Story 3.3d)', () => {
   let consoleSpy: ReturnType<typeof spyOn>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
     mockLogger.error.mockClear();
+    const codebaseDb = await import('@archon/core/db/codebases');
+    (codebaseDb.getCodebase as ReturnType<typeof mock>).mockReset();
+    (codebaseDb.getCodebase as ReturnType<typeof mock>).mockImplementation(() =>
+      Promise.resolve({
+        id: 'cb-default',
+        name: 'test/repo',
+        repository_url: null,
+        default_cwd: '/tmp/repo',
+        commands: {},
+      })
+    );
   });
 
   afterEach(() => {
@@ -7815,9 +7835,20 @@ describe('workflowCancelCommand — JSON envelope mode (Story 3.3d)', () => {
 describe('workflowRetryCommand — JSON envelope mode (Story 3.3d)', () => {
   let consoleSpy: ReturnType<typeof spyOn>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
     mockLogger.error.mockClear();
+    const codebaseDb = await import('@archon/core/db/codebases');
+    (codebaseDb.getCodebase as ReturnType<typeof mock>).mockReset();
+    (codebaseDb.getCodebase as ReturnType<typeof mock>).mockImplementation(() =>
+      Promise.resolve({
+        id: 'cb-default',
+        name: 'test/repo',
+        repository_url: null,
+        default_cwd: '/tmp/repo',
+        commands: {},
+      })
+    );
   });
 
   afterEach(() => {

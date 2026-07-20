@@ -708,7 +708,8 @@ describe('abandonWorkflow', () => {
 
   // Race: a concurrent transition already took the run terminal, so our cancel CAS
   // no-ops (`cancelled: false`). The winner OWNS the environment — we must NOT reclaim.
-  test('does not reclaim a container run when the cancel loses the race', async () => {
+  // R1-F36: CAS loss for a non-pending run now throws instead of silently returning success.
+  test('throws when the cancel loses the race for a non-pending run', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(
       makePausedRun({
         status: 'paused',
@@ -716,7 +717,9 @@ describe('abandonWorkflow', () => {
       })
     );
     mockCancelWorkflowRun.mockImplementationOnce(() => Promise.resolve({ cancelled: false }));
-    await abandonWorkflow('run-1');
+    await expect(abandonWorkflow('run-1')).rejects.toThrow(
+      'another transition already changed the run status'
+    );
     expect(mockReclaimContainerEnv).not.toHaveBeenCalled();
   });
 

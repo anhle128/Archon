@@ -153,6 +153,11 @@ export async function abandonWorkflow(runId: string): Promise<WorkflowRun> {
       throw new Error(`Failed to abandon pending workflow run ${runId}: ${err.message}`);
     }
   }
+  if (!cancelled) {
+    throw new Error(
+      `Failed to abandon workflow run ${runId}: another transition already changed the run status.`
+    );
+  }
   // M2 — reclaim a container run's container + upper volume immediately, in the SHARED
   // op so EVERY abandon surface (CLI, web API, chat, manage_run, Slack-cancel) frees the
   // resources now rather than waiting for the scheduled reaper. Best-effort: a reclaim

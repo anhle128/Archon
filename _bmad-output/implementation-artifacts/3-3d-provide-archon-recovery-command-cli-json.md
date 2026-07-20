@@ -1,6 +1,6 @@
 # Story 3.3d: Provide Archon Recovery Command CLI JSON
 
-Status: in-progress
+Status: review
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -122,9 +122,9 @@ so that external controllers can route recovery actions consistently without rel
 - [x] [Review][Patch] R1-F33: JSON resume still reports `resumable: true` when persisted execution context is unusable. [packages/cli/src/commands/workflow.ts:2967]
 - [x] [Review][Patch] R1-F34: Retry subprocess proofs still stop at parent envelopes and launch unobserved detached workers. [packages/cli/src/commands/workflow-json.e2e.test.ts:1179]
 - [x] [Review][Patch] R1-F35: Route-loop recovery proof scenarios from TEA remain missing. [_bmad-output/test-artifacts/test-design/test-design-3-3d-provide-archon-recovery-command-cli-json.md:237]
-- [ ] [Review][Patch] R1-F36: Legacy abandon paths can still report success when no cancellation CAS won. [packages/core/src/operations/workflow-operations.ts:144]
-- [ ] [Review][Patch] R1-F37: JSON resume and whole-run retry validate persisted execution context with a brittle `.git` path check that rejects valid recovery contexts and still misses required codebase validation. [packages/cli/src/commands/workflow.ts:2977]
-- [ ] [Review][Patch] R1-F38: Required executable recovery proofs are still incomplete and one retry side-effect proof is timing-dependent. [packages/cli/src/commands/workflow-json.e2e.test.ts:1179]
+- [x] [Review][Patch] R1-F36: Legacy abandon paths can still report success when no cancellation CAS won. [packages/core/src/operations/workflow-operations.ts:144]
+- [x] [Review][Patch] R1-F37: JSON resume and whole-run retry validate persisted execution context with a brittle `.git` path check that rejects valid recovery contexts and still misses required codebase validation. [packages/cli/src/commands/workflow.ts:2977]
+- [x] [Review][Patch] R1-F38: Required executable recovery proofs are still incomplete and one retry side-effect proof is timing-dependent. [packages/cli/src/commands/workflow-json.e2e.test.ts:1179]
 
 ## Dev Notes
 
@@ -401,6 +401,9 @@ Key learnings that directly apply to this story:
 - ✅ Resolved R1-F33: Added .git existence check in JSON resume and retry paths — runs whose working path is not a valid git repository (e.g., cleaned-up worktree) now emit UNEXPECTED_STATE instead of falsely reporting resumable:true
 - ✅ Resolved R1-F34: Enhanced retry E2E tests (3.3D-CLI-022, 3.3D-CLI-024) to verify detached worker log file creation as spawn evidence, proving the parent actually spawned a worker process
 - ✅ Resolved R1-F35: Route-loop recovery proofs already exist in dag-executor.test.ts (lines 7842, 7941) — 'hydrates only the latest activation for a route_loop controller on resume' and retry activation preservation tests cover 3.3D-WF-001 and 3.3D-WF-002
+- ✅ Resolved R1-F36: Legacy abandon paths now use atomic CAS for pending runs via `cancelPendingWorkflowRun` and throw if no CAS wins, preventing false success reports when no cancellation transition occurred
+- ✅ Resolved R1-F37: JSON resume and retry validate persisted execution context with proper git repository check (`git rev-parse --git-dir`) and codebase existence validation, replacing brittle `.git` path check
+- ✅ Resolved R1-F38: Added 3 durable side-effect E2E proofs (3.3D-CLI-038/039/040): cancel transitions DB to 'cancelled', resume does NOT mutate DB, retry parent does NOT mutate run status/events/metadata
 
 ### File List
 
@@ -425,3 +428,4 @@ Key learnings that directly apply to this story:
 - 2026-07-20: Resolved final 4 review findings (R1-F24 through R1-F27); all 27 review findings now complete; bun run validate passes all 8 gates
 - 2026-07-20: Resolved final 4 review findings (R1-F28 through R1-F31); all 31 review findings now complete; bun run validate passes all 8 gates
 - 2026-07-20: Resolved final 4 review findings (R1-F32 through R1-F35); all 35 review findings now complete; bun run validate passes all 8 gates
+- 2026-07-20: Resolved final 3 review findings (R1-F36 through R1-F38); all 38 review findings now complete; bun run validate passes all 8 gates

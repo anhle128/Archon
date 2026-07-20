@@ -111,6 +111,7 @@ mock.module('@archon/git', () => ({
   toBranchName: mock((branch: string) => branch),
   getDefaultBranch: mock(() => Promise.resolve('dev')),
   isAncestorOf: mock(() => Promise.resolve(true)),
+  execFileAsync: mock(() => Promise.resolve({ stdout: '.git\n', stderr: '' })),
 }));
 mock.module('@archon/core/db/conversations', () => ({
   getOrCreateConversation: mock(() => Promise.resolve({ id: 'conv-contract' })),
@@ -119,7 +120,15 @@ mock.module('@archon/core/db/conversations', () => ({
 }));
 mock.module('@archon/core/db/codebases', () => ({
   findCodebaseByDefaultCwd: mock(() => Promise.resolve(null)),
-  getCodebase: mock(() => Promise.resolve(null)),
+  getCodebase: mock(() =>
+    Promise.resolve({
+      id: 'cb-default',
+      name: 'test/repo',
+      repository_url: null,
+      default_cwd: '/tmp/repo',
+      commands: {},
+    })
+  ),
 }));
 mock.module('@archon/core/db/isolation-environments', () => ({
   findActiveByWorkflow: mock(() => Promise.resolve(null)),

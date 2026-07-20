@@ -2974,10 +2974,20 @@ export async function workflowResumeCommand(
           `Cannot resume run with status '${run.status}'. Working path no longer exists — run context is unusable.`
         );
       }
-      if (!existsSync(join(run.working_path, '.git'))) {
+      try {
+        await git.execFileAsync('git', ['rev-parse', '--git-dir'], { cwd: run.working_path });
+      } catch {
         throw new Error(
           `Cannot resume run with status '${run.status}'. Working path is not a valid git repository — run context is unusable.`
         );
+      }
+      if (run.codebase_id) {
+        const codebase = await codebaseDb.getCodebase(run.codebase_id);
+        if (!codebase) {
+          throw new Error(
+            `Cannot resume run with status '${run.status}'. Associated codebase no longer registered — run context is unusable.`
+          );
+        }
       }
       const contractState = mapWorkflowRunToContractState(run);
       console.log(
@@ -3155,10 +3165,25 @@ export async function workflowRetryCommand(
     if (!run.working_path) {
       throw new Error(`Cannot retry workflow run '${resolvedId}': no working path recorded.`);
     }
-    if (!existsSync(join(run.working_path, '.git'))) {
+    if (!existsSync(run.working_path)) {
+      throw new Error(
+        `Cannot retry workflow run '${resolvedId}': working path no longer exists — run context is unusable.`
+      );
+    }
+    try {
+      await git.execFileAsync('git', ['rev-parse', '--git-dir'], { cwd: run.working_path });
+    } catch {
       throw new Error(
         `Cannot retry workflow run '${resolvedId}': working path is not a valid git repository — run context is unusable.`
       );
+    }
+    if (run.codebase_id) {
+      const codebase = await codebaseDb.getCodebase(run.codebase_id);
+      if (!codebase) {
+        throw new Error(
+          `Cannot retry workflow run '${resolvedId}': associated codebase no longer registered — run context is unusable.`
+        );
+      }
     }
     const workingPath = run.working_path;
 

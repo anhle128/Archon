@@ -127,6 +127,32 @@ function queryRunStatus(runId: string): string | null {
   }
 }
 
+function queryEventCount(runId: string): number {
+  const dbPath = join(isolatedHome, 'archon.db');
+  const db = new Database(dbPath);
+  try {
+    const row = db
+      .query('SELECT COUNT(*) as cnt FROM remote_agent_workflow_events WHERE workflow_run_id = ?')
+      .get(runId) as { cnt: number } | undefined;
+    return row?.cnt ?? 0;
+  } finally {
+    db.close();
+  }
+}
+
+function queryRunMetadata(runId: string): Record<string, unknown> | null {
+  const dbPath = join(isolatedHome, 'archon.db');
+  const db = new Database(dbPath);
+  try {
+    const row = db
+      .query('SELECT metadata FROM remote_agent_workflow_runs WHERE id = ?')
+      .get(runId) as { metadata: string } | undefined;
+    return row?.metadata ? JSON.parse(row.metadata) : null;
+  } finally {
+    db.close();
+  }
+}
+
 describe('workflow run/get --json CLI dispatch E2E — real subprocess (Story 3.3b)', () => {
   // 3.3B-CLI-031 [P0] R-003,RC-09,RC-10 — a missing `workflow run` name under
   // --json must become a `workflow.start` MALFORMED_REQUEST envelope with
@@ -1566,11 +1592,16 @@ describe('R1-F30 — durable side-effect proofs (Story 3.3d)', () => {
     expect(statusAfter).toBe('paused');
   });
 
-  // 3.3D-CLI-040 [P0] — retry parent dispatch does NOT mutate run status in DB
-  test('3.3D-CLI-040: `workflow retry --json` parent dispatch does not mutate run status in DB', async () => {
+  // 3.3D-CLI-040 [P0] R1-F38 — retry parent dispatch does not mutate run status,
+  // events, or metadata in DB. Checks are deterministic: the parent returns
+  // immediately after spawn, and these DB assertions run before the detached
+  // worker can claim the run (worker must re-resolve the run and win a CAS).
+  test('3.3D-CLI-040: `workflow retry --json` parent dispatch does not mutate run status, events, or metadata in DB', async () => {
     const runId = 'cccc3333-dddd-eeee-ffff-aaaaaaaaaaaa';
     await seedFailedRun(runId, isolatedRepo);
     expect(queryRunStatus(runId)).toBe('failed');
+    expect(queryEventCount(runId)).toBe(0);
+    const metadataBefore = queryRunMetadata(runId);
 
     const { stdout, exitCode } = await runCli(['workflow', 'retry', runId, '--json']);
 
@@ -1578,8 +1609,10 @@ describe('R1-F30 — durable side-effect proofs (Story 3.3d)', () => {
     expect(envelope.success).toBe(true);
     expect(exitCode).toBe(0);
 
-    const statusAfter = queryRunStatus(runId);
-    expect(statusAfter).toBe('failed');
+    // Deterministic side-effect proofs: parent dispatch is read-only on the run.
+    expect(queryRunStatus(runId)).toBe('failed');
+    expect(queryEventCount(runId)).toBe(0);
+    expect(queryRunMetadata(runId)).toEqual(metadataBefore);
   });
 });
 
