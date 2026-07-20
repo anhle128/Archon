@@ -1,0 +1,210 @@
+{
+  "schema_version": 2,
+  "subject": "skills/bmad-technical-decision-gate",
+  "generated": "2026-07-19T20:08:55+07:00",
+  "verdict": "Fair: the batch-review contract is coherent and testable, but activation preflight, durable working state, and independent semantic review remain unsafe for a trustworthy PASS.",
+  "grade": "fair",
+  "summary": "The revised skill now gives batch review a clear user-approval boundary, keeps runtime evidence separate from normative authority, and deterministically validates the artifact contract. Its remaining risks are concentrated rather than diffuse: target and prerequisite resolution can still break headless execution, multi-turn state is only partially durable, and the same reasoning pass still authors and certifies PASS.",
+  "standards": {
+    "canon": "/Users/dale/Desktop/workspace/opensources/Archon/.agents/skills/bmad-workflow-builder/references/prompt-quality-canon.md",
+    "principles": "/Users/dale/Desktop/workspace/opensources/Archon/.agents/skills/bmad-workflow-builder/references/skill-quality-principles.md",
+    "scripts": "/Users/dale/Desktop/workspace/opensources/Archon/.agents/skills/bmad-workflow-builder/references/script-standards.md"
+  },
+  "themes": [
+    {
+      "title": "Activation has no closed preflight contract",
+      "root_cause": "The workflow begins creating durable state before it has guaranteed a canonical story key, non-interactive headless behavior, required runtime helpers, and a writable workspace.",
+      "finding_ids": [
+        "architecture-1",
+        "architecture-2",
+        "enhancement-2",
+        "enhancement-4"
+      ],
+      "action": "Define one preflight that resolves an authoritative filesystem-safe story key and runtime prerequisites before the run folder, never prompts in headless mode, and returns an actionable BLOCKED result when safe audited continuation is impossible."
+    },
+    {
+      "title": "Working state exists but does not span the full lifecycle",
+      "root_cause": "The memlog is initialized before the structured artifact, evolving reconciliation can remain conversation-bound, and completed runs are not distinguished from resumable work.",
+      "finding_ids": [
+        "architecture-3",
+        "enhancement-3"
+      ],
+      "action": "Initialize and checkpoint the artifact with the memlog, record headless assumptions, mark only validated PASS runs complete, and make resume distinguish open work from an explicit update to completed decisions."
+    },
+    {
+      "title": "PASS lacks independent semantic challenge",
+      "root_cause": "The same facilitator reconciles the evidence and certifies that its own lifecycle, ownership map, contradictions, and proof sketch are complete, while the validator can check only structure.",
+      "finding_ids": [
+        "enhancement-1"
+      ],
+      "action": "Before PASS, run independent lifecycle-ownership and source-authority reviews, then resolve every material finding or convert it into an unresolved decision, with sequential self-review as the fallback."
+    },
+    {
+      "title": "The intelligence boundary needs one normalization pass",
+      "root_cause": "The prompt still sorts and counts batch entries even though those operations are deterministic, while the script uses word count to make a semantic quality warning about the proof sketch.",
+      "finding_ids": [
+        "determinism-1",
+        "determinism-2"
+      ],
+      "action": "Move stable batch ordering and unresolved-count derivation into the Python helper, and remove the proof-length heuristic so the prompt retains semantic judgment while the script owns plumbing."
+    }
+  ],
+  "strengths": [
+    "Batch mode records every problem and suggested solution for one explicit whole-file user review.",
+    "PENDING review cannot produce PASS, and only an APPROVED batch artifact may proceed.",
+    "The skill treats current code as runtime evidence rather than automatic normative authority.",
+    "The artifact validator is stdlib-only, tested, and owns structural gate consistency.",
+    "The fixed v1 surface still matches the user's explicit decision to decline customization."
+  ],
+  "recommendations": [
+    {
+      "rank": 1,
+      "action": "Close activation with canonical target, headless, dependency, and writable-workspace preflight behavior.",
+      "resolves": [
+        "architecture-1",
+        "architecture-2",
+        "enhancement-2",
+        "enhancement-4"
+      ]
+    },
+    {
+      "rank": 2,
+      "action": "Make the artifact and memlog durable from initialization through completion and update.",
+      "resolves": [
+        "architecture-3",
+        "enhancement-3"
+      ]
+    },
+    {
+      "rank": 3,
+      "action": "Move batch sorting and counting into the helper and remove the proof-length heuristic.",
+      "resolves": [
+        "determinism-1",
+        "determinism-2"
+      ]
+    },
+    {
+      "rank": 4,
+      "action": "Add two independent semantic challenge lenses before PASS.",
+      "resolves": [
+        "enhancement-1"
+      ]
+    },
+    {
+      "rank": 5,
+      "action": "Consolidate the repeated proof-sketch requirement into one complete contract.",
+      "resolves": [
+        "leanness-1"
+      ]
+    }
+  ],
+  "experience": {
+    "journeys": [
+      {
+        "name": "Guided technical decision gate",
+        "steps": "Resolve one authoritative story key, establish durable state, reconcile evidence and lifecycle ownership, answer one material question at a time, challenge the result, validate it, and hand off only on PASS."
+      },
+      {
+        "name": "Batch whole-file review",
+        "steps": "Resolve one authoritative story key, write every problem and suggested solution in descending risk order, return a PENDING BLOCKED artifact for whole-file review, then promote approved suggestions and re-evaluate PASS."
+      },
+      {
+        "name": "Headless automation",
+        "steps": "Preflight an explicit target and runtime prerequisites without prompting, record assumptions, produce a validated artifact when possible, and otherwise return a stable actionable BLOCKED result."
+      }
+    ],
+    "headless": "Partially ready: result JSON exists, but startup can still prompt or fail before a stable run folder and audit path are available."
+  },
+  "findings": [
+    {
+      "id": "leanness-1",
+      "lens": "leanness",
+      "severity": "low",
+      "title": "Proof-sketch criterion is repeated three times",
+      "location": "SKILL.md:50,86,92",
+      "evidence": "The requirement that the executable proof distinguish the chosen semantics from alternatives appears in the lifecycle checklist, the artifact-content rules, and the PASS gate criteria; line 86 adds the only distinct constraint, namely exercising the real external boundary and observable lifecycle.",
+      "recommendation": "State the complete requirement once near the artifact definition: \"The proof sketch must exercise the real external boundary and observable lifecycle so it distinguishes the selected semantics from plausible alternatives.\" Keep the PASS criterion as a short reference to a valid proof sketch, and remove the lifecycle-list repetition."
+    },
+    {
+      "id": "determinism-1",
+      "lens": "determinism",
+      "severity": "medium",
+      "title": "Prompt performs deterministic batch normalization",
+      "location": "skills/bmad-technical-decision-gate/SKILL.md:Resolve Remaining Decisions by Mode and Produce the Gate Artifact",
+      "evidence": "The prompt says to write problems \"ordered by risk as `HIGH`, `MEDIUM`, then `LOW`\" and to set `unresolvedDecisionCount`, while the script only rejects an incorrect order or count after generation.",
+      "recommendation": "This leaks deterministic sorting and counting into the prompt. Apply the determinism test and signal-verb scan: extend the native Python helper with a normalization or rendering operation that stably groups entries by HIGH, MEDIUM, LOW, preserves within-risk order, derives `unresolvedDecisionCount`, and emits the normalized artifact before validation."
+    },
+    {
+      "id": "determinism-2",
+      "lens": "determinism",
+      "severity": "low",
+      "title": "Word count is used as a proof-quality heuristic",
+      "location": "skills/bmad-technical-decision-gate/scripts/validate_decision_gate.py:proof-body warning",
+      "evidence": "The validator emits \"Executable Proof Sketch is unusually short\" solely when `len(proof_body.split()) < 8`.",
+      "recommendation": "This is an intelligence leak because proof executability and adequacy depend on meaning, not word count. Keep deterministic structure validation in the script, but remove this heuristic or report only the neutral metric; leave proof-quality judgment to the prompt under the determinism test."
+    },
+    {
+      "id": "architecture-1",
+      "lens": "architecture",
+      "severity": "high",
+      "title": "Planned-capability activation can still leave story-key unresolved",
+      "location": "skills/bmad-technical-decision-gate/SKILL.md:On Activation",
+      "evidence": "Activation accepts either a story key or a planned capability, while the run folder, artifact, memlog topic, and downstream handoff all require `{story-key}`. Inferring a plausible target does not produce a stable filesystem-safe key, so an explicitly supported invocation can reach unresolved paths. This violates the architecture lens's requirement that earlier sections produce every value later sections consume.",
+      "recommendation": "Require a concrete story key before resolving the run folder. Derive it only from unique authoritative planning metadata; otherwise ask in guided or batch mode, and require it explicitly for headless mode."
+    },
+    {
+      "id": "architecture-2",
+      "lens": "architecture",
+      "severity": "high",
+      "title": "Headless activation can enter an interactive question path",
+      "location": "skills/bmad-technical-decision-gate/SKILL.md:On Activation and Resolve Remaining Decisions by Mode",
+      "evidence": "The shared activation path says to ask for the target when discovery is ambiguous, with no headless exception. A `--headless` caller can therefore be prompted before reaching the promised JSON-only return, and without a story key the required artifact and memlog paths cannot be resolved. This breaks the Skill Quality Principles' headless-mode audit contract and the architecture lens's three-mode soundness rule.",
+      "recommendation": "Make an explicit canonical story key a headless precondition and never prompt in that mode. If it is absent or ambiguous, use a deterministic preflight BLOCKED return and record the failure in a defined memlog location, or revise the headless return contract to cover pre-artifact failures explicitly."
+    },
+    {
+      "id": "architecture-3",
+      "lens": "architecture",
+      "severity": "medium",
+      "title": "Working-state recovery is only partially durable",
+      "location": "skills/bmad-technical-decision-gate/SKILL.md:On Activation through Produce the Gate Artifact",
+      "evidence": "A new run initializes only `.memlog.md`, while `technical-decisions.md` is created later. The resume rule then says to resume both files when either exists, so the normal guided pause can leave only the memlog available. Material source reconciliation, lifecycle structure, ownership mapping, and unresolved-decision ordering are not explicitly persisted as they evolve. The Skill Quality Principles identify this as the multi-turn producing-skill failure where state can remain conversation-bound.",
+      "recommendation": "Initialize the artifact skeleton with the memlog, update its evidence, lifecycle, ownership, and unresolved-decision sections at durable checkpoints, and restore or initialize each missing state file independently on resume."
+    },
+    {
+      "id": "enhancement-1",
+      "lens": "enhancement",
+      "severity": "high",
+      "title": "Add parallel semantic review before PASS",
+      "location": "SKILL.md:Validate and Hand Off",
+      "evidence": "The Parallel review lenses pattern is absent: the same facilitator that reconciles sources and proposes decisions also certifies PASS, while the validator checks only structural and gate consistency.",
+      "recommendation": "Before PASS, run two independent reviews of the completed artifact: one skeptical lifecycle and ownership review and one source-authority and contradiction review. Require resolution of every material finding, and use a sequential self-review with the same two lenses as Graceful degradation when subagents are unavailable."
+    },
+    {
+      "id": "enhancement-2",
+      "lens": "enhancement",
+      "severity": "high",
+      "title": "Make headless activation strictly non-interactive",
+      "location": "SKILL.md:On Activation and Validate and Hand Off",
+      "evidence": "Headless readiness is only partial because activation unconditionally asks for the target when discovery is ambiguous, so an automator can hang before the later headless rules apply.",
+      "recommendation": "Require an explicit story selector for --headless unless exactly one target is deterministically discoverable. On missing or ambiguous input, ask no question and return a stable blocked preflight JSON result; define nullable artifact and memlog fields for failures that occur before a run folder can be resolved."
+    },
+    {
+      "id": "enhancement-3",
+      "lens": "enhancement",
+      "severity": "medium",
+      "title": "Complete the working-state lifecycle",
+      "location": "SKILL.md:On Activation, Establish the Evidence Chain, and Validate and Hand Off",
+      "evidence": "The Working state across turns pattern is partially present through the artifact and memlog, but PASS never calls set-complete, activation resumes every existing log without distinguishing completed work, and headless inferences are not explicitly captured as typed assumption entries.",
+      "recommendation": "Append typed assumption and decision entries for every headless inference, call memlog.py set-complete only after a validated PASS handoff, and make activation distinguish an open run from a completed run so completed decisions are presented as final unless the user explicitly requests an update."
+    },
+    {
+      "id": "enhancement-4",
+      "lens": "enhancement",
+      "severity": "medium",
+      "title": "Add graceful degradation for runtime prerequisites",
+      "location": "SKILL.md:On Activation",
+      "evidence": "Graceful degradation exists for the artifact validator but not for missing BMAD config, the project memlog helper, uv, or an unwritable run folder, so the workflow can terminate without a usable artifact or actionable blocked result.",
+      "recommendation": "Add an activation preflight for required config, helper, runner, and output access. Fail with a concise actionable BLOCKED result when audit-preserving continuation is unsafe, and document any safe fallback explicitly instead of failing at the first shell command."
+    }
+  ]
+}

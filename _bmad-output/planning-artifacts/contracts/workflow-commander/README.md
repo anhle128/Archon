@@ -3,7 +3,7 @@
 Status: Story 1.3a command, provider binding, and delivery status contracts are present.
 Status: Story 1.3b workflow event envelope and callback rejection contracts are present.
 Status: Story 1.3c Project Work Item identity, Phase Task identity, and materialization contracts are present.
-This package contains the shared JSON schemas and examples that Archon producer stories and Hermes consumer stories use before runtime implementation begins.
+This package contains the shared JSON schemas and examples that Archon producer stories validate before producer completion and that downstream Hermes consumer stories validate when their implementation begins.
 Story 1.3a owns workflow command envelopes, Workflow Provider Binding payloads, and workflow delivery status results only.
 Story 1.3c owns materialization, Project Work Item identity, and Phase Task identity examples only.
 This package does not implement Hermes storage, Hermes materialization runtime, phase-task persistence, gates, workflow event receipts, reconciliation, or UI surfaces.
@@ -35,6 +35,7 @@ examples/providers/archon/commands/approve-success.json
 examples/providers/archon/commands/reject-success.json
 examples/providers/archon/commands/resume-success.json
 examples/providers/archon/commands/retry-success.json
+examples/providers/archon/commands/retry-node-success.json
 examples/providers/archon/commands/cancel-success.json
 examples/providers/archon/commands/binding-create-success.json
 examples/providers/archon/commands/binding-update-success.json
@@ -105,6 +106,14 @@ Successful workflow commands include `workflowRunRef` when the command operates 
 Successful binding commands include `bindingRef` when the command operates on provider-side binding state.
 Failed command results include a machine-readable `error` with stable `code`, `category`, `retryable`, and structured `details`.
 Hermes must not parse display text, stdout text, stderr text, or prose diagnostics to understand these examples.
+`workflow.resume` in JSON mode validates that the referenced run is resumable and returns its unchanged current state without dispatching execution or mutating the run.
+`workflow.retry` returns success after the parent creates the detached worker process; the whole-run result contains `scope: run`, while the targeted result contains `scope: node` and the requested `nodeId`.
+The retry acknowledgement contains `dispatched: true` and `detached: true` and does not claim running state, resumed state, attempt advancement, retry epoch, invalidated nodes, or safety references.
+The detached worker owns every later validation, claim, preparation, and execution outcome.
+Controllers observe those later outcomes through `workflow.status`, typed workflow events, or worker logs.
+`workflow.cancel` returns `state: cancelled` and `terminal: true` immediately after the durable cancellation transition succeeds; it does not report a pre-transition state or wait for process quiescence and cleanup.
+Archon emits the shared failure envelope for errors it catches before responding.
+Hermes classifies empty output and uncatchable process exit as `UNEXPECTED_EXIT`, malformed or schema-invalid output as `SCHEMA_MISMATCH`, and a consumer-enforced timeout as `TIMEOUT`; those observations cannot be emitted by the failed producer process itself.
 
 ## Workflow Provider Binding Rules
 

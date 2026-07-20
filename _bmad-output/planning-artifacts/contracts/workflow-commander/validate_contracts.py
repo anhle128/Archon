@@ -107,6 +107,7 @@ REQUIRED_COMMAND_EXAMPLES = [
     'reject-success.json',
     'resume-success.json',
     'retry-success.json',
+    'retry-node-success.json',
     'cancel-success.json',
     'binding-create-success.json',
     'binding-update-success.json',
@@ -617,6 +618,103 @@ def validate_schema(path: Path, data: Any, expected_version: str, errors: list[s
         errors.append(f'{path} schemaVersion const must be {expected_version}')
 
 
+def validate_recovery_command_fixture(path: Path, data: dict[str, Any], errors: list[str]) -> None:
+    result = data.get('result')
+    if not isinstance(result, dict):
+        return
+
+    if path.name == 'resume-success.json':
+        if data.get('command') != 'workflow.resume':
+            errors.append(f'{path} must describe workflow.resume')
+        expected = {
+            'operation': 'resume',
+            'state': 'paused',
+            'validated': True,
+            'resumable': True,
+            'executed': False,
+        }
+        for field, expected_value in expected.items():
+            if result.get(field) != expected_value:
+                errors.append(f'{path} result.{field} must be {expected_value!r}')
+        action_fields = {'previousState', 'resumed'} & set(result)
+        if action_fields:
+            errors.append(
+                f'{path} validate-only resume must not include action fields: {sorted(action_fields)}'
+            )
+        return
+
+    if path.name == 'retry-success.json':
+        if data.get('command') != 'workflow.retry':
+            errors.append(f'{path} must describe workflow.retry')
+        expected = {
+            'operation': 'retry',
+            'scope': 'run',
+            'dispatched': True,
+            'detached': True,
+        }
+        for field, expected_value in expected.items():
+            if result.get(field) != expected_value:
+                errors.append(f'{path} result.{field} must be {expected_value!r}')
+        worker_fields = {
+            'accepted',
+            'currentAttempt',
+            'invalidatedNodeIds',
+            'previousAttempt',
+            'resumed',
+            'retryEpoch',
+            'safetyRef',
+            'state',
+        } & set(result)
+        if worker_fields:
+            errors.append(
+                f'{path} dispatch-only retry must not include worker fields: {sorted(worker_fields)}'
+            )
+        return
+
+    if path.name == 'retry-node-success.json':
+        if data.get('command') != 'workflow.retry':
+            errors.append(f'{path} must describe workflow.retry')
+        expected = {
+            'operation': 'retry',
+            'scope': 'node',
+            'dispatched': True,
+            'detached': True,
+        }
+        for field, expected_value in expected.items():
+            if result.get(field) != expected_value:
+                errors.append(f'{path} result.{field} must be {expected_value!r}')
+        validate_string_field(path, result, 'result', 'nodeId', errors)
+        worker_fields = {
+            'accepted',
+            'currentAttempt',
+            'invalidatedNodeIds',
+            'previousAttempt',
+            'resumed',
+            'retryEpoch',
+            'safetyRef',
+            'state',
+        } & set(result)
+        if worker_fields:
+            errors.append(
+                f'{path} dispatch-only targeted retry must not include worker fields: {sorted(worker_fields)}'
+            )
+        return
+
+    if path.name == 'cancel-success.json':
+        if data.get('command') != 'workflow.cancel':
+            errors.append(f'{path} must describe workflow.cancel')
+        expected = {
+            'operation': 'cancel',
+            'state': 'cancelled',
+            'terminal': True,
+        }
+        for field, expected_value in expected.items():
+            if result.get(field) != expected_value:
+                errors.append(f'{path} result.{field} must be {expected_value!r}')
+        if 'previousState' in result:
+            errors.append(f'{path} minimal cancel result must not include previousState')
+
+
 def validate_command(path: Path, data: Any, errors: list[str]) -> None:
     if not isinstance(data, dict):
         errors.append(f'{path} command example root must be an object')
@@ -645,6 +743,7 @@ def validate_command(path: Path, data: Any, errors: list[str]) -> None:
             errors.append(f'{path} successful workflow command must include workflowRunRef')
         if isinstance(command, str) and command.startswith('binding.') and 'bindingRef' not in data:
             errors.append(f'{path} successful binding command must include bindingRef')
+        validate_recovery_command_fixture(path, data, errors)
     else:
         if 'error' not in data or not isinstance(data.get('error'), dict):
             errors.append(f'{path} failed example must include object error')

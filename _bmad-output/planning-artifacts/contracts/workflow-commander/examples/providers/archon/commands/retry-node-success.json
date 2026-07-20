@@ -4,19 +4,21 @@
   "intendedConsumer": "Hermes",
   "owningSubproject": "archon",
   "provider": "archon",
-  "command": "workflow.cancel",
-  "correlationId": "corr_story_1_3a_workflow_cancel",
-  "issuedAt": "2026-07-11T11:48:27Z",
+  "command": "workflow.retry",
+  "correlationId": "corr_story_3_3d_workflow_retry_node",
+  "issuedAt": "2026-07-20T12:05:00Z",
   "success": true,
   "workflowRunRef": {
     "provider": "archon",
-    "runId": "archon-run-story-1-3a-001",
+    "runId": "archon-run-story-3-3d-001",
     "workflowName": "bmad-dev-story",
     "projectRef": "project:workflow-engine"
   },
   "result": {
-    "operation": "cancel",
-    "state": "cancelled",
-    "terminal": true
+    "operation": "retry",
+    "scope": "node",
+    "nodeId": "implement-story",
+    "dispatched": true,
+    "detached": true
   }
 }

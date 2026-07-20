@@ -16,8 +16,8 @@
   },
   "result": {
     "operation": "retry",
-    "previousAttempt": 1,
-    "currentAttempt": 2,
-    "state": "running"
+    "scope": "run",
+    "dispatched": true,
+    "detached": true
   }
 }

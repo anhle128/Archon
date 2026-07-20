@@ -152,7 +152,7 @@ So that external controllers can fail closed and validate command output consist
 Depends on: parent Story 1.3a and Archon Story 3.1.
 Contract needed: Workflow command success envelope, workflow command error envelope, timeout representation, schema mismatch representation, workflow run reference, binding reference, and correlation id.
 Blocking behavior: Command-family producer stories must not start producer code or be completed until the validated local contracts define the shared envelope, the provider command syntax baseline is covered by tests, and the implementation returns parseable JSON for success and failure.
-Integration validation: Archon validates success, failure, timeout, malformed request, schema mismatch, and unexpected-state examples without introducing Hermes-specific command names.
+Integration validation: The local contract package validates producer success and caught-failure examples plus consumer-side timeout, schema-mismatch, and unexpected-exit classification vocabulary without introducing Hermes-specific command names.
 
 **Acceptance Criteria:**
 
@@ -170,8 +170,9 @@ Integration validation: Archon validates success, failure, timeout, malformed re
 **And** tests fail if the CLI syntax and command identifier drift apart.
 
 **Given** an external controller consumes a workflow control result
-**When** malformed JSON, schema mismatch, timeout, unexpected exit code, or unexpected state occurs
-**Then** the shared envelope lets the controller fail closed without relying on human-readable output.
+**When** the provider returns empty, malformed, or schema-invalid output, exceeds a consumer-enforced timeout, or exits unexpectedly
+**Then** the controller classifies the observation as unexpected exit, schema mismatch, or timeout and fails closed without relying on human-readable output
+**And** the failed provider process is not required to envelope an error it cannot observe.
 
 ---
 
@@ -255,36 +256,46 @@ So that external controllers can route recovery actions consistently.
 Depends on: parent Story 1.3a, Archon Story 3.1, Archon Story 3.3a, and Archon Story 3.3b.
 Contract needed: Workflow command resume, retry, cancel, timeout, success, and error envelope schemas.
 Blocking behavior: This story must not move to implementation-ready or be completed unless resume, retry, and cancel commands use the validated shared envelope and represent unexpected state machine outcomes.
-Integration validation: Archon validates resume, retry, cancel, timeout, and unexpected-state examples without introducing Hermes-specific command names.
+Integration validation: Archon validates resume, retry-dispatch, cancel, caught-failure, and unexpected-state examples, while the consumer harness validates empty output, malformed or schema-invalid output, external timeout, and unexpected exit.
 
-**Hermes consumer impact:** `hermes-agent` Story 3.4c consumes this producer surface.
+**Hermes consumer impact:** `hermes-agent` Story 3.4c is downstream, consumes this producer surface after Archon completion, and owns the later consumer compatibility proof.
 
 **Acceptance Criteria:**
 
 **Given** a workflow run is in a resumable state
 **When** Archon executes `workflow.resume`
-**Then** it returns the shared success envelope with the resumed workflow run reference and resulting run state
+**Then** it returns the shared success envelope confirming the run is resumable, reports the unchanged current state, and records `executed: false`
+**And** it does not dispatch execution or mutate run state, timestamps, retry state, or workflow events
 **And** a non-resumable state returns an unexpected-state failure envelope without mutating the run.
 
 **Given** a workflow run can be retried from its failed work
 **When** Archon executes `workflow.retry` without `--node`
-**Then** it returns the shared success envelope for whole-run recovery
-**And** completed work is preserved or skipped according to the existing workflow retry contract.
+**Then** it returns the shared success envelope immediately after creating a detached exact-run worker process
+**And** the result contains `operation: retry`, `scope: run`, `dispatched: true`, and `detached: true` without running state, resumed state, or attempt fields
+**And** the worker later owns claim and execution, preserves or skips completed work according to the existing workflow retry contract, and exposes its outcome through status, events, or worker logs.
 
 **Given** a failed workflow node is eligible for targeted retry
 **When** Archon executes `workflow.retry --node <node-id>`
-**Then** it returns the shared success envelope identifying the requested node and workflow run
-**And** an unknown or ineligible node returns a machine-readable failure without starting recovery.
+**Then** it returns the shared success envelope immediately after creating a detached exact-run and exact-node worker process
+**And** the result contains `operation: retry`, `scope: node`, the requested `nodeId`, `dispatched: true`, and `detached: true` without worker-derived preparation or execution fields
+**And** the worker later owns node validation, claim, checkpoint, reset, invalidation, and execution
+**And** an unknown or ineligible run or node becomes a later worker outcome, while malformed or missing parent arguments and process-spawn failure return a command failure envelope.
 
 **Given** a workflow run is active and cancellable
 **When** Archon executes `workflow.cancel`
-**Then** it returns the shared success envelope with the resulting run state
+**Then** it returns the shared success envelope immediately after the durable cancellation transition succeeds
+**And** the result contains only `operation: cancel`, `state: cancelled`, and `terminal: true` without a pre-transition state
+**And** process quiescence and best-effort cleanup are not prerequisites for the acknowledgement
 **And** it does not report or serialize the operation as legacy `abandon`.
 
-**Given** any recovery command receives malformed input, times out, exits unexpectedly, produces schema-invalid JSON, or targets an invalid run state
+**Given** Archon catches malformed input, database failure, invalid state, process-spawn failure, or an internal timeout before responding
 **When** Archon returns the failure
 **Then** the response uses the shared failure envelope with code, category, retryability, and structured details
 **And** no unsupported state transition is applied.
+
+**Given** a recovery-command subprocess returns empty, malformed, or schema-invalid output, exceeds a consumer-enforced timeout, or exits unexpectedly
+**When** Hermes observes the subprocess result
+**Then** Hermes classifies it as unexpected exit, schema mismatch, or timeout without requiring Archon to supervise or envelope its own uncatchable failure.
 
 ---
 

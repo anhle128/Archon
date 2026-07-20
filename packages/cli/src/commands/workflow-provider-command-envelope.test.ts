@@ -214,7 +214,13 @@ describe('3.3A-UNIT-003 — workflow success envelope has workflowRunRef and res
           projectRef: 'project:workflow-engine',
         },
       },
-      { operation: 'resume', previousState: 'paused', state: 'running', resumed: true }
+      {
+        operation: 'resume',
+        state: 'paused',
+        validated: true,
+        resumable: true,
+        executed: false,
+      }
     );
     expect(envelope.success).toBe(true);
     expect(envelope).toHaveProperty('workflowRunRef');
@@ -896,6 +902,37 @@ describe('3.3A-CONTRACT-037 — representative success envelope for every one of
   }
 });
 
+describe('3.3D-CONTRACT — targeted retry variant uses the shared workflow.retry envelope', () => {
+  test('buildSuccessEnvelope reproduces retry-node-success.json exactly', async () => {
+    const mod = (await import('./workflow-provider-command-envelope')) as {
+      buildSuccessEnvelope: (
+        meta: Record<string, unknown>,
+        refs: Record<string, unknown>,
+        result: Record<string, unknown>
+      ) => Record<string, unknown>;
+    };
+    const f = loadFixture('retry-node-success.json') as {
+      provider: string;
+      command: string;
+      correlationId: string;
+      issuedAt: string;
+      workflowRunRef: Record<string, unknown>;
+      result: Record<string, unknown>;
+    };
+    const envelope = mod.buildSuccessEnvelope(
+      {
+        provider: f.provider,
+        command: f.command,
+        correlationId: f.correlationId,
+        issuedAt: f.issuedAt,
+      },
+      { workflowRunRef: f.workflowRunRef },
+      f.result
+    );
+    expect(envelope).toEqual(f);
+  });
+});
+
 describe('3.3A-CONTRACT-038 — malformed request failure example is reproducible [P0, R-005]', () => {
   test('buildErrorEnvelope reproduces error-malformed-request.json exactly given matching inputs', async () => {
     // ACTIVATION: remove .skip once buildErrorEnvelope exists.
@@ -1125,6 +1162,7 @@ describe('fixture inventory guard (supports CONTRACT-037/038-042 above)', () => 
   test('every fixture referenced by the scaffolds above still exists on disk', () => {
     const required = [
       ...REPRESENTATIVE_COMMAND_FAMILIES.map(f => f.fixture),
+      'retry-node-success.json',
       'error-malformed-request.json',
       'error-schema-mismatch.json',
       'error-timeout.json',

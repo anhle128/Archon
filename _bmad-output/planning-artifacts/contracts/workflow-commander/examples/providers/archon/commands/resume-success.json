@@ -16,8 +16,9 @@
   },
   "result": {
     "operation": "resume",
-    "previousState": "paused",
-    "state": "running",
-    "resumed": true
+    "state": "paused",
+    "validated": true,
+    "resumable": true,
+    "executed": false
   }
 }

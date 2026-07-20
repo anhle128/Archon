@@ -1,0 +1,1063 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skill Analysis Report</title>
+<style>
+  :root {
+    --bg: #0f1b2d;
+    --panel: #16263d;
+    --panel-2: #1d3250;
+    --ink: #e9eef6;
+    --ink-dim: #9fb0c7;
+    --line: #294366;
+    --accent: #b66d46;
+    --accent-ink: #f4d9c8;
+    --critical: #e05656;
+    --high: #e0904a;
+    --medium: #d8c24a;
+    --low: #5aa0d0;
+    --ok: #4caf72;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 28px 20px 80px; }
+  header h1 { font-size: 22px; margin: 0 0 4px; }
+  header .meta { color: var(--ink-dim); font-size: 13px; }
+  header .meta b { color: var(--ink); font-weight: 600; }
+
+  .banner {
+    display: none;
+    background: #3a1414;
+    border: 1px solid var(--critical);
+    color: #ffd9d9;
+    padding: 14px 16px;
+    border-radius: 8px;
+    margin: 16px 0;
+    white-space: pre-wrap;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+  }
+  .banner.show { display: block; }
+
+  .overview {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 18px;
+    margin: 18px 0;
+  }
+  .grade {
+    font-size: 34px;
+    font-weight: 800;
+    margin: 0 0 8px;
+    text-transform: capitalize;
+  }
+  .grade.g-excellent { color: var(--ok); }
+  .grade.g-good { color: var(--low); }
+  .grade.g-fair { color: var(--medium); }
+  .grade.g-poor { color: var(--critical); }
+  .verdict { font-size: 16px; font-weight: 600; margin: 0 0 14px; }
+  .summary { color: var(--ink-dim); margin: 0 0 14px; }
+  .counts { display: flex; flex-wrap: wrap; gap: 10px; }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    font-size: 13px;
+  }
+  .pill .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .pill .n { font-weight: 700; }
+  .dot.critical { background: var(--critical); }
+  .dot.high { background: var(--high); }
+  .dot.medium { background: var(--medium); }
+  .dot.low { background: var(--low); }
+
+  /* Generic synthesis/agent-block panel */
+  .block {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 18px;
+    margin: 18px 0;
+  }
+  .block > h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--ink-dim);
+    margin: 0 0 12px;
+  }
+  .block .mono, .block code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+    background: var(--panel-2);
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+  .kv { margin: 0; display: grid; grid-template-columns: 150px 1fr; gap: 6px 14px; }
+  .kv dt { color: var(--ink-dim); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .kv dd { margin: 0; }
+
+  /* Themes */
+  .theme { padding: 12px 0; border-top: 1px solid var(--line); }
+  .theme:first-of-type { border-top: none; padding-top: 0; }
+  .theme .t-head { display: flex; align-items: center; gap: 10px; }
+  .theme .t-title { font-weight: 600; flex: 1 1 auto; min-width: 0; }
+  .theme .t-cause { color: var(--ink-dim); margin-top: 4px; }
+  .theme .t-action { margin-top: 4px; }
+  .theme .t-findings { margin-top: 8px; padding-left: 12px; border-left: 2px solid var(--line); }
+  .theme .t-finding { font-size: 13px; color: var(--ink-dim); padding: 2px 0; }
+
+  /* Strengths */
+  .strength-list { margin: 0; padding-left: 20px; }
+  .strength-list li { padding: 2px 0; }
+
+  /* Recommendations */
+  .rec { padding: 8px 0; border-top: 1px solid var(--line); }
+  .rec:first-of-type { border-top: none; padding-top: 0; }
+  .rec .rank { font-weight: 700; color: var(--accent-ink); margin-right: 8px; }
+  .rec .resolves { color: var(--ink-dim); font-size: 12px; margin-left: 8px; }
+
+  /* Experience journeys */
+  .block .journey { padding: 8px 0; border-top: 1px solid var(--line); }
+  .block .journey:first-of-type { border-top: none; padding-top: 0; }
+  .block .journey .j-name { font-weight: 600; }
+  .block .journey .j-steps { color: var(--ink-dim); margin-top: 2px; }
+
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 18px 0 10px;
+    flex-wrap: wrap;
+  }
+  .toolbar .sel-count { color: var(--ink-dim); font-size: 13px; }
+  button {
+    font: inherit;
+    cursor: pointer;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--panel-2);
+    color: var(--ink);
+    padding: 8px 14px;
+  }
+  button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #1a0e07;
+    font-weight: 600;
+  }
+  button:disabled { opacity: 0.5; cursor: default; }
+  button.link {
+    background: none;
+    border: none;
+    color: var(--accent-ink);
+    padding: 4px 6px;
+    font-size: 13px;
+  }
+  button.small { padding: 5px 10px; font-size: 13px; flex: 0 0 auto; }
+
+  .no-findings {
+    background: var(--panel);
+    border: 1px dashed var(--line);
+    border-radius: 10px;
+    padding: 28px;
+    text-align: center;
+    color: var(--ink-dim);
+  }
+  .no-findings .big { font-size: 18px; color: var(--ok); margin-bottom: 6px; }
+
+  .group { margin: 18px 0; }
+  .group > h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--ink-dim);
+    margin: 0 0 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .finding {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--line);
+    border-radius: 8px;
+    margin: 8px 0;
+    overflow: hidden;
+  }
+  .finding.sev-critical { border-left-color: var(--critical); }
+  .finding.sev-high { border-left-color: var(--high); }
+  .finding.sev-medium { border-left-color: var(--medium); }
+  .finding.sev-low { border-left-color: var(--low); }
+
+  .finding .row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+  }
+  .finding .row .chk { width: 16px; height: 16px; flex: 0 0 auto; cursor: pointer; }
+  .finding .row .head { flex: 1 1 auto; cursor: pointer; min-width: 0; }
+  .finding .row .title { font-weight: 600; }
+  .finding .row .sub { color: var(--ink-dim); font-size: 12px; margin-top: 2px; }
+  .finding .tag {
+    flex: 0 0 auto;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 3px 8px;
+    border-radius: 6px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    color: var(--ink-dim);
+  }
+  .finding .caret { flex: 0 0 auto; color: var(--ink-dim); transition: transform 0.15s; cursor: pointer; }
+  .finding.open .caret { transform: rotate(90deg); }
+
+  .finding .body {
+    display: none;
+    padding: 0 14px 14px 42px;
+    border-top: 1px solid var(--line);
+  }
+  .finding.open .body { display: block; }
+  .finding .body dl { margin: 12px 0 0; display: grid; grid-template-columns: 130px 1fr; gap: 6px 14px; }
+  .finding .body dt { color: var(--ink-dim); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .finding .body dd { margin: 0; }
+  .finding .body code, .finding .body .mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+    background: var(--panel-2);
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+
+  .toast {
+    position: fixed;
+    left: 50%;
+    bottom: 28px;
+    transform: translateX(-50%);
+    background: var(--ok);
+    color: #06160c;
+    padding: 10px 18px;
+    border-radius: 8px;
+    font-weight: 600;
+    opacity: 0;
+    transition: opacity 0.2s;
+    pointer-events: none;
+  }
+  .toast.show { opacity: 1; }
+
+  .fallback-area { margin-top: 12px; display: none; }
+  .fallback-area.show { display: block; }
+  .fallback-area textarea {
+    width: 100%;
+    min-height: 160px;
+    background: var(--panel-2);
+    color: var(--ink);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Skill Analysis Report</h1>
+    <div class="meta">
+      <span>Subject: <b id="m-subject">—</b></span> &nbsp;·&nbsp;
+      <span>Generated: <b id="m-generated">—</b></span> &nbsp;·&nbsp;
+      <span>Schema: <b id="m-schema">—</b></span>
+    </div>
+  </header>
+
+  <div id="parse-banner" class="banner"></div>
+
+  <section id="overview" class="overview" hidden>
+    <div id="grade" class="grade" hidden></div>
+    <p id="verdict" class="verdict"></p>
+    <p id="summary-text" class="summary" hidden></p>
+    <div id="counts" class="counts"></div>
+  </section>
+
+  <!-- Synthesis layer (themes, strengths, recommendations). Hidden when absent. -->
+  <section id="themes" class="block" hidden></section>
+  <section id="strengths" class="block" hidden></section>
+  <section id="recommendations" class="block" hidden></section>
+
+  <!-- Experience: journeys plus headless (experience). Hidden when absent. -->
+  <section id="experience" class="block" hidden></section>
+
+  <div id="toolbar" class="toolbar" hidden>
+    <button id="btn-copy" class="primary" disabled>Copy selected as paste-back prompt</button>
+    <span id="sel-count" class="sel-count">0 selected</span>
+    <button id="btn-select-all" class="link">Select all</button>
+    <button id="btn-clear" class="link">Clear</button>
+    <button id="btn-expand-all" class="link">Expand all</button>
+    <button id="btn-collapse-all" class="link">Collapse all</button>
+  </div>
+
+  <div id="fallback" class="fallback-area">
+    <p class="sel-count">Clipboard was unavailable. Copy the text below manually:</p>
+    <textarea id="fallback-text" readonly></textarea>
+  </div>
+
+  <div id="findings-root"></div>
+</div>
+
+<div id="toast" class="toast">Copied</div>
+
+<!-- scripts/render_report.py replaces the contents of this island per run.
+     The placeholder below is intentionally unusable: the shell refuses to
+     render it, so a failed injection can never look like real findings. -->
+<script type="application/json" id="report-data">
+{
+  "schema_version": 2,
+  "subject": "skills/bmad-technical-decision-gate",
+  "generated": "2026-07-19T20:08:55+07:00",
+  "verdict": "Fair: the batch-review contract is coherent and testable, but activation preflight, durable working state, and independent semantic review remain unsafe for a trustworthy PASS.",
+  "grade": "fair",
+  "summary": "The revised skill now gives batch review a clear user-approval boundary, keeps runtime evidence separate from normative authority, and deterministically validates the artifact contract. Its remaining risks are concentrated rather than diffuse: target and prerequisite resolution can still break headless execution, multi-turn state is only partially durable, and the same reasoning pass still authors and certifies PASS.",
+  "standards": {
+    "canon": "/Users/dale/Desktop/workspace/opensources/Archon/.agents/skills/bmad-workflow-builder/references/prompt-quality-canon.md",
+    "principles": "/Users/dale/Desktop/workspace/opensources/Archon/.agents/skills/bmad-workflow-builder/references/skill-quality-principles.md",
+    "scripts": "/Users/dale/Desktop/workspace/opensources/Archon/.agents/skills/bmad-workflow-builder/references/script-standards.md"
+  },
+  "themes": [
+    {
+      "title": "Activation has no closed preflight contract",
+      "root_cause": "The workflow begins creating durable state before it has guaranteed a canonical story key, non-interactive headless behavior, required runtime helpers, and a writable workspace.",
+      "finding_ids": [
+        "architecture-1",
+        "architecture-2",
+        "enhancement-2",
+        "enhancement-4"
+      ],
+      "action": "Define one preflight that resolves an authoritative filesystem-safe story key and runtime prerequisites before the run folder, never prompts in headless mode, and returns an actionable BLOCKED result when safe audited continuation is impossible."
+    },
+    {
+      "title": "Working state exists but does not span the full lifecycle",
+      "root_cause": "The memlog is initialized before the structured artifact, evolving reconciliation can remain conversation-bound, and completed runs are not distinguished from resumable work.",
+      "finding_ids": [
+        "architecture-3",
+        "enhancement-3"
+      ],
+      "action": "Initialize and checkpoint the artifact with the memlog, record headless assumptions, mark only validated PASS runs complete, and make resume distinguish open work from an explicit update to completed decisions."
+    },
+    {
+      "title": "PASS lacks independent semantic challenge",
+      "root_cause": "The same facilitator reconciles the evidence and certifies that its own lifecycle, ownership map, contradictions, and proof sketch are complete, while the validator can check only structure.",
+      "finding_ids": [
+        "enhancement-1"
+      ],
+      "action": "Before PASS, run independent lifecycle-ownership and source-authority reviews, then resolve every material finding or convert it into an unresolved decision, with sequential self-review as the fallback."
+    },
+    {
+      "title": "The intelligence boundary needs one normalization pass",
+      "root_cause": "The prompt still sorts and counts batch entries even though those operations are deterministic, while the script uses word count to make a semantic quality warning about the proof sketch.",
+      "finding_ids": [
+        "determinism-1",
+        "determinism-2"
+      ],
+      "action": "Move stable batch ordering and unresolved-count derivation into the Python helper, and remove the proof-length heuristic so the prompt retains semantic judgment while the script owns plumbing."
+    }
+  ],
+  "strengths": [
+    "Batch mode records every problem and suggested solution for one explicit whole-file user review.",
+    "PENDING review cannot produce PASS, and only an APPROVED batch artifact may proceed.",
+    "The skill treats current code as runtime evidence rather than automatic normative authority.",
+    "The artifact validator is stdlib-only, tested, and owns structural gate consistency.",
+    "The fixed v1 surface still matches the user's explicit decision to decline customization."
+  ],
+  "recommendations": [
+    {
+      "rank": 1,
+      "action": "Close activation with canonical target, headless, dependency, and writable-workspace preflight behavior.",
+      "resolves": [
+        "architecture-1",
+        "architecture-2",
+        "enhancement-2",
+        "enhancement-4"
+      ]
+    },
+    {
+      "rank": 2,
+      "action": "Make the artifact and memlog durable from initialization through completion and update.",
+      "resolves": [
+        "architecture-3",
+        "enhancement-3"
+      ]
+    },
+    {
+      "rank": 3,
+      "action": "Move batch sorting and counting into the helper and remove the proof-length heuristic.",
+      "resolves": [
+        "determinism-1",
+        "determinism-2"
+      ]
+    },
+    {
+      "rank": 4,
+      "action": "Add two independent semantic challenge lenses before PASS.",
+      "resolves": [
+        "enhancement-1"
+      ]
+    },
+    {
+      "rank": 5,
+      "action": "Consolidate the repeated proof-sketch requirement into one complete contract.",
+      "resolves": [
+        "leanness-1"
+      ]
+    }
+  ],
+  "experience": {
+    "journeys": [
+      {
+        "name": "Guided technical decision gate",
+        "steps": "Resolve one authoritative story key, establish durable state, reconcile evidence and lifecycle ownership, answer one material question at a time, challenge the result, validate it, and hand off only on PASS."
+      },
+      {
+        "name": "Batch whole-file review",
+        "steps": "Resolve one authoritative story key, write every problem and suggested solution in descending risk order, return a PENDING BLOCKED artifact for whole-file review, then promote approved suggestions and re-evaluate PASS."
+      },
+      {
+        "name": "Headless automation",
+        "steps": "Preflight an explicit target and runtime prerequisites without prompting, record assumptions, produce a validated artifact when possible, and otherwise return a stable actionable BLOCKED result."
+      }
+    ],
+    "headless": "Partially ready: result JSON exists, but startup can still prompt or fail before a stable run folder and audit path are available."
+  },
+  "findings": [
+    {
+      "id": "leanness-1",
+      "lens": "leanness",
+      "severity": "low",
+      "title": "Proof-sketch criterion is repeated three times",
+      "location": "SKILL.md:50,86,92",
+      "evidence": "The requirement that the executable proof distinguish the chosen semantics from alternatives appears in the lifecycle checklist, the artifact-content rules, and the PASS gate criteria; line 86 adds the only distinct constraint, namely exercising the real external boundary and observable lifecycle.",
+      "recommendation": "State the complete requirement once near the artifact definition: \"The proof sketch must exercise the real external boundary and observable lifecycle so it distinguishes the selected semantics from plausible alternatives.\" Keep the PASS criterion as a short reference to a valid proof sketch, and remove the lifecycle-list repetition."
+    },
+    {
+      "id": "determinism-1",
+      "lens": "determinism",
+      "severity": "medium",
+      "title": "Prompt performs deterministic batch normalization",
+      "location": "skills/bmad-technical-decision-gate/SKILL.md:Resolve Remaining Decisions by Mode and Produce the Gate Artifact",
+      "evidence": "The prompt says to write problems \"ordered by risk as `HIGH`, `MEDIUM`, then `LOW`\" and to set `unresolvedDecisionCount`, while the script only rejects an incorrect order or count after generation.",
+      "recommendation": "This leaks deterministic sorting and counting into the prompt. Apply the determinism test and signal-verb scan: extend the native Python helper with a normalization or rendering operation that stably groups entries by HIGH, MEDIUM, LOW, preserves within-risk order, derives `unresolvedDecisionCount`, and emits the normalized artifact before validation."
+    },
+    {
+      "id": "determinism-2",
+      "lens": "determinism",
+      "severity": "low",
+      "title": "Word count is used as a proof-quality heuristic",
+      "location": "skills/bmad-technical-decision-gate/scripts/validate_decision_gate.py:proof-body warning",
+      "evidence": "The validator emits \"Executable Proof Sketch is unusually short\" solely when `len(proof_body.split()) < 8`.",
+      "recommendation": "This is an intelligence leak because proof executability and adequacy depend on meaning, not word count. Keep deterministic structure validation in the script, but remove this heuristic or report only the neutral metric; leave proof-quality judgment to the prompt under the determinism test."
+    },
+    {
+      "id": "architecture-1",
+      "lens": "architecture",
+      "severity": "high",
+      "title": "Planned-capability activation can still leave story-key unresolved",
+      "location": "skills/bmad-technical-decision-gate/SKILL.md:On Activation",
+      "evidence": "Activation accepts either a story key or a planned capability, while the run folder, artifact, memlog topic, and downstream handoff all require `{story-key}`. Inferring a plausible target does not produce a stable filesystem-safe key, so an explicitly supported invocation can reach unresolved paths. This violates the architecture lens's requirement that earlier sections produce every value later sections consume.",
+      "recommendation": "Require a concrete story key before resolving the run folder. Derive it only from unique authoritative planning metadata; otherwise ask in guided or batch mode, and require it explicitly for headless mode."
+    },
+    {
+      "id": "architecture-2",
+      "lens": "architecture",
+      "severity": "high",
+      "title": "Headless activation can enter an interactive question path",
+      "location": "skills/bmad-technical-decision-gate/SKILL.md:On Activation and Resolve Remaining Decisions by Mode",
+      "evidence": "The shared activation path says to ask for the target when discovery is ambiguous, with no headless exception. A `--headless` caller can therefore be prompted before reaching the promised JSON-only return, and without a story key the required artifact and memlog paths cannot be resolved. This breaks the Skill Quality Principles' headless-mode audit contract and the architecture lens's three-mode soundness rule.",
+      "recommendation": "Make an explicit canonical story key a headless precondition and never prompt in that mode. If it is absent or ambiguous, use a deterministic preflight BLOCKED return and record the failure in a defined memlog location, or revise the headless return contract to cover pre-artifact failures explicitly."
+    },
+    {
+      "id": "architecture-3",
+      "lens": "architecture",
+      "severity": "medium",
+      "title": "Working-state recovery is only partially durable",
+      "location": "skills/bmad-technical-decision-gate/SKILL.md:On Activation through Produce the Gate Artifact",
+      "evidence": "A new run initializes only `.memlog.md`, while `technical-decisions.md` is created later. The resume rule then says to resume both files when either exists, so the normal guided pause can leave only the memlog available. Material source reconciliation, lifecycle structure, ownership mapping, and unresolved-decision ordering are not explicitly persisted as they evolve. The Skill Quality Principles identify this as the multi-turn producing-skill failure where state can remain conversation-bound.",
+      "recommendation": "Initialize the artifact skeleton with the memlog, update its evidence, lifecycle, ownership, and unresolved-decision sections at durable checkpoints, and restore or initialize each missing state file independently on resume."
+    },
+    {
+      "id": "enhancement-1",
+      "lens": "enhancement",
+      "severity": "high",
+      "title": "Add parallel semantic review before PASS",
+      "location": "SKILL.md:Validate and Hand Off",
+      "evidence": "The Parallel review lenses pattern is absent: the same facilitator that reconciles sources and proposes decisions also certifies PASS, while the validator checks only structural and gate consistency.",
+      "recommendation": "Before PASS, run two independent reviews of the completed artifact: one skeptical lifecycle and ownership review and one source-authority and contradiction review. Require resolution of every material finding, and use a sequential self-review with the same two lenses as Graceful degradation when subagents are unavailable."
+    },
+    {
+      "id": "enhancement-2",
+      "lens": "enhancement",
+      "severity": "high",
+      "title": "Make headless activation strictly non-interactive",
+      "location": "SKILL.md:On Activation and Validate and Hand Off",
+      "evidence": "Headless readiness is only partial because activation unconditionally asks for the target when discovery is ambiguous, so an automator can hang before the later headless rules apply.",
+      "recommendation": "Require an explicit story selector for --headless unless exactly one target is deterministically discoverable. On missing or ambiguous input, ask no question and return a stable blocked preflight JSON result; define nullable artifact and memlog fields for failures that occur before a run folder can be resolved."
+    },
+    {
+      "id": "enhancement-3",
+      "lens": "enhancement",
+      "severity": "medium",
+      "title": "Complete the working-state lifecycle",
+      "location": "SKILL.md:On Activation, Establish the Evidence Chain, and Validate and Hand Off",
+      "evidence": "The Working state across turns pattern is partially present through the artifact and memlog, but PASS never calls set-complete, activation resumes every existing log without distinguishing completed work, and headless inferences are not explicitly captured as typed assumption entries.",
+      "recommendation": "Append typed assumption and decision entries for every headless inference, call memlog.py set-complete only after a validated PASS handoff, and make activation distinguish an open run from a completed run so completed decisions are presented as final unless the user explicitly requests an update."
+    },
+    {
+      "id": "enhancement-4",
+      "lens": "enhancement",
+      "severity": "medium",
+      "title": "Add graceful degradation for runtime prerequisites",
+      "location": "SKILL.md:On Activation",
+      "evidence": "Graceful degradation exists for the artifact validator but not for missing BMAD config, the project memlog helper, uv, or an unwritable run folder, so the workflow can terminate without a usable artifact or actionable blocked result.",
+      "recommendation": "Add an activation preflight for required config, helper, runner, and output access. Fail with a concise actionable BLOCKED result when audit-preserving continuation is unsafe, and document any safe fallback explicitly instead of failing at the first shell command."
+    }
+  ]
+}
+</script>
+
+<script>
+(function () {
+  "use strict";
+
+  var SEVERITIES = ["critical", "high", "medium", "low"];
+  var SEV_LABEL = { critical: "Critical", high: "High", medium: "Medium", low: "Low" };
+  var GRADES = ["excellent", "good", "fair", "poor"];
+  var PLACEHOLDER_SUBJECT = "__PLACEHOLDER__";
+
+  var els = {
+    banner: document.getElementById("parse-banner"),
+    overview: document.getElementById("overview"),
+    grade: document.getElementById("grade"),
+    verdict: document.getElementById("verdict"),
+    summaryText: document.getElementById("summary-text"),
+    counts: document.getElementById("counts"),
+    themes: document.getElementById("themes"),
+    strengths: document.getElementById("strengths"),
+    recommendations: document.getElementById("recommendations"),
+    experience: document.getElementById("experience"),
+    toolbar: document.getElementById("toolbar"),
+    root: document.getElementById("findings-root"),
+    subject: document.getElementById("m-subject"),
+    generated: document.getElementById("m-generated"),
+    schema: document.getElementById("m-schema"),
+    selCount: document.getElementById("sel-count"),
+    btnCopy: document.getElementById("btn-copy"),
+    btnSelectAll: document.getElementById("btn-select-all"),
+    btnClear: document.getElementById("btn-clear"),
+    btnExpandAll: document.getElementById("btn-expand-all"),
+    btnCollapseAll: document.getElementById("btn-collapse-all"),
+    fallback: document.getElementById("fallback"),
+    fallbackText: document.getElementById("fallback-text"),
+    toast: document.getElementById("toast")
+  };
+
+  var selected = Object.create(null);
+  var findings = [];
+  var findingsById = Object.create(null);
+  var subjectPath = "";
+  var standards = null;
+
+  function showBanner(message) {
+    els.banner.textContent = message;
+    els.banner.classList.add("show");
+  }
+
+  function esc(value) {
+    var s = value == null ? "" : String(value);
+    return s.replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  // Normalize an arbitrary parsed object against schema_version 2, supplying
+  // defaults so a partial or future island still renders. Unknown fields are
+  // ignored, not fatal. Severity counts are always derived from the findings
+  // array, never read from the island, so they cannot disagree with it. The
+  // synthesis blocks (grade, summary, themes, strengths, recommendations) and
+  // the experience block are OPTIONAL: each normalizes to an empty value that
+  // renders nothing rather than an empty panel or an error.
+  function normalize(raw) {
+    var obj = raw && typeof raw === "object" ? raw : {};
+    var rawFindings = Array.isArray(obj.findings) ? obj.findings : [];
+
+    var norm = {
+      schema_version: typeof obj.schema_version === "number" ? obj.schema_version : 2,
+      subject: obj.subject != null ? String(obj.subject) : "(unspecified)",
+      generated: obj.generated != null ? String(obj.generated) : "(unspecified)",
+      verdict: obj.verdict != null ? String(obj.verdict) : "(no verdict supplied)",
+      grade: GRADES.indexOf(String(obj.grade || "").toLowerCase()) >= 0
+        ? String(obj.grade).toLowerCase() : "",
+      summary: typeof obj.summary === "string" ? obj.summary : "",
+      standards: (obj.standards && typeof obj.standards === "object") ? {
+        canon: obj.standards.canon != null ? String(obj.standards.canon) : "",
+        principles: obj.standards.principles != null ? String(obj.standards.principles) : "",
+        scripts: obj.standards.scripts != null ? String(obj.standards.scripts) : ""
+      } : null,
+      themes: normalizeThemes(obj.themes),
+      strengths: normalizeStrengths(obj.strengths),
+      recommendations: normalizeRecommendations(obj.recommendations),
+      experience: normalizeExperience(obj.experience),
+      counts: { critical: 0, high: 0, medium: 0, low: 0 },
+      findings: []
+    };
+
+    rawFindings.forEach(function (f, i) {
+      if (!f || typeof f !== "object") { return; }
+      var sev = SEVERITIES.indexOf(f.severity) >= 0 ? f.severity : "low";
+      norm.findings.push({
+        id: f.id != null ? String(f.id) : "finding-" + (i + 1),
+        lens: f.lens != null ? String(f.lens) : "(unknown)",
+        severity: sev,
+        title: f.title != null ? String(f.title) : "(untitled finding)",
+        location: f.location != null ? String(f.location) : "",
+        evidence: f.evidence != null ? String(f.evidence) : "",
+        recommendation: f.recommendation != null ? String(f.recommendation) : "",
+        proposed_smallest: f.proposed_smallest != null ? String(f.proposed_smallest) : "",
+        predicted_delta: f.predicted_delta != null ? String(f.predicted_delta) : ""
+      });
+      norm.counts[sev] += 1;
+    });
+
+    return norm;
+  }
+
+  function normalizeThemes(raw) {
+    if (!Array.isArray(raw)) { return []; }
+    var list = [];
+    raw.forEach(function (t) {
+      if (!t || typeof t !== "object") { return; }
+      var ids = [];
+      if (Array.isArray(t.finding_ids)) {
+        t.finding_ids.forEach(function (id) { if (id != null) { ids.push(String(id)); } });
+      }
+      var title = t.title != null ? String(t.title) : "";
+      if (!title && !ids.length) { return; }
+      list.push({
+        title: title || "(untitled theme)",
+        root_cause: t.root_cause != null ? String(t.root_cause) : "",
+        action: t.action != null ? String(t.action) : "",
+        finding_ids: ids
+      });
+    });
+    return list;
+  }
+
+  function normalizeStrengths(raw) {
+    if (!Array.isArray(raw)) { return []; }
+    var list = [];
+    raw.forEach(function (s) {
+      if (typeof s === "string" && s) { list.push(s); }
+      else if (s && typeof s === "object" && s.title) {
+        list.push(String(s.title) + (s.detail ? " — " + String(s.detail) : ""));
+      }
+    });
+    return list;
+  }
+
+  function normalizeRecommendations(raw) {
+    if (!Array.isArray(raw)) { return []; }
+    var list = [];
+    raw.forEach(function (r, i) {
+      if (!r || typeof r !== "object") { return; }
+      var action = r.action != null ? String(r.action) : "";
+      if (!action) { return; }
+      var resolves = "";
+      if (Array.isArray(r.resolves)) { resolves = r.resolves.map(String).join(", "); }
+      else if (typeof r.resolves === "number") { resolves = r.resolves + " findings"; }
+      else if (r.resolves != null) { resolves = String(r.resolves); }
+      list.push({
+        rank: typeof r.rank === "number" ? r.rank : i + 1,
+        action: action,
+        resolves: resolves
+      });
+    });
+    list.sort(function (a, b) { return a.rank - b.rank; });
+    return list;
+  }
+
+  // Optional experience block: journeys plus a headless note. Returns null when
+  // neither is usable.
+  function normalizeExperience(raw) {
+    if (!raw || typeof raw !== "object") { return null; }
+    var journeys = [];
+    if (Array.isArray(raw.journeys)) {
+      raw.journeys.forEach(function (j) {
+        if (!j || typeof j !== "object") { return; }
+        var name = j.name != null ? String(j.name) : "";
+        var steps = j.steps != null ? String(j.steps) : "";
+        if (!name && !steps) { return; }
+        journeys.push({ name: name, steps: steps });
+      });
+    }
+    var headless = raw.headless != null ? String(raw.headless) : "";
+    if (!journeys.length && !headless) { return null; }
+    return { journeys: journeys, headless: headless };
+  }
+
+  function renderOverview(data) {
+    els.subject.textContent = data.subject;
+    els.generated.textContent = data.generated;
+    els.schema.textContent = String(data.schema_version);
+    els.verdict.textContent = data.verdict;
+
+    if (data.grade) {
+      els.grade.textContent = data.grade;
+      els.grade.className = "grade g-" + data.grade;
+      els.grade.hidden = false;
+    }
+    if (data.summary) {
+      els.summaryText.textContent = data.summary;
+      els.summaryText.hidden = false;
+    }
+
+    els.counts.innerHTML = "";
+    SEVERITIES.forEach(function (s) {
+      var pill = document.createElement("span");
+      pill.className = "pill";
+      pill.innerHTML =
+        '<span class="dot ' + s + '"></span>' +
+        '<span class="lbl">' + SEV_LABEL[s] + '</span>' +
+        '<span class="n">' + data.counts[s] + "</span>";
+      els.counts.appendChild(pill);
+    });
+    els.overview.hidden = false;
+  }
+
+  // Every copied fix prompt opens by anchoring the fixing session to the same
+  // standards that produced the findings, so the fix is held to the bar too.
+  function standardsPreamble() {
+    if (!standards || !standards.canon) { return []; }
+    var bar = standards.canon + (standards.principles ? " and " + standards.principles : "");
+    var lines = [
+      "Hold " + bar + " as the bar for every line you change — a fix that adds ceremony is a new finding, not a fix."
+    ];
+    if (standards.scripts) {
+      lines.push("If the fix adds or changes scripts, follow " + standards.scripts + ".");
+    }
+    lines.push("");
+    return lines;
+  }
+
+  function composeThemePrompt(theme, resolved) {
+    var lines = standardsPreamble();
+    lines.push("Fix the following theme in " + subjectPath + ": " + theme.title);
+    lines.push("");
+    if (theme.root_cause) { lines.push("Root cause: " + theme.root_cause); }
+    if (theme.action) { lines.push("Fix: " + theme.action); }
+    if (resolved.length) {
+      lines.push("");
+      lines.push("Findings to address:");
+      resolved.forEach(function (f, i) {
+        lines.push((i + 1) + ". " + f.title);
+        if (f.location) { lines.push("   Location: " + f.location); }
+        if (f.evidence) { lines.push("   Evidence: " + f.evidence); }
+        if (f.recommendation) { lines.push("   Recommendation: " + f.recommendation); }
+      });
+    }
+    return lines.join("\n") + "\n";
+  }
+
+  function renderThemes(themes) {
+    if (!themes.length) { els.themes.hidden = true; return; }
+    els.themes.innerHTML = "<h2>Themes</h2>";
+    themes.forEach(function (t) {
+      var resolved = t.finding_ids
+        .map(function (id) { return findingsById[id]; })
+        .filter(function (f) { return !!f; });
+      var items = resolved.map(function (f) {
+        return '<div class="t-finding"><span class="mono">' + esc(f.id) + "</span> " +
+          esc(f.title) +
+          (f.location ? ' · <span class="mono">' + esc(f.location) + "</span>" : "") +
+          "</div>";
+      }).join("");
+
+      var node = document.createElement("div");
+      node.className = "theme";
+      node.innerHTML =
+        '<div class="t-head"><span class="t-title">' + esc(t.title) + "</span>" +
+        '<button class="small t-fix">Fix This Theme</button></div>' +
+        (t.root_cause ? '<div class="t-cause">Root cause: ' + esc(t.root_cause) + "</div>" : "") +
+        (t.action ? '<div class="t-action"><b>Fix:</b> ' + esc(t.action) + "</div>" : "") +
+        (items ? '<div class="t-findings">' + items + "</div>" : "");
+      node.querySelector(".t-fix").addEventListener("click", function () {
+        copyText(composeThemePrompt(t, resolved));
+      });
+      els.themes.appendChild(node);
+    });
+    els.themes.hidden = false;
+  }
+
+  function renderStrengths(list) {
+    if (!list.length) { els.strengths.hidden = true; return; }
+    els.strengths.innerHTML =
+      "<h2>Strengths</h2><ul class=\"strength-list\">" +
+      list.map(function (s) { return "<li>" + esc(s) + "</li>"; }).join("") +
+      "</ul>";
+    els.strengths.hidden = false;
+  }
+
+  function renderRecommendations(recs) {
+    if (!recs.length) { els.recommendations.hidden = true; return; }
+    var html = "<h2>Recommendations</h2>";
+    recs.forEach(function (r) {
+      html += '<div class="rec"><span class="rank">#' + esc(String(r.rank)) + "</span>" +
+        esc(r.action) +
+        (r.resolves ? '<span class="resolves">resolves: ' + esc(r.resolves) + "</span>" : "") +
+        "</div>";
+    });
+    els.recommendations.innerHTML = html;
+    els.recommendations.hidden = false;
+  }
+
+  function renderExperience(exp) {
+    if (!exp) { els.experience.hidden = true; return; }
+    var html = "<h2>Experience</h2>";
+    if (exp.journeys.length) {
+      html += exp.journeys.map(function (j) {
+        return '<div class="journey">' +
+          '<div class="j-name">' + esc(j.name || "(unnamed journey)") + "</div>" +
+          (j.steps ? '<div class="j-steps">' + esc(j.steps) + "</div>" : "") +
+          "</div>";
+      }).join("");
+    }
+    if (exp.headless) {
+      html += '<dl class="kv" style="margin-top:12px"><dt>Headless</dt><dd>' +
+        esc(exp.headless) + "</dd></dl>";
+    }
+    els.experience.innerHTML = html;
+    els.experience.hidden = false;
+  }
+
+  function renderNoFindings() {
+    els.root.innerHTML =
+      '<div class="no-findings">' +
+      '<div class="big">No findings</div>' +
+      "<div>The scanners returned a clean pass for this subject.</div>" +
+      "</div>";
+  }
+
+  function findingNode(f) {
+    var node = document.createElement("div");
+    node.className = "finding sev-" + f.severity;
+    node.setAttribute("data-id", f.id);
+
+    var sub =
+      esc(f.lens) +
+      (f.location ? ' · <span class="mono">' + esc(f.location) + "</span>" : "");
+
+    var rows =
+      "<dt>Lens</dt><dd>" + esc(f.lens) + "</dd>" +
+      (f.location ? "<dt>Location</dt><dd><code>" + esc(f.location) + "</code></dd>" : "") +
+      (f.evidence ? "<dt>Evidence</dt><dd>" + esc(f.evidence) + "</dd>" : "") +
+      (f.recommendation ? "<dt>Recommendation</dt><dd>" + esc(f.recommendation) + "</dd>" : "") +
+      (f.proposed_smallest ? "<dt>Proposed smallest</dt><dd>" + esc(f.proposed_smallest) + "</dd>" : "") +
+      (f.predicted_delta ? "<dt>Predicted delta</dt><dd>" + esc(f.predicted_delta) + "</dd>" : "");
+
+    node.innerHTML =
+      '<div class="row">' +
+      '<input type="checkbox" class="chk" aria-label="Select finding">' +
+      '<div class="head">' +
+      '<div class="title">' + esc(f.title) + "</div>" +
+      '<div class="sub">' + sub + "</div>" +
+      "</div>" +
+      '<span class="tag">' + SEV_LABEL[f.severity] + "</span>" +
+      '<span class="caret">▸</span>' +
+      "</div>" +
+      '<div class="body"><dl>' + rows + "</dl></div>";
+
+    var chk = node.querySelector(".chk");
+    chk.checked = !!selected[f.id];
+    chk.addEventListener("change", function () {
+      if (chk.checked) { selected[f.id] = true; } else { delete selected[f.id]; }
+      updateSelection();
+    });
+
+    var head = node.querySelector(".head");
+    var caret = node.querySelector(".caret");
+    function toggle() { node.classList.toggle("open"); }
+    head.addEventListener("click", toggle);
+    caret.addEventListener("click", toggle);
+
+    return node;
+  }
+
+  function renderFindings(list) {
+    els.root.innerHTML = "";
+    if (list.length === 0) {
+      renderNoFindings();
+      els.toolbar.hidden = true;
+      return;
+    }
+    els.toolbar.hidden = false;
+
+    SEVERITIES.forEach(function (sev) {
+      var group = list.filter(function (f) { return f.severity === sev; });
+      if (group.length === 0) { return; }
+      var wrap = document.createElement("div");
+      wrap.className = "group";
+      var h = document.createElement("h2");
+      h.innerHTML = '<span class="dot ' + sev + '"></span>' + SEV_LABEL[sev] + " (" + group.length + ")";
+      wrap.appendChild(h);
+      group.forEach(function (f) { wrap.appendChild(findingNode(f)); });
+      els.root.appendChild(wrap);
+    });
+  }
+
+  function updateSelection() {
+    var n = Object.keys(selected).length;
+    els.selCount.textContent = n + " selected";
+    els.btnCopy.disabled = n === 0;
+  }
+
+  function composePrompt() {
+    var picked = findings.filter(function (f) { return selected[f.id]; });
+    if (picked.length === 0) { return ""; }
+    var lines = standardsPreamble();
+    lines.push("Fix the following issues in " + subjectPath + ":");
+    lines.push("");
+    picked.forEach(function (f, i) {
+      lines.push((i + 1) + ". " + f.title);
+      if (f.location) { lines.push("   Location: " + f.location); }
+      if (f.evidence) { lines.push("   Evidence: " + f.evidence); }
+      if (f.recommendation) { lines.push("   Recommendation: " + f.recommendation); }
+      if (f.proposed_smallest) { lines.push("   Proposed smallest: " + f.proposed_smallest); }
+      lines.push("");
+    });
+    return lines.join("\n").replace(/\n+$/, "\n");
+  }
+
+  function showToast(text) {
+    els.toast.textContent = text;
+    els.toast.classList.add("show");
+    setTimeout(function () { els.toast.classList.remove("show"); }, 1600);
+  }
+
+  function fallbackCopy(text) {
+    els.fallbackText.value = text;
+    els.fallback.classList.add("show");
+    els.fallbackText.focus();
+    els.fallbackText.select();
+    try {
+      var ok = document.execCommand && document.execCommand("copy");
+      if (ok) {
+        showToast("Copied");
+        return;
+      }
+    } catch (e) { /* fall through to manual */ }
+    showToast("Copy the text shown below");
+  }
+
+  function copyText(text) {
+    if (!text) { return; }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(
+        function () { showToast("Copied"); },
+        function () { fallbackCopy(text); }
+      );
+    } else {
+      fallbackCopy(text);
+    }
+  }
+
+  function doCopy() {
+    copyText(composePrompt());
+  }
+
+  function wireToolbar() {
+    els.btnCopy.addEventListener("click", doCopy);
+    els.btnSelectAll.addEventListener("click", function () {
+      findings.forEach(function (f) { selected[f.id] = true; });
+      document.querySelectorAll(".finding .chk").forEach(function (c) { c.checked = true; });
+      updateSelection();
+    });
+    els.btnClear.addEventListener("click", function () {
+      selected = Object.create(null);
+      document.querySelectorAll(".finding .chk").forEach(function (c) { c.checked = false; });
+      els.fallback.classList.remove("show");
+      updateSelection();
+    });
+    els.btnExpandAll.addEventListener("click", function () {
+      document.querySelectorAll(".finding").forEach(function (n) { n.classList.add("open"); });
+    });
+    els.btnCollapseAll.addEventListener("click", function () {
+      document.querySelectorAll(".finding").forEach(function (n) { n.classList.remove("open"); });
+    });
+  }
+
+  function init() {
+    var island = document.getElementById("report-data");
+    var parsed;
+    try {
+      if (!island) { throw new Error("report-data island element not found"); }
+      parsed = JSON.parse(island.textContent);
+    } catch (err) {
+      showBanner(
+        "Could not parse the report data island.\n\n" +
+        "Error: " + (err && err.message ? err.message : String(err)) + "\n\n" +
+        "The findings could not be rendered. The JSON inside the " +
+        'report-data island (the application/json script tag) is malformed.'
+      );
+      return;
+    }
+
+    var data = normalize(parsed);
+
+    if (data.subject === PLACEHOLDER_SUBJECT) {
+      els.subject.textContent = data.subject;
+      showBanner(
+        "This is the unfilled report shell.\n\n" +
+        "The report-data island still carries the placeholder subject, so " +
+        "there are no findings here. Generate a real report with " +
+        "scripts/render_report.py."
+      );
+      return;
+    }
+
+    findings = data.findings;
+    subjectPath = data.subject;
+    standards = data.standards;
+    findingsById = Object.create(null);
+    findings.forEach(function (f) { findingsById[f.id] = f; });
+
+    renderOverview(data);
+    renderThemes(data.themes);
+    renderStrengths(data.strengths);
+    renderRecommendations(data.recommendations);
+    renderExperience(data.experience);
+    renderFindings(findings);
+    wireToolbar();
+    updateSelection();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
+})();
+</script>
+</body>
+</html>

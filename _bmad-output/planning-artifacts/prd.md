@@ -60,7 +60,8 @@ This is the producer side of the provider adapter that a controller such as Herm
 
 - Archon returns parseable JSON for every state-changing control result.
 - Every result includes schema version, success flag, correlation id, workflow run reference when applicable, binding reference when applicable, machine-readable result payload, and machine-readable error shape when failed.
-- Archon classifies timeout, schema mismatch, malformed request, unexpected state, and unexpected exit behavior in a machine-readable way.
+- Archon returns machine-readable classifications for malformed requests, unexpected states, internally caught timeouts, and every other failure it catches before responding.
+- The subprocess consumer classifies empty output or uncatchable process exit as unexpected exit, malformed or schema-invalid output as schema mismatch, and a consumer-enforced timeout as timeout.
 - Archon does not expose a state-changing HTTP control path for Workflow Commander v1.
 
 ### FR-9: Produce Signed Typed Workflow Events

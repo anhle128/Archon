@@ -55,7 +55,8 @@ Implementation must preserve this boundary even when both sides reference the sa
 
 ### AD-7 - Version Every Cross-Subproject Machine Contract
 
-Workflow command envelopes, workflow event envelopes, Workflow Provider Binding records, and delivery status records are JSON, schema-versioned, and compatibility-tested from shared examples before dependent producer or consumer work is complete.
+Workflow command envelopes, workflow event envelopes, Workflow Provider Binding records, and delivery status records are JSON and schema-versioned.
+Archon producer work validates the shared examples locally before producer completion, and downstream Hermes consumer work validates compatibility when that consumer implementation begins.
 Archon-specific fixtures live under the provider-specific Archon fixture namespace inside the local contract package.
 
 ### AD-8 - Ratify The Brownfield Stack And Avoid New Runtime Infrastructure
@@ -129,11 +130,11 @@ This planning story does not create application code, migrations, tests, or impl
 
 ## Deferred Details
 
-| Deferred Decision                                                         | Owner                                | Gate Before Implementation                                                                                                              |
-| ------------------------------------------------------------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| Exact provider command JSON result schemas                                | Archon with consumer review          | Shared success and error examples pass compatibility tests in both subprojects.                                                         |
-| Exact workflow event signature algorithm, replay window, and header names | Archon with consumer security review | Signed, expired, duplicate, wrong-binding, and invalid-schema examples exist.                                                           |
-| Exact delivery retry policy                                               | Archon provider owner                | Delivery status fixtures cover healthy, delayed, retrying, failed, terminal failure, duplicate-safe, and reconciliation-pending states. |
+| Deferred Decision                                                         | Owner                                  | Gate / Required Follow-up                                                                                                                                    |
+| ------------------------------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Exact provider command JSON result schemas                                | Archon with downstream consumer review | Archon implementation gate: local canonical examples and validation pass. Hermes validates consumer compatibility when its downstream implementation begins. |
+| Exact workflow event signature algorithm, replay window, and header names | Archon with consumer security review   | Signed, expired, duplicate, wrong-binding, and invalid-schema examples exist.                                                                                |
+| Exact delivery retry policy                                               | Archon provider owner                  | Delivery status fixtures cover healthy, delayed, retrying, failed, terminal failure, duplicate-safe, and reconciliation-pending states.                      |
 
 ## Provider Command Syntax Baseline
 
@@ -147,9 +148,9 @@ The provider CLI syntax must preserve the existing `archon workflow` command fam
 | `workflow.status`  | `archon workflow get <run-id> --json`                                                                                     | Uses the single-run inspection surface, not the active-run list surface.                                                                                                           |
 | `workflow.approve` | `archon workflow approve <run-id> [comment] --json`                                                                       | Must keep command result recording distinct from Hermes-owned human decision authority.                                                                                            |
 | `workflow.reject`  | `archon workflow reject <run-id> [reason] --json`                                                                         | Must keep command result recording distinct from Hermes-owned human decision authority.                                                                                            |
-| `workflow.resume`  | `archon workflow resume <run-id> --json`                                                                                  | Must return the shared envelope for provider-command acknowledgement and errors.                                                                                                   |
-| `workflow.retry`   | `archon workflow retry <run-id> [--node <node-id>] --json`                                                                | Adds a JSON-compatible provider command separate from the existing streaming `retry-node` developer command.                                                                       |
-| `workflow.cancel`  | `archon workflow cancel <run-id> --json`                                                                                  | Adds a contract-named provider command; legacy `abandon` remains outside the Workflow Commander command vocabulary.                                                                |
+| `workflow.resume`  | `archon workflow resume <run-id> --json`                                                                                  | Validates resumability and returns the unchanged current state without dispatching execution or mutating the run.                                                                  |
+| `workflow.retry`   | `archon workflow retry <run-id> [--node <node-id>] --json`                                                                | Acknowledges detached-process creation only; the worker owns later validation, claim, preparation, and execution outcomes; remains separate from streaming `retry-node`.           |
+| `workflow.cancel`  | `archon workflow cancel <run-id> --json`                                                                                  | Returns minimal cancelled terminal state after the durable transition without reporting stale previous state or waiting for process quiescence or cleanup.                         |
 | `binding.create`   | `archon provider-binding create --provider archon --name <name> --project-ref <project-ref> --route <event-route> --json` | Uses generic provider and name vocabulary.                                                                                                                                         |
 | `binding.update`   | `archon provider-binding update --provider archon --name <name> --project-ref <project-ref> --route <event-route> --json` | Updates an existing provider-side binding route or metadata. This is separate from `binding.create`; create must not silently upsert.                                              |
 | `binding.status`   | `archon provider-binding status --provider archon --name <name> [--project-ref <project-ref>] --json`                     | Reports missing, valid, stale, disabled, rotated, and conflicting states.                                                                                                          |
@@ -158,6 +159,8 @@ The provider CLI syntax must preserve the existing `archon workflow` command fam
 
 Story 3.3a owns finalizing tests that assert each provider CLI syntax emits the matching canonical `command` value.
 If implementation discovers an existing CLI conflict, the story must update this table and the contract examples before producer code merges.
+Archon emits shared failure envelopes only for failures it catches before response.
+The subprocess consumer owns empty output, malformed or schema-invalid output, externally enforced timeout, and uncatchable process-exit classification; Workflow Commander v1 does not add an Archon supervisor.
 
 ## Local Contract Readiness
 
