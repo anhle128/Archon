@@ -1,6 +1,6 @@
 # Story 3.3d: Provide Archon Recovery Command CLI JSON
 
-Status: review
+Status: in-progress
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -130,6 +130,12 @@ so that external controllers can route recovery actions consistently without rel
 - [x] [Review][Patch] R1-F41: Option-looking targeted retry node values can be consumed as node IDs instead of malformed input. [packages/cli/src/cli.ts:1027]
 - [x] [Review][Patch] R1-F42: Required recovery proof still stops at parent retry envelopes and omits targeted runtime contract validation. [packages/cli/src/commands/workflow-json.e2e.test.ts:1205]
 - [x] [Review][Patch] R1-F43: New cancel and abandon 409 responses are not declared in the OpenAPI route definitions. [packages/server/src/routes/api.ts:849]
+- [ ] [Review][Patch] R1-F44: Recovery JSON preflight still treats database infrastructure failures as malformed caller input, and unexpected git preflight failures can still bypass the shared JSON failure envelope. [packages/cli/src/cli.ts:686]
+- [ ] [Review][Patch] R1-F45: Single-dash option-looking `--node` values are still accepted as targeted retry node IDs instead of being rejected as malformed input. [packages/cli/src/cli.ts:1036]
+- [ ] [Review][Patch] R1-F46: Folder-project recovery validation accepts an existing `working_path` that is not a directory. [packages/cli/src/commands/workflow.ts:2972]
+- [ ] [Review][Patch] R1-F47: Required retry recovery proof still stops at parent envelopes and synchronously-created log files instead of proving worker claim or outcome. [packages/cli/src/commands/workflow-json.e2e.test.ts:1205]
+- [ ] [Review][Patch] R1-F48: Resume validate-only proof remains incomplete for the no-mutation contract. [packages/cli/src/commands/workflow-json.e2e.test.ts:1597]
+- [ ] [Review][Patch] R1-F49: The generated web API types still omit the new cancel and abandon `409` responses. [packages/web/src/lib/api.generated.d.ts:1639]
 
 ## Dev Notes
 
