@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Database } from 'bun:sqlite';
@@ -1175,8 +1175,8 @@ describe('workflow resume/retry/cancel --json CLI dispatch E2E — real subproce
     expect(stderr).toBe('');
   });
 
-  // 3.3D-CLI-022 [P0] R1-F14 — real-subprocess retry success envelope
-  test('3.3D-CLI-022: `workflow retry <failed-run> --json` emits a success envelope matching retry-success.json shape', async () => {
+  // 3.3D-CLI-022 [P0] R1-F14, R1-F34 — real-subprocess retry success envelope + worker spawn evidence
+  test('3.3D-CLI-022: `workflow retry <failed-run> --json` emits a success envelope matching retry-success.json shape and creates a detached worker log', async () => {
     const runId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
     await seedFailedRun(runId, isolatedRepo);
 
@@ -1208,6 +1208,15 @@ describe('workflow resume/retry/cancel --json CLI dispatch E2E — real subproce
 
     expect(exitCode).toBe(0);
     expect(stderr).toBe('');
+
+    // R1-F34: verify the detached worker log was created (spawn evidence).
+    // The retry handler creates the log synchronously before spawn, so it
+    // exists immediately after the parent exits.
+    const logDir = join(isolatedHome, 'logs');
+    expect(existsSync(logDir)).toBe(true);
+    const logFiles = readdirSync(logDir).filter(f => f.startsWith('detached-retry-'));
+    expect(logFiles.length).toBeGreaterThanOrEqual(1);
+    expect(logFiles.some(f => f.includes(runId))).toBe(true);
   });
 
   // 3.3D-CLI-023 [P0] R1-F14 — worker-boundary proof: parent succeeds regardless
@@ -1230,8 +1239,8 @@ describe('workflow resume/retry/cancel --json CLI dispatch E2E — real subproce
     expect(stderr).toBe('');
   });
 
-  // 3.3D-CLI-024 [P1] R1-F14 — targeted-node retry success envelope
-  test('3.3D-CLI-024: `workflow retry <failed-run> --node <id> --json` emits success envelope with scope=node', async () => {
+  // 3.3D-CLI-024 [P1] R1-F14, R1-F34 — targeted-node retry success envelope + worker spawn evidence
+  test('3.3D-CLI-024: `workflow retry <failed-run> --node <id> --json` emits success envelope with scope=node and creates a detached worker log', async () => {
     const runId = 'cccccccc-dddd-eeee-ffff-aaaaaaaaaaaa';
     await seedFailedRun(runId, isolatedRepo);
 
@@ -1260,6 +1269,11 @@ describe('workflow resume/retry/cancel --json CLI dispatch E2E — real subproce
 
     expect(exitCode).toBe(0);
     expect(stderr).toBe('');
+
+    // R1-F34: verify the detached worker log was created (spawn evidence).
+    const logDir = join(isolatedHome, 'logs');
+    const logFiles = readdirSync(logDir).filter(f => f.startsWith('detached-retry-'));
+    expect(logFiles.some(f => f.includes(runId))).toBe(true);
   });
 
   // 3.3D-CLI-025 [P0] R1-F23 — resume success envelope for a paused run

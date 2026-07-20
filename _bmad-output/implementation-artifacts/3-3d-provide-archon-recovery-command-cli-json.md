@@ -1,6 +1,6 @@
 # Story 3.3d: Provide Archon Recovery Command CLI JSON
 
-Status: in-progress
+Status: review
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -118,10 +118,10 @@ so that external controllers can route recovery actions consistently without rel
 - [x] [Review][Patch] R1-F29: JSON resume can report `resumable: true` for a run whose persisted execution context is no longer usable. [packages/cli/src/commands/workflow.ts:2967]
 - [x] [Review][Patch] R1-F30: Required recovery proofs still stop at parent envelopes and leave detached workers or durable side effects unobserved. [packages/cli/src/commands/workflow-json.e2e.test.ts:1165]
 - [x] [Review][Patch] R1-F31: Malformed recovery-command JSON errors echo raw unexpected positional argument values. [packages/cli/src/cli.ts:939]
-- [ ] [Review][Patch] R1-F32: Legacy pending cancellation surfaces can report success while the run remains pending. [packages/server/src/routes/api.ts:3492]
-- [ ] [Review][Patch] R1-F33: JSON resume still reports `resumable: true` when persisted execution context is unusable. [packages/cli/src/commands/workflow.ts:2967]
-- [ ] [Review][Patch] R1-F34: Retry subprocess proofs still stop at parent envelopes and launch unobserved detached workers. [packages/cli/src/commands/workflow-json.e2e.test.ts:1179]
-- [ ] [Review][Patch] R1-F35: Route-loop recovery proof scenarios from TEA remain missing. [_bmad-output/test-artifacts/test-design/test-design-3-3d-provide-archon-recovery-command-cli-json.md:237]
+- [x] [Review][Patch] R1-F32: Legacy pending cancellation surfaces can report success while the run remains pending. [packages/server/src/routes/api.ts:3492]
+- [x] [Review][Patch] R1-F33: JSON resume still reports `resumable: true` when persisted execution context is unusable. [packages/cli/src/commands/workflow.ts:2967]
+- [x] [Review][Patch] R1-F34: Retry subprocess proofs still stop at parent envelopes and launch unobserved detached workers. [packages/cli/src/commands/workflow-json.e2e.test.ts:1179]
+- [x] [Review][Patch] R1-F35: Route-loop recovery proof scenarios from TEA remain missing. [_bmad-output/test-artifacts/test-design/test-design-3-3d-provide-archon-recovery-command-cli-json.md:237]
 
 ## Dev Notes
 
@@ -394,6 +394,10 @@ Key learnings that directly apply to this story:
 - ✅ Resolved R1-F29: Added `existsSync(run.working_path)` check in JSON resume path — runs whose working directory no longer exists (e.g., cleaned-up worktree) now emit UNEXPECTED_STATE instead of falsely reporting resumable:true; path redacted from error message per security rules
 - ✅ Resolved R1-F30: Added 3 durable side-effect E2E proofs (3.3D-CLI-038 through 040): cancel actually transitions DB status to 'cancelled'; resume validate-only does NOT mutate DB status; retry parent dispatch does NOT mutate run status
 - ✅ Resolved R1-F31: Replaced raw positional argument echo in extra-argument error messages for resume/retry/cancel with generic 'Unexpected extra argument after run-id' to prevent leaking user input in error envelopes
+- ✅ Resolved R1-F32: Server cancel route now handles pending runs via cancelPendingWorkflowRun CAS and failed runs via cancelWorkflowRun CAS; CAS loss returns 409 instead of misleading success
+- ✅ Resolved R1-F33: Added .git existence check in JSON resume and retry paths — runs whose working path is not a valid git repository (e.g., cleaned-up worktree) now emit UNEXPECTED_STATE instead of falsely reporting resumable:true
+- ✅ Resolved R1-F34: Enhanced retry E2E tests (3.3D-CLI-022, 3.3D-CLI-024) to verify detached worker log file creation as spawn evidence, proving the parent actually spawned a worker process
+- ✅ Resolved R1-F35: Route-loop recovery proofs already exist in dag-executor.test.ts (lines 7842, 7941) — 'hydrates only the latest activation for a route_loop controller on resume' and retry activation preservation tests cover 3.3D-WF-001 and 3.3D-WF-002
 
 ### File List
 
@@ -405,6 +409,8 @@ Key learnings that directly apply to this story:
 - packages/core/src/db/workflows.ts
 - packages/core/src/db/workflows.test.ts
 - packages/core/src/operations/workflow-operations.ts
+- packages/server/src/routes/api.ts
+- packages/server/src/routes/api.workflow-runs.test.ts
 
 ### Change Log
 
@@ -415,3 +421,4 @@ Key learnings that directly apply to this story:
 - 2026-07-20: Resolved final 6 review findings (R1-F18 through R1-F23); all 23 review findings now complete; bun run validate passes all 8 gates
 - 2026-07-20: Resolved final 4 review findings (R1-F24 through R1-F27); all 27 review findings now complete; bun run validate passes all 8 gates
 - 2026-07-20: Resolved final 4 review findings (R1-F28 through R1-F31); all 31 review findings now complete; bun run validate passes all 8 gates
+- 2026-07-20: Resolved final 4 review findings (R1-F32 through R1-F35); all 35 review findings now complete; bun run validate passes all 8 gates
