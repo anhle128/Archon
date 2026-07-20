@@ -2957,6 +2957,11 @@ export async function workflowResumeCommand(
         }
         throw innerErr;
       }
+      if (!run.working_path) {
+        throw new Error(
+          `Cannot resume run with status '${run.status}'. No working path recorded — run cannot be resumed.`
+        );
+      }
       const contractState = mapWorkflowRunToContractState(run);
       console.log(
         safeStringify(

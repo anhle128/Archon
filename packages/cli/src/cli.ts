@@ -187,6 +187,22 @@ function scanRawWorkflowProviderOptions(args: string[]): RawWorkflowProviderOpti
   return result;
 }
 
+function findUnsupportedFlag(args: string[], allowedFlags: Set<string>): string | undefined {
+  const end = args.indexOf('--');
+  const scanArgs = end === -1 ? args : args.slice(0, end);
+  for (const arg of scanArgs) {
+    if (!arg.startsWith('-')) continue;
+    const name = arg.startsWith('--') ? arg.split('=')[0] : arg;
+    if (!allowedFlags.has(name)) return name;
+  }
+  return undefined;
+}
+
+const RECOVERY_BASE_FLAGS = new Set(['--json', '--correlation-id', '--cwd', '--help', '-h']);
+const RESUME_ALLOWED_FLAGS = RECOVERY_BASE_FLAGS;
+const RETRY_ALLOWED_FLAGS = new Set([...RECOVERY_BASE_FLAGS, '--node']);
+const CANCEL_ALLOWED_FLAGS = RECOVERY_BASE_FLAGS;
+
 function isBlankString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length === 0;
 }
@@ -921,6 +937,19 @@ async function main(): Promise<number> {
               );
               return 1;
             }
+            if (jsonFlag && envelopeCommand) {
+              const unsupported = findUnsupportedFlag(args, RESUME_ALLOWED_FLAGS);
+              if (unsupported) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    parseError: `Unsupported flag for resume --json: '${unsupported}'`,
+                    requestAccepted: false,
+                  },
+                  rawWorkflowProviderOptions.correlationIdValue
+                );
+              }
+            }
             await workflowResumeCommand(
               resumeRunId,
               jsonFlag,
@@ -985,8 +1014,11 @@ async function main(): Promise<number> {
               );
               return 1;
             }
-            const nodeId = values.node as string | undefined;
-            if (nodeId?.trim() === '') {
+            const rawNodeId = values.node;
+            if (
+              rawNodeId !== undefined &&
+              (typeof rawNodeId !== 'string' || rawNodeId.trim() === '')
+            ) {
               if (envelopeCommand) {
                 return await emitWorkflowCommandMalformedEnvelope(
                   envelopeCommand,
@@ -999,6 +1031,20 @@ async function main(): Promise<number> {
               }
               console.error('Error: --node value must be a non-blank string');
               return 1;
+            }
+            const nodeId = typeof rawNodeId === 'string' ? rawNodeId : undefined;
+            {
+              const unsupported = findUnsupportedFlag(args, RETRY_ALLOWED_FLAGS);
+              if (unsupported && envelopeCommand) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    parseError: `Unsupported flag for retry --json: '${unsupported}'`,
+                    requestAccepted: false,
+                  },
+                  rawWorkflowProviderOptions.correlationIdValue
+                );
+              }
             }
             await workflowRetryCommand(
               retryRunId,
@@ -1047,6 +1093,19 @@ async function main(): Promise<number> {
                 `Error: unexpected extra argument '${positionals[3]}'. Usage: archon workflow cancel <run-id> --json`
               );
               return 1;
+            }
+            {
+              const unsupported = findUnsupportedFlag(args, CANCEL_ALLOWED_FLAGS);
+              if (unsupported && envelopeCommand) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    parseError: `Unsupported flag for cancel --json: '${unsupported}'`,
+                    requestAccepted: false,
+                  },
+                  rawWorkflowProviderOptions.correlationIdValue
+                );
+              }
             }
             await workflowCancelCommand(
               cancelRunId,

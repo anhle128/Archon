@@ -1157,8 +1157,8 @@ describe('workflows database', () => {
       expect(result).toEqual({ cancelled: true });
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain("status = 'cancelled'");
-      // Must not re-cancel / re-stamp completed_at on an already-finished run.
-      expect(query).toContain("status NOT IN ('completed', 'cancelled')");
+      // Must only cancel running, paused, or failed runs (allowlist per story 3.3d AC #4, R1-F22).
+      expect(query).toContain("status IN ('running', 'paused', 'failed')");
       expect(params).toEqual(['workflow-run-123']);
     });
 

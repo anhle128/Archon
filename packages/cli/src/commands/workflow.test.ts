@@ -8045,13 +8045,14 @@ describe('workflowRetryCommand — JSON envelope mode (Story 3.3d)', () => {
   it('R1-F11: whole-run retry detached worker argv contains run.id (persisted UUID), not the caller-supplied input', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const persistedId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const workingPath = '/tmp/wt';
     const getRun = workflowDb.getWorkflowRun as ReturnType<typeof mock>;
     getRun.mockResolvedValueOnce({
       id: persistedId,
       workflow_name: 'implement',
       status: 'failed',
       codebase_id: null,
-      working_path: '/tmp/wt',
+      working_path: workingPath,
       metadata: {},
     });
 
@@ -8074,5 +8075,11 @@ describe('workflowRetryCommand — JSON envelope mode (Story 3.3d)', () => {
     expect(args).not.toContain('short-prefix');
     // Worker runs `workflow resume <run.id>`, not `workflow retry`
     expect(args).toContain('resume');
+    expect(args).not.toContain('retry');
+    // R1-F20: worker argv must include --cwd bound to the run's persisted working_path
+    // so the worker resumes in the exact run's working directory.
+    const cwdIdx = args.indexOf('--cwd');
+    expect(cwdIdx).toBeGreaterThan(-1);
+    expect(args[cwdIdx + 1]).toBe(workingPath);
   });
 });

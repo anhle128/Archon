@@ -117,11 +117,12 @@ export async function resumeWorkflow(runId: string): Promise<WorkflowRun> {
  * Running, paused, AND failed runs can be abandoned. A `failed` run is terminal
  * per TERMINAL_WORKFLOW_STATUSES but remains resumable, so the user must be able
  * to discard it — hence the inline check here intentionally diverges from that
- * constant and blocks only the two non-resumable terminal states.
+ * constant and blocks only the two non-resumable terminal states plus `pending`
+ * (which has not yet started and is not cancellable via the CAS allowlist).
  */
 export async function abandonWorkflow(runId: string): Promise<WorkflowRun> {
   const run = await getRunOrThrow(runId, 'operations.workflow_abandon_lookup_failed');
-  if (run.status === 'completed' || run.status === 'cancelled') {
+  if (run.status === 'completed' || run.status === 'cancelled' || run.status === 'pending') {
     throw new Error(
       `Cannot abandon run with status '${run.status}'. Only running, paused, or failed runs can be abandoned.`
     );
@@ -144,7 +145,7 @@ export async function abandonWorkflow(runId: string): Promise<WorkflowRun> {
   // (CLI/server), which is where docker is reachable.
   //
   // ONLY when OUR cancel actually won the CAS (`cancelled === true`). cancelWorkflowRun
-  // is `UPDATE … WHERE status NOT IN (completed, cancelled)`, so a false result means a
+  // is `UPDATE … WHERE status IN (running, paused, failed)`, so a false result means a
   // concurrent transition (a resume or completion) already took the run terminal and now
   // OWNS the environment — reclaiming here would pull the container out from under it.
   if (

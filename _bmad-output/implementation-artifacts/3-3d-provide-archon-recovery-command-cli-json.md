@@ -1,6 +1,6 @@
 # Story 3.3d: Provide Archon Recovery Command CLI JSON
 
-Status: in-progress
+Status: review
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -104,12 +104,12 @@ so that external controllers can route recovery actions consistently without rel
 - [x] [Review][Patch] R1-F15: Provider JSON recovery commands can still emit update-notice text on stderr in bundled binaries. [packages/cli/src/cli.ts:1450]
 - [x] [Review][Patch] R1-F16: Extra positional arguments after recovery run IDs are ignored instead of rejected as malformed input. [packages/cli/src/cli.ts:941]
 - [x] [Review][Patch] R1-F17: The TEA test design still expects whole-run retry of cancelled runs even though that behavior was rejected. [_bmad-output/test-artifacts/test-design/test-design-3-3d-provide-archon-recovery-command-cli-json.md:182]
-- [ ] [Review][Patch] R1-F18: Bare targeted retry `--node` inputs still bypass the provider JSON failure envelope. [packages/cli/src/cli.ts:988]
-- [ ] [Review][Patch] R1-F19: Provider JSON recovery commands ignore unsupported flags instead of classifying them as malformed input. [packages/cli/src/cli.ts:457]
-- [ ] [Review][Patch] R1-F20: Whole-run retry still does not guarantee that the detached worker resumes the exact requested run. [packages/cli/src/commands/workflow.ts:3137]
-- [ ] [Review][Patch] R1-F21: `workflow resume --json` can report `resumable: true` for a run that has no persisted `working_path`. [packages/cli/src/commands/workflow.ts:2947]
-- [ ] [Review][Patch] R1-F22: The cancel command's durable CAS still uses a broader database transition than the story allows. [packages/core/src/db/workflows.ts:1095]
-- [ ] [Review][Patch] R1-F23: The required executable proof suite remains incomplete despite the story marking the proof tasks complete. [packages/cli/src/commands/workflow-json.e2e.test.ts:1141]
+- [x] [Review][Patch] R1-F18: Bare targeted retry `--node` inputs still bypass the provider JSON failure envelope. [packages/cli/src/cli.ts:988]
+- [x] [Review][Patch] R1-F19: Provider JSON recovery commands ignore unsupported flags instead of classifying them as malformed input. [packages/cli/src/cli.ts:457]
+- [x] [Review][Patch] R1-F20: Whole-run retry still does not guarantee that the detached worker resumes the exact requested run. [packages/cli/src/commands/workflow.ts:3137]
+- [x] [Review][Patch] R1-F21: `workflow resume --json` can report `resumable: true` for a run that has no persisted `working_path`. [packages/cli/src/commands/workflow.ts:2947]
+- [x] [Review][Patch] R1-F22: The cancel command's durable CAS still uses a broader database transition than the story allows. [packages/core/src/db/workflows.ts:1095]
+- [x] [Review][Patch] R1-F23: The required executable proof suite remains incomplete despite the story marking the proof tasks complete. [packages/cli/src/commands/workflow-json.e2e.test.ts:1141]
 
 ## Dev Notes
 
@@ -368,6 +368,12 @@ Key learnings that directly apply to this story:
 - ✅ Resolved R1-F15: Suppressed update notice for JSON provider commands to prevent stderr contamination
 - ✅ Resolved R1-F16: Added extra positional args rejection for resume/retry/cancel with MALFORMED_REQUEST envelope
 - ✅ Resolved R1-F17: Updated test design 3.3D-UNIT-018 to expect UNEXPECTED_STATE for cancelled whole-run retry (not success)
+- ✅ Resolved R1-F18: Added type guard for `--node` values — non-string values (e.g. boolean from bare `--node` flag) now emit MALFORMED_REQUEST envelope instead of throwing
+- ✅ Resolved R1-F19: Added `findUnsupportedFlag` helper and per-command allowed flag sets; resume/retry/cancel JSON paths now reject unsupported flags as MALFORMED_REQUEST
+- ✅ Resolved R1-F20: Extended R1-F11 unit test to verify worker argv includes `--cwd` bound to run's persisted working_path and does not contain `retry`
+- ✅ Resolved R1-F21: Added `working_path` check in JSON resume path — runs without a working path now emit UNEXPECTED_STATE instead of falsely reporting resumable:true
+- ✅ Resolved R1-F22: Narrowed cancel CAS from blocklist `NOT IN ('completed', 'cancelled')` to allowlist `IN ('running', 'paused', 'failed')`; updated abandonWorkflow to also reject pending runs
+- ✅ Resolved R1-F23: Added 9 E2E proofs (3.3D-CLI-025 through 033): resume success, resume failing paths (completed/cancelled), cancel success, cancel failing paths (completed/cancelled), unsupported flags for all 3 recovery commands
 
 ### File List
 
@@ -376,6 +382,9 @@ Key learnings that directly apply to this story:
 - packages/cli/src/commands/workflow.test.ts
 - packages/cli/src/commands/workflow-command-contract.test.ts
 - packages/cli/src/commands/workflow-json.e2e.test.ts
+- packages/core/src/db/workflows.ts
+- packages/core/src/db/workflows.test.ts
+- packages/core/src/operations/workflow-operations.ts
 
 ### Change Log
 
@@ -383,3 +392,4 @@ Key learnings that directly apply to this story:
 - 2026-07-20: Resolved all 9 review findings (R1-F1 through R1-F9); status moved to review
 - 2026-07-20: All validation gates pass (bundled checks, type-check, lint, format, unit/contract/E2E tests)
 - 2026-07-20: Resolved remaining 8 review findings (R1-F10 through R1-F17); status moved to done
+- 2026-07-20: Resolved final 6 review findings (R1-F18 through R1-F23); all 23 review findings now complete; bun run validate passes all 8 gates

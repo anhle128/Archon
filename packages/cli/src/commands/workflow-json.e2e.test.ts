@@ -90,6 +90,30 @@ async function seedFailedRun(runId: string, workingPath: string): Promise<void> 
   }
 }
 
+async function seedRunWithStatus(
+  runId: string,
+  workingPath: string,
+  status: string
+): Promise<void> {
+  await runCli(['workflow', 'list', '--json']);
+  const dbPath = join(isolatedHome, 'archon.db');
+  const db = new Database(dbPath);
+  try {
+    db.run('PRAGMA foreign_keys = OFF');
+    db.run(
+      `INSERT OR IGNORE INTO remote_agent_conversations (id, platform_type, platform_conversation_id)
+       VALUES ('seed-conv-e2e', 'cli', 'seed-conv-e2e')`
+    );
+    db.run(
+      `INSERT INTO remote_agent_workflow_runs (id, conversation_id, workflow_name, user_message, status, working_path, metadata)
+       VALUES (?, 'seed-conv-e2e', 'test-workflow', 'seed run', ?, ?, '{}')`,
+      [runId, status, workingPath]
+    );
+  } finally {
+    db.close();
+  }
+}
+
 describe('workflow run/get --json CLI dispatch E2E — real subprocess (Story 3.3b)', () => {
   // 3.3B-CLI-031 [P0] R-003,RC-09,RC-10 — a missing `workflow run` name under
   // --json must become a `workflow.start` MALFORMED_REQUEST envelope with
@@ -1222,6 +1246,189 @@ describe('workflow resume/retry/cancel --json CLI dispatch E2E — real subproce
     expect(result?.detached).toBe(true);
 
     expect(exitCode).toBe(0);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-025 [P0] R1-F23 — resume success envelope for a paused run
+  test('3.3D-CLI-025: `workflow resume <paused-run> --json` emits success envelope with resumable:true, executed:false', async () => {
+    const runId = 'dddddddd-eeee-ffff-0000-111111111111';
+    await seedRunWithStatus(runId, isolatedRepo, 'paused');
+
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'resume',
+      runId,
+      '--json',
+      '--correlation-id',
+      'corr-cli-025-resume-success',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
+    expect(envelope.command).toBe('workflow.resume');
+    expect(envelope.success).toBe(true);
+    expect(envelope.correlationId).toBe('corr-cli-025-resume-success');
+
+    const result = envelope.result as Record<string, unknown> | undefined;
+    expect(result?.operation).toBe('resume');
+    expect(result?.resumable).toBe(true);
+    expect(result?.executed).toBe(false);
+    expect(result?.validated).toBe(true);
+    expect(result?.state).toBe('paused');
+
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-026 [P0] R1-F23 — resume UNEXPECTED_STATE for completed run
+  test('3.3D-CLI-026: `workflow resume <completed-run> --json` emits UNEXPECTED_STATE envelope, exit 78', async () => {
+    const runId = 'eeeeeeee-ffff-0000-1111-222222222222';
+    await seedRunWithStatus(runId, isolatedRepo, 'completed');
+
+    const { stdout, stderr, exitCode } = await runCli(['workflow', 'resume', runId, '--json']);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('UNEXPECTED_STATE');
+    expect(exitCode).toBe(78);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-027 [P0] R1-F23 — resume UNEXPECTED_STATE for cancelled run
+  test('3.3D-CLI-027: `workflow resume <cancelled-run> --json` emits UNEXPECTED_STATE envelope, exit 78', async () => {
+    const runId = 'ffffffff-0000-1111-2222-333333333333';
+    await seedRunWithStatus(runId, isolatedRepo, 'cancelled');
+
+    const { stdout, stderr, exitCode } = await runCli(['workflow', 'resume', runId, '--json']);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('UNEXPECTED_STATE');
+    expect(exitCode).toBe(78);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-028 [P0] R1-F23 — cancel success envelope for a paused run
+  test('3.3D-CLI-028: `workflow cancel <paused-run> --json` emits success envelope with terminal:true', async () => {
+    const runId = '00000000-1111-2222-3333-444444444444';
+    await seedRunWithStatus(runId, isolatedRepo, 'paused');
+
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'cancel',
+      runId,
+      '--json',
+      '--correlation-id',
+      'corr-cli-028-cancel-success',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
+    expect(envelope.command).toBe('workflow.cancel');
+    expect(envelope.success).toBe(true);
+    expect(envelope.correlationId).toBe('corr-cli-028-cancel-success');
+
+    const result = envelope.result as Record<string, unknown> | undefined;
+    expect(result?.operation).toBe('cancel');
+    expect(result?.state).toBe('cancelled');
+    expect(result?.terminal).toBe(true);
+
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-029 [P0] R1-F23 — cancel UNEXPECTED_STATE for completed run
+  test('3.3D-CLI-029: `workflow cancel <completed-run> --json` emits UNEXPECTED_STATE envelope, exit 78', async () => {
+    const runId = '11111111-2222-3333-4444-555555555555';
+    await seedRunWithStatus(runId, isolatedRepo, 'completed');
+
+    const { stdout, stderr, exitCode } = await runCli(['workflow', 'cancel', runId, '--json']);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('UNEXPECTED_STATE');
+    expect(exitCode).toBe(78);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-030 [P0] R1-F23 — cancel UNEXPECTED_STATE for cancelled run
+  test('3.3D-CLI-030: `workflow cancel <cancelled-run> --json` emits UNEXPECTED_STATE envelope, exit 78', async () => {
+    const runId = '22222222-3333-4444-5555-666666666666';
+    await seedRunWithStatus(runId, isolatedRepo, 'cancelled');
+
+    const { stdout, stderr, exitCode } = await runCli(['workflow', 'cancel', runId, '--json']);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('UNEXPECTED_STATE');
+    expect(exitCode).toBe(78);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-031 [P1] R1-F19 — unsupported flag on resume --json
+  test('3.3D-CLI-031: `workflow resume <run> --json --force` emits MALFORMED_REQUEST for unsupported flag', async () => {
+    const runId = '33333333-4444-5555-6666-777777777777';
+    await seedRunWithStatus(runId, isolatedRepo, 'paused');
+
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'resume',
+      runId,
+      '--json',
+      '--force',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-032 [P1] R1-F19 — unsupported flag on retry --json
+  test('3.3D-CLI-032: `workflow retry <run> --json --verbose` emits MALFORMED_REQUEST for unsupported flag', async () => {
+    const runId = '44444444-5555-6666-7777-888888888888';
+    await seedFailedRun(runId, isolatedRepo);
+
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'retry',
+      runId,
+      '--json',
+      '--verbose',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-033 [P1] R1-F19 — unsupported flag on cancel --json
+  test('3.3D-CLI-033: `workflow cancel <run> --json --detach` emits MALFORMED_REQUEST for unsupported flag', async () => {
+    const runId = '55555555-6666-7777-8888-999999999999';
+    await seedRunWithStatus(runId, isolatedRepo, 'paused');
+
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'cancel',
+      runId,
+      '--json',
+      '--detach',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(exitCode).toBe(64);
     expect(stderr).toBe('');
   });
 });

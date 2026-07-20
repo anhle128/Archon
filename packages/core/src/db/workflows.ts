@@ -1087,7 +1087,9 @@ export async function cancelWorkflowRun(id: string): Promise<{ cancelled: boolea
   try {
     // Guard against re-stamping an already-finished run. Cancelling a run that
     // is 'completed' or 'cancelled' must be a no-op, not a re-write of
-    // completed_at / a resurrection of terminal state. 'failed' is intentionally
+    // completed_at / a resurrection of terminal state. 'pending' is also
+    // excluded — only 'running', 'paused', and 'failed' are eligible for
+    // cancellation (story 3.3d AC #4, R1-F22). 'failed' is intentionally
     // still cancellable (it remains a resumable state, so the user must be able
     // to discard it), and a 'running' run stays cancellable — that is
     // cooperative cancellation, which the executor honors via its between-layer
@@ -1095,7 +1097,7 @@ export async function cancelWorkflowRun(id: string): Promise<{ cancelled: boolea
     result = await pool.query(
       `UPDATE remote_agent_workflow_runs
        SET status = 'cancelled', completed_at = ${dialect.now()}
-       WHERE id = $1 AND status NOT IN ('completed', 'cancelled')`,
+       WHERE id = $1 AND status IN ('running', 'paused', 'failed')`,
       [id]
     );
   } catch (error) {
