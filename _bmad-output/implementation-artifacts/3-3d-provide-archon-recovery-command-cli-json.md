@@ -1,6 +1,6 @@
 # Story 3.3d: Provide Archon Recovery Command CLI JSON
 
-Status: review
+Status: in-progress
 
 <!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
 
@@ -96,6 +96,14 @@ so that external controllers can route recovery actions consistently without rel
 - [x] [Review][Patch] R1-F7: Whole-run retry accepts cancelled runs even though the spawned worker uses the resume path, which cannot resume cancelled runs. [packages/cli/src/commands/workflow.ts:3105]
 - [x] [Review][Patch] R1-F8: The required cancel CAS-race proof is skipped while the story marks that proof complete. [packages/cli/src/commands/workflow.test.ts:7719]
 - [x] [Review][Patch] R1-F9: The runtime retry "success" contract test can pass on an error envelope and can start a real detached worker. [packages/cli/src/commands/workflow-command-contract.test.ts:1016]
+- [ ] [Review][Patch] R1-F10: Malformed targeted retry `--node` inputs can bypass the JSON envelope or return the wrong error category. [packages/cli/src/cli.ts:935]
+- [ ] [Review][Patch] R1-F11: Whole-run retry still does not guarantee that the detached worker resumes the exact requested run. [packages/cli/src/commands/workflow.ts:3137]
+- [ ] [Review][Patch] R1-F12: Detached retry attaches the spawn `error` listener after the pid failure check. [packages/cli/src/commands/workflow.ts:3159]
+- [ ] [Review][Patch] R1-F13: Retry tests mock `Bun.spawn` while the implementation uses `node:child_process.spawn`. [packages/cli/src/commands/workflow.test.ts:7816]
+- [ ] [Review][Patch] R1-F14: Required real-subprocess success and worker-boundary proofs are still missing. [packages/cli/src/commands/workflow-json.e2e.test.ts:712]
+- [ ] [Review][Patch] R1-F15: Provider JSON recovery commands can still emit update-notice text on stderr in bundled binaries. [packages/cli/src/cli.ts:1450]
+- [ ] [Review][Patch] R1-F16: Extra positional arguments after recovery run IDs are ignored instead of rejected as malformed input. [packages/cli/src/cli.ts:941]
+- [ ] [Review][Patch] R1-F17: The TEA test design still expects whole-run retry of cancelled runs even though that behavior was rejected. [_bmad-output/test-artifacts/test-design/test-design-3-3d-provide-archon-recovery-command-cli-json.md:182]
 
 ## Dev Notes
 
