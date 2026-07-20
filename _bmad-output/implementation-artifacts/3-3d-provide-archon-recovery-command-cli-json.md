@@ -41,13 +41,14 @@ so that external controllers can route recovery actions consistently without rel
   - [ ] Preserve existing non-JSON resume behavior unchanged.
   - [ ] Add `--correlation-id` support to resume dispatch.
   - [ ] Add positive proof: paused run → validate-only success with `executed: false`; failed run → validate-only success.
-  - [ ] Add failing-path proof: completed run → `UNEXPECTED_STATE`; cancelled run → `UNEXPECTED_STATE`; running run → `UNEXPECTED_STATE`; missing run → `WORKFLOW_RUN_NOT_FOUND`.
+  - [ ] Add failing-path proof: completed run → `UNEXPECTED_STATE`; cancelled run → `UNEXPECTED_STATE`; running run → `UNEXPECTED_STATE`; missing run → `UNEXPECTED_STATE` (TD-007 recovery-command mapping).
   - [ ] Assert no side effects: status, timestamps, events, retry epoch, checkout, executor calls remain unchanged after resume JSON.
 
 - [ ] Slice 3: Implement `workflow retry <run-id> --json` whole-run dispatch (AC: #2, #5)
   - [ ] Add `workflowRetryCommand` handler (or extend existing function with a provider-command path) that: resolves run by ID/prefix, validates retryability, creates a detached worker process, returns immediately with the dispatch-only envelope.
   - [ ] The detached worker re-invokes `archon workflow resume <run-id>` (the existing inline resume path) in a child process, NOT `retry-node`. It reuses the persisted run codebase and working path (TD-N06: no caller-cwd matching).
-  - [ ] Build the detached spawn using `spawnDetachedWorkflowRun()` or an equivalent pattern: `spawn()` with `detached: true`, log to `~/.archon/logs/`, `child.unref()`, check `child.pid !== undefined` for spawn success.
+  - [ ] Build the detached spawn using the existing detached-process pattern: `spawn()` with `detached: true`, log to `~/.archon/logs/`, `child.unref()`, check `child.pid !== undefined` for spawn success.
+  - [ ] Do not call `spawnDetachedWorkflowRun()` unchanged if it preserves the parent `workflow retry` argv; the worker argv must be explicit `archon workflow resume <run-id>` to avoid recursive retry dispatch.
   - [ ] Return `buildSuccessEnvelope()` with `command: 'workflow.retry'`, `workflowRunRef`, `result: { operation: 'retry', scope: 'run', dispatched: true, detached: true }`.
   - [ ] On spawn failure: return `INTERNAL_ERROR` envelope, exit 70.
   - [ ] On run-not-found or non-retryable status: return `UNEXPECTED_STATE` envelope, exit 78.
@@ -57,6 +58,7 @@ so that external controllers can route recovery actions consistently without rel
 
 - [ ] Slice 4: Implement `workflow retry <run-id> --node <node-id> --json` targeted dispatch (AC: #3, #5)
   - [ ] Targeted retry dispatches a detached worker that runs `archon workflow retry-node <run-id> <node-id>` (the existing inline retry-node path).
+  - [ ] Do not call `spawnDetachedWorkflowRun()` unchanged if it preserves the parent `workflow retry --node` argv; the worker argv must be explicit `archon workflow retry-node <run-id> <node-id>` to avoid recursive retry dispatch.
   - [ ] The parent does NOT validate the node or perform preparation — those are worker responsibilities (TD-003).
   - [ ] Return `buildSuccessEnvelope()` with `command: 'workflow.retry'`, `workflowRunRef`, `result: { operation: 'retry', scope: 'node', nodeId: <requested-node-id>, dispatched: true, detached: true }`.
   - [ ] On spawn failure: `INTERNAL_ERROR`, exit 70.
@@ -72,7 +74,7 @@ so that external controllers can route recovery actions consistently without rel
   - [ ] Pre-check: run-not-found → `UNEXPECTED_STATE`; already `completed` or `cancelled` → `UNEXPECTED_STATE` (same pre-check as `abandonWorkflow`).
   - [ ] Do NOT wait for worker quiescence, container cleanup, or cooperative cancellation.
   - [ ] Do NOT report or serialize the operation as legacy `abandon`.
-  - [ ] Container reclaim: either inline best-effort (reuse `abandonWorkflow`'s M2 pattern) or skip (the reaper handles it). Decision: inline best-effort after CAS win, same as `abandonWorkflow`, to avoid orphaned containers.
+  - [ ] Container reclaim is not part of the provider cancel command; after the CAS result is reported, worker quiescence and container cleanup remain asynchronous and are owned by cooperative executor checks plus the existing cleanup reaper.
   - [ ] Add positive proof: paused run → cancel success with `terminal: true`; running run → cancel success; failed run → cancel success.
   - [ ] Add failing-path proof: completed run → `UNEXPECTED_STATE`; cancelled run → `UNEXPECTED_STATE`; CAS race loser → `UNEXPECTED_STATE`.
 
@@ -145,7 +147,7 @@ so that external controllers can route recovery actions consistently without rel
 | Resume JSON call | `--json` flag + `resume` subcommand | Validate run → emit envelope | Envelope on stdout, exit 0 or error exit | `classifyRunError` → error envelope | N/A — stateless |
 | Retry JSON call (whole-run) | `--json` flag + `retry` subcommand, no `--node` | Validate run → spawn worker → emit envelope | Dispatch envelope on stdout, exit 0 | Spawn failure → `INTERNAL_ERROR`; run-not-found → `UNEXPECTED_STATE` | Worker handles its own lifecycle |
 | Retry JSON call (targeted) | `--json` flag + `retry` subcommand + `--node` | Validate run → spawn worker → emit envelope | Dispatch envelope on stdout, exit 0 | Spawn failure → `INTERNAL_ERROR`; run-not-found → `UNEXPECTED_STATE` | Worker handles its own lifecycle |
-| Cancel JSON call | `--json` flag + `cancel` subcommand | Look up run → CAS cancel → emit envelope | Cancel envelope on stdout, exit 0 | CAS loss → `UNEXPECTED_STATE`; run-not-found → `UNEXPECTED_STATE` | Container reclaim best-effort |
+| Cancel JSON call | `--json` flag + `cancel` subcommand | Look up run → CAS cancel → emit envelope | Cancel envelope on stdout, exit 0 | CAS loss → `UNEXPECTED_STATE`; run-not-found → `UNEXPECTED_STATE` | Cleanup remains asynchronous; reaper handles container reclaim |
 | Detached retry worker (whole-run) | Spawned by parent after dispatch ack | Claim run → resume → execute | Terminal run status | Claim loss (another worker won) → fail gracefully, log | Status/events expose outcome |
 | Detached retry worker (targeted) | Spawned by parent after dispatch ack | Claim run → prepare retry → execute | Terminal run status or pause | Node validation fail, claim loss → fail gracefully, log | Status/events expose outcome |
 
