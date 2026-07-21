@@ -292,31 +292,37 @@ nodes:
 
   - id: persist-story-readiness-report
     depends_on: [validate-story-readiness]
-    script: |
-      import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-      import { dirname, join } from "node:path";
+    bash: |
+      set -euo pipefail
 
-      const report = $validate-story-readiness.output;
-      const reportPath = join(process.env.ARTIFACTS_DIR, "story-readiness", "latest.json");
-      const previousReport = existsSync(reportPath)
-        ? JSON.parse(readFileSync(reportPath, "utf8"))
-        : null;
-      const fingerprint = candidate => [...new Set((candidate?.findings ?? []).map(finding => finding.fingerprint).filter(Boolean))]
-        .sort()
-        .join("|");
-      mkdirSync(dirname(reportPath), { recursive: true });
-      writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
-      const currentFingerprint = fingerprint(report);
-      if (
-        report.gate === "FAIL" &&
-        previousReport?.gate === "FAIL" &&
-        currentFingerprint &&
-        currentFingerprint === fingerprint(previousReport)
-      ) {
-        throw new Error(`Story readiness findings repeated after repair: ${currentFingerprint}`);
-      }
-      console.log(report.gate);
-    runtime: bun
+      REPORT_JSON=$validate-story-readiness.output
+      REPORT_JSON="$REPORT_JSON" bun -e '
+        import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+        import { dirname, join } from "node:path";
+
+        const reportJson = process.env.REPORT_JSON;
+        if (!reportJson) throw new Error("REPORT_JSON is required");
+        const report = JSON.parse(reportJson);
+        const reportPath = join(process.env.ARTIFACTS_DIR, "story-readiness", "latest.json");
+        const previousReport = existsSync(reportPath)
+          ? JSON.parse(readFileSync(reportPath, "utf8"))
+          : null;
+        const fingerprint = candidate => [...new Set((candidate?.findings ?? []).map(finding => finding.fingerprint).filter(Boolean))]
+          .sort()
+          .join("|");
+        mkdirSync(dirname(reportPath), { recursive: true });
+        writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+        const currentFingerprint = fingerprint(report);
+        if (
+          report.gate === "FAIL" &&
+          previousReport?.gate === "FAIL" &&
+          currentFingerprint &&
+          currentFingerprint === fingerprint(previousReport)
+        ) {
+          throw new Error(`Story readiness findings repeated after repair: ${currentFingerprint}`);
+        }
+        console.log(report.gate);
+      '
     timeout: 60000
     output_type: story-readiness-report
 
