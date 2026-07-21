@@ -2,8 +2,6 @@
 
 Status: draft
 
-<!-- A story may become ready-for-dev only after solution-readiness and proof-readiness validation pass. -->
-
 ## Story
 
 As a {{role}},
@@ -12,112 +10,85 @@ so that {{benefit}}.
 
 ## Acceptance Criteria
 
-1. [Add acceptance criteria from epics/PRD]
+1. [AC-1] [Observable behavior and boundary]
+
+## Story Contract
+
+### Authority and Source Precedence
+
+| Source | Claim | Disposition | Effect on this story |
+| --- | --- | --- | --- |
+| [Source: path#section] | [Normative claim] | ADOPT | [Concrete requirement] |
+
+### Risk Profile
+
+- stateful: not-applicable — [specific reason]
+- async-process: not-applicable — [specific reason]
+- cli-api: not-applicable — [specific reason]
+- cross-package: not-applicable — [specific reason]
+- compatibility: not-applicable — [specific reason]
+- security: not-applicable — [specific reason]
+
+### Decision and Invariant Ledger
+
+This table is the normative implementation authority for this story.
+
+| ID | Source | Acceptance IDs | Required behavior | Owner or boundary | Task IDs | Surface IDs | Proof IDs | Disposition |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| INV-1 | [Source: path#section] | AC-1 | [Required and prohibited behavior] | [Owning module/process/store] | TASK-1 | SURF-1 | PROOF-1 | IMPLEMENT |
+
+### Changed Surface Contract
+
+| Surface ID | Classification | Module or contract | Current behavior | Required or preserved behavior | Consumers | Owner |
+| --- | --- | --- | --- | --- | --- | --- |
+| SURF-1 | CHANGE | [path or public contract] | [Current evidence] | [Required behavior] | [Callers/consumers] | [Owner] |
+
+### Stateful and Persistence Contract
+
+N/A — risk profile marks `stateful` not-applicable because [same concrete reason].
+
+### Async and Process Contract
+
+N/A — risk profile marks `async-process` not-applicable because [same concrete reason].
+
+### CLI and API Contract
+
+N/A — risk profile marks `cli-api` not-applicable because [same concrete reason].
+
+### Cross-Package and Generated Contract
+
+N/A — risk profile marks `cross-package` not-applicable because [same concrete reason].
+
+### Compatibility Contract
+
+N/A — risk profile marks `compatibility` not-applicable because [same concrete reason].
+
+### Security Contract
+
+N/A — risk profile marks `security` not-applicable because [same concrete reason].
 
 ## Tasks / Subtasks
 
-- [ ] Slice 1: [behavior or invariant slice] (AC: #)
-  - [ ] Implement the complete behavior across all owned surfaces.
-  - [ ] Add positive and failing-path proof for the owned invariant.
-- [ ] Slice 2: [behavior or invariant slice] (AC: #)
-  - [ ] Preserve existing behavior on adjacent surfaces.
-  - [ ] Wire the required proof into the mandated command.
+- [ ] [TASK-1] Close INV-1 across its owned surfaces (AC: AC-1; Invariants: INV-1; Surfaces: SURF-1; Proof: PROOF-1)
+  - [ ] Implement the required behavior at the owning boundary.
+  - [ ] Preserve or regenerate every classified adjacent surface.
+  - [ ] Add the mapped positive, negative, and boundary proof.
 
-## Dev Notes
+## Proof Plan
 
-### Feature and System Context
-
-- Outcome:
-- Architectural role:
-- Upstream authorities:
-- Downstream consumers:
-- User-visible or system-visible behavior:
-
-### Canonical Artifact Reconciliation
-
-| Source | Relevant claim | Current code or prior-story decision | Resolution |
-| --- | --- | --- | --- |
-| [Source: path#section] |  |  |  |
-
-### Solution Surface Map
-
-| Surface | Owner or authority | Current state | Required change | Consumers | Proof |
-| --- | --- | --- | --- | --- | --- |
-|  |  |  |  |  |  |
-
-### Invariant and Ownership Map
-
-| Invariant | Source of truth | Enforcement owner | Created or transformed at | Persisted or transmitted at | Consumed by | Proof |
+| Proof ID | Covers | Observable | Owning boundary | Command or test | Positive assertion | Negative or boundary assertion |
 | --- | --- | --- | --- | --- | --- | --- |
-|  |  |  |  |  |  |  |
+| PROOF-1 | AC-1, INV-1 | [return-value/protocol-envelope/durable-state/dispatch-ack/worker-claim/terminal-outcome/consumer-contract/no-side-effect] | [Owner] | [Exact focused command/test] | [Concrete assertion] | [Concrete failing or boundary assertion] |
 
-### Lifecycle and State Analysis
+## Explicit Deferrals
 
-| State or phase | Entry condition | Valid transition | Exit condition | Failure or interruption behavior | Recovery or cleanup behavior |
-| --- | --- | --- | --- | --- | --- |
-|  |  |  |  |  |  |
-
-### Failure, Concurrency, Security, and Compatibility Analysis
-
-- Typed failures:
-- Concurrency and race conditions:
-- Transaction, atomicity, and partial-write boundaries:
-- Security and trust boundaries:
-- Compatibility and migration boundaries:
-- Diagnostics and evidence preservation:
-
-### Solution Design and Decision Record
-
-- Selected approach:
-- Why this approach preserves simplicity, robustness, scalability, and long-term maintainability:
-- Rejected alternative:
-- Rejection reason:
-
-### Implementation Slices
-
-| Slice | Owned behavior or invariant | Files or modules | Positive proof | Failing-path proof | Integration impact |
-| --- | --- | --- | --- | --- | --- |
-|  |  |  |  |  |  |
-
-### Executable Proof Design
-
-| Acceptance Criterion | Proof command or test | Positive assertion | Failing-path assertion | Required state or side effect | Prohibited side effect | Evidence |
-| --- | --- | --- | --- | --- | --- | --- |
-| AC #1 |  |  |  |  |  |  |
-
-### Explicit Boundary and Deferral Record
-
-| Excluded behavior or deferred concern | Owner or future story | Reason | Current invariant remains complete because |
-| --- | --- | --- | --- |
-| None | N/A - no exclusion | N/A - no deferral |  |
-
-### Project Structure Notes
-
-- Alignment with unified project structure (paths, modules, naming)
-- Detected conflicts or variances (with rationale)
-
-### References
-
-- Cite all technical details with source paths and sections, e.g. [Source: docs/<file>.md#Section]
-
-## Failure Analysis & Proof Readiness
-
-### Failure Mode Risk Scan
-
-- F1 Contract invariants not enforced: N/A - reason.
-- F2 Split source of truth: N/A - reason.
-- F3 Fail-open ingress validation: N/A - reason.
-- F4 Incomplete drift/coverage gates: N/A - reason.
-- F5 Mandated commands not running real gates: N/A - reason.
-- F6 Bypassable dependency-direction checks: N/A - reason.
-- F7 Cleanup without preserved-behavior regression tests: N/A - reason.
-- F8 Review findings recorded without ownership triage: N/A - reason.
-
-### AC Proof Matrix
-
-| Acceptance Criterion | Proof Command/Test | Failing-Path Evidence | Ownership Boundary | Deferral Decision |
+| Deferred item | Owner | Reason | Residual risk | Follow-up trigger |
 | --- | --- | --- | --- | --- |
-| AC #1 |  |  |  |  |
+| None | N/A | No deferral | None | N/A |
+
+## References
+
+- [Source: path#section]
 
 ## Dev Agent Record
 

@@ -50,6 +50,7 @@ import {
   resumeWorkflowRun,
   pauseWorkflowRun,
   cancelWorkflowRun,
+  cancelRecoveryWorkflowRun,
   failOrphanedRuns,
   listWorkflowRuns,
   deleteOldWorkflowRuns,
@@ -1174,6 +1175,36 @@ describe('workflows database', () => {
 
       await expect(cancelWorkflowRun('workflow-run-123')).rejects.toThrow(
         'Failed to cancel workflow run: Lock timeout'
+      );
+    });
+  });
+
+  describe('cancelRecoveryWorkflowRun', () => {
+    test('atomically cancels only provider-recovery eligible states', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+
+      const result = await cancelRecoveryWorkflowRun('workflow-run-123');
+
+      expect(result).toEqual({ cancelled: true });
+      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(query).toContain("status = 'cancelled'");
+      expect(query).toContain("status IN ('running', 'paused', 'failed')");
+      expect(params).toEqual(['workflow-run-123']);
+    });
+
+    test('reports { cancelled: false } when no eligible state matches (CAS lost)', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
+
+      await expect(cancelRecoveryWorkflowRun('workflow-run-123')).resolves.toEqual({
+        cancelled: false,
+      });
+    });
+
+    test('throws on database error', async () => {
+      mockQuery.mockRejectedValueOnce(new Error('Lock timeout'));
+
+      await expect(cancelRecoveryWorkflowRun('workflow-run-123')).rejects.toThrow(
+        'Failed to cancel recoverable workflow run: Lock timeout'
       );
     });
   });

@@ -21,7 +21,7 @@ import {
 import type { ExecutionContext, ContainerBackend, ContainerBackendConfig } from '@archon/isolation';
 import { createLogger, getArchonHome, BUNDLED_IS_BINARY } from '@archon/paths';
 import { join, sep } from 'node:path';
-import { mkdirSync, openSync, closeSync } from 'node:fs';
+import { mkdirSync, openSync, closeSync, existsSync, statSync } from 'node:fs';
 import { realpath } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
@@ -40,6 +40,7 @@ import type {
   WorkflowWithSource,
 } from '@archon/workflows/schemas/workflow';
 import {
+  RESUMABLE_WORKFLOW_STATUSES,
   RETRYABLE_WORKFLOW_STATUSES,
   TERMINAL_WORKFLOW_STATUSES,
   workflowRunStatusSchema,
@@ -111,6 +112,7 @@ export interface WorkflowRunOptions {
    */
   container?: boolean;
   resume?: boolean;
+  resumeRunId?: string;
   codebaseId?: string; // Skips path-based codebase lookup when resume/approve/reject already resolved it
   /**
    * Override the directory used for workflow YAML discovery.
@@ -257,6 +259,85 @@ interface ClassifiedError {
   category: ErrorCategory;
   retryable: boolean;
   exitCode: number;
+}
+
+type RecoveryParentErrorCause =
+  | 'malformed_request'
+  | 'unexpected_state'
+  | 'command_timeout'
+  | 'internal_error';
+
+class RecoveryParentError extends Error {
+  constructor(
+    readonly cause: RecoveryParentErrorCause,
+    message: string,
+    readonly details: Record<string, unknown>
+  ) {
+    super(message);
+    this.name = 'RecoveryParentError';
+  }
+}
+
+interface ClassifiedRecoveryError extends ClassifiedError {
+  details: Record<string, unknown>;
+}
+
+function classifyRecoveryParentError(err: unknown): ClassifiedRecoveryError {
+  if (err instanceof RecoveryParentError) {
+    switch (err.cause) {
+      case 'malformed_request':
+        return {
+          code: 'MALFORMED_REQUEST',
+          category: 'provider_contract',
+          retryable: false,
+          exitCode: EXIT_USAGE,
+          details: err.details,
+        };
+      case 'unexpected_state':
+        return {
+          code: 'UNEXPECTED_STATE',
+          category: 'unexpected_state',
+          retryable: false,
+          exitCode: EXIT_RUNTIME,
+          details: err.details,
+        };
+      case 'command_timeout':
+        return {
+          code: 'COMMAND_TIMEOUT',
+          category: 'timeout',
+          retryable: true,
+          exitCode: EXIT_TIMEOUT,
+          details: err.details,
+        };
+      case 'internal_error':
+        return {
+          code: 'INTERNAL_ERROR',
+          category: 'implementation_defect',
+          retryable: false,
+          exitCode: EXIT_SOFTWARE,
+          details: err.details,
+        };
+    }
+  }
+
+  const errCode = (err as { code?: string })?.code;
+  if (errCode === 'ETIMEDOUT') {
+    return {
+      code: 'COMMAND_TIMEOUT',
+      category: 'timeout',
+      retryable: true,
+      exitCode: EXIT_TIMEOUT,
+      details: { reason: 'internal_timeout' },
+    };
+  }
+
+  return {
+    code: 'INTERNAL_ERROR',
+    category: 'implementation_defect',
+    retryable: false,
+    exitCode: EXIT_SOFTWARE,
+    details: { reason: 'unexpected_failure' },
+  };
 }
 
 export function classifyRunError(err: unknown): ClassifiedError {
@@ -1289,10 +1370,16 @@ async function workflowRunCommandInner(
       );
     }
 
-    resumable = await workflowDb.findResumableRun(workflowName, cwd);
+    resumable = options.resumeRunId
+      ? await workflowDb.getWorkflowRun(options.resumeRunId)
+      : await workflowDb.findResumableRun(workflowName, cwd);
 
     if (!resumable) {
-      throw new Error(`No resumable run found for workflow '${workflowName}' at path '${cwd}'.`);
+      throw new Error(
+        options.resumeRunId
+          ? `No resumable run found with id '${options.resumeRunId}'.`
+          : `No resumable run found for workflow '${workflowName}' at path '${cwd}'.`
+      );
     }
 
     getLog().info(
@@ -2873,8 +2960,10 @@ async function resolveRunIdArg(runId: string, cwd?: string): Promise<string> {
   if (!codebase) return runId;
   const matches = await workflowDb.findWorkflowRunsByIdPrefix(runId, codebase.id);
   if (matches.length > 1) {
-    throw new Error(
-      `Run id '${runId}' matches more than one run in this project — use more characters or the full id (from 'archon workflow runs --json').`
+    throw new RecoveryParentError(
+      'malformed_request',
+      `Run id '${runId}' matches more than one run in this project — use more characters or the full id (from 'archon workflow runs --json').`,
+      { reason: 'ambiguous_run_id' }
     );
   }
   return matches[0]?.id ?? runId;
@@ -2924,7 +3013,8 @@ async function resolveDiscoveryCwdForCodebase(
 export async function workflowResumeCommand(
   runId: string,
   json?: boolean,
-  cwd?: string
+  cwd?: string,
+  correlationId?: string
 ): Promise<void> {
   // JSON mode is a non-blocking control-plane ack: validate the run is resumable
   // and report its state, but do NOT re-execute the workflow inline (execution
@@ -2932,26 +3022,111 @@ export async function workflowResumeCommand(
   // To actually execute a resumable run, use the blocking `resume` (no --json,
   // run as a background task) or `run <name> --resume --detach`.
   if (json) {
+    const startTime = Date.now();
+    const meta: EnvelopeMeta = {
+      provider: 'archon',
+      command: 'workflow.resume',
+      correlationId: resolveCorrelationId(correlationId),
+      issuedAt: resolveIssuedAt(),
+    };
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
-      const run = await resumeWorkflowOp(resolvedId);
+      const run = await workflowDb.getWorkflowRun(resolvedId);
+      if (!run) {
+        throw new RecoveryParentError(
+          'unexpected_state',
+          `Cannot resume run with status 'unknown'. Run '${resolvedId}' does not exist.`,
+          { reason: 'run_not_found' }
+        );
+      }
+      if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) {
+        throw new RecoveryParentError(
+          'unexpected_state',
+          `Cannot resume run with status '${run.status}'. Only failed or paused runs can be resumed.`,
+          { reason: 'run_not_resumable', state: run.status }
+        );
+      }
+      if (!run.working_path) {
+        throw new RecoveryParentError(
+          'unexpected_state',
+          `Cannot resume run with status '${run.status}'. No working path recorded — run cannot be resumed.`,
+          { reason: 'working_path_missing', state: run.status }
+        );
+      }
+      if (!existsSync(run.working_path) || !statSync(run.working_path).isDirectory()) {
+        throw new RecoveryParentError(
+          'unexpected_state',
+          `Cannot resume run with status '${run.status}'. Working path no longer exists — run context is unusable.`,
+          { reason: 'working_path_unusable', state: run.status }
+        );
+      }
+      let isFolderProject = false;
+      if (run.codebase_id) {
+        const codebase = await codebaseDb.getCodebase(run.codebase_id);
+        if (!codebase) {
+          throw new RecoveryParentError(
+            'unexpected_state',
+            `Cannot resume run with status '${run.status}'. Associated codebase no longer registered — run context is unusable.`,
+            { reason: 'codebase_not_registered', state: run.status }
+          );
+        }
+        isFolderProject = codebase.kind === 'folder';
+      }
+      if (!isFolderProject) {
+        try {
+          await git.execFileAsync('git', ['rev-parse', '--git-dir'], { cwd: run.working_path });
+        } catch (error) {
+          const gitErrorCode = (error as { code?: string })?.code;
+          if (
+            gitErrorCode === 'ENOENT' ||
+            gitErrorCode === 'EACCES' ||
+            gitErrorCode === 'ETIMEDOUT'
+          ) {
+            throw error;
+          }
+          throw new RecoveryParentError(
+            'unexpected_state',
+            `Cannot resume run with status '${run.status}'. Working path is not a valid git repository — run context is unusable.`,
+            { reason: 'working_path_not_git_repository', state: run.status }
+          );
+        }
+      }
+      const contractState = mapWorkflowRunToContractState(run);
       console.log(
-        JSON.stringify(
-          {
-            ok: true,
-            runId: resolvedId,
-            action: 'resume',
-            executed: false,
-            status: run.status,
-            workflowName: run.workflow_name,
-            workingPath: run.working_path,
-          },
-          null,
-          2
+        safeStringify(
+          buildSuccessEnvelope(
+            meta,
+            { workflowRunRef: buildWorkflowRunRef(run) },
+            {
+              operation: 'resume',
+              state: contractState.state,
+              validated: true,
+              resumable: true,
+              executed: false,
+            }
+          )
         )
       );
+      process.exitCode = EXIT_SUCCESS;
     } catch (error) {
-      printJsonWriteError(runId, 'resume', error);
+      const classified = classifyRecoveryParentError(error);
+      getLog().error({ err: error as Error, runId, classified }, 'cli.workflow_resume_json_failed');
+      console.log(
+        safeStringify(
+          buildErrorEnvelope(
+            meta,
+            {
+              code: classified.code,
+              category: classified.category,
+              retryable: classified.retryable,
+              details: { requestAccepted: false, ...classified.details },
+              exitCode: classified.exitCode,
+            },
+            startTime
+          )
+        )
+      );
+      process.exitCode = classified.exitCode;
     }
     return;
   }
@@ -2976,11 +3151,12 @@ export async function workflowResumeCommand(
     : undefined;
 
   // Re-execute via workflowRunCommand with --resume: it locates the prior failed
-  // run via findResumableRun and skips already-completed nodes (the executor
+  // run by ID (resumeRunId) and skips already-completed nodes (the executor
   // itself no longer auto-detects resumable runs).
   try {
     await workflowRunCommand(run.working_path, run.workflow_name, run.user_message ?? '', {
       resume: true,
+      resumeRunId: resolvedId,
       codebaseId: run.codebase_id ?? undefined,
       discoveryCwd,
     });
@@ -3038,6 +3214,272 @@ export async function workflowAbandonCommand(
   const run = await abandonWorkflow(resolvedId);
   console.log(`Abandoned workflow run: ${resolvedId}`);
   console.log(`Workflow: ${run.workflow_name}`);
+}
+
+/**
+ * Retry a workflow run by dispatching a detached worker process.
+ *
+ * JSON-only (TD-009). The parent validates syntax and exact-worker spawn
+ * prerequisites, then returns a dispatch-only envelope. The worker later owns
+ * eligibility, claim, preparation, and execution.
+ *
+ * Without `nodeId`: whole-run retry — worker runs `workflow resume <runId>`.
+ * With `nodeId`: targeted retry — worker runs `workflow retry-node <runId> <nodeId>`.
+ */
+export async function workflowRetryCommand(
+  runId: string,
+  nodeId: string | undefined,
+  _json?: boolean,
+  cwd?: string,
+  correlationId?: string
+): Promise<void> {
+  const startTime = Date.now();
+  const meta: EnvelopeMeta = {
+    provider: 'archon',
+    command: 'workflow.retry',
+    correlationId: resolveCorrelationId(correlationId),
+    issuedAt: resolveIssuedAt(),
+  };
+
+  try {
+    const resolvedId = await resolveRunIdArg(runId, cwd);
+    const run = await workflowDb.getWorkflowRun(resolvedId);
+    if (!run) {
+      throw new RecoveryParentError(
+        'unexpected_state',
+        `Cannot retry workflow run '${resolvedId}': run not found.`,
+        { reason: 'run_not_found' }
+      );
+    }
+    if (nodeId?.trim() === '') {
+      throw new RecoveryParentError(
+        'malformed_request',
+        'node ID is required and must not be blank when --node is specified.',
+        { reason: 'node_id_blank' }
+      );
+    }
+
+    if (!run.working_path) {
+      throw new RecoveryParentError(
+        'unexpected_state',
+        `Cannot retry workflow run '${resolvedId}': no working path recorded.`,
+        { reason: 'working_path_missing' }
+      );
+    }
+    if (!existsSync(run.working_path) || !statSync(run.working_path).isDirectory()) {
+      throw new RecoveryParentError(
+        'unexpected_state',
+        `Cannot retry workflow run '${resolvedId}': working path no longer exists — run context is unusable.`,
+        { reason: 'working_path_unusable' }
+      );
+    }
+    let isFolderProject = false;
+    if (run.codebase_id) {
+      const codebase = await codebaseDb.getCodebase(run.codebase_id);
+      if (!codebase) {
+        throw new RecoveryParentError(
+          'unexpected_state',
+          `Cannot retry workflow run '${resolvedId}': associated codebase no longer registered — run context is unusable.`,
+          { reason: 'codebase_not_registered' }
+        );
+      }
+      isFolderProject = codebase.kind === 'folder';
+    }
+    if (!isFolderProject) {
+      try {
+        await git.execFileAsync('git', ['rev-parse', '--git-dir'], { cwd: run.working_path });
+      } catch (error) {
+        const gitErrorCode = (error as { code?: string })?.code;
+        if (
+          gitErrorCode === 'ENOENT' ||
+          gitErrorCode === 'EACCES' ||
+          gitErrorCode === 'ETIMEDOUT'
+        ) {
+          throw error;
+        }
+        throw new RecoveryParentError(
+          'unexpected_state',
+          `Cannot retry workflow run '${resolvedId}': working path is not a valid git repository — run context is unusable.`,
+          { reason: 'working_path_not_git_repository' }
+        );
+      }
+    }
+    const workingPath = run.working_path;
+
+    const workerArgs = nodeId
+      ? ['workflow', 'retry-node', run.id, nodeId]
+      : ['workflow', 'resume', run.id];
+
+    const baseCmd = BUNDLED_IS_BINARY ? [process.execPath] : [process.execPath, process.argv[1]];
+    const cmd = [...baseCmd, ...workerArgs, '--cwd', workingPath];
+
+    let logFd: number | undefined;
+    try {
+      const logDir = join(getArchonHome(), 'logs');
+      mkdirSync(logDir, { recursive: true });
+      const logPath = join(logDir, `detached-retry-${run.id}-${Date.now()}.log`);
+      try {
+        logFd = openSync(logPath, 'a');
+      } catch {
+        logFd = undefined;
+      }
+    } catch {
+      logFd = undefined;
+    }
+
+    try {
+      const child = spawn(cmd[0], cmd.slice(1), {
+        cwd: workingPath,
+        env: process.env,
+        detached: true,
+        windowsHide: true,
+        stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'],
+      });
+      child.on('error', () => {
+        /* spawn errors surface via the error event; parent already acked dispatch */
+      });
+      if (child.pid === undefined) {
+        throw new RecoveryParentError(
+          'internal_error',
+          `Failed to start detached retry worker (executable: ${cmd[0]})`,
+          { reason: 'worker_spawn_failed' }
+        );
+      }
+      child.unref();
+    } finally {
+      if (logFd !== undefined) {
+        try {
+          closeSync(logFd);
+        } catch {
+          /* fd already closed/invalid */
+        }
+      }
+    }
+
+    const result: Record<string, unknown> = {
+      operation: 'retry',
+      scope: nodeId ? 'node' : 'run',
+      dispatched: true,
+      detached: true,
+    };
+    if (nodeId) {
+      result.nodeId = nodeId;
+    }
+
+    console.log(
+      safeStringify(
+        buildSuccessEnvelope(meta, { workflowRunRef: buildWorkflowRunRef(run) }, result)
+      )
+    );
+    process.exitCode = EXIT_SUCCESS;
+  } catch (error) {
+    const classified = classifyRecoveryParentError(error);
+    getLog().error(
+      { err: error as Error, runId, nodeId, classified },
+      'cli.workflow_retry_json_failed'
+    );
+    console.log(
+      safeStringify(
+        buildErrorEnvelope(
+          meta,
+          {
+            code: classified.code,
+            category: classified.category,
+            retryable: classified.retryable,
+            details: { requestAccepted: false, ...classified.details },
+            exitCode: classified.exitCode,
+          },
+          startTime
+        )
+      )
+    );
+    process.exitCode = classified.exitCode;
+  }
+}
+
+/**
+ * Cancel a workflow run via durable CAS transition.
+ *
+ * JSON-only (TD-009). Uses the provider-specific recovery CAS directly
+ * (NOT `abandonWorkflow`) to report based on the CAS boolean without leaking
+ * pre-transition state or changing legacy cancellation semantics (TD-004/TD-N05).
+ * Container reclaim is asynchronous and not part of this command.
+ */
+export async function workflowCancelCommand(
+  runId: string,
+  _json?: boolean,
+  cwd?: string,
+  correlationId?: string
+): Promise<void> {
+  const startTime = Date.now();
+  const meta: EnvelopeMeta = {
+    provider: 'archon',
+    command: 'workflow.cancel',
+    correlationId: resolveCorrelationId(correlationId),
+    issuedAt: resolveIssuedAt(),
+  };
+
+  try {
+    const resolvedId = await resolveRunIdArg(runId, cwd);
+    const run = await workflowDb.getWorkflowRun(resolvedId);
+    if (!run) {
+      throw new RecoveryParentError(
+        'unexpected_state',
+        `Cannot cancel run with status 'unknown'. Run '${resolvedId}' does not exist.`,
+        { reason: 'run_not_found' }
+      );
+    }
+    if (run.status !== 'running' && run.status !== 'paused' && run.status !== 'failed') {
+      throw new RecoveryParentError(
+        'unexpected_state',
+        `Cannot cancel run with status '${run.status}'. Only running, paused, or failed runs can be cancelled.`,
+        { reason: 'run_not_cancellable', state: run.status }
+      );
+    }
+
+    const { cancelled } = await workflowDb.cancelRecoveryWorkflowRun(resolvedId);
+    if (!cancelled) {
+      throw new RecoveryParentError(
+        'unexpected_state',
+        `Cancel CAS lost for run '${resolvedId}'. Another transition already completed the run.`,
+        { reason: 'cancel_cas_lost' }
+      );
+    }
+
+    console.log(
+      safeStringify(
+        buildSuccessEnvelope(
+          meta,
+          { workflowRunRef: buildWorkflowRunRef(run) },
+          {
+            operation: 'cancel',
+            state: 'cancelled',
+            terminal: true,
+          }
+        )
+      )
+    );
+    process.exitCode = EXIT_SUCCESS;
+  } catch (error) {
+    const classified = classifyRecoveryParentError(error);
+    getLog().error({ err: error as Error, runId, classified }, 'cli.workflow_cancel_json_failed');
+    console.log(
+      safeStringify(
+        buildErrorEnvelope(
+          meta,
+          {
+            code: classified.code,
+            category: classified.category,
+            retryable: classified.retryable,
+            details: { requestAccepted: false, ...classified.details },
+            exitCode: classified.exitCode,
+          },
+          startTime
+        )
+      )
+    );
+    process.exitCode = classified.exitCode;
+  }
 }
 
 /**

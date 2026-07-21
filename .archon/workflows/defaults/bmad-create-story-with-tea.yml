@@ -23,6 +23,7 @@ nodes:
 
       for required in \
         ".agents/skills/bmad-create-story/SKILL.md" \
+        ".agents/skills/bmad-create-story/scripts/validate_story_readiness.py" \
         ".agents/skills/bmad-testarch-test-design/SKILL.md" \
         ".agents/skills/bmad-testarch-atdd/SKILL.md" \
         "_bmad/bmm/config.yaml" \
@@ -41,8 +42,14 @@ nodes:
 
   - id: create-story
     prompt: |
-      $bmad-create-story create detail story for $ARGUMENTS, you need read all references documents, 
-      understand comrehensive, spawn sub-agents for help
+      Act as the story author. Keep validation independent.
+
+      Inspect `$ARTIFACTS_DIR/story-readiness/latest.json` first.
+      - If it does not exist, run `$bmad-create-story create $ARGUMENTS`.
+      - If it exists with `gate: FAIL`, run `$bmad-create-story repair <report.story_file> $ARTIFACTS_DIR/story-readiness/latest.json`.
+      - If it exists with `gate: BLOCKED`, stop with the blocker; do not invent a decision, scope, or owner.
+
+      Read every source required by the skill. Return the skill's structured result.
     provider: codex
     depends_on: [validate-story-name-input]
     context: fresh
@@ -53,6 +60,9 @@ nodes:
       properties:
         story_name:
           type: string
+        status:
+          type: string
+          enum: [draft, repaired, blocked]
         story_key:
           type: string
         story_file:
@@ -61,22 +71,150 @@ nodes:
           type: string
         validation_summary:
           type: string
+        risk_profile:
+          type: array
+          items:
+            type: string
       required:
+        - status
         - story_name
         - story_key
         - story_file
         - sprint_status
         - validation_summary
+        - risk_profile
     output_type: create-story
+
+  - id: record-story-readiness-state
+    depends_on: [create-story]
+    script: |
+      import { createHash } from "node:crypto";
+      import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+      import { dirname, join } from "node:path";
+
+      const storyFile = $create-story.output.story_file;
+      const authorStatus = $create-story.output.status;
+      if (authorStatus === "blocked") {
+        throw new Error("BMAD create-story is blocked by unresolved authority, scope, or ownership; inspect the create-story node output");
+      }
+      if (!existsSync(storyFile)) throw new Error("Created story file is missing");
+
+      const statePath = join(process.env.ARTIFACTS_DIR, "story-readiness", "state.json");
+      const state = existsSync(statePath)
+        ? JSON.parse(readFileSync(statePath, "utf8"))
+        : { lastStoryHash: "" };
+      const storyHash = createHash("sha256").update(readFileSync(storyFile)).digest("hex");
+      if (authorStatus === "repaired" && state.lastStoryHash === storyHash) {
+        throw new Error("Story repair produced no content diff; stopping readiness loop");
+      }
+      state.lastStoryHash = storyHash;
+      mkdirSync(dirname(statePath), { recursive: true });
+      writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
+      console.log(JSON.stringify({ storyFile, authorStatus, storyHash }));
+    runtime: bun
+    timeout: 60000
+    output_type: story-readiness-state
 
   - id: validate-story-readiness
     prompt: |
       $bmad-create-story validate $create-story.output.story_file
+
+      This is an independent fresh-context gate.
+      Write the exact returned object to `$ARTIFACTS_DIR/story-readiness/latest.json`.
+      Return PASS only with zero findings and full deterministic coverage.
     provider: codex
-    depends_on: [create-story]
+    depends_on: [record-story-readiness-state]
     context: fresh
     model: gpt-5.5
+    output_format: &story_readiness_gate_schema
+      type: object
+      properties:
+        gate:
+          type: string
+          enum: [PASS, FAIL, BLOCKED]
+        story_file:
+          type: string
+        findings_count:
+          type: number
+        findings:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              fingerprint:
+                type: string
+              severity:
+                type: string
+                enum: [critical, high, medium, low]
+              invariant:
+                type: string
+              surface:
+                type: string
+              problem:
+                type: string
+              evidence:
+                type: array
+                items:
+                  type: string
+              required_fix:
+                type: string
+              authority:
+                type: string
+              repairable:
+                type: boolean
+            required: [id, fingerprint, severity, invariant, surface, problem, evidence, required_fix, authority, repairable]
+        decision_coverage:
+          type: string
+        ac_coverage:
+          type: string
+        invariant_coverage:
+          type: string
+        summary:
+          type: string
+      required: [gate, story_file, findings_count, findings, decision_coverage, ac_coverage, invariant_coverage, summary]
     output_type: story-readiness-gate
+
+  - id: persist-story-readiness-report
+    depends_on: [validate-story-readiness]
+    script: |
+      import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+      import { dirname, join } from "node:path";
+
+      const report = $validate-story-readiness.output;
+      const reportPath = join(process.env.ARTIFACTS_DIR, "story-readiness", "latest.json");
+      const previousReport = existsSync(reportPath)
+        ? JSON.parse(readFileSync(reportPath, "utf8"))
+        : null;
+      const fingerprint = candidate => [...new Set((candidate?.findings ?? []).map(finding => finding.fingerprint).filter(Boolean))]
+        .sort()
+        .join("|");
+      mkdirSync(dirname(reportPath), { recursive: true });
+      writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+      const currentFingerprint = fingerprint(report);
+      if (
+        report.gate === "FAIL" &&
+        previousReport?.gate === "FAIL" &&
+        currentFingerprint &&
+        currentFingerprint === fingerprint(previousReport)
+      ) {
+        throw new Error(`Story readiness findings repeated after repair: ${currentFingerprint}`);
+      }
+      console.log(report.gate);
+    runtime: bun
+    timeout: 60000
+    output_type: story-readiness-report
+
+  - id: story-readiness-gate
+    depends_on: [persist-story-readiness-report]
+    route_loop:
+      condition: "$persist-story-readiness-report.output == 'PASS'"
+      max_iterations: 3
+      routes:
+        positive: design-risk-based-tests
+        negative: create-story
+        exhausted: story-readiness-error
 
   - id: design-risk-based-tests
     prompt: |
@@ -105,10 +243,25 @@ nodes:
       Do not stop at happy paths.
       Do not mark coverage complete if P0/P1 edge cases are only implied.
     provider: codex
-    depends_on: [validate-story-readiness]
+    depends_on: [story-readiness-gate]
     context: fresh
     model: gpt-5.5
     output_type: risk-based-test-design
+
+  - id: story-readiness-error
+    depends_on: [story-readiness-gate]
+    bash: |
+      set -euo pipefail
+
+      REPORT="$ARTIFACTS_DIR/story-readiness/latest.json"
+      echo "BMAD story readiness did not pass within the repair budget."
+      echo "Report: $REPORT"
+      if [ -f "$REPORT" ]; then
+        cat "$REPORT"
+      fi
+      exit 1
+    timeout: 60000
+    output_type: story-readiness-error
 
   - id: generate-red-acceptance-tests
     prompt: |

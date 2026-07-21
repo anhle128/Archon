@@ -1,5 +1,5 @@
 # generated: 2026-07-13 11:55:39 +0700
-# last_updated: 2026-07-19
+# last_updated: 2026-07-20
 # project: Archon
 # project_key: NOKEY
 # tracking_system: file-system
@@ -41,7 +41,7 @@
 # - Retrospective appends its action items to action_items; sprint-status surfaces open ones
 
 generated: "2026-07-13 11:55:39 +0700"
-last_updated: "2026-07-19"
+last_updated: "2026-07-20"
 project: Archon
 project_key: NOKEY
 tracking_system: file-system
@@ -53,7 +53,7 @@ development_status:
   3-3a-define-shared-workflow-provider-command-envelope: done
   3-3b-provide-archon-start-and-status-cli-json: done
   3-3c-provide-archon-provider-decision-command-cli-json: done
-  3-3d-provide-archon-recovery-command-cli-json: backlog
+  3-3d-provide-archon-recovery-command-cli-json: done
   3-5-produce-signed-typed-archon-workflow-events-from-outbox: backlog
   3-7-expose-archon-workflow-event-delivery-health: backlog
   epic-3-retrospective: optional
@@ -74,4 +74,32 @@ action_items:
   - epic: 3
     action: "Escalate unresolved contract or policy decisions before implementation instead of coding around missing schema fields, ambiguous fixture deltas, undefined lifecycle transitions, or unsupported runtime behavior."
     owner: "Winston (System Architect)"
+    status: open
+  - epic: 3
+    action: "[SPG-01][SPG-03] Reconcile Story 3.3d technical decisions with its implementation tasks, proofs, and owning packages before another code-review gate."
+    owner: "Winston (System Architect) and Amelia (Developer)"
+    status: done
+  - epic: 3
+    action: "[SPG-05][SPG-06] Make the Story 3.3d recovery E2E fixture initialize its own database schema and pass focused cases independently."
+    owner: "Murat (Test Architect)"
+    status: done
+  - epic: 3
+    action: "[SPG-02][SPG-04] Close Story 3.3d review findings by invariant cluster with positive, negative, boundary, and runtime-observable proof."
+    owner: "Amelia (Developer)"
+    status: done
+  - epic: 3
+    action: "[SPG-03][SPG-07][SPG-08] Decide whether the core, server, and generated-web cancel compatibility changes belong to Story 3.3d; amend scope or revert and defer them."
+    owner: "Winston (System Architect)"
+    status: done
+  - epic: 3
+    action: "[SPG-07] Assign every remaining review candidate exactly one Patch, Defer, or Dismiss outcome with rationale and ownership."
+    owner: "Amelia (Developer and review facilitator)"
+    status: done
+  - epic: 3
+    action: "[SPG-04][SPG-06] Prove resume no-mutation and retry exact-run or exact-node worker claim and outcome before Story 3.3d is marked done."
+    owner: "Murat (Test Architect) and Amelia (Developer)"
+    status: done
+  - epic: 3
+    action: "[SPG-01-SPG-08] Apply Story Proof Guardrails to Stories 3.5 and 3.7 before either story moves into implementation."
+    owner: "Winston (System Architect), Amelia (Developer), and Murat (Test Architect)"
     status: open

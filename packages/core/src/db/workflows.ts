@@ -1114,6 +1114,31 @@ export async function cancelWorkflowRun(id: string): Promise<{ cancelled: boolea
 }
 
 /**
+ * Atomically cancel a run eligible for the provider recovery command.
+ *
+ * This narrow CAS is intentionally separate from `cancelWorkflowRun`, whose
+ * broader semantics are shared by legacy human, chat, and HTTP surfaces.
+ * Story 3.3d owns only the provider CLI transition for running, paused, or
+ * failed runs and must not change those legacy callers as a side effect.
+ */
+export async function cancelRecoveryWorkflowRun(id: string): Promise<{ cancelled: boolean }> {
+  let result: Awaited<ReturnType<typeof pool.query>>;
+  try {
+    result = await pool.query(
+      `UPDATE remote_agent_workflow_runs
+       SET status = 'cancelled', completed_at = ${getDialect().now()}
+       WHERE id = $1 AND status IN ('running', 'paused', 'failed')`,
+      [id]
+    );
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err }, 'db.workflow_run_recovery_cancel_failed');
+    throw new Error(`Failed to cancel recoverable workflow run: ${err.message}`);
+  }
+  return { cancelled: (result.rowCount ?? 0) > 0 };
+}
+
+/**
  * Pause a running workflow run for human approval.
  * Sets status to 'paused' and stores approval context in metadata.
  * Does NOT set completed_at — the run is not finished.

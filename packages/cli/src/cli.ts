@@ -44,7 +44,9 @@ import {
   workflowGetCommand,
   workflowRunsCommand,
   workflowResumeCommand,
+  workflowRetryCommand,
   workflowRetryNodeCommand,
+  workflowCancelCommand,
   workflowAbandonCommand,
   workflowApproveCommand,
   workflowRejectCommand,
@@ -115,7 +117,13 @@ function getLog(): ReturnType<typeof createLogger> {
 
 type WorkflowCommandEnvelopeCommand = Extract<
   WorkflowProviderCommand,
-  'workflow.start' | 'workflow.status' | 'workflow.approve' | 'workflow.reject'
+  | 'workflow.start'
+  | 'workflow.status'
+  | 'workflow.approve'
+  | 'workflow.reject'
+  | 'workflow.resume'
+  | 'workflow.retry'
+  | 'workflow.cancel'
 >;
 
 function getWorkflowCommandEnvelopeCommand(
@@ -127,6 +135,9 @@ function getWorkflowCommandEnvelopeCommand(
   if (subcommand === 'get') return 'workflow.status';
   if (subcommand === 'approve') return 'workflow.approve';
   if (subcommand === 'reject') return 'workflow.reject';
+  if (subcommand === 'resume') return 'workflow.resume';
+  if (subcommand === 'retry') return 'workflow.retry';
+  if (subcommand === 'cancel') return 'workflow.cancel';
   return undefined;
 }
 
@@ -176,6 +187,22 @@ function scanRawWorkflowProviderOptions(args: string[]): RawWorkflowProviderOpti
   return result;
 }
 
+function findUnsupportedFlag(args: string[], allowedFlags: Set<string>): string | undefined {
+  const end = args.indexOf('--');
+  const scanArgs = end === -1 ? args : args.slice(0, end);
+  for (const arg of scanArgs) {
+    if (!arg.startsWith('-')) continue;
+    const name = arg.startsWith('--') ? arg.split('=')[0] : arg;
+    if (!allowedFlags.has(name)) return name;
+  }
+  return undefined;
+}
+
+const RECOVERY_BASE_FLAGS = new Set(['--json', '--correlation-id', '--cwd', '--help', '-h']);
+const RESUME_ALLOWED_FLAGS = RECOVERY_BASE_FLAGS;
+const RETRY_ALLOWED_FLAGS = new Set([...RECOVERY_BASE_FLAGS, '--node']);
+const CANCEL_ALLOWED_FLAGS = RECOVERY_BASE_FLAGS;
+
 function isBlankString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length === 0;
 }
@@ -208,6 +235,36 @@ async function emitWorkflowCommandMalformedEnvelope(
     )
   );
   return 64;
+}
+
+async function emitWorkflowCommandInternalErrorEnvelope(
+  command: WorkflowCommandEnvelopeCommand,
+  details: Record<string, unknown>,
+  correlationId?: string
+): Promise<number> {
+  const { safeStringify, resolveCorrelationId, resolveIssuedAt, buildErrorEnvelope } =
+    await import('./commands/workflow-provider-command-envelope.js');
+  console.log(
+    safeStringify(
+      buildErrorEnvelope(
+        {
+          command,
+          provider: 'archon',
+          correlationId: resolveCorrelationId(correlationId),
+          issuedAt: resolveIssuedAt(),
+        },
+        {
+          code: 'INTERNAL_ERROR',
+          category: 'implementation_defect',
+          retryable: false,
+          details,
+          exitCode: 70,
+        },
+        Date.now()
+      )
+    )
+  );
+  return 70;
 }
 
 /**
@@ -559,6 +616,16 @@ async function main(): Promise<number> {
           parsedCorrelationId as string | undefined
         );
       }
+      if (rawWorkflowProviderOptions.jsonRequested && jsonFlag === undefined && !invalidJsonFlag) {
+        return await emitWorkflowCommandMalformedEnvelope(
+          envelopeCommand,
+          {
+            fieldErrors: [{ path: '/json', code: 'consumed_as_option_value' }],
+            requestAccepted: false,
+          },
+          parsedCorrelationId as string | undefined
+        );
+      }
     }
 
     // Note: orphaned run cleanup moved to `workflow cleanup` command only.
@@ -598,7 +665,24 @@ async function main(): Promise<number> {
       }
 
       // Validate git repository and resolve to root
-      const repoRoot = await git.findRepoRoot(cwd);
+      let repoRoot: string | null;
+      try {
+        repoRoot = await git.findRepoRoot(cwd);
+      } catch (gitError) {
+        // Unexpected git failure (binary missing, permission error) — not "not a repo".
+        const envelopeCommand = getWorkflowCommandEnvelopeCommand(command, subcommand);
+        if (jsonFlag && envelopeCommand !== undefined) {
+          return await emitWorkflowCommandInternalErrorEnvelope(
+            envelopeCommand,
+            {
+              fieldErrors: [{ path: '/cwd', code: 'git_preflight_failed' }],
+              requestAccepted: false,
+            },
+            values['correlation-id'] as string | undefined
+          );
+        }
+        throw gitError;
+      }
       if (repoRoot) {
         // Use repo root as working directory (handles subdirectory case)
         effectiveCwd = repoRoot;
@@ -647,7 +731,17 @@ async function main(): Promise<number> {
           // let it through so the run command registers the folder project.
           effectiveCwd = realCwd;
         } else if (gateLookupError && looksLikeConnectionError(gateLookupError)) {
-          // A DB outage would otherwise be mis-reported as "not a git repository".
+          // A DB outage is an infrastructure failure, not a malformed request.
+          if (jsonFlag && envelopeCommand !== undefined) {
+            return await emitWorkflowCommandInternalErrorEnvelope(
+              envelopeCommand,
+              {
+                fieldErrors: [{ path: '/cwd', code: 'database_unavailable' }],
+                requestAccepted: false,
+              },
+              values['correlation-id'] as string | undefined
+            );
+          }
           console.error(
             'Error: Could not verify project registration — the database is unavailable.'
           );
@@ -657,7 +751,6 @@ async function main(): Promise<number> {
           );
           return 1;
         } else {
-          const envelopeCommand = getWorkflowCommandEnvelopeCommand(command, subcommand);
           if (jsonFlag && envelopeCommand !== undefined) {
             return await emitWorkflowCommandMalformedEnvelope(
               envelopeCommand,
@@ -881,10 +974,54 @@ async function main(): Promise<number> {
           case 'resume': {
             const resumeRunId = positionals[2];
             if (!resumeRunId) {
+              if (jsonFlag && envelopeCommand) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    missingArgument: 'run-id',
+                    usage: 'archon workflow resume <run-id> [--json]',
+                  },
+                  rawWorkflowProviderOptions.correlationIdValue
+                );
+              }
               console.error('Usage: archon workflow resume <run-id>');
               return 1;
             }
-            await workflowResumeCommand(resumeRunId, jsonFlag, effectiveCwd);
+            if (positionals[3] !== undefined) {
+              if (jsonFlag && envelopeCommand) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    parseError: 'Unexpected extra argument after run-id',
+                    requestAccepted: false,
+                  },
+                  rawWorkflowProviderOptions.correlationIdValue
+                );
+              }
+              console.error(
+                'Error: unexpected extra argument after run-id. Usage: archon workflow resume <run-id> [--json]'
+              );
+              return 1;
+            }
+            if (jsonFlag && envelopeCommand) {
+              const unsupported = findUnsupportedFlag(args, RESUME_ALLOWED_FLAGS);
+              if (unsupported) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    parseError: `Unsupported flag for resume --json: '${unsupported}'`,
+                    requestAccepted: false,
+                  },
+                  rawWorkflowProviderOptions.correlationIdValue
+                );
+              }
+            }
+            await workflowResumeCommand(
+              resumeRunId,
+              jsonFlag,
+              effectiveCwd,
+              values['correlation-id'] as string | undefined
+            );
             break;
           }
 
@@ -902,6 +1039,148 @@ async function main(): Promise<number> {
               return 1;
             }
             await workflowRetryNodeCommand(retryRunId, retryNodeId, jsonFlag);
+            break;
+          }
+
+          case 'retry': {
+            if (!jsonFlag) {
+              console.error(
+                'Error: `workflow retry` requires --json. For interactive retry, use `workflow retry-node <run-id> <node-id>`.'
+              );
+              return 1;
+            }
+            const retryRunId = positionals[2];
+            if (!retryRunId) {
+              if (envelopeCommand) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    missingArgument: 'run-id',
+                    usage: 'archon workflow retry <run-id> [--node <node-id>] --json',
+                  },
+                  rawWorkflowProviderOptions.correlationIdValue
+                );
+              }
+              console.error('Usage: archon workflow retry <run-id> [--node <node-id>] --json');
+              return 1;
+            }
+            if (positionals[3] !== undefined) {
+              if (envelopeCommand) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    parseError: 'Unexpected extra argument after run-id',
+                    requestAccepted: false,
+                  },
+                  rawWorkflowProviderOptions.correlationIdValue
+                );
+              }
+              console.error(
+                'Error: unexpected extra argument after run-id. Usage: archon workflow retry <run-id> [--node <node-id>] --json'
+              );
+              return 1;
+            }
+            const rawNodeId = values.node;
+            if (
+              rawNodeId !== undefined &&
+              (typeof rawNodeId !== 'string' ||
+                rawNodeId.trim() === '' ||
+                rawNodeId.startsWith('-'))
+            ) {
+              if (envelopeCommand) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    fieldErrors: [{ path: '/node', code: 'must_be_non_blank_string' }],
+                    requestAccepted: false,
+                  },
+                  rawWorkflowProviderOptions.correlationIdValue
+                );
+              }
+              console.error('Error: --node value must be a non-blank string');
+              return 1;
+            }
+            const nodeId = typeof rawNodeId === 'string' ? rawNodeId : undefined;
+            {
+              const unsupported = findUnsupportedFlag(args, RETRY_ALLOWED_FLAGS);
+              if (unsupported && envelopeCommand) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    parseError: `Unsupported flag for retry --json: '${unsupported}'`,
+                    requestAccepted: false,
+                  },
+                  rawWorkflowProviderOptions.correlationIdValue
+                );
+              }
+            }
+            await workflowRetryCommand(
+              retryRunId,
+              nodeId,
+              jsonFlag,
+              effectiveCwd,
+              values['correlation-id'] as string | undefined
+            );
+            break;
+          }
+
+          case 'cancel': {
+            if (!jsonFlag) {
+              console.error(
+                'Error: `workflow cancel` requires --json. Use `workflow abandon <run-id>` to cancel a run interactively.'
+              );
+              return 1;
+            }
+            const cancelRunId = positionals[2];
+            if (!cancelRunId) {
+              if (envelopeCommand) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    missingArgument: 'run-id',
+                    usage: 'archon workflow cancel <run-id> --json',
+                  },
+                  rawWorkflowProviderOptions.correlationIdValue
+                );
+              }
+              console.error('Usage: archon workflow cancel <run-id> --json');
+              return 1;
+            }
+            if (positionals[3] !== undefined) {
+              if (envelopeCommand) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    parseError: 'Unexpected extra argument after run-id',
+                    requestAccepted: false,
+                  },
+                  rawWorkflowProviderOptions.correlationIdValue
+                );
+              }
+              console.error(
+                'Error: unexpected extra argument after run-id. Usage: archon workflow cancel <run-id> --json'
+              );
+              return 1;
+            }
+            {
+              const unsupported = findUnsupportedFlag(args, CANCEL_ALLOWED_FLAGS);
+              if (unsupported && envelopeCommand) {
+                return await emitWorkflowCommandMalformedEnvelope(
+                  envelopeCommand,
+                  {
+                    parseError: `Unsupported flag for cancel --json: '${unsupported}'`,
+                    requestAccepted: false,
+                  },
+                  rawWorkflowProviderOptions.correlationIdValue
+                );
+              }
+            }
+            await workflowCancelCommand(
+              cancelRunId,
+              jsonFlag,
+              effectiveCwd,
+              values['correlation-id'] as string | undefined
+            );
             break;
           }
 
@@ -1081,7 +1360,7 @@ async function main(): Promise<number> {
               console.error(`Unknown workflow subcommand: ${subcommand}`);
             }
             console.error(
-              'Available: list, run, status, get, runs, resume, abandon, approve, reject, cleanup, event, search, install'
+              'Available: list, run, status, get, runs, resume, retry, retry-node, cancel, abandon, approve, reject, cleanup, event, search, install'
             );
             return 1;
         }
@@ -1357,8 +1636,10 @@ async function main(): Promise<number> {
         printUsage();
         return 1;
     }
-    await printUpdateNotice(values.quiet as boolean | undefined);
-    return 0;
+    if (!workflowProviderJsonRequested) {
+      await printUpdateNotice(values.quiet as boolean | undefined);
+    }
+    return typeof process.exitCode === 'number' ? process.exitCode : 0;
   } catch (error) {
     const err = error as Error;
     console.error(`Error: ${err.message}`);

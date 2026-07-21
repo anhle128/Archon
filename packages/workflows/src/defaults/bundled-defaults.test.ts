@@ -157,6 +157,29 @@ describe('bundled-defaults', () => {
       expect(content).toContain('command: archon-create-pr');
     });
 
+    it('BMAD create-story workflows should gate downstream work on independent readiness validation', () => {
+      const workflowNames = [
+        'bmad-create-story-with-tea',
+        'bmad-create-and-dev-story',
+        'bmad-create-and-dev-story-with-tea',
+      ] as const;
+
+      for (const workflowName of workflowNames) {
+        const content = BUNDLED_WORKFLOWS[workflowName];
+        expect(content).toContain('validate_story_readiness.py');
+        expect(content).toContain('$bmad-create-story repair');
+        expect(content).toContain('enum: [draft, repaired, blocked]');
+        expect(content).toContain('id: persist-story-readiness-report');
+        expect(content).toContain('id: story-readiness-gate');
+        expect(content).toContain(
+          'condition: "$persist-story-readiness-report.output == \'PASS\'"'
+        );
+        expect(content).toContain('negative: create-story');
+        expect(content).toContain('id: story-readiness-error');
+        expect(content).toContain('Story readiness findings repeated after repair');
+      }
+    });
+
     it('bmad readiness correction commands should not wait for interactive BMAD gates', () => {
       const readiness = BUNDLED_COMMANDS['bmad-check-implementation-readiness'];
       const correctCourse = BUNDLED_COMMANDS['bmad-correct-course'];
