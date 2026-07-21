@@ -11,7 +11,6 @@ import { mockAllWorkflowModules } from '../test/workflow-mock-factories';
 
 const mockGetWorkflowRun = mock(async (_id: string) => null as null | MockWorkflowRun);
 const mockCancelWorkflowRun = mock(async (_id: string) => ({ cancelled: true }));
-const mockCancelPendingWorkflowRun = mock(async (_id: string) => ({ cancelled: true }));
 const mockListWorkflowRuns = mock(async () => [] as MockWorkflowRun[]);
 const mockListDashboardRuns = mock(async () => ({
   runs: [] as MockWorkflowRun[],
@@ -193,7 +192,6 @@ mock.module('@archon/core/db/workflows', () => ({
   listDashboardRuns: mockListDashboardRuns,
   getWorkflowRun: mockGetWorkflowRun,
   cancelWorkflowRun: mockCancelWorkflowRun,
-  cancelPendingWorkflowRun: mockCancelPendingWorkflowRun,
   deleteWorkflowRun: mockDeleteWorkflowRun,
   updateWorkflowRun: mockUpdateWorkflowRun,
   resolveApprovalGate: mockResolveApprovalGate,
@@ -515,7 +513,6 @@ describe('POST /api/workflows/runs/:runId/cancel', () => {
   beforeEach(() => {
     mockGetWorkflowRun.mockReset();
     mockCancelWorkflowRun.mockReset();
-    mockCancelPendingWorkflowRun.mockReset();
   });
 
   test('cancels a running workflow run and returns success', async () => {
@@ -536,7 +533,7 @@ describe('POST /api/workflows/runs/:runId/cancel', () => {
 
   test('cancels a pending workflow run and returns success', async () => {
     mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_PENDING_RUN);
-    mockCancelPendingWorkflowRun.mockImplementationOnce(async () => ({ cancelled: true }));
+    mockCancelWorkflowRun.mockImplementationOnce(async () => ({ cancelled: true }));
 
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/run-uuid-3/cancel', {
@@ -546,11 +543,9 @@ describe('POST /api/workflows/runs/:runId/cancel', () => {
 
     const body = (await response.json()) as { success: boolean };
     expect(body.success).toBe(true);
-    expect(mockCancelPendingWorkflowRun).toHaveBeenCalledWith('run-uuid-3');
-    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
 
-  test('returns 409 when the run finished in the cancel TOCTOU window', async () => {
+  test('reports "nothing to cancel" when the run finished in the cancel TOCTOU window', async () => {
     // Run passes the status pre-check (running), but cancelWorkflowRun no-ops
     // because the run reached a terminal state first — the route must not claim
     // a false "Cancelled" (#1830 I1).
@@ -561,9 +556,10 @@ describe('POST /api/workflows/runs/:runId/cancel', () => {
     const response = await app.request('/api/workflows/runs/run-uuid-1/cancel', {
       method: 'POST',
     });
-    expect(response.status).toBe(409);
-    const body = (await response.json()) as { error: string };
-    expect(body.error).toContain('nothing to cancel');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { success: boolean; message: string };
+    expect(body.success).toBe(true);
+    expect(body.message).toContain('nothing to cancel');
   });
 
   test('returns 404 when run not found', async () => {
@@ -608,21 +604,17 @@ describe('POST /api/workflows/runs/:runId/cancel', () => {
     expect(body.error).toContain('cancelled');
   });
 
-  test('cancels a failed run and returns success', async () => {
+  test('returns 400 when trying to cancel a failed run', async () => {
     mockGetWorkflowRun.mockImplementationOnce(async () => ({
       ...MOCK_RUNNING_RUN,
       status: 'failed' as const,
     }));
-    mockCancelWorkflowRun.mockImplementationOnce(async () => ({ cancelled: true }));
 
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/run-uuid-1/cancel', {
       method: 'POST',
     });
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as { success: boolean };
-    expect(body.success).toBe(true);
-    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-uuid-1');
+    expect(response.status).toBe(400);
   });
 
   test('returns 500 when DB throws during cancel', async () => {
@@ -1727,7 +1719,6 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
   beforeEach(() => {
     mockGetWorkflowRun.mockReset();
     mockCancelWorkflowRun.mockReset();
-    mockCancelPendingWorkflowRun.mockReset();
   });
 
   test('returns 404 when run not found', async () => {
@@ -1769,7 +1760,6 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
 
   test('returns 200 and calls cancelWorkflowRun for running run', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(MOCK_RUNNING_RUN);
-    mockCancelWorkflowRun.mockImplementationOnce(async () => ({ cancelled: true }));
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/run-uuid-1/abandon', {
       method: 'POST',
@@ -1785,7 +1775,6 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
   // abandonable — the HTTP route previously rejected it, contradicting CLI/chat.
   test('returns 200 and calls cancelWorkflowRun for failed run', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(MOCK_FAILED_RUN);
-    mockCancelWorkflowRun.mockImplementationOnce(async () => ({ cancelled: true }));
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/run-uuid-4/abandon', {
       method: 'POST',
@@ -1795,17 +1784,6 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
     expect(body.success).toBe(true);
     expect(body.message).toContain('Abandoned');
     expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-uuid-4');
-  });
-
-  // R1-F36: CAS loss returns 409 instead of misleading success
-  test('returns 409 when CAS is lost (run already transitioned)', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce(MOCK_RUNNING_RUN);
-    mockCancelWorkflowRun.mockImplementationOnce(async () => ({ cancelled: false }));
-    const { app } = makeApp();
-    const response = await app.request('/api/workflows/runs/run-uuid-1/abandon', {
-      method: 'POST',
-    });
-    expect(response.status).toBe(409);
   });
 });
 

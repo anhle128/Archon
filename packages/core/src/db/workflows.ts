@@ -1087,9 +1087,7 @@ export async function cancelWorkflowRun(id: string): Promise<{ cancelled: boolea
   try {
     // Guard against re-stamping an already-finished run. Cancelling a run that
     // is 'completed' or 'cancelled' must be a no-op, not a re-write of
-    // completed_at / a resurrection of terminal state. 'pending' is also
-    // excluded — only 'running', 'paused', and 'failed' are eligible for
-    // cancellation (story 3.3d AC #4, R1-F22). 'failed' is intentionally
+    // completed_at / a resurrection of terminal state. 'failed' is intentionally
     // still cancellable (it remains a resumable state, so the user must be able
     // to discard it), and a 'running' run stays cancellable — that is
     // cooperative cancellation, which the executor honors via its between-layer
@@ -1097,7 +1095,7 @@ export async function cancelWorkflowRun(id: string): Promise<{ cancelled: boolea
     result = await pool.query(
       `UPDATE remote_agent_workflow_runs
        SET status = 'cancelled', completed_at = ${dialect.now()}
-       WHERE id = $1 AND status IN ('running', 'paused', 'failed')`,
+       WHERE id = $1 AND status NOT IN ('completed', 'cancelled')`,
       [id]
     );
   } catch (error) {
@@ -1116,27 +1114,26 @@ export async function cancelWorkflowRun(id: string): Promise<{ cancelled: boolea
 }
 
 /**
- * Atomically transition a pending run to cancelled (story 3.3d R1-F28).
+ * Atomically cancel a run eligible for the provider recovery command.
  *
- * `cancelWorkflowRun` excludes 'pending' from its CAS allowlist (running/paused/failed).
- * Legacy `abandonWorkflow` falls back to this function for pending runs so the
- * transition is guarded — if the run has already left 'pending' (e.g., started
- * executing between the read and the update), the CAS loses safely instead of
- * overwriting the new status.
+ * This narrow CAS is intentionally separate from `cancelWorkflowRun`, whose
+ * broader semantics are shared by legacy human, chat, and HTTP surfaces.
+ * Story 3.3d owns only the provider CLI transition for running, paused, or
+ * failed runs and must not change those legacy callers as a side effect.
  */
-export async function cancelPendingWorkflowRun(id: string): Promise<{ cancelled: boolean }> {
+export async function cancelRecoveryWorkflowRun(id: string): Promise<{ cancelled: boolean }> {
   let result: Awaited<ReturnType<typeof pool.query>>;
   try {
     result = await pool.query(
       `UPDATE remote_agent_workflow_runs
        SET status = 'cancelled', completed_at = ${getDialect().now()}
-       WHERE id = $1 AND status = 'pending'`,
+       WHERE id = $1 AND status IN ('running', 'paused', 'failed')`,
       [id]
     );
   } catch (error) {
     const err = error as Error;
-    getLog().error({ err }, 'db.workflow_run_cancel_pending_failed');
-    throw new Error(`Failed to cancel pending workflow run: ${err.message}`);
+    getLog().error({ err }, 'db.workflow_run_recovery_cancel_failed');
+    throw new Error(`Failed to cancel recoverable workflow run: ${err.message}`);
   }
   return { cancelled: (result.rowCount ?? 0) > 0 };
 }

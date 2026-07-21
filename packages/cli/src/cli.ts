@@ -237,6 +237,36 @@ async function emitWorkflowCommandMalformedEnvelope(
   return 64;
 }
 
+async function emitWorkflowCommandInternalErrorEnvelope(
+  command: WorkflowCommandEnvelopeCommand,
+  details: Record<string, unknown>,
+  correlationId?: string
+): Promise<number> {
+  const { safeStringify, resolveCorrelationId, resolveIssuedAt, buildErrorEnvelope } =
+    await import('./commands/workflow-provider-command-envelope.js');
+  console.log(
+    safeStringify(
+      buildErrorEnvelope(
+        {
+          command,
+          provider: 'archon',
+          correlationId: resolveCorrelationId(correlationId),
+          issuedAt: resolveIssuedAt(),
+        },
+        {
+          code: 'INTERNAL_ERROR',
+          category: 'implementation_defect',
+          retryable: false,
+          details,
+          exitCode: 70,
+        },
+        Date.now()
+      )
+    )
+  );
+  return 70;
+}
+
 /**
  * Print usage information
  */
@@ -635,7 +665,24 @@ async function main(): Promise<number> {
       }
 
       // Validate git repository and resolve to root
-      const repoRoot = await git.findRepoRoot(cwd);
+      let repoRoot: string | null;
+      try {
+        repoRoot = await git.findRepoRoot(cwd);
+      } catch (gitError) {
+        // Unexpected git failure (binary missing, permission error) — not "not a repo".
+        const envelopeCommand = getWorkflowCommandEnvelopeCommand(command, subcommand);
+        if (jsonFlag && envelopeCommand !== undefined) {
+          return await emitWorkflowCommandInternalErrorEnvelope(
+            envelopeCommand,
+            {
+              fieldErrors: [{ path: '/cwd', code: 'git_preflight_failed' }],
+              requestAccepted: false,
+            },
+            values['correlation-id'] as string | undefined
+          );
+        }
+        throw gitError;
+      }
       if (repoRoot) {
         // Use repo root as working directory (handles subdirectory case)
         effectiveCwd = repoRoot;
@@ -684,9 +731,9 @@ async function main(): Promise<number> {
           // let it through so the run command registers the folder project.
           effectiveCwd = realCwd;
         } else if (gateLookupError && looksLikeConnectionError(gateLookupError)) {
-          // A DB outage would otherwise be mis-reported as "not a git repository".
+          // A DB outage is an infrastructure failure, not a malformed request.
           if (jsonFlag && envelopeCommand !== undefined) {
-            return await emitWorkflowCommandMalformedEnvelope(
+            return await emitWorkflowCommandInternalErrorEnvelope(
               envelopeCommand,
               {
                 fieldErrors: [{ path: '/cwd', code: 'database_unavailable' }],
@@ -1038,7 +1085,7 @@ async function main(): Promise<number> {
               rawNodeId !== undefined &&
               (typeof rawNodeId !== 'string' ||
                 rawNodeId.trim() === '' ||
-                rawNodeId.startsWith('--'))
+                rawNodeId.startsWith('-'))
             ) {
               if (envelopeCommand) {
                 return await emitWorkflowCommandMalformedEnvelope(

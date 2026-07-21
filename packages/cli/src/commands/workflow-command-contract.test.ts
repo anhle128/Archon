@@ -53,6 +53,7 @@ const actualFs = await import('node:fs');
 mock.module('node:fs', () => ({
   ...actualFs,
   existsSync: mock(() => true),
+  statSync: mock(() => ({ isDirectory: () => true })),
 }));
 
 mock.module('@archon/isolation', () => ({
@@ -141,6 +142,7 @@ mock.module('@archon/core/db/workflows', () => ({
   getActiveWorkflowRun: mock(() => Promise.resolve(null)),
   failWorkflowRun: mock(() => Promise.resolve()),
   cancelWorkflowRun: mock(() => Promise.resolve()),
+  cancelRecoveryWorkflowRun: mock(() => Promise.resolve({ cancelled: true })),
   findResumableRun: mock(() => Promise.resolve(null)),
   resumeWorkflowRun: mock(() => Promise.resolve(null)),
   getWorkflowRun: mock(() => Promise.resolve(null)),
@@ -874,7 +876,7 @@ describe('3.3D-CONTRACT-001 [P0] forbidden-key scan on recovery envelopes (AC #1
       codebase_id: null,
       metadata: {},
     });
-    (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+    (workflowDb.cancelRecoveryWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       cancelled: true,
     });
 
@@ -1080,7 +1082,7 @@ describe('3.3D-CONTRACT-006 [P0] runtime envelope JSON Schema validation via con
       codebase_id: null,
       metadata: {},
     });
-    (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+    (workflowDb.cancelRecoveryWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       cancelled: true,
     });
 

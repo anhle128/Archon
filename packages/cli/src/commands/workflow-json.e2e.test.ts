@@ -1,6 +1,15 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, readdirSync, existsSync } from 'node:fs';
+import {
+  mkdtempSync,
+  rmSync,
+  readdirSync,
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  statSync,
+  mkdirSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Database } from 'bun:sqlite';
@@ -26,16 +35,21 @@ const CLI_ENTRY = join(import.meta.dir, '..', 'cli.ts');
 
 let isolatedHome: string;
 let isolatedRepo: string;
+let isolatedRetryProofRepo: string;
 
-beforeAll(() => {
+beforeAll(async () => {
   isolatedHome = mkdtempSync(join(tmpdir(), 'archon-workflow-json-e2e-'));
   isolatedRepo = mkdtempSync(join(tmpdir(), 'archon-workflow-json-repo-'));
+  isolatedRetryProofRepo = mkdtempSync(join(tmpdir(), 'archon-retry-proof-repo-'));
   execFileSync('git', ['init', isolatedRepo], { stdio: 'ignore' });
+  execFileSync('git', ['init', isolatedRetryProofRepo], { stdio: 'ignore' });
+  await initializeIsolatedDatabase();
 });
 
 afterAll(() => {
   rmSync(isolatedHome, { recursive: true, force: true });
   rmSync(isolatedRepo, { recursive: true, force: true });
+  rmSync(isolatedRetryProofRepo, { recursive: true, force: true });
 });
 
 interface CliResult {
@@ -64,13 +78,36 @@ async function runCli(args: string[], cwd: string = isolatedRepo): Promise<CliRe
   return { stdout, stderr, exitCode };
 }
 
+async function initializeIsolatedDatabase(): Promise<void> {
+  // `workflow list` does not touch the database. Initialize the isolated SQLite
+  // schema explicitly so focused `-t` runs cannot depend on an earlier test
+  // happening to issue a DB-backed command first.
+  const initialized = await runCli(['workflow', 'runs', '--all', '--json']);
+  expect(initialized.exitCode).toBe(0);
+  expect(JSON.parse(initialized.stdout) as Record<string, unknown>).toHaveProperty('runs');
+
+  const db = new Database(join(isolatedHome, 'archon.db'), { readonly: true });
+  try {
+    const table = db
+      .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get('remote_agent_workflow_runs') as { name: string } | undefined;
+    expect(table?.name).toBe('remote_agent_workflow_runs');
+  } finally {
+    db.close();
+  }
+}
+
 function parseSoleJsonLine(stdout: string): Record<string, unknown> {
   const lines = stdout.trim().split('\n').filter(Boolean);
   expect(lines).toHaveLength(1);
   return JSON.parse(lines[0] as string) as Record<string, unknown>;
 }
 
-async function seedFailedRun(runId: string, workingPath: string): Promise<void> {
+async function seedFailedRun(
+  runId: string,
+  workingPath: string,
+  workflowName: string = 'test-workflow'
+): Promise<void> {
   await runCli(['workflow', 'list', '--json']);
   const dbPath = join(isolatedHome, 'archon.db');
   const db = new Database(dbPath);
@@ -82,8 +119,8 @@ async function seedFailedRun(runId: string, workingPath: string): Promise<void> 
     );
     db.run(
       `INSERT INTO remote_agent_workflow_runs (id, conversation_id, workflow_name, user_message, status, working_path, metadata)
-       VALUES (?, 'seed-conv-e2e', 'test-workflow', 'seed failed run', 'failed', ?, '{}')`,
-      [runId, workingPath]
+       VALUES (?, 'seed-conv-e2e', ?, 'seed failed run', 'failed', ?, '{}')`,
+      [runId, workflowName, workingPath]
     );
   } finally {
     db.close();
@@ -140,6 +177,54 @@ function queryEventCount(runId: string): number {
   }
 }
 
+function seedNodeEvent(
+  runId: string,
+  eventType: 'node_completed' | 'node_failed',
+  nodeId: string,
+  data: Record<string, unknown>
+): void {
+  const db = new Database(join(isolatedHome, 'archon.db'));
+  try {
+    db.run(
+      `INSERT INTO remote_agent_workflow_events (workflow_run_id, event_type, step_name, data)
+       VALUES (?, ?, ?, ?)`,
+      [runId, eventType, nodeId, JSON.stringify(data)]
+    );
+  } finally {
+    db.close();
+  }
+}
+
+function queryNodeEventCount(runId: string, eventType: string, nodeId: string): number {
+  const db = new Database(join(isolatedHome, 'archon.db'));
+  try {
+    const row = db
+      .query(
+        `SELECT COUNT(*) as cnt FROM remote_agent_workflow_events
+         WHERE workflow_run_id = ? AND event_type = ? AND step_name = ?`
+      )
+      .get(runId, eventType, nodeId) as { cnt: number } | undefined;
+    return row?.cnt ?? 0;
+  } finally {
+    db.close();
+  }
+}
+
+function installWorkflowFixture(
+  repoPath: string,
+  fileName: string,
+  yaml: string,
+  commitMessage: string
+): void {
+  const relativePath = `.archon/workflows/${fileName}`;
+  mkdirSync(join(repoPath, '.archon', 'workflows'), { recursive: true });
+  writeFileSync(join(repoPath, relativePath), yaml);
+  execFileSync('git', ['-C', repoPath, 'config', 'user.email', 'proof@example.invalid']);
+  execFileSync('git', ['-C', repoPath, 'config', 'user.name', 'Archon Proof']);
+  execFileSync('git', ['-C', repoPath, 'add', relativePath]);
+  execFileSync('git', ['-C', repoPath, 'commit', '-m', commitMessage], { stdio: 'ignore' });
+}
+
 function queryRunMetadata(runId: string): Record<string, unknown> | null {
   const dbPath = join(isolatedHome, 'archon.db');
   const db = new Database(dbPath);
@@ -148,6 +233,19 @@ function queryRunMetadata(runId: string): Record<string, unknown> | null {
       .query('SELECT metadata FROM remote_agent_workflow_runs WHERE id = ?')
       .get(runId) as { metadata: string } | undefined;
     return row?.metadata ? JSON.parse(row.metadata) : null;
+  } finally {
+    db.close();
+  }
+}
+
+function queryRunUpdatedAt(runId: string): string | null {
+  const dbPath = join(isolatedHome, 'archon.db');
+  const db = new Database(dbPath);
+  try {
+    const row = db
+      .query('SELECT last_activity_at FROM remote_agent_workflow_runs WHERE id = ?')
+      .get(runId) as { last_activity_at: string } | undefined;
+    return row?.last_activity_at ?? null;
   } finally {
     db.close();
   }
@@ -1265,17 +1363,37 @@ describe('workflow resume/retry/cancel --json CLI dispatch E2E — real subproce
     expect(stderr).toBe('');
   });
 
-  // 3.3D-CLI-024 [P0] R1-F14, R1-F34, R1-F42 — targeted-node retry success envelope + full contract validation + worker spawn evidence
-  test('3.3D-CLI-024: `workflow retry <failed-run> --node <id> --json` emits success envelope with scope=node matching retry-node-success.json contract and creates a detached worker log', async () => {
+  // 3.3D-CLI-024 [P0] TD-003 — parent acknowledges dispatch; exact-node worker owns validation
+  test('3.3D-CLI-024: targeted retry matches the JSON contract and records invalid-node validation as a later worker outcome', async () => {
     const runId = 'cccccccc-dddd-eeee-ffff-aaaaaaaaaaaa';
-    await seedFailedRun(runId, isolatedRepo);
+    installWorkflowFixture(
+      isolatedRepo,
+      'targeted-proof-workflow.yaml',
+      [
+        'name: targeted-proof-workflow',
+        'description: Deterministic targeted retry ownership proof',
+        'nodes:',
+        '  - id: already-complete',
+        '    bash: "echo \'prior-output\'"',
+        '  - id: real-target',
+        '    bash: "echo \'target-output\'"',
+        '    depends_on: [already-complete]',
+        '',
+      ].join('\n'),
+      'add targeted retry proof workflow'
+    );
+    await seedFailedRun(runId, isolatedRepo, 'targeted-proof-workflow');
+    seedNodeEvent(runId, 'node_completed', 'already-complete', {
+      type: 'bash',
+      node_output: 'prior-output',
+    });
 
     const { stdout, stderr, exitCode } = await runCli([
       'workflow',
       'retry',
       runId,
       '--node',
-      'implement-story',
+      'missing-target',
       '--json',
       '--correlation-id',
       'corr-cli-024-retry-node',
@@ -1297,12 +1415,12 @@ describe('workflow resume/retry/cancel --json CLI dispatch E2E — real subproce
     const wfRef = envelope.workflowRunRef as Record<string, unknown> | undefined;
     expect(wfRef?.provider).toBe('archon');
     expect(wfRef?.runId).toBe(runId);
-    expect(wfRef?.workflowName).toBe('test-workflow');
+    expect(wfRef?.workflowName).toBe('targeted-proof-workflow');
 
     const result = envelope.result as Record<string, unknown> | undefined;
     expect(result?.operation).toBe('retry');
     expect(result?.scope).toBe('node');
-    expect(result?.nodeId).toBe('implement-story');
+    expect(result?.nodeId).toBe('missing-target');
     expect(result?.dispatched).toBe(true);
     expect(result?.detached).toBe(true);
 
@@ -1314,11 +1432,28 @@ describe('workflow resume/retry/cancel --json CLI dispatch E2E — real subproce
     expect(exitCode).toBe(0);
     expect(stderr).toBe('');
 
-    // R1-F34: verify the detached worker log was created (spawn evidence).
+    // The parent must not validate node existence. The exact worker later loads
+    // the persisted workflow, rejects the requested node, and leaves the run
+    // failed without retroactively changing the successful parent envelope.
     const logDir = join(isolatedHome, 'logs');
-    const logFiles = readdirSync(logDir).filter(f => f.startsWith('detached-retry-'));
-    expect(logFiles.some(f => f.includes(runId))).toBe(true);
-  });
+    const logFiles = readdirSync(logDir).filter(
+      f => f.startsWith('detached-retry-') && f.includes(runId)
+    );
+    expect(logFiles.length).toBeGreaterThanOrEqual(1);
+    const logPath = join(logDir, logFiles[0] as string);
+    let logContent = '';
+    for (let i = 0; i < 50; i++) {
+      try {
+        logContent = readFileSync(logPath, 'utf8');
+        if (logContent.includes("Retry target node 'missing-target'")) break;
+      } catch {
+        // Detached worker has not opened the log yet.
+      }
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    expect(logContent).toContain("Retry target node 'missing-target'");
+    expect(queryRunStatus(runId)).toBe('failed');
+  }, 10_000);
 
   // 3.3D-CLI-025 [P0] R1-F23 — resume success envelope for a paused run
   test('3.3D-CLI-025: `workflow resume <paused-run> --json` emits success envelope with resumable:true, executed:false', async () => {
@@ -1518,18 +1653,20 @@ describe('workflow resume/retry/cancel --json CLI dispatch E2E — real subproce
     expect(stderr).toBe('');
   });
 
-  // 3.3D-CLI-035 [P0] R1-F27 — retry UNEXPECTED_STATE for completed run
-  test('3.3D-CLI-035: `workflow retry <completed-run> --json` emits UNEXPECTED_STATE envelope, exit 78', async () => {
+  // 3.3D-CLI-035 [P0] TD-002 — parent dispatches; worker owns lifecycle eligibility
+  test('3.3D-CLI-035: `workflow retry <completed-run> --json` returns dispatch acknowledgement', async () => {
     const runId = '77777777-8888-9999-aaaa-bbbbbbbbbbbb';
     await seedRunWithStatus(runId, isolatedRepo, 'completed');
 
     const { stdout, stderr, exitCode } = await runCli(['workflow', 'retry', runId, '--json']);
 
     const envelope = parseSoleJsonLine(stdout);
-    expect(envelope.success).toBe(false);
-    const error = envelope.error as Record<string, unknown> | undefined;
-    expect(error?.code).toBe('UNEXPECTED_STATE');
-    expect(exitCode).toBe(78);
+    expect(envelope.success).toBe(true);
+    const result = envelope.result as Record<string, unknown> | undefined;
+    expect(result?.scope).toBe('run');
+    expect(result?.dispatched).toBe(true);
+    expect(result?.detached).toBe(true);
+    expect(exitCode).toBe(0);
     expect(stderr).toBe('');
   });
 
@@ -1594,11 +1731,14 @@ describe('R1-F30 — durable side-effect proofs (Story 3.3d)', () => {
     expect(statusAfter).toBe('cancelled');
   });
 
-  // 3.3D-CLI-039 [P0] — resume validate-only does NOT mutate DB state
-  test('3.3D-CLI-039: `workflow resume --json` does not mutate run status in DB (validate-only)', async () => {
+  // 3.3D-CLI-039 [P0] R1-F48 — resume validate-only does NOT mutate DB state
+  test('3.3D-CLI-039: `workflow resume --json` does not mutate run status, timestamps, events, or metadata in DB (validate-only)', async () => {
     const runId = 'bbbb2222-cccc-dddd-eeee-ffffffffffff';
     await seedRunWithStatus(runId, isolatedRepo, 'paused');
     expect(queryRunStatus(runId)).toBe('paused');
+    const updatedAtBefore = queryRunUpdatedAt(runId);
+    const eventsBefore = queryEventCount(runId);
+    const metadataBefore = queryRunMetadata(runId);
 
     const { stdout, exitCode } = await runCli(['workflow', 'resume', runId, '--json']);
 
@@ -1606,8 +1746,11 @@ describe('R1-F30 — durable side-effect proofs (Story 3.3d)', () => {
     expect(envelope.success).toBe(true);
     expect(exitCode).toBe(0);
 
-    const statusAfter = queryRunStatus(runId);
-    expect(statusAfter).toBe('paused');
+    // R1-F48: full no-mutation contract — status, timestamps, events, metadata unchanged
+    expect(queryRunStatus(runId)).toBe('paused');
+    expect(queryRunUpdatedAt(runId)).toBe(updatedAtBefore);
+    expect(queryEventCount(runId)).toBe(eventsBefore);
+    expect(queryRunMetadata(runId)).toEqual(metadataBefore);
   });
 
   // 3.3D-CLI-040 [P0] R1-F38 — retry parent dispatch does not mutate run status,
@@ -1656,6 +1799,248 @@ describe('R1-F30 — durable side-effect proofs (Story 3.3d)', () => {
     expect(exitCode).toBe(64);
     expect(stderr).toBe('');
   });
+
+  // 3.3D-CLI-042 [P1] R1-F45 — single-dash option-looking --node values rejected
+  test('3.3D-CLI-042: `workflow retry <run> --node -n --json` rejects single-dash option-looking node value as MALFORMED_REQUEST', async () => {
+    const runId = 'a2a2a2a2-b3b3-c4c4-d5d5-e6e6e6e6e6e6';
+    await seedFailedRun(runId, isolatedRepo);
+
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'retry',
+      runId,
+      '--node',
+      '-n',
+      '--json',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.command).toBe('workflow.retry');
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('MALFORMED_REQUEST');
+    expect(exitCode).toBe(64);
+    expect(stderr).toBe('');
+  });
+
+  // 3.3D-CLI-043 [P1] R1-F46 — working_path that is a file (not directory) rejected
+  test('3.3D-CLI-043: `workflow resume --json` rejects run whose working_path is a file, not a directory', async () => {
+    const runId = 'b3b3b3b3-c4c4-d5d5-e6e6-f7f7f7f7f7f7';
+    // Create a regular file to use as working_path
+    const filePath = join(isolatedRepo, 'not-a-directory.txt');
+    writeFileSync(filePath, 'this is a file, not a directory');
+
+    const dbPath = join(isolatedHome, 'archon.db');
+    await runCli(['workflow', 'list', '--json']);
+    const db = new Database(dbPath);
+    try {
+      db.run('PRAGMA foreign_keys = OFF');
+      db.run(
+        `INSERT OR IGNORE INTO remote_agent_conversations (id, platform_type, platform_conversation_id)
+         VALUES ('seed-conv-e2e', 'cli', 'seed-conv-e2e')`
+      );
+      db.run(
+        `INSERT INTO remote_agent_workflow_runs (id, conversation_id, workflow_name, user_message, status, working_path, metadata)
+         VALUES (?, 'seed-conv-e2e', 'test-workflow', 'seed run', 'paused', ?, '{}')`,
+        [runId, filePath]
+      );
+    } finally {
+      db.close();
+    }
+
+    const { stdout, exitCode } = await runCli(['workflow', 'resume', runId, '--json']);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown> | undefined;
+    expect(error?.code).toBe('UNEXPECTED_STATE');
+    expect(exitCode).toBe(78);
+  });
+
+  // 3.3D-CLI-044 [P0] TD-002 — detached worker reaches an observable terminal outcome
+  test('3.3D-CLI-044: `workflow retry <failed-run> --json` worker completes a deterministic workflow and emits events', async () => {
+    const runId = 'c4c4c4c4-d5d5-e6e6-f7f7-a8a8a8a8a8a8';
+    installWorkflowFixture(
+      isolatedRetryProofRepo,
+      'retry-proof-workflow.yaml',
+      [
+        'name: retry-proof-workflow',
+        'description: Deterministic detached retry proof',
+        'nodes:',
+        '  - id: already-complete',
+        '    bash: "echo \'prior-output\'"',
+        '  - id: retry-proof',
+        '    bash: "echo \'retry-worker-proof\'"',
+        '    depends_on: [already-complete]',
+        '',
+      ].join('\n'),
+      'add retry proof workflow'
+    );
+    await seedFailedRun(runId, isolatedRetryProofRepo, 'retry-proof-workflow');
+    seedNodeEvent(runId, 'node_completed', 'already-complete', {
+      type: 'bash',
+      node_output: 'prior-output',
+    });
+
+    const { stdout, exitCode } = await runCli(['workflow', 'retry', runId, '--json']);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.success).toBe(true);
+    expect(exitCode).toBe(0);
+
+    const logDir = join(isolatedHome, 'logs');
+    const logFiles = readdirSync(logDir).filter(
+      f => f.startsWith('detached-retry-') && f.includes(runId)
+    );
+    expect(logFiles.length).toBeGreaterThanOrEqual(1);
+    const logPath = join(logDir, logFiles[0] as string);
+
+    // A dispatch acknowledgement proves only that spawn returned a pid. Poll the
+    // durable run/event state to prove the exact worker actually executed and
+    // reached a terminal outcome.
+    let status = queryRunStatus(runId);
+    let eventCount = queryEventCount(runId);
+    for (let i = 0; i < 80 && (status !== 'completed' || eventCount === 0); i++) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      status = queryRunStatus(runId);
+      eventCount = queryEventCount(runId);
+    }
+
+    // Keep the log assertion as a secondary diagnostic, but it is no longer the
+    // proof oracle: file creation alone cannot establish successful execution.
+    let logContent = '';
+    for (let i = 0; i < 30; i++) {
+      try {
+        logContent = readFileSync(logPath, 'utf8');
+        if (logContent.length > 0) break;
+      } catch {
+        // log file may not be readable yet
+      }
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+
+    if (status !== 'completed' || eventCount === 0) {
+      throw new Error(
+        `Detached retry proof did not complete (status=${status}, events=${eventCount}). Worker log:\n${logContent}`
+      );
+    }
+
+    expect(logContent).toContain('retry-worker-proof');
+  }, 15_000);
+
+  // 3.3D-CLI-045 [P0] TD-003 — exact-node worker owns claim, preparation, and execution
+  test('3.3D-CLI-045: targeted retry worker claims and completes the exact persisted failed node once', async () => {
+    const runId = 'd5d5d5d5-e6e6-f7f7-a8a8-b9b9b9b9b9b9';
+    installWorkflowFixture(
+      isolatedRetryProofRepo,
+      'targeted-success-proof.yaml',
+      [
+        'name: targeted-success-proof',
+        'description: Deterministic exact-node retry success proof',
+        'mutates_checkout: false',
+        'nodes:',
+        '  - id: already-complete-targeted',
+        '    bash: "echo \'prior-targeted-output\'"',
+        '  - id: exact-target',
+        '    bash: "echo \'exact-target-worker-proof\'"',
+        '    depends_on: [already-complete-targeted]',
+        '',
+      ].join('\n'),
+      'add exact-node retry success proof'
+    );
+    await seedFailedRun(runId, isolatedRetryProofRepo, 'targeted-success-proof');
+    seedNodeEvent(runId, 'node_completed', 'already-complete-targeted', {
+      type: 'bash',
+      node_output: 'prior-targeted-output',
+    });
+    seedNodeEvent(runId, 'node_failed', 'exact-target', {
+      type: 'bash',
+      error: 'seeded target failure',
+    });
+
+    const { stdout, exitCode } = await runCli([
+      'workflow',
+      'retry',
+      runId,
+      '--node',
+      'exact-target',
+      '--json',
+    ]);
+
+    const envelope = parseSoleJsonLine(stdout);
+    expect(envelope.success).toBe(true);
+    expect((envelope.result as Record<string, unknown>).nodeId).toBe('exact-target');
+    expect(exitCode).toBe(0);
+
+    let status = queryRunStatus(runId);
+    let targetCompletionCount = queryNodeEventCount(runId, 'node_completed', 'exact-target');
+    for (let i = 0; i < 80 && (status !== 'completed' || targetCompletionCount !== 1); i++) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      status = queryRunStatus(runId);
+      targetCompletionCount = queryNodeEventCount(runId, 'node_completed', 'exact-target');
+    }
+
+    expect(status).toBe('completed');
+    expect(targetCompletionCount).toBe(1);
+    expect(queryNodeEventCount(runId, 'node_retry_requested', 'exact-target')).toBe(1);
+  }, 15_000);
+
+  // 3.3D-CLI-046 [P0] TD-002 — duplicate parents may ack; exactly one worker executes
+  test('3.3D-CLI-046: concurrent whole-run retry dispatches produce one winning worker execution', async () => {
+    const runId = 'e6e6e6e6-f7f7-a8a8-b9b9-c0c0c0c0c0c0';
+    installWorkflowFixture(
+      isolatedRetryProofRepo,
+      'concurrent-retry-proof.yaml',
+      [
+        'name: concurrent-retry-proof',
+        'description: Deterministic retry claim race proof',
+        'nodes:',
+        '  - id: already-complete-race',
+        '    bash: "echo \'prior-race-output\'"',
+        '  - id: one-winner',
+        '    bash: "echo \'concurrent-worker-proof\'"',
+        '    depends_on: [already-complete-race]',
+        '',
+      ].join('\n'),
+      'add concurrent retry proof'
+    );
+    await seedFailedRun(runId, isolatedRetryProofRepo, 'concurrent-retry-proof');
+    seedNodeEvent(runId, 'node_completed', 'already-complete-race', {
+      type: 'bash',
+      node_output: 'prior-race-output',
+    });
+
+    const [first, second] = await Promise.all([
+      runCli(['workflow', 'retry', runId, '--json']),
+      runCli(['workflow', 'retry', runId, '--json']),
+    ]);
+
+    for (const parent of [first, second]) {
+      const envelope = parseSoleJsonLine(parent.stdout);
+      expect(envelope.success).toBe(true);
+      expect((envelope.result as Record<string, unknown>).dispatched).toBe(true);
+      expect(parent.exitCode).toBe(0);
+    }
+
+    let status = queryRunStatus(runId);
+    let winnerCompletionCount = queryNodeEventCount(runId, 'node_completed', 'one-winner');
+    for (let i = 0; i < 100 && (status !== 'completed' || winnerCompletionCount !== 1); i++) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      status = queryRunStatus(runId);
+      winnerCompletionCount = queryNodeEventCount(runId, 'node_completed', 'one-winner');
+    }
+
+    expect(status).toBe('completed');
+    expect(winnerCompletionCount).toBe(1);
+    const logFiles = readdirSync(join(isolatedHome, 'logs')).filter(
+      file => file.startsWith('detached-retry-') && file.includes(runId)
+    );
+    expect(logFiles.length).toBeGreaterThanOrEqual(1);
+    const combinedLogs = logFiles
+      .map(file => readFileSync(join(isolatedHome, 'logs', file), 'utf8'))
+      .join('\n');
+    expect(combinedLogs.split('concurrent-worker-proof').length - 1).toBe(1);
+  }, 20_000);
 });
 
 // ---------------------------------------------------------------------------

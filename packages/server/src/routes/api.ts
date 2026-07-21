@@ -859,7 +859,6 @@ const cancelWorkflowRunRoute = createRoute({
     },
     400: jsonError('Bad request'),
     404: jsonError('Not found'),
-    409: jsonError('Conflict'),
     500: jsonError('Server error'),
   },
 });
@@ -914,7 +913,6 @@ const abandonWorkflowRunRoute = createRoute({
     },
     400: jsonError('Bad request'),
     404: jsonError('Not found'),
-    409: jsonError('Conflict'),
     500: jsonError('Server error'),
   },
 });
@@ -3491,36 +3489,15 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
       }
-      if (
-        run.status !== 'running' &&
-        run.status !== 'pending' &&
-        run.status !== 'paused' &&
-        run.status !== 'failed'
-      ) {
+      if (run.status !== 'running' && run.status !== 'pending' && run.status !== 'paused') {
         return apiError(c, 400, `Cannot cancel workflow in '${run.status}' status`);
       }
-      // Pending uses a dedicated CAS (WHERE status='pending'); running/paused/failed
-      // use the standard CAS (WHERE status IN (...)). Split to avoid a pending run
-      // passing the pre-check but losing the standard CAS and reporting success
-      // while the run remains pending (R1-F32).
-      let cancelled: boolean;
-      if (run.status === 'pending') {
-        const result = await workflowDb.cancelPendingWorkflowRun(runId);
-        cancelled = result.cancelled;
-      } else {
-        const result = await workflowDb.cancelWorkflowRun(runId);
-        cancelled = result.cancelled;
-      }
-      if (!cancelled) {
-        return apiError(
-          c,
-          409,
-          `Workflow ${run.workflow_name} already finished — nothing to cancel.`
-        );
-      }
+      const { cancelled } = await workflowDb.cancelWorkflowRun(runId);
       return c.json({
         success: true,
-        message: `Cancelled workflow: ${run.workflow_name}`,
+        message: cancelled
+          ? `Cancelled workflow: ${run.workflow_name}`
+          : `Workflow ${run.workflow_name} already finished — nothing to cancel.`,
       });
     } catch (error) {
       getLog().error({ err: error }, 'cancel_workflow_run_api_failed');
@@ -3711,24 +3688,7 @@ export function registerApiRoutes(
           `Cannot abandon run with status '${run.status}'. Only running, paused, or failed runs can be abandoned.`
         );
       }
-      // R1-F36: check the CAS result — if lost, report 409 instead of misleading success.
-      // Pending uses a dedicated CAS (WHERE status='pending'); running/paused/failed
-      // use the standard CAS (WHERE status IN (...)).
-      let cancelled: boolean;
-      if (run.status === 'pending') {
-        const result = await workflowDb.cancelPendingWorkflowRun(runId);
-        cancelled = result.cancelled;
-      } else {
-        const result = await workflowDb.cancelWorkflowRun(runId);
-        cancelled = result.cancelled;
-      }
-      if (!cancelled) {
-        return apiError(
-          c,
-          409,
-          `Workflow ${run.workflow_name} already finished — nothing to abandon.`
-        );
-      }
+      await workflowDb.cancelWorkflowRun(runId);
       return c.json({ success: true, message: `Abandoned workflow: ${run.workflow_name}` });
     } catch (error) {
       getLog().error({ err: error, runId }, 'api.workflow_run_abandon_failed');

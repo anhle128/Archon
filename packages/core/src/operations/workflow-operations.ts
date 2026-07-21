@@ -114,16 +114,16 @@ export async function resumeWorkflow(runId: string): Promise<WorkflowRun> {
 /**
  * Abandon a workflow run (marks it as cancelled).
  *
- * Running, paused, failed, AND pending runs can be abandoned. A `failed` run is
- * terminal per TERMINAL_WORKFLOW_STATUSES but remains resumable, so the user must
- * be able to discard it — hence the inline check here intentionally diverges
- * from that constant and blocks only the two non-resumable terminal states.
+ * Running, paused, AND failed runs can be abandoned. A `failed` run is terminal
+ * per TERMINAL_WORKFLOW_STATUSES but remains resumable, so the user must be able
+ * to discard it — hence the inline check here intentionally diverges from that
+ * constant and blocks only the two non-resumable terminal states.
  */
 export async function abandonWorkflow(runId: string): Promise<WorkflowRun> {
   const run = await getRunOrThrow(runId, 'operations.workflow_abandon_lookup_failed');
   if (run.status === 'completed' || run.status === 'cancelled') {
     throw new Error(
-      `Cannot abandon run with status '${run.status}'. Only running, paused, failed, or pending runs can be abandoned.`
+      `Cannot abandon run with status '${run.status}'. Only running, paused, or failed runs can be abandoned.`
     );
   }
   let cancelled: boolean;
@@ -137,27 +137,6 @@ export async function abandonWorkflow(runId: string): Promise<WorkflowRun> {
     );
     throw new Error(`Failed to abandon workflow run ${runId}: ${err.message}`);
   }
-  // The CAS allowlist (running/paused/failed) excludes pending. Pending runs
-  // have not started execution, so a direct transition is safe — no worker to
-  // race with. This preserves the legacy abandon behavior for pending runs
-  // while keeping the cancel command's narrow CAS (story 3.3d R1-F26).
-  if (!cancelled && run.status === 'pending') {
-    try {
-      ({ cancelled } = await workflowDb.cancelPendingWorkflowRun(runId));
-    } catch (error) {
-      const err = error as Error;
-      getLog().error(
-        { err, errorType: err.constructor.name, runId },
-        'operations.workflow_abandon_pending_cas_failed'
-      );
-      throw new Error(`Failed to abandon pending workflow run ${runId}: ${err.message}`);
-    }
-  }
-  if (!cancelled) {
-    throw new Error(
-      `Failed to abandon workflow run ${runId}: another transition already changed the run status.`
-    );
-  }
   // M2 — reclaim a container run's container + upper volume immediately, in the SHARED
   // op so EVERY abandon surface (CLI, web API, chat, manage_run, Slack-cancel) frees the
   // resources now rather than waiting for the scheduled reaper. Best-effort: a reclaim
@@ -165,7 +144,7 @@ export async function abandonWorkflow(runId: string): Promise<WorkflowRun> {
   // (CLI/server), which is where docker is reachable.
   //
   // ONLY when OUR cancel actually won the CAS (`cancelled === true`). cancelWorkflowRun
-  // is `UPDATE … WHERE status IN (running, paused, failed)`, so a false result means a
+  // is `UPDATE … WHERE status NOT IN (completed, cancelled)`, so a false result means a
   // concurrent transition (a resume or completion) already took the run terminal and now
   // OWNS the environment — reclaiming here would pull the container out from under it.
   if (

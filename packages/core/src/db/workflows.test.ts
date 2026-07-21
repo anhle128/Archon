@@ -50,7 +50,7 @@ import {
   resumeWorkflowRun,
   pauseWorkflowRun,
   cancelWorkflowRun,
-  cancelPendingWorkflowRun,
+  cancelRecoveryWorkflowRun,
   failOrphanedRuns,
   listWorkflowRuns,
   deleteOldWorkflowRuns,
@@ -1158,8 +1158,8 @@ describe('workflows database', () => {
       expect(result).toEqual({ cancelled: true });
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain("status = 'cancelled'");
-      // Must only cancel running, paused, or failed runs (allowlist per story 3.3d AC #4, R1-F22).
-      expect(query).toContain("status IN ('running', 'paused', 'failed')");
+      // Must not re-cancel / re-stamp completed_at on an already-finished run.
+      expect(query).toContain("status NOT IN ('completed', 'cancelled')");
       expect(params).toEqual(['workflow-run-123']);
     });
 
@@ -1179,23 +1179,23 @@ describe('workflows database', () => {
     });
   });
 
-  describe('cancelPendingWorkflowRun', () => {
-    test('atomically cancels a pending run with status guard', async () => {
+  describe('cancelRecoveryWorkflowRun', () => {
+    test('atomically cancels only provider-recovery eligible states', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
 
-      const result = await cancelPendingWorkflowRun('workflow-run-123');
+      const result = await cancelRecoveryWorkflowRun('workflow-run-123');
 
       expect(result).toEqual({ cancelled: true });
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain("status = 'cancelled'");
-      expect(query).toContain("AND status = 'pending'");
+      expect(query).toContain("status IN ('running', 'paused', 'failed')");
       expect(params).toEqual(['workflow-run-123']);
     });
 
-    test('reports { cancelled: false } when the run has left pending (CAS lost)', async () => {
+    test('reports { cancelled: false } when no eligible state matches (CAS lost)', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
 
-      await expect(cancelPendingWorkflowRun('workflow-run-123')).resolves.toEqual({
+      await expect(cancelRecoveryWorkflowRun('workflow-run-123')).resolves.toEqual({
         cancelled: false,
       });
     });
@@ -1203,8 +1203,8 @@ describe('workflows database', () => {
     test('throws on database error', async () => {
       mockQuery.mockRejectedValueOnce(new Error('Lock timeout'));
 
-      await expect(cancelPendingWorkflowRun('workflow-run-123')).rejects.toThrow(
-        'Failed to cancel pending workflow run: Lock timeout'
+      await expect(cancelRecoveryWorkflowRun('workflow-run-123')).rejects.toThrow(
+        'Failed to cancel recoverable workflow run: Lock timeout'
       );
     });
   });

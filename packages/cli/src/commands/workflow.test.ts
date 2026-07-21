@@ -50,6 +50,7 @@ const actualFs = await import('node:fs');
 mock.module('node:fs', () => ({
   ...actualFs,
   existsSync: mock(() => true),
+  statSync: mock(() => ({ isDirectory: () => true })),
 }));
 
 // Mock @archon/isolation (getIsolationProvider moved here from @archon/core)
@@ -182,6 +183,7 @@ mock.module('@archon/core/db/workflows', () => ({
   getActiveWorkflowRun: mock(() => Promise.resolve(null)),
   failWorkflowRun: mock(() => Promise.resolve()),
   cancelWorkflowRun: mock(() => Promise.resolve({ cancelled: true })),
+  cancelRecoveryWorkflowRun: mock(() => Promise.resolve({ cancelled: true })),
   findResumableRun: mock(() => Promise.resolve(null)),
   resumeWorkflowRun: mock(() => Promise.resolve(null)),
   getWorkflowRun: mock(() => Promise.resolve(null)),
@@ -7178,13 +7180,13 @@ describe('classifyRunError — decision-specific patterns (Story 3.3c Slice 4)',
       exitCode: 78,
     });
 
-    // 'Cannot resume run with status' now matches UNEXPECTED_STATE (Story 3.3d
-    // recovery classifier extension — resume/cancel/retry status guards)
+    // Recovery prose must not extend this shared classifier. Story 3.3d maps
+    // typed RecoveryParentError causes at its private command boundary.
     expect(classifyRunError(new Error('Cannot resume run with status "completed"'))).toEqual({
-      code: 'UNEXPECTED_STATE',
-      category: 'unexpected_state',
+      code: 'INTERNAL_ERROR',
+      category: 'implementation_defect',
       retryable: false,
-      exitCode: 78,
+      exitCode: 70,
     });
   });
 
@@ -7260,9 +7262,8 @@ describe('classifyRunError — decision-specific patterns (Story 3.3c Slice 4)',
     });
   });
 
-  // 3.3D-UNIT-CLS-001 [P0] AC #5 — resume status check → UNEXPECTED_STATE
-  it('3.3D-UNIT-CLS-001: classifies "Cannot resume run with status" as UNEXPECTED_STATE', () => {
-    // ACTIVATION: classifyRunError has a pattern for 'Cannot resume run with status'
+  // 3.3D-UNIT-CLS-001 [P0] TD-007 — recovery prose is not a type discriminator
+  it('3.3D-UNIT-CLS-001: does not classify resume prose as UNEXPECTED_STATE', () => {
     expect(
       classifyRunError(
         new Error(
@@ -7270,35 +7271,32 @@ describe('classifyRunError — decision-specific patterns (Story 3.3c Slice 4)',
         )
       )
     ).toEqual({
-      code: 'UNEXPECTED_STATE',
-      category: 'unexpected_state',
+      code: 'INTERNAL_ERROR',
+      category: 'implementation_defect',
       retryable: false,
-      exitCode: 78,
+      exitCode: 70,
     });
   });
 
-  // 3.3D-UNIT-CLS-002 [P0] AC #5 — retry status check → UNEXPECTED_STATE
-  it('3.3D-UNIT-CLS-002: classifies "Cannot retry workflow run" as UNEXPECTED_STATE', () => {
-    // ACTIVATION: classifyRunError has a pattern for 'Cannot retry workflow run'
+  // 3.3D-UNIT-CLS-002 [P0] TD-007 — retry classification is typed
+  it('3.3D-UNIT-CLS-002: does not classify retry prose as UNEXPECTED_STATE', () => {
     expect(
       classifyRunError(new Error("Cannot retry workflow run with status 'completed'."))
     ).toEqual({
-      code: 'UNEXPECTED_STATE',
-      category: 'unexpected_state',
+      code: 'INTERNAL_ERROR',
+      category: 'implementation_defect',
       retryable: false,
-      exitCode: 78,
+      exitCode: 70,
     });
   });
 
-  // 3.3D-UNIT-CLS-003 [P0] AC #5 — cancel status check → UNEXPECTED_STATE
-  it('3.3D-UNIT-CLS-003: classifies "Cannot cancel run with status" as UNEXPECTED_STATE', () => {
-    // ACTIVATION: classifyRunError has a pattern for 'Cannot cancel run' or
-    // 'Cannot abandon run with status' mapped to cancel context
+  // 3.3D-UNIT-CLS-003 [P0] TD-007 — cancel classification is typed
+  it('3.3D-UNIT-CLS-003: does not classify cancel prose as UNEXPECTED_STATE', () => {
     expect(classifyRunError(new Error("Cannot cancel run with status 'completed'."))).toEqual({
-      code: 'UNEXPECTED_STATE',
-      category: 'unexpected_state',
+      code: 'INTERNAL_ERROR',
+      category: 'implementation_defect',
       retryable: false,
-      exitCode: 78,
+      exitCode: 70,
     });
   });
 
@@ -7660,7 +7658,7 @@ describe('workflowCancelCommand — JSON envelope mode (Story 3.3d)', () => {
     mockLogger.error.mockClear();
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockClear();
-    (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockClear();
+    (workflowDb.cancelRecoveryWorkflowRun as ReturnType<typeof mock>).mockClear();
   });
 
   afterEach(() => {
@@ -7669,7 +7667,7 @@ describe('workflowCancelCommand — JSON envelope mode (Story 3.3d)', () => {
 
   // 3.3D-UNIT-011 [P0] AC #4 — cancel success on a paused run
   it('3.3D-UNIT-011: emits workflow.cancel success envelope with state=cancelled, terminal=true', async () => {
-    // ACTIVATION: workflowCancelCommand exists and uses cancelWorkflowRun CAS
+    // ACTIVATION: workflowCancelCommand exists and uses the provider recovery CAS
     // + buildSuccessEnvelope with command 'workflow.cancel'.
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -7680,7 +7678,7 @@ describe('workflowCancelCommand — JSON envelope mode (Story 3.3d)', () => {
       working_path: '/tmp/wt',
       metadata: {},
     });
-    (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+    (workflowDb.cancelRecoveryWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       cancelled: true,
     });
 
@@ -7717,7 +7715,7 @@ describe('workflowCancelCommand — JSON envelope mode (Story 3.3d)', () => {
       working_path: '/tmp/wt',
       metadata: {},
     });
-    (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+    (workflowDb.cancelRecoveryWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       cancelled: true,
     });
 
@@ -7746,7 +7744,7 @@ describe('workflowCancelCommand — JSON envelope mode (Story 3.3d)', () => {
       working_path: '/tmp/wt',
       metadata: {},
     });
-    (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+    (workflowDb.cancelRecoveryWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       cancelled: true,
     });
 
@@ -7809,7 +7807,7 @@ describe('workflowCancelCommand — JSON envelope mode (Story 3.3d)', () => {
 
   // 3.3D-UNIT-016 [P0] AC #4 — cancel error: CAS race loser → UNEXPECTED_STATE
   it('3.3D-UNIT-016: emits UNEXPECTED_STATE envelope when CAS returns cancelled=false', async () => {
-    // ACTIVATION: workflowCancelCommand uses cancelWorkflowRun directly and
+    // ACTIVATION: workflowCancelCommand uses the provider recovery CAS directly and
     // checks the `cancelled` boolean; false means CAS lost.
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -7820,7 +7818,7 @@ describe('workflowCancelCommand — JSON envelope mode (Story 3.3d)', () => {
       working_path: '/tmp/wt',
       metadata: {},
     });
-    const cancelMock = workflowDb.cancelWorkflowRun as ReturnType<typeof mock>;
+    const cancelMock = workflowDb.cancelRecoveryWorkflowRun as ReturnType<typeof mock>;
     cancelMock.mockReset();
     cancelMock.mockResolvedValueOnce({ cancelled: false });
 
@@ -7856,7 +7854,7 @@ describe('workflowCancelCommand — JSON envelope mode (Story 3.3d)', () => {
 
   // 3.3D-UNIT-018 [P1] AC #4 — cancel result has no previousState field
   it('3.3D-UNIT-018: cancel success envelope has no previousState (TD-004)', async () => {
-    // ACTIVATION: workflowCancelCommand uses cancelWorkflowRun directly,
+    // ACTIVATION: workflowCancelCommand uses the provider recovery CAS directly,
     // NOT abandonWorkflow which leaks pre-cancel run data.
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -7867,7 +7865,7 @@ describe('workflowCancelCommand — JSON envelope mode (Story 3.3d)', () => {
       working_path: '/tmp/wt',
       metadata: {},
     });
-    (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+    (workflowDb.cancelRecoveryWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       cancelled: true,
     });
 
@@ -7880,6 +7878,46 @@ describe('workflowCancelCommand — JSON envelope mode (Story 3.3d)', () => {
     expect(result).not.toHaveProperty('previousState');
     expect(result).not.toHaveProperty('workingPath');
     expect(result).not.toHaveProperty('workflowName');
+  });
+
+  // 3.3D-UNIT-041 [P0] TD-007 — recovery classification is typed, not prose-driven
+  it('3.3D-UNIT-041: does not classify an untyped English error message as UNEXPECTED_STATE', async () => {
+    const rawMessage = "Cannot cancel run with status 'completed'";
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new Error(rawMessage)
+    );
+
+    const { workflowCancelCommand } = await import('./workflow');
+    await workflowCancelCommand('run-untyped-error', true);
+
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('INTERNAL_ERROR');
+    expect(error.category).toBe('implementation_defect');
+    expect(error.details).toEqual({ requestAccepted: false, reason: 'unexpected_failure' });
+    expect(JSON.stringify(envelope)).not.toContain(rawMessage);
+  });
+
+  // 3.3D-UNIT-042 [P0] TD-007 — infrastructure timeout uses a stable typed code
+  it('3.3D-UNIT-042: maps ETIMEDOUT to COMMAND_TIMEOUT without inspecting message text', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockRejectedValueOnce(
+      Object.assign(new Error('opaque infrastructure failure'), { code: 'ETIMEDOUT' })
+    );
+
+    const { workflowCancelCommand } = await import('./workflow');
+    await workflowCancelCommand('run-timeout', true);
+
+    const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
+    expect(envelope.success).toBe(false);
+    const error = envelope.error as Record<string, unknown>;
+    expect(error.code).toBe('COMMAND_TIMEOUT');
+    expect(error.category).toBe('timeout');
+    expect(error.retryable).toBe(true);
+    expect(error.details).toEqual({ requestAccepted: false, reason: 'internal_timeout' });
+    expect((envelope.execution as Record<string, unknown>).exitCode).toBe(69);
   });
 });
 
@@ -7980,53 +8018,69 @@ describe('workflowRetryCommand — JSON envelope mode (Story 3.3d)', () => {
     expect(result.detached).toBe(true);
   });
 
-  // 3.3D-UNIT-021 [P0] AC #2 — retry error: completed run → UNEXPECTED_STATE
-  it('3.3D-UNIT-021: emits UNEXPECTED_STATE envelope when retry called on a completed run', async () => {
-    // ACTIVATION: workflowRetryCommand pre-checks status; completed is non-retryable.
+  // 3.3D-UNIT-021 [P0] AC #2 — parent does not own whole-run retry eligibility
+  it('3.3D-UNIT-021: dispatches a completed run so the exact worker owns eligibility', async () => {
+    // TD-002: the parent validates only exact-worker spawn prerequisites. The
+    // worker's `workflow resume` command owns the lifecycle decision.
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-retry-completed',
       workflow_name: 'implement',
       status: 'completed',
+      codebase_id: null,
+      working_path: '/tmp/wt',
       metadata: {},
     });
 
+    mockChildProcessSpawn.mockReturnValueOnce({
+      pid: 45454,
+      on: mock(() => undefined),
+      unref: mock(() => undefined),
+    } as unknown as ReturnType<typeof mockChildProcessSpawn>);
+    const callsBefore = mockChildProcessSpawn.mock.calls.length;
     const { workflowRetryCommand } = await import('./workflow');
     await workflowRetryCommand('run-retry-completed', undefined, true);
 
     const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
     expect(envelope.command).toBe('workflow.retry');
-    expect(envelope.success).toBe(false);
-    const error = envelope.error as Record<string, unknown>;
-    expect(error.code).toBe('UNEXPECTED_STATE');
-    expect(error.category).toBe('unexpected_state');
-    const execution = envelope.execution as Record<string, unknown>;
-    expect(execution.exitCode).toBe(78);
+    expect(envelope.success).toBe(true);
+    expect((envelope.result as Record<string, unknown>).dispatched).toBe(true);
+    expect(mockChildProcessSpawn.mock.calls.length - callsBefore).toBe(1);
+    const workerArgs = (mockChildProcessSpawn.mock.calls[callsBefore]?.[1] ?? []) as string[];
+    expect(workerArgs).toContain('resume');
+    expect(workerArgs).toContain('run-retry-completed');
   });
 
-  // 3.3D-UNIT-022 [P0] AC #2 — retry error: running run → UNEXPECTED_STATE
-  it('3.3D-UNIT-022: emits UNEXPECTED_STATE envelope when retry called on a running run', async () => {
-    // ACTIVATION: same as 3.3D-UNIT-021
+  // 3.3D-UNIT-022 [P0] AC #2 — no duplicate lifecycle pre-check in parent
+  it('3.3D-UNIT-022: dispatches a running run so the exact worker owns eligibility', async () => {
+    // Same ownership proof as UNIT-021 for a second non-resumable state.
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-retry-running',
       workflow_name: 'implement',
       status: 'running',
+      codebase_id: null,
+      working_path: '/tmp/wt',
       metadata: {},
     });
 
+    mockChildProcessSpawn.mockReturnValueOnce({
+      pid: 56565,
+      on: mock(() => undefined),
+      unref: mock(() => undefined),
+    } as unknown as ReturnType<typeof mockChildProcessSpawn>);
     const { workflowRetryCommand } = await import('./workflow');
     await workflowRetryCommand('run-retry-running', undefined, true);
 
     const envelope = JSON.parse(consoleSpy.mock.calls[0][0] as string) as Record<string, unknown>;
-    expect(envelope.success).toBe(false);
-    expect((envelope.error as Record<string, unknown>).code).toBe('UNEXPECTED_STATE');
+    expect(envelope.success).toBe(true);
+    expect((envelope.result as Record<string, unknown>).dispatched).toBe(true);
   });
 
   // 3.3D-UNIT-023 [P0] AC #2 — retry error: run not found → UNEXPECTED_STATE (R1-F1)
   it('3.3D-UNIT-023: emits UNEXPECTED_STATE envelope when run does not exist for retry', async () => {
-    // ACTIVATION: retry handler throws with 'Cannot retry workflow run' message
-    // which classifies as UNEXPECTED_STATE (R1-F1: recovery commands use UNEXPECTED_STATE).
+    // The parent cannot construct an exact worker command without a persisted
+    // run, so this typed precondition remains parent-owned.
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
 

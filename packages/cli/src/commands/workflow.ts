@@ -21,7 +21,7 @@ import {
 import type { ExecutionContext, ContainerBackend, ContainerBackendConfig } from '@archon/isolation';
 import { createLogger, getArchonHome, BUNDLED_IS_BINARY } from '@archon/paths';
 import { join, sep } from 'node:path';
-import { mkdirSync, openSync, closeSync, existsSync } from 'node:fs';
+import { mkdirSync, openSync, closeSync, existsSync, statSync } from 'node:fs';
 import { realpath } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
@@ -40,6 +40,7 @@ import type {
   WorkflowWithSource,
 } from '@archon/workflows/schemas/workflow';
 import {
+  RESUMABLE_WORKFLOW_STATUSES,
   RETRYABLE_WORKFLOW_STATUSES,
   TERMINAL_WORKFLOW_STATUSES,
   workflowRunStatusSchema,
@@ -260,6 +261,85 @@ interface ClassifiedError {
   exitCode: number;
 }
 
+type RecoveryParentErrorCause =
+  | 'malformed_request'
+  | 'unexpected_state'
+  | 'command_timeout'
+  | 'internal_error';
+
+class RecoveryParentError extends Error {
+  constructor(
+    readonly cause: RecoveryParentErrorCause,
+    message: string,
+    readonly details: Record<string, unknown>
+  ) {
+    super(message);
+    this.name = 'RecoveryParentError';
+  }
+}
+
+interface ClassifiedRecoveryError extends ClassifiedError {
+  details: Record<string, unknown>;
+}
+
+function classifyRecoveryParentError(err: unknown): ClassifiedRecoveryError {
+  if (err instanceof RecoveryParentError) {
+    switch (err.cause) {
+      case 'malformed_request':
+        return {
+          code: 'MALFORMED_REQUEST',
+          category: 'provider_contract',
+          retryable: false,
+          exitCode: EXIT_USAGE,
+          details: err.details,
+        };
+      case 'unexpected_state':
+        return {
+          code: 'UNEXPECTED_STATE',
+          category: 'unexpected_state',
+          retryable: false,
+          exitCode: EXIT_RUNTIME,
+          details: err.details,
+        };
+      case 'command_timeout':
+        return {
+          code: 'COMMAND_TIMEOUT',
+          category: 'timeout',
+          retryable: true,
+          exitCode: EXIT_TIMEOUT,
+          details: err.details,
+        };
+      case 'internal_error':
+        return {
+          code: 'INTERNAL_ERROR',
+          category: 'implementation_defect',
+          retryable: false,
+          exitCode: EXIT_SOFTWARE,
+          details: err.details,
+        };
+    }
+  }
+
+  const errCode = (err as { code?: string })?.code;
+  if (errCode === 'ETIMEDOUT') {
+    return {
+      code: 'COMMAND_TIMEOUT',
+      category: 'timeout',
+      retryable: true,
+      exitCode: EXIT_TIMEOUT,
+      details: { reason: 'internal_timeout' },
+    };
+  }
+
+  return {
+    code: 'INTERNAL_ERROR',
+    category: 'implementation_defect',
+    retryable: false,
+    exitCode: EXIT_SOFTWARE,
+    details: { reason: 'unexpected_failure' },
+  };
+}
+
 export function classifyRunError(err: unknown): ClassifiedError {
   const msg = err instanceof Error ? err.message : String(err);
   const errCode = (err as { code?: string })?.code;
@@ -287,10 +367,6 @@ export function classifyRunError(err: unknown): ClassifiedError {
     msg.includes('awaiting resume') ||
     msg.includes('Cannot approve run with status') ||
     msg.includes('Cannot reject run with status') ||
-    msg.includes('Cannot resume run with status') ||
-    msg.includes('Cannot retry workflow run') ||
-    msg.includes('Cannot cancel run with status') ||
-    msg.includes('Cancel CAS lost') ||
     msg.includes('missing approval context')
   ) {
     return {
@@ -2884,8 +2960,10 @@ async function resolveRunIdArg(runId: string, cwd?: string): Promise<string> {
   if (!codebase) return runId;
   const matches = await workflowDb.findWorkflowRunsByIdPrefix(runId, codebase.id);
   if (matches.length > 1) {
-    throw new Error(
-      `Run id '${runId}' matches more than one run in this project — use more characters or the full id (from 'archon workflow runs --json').`
+    throw new RecoveryParentError(
+      'malformed_request',
+      `Run id '${runId}' matches more than one run in this project — use more characters or the full id (from 'archon workflow runs --json').`,
+      { reason: 'ambiguous_run_id' }
     );
   }
   return matches[0]?.id ?? runId;
@@ -2953,33 +3031,43 @@ export async function workflowResumeCommand(
     };
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
-      let run: Awaited<ReturnType<typeof resumeWorkflowOp>>;
-      try {
-        run = await resumeWorkflowOp(resolvedId);
-      } catch (innerErr) {
-        if (innerErr instanceof Error && innerErr.message.includes('Workflow run not found')) {
-          throw new Error(
-            `Cannot resume run with status 'unknown'. Run '${resolvedId}' does not exist.`
-          );
-        }
-        throw innerErr;
-      }
-      if (!run.working_path) {
-        throw new Error(
-          `Cannot resume run with status '${run.status}'. No working path recorded — run cannot be resumed.`
+      const run = await workflowDb.getWorkflowRun(resolvedId);
+      if (!run) {
+        throw new RecoveryParentError(
+          'unexpected_state',
+          `Cannot resume run with status 'unknown'. Run '${resolvedId}' does not exist.`,
+          { reason: 'run_not_found' }
         );
       }
-      if (!existsSync(run.working_path)) {
-        throw new Error(
-          `Cannot resume run with status '${run.status}'. Working path no longer exists — run context is unusable.`
+      if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) {
+        throw new RecoveryParentError(
+          'unexpected_state',
+          `Cannot resume run with status '${run.status}'. Only failed or paused runs can be resumed.`,
+          { reason: 'run_not_resumable', state: run.status }
+        );
+      }
+      if (!run.working_path) {
+        throw new RecoveryParentError(
+          'unexpected_state',
+          `Cannot resume run with status '${run.status}'. No working path recorded — run cannot be resumed.`,
+          { reason: 'working_path_missing', state: run.status }
+        );
+      }
+      if (!existsSync(run.working_path) || !statSync(run.working_path).isDirectory()) {
+        throw new RecoveryParentError(
+          'unexpected_state',
+          `Cannot resume run with status '${run.status}'. Working path no longer exists — run context is unusable.`,
+          { reason: 'working_path_unusable', state: run.status }
         );
       }
       let isFolderProject = false;
       if (run.codebase_id) {
         const codebase = await codebaseDb.getCodebase(run.codebase_id);
         if (!codebase) {
-          throw new Error(
-            `Cannot resume run with status '${run.status}'. Associated codebase no longer registered — run context is unusable.`
+          throw new RecoveryParentError(
+            'unexpected_state',
+            `Cannot resume run with status '${run.status}'. Associated codebase no longer registered — run context is unusable.`,
+            { reason: 'codebase_not_registered', state: run.status }
           );
         }
         isFolderProject = codebase.kind === 'folder';
@@ -2987,9 +3075,19 @@ export async function workflowResumeCommand(
       if (!isFolderProject) {
         try {
           await git.execFileAsync('git', ['rev-parse', '--git-dir'], { cwd: run.working_path });
-        } catch {
-          throw new Error(
-            `Cannot resume run with status '${run.status}'. Working path is not a valid git repository — run context is unusable.`
+        } catch (error) {
+          const gitErrorCode = (error as { code?: string })?.code;
+          if (
+            gitErrorCode === 'ENOENT' ||
+            gitErrorCode === 'EACCES' ||
+            gitErrorCode === 'ETIMEDOUT'
+          ) {
+            throw error;
+          }
+          throw new RecoveryParentError(
+            'unexpected_state',
+            `Cannot resume run with status '${run.status}'. Working path is not a valid git repository — run context is unusable.`,
+            { reason: 'working_path_not_git_repository', state: run.status }
           );
         }
       }
@@ -3011,7 +3109,7 @@ export async function workflowResumeCommand(
       );
       process.exitCode = EXIT_SUCCESS;
     } catch (error) {
-      const classified = classifyRunError(error);
+      const classified = classifyRecoveryParentError(error);
       getLog().error({ err: error as Error, runId, classified }, 'cli.workflow_resume_json_failed');
       console.log(
         safeStringify(
@@ -3021,7 +3119,7 @@ export async function workflowResumeCommand(
               code: classified.code,
               category: classified.category,
               retryable: classified.retryable,
-              details: { requestAccepted: false },
+              details: { requestAccepted: false, ...classified.details },
               exitCode: classified.exitCode,
             },
             startTime
@@ -3121,9 +3219,9 @@ export async function workflowAbandonCommand(
 /**
  * Retry a workflow run by dispatching a detached worker process.
  *
- * JSON-only (TD-009). The parent validates the run exists and is retryable,
- * spawns a detached worker, and returns a dispatch-only envelope. The worker
- * later owns claim, preparation, and execution.
+ * JSON-only (TD-009). The parent validates syntax and exact-worker spawn
+ * prerequisites, then returns a dispatch-only envelope. The worker later owns
+ * eligibility, claim, preparation, and execution.
  *
  * Without `nodeId`: whole-run retry — worker runs `workflow resume <runId>`.
  * With `nodeId`: targeted retry — worker runs `workflow retry-node <runId> <nodeId>`.
@@ -3147,39 +3245,42 @@ export async function workflowRetryCommand(
     const resolvedId = await resolveRunIdArg(runId, cwd);
     const run = await workflowDb.getWorkflowRun(resolvedId);
     if (!run) {
-      throw new Error(`Cannot retry workflow run '${resolvedId}': run not found.`);
+      throw new RecoveryParentError(
+        'unexpected_state',
+        `Cannot retry workflow run '${resolvedId}': run not found.`,
+        { reason: 'run_not_found' }
+      );
     }
     if (nodeId?.trim() === '') {
-      throw new Error('node ID is required and must not be blank when --node is specified.');
-    }
-    if (nodeId) {
-      if (!RETRYABLE_WORKFLOW_STATUSES.includes(run.status)) {
-        throw new Error(
-          `Cannot retry workflow run '${resolvedId}' with status '${run.status}'. Only failed or cancelled runs can be retried.`
-        );
-      }
-    } else {
-      if (run.status !== 'failed') {
-        throw new Error(
-          `Cannot retry workflow run '${resolvedId}' with status '${run.status}'. Only failed runs can be retried as a whole run.`
-        );
-      }
+      throw new RecoveryParentError(
+        'malformed_request',
+        'node ID is required and must not be blank when --node is specified.',
+        { reason: 'node_id_blank' }
+      );
     }
 
     if (!run.working_path) {
-      throw new Error(`Cannot retry workflow run '${resolvedId}': no working path recorded.`);
+      throw new RecoveryParentError(
+        'unexpected_state',
+        `Cannot retry workflow run '${resolvedId}': no working path recorded.`,
+        { reason: 'working_path_missing' }
+      );
     }
-    if (!existsSync(run.working_path)) {
-      throw new Error(
-        `Cannot retry workflow run '${resolvedId}': working path no longer exists — run context is unusable.`
+    if (!existsSync(run.working_path) || !statSync(run.working_path).isDirectory()) {
+      throw new RecoveryParentError(
+        'unexpected_state',
+        `Cannot retry workflow run '${resolvedId}': working path no longer exists — run context is unusable.`,
+        { reason: 'working_path_unusable' }
       );
     }
     let isFolderProject = false;
     if (run.codebase_id) {
       const codebase = await codebaseDb.getCodebase(run.codebase_id);
       if (!codebase) {
-        throw new Error(
-          `Cannot retry workflow run '${resolvedId}': associated codebase no longer registered — run context is unusable.`
+        throw new RecoveryParentError(
+          'unexpected_state',
+          `Cannot retry workflow run '${resolvedId}': associated codebase no longer registered — run context is unusable.`,
+          { reason: 'codebase_not_registered' }
         );
       }
       isFolderProject = codebase.kind === 'folder';
@@ -3187,9 +3288,19 @@ export async function workflowRetryCommand(
     if (!isFolderProject) {
       try {
         await git.execFileAsync('git', ['rev-parse', '--git-dir'], { cwd: run.working_path });
-      } catch {
-        throw new Error(
-          `Cannot retry workflow run '${resolvedId}': working path is not a valid git repository — run context is unusable.`
+      } catch (error) {
+        const gitErrorCode = (error as { code?: string })?.code;
+        if (
+          gitErrorCode === 'ENOENT' ||
+          gitErrorCode === 'EACCES' ||
+          gitErrorCode === 'ETIMEDOUT'
+        ) {
+          throw error;
+        }
+        throw new RecoveryParentError(
+          'unexpected_state',
+          `Cannot retry workflow run '${resolvedId}': working path is not a valid git repository — run context is unusable.`,
+          { reason: 'working_path_not_git_repository' }
         );
       }
     }
@@ -3228,7 +3339,11 @@ export async function workflowRetryCommand(
         /* spawn errors surface via the error event; parent already acked dispatch */
       });
       if (child.pid === undefined) {
-        throw new Error(`Failed to start detached retry worker (executable: ${cmd[0]})`);
+        throw new RecoveryParentError(
+          'internal_error',
+          `Failed to start detached retry worker (executable: ${cmd[0]})`,
+          { reason: 'worker_spawn_failed' }
+        );
       }
       child.unref();
     } finally {
@@ -3258,7 +3373,7 @@ export async function workflowRetryCommand(
     );
     process.exitCode = EXIT_SUCCESS;
   } catch (error) {
-    const classified = classifyRunError(error);
+    const classified = classifyRecoveryParentError(error);
     getLog().error(
       { err: error as Error, runId, nodeId, classified },
       'cli.workflow_retry_json_failed'
@@ -3271,7 +3386,7 @@ export async function workflowRetryCommand(
             code: classified.code,
             category: classified.category,
             retryable: classified.retryable,
-            details: { requestAccepted: false },
+            details: { requestAccepted: false, ...classified.details },
             exitCode: classified.exitCode,
           },
           startTime
@@ -3285,8 +3400,9 @@ export async function workflowRetryCommand(
 /**
  * Cancel a workflow run via durable CAS transition.
  *
- * JSON-only (TD-009). Uses `cancelWorkflowRun` directly (NOT `abandonWorkflow`)
- * to report based on the CAS boolean without leaking pre-transition state (TD-004).
+ * JSON-only (TD-009). Uses the provider-specific recovery CAS directly
+ * (NOT `abandonWorkflow`) to report based on the CAS boolean without leaking
+ * pre-transition state or changing legacy cancellation semantics (TD-004/TD-N05).
  * Container reclaim is asynchronous and not part of this command.
  */
 export async function workflowCancelCommand(
@@ -3307,20 +3423,26 @@ export async function workflowCancelCommand(
     const resolvedId = await resolveRunIdArg(runId, cwd);
     const run = await workflowDb.getWorkflowRun(resolvedId);
     if (!run) {
-      throw new Error(
-        `Cannot cancel run with status 'unknown'. Run '${resolvedId}' does not exist.`
+      throw new RecoveryParentError(
+        'unexpected_state',
+        `Cannot cancel run with status 'unknown'. Run '${resolvedId}' does not exist.`,
+        { reason: 'run_not_found' }
       );
     }
     if (run.status !== 'running' && run.status !== 'paused' && run.status !== 'failed') {
-      throw new Error(
-        `Cannot cancel run with status '${run.status}'. Only running, paused, or failed runs can be cancelled.`
+      throw new RecoveryParentError(
+        'unexpected_state',
+        `Cannot cancel run with status '${run.status}'. Only running, paused, or failed runs can be cancelled.`,
+        { reason: 'run_not_cancellable', state: run.status }
       );
     }
 
-    const { cancelled } = await workflowDb.cancelWorkflowRun(resolvedId);
+    const { cancelled } = await workflowDb.cancelRecoveryWorkflowRun(resolvedId);
     if (!cancelled) {
-      throw new Error(
-        `Cancel CAS lost for run '${resolvedId}'. Another transition already completed the run.`
+      throw new RecoveryParentError(
+        'unexpected_state',
+        `Cancel CAS lost for run '${resolvedId}'. Another transition already completed the run.`,
+        { reason: 'cancel_cas_lost' }
       );
     }
 
@@ -3339,7 +3461,7 @@ export async function workflowCancelCommand(
     );
     process.exitCode = EXIT_SUCCESS;
   } catch (error) {
-    const classified = classifyRunError(error);
+    const classified = classifyRecoveryParentError(error);
     getLog().error({ err: error as Error, runId, classified }, 'cli.workflow_cancel_json_failed');
     console.log(
       safeStringify(
@@ -3349,7 +3471,7 @@ export async function workflowCancelCommand(
             code: classified.code,
             category: classified.category,
             retryable: classified.retryable,
-            details: { requestAccepted: false },
+            details: { requestAccepted: false, ...classified.details },
             exitCode: classified.exitCode,
           },
           startTime
