@@ -69,7 +69,11 @@ nodes:
             Previous human blocker-resolution note, if any: $LOOP_USER_INPUT
             Treat that note as context only; canonical BMAD sources and approved decisions remain authoritative.
 
-            Read every source required by the skill. Return the skill's structured result.
+            Read every source required by the skill.
+            Do not return `draft` or `repaired` until the story is contract-ready and the deterministic checker passes with zero findings.
+            If validation reports missing Story Contract, AC IDs, task IDs, proof plan, explicit deferrals, references, TD coverage, or placeholders, normalize the story into the required BMAD Story Contract shape and run the checker again.
+            If the contract cannot be completed from existing authority, return `blocked` with the missing authority, scope, or owner.
+            Return the skill's structured result only after that terminal state is true.
           provider: codex
           depends_on: []
           context: fresh

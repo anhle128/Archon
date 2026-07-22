@@ -62,6 +62,8 @@ Stop with `BLOCKED` when authorities materially conflict, a required technical c
 5. Classify the story risk dimensions from `story-contract.md`. Add the applicable contract modules and justify every non-applicable dimension.
 6. Build one normative Decision and Invariant Ledger. Derive tasks, changed surfaces, and proofs from it; do not create competing descriptions of the implementation plan.
 7. Populate `template.md` completely. Use stable IDs: `AC-*`, `INV-*` or `TD-*`, `TASK-*`, `SURF-*`, and `PROOF-*`.
+   Do not return the story while any template placeholder, legacy AC numbering, legacy task numbering, or freeform proof/deferral/reference section remains.
+   A story with rich prose but without the exact Story Contract headings, tables, and mappings is not draft-ready.
 8. Keep `Status: draft`. Do not update sprint status to `ready-for-dev`.
 9. Run the deterministic structural check:
 
@@ -75,7 +77,10 @@ When the optional technical-decision artifact exists, append:
 --technical-decisions {planning_artifacts}/story-decisions/{story_key}/technical-decisions.md
 ```
 
-Fix structural failures that are supported by authority. Return `BLOCKED` for material ambiguity.
+Fix every deterministic structural failure that is supported by authority before returning.
+If the checker reports missing `Story Contract`, `AC_IDS`, `TASK_IDS`, `PROOF_TABLE`, `DEFERRAL_TABLE`, `TD_COVERAGE`, or placeholder findings, normalize the story into the required contract shape instead of treating the prose draft as complete.
+Return `BLOCKED` for material ambiguity.
+Never return `draft` unless the deterministic checker returns `gate: PASS` with zero findings.
 
 Return only an object with:
 
@@ -143,6 +148,10 @@ Never return PASS with findings. Never classify a material authority, scope, or 
 5. Return `BLOCKED` without inventing a solution when a finding requires a new technical decision, scope expansion, or ownership change.
 6. Keep `Status: draft`; validation must run again.
 7. Run the deterministic checker before returning.
+   If the existing story uses legacy prose sections, normalize it into `template.md`'s exact contract structure while preserving supported content.
+   Convert prose ACs to stable `AC-*` IDs, top-level tasks to `[TASK-*]`, technical decisions to `TD-*` ledger rows, surfaces to `SURF-*`, proofs to `PROOF-*`, and deferrals/references to the required top-level sections.
+   Remove all template placeholders.
+   Never return `repaired` unless the deterministic checker returns `gate: PASS` with zero findings.
 
 Return only an object with:
 

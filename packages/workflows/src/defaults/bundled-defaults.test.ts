@@ -175,6 +175,12 @@ describe('bundled-defaults', () => {
         expect(content).toContain(
           'If it exists with `gate: BLOCKED` and `$LOOP_USER_INPUT` is non-empty'
         );
+        expect(content).toContain(
+          'Do not return `draft` or `repaired` until the story is contract-ready'
+        );
+        expect(content).toContain(
+          'normalize the story into the required BMAD Story Contract shape'
+        );
         expect(content).toContain('id: persist-story-readiness-report');
         expect(content).toContain('id: story-readiness-gate');
         expect(content).toContain(
