@@ -137,6 +137,22 @@ function isCheckpointableExecutableNode(node: DagNode): boolean {
   return !isApprovalNode(node) && !isCancelNode(node);
 }
 
+function escapeCompletionSignalForRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function stripLoopGroupCompletionSignal(content: string, until?: string): string {
+  let result = stripCompletionTags(content, until);
+  if (!until) return result;
+
+  const signalLinePattern = new RegExp(
+    `^\\s*${escapeCompletionSignalForRegExp(until)}[\\s.,;:!?]*$`,
+    'gm'
+  );
+  result = result.replace(signalLinePattern, '');
+  return result.trim();
+}
+
 function getRunRetryEpoch(
   workflowRun: WorkflowRun,
   retryContext: WorkflowRetryContext | undefined
@@ -163,10 +179,12 @@ async function createPreNodeCheckpoint(params: {
   workflowRun: WorkflowRun;
   node: DagNode;
   retryContext: WorkflowRetryContext | undefined;
+  checkpointNodeId?: string;
 }): Promise<void> {
+  const checkpointNodeId = params.checkpointNodeId ?? params.node.id;
   if (!params.deps.store.upsertWorkflowNodeCheckpoint) {
     getLog().warn(
-      { workflowRunId: params.workflowRun.id, nodeId: params.node.id },
+      { workflowRunId: params.workflowRun.id, nodeId: checkpointNodeId },
       'dag.checkpoint_store_unavailable'
     );
     return;
@@ -177,11 +195,11 @@ async function createPreNodeCheckpoint(params: {
     runId: params.workflowRun.id,
     retryEpoch,
     workflowName: params.workflowRun.workflow_name,
-    nodeId: params.node.id,
+    nodeId: checkpointNodeId,
   });
   await params.deps.store.upsertWorkflowNodeCheckpoint({
     workflow_run_id: params.workflowRun.id,
-    node_id: params.node.id,
+    node_id: checkpointNodeId,
     retry_epoch: retryEpoch,
     checkpoint_ref: checkpoint.ref,
     commit_sha: checkpoint.commitSha,
@@ -3149,6 +3167,7 @@ async function executeLoopGroupNode(
   config: WorkflowConfig,
   issueContext?: string,
   stepNamePrefix = '',
+  mutatesCheckout = false,
   execContext: ExecutionContext = { kind: 'host' }
 ): Promise<NodeExecutionResult> {
   const group = node.loop_group;
@@ -3308,7 +3327,7 @@ async function executeLoopGroupNode(
       persistScopeKey: undefined,
       workflowPersistSessions: false,
       scopeArtifactsDir: undefined,
-      mutatesCheckout: false,
+      mutatesCheckout,
       retryContext: undefined,
       retryEpoch: getRunRetryEpoch(workflowRun, undefined),
       layers: iterBodyLayers,
@@ -3399,7 +3418,7 @@ async function executeLoopGroupNode(
     // Signal detection uses the raw output; the stored/returned output is stripped of
     // completion-signal tags so the marker never leaks into $groupId.output (mirrors
     // executeLoopNode's cleanOutput handling).
-    lastIterationOutput = stripCompletionTags(iterationOutput, group.until);
+    lastIterationOutput = stripLoopGroupCompletionSignal(iterationOutput, group.until);
 
     // Completion gate: until-signal in the terminal output, and/or until_bash exit 0.
     // Short-circuit: if the until-signal already detected completion, skip the
@@ -5309,6 +5328,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               workflowRun,
               node,
               retryContext,
+              checkpointNodeId: stepNamePrefix + node.id,
             });
           }
 
@@ -5436,6 +5456,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               config,
               issueContext,
               stepNamePrefix,
+              mutatesCheckout,
               execContext
             );
             return { nodeId: node.id, output };

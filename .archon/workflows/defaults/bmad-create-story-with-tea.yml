@@ -9,6 +9,7 @@ provider: codex
 effort: xhigh
 model: gpt-5.5
 tags: [BMad, TEA, Planning]
+interactive: true
 
 nodes:
   - id: validate-story-name-input
@@ -41,79 +42,112 @@ nodes:
     output_type: story-name-input
 
   - id: create-story
-    prompt: |
-      Act as the story author. Keep validation independent.
-
-      Inspect `$ARTIFACTS_DIR/story-readiness/latest.json` first.
-      - If it does not exist, run `$bmad-create-story create $ARGUMENTS`.
-      - If it exists with `gate: FAIL`, run `$bmad-create-story repair <report.story_file> $ARTIFACTS_DIR/story-readiness/latest.json`.
-      - If it exists with `gate: BLOCKED`, stop with the blocker; do not invent a decision, scope, or owner.
-
-      Read every source required by the skill. Return the skill's structured result.
-    provider: codex
     depends_on: [validate-story-name-input]
-    context: fresh
+    provider: codex
     model: gpt-5.5
-    idle_timeout: 900000
-    output_format:
-      type: object
-      properties:
-        story_name:
-          type: string
-        status:
-          type: string
-          enum: [draft, repaired, blocked]
-        story_key:
-          type: string
-        story_file:
-          type: string
-        sprint_status:
-          type: string
-        validation_summary:
-          type: string
-        risk_profile:
-          type: array
-          items:
-            type: string
-      required:
-        - status
-        - story_name
-        - story_key
-        - story_file
-        - sprint_status
-        - validation_summary
-        - risk_profile
+    loop_group:
+      until: CREATE_STORY_READY
+      max_iterations: 3
+      fresh_context: true
+      interactive: true
+      signal_completes: true
+      gate_message: |
+        BMAD create-story is blocked by unresolved authority, scope, or ownership.
+        Resolve the canonical source of truth, scope, or owner before approving this run to rerun story creation.
+        Approval feedback is context only; canonical BMAD sources and approved decisions remain authoritative.
+      nodes:
+        - id: author-story
+          prompt: |
+            Act as the story author. Keep validation independent.
+
+            Inspect `$ARTIFACTS_DIR/story-readiness/latest.json` first.
+            - If it does not exist, run `$bmad-create-story create $ARGUMENTS`.
+            - If it exists with `gate: FAIL`, run `$bmad-create-story repair <report.story_file> $ARTIFACTS_DIR/story-readiness/latest.json`.
+            - If it exists with `gate: BLOCKED` and `$LOOP_USER_INPUT` is empty, stop with the blocker; do not invent a decision, scope, or owner.
+            - If it exists with `gate: BLOCKED` and `$LOOP_USER_INPUT` is non-empty, reread canonical BMAD sources and run `$bmad-create-story repair <report.story_file> $ARTIFACTS_DIR/story-readiness/latest.json`.
+
+            Previous human blocker-resolution note, if any: $LOOP_USER_INPUT
+            Treat that note as context only; canonical BMAD sources and approved decisions remain authoritative.
+
+            Read every source required by the skill. Return the skill's structured result.
+          provider: codex
+          depends_on: []
+          context: fresh
+          model: gpt-5.5
+          idle_timeout: 900000
+          output_format:
+            type: object
+            properties:
+              story_name:
+                type: string
+              status:
+                type: string
+                enum: [draft, repaired, blocked]
+              story_key:
+                type: string
+              story_file:
+                type: string
+              sprint_status:
+                type: string
+              validation_summary:
+                type: string
+              risk_profile:
+                type: array
+                items:
+                  type: string
+            required:
+              - status
+              - story_name
+              - story_key
+              - story_file
+              - sprint_status
+              - validation_summary
+              - risk_profile
+
+        - id: record-story-readiness-state
+          script: |
+            import { createHash } from "node:crypto";
+            import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+            import { dirname, join } from "node:path";
+
+            const story = $author-story.output;
+            const storyFile = story.story_file;
+            const authorStatus = story.status;
+            if (!existsSync(storyFile)) throw new Error("Created story file is missing");
+
+            const statePath = join(process.env.ARTIFACTS_DIR, "story-readiness", "state.json");
+            const state = existsSync(statePath)
+              ? JSON.parse(readFileSync(statePath, "utf8"))
+              : { lastStoryHash: "" };
+            const storyHash = createHash("sha256").update(readFileSync(storyFile)).digest("hex");
+            if (authorStatus === "repaired" && state.lastStoryHash === storyHash) {
+              throw new Error("Story repair produced no content diff; stopping readiness loop");
+            }
+            state.lastStoryHash = storyHash;
+            mkdirSync(dirname(statePath), { recursive: true });
+            writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
+            console.log(JSON.stringify(story));
+            console.log("CREATE_STORY_READY");
+          runtime: bun
+          depends_on: [author-story]
+          when: "$author-story.output.status != 'blocked'"
+          timeout: 60000
+          output_type: story-readiness-state
+
+        - id: report-create-story-blocked
+          script: |
+            const story = $author-story.output;
+
+            console.log("BMAD create-story is blocked by unresolved authority, scope, or ownership.");
+            console.log("Resolve the canonical source of truth, scope, or owner before approving this run to rerun story creation.");
+            console.log("Approval feedback is context only; canonical BMAD sources and approved decisions remain authoritative.");
+            console.log("");
+            console.log(JSON.stringify(story));
+          runtime: bun
+          depends_on: [author-story]
+          when: "$author-story.output.status == 'blocked'"
+          timeout: 60000
     output_type: create-story
-
-  - id: record-story-readiness-state
-    depends_on: [create-story]
-    script: |
-      import { createHash } from "node:crypto";
-      import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-      import { dirname, join } from "node:path";
-
-      const storyFile = $create-story.output.story_file;
-      const authorStatus = $create-story.output.status;
-      if (authorStatus === "blocked") {
-        throw new Error("BMAD create-story is blocked by unresolved authority, scope, or ownership; inspect the create-story node output");
-      }
-      if (!existsSync(storyFile)) throw new Error("Created story file is missing");
-
-      const statePath = join(process.env.ARTIFACTS_DIR, "story-readiness", "state.json");
-      const state = existsSync(statePath)
-        ? JSON.parse(readFileSync(statePath, "utf8"))
-        : { lastStoryHash: "" };
-      const storyHash = createHash("sha256").update(readFileSync(storyFile)).digest("hex");
-      if (authorStatus === "repaired" && state.lastStoryHash === storyHash) {
-        throw new Error("Story repair produced no content diff; stopping readiness loop");
-      }
-      state.lastStoryHash = storyHash;
-      mkdirSync(dirname(statePath), { recursive: true });
-      writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
-      console.log(JSON.stringify({ storyFile, authorStatus, storyHash }));
-    runtime: bun
-    timeout: 60000
-    output_type: story-readiness-state
 
   - id: validate-story-readiness
     prompt: |
@@ -123,7 +157,7 @@ nodes:
       Write the exact returned object to `$ARTIFACTS_DIR/story-readiness/latest.json`.
       Return PASS only with zero findings and full deterministic coverage.
     provider: codex
-    depends_on: [record-story-readiness-state]
+    depends_on: [create-story]
     context: fresh
     model: gpt-5.5
     output_format: &story_readiness_gate_schema

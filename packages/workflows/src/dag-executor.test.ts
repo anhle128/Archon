@@ -8276,6 +8276,87 @@ describe('executeDagWorkflow -- retry checkpoints', () => {
     }
   });
 
+  it('persists loop_group body checkpoints with namespaced node ids when workflow mutates checkout', async () => {
+    const testDir = join(
+      tmpdir(),
+      `dag-loopgroup-checkpoint-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(testDir, { recursive: true });
+    await runGit(testDir, ['init']);
+    await runGit(testDir, ['config', 'user.name', 'Archon Test']);
+    await runGit(testDir, ['config', 'user.email', 'archon-test@example.com']);
+    await writeFile(join(testDir, 'README.md'), 'initial\n');
+    await runGit(testDir, ['add', 'README.md']);
+    await runGit(testDir, ['commit', '-m', 'initial']);
+
+    const upsertCheckpoint = mock(
+      async (data: Parameters<NonNullable<IWorkflowStore['upsertWorkflowNodeCheckpoint']>>[0]) => ({
+        ...data,
+        created_at: new Date(),
+      })
+    );
+    const store = createMockStore();
+    store.upsertWorkflowNodeCheckpoint = upsertCheckpoint;
+
+    try {
+      await executeDagWorkflow(
+        createMockDeps(store),
+        createMockPlatform(),
+        'conv-dag',
+        testDir,
+        {
+          name: 'dag-loopgroup-checkpoint-test',
+          nodes: [
+            {
+              id: 'create-story',
+              loop_group: {
+                until: 'CREATE_STORY_READY',
+                max_iterations: 1,
+                fresh_context: true,
+                nodes: [
+                  {
+                    id: 'author-story',
+                    bash:
+                      "printf 'draft\\n' >> story.md\n" +
+                      'printf \'{"status":"draft"}\\nCREATE_STORY_READY\\n\'',
+                    depends_on: [],
+                  },
+                ],
+              },
+              depends_on: [],
+            },
+          ],
+        },
+        makeWorkflowRun('loopgroup-checkpoint-run', {
+          working_path: testDir,
+          metadata: { retry_epoch: 0 },
+        }),
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      expect(upsertCheckpoint.mock.calls.map(call => call[0].node_id)).toContain('create-story');
+      expect(upsertCheckpoint.mock.calls.map(call => call[0].node_id)).toContain(
+        'create-story.author-story'
+      );
+      expect(upsertCheckpoint.mock.calls.map(call => call[0].node_id)).not.toContain(
+        'author-story'
+      );
+      expect(
+        upsertCheckpoint.mock.calls.every(call =>
+          call[0].checkpoint_ref.startsWith('refs/archon/checkpoints/loopgroup-checkpoint-run/0/')
+        )
+      ).toBe(true);
+    } finally {
+      await rm(testDir, { recursive: true, force: true });
+    }
+  });
+
   it('skips checkpointing for skipped, approval, and cancel nodes', async () => {
     const testDir = join(
       tmpdir(),
@@ -14302,6 +14383,257 @@ describe('executeDagWorkflow -- loop_group node', () => {
       >
     ).mock.calls;
     expect(pauseCalls2.length).toBe(0);
+  });
+
+  it('INTERACTIVE: blocked create-story loop pauses and reruns authoring on approval', async () => {
+    let aiCalls = 0;
+    let authorCalls = 0;
+    mockSendQueryDag.mockImplementation(function* () {
+      aiCalls++;
+      const prompt = String(mockSendQueryDag.mock.calls[aiCalls - 1]?.[0] ?? '');
+      const isAuthorCall = prompt.includes('Author story.');
+      if (isAuthorCall) authorCalls++;
+      const content =
+        isAuthorCall && authorCalls === 1
+          ? JSON.stringify({
+              status: 'blocked',
+              story_name: 'Blocked story',
+              story_key: '3-9-blocked-story',
+              story_file: join(testDir, 'blocked.md'),
+              sprint_status: 'backlog',
+              validation_summary: 'Needs canonical decision',
+              risk_profile: ['decision coverage'],
+            })
+          : `${JSON.stringify({
+              status: 'draft',
+              story_name: 'Blocked story',
+              story_key: '3-9-blocked-story',
+              story_file: join(testDir, 'blocked.md'),
+              sprint_status: 'in-progress',
+              validation_summary: 'Ready for validation',
+              risk_profile: ['decision coverage'],
+            })}`;
+      yield { type: 'assistant', content };
+      yield { type: 'result', sessionId: `create-story-${authorCalls}` };
+    });
+
+    const workflow = {
+      name: 'bmad-create-story-blocked-regression',
+      nodes: [
+        {
+          id: 'create-story',
+          output_type: 'create-story',
+          loop_group: {
+            until: 'CREATE_STORY_READY',
+            max_iterations: 3,
+            fresh_context: true,
+            interactive: true,
+            signal_completes: true,
+            gate_message:
+              'BMAD create-story is blocked. Resolve the canonical source and approve to rerun authoring.',
+            nodes: [
+              {
+                id: 'author-story',
+                prompt:
+                  'Author story. User note: $LOOP_USER_INPUT. If blocked, return blocked JSON without CREATE_STORY_READY.',
+                depends_on: [],
+              },
+              {
+                id: 'record-created-story-state',
+                bash:
+                  'AUTHOR_STATUS=$author-story.output.status\n' +
+                  'if [ "$AUTHOR_STATUS" = "blocked" ]; then\n' +
+                  '  echo "blocked"\n' +
+                  'else\n' +
+                  '  printf "%s\\n" $author-story.output\n' +
+                  '  echo CREATE_STORY_READY\n' +
+                  'fi',
+                depends_on: ['author-story'],
+              },
+            ],
+          },
+          depends_on: [],
+        },
+        {
+          id: 'validate-story-readiness',
+          prompt: 'Validate $create-story.output.story_file',
+          depends_on: ['create-story'],
+        },
+      ] as DagNode[],
+    };
+
+    const firstStore = createMockStore();
+    const firstRun = makeWorkflowRun('blocked-loop-first');
+    await executeDagWorkflow(
+      createMockDeps(firstStore),
+      createMockPlatform(),
+      'conv-lg',
+      testDir,
+      workflow,
+      firstRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts-first'),
+      join(testDir, 'logs-first'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(authorCalls).toBe(1);
+    expect(
+      (
+        firstStore.pauseWorkflowRun as Mock<
+          (id: string, ctx: Record<string, unknown>) => Promise<void>
+        >
+      ).mock.calls[0]?.[1]
+    ).toMatchObject({
+      type: 'interactive_loop',
+      nodeId: 'create-story',
+      iteration: 1,
+      completionSignaled: false,
+    });
+
+    const resumedStore = createMockStore();
+    const resumedRun = makeWorkflowRun('blocked-loop-resume', {
+      metadata: {
+        approval: {
+          type: 'interactive_loop',
+          nodeId: 'create-story',
+          iteration: 1,
+          message: 'Resolve blocker.',
+        },
+        loop_user_input: 'Canonical source updated.',
+        loop_feedback_given: true,
+      },
+    });
+
+    await executeDagWorkflow(
+      createMockDeps(resumedStore),
+      createMockPlatform(),
+      'conv-lg',
+      testDir,
+      workflow,
+      resumedRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts-resume'),
+      join(testDir, 'logs-resume'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const resumedAuthorPrompt = mockSendQueryDag.mock.calls[1]?.[0] as string;
+    expect(resumedAuthorPrompt).toContain('Canonical source updated.');
+    expect(authorCalls).toBe(2);
+    const validatePrompt = mockSendQueryDag.mock.calls[2]?.[0] as string;
+    expect(validatePrompt).toContain(join(testDir, 'blocked.md'));
+    const completedEvents = (
+      resumedStore.createWorkflowEvent as Mock<
+        (e: {
+          event_type: string;
+          step_name: string;
+          data: Record<string, unknown>;
+        }) => Promise<void>
+      >
+    ).mock.calls.filter(
+      call => call[0].event_type === 'node_completed' && call[0].step_name === 'create-story'
+    );
+    expect(completedEvents.length).toBe(1);
+    expect(completedEvents[0]?.[0].data.node_output).not.toContain('CREATE_STORY_READY');
+    expect(String(completedEvents[0]?.[0].data.node_output)).toStartWith('{"status":"draft"');
+  });
+
+  it('INTERACTIVE: successful create-story loop signal completes without first-run pause', async () => {
+    let aiCalls = 0;
+    let authorCalls = 0;
+    mockSendQueryDag.mockImplementation(function* () {
+      aiCalls++;
+      const prompt = String(mockSendQueryDag.mock.calls[aiCalls - 1]?.[0] ?? '');
+      const isAuthorCall = prompt.includes('Author story.');
+      if (isAuthorCall) authorCalls++;
+      const content = isAuthorCall
+        ? JSON.stringify({
+            status: 'draft',
+            story_name: 'Ready story',
+            story_key: '3-10-ready-story',
+            story_file: join(testDir, 'ready.md'),
+            sprint_status: 'in-progress',
+            validation_summary: 'Ready for validation',
+            risk_profile: ['decision coverage'],
+          })
+        : 'PASS';
+      yield { type: 'assistant', content };
+      yield { type: 'result', sessionId: `create-story-success-${aiCalls}` };
+    });
+
+    const store = createMockStore();
+    await executeDagWorkflow(
+      createMockDeps(store),
+      createMockPlatform(),
+      'conv-lg',
+      testDir,
+      {
+        name: 'bmad-create-story-success-regression',
+        nodes: [
+          {
+            id: 'create-story',
+            output_type: 'create-story',
+            loop_group: {
+              until: 'CREATE_STORY_READY',
+              max_iterations: 3,
+              fresh_context: true,
+              interactive: true,
+              signal_completes: true,
+              gate_message:
+                'BMAD create-story is blocked. Resolve the canonical source and approve to rerun authoring.',
+              nodes: [
+                {
+                  id: 'author-story',
+                  prompt: 'Author story. User note: $LOOP_USER_INPUT.',
+                  depends_on: [],
+                },
+                {
+                  id: 'record-created-story-state',
+                  bash:
+                    'AUTHOR_STATUS=$author-story.output.status\n' +
+                    'if [ "$AUTHOR_STATUS" = "blocked" ]; then\n' +
+                    '  echo "blocked"\n' +
+                    'else\n' +
+                    '  printf "%s\\n" $author-story.output\n' +
+                    '  echo CREATE_STORY_READY\n' +
+                    'fi',
+                  depends_on: ['author-story'],
+                },
+              ],
+            },
+            depends_on: [],
+          },
+          {
+            id: 'validate-story-readiness',
+            prompt: 'Validate $create-story.output.story_file',
+            depends_on: ['create-story'],
+          },
+        ] as DagNode[],
+      },
+      makeWorkflowRun('ready-loop-first'),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts-ready'),
+      join(testDir, 'logs-ready'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(authorCalls).toBe(1);
+    expect(
+      (store.pauseWorkflowRun as Mock<(id: string, ctx: Record<string, unknown>) => Promise<void>>)
+        .mock.calls.length
+    ).toBe(0);
+    const validatePrompt = mockSendQueryDag.mock.calls[1]?.[0] as string;
+    expect(validatePrompt).toContain(join(testDir, 'ready.md'));
   });
 
   it('INTERACTIVE resume: $LOOP_PREV is NOT preserved across the pause/resume boundary (v1 known limitation)', async () => {
