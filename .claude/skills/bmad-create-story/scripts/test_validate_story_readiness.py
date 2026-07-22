@@ -201,6 +201,12 @@ The exact selected value must be returned.
         self.assertIn("LEDGER_TASK_REF", self.codes(result))
         self.assertIn("TASK_LEDGER", self.codes(result))
 
+    def test_template_uses_safe_dev_agent_defaults(self) -> None:
+        template = (MODULE_PATH.parent.parent / "template.md").read_text(encoding="utf-8")
+        self.assertNotIn("{{agent_model_name_version}}", template)
+        self.assertIn("Not assigned before implementation.", template)
+        self.assertIn("None before implementation.", template)
+
 
 if __name__ == "__main__":
     unittest.main()

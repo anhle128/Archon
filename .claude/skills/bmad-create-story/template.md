@@ -94,10 +94,16 @@ N/A — risk profile marks `security` not-applicable because [same concrete reas
 
 ### Agent Model Used
 
-{{agent_model_name_version}}
+Not assigned before implementation.
 
 ### Debug Log References
 
+None before implementation.
+
 ### Completion Notes List
 
+None before implementation.
+
 ### File List
+
+None before implementation.
