@@ -342,6 +342,25 @@ export class SqliteAdapter implements IDatabase {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_user_ai_prefs_columns_failed');
     }
 
+    // Workflow provider binding columns. Story 3.5 adds a private signing
+    // secret for outbound workflow-event HMACs; public binding projections
+    // intentionally keep using the secret-free row schema.
+    try {
+      const cols = this.db
+        .prepare("PRAGMA table_info('remote_agent_workflow_provider_bindings')")
+        .all() as {
+        name: string;
+      }[];
+      const colNames = new Set(cols.map(c => c.name));
+      if (cols.length > 0 && !colNames.has('signing_secret')) {
+        this.db.run(
+          'ALTER TABLE remote_agent_workflow_provider_bindings ADD COLUMN signing_secret TEXT'
+        );
+      }
+    } catch (e: unknown) {
+      getLog().warn({ err: e as Error }, 'db.sqlite_migration_provider_binding_columns_failed');
+    }
+
     // #1955: credential rows are vendor-keyed (claude→anthropic, codex→openai,
     // copilot→github-copilot). Idempotent data fix mirroring
     // migrations/000_combined.sql: where both a legacy and a vendor row exist
@@ -664,6 +683,7 @@ export class SqliteAdapter implements IDatabase {
         name TEXT NOT NULL,
         codebase_id TEXT NOT NULL REFERENCES remote_agent_codebases(id) ON DELETE CASCADE,
         event_route TEXT NOT NULL,
+        signing_secret TEXT,
         state TEXT NOT NULL DEFAULT 'active',
         binding_version INTEGER NOT NULL DEFAULT 1,
         created_at TEXT DEFAULT (datetime('now')),
@@ -675,6 +695,55 @@ export class SqliteAdapter implements IDatabase {
         ON remote_agent_workflow_provider_bindings(codebase_id);
       CREATE INDEX IF NOT EXISTS idx_provider_bindings_provider_name
         ON remote_agent_workflow_provider_bindings(provider, name);
+
+      -- Durable external workflow-event outbox
+      CREATE TABLE IF NOT EXISTS remote_agent_workflow_event_outbox (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        event_id TEXT UNIQUE NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        provider TEXT NOT NULL DEFAULT 'archon',
+        workflow_run_id TEXT NOT NULL REFERENCES remote_agent_workflow_runs(id) ON DELETE CASCADE,
+        codebase_id TEXT REFERENCES remote_agent_codebases(id) ON DELETE SET NULL,
+        binding_id TEXT REFERENCES remote_agent_workflow_provider_bindings(id) ON DELETE SET NULL,
+        event_route TEXT,
+        event_body TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        not_routable_reason TEXT,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        last_attempt_at TEXT,
+        next_attempt_at TEXT,
+        last_error TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_workflow_event_outbox_due
+        ON remote_agent_workflow_event_outbox(status, next_attempt_at);
+      CREATE INDEX IF NOT EXISTS idx_workflow_event_outbox_run
+        ON remote_agent_workflow_event_outbox(workflow_run_id);
+
+      -- Append-only HTTP delivery attempt history
+      CREATE TABLE IF NOT EXISTS remote_agent_workflow_event_delivery_attempts (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        outbox_event_id TEXT NOT NULL REFERENCES remote_agent_workflow_event_outbox(id) ON DELETE CASCADE,
+        attempt_number INTEGER NOT NULL,
+        request_url TEXT NOT NULL,
+        request_method TEXT NOT NULL DEFAULT 'POST',
+        request_headers TEXT NOT NULL,
+        request_body TEXT NOT NULL,
+        response_status INTEGER,
+        response_headers TEXT,
+        response_body TEXT,
+        transport_error TEXT,
+        started_at TEXT NOT NULL,
+        completed_at TEXT,
+        duration_ms INTEGER,
+        outcome TEXT NOT NULL DEFAULT 'pending'
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_workflow_event_delivery_attempts_outbox
+        ON remote_agent_workflow_event_delivery_attempts(outbox_event_id);
     `);
     getLog().info('db.sqlite_schema_initialized');
   }

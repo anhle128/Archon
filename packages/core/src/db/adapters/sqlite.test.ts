@@ -442,6 +442,7 @@ describe('remote_agent_workflow_provider_bindings (Story 3.1)', () => {
       name: string;
       codebaseId: string;
       eventRoute: string;
+      signingSecret: string | null;
       state: string;
     }> = {}
   ): Promise<void> {
@@ -450,14 +451,15 @@ describe('remote_agent_workflow_provider_bindings (Story 3.1)', () => {
       name: 'workflow-engine-primary',
       codebaseId: 'cb-1',
       eventRoute: 'https://hermes.example/events/workflow-engine',
+      signingSecret: null,
       state: 'active',
       ...overrides,
     };
     await db.query(
       `INSERT INTO remote_agent_workflow_provider_bindings
-       (id, provider, name, codebase_id, event_route, state)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [id, v.provider, v.name, v.codebaseId, v.eventRoute, v.state]
+       (id, provider, name, codebase_id, event_route, signing_secret, state)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [id, v.provider, v.name, v.codebaseId, v.eventRoute, v.signingSecret, v.state]
     );
   }
 
@@ -547,6 +549,7 @@ describe('remote_agent_workflow_provider_bindings (Story 3.1)', () => {
     expect(cols).toContain('provider');
     expect(cols).toContain('name');
     expect(cols).toContain('event_route');
+    expect(cols).toContain('signing_secret');
 
     // The pre-existing row must survive the upgrade untouched.
     const preserved = await db.query('SELECT name FROM remote_agent_codebases WHERE id = $1', [
@@ -566,6 +569,19 @@ describe('remote_agent_workflow_provider_bindings (Story 3.1)', () => {
     }).not.toThrow();
     await insertCodebase(db, 'cb-1');
     await expect(insertBinding('wpb-1')).resolves.toBeUndefined();
+  });
+
+  test('fresh schema: signing_secret persists privately on provider bindings', async () => {
+    db = createTestDb();
+    await insertCodebase(db, 'cb-1');
+    await insertBinding('wpb-1', { signingSecret: 'local-test-value' });
+
+    const result = await db.query<{ signing_secret: string | null }>(
+      `SELECT signing_secret FROM remote_agent_workflow_provider_bindings WHERE id = $1`,
+      ['wpb-1']
+    );
+
+    expect(result.rows[0]?.signing_secret).toBe('local-test-value');
   });
 
   // ---------------------------------------------------------------------------
@@ -717,6 +733,125 @@ describe('remote_agent_workflow_provider_bindings (Story 3.1)', () => {
     );
     expect(rows.rows).toHaveLength(1);
     expect(rows.rows[0]?.state).toBe('disabled');
+  });
+});
+
+describe('remote_agent_workflow_event_outbox (Story 3.5)', () => {
+  let db: SqliteAdapter;
+
+  afterEach(async () => {
+    if (db) {
+      await db.close();
+    }
+    try {
+      unlinkSync(currentDbPath);
+    } catch {
+      /* may not exist */
+    }
+    try {
+      unlinkSync(currentDbPath + '-wal');
+    } catch {
+      /* may not exist */
+    }
+    try {
+      unlinkSync(currentDbPath + '-shm');
+    } catch {
+      /* may not exist */
+    }
+  });
+
+  async function insertRun(): Promise<void> {
+    await insertCodebase(db, 'cb-1');
+    await db.query(
+      `INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id)
+       VALUES ($1, $2, $3)`,
+      ['conv-1', 'web', 'conv-1']
+    );
+    await db.query(
+      `INSERT INTO remote_agent_workflow_runs
+       (id, conversation_id, codebase_id, workflow_name, user_message, status)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      ['run-1', 'conv-1', 'cb-1', 'bmad-dev-story', 'ship it', 'running']
+    );
+    await db.query(
+      `INSERT INTO remote_agent_workflow_provider_bindings
+       (id, provider, name, codebase_id, event_route, signing_secret, state)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        'wpb-1',
+        'archon',
+        'workflow-engine-primary',
+        'cb-1',
+        'https://hermes.example/events',
+        'local-test-value',
+        'active',
+      ]
+    );
+  }
+
+  test('fresh schema: outbox row and append-only attempt row persist exact request body', async () => {
+    db = createTestDb();
+    await insertRun();
+    const body = '{"schemaVersion":"workflow-event-envelope.v1","eventId":"evt-1"}';
+
+    await db.query(
+      `INSERT INTO remote_agent_workflow_event_outbox
+       (id, event_id, idempotency_key, event_type, workflow_run_id, codebase_id,
+        binding_id, event_route, event_body, status, next_attempt_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      [
+        'outbox-1',
+        'evt-1',
+        'archon:workflow-engine-primary:evt-1',
+        'workflow.run.completed',
+        'run-1',
+        'cb-1',
+        'wpb-1',
+        'https://hermes.example/events',
+        body,
+        'pending',
+        '2026-07-25T00:00:00.000Z',
+      ]
+    );
+    await db.query(
+      `INSERT INTO remote_agent_workflow_event_delivery_attempts
+       (id, outbox_event_id, attempt_number, request_url, request_method,
+        request_headers, request_body, started_at, outcome)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [
+        'attempt-1',
+        'outbox-1',
+        1,
+        'https://hermes.example/events',
+        'POST',
+        '{"X-Request-ID":"archon:workflow-engine-primary:evt-1"}',
+        body,
+        '2026-07-25T00:00:00.000Z',
+        'pending',
+      ]
+    );
+
+    const outbox = await db.query<{ event_body: string; status: string }>(
+      'SELECT event_body, status FROM remote_agent_workflow_event_outbox WHERE id = $1',
+      ['outbox-1']
+    );
+    const attempts = await db.query<{ request_body: string; outcome: string }>(
+      'SELECT request_body, outcome FROM remote_agent_workflow_event_delivery_attempts WHERE id = $1',
+      ['attempt-1']
+    );
+
+    expect(outbox.rows[0]).toEqual({ event_body: body, status: 'pending' });
+    expect(attempts.rows[0]).toEqual({ request_body: body, outcome: 'pending' });
+  });
+
+  test('fresh schema: due and attempt indexes exist', async () => {
+    db = createTestDb();
+
+    const indexes = raw_indexes(currentDbPath);
+
+    expect(indexes).toContain('idx_workflow_event_outbox_due');
+    expect(indexes).toContain('idx_workflow_event_outbox_run');
+    expect(indexes).toContain('idx_workflow_event_delivery_attempts_outbox');
   });
 });
 

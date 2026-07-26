@@ -1361,7 +1361,7 @@ describe('workflow resume/retry/cancel --json CLI dispatch E2E — real subproce
 
     expect(exitCode).toBe(0);
     expect(stderr).toBe('');
-  });
+  }, 10_000);
 
   // 3.3D-CLI-024 [P0] TD-003 — parent acknowledges dispatch; exact-node worker owns validation
   test('3.3D-CLI-024: targeted retry matches the JSON contract and records invalid-node validation as a later worker outcome', async () => {

@@ -43,6 +43,22 @@ mock.module('../db/workflow-events', () => ({
   getCompletedDagNodeOutputs: mockGetCompletedDagNodeOutputs,
 }));
 
+const mockEnqueueExternalWorkflowEvent = mock(() => Promise.resolve());
+mock.module('../db/workflow-event-outbox', () => ({
+  enqueueExternalWorkflowEvent: mockEnqueueExternalWorkflowEvent,
+}));
+const mockResolveEventRoute = mock(() =>
+  Promise.resolve({
+    routable: false,
+    codebase: null,
+    binding: null,
+    reason: 'missing-codebase',
+  })
+);
+mock.module('../events/binding-router', () => ({
+  resolveEventRoute: mockResolveEventRoute,
+}));
+
 const mockUpsertWorkflowNodeCheckpoint = mock(() => Promise.resolve({ workflow_run_id: 'run-1' }));
 const mockGetLatestWorkflowNodeCheckpoint = mock(() => Promise.resolve(null));
 mock.module('../db/workflow-checkpoints', () => ({
@@ -111,7 +127,57 @@ mock.module('../db/workflow-node-sessions', () => ({
 
 const { createWorkflowStore, createWorkflowDeps } = await import('./store-adapter');
 
+function workflowRunRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 'run-1',
+    workflow_name: 'bmad-dev-story',
+    codebase_id: 'cb-1',
+    ...overrides,
+  };
+}
+
+function codebaseRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 'cb-1',
+    name: 'workflow-engine',
+    default_cwd: '/workspace/workflow-engine',
+    default_branch: 'dev',
+    ...overrides,
+  };
+}
+
+function bindingRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 'binding-1',
+    provider: 'archon',
+    name: 'workflow-engine-primary',
+    codebase_id: 'cb-1',
+    event_route: 'https://hermes.example/events',
+    signing_secret: 'test-secret',
+    state: 'active',
+    ...overrides,
+  };
+}
+
 describe('createWorkflowStore', () => {
+  beforeEach(() => {
+    mockCreateWorkflowEvent.mockReset();
+    mockCreateWorkflowEvent.mockImplementation(() => Promise.resolve());
+    mockGetWorkflowRun.mockReset();
+    mockGetWorkflowRun.mockImplementation(() => Promise.resolve(null));
+    mockEnqueueExternalWorkflowEvent.mockReset();
+    mockEnqueueExternalWorkflowEvent.mockImplementation(() => Promise.resolve());
+    mockResolveEventRoute.mockReset();
+    mockResolveEventRoute.mockImplementation(() =>
+      Promise.resolve({
+        routable: false,
+        codebase: null,
+        binding: null,
+        reason: 'missing-codebase',
+      })
+    );
+  });
+
   test('returns object with all IWorkflowStore methods', () => {
     const store = createWorkflowStore();
     const requiredMethods: (keyof IWorkflowStore)[] = [
@@ -132,6 +198,7 @@ describe('createWorkflowStore', () => {
       'cancelWorkflowRun',
       'persistRouteDecisionTransition',
       'createWorkflowEvent',
+      'enqueueExternalWorkflowEvent',
       'getCompletedDagNodeOutputs',
       'upsertWorkflowNodeCheckpoint',
       'getLatestWorkflowNodeCheckpoint',
@@ -185,6 +252,154 @@ describe('createWorkflowStore', () => {
         step_name: 'test-step',
       })
     ).resolves.toBeUndefined();
+  });
+
+  test('enqueueExternalWorkflowEvent catches unexpected throws', async () => {
+    mockGetWorkflowRun.mockRejectedValueOnce(new Error('DB connection lost'));
+    const store = createWorkflowStore();
+    await expect(
+      store.enqueueExternalWorkflowEvent({
+        workflow_run_id: 'run-1',
+        event_type: 'workflow.run.started',
+        occurred_at: new Date().toISOString(),
+        payload: { state: 'running' },
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  test('enqueueExternalWorkflowEvent persists a routable envelope with a queued delivery time', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(workflowRunRow());
+    mockResolveEventRoute.mockResolvedValueOnce({
+      routable: true,
+      codebase: codebaseRow(),
+      binding: bindingRow(),
+      route: 'https://hermes.example/events',
+      secret: 'test-secret',
+    });
+    const store = createWorkflowStore();
+
+    await store.enqueueExternalWorkflowEvent({
+      workflow_run_id: 'run-1',
+      event_type: 'workflow.run.completed',
+      occurred_at: '2026-07-25T00:00:00.000Z',
+      payload: {
+        state: 'completed',
+        result: { outcome: 'accepted', completedAt: '2026-07-25T00:00:00.000Z' },
+      },
+    });
+
+    expect(mockResolveEventRoute).toHaveBeenCalledWith('cb-1');
+    expect(mockEnqueueExternalWorkflowEvent).toHaveBeenCalledTimes(1);
+    const [insert] = mockEnqueueExternalWorkflowEvent.mock.calls[0] as [Record<string, unknown>];
+    expect(insert).toMatchObject({
+      event_type: 'workflow.run.completed',
+      workflow_run_id: 'run-1',
+      codebase_id: 'cb-1',
+      binding_id: 'binding-1',
+      event_route: 'https://hermes.example/events',
+      status: 'pending',
+      next_attempt_at: '2026-07-25T00:00:00.000Z',
+    });
+    const body = JSON.parse(insert.event_body as string) as Record<string, unknown>;
+    expect(Object.keys(body)).toHaveLength(10);
+    expect(body).toMatchObject({
+      schemaVersion: 'workflow-event-envelope.v1',
+      provider: 'archon',
+      eventType: 'workflow.run.completed',
+      occurredAt: '2026-07-25T00:00:00.000Z',
+      idempotencyKey: insert.idempotency_key,
+    });
+    expect(body).not.toHaveProperty('signature');
+    expect(body).not.toHaveProperty('delivery');
+  });
+
+  test('enqueueExternalWorkflowEvent does not persist invalid typed event payloads', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(workflowRunRow());
+    mockResolveEventRoute.mockResolvedValueOnce({
+      routable: true,
+      codebase: codebaseRow(),
+      binding: bindingRow(),
+      route: 'https://hermes.example/events',
+      secret: 'test-secret',
+    });
+    const store = createWorkflowStore();
+
+    await expect(
+      store.enqueueExternalWorkflowEvent({
+        workflow_run_id: 'run-1',
+        event_type: 'workflow.run.completed',
+        occurred_at: '2026-07-25T00:00:00.000Z',
+        payload: { state: 'completed' },
+      })
+    ).resolves.toBeUndefined();
+
+    expect(mockEnqueueExternalWorkflowEvent).not.toHaveBeenCalled();
+  });
+
+  test('enqueueExternalWorkflowEvent records not-routable events without scheduling delivery', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(workflowRunRow());
+    mockResolveEventRoute.mockResolvedValueOnce({
+      routable: false,
+      codebase: codebaseRow(),
+      binding: bindingRow({ signing_secret: null }),
+      reason: 'missing-secret',
+    });
+    const store = createWorkflowStore();
+
+    await store.enqueueExternalWorkflowEvent({
+      workflow_run_id: 'run-1',
+      event_type: 'workflow.run.started',
+      occurred_at: '2026-07-25T00:00:00.000Z',
+      payload: { state: 'running', startedAt: '2026-07-25T00:00:00.000Z' },
+    });
+
+    const [insert] = mockEnqueueExternalWorkflowEvent.mock.calls[0] as [Record<string, unknown>];
+    expect(insert).toMatchObject({
+      event_type: 'workflow.run.started',
+      workflow_run_id: 'run-1',
+      codebase_id: 'cb-1',
+      binding_id: 'binding-1',
+      status: 'not-routable',
+      not_routable_reason: 'missing-secret',
+    });
+    expect(insert).not.toHaveProperty('event_route');
+    expect(insert).not.toHaveProperty('next_attempt_at');
+  });
+
+  test('createWorkflowEvent mirrors supported internal lifecycle events to the external outbox', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(workflowRunRow());
+    mockResolveEventRoute.mockResolvedValueOnce({
+      routable: true,
+      codebase: codebaseRow(),
+      binding: bindingRow(),
+      route: 'https://hermes.example/events',
+      secret: 'test-secret',
+    });
+    const store = createWorkflowStore();
+
+    await store.createWorkflowEvent({
+      workflow_run_id: 'run-1',
+      event_type: 'workflow_started',
+      step_index: 0,
+      step_name: 'workflow',
+    });
+
+    expect(mockCreateWorkflowEvent).toHaveBeenCalledWith({
+      workflow_run_id: 'run-1',
+      event_type: 'workflow_started',
+      step_index: 0,
+      step_name: 'workflow',
+    });
+    expect(mockEnqueueExternalWorkflowEvent).toHaveBeenCalledTimes(1);
+    const [insert] = mockEnqueueExternalWorkflowEvent.mock.calls[0] as [Record<string, unknown>];
+    const body = JSON.parse(insert.event_body as string) as Record<string, unknown>;
+    expect(insert.event_type).toBe('workflow.run.started');
+    expect(body).toMatchObject({
+      eventType: 'workflow.run.started',
+      payload: {
+        state: 'running',
+      },
+    });
   });
 
   test('delegates getCompletedDagNodeOutputs to DB', async () => {
@@ -259,6 +474,7 @@ describe('createWorkflowDeps', () => {
     expect(typeof deps.store.createWorkflowRun).toBe('function');
     expect(typeof deps.store.getWorkflowRun).toBe('function');
     expect(typeof deps.store.createWorkflowEvent).toBe('function');
+    expect(typeof deps.store.enqueueExternalWorkflowEvent).toBe('function');
     expect(typeof deps.store.getCodebase).toBe('function');
   });
 

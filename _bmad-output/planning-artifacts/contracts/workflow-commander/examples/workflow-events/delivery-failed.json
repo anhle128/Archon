@@ -1,8 +1,5 @@
 {
   "schemaVersion": "workflow-event-envelope.v1",
-  "intendedProducer": "Archon",
-  "intendedConsumer": "Hermes",
-  "owningSubproject": "archon",
   "provider": "archon",
   "eventId": "evt_generic_workflow_engine_1_3b_104",
   "eventType": "workflow.delivery.failed",
@@ -21,30 +18,11 @@
   },
   "projectRef": {
     "id": "workflow-engine",
-    "codebaseRef": "git:OceanLabs/workflow-engine@dev",
+    "codebaseRef": "workflow-engine",
     "repositoryPath": "${WORKFLOW_ENGINE_REPOSITORY_PATH}",
-    "defaultBranch": "dev",
-    "projectBindingId": "project-binding-workflow-engine"
+    "defaultBranch": "dev"
   },
-  "profileRoute": {
-    "profile": "workflow-engine-primary",
-    "ingressPath": "/p/workflow-engine-primary/webhooks/workflow-events/archon",
-    "bindingName": "workflow-engine-primary",
-    "secretRef": "secret:hermes/workflow-engine-primary/webhook",
-    "expectedProvider": "archon",
-    "routeVersion": "2026-07-11"
-  },
-  "idempotencyKey": "generic:workflow-engine-primary:evt_generic_workflow_engine_1_3b_104",
-  "signature": {
-    "algorithm": "${WORKFLOW_EVENT_SIGNATURE_ALGORITHM}",
-    "keyId": "archon-profile-primary-2026-07",
-    "signedAt": "2026-07-11T12:22:00Z",
-    "signatureHeader": "${WORKFLOW_EVENT_SIGNATURE_HEADER}",
-    "timestampHeader": "${WORKFLOW_EVENT_TIMESTAMP_HEADER}",
-    "signatureInput": ["method", "path", "timestamp", "eventId", "bodyDigest"],
-    "bodyDigest": "sha256:event-delivery-failed-body-digest",
-    "canonicalization": "${WORKFLOW_EVENT_SIGNATURE_CANONICALIZATION}"
-  },
+  "idempotencyKey": "archon:workflow-engine-primary:evt_generic_workflow_engine_1_3b_104",
   "payload": {
     "deliveryOnly": true,
     "mutationIntent": "none",
@@ -52,10 +30,5 @@
     "failedDeliveryId": "delivery_archon_1_3b_002",
     "nextStatus": "reconciliation-pending",
     "diagnosticRef": "diag_archon_1_3b_delivery_failed"
-  },
-  "delivery": {
-    "deliveryId": "delivery_archon_1_3b_006",
-    "attempt": 3,
-    "receivedAt": "2026-07-11T12:22:03Z"
   }
 }

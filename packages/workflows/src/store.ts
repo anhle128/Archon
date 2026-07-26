@@ -197,6 +197,19 @@ export interface IWorkflowStore {
   }): Promise<void>;
 
   /**
+   * Enqueue an external workflow event. Implementations MUST NOT throw — catch
+   * all errors internally and log them. The workflow engine passes only primitive
+   * data; codebase, binding, and routability resolution belong to the store
+   * implementation.
+   */
+  enqueueExternalWorkflowEvent(data: {
+    workflow_run_id: string;
+    event_type: string;
+    occurred_at: string;
+    payload: Record<string, unknown>;
+  }): Promise<void>;
+
+  /**
    * Return a map of nodeId → output for all node_completed events
    * from a prior DAG workflow run. Used for DAG resume: the executor
    * pre-populates nodeOutputs so completed nodes are skipped on re-run.

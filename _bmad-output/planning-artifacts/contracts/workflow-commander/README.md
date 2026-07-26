@@ -86,7 +86,7 @@ examples/callback-rejections/duplicate-event-id.json
 examples/callback-rejections/wrong-binding.json
 examples/callback-rejections/unknown-project.json
 examples/callback-rejections/schema-mismatch.json
-examples/callback-rejections/wrong-profile-secret.json
+examples/callback-rejections/wrong-signing-secret.json
 examples/callback-rejections/wrong-codebase.json
 examples/callback-rejections/unsupported-provider.json
 examples/materialization/new-story.json
@@ -139,14 +139,13 @@ Delivery status examples keep workflow execution independent from event delivery
 ## Workflow Event Envelope Rules
 
 Workflow event envelopes are provider callbacks from Archon to Hermes.
-Every event envelope declares `schemaVersion`, `intendedProducer`, `intendedConsumer`, `owningSubproject`, `provider`, `eventId`, `eventType`, `occurredAt`, `bindingRef`, `workflowRunRef`, `projectRef`, `profileRoute`, `idempotencyKey`, `signature`, and `payload`.
 The canonical event type values are `workflow.run.started`, `workflow.run.completed`, `workflow.run.failed`, `workflow.approval.requested`, `workflow.delivery.failed`, and `workflow.artifact.recorded`.
-Event envelopes carry profile route metadata so Hermes can reject callbacks that arrive through the wrong profile, binding, provider, project, or codebase before mutating workflow state.
-Event envelopes carry signature verification metadata through `signature` fields and `profileRoute.secretRef`, but examples must never contain raw shared secrets or raw signature header values.
-Signature algorithm, signature header name, timestamp header name, canonicalization, and replay-window duration remain deferred shared security decisions.
-Fixtures use deterministic placeholder strings such as `${WORKFLOW_EVENT_SIGNATURE_ALGORITHM}` instead of final policy values.
+Every event envelope declares `schemaVersion`, `provider`, `eventId`, `eventType`, `occurredAt`, `bindingRef`, `workflowRunRef`, `projectRef`, `idempotencyKey`, and `payload`.
+Event envelopes do not carry profile route metadata, body-level signature metadata, body digest metadata, or delivery attempt metadata.
+Archon signs the exact serialized body in HTTP headers with Hermes Generic Webhook V2.
+The signature headers are `X-Webhook-Signature-V2` and `X-Webhook-Timestamp`, and the signature input is `timestamp + "." + exactRawBodyBytes`.
 The generic `examples/workflow-events/` fixtures model shared event semantics, while `examples/providers/archon/events/` fixtures model Archon-specific provider output.
-The `workflow-completed-redelivery.json` fixtures reuse the original completed event id and idempotency key with a later delivery attempt, proving redelivery stability without permitting duplicate side effects.
+The `workflow-completed-redelivery.json` fixtures are byte-identical duplicates of the original completed body; only HTTP timestamp and signature headers differ between attempts.
 The `workflow.delivery.failed` examples set `deliveryOnly` and `mutationIntent` so consumers do not confuse delivery health with typed project-work mutation.
 
 ## Callback Rejection Rules
@@ -154,10 +153,10 @@ The `workflow.delivery.failed` examples set `deliveryOnly` and `mutationIntent` 
 Callback rejection fixtures describe fail-closed Hermes behavior for invalid provider callbacks.
 Each rejection fixture declares `diagnosticCategory` and `expectedMutationBehavior`.
 The expected mutation behavior for these fixtures is no state mutation, no workflow run mutation, no binding mutation, no event ledger mutation, no Project Work Item mutation, no Phase Task mutation, no HILT Gate mutation, no workflow reference mutation, no comment mutation, no Story Status History mutation, and a diagnostic emission.
-Required rejection reasons are `bad-signature`, `stale-timestamp`, `duplicate-event-id`, `wrong-binding`, `unknown-project`, `schema-mismatch`, `wrong-profile-secret`, `wrong-codebase`, and `unsupported-provider`.
+Required rejection reasons are `bad-signature`, `stale-timestamp`, `duplicate-event-id`, `wrong-binding`, `unknown-project`, `schema-mismatch`, `wrong-signing-secret`, `wrong-codebase`, and `unsupported-provider`.
 The `schema-mismatch` fixture intentionally contains an embedded event envelope that fails the workflow event schema.
 All other rejection fixtures keep the embedded event envelope structurally valid and rely on semantic rejection evidence.
-The `stale-timestamp` fixture references the deferred replay-window decision instead of hard-coding a final clock-skew duration.
+The `stale-timestamp` fixture models a webhook timestamp older than the Hermes V2 replay window.
 
 ## Project Work Item Identity Rules
 
@@ -207,7 +206,7 @@ python3 _bmad-output/planning-artifacts/contracts/workflow-commander/validate_co
 ```
 
 The validator uses only Python standard-library JSON parsing and explicit invariant checks.
-It checks strict UTF-8 JSON parseability with duplicate-key and non-standard constant rejection, schema and example conformance against the shipped JSON schemas, required metadata fields, command envelope success and error shape, binding vocabulary, forbidden binding keys, delivery status vocabulary, event envelope routing metadata, project identity consistency, per-event payload fields, redelivery idempotency stability, workspace-relative file URI targets, callback rejection semantics, Project Work Item identity inputs, percent-encoded Project Work Item identity key derivation, Phase Task identity derivation, materialization identity stability, duplicate Phase Task prevention, fail-closed materialization source and recovery safety, concrete downstream readiness expectations, required JSON files as regular non-empty files, no unexpected JSON examples outside the canonical fixture list, no raw secret or raw signature material in schemas or examples including nested array string values, no hard-coded deferred signature policy values, no host-specific absolute paths in schemas or examples including nested array string values and common local temp prefixes, no symlinks, and local package validation without parent workspace traversal.
+It checks strict UTF-8 JSON parseability with duplicate-key and non-standard constant rejection, schema and example conformance against the shipped JSON schemas, required metadata fields, command envelope success and error shape, binding vocabulary, forbidden binding keys, delivery status vocabulary, event envelope project identity consistency, per-event payload fields, redelivery idempotency stability, workspace-relative file URI targets, callback rejection semantics, Project Work Item identity inputs, percent-encoded Project Work Item identity key derivation, Phase Task identity derivation, materialization identity stability, duplicate Phase Task prevention, fail-closed materialization source and recovery safety, concrete downstream readiness expectations, required JSON files as regular non-empty files, no unexpected JSON examples outside the canonical fixture list, no raw secret or raw signature material in schemas or examples including nested array string values, no host-specific absolute paths in schemas or examples including nested array string values and common local temp prefixes, no symlinks, and local package validation without parent workspace traversal.
 
 ## Readiness Rule
 

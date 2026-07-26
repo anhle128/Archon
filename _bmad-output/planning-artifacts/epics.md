@@ -307,14 +307,14 @@ So that workflow execution remains independent while Hermes receives compatible 
 
 **Requirements Covered:** FR-9.
 
-**Implementation Scope:** Provider `archon` event producer, outbox, signature metadata, and delivery attempts.
+**Implementation Scope:** Provider `archon` event producer, outbox, HTTP signature headers, and delivery attempts.
 Keep this story limited to five implementation slices: event-envelope construction, outbox persistence, binding-state routing checks, delivery-attempt status recording, and duplicate-safe idempotency tests.
 Do not include Hermes event ingress, reconciliation, Project Work Item mutation, Phase Task mutation, gate mutation, or user-facing diagnostics in this story.
 Implementation task gates are:
 
-1. Event-envelope task: construct, sign, and validate event payloads against local examples and rejection fixtures without adding delivery behavior.
+1. Event-envelope task: construct and validate event payloads against local examples and rejection fixtures without adding delivery behavior.
 2. Durable enqueue task: add outbox storage, migrations, SQLite and PostgreSQL behavior, and enqueue-before-delivery tests.
-3. Binding-aware routing task: resolve the provider binding and record not-routable state for missing, stale, disabled, or conflicting bindings without blocking workflow execution.
+3. Binding-aware routing task: resolve the provider binding and record not-routable state for missing, disabled, or conflicting bindings without blocking workflow execution.
 4. Delivery-state writer task: own all delivery-attempt writes, retry state, last-attempt time, last-error category, terminal failure state, and affected references.
 5. Retry and idempotency task: implement retry policy and prove stable event ID and idempotency-key behavior across duplicate-safe redelivery.
 
@@ -322,9 +322,9 @@ Each task is accepted separately and must have focused tests, completion evidenc
 Story 3.5 is the sole owner of delivery-state writes and related migrations.
 
 Depends on: parent Story 1.3b, Archon Story 3.1, Archon Story 3.3a, and Archon Story 3.3b.
-Contract needed: Workflow event envelope schema, workflow provider event route, binding reference, signature metadata, replay metadata, idempotency key, workflow delivery status shape, and rejection fixtures.
+Contract needed: Workflow event envelope schema, workflow provider event route, binding reference, HTTP signature headers, replay metadata, idempotency key, workflow delivery status shape, and rejection fixtures.
 Blocking behavior: This story must not move to implementation-ready or be completed unless shared workflow event examples validate locally and the provider binding surface can supply an event route and binding reference.
-Integration validation: Archon validates signed workflow event examples and rejection examples for bad signature, stale timestamp, duplicate event id, wrong binding, unknown project, schema mismatch, and wrong-profile-secret without introducing Hermes-specific Archon model names.
+Integration validation: Archon validates signed workflow event examples and rejection examples for bad signature, stale timestamp, duplicate event id, wrong binding, unknown project, schema mismatch, and wrong-signing-secret without introducing Hermes-specific Archon model names.
 
 **Hermes consumer impact:** `hermes-agent` Stories 3.6a, 3.6b, and 3.6c consume these events.
 
@@ -335,14 +335,14 @@ Integration validation: Archon validates signed workflow event examples and reje
 **Then** Archon writes the event to a non-blocking event outbox
 **And** Archon workflow execution continues even if workflow event delivery later fails.
 
-**Given** Archon prepares a workflow event for a project or codebase with a missing, stale, or disabled Workflow Provider Binding
+**Given** Archon prepares a workflow event for a project or codebase with a missing or disabled Workflow Provider Binding
 **When** the event would otherwise be queued or delivered
-**Then** Archon records a machine-readable delivery-failed or not-routable status
-**And** Archon does not deliver the event to a stale or disabled route.
+**Then** Archon records a machine-readable not-routable status
+**And** Archon does not deliver the event to a disabled or non-existent route.
 
 **Given** Archon prepares a workflow event payload for delivery
 **When** the payload is serialized
-**Then** it includes schema version, event id, event type, occurred timestamp, provider binding reference, workflow run reference, project or codebase reference, signature metadata, and idempotency key
+**Then** it includes schema version, event id, event type, occurred timestamp, provider binding reference, workflow run reference, project or codebase reference, and idempotency key
 **And** it matches the shared workflow event envelope example.
 
 **Given** workflow event delivery fails, retries, or reaches terminal failure
@@ -356,6 +356,136 @@ Integration validation: Archon validates signed workflow event examples and reje
 **And** consumers can detect duplicate-safe delivery from those fields.
 
 ---
+
+<!-- decision-gate:begin 3-5-produce-signed-typed-archon-workflow-events-from-outbox -->
+
+**Technical Decisions**
+
+### TD-01 — Reuse Hermes Generic Webhook V2 exactly
+
+**Behavior:** Archon signs `timestamp + "." + exactRawBodyBytes` with HMAC-SHA256 and sends the lowercase hexadecimal digest in `X-Webhook-Signature-V2` plus Unix seconds in `X-Webhook-Timestamp`.
+**Replay policy:** Hermes retains its existing 300-second replay window.
+**Body contract:** The event body contains no signature object, signature metadata, canonicalization metadata, or `bodyDigest`.
+**Rejected alternatives:** JCS, body-digest signing, configurable algorithms, configurable header names, and a second Archon-only signing protocol are rejected.
+**Owner:** Archon signs and Hermes verifies using the already implemented Hermes rule.
+
+### TD-02 — Store the plaintext signing secret on the Workflow Provider Binding
+
+**Behavior:** Add nullable `signing_secret TEXT` to `remote_agent_workflow_provider_bindings` and leave it unencrypted at rest.
+**Routing data:** The existing `event_route` is the complete webhook target and no `profileRoute`, ingress-path, secret-reference, or profile columns are added.
+**Provisioning:** Existing rows remain nullable until a secret is provisioned, while binding rotation replaces the stored secret and increments the existing binding version.
+**Exposure:** The raw secret is excluded from ordinary binding projections, CLI JSON, API responses, event bodies, delivery status, and logs.
+**Consumer copy:** Hermes retains its verifier copy in its existing webhook-subscription configuration.
+**Rejected alternatives:** A project-binding secret table, encryption-at-rest, `secretRef`, and runtime profile routing are rejected.
+
+### TD-03 — Only `archon serve` dispatches external events
+
+**Behavior:** CLI, detached, chat, and server workflow execution paths only enqueue external events.
+**Dispatcher:** `archon serve` starts one in-process poller, performs an immediate drain at boot, polls on an interval, and prevents overlapping drains in the same process.
+**Transport:** The poller posts to the binding's `event_route`, signs every attempt with Hermes V2, and sends the stable idempotency key as `X-Request-ID`.
+**Delivery guarantee:** Delivery is at-least-once because a crash after Hermes accepts but before Archon records the response leaves the outbox event eligible for redelivery.
+**Rejected alternatives:** Detached dispatch workers, a second daemon, queue infrastructure, cross-process leases, `SKIP LOCKED`, advisory election, and `LISTEN/NOTIFY` wake-up are rejected.
+
+### TD-04 — External enqueue is best-effort and non-transactional
+
+**Behavior:** External outbox enqueue follows the existing non-throwing workflow-event pattern and is independent from the workflow state transition.
+**Failure semantics:** Enqueue failure is logged but never thrown into workflow execution, and the workflow transition is not rolled back.
+**Accepted limitation:** A crash or database failure between the workflow transition and outbox enqueue can lose the external notification.
+**Rejected alternatives:** Transactionally coupling workflow transitions to outbox rows, failing a transition because enqueue failed, and adding compensating durability machinery are rejected.
+
+### TD-05 — Delivery-failed meta-events have a single recursion guard
+
+**Behavior:** Delivery failure of an ordinary external event may enqueue `workflow.delivery.failed`.
+**Terminator:** Failure to deliver an event whose `eventType` is already `workflow.delivery.failed` updates only that event's own attempt and retry state and never enqueues another failure event.
+**Rejected alternatives:** Recursion-depth counters and unbounded failure-event chaining are rejected.
+
+### TD-06 — Use one canonical external event vocabulary
+
+**Behavior:** The external event types are `workflow.run.started`, `workflow.run.completed`, `workflow.run.failed`, `workflow.approval.requested`, `workflow.delivery.failed`, and `workflow.artifact.recorded`.
+**Mapping:** Internal snake-case event names remain unchanged and are mapped only when an external outbox event is produced.
+**Contract update:** Delivery-status fixtures using `workflow.completed` must use `workflow.run.completed` instead.
+**Rejected alternatives:** Compatibility aliases and a third event vocabulary are rejected.
+
+### TD-07 — Derive one stable idempotency key per logical event
+
+**Behavior:** The idempotency key is `archon:<bindingName>:<eventId>`.
+**Persistence:** It is created once at enqueue, persisted with the outbox row, reused unchanged across every attempt, returned by delivery status, and sent as `X-Request-ID`.
+**Rejected alternatives:** The delivery fixture's `idm_*` form and minting a new key during redelivery are rejected.
+
+### TD-08 — Emit `workflow.run.started`
+
+**Behavior:** Story 3.5 maps the existing internal `workflow_started` lifecycle signal to `workflow.run.started`.
+**Payload:** The start payload describes the Archon run state and start time without a fabricated phase or command correlation ID.
+**Contract update:** FR-9, acceptance criteria, schema, and fixture prose must include the started event consistently.
+
+### TD-09 — `phase` identifies the workflow node awaiting review
+
+**Behavior:** `workflow.approval.requested.payload.approval.phase` contains the approval context's node ID or node name.
+**Meaning:** The name remains generic `phase`, but its Archon meaning is the workflow phase represented by the node currently awaiting review rather than a BMAD lifecycle phase.
+**Started event:** `workflow.run.started` emits no `phase` because no workflow node is awaiting review at run start.
+**Rejected alternatives:** Renaming the field to `nodeId`, fabricating a BMAD phase, and using a constant phase are rejected.
+
+### TD-10 — Build `projectRef` directly from the registered codebase
+
+**Behavior:** `projectRef.id` is `codebase.id`, `projectRef.codebaseRef` is `codebase.name`, `projectRef.repositoryPath` is `codebase.default_cwd`, and optional `projectRef.defaultBranch` is `codebase.default_branch`.
+**String refs:** `bindingRef.projectRef` and `workflowRunRef.projectRef` use `project:<codebase.id>`.
+**Eligibility:** A run without a resolvable registered codebase and matching binding is not routable.
+**Folder projects:** Registered folder projects are routable because `default_cwd` supplies their repository path even when `repository_url` is null.
+**Rejected alternatives:** Parsing `repository_url`, synthesizing `git:` or `folder:` identities, using a worktree `working_path`, and emitting a Hermes-owned Project Binding ID are rejected.
+
+### TD-11 — Do not compare binding versions or detect `stale`
+
+**Behavior:** Story 3.5 does not compare Workflow Provider Binding versions between Archon and Hermes and does not implement binding-staleness detection or reconciliation.
+**Local routing checks:** A binding is not routable when it is missing, disabled, points to a different codebase, or lacks the required route or signing secret.
+**Routable states:** Both `active` and `rotated` bindings are routable using their currently stored route and secret.
+**Version use:** `binding_version` remains binding lifecycle and audit data but is not a delivery-eligibility or signature input.
+**Contract update:** Remove `stale` from Story 3.5 routing requirements.
+
+### TD-12 — Use a separate external outbox
+
+**Behavior:** Create `remote_agent_workflow_event_outbox` for Hermes-bound logical events and leave `remote_agent_workflow_events` unchanged.
+**Identity:** External outbox events receive their own event IDs and do not reuse internal timeline row IDs.
+**Production:** Relevant workflow lifecycle sites best-effort write the internal timeline event and external outbox event independently.
+**Mappings:** `workflow_started`, `workflow_completed`, `workflow_failed`, `approval_requested`, and `workflow_artifact` map to their canonical external forms.
+**Delivery failure:** `workflow.delivery.failed` is produced directly by the delivery subsystem and needs no internal source event.
+**Rejected alternatives:** Scanning the internal timeline as a webhook queue and adding delivery columns to internal event rows are rejected.
+
+### TD-13 — Remove delivery metadata from the event body
+
+**Behavior:** Remove the optional `delivery` object and its `deliveryId`, `attempt`, and `receivedAt` fields from the event schema and all event fixtures.
+**Ownership:** Attempt identity, timing, outcome, request, and response belong to the Story 3.5 delivery-attempt history and Story 3.7 status projection.
+**Redelivery:** Every attempt sends the exact same serialized body; only the Hermes V2 timestamp and signature headers change.
+**Rejected alternatives:** Guessing Hermes's receipt time and replacing `receivedAt` with another producer timestamp are rejected.
+
+### TD-14 — Remove planning-only party metadata from event bodies
+
+**Behavior:** Remove `intendedProducer`, `intendedConsumer`, and `owningSubproject` from the workflow event schema, runtime body, and fixtures.
+**Reason:** These fields do not participate in routing, authentication, signature verification, idempotency, retry, workflow identity, or project identity.
+**Scope:** Existing CLI command envelopes remain unchanged because they belong to earlier stories.
+**Rejected alternatives:** Creating shared constants, moving CLI helpers into core, and importing CLI code from core are rejected.
+
+### TD-15 — Delivery-status correlation belongs to the status query
+
+**Behavior:** Story 3.5 persists no command correlation ID on workflow runs, event bodies, outbox rows, or delivery-attempt rows.
+**Story 3.7:** A delivery-health query echoes a supplied correlation ID or generates one at query time, matching the existing CLI JSON convention.
+**Durable identity:** `eventId`, `idempotencyKey`, and `workflowRunRef` identify the delivery and workflow independently of a query request.
+**Rejected alternatives:** Persisting the start-command correlation ID and choosing one of several later workflow-control correlation IDs are rejected.
+
+### TD-16 — Use eight attempts with deterministic backoff and append-only webhook history
+
+**Retry limit:** The first delivery is attempt 1, failures 1 through 7 schedule delays of 1, 2, 4, 8, 16, 32, and 60 minutes, and failure 8 becomes `terminal-failure`.
+**Policy shape:** The values are code constants with no configuration, jitter, separate scheduler, or HTTP-status-specific policy in v1.
+**Retryable failures:** Network errors, timeouts, and all HTTP non-2xx responses follow the same retry schedule.
+**Not-routable events:** Locally non-routable events are recorded as failed/not-routable and are not automatically retried.
+**Current state:** The outbox persists current status, attempt count, last-attempt time, next-attempt time, and last error.
+**Attempt history:** Create append-only `remote_agent_workflow_event_delivery_attempts` with one row for every HTTP attempt, successful or failed.
+**Request snapshot:** Each attempt stores its number, actual full request URL, method, request headers, exact request body, and start time.
+**Response snapshot:** Each attempt stores response status, response headers, exact response body, transport error when no response exists, completion time, duration, and explicit outcome.
+**Outcome states:** An attempt starts as `pending`, ends as `succeeded` for HTTP 2xx or `failed` otherwise, and remains `pending` when a process crash makes the result unknowable.
+**History invariant:** The dispatcher inserts the pending attempt before issuing HTTP; if that insert fails, it sends no webhook and leaves the outbox row eligible for a later drain.
+**Redelivery:** Reproduction uses the stored target and exact body, preserves `eventId` and `idempotencyKey`, creates a new attempt row, and generates a fresh Hermes V2 timestamp and signature.
+
+<!-- decision-gate:end 3-5-produce-signed-typed-archon-workflow-events-from-outbox -->
 
 ### Story 3.7: Expose Archon Workflow Event Delivery Health
 

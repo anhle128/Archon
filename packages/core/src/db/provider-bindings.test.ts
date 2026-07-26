@@ -36,6 +36,8 @@ import {
   rotateBinding,
   disableBinding,
   deriveBindingId,
+  getBindingByCodebase,
+  getBindingByIdWithSecret,
 } from './provider-bindings';
 
 function bindingRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -60,7 +62,7 @@ describe('provider-bindings db layer (Story 3.1)', () => {
   });
 
   describe('createBinding()', () => {
-    test('inserts provider/name/codebase_id/event_route with ON CONFLICT DO NOTHING (never DO UPDATE)', async () => {
+    test('inserts provider/name/codebase_id/event_route/signing_secret with ON CONFLICT DO NOTHING', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
       mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
 
@@ -69,6 +71,7 @@ describe('provider-bindings db layer (Story 3.1)', () => {
         name: 'workflow-engine-primary',
         codebaseId: 'cb-1',
         eventRoute: 'https://hermes.example/events/workflow-engine',
+        signingSecret: 'local-test-value',
       });
 
       expect(mockWithTransaction).toHaveBeenCalledTimes(1);
@@ -81,6 +84,7 @@ describe('provider-bindings db layer (Story 3.1)', () => {
       expect(params).toContain('workflow-engine-primary');
       expect(params).toContain('cb-1');
       expect(params).toContain('https://hermes.example/events/workflow-engine');
+      expect(params).toContain('local-test-value');
     });
 
     test('rejects with BINDING_ALREADY_EXISTS when rowCount is 0 (row already present) and issues no further write', async () => {
@@ -99,6 +103,53 @@ describe('provider-bindings db layer (Story 3.1)', () => {
     });
   });
 
+  describe('secret-aware private lookups', () => {
+    test('getBinding strips signing_secret from the public projection', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([bindingRow({ signing_secret: 'local-test-value' })], 1)
+      );
+
+      const result = await getBinding('archon', 'workflow-engine-primary');
+
+      expect(result).not.toBeNull();
+      expect('signing_secret' in (result ?? {})).toBe(false);
+    });
+
+    test('getBindingByCodebase returns every binding row for conflict handling', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult(
+          [
+            bindingRow({ id: 'wpb-1', signing_secret: 'first' }),
+            bindingRow({
+              id: 'wpb-2',
+              name: 'workflow-engine-secondary',
+              signing_secret: 'second',
+            }),
+          ],
+          2
+        )
+      );
+
+      const result = await getBindingByCodebase('archon', 'cb-1');
+
+      expect(result).toHaveLength(2);
+      expect(result.map(row => row.signing_secret)).toEqual(['first', 'second']);
+      const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(sql).toContain('WHERE provider = $1 AND codebase_id = $2');
+      expect(params).toEqual(['archon', 'cb-1']);
+    });
+
+    test('getBindingByIdWithSecret returns the private signing secret', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([bindingRow({ signing_secret: 'local-test-value' })], 1)
+      );
+
+      const result = await getBindingByIdWithSecret('wpb-1');
+
+      expect(result?.signing_secret).toBe('local-test-value');
+    });
+  });
+
   describe('updateBinding()', () => {
     test('issues UPDATE ... WHERE provider=$1 AND name=$2 and never inserts', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
@@ -112,6 +163,7 @@ describe('provider-bindings db layer (Story 3.1)', () => {
         name: 'workflow-engine-primary',
         codebaseId: 'cb-1',
         eventRoute: 'https://hermes.example/events/v2',
+        signingSecret: 'local-test-value-v2',
       });
 
       expect(mockWithTransaction).toHaveBeenCalledTimes(1);
@@ -119,9 +171,11 @@ describe('provider-bindings db layer (Story 3.1)', () => {
       expect(preSelectSql).toContain('FOR UPDATE');
       const [updateSql, updateParams] = mockQuery.mock.calls[1] as [string, unknown[]];
       expect(updateSql).toContain('UPDATE remote_agent_workflow_provider_bindings');
+      expect(updateSql).toContain('signing_secret = COALESCE');
       expect(updateSql).not.toContain('INSERT INTO');
       expect(updateSql).toMatch(/WHERE\s+provider\s*=\s*\$\d+\s+AND\s+name\s*=\s*\$\d+/);
       expect(updateParams).toContain('https://hermes.example/events/v2');
+      expect(updateParams).toContain('local-test-value-v2');
     });
 
     test('rejects with BINDING_NOT_FOUND when rowCount is 0 and issues no INSERT fallback', async () => {
@@ -240,7 +294,7 @@ describe('provider-bindings db layer (Story 3.1)', () => {
         createQueryResult([bindingRow({ state: 'rotated', binding_version: 2 })], 1)
       );
 
-      const result = await rotateBinding('archon', 'workflow-engine-primary');
+      const result = await rotateBinding('archon', 'workflow-engine-primary', 'rotated-secret');
 
       expect(mockWithTransaction).toHaveBeenCalledTimes(1);
       const [preSelectSql] = mockQuery.mock.calls[0] as [string, unknown[]];
@@ -248,8 +302,16 @@ describe('provider-bindings db layer (Story 3.1)', () => {
       const [updateSql, updateParams] = mockQuery.mock.calls[1] as [string, unknown[]];
       expect(updateSql).toContain('UPDATE remote_agent_workflow_provider_bindings');
       expect(updateSql).toContain('binding_version = $3');
-      expect(updateSql).toContain('binding_version = $4');
-      expect(updateParams).toEqual(['archon', 'workflow-engine-primary', 2, 1, 'active']);
+      expect(updateSql).toContain('signing_secret = COALESCE($4, signing_secret)');
+      expect(updateSql).toContain('binding_version = $5');
+      expect(updateParams).toEqual([
+        'archon',
+        'workflow-engine-primary',
+        2,
+        'rotated-secret',
+        1,
+        'active',
+      ]);
       expect(updateSql).not.toContain('RETURNING');
       const [selectSql] = mockQuery.mock.calls[2] as [string, unknown[]];
       expect(selectSql).toContain('SELECT');

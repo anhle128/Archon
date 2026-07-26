@@ -30,3 +30,24 @@ describe('provider binding bundled schema marker (Story 3.1)', () => {
     );
   });
 });
+
+describe('workflow event outbox bundled schema marker (Story 3.5)', () => {
+  test('getSchemaSQL() (source-build disk read) contains the outbox tables and private signing secret column', () => {
+    const sql = getSchemaSQL();
+    expect(sql).toContain('signing_secret  TEXT');
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS remote_agent_workflow_event_outbox');
+    expect(sql).toContain(
+      'CREATE TABLE IF NOT EXISTS remote_agent_workflow_event_delivery_attempts'
+    );
+  });
+
+  test('BUNDLED_SCHEMA_SQL (binary-build embedded copy) contains the outbox tables and private signing secret column', () => {
+    expect(BUNDLED_SCHEMA_SQL).toContain('signing_secret  TEXT');
+    expect(BUNDLED_SCHEMA_SQL).toContain(
+      'CREATE TABLE IF NOT EXISTS remote_agent_workflow_event_outbox'
+    );
+    expect(BUNDLED_SCHEMA_SQL).toContain(
+      'CREATE TABLE IF NOT EXISTS remote_agent_workflow_event_delivery_attempts'
+    );
+  });
+});

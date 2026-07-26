@@ -96,4 +96,21 @@ describe('workflowProviderBindingSchema (Story 3.1)', () => {
     };
     expect(() => workflowProviderBindingSchema.parse(row)).toThrow();
   });
+
+  test('strips private signing_secret from public binding projections', () => {
+    const parsed = workflowProviderBindingSchema.parse({
+      id: 'wpb-1',
+      provider: 'archon',
+      name: 'workflow-engine-primary',
+      codebase_id: 'cb-1',
+      event_route: 'https://hermes.example/events/workflow-engine',
+      signing_secret: 'local-test-value',
+      state: 'active',
+      binding_version: 1,
+      created_at: '2026-07-11T11:48:27.000Z',
+      updated_at: '2026-07-11T11:48:27.000Z',
+    });
+
+    expect('signing_secret' in parsed).toBe(false);
+  });
 });

@@ -88,18 +88,25 @@ describe('workflow-commander contract regression (Story 3.1)', () => {
 // the file instead.
 // ---------------------------------------------------------------------------
 describe('CI-002 / 3.3A-CI-049 secret/signing-material scan (Stories 3.1 and 3.3a)', () => {
-  test('none of the provider-binding or shared envelope implementation files contain secret/signing-material patterns', () => {
-    const targets = [
-      join(import.meta.dir, '../../../core/src/db/provider-bindings.ts'),
+  test('public provider-binding files do not expose signing secret fields or raw signing material', () => {
+    const publicTargets = [
       join(import.meta.dir, '../../../core/src/schemas/workflow-provider-binding.ts'),
       join(import.meta.dir, './provider-binding.ts'),
       join(import.meta.dir, './workflow-provider-command-envelope.ts'),
     ];
-    const forbidden = /secret|signing[_-]?key|private[_-]?key|BEGIN (RSA|EC|OPENSSH) PRIVATE KEY/i;
-    for (const path of targets) {
+    const rawMaterial = /sk-|ghp_|whsec_|private[_-]?key|BEGIN (RSA|EC|OPENSSH) PRIVATE KEY/i;
+    const publicSecretField = /signing_secret|secretRef/i;
+    for (const path of publicTargets) {
       const content = readFileSync(path, 'utf8');
-      expect(forbidden.test(content)).toBe(false);
+      expect(rawMaterial.test(content)).toBe(false);
+      expect(publicSecretField.test(content)).toBe(false);
     }
+
+    const privateDbTarget = join(import.meta.dir, '../../../core/src/db/provider-bindings.ts');
+    const privateDbContent = readFileSync(privateDbTarget, 'utf8');
+    const rawPrivateMaterial =
+      /sk-|ghp_|whsec_|private[_-]?key|BEGIN (RSA|EC|OPENSSH) PRIVATE KEY/i;
+    expect(rawPrivateMaterial.test(privateDbContent)).toBe(false);
   });
 });
 

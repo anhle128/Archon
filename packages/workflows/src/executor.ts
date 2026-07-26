@@ -1147,6 +1147,27 @@ export async function executeWorkflow(
           'workflow_event_persist_failed'
         );
       });
+    deps.store
+      .enqueueExternalWorkflowEvent({
+        workflow_run_id: workflowRun.id,
+        event_type: 'workflow.run.failed',
+        occurred_at: new Date().toISOString(),
+        payload: {
+          state: 'failed',
+          failure: {
+            code: 'WORKFLOW_FAILED',
+            category: 'workflow_failure',
+            retryable: false,
+            details: { error: err.message },
+          },
+        },
+      })
+      .catch((err: Error) => {
+        getLog().error(
+          { err, workflowRunId: workflowRun.id, eventType: 'workflow.run.failed' },
+          'workflow_event_outbox_enqueue_failed'
+        );
+      });
     emitter.unregisterRun(workflowRun.id);
 
     // Notify user about the failure

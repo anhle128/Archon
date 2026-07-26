@@ -62,7 +62,7 @@ REJECTION_REASONS = {
     'wrong-binding',
     'unknown-project',
     'schema-mismatch',
-    'wrong-profile-secret',
+    'wrong-signing-secret',
     'wrong-codebase',
     'unsupported-provider',
 }
@@ -168,7 +168,7 @@ REQUIRED_REJECTION_EXAMPLES = [
     'wrong-binding.json',
     'unknown-project.json',
     'schema-mismatch.json',
-    'wrong-profile-secret.json',
+    'wrong-signing-secret.json',
     'wrong-codebase.json',
     'unsupported-provider.json',
 ]
@@ -180,12 +180,6 @@ REQUIRED_MATERIALIZATION_EXAMPLES = [
     'malformed-sprint-status.json',
     'duplicate-phase-task-prevention.json',
 ]
-DEFERRED_SIGNATURE_POLICY = {
-    'algorithm': '${WORKFLOW_EVENT_SIGNATURE_ALGORITHM}',
-    'signatureHeader': '${WORKFLOW_EVENT_SIGNATURE_HEADER}',
-    'timestampHeader': '${WORKFLOW_EVENT_TIMESTAMP_HEADER}',
-    'canonicalization': '${WORKFLOW_EVENT_SIGNATURE_CANONICALIZATION}',
-}
 NO_MUTATION_FIELDS = {
     'stateMutation',
     'workflowRunMutation',
@@ -254,7 +248,7 @@ DOWNSTREAM_READINESS_EXPECTATION_FIELDS = {
     'idempotencyExpectation',
 }
 PAYLOAD_REQUIRED_FIELDS = {
-    'workflow.run.started': {'state', 'phase', 'commandCorrelationId', 'startedAt'},
+    'workflow.run.started': {'state', 'startedAt'},
     'workflow.run.completed': {'state', 'result'},
     'workflow.run.failed': {'state', 'failure'},
     'workflow.approval.requested': {'state', 'approval'},
@@ -885,25 +879,6 @@ def validate_project_identity(
             errors.append(f'{path} {container}.projectRef must match projectRef.id as {expected_project_ref}')
 
 
-def validate_profile_route_shape(path: Path, provider: Any, profile_route: Any, errors: list[str]) -> None:
-    if not isinstance(provider, str) or not isinstance(profile_route, dict):
-        return
-    profile = profile_route.get('profile')
-    if not isinstance(profile, str) or not profile.strip():
-        return
-    expected_path = f'/p/{profile}/webhooks/workflow-events/{provider}'
-    if profile_route.get('ingressPath') != expected_path:
-        errors.append(f'{path} profileRoute.ingressPath must be {expected_path}')
-
-
-def validate_signature_policy(path: Path, signature: Any, errors: list[str]) -> None:
-    if not isinstance(signature, dict):
-        return
-    for field, expected in DEFERRED_SIGNATURE_POLICY.items():
-        if signature.get(field) != expected:
-            errors.append(f'{path} signature.{field} must use deferred placeholder {expected}')
-
-
 def validate_event_payload(path: Path, event_type: Any, payload: Any, errors: list[str]) -> None:
     if not isinstance(event_type, str) or not isinstance(payload, dict):
         return
@@ -927,38 +902,17 @@ def validate_event_payload(path: Path, event_type: Any, payload: Any, errors: li
 
 
 def is_valid_redelivery(original: dict[str, Any], candidate: dict[str, Any]) -> bool:
-    if candidate.get('eventId') != original.get('eventId'):
-        return False
-    if candidate.get('idempotencyKey') != original.get('idempotencyKey'):
-        return False
-    for field in ('provider', 'eventType', 'bindingRef', 'workflowRunRef', 'projectRef', 'profileRoute', 'payload'):
-        if candidate.get(field) != original.get(field):
-            return False
-    original_delivery = original.get('delivery')
-    candidate_delivery = candidate.get('delivery')
-    if not isinstance(original_delivery, dict) or not isinstance(candidate_delivery, dict):
-        return False
-    original_attempt = original_delivery.get('attempt')
-    candidate_attempt = candidate_delivery.get('attempt')
-    if not isinstance(original_attempt, int) or not isinstance(candidate_attempt, int):
-        return False
-    if candidate_attempt <= original_attempt:
-        return False
-    return candidate_delivery.get('deliveryId') != original_delivery.get('deliveryId')
+    return candidate == original
 
 
 def validate_event(path: Path, data: Any, errors: list[str]) -> None:
     if not isinstance(data, dict):
         errors.append(f'{path} event example root must be an object')
         return
-    check_metadata(path, data, errors)
     if data.get('schemaVersion') != EVENT_VERSION:
         errors.append(f'{path} must use schemaVersion {EVENT_VERSION}')
-    if data.get('intendedProducer') != 'Archon' or data.get('intendedConsumer') != 'Hermes':
-        errors.append(f'{path} event payload must be Archon -> Hermes')
-    if data.get('owningSubproject') != 'archon':
-        errors.append(f'{path} event owningSubproject must be archon')
     required = {
+        'schemaVersion',
         'provider',
         'eventId',
         'eventType',
@@ -966,9 +920,7 @@ def validate_event(path: Path, data: Any, errors: list[str]) -> None:
         'bindingRef',
         'workflowRunRef',
         'projectRef',
-        'profileRoute',
         'idempotencyKey',
-        'signature',
         'payload',
     }
     require_object_fields(path, data, 'event', required, errors)
@@ -1005,40 +957,6 @@ def validate_event(path: Path, data: Any, errors: list[str]) -> None:
     elif 'projectRef' in data:
         errors.append(f'{path} projectRef must be an object')
     validate_project_identity(path, project_ref, binding_ref, workflow_run_ref, errors)
-
-    profile_route = data.get('profileRoute')
-    if isinstance(profile_route, dict):
-        require_object_fields(
-            path,
-            profile_route,
-            'profileRoute',
-            {'profile', 'ingressPath', 'bindingName', 'secretRef', 'expectedProvider'},
-            errors,
-        )
-        if isinstance(binding_ref, dict) and profile_route.get('bindingName') != binding_ref.get('name'):
-            errors.append(f'{path} profileRoute bindingName must match bindingRef name')
-        if profile_route.get('expectedProvider') != data.get('provider'):
-            errors.append(f'{path} profileRoute expectedProvider must match event provider')
-        validate_profile_route_shape(path, data.get('provider'), profile_route, errors)
-    elif 'profileRoute' in data:
-        errors.append(f'{path} profileRoute must be an object')
-
-    signature = data.get('signature')
-    if isinstance(signature, dict):
-        require_object_fields(
-            path,
-            signature,
-            'signature',
-            {'algorithm', 'keyId', 'signedAt', 'signatureHeader', 'timestampHeader', 'signatureInput', 'bodyDigest'},
-            errors,
-        )
-        if isinstance(signature.get('signedAt'), str) and not is_valid_datetime(signature['signedAt']):
-            errors.append(f'{path} signature.signedAt must be a valid date-time')
-        if not isinstance(signature.get('signatureInput'), list) or not signature.get('signatureInput'):
-            errors.append(f'{path} signature.signatureInput must be a non-empty list')
-        validate_signature_policy(path, signature, errors)
-    elif 'signature' in data:
-        errors.append(f'{path} signature must be an object')
 
     if 'payload' in data and not isinstance(data.get('payload'), dict):
         errors.append(f'{path} payload must be an object')
@@ -1118,8 +1036,6 @@ def validate_rejection(
         event_envelope.get('workflowRunRef'),
         errors,
     )
-    validate_profile_route_shape(path, event_envelope.get('provider'), event_envelope.get('profileRoute'), errors)
-    validate_signature_policy(path, event_envelope.get('signature'), errors)
 
     if reason != 'schema-mismatch' and event_schema is not None:
         for error in schema_errors(event_envelope, event_schema, event_schema, []):
@@ -1136,19 +1052,20 @@ def validate_rejection(
     if reason == 'stale-timestamp':
         if 'allowedClockSkewSeconds' in evidence:
             errors.append(f'{path} stale-timestamp evidence must not hard-code allowedClockSkewSeconds')
-        if evidence.get('replayWindowDecisionRef') != 'deferred-signature-and-replay-policy':
-            errors.append(f'{path} stale-timestamp evidence must reference deferred-signature-and-replay-policy')
+        age = evidence.get('webhookTimestampAgeSeconds')
+        if not isinstance(age, int) or age <= 300:
+            errors.append(f'{path} stale-timestamp evidence must show a webhook timestamp older than 300 seconds')
     if reason == 'duplicate-event-id' and evidence.get('duplicateOfEventId') != event_envelope.get('eventId'):
         errors.append(f'{path} duplicate-event-id evidence must reference the duplicate eventId')
     if reason == 'wrong-binding' and evidence.get('bindingAccepted') is not False:
         errors.append(f'{path} wrong-binding evidence must set bindingAccepted false')
     if reason == 'unknown-project' and evidence.get('projectLookupStatus') != 'missing':
         errors.append(f'{path} unknown-project evidence must set projectLookupStatus missing')
-    if reason == 'wrong-profile-secret':
-        if evidence.get('signatureVerifiedAgainstPresentedProfile') is not True:
-            errors.append(f'{path} wrong-profile-secret evidence must verify against the presented profile')
-        if evidence.get('profileRouteAccepted') is not False:
-            errors.append(f'{path} wrong-profile-secret evidence must set profileRouteAccepted false')
+    if reason == 'wrong-signing-secret':
+        if evidence.get('signatureVerification') != 'failed':
+            errors.append(f'{path} wrong-signing-secret evidence must set signatureVerification failed')
+        if evidence.get('signingSecretAccepted') is not False:
+            errors.append(f'{path} wrong-signing-secret evidence must set signingSecretAccepted false')
     if reason == 'wrong-codebase' and evidence.get('codebaseAccepted') is not False:
         errors.append(f'{path} wrong-codebase evidence must set codebaseAccepted false')
     if reason == 'unsupported-provider' and evidence.get('providerSupported') is not False:

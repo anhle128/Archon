@@ -638,3 +638,25 @@ describe('PostgreSQL schema convergence — remote_agent_workflow_provider_bindi
     //   ).resolves.toBeDefined();
   });
 });
+
+describe('PostgreSQL schema convergence — workflow event outbox (Story 3.5)', () => {
+  test('the real migrations/000_combined.sql defines signed event outbox storage and indexes', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const realCombinedSql = readFileSync(
+      resolve(import.meta.dir, '../../../../../migrations/000_combined.sql'),
+      'utf8'
+    );
+
+    expect(realCombinedSql).toContain('signing_secret  TEXT');
+    expect(realCombinedSql).toContain(
+      'CREATE TABLE IF NOT EXISTS remote_agent_workflow_event_outbox'
+    );
+    expect(realCombinedSql).toContain(
+      'CREATE TABLE IF NOT EXISTS remote_agent_workflow_event_delivery_attempts'
+    );
+    expect(realCombinedSql).toContain('idx_workflow_event_outbox_due');
+    expect(realCombinedSql).toContain('idx_workflow_event_outbox_run');
+    expect(realCombinedSql).toContain('idx_workflow_event_delivery_attempts_outbox');
+  });
+});

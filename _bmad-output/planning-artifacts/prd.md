@@ -66,13 +66,14 @@ This is the producer side of the provider adapter that a controller such as Herm
 
 ### FR-9: Produce Signed Typed Workflow Events
 
-Archon emits signed typed workflow events for workflow completion, workflow failure, approval requested, delivery failed, and artifact events through a non-blocking outbox.
+Archon emits signed typed workflow events for workflow start, workflow completion, workflow failure, approval requested, delivery failed, and artifact events through a non-blocking outbox.
 
 **Consequences:**
 
 - Archon writes eligible events to durable outbox state before delivery.
 - Archon workflow execution continues even when event delivery fails later.
-- Every event includes schema version, event id, event type, occurred timestamp, provider binding reference, workflow run reference, project or codebase reference, signature metadata, and idempotency key.
+- Every event body includes schema version, event id, event type, occurred timestamp, provider binding reference, workflow run reference, project or codebase reference, and idempotency key.
+- Signature metadata travels in HTTP headers.
 - Archon uses stable event id and idempotency key values so consumers can classify duplicate-safe delivery.
 - Archon produces events that can be validated by shared event-envelope and rejection fixtures.
 
@@ -91,7 +92,7 @@ Archon reports workflow event delivery and outbox health as structured status.
 
 - **NFR-1:** Workflow events accelerate delivery but are not the only source of truth.
 - **NFR-5:** Archon events must be signed and schema-versioned so consumers can reject invalid events.
-- **NFR-6:** Event secrets and signature metadata must support profile-scoped validation by the consumer.
+- **NFR-6:** Event secrets and signature metadata must support binding-scoped validation by the consumer.
 - **NFR-9:** Archon persists workflow commands, workflow events, and delivery state with enough detail for audit.
 - **NFR-14:** Archon error and delivery-health responses expose diagnostic categories and machine-readable detail rather than raw stack traces.
 - **NFR-15:** Archon stays within provider ownership boundaries and does not reach into Hermes-owned concerns.

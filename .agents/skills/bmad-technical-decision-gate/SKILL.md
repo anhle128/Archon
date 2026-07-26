@@ -19,7 +19,7 @@ Gate `$bmad-create-story` before creation or `$validate-story` during existing-s
 
 ## On Activation
 
-Parse the selector and `--intent create|revalidate`; set `{mode-flag}` to empty, `--batch`, or `--headless`, rejecting combinations before preflight or mutation.
+Parse the selector, `--intent create|revalidate`, and an optional `--apply` re-run request; set `{mode-flag}` to empty, `--batch`, or `--headless`, rejecting invalid combinations before preflight or mutation.
 Resolve a filesystem-safe `{story-key}` from the selector or one authoritative planning record, never a capability title.
 Ask one target question in guided or batch mode when needed; headless requires an explicit key and `--intent`.
 
@@ -71,9 +71,10 @@ Never hide a producer/consumer mismatch in an undocumented adapter, prefer curre
 
 Classify public contracts, lifecycle semantics, durable state mutation, migrations, security boundaries, and cross-process ownership as high risk.
 
-- In guided mode, ask one material question at a time, cite both sides, explain the consequence, recommend an evidence-grounded answer, and checkpoint it.
-- In batch mode, never decide or interrupt; record every problem and suggestion with `HIGH`, `MEDIUM`, or `LOW`, then let the helper sort and count.
-- Set `mode: batch`, `reviewStatus: PENDING`, and `gate: BLOCKED`; only explicit whole-file approval promotes suggestions and sets `APPROVED`, while changes trigger another review.
+- In guided mode, ask one material question at a time as evidence surfaces, cite both sides, explain the consequence, recommend an evidence-grounded answer, and checkpoint it.
+- In batch mode, decide nothing during the sweep: record every problem, suggestion, and suggestion rationale with `HIGH`, `MEDIUM`, or `LOW`, let the helper sort and count, then interview the user finding by finding in table order.
+- In both modes, record the user's answer together with the user's own reasoning: mine their reply and the conversation history for why they chose it, and when the why is not recoverable, ask one follow-up before recording — the artifact must let a later reader judge the user's thinking, not only the verdict.
+- Set `mode: batch`, `reviewStatus: PENDING`, and `gate: BLOCKED`; only explicit whole-file approval after the interview promotes answered findings and sets `APPROVED`, while changes trigger another review.
 - In headless mode, choose only evidence-determined or low-risk details and return `BLOCKED` instead of guessing any unresolved high-risk decision.
 
 ## Produce the Gate Artifact
@@ -93,17 +94,19 @@ Use exactly these substantive sections:
 
 For each material decision, state its identifier, behavior, authority, rejected alternatives, affected contracts, and owners when applicable.
 For each conflict, identify its artifacts and whether an upstream authority must change.
-Start each guided or headless unresolved item with `- TD-<id>:` for deterministic counting.
+Start a quick guided or headless unresolved note with `- TD-<id>:` for deterministic counting.
 The proof sketch must exercise the real external boundary and observable lifecycle so it distinguishes the selected semantics from plausible alternatives.
 
-In a pending batch artifact, place every problem under `## Unresolved Decisions` using a `### [HIGH|MEDIUM|LOW] TD-<id> — <title>` heading and the labels `**Problem:**`, `**Evidence:**`, `**Impact:**`, and `**Suggested solution:**`.
-Do not copy a suggested solution into `## Decisions` before the user approves the whole file.
+In both modes, structure every finding under `## Unresolved Decisions` as `### [HIGH|MEDIUM|LOW] TD-<id> — <title>` with the labels `**Problem:**`, `**Evidence:**`, `**Impact:**`, `**Suggestion:**`, and `**Suggestion rationale:**`, adding `**Answer:**` and `**Answer rationale:**` in the user's own terms once they have answered.
+The helper derives the findings tracking table (TD, severity, title, answered or pending) at the top of the section during normalization; never build or edit the table manually.
+Promotion into `## Decisions` carries the full finding record, including the user's rationale.
+In batch mode, do not promote any finding before the user approves the whole file.
 
 Set `gate: PASS` only when one lifecycle satisfies all normative sources, every state-changing boundary has an owner, no material decision remains unresolved, conflicts have explicit resolutions, and the artifact has a valid executable proof sketch.
 Batch `PASS` additionally requires explicit whole-file approval and `reviewStatus: APPROVED`.
 Otherwise block and route product ambiguity to `bmad-prd` or `bmad-correct-course`, ownership to `bmad-architecture`, behavior to `bmad-investigate`, technology evidence to `bmad-technical-research`, and contract conflicts to canonical owners.
 
-Do not edit canonical artifacts or code without a separate request, create the story, or claim implementation readiness.
+Beyond the apply helper's marker-delimited epic block, do not edit canonical artifacts or code without a separate request, create the story, or claim implementation readiness.
 
 ## Challenge, Validate, and Hand Off
 
@@ -121,7 +124,12 @@ When subagents are unavailable, perform the same two reviews sequentially as exp
 Resolve every material finding or convert it into an unresolved decision, then normalize and validate again.
 If a post-approval review adds a batch problem, reset `reviewStatus: PENDING` and return the whole file for another user review.
 
-Append the final gate and artifact path to the memlog.
+After the final validated `PASS` built from user answers, offer the apply step: name the owning epic file and its story heading — exactly one `### Story ...` heading may match this story across the planning-artifacts epic files — preview what the block will carry, and only on the user's explicit yes run `{python-runner} {skill-root}/scripts/validate_decision_gate.py {artifact} --apply --epic <epic-path> --story-heading "<exact heading line>"`.
+The helper owns the marker-delimited `Technical Decisions` block and reruns idempotently; never touch other epic content, and report instead of writing when the heading is missing or ambiguous.
+Headless runs never apply, because applying publishes user answers and headless has none.
+An `--apply` invocation is that yes given upfront: re-run only the apply step for an already validated artifact without reopening decisions or asking again.
+
+Append the final gate, artifact path, and apply outcome (run, declined, or unavailable) to the memlog.
 For `PASS`, hand `{artifact}` to `$bmad-create-story` before creation or hand it with the existing story to `$validate-story` in Validate Mode; the latter must not run create-story.
 A `BLOCKED` artifact stops downstream story work and routes pending review or decisions to the user and named owners.
 After a validated `PASS` handoff, append the memlog event `session complete`.

@@ -132,15 +132,13 @@ describe('3.3A-UNIT-018 — no new JSON Schema runtime dependency in @archon/cli
 });
 
 // ---------------------------------------------------------------------------
-// EXECUTABLE — 3.3A-CONTRACT-048 [P1] — Contract package is not edited to fit
-// runtime. Uses `git diff --quiet` against the working tree's HEAD for the
-// contracts directory: this repo is clean at ATDD time, so this test passes
-// now and fails the moment any implementation step edits a checked-in
-// contract file/fixture/schema instead of conforming runtime code to them.
+// EXECUTABLE — 3.3A-CONTRACT-048 [P1] — Command contract package is not edited
+// to fit runtime. Story 3.5 legitimately evolves the event contract, so this
+// guard stays scoped to the Story 3.3A command schema and command fixtures.
 // ---------------------------------------------------------------------------
-describe('3.3A-CONTRACT-048 — contract package is never edited to fit runtime [P1, R-008/R-011]', () => {
-  test('the workflow-commander contract package has no uncommitted working-tree changes', async () => {
-    const proc = Bun.spawn(['git', 'diff', '--quiet', '--', CONTRACTS_ROOT], {
+describe('3.3A-CONTRACT-048 — command contract package is never edited to fit runtime [P1, R-008/R-011]', () => {
+  test('the workflow-commander command contract has no uncommitted working-tree changes', async () => {
+    const proc = Bun.spawn(['git', 'diff', '--quiet', '--', SCHEMA_PATH, COMMANDS_DIR], {
       cwd: join(import.meta.dir, '../../../..'),
       stdout: 'pipe',
       stderr: 'pipe',

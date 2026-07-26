@@ -290,6 +290,29 @@ describe('provider-binding CLI command (Story 3.1)', () => {
     });
   });
 
+  describe('private signing material input', () => {
+    test('create passes signing material to the DB layer without echoing it', async () => {
+      mockCreateBinding.mockClear();
+      const logs: string[] = [];
+
+      await providerBindingCreateCommand(
+        {
+          provider: 'archon',
+          name: 'workflow-engine-primary',
+          projectRef: 'workflow-engine',
+          route: 'https://hermes.example/events/workflow-engine',
+          signingSecret: 'local-test-value',
+        },
+        { json: true, log: (line: string) => logs.push(line) }
+      );
+
+      expect(mockCreateBinding).toHaveBeenCalledWith(
+        expect.objectContaining({ signingSecret: 'local-test-value' })
+      );
+      expect(logs.join('\n')).not.toContain('local-test-value');
+    });
+  });
+
   describe('status state matrix', () => {
     test('supplying a --project-ref that resolves to a different codebase reports state=conflicting', async () => {
       const codebasesMod = await import('@archon/core/db/codebases');

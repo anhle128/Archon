@@ -83,8 +83,14 @@ def batch_artifact(
     )
 
 
-def batch_problem(risk: str, identifier: str) -> str:
-    """Build one structured batch problem."""
+def finding(risk: str, identifier: str, answered: bool = False) -> str:
+    """Build one structured finding block."""
+    answer = (
+        "\n**Answer:** Persist the dispatch before returning success.\n"
+        "\n**Answer rationale:** Avoids stranded runs and matches operator expectations.\n"
+        if answered
+        else ""
+    )
     return f"""### [{risk}] {identifier} — Dispatch ownership
 
 **Problem:** The durable dispatch owner is not defined.
@@ -93,7 +99,43 @@ def batch_problem(risk: str, identifier: str) -> str:
 
 **Impact:** A successful command can leave the run stranded.
 
-**Suggested solution:** Persist the dispatch before returning success.
+**Suggestion:** Persist the dispatch before returning success.
+
+**Suggestion rationale:** Durable dispatch is the only owner both plans accept.
+{answer}"""
+
+
+def findings_with_table(*specs: tuple) -> str:
+    """Build finding blocks preceded by their matching tracking table."""
+    rows = ["| TD | Severity | Title | Status |", "| --- | --- | --- | --- |"]
+    blocks = []
+    for spec in specs:
+        risk, identifier, answered = (tuple(spec) + (False,))[:3]
+        status = "answered" if answered else "pending"
+        rows.append(f"| {identifier} | {risk} | Dispatch ownership | {status} |")
+        blocks.append(finding(risk, identifier, answered))
+    return "\n".join(rows) + "\n\n" + "\n".join(blocks)
+
+
+EPIC_FIXTURE = """# Example Epic Breakdown
+
+## Epic 2: Waits
+
+### Story 2.6: Kind-Specific answerWait
+
+**User Story**
+
+As a developer, I want kind-specific waits.
+
+**Acceptance Criteria**
+
+- Given a wait, when answered, then the answer routes by kind.
+
+### Story 2.7: Cancel
+
+**User Story**
+
+Another story body.
 """
 
 
@@ -134,7 +176,7 @@ class ValidateDecisionGateTests(unittest.TestCase):
         self.assertIn("Missing or malformed YAML frontmatter", result["errors"])
 
     def test_valid_pending_batch_review_orders_risks(self) -> None:
-        unresolved = f"{batch_problem('HIGH', 'TD-002')}\n{batch_problem('LOW', 'TD-003')}"
+        unresolved = findings_with_table(("HIGH", "TD-002"), ("LOW", "TD-003"))
         result, exit_code = self.validate(batch_artifact("BLOCKED", 2, "PENDING", unresolved))
         self.assertEqual(exit_code, 0)
         self.assertTrue(result["ok"])
@@ -145,20 +187,67 @@ class ValidateDecisionGateTests(unittest.TestCase):
         self.assertTrue(result["ok"])
 
     def test_batch_rejects_risk_order_drift(self) -> None:
-        unresolved = f"{batch_problem('LOW', 'TD-002')}\n{batch_problem('HIGH', 'TD-003')}"
+        unresolved = findings_with_table(("LOW", "TD-002"), ("HIGH", "TD-003"))
         result, exit_code = self.validate(batch_artifact("BLOCKED", 2, "PENDING", unresolved))
         self.assertEqual(exit_code, 1)
         self.assertIn("batch problems must be ordered HIGH, MEDIUM, then LOW", result["errors"])
 
     def test_batch_normalization_sorts_and_derives_count(self) -> None:
-        unresolved = f"{batch_problem('LOW', 'TD-002')}\n{batch_problem('HIGH', 'TD-003')}"
+        unresolved = f"{finding('LOW', 'TD-002')}\n{finding('HIGH', 'TD-003')}"
         content = batch_artifact("BLOCKED", 99, "PENDING", unresolved)
         normalized, changed, count = VALIDATOR.normalize_artifact(content)
         self.assertTrue(changed)
         self.assertEqual(count, 2)
         self.assertIn("unresolvedDecisionCount: 2", normalized)
         self.assertLess(normalized.index("[HIGH]"), normalized.index("[LOW]"))
+        self.assertIn("| TD-003 | HIGH | Dispatch ownership | pending |", normalized)
         result, exit_code = self.validate(normalized)
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(result["ok"])
+
+    def test_normalization_marks_answered_findings_in_table(self) -> None:
+        unresolved = f"{finding('HIGH', 'TD-002', answered=True)}\n{finding('LOW', 'TD-003')}"
+        content = batch_artifact("BLOCKED", 0, "PENDING", unresolved)
+        normalized, _, count = VALIDATOR.normalize_artifact(content)
+        self.assertEqual(count, 2)
+        self.assertIn("| TD-002 | HIGH | Dispatch ownership | answered |", normalized)
+        self.assertIn("| TD-003 | LOW | Dispatch ownership | pending |", normalized)
+        result, exit_code = self.validate(normalized)
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(result["ok"])
+
+    def test_structured_findings_require_tracking_table(self) -> None:
+        result, exit_code = self.validate(
+            batch_artifact("BLOCKED", 1, "PENDING", finding("HIGH", "TD-002"))
+        )
+        self.assertEqual(exit_code, 1)
+        self.assertIn(
+            "findings tracking table is missing above structured findings", result["errors"]
+        )
+
+    def test_tracking_table_must_match_finding_status(self) -> None:
+        unresolved = findings_with_table(("HIGH", "TD-002")).replace("| pending |", "| answered |")
+        result, exit_code = self.validate(batch_artifact("BLOCKED", 1, "PENDING", unresolved))
+        self.assertEqual(exit_code, 1)
+        self.assertIn(
+            "findings tracking table does not match the finding entries", result["errors"]
+        )
+
+    def test_answer_requires_rationale_pairing(self) -> None:
+        unresolved = findings_with_table(("HIGH", "TD-002", True)).replace(
+            "\n**Answer rationale:** Avoids stranded runs and matches operator expectations.\n",
+            "",
+        )
+        result, exit_code = self.validate(batch_artifact("BLOCKED", 1, "PENDING", unresolved))
+        self.assertEqual(exit_code, 1)
+        self.assertIn(
+            "finding TD-002 must pair **Answer:** with **Answer rationale:** content",
+            result["errors"],
+        )
+
+    def test_guided_structured_findings_count_with_simple_entries(self) -> None:
+        unresolved = findings_with_table(("HIGH", "TD-002")) + "\n\n- TD-003: Choose recovery owner."
+        result, exit_code = self.validate(artifact("BLOCKED", 2, unresolved))
         self.assertEqual(exit_code, 0)
         self.assertTrue(result["ok"])
 
@@ -193,7 +282,7 @@ class ValidateDecisionGateTests(unittest.TestCase):
         )
 
     def test_cli_normalize_atomically_updates_artifact(self) -> None:
-        unresolved = f"{batch_problem('LOW', 'TD-002')}\n{batch_problem('HIGH', 'TD-003')}"
+        unresolved = f"{finding('LOW', 'TD-002')}\n{finding('HIGH', 'TD-003')}"
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "technical-decisions.md"
             path.write_text(batch_artifact("BLOCKED", 0, "PENDING", unresolved), encoding="utf-8")
@@ -229,14 +318,16 @@ class ValidateDecisionGateTests(unittest.TestCase):
         self.assertEqual(payload["derivedUnresolvedDecisionCount"], 2)
         self.assertIn("unresolvedDecisionCount: 2", normalized)
 
-    def test_batch_problem_requires_suggested_solution(self) -> None:
-        unresolved = batch_problem("HIGH", "TD-002").replace(
-            "**Suggested solution:** Persist the dispatch before returning success.\n",
+    def test_finding_requires_suggestion_rationale(self) -> None:
+        unresolved = findings_with_table(("HIGH", "TD-002")).replace(
+            "**Suggestion rationale:** Durable dispatch is the only owner both plans accept.\n",
             "",
         )
         result, exit_code = self.validate(batch_artifact("BLOCKED", 1, "PENDING", unresolved))
         self.assertEqual(exit_code, 1)
-        self.assertIn("batch problem 1 is missing **Suggested solution:** content", result["errors"])
+        self.assertIn(
+            "finding TD-002 is missing **Suggestion rationale:** content", result["errors"]
+        )
 
     def test_batch_pass_requires_whole_file_approval(self) -> None:
         result, exit_code = self.validate(batch_artifact("PASS", 0, "PENDING", "None."))
@@ -249,7 +340,7 @@ class ValidateDecisionGateTests(unittest.TestCase):
         self.assertTrue(result["ok"])
 
     def test_approved_batch_cannot_retain_unresolved_problems(self) -> None:
-        content = batch_artifact("BLOCKED", 1, "APPROVED", batch_problem("HIGH", "TD-002"))
+        content = batch_artifact("BLOCKED", 1, "APPROVED", findings_with_table(("HIGH", "TD-002")))
         result, exit_code = self.validate(content)
         self.assertEqual(exit_code, 1)
         self.assertIn("APPROVED batch review cannot retain unresolved problems", result["errors"])
@@ -634,6 +725,97 @@ class ValidateDecisionGateTests(unittest.TestCase):
         self.assertIn("mutually exclusive", payload["errors"][0])
         self.assertFalse(artifact_parent_exists)
         self.assertFalse(story_root_exists)
+
+    HEADING = "### Story 2.6: Kind-Specific answerWait"
+
+    def apply_fixture(self, directory: str, content: str) -> tuple[Path, Path]:
+        """Write one artifact and one epic fixture into a temporary directory."""
+        root = Path(directory)
+        artifact_path = root / "technical-decisions.md"
+        artifact_path.write_text(content, encoding="utf-8")
+        epic_path = root / "epics-example.md"
+        epic_path.write_text(EPIC_FIXTURE, encoding="utf-8")
+        return artifact_path, epic_path
+
+    def test_apply_inserts_marker_block_into_story_section(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            artifact_path, epic_path = self.apply_fixture(directory, artifact("PASS", 0))
+            result = VALIDATOR.apply_decisions(artifact_path, epic_path, self.HEADING)
+            epic_text = epic_path.read_text(encoding="utf-8")
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["replaced"])
+        self.assertEqual(result["decisionCount"], 1)
+        begin = "<!-- decision-gate:begin 3-4-example -->"
+        self.assertIn(begin, epic_text)
+        self.assertIn("**Technical Decisions**", epic_text)
+        self.assertIn("TD-001: Dispatch is durable before success is returned.", epic_text)
+        self.assertLess(epic_text.index("Acceptance Criteria"), epic_text.index(begin))
+        self.assertLess(epic_text.index(begin), epic_text.index("### Story 2.7"))
+
+    def test_apply_replaces_existing_block_idempotently(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            artifact_path, epic_path = self.apply_fixture(directory, artifact("PASS", 0))
+            VALIDATOR.apply_decisions(artifact_path, epic_path, self.HEADING)
+            first_epic = epic_path.read_text(encoding="utf-8")
+            result = VALIDATOR.apply_decisions(artifact_path, epic_path, self.HEADING)
+            second_epic = epic_path.read_text(encoding="utf-8")
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["replaced"])
+        self.assertFalse(result["changed"])
+        self.assertEqual(first_epic, second_epic)
+        self.assertEqual(second_epic.count("decision-gate:begin"), 1)
+
+    def test_apply_refuses_blocked_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            artifact_path, epic_path = self.apply_fixture(
+                directory, artifact("BLOCKED", 1, "- TD-002: Decide.")
+            )
+            result = VALIDATOR.apply_decisions(artifact_path, epic_path, self.HEADING)
+            epic_text = epic_path.read_text(encoding="utf-8")
+        self.assertFalse(result["ok"])
+        self.assertIn("apply requires gate: PASS", result["errors"])
+        self.assertEqual(epic_text, EPIC_FIXTURE)
+
+    def test_apply_refuses_unapproved_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            artifact_path, epic_path = self.apply_fixture(
+                directory, batch_artifact("PASS", 0, "PENDING", "None.")
+            )
+            result = VALIDATOR.apply_decisions(artifact_path, epic_path, self.HEADING)
+        self.assertFalse(result["ok"])
+        self.assertIn("apply requires reviewStatus: APPROVED for batch artifacts", result["errors"])
+
+    def test_apply_requires_unique_story_heading(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            artifact_path, epic_path = self.apply_fixture(directory, artifact("PASS", 0))
+            epic_path.write_text(EPIC_FIXTURE + f"\n{self.HEADING}\n", encoding="utf-8")
+            result = VALIDATOR.apply_decisions(artifact_path, epic_path, self.HEADING)
+        self.assertFalse(result["ok"])
+        self.assertIn("story heading must appear exactly once in the epic, found 2", result["errors"])
+
+    def test_cli_apply_emits_stable_json(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            artifact_path, epic_path = self.apply_fixture(directory, artifact("PASS", 0))
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_PATH),
+                    str(artifact_path),
+                    "--apply",
+                    "--epic",
+                    str(epic_path),
+                    "--story-heading",
+                    self.HEADING,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            payload = json.loads(completed.stdout)
+        self.assertEqual(completed.returncode, 0)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["action"], "apply")
+        self.assertEqual(payload["story"], "3-4-example")
 
 
 if __name__ == "__main__":

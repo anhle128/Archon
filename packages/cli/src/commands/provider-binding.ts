@@ -49,6 +49,7 @@ interface BindingArgs {
   projectRef?: string;
   route?: string;
   correlationId?: string;
+  signingSecret?: string;
 }
 
 interface ValidatedArgs {
@@ -56,11 +57,13 @@ interface ValidatedArgs {
   name: string;
   projectRef: string;
   route: string;
+  signingSecret?: string;
 }
 
 const EXIT_SUCCESS = 0;
 const EXIT_USAGE = 64;
 const EXIT_SOFTWARE = 70;
+const BINDING_HMAC_KEY_ENV = 'ARCHON_PROVIDER_BINDING_HMAC_KEY';
 
 function isBlank(v: string | undefined): boolean {
   return v === undefined || v.trim().length === 0;
@@ -74,6 +77,12 @@ function nonBlank(v: string | undefined, fallback: string): string {
 function normalizeProjectRef(projectRef: string): string {
   const trimmed = projectRef.trim();
   return trimmed.startsWith('project:') ? trimmed.slice('project:'.length) : trimmed;
+}
+
+function resolveSigningSecret(args: BindingArgs): string | undefined {
+  const value = args.signingSecret ?? process.env[BINDING_HMAC_KEY_ENV];
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
 }
 
 function classifyError(err: unknown): {
@@ -239,6 +248,7 @@ function validateAndExtract(
     name: args.name?.trim() ?? '',
     projectRef: args.projectRef === undefined ? '' : normalizeProjectRef(args.projectRef),
     route: args.route?.trim() ?? '',
+    signingSecret: resolveSigningSecret(args),
   };
 }
 
@@ -320,6 +330,7 @@ export async function providerBindingCreateCommand(
         name: validated.name,
         codebaseId: resolved.codebaseId,
         eventRoute: validated.route,
+        signingSecret: validated.signingSecret,
       });
 
       emitEnvelope(
@@ -380,6 +391,7 @@ export async function providerBindingUpdateCommand(
         name: validated.name,
         codebaseId: resolved.codebaseId,
         eventRoute: validated.route,
+        signingSecret: validated.signingSecret,
       });
 
       emitEnvelope(
@@ -532,7 +544,11 @@ export async function providerBindingRotateCommand(
     if (!validated) return EXIT_USAGE;
 
     try {
-      const result = await rotateBinding(validated.provider, validated.name);
+      const result = await rotateBinding(
+        validated.provider,
+        validated.name,
+        resolveSigningSecret(args)
+      );
       const projectRef = result.codebase_id;
 
       emitEnvelope(

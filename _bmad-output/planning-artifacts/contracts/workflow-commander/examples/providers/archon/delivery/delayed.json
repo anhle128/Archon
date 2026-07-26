@@ -14,8 +14,8 @@
   },
   "eventRef": {
     "eventId": "evt_corr_story_1_3a_delivery_delayed",
-    "eventType": "workflow.completed",
-    "idempotencyKey": "idm_corr_story_1_3a_delivery_delayed"
+    "eventType": "workflow.run.completed",
+    "idempotencyKey": "archon:workflow-engine-primary:evt_corr_story_1_3a_delivery_delayed"
   },
   "deliveryAttemptRef": {
     "attemptId": "attempt_corr_story_1_3a_delivery_delayed",

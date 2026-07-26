@@ -7049,6 +7049,27 @@ export async function executeDagWorkflow(
       workflowName: workflow.name,
       error: failMsg,
     });
+    deps.store
+      .enqueueExternalWorkflowEvent({
+        workflow_run_id: workflowRun.id,
+        event_type: 'workflow.run.failed',
+        occurred_at: new Date().toISOString(),
+        payload: {
+          state: 'failed',
+          failure: {
+            code: 'WORKFLOW_FAILED',
+            category: 'workflow_failure',
+            retryable: false,
+            details: { error: failMsg },
+          },
+        },
+      })
+      .catch((err: Error) => {
+        getLog().error(
+          { err, workflowRunId: workflowRun.id, eventType: 'workflow.run.failed' },
+          'workflow_event_outbox_enqueue_failed'
+        );
+      });
     emitterForFail.unregisterRun(workflowRun.id);
     await safeSendMessage(platform, conversationId, `\u274c ${failMsg}`, {
       workflowId: workflowRun.id,
@@ -7095,6 +7116,27 @@ export async function executeDagWorkflow(
       workflowName: workflow.name,
       error: failMsg,
     });
+    deps.store
+      .enqueueExternalWorkflowEvent({
+        workflow_run_id: workflowRun.id,
+        event_type: 'workflow.run.failed',
+        occurred_at: new Date().toISOString(),
+        payload: {
+          state: 'failed',
+          failure: {
+            code: 'WORKFLOW_FAILED',
+            category: 'workflow_failure',
+            retryable: false,
+            details: { error: failMsg },
+          },
+        },
+      })
+      .catch((err: Error) => {
+        getLog().error(
+          { err, workflowRunId: workflowRun.id, eventType: 'workflow.run.failed' },
+          'workflow_event_outbox_enqueue_failed'
+        );
+      });
     emitterForFail.unregisterRun(workflowRun.id);
     await safeSendMessage(platform, conversationId, `\u274c ${failMsg}`, {
       workflowId: workflowRun.id,

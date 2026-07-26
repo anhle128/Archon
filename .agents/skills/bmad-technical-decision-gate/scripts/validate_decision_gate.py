@@ -27,9 +27,16 @@ REQUIRED_SECTIONS = (
     "Downstream Handoff",
 )
 BATCH_RISK_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
-BATCH_REQUIRED_LABELS = ("Problem", "Evidence", "Impact", "Suggested solution")
-BATCH_PROBLEM_PATTERN = r"(?ms)^### \[(HIGH|MEDIUM|LOW)\]\s+TD-[^\n]+\n.*?(?=^### \[|\Z)"
-GUIDED_PROBLEM_PATTERN = re.compile(r"(?m)^(?:[-*]\s+|###\s+)TD-[^\n]+")
+FINDING_REQUIRED_LABELS = ("Problem", "Evidence", "Impact", "Suggestion", "Suggestion rationale")
+FINDING_ANSWER_LABELS = ("Answer", "Answer rationale")
+FINDING_BLOCK_PATTERN = re.compile(
+    r"(?ms)^### \[(HIGH|MEDIUM|LOW)\]\s+(TD-[A-Za-z0-9_.]+)([^\n]*)\n(.*?)(?=^### \[|^[-*]\s+TD-|\Z)"
+)
+SIMPLE_PROBLEM_PATTERN = re.compile(r"(?m)^(?:[-*]\s+|###\s+)TD-[^\n]+")
+TABLE_HEADER = "| TD | Severity | Title | Status |"
+TABLE_SEPARATOR = "| --- | --- | --- | --- |"
+APPLY_BEGIN_TEMPLATE = "<!-- decision-gate:begin {story} -->"
+APPLY_END_TEMPLATE = "<!-- decision-gate:end {story} -->"
 MEMLOG_EVENT_PATTERN = re.compile(r"^\s*-\s+\(event(?: by [^)]+)?\)\s+(.+?)\s*$")
 
 
@@ -66,15 +73,66 @@ def section_body(text: str, section: str) -> str | None:
     return match.group(1).strip() if match is not None else None
 
 
-def batch_problem_entries(body: str) -> list[tuple[str, str]]:
-    """Return risk and body pairs for structured batch review entries."""
-    pattern = r"(?ms)^### \[(HIGH|MEDIUM|LOW)\]\s+TD-[^\n]+\n(.*?)(?=^### \[|\Z)"
-    return [(match.group(1), match.group(2).strip()) for match in re.finditer(pattern, body)]
+def label_has_content(body: str, label: str) -> bool:
+    """Return whether one bold label line carries non-empty content."""
+    return re.search(rf"(?m)^\*\*{re.escape(label)}:\*\*\s*\S", body) is not None
 
 
-def guided_problem_entries(body: str) -> list[str]:
-    """Return the enumerated guided or headless unresolved entries."""
-    return [match.group(0) for match in GUIDED_PROBLEM_PATTERN.finditer(body)]
+def finding_entries(body: str) -> list[dict[str, str]]:
+    """Parse structured finding blocks into severity, id, title, status, and text."""
+    entries: list[dict[str, str]] = []
+    for match in FINDING_BLOCK_PATTERN.finditer(body):
+        severity, identifier, title_tail, block_body = match.groups()
+        title = re.sub(r"^\s*(?:—|--|-)\s*", "", title_tail).strip()
+        answered = all(label_has_content(block_body, label) for label in FINDING_ANSWER_LABELS)
+        entries.append(
+            {
+                "severity": severity,
+                "id": identifier,
+                "title": title,
+                "status": "answered" if answered else "pending",
+                "body": block_body.strip(),
+                "block": match.group(0).strip(),
+            }
+        )
+    return entries
+
+
+def simple_problem_entries(body: str) -> list[str]:
+    """Return the enumerated plain unresolved entries outside structured findings."""
+    without_blocks = FINDING_BLOCK_PATTERN.sub("", body)
+    return [match.group(0) for match in SIMPLE_PROBLEM_PATTERN.finditer(without_blocks)]
+
+
+def finding_table(entries: list[dict[str, str]]) -> str:
+    """Derive the findings tracking table from parsed finding entries."""
+    rows = [TABLE_HEADER, TABLE_SEPARATOR]
+    for entry in entries:
+        rows.append(
+            f"| {entry['id']} | {entry['severity']} | {entry['title']} | {entry['status']} |"
+        )
+    return "\n".join(rows)
+
+
+def split_leading_table(body: str) -> tuple[str, str]:
+    """Split one leading pipe table from the rest of a section body."""
+    match = re.match(r"\s*((?:\|[^\n]*(?:\n|\Z))+)", body)
+    if match is None:
+        return "", body.strip()
+    return match.group(1).strip(), body[match.end() :].strip()
+
+
+def table_rows(table_text: str) -> list[tuple[str, ...]]:
+    """Return the data rows of a pipe table as stripped cell tuples."""
+    rows: list[tuple[str, ...]] = []
+    for line in table_text.splitlines():
+        cells = tuple(cell.strip() for cell in line.strip().strip("|").split("|"))
+        if not cells or all(re.fullmatch(r":?-+:?", cell) for cell in cells):
+            continue
+        if cells[0].upper() == "TD":
+            continue
+        rows.append(cells)
+    return rows
 
 
 def is_none_marker(body: str) -> bool:
@@ -108,34 +166,38 @@ def replace_section_body(text: str, section: str, body: str) -> str:
 
 
 def normalize_artifact(text: str) -> tuple[str, bool, int]:
-    """Derive unresolved counts and stably sort batch problems."""
+    """Derive unresolved counts, sort findings, and regenerate the tracking table."""
     fields = parse_frontmatter(text)
     unresolved_body = section_body(text, "Unresolved Decisions")
     if unresolved_body is None:
         raise ArtifactError("Missing section: ## Unresolved Decisions")
 
-    if fields.get("mode") != "batch":
-        entries = guided_problem_entries(unresolved_body)
-        if is_none_marker(unresolved_body):
-            count = 0
-        elif entries:
-            count = len(entries)
-        else:
+    is_batch = fields.get("mode") == "batch"
+    _, rest = split_leading_table(unresolved_body)
+    entries = finding_entries(rest)
+    entries.sort(key=lambda entry: BATCH_RISK_ORDER[entry["severity"]])
+    simple = simple_problem_entries(rest)
+    leftovers = SIMPLE_PROBLEM_PATTERN.sub("", FINDING_BLOCK_PATTERN.sub("", rest)).strip()
+
+    if is_batch:
+        if simple or (leftovers and not is_none_marker(leftovers)):
+            raise ArtifactError("Batch Unresolved Decisions contains unstructured content")
+        count = len(entries)
+    else:
+        if not entries and not simple and not is_none_marker(rest):
             raise ArtifactError("Guided Unresolved Decisions contains unstructured content")
-        normalized = replace_frontmatter_value(text, "unresolvedDecisionCount", str(count))
-        return normalized, normalized != text, count
+        count = len(entries) + len(simple)
 
-    matches = list(re.finditer(BATCH_PROBLEM_PATTERN, unresolved_body))
-    remainder = re.sub(BATCH_PROBLEM_PATTERN, "", unresolved_body).strip()
-    if remainder and not is_none_marker(remainder):
-        raise ArtifactError("Batch Unresolved Decisions contains unstructured content")
-
-    blocks = [(match.group(1), match.group(0).strip()) for match in matches]
-    blocks.sort(key=lambda item: BATCH_RISK_ORDER[item[0]])
-    count = len(blocks)
-    normalized_body = "\n\n".join(block for _, block in blocks) if blocks else "None."
     normalized = replace_frontmatter_value(text, "unresolvedDecisionCount", str(count))
-    normalized = replace_section_body(normalized, "Unresolved Decisions", normalized_body)
+    if entries:
+        parts = [finding_table(entries)]
+        parts.extend(entry["block"] for entry in entries)
+        trailing = FINDING_BLOCK_PATTERN.sub("", rest).strip()
+        if trailing and not is_none_marker(trailing):
+            parts.append(trailing)
+        normalized = replace_section_body(normalized, "Unresolved Decisions", "\n\n".join(parts))
+    elif is_batch:
+        normalized = replace_section_body(normalized, "Unresolved Decisions", "None.")
     return normalized, normalized != text, count
 
 
@@ -375,6 +437,85 @@ def begin_revalidation(path: Path, approved_content_affected: bool) -> dict[str,
     }
 
 
+def apply_decisions(artifact_path: Path, epic_path: Path, story_heading: str) -> dict[str, Any]:
+    """Write the approved decisions into the owning epic's marker-delimited block."""
+    text = artifact_path.read_text(encoding="utf-8")
+    fields = parse_frontmatter(text)
+    errors: list[str] = []
+    if fields.get("gate") != "PASS":
+        errors.append("apply requires gate: PASS")
+    if fields.get("mode") == "batch" and fields.get("reviewStatus") != "APPROVED":
+        errors.append("apply requires reviewStatus: APPROVED for batch artifacts")
+    story = fields.get("story")
+    if not story:
+        errors.append("apply requires a story frontmatter field")
+    decisions_body = section_body(text, "Decisions")
+    if not decisions_body or is_none_marker(decisions_body):
+        errors.append("apply requires a non-empty ## Decisions section")
+
+    epic_text = epic_path.read_text(encoding="utf-8")
+    heading = story_heading.strip()
+    heading_matches = list(re.finditer(rf"(?m)^{re.escape(heading)}\s*$", epic_text))
+    if len(heading_matches) != 1:
+        errors.append(
+            f"story heading must appear exactly once in the epic, found {len(heading_matches)}"
+        )
+    if errors:
+        return {
+            "ok": False,
+            "action": "apply",
+            "path": str(epic_path),
+            "errors": errors,
+            "warnings": [],
+            "exitCode": 1,
+        }
+
+    begin = APPLY_BEGIN_TEMPLATE.format(story=story)
+    end = APPLY_END_TEMPLATE.format(story=story)
+    block = f"{begin}\n\n**Technical Decisions**\n\n{decisions_body.strip()}\n\n{end}"
+    decision_count = len(
+        re.findall(r"(?m)^(?:[-*]\s+|###\s+(?:\[(?:HIGH|MEDIUM|LOW)\]\s+)?)TD-", decisions_body)
+    )
+
+    begin_index = epic_text.find(begin)
+    end_index = epic_text.find(end)
+    if (begin_index == -1) != (end_index == -1) or (begin_index != -1 and end_index < begin_index):
+        return {
+            "ok": False,
+            "action": "apply",
+            "path": str(epic_path),
+            "errors": ["apply markers are unpaired in the epic; repair them before applying"],
+            "warnings": [],
+            "exitCode": 1,
+        }
+
+    if begin_index != -1:
+        updated = f"{epic_text[:begin_index]}{block}{epic_text[end_index + len(end):]}"
+        replaced = True
+    else:
+        heading_match = heading_matches[0]
+        section_end_match = re.compile(r"(?m)^#{1,3} ").search(epic_text, heading_match.end())
+        insert_at = section_end_match.start() if section_end_match is not None else len(epic_text)
+        section = epic_text[heading_match.end() : insert_at].rstrip("\n")
+        updated = (
+            f"{epic_text[: heading_match.end()]}{section}\n\n{block}\n\n{epic_text[insert_at:]}"
+        )
+        replaced = False
+
+    changed = updated != epic_text
+    if changed:
+        write_text_atomic(epic_path, updated)
+    return {
+        "ok": True,
+        "action": "apply",
+        "path": str(epic_path),
+        "story": story,
+        "replaced": replaced,
+        "changed": changed,
+        "decisionCount": decision_count,
+    }
+
+
 def validate_artifact(path: Path) -> tuple[dict[str, Any], int]:
     """Return a machine-readable validation result and its process exit code."""
     try:
@@ -458,28 +599,42 @@ def validate_artifact(path: Path) -> tuple[dict[str, Any], int]:
         if not has_item:
             errors.append("BLOCKED requires an enumerated unresolved decision")
 
-    if is_batch and unresolved_body is not None and unresolved_count is not None:
-        entries = batch_problem_entries(unresolved_body)
-        if unresolved_count != len(entries):
-            errors.append("batch unresolvedDecisionCount must match structured problem entries")
-        risks = [BATCH_RISK_ORDER[risk] for risk, _ in entries]
-        if risks != sorted(risks):
-            errors.append("batch problems must be ordered HIGH, MEDIUM, then LOW")
-        for index, (_, entry_body) in enumerate(entries, start=1):
-            for label in BATCH_REQUIRED_LABELS:
-                if re.search(rf"(?m)^\*\*{re.escape(label)}:\*\*\s*\S", entry_body) is None:
-                    errors.append(f"batch problem {index} is missing **{label}:** content")
-    if not is_batch and unresolved_body is not None and unresolved_count is not None:
-        entries = guided_problem_entries(unresolved_body)
-        if is_none_marker(unresolved_body):
-            derived_count = 0
-        elif entries:
-            derived_count = len(entries)
+    if unresolved_body is not None and unresolved_count is not None:
+        table_text, rest = split_leading_table(unresolved_body)
+        entries = finding_entries(rest)
+        simple = simple_problem_entries(rest)
+        for entry in entries:
+            for label in FINDING_REQUIRED_LABELS:
+                if not label_has_content(entry["body"], label):
+                    errors.append(f"finding {entry['id']} is missing **{label}:** content")
+            answer_states = [label_has_content(entry["body"], label) for label in FINDING_ANSWER_LABELS]
+            if any(answer_states) and not all(answer_states):
+                errors.append(
+                    f"finding {entry['id']} must pair **Answer:** with **Answer rationale:** content"
+                )
+        if entries:
+            if not table_text:
+                errors.append("findings tracking table is missing above structured findings")
+            elif table_rows(table_text) != table_rows(finding_table(entries)):
+                errors.append("findings tracking table does not match the finding entries")
+        elif table_text:
+            errors.append("findings tracking table is present without structured findings")
+        if is_batch:
+            if unresolved_count != len(entries):
+                errors.append("batch unresolvedDecisionCount must match structured problem entries")
+            risks = [BATCH_RISK_ORDER[entry["severity"]] for entry in entries]
+            if risks != sorted(risks):
+                errors.append("batch problems must be ordered HIGH, MEDIUM, then LOW")
         else:
-            derived_count = None
-            errors.append("Guided Unresolved Decisions contains unstructured content")
-        if derived_count is not None and unresolved_count != derived_count:
-            errors.append("unresolvedDecisionCount must match enumerated guided decisions")
+            if is_none_marker(unresolved_body):
+                derived_count = 0
+            elif entries or simple:
+                derived_count = len(entries) + len(simple)
+            else:
+                derived_count = None
+                errors.append("Guided Unresolved Decisions contains unstructured content")
+            if derived_count is not None and unresolved_count != derived_count:
+                errors.append("unresolvedDecisionCount must match enumerated guided decisions")
     if is_batch and review_status == "APPROVED" and unresolved_count not in {None, 0}:
         errors.append("APPROVED batch review cannot retain unresolved problems")
 
@@ -514,6 +669,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="atomically set gate BLOCKED before revalidation",
     )
+    action.add_argument(
+        "--apply",
+        action="store_true",
+        help="write approved decisions into the owning epic's marker-delimited block",
+    )
     parser.add_argument(
         "--normalize",
         action="store_true",
@@ -528,6 +688,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="accepted gate intent required by --inspect",
     )
     parser.add_argument("--story", help="story value required by --init")
+    parser.add_argument("--epic", type=Path, help="epic file path required by --apply")
+    parser.add_argument(
+        "--story-heading",
+        help="exact epic story heading line required by --apply",
+    )
     parser.add_argument(
         "--batch",
         action="store_true",
@@ -594,7 +759,7 @@ def main() -> int:
         )
         return emit_result(result, args.output, args.verbose)
 
-    action_selected = args.inspect or args.init or args.begin_revalidation
+    action_selected = args.inspect or args.init or args.begin_revalidation or args.apply
     if action_selected and args.normalize:
         result = action_error("arguments", args.artifact, "--normalize cannot be combined with a state action")
         return emit_result(result, args.output, args.verbose)
@@ -637,6 +802,16 @@ def main() -> int:
             result = begin_revalidation(args.artifact, args.approved_content_affected)
         except (ArtifactError, OSError) as error:
             result = action_error("begin-revalidation", args.artifact, f"Cannot begin revalidation: {error}")
+        return emit_result(result, args.output, args.verbose)
+
+    if args.apply:
+        if args.epic is None or args.story_heading is None:
+            result = action_error("apply", args.artifact, "--apply requires --epic and --story-heading")
+            return emit_result(result, args.output, args.verbose)
+        try:
+            result = apply_decisions(args.artifact, args.epic, args.story_heading)
+        except (ArtifactError, OSError) as error:
+            result = action_error("apply", args.artifact, f"Cannot apply decisions: {error}")
         return emit_result(result, args.output, args.verbose)
 
     normalized = False

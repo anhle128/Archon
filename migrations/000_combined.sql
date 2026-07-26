@@ -2,7 +2,7 @@
 -- Version: Combined (final state after migrations 001-020)
 -- Description: Complete database schema (idempotent - safe to run multiple times)
 --
--- 14 Tables (+ the remote_agent_auth_* Better Auth tables, listed inline below):
+-- 16 Tables (+ the remote_agent_auth_* Better Auth tables, listed inline below):
 --   1. remote_agent_codebases
 --   1b. remote_agent_codebase_env_vars
 --   1c. remote_agent_users
@@ -18,6 +18,8 @@
 --   9. remote_agent_user_provider_keys
 --   10. remote_agent_user_ai_prefs
 --   11. remote_agent_workflow_provider_bindings
+--   12. remote_agent_workflow_event_outbox
+--   13. remote_agent_workflow_event_delivery_attempts
 --
 -- Dropped tables (via migrations):
 --   - remote_agent_command_templates (017)
@@ -596,6 +598,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_workflow_provider_bindings (
   name            TEXT NOT NULL,
   codebase_id     UUID NOT NULL REFERENCES remote_agent_codebases(id) ON DELETE CASCADE,
   event_route     TEXT NOT NULL,
+  signing_secret  TEXT,
   state           TEXT NOT NULL DEFAULT 'active',
   binding_version INTEGER NOT NULL DEFAULT 1,
   created_at      TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -618,3 +621,72 @@ COMMENT ON COLUMN remote_agent_workflow_provider_bindings.state IS
   'Lifecycle state: active, disabled, rotated';
 COMMENT ON COLUMN remote_agent_workflow_provider_bindings.binding_version IS
   'Monotonic version counter, incremented on rotate';
+COMMENT ON COLUMN remote_agent_workflow_provider_bindings.signing_secret IS
+  'Private HMAC signing secret for outbound workflow events; excluded from projections';
+
+-- Story 3.5: existing provider-binding tables predate the private signing secret.
+ALTER TABLE remote_agent_workflow_provider_bindings
+  ADD COLUMN IF NOT EXISTS signing_secret TEXT;
+
+-- ============================================================================
+-- Table 12: Workflow Event Outbox
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS remote_agent_workflow_event_outbox (
+  id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  event_id             TEXT UNIQUE NOT NULL,
+  idempotency_key      TEXT NOT NULL,
+  event_type           TEXT NOT NULL,
+  provider             TEXT NOT NULL DEFAULT 'archon',
+  workflow_run_id      UUID NOT NULL REFERENCES remote_agent_workflow_runs(id) ON DELETE CASCADE,
+  codebase_id          UUID REFERENCES remote_agent_codebases(id) ON DELETE SET NULL,
+  binding_id           UUID REFERENCES remote_agent_workflow_provider_bindings(id) ON DELETE SET NULL,
+  event_route          TEXT,
+  event_body           TEXT NOT NULL,
+  status               TEXT NOT NULL DEFAULT 'pending',
+  not_routable_reason  TEXT,
+  attempt_count        INTEGER NOT NULL DEFAULT 0,
+  last_attempt_at      TIMESTAMP WITH TIME ZONE,
+  next_attempt_at      TIMESTAMP WITH TIME ZONE,
+  last_error           TEXT,
+  created_at           TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at           TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_workflow_event_outbox_due
+  ON remote_agent_workflow_event_outbox(status, next_attempt_at);
+CREATE INDEX IF NOT EXISTS idx_workflow_event_outbox_run
+  ON remote_agent_workflow_event_outbox(workflow_run_id);
+
+COMMENT ON TABLE remote_agent_workflow_event_outbox IS
+  'Durable non-blocking outbox for external Archon workflow events';
+COMMENT ON COLUMN remote_agent_workflow_event_outbox.event_body IS
+  'Exact serialized JSON body reused byte-for-byte across delivery attempts';
+
+-- ============================================================================
+-- Table 13: Workflow Event Delivery Attempts
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS remote_agent_workflow_event_delivery_attempts (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  outbox_event_id   UUID NOT NULL REFERENCES remote_agent_workflow_event_outbox(id) ON DELETE CASCADE,
+  attempt_number    INTEGER NOT NULL,
+  request_url       TEXT NOT NULL,
+  request_method    TEXT NOT NULL DEFAULT 'POST',
+  request_headers   TEXT NOT NULL,
+  request_body      TEXT NOT NULL,
+  response_status   INTEGER,
+  response_headers  TEXT,
+  response_body     TEXT,
+  transport_error   TEXT,
+  started_at        TIMESTAMP WITH TIME ZONE NOT NULL,
+  completed_at      TIMESTAMP WITH TIME ZONE,
+  duration_ms       INTEGER,
+  outcome           TEXT NOT NULL DEFAULT 'pending'
+);
+
+CREATE INDEX IF NOT EXISTS idx_workflow_event_delivery_attempts_outbox
+  ON remote_agent_workflow_event_delivery_attempts(outbox_event_id);
+
+COMMENT ON TABLE remote_agent_workflow_event_delivery_attempts IS
+  'Append-only HTTP delivery attempt history for external workflow events';

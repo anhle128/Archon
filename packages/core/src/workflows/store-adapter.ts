@@ -8,10 +8,16 @@ import type { WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import type { MergedConfig } from '../config/config-types';
 import * as workflowDb from '../db/workflows';
 import * as workflowEventDb from '../db/workflow-events';
+import * as workflowEventOutboxDb from '../db/workflow-event-outbox';
 import * as workflowNodeSessionDb from '../db/workflow-node-sessions';
 import * as workflowCheckpointDb from '../db/workflow-checkpoints';
 import * as codebaseDb from '../db/codebases';
 import * as envVarDb from '../db/env-vars';
+import { resolveEventRoute, type NotRoutableReason } from '../events/binding-router';
+import {
+  buildWorkflowEventEnvelope,
+  type ExternalWorkflowEventType,
+} from '../events/workflow-event-envelope';
 import { getAgentProvider } from '@archon/providers';
 import { loadConfig as loadMergedConfig } from '../config/config-loader';
 import { createLogger } from '@archon/paths';
@@ -19,6 +25,7 @@ import type { IGitHubAppAuthProvider } from '../github-auth';
 import { isPerUserGitHubEnabled } from '../github-auth/config';
 import { getDecryptedAccessToken } from '../db/user-github-token-store';
 import { isPerUserProviderKeysEnabled } from '../credentials/config';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import {
   deliverCredential,
@@ -38,6 +45,207 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('workflow.store-adapter');
   return cachedLog;
+}
+
+const EXTERNAL_EVENT_TYPES = new Set<string>([
+  'workflow.run.started',
+  'workflow.run.completed',
+  'workflow.run.failed',
+  'workflow.approval.requested',
+  'workflow.delivery.failed',
+  'workflow.artifact.recorded',
+]);
+
+const INTERNAL_EVENT_TYPE_MAP = new Map<string, ExternalWorkflowEventType>([
+  ['workflow_started', 'workflow.run.started'],
+  ['workflow_completed', 'workflow.run.completed'],
+  ['approval_requested', 'workflow.approval.requested'],
+]);
+
+interface ExternalWorkflowEventInput {
+  workflow_run_id: string;
+  event_type: string;
+  occurred_at: string;
+  payload: Record<string, unknown>;
+}
+
+function toExternalEventType(value: string): ExternalWorkflowEventType | null {
+  return EXTERNAL_EVENT_TYPES.has(value) ? (value as ExternalWorkflowEventType) : null;
+}
+
+function buildInternalEventPayload(input: {
+  runId: string;
+  eventType: ExternalWorkflowEventType;
+  occurredAt: string;
+  stepName?: string;
+  data?: Record<string, unknown>;
+}): Record<string, unknown> {
+  if (input.eventType === 'workflow.run.started') {
+    return { state: 'running', startedAt: input.occurredAt };
+  }
+  if (input.eventType === 'workflow.run.completed') {
+    return {
+      state: 'completed',
+      result: {
+        outcome: 'accepted',
+        completedAt: input.occurredAt,
+        ...(input.data ?? {}),
+      },
+    };
+  }
+  if (input.eventType === 'workflow.run.failed') {
+    return {
+      state: 'failed',
+      failure: {
+        code: 'WORKFLOW_FAILED',
+        category: 'workflow_failure',
+        retryable: false,
+        details: input.data ?? {},
+      },
+    };
+  }
+  if (input.eventType === 'workflow.approval.requested') {
+    return {
+      state: 'waiting-for-approval',
+      approval: {
+        requestId: `approval:${input.runId}:${input.stepName ?? 'workflow'}`,
+        requestedAction: 'approve-or-reject',
+        phase: input.stepName ?? 'approval',
+        ...(input.data ?? {}),
+      },
+    };
+  }
+  return input.data ?? {};
+}
+
+function buildNotRoutableBody(input: {
+  eventId: string;
+  eventType: ExternalWorkflowEventType;
+  occurredAt: string;
+  idempotencyKey: string;
+  reason: NotRoutableReason;
+  payload: Record<string, unknown>;
+}): string {
+  return JSON.stringify({
+    schemaVersion: 'workflow-event-envelope.v1',
+    provider: 'archon',
+    eventId: input.eventId,
+    eventType: input.eventType,
+    occurredAt: input.occurredAt,
+    idempotencyKey: input.idempotencyKey,
+    notRoutableReason: input.reason,
+    payload: input.payload,
+  });
+}
+
+async function enqueueExternalWorkflowEvent(input: ExternalWorkflowEventInput): Promise<void> {
+  try {
+    const eventType = toExternalEventType(input.event_type);
+    if (!eventType) {
+      getLog().warn(
+        { eventType: input.event_type, runId: input.workflow_run_id },
+        'workflow_event_outbox_unsupported_event_type'
+      );
+      return;
+    }
+
+    const run = await workflowDb.getWorkflowRun(input.workflow_run_id);
+    if (!run) {
+      getLog().warn({ runId: input.workflow_run_id }, 'workflow_event_outbox_run_missing');
+      return;
+    }
+
+    const eventId = `evt_${randomUUID()}`;
+    const codebaseId = run.codebase_id;
+    if (!codebaseId) {
+      const reason: NotRoutableReason = 'missing-codebase';
+      const idempotencyKey = `archon:not-routable:${eventId}`;
+      await workflowEventOutboxDb.enqueueExternalWorkflowEvent({
+        event_id: eventId,
+        idempotency_key: idempotencyKey,
+        event_type: eventType,
+        workflow_run_id: run.id,
+        event_body: buildNotRoutableBody({
+          eventId,
+          eventType,
+          occurredAt: input.occurred_at,
+          idempotencyKey,
+          reason,
+          payload: input.payload,
+        }),
+        status: 'not-routable',
+        not_routable_reason: reason,
+      });
+      return;
+    }
+
+    const resolution = await resolveEventRoute(codebaseId);
+    if (!resolution.routable) {
+      const idempotencyKey = resolution.binding
+        ? `archon:${resolution.binding.name}:${eventId}`
+        : `archon:not-routable:${eventId}`;
+      const eventBody =
+        resolution.codebase && resolution.binding
+          ? JSON.stringify(
+              buildWorkflowEventEnvelope({
+                eventId,
+                eventType,
+                occurredAt: input.occurred_at,
+                run,
+                codebase: resolution.codebase,
+                binding: resolution.binding,
+                payload: input.payload,
+              })
+            )
+          : buildNotRoutableBody({
+              eventId,
+              eventType,
+              occurredAt: input.occurred_at,
+              idempotencyKey,
+              reason: resolution.reason,
+              payload: input.payload,
+            });
+      await workflowEventOutboxDb.enqueueExternalWorkflowEvent({
+        event_id: eventId,
+        idempotency_key: idempotencyKey,
+        event_type: eventType,
+        workflow_run_id: run.id,
+        codebase_id: resolution.codebase?.id ?? codebaseId,
+        binding_id: resolution.binding?.id ?? null,
+        event_body: eventBody,
+        status: 'not-routable',
+        not_routable_reason: resolution.reason,
+      });
+      return;
+    }
+
+    const envelope = buildWorkflowEventEnvelope({
+      eventId,
+      eventType,
+      occurredAt: input.occurred_at,
+      run,
+      codebase: resolution.codebase,
+      binding: resolution.binding,
+      payload: input.payload,
+    });
+    await workflowEventOutboxDb.enqueueExternalWorkflowEvent({
+      event_id: envelope.eventId,
+      idempotency_key: envelope.idempotencyKey,
+      event_type: envelope.eventType,
+      workflow_run_id: run.id,
+      codebase_id: resolution.codebase.id,
+      binding_id: resolution.binding.id,
+      event_route: resolution.route,
+      event_body: JSON.stringify(envelope),
+      status: 'pending',
+      next_attempt_at: input.occurred_at,
+    });
+  } catch (err) {
+    getLog().error(
+      { err: err as Error, eventType: input.event_type, runId: input.workflow_run_id },
+      'workflow_event_outbox_enqueue_unexpected_throw'
+    );
+  }
 }
 
 export function createWorkflowStore(): IWorkflowStore {
@@ -65,6 +273,22 @@ export function createWorkflowStore(): IWorkflowStore {
     createWorkflowEvent: async (data): Promise<void> => {
       try {
         await workflowEventDb.createWorkflowEvent(data);
+        const eventType = INTERNAL_EVENT_TYPE_MAP.get(data.event_type);
+        if (eventType) {
+          const occurredAt = new Date().toISOString();
+          await enqueueExternalWorkflowEvent({
+            workflow_run_id: data.workflow_run_id,
+            event_type: eventType,
+            occurred_at: occurredAt,
+            payload: buildInternalEventPayload({
+              runId: data.workflow_run_id,
+              eventType,
+              occurredAt,
+              stepName: data.step_name,
+              data: data.data,
+            }),
+          });
+        }
       } catch (err) {
         // Belt-and-suspenders: workflowEventDb.createWorkflowEvent already catches internally,
         // but this wrapper guarantees the IWorkflowStore non-throwing contract at the boundary.
@@ -74,6 +298,7 @@ export function createWorkflowStore(): IWorkflowStore {
         );
       }
     },
+    enqueueExternalWorkflowEvent,
     getCompletedDagNodeOutputs: workflowEventDb.getCompletedDagNodeOutputs,
     upsertWorkflowNodeCheckpoint: workflowCheckpointDb.upsertWorkflowNodeCheckpoint,
     getLatestWorkflowNodeCheckpoint: workflowCheckpointDb.getLatestWorkflowNodeCheckpoint,

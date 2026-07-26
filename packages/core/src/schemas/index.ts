@@ -75,3 +75,20 @@ export {
   workflowProviderBindingStateSchema,
 } from './workflow-provider-binding';
 export type { WorkflowProviderBinding } from './workflow-provider-binding';
+
+// WorkflowEventOutbox
+export {
+  workflowEventOutboxRowSchema,
+  workflowEventOutboxStatusSchema,
+} from './workflow-event-outbox';
+export type { WorkflowEventOutboxRow, WorkflowEventOutboxStatus } from './workflow-event-outbox';
+
+// WorkflowEventDeliveryAttempt
+export {
+  workflowEventDeliveryAttemptOutcomeSchema,
+  workflowEventDeliveryAttemptRowSchema,
+} from './workflow-event-delivery-attempt';
+export type {
+  WorkflowEventDeliveryAttemptOutcome,
+  WorkflowEventDeliveryAttemptRow,
+} from './workflow-event-delivery-attempt';
