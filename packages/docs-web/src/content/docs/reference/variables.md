@@ -10,10 +10,9 @@ sidebar:
 
 Archon substitutes variables in command files, inline prompts, bash scripts, and `script:` node bodies before execution. There are three categories of variables: workflow variables (substituted by the workflow engine), positional arguments (substituted by the command handler), and node output references (DAG workflows only).
 `route_loop.condition` does not receive workflow variables, but it does evaluate node output references with the same condition grammar as `when:`.
-
 ## Workflow Variables
 
-These variables are substituted by the workflow executor in all node types (`command:`, `prompt:`, `bash:`, `script:`, `loop:`).
+These variables are substituted by the workflow executor in all node types (`command:`, `prompt:`, `bash:`, `script:`, `loop:`, `loop_group:`).
 
 | Variable | Resolves to | Notes |
 |----------|-------------|-------|
@@ -48,17 +47,14 @@ Unlike other variables, `$BASE_BRANCH` will cause the workflow to **fail immedia
 
 If the variable is not referenced, no error occurs even if the base branch cannot be determined.
 
-## Positional Arguments
+## Positional Arguments (not supported)
 
-These variables are substituted by the command handler when commands are invoked directly (outside workflows). They are processed before workflow variables.
-
-| Variable | Resolves to | Notes |
-|----------|-------------|-------|
-| `$1` | First positional argument | Split by whitespace from the user's input |
-| `$2` | Second positional argument | |
-| `$3` ... `$9` | Third through ninth positional arguments | |
-| `$ARGUMENTS` | All arguments as a single string | Same variable, available in both contexts |
-| `\$` | Literal `$` character | Escape a dollar sign to prevent substitution |
+Archon does **not** support positional arguments (`$1`, `$2`, `$3`, … `$9`).
+Command files and workflow prompts receive the user's whole trigger message via
+`$ARGUMENTS` / `$USER_MESSAGE` only — there is no whitespace-splitting into
+numbered slots, in either direct command invocation or workflow nodes. If you
+need structured inputs, parse them out of `$ARGUMENTS` inside the command or
+prompt body.
 
 ## Node Output References
 
@@ -77,6 +73,8 @@ If the condition cannot be parsed, or a referenced field is not declared or cann
 ### Shell Quoting in `bash:` vs `script:`
 
 `$nodeId.output` values are **auto shell-quoted** when substituted into `bash:` scripts, so the value is always safe to embed in a shell command. For small outputs, values are single-quoted inline. For outputs exceeding 32 KB, Archon spills to a temp file and substitutes `$(cat '/tmp/path')` instead — the unquoted assignment form is correct in both cases. They are **not** shell-quoted when substituted into `script:` bodies — the raw value is embedded as-is. For script nodes, treat substituted values as untrusted input and parse them with language features (e.g. `JSON.parse`), not by interpolating into shell syntax.
+
+User-controlled variables (`$ARGUMENTS`, `$USER_MESSAGE`, `$LOOP_USER_INPUT`, `$LOOP_PREV_OUTPUT`, `$REJECTION_REASON`, `$CONTEXT` and its aliases) are delivered to `bash:` and `script:` nodes as subprocess **environment variables** (`ARGUMENTS`, `USER_MESSAGE`, `LOOP_USER_INPUT`, `LOOP_PREV_OUTPUT`, `REJECTION_REASON`, `CONTEXT`/`EXTERNAL_CONTEXT`/`ISSUE_CONTEXT`), never spliced as raw text into executable code — so attacker-influenced input can't inject. In `bash:` read them as `"$ARGUMENTS"`; in `script:` read them via `process.env.ARGUMENTS` (bun) or `os.environ['ARGUMENTS']` (uv/python). A literal `$ARGUMENTS`/`$USER_MESSAGE`/`$CONTEXT` left in a `script:` body no longer resolves and logs a one-release migration warning.
 
 Because `bash:` substitutions arrive pre-quoted, wrapping them in double quotes is a silent footgun for small (inline) values:
 
@@ -144,7 +142,6 @@ Positional arguments (`$1` through `$9`) are substituted separately by the comma
 | `$LOOP_PREV_OUTPUT` | Yes (loop nodes) | No | No | No |
 | `$LOOP_PREV.<nodeId>.output` | Yes (loop_group body nodes) | No | No | No |
 | `$nodeId.output` | Yes (DAG nodes) | No | Yes | Yes, source node only |
-
 ## Authentication Environment Variables
 
 These are standard environment variables read from `process.env` at clone time. They are **not** workflow-substituted variables — they must be set in your shell environment or `.env` file before Archon starts.

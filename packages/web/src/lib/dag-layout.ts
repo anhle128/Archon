@@ -102,6 +102,9 @@ export function resolveNodeDisplay(dn: DagNode): {
     return { label: dn.command, nodeType: 'command' };
   }
   if ('loop' in dn && dn.loop) {
+    if (dn.loop.command) {
+      return { label: dn.loop.command, nodeType: 'loop' };
+    }
     return { label: 'Loop', nodeType: 'loop', promptText: dn.loop.prompt };
   }
   const routeLoop = getRouteLoopConfig(dn);

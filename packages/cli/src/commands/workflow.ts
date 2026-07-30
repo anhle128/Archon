@@ -8,10 +8,18 @@ import {
   loadRepoConfig,
   generateAndSetTitle,
   createWorkflowStore,
+  getUserAiPrefs,
   isPerUserGitHubEnabled,
   getDecryptedAccessToken,
 } from '@archon/core';
 import { WORKFLOW_EVENT_TYPES, type WorkflowEventType } from '@archon/workflows/store';
+import {
+  isTierName,
+  buildAiProfile,
+  TIER_NAMES,
+  type TierName,
+  type RawTiersConfig,
+} from '@archon/workflows/model-validation';
 import {
   configureIsolation,
   getIsolationProvider,
@@ -19,7 +27,14 @@ import {
   classifyIsolationError,
 } from '@archon/isolation';
 import type { ExecutionContext, ContainerBackend, ContainerBackendConfig } from '@archon/isolation';
-import { createLogger, getArchonHome, BUNDLED_IS_BINARY } from '@archon/paths';
+import {
+  createLogger,
+  getArchonHome,
+  BUNDLED_IS_BINARY,
+  BUNDLED_VERSION,
+  readTierNoticeState,
+  markTierNoticeShown,
+} from '@archon/paths';
 import { join, sep } from 'node:path';
 import { mkdirSync, openSync, closeSync, existsSync, statSync } from 'node:fs';
 import { realpath } from 'node:fs/promises';
@@ -742,6 +757,96 @@ function resolveTitleAssistantType(
   const fallbackAssistant = defaultAssistant ?? conversationAssistant ?? 'claude';
   if (workflow.provider) return workflow.provider;
   return fallbackAssistant;
+}
+
+/**
+ * Print a one-time per-version tier notice to stderr when the workflow uses
+ * unconfigured tier-keyword nodes (small/medium/large resolving via built-in
+ * defaults). Suppressed under --quiet. Uses the same 7-char tier column as
+ * `archon ai tier list`.
+ */
+export async function maybePrintTierNotice(
+  workflow: WorkflowDefinition,
+  cwd: string,
+  cliUserId: string | undefined,
+  quiet: boolean | undefined
+): Promise<void> {
+  if (quiet) return;
+
+  const usedTiers = new Set<TierName>();
+  if (typeof workflow.model === 'string' && isTierName(workflow.model)) {
+    usedTiers.add(workflow.model);
+  }
+  for (const node of workflow.nodes) {
+    if ('model' in node && typeof node.model === 'string' && isTierName(node.model)) {
+      usedTiers.add(node.model);
+    }
+  }
+  if (usedTiers.size === 0) return;
+
+  let config: Awaited<ReturnType<typeof loadConfig>>;
+  try {
+    config = await loadConfig(cwd);
+  } catch (err) {
+    getLog().debug({ err }, 'tier_notice.config_load_failed');
+    return;
+  }
+  const configuredTiers: RawTiersConfig = config.tiers ?? {};
+
+  let userTiers: RawTiersConfig = {};
+  let userDefaultProvider: string | undefined;
+  if (cliUserId) {
+    try {
+      const prefs = await getUserAiPrefs(cliUserId);
+      userTiers = prefs.tiers ?? {};
+      userDefaultProvider = prefs.defaultProvider;
+    } catch {
+      // Non-fatal — proceed without user tier info.
+    }
+  }
+
+  const hasUnconfigured = [...usedTiers].some(t => !configuredTiers[t] && !userTiers[t]);
+  if (!hasUnconfigured) return;
+
+  const version = BUNDLED_VERSION;
+  if (readTierNoticeState()?.shownForVersion === version) return;
+
+  const effectiveAssistant = userDefaultProvider ?? config.assistant;
+  let aliases: ReturnType<typeof buildAiProfile>['aliases'];
+  try {
+    aliases = buildAiProfile(effectiveAssistant, {
+      globalTiers: configuredTiers,
+      userTiers,
+    }).aliases;
+  } catch (err) {
+    getLog().debug({ err }, 'tier_notice.build_profile_failed');
+    return;
+  }
+
+  const lines: string[] = [
+    "ℹ️  This workflow uses model tiers (small/medium/large). You haven't configured them —",
+    `   using built-in defaults for '${effectiveAssistant}':`,
+  ];
+  for (const tier of TIER_NAMES) {
+    const preset = aliases[tier];
+    if (preset) lines.push(`     ${tier.padEnd(7)} → ${preset.provider}/${preset.model}`);
+  }
+  const largePreset = aliases.large;
+  if (largePreset?.provider === 'claude' && largePreset.model === 'opus') {
+    lines.push(
+      '   (Opus runs a 1M context window on API keys and Max/Team/Enterprise;',
+      "    on Pro it's 200K unless you set the `large` tier to `opus[1m]`.)"
+    );
+  }
+  lines.push(
+    '   Customize: `archon ai tier set <tier> <provider> <model>`',
+    '              or `tiers:` in .archon/config.yaml',
+    '   See anytime: `archon ai tier list`           (shown once per version)',
+    ''
+  );
+  process.stderr.write(lines.join('\n') + '\n');
+
+  markTierNoticeShown(version);
 }
 
 /** Render a workflow event to stderr as a progress line. Called only when --quiet is not set. */
@@ -1752,20 +1857,53 @@ async function workflowRunCommandInner(
     }
   })();
 
-  // Register cleanup handlers for graceful termination
+  // Register cleanup handlers for graceful termination.
+  //
+  // Guard rails (#1123): a signal must only ever fail THE run this process is
+  // driving, and only while that run is still 'running'. The run id is learned
+  // from the resumable lookup (resume path) or the workflow_started emitter
+  // event (fresh runs, see the subscription below) — never from a
+  // conversation-wide "active run" query, which can match a run driven by
+  // another process (children share parent_conversation_id). When the run has
+  // already transitioned elsewhere — paused at a gate, completed, cancelled —
+  // the handler leaves it alone; see "No Autonomous Lifecycle Mutation Across
+  // Process Boundaries" in CLAUDE.md. The handlers themselves are removed in
+  // the finally below once executeWorkflow returns, so a late signal can never
+  // touch a settled run (and repeated workflowRunCommand calls in one process
+  // don't stack handlers).
+  let ownedRunId: string | undefined = resumable?.id;
   let terminating = false;
   const cleanup = (signal: string): void => {
     if (terminating) return;
     terminating = true;
     getLog().info({ conversationId: conversation.id, signal }, 'workflow.process_terminating');
-    workflowDb
-      .getActiveWorkflowRun(conversation.id)
-      .then(activeRun => {
-        if (activeRun) {
-          return workflowDb.failWorkflowRun(activeRun.id, `Process terminated (${signal})`);
-        }
-        return undefined;
-      })
+    const interruptedRunId = ownedRunId;
+    (async (): Promise<void> => {
+      if (!interruptedRunId) {
+        // Signal before this process created/resumed a run — nothing it owns.
+        // A pre-created 'pending' row is covered by the stale-pending hygiene.
+        getLog().info(
+          { conversationId: conversation.id, signal },
+          'workflow.termination_no_owned_run'
+        );
+        return;
+      }
+      const status = await workflowDb.getWorkflowRunStatus(interruptedRunId);
+      if (status !== 'running') {
+        // Externally transitioned (paused at a new gate, completed, cancelled,
+        // failed) — not this handler's to mutate.
+        getLog().info(
+          { runId: interruptedRunId, status, signal },
+          'workflow.termination_skip_not_running'
+        );
+        return;
+      }
+      // Genuine interrupt of the run this process is driving. failWorkflowRun's
+      // own status='running' CAS closes the read-then-write window: if the
+      // executor commits a gate pause between the read above and this write,
+      // the CAS misses and throws (caught below) — the run stays paused.
+      await workflowDb.failWorkflowRun(interruptedRunId, `Process terminated (${signal})`);
+    })()
       .catch((err: unknown) => {
         const e = err as Error;
         getLog().error(
@@ -1794,22 +1932,34 @@ async function workflowRunCommandInner(
         process.exit(1);
       });
   };
-  process.once('SIGTERM', () => {
+  const sigtermHandler = (): void => {
     cleanup('SIGTERM');
-  });
-  process.once('SIGINT', () => {
+  };
+  const sigintHandler = (): void => {
     cleanup('SIGINT');
-  });
+  };
+  process.once('SIGTERM', sigtermHandler);
+  process.once('SIGINT', sigintHandler);
 
-  // Subscribe to workflow events for progress rendering on stderr.
+  // One-time-per-version notice when the workflow uses unconfigured tier keywords.
+  await maybePrintTierNotice(workflow, workingCwd, cliUserId, options.quiet);
+
+  // Subscribe to workflow events: always registered (even with --quiet) because
+  // the handler also learns the run id this process owns — the signal cleanup
+  // guard above needs it for fresh runs, where the id only exists once
+  // executeWorkflow creates the run and emits workflow_started. --quiet only
+  // gates the progress rendering.
   // subscribeForConversation is pure in-memory registration — cannot throw in practice.
   // If that changes, this should be moved inside the try block to prevent blocking executeWorkflow.
   const { quiet, verbose } = options;
-  const unsubscribe = quiet
-    ? undefined
-    : getWorkflowEventEmitter().subscribeForConversation(conversationId, event => {
-        renderWorkflowEvent(event, verbose ?? false);
-      });
+  const unsubscribe = getWorkflowEventEmitter().subscribeForConversation(conversationId, event => {
+    if (event.type === 'workflow_started' && ownedRunId === undefined) {
+      ownedRunId = event.runId;
+    }
+    if (!quiet) {
+      renderWorkflowEvent(event, verbose ?? false);
+    }
+  });
 
   // Notify Web UI that a workflow is dispatching.
   // Mirrors the orchestrator dispatch message structure (category/segment/workflowDispatch),
@@ -1905,7 +2055,16 @@ async function workflowRunCommandInner(
       opts
     );
   } finally {
-    unsubscribe?.();
+    unsubscribe();
+
+    // Deregister the signal handlers now that the run's lifecycle is settled
+    // (paused / completed / failed, or the throw propagating out of this
+    // finally). A signal from here on gets default handling — the destructive
+    // failWorkflowRun cleanup must never fire against a settled run (#1123),
+    // and removal keeps repeated workflowRunCommand calls in one process from
+    // stacking handlers.
+    process.off('SIGTERM', sigtermHandler);
+    process.off('SIGINT', sigintHandler);
 
     // Container teardown (Phase C) — in `finally` so a throw from executeWorkflow
     // BEFORE its own try/catch (malformed config, env resolvers, unknown provider)

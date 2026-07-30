@@ -856,6 +856,8 @@ describe('dagNodeSchema — per-node Pi posture (pi:)', () => {
   });
 
   test('preserves pi posture and exact raw effort on a loop node', () => {
+    // Loops drop model/provider in the transform, but pi and raw effort MUST survive
+    // because the loop itself owns the per-iteration sendQuery call.
     const result = dagNodeSchema.safeParse({
       id: 'implement',
       loop: { prompt: 'do work', until: 'DONE', max_iterations: 5 },

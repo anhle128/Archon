@@ -505,6 +505,7 @@ export type IncludeNode = z.infer<typeof includeNodeSchema> & {
 };
 
 /** A single node in a DAG workflow. command, prompt, bash, loop, route_loop, loop_group, approval, cancel, script, and include are mutually exclusive. */
+/** A single node in a DAG workflow. command, prompt, bash, loop, loop_group, approval, cancel, script, and include are mutually exclusive. */
 export type DagNode =
   | CommandNode
   | PromptNode
@@ -599,6 +600,7 @@ export const INCLUDE_NODE_IGNORED_FIELDS: readonly string[] = [
  * - Non-empty id
  * - Exactly one of command/prompt/bash/loop/route_loop/loop_group/approval/cancel/script/include
  *   (mutual exclusivity)
+ * - Exactly one of command/prompt/bash/loop/loop_group/approval/cancel/script (mutual exclusivity)
  * - command name validity (via isValidCommandName)
  * - idle_timeout must be a finite positive number
  * - retry not allowed on loop or loop_group nodes
@@ -929,9 +931,10 @@ export const dagNodeSchema = dagNodeBaseSchema
       return { ...base, ...aiOnly, loop_group: data.loop_group } as LoopGroupNode;
     }
     // loop — guaranteed by superRefine to be defined at this point.
-    // Unlike the rest of aiOnly, `pi` posture and raw `effort` are kept because
-    // this loop performs the per-iteration sendQuery. Both are excluded from
-    // LOOP_NODE_AI_FIELDS so the loader does not warn that they are ignored.
+    // Unlike the rest of aiOnly (dropped for loops — model/provider inherit from
+    // the workflow level), `pi` posture and raw `effort` are kept because this loop
+    // performs the per-iteration sendQuery. Both are excluded from LOOP_NODE_AI_FIELDS
+    // so the loader does not warn that they are ignored.
     if (!data.loop) throw new Error('unreachable: loop must be defined after superRefine');
     return {
       ...base,

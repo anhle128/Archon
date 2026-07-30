@@ -236,7 +236,6 @@ The classify-and-route example uses `none_failed_min_one_success` on `implement`
 ## Node Types
 
 Archon supports nine node types. Exactly one mode field is required per node:
-
 | Type | Syntax | When to use |
 |------|--------|-------------|
 | **Command** | `command: my-command` | Load a command from `.archon/commands/my-command.md`. The standard choice. |

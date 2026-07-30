@@ -249,6 +249,8 @@ export class ContainerBackend implements IIsolationBackend {
 
     if (!containerName && !volume) {
       // Metadata is present-but-unusable (e.g. an old row, or a parse failure).
+      // Metadata is present-but-unusable (e.g. an old row, or a metadata that
+      // failed to parse at the store boundary and was normalized to `{}`).
       // Fail LOUDLY rather than silently "destroy" nothing and leak the container.
       log.error(
         { envId, rawMetadataType: typeof row.metadata },

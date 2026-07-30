@@ -52,6 +52,7 @@ import type {
   WorkflowSource,
   RouteLoopRuntimeMetadata,
   LoopGateRunMetadata,
+  ApprovalContext,
 } from './schemas';
 import {
   isBashNode,
@@ -781,6 +782,29 @@ export function substituteNodeOutputRefs(
 }
 
 /**
+ * Collect the static ids of every node in a loop_group body, recursing into nested
+ * loop_group bodies. This is the *typo detector* for `$LOOP_PREV.<id>.output.<field>`
+ * refs: an id that matches no node anywhere in the (possibly nested) body is a genuine
+ * typo, distinct from a real body id that merely has no prior-iteration output yet.
+ *
+ * The transitive set (not just the outer group's direct ids) is deliberate: nested
+ * loop_group bodies reuse the OUTER loop's prior-iteration snapshot, so a ref inside a
+ * nested body may legitimately name an inner-group node id (which resolves to '' at the
+ * outer granularity — see {@link applyLoopPrevToBodyNode}). Including descendants keeps
+ * such real-but-empty refs lenient while still catching ids that exist nowhere.
+ */
+function collectLoopBodyNodeIds(
+  nodes: readonly DagNode[],
+  into: Set<string> = new Set<string>()
+): Set<string> {
+  for (const n of nodes) {
+    into.add(n.id);
+    if (isLoopGroupNode(n)) collectLoopBodyNodeIds(n.loop_group.nodes, into);
+  }
+  return into;
+}
+
+/**
  * Resolve `$LOOP_PREV.<nodeId>.output` and `$LOOP_PREV.<nodeId>.output.<field>` references
  * against a loop_group body's *prior-iteration* node outputs.
  *
@@ -795,12 +819,32 @@ export function substituteNodeOutputRefs(
  * semantics (declared-schema typo / schemaless non-JSON / missing key → throws
  * `OutputRefError`, propagating to the consuming node's failure). The only value that
  * resolves to empty is an author-declared-optional field — or any ref on iteration 1.
+ *
+ * Two static id sets from the enclosing loop_group (both via {@link collectLoopBodyNodeIds}
+ * / its immediate-ids counterpart) drive the absent-output branch. `knownBodyIds` is the
+ * TRANSITIVE set (this group's body plus every nested descendant); `directBodyIds` is only
+ * THIS group's immediate body ids. When output is absent, the id is classified:
+ *   - not in `knownBodyIds` → a typo that matches no body node anywhere. A `.field` ref
+ *     throws `OutputRefError('unknown-node')` (loud, with a did-you-mean) — the loop_group
+ *     analog of the same fix at the `$node.output.field` seam (#2135/#2142); a whole-text
+ *     `$LOOP_PREV.<id>.output` ref stays lenient ('').
+ *   - in `knownBodyIds` but not in `directBodyIds` → the id belongs to a NESTED loop_group,
+ *     not this group's own body. The literal token is left INTACT (`return match`) so the
+ *     inner loop_group resolves it against its OWN prior-iteration snapshot when it runs
+ *     (nested body nodes get a second substituteLoopPrevRefs pass — the outer pass must not
+ *     consume their tokens, or the inner loop could never see its own prior iteration).
+ *   - in `directBodyIds` with no prior output → legitimate iteration-1 / skipped absence → ''.
+ *
+ * When `knownBodyIds` is undefined (raw callers with no static set) the seam stays fully
+ * lenient — every absent ref resolves to '', preserving the pre-#2142 behavior.
  */
 export function substituteLoopPrevRefs(
   prompt: string,
   loopPrevOutputs: Map<string, NodeOutput> | undefined,
   escapedForBash = false,
-  outputFileDir?: string
+  outputFileDir?: string,
+  knownBodyIds?: ReadonlySet<string>,
+  directBodyIds?: ReadonlySet<string>
 ): string {
   // Fast path: no refs to resolve. When refs ARE present but the map is empty/undefined
   // (iteration 1 — no prior iteration), we still run the replace so each ref resolves to
@@ -813,6 +857,32 @@ export function substituteLoopPrevRefs(
     (match, nodeId: string, field: string | undefined) => {
       const nodeOutput = loopPrevOutputs?.get(nodeId);
       if (!nodeOutput || nodeOutput.state === 'skipped' || nodeOutput.state === 'pending') {
+        if (knownBodyIds) {
+          if (!knownBodyIds.has(nodeId)) {
+            // Typo: id matches NO body node anywhere in the enclosing loop_group (a typo
+            // the loader can't see — it never scans `$LOOP_PREV.*` refs). A `.field` ref
+            // fails the consuming node loudly, mirroring substituteNodeOutputRefs /
+            // resolveOutputRef; a whole-text ref stays lenient ('' below). The static set
+            // is required: the runtime `loopPrevOutputs` map is empty on iteration 1, so it
+            // alone cannot tell a typo from a legitimate first-pass absence.
+            if (field) {
+              throw new OutputRefError(
+                nodeId,
+                field,
+                'unknown-node',
+                similarNodeIds(nodeId, knownBodyIds)
+              );
+            }
+          } else if (directBodyIds && !directBodyIds.has(nodeId)) {
+            // Known id owned by a NESTED loop_group, not this group's own body. Leave the
+            // literal token intact so the inner loop_group resolves it against its OWN
+            // prior-iteration snapshot when it executes — the outer pass must not consume
+            // it, or the inner loop could never reference its own previous iteration.
+            return match;
+          }
+          // else: known + direct id with no prior output → legitimate iteration-1 / skipped
+          // absence → lenient '' below.
+        }
         // No prior-iteration output for this body node (iteration 1, or the node was
         // skipped / hasn't settled last iteration). Resolve to empty rather than
         // throwing — the author opted into a cross-iteration ref, and absence on the
@@ -954,6 +1024,18 @@ async function resolveNodeProviderAndModel(
   if (requestedEffort !== undefined && !caps.effortControl) {
     throw new Error(
       `Node '${node.id}' sets effort but provider '${provider}' does not support effortControl.`
+    );
+  }
+
+  // Runtime backstop for container dispatch: the run-start pre-scan
+  // (collectContainerIncompatibleProviders) hand-mirrors this same provider
+  // resolution, so it could drift. Re-check the RESOLVED provider here, at the
+  // actual dispatch point, so a container turn can never reach a provider that
+  // can't honor it — no silent host downgrade (defense in depth).
+  if (execContext.kind === 'container' && !caps.containerExec) {
+    throw new Error(
+      `Provider '${provider}' cannot run inside a container yet (containerExec ` +
+        'capability). Use provider claude, or run without --container.'
     );
   }
 
@@ -2606,7 +2688,14 @@ async function executeBashNode(
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
   // Archon-managed env only — runSubprocess adds the host env for host runs and
   // delivers ONLY this bag into the container (host process.env never crosses).
+  // Configured project env (envVars) spreads FIRST so the engine-reserved keys below
+  // always win — a codebase env var named ARGUMENTS/CONTEXT/… must never shadow the
+  // values this node delivers (that IS the injection-safe delivery channel, #2115).
+  // The GitHub-token scrub keys (GH_TOKEN/GITHUB_TOKEN/COPILOT_GITHUB_TOKEN) are
+  // disjoint from the reserved set and stay in the bag, still overriding the ambient
+  // host token via runSubprocess's process.env layering — the scrub is unaffected.
   const subprocessEnv: NodeJS.ProcessEnv = {
+    ...(envVars ?? {}),
     ARTIFACTS_DIR: artifactsDir,
     LOG_DIR: logDir,
     BASE_BRANCH: baseBranch,
@@ -2619,7 +2708,6 @@ async function executeBashNode(
     CONTEXT: issueContext ?? '',
     EXTERNAL_CONTEXT: issueContext ?? '',
     ISSUE_CONTEXT: issueContext ?? '',
-    ...(envVars ?? {}),
   };
 
   const bashPath = resolveBashPath();
@@ -2734,6 +2822,51 @@ async function executeBashNode(
 }
 
 /**
+ * User-controlled workflow variables that {@link executeScriptNode} delivers via
+ * subprocess env vars instead of splicing into the script source. Matches the
+ * literal `$VAR` form only (word-boundary lookahead) so `$LOOP_PREV.<id>.output`
+ * refs and `process.env.ARGUMENTS`-style accessors never false-positive (#2115).
+ */
+const SCRIPT_USER_VAR_PATTERN =
+  /\$(?:USER_MESSAGE|ARGUMENTS|LOOP_USER_INPUT|LOOP_PREV_OUTPUT|REJECTION_REASON|CONTEXT|EXTERNAL_CONTEXT|ISSUE_CONTEXT)(?![A-Za-z0-9_])/g;
+
+/**
+ * Migration aid (#2115): script bodies used to raw-splice user-controlled text
+ * ($ARGUMENTS/$CONTEXT family/…) directly into TS/Python source — an injection
+ * channel. Those refs are now delivered as env vars and no longer substituted, so
+ * a literal `$VAR` left in the body silently stops resolving. Warn the author (log
+ * + one concise platform line) with the language-appropriate accessor for one
+ * release before the refs are removed. `script` is the post-workflow-var,
+ * pre-node-output string so an expanded `$nodeId.output` value can't false-positive.
+ */
+async function warnOnLiteralUserVars(
+  node: ScriptNode,
+  script: string,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  nodeContext: SendMessageContext
+): Promise<void> {
+  const matches = script.match(SCRIPT_USER_VAR_PATTERN);
+  if (!matches) return;
+  const unique = [...new Set(matches)];
+  const accessor = unique
+    .map(v => (node.runtime === 'uv' ? `os.environ['${v.slice(1)}']` : `process.env.${v.slice(1)}`))
+    .join(', ');
+  getLog().warn(
+    { nodeId: node.id, runtime: node.runtime, vars: unique },
+    'script_node_literal_user_var'
+  );
+  await safeSendMessage(
+    platform,
+    conversationId,
+    `Script node '${node.id}': ${unique.join(', ')} ${unique.length > 1 ? 'are' : 'is'} no longer ` +
+      'substituted into script source (security hardening, #2115). ' +
+      `Read from the environment instead: ${accessor}.`,
+    nodeContext
+  );
+}
+
+/**
  * Execute a script (TypeScript via bun or Python via uv) DAG node.
  * Supports both inline code snippets and named scripts discovered from .archon/scripts/.
  * stdout is captured and trimmed as the node output; stderr is logged as a warning.
@@ -2755,6 +2888,10 @@ async function executeScriptNode(
   envVars?: Record<string, string>,
   stepNamePrefix = '',
   iteration?: number,
+  // Per-iteration $LOOP_USER_INPUT free-text for loop_group body scripts, delivered via
+  // env (never spliced into source — #2115). '' for top-level scripts and non-first
+  // iterations (mirrors executeBashNode, which delivers loop input via quoted splice).
+  loopUserInput = '',
   execContext: ExecutionContext = { kind: 'host' }
 ): Promise<NodeOutput> {
   const nodeStartTime = Date.now();
@@ -2792,7 +2929,14 @@ async function executeScriptNode(
     nodeName: node.id,
   });
 
-  // Variable substitution on script field
+  // Variable substitution on script field.
+  // shellSafe: true skips literal substitution of the user-controlled variables
+  // ($ARGUMENTS/$USER_MESSAGE/$CONTEXT family/$LOOP_*/$REJECTION_REASON) so
+  // attacker-influenced text is never spliced into the TS/Python source that
+  // `bun -e` / `uv run python -c` executes. Those values ride subprocess env vars
+  // below instead (read via process.env.X / os.environ['X']), mirroring the
+  // executeBashNode hardening. $nodeId.output refs keep raw substitution — the
+  // strict producer contract bounds those values (#2115).
   const { prompt: substitutedScript } = substituteWorkflowVariables(
     node.script,
     workflowRun.id,
@@ -2804,19 +2948,37 @@ async function executeScriptNode(
     undefined,
     undefined,
     undefined,
-    { prRemote }
+    { shellSafe: true, prRemote }
   );
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, false);
+
+  // One-release migration warn for any literal user-controlled var ref that no
+  // longer substitutes now that delivery moved to env vars (#2115).
+  await warnOnLiteralUserVars(node, substitutedScript, platform, conversationId, nodeContext);
 
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
   // Archon-managed env only — runSubprocess adds the host env for host runs and
   // delivers ONLY this bag into the container (host process.env never crosses).
+  // User-controlled values ride env vars (never spliced into source) — the
+  // sanctioned injection-safe channel, matching executeBashNode (#2115).
+  // Configured project env (envVars) spreads FIRST so the engine-reserved keys below
+  // always win — a codebase env var named ARGUMENTS/CONTEXT/… must never shadow this
+  // delivery channel. The GitHub-token scrub keys are disjoint from the reserved set
+  // and still override the ambient host token via runSubprocess (scrub unaffected).
   const subprocessEnv: NodeJS.ProcessEnv = {
+    ...(envVars ?? {}),
     ARTIFACTS_DIR: artifactsDir,
     LOG_DIR: logDir,
     BASE_BRANCH: baseBranch,
     PR_REMOTE: prRemote,
-    ...(envVars ?? {}),
+    USER_MESSAGE: workflowRun.user_message,
+    ARGUMENTS: workflowRun.user_message,
+    LOOP_USER_INPUT: loopUserInput,
+    LOOP_PREV_OUTPUT: '',
+    REJECTION_REASON: '',
+    CONTEXT: issueContext ?? '',
+    EXTERNAL_CONTEXT: issueContext ?? '',
+    ISSUE_CONTEXT: issueContext ?? '',
   };
 
   // Build the command and args based on runtime and inline vs named
@@ -3184,6 +3346,15 @@ async function executeLoopGroupNode(
   // prefix composes across nested loop_groups: `<enclosing>.<groupId>.<bodyNodeId>`.
   const bodyStepNamePrefix = `${stepName}.`;
 
+  // Static (iteration-invariant) id sets for `$LOOP_PREV.<id>.output[.field]` resolution
+  // (#2142). `knownBodyIds` is TRANSITIVE (this group's body + every nested descendant) —
+  // an id absent from it is a typo (`.field` ref → loud failure). `directBodyIds` is only
+  // THIS group's immediate ids — an id in knownBodyIds but not directBodyIds belongs to a
+  // nested group and its token is preserved for that inner group's own pass. Computed once
+  // (body shape is static) and threaded into every applyLoopPrevToBodyNode call.
+  const knownBodyIds = collectLoopBodyNodeIds(group.nodes);
+  const directBodyIds = new Set(group.nodes.map(n => n.id));
+
   // Detect interactive loop resume (mirrors executeLoopNode).
   const rawApproval = workflowRun.metadata?.approval;
   const loopGateMeta = isApprovalContext(rawApproval) ? rawApproval : undefined;
@@ -3282,7 +3453,14 @@ async function executeLoopGroupNode(
     const prevSnapshot = loopPrevOutputs;
     const userInputForIter = isLoopResume && i === startIteration ? loopUserInput : '';
     const iterBodyNodes = group.nodes.map(n =>
-      applyLoopPrevToBodyNode(n, prevSnapshot, userInputForIter, logDir)
+      applyLoopPrevToBodyNode(
+        n,
+        prevSnapshot,
+        userInputForIter,
+        logDir,
+        knownBodyIds,
+        directBodyIds
+      )
     );
     // Re-layer from the (possibly substituted) body nodes — runLayers walks ctx.layers,
     // not ctx.nodes, so the layers must reference the substituted nodes to take effect.
@@ -3345,6 +3523,9 @@ async function executeLoopGroupNode(
       totalLoopIterations: 0,
       stepNamePrefix: bodyStepNamePrefix,
       iteration: i,
+      // Deliver this iteration's approval-gate free-text to body script: nodes via env
+      // (never spliced into source — #2115); matches applyLoopPrevToBodyNode's skip.
+      bodyLoopUserInput: userInputForIter,
     };
     await runLayers(iterCtx);
     // A body approval/cancel node may have paused or cancelled the run mid-iteration.
@@ -3419,7 +3600,6 @@ async function executeLoopGroupNode(
     // completion-signal tags so the marker never leaks into $groupId.output (mirrors
     // executeLoopNode's cleanOutput handling).
     lastIterationOutput = stripLoopGroupCompletionSignal(iterationOutput, group.until);
-
     // Completion gate: until-signal in the terminal output, and/or until_bash exit 0.
     // Short-circuit: if the until-signal already detected completion, skip the
     // until_bash subprocess (avoids unnecessary side effects and shell cost) — OR
@@ -3456,8 +3636,12 @@ async function executeLoopGroupNode(
           timeout: SUBPROCESS_DEFAULT_TIMEOUT,
           // Archon-managed env only (no process.env spread) — runSubprocess
           // layers the host env for host runs, or delivers ONLY this bag into
-          // the container.
+          // the container. Configured project env spreads FIRST so the reserved
+          // workflow vars below win over any colliding codebase env var (#2115);
+          // the token-scrub keys are disjoint and still override the ambient host
+          // token via runSubprocess, so the unconnected-user scrub is unaffected.
           env: {
+            ...(config.envVars ?? {}),
             USER_MESSAGE: workflowRun.user_message,
             ARGUMENTS: workflowRun.user_message,
             LOOP_USER_INPUT: i === startIteration ? (loopUserInput ?? '') : '',
@@ -3608,7 +3792,7 @@ async function executeLoopGroupNode(
         .catch((err: Error) => {
           logEventStoreError(err, i);
         });
-      await deps.store.pauseWorkflowRun(workflowRun.id, {
+      await pauseGateRespectingExternalTransition(deps, workflowRun.id, {
         nodeId: node.id,
         message: honestMessage,
         type: 'interactive_loop',
@@ -3626,12 +3810,6 @@ async function executeLoopGroupNode(
         // for honesty; pauseWorkflowRun nulls both on every fresh pause.
         completionSignaled: completionDetected,
         signaledOutput: completionDetected ? lastIterationOutput : null,
-      });
-      getWorkflowEventEmitter().emit({
-        type: 'approval_pending',
-        runId: workflowRun.id,
-        nodeId: node.id,
-        message: honestMessage,
       });
       return {
         state: 'completed',
@@ -3671,12 +3849,22 @@ async function executeLoopGroupNode(
  * Only prompt-bearing fields are substituted in v1; `when:` conditions are NOT (they use
  * evaluateCondition, which does not call substituteLoopPrevRefs). Body authors who need
  * cross-iteration gating should branch on prompt content, not `when:`.
+ *
+ * `knownBodyIds` (transitive body-id set) and `directBodyIds` (this group's immediate body
+ * ids) are threaded UNCHANGED into every substituteLoopPrevRefs call AND into the
+ * nested-loop_group recursion — deliberately not recomputed for the inner group. This keeps
+ * `$LOOP_PREV.*` refs validated against the OUTER loop's snapshot (whose body they resolve
+ * against): a ref to an outer-direct id resolves now, a ref owned by a nested group is left
+ * intact for that inner group's own pass, and a ref to nothing is a typo. Both omitted by
+ * raw callers, which then skip the typo/nested classification entirely (fully lenient).
  */
 export function applyLoopPrevToBodyNode(
   node: DagNode,
   loopPrevOutputs: Map<string, NodeOutput> | undefined,
   loopUserInput: string,
-  outputFileDir?: string
+  outputFileDir?: string,
+  knownBodyIds?: ReadonlySet<string>,
+  directBodyIds?: ReadonlySet<string>
 ): DagNode {
   // Substitute $LOOP_USER_INPUT (user free-text) and $LOOP_PREV.* refs.
   // Resolve $LOOP_PREV FIRST, then splice $LOOP_USER_INPUT — so user input containing a
@@ -3684,12 +3872,24 @@ export function applyLoopPrevToBodyNode(
   // is true for shell-bound fields (bash/until_bash): $LOOP_PREV values are shell-quoted
   // (spilling to a file over the size threshold, same as substituteNodeOutputRefs), and
   // $LOOP_USER_INPUT is shell-quoted before splicing (user input is free-text; unquoted
-  // it could break or inject into the bash command). Non-shell fields (prompt/
-  // approval.message/command, and script/cancel — scripts run via execFile argv and
-  // cancel reasons are display text, mirroring their normal-path substitution) use the
-  // raw values.
-  const sub = (s: string, escapedForBash = false): string => {
-    const prevResolved = substituteLoopPrevRefs(s, loopPrevOutputs, escapedForBash, outputFileDir);
+  // it could break or inject into the bash command). Non-shell display/prompt fields
+  // (prompt/approval.message/command, and cancel reasons) use the raw values.
+  // `skipUserInput` is set ONLY for `script:` bodies: $LOOP_USER_INPUT is free-text that
+  // cannot be safely quoted into TS/Python source, so it is left as a literal token here
+  // and delivered to the script as a subprocess env var instead (#2115) — matching how
+  // executeScriptNode delivers every other user-controlled variable. $LOOP_PREV.* refs
+  // stay raw-spliced (bounded producer contract), routed through the knownBodyIds/
+  // directBodyIds typo-vs-nested-vs-absent decision table (#2165).
+  const sub = (s: string, escapedForBash = false, skipUserInput = false): string => {
+    const prevResolved = substituteLoopPrevRefs(
+      s,
+      loopPrevOutputs,
+      escapedForBash,
+      outputFileDir,
+      knownBodyIds,
+      directBodyIds
+    );
+    if (skipUserInput) return prevResolved;
     const userInputForField = escapedForBash ? shellQuote(loopUserInput) : loopUserInput;
     return prevResolved.replace(/\$LOOP_USER_INPUT/g, userInputForField);
   };
@@ -3700,7 +3900,11 @@ export function applyLoopPrevToBodyNode(
       ...node,
       loop: {
         ...node.loop,
-        prompt: sub(node.loop.prompt),
+        // A command-backed loop has no inline prompt to substitute — its prompt text
+        // is loaded from the command file inside executeLoopNode. Group-level
+        // $LOOP_PREV.<bodyId>.output refs are resolved only in YAML fields (this
+        // pass); they are not scanned inside command-file bodies.
+        ...(node.loop.prompt !== undefined ? { prompt: sub(node.loop.prompt) } : {}),
         ...(node.loop.until_bash !== undefined
           ? { until_bash: sub(node.loop.until_bash, true) }
           : {}),
@@ -3712,6 +3916,15 @@ export function applyLoopPrevToBodyNode(
     // against the OUTER loop's prior-iteration snapshot; inner-loop refs resolve at the
     // inner loop's own iteration granularity). The inner group's until_bash is likewise
     // shell-bound and only ever substituted here for OUTER-loop refs.
+    // Nested loop_group: recurse into the body. `knownBodyIds`/`directBodyIds` are the OUTER
+    // group's sets, threaded UNCHANGED — so during this OUTER pass a ref to an inner-owned id
+    // (in knownBodyIds but not directBodyIds) is left intact (return match) for the inner
+    // group's own pass, while a ref to an OUTER-direct id resolves here at the outer
+    // granularity and a true typo still throws. The inner group's own executeLoopGroupNode
+    // computes fresh sets when it runs, so inner-owned refs resolve at the inner iteration
+    // granularity. The inner group's until_bash is shell-bound and only ever substituted
+    // here for OUTER-loop refs (a nested group's own until_bash cannot reference its own body
+    // via $LOOP_PREV — executeLoopGroupNode does not re-run this pass on the group's until_bash).
     return {
       ...node,
       loop_group: {
@@ -3720,7 +3933,14 @@ export function applyLoopPrevToBodyNode(
           ? { until_bash: sub(node.loop_group.until_bash, true) }
           : {}),
         nodes: node.loop_group.nodes.map(n =>
-          applyLoopPrevToBodyNode(n, loopPrevOutputs, loopUserInput, outputFileDir)
+          applyLoopPrevToBodyNode(
+            n,
+            loopPrevOutputs,
+            loopUserInput,
+            outputFileDir,
+            knownBodyIds,
+            directBodyIds
+          )
         ),
       },
     };
@@ -3730,10 +3950,10 @@ export function applyLoopPrevToBodyNode(
   }
   if (isBashNode(node)) return { ...node, bash: sub(node.bash, true) };
   // Scripts never pass through a shell (execFile argv) — bash-quoting would inject
-  // literal quote artifacts into TS/Python source. Mirrors executeScriptNode's own
-  // substituteNodeOutputRefs(..., false).
-  if (isScriptNode(node)) return { ...node, script: sub(node.script) };
-  // Cancel reason is display text, never executed — mirrors the normal-path default.
+  // literal quote artifacts into TS/Python source. $LOOP_PREV.* refs are spliced raw
+  // (mirroring executeScriptNode's substituteNodeOutputRefs(..., false)); $LOOP_USER_INPUT
+  // is skipped here (skipUserInput) and delivered via env by executeScriptNode (#2115).
+  if (isScriptNode(node)) return { ...node, script: sub(node.script, false, true) }; // Cancel reason is display text, never executed — mirrors the normal-path default.
   if (isCancelNode(node)) return { ...node, cancel: sub(node.cancel) };
   if ('command' in node && typeof node.command === 'string')
     return { ...node, command: sub(node.command) };
@@ -3767,6 +3987,7 @@ async function executeLoopNode(
   nodeOutputs: Map<string, NodeOutput>,
   config: WorkflowConfig,
   issueContext?: string,
+  configuredCommandFolder?: string,
   stepNamePrefix = '',
   execContext: ExecutionContext = { kind: 'host' }
 ): Promise<NodeExecutionResult> {
@@ -3777,19 +3998,88 @@ async function executeLoopNode(
   // each event's data (`iteration`), so no separate iteration param is threaded here.
   const stepName = stepNamePrefix + node.id;
 
-  // Resolve AI client — fail fast with descriptive error
-  let aiClient: ReturnType<typeof deps.getAgentProvider>;
-  try {
-    aiClient = deps.getAgentProvider(workflowProvider);
-  } catch (error) {
-    const err = error as Error;
-    const errorMsg = `Invalid provider '${workflowProvider}' for loop node '${node.id}'. Check workflow YAML or .archon/config.yaml. Original: ${err.message}`;
-    getLog().error(
-      { err, nodeId: node.id, provider: workflowProvider },
-      'loop_node.provider_failed'
-    );
-    return { state: 'failed', output: '', error: errorMsg };
-  }
+  // Emit node_started up-front so every terminal outcome of this loop node is
+  // paired with a corresponding _started event — same pattern the bash and
+  // script node executors follow. The pairing contract: every `return` of a
+  // failed result below goes through `failLoopNode` (one terminal log line, one
+  // persisted node_failed row, exactly one node_failed emitter event), success
+  // paths write node_completed, and a gate pause intentionally has NO terminal
+  // event (the node is still in flight; the resumed invocation emits its own
+  // node_started and eventually the terminal event). Exits that THROW (e.g.
+  // until_bash system errors) are paired by the dispatcher's catch in
+  // runLayers, which emits its own node_failed.
+  getLog().info({ nodeId: node.id, type: 'loop' }, 'loop_node.started');
+  await logNodeStart(logDir, workflowRun.id, node.id, '<loop>');
+
+  deps.store
+    .createWorkflowEvent({
+      workflow_run_id: workflowRun.id,
+      event_type: 'node_started',
+      step_name: stepName,
+      data: { type: 'loop', command: loop.command ?? null },
+    })
+    .catch((err: Error) => {
+      getLog().error(
+        { err, workflowRunId: workflowRun.id, eventType: 'node_started' },
+        'workflow_event_persist_failed'
+      );
+    });
+
+  getWorkflowEventEmitter().emit({
+    type: 'node_started',
+    runId: workflowRun.id,
+    nodeId: node.id,
+    nodeName: node.id,
+  });
+
+  /**
+   * Single failure finalizer for this loop node (see the pairing contract on
+   * the node_started comment above). Call sites keep their specific diagnostic
+   * logs/events (e.g. loop_iteration_failed with per-iteration data); this
+   * closes the node's lifecycle exactly once.
+   */
+  const failLoopNode = async (
+    error: string,
+    extras: {
+      output?: string;
+      costUsd?: number;
+      tokens?: TokenUsage;
+      loopIterations?: number;
+      /** Extra persisted node_failed payload (e.g. the failing command name). */
+      data?: Record<string, unknown>;
+    } = {}
+  ): Promise<NodeExecutionResult> => {
+    getLog().error({ nodeId: node.id, error, ...(extras.data ?? {}) }, 'loop_node.failed');
+    await logNodeError(logDir, workflowRun.id, node.id, error);
+    deps.store
+      .createWorkflowEvent({
+        workflow_run_id: workflowRun.id,
+        event_type: 'node_failed',
+        step_name: stepName,
+        data: { error, ...(extras.data ?? {}) },
+      })
+      .catch((err: Error) => {
+        getLog().error(
+          { err, workflowRunId: workflowRun.id, eventType: 'node_failed' },
+          'workflow_event_persist_failed'
+        );
+      });
+    getWorkflowEventEmitter().emit({
+      type: 'node_failed',
+      runId: workflowRun.id,
+      nodeId: node.id,
+      nodeName: node.id,
+      error,
+    });
+    return {
+      state: 'failed',
+      output: extras.output ?? '',
+      error,
+      ...(extras.costUsd !== undefined ? { costUsd: extras.costUsd } : {}),
+      ...(extras.tokens !== undefined ? { tokens: extras.tokens } : {}),
+      ...(extras.loopIterations !== undefined ? { loopIterations: extras.loopIterations } : {}),
+    };
+  };
 
   // Detect interactive loop resume — check if workflowRun.metadata has loop gate state for this node
   const rawApproval = workflowRun.metadata?.approval;
@@ -3805,7 +4095,9 @@ async function executeLoopNode(
   // Finalize-on-approve (#2074): a gate that paused on a signal-bearing iteration,
   // resumed WITHOUT feedback, completes the node from the persisted output instead of
   // re-running the (expensive) iteration. Feedback (loop_feedback_given) OR a
-  // non-signaled gate falls through to a normal resumed iteration below.
+  // non-signaled gate falls through to a normal resumed iteration below. Runs
+  // BEFORE prompt-source resolution: a bare approve never needs the prompt, so a
+  // command file deleted while the run sat paused cannot fail the finalize.
   const feedbackGiven = loopGateRunMeta.loop_feedback_given === true;
   if (isLoopResume && loopGateMeta?.completionSignaled === true && !feedbackGiven) {
     const finalizeOutput = loopGateMeta.signaledOutput ?? '';
@@ -3820,6 +4112,61 @@ async function executeLoopNode(
       finalizeOutput
     );
     return { state: 'completed', output: finalizeOutput, sessionId: currentSessionId };
+  }
+
+  // Resolve the iteration prompt source. `loop.prompt` is used directly;
+  // `loop.command` is read ONCE per run/node: the first invocation loads the
+  // command file, and the interactive gate persists the loaded text
+  // (`commandSnapshot` in the pause context) so a resumed invocation reuses the
+  // snapshot instead of re-reading — a command file edited or deleted while the
+  // run sat paused at a gate can neither change nor break the running loop's
+  // prompt. The schema guarantees exactly one of prompt/command is defined.
+  let loopPromptTemplate: string;
+  if (typeof loop.prompt === 'string') {
+    loopPromptTemplate = loop.prompt;
+  } else if (typeof loop.command === 'string') {
+    if (isLoopResume && typeof loopGateMeta?.commandSnapshot === 'string') {
+      loopPromptTemplate = loopGateMeta.commandSnapshot;
+    } else {
+      // Fresh execution — or a resume of a run paused under a build that
+      // predates commandSnapshot: fall back to a fresh read (documented,
+      // fail-safe) rather than failing an otherwise-valid resume.
+      const promptResult = await loadCommandPrompt(
+        deps,
+        cwd,
+        loop.command,
+        configuredCommandFolder
+      );
+      if (!promptResult.success) {
+        getLog().error(
+          { nodeId: node.id, command: loop.command, error: promptResult.message },
+          'loop_node.command_load_failed'
+        );
+        // The failing command name travels on the node_failed payload so the
+        // event stream carries the same context as the structured log.
+        return failLoopNode(promptResult.message, { data: { command: loop.command } });
+      }
+      loopPromptTemplate = promptResult.content;
+    }
+  } else {
+    // Unreachable: superRefine on loopNodeConfigSchema enforces exactly-one.
+    throw new Error(
+      `Loop node '${node.id}' has neither 'loop.prompt' nor 'loop.command' — schema invariant violated`
+    );
+  }
+
+  // Resolve AI client — fail fast with descriptive error
+  let aiClient: ReturnType<typeof deps.getAgentProvider>;
+  try {
+    aiClient = deps.getAgentProvider(workflowProvider);
+  } catch (error) {
+    const err = error as Error;
+    const errorMsg = `Invalid provider '${workflowProvider}' for loop node '${node.id}'. Check workflow YAML or .archon/config.yaml. Original: ${err.message}`;
+    getLog().error(
+      { err, nodeId: node.id, provider: workflowProvider },
+      'loop_node.provider_failed'
+    );
+    return failLoopNode(errorMsg, { data: { provider: workflowProvider } });
   }
 
   let lastIterationOutput = '';
@@ -3863,7 +4210,12 @@ async function executeLoopNode(
         `Loop node '${node.id}' stopped at iteration ${String(i)} (${effectiveStatus})`,
         msgContext
       );
-      return { state: 'failed', output: '', error: `Workflow ${effectiveStatus}` };
+      return failLoopNode(`Workflow ${effectiveStatus}`, {
+        costUsd: loopTotalCostUsd,
+        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+        loopIterations: i - 1,
+        data: { status: effectiveStatus, iteration: i },
+      });
     }
 
     // Emit iteration started
@@ -3949,7 +4301,7 @@ async function executeLoopNode(
       // executor starts a fresh `lastIterationOutput` variable, so the first iteration of
       // the resume also receives an empty $LOOP_PREV_OUTPUT.
       const { prompt: substitutedPrompt } = substituteWorkflowVariables(
-        loop.prompt,
+        loopPromptTemplate,
         workflowRun.id,
         workflowRun.user_message,
         artifactsDir,
@@ -4243,14 +4595,12 @@ async function executeLoopNode(
           `Loop node '${node.id}' stopped during iteration ${String(i)} (${effectiveStatus})`,
           msgContext
         );
-        return {
-          state: 'failed',
-          output: '',
-          error: `Workflow ${effectiveStatus}`,
+        return await failLoopNode(`Workflow ${effectiveStatus}`, {
           costUsd: loopTotalCostUsd,
           ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
           loopIterations: i,
-        };
+          data: { status: effectiveStatus, iteration: i },
+        });
       }
     } catch (error) {
       foldIterationUsage();
@@ -4274,14 +4624,12 @@ async function executeLoopNode(
         .catch((evtErr: Error) => {
           logEventStoreError(evtErr, i);
         });
-      return {
-        state: 'failed',
-        output: '',
-        error: `Loop iteration ${i} failed: ${err.message}`,
+      return failLoopNode(`Loop iteration ${i} failed: ${err.message}`, {
         costUsd: loopTotalCostUsd,
         ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
         loopIterations: i,
-      };
+        data: { iteration: i },
+      });
     }
 
     // Notify on idle timeout
@@ -4332,14 +4680,12 @@ async function executeLoopNode(
         .catch((evtErr: Error) => {
           logEventStoreError(evtErr, i);
         });
-      return {
-        state: 'failed',
-        output: '',
-        error: `Loop iteration ${i} failed: ${emptyError}`,
+      return failLoopNode(`Loop iteration ${i} failed: ${emptyError}`, {
         costUsd: loopTotalCostUsd,
         ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
         loopIterations: i,
-      };
+        data: { iteration: i },
+      });
     }
 
     // Batch mode: send accumulated output
@@ -4386,8 +4732,15 @@ async function executeLoopNode(
           timeout: SUBPROCESS_DEFAULT_TIMEOUT,
           // Archon-managed env only (no process.env spread) — runSubprocess
           // layers the host env for host runs, or delivers ONLY this bag into
-          // the container.
+          // the container. Configured project env (managed per-project vars +
+          // per-user GitHub token overrides incl. the unconnected-user scrub)
+          // spreads FIRST so the reserved workflow vars below win over any
+          // colliding codebase env var (#2115). The scrub keys (GH_TOKEN/
+          // GITHUB_TOKEN/COPILOT_GITHUB_TOKEN) are disjoint from the reserved set
+          // and stay in the bag, so they still override the server's ambient GH
+          // token via runSubprocess's process.env layering — scrub unaffected.
           env: {
+            ...(config.envVars ?? {}),
             USER_MESSAGE: workflowRun.user_message,
             ARGUMENTS: workflowRun.user_message,
             PR_REMOTE: prRemote,
@@ -4397,11 +4750,6 @@ async function executeLoopNode(
             CONTEXT: issueContext ?? '',
             EXTERNAL_CONTEXT: issueContext ?? '',
             ISSUE_CONTEXT: issueContext ?? '',
-            // Managed per-project env vars + per-user GitHub token overrides
-            // (incl. the unconnected-user scrub) must win last, exactly as
-            // executeBashNode/executeScriptNode do — otherwise until_bash would
-            // inherit the server's ambient GH token and bypass the scrub.
-            ...(config.envVars ?? {}),
           },
         });
         bashComplete = true; // exit 0 = complete
@@ -4551,11 +4899,16 @@ async function executeLoopNode(
           { nodeId: node.id, workflowRunId: workflowRun.id, iteration: i },
           'loop_node.gate_message_send_failed'
         );
-        return {
-          state: 'failed',
-          output: lastIterationOutput,
-          error: `Loop gate message failed to deliver for node '${node.id}' — cannot pause safely`,
-        };
+        return failLoopNode(
+          `Loop gate message failed to deliver for node '${node.id}' — cannot pause safely`,
+          {
+            output: lastIterationOutput,
+            costUsd: loopTotalCostUsd,
+            ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+            loopIterations: i,
+            data: { iteration: i },
+          }
+        );
       }
       deps.store
         .createWorkflowEvent({
@@ -4567,7 +4920,7 @@ async function executeLoopNode(
         .catch((err: Error) => {
           logEventStoreError(err, i);
         });
-      await deps.store.pauseWorkflowRun(workflowRun.id, {
+      await pauseGateRespectingExternalTransition(deps, workflowRun.id, {
         nodeId: node.id,
         message: honestMessage,
         type: 'interactive_loop',
@@ -4580,12 +4933,10 @@ async function executeLoopNode(
         // for honesty; pauseWorkflowRun nulls both on every fresh pause.
         completionSignaled: completionDetected,
         signaledOutput: completionDetected ? lastIterationOutput : null,
-      });
-      getWorkflowEventEmitter().emit({
-        type: 'approval_pending',
-        runId: workflowRun.id,
-        nodeId: node.id,
-        message: honestMessage,
+        // Read-once command body for command-backed loops: the resumed invocation
+        // reuses this snapshot instead of re-reading the file (explicit null for
+        // prompt-based loops — same json_patch convention as `sessionId`).
+        commandSnapshot: typeof loop.command === 'string' ? loopPromptTemplate : null,
       });
       // Return completed — the between-layer status check sees 'paused' and halts cleanly.
       // This mirrors the approval-node pattern, preventing false "DAG nodes failed" warnings
@@ -4608,14 +4959,62 @@ async function executeLoopNode(
     'loop_node.max_iterations_reached'
   );
   await safeSendMessage(platform, conversationId, errorMsg, msgContext);
-  return {
-    state: 'failed',
+  return failLoopNode(errorMsg, {
     output: lastIterationOutput,
-    error: errorMsg,
     costUsd: loopTotalCostUsd,
     ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
     loopIterations: loop.max_iterations,
-  };
+    data: { maxIterations: loop.max_iterations },
+  });
+}
+
+/**
+ * Pause the run for a human gate, tolerating a lost CAS when the run was
+ * externally transitioned while the gate was being raised — e.g. a killed CLI's
+ * signal cleanup marked the run failed mid-pause (#1123), or an operator
+ * cancelled it from another surface. `pauseWorkflowRun`'s UPDATE only matches
+ * status='running'; when it misses, re-read the status: any non-running status
+ * means the pause lost a legitimate external race — log, skip the
+ * approval_pending emit, and return so the caller's normal completed-shaped
+ * output lets the between-layer status check halt the DAG cleanly (the same
+ * path a successful pause takes). On a successful pause, the approval_pending
+ * live signal is emitted HERE (from the ApprovalContext's own nodeId/message)
+ * so no call site can accidentally emit it after a lost CAS. A store error
+ * while the run is still 'running' is a genuine pause failure and rethrows.
+ *
+ * Deliberately NOT used by the container write-back gate (raiseWriteBackGate),
+ * which must stay fail-closed: a lost pause there may never fall through
+ * toward the apply/teardown path — throwing is the safe behavior, and the H2
+ * teardown-preserve logic keeps the overlay volume for a retry.
+ */
+async function pauseGateRespectingExternalTransition(
+  deps: WorkflowDeps,
+  runId: string,
+  approvalContext: ApprovalContext
+): Promise<void> {
+  try {
+    await deps.store.pauseWorkflowRun(runId, approvalContext);
+  } catch (pauseErr) {
+    let status: string | null;
+    try {
+      status = await deps.store.getWorkflowRunStatus(runId);
+    } catch {
+      // Status unknowable — surface the original pause failure.
+      throw pauseErr;
+    }
+    if (status === 'running') throw pauseErr;
+    getLog().warn(
+      { workflowRunId: runId, status, err: pauseErr as Error },
+      'dag.gate_pause_skipped_external_transition'
+    );
+    return;
+  }
+  getWorkflowEventEmitter().emit({
+    type: 'approval_pending',
+    runId,
+    nodeId: approvalContext.nodeId,
+    message: approvalContext.message,
+  });
 }
 
 /**
@@ -4806,7 +5205,7 @@ async function executeApprovalNode(
       );
     });
 
-  await deps.store.pauseWorkflowRun(workflowRun.id, {
+  await pauseGateRespectingExternalTransition(deps, workflowRun.id, {
     message: renderedMessage,
     nodeId: node.id,
     type: 'approval',
@@ -4815,14 +5214,8 @@ async function executeApprovalNode(
     onRejectMaxAttempts: node.approval.on_reject?.max_attempts,
   });
 
-  getWorkflowEventEmitter().emit({
-    type: 'approval_pending',
-    runId: workflowRun.id,
-    nodeId: node.id,
-    message: renderedMessage,
-  });
-
-  // Return completed — the between-layer status check will see 'paused' and break.
+  // Return completed — the between-layer status check will see 'paused' (or the
+  // external transition that beat the pause) and break.
   // On resume, the approve endpoint writes a real node_completed event with the user's response.
   return { state: 'completed' as const, output: '' };
 }
@@ -4970,6 +5363,13 @@ interface RunLayersContext {
    * so multi-iteration runs are disaggregatable in the persisted event log (#2090).
    */
   iteration?: number;
+  /**
+   * Per-iteration `$LOOP_USER_INPUT` free-text for loop_group body `script:` nodes,
+   * delivered into the subprocess as an env var (never spliced into TS/Python source —
+   * #2115). Only non-empty on the first resumed iteration of an interactive group;
+   * undefined for the top-level DAG (top-level scripts have no loop user input).
+   */
+  bodyLoopUserInput?: string;
   route?: RunLayersRouteState;
 }
 
@@ -5402,6 +5802,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               ctx.nodeOutputs,
               config,
               issueContext,
+              configuredCommandFolder,
               stepNamePrefix,
               execContext
             );
@@ -5552,6 +5953,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   config.envVars,
                   stepNamePrefix,
                   iteration,
+                  ctx.bodyLoopUserInput ?? '',
                   execContext
                 )
             );
@@ -5838,6 +6240,14 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             { state: 'failed', output: '', error: 'Node did not execute' } as NodeExecutionResult
           );
 
+          // Cold-resume surfacing: this node requested a session resume but the
+          // provider reported it came back cold (resumed === false) — the prior
+          // context is gone. Every provider's cold fallback is already a clean
+          // fresh session, so the run we just completed is a valid fresh-context
+          // result; we keep it and persist its fresh session id below. Surface the
+          // lost continuity to the user (no silent failure) so a degraded run isn't
+          // mistaken for a normal resumed one — but do NOT re-run: a replay would
+          // only repeat the same fresh run at double the cost and side effects.
           if (
             usesPersistedScope &&
             persistScopeKey &&
@@ -6630,7 +7040,6 @@ export async function executeDagWorkflow(
     (isContainerRunContextValue(execOrContainerCtx) ? execOrContainerCtx : undefined);
   const prRemote = config.prRemote;
   const retryEpoch = getRunRetryEpoch(workflowRun, retryContext);
-
   // Container capability fail-fast: before ANY node runs (and before any
   // container work), reject a container run whose AI nodes resolve to a provider
   // that can't spawn in-container. No silent downgrade to the host — the user
@@ -6834,12 +7243,12 @@ export async function executeDagWorkflow(
   // Nodes flagged `always_run: true` are excluded — they re-execute on resume
   // and downstream consumers must see the fresh output, not the cached one.
   if (priorCompletedNodes && priorCompletedNodes.size > 0) {
+    const nodesById = new Map(workflow.nodes.map(n => [n.id, n]));
     let prepopulatedCount = 0;
     for (const [nodeId, output] of priorCompletedNodes) {
       const node = nodesById.get(nodeId);
       // Nodes flagged always_run re-execute on resume — leave them for fresh output.
-      if (node?.always_run && !retryContext) continue;
-      // Re-derive the producer's declared field set from the loaded definition so the
+      if (node?.always_run && !retryContext) continue; // Re-derive the producer's declared field set from the loaded definition so the
       // strict `$node.output.field` contract (output-ref.ts) is invariant across fresh
       // vs resumed runs. getCompletedDagNodeOutputs rehydrates text only, so without
       // this a declared-optional-absent field would throw instead of resolving to ''

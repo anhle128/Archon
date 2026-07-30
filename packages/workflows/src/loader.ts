@@ -248,7 +248,13 @@ export function validateDagStructure(
     if (isCancelNode(node)) sources.push(node.cancel);
     if (isApprovalNode(node)) sources.push(node.approval.message);
     if (isLoopNode(node)) {
-      sources.push(stripMarkdownCode(node.loop.prompt));
+      // Only inline `loop.prompt` is scanned for `$nodeId.output` refs. A
+      // command-backed loop (`loop.command`) loads its prompt text from a file
+      // at runtime; that file's contents are the author's responsibility, the
+      // same way a `command:` node's body is not scanned at parse time.
+      if (typeof node.loop.prompt === 'string') {
+        sources.push(stripMarkdownCode(node.loop.prompt));
+      }
       if (node.loop.until_bash) sources.push(node.loop.until_bash);
     }
     if (isLoopGroupNode(node) && node.loop_group.until_bash) {
@@ -786,6 +792,8 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
     }
 
     // Parse workflow-level fallback fields. These are declared on
+    // Parse workflow-level fallback fields. Same warn-and-drop pattern as
+    // `modelReasoningEffort` / `webSearchMode` above. These are declared on
     // `workflowBaseSchema` and consumed by the DAG executor's
     // `workflowLevelOptions` (the object literal at the top of
     // `executeDagWorkflow`, reading `workflow.effort` etc.) as defaults that
