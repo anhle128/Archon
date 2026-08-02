@@ -60,6 +60,15 @@ export async function generateAndSetTitle(
       ...(requestOptions ?? {}),
       ...(titleModel ? { model: titleModel } : {}),
       assistantConfig: requestOptions?.assistantConfig ?? assistantConfig,
+      traceContext: {
+        ...requestOptions?.traceContext,
+        name: 'generate-conversation-title',
+        input: userMessage,
+        sessionId: requestOptions?.traceContext?.sessionId ?? conversationDbId,
+        tags: [
+          ...new Set([...(requestOptions?.traceContext?.tags ?? []), 'feature:title-generation']),
+        ],
+      },
       nodeConfig: {
         ...(requestOptions?.nodeConfig ?? {}),
         allowed_tools: [], // No tool access — pure text generation

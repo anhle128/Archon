@@ -31,7 +31,11 @@ if (!process.env.CLAUDE_API_KEY && !process.env.CLAUDE_CODE_OAUTH_TOKEN) {
 // DATABASE_URL is no longer required - SQLite will be used as default
 
 // Bootstrap provider registry before any provider lookups
-import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
+import {
+  registerBuiltinProviders,
+  registerCommunityProviders,
+  shutdownLangfuse,
+} from '@archon/providers';
 registerBuiltinProviders();
 registerCommunityProviders();
 
@@ -1648,8 +1652,9 @@ async function main(): Promise<number> {
     }
     return 1;
   } finally {
-    // Flush queued telemetry events before the CLI process exits.
-    // Short-lived CLI commands lose buffered events if shutdown() is skipped.
+    // Flush queued observability and telemetry events before the CLI process exits.
+    // Short-lived CLI commands lose buffered events if shutdown is skipped.
+    await shutdownLangfuse();
     await shutdownTelemetry();
     // Always close database connection
     await closeDb();

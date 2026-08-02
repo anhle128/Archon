@@ -22,6 +22,7 @@ import { registerOpencodeProvider } from './community/opencode/registration';
 import { registerPiProvider } from './community/pi/registration';
 import { registerQoderCliProvider } from './community/qodercli/registration';
 import { UnknownProviderError } from './errors';
+import { instrumentProvider } from './observability';
 import { createLogger } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -55,7 +56,7 @@ export function getAgentProvider(id: string): IAgentProvider {
     throw new UnknownProviderError(id, [...registry.keys()]);
   }
   getLog().debug({ provider: id }, 'provider_selected');
-  return entry.factory();
+  return instrumentProvider(entry.factory());
 }
 
 /**

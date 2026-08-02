@@ -49,7 +49,11 @@ if (shouldDefaultClaudeGlobalAuth(process.env)) {
   process.env.CLAUDE_USE_GLOBAL_AUTH = 'true';
 }
 
-import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
+import {
+  registerBuiltinProviders,
+  registerCommunityProviders,
+  shutdownLangfuse,
+} from '@archon/providers';
 import { getVendorCatalog } from '@archon/core';
 
 // Bootstrap provider registry before any provider lookups
@@ -995,7 +999,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
           getLog().error({ err: error }, 'adapter_stop_error');
         }
 
-        // Flush queued telemetry events before pool closes the process.
+        // Flush queued observability and telemetry events before the process exits.
+        await shutdownLangfuse();
         await shutdownTelemetry();
 
         // Release the dedicated Better Auth pool (no-op when web auth is off).

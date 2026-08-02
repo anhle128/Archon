@@ -2,6 +2,7 @@
 export type {
   IAgentProvider,
   AgentRequestOptions,
+  AgentTraceContext,
   SendQueryOptions,
   NodeConfig,
   ProviderDefaults,
@@ -33,6 +34,9 @@ export {
   registerCommunityProviders,
   clearRegistry,
 } from './registry';
+
+// AI observability lifecycle
+export { shutdownLangfuse } from './observability';
 
 // Error
 export { UnknownProviderError } from './errors';
