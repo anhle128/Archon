@@ -438,6 +438,19 @@ export const CONTAINER_ENV_DENYLIST: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Product-level context attached to one provider turn for AI observability.
+ * Keep names and tags stable and low-cardinality; put correlating IDs in metadata.
+ */
+export interface AgentTraceContext {
+  name: string;
+  input?: unknown;
+  sessionId?: string;
+  userId?: string;
+  tags?: string[];
+  metadata?: Record<string, string>;
+}
+
+/**
  * Universal request options accepted by all providers.
  * Provider-specific fields go through `nodeConfig` and `assistantConfig` in SendQueryOptions.
  */
@@ -453,6 +466,8 @@ export interface AgentRequestOptions {
   forkSession?: boolean;
   /** When false, skip writing session transcript to disk. */
   persistSession?: boolean;
+  /** Optional product context used to group and identify the provider turn in Langfuse. */
+  traceContext?: AgentTraceContext;
   /**
    * In-process tools the model may call this turn. Defined once by the caller
    * (e.g. core's manage_run) and adapted per provider — Claude wraps each via

@@ -22,7 +22,7 @@
     "check:bundled-schema": "bun run scripts/generate-bundled-schema.ts --check",
     "generate:pi-vendor-map": "bun run scripts/generate-pi-vendor-map.ts",
     "check:pi-vendor-map": "bun run scripts/generate-pi-vendor-map.ts --check",
-    "test": "bun --filter '*' --parallel test",
+    "test": "bun --filter '*' test",
     "test:e2e:no-mistakes": "bun run test",
     "test:watch": "bun --filter @archon/server test:watch",
     "type-check": "bun --filter '*' type-check && bun x tsc --noEmit -p scripts/tsconfig.json",

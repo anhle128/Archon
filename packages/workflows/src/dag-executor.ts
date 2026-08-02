@@ -1523,6 +1523,17 @@ async function executeNodeInternal(
     ...nodeOptions,
     abortSignal: nodeAbortController.signal,
     ...(shouldForkSession ? { forkSession: true } : {}),
+    traceContext: {
+      name: 'execute-workflow-node',
+      sessionId: workflowRun.id,
+      userId: workflowRun.user_id ?? undefined,
+      tags: ['feature:workflow', `platform:${platform.getPlatformType()}`],
+      metadata: {
+        workflowName: workflowRun.workflow_name,
+        nodeId: stepName,
+        platform: platform.getPlatformType(),
+      },
+    },
   };
   let nodeIdleTimedOut = false;
   const effectiveIdleTimeout = node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS;
@@ -3966,6 +3977,18 @@ async function executeLoopNode(
       const iterationOptions: SendQueryOptions | undefined = {
         ...resolvedOptions,
         abortSignal: iterationAbortController.signal,
+        traceContext: {
+          name: 'execute-workflow-loop',
+          sessionId: workflowRun.id,
+          userId: workflowRun.user_id ?? undefined,
+          tags: ['feature:workflow', `platform:${platform.getPlatformType()}`],
+          metadata: {
+            workflowName: workflowRun.workflow_name,
+            nodeId: stepName,
+            iteration: String(i),
+            platform: platform.getPlatformType(),
+          },
+        },
       };
 
       const generator = aiClient.sendQuery(finalPrompt, cwd, resumeSessionId, iterationOptions);

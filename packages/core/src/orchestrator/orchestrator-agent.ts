@@ -1563,6 +1563,14 @@ export async function handleMessage(
       env: Object.keys(effectiveEnv).length > 0 ? effectiveEnv : undefined,
       model: chatRequest.model,
       systemPrompt,
+      traceContext: {
+        name: 'generate-chat-response',
+        input: message,
+        sessionId: conversation.id,
+        userId: executionUserId,
+        tags: ['feature:chat', `platform:${platform.getPlatformType()}`],
+        metadata: { platform: platform.getPlatformType() },
+      },
     };
     if (chatRequest.preset) {
       applyPresetToRequestOptions(providerKey, chatRequest.preset, requestOptions);
@@ -1578,6 +1586,14 @@ export async function handleMessage(
         // subscription/key and fails on per-user-only installs (#1984; same family
         // as #1794/#1855). Same env-only bag as the main chat request above.
         env: Object.keys(effectiveEnv).length > 0 ? effectiveEnv : undefined,
+        traceContext: {
+          name: 'generate-conversation-title',
+          input: message,
+          sessionId: conversation.id,
+          userId: executionUserId,
+          tags: ['feature:title-generation', `platform:${platform.getPlatformType()}`],
+          metadata: { platform: platform.getPlatformType() },
+        },
       };
       if (titleRequest.preset) {
         applyPresetToRequestOptions(titleRequest.provider, titleRequest.preset, titleOptions);
