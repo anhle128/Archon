@@ -252,6 +252,8 @@ export function createWorkflowStore(): IWorkflowStore {
   return {
     createWorkflowRun: workflowDb.createWorkflowRun,
     getWorkflowRun: workflowDb.getWorkflowRun,
+    findChildRuns: workflowDb.findChildRuns,
+    getRunAncestry: workflowDb.getRunAncestry,
     getActiveWorkflowRunByPath: workflowDb.getActiveWorkflowRunByPath,
     findResumableRun: workflowDb.findResumableRun,
     failOrphanedRuns: workflowDb.failOrphanedRuns,
@@ -299,9 +301,9 @@ export function createWorkflowStore(): IWorkflowStore {
       }
     },
     enqueueExternalWorkflowEvent,
-    getCompletedDagNodeOutputs: workflowEventDb.getCompletedDagNodeOutputs,
     upsertWorkflowNodeCheckpoint: workflowCheckpointDb.upsertWorkflowNodeCheckpoint,
     getLatestWorkflowNodeCheckpoint: workflowCheckpointDb.getLatestWorkflowNodeCheckpoint,
+    getDagResumeSnapshot: workflowEventDb.getDagResumeSnapshot,
     getCodebase: codebaseDb.getCodebase,
     getCodebaseEnvVars: envVarDb.getCodebaseEnvVars,
     getWorkflowNodeSession: workflowNodeSessionDb.getWorkflowNodeSession,

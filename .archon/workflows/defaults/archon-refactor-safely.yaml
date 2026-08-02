@@ -455,7 +455,7 @@ nodes:
       4. Create the PR targeting `$BASE_BRANCH` as the base branch:
          `gh pr create --repo "$PR_REPO" --base "$BASE_BRANCH" --head "$PR_HEAD" --title "..." --body "..."`, then format
          title/body per the template below
-      5. Save the PR URL to `$ARTIFACTS_DIR/.pr-url`
+      6. Save the PR URL to `$ARTIFACTS_DIR/.pr-url`
 
       ## PR Format
 
@@ -521,6 +521,8 @@ nodes:
   - id: verify-pr-base
     bash: |
       set -euo pipefail
+      # Pin to the origin remote — in a fork clone, gh otherwise queries the upstream parent
+      ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')
       HEAD_BRANCH=$(git rev-parse --abbrev-ref HEAD)
       PR_REPO=$(gh repo view "$(git remote get-url "$PR_REMOTE")" --json nameWithOwner -q .nameWithOwner)
       ORIGIN_REPO=$(gh repo view "$(git remote get-url origin)" --json nameWithOwner -q .nameWithOwner)

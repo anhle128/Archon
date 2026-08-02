@@ -1,5 +1,7 @@
 import { describe, test, expect, afterEach } from 'bun:test';
 import { SqliteAdapter } from './sqlite';
+import { getSchemaSQL } from '../bundled-schema';
+import { APP_VERSION, readSchemaVersion } from '../schema-version';
 import { Database } from 'bun:sqlite';
 import { unlinkSync } from 'fs';
 import { join } from 'path';
@@ -389,150 +391,149 @@ describe('SqliteAdapter', () => {
       expect(cols).toContain('checkpoint_ref');
     });
   });
-});
 
-// ---------------------------------------------------------------------------
-// RED-PHASE SCAFFOLD (EXECUTABLE) — Story 3.1 "Implement Archon Workflow
-// Provider Binding Lifecycle"
-// (_bmad-output/implementation-artifacts/3-1-implement-archon-workflow-provider-binding-lifecycle.md).
-//
-// Unlike the other new scaffolds for this story, these tests are NOT
-// `test.skip()`: the boundary they exercise (a real SqliteAdapter over a
-// real bun:sqlite temp file, using raw SQL — the exact same pattern as every
-// other `describe` block above) already exists today. They import nothing
-// from the not-yet-written `packages/core/src/db/provider-bindings.ts`, so
-// there is no missing-module crash risk. They assert the DESIRED end state
-// from the Dev Notes "DB Design Proposal" table
-// (`remote_agent_workflow_provider_bindings`) and currently fail with
-// "no such table: remote_agent_workflow_provider_bindings" because Task 1
-// has not yet added the table to `createSchema()` — that IS the red phase.
-// They flip green once Task 1 adds the `CREATE TABLE IF NOT EXISTS
-// remote_agent_workflow_provider_bindings (...)` block (mirroring the
-// `remote_agent_isolation_environments` pattern already in this file, per
-// Dev Notes "DB Design Proposal" / "SQLite has no RETURNING on UPDATE/DELETE").
-// ---------------------------------------------------------------------------
-describe('remote_agent_workflow_provider_bindings (Story 3.1)', () => {
-  let db: SqliteAdapter;
+  // ---------------------------------------------------------------------------
+  // RED-PHASE SCAFFOLD (EXECUTABLE) — Story 3.1 "Implement Archon Workflow
+  // Provider Binding Lifecycle"
+  // (_bmad-output/implementation-artifacts/3-1-implement-archon-workflow-provider-binding-lifecycle.md).
+  //
+  // Unlike the other new scaffolds for this story, these tests are NOT
+  // `test.skip()`: the boundary they exercise (a real SqliteAdapter over a
+  // real bun:sqlite temp file, using raw SQL — the exact same pattern as every
+  // other `describe` block above) already exists today. They import nothing
+  // from the not-yet-written `packages/core/src/db/provider-bindings.ts`, so
+  // there is no missing-module crash risk. They assert the DESIRED end state
+  // from the Dev Notes "DB Design Proposal" table
+  // (`remote_agent_workflow_provider_bindings`) and currently fail with
+  // "no such table: remote_agent_workflow_provider_bindings" because Task 1
+  // has not yet added the table to `createSchema()` — that IS the red phase.
+  // They flip green once Task 1 adds the `CREATE TABLE IF NOT EXISTS
+  // remote_agent_workflow_provider_bindings (...)` block (mirroring the
+  // `remote_agent_isolation_environments` pattern already in this file, per
+  // Dev Notes "DB Design Proposal" / "SQLite has no RETURNING on UPDATE/DELETE").
+  // ---------------------------------------------------------------------------
+  describe('remote_agent_workflow_provider_bindings (Story 3.1)', () => {
+    let db: SqliteAdapter;
 
-  afterEach(async () => {
-    if (db) {
-      await db.close();
-    }
-    try {
-      unlinkSync(currentDbPath);
-    } catch {
-      /* may not exist */
-    }
-    try {
-      unlinkSync(currentDbPath + '-wal');
-    } catch {
-      /* may not exist */
-    }
-    try {
-      unlinkSync(currentDbPath + '-shm');
-    } catch {
-      /* may not exist */
-    }
-  });
+    afterEach(async () => {
+      if (db) {
+        await db.close();
+      }
+      try {
+        unlinkSync(currentDbPath);
+      } catch {
+        /* may not exist */
+      }
+      try {
+        unlinkSync(currentDbPath + '-wal');
+      } catch {
+        /* may not exist */
+      }
+      try {
+        unlinkSync(currentDbPath + '-shm');
+      } catch {
+        /* may not exist */
+      }
+    });
 
-  async function insertBinding(
-    id: string,
-    overrides: Partial<{
-      provider: string;
-      name: string;
-      codebaseId: string;
-      eventRoute: string;
-      signingSecret: string | null;
-      state: string;
-    }> = {}
-  ): Promise<void> {
-    const v = {
-      provider: 'archon',
-      name: 'workflow-engine-primary',
-      codebaseId: 'cb-1',
-      eventRoute: 'https://hermes.example/events/workflow-engine',
-      signingSecret: null,
-      state: 'active',
-      ...overrides,
-    };
-    await db.query(
-      `INSERT INTO remote_agent_workflow_provider_bindings
+    async function insertBinding(
+      id: string,
+      overrides: Partial<{
+        provider: string;
+        name: string;
+        codebaseId: string;
+        eventRoute: string;
+        signingSecret: string | null;
+        state: string;
+      }> = {}
+    ): Promise<void> {
+      const v = {
+        provider: 'archon',
+        name: 'workflow-engine-primary',
+        codebaseId: 'cb-1',
+        eventRoute: 'https://hermes.example/events/workflow-engine',
+        signingSecret: null,
+        state: 'active',
+        ...overrides,
+      };
+      await db.query(
+        `INSERT INTO remote_agent_workflow_provider_bindings
        (id, provider, name, codebase_id, event_route, signing_secret, state)
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [id, v.provider, v.name, v.codebaseId, v.eventRoute, v.signingSecret, v.state]
-    );
-  }
+        [id, v.provider, v.name, v.codebaseId, v.eventRoute, v.signingSecret, v.state]
+      );
+    }
 
-  // 3.1-INT-001 [P0] — Fresh SQLite schema has FK, defaults, and unique
-  // identity. Risk: R-003, R-007.
-  test('fresh schema: insert applies defaults (state=active, binding_version=1) and both timestamps', async () => {
-    db = createTestDb();
-    await insertCodebase(db, 'cb-1');
-    await insertBinding('wpb-1');
+    // 3.1-INT-001 [P0] — Fresh SQLite schema has FK, defaults, and unique
+    // identity. Risk: R-003, R-007.
+    test('fresh schema: insert applies defaults (state=active, binding_version=1) and both timestamps', async () => {
+      db = createTestDb();
+      await insertCodebase(db, 'cb-1');
+      await insertBinding('wpb-1');
 
-    const result = await db.query<{
-      state: string;
-      binding_version: number;
-      created_at: string | null;
-      updated_at: string | null;
-    }>(
-      `SELECT state, binding_version, created_at, updated_at
+      const result = await db.query<{
+        state: string;
+        binding_version: number;
+        created_at: string | null;
+        updated_at: string | null;
+      }>(
+        `SELECT state, binding_version, created_at, updated_at
        FROM remote_agent_workflow_provider_bindings WHERE id = $1`,
-      ['wpb-1']
-    );
-    expect(result.rows).toHaveLength(1);
-    expect(result.rows[0]?.state).toBe('active');
-    expect(result.rows[0]?.binding_version).toBe(1);
-    expect(result.rows[0]?.created_at).toBeTruthy();
-    expect(result.rows[0]?.updated_at).toBeTruthy();
-  });
+        ['wpb-1']
+      );
+      expect(result.rows).toHaveLength(1);
+      expect(result.rows[0]?.state).toBe('active');
+      expect(result.rows[0]?.binding_version).toBe(1);
+      expect(result.rows[0]?.created_at).toBeTruthy();
+      expect(result.rows[0]?.updated_at).toBeTruthy();
+    });
 
-  test('fresh schema: UNIQUE(provider, name) rejects a second row for the same pair', async () => {
-    db = createTestDb();
-    await insertCodebase(db, 'cb-1');
-    await insertBinding('wpb-1');
+    test('fresh schema: UNIQUE(provider, name) rejects a second row for the same pair', async () => {
+      db = createTestDb();
+      await insertCodebase(db, 'cb-1');
+      await insertBinding('wpb-1');
 
-    await expect(insertBinding('wpb-2')).rejects.toThrow();
-  });
+      await expect(insertBinding('wpb-2')).rejects.toThrow();
+    });
 
-  test('fresh schema: codebase_id is a foreign key that rejects an unregistered codebase', async () => {
-    db = createTestDb();
-    // No insertCodebase() call — 'cb-missing' is never registered. Match on
-    // "FOREIGN KEY" specifically (not just "any throw") so this stays a
-    // meaningful assertion once the table exists, rather than a vacuous pass
-    // driven by "no such table".
-    await expect(insertBinding('wpb-1', { codebaseId: 'cb-missing' })).rejects.toThrow(
-      /FOREIGN KEY/i
-    );
-  });
+    test('fresh schema: codebase_id is a foreign key that rejects an unregistered codebase', async () => {
+      db = createTestDb();
+      // No insertCodebase() call — 'cb-missing' is never registered. Match on
+      // "FOREIGN KEY" specifically (not just "any throw") so this stays a
+      // meaningful assertion once the table exists, rather than a vacuous pass
+      // driven by "no such table".
+      await expect(insertBinding('wpb-1', { codebaseId: 'cb-missing' })).rejects.toThrow(
+        /FOREIGN KEY/i
+      );
+    });
 
-  test('fresh schema: deleting the parent codebase cascades to its bindings (ON DELETE CASCADE)', async () => {
-    db = createTestDb();
-    await insertCodebase(db, 'cb-1');
-    await insertBinding('wpb-1');
+    test('fresh schema: deleting the parent codebase cascades to its bindings (ON DELETE CASCADE)', async () => {
+      db = createTestDb();
+      await insertCodebase(db, 'cb-1');
+      await insertBinding('wpb-1');
 
-    await db.query('DELETE FROM remote_agent_codebases WHERE id = $1', ['cb-1']);
+      await db.query('DELETE FROM remote_agent_codebases WHERE id = $1', ['cb-1']);
 
-    const result = await db.query(
-      'SELECT id FROM remote_agent_workflow_provider_bindings WHERE id = $1',
-      ['wpb-1']
-    );
-    expect(result.rows).toHaveLength(0);
-  });
+      const result = await db.query(
+        'SELECT id FROM remote_agent_workflow_provider_bindings WHERE id = $1',
+        ['wpb-1']
+      );
+      expect(result.rows).toHaveLength(0);
+    });
 
-  // 3.1-INT-002 [P1] — Existing SQLite DB adds the table without data loss.
-  // Risk: R-007, R-013.
-  test('upgrade: constructing SqliteAdapter against a pre-existing DB (missing the new table) adds it without touching unrelated tables', async () => {
-    const dbPath = join(
-      import.meta.dir,
-      `.test-sqlite-pre-binding-${Date.now()}-${Math.random().toString(36).slice(2)}.db`
-    );
-    currentDbPath = dbPath;
+    // 3.1-INT-002 [P1] — Existing SQLite DB adds the table without data loss.
+    // Risk: R-007, R-013.
+    test('upgrade: constructing SqliteAdapter against a pre-existing DB (missing the new table) adds it without touching unrelated tables', async () => {
+      const dbPath = join(
+        import.meta.dir,
+        `.test-sqlite-pre-binding-${Date.now()}-${Math.random().toString(36).slice(2)}.db`
+      );
+      currentDbPath = dbPath;
 
-    // Seed a pre-Story-3.1 database: codebases table exists, has a row, but
-    // remote_agent_workflow_provider_bindings does not exist at all.
-    const raw = new Database(dbPath);
-    raw.exec(`
+      // Seed a pre-Story-3.1 database: codebases table exists, has a row, but
+      // remote_agent_workflow_provider_bindings does not exist at all.
+      const raw = new Database(dbPath);
+      raw.exec(`
       CREATE TABLE remote_agent_codebases (
         id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
         name TEXT NOT NULL,
@@ -542,318 +543,749 @@ describe('remote_agent_workflow_provider_bindings (Story 3.1)', () => {
       );
       INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ('cb-preexisting', 'pre', '/tmp/pre');
     `);
-    raw.close();
+      raw.close();
 
-    db = new SqliteAdapter(dbPath);
-    const cols = raw_pragma(dbPath, 'remote_agent_workflow_provider_bindings');
-    expect(cols).toContain('provider');
-    expect(cols).toContain('name');
-    expect(cols).toContain('event_route');
-    expect(cols).toContain('signing_secret');
+      db = new SqliteAdapter(dbPath);
+      const cols = raw_pragma(dbPath, 'remote_agent_workflow_provider_bindings');
+      expect(cols).toContain('provider');
+      expect(cols).toContain('name');
+      expect(cols).toContain('event_route');
+      expect(cols).toContain('signing_secret');
 
-    // The pre-existing row must survive the upgrade untouched.
-    const preserved = await db.query('SELECT name FROM remote_agent_codebases WHERE id = $1', [
-      'cb-preexisting',
-    ]);
-    expect(preserved.rows).toHaveLength(1);
-  });
+      // The pre-existing row must survive the upgrade untouched.
+      const preserved = await db.query('SELECT name FROM remote_agent_codebases WHERE id = $1', [
+        'cb-preexisting',
+      ]);
+      expect(preserved.rows).toHaveLength(1);
+    });
 
-  // 3.1-INT-003 [P1] — Repeated SQLite init is idempotent. Risk: R-007, R-013.
-  test('repeated construction against the same file is idempotent (no duplicate-table / duplicate-index errors)', async () => {
-    db = createTestDb();
-    await db.close();
-    // Re-open the same file — createSchema()'s CREATE TABLE IF NOT EXISTS /
-    // CREATE INDEX IF NOT EXISTS must not throw on the second pass.
-    expect(() => {
-      db = new SqliteAdapter(currentDbPath);
-    }).not.toThrow();
-    await insertCodebase(db, 'cb-1');
-    await expect(insertBinding('wpb-1')).resolves.toBeUndefined();
-  });
+    // 3.1-INT-003 [P1] — Repeated SQLite init is idempotent. Risk: R-007, R-013.
+    test('repeated construction against the same file is idempotent (no duplicate-table / duplicate-index errors)', async () => {
+      db = createTestDb();
+      await db.close();
+      // Re-open the same file — createSchema()'s CREATE TABLE IF NOT EXISTS /
+      // CREATE INDEX IF NOT EXISTS must not throw on the second pass.
+      expect(() => {
+        db = new SqliteAdapter(currentDbPath);
+      }).not.toThrow();
+      await insertCodebase(db, 'cb-1');
+      await expect(insertBinding('wpb-1')).resolves.toBeUndefined();
+    });
 
-  test('fresh schema: signing_secret persists privately on provider bindings', async () => {
-    db = createTestDb();
-    await insertCodebase(db, 'cb-1');
-    await insertBinding('wpb-1', { signingSecret: 'local-test-value' });
+    test('fresh schema: signing_secret persists privately on provider bindings', async () => {
+      db = createTestDb();
+      await insertCodebase(db, 'cb-1');
+      await insertBinding('wpb-1', { signingSecret: 'local-test-value' });
 
-    const result = await db.query<{ signing_secret: string | null }>(
-      `SELECT signing_secret FROM remote_agent_workflow_provider_bindings WHERE id = $1`,
-      ['wpb-1']
-    );
+      const result = await db.query<{ signing_secret: string | null }>(
+        `SELECT signing_secret FROM remote_agent_workflow_provider_bindings WHERE id = $1`,
+        ['wpb-1']
+      );
 
-    expect(result.rows[0]?.signing_secret).toBe('local-test-value');
-  });
+      expect(result.rows[0]?.signing_secret).toBe('local-test-value');
+    });
 
-  // ---------------------------------------------------------------------------
-  // Concurrency / races — real temp SQLite DB, Promise.all-driven interleaving.
-  // ---------------------------------------------------------------------------
+    // ---------------------------------------------------------------------------
+    // Concurrency / races — real temp SQLite DB, Promise.all-driven interleaving.
+    // ---------------------------------------------------------------------------
 
-  // 3.1-INT-005 [P0] — Concurrent duplicate creates produce one row and one
-  // loser. Risk: R-003.
-  test('two concurrent creates for the same (provider,name) leave exactly one row', async () => {
-    db = createTestDb();
-    await insertCodebase(db, 'cb-1');
+    // 3.1-INT-005 [P0] — Concurrent duplicate creates produce one row and one
+    // loser. Risk: R-003.
+    test('two concurrent creates for the same (provider,name) leave exactly one row', async () => {
+      db = createTestDb();
+      await insertCodebase(db, 'cb-1');
 
-    const attempt = (id: string): Promise<unknown> =>
-      db.query(
-        `INSERT INTO remote_agent_workflow_provider_bindings
+      const attempt = (id: string): Promise<unknown> =>
+        db.query(
+          `INSERT INTO remote_agent_workflow_provider_bindings
          (id, provider, name, codebase_id, event_route, state)
          VALUES ($1, 'archon', 'workflow-engine-primary', 'cb-1', 'https://hermes.example/events/x', 'active')
          ON CONFLICT (provider, name) DO NOTHING`,
-        [id]
+          [id]
+        );
+
+      await Promise.all([attempt('wpb-a'), attempt('wpb-b')]);
+
+      const rows = await db.query(
+        `SELECT id FROM remote_agent_workflow_provider_bindings WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
       );
+      expect(rows.rows).toHaveLength(1);
+    });
 
-    await Promise.all([attempt('wpb-a'), attempt('wpb-b')]);
+    // 3.1-INT-006 [P0] — Concurrent create/update yields only legal outcomes
+    // and no duplicate. Risk: R-003, R-006.
+    test('a create racing an update on the not-yet-created binding never produces two rows', async () => {
+      db = createTestDb();
+      await insertCodebase(db, 'cb-1');
 
-    const rows = await db.query(
-      `SELECT id FROM remote_agent_workflow_provider_bindings WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
-    );
-    expect(rows.rows).toHaveLength(1);
-  });
-
-  // 3.1-INT-006 [P0] — Concurrent create/update yields only legal outcomes
-  // and no duplicate. Risk: R-003, R-006.
-  test('a create racing an update on the not-yet-created binding never produces two rows', async () => {
-    db = createTestDb();
-    await insertCodebase(db, 'cb-1');
-
-    const create = db.query(
-      `INSERT INTO remote_agent_workflow_provider_bindings
+      const create = db.query(
+        `INSERT INTO remote_agent_workflow_provider_bindings
        (id, provider, name, codebase_id, event_route, state)
        VALUES ('wpb-race', 'archon', 'workflow-engine-primary', 'cb-1', 'https://hermes.example/events/x', 'active')
        ON CONFLICT (provider, name) DO NOTHING`
-    );
-    const update = db.query(
-      `UPDATE remote_agent_workflow_provider_bindings
+      );
+      const update = db.query(
+        `UPDATE remote_agent_workflow_provider_bindings
        SET event_route = 'https://hermes.example/events/updated'
        WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
-    );
+      );
 
-    await Promise.allSettled([create, update]);
+      await Promise.allSettled([create, update]);
 
-    const rows = await db.query(
-      `SELECT id FROM remote_agent_workflow_provider_bindings WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
-    );
-    expect(rows.rows.length).toBeLessThanOrEqual(1);
-  });
+      const rows = await db.query(
+        `SELECT id FROM remote_agent_workflow_provider_bindings WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
+      );
+      expect(rows.rows.length).toBeLessThanOrEqual(1);
+    });
 
-  // 3.1-INT-007 [P0] — Create→update→create preserves distinct command
-  // semantics. Risk: R-003.
-  test('create, then update, then a second create for the same (provider,name) — the second create still fails', async () => {
-    db = createTestDb();
-    await insertCodebase(db, 'cb-1');
-    await insertBinding('wpb-1');
+    // 3.1-INT-007 [P0] — Create→update→create preserves distinct command
+    // semantics. Risk: R-003.
+    test('create, then update, then a second create for the same (provider,name) — the second create still fails', async () => {
+      db = createTestDb();
+      await insertCodebase(db, 'cb-1');
+      await insertBinding('wpb-1');
 
-    await db.query(
-      `UPDATE remote_agent_workflow_provider_bindings SET event_route = $1 WHERE provider = 'archon' AND name = 'workflow-engine-primary'`,
-      ['https://hermes.example/events/v2']
-    );
+      await db.query(
+        `UPDATE remote_agent_workflow_provider_bindings SET event_route = $1 WHERE provider = 'archon' AND name = 'workflow-engine-primary'`,
+        ['https://hermes.example/events/v2']
+      );
 
-    const secondCreate = await db.query(
-      `INSERT INTO remote_agent_workflow_provider_bindings
+      const secondCreate = await db.query(
+        `INSERT INTO remote_agent_workflow_provider_bindings
        (id, provider, name, codebase_id, event_route, state)
        VALUES ('wpb-2', 'archon', 'workflow-engine-primary', 'cb-1', 'https://hermes.example/events/v3', 'active')
        ON CONFLICT (provider, name) DO NOTHING`
-    );
-    expect(secondCreate.rowCount).toBe(0);
+      );
+      expect(secondCreate.rowCount).toBe(0);
 
-    const rows = await db.query<{ event_route: string }>(
-      `SELECT event_route FROM remote_agent_workflow_provider_bindings WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
-    );
-    expect(rows.rows).toHaveLength(1);
-    expect(rows.rows[0]?.event_route).toBe('https://hermes.example/events/v2');
-  });
+      const rows = await db.query<{ event_route: string }>(
+        `SELECT event_route FROM remote_agent_workflow_provider_bindings WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
+      );
+      expect(rows.rows).toHaveLength(1);
+      expect(rows.rows[0]?.event_route).toBe('https://hermes.example/events/v2');
+    });
 
-  // 3.1-INT-008 [P1] — Concurrent rotates are monotonic. Risk: R-006.
-  test('N concurrent rotate UPDATEs each increment binding_version by exactly 1 in total (no lost update)', async () => {
-    db = createTestDb();
-    await insertCodebase(db, 'cb-1');
-    await insertBinding('wpb-1');
+    // 3.1-INT-008 [P1] — Concurrent rotates are monotonic. Risk: R-006.
+    test('N concurrent rotate UPDATEs each increment binding_version by exactly 1 in total (no lost update)', async () => {
+      db = createTestDb();
+      await insertCodebase(db, 'cb-1');
+      await insertBinding('wpb-1');
 
-    const rotate = (): Promise<unknown> =>
-      db.query(
-        `UPDATE remote_agent_workflow_provider_bindings
+      const rotate = (): Promise<unknown> =>
+        db.query(
+          `UPDATE remote_agent_workflow_provider_bindings
          SET binding_version = binding_version + 1, state = 'rotated'
          WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
+        );
+
+      await Promise.all([rotate(), rotate(), rotate()]);
+
+      const rows = await db.query<{ binding_version: number }>(
+        `SELECT binding_version FROM remote_agent_workflow_provider_bindings WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
       );
+      // 3 concurrent +1 UPDATEs starting from version 1 must land on exactly 4 —
+      // a lost update would land lower.
+      expect(rows.rows[0]?.binding_version).toBe(4);
+    });
 
-    await Promise.all([rotate(), rotate(), rotate()]);
+    // 3.1-INT-009 [P1] — Rotate racing disable has a serializable final state.
+    // Risk: R-006, R-009.
+    test('a rotate racing a disable on the same binding leaves a single coherent final state (never both half-applied)', async () => {
+      db = createTestDb();
+      await insertCodebase(db, 'cb-1');
+      await insertBinding('wpb-1');
 
-    const rows = await db.query<{ binding_version: number }>(
-      `SELECT binding_version FROM remote_agent_workflow_provider_bindings WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
-    );
-    // 3 concurrent +1 UPDATEs starting from version 1 must land on exactly 4 —
-    // a lost update would land lower.
-    expect(rows.rows[0]?.binding_version).toBe(4);
-  });
-
-  // 3.1-INT-009 [P1] — Rotate racing disable has a serializable final state.
-  // Risk: R-006, R-009.
-  test('a rotate racing a disable on the same binding leaves a single coherent final state (never both half-applied)', async () => {
-    db = createTestDb();
-    await insertCodebase(db, 'cb-1');
-    await insertBinding('wpb-1');
-
-    const rotate = db.query(
-      `UPDATE remote_agent_workflow_provider_bindings
+      const rotate = db.query(
+        `UPDATE remote_agent_workflow_provider_bindings
        SET binding_version = binding_version + 1, state = 'rotated'
        WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
-    );
-    const disable = db.query(
-      `UPDATE remote_agent_workflow_provider_bindings
+      );
+      const disable = db.query(
+        `UPDATE remote_agent_workflow_provider_bindings
        SET state = 'disabled'
        WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
-    );
+      );
 
-    await Promise.allSettled([rotate, disable]);
+      await Promise.allSettled([rotate, disable]);
 
-    const rows = await db.query<{ state: string }>(
-      `SELECT state FROM remote_agent_workflow_provider_bindings WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
-    );
-    expect(rows.rows).toHaveLength(1);
-    expect(['rotated', 'disabled']).toContain(rows.rows[0]?.state);
+      const rows = await db.query<{ state: string }>(
+        `SELECT state FROM remote_agent_workflow_provider_bindings WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
+      );
+      expect(rows.rows).toHaveLength(1);
+      expect(['rotated', 'disabled']).toContain(rows.rows[0]?.state);
+    });
+
+    // 3.1-INT-010 [P1] — Duplicate disable follows ratified idempotent
+    // semantics and retains one row. Risk: R-009.
+    test('disabling an already-disabled binding twice retains exactly one row with state=disabled', async () => {
+      db = createTestDb();
+      await insertCodebase(db, 'cb-1');
+      await insertBinding('wpb-1', { state: 'disabled' });
+
+      await db.query(
+        `UPDATE remote_agent_workflow_provider_bindings SET state = 'disabled' WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
+      );
+      await db.query(
+        `UPDATE remote_agent_workflow_provider_bindings SET state = 'disabled' WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
+      );
+
+      const rows = await db.query<{ state: string }>(
+        `SELECT state FROM remote_agent_workflow_provider_bindings WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
+      );
+      expect(rows.rows).toHaveLength(1);
+      expect(rows.rows[0]?.state).toBe('disabled');
+    });
   });
 
-  // 3.1-INT-010 [P1] — Duplicate disable follows ratified idempotent
-  // semantics and retains one row. Risk: R-009.
-  test('disabling an already-disabled binding twice retains exactly one row with state=disabled', async () => {
-    db = createTestDb();
-    await insertCodebase(db, 'cb-1');
-    await insertBinding('wpb-1', { state: 'disabled' });
+  describe('remote_agent_workflow_event_outbox (Story 3.5)', () => {
+    let db: SqliteAdapter;
 
-    await db.query(
-      `UPDATE remote_agent_workflow_provider_bindings SET state = 'disabled' WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
-    );
-    await db.query(
-      `UPDATE remote_agent_workflow_provider_bindings SET state = 'disabled' WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
-    );
+    afterEach(async () => {
+      if (db) {
+        await db.close();
+      }
+      try {
+        unlinkSync(currentDbPath);
+      } catch {
+        /* may not exist */
+      }
+      try {
+        unlinkSync(currentDbPath + '-wal');
+      } catch {
+        /* may not exist */
+      }
+      try {
+        unlinkSync(currentDbPath + '-shm');
+      } catch {
+        /* may not exist */
+      }
+    });
 
-    const rows = await db.query<{ state: string }>(
-      `SELECT state FROM remote_agent_workflow_provider_bindings WHERE provider = 'archon' AND name = 'workflow-engine-primary'`
-    );
-    expect(rows.rows).toHaveLength(1);
-    expect(rows.rows[0]?.state).toBe('disabled');
-  });
-});
-
-describe('remote_agent_workflow_event_outbox (Story 3.5)', () => {
-  let db: SqliteAdapter;
-
-  afterEach(async () => {
-    if (db) {
-      await db.close();
-    }
-    try {
-      unlinkSync(currentDbPath);
-    } catch {
-      /* may not exist */
-    }
-    try {
-      unlinkSync(currentDbPath + '-wal');
-    } catch {
-      /* may not exist */
-    }
-    try {
-      unlinkSync(currentDbPath + '-shm');
-    } catch {
-      /* may not exist */
-    }
-  });
-
-  async function insertRun(): Promise<void> {
-    await insertCodebase(db, 'cb-1');
-    await db.query(
-      `INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id)
+    async function insertRun(): Promise<void> {
+      await insertCodebase(db, 'cb-1');
+      await db.query(
+        `INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id)
        VALUES ($1, $2, $3)`,
-      ['conv-1', 'web', 'conv-1']
-    );
-    await db.query(
-      `INSERT INTO remote_agent_workflow_runs
+        ['conv-1', 'web', 'conv-1']
+      );
+      await db.query(
+        `INSERT INTO remote_agent_workflow_runs
        (id, conversation_id, codebase_id, workflow_name, user_message, status)
        VALUES ($1, $2, $3, $4, $5, $6)`,
-      ['run-1', 'conv-1', 'cb-1', 'bmad-dev-story', 'ship it', 'running']
-    );
-    await db.query(
-      `INSERT INTO remote_agent_workflow_provider_bindings
+        ['run-1', 'conv-1', 'cb-1', 'bmad-dev-story', 'ship it', 'running']
+      );
+      await db.query(
+        `INSERT INTO remote_agent_workflow_provider_bindings
        (id, provider, name, codebase_id, event_route, signing_secret, state)
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [
-        'wpb-1',
-        'archon',
-        'workflow-engine-primary',
-        'cb-1',
-        'https://hermes.example/events',
-        'local-test-value',
-        'active',
-      ]
-    );
-  }
+        [
+          'wpb-1',
+          'archon',
+          'workflow-engine-primary',
+          'cb-1',
+          'https://hermes.example/events',
+          'local-test-value',
+          'active',
+        ]
+      );
+    }
 
-  test('fresh schema: outbox row and append-only attempt row persist exact request body', async () => {
-    db = createTestDb();
-    await insertRun();
-    const body = '{"schemaVersion":"workflow-event-envelope.v1","eventId":"evt-1"}';
+    test('fresh schema: outbox row and append-only attempt row persist exact request body', async () => {
+      db = createTestDb();
+      await insertRun();
+      const body = '{"schemaVersion":"workflow-event-envelope.v1","eventId":"evt-1"}';
 
-    await db.query(
-      `INSERT INTO remote_agent_workflow_event_outbox
+      await db.query(
+        `INSERT INTO remote_agent_workflow_event_outbox
        (id, event_id, idempotency_key, event_type, workflow_run_id, codebase_id,
         binding_id, event_route, event_body, status, next_attempt_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-      [
-        'outbox-1',
-        'evt-1',
-        'archon:workflow-engine-primary:evt-1',
-        'workflow.run.completed',
-        'run-1',
-        'cb-1',
-        'wpb-1',
-        'https://hermes.example/events',
-        body,
-        'pending',
-        '2026-07-25T00:00:00.000Z',
-      ]
-    );
-    await db.query(
-      `INSERT INTO remote_agent_workflow_event_delivery_attempts
+        [
+          'outbox-1',
+          'evt-1',
+          'archon:workflow-engine-primary:evt-1',
+          'workflow.run.completed',
+          'run-1',
+          'cb-1',
+          'wpb-1',
+          'https://hermes.example/events',
+          body,
+          'pending',
+          '2026-07-25T00:00:00.000Z',
+        ]
+      );
+      await db.query(
+        `INSERT INTO remote_agent_workflow_event_delivery_attempts
        (id, outbox_event_id, attempt_number, request_url, request_method,
         request_headers, request_body, started_at, outcome)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [
-        'attempt-1',
-        'outbox-1',
-        1,
-        'https://hermes.example/events',
-        'POST',
-        '{"X-Request-ID":"archon:workflow-engine-primary:evt-1"}',
-        body,
-        '2026-07-25T00:00:00.000Z',
-        'pending',
-      ]
-    );
+        [
+          'attempt-1',
+          'outbox-1',
+          1,
+          'https://hermes.example/events',
+          'POST',
+          '{"X-Request-ID":"archon:workflow-engine-primary:evt-1"}',
+          body,
+          '2026-07-25T00:00:00.000Z',
+          'pending',
+        ]
+      );
 
-    const outbox = await db.query<{ event_body: string; status: string }>(
-      'SELECT event_body, status FROM remote_agent_workflow_event_outbox WHERE id = $1',
-      ['outbox-1']
-    );
-    const attempts = await db.query<{ request_body: string; outcome: string }>(
-      'SELECT request_body, outcome FROM remote_agent_workflow_event_delivery_attempts WHERE id = $1',
-      ['attempt-1']
-    );
+      const outbox = await db.query<{ event_body: string; status: string }>(
+        'SELECT event_body, status FROM remote_agent_workflow_event_outbox WHERE id = $1',
+        ['outbox-1']
+      );
+      const attempts = await db.query<{ request_body: string; outcome: string }>(
+        'SELECT request_body, outcome FROM remote_agent_workflow_event_delivery_attempts WHERE id = $1',
+        ['attempt-1']
+      );
 
-    expect(outbox.rows[0]).toEqual({ event_body: body, status: 'pending' });
-    expect(attempts.rows[0]).toEqual({ request_body: body, outcome: 'pending' });
+      expect(outbox.rows[0]).toEqual({ event_body: body, status: 'pending' });
+      expect(attempts.rows[0]).toEqual({ request_body: body, outcome: 'pending' });
+    });
+
+    test('fresh schema: due and attempt indexes exist', async () => {
+      db = createTestDb();
+
+      const indexes = raw_indexes(currentDbPath);
+
+      expect(indexes).toContain('idx_workflow_event_outbox_due');
+      expect(indexes).toContain('idx_workflow_event_outbox_run');
+      expect(indexes).toContain('idx_workflow_event_delivery_attempts_outbox');
+    });
   });
 
-  test('fresh schema: due and attempt indexes exist', async () => {
-    db = createTestDb();
+  describe('schema parity with the Postgres migration (000_combined.sql)', () => {
+    /**
+     * The SQLite schema (createSchema() in sqlite.ts) and the Postgres schema
+     * (migrations/000_combined.sql) are two independently hand-maintained
+     * sources of truth. Before this test nothing compared them, so a table
+     * added to the migration but forgotten in sqlite.ts shipped silently and
+     * threw `no such table: <name>` on SQLite. That regression actually
+     * happened with remote_agent_user_ai_prefs (Phase 3 / credentials epic):
+     * added to the migration, missed in sqlite.ts, invisible on the Postgres
+     * VPS. The lookup is caught (runs degrade to config-only), but it spammed
+     * two ERROR log lines on every SQLite run.
+     *
+     * Better Auth's remote_agent_auth_* tables are intentionally Postgres-only
+     * (web auth never runs on SQLite — see migrateColumns() and CLAUDE.md), so
+     * the parity checks exclude that prefix. The separate, exact
+     * remote_agent_codebases.allow_env_keys column exception is tracked by
+     * #2318; keep it column-specific. A genuinely new Postgres-only table
+     * must be added to the table allowlist with a justifying comment.
+     *
+     * Table discovery is deliberately independent of column-body parsing: a
+     * table that is present in the migration but missing from sqlite.ts is the
+     * original drift class (PR #2033), and it must stay caught even if its
+     * CREATE body is unparseable for any reason.
+     */
+    const POSTGRES_ONLY_PREFIX = 'remote_agent_auth_';
+    // #2318 owns this known dead Postgres-only residue. Keep the exception
+    // column-specific so every other codebases column remains protected.
+    const POSTGRES_ONLY_COLUMNS = new Set(['remote_agent_codebases.allow_env_keys']);
+    // Reverse-direction residue: declared in sqlite.ts, never added to the
+    // migration, and read by nothing. Harmless but real — and reverse drift is
+    // the works-locally / breaks-on-the-Postgres-VPS direction, so the check
+    // itself is worth keeping even though today it costs one entry.
+    const SQLITE_ONLY_COLUMNS = new Set(['remote_agent_isolation_environments.updated_at']);
+    const TABLE_CONSTRAINTS = new Set(['check', 'constraint', 'foreign', 'primary', 'unique']);
+    /**
+     * Floor for the number of non-auth columns actually compared. A parser bug
+     * that silently drops columns (rather than mismatching them) makes the
+     * comparison pass vacuously, which is exactly how a truncating body regex
+     * shipped: a `);` inside a comment cut a table from 7 columns to 3 and the
+     * suite stayed green. Adjust when the schema legitimately changes size —
+     * the failure names the count, so the intended value is never a guess.
+     */
+    const MIN_NON_AUTH_COLUMNS = 136;
 
-    const indexes = raw_indexes(currentDbPath);
+    /**
+     * Archon table names declared by the Postgres migration. Body-independent
+     * on purpose — see the note above about the PR #2033 drift class.
+     */
+    function postgresArchonTables(): string[] {
+      const re = /CREATE TABLE(?:\s+IF NOT EXISTS)?\s+"?([a-z0-9_]+)"?/gi;
+      // All Archon tables share this prefix (CLAUDE.md).
+      const names = [...stripSqlComments(getSchemaSQL()).matchAll(re)]
+        .map(m => m[1].toLowerCase())
+        .filter(name => name.startsWith('remote_agent_'));
+      return [...new Set(names)];
+    }
 
-    expect(indexes).toContain('idx_workflow_event_outbox_due');
-    expect(indexes).toContain('idx_workflow_event_outbox_run');
-    expect(indexes).toContain('idx_workflow_event_delivery_attempts_outbox');
+    /** Extract Archon table columns declared or added by the Postgres migration. */
+    function postgresArchonColumns(): Map<string, Set<string>> {
+      // Comments are stripped first: `migrations/000_combined.sql` writes `);`
+      // inside prose comments as a matter of house style, and any paren- or
+      // semicolon-sensitive scan would otherwise end a table body early.
+      const sql = stripSqlComments(getSchemaSQL());
+      const columnsByTable = new Map<string, Set<string>>();
+      const createTableRe = /CREATE TABLE(?:\s+IF NOT EXISTS)?\s+"?([a-z0-9_]+)"?\s*\(/gi;
+
+      for (const match of sql.matchAll(createTableRe)) {
+        const table = match[1].toLowerCase();
+        if (!table.startsWith('remote_agent_')) continue;
+
+        const columns = columnsByTable.get(table) ?? new Set<string>();
+        // Depth-tracked so nested parens in REFERENCES / CHECK / DEFAULT
+        // clauses cannot terminate the body or split a declaration.
+        const body = readBalancedParens(sql, match.index + match[0].length - 1);
+        for (const declaration of splitTopLevelCommas(body)) {
+          const identifier = declaration.trim().match(/^(?:"([^"]+)"|([a-z_][a-z0-9_]*))/i);
+          if (!identifier) continue;
+
+          const column = identifier[1] ?? identifier[2].toLowerCase();
+          if (!TABLE_CONSTRAINTS.has(column.toLowerCase())) columns.add(column);
+        }
+        columnsByTable.set(table, columns);
+      }
+
+      const addColumnRe =
+        /ALTER TABLE\s+"?([a-z0-9_]+)"?\s+ADD COLUMN IF NOT EXISTS\s+"?([a-z_][a-z0-9_]*)"?/gi;
+      for (const match of sql.matchAll(addColumnRe)) {
+        const table = match[1].toLowerCase();
+        if (!table.startsWith('remote_agent_')) continue;
+        const columns = columnsByTable.get(table) ?? new Set<string>();
+        columns.add(match[2].toLowerCase());
+        columnsByTable.set(table, columns);
+      }
+
+      return columnsByTable;
+    }
+
+    /** Table → columns as the fresh SQLite schema (createSchema()) built them. */
+    async function sqliteSchemaColumns(): Promise<Map<string, Set<string>>> {
+      const result = await db.query<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+      );
+      return new Map(result.rows.map(r => [r.name, new Set(raw_pragma(currentDbPath, r.name))]));
+    }
+
+    test('every non-auth Postgres table is created by the SQLite schema', async () => {
+      db = createTestDb();
+      const result = await db.query<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+      );
+      const sqliteTables = new Set(result.rows.map(r => r.name));
+
+      const expected = postgresArchonTables().filter(
+        table => !table.startsWith(POSTGRES_ONLY_PREFIX)
+      );
+      // Sanity: the parse found the table set, including the exact table whose
+      // absence triggered this regression — guards against the regex silently
+      // missing a name and the assertion below passing vacuously.
+      expect(expected.length).toBeGreaterThan(10);
+      expect(expected).toContain('remote_agent_user_ai_prefs');
+
+      const missing = expected.filter(name => !sqliteTables.has(name)).sort();
+      expect(missing).toEqual([]);
+    });
+
+    test('every non-auth Postgres column exists in a fresh SQLite schema', async () => {
+      db = createTestDb();
+      const postgresColumns = postgresArchonColumns();
+      const sqliteColumns = await sqliteSchemaColumns();
+
+      // Anti-vacuity checks cover a CREATE declaration and an ALTER-only one.
+      // Deliberately NOT an allowlisted column: fixing a listed drift should
+      // require editing the allowlist and nothing else.
+      expect(postgresColumns.get('remote_agent_codebases')?.has('default_cwd')).toBe(true);
+      expect(postgresColumns.get('remote_agent_users')?.has('role')).toBe(true);
+
+      const missing: string[] = [];
+      let compared = 0;
+      for (const table of postgresArchonTables()) {
+        if (table.startsWith(POSTGRES_ONLY_PREFIX)) continue;
+        const expectedColumns = postgresColumns.get(table) ?? new Set<string>();
+        const actualColumns = sqliteColumns.get(table) ?? new Set<string>();
+        for (const column of expectedColumns) {
+          compared++;
+          const qualifiedColumn = `${table}.${column}`;
+          if (!actualColumns.has(column) && !POSTGRES_ONLY_COLUMNS.has(qualifiedColumn)) {
+            missing.push(qualifiedColumn);
+          }
+        }
+      }
+
+      // Drift FIRST. The vacuity floor below is a guard on this test's own
+      // reach, not a drift assertion -- and asserting it first lets it mask the
+      // thing you actually need to see: two legitimate column removals plus one
+      // real drift made the floor fire and the drift list never printed.
+      expect(missing.sort()).toEqual([]);
+
+      // Anti-vacuity: if the parser silently loses columns again (it did -- an
+      // in-body `);` once cut workflow_events from 7 columns to 3 with the suite
+      // still green), `missing` stays empty because there is nothing left to
+      // compare. Thrown rather than expect()ed so the message explains itself:
+      // a bare `Expected: >= 136 / Received: 135` under this test's name reads
+      // as drift when it is either a parser regression or a legitimate removal.
+      if (compared < MIN_NON_AUTH_COLUMNS) {
+        throw new Error(
+          `Schema-parity coverage collapsed: compared ${compared} non-auth columns, ` +
+            `expected at least ${MIN_NON_AUTH_COLUMNS}. Either the migration parser has ` +
+            `silently lost columns (check the CREATE TABLE body extraction), or columns ` +
+            `were legitimately removed from migrations/000_combined.sql -- in which case ` +
+            `lower MIN_NON_AUTH_COLUMNS to the new count. No drift was detected either way.`
+        );
+      }
+    });
+
+    test('every SQLite column exists in the Postgres migration', async () => {
+      db = createTestDb();
+      const postgresColumns = postgresArchonColumns();
+      const sqliteColumns = await sqliteSchemaColumns();
+
+      const extra: string[] = [];
+      for (const [table, actualColumns] of sqliteColumns) {
+        const expectedColumns = postgresColumns.get(table);
+        // No Postgres counterpart at all: a SQLite-only table. Nothing else
+        // checks this direction, so report the whole table rather than 20
+        // individual column lines.
+        if (!expectedColumns) {
+          extra.push(`${table}.*`);
+          continue;
+        }
+        for (const column of actualColumns) {
+          const qualifiedColumn = `${table}.${column}`;
+          if (!expectedColumns.has(column) && !SQLITE_ONLY_COLUMNS.has(qualifiedColumn)) {
+            extra.push(qualifiedColumn);
+          }
+        }
+      }
+
+      expect(extra.sort()).toEqual([]);
+    });
+
+    /**
+     * Self-expiring allowlists: an entry stops being an exception the moment
+     * the drift it names is fixed, so assert each one still describes reality.
+     * Fixing #2318 (dropping allow_env_keys from the migration) fails here
+     * until the allowlist entry is deleted — the exception cannot outlive its
+     * reason and quietly keep a real column unprotected.
+     */
+    test('parity allowlists still describe real drift', async () => {
+      db = createTestDb();
+      const postgresColumns = postgresArchonColumns();
+      const sqliteColumns = await sqliteSchemaColumns();
+
+      const stale: string[] = [];
+      for (const qualifiedColumn of POSTGRES_ONLY_COLUMNS) {
+        const [table, column] = qualifiedColumn.split('.');
+        if (!postgresColumns.get(table)?.has(column)) {
+          stale.push(`${qualifiedColumn} (no longer in the Postgres migration)`);
+        }
+        if (sqliteColumns.get(table)?.has(column)) {
+          stale.push(`${qualifiedColumn} (now exists in SQLite)`);
+        }
+      }
+      for (const qualifiedColumn of SQLITE_ONLY_COLUMNS) {
+        const [table, column] = qualifiedColumn.split('.');
+        if (!sqliteColumns.get(table)?.has(column)) {
+          stale.push(`${qualifiedColumn} (no longer in the SQLite schema)`);
+        }
+        if (postgresColumns.get(table)?.has(column)) {
+          stale.push(`${qualifiedColumn} (now exists in the Postgres migration)`);
+        }
+      }
+
+      expect(stale.sort()).toEqual([]);
+    });
+
+    test('parent_run_id index exists on a fresh SQLite schema', () => {
+      db = createTestDb();
+      const indexes = raw_indexes(currentDbPath);
+      expect(indexes).toContain('idx_workflow_runs_parent_run');
+    });
+  });
+
+  /**
+   * Schema vintage (#2316). The value that matters most is the one the adapter
+   * refuses to invent: a database created before this table existed has an
+   * unknowable creation vintage, and must report NULL rather than today's build.
+   */
+  describe('schema version', () => {
+    test('records the creating build on a fresh database', () => {
+      db = createTestDb();
+      const rows = raw_query(
+        currentDbPath,
+        'SELECT id, created_app_version, app_version FROM remote_agent_schema_version'
+      ) as { id: number; created_app_version: string | null; app_version: string }[];
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.id).toBe(1);
+      expect(rows[0]?.created_app_version).toBe(APP_VERSION);
+      expect(rows[0]?.app_version).toBe(APP_VERSION);
+    });
+
+    test('reopening a database does not revise the creation vintage', async () => {
+      db = createTestDb();
+      const dbPath = currentDbPath;
+      await db.close();
+
+      // Second open of the same file: created_app_version must survive untouched,
+      // which is what makes it a record of the database rather than of this process.
+      const reopened = new SqliteAdapter(dbPath);
+      try {
+        const rows = raw_query(
+          dbPath,
+          'SELECT created_app_version, app_version FROM remote_agent_schema_version'
+        ) as { created_app_version: string | null; app_version: string }[];
+
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.created_app_version).toBe(APP_VERSION);
+        expect(rows[0]?.app_version).toBe(APP_VERSION);
+      } finally {
+        await reopened.close();
+        db = reopened;
+      }
+    });
+
+    test('records a NULL creation vintage for a database that predates the table', async () => {
+      // Simulate a pre-#2316 database: core tables already present, no version row.
+      currentDbPath = join(
+        import.meta.dir,
+        `.test-sqlite-adapter-${Date.now()}-${Math.random().toString(36).slice(2)}.db`
+      );
+      const seed = new Database(currentDbPath);
+      seed.run(
+        `CREATE TABLE remote_agent_codebases (
+           id TEXT PRIMARY KEY,
+           name TEXT NOT NULL,
+           default_cwd TEXT NOT NULL
+         )`
+      );
+      seed.close();
+
+      db = new SqliteAdapter(currentDbPath);
+      const rows = raw_query(
+        currentDbPath,
+        'SELECT created_app_version, app_version FROM remote_agent_schema_version'
+      ) as { created_app_version: string | null; app_version: string }[];
+
+      expect(rows).toHaveLength(1);
+      // Never back-filled with a guess — the unknowability is the reportable fact.
+      expect(rows[0]?.created_app_version).toBeNull();
+      expect(rows[0]?.app_version).toBe(APP_VERSION);
+    });
+
+    /**
+     * migrateColumns() suppresses each table's failure so one bad ALTER cannot abort
+     * startup — which means the schema may genuinely be incomplete. Stamping this
+     * build onto that database would make the vintage a wrong answer that gets
+     * believed, which is worse than no answer at all.
+     */
+    test('does not record a vintage when a column migration failed', async () => {
+      currentDbPath = join(
+        import.meta.dir,
+        `.test-sqlite-adapter-${Date.now()}-${Math.random().toString(36).slice(2)}.db`
+      );
+      // Seed a `remote_agent_users` whose shape makes migrateColumns' ALTER fail:
+      // adding a NOT NULL column with a DEFAULT is fine, so instead occupy the name
+      // with an incompatible object — a view cannot be ALTERed.
+      const seed = new Database(currentDbPath);
+      seed.run('CREATE TABLE remote_agent_users_backing (id TEXT PRIMARY KEY)');
+      seed.run('CREATE VIEW remote_agent_users AS SELECT id FROM remote_agent_users_backing');
+      seed.close();
+
+      db = new SqliteAdapter(currentDbPath);
+
+      const rows = raw_query(
+        currentDbPath,
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='remote_agent_schema_version'"
+      ) as { name: string }[];
+      // The table itself is created by createSchema(); the row must be absent.
+      expect(rows).toHaveLength(1);
+
+      const versionRows = raw_query(
+        currentDbPath,
+        'SELECT app_version FROM remote_agent_schema_version'
+      ) as { app_version: string }[];
+      expect(versionRows).toHaveLength(0);
+      expect(await readSchemaVersion(db)).toBeNull();
+    });
+
+    test('readSchemaVersion surfaces the row through the adapter', async () => {
+      db = createTestDb();
+      const info = await readSchemaVersion(db);
+
+      expect(info).not.toBeNull();
+      expect(info?.createdAppVersion).toBe(APP_VERSION);
+      expect(info?.appVersion).toBe(APP_VERSION);
+      expect(info?.appliedAt).toBeTruthy();
+    });
   });
 });
+
+/**
+ * Advance past a SQL string literal / quoted identifier that opens at `start`,
+ * returning the index of its closing quote. Doubled quotes escape.
+ */
+function skipQuoted(sql: string, start: number): number {
+  const quote = sql[start];
+  for (let i = start + 1; i < sql.length; i++) {
+    if (sql[i] !== quote) continue;
+    // A doubled quote escapes itself — not the end of the literal.
+    if (sql[i + 1] === quote) i++;
+    else return i;
+  }
+  return sql.length;
+}
+
+/** Remove SQL line and block comments, preserving quoted text. */
+function stripSqlComments(sql: string): string {
+  let out = '';
+  let i = 0;
+  while (i < sql.length) {
+    if (sql[i] === "'" || sql[i] === '"') {
+      const end = skipQuoted(sql, i);
+      out += sql.slice(i, end + 1);
+      i = end + 1;
+    } else if (sql[i] === '-' && sql[i + 1] === '-') {
+      while (i < sql.length && sql[i] !== '\n') i++;
+    } else if (sql[i] === '/' && sql[i + 1] === '*') {
+      const end = sql.indexOf('*/', i + 2);
+      i = end === -1 ? sql.length : end + 2;
+    } else {
+      out += sql[i];
+      i++;
+    }
+  }
+  return out;
+}
+
+/**
+ * Return the text between the `(` at `openIndex` and its matching `)`, tracking
+ * nesting depth so `REFERENCES t(id)` / `CHECK (id = 1)` / `DEFAULT NOW()` do
+ * not end the body early. Throws rather than returning a truncated body — a
+ * silently short column list is the failure mode this whole parser guards.
+ */
+function readBalancedParens(sql: string, openIndex: number): string {
+  let depth = 0;
+  for (let i = openIndex; i < sql.length; i++) {
+    if (sql[i] === "'" || sql[i] === '"') i = skipQuoted(sql, i);
+    else if (sql[i] === '(') depth++;
+    else if (sql[i] === ')' && --depth === 0) return sql.slice(openIndex + 1, i);
+  }
+  throw new Error(`Unbalanced parentheses in schema SQL at index ${openIndex}`);
+}
+
+/** Split a CREATE TABLE body on its top-level commas (depth- and quote-aware). */
+function splitTopLevelCommas(body: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < body.length; i++) {
+    if (body[i] === "'" || body[i] === '"') i = skipQuoted(body, i);
+    else if (body[i] === '(') depth++;
+    else if (body[i] === ')') depth--;
+    else if (body[i] === ',' && depth === 0) {
+      parts.push(body.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(body.slice(start));
+  return parts;
+}
 
 function raw_pragma(dbPath: string, table: string): string[] {
   const raw = new Database(dbPath, { readonly: true });

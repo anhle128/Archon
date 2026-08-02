@@ -182,7 +182,8 @@ Use this matrix to find the right parameter. Use these references for the full e
 | `bash` / `script`               | yes (no AI — provider-independent) | yes                | yes                                  | yes                  | yes                 |
 | `output_format`                 | **enforced** (SDK grammar) | **enforced** (SDK grammar) | best-effort (prompt + parse/repair + up to 3 re-asks) | **enforced** | best-effort (same re-ask loop as Pi) |
 | `allowed_tools` / `denied_tools` | yes          | ignored (use Codex CLI config)          | **yes**                              | **yes**              | **yes**             |
-| `hooks`                         | yes           | **ignored + warn**                      | not available                        | **ignored + warn**   | not available       || `mcp` (per-node)                | yes           | **yes**                                 | not available                        | **yes**              | **yes**             |
+| `hooks`                         | yes           | **ignored + warn**                      | not available                        | **ignored + warn**   | not available       |
+| `mcp` (per-node)                | yes           | **yes**                                 | not available                        | **yes**              | **yes**             |
 | `skills` (per-node)             | yes           | informational (auto-discovers `.agents/skills/`) | yes                          | yes                  | yes                 |
 | `agents`                        | yes           | no                                      | no                                   | **yes**              | **yes**             |
 | `sandbox` / `maxBudgetUsd` / `fallbackModel` | yes | no                                | no                                   | no                   | no                  |

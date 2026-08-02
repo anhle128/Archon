@@ -18,6 +18,7 @@ export const QODERCLI_CAPABILITIES: ProviderCapabilities = {
   thinkingControl: true,
   fallbackModel: false,
   sandbox: false,
+  settingSources: false,
   nativeTools: false,
   containerExec: false,
 };

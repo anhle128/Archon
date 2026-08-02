@@ -184,6 +184,7 @@ nodes:
          - Link to issue: include `Fixes #...` or `Closes #...`
       7. Capture PR identifiers:
          ```bash
+         ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')
          HEAD_BRANCH=$(git branch --show-current)
          PR_REPO=$(gh repo view "$(git remote get-url "$PR_REMOTE")" --json nameWithOwner -q .nameWithOwner)
          ORIGIN_REPO=$(gh repo view "$(git remote get-url origin)" --json nameWithOwner -q .nameWithOwner)
@@ -212,6 +213,8 @@ nodes:
   - id: verify-pr-base
     bash: |
       set -euo pipefail
+      # Pin to the origin remote — in a fork clone, gh otherwise queries the upstream parent
+      ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')
       HEAD_BRANCH=$(git rev-parse --abbrev-ref HEAD)
       PR_REPO=$(gh repo view "$(git remote get-url "$PR_REMOTE")" --json nameWithOwner -q .nameWithOwner)
       ORIGIN_REPO=$(gh repo view "$(git remote get-url origin)" --json nameWithOwner -q .nameWithOwner)

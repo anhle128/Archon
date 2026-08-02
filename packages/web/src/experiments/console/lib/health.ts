@@ -6,6 +6,7 @@
  * link on first paint inside Docker.
  */
 
+import { ideUri } from '@/lib/ide-uri';
 import { useEntity, type EntityView } from '../store/cache';
 import { K } from '../store/keys';
 import { getHealth, type HealthResponse } from '../skills/settings';
@@ -25,12 +26,21 @@ const VSCODE_NEW_WINDOW_QUERY = 'windowId=_blank';
 
 /** Build a VS Code protocol URI that opens a path without replacing the active window. */
 export function buildIdeUri(workingPath: string): string {
-  // Normalise backslashes for Windows paths the same way the old UI does.
-  const normalised = workingPath.replace(/\\/g, '/');
-  return `vscode://file/${normalised}?${VSCODE_NEW_WINDOW_QUERY}`;
+  return `${ideUri(workingPath)}?${VSCODE_NEW_WINDOW_QUERY}`;
+}
+
+/** Server-environment hints needed to build a working vscode:// URI. */
+export interface IdeEnv {
+  is_wsl?: boolean;
+  wsl_distro?: string;
+}
+
+export function useIdeEnv(): IdeEnv {
+  const { data } = useHealth();
+  return { is_wsl: data?.is_wsl, wsl_distro: data?.wsl_distro };
 }
 
 /** Open a host path in the user's editor via the vscode:// scheme. */
-export function openInIde(workingPath: string): void {
-  window.open(buildIdeUri(workingPath), '_blank');
+export function openInIde(workingPath: string, env?: IdeEnv): void {
+  window.open(ideUri(workingPath, env), '_blank');
 }

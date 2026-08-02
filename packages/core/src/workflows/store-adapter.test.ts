@@ -37,10 +37,15 @@ mock.module('../db/workflows', () => ({
 }));
 
 const mockCreateWorkflowEvent = mock(() => Promise.resolve());
-const mockGetCompletedDagNodeOutputs = mock(() => Promise.resolve(new Map<string, string>()));
+const mockGetDagResumeSnapshot = mock(() =>
+  Promise.resolve({
+    completedNodeOutputs: new Map<string, string>(),
+    tokens: { input: 0, output: 0 },
+  })
+);
 mock.module('../db/workflow-events', () => ({
   createWorkflowEvent: mockCreateWorkflowEvent,
-  getCompletedDagNodeOutputs: mockGetCompletedDagNodeOutputs,
+  getDagResumeSnapshot: mockGetDagResumeSnapshot,
 }));
 
 const mockEnqueueExternalWorkflowEvent = mock(() => Promise.resolve());
@@ -199,7 +204,7 @@ describe('createWorkflowStore', () => {
       'persistRouteDecisionTransition',
       'createWorkflowEvent',
       'enqueueExternalWorkflowEvent',
-      'getCompletedDagNodeOutputs',
+      'getDagResumeSnapshot',
       'upsertWorkflowNodeCheckpoint',
       'getLatestWorkflowNodeCheckpoint',
       'getCodebase',
@@ -402,13 +407,16 @@ describe('createWorkflowStore', () => {
     });
   });
 
-  test('delegates getCompletedDagNodeOutputs to DB', async () => {
-    const expected = new Map([['step1', 'output text']]);
-    mockGetCompletedDagNodeOutputs.mockResolvedValueOnce(expected);
+  test('delegates getDagResumeSnapshot to DB', async () => {
+    const expected = {
+      completedNodeOutputs: new Map([['step1', 'output text']]),
+      tokens: { input: 40, output: 4 },
+    };
+    mockGetDagResumeSnapshot.mockResolvedValueOnce(expected);
     const store = createWorkflowStore();
-    const result = await store.getCompletedDagNodeOutputs('run-123');
+    const result = await store.getDagResumeSnapshot('run-123');
     expect(result).toBe(expected);
-    expect(mockGetCompletedDagNodeOutputs).toHaveBeenCalledWith('run-123');
+    expect(mockGetDagResumeSnapshot).toHaveBeenCalledWith('run-123');
   });
 
   test('delegates workflow node checkpoint upsert to DB', async () => {

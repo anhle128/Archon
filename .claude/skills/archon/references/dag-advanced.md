@@ -17,6 +17,7 @@ Hooks, MCP, skills, tool restrictions, `output_format`, `agents`, and Claude SDK
 | `agents` / `sandbox` / `maxBudgetUsd` / `fallbackModel` | Supported | No | No | — |
 
 Community providers beyond Pi: **OpenCode** supports per-node `mcp`, `skills`, `agents` (configured-agent selection by name — NOT Claude-style inline definitions), and tool restrictions (no `hooks` — Archon's Claude-shaped hook field has no OpenCode translation site; effort/thinking via `opencode.json`, not per-node); **Copilot** supports per-node `mcp`, `skills`, `agents`, tool restrictions, and effort/thinking (no hooks). Hooks are Claude-only. See the five-provider matrix in `parameter-matrix.md` §Providers at a Glance. `sandbox`/`maxBudgetUsd`/`fallbackModel` remain Claude-only.
+
 ### Claude vs Codex: How Each Gets MCP and Skills
 
 **Claude**: MCP servers and skills are configured **per-node** in the workflow YAML via `mcp:` and `skills:` fields. Each node can have different MCP servers and skills.

@@ -12,7 +12,7 @@ Archon substitutes variables in command files, inline prompts, bash scripts, and
 `route_loop.condition` does not receive workflow variables, but it does evaluate node output references with the same condition grammar as `when:`.
 ## Workflow Variables
 
-These variables are substituted by the workflow executor in all node types (`command:`, `prompt:`, `bash:`, `script:`, `loop:`, `loop_group:`).
+These variables are substituted by the workflow executor in all node types (`command:`, `prompt:`, `bash:`, `script:`, `loop:`, `loop_group:`, and a `workflow:` node's `input:` field — which behaves like a `prompt:` body, not a bash-escaped one).
 
 | Variable | Resolves to | Notes |
 |----------|-------------|-------|
@@ -123,7 +123,7 @@ Inside a `loop_group` body, `$LOOP_PREV.<nodeId>.output` refs are resolved
 first (before `$LOOP_USER_INPUT` is spliced in, so user-provided text is never
 re-processed as a workflow ref), then the node's normal substitution runs.
 
-Positional arguments (`$1` through `$9`) are substituted separately by the command handler and are only available when commands are invoked directly, not through workflow nodes.
+Positional arguments (`$1` through `$9`) are **not** supported in any context — `$ARGUMENTS` / `$USER_MESSAGE` deliver the whole trigger message instead.
 
 ## Variable Availability by Context
 

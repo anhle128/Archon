@@ -270,6 +270,7 @@ describe('core schemas', () => {
       workflow_name: 'deploy',
       conversation_id: 'conv-1',
       parent_conversation_id: null,
+      parent_run_id: null,
       codebase_id: null,
       status: 'running',
       user_message: 'deploy please',

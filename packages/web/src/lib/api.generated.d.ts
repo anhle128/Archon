@@ -3437,6 +3437,9 @@ export interface components {
                 /** @enum {string} */
                 write_back?: "approve" | "auto";
             };
+            evidence_policy?: {
+                required: boolean;
+            };
             mutates_checkout?: boolean;
             persist_sessions?: boolean;
             tags?: string[];
@@ -3650,6 +3653,7 @@ export interface components {
             maxBudgetUsd?: number;
             systemPrompt?: string;
             fallbackModel?: string;
+            settingSources?: ("project" | "user")[];
             betas?: string[];
             sandbox?: {
                 enabled?: boolean;
@@ -3732,6 +3736,10 @@ export interface components {
             };
             cancel?: string;
             include?: string;
+            workflow?: string;
+            input?: string;
+            /** @enum {string} */
+            isolation?: "inherit" | "worktree";
             with?: unknown;
             script?: string;
             /** @enum {string} */
@@ -3777,6 +3785,7 @@ export interface components {
             last_activity_at: string | null;
             working_path: string | null;
             user_id: string | null;
+            parent_run_id: string | null;
             codebase_name: string | null;
             platform_type: string | null;
             worker_platform_id: string | null;
@@ -3836,6 +3845,7 @@ export interface components {
             last_activity_at: string | null;
             working_path: string | null;
             user_id: string | null;
+            parent_run_id: string | null;
         };
         WorkflowRunByWorkerResponse: {
             run: components["schemas"]["WorkflowRun"];
@@ -4081,7 +4091,14 @@ export interface components {
             runningWorkflows: number;
             version?: string;
             is_docker: boolean;
+            is_wsl: boolean;
+            wsl_distro?: string;
             activePlatforms?: string[];
+            schema?: {
+                createdAppVersion: string | null;
+                appVersion: string;
+                appliedAt: string | null;
+            };
         };
         UpdateCheckResponse: {
             updateAvailable: boolean;

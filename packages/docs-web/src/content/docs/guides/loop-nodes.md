@@ -541,9 +541,11 @@ than silently degrading).
 difference is the body: `loop` takes a single `prompt`; `loop_group` takes a
 `nodes` array.
 
-Unlike `loop:` (where node-level `model`/`provider` are ignored at runtime),
-`model` and `provider` set on a `loop_group` node **are honored**: they become
-the default for every body AI node, overridable per body node.
+As with a `loop:` node (whose node-level `model`/`provider` are resolved and
+applied to every iteration), `model` and `provider` set on a `loop_group` node
+**are honored**: they become the default for every body AI node, overridable per
+body node.
+
 ### Resume
 
 Two distinct cases:
