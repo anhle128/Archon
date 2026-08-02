@@ -181,6 +181,7 @@ mock.module('@archon/core/db/messages', () => ({
 
 mock.module('@archon/core/db/workflows', () => ({
   getActiveWorkflowRun: mock(() => Promise.resolve(null)),
+  getWorkflowRunStatus: mock(() => Promise.resolve(null)),
   failWorkflowRun: mock(() => Promise.resolve()),
   cancelWorkflowRun: mock(() => Promise.resolve({ cancelled: true })),
   cancelRecoveryWorkflowRun: mock(() => Promise.resolve({ cancelled: true })),
@@ -4681,8 +4682,23 @@ describe('write command --json output', () => {
 describe('workflowRunCommand — detach', () => {
   let consoleSpy: ReturnType<typeof spyOn>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    mockChildProcessSpawn.mockReset();
+    mockChildProcessSpawn.mockImplementation(() => ({
+      pid: 99999,
+      on: mock(() => undefined),
+      unref: mock(() => undefined),
+    }));
+    const codebaseDb = await import('@archon/core/db/codebases');
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockReset();
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockImplementation(() =>
+      Promise.resolve(null)
+    );
+    (codebaseDb.findCodebaseByPathPrefix as ReturnType<typeof mock>).mockReset();
+    (codebaseDb.findCodebaseByPathPrefix as ReturnType<typeof mock>).mockImplementation(() =>
+      Promise.resolve(null)
+    );
   });
 
   afterEach(() => {
@@ -6026,14 +6042,29 @@ describe('workflowRunCommand — progress rendering', () => {
     expect(mockUnsubscribe).toHaveBeenCalledTimes(1);
   });
 
-  it('should not subscribe to emitter when quiet', async () => {
+  it('should subscribe (for run-id tracking) but not render when quiet', async () => {
     setupWorkflowMocks();
+
+    const { executeWorkflow } = require('@archon/workflows/executor');
+    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
+      if (capturedSubscribeHandler) {
+        capturedSubscribeHandler({
+          type: 'node_started',
+          runId: 'run-1',
+          nodeId: 'classify',
+          nodeName: 'classify',
+        });
+      }
+      return { success: true, workflowRunId: 'run-1' };
+    });
 
     await workflowRunCommand('/test/path', 'plan', 'hello', { quiet: true });
 
-    // quiet = true skips subscription entirely
-    expect(capturedSubscribeHandler).toBeNull();
-    expect(mockUnsubscribe).not.toHaveBeenCalled();
+    // quiet still subscribes — the handler tracks the owned run id for the
+    // signal cleanup guard (#1123) — but renders no progress output.
+    expect(capturedSubscribeHandler).not.toBeNull();
+    expect(mockUnsubscribe).toHaveBeenCalledTimes(1);
+    expect(stderrSpy).not.toHaveBeenCalledWith('[classify] Started\n');
   });
 
   it('should call unsubscribe after executeWorkflow completes', async () => {
@@ -6261,6 +6292,194 @@ describe('workflowRunCommand — progress rendering', () => {
     await workflowRunCommand('/test/path', 'plan', 'hello', {});
 
     expect(stderrSpy).toHaveBeenCalledWith('[slow] Completed (1m30s)\n');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Signal cleanup guard (#1123) — SIGTERM/SIGINT handlers must be run-scoped,
+// status-guarded, and removed once executeWorkflow settles.
+// ---------------------------------------------------------------------------
+
+describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
+  let consoleSpy: ReturnType<typeof spyOn>;
+  let stderrSpy: ReturnType<typeof spyOn>;
+  let exitSpy: ReturnType<typeof spyOn>;
+
+  function setupWorkflowMocks(): void {
+    const discoverMock = require('@archon/workflows/workflow-discovery')
+      .discoverWorkflowsWithConfig as ReturnType<typeof mock>;
+    discoverMock.mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'plan', description: 'Plan work' })],
+      errors: [],
+    });
+
+    const conversationDb = require('@archon/core/db/conversations');
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-1',
+      platform: 'cli',
+      platform_conversation_id: 'cli-123',
+      title: null,
+      is_active: true,
+      codebase_id: null,
+    });
+
+    const codebaseDb = require('@archon/core/db/codebases');
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-1',
+      name: 'test-repo',
+      default_cwd: '/test/path',
+    });
+  }
+
+  /** Flush the cleanup handler's fire-and-forget promise chain. */
+  async function settleCleanup(): Promise<void> {
+    for (let i = 0; i < 5; i++) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+  }
+
+  /** The SIGTERM listeners added since `baseline` (i.e. by the command under test). */
+  function addedSigtermListeners(baseline: readonly unknown[]): Array<() => void> {
+    return process.listeners('SIGTERM').filter(listener => !baseline.includes(listener)) as Array<
+      () => void
+    >;
+  }
+
+  beforeEach(() => {
+    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    stderrSpy = spyOn(process.stderr, 'write').mockImplementation(() => true);
+    // The cleanup chain ends in process.exit(1) — neuter it so invoking the
+    // handler in-process doesn't kill the test runner.
+    exitSpy = spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    capturedSubscribeHandler = null;
+    mockUnsubscribe.mockClear();
+
+    const workflowsDb = require('@archon/core/db/workflows');
+    (workflowsDb.failWorkflowRun as ReturnType<typeof mock>).mockClear();
+    (workflowsDb.getActiveWorkflowRun as ReturnType<typeof mock>).mockClear();
+    (workflowsDb.getWorkflowRunStatus as ReturnType<typeof mock>).mockReset();
+    (workflowsDb.getWorkflowRunStatus as ReturnType<typeof mock>).mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    consoleSpy.mockRestore();
+    stderrSpy.mockRestore();
+    exitSpy.mockRestore();
+  });
+
+  it('removes SIGTERM/SIGINT handlers once executeWorkflow settles (no leak, no stacking)', async () => {
+    const sigtermBaseline = process.listenerCount('SIGTERM');
+    const sigintBaseline = process.listenerCount('SIGINT');
+
+    let duringRunSigterm = 0;
+    const { executeWorkflow } = require('@archon/workflows/executor');
+    (executeWorkflow as ReturnType<typeof mock>).mockImplementation(async () => {
+      duringRunSigterm = process.listenerCount('SIGTERM');
+      return { success: true, workflowRunId: 'run-1' };
+    });
+
+    setupWorkflowMocks();
+    await workflowRunCommand('/test/path', 'plan', 'hello', {});
+    expect(duringRunSigterm).toBe(sigtermBaseline + 1);
+    expect(process.listenerCount('SIGTERM')).toBe(sigtermBaseline);
+    expect(process.listenerCount('SIGINT')).toBe(sigintBaseline);
+
+    // A second invocation in the same process must not stack handlers either.
+    setupWorkflowMocks();
+    await workflowRunCommand('/test/path', 'plan', 'hello', {});
+    expect(duringRunSigterm).toBe(sigtermBaseline + 1);
+    expect(process.listenerCount('SIGTERM')).toBe(sigtermBaseline);
+    expect(process.listenerCount('SIGINT')).toBe(sigintBaseline);
+
+    (executeWorkflow as ReturnType<typeof mock>).mockImplementation(() =>
+      Promise.resolve({ success: true, workflowRunId: 'test-run-id' })
+    );
+  });
+
+  it('does not fail the run when it is paused at a new gate at signal time', async () => {
+    const workflowsDb = require('@archon/core/db/workflows');
+    // The run this process drives has committed its pause at the next gate.
+    (workflowsDb.getWorkflowRunStatus as ReturnType<typeof mock>).mockResolvedValue('paused');
+
+    const sigtermBefore = process.listeners('SIGTERM');
+    const { executeWorkflow } = require('@archon/workflows/executor');
+    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
+      // The executor announced the run this process owns…
+      capturedSubscribeHandler?.({
+        type: 'workflow_started',
+        runId: 'run-1',
+        workflowName: 'plan',
+        conversationId: 'conv-1',
+      });
+      // …then the signal lands while the handler is still registered.
+      const [handler] = addedSigtermListeners(sigtermBefore);
+      expect(handler).toBeDefined();
+      handler();
+      await settleCleanup();
+      return { success: true, workflowRunId: 'run-1', paused: true };
+    });
+
+    setupWorkflowMocks();
+    await workflowRunCommand('/test/path', 'plan', 'hello', {});
+
+    // Paused-at-gate is an external transition the signal handler must respect.
+    expect(workflowsDb.failWorkflowRun).not.toHaveBeenCalled();
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it('still fails the run on a genuine mid-run interrupt (legacy behavior)', async () => {
+    const workflowsDb = require('@archon/core/db/workflows');
+    (workflowsDb.getWorkflowRunStatus as ReturnType<typeof mock>).mockResolvedValue('running');
+
+    const sigtermBefore = process.listeners('SIGTERM');
+    const { executeWorkflow } = require('@archon/workflows/executor');
+    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
+      capturedSubscribeHandler?.({
+        type: 'workflow_started',
+        runId: 'run-1',
+        workflowName: 'plan',
+        conversationId: 'conv-1',
+      });
+      const [handler] = addedSigtermListeners(sigtermBefore);
+      expect(handler).toBeDefined();
+      handler();
+      await settleCleanup();
+      return { success: false, workflowRunId: 'run-1', error: 'interrupted' };
+    });
+
+    setupWorkflowMocks();
+    await expect(workflowRunCommand('/test/path', 'plan', 'hello', {})).rejects.toThrow(
+      'Workflow failed'
+    );
+
+    expect(workflowsDb.failWorkflowRun).toHaveBeenCalledWith(
+      'run-1',
+      'Process terminated (SIGTERM)'
+    );
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it('never touches a run it does not own (no owned run id at signal time)', async () => {
+    const workflowsDb = require('@archon/core/db/workflows');
+
+    const sigtermBefore = process.listeners('SIGTERM');
+    const { executeWorkflow } = require('@archon/workflows/executor');
+    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
+      // No workflow_started yet — this process owns no run. Another process's
+      // run on the same conversation must never be failed by this handler.
+      const [handler] = addedSigtermListeners(sigtermBefore);
+      expect(handler).toBeDefined();
+      handler();
+      await settleCleanup();
+      return { success: true, workflowRunId: 'run-1' };
+    });
+
+    setupWorkflowMocks();
+    await workflowRunCommand('/test/path', 'plan', 'hello', {});
+
+    expect(workflowsDb.failWorkflowRun).not.toHaveBeenCalled();
+    expect(workflowsDb.getActiveWorkflowRun).not.toHaveBeenCalled();
+    expect(exitSpy).toHaveBeenCalledWith(1);
   });
 });
 
@@ -8283,5 +8502,60 @@ describe('workflowRetryCommand — JSON envelope mode (Story 3.3d)', () => {
         Promise.resolve({ stdout: '.git\n', stderr: '' })
       );
     }
+  });
+});
+
+describe('hasUnresolvedWriteback (H2 teardown-preserve decision)', () => {
+  it('true when the gate was raised but never resolved (failed/partial apply)', () => {
+    expect(hasUnresolvedWriteback({ pending_writeback: { envId: 'e' } })).toBe(true);
+  });
+  it('false once the write-back resolved (applied/discarded)', () => {
+    expect(
+      hasUnresolvedWriteback({ pending_writeback: { envId: 'e' }, writeback_resolved: true })
+    ).toBe(false);
+  });
+  it('false for a run that never raised a write-back gate', () => {
+    expect(hasUnresolvedWriteback({ isolation: 'container' })).toBe(false);
+    expect(hasUnresolvedWriteback(undefined)).toBe(false);
+  });
+});
+
+describe('resolveContainerBackendConfig', () => {
+  it('applies defaults when config is absent', () => {
+    const cfg = resolveContainerBackendConfig(undefined);
+    expect(cfg).toEqual({
+      image: 'archon-runner:latest',
+      network: 'bridge',
+      memoryMb: 4096,
+      pidsLimit: 512,
+    });
+  });
+
+  it('passes through valid values', () => {
+    const cfg = resolveContainerBackendConfig({
+      image: '  my-runner:1  ',
+      network: 'none',
+      memoryMb: 2048,
+      pidsLimit: 256,
+    });
+    expect(cfg).toEqual({
+      image: 'my-runner:1',
+      network: 'none',
+      memoryMb: 2048,
+      pidsLimit: 256,
+    });
+  });
+
+  it('rejects a non bridge/none network (no silent --network host)', () => {
+    expect(() => resolveContainerBackendConfig({ network: 'host' })).toThrow(/bridge.*none/);
+  });
+
+  it('rejects a fractional memoryMb (docker --memory needs an integer)', () => {
+    expect(() => resolveContainerBackendConfig({ memoryMb: 512.5 })).toThrow(/positive integer/);
+  });
+
+  it('rejects a non-integer / non-positive pidsLimit', () => {
+    expect(() => resolveContainerBackendConfig({ pidsLimit: 10.5 })).toThrow(/positive integer/);
+    expect(() => resolveContainerBackendConfig({ pidsLimit: 0 })).toThrow(/positive integer/);
   });
 });
