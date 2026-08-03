@@ -106,7 +106,7 @@ nodes:
       - clarify-apply
     effort: high
     provider: claude
-    model: "claude-opus-4-6[1M]"
+    model: "claude-opus-4-8[1M]"
     context: fresh
     denied_tools:
       - Bash
@@ -188,7 +188,7 @@ nodes:
       - red-team-apply
     effort: high
     provider: claude
-    model: "claude-opus-4-6[1M]"
+    model: "claude-opus-4-8[1M]"
     context: fresh
   - id: tasks
     prompt: |
