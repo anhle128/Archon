@@ -86,13 +86,22 @@ nodes:
       - Glob
       - Grep
       - Bash
+  - id: clarify-gate
+    approval:
+      message: |
+        Drafted answers are now written to `<feature_directory>/clarification-questions.md`.
+        Review and edit the file, then approve when satisfied.
+        The next step runs `$speckit-clarifybatch --apply`.
+      capture_response: true
+    depends_on:
+      - clarify-respond
   - id: clarify-apply
     prompt: |
       $speckit-clarifybatch --apply
     depends_on:
-      - clarify-respond
+      - clarify-gate
     provider: codex
-    effort: high
+    effort: xhigh
     model: gpt-5.6-terra
     context: fresh
   - id: red-team
@@ -192,7 +201,7 @@ nodes:
     depends_on:
       - red-team-gate
     provider: codex
-    effort: high
+    effort: xhigh
     model: gpt-5.6-terra
     context: fresh
   - id: plan
@@ -360,7 +369,7 @@ nodes:
     depends_on:
       - analyze-respond
     provider: codex
-    effort: high
+    effort: xhigh
     model: gpt-5.6-terra
     context: fresh
   - id: ralph-tasks-to-ralph
@@ -370,7 +379,7 @@ nodes:
     depends_on:
       - analyze-apply
     provider: codex
-    effort: high
+    effort: xhigh
     model: gpt-5.6-terra
     context: fresh
   - id: ralph-loop-run
