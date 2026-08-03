@@ -30,12 +30,12 @@ nodes:
       echo "Starting Step 1 of 8: Generating feature specification..."
   - id: specify
     prompt: |
-      /speckit-specify read requirement in $ARGUMENTS , scout source code to know the context , create detail spec, spawn sub-agents for help
+      /speckit-specify read requirement in $ARGUMENTS , scout source code and all related documents to know the context, don't guess , create detail spec, spawn sub-agents for help
     depends_on:
       - setup
     effort: high
     provider: claude
-    model: "claude-opus-4-6[1M]"
+    model: "fable"
     context: fresh
   - id: clarify
     prompt: |
@@ -188,7 +188,7 @@ nodes:
       - red-team-apply
     effort: high
     provider: claude
-    model: "fable"
+    model: "claude-opus-4-6[1M]"
     context: fresh
   - id: tasks
     prompt: |

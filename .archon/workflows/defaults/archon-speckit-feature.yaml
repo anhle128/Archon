@@ -33,7 +33,7 @@ nodes:
       - setup
     effort: high
     provider: claude
-    model: "claude-opus-4-6[1M]"
+    model: "fable"
     context: fresh
   - id: clarify
     prompt: |
@@ -203,7 +203,7 @@ nodes:
       - red-team-apply
     effort: high
     provider: claude
-    model: "fable"
+    model: "claude-opus-4-6[1M]"
     context: fresh
   - id: tasks
     prompt: |
