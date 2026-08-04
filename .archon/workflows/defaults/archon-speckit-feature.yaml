@@ -253,7 +253,7 @@ nodes:
     depends_on:
       - plan
     effort: xhigh
-    model: gpt-5.6-sol
+    model: gpt-5.6-terra
     context: fresh
   - id: analyze
     prompt: |
