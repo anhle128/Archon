@@ -82,25 +82,13 @@
       "enabled": true,
       "priority": 10,
       "registered_commands": {
-        "agy": [
-          "speckit.ralph-loop.tasks-to-ralph",
-          "speckit.ralph-loop.sync-back"
-        ],
         "claude": [
-          "speckit.ralph-loop.tasks-to-ralph",
-          "speckit.ralph-loop.sync-back"
-        ],
-        "codex": [
-          "speckit.ralph-loop.tasks-to-ralph",
-          "speckit.ralph-loop.sync-back"
-        ],
-        "copilot": [
           "speckit.ralph-loop.tasks-to-ralph",
           "speckit.ralph-loop.sync-back"
         ]
       },
       "registered_skills": [],
-      "installed_at": "2026-06-24T19:38:32.535927+00:00"
+      "installed_at": "2026-08-03T17:35:27.364075+00:00"
     }
   }
 }

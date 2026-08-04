@@ -28,7 +28,7 @@ nodes:
       echo "Starting Step 1 of 7: Generating feature specification..."
   - id: specify
     prompt: |
-      /speckit-specify read requirement in $ARGUMENTS , scout source code to know the context , create detail spec, spawn sub-agents for help
+      /speckit-specify $ARGUMENTS
     depends_on:
       - setup
     effort: high

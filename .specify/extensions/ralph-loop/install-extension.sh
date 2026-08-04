@@ -8,7 +8,9 @@ set -Eeuo pipefail
 DEFAULT_REPOS=(
   "/Users/dale/Desktop/workspace/OceanLabs/x10.oh.cowork"
   "/Users/dale/Desktop/workspace/OceanLabs/workflow-engine/no-mistakes"
-  /Users/dale/Desktop/workspace/OceanLabs/workflow-engine/Archon
+  "/Users/dale/Desktop/workspace/OceanLabs/workflow-engine/Archon"
+  "/Users/dale/Desktop/workspace/OceanLabs/agentic-os-plan/harness-service"
+
 )
 
 EXTENSION_ID="ralph-loop"
