@@ -33,7 +33,7 @@ nodes:
       - setup
     effort: high
     provider: claude
-    model: "fable"
+    model: "claude-opus-4-8[1M]"
     context: fresh
   - id: clarify
     prompt: |
@@ -125,7 +125,9 @@ nodes:
       $speckit.red-team.run <feature_directory> --yes
     depends_on:
       - clarify-apply
-    model: gpt-5.6-sol
+    effort: high
+    provider: claude
+    model: "claude-opus-4-8[1M]"
     context: fresh
     denied_tools:
       - Bash
@@ -237,12 +239,12 @@ nodes:
   - id: plan
     prompt: |
       Read .specify/feature.json to resolve <feature_directory>, then run:
-      /speckit-plan create detail plan <feature_directory>, spawn sub-agents for help
+      /speckit-plan create detail plan <feature_directory>, reference omnigent to know how they build this feature if they have (distill all follow, class name, function name and field name) ,spawn sub-agents for help
     depends_on:
       - red-team-apply
     effort: high
     provider: claude
-    model: "claude-opus-4-8[1M]"
+    model: "fable"
     context: fresh
   - id: tasks
     prompt: |
