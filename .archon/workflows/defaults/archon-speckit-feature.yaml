@@ -5,7 +5,7 @@ description: |
             "specify plan implement", "speckit end-to-end", "feature with speckit",
             "speckit pipeline", "sdd feature".
   Does: Specify → red-team adversarial review → clarify ambiguities → plan → tasks →
-        analyze cross-artifact consistency → tasks-to-ralph → run ralph.sh → sync-back → PR creation.
+        analyze cross-artifact consistency → tasks-to-ralph → run ralph.sh → sync-back → converge gate → PR creation.
   NOT for: Quick one-file fixes, bug fixes, PR reviews.
   NOT for: When a spec already exists (use archon-speckit-plan-to-tasks instead).
   NOT for: Spec generation only without planning (use archon-speckit-spec instead).
@@ -26,6 +26,7 @@ nodes:
       echo ""
       echo "Artifacts will be saved to: $ARTIFACTS_DIR"
       echo "Starting Step 1 of 7: Generating feature specification..."
+  
   - id: specify
     prompt: |
       /speckit-specify $ARGUMENTS
@@ -35,6 +36,7 @@ nodes:
     provider: claude
     model: "claude-opus-4-8[1M]"
     context: fresh
+
   - id: clarify
     prompt: |
       $speckit-clarifybatch --turn 10
@@ -44,6 +46,7 @@ nodes:
     provider: codex
     model: gpt-5.6-sol
     context: fresh
+
   - id: clarify-respond
     prompt: |
       ## Persona
@@ -86,6 +89,7 @@ nodes:
       - Glob
       - Grep
       - Bash
+
   - id: clarify-explain
     prompt: |
      /speckit-question-explain --clarify giải thích chi tiết clarify bằng tiếng việt
@@ -101,6 +105,7 @@ nodes:
       - Glob
       - Grep
       - Bash
+
   - id: clarify-gate
     approval:
       message: |
@@ -110,6 +115,7 @@ nodes:
       capture_response: true
     depends_on:
       - clarify-explain
+
   - id: clarify-apply
     prompt: |
       $speckit-clarifybatch --apply
@@ -119,6 +125,7 @@ nodes:
     effort: xhigh
     model: gpt-5.6-terra
     context: fresh
+
   - id: red-team
     prompt: |
       Read .specify/feature.json to resolve <feature_directory>, then run:
@@ -131,6 +138,7 @@ nodes:
     context: fresh
     denied_tools:
       - Bash
+
   - id: red-team-respond
     prompt: |
       ## Persona
@@ -192,6 +200,7 @@ nodes:
       - Grep
       - Bash
       - Task
+
   - id: red-team-explain
     prompt: |
      /speckit-question-explain --red-team giải thích chi tiết bằng tiếng việt
@@ -207,6 +216,7 @@ nodes:
       - Glob
       - Grep
       - Bash
+
   - id: red-team-gate
     approval:
       message: |
@@ -227,6 +237,7 @@ nodes:
       capture_response: true
     depends_on:
       - red-team-explain
+
   - id: red-team-apply
     prompt: |
       /speckit.red-team.apply --allow-historical-edits
@@ -236,6 +247,7 @@ nodes:
     effort: xhigh
     model: gpt-5.6-terra
     context: fresh
+
   - id: plan
     prompt: |
       Read .specify/feature.json to resolve <feature_directory>, then run:
@@ -246,6 +258,7 @@ nodes:
     provider: claude
     model: "fable"
     context: fresh
+
   - id: tasks
     prompt: |
       Read .specify/feature.json to resolve <feature_directory>, then run:
@@ -255,6 +268,7 @@ nodes:
     effort: xhigh
     model: gpt-5.6-terra
     context: fresh
+
   - id: analyze
     prompt: |
       Read .specify/feature.json to resolve <feature_directory>.
@@ -266,6 +280,7 @@ nodes:
     effort: xhigh
     model: gpt-5.6-sol
     context: fresh
+
   - id: analyze-respond
     prompt: |
       ## Persona
@@ -394,6 +409,7 @@ nodes:
       - Glob
       - Grep
       - Bash
+
   - id: analyze-apply
     prompt: |
       $speckit-analyzebatch --apply --allow-historical-edits
@@ -403,6 +419,7 @@ nodes:
     effort: xhigh
     model: gpt-5.6-terra
     context: fresh
+
   - id: ralph-tasks-to-ralph
     prompt: |
       Read .specify/feature.json to resolve <feature_directory>, then run:
@@ -413,12 +430,14 @@ nodes:
     effort: xhigh
     model: gpt-5.6-terra
     context: fresh
+
   - id: ralph-loop-run
     bash: |
       bash .specify/extensions/ralph-loop/ralph.sh
     depends_on:
       - ralph-tasks-to-ralph
     timeout: 86400000
+
   - id: ralph-sync-back
     prompt: |
       Read .specify/feature.json to resolve <feature_directory>, then run:
@@ -429,3 +448,56 @@ nodes:
     effort: high
     model: gpt-5.6-terra
     context: fresh
+
+  - id: speckit-converge
+    prompt: |
+      Read .specify/feature.json to resolve <feature_directory>.
+      run speckit-converge
+      Return PASS only when there are no any problem.
+      Return FAIL when it added one or more tasks to tasks.md .
+    depends_on:
+      - ralph-sync-back
+    provider: codex
+    effort: xhigh
+    model: gpt-5.6-sol
+    context: fresh
+    output_format:
+      type: object
+      properties:
+        gate:
+          type: string
+          enum: [PASS, FAIL]
+        tasks_added:
+          type: number
+      required:
+        - gate
+        - tasks_added
+    output_type: speckit-convergence
+
+  - id: speckit-converge-gate
+    depends_on: [speckit-converge]
+    route_loop:
+      condition: "$speckit-converge.output.gate == 'PASS'"
+      max_iterations: 10
+      routes:
+        positive: create-pull-request
+        negative: ralph-tasks-to-ralph
+        exhausted: speckit-converge-loop-error
+
+  - id: create-pull-request
+    command: archon-create-pr
+    provider: codex
+    effort: medium
+    depends_on: [speckit-converge-gate]
+    context: fresh
+    model: gpt-5.6-terra
+    idle_timeout: 900000
+    output_type: pull-request
+
+  - id: speckit-converge-loop-error
+    depends_on: [speckit-converge-gate]
+    bash: |
+      set -euo pipefail
+      echo "Speckit convergence added tasks in all 10 iterations."
+      exit 1
+    timeout: 60000
