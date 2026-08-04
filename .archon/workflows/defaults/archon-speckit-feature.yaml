@@ -86,6 +86,21 @@ nodes:
       - Glob
       - Grep
       - Bash
+  - id: clarify-explain
+    prompt: |
+     /speckit-question-explain --clarify giải thích chi tiết clarify bằng tiếng việt
+    depends_on:
+      - clarify-respond
+    effort: xhigh
+    provider: claude
+    model: sonnet
+    context: fresh
+    allowed_tools:
+      - Read
+      - Edit
+      - Glob
+      - Grep
+      - Bash
   - id: clarify-gate
     approval:
       message: |
@@ -94,7 +109,7 @@ nodes:
         The next step runs `$speckit-clarifybatch --apply`.
       capture_response: true
     depends_on:
-      - clarify-respond
+      - clarify-explain
   - id: clarify-apply
     prompt: |
       $speckit-clarifybatch --apply
@@ -175,6 +190,21 @@ nodes:
       - Grep
       - Bash
       - Task
+  - id: red-team-explain
+    prompt: |
+     /speckit-question-explain --red-team giải thích chi tiết bằng tiếng việt
+    depends_on:
+      - red-team-respond
+    effort: xhigh
+    provider: 
+    model: sonnet
+    context: fresh
+    allowed_tools:
+      - Read
+      - Edit
+      - Glob
+      - Grep
+      - Bash
   - id: red-team-gate
     approval:
       message: |
@@ -194,7 +224,7 @@ nodes:
         file, not this comment.
       capture_response: true
     depends_on:
-      - red-team-respond
+      - red-team-explain
   - id: red-team-apply
     prompt: |
       /speckit.red-team.apply --allow-historical-edits
@@ -255,8 +285,7 @@ nodes:
 
       Draft per-finding resolutions for the analyze findings file produced
       by the previous `analyze` node. The file is the single source of
-      truth — no chat-only RECAP drafts. Mirror of the `red-team-respond`
-      flow earlier in this workflow (file-centric, in-place edits).
+      truth — no chat-only RECAP drafts.
       Run all commands from the current working directory; use only relative paths.
 
       ## Instructions
