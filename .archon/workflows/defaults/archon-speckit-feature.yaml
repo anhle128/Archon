@@ -196,7 +196,7 @@ nodes:
     depends_on:
       - red-team-respond
     effort: xhigh
-    provider: 
+    provider: claude
     model: sonnet
     context: fresh
     allowed_tools:
