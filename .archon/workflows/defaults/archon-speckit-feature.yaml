@@ -478,11 +478,11 @@ nodes:
     depends_on: [speckit-converge]
     route_loop:
       condition: "$speckit-converge.output.gate == 'PASS'"
-      max_iterations: 10
+      max_iterations: 3
       routes:
         positive: create-pull-request
         negative: ralph-tasks-to-ralph
-        exhausted: speckit-converge-loop-error
+        exhausted: ralph-tasks-to-ralph-2
 
   - id: create-pull-request
     command: archon-create-pr
@@ -494,10 +494,41 @@ nodes:
     idle_timeout: 900000
     output_type: pull-request
 
-  - id: speckit-converge-loop-error
-    depends_on: [speckit-converge-gate]
+  - id: ralph-tasks-to-ralph-2
+    prompt: |
+      Read .specify/feature.json to resolve <feature_directory>, then run:
+      /speckit.ralph-loop.tasks-to-ralph <feature_directory>
+    depends_on:
+      - speckit-converge-gate
+    provider: codex
+    effort: xhigh
+    model: gpt-5.6-terra
+    context: fresh
+
+  - id: ralph-loop-run-2
     bash: |
-      set -euo pipefail
-      echo "Speckit convergence added tasks in all 10 iterations."
-      exit 1
-    timeout: 60000
+      bash .specify/extensions/ralph-loop/ralph.sh
+    depends_on:
+      - ralph-tasks-to-ralph-2
+    timeout: 86400000
+
+  - id: ralph-sync-back-2
+    prompt: |
+      Read .specify/feature.json to resolve <feature_directory>, then run:
+      /speckit.ralph-loop.sync-back <feature_directory>
+    depends_on:
+      - ralph-loop-run-2
+    provider: codex
+    effort: high
+    model: gpt-5.6-terra
+    context: fresh
+
+  - id: create-pull-request-2
+    command: archon-create-pr
+    provider: codex
+    effort: medium
+    depends_on: [ralph-sync-back-2]
+    context: fresh
+    model: gpt-5.6-terra
+    idle_timeout: 900000
+    output_type: pull-request
