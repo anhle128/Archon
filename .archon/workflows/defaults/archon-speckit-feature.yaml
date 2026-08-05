@@ -445,7 +445,7 @@ nodes:
     depends_on:
       - ralph-loop-run
     provider: codex
-    effort: high
+    effort: medium
     model: gpt-5.6-terra
     context: fresh
 
@@ -501,7 +501,7 @@ nodes:
     depends_on:
       - speckit-converge-gate
     provider: codex
-    effort: xhigh
+    effort: medium
     model: gpt-5.6-terra
     context: fresh
 
@@ -519,7 +519,7 @@ nodes:
     depends_on:
       - ralph-loop-run-2
     provider: codex
-    effort: high
+    effort: medium
     model: gpt-5.6-terra
     context: fresh
 
