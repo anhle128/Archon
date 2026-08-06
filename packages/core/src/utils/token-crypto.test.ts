@@ -51,6 +51,11 @@ describe('token-crypto', () => {
       buf[buf.length - 1] ^= 0xff; // flip a bit in the ciphertext body
       expect(() => decryptToken(buf.toString('base64'), KEY)).toThrow();
     });
+
+    test('rejects a truncated encrypted payload', () => {
+      const truncatedPayload = Buffer.from('not-a-valid-ciphertext').toString('base64');
+      expect(() => decryptToken(truncatedPayload, KEY)).toThrow('Invalid encrypted token payload');
+    });
   });
 
   describe('getEncryptionKey', () => {

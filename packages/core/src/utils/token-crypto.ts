@@ -60,10 +60,13 @@ export function encryptToken(plaintext: string, key: Buffer): string {
 export function decryptToken(ciphertext: string, key: Buffer): string {
   assertKeyLength(key);
   const buf = Buffer.from(ciphertext, 'base64');
+  if (buf.length < IV_BYTES + AUTH_TAG_BYTES) {
+    throw new Error('Invalid encrypted token payload');
+  }
   const iv = buf.subarray(0, IV_BYTES);
   const authTag = buf.subarray(IV_BYTES, IV_BYTES + AUTH_TAG_BYTES);
   const encrypted = buf.subarray(IV_BYTES + AUTH_TAG_BYTES);
-  const decipher = createDecipheriv(ALGORITHM, key, iv);
+  const decipher = createDecipheriv(ALGORITHM, key, iv, { authTagLength: AUTH_TAG_BYTES });
   decipher.setAuthTag(authTag);
   return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
 }
