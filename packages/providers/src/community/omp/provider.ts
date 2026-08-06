@@ -50,6 +50,8 @@ interface BuildOmpArgsResult {
   thinking?: string;
 }
 
+type ProcessOutcome<T> = { ok: true; value: T } | { ok: false; error: Error };
+
 function defaultSpawner(command: string[], options: OmpSpawnOptions): OmpProcess {
   const proc = Bun.spawn(command, {
     cwd: options.cwd,
@@ -226,6 +228,26 @@ function buildExitErrorMessage(exitCode: number, stderr: string): string {
     : `OMP CLI exited with code ${String(exitCode)}.`;
 }
 
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+function buildTransportErrorResult(
+  parser: OmpEventParser,
+  errorSubtype: 'omp_protocol_error' | 'omp_exit_nonzero',
+  message: string,
+  resumeRequested: boolean
+): MessageChunk {
+  const observed = parser.buildResult(resumeRequested ? false : undefined);
+  return {
+    ...observed,
+    type: 'result',
+    isError: true,
+    errorSubtype,
+    errors: [message, ...(observed.errors ?? []).filter(error => error !== message)],
+  };
+}
+
 export class OmpProvider implements IAgentProvider {
   private readonly spawn: OmpSpawner;
 
@@ -288,14 +310,48 @@ export class OmpProvider implements IAgentProvider {
 
     const parser = new OmpEventParser(wantsStructured);
     const proc = this.spawn(command, { cwd, env });
-    const stderrPromise = readStream(proc.stderr);
     const abortSignal = requestOptions?.abortSignal;
     let processExited = false;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
     let protocolError: Error | undefined;
-    const onAbort = (): void => {
-      killTimer ??= scheduleKill(proc);
+    let transportError: Error | undefined;
+    const clearKillTimer = (): void => {
+      if (!killTimer) return;
+      clearTimeout(killTimer);
+      killTimer = undefined;
     };
+    const terminate = (): void => {
+      if (processExited || killTimer) return;
+      killTimer = scheduleKill(proc);
+    };
+    const onAbort = (): void => {
+      terminate();
+    };
+    const exitOutcomePromise = proc.exited.then<ProcessOutcome<number>, ProcessOutcome<number>>(
+      exitCode => {
+        processExited = true;
+        clearKillTimer();
+        return { ok: true, value: exitCode };
+      },
+      (error: unknown) => {
+        const normalized = toError(error);
+        transportError ??= normalized;
+        terminate();
+        return { ok: false, error: normalized };
+      }
+    );
+    const stderrOutcomePromise = readStream(proc.stderr).then<
+      ProcessOutcome<string>,
+      ProcessOutcome<string>
+    >(
+      stderr => ({ ok: true, value: stderr }),
+      (error: unknown) => {
+        const normalized = toError(error);
+        transportError ??= normalized;
+        terminate();
+        return { ok: false, error: normalized };
+      }
+    );
 
     if (abortSignal) {
       if (abortSignal.aborted) onAbort();
@@ -303,47 +359,52 @@ export class OmpProvider implements IAgentProvider {
     }
 
     try {
-      for await (const line of streamLines(proc.stdout)) {
-        if (line.trim().length === 0) continue;
-        try {
-          for (const chunk of parser.consumeLine(line)) yield chunk;
-        } catch (error: unknown) {
-          protocolError = error instanceof Error ? error : new Error(String(error));
-          killTimer ??= scheduleKill(proc);
-          break;
+      try {
+        for await (const line of streamLines(proc.stdout)) {
+          if (line.trim().length === 0) continue;
+          try {
+            for (const chunk of parser.consumeLine(line)) yield chunk;
+          } catch (error: unknown) {
+            protocolError = toError(error);
+            terminate();
+            break;
+          }
         }
+      } catch (error: unknown) {
+        transportError ??= toError(error);
+        terminate();
       }
 
-      const exitCode = await proc.exited;
-      processExited = true;
-      const stderr = await stderrPromise;
+      const [exitOutcome, stderrOutcome] = await Promise.all([
+        exitOutcomePromise,
+        stderrOutcomePromise,
+      ]);
       if (abortSignal?.aborted) throw new Error('Query aborted');
+      if (transportError) throw transportError;
+      if (!exitOutcome.ok) throw exitOutcome.error;
+      if (!stderrOutcome.ok) throw stderrOutcome.error;
 
       if (protocolError) {
         const message = protocolError.message;
         yield { type: 'system', content: message };
-        yield {
-          type: 'result',
-          ...(parser.getSessionId() ? { sessionId: parser.getSessionId() } : {}),
-          isError: true,
-          errorSubtype: 'omp_protocol_error',
-          errors: [message],
-          ...(resumeSessionId !== undefined ? { resumed: false } : {}),
-        };
+        yield buildTransportErrorResult(
+          parser,
+          'omp_protocol_error',
+          message,
+          resumeSessionId !== undefined
+        );
         return;
       }
 
-      if (exitCode !== 0) {
-        const message = buildExitErrorMessage(exitCode, stderr);
+      if (exitOutcome.value !== 0) {
+        const message = buildExitErrorMessage(exitOutcome.value, stderrOutcome.value);
         yield { type: 'system', content: message };
-        yield {
-          type: 'result',
-          ...(parser.getSessionId() ? { sessionId: parser.getSessionId() } : {}),
-          isError: true,
-          errorSubtype: 'omp_exit_nonzero',
-          errors: [message],
-          ...(resumeSessionId !== undefined ? { resumed: false } : {}),
-        };
+        yield buildTransportErrorResult(
+          parser,
+          'omp_exit_nonzero',
+          message,
+          resumeSessionId !== undefined
+        );
         return;
       }
 
@@ -351,8 +412,9 @@ export class OmpProvider implements IAgentProvider {
       getLog().info({ sessionId: parser.getSessionId() }, 'omp.query_completed');
     } finally {
       if (abortSignal) abortSignal.removeEventListener('abort', onAbort);
-      if (killTimer && processExited) clearTimeout(killTimer);
-      if (!processExited && !killTimer) scheduleKill(proc);
+      if (!processExited) terminate();
+      await Promise.all([exitOutcomePromise, stderrOutcomePromise]);
+      if (processExited) clearKillTimer();
     }
   }
 }

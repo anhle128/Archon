@@ -7,6 +7,7 @@ const MAX_ERROR_PREVIEW_CHARS = 1000;
 const log = createLogger('provider.omp.event-parser');
 
 type JsonObject = Record<string, unknown>;
+type ResultChunk = Extract<MessageChunk, { type: 'result' }>;
 
 function asObject(value: unknown): JsonObject | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -63,7 +64,8 @@ export class OmpEventParser {
     return this.consumeEvent(event);
   }
 
-  buildResult(resumed: boolean | undefined): MessageChunk {
+  buildResult(resumed: boolean | undefined): ResultChunk {
+    const observedResult = this.buildObservedResult(resumed);
     if (
       !this.sessionId ||
       !this.sawAgentEnd ||
@@ -78,11 +80,15 @@ export class OmpEventParser {
             ? 'completed assistant message'
             : 'assistant message';
       return {
-        type: 'result',
-        ...(this.sessionId ? { sessionId: this.sessionId } : {}),
+        ...observedResult,
         isError: true,
         errorSubtype: 'omp_incomplete_output',
-        errors: [`OMP CLI completed without a required ${missing}.`],
+        errors: [
+          `OMP CLI completed without a required ${missing}.`,
+          ...((this.streamError ?? this.errorMessage)
+            ? [this.streamError ?? this.errorMessage ?? '']
+            : []),
+        ],
         ...(resumed !== undefined ? { resumed: false } : {}),
       };
     }
@@ -91,19 +97,8 @@ export class OmpEventParser {
       this.streamError !== undefined ||
       this.stopReason === 'error' ||
       this.stopReason === 'aborted';
-    const structuredOutput =
-      this.wantsStructured && !this.streamError
-        ? tryParseStructuredOutput(this.structuredText)
-        : undefined;
     return {
-      type: 'result',
-      sessionId: this.sessionId,
-      tokens: this.tokens,
-      cost: this.tokens.cost,
-      ...(this.stopReason ? { stopReason: this.stopReason } : {}),
-      numTurns: this.numTurns,
-      ...(this.resolvedModel ? { resolvedModel: { id: this.resolvedModel } } : {}),
-      ...(structuredOutput !== undefined ? { structuredOutput } : {}),
+      ...observedResult,
       ...(isError
         ? {
             isError: true,
@@ -113,12 +108,29 @@ export class OmpEventParser {
               : {}),
           }
         : {}),
-      ...(resumed !== undefined ? { resumed } : {}),
     };
   }
 
   getSessionId(): string | undefined {
     return this.sessionId;
+  }
+
+  private buildObservedResult(resumed: boolean | undefined): ResultChunk {
+    const structuredOutput =
+      this.wantsStructured && !this.streamError
+        ? tryParseStructuredOutput(this.structuredText)
+        : undefined;
+    return {
+      type: 'result',
+      ...(this.sessionId ? { sessionId: this.sessionId } : {}),
+      ...(this.numTurns > 0
+        ? { tokens: this.tokens, cost: this.tokens.cost, numTurns: this.numTurns }
+        : {}),
+      ...(this.stopReason ? { stopReason: this.stopReason } : {}),
+      ...(this.resolvedModel ? { resolvedModel: { id: this.resolvedModel } } : {}),
+      ...(structuredOutput !== undefined ? { structuredOutput } : {}),
+      ...(resumed !== undefined ? { resumed } : {}),
+    };
   }
 
   private consumeEvent(event: JsonObject): MessageChunk[] {

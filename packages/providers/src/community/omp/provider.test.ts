@@ -38,7 +38,7 @@ function makeProcess(stdoutChunks: string[], stderr = '', exitCode = 0): FakePro
   return proc;
 }
 
-function makeRunningProcess(exitOn: NodeJS.Signals): FakeProcess {
+function makeRunningProcess(exitOn: NodeJS.Signals, stdoutFailure?: Error): FakeProcess {
   let stdoutController: ReadableStreamDefaultController<Uint8Array> | undefined;
   let resolveExit: ((code: number) => void) | undefined;
   let reaped = false;
@@ -60,9 +60,29 @@ function makeRunningProcess(exitOn: NodeJS.Signals): FakeProcess {
       proc.signals.push(signal);
       if (signal === exitOn && !reaped) {
         reaped = true;
-        stdoutController?.close();
+        if (stdoutFailure) stdoutController?.error(stdoutFailure);
+        else stdoutController?.close();
         resolveExit?.(0);
       }
+    },
+  };
+  return proc;
+}
+
+function makeStderrRejectingProcess(): FakeProcess {
+  const proc: FakeProcess = {
+    stdout: streamFromChunks([]),
+    stderr: new ReadableStream<Uint8Array>({
+      start(controller): void {
+        controller.error(new Error('stderr read failed'));
+      },
+    }),
+    exited: new Promise<number>(resolve => {
+      setTimeout(() => resolve(0), 20);
+    }),
+    signals: [],
+    kill: (signal = 'SIGTERM'): void => {
+      proc.signals.push(signal);
     },
   };
   return proc;
@@ -101,6 +121,25 @@ function successfulLines(sessionId = 'omp-session-1', text = 'Hello'): string[] 
       isError: false,
     }),
     JSON.stringify({ type: 'agent_end', messages: [] }),
+  ];
+}
+
+function modelErrorLines(): string[] {
+  return [
+    JSON.stringify({ type: 'session', id: 'model-error-session' }),
+    JSON.stringify({
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: '{"answer":"partial"}' }],
+        provider: 'openai-codex',
+        model: 'gpt-5.6-sol',
+        usage: { input: 7, output: 4, totalTokens: 11, cost: { total: 0.3 } },
+        stopReason: 'error',
+        errorMessage: 'rate limited',
+      },
+    }),
+    '{bad json',
   ];
 }
 
@@ -307,6 +346,29 @@ describe('OmpProvider', () => {
     });
   });
 
+  test('preserves parser metadata on a non-zero exit result', async () => {
+    const proc = makeProcess(
+      [successfulLines('exit-session', '{"answer":"ok"}').join('\n')],
+      'process failed',
+      2
+    );
+    const chunks = await collect(new OmpProvider({ spawn: makeSpawner(proc, []) }), undefined, {
+      outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+    });
+    expect(chunks.at(-1)).toMatchObject({
+      type: 'result',
+      sessionId: 'exit-session',
+      tokens: { input: 3, output: 2, total: 5, cost: 0.1 },
+      cost: 0.1,
+      stopReason: 'stop',
+      numTurns: 1,
+      resolvedModel: { id: 'openai-codex/gpt-5.6-sol' },
+      structuredOutput: { answer: 'ok' },
+      isError: true,
+      errorSubtype: 'omp_exit_nonzero',
+    });
+  });
+
   test('maps exit zero without agent_end to incomplete output', async () => {
     const proc = makeProcess([[JSON.stringify({ type: 'session', id: 'incomplete' })].join('\n')]);
     const chunks = await collect(new OmpProvider({ spawn: makeSpawner(proc, []) }));
@@ -332,6 +394,26 @@ describe('OmpProvider', () => {
       sessionId: 'protocol-session',
       isError: true,
       errorSubtype: 'omp_protocol_error',
+    });
+  });
+
+  test('preserves parser metadata and model errors on a protocol error result', async () => {
+    const proc = makeProcess([modelErrorLines().join('\n')]);
+    const chunks = await collect(new OmpProvider({ spawn: makeSpawner(proc, []) }), undefined, {
+      outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+    });
+    expect(chunks.at(-1)).toMatchObject({
+      type: 'result',
+      sessionId: 'model-error-session',
+      tokens: { input: 7, output: 4, total: 11, cost: 0.3 },
+      cost: 0.3,
+      stopReason: 'error',
+      numTurns: 1,
+      resolvedModel: { id: 'openai-codex/gpt-5.6-sol' },
+      structuredOutput: { answer: 'partial' },
+      isError: true,
+      errorSubtype: 'omp_protocol_error',
+      errors: expect.arrayContaining(['rate limited']),
     });
   });
 
@@ -380,6 +462,27 @@ describe('OmpProvider', () => {
     expect(proc.signals).toEqual(['SIGTERM', 'SIGKILL']);
   }, 7_000);
 
+  test('reports abort when SIGTERM makes stdout reject', async () => {
+    const proc = makeRunningProcess('SIGTERM', new Error('stdout read failed'));
+    const calls: { command: string[]; options: OmpSpawnOptions }[] = [];
+    const controller = new AbortController();
+    const run = collect(new OmpProvider({ spawn: makeSpawner(proc, calls) }), undefined, {
+      abortSignal: controller.signal,
+    });
+    await waitFor(() => calls.length === 1);
+    controller.abort();
+    await expect(run).rejects.toThrow('Query aborted');
+    expect(proc.signals).toEqual(['SIGTERM']);
+  });
+
+  test('tears down and reaps after an early stderr read rejection', async () => {
+    const proc = makeStderrRejectingProcess();
+    await expect(collect(new OmpProvider({ spawn: makeSpawner(proc, []) }))).rejects.toThrow(
+      'stderr read failed'
+    );
+    expect(proc.signals).toEqual(['SIGTERM']);
+  });
+
   test('overlays request environment values on defined process values', async () => {
     const key = 'ARCHON_OMP_PROVIDER_TEST';
     const original = process.env[key];
@@ -414,18 +517,22 @@ describe('OmpProvider', () => {
     });
   });
 
-  test('terminates the child when the generator closes early', async () => {
-    const proc = makeProcess([successfulLines().join('\n')]);
+  test('clears the escalation timer after early close reaps the child', async () => {
+    const proc = makeRunningProcess('SIGTERM');
     const iterator = new OmpProvider({ spawn: makeSpawner(proc, []) }).sendQuery(
       'hello',
       '/repo',
       undefined,
       { env: { OMP_BIN_PATH: process.execPath } }
     );
-    await expect(iterator.next()).resolves.toMatchObject({
+    const firstChunk = iterator.next();
+    await waitFor(() => proc.stdout?.locked === true);
+    proc.pushStdout?.(`${successfulLines().slice(0, 4).join('\n')}\n`);
+    await expect(firstChunk).resolves.toMatchObject({
       value: { type: 'assistant', content: 'Hello' },
     });
     await iterator.return(undefined);
+    await new Promise(resolve => setTimeout(resolve, 5_100));
     expect(proc.signals).toEqual(['SIGTERM']);
-  });
+  }, 7_000);
 });
