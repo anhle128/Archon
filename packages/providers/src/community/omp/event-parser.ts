@@ -117,6 +117,10 @@ export class OmpEventParser {
     };
   }
 
+  getSessionId(): string | undefined {
+    return this.sessionId;
+  }
+
   private consumeEvent(event: JsonObject): MessageChunk[] {
     if (this.sawAgentEnd) throw new Error('OMP CLI emitted an event after agent_end.');
     const type = stringField(event.type);
