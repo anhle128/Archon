@@ -372,7 +372,10 @@ String `thinking` values, including `off` and `auto`, also map to `omp --thinkin
 Per-node `skills` names map to OMP's `--skills` filter and can select skills discovered from `.agents/skills` and OMP's other configured roots.
 
 Archon passes `--yolo` because workflow and remote-chat turns are non-interactive.
-The OMP process therefore has the same working-directory permissions as Archon and should normally run inside Archon's worktree isolation.
+The OMP process inherits Archon's host-user permissions and environment, including access to resources outside its working directory.
+Archon's worktree isolation separates Git branches but is not a filesystem or host security boundary, so it does not contain an unsandboxed OMP process.
+Run Archon and OMP inside an external sandbox, container, or virtual machine when that host-level access is unacceptable.
+Worktree isolation is still recommended to prevent branch conflicts.
 
 Project and user extension discovery is disabled by default because OMP extensions are executable code.
 Set `enableExtensions: true` only when the OMP extension roots and the target repository are trusted.

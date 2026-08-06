@@ -39,7 +39,6 @@ export class OmpEventParser {
   private activeAssistantMessage = false;
   private pendingAssistant = '';
   private currentMessageText = '';
-  private currentStructuredText = '';
   private structuredText = '';
   private streamError: string | undefined;
   private readonly activeTools = new Map<string, string>();
@@ -136,6 +135,7 @@ export class OmpEventParser {
   private consumeEvent(event: JsonObject): MessageChunk[] {
     if (this.sawAgentEnd) throw new Error('OMP CLI emitted an event after agent_end.');
     const type = stringField(event.type);
+    if (!type) throw new Error('OMP CLI emitted a record without a non-empty string event type.');
     switch (type) {
       case 'session': {
         const sessionId = stringField(event.id);
@@ -154,7 +154,6 @@ export class OmpEventParser {
             );
           this.activeAssistantMessage = true;
           this.currentMessageText = '';
-          this.currentStructuredText = '';
         }
         return [];
       }
@@ -201,7 +200,6 @@ export class OmpEventParser {
     if (type === 'text_delta' && delta) {
       this.pendingAssistant += delta;
       this.currentMessageText += delta;
-      if (this.wantsStructured) this.currentStructuredText += delta;
       return [];
     }
     if (type === 'thinking_delta' && delta) {

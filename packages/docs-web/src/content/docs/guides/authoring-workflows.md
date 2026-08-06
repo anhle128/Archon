@@ -486,7 +486,9 @@ See [Route Loop Nodes](/guides/route-loop-nodes/) for validation rules, retry be
 
 ### `output_format` for Structured JSON
 
-Use `output_format` to enforce JSON output from an AI node. For Claude, the schema is passed via the SDK's `outputFormat` option and `structured_output` is used directly. For Codex (v0.116.0+), the schema is passed via `TurnOptions.outputSchema` and the agent's inline JSON response is used. Both ensure clean JSON for `when:` conditions and `$nodeId.output` substitution:
+Use `output_format` to request schema-valid JSON from an AI node for `when:` conditions and `$nodeId.output` substitution.
+Provider guarantees vary between enforced decoding and best-effort prompting, as recorded in the [Provider Capability Matrix](/reference/provider-capabilities/).
+Archon validates parsed output against the schema for every supported provider.
 
 > **Codex strict-mode normalization.** OpenAI's Structured Outputs validator rejects any object schema that doesn't set `additionalProperties: false`. Archon normalizes Codex schemas before sending them, injecting `additionalProperties: false` on every object node automatically — so write portable schemas and you won't notice. One caveat: an open-record `additionalProperties: { type: 'string' }` (or `additionalProperties: true`) is **replaced** with `false`, closing the object. OpenAI would reject the open form regardless, but the rewrite is logged (`codex.output_format_open_record_closed`) so it isn't silent. Open-record maps aren't supported for Codex structured output.
 
@@ -513,7 +515,9 @@ nodes:
 
 ### `allowed_tools` and `denied_tools` for Tool Restrictions
 
-Restrict which built-in tools a node can use without relying on prompt instructions. Restrictions are enforced at the Claude SDK level.
+Restrict which built-in tools a node can use without relying on prompt instructions.
+Enforcement is adapter-specific and exists only where the [Provider Capability Matrix](/reference/provider-capabilities/) marks the resolved provider as supporting tool restrictions.
+Unsupported providers warn and ignore these fields.
 
 ```yaml
 nodes:

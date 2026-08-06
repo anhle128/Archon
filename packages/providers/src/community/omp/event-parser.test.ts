@@ -196,7 +196,33 @@ describe('OmpEventParser', () => {
 
   test('rejects malformed NDJSON with a bounded preview', () => {
     const parser = new OmpEventParser(false);
-    expect(() => parser.consumeLine('{bad json')).toThrow('invalid JSON');
+    const recognizableTail = 'TAIL_MUST_NOT_APPEAR';
+    const malformed = `${'x'.repeat(1_001)}${recognizableTail}`;
+    let thrown: unknown;
+    try {
+      parser.consumeLine(malformed);
+    } catch (error: unknown) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain('invalid JSON');
+    expect((thrown as Error).message).not.toContain(recognizableTail);
+  });
+
+  test('rejects records without a non-empty string event type', () => {
+    for (const event of [{}, { type: '' }, { type: 42 }]) {
+      const parser = new OmpEventParser(false);
+      expect(() => parser.consumeLine(JSON.stringify(event))).toThrow(
+        'non-empty string event type'
+      );
+    }
+  });
+
+  test('ignores unknown future string event types', () => {
+    const parser = new OmpEventParser(false);
+    expect(
+      parser.consumeLine(JSON.stringify({ type: 'future_event', payload: { version: 2 } }))
+    ).toEqual([]);
   });
 
   test('fails incomplete success streams instead of inventing a result', () => {
