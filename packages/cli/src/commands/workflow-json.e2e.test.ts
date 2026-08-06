@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
+import { describe, test, expect, beforeAll, afterAll, setDefaultTimeout } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import {
   mkdtempSync,
@@ -32,6 +32,9 @@ import { Database } from 'bun:sqlite';
 // `{ok:false, runId, error:'not_found'}` shape with no `correlationId`.
 
 const CLI_ENTRY = join(import.meta.dir, '..', 'cli.ts');
+
+// Fresh CLI subprocesses may wait for SQLite's 5s busy timeout plus startup under package-parallel load.
+setDefaultTimeout(10_000);
 
 let isolatedHome: string;
 let isolatedRepo: string;
@@ -1482,7 +1485,7 @@ describe('workflow resume/retry/cancel --json CLI dispatch E2E — real subproce
 
     expect(exitCode).toBe(0);
     expect(stderr).toBe('');
-  }, 10_000);
+  });
 
   // 3.3D-CLI-026 [P0] R1-F23 — resume UNEXPECTED_STATE for completed run
   test('3.3D-CLI-026: `workflow resume <completed-run> --json` emits UNEXPECTED_STATE envelope, exit 78', async () => {
@@ -1497,7 +1500,7 @@ describe('workflow resume/retry/cancel --json CLI dispatch E2E — real subproce
     expect(error?.code).toBe('UNEXPECTED_STATE');
     expect(exitCode).toBe(78);
     expect(stderr).toBe('');
-  }, 10_000);
+  });
 
   // 3.3D-CLI-027 [P0] R1-F23 — resume UNEXPECTED_STATE for cancelled run
   test('3.3D-CLI-027: `workflow resume <cancelled-run> --json` emits UNEXPECTED_STATE envelope, exit 78', async () => {
