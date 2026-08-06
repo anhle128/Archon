@@ -5,7 +5,7 @@ description: |
             "specify plan implement", "speckit end-to-end", "feature with speckit",
             "speckit pipeline", "sdd feature".
   Does: Specify → red-team adversarial review → clarify ambiguities → plan → tasks →
-        analyze cross-artifact consistency → tasks-to-ralph → run ralph.sh → sync-back → converge gate → PR creation.
+        analyze cross-artifact consistency → tasks-to-ralph → run ralph.sh → sync-back → converge gate → human review before retry → PR creation.
   NOT for: Quick one-file fixes, bug fixes, PR reviews.
   NOT for: When a spec already exists (use archon-speckit-plan-to-tasks instead).
   NOT for: Spec generation only without planning (use archon-speckit-spec instead).
@@ -428,6 +428,8 @@ nodes:
       /speckit.ralph-loop.tasks-to-ralph <feature_directory>
     depends_on:
       - analyze-apply
+      - speckit-converge-review-gate
+    trigger_rule: one_success
     provider: codex
     effort: xhigh
     model: gpt-5.6-terra
@@ -483,8 +485,17 @@ nodes:
       max_iterations: 3
       routes:
         positive: create-pull-request
-        negative: ralph-tasks-to-ralph
+        negative: speckit-converge-review-gate
         exhausted: ralph-tasks-to-ralph-2
+
+  - id: speckit-converge-review-gate
+    approval:
+      message: |
+        Speckit convergence found $speckit-converge.output.tasks_added remaining task(s) and updated `tasks.md`.
+        Review the convergence findings and task changes.
+        Approve to run `ralph-tasks-to-ralph` and repeat the Ralph implementation loop.
+      capture_response: true
+    when: "$speckit-converge.output.gate == 'FAIL'"
 
   - id: create-pull-request
     command: archon-create-pr
