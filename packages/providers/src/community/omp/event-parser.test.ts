@@ -88,21 +88,18 @@ describe('OmpEventParser', () => {
     const parser = new OmpEventParser(true);
     const chunks = OMP_SUCCESS_LINES.flatMap(line => parser.consumeLine(line));
     const result = parser.buildResult(true);
-    expect(chunks).toContainEqual({ type: 'thinking', content: 'Think' });
-    expect(chunks).toContainEqual({ type: 'assistant', content: 'Hello' });
-    expect(chunks).toContainEqual({ type: 'assistant', content: 'Done' });
-    expect(chunks).toContainEqual({
-      type: 'tool',
-      toolName: 'read',
-      toolInput: { path: 'README.md' },
-      toolCallId: 'tool-1',
-    });
-    expect(chunks).toContainEqual({
-      type: 'tool_result',
-      toolName: 'read',
-      toolOutput: '{"content":[{"type":"text","text":"contents"}]}',
-      toolCallId: 'tool-1',
-    });
+    expect(chunks).toEqual([
+      { type: 'thinking', content: 'Think' },
+      { type: 'assistant', content: 'Hello' },
+      { type: 'tool', toolName: 'read', toolInput: { path: 'README.md' }, toolCallId: 'tool-1' },
+      {
+        type: 'tool_result',
+        toolName: 'read',
+        toolOutput: '{"content":[{"type":"text","text":"contents"}]}',
+        toolCallId: 'tool-1',
+      },
+      { type: 'assistant', content: 'Done' },
+    ]);
     expect(result).toMatchObject({
       type: 'result',
       sessionId: 'omp-session-1',
@@ -118,25 +115,33 @@ describe('OmpEventParser', () => {
   test('repairs only a strict missing suffix from message_end', () => {
     const parser = new OmpEventParser(false);
     parser.consumeLine(JSON.stringify({ type: 'session', id: 'session-tail' }));
+    parser.consumeLine(JSON.stringify({ type: 'message_start', message: { role: 'assistant' } }));
     parser.consumeLine(
       JSON.stringify({
         type: 'message_update',
         assistantMessageEvent: { type: 'text_delta', delta: 'hel' },
       })
     );
-    const chunks = parser.consumeLine(
-      JSON.stringify({
-        type: 'message_end',
-        message: {
-          role: 'assistant',
-          content: [{ type: 'text', text: 'hello' }],
-          usage: { input: 1, output: 1, totalTokens: 2, cost: { total: 0 } },
-          stopReason: 'stop',
-        },
-      })
-    );
+    expect(
+      parser.consumeLine(
+        JSON.stringify({ type: 'message_update', assistantMessageEvent: { type: 'text_end' } })
+      )
+    ).toEqual([{ type: 'assistant', content: 'hel' }]);
+    expect(
+      parser.consumeLine(
+        JSON.stringify({
+          type: 'message_end',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'hello' }],
+            model: 'gpt-5.6-sol',
+            usage: { input: 1, output: 1, totalTokens: 2, cost: { total: 0 } },
+            stopReason: 'stop',
+          },
+        })
+      )
+    ).toEqual([{ type: 'assistant', content: 'lo' }]);
     parser.consumeLine(JSON.stringify({ type: 'agent_end', messages: [] }));
-    expect(chunks).toEqual([{ type: 'assistant', content: 'hello' }]);
   });
 
   test('marks model errors on the terminal result', () => {
@@ -148,6 +153,7 @@ describe('OmpEventParser', () => {
         message: {
           role: 'assistant',
           content: [],
+          model: 'gpt-5.6-sol',
           usage: { input: 2, output: 0, totalTokens: 2, cost: { total: 0 } },
           stopReason: 'error',
           errorMessage: 'rate limited',
@@ -178,6 +184,7 @@ describe('OmpEventParser', () => {
         message: {
           role: 'assistant',
           content: [{ type: 'text', text: '{"answer":"ok"}' }],
+          model: 'gpt-5.6-sol',
           usage: { input: 1, output: 1, totalTokens: 2, cost: { total: 0 } },
           stopReason: 'stop',
         },
@@ -200,4 +207,149 @@ describe('OmpEventParser', () => {
       errorSubtype: 'omp_incomplete_output',
     });
   });
+
+  test('fails an unfinished later assistant turn without emitting its tail', () => {
+    const parser = new OmpEventParser(false);
+    parser.consumeLine(JSON.stringify({ type: 'session', id: 'session-partial' }));
+    parser.consumeLine(JSON.stringify({ type: 'message_end', message: completeMessage('first') }));
+    parser.consumeLine(JSON.stringify({ type: 'message_start', message: { role: 'assistant' } }));
+    parser.consumeLine(
+      JSON.stringify({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', delta: 'partial' },
+      })
+    );
+    expect(parser.consumeLine(JSON.stringify({ type: 'agent_end' }))).toEqual([]);
+    expect(parser.buildResult(undefined)).toMatchObject({
+      isError: true,
+      errorSubtype: 'omp_incomplete_output',
+    });
+  });
+
+  test('rejects overlapping assistant messages and conflicting session headers', () => {
+    const parser = new OmpEventParser(false);
+    parser.consumeLine(JSON.stringify({ type: 'session', id: 'session-one' }));
+    expect(() =>
+      parser.consumeLine(JSON.stringify({ type: 'session', id: 'session-two' }))
+    ).toThrow('conflicting');
+    parser.consumeLine(JSON.stringify({ type: 'message_start', message: { role: 'assistant' } }));
+    expect(() =>
+      parser.consumeLine(JSON.stringify({ type: 'message_start', message: { role: 'assistant' } }))
+    ).toThrow('unfinished');
+  });
+
+  test('rejects unpaired tools and tool errors without a result', () => {
+    const parser = new OmpEventParser(false);
+    parser.consumeLine(JSON.stringify({ type: 'session', id: 'session-tools' }));
+    expect(() =>
+      parser.consumeLine(
+        JSON.stringify({ type: 'tool_execution_start', toolName: 'read', args: {} })
+      )
+    ).toThrow('toolCallId');
+    expect(() =>
+      parser.consumeLine(
+        JSON.stringify({
+          type: 'tool_execution_end',
+          toolCallId: 'missing',
+          toolName: 'read',
+          result: {},
+        })
+      )
+    ).toThrow('unmatched');
+    parser.consumeLine(
+      JSON.stringify({
+        type: 'tool_execution_start',
+        toolCallId: 'one',
+        toolName: 'read',
+        args: {},
+      })
+    );
+    expect(() =>
+      parser.consumeLine(
+        JSON.stringify({
+          type: 'tool_execution_end',
+          toolCallId: 'one',
+          toolName: 'write',
+          result: {},
+        })
+      )
+    ).toThrow('mismatched');
+    expect(() =>
+      parser.consumeLine(
+        JSON.stringify({
+          type: 'tool_execution_end',
+          toolCallId: 'one',
+          toolName: 'read',
+          isError: true,
+        })
+      )
+    ).toThrow('result');
+  });
+
+  test('does not duplicate mismatched final text or use it as structured output', () => {
+    const parser = new OmpEventParser(true);
+    parser.consumeLine(JSON.stringify({ type: 'session', id: 'session-mismatch' }));
+    parser.consumeLine(JSON.stringify({ type: 'message_start', message: { role: 'assistant' } }));
+    parser.consumeLine(
+      JSON.stringify({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', delta: '{"answer":"streamed"}' },
+      })
+    );
+    expect(
+      parser.consumeLine(
+        JSON.stringify({ type: 'message_update', assistantMessageEvent: { type: 'text_end' } })
+      )
+    ).toEqual([{ type: 'assistant', content: '{"answer":"streamed"}' }]);
+    expect(
+      parser.consumeLine(
+        JSON.stringify({ type: 'message_end', message: completeMessage('{"answer":"final"}') })
+      )
+    ).toEqual([]);
+    parser.consumeLine(JSON.stringify({ type: 'agent_end' }));
+    expect(parser.buildResult(undefined)).toMatchObject({
+      isError: true,
+      errorSubtype: 'omp_stream_mismatch',
+    });
+    expect(parser.buildResult(undefined)).not.toHaveProperty('structuredOutput');
+  });
+
+  test('rejects invalid assistant terminals, outstanding tools, and events after agent_end', () => {
+    const parser = new OmpEventParser(false);
+    parser.consumeLine(JSON.stringify({ type: 'session', id: 'session-terminal' }));
+    expect(() =>
+      parser.consumeLine(
+        JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [] } })
+      )
+    ).toThrow('usage');
+    parser.consumeLine(JSON.stringify({ type: 'message_end', message: completeMessage('done') }));
+    parser.consumeLine(JSON.stringify({ type: 'agent_end' }));
+    expect(() => parser.consumeLine(JSON.stringify({ type: 'notice', message: 'late' }))).toThrow(
+      'agent_end'
+    );
+
+    const withTool = new OmpEventParser(false);
+    withTool.consumeLine(JSON.stringify({ type: 'session', id: 'session-open-tool' }));
+    withTool.consumeLine(
+      JSON.stringify({
+        type: 'tool_execution_start',
+        toolCallId: 'one',
+        toolName: 'read',
+        args: {},
+      })
+    );
+    expect(() => withTool.consumeLine(JSON.stringify({ type: 'agent_end' }))).toThrow(
+      'outstanding tool'
+    );
+  });
 });
+
+function completeMessage(text: string): Record<string, unknown> {
+  return {
+    role: 'assistant',
+    content: [{ type: 'text', text }],
+    model: 'gpt-5.6-sol',
+    usage: { input: 1, output: 1, totalTokens: 2, cost: { total: 0 } },
+    stopReason: 'stop',
+  };
+}

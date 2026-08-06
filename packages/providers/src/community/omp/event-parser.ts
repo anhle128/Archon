@@ -35,9 +35,13 @@ export class OmpEventParser {
   private sessionId: string | undefined;
   private sawAgentEnd = false;
   private sawAssistantMessage = false;
+  private activeAssistantMessage = false;
   private pendingAssistant = '';
   private currentMessageText = '';
+  private currentStructuredText = '';
   private structuredText = '';
+  private streamError: string | undefined;
+  private readonly activeTools = new Map<string, string>();
   private tokens: TokenUsage = { input: 0, output: 0, total: 0, cost: 0 };
   private stopReason: string | undefined;
   private errorMessage: string | undefined;
@@ -60,12 +64,19 @@ export class OmpEventParser {
   }
 
   buildResult(resumed: boolean | undefined): MessageChunk {
-    if (!this.sessionId || !this.sawAgentEnd || !this.sawAssistantMessage) {
+    if (
+      !this.sessionId ||
+      !this.sawAgentEnd ||
+      !this.sawAssistantMessage ||
+      this.activeAssistantMessage
+    ) {
       const missing = !this.sessionId
         ? 'session header'
         : !this.sawAgentEnd
           ? 'agent_end event'
-          : 'assistant message';
+          : this.activeAssistantMessage
+            ? 'completed assistant message'
+            : 'assistant message';
       return {
         type: 'result',
         ...(this.sessionId ? { sessionId: this.sessionId } : {}),
@@ -76,10 +87,14 @@ export class OmpEventParser {
       };
     }
 
-    const isError = this.stopReason === 'error' || this.stopReason === 'aborted';
-    const structuredOutput = this.wantsStructured
-      ? tryParseStructuredOutput(this.structuredText)
-      : undefined;
+    const isError =
+      this.streamError !== undefined ||
+      this.stopReason === 'error' ||
+      this.stopReason === 'aborted';
+    const structuredOutput =
+      this.wantsStructured && !this.streamError
+        ? tryParseStructuredOutput(this.structuredText)
+        : undefined;
     return {
       type: 'result',
       sessionId: this.sessionId,
@@ -92,8 +107,10 @@ export class OmpEventParser {
       ...(isError
         ? {
             isError: true,
-            errorSubtype: this.stopReason,
-            ...(this.errorMessage ? { errors: [this.errorMessage] } : {}),
+            errorSubtype: this.streamError ?? this.stopReason,
+            ...((this.streamError ?? this.errorMessage)
+              ? { errors: [this.streamError ?? this.errorMessage ?? ''] }
+              : {}),
           }
         : {}),
       ...(resumed !== undefined ? { resumed } : {}),
@@ -101,17 +118,28 @@ export class OmpEventParser {
   }
 
   private consumeEvent(event: JsonObject): MessageChunk[] {
+    if (this.sawAgentEnd) throw new Error('OMP CLI emitted an event after agent_end.');
     const type = stringField(event.type);
     switch (type) {
       case 'session': {
         const sessionId = stringField(event.id);
         if (!sessionId) throw new Error('OMP CLI emitted a session event without an id.');
+        if (this.sessionId && this.sessionId !== sessionId)
+          throw new Error('OMP CLI emitted conflicting session headers.');
         this.sessionId = sessionId;
         return [];
       }
       case 'message_start': {
         const message = asObject(event.message);
-        if (stringField(message?.role) === 'assistant') this.currentMessageText = '';
+        if (stringField(message?.role) === 'assistant') {
+          if (this.activeAssistantMessage || this.pendingAssistant)
+            throw new Error(
+              'OMP CLI started an assistant message before the unfinished message ended.'
+            );
+          this.activeAssistantMessage = true;
+          this.currentMessageText = '';
+          this.currentStructuredText = '';
+        }
         return [];
       }
       case 'message_update':
@@ -142,8 +170,10 @@ export class OmpEventParser {
           : chunks;
       }
       case 'agent_end':
+        if (this.activeTools.size > 0)
+          throw new Error('OMP CLI ended with an outstanding tool call.');
         this.sawAgentEnd = true;
-        return this.flushAssistant();
+        return this.activeAssistantMessage ? [] : this.flushAssistant();
       default:
         return this.flushAssistant();
     }
@@ -155,7 +185,7 @@ export class OmpEventParser {
     if (type === 'text_delta' && delta) {
       this.pendingAssistant += delta;
       this.currentMessageText += delta;
-      if (this.wantsStructured) this.structuredText += delta;
+      if (this.wantsStructured) this.currentStructuredText += delta;
       return [];
     }
     if (type === 'thinking_delta' && delta) {
@@ -165,9 +195,17 @@ export class OmpEventParser {
   }
 
   private consumeMessageEnd(message: JsonObject | undefined): MessageChunk[] {
-    if (stringField(message?.role) !== 'assistant') return [];
-    this.sawAssistantMessage = true;
-    const content = Array.isArray(message?.content) ? message.content : [];
+    if (!message || stringField(message.role) !== 'assistant') return [];
+    if (!Array.isArray(message.content))
+      throw new Error('OMP CLI assistant message_end is missing content.');
+    const usage = asObject(message.usage);
+    if (!usage) throw new Error('OMP CLI assistant message_end is missing usage.');
+    const model = stringField(message.model);
+    if (!model) throw new Error('OMP CLI assistant message_end is missing model.');
+    const stopReason = stringField(message.stopReason);
+    if (!stopReason) throw new Error('OMP CLI assistant message_end is missing stop reason.');
+    this.assertUsage(usage);
+    const content = message.content;
     const completeText = content
       .map(asObject)
       .map(block => (stringField(block?.type) === 'text' ? (stringField(block?.text) ?? '') : ''))
@@ -177,38 +215,45 @@ export class OmpEventParser {
       const suffix = completeText.slice(this.currentMessageText.length);
       this.pendingAssistant += suffix;
       this.currentMessageText += suffix;
-      if (this.wantsStructured) this.structuredText += suffix;
+      if (this.wantsStructured) this.structuredText += completeText;
       chunks = this.flushAssistant();
     } else {
       log.warn(
         { streamedLength: this.currentMessageText.length, completeLength: completeText.length },
         'omp.streaming_text_mismatch'
       );
-      this.pendingAssistant = '';
+      chunks = this.flushAssistant();
+      this.streamError = 'omp_stream_mismatch';
     }
-    this.accumulateUsage(asObject(message?.usage));
+    this.sawAssistantMessage = true;
+    this.activeAssistantMessage = false;
+    this.accumulateUsage(usage);
     this.numTurns += 1;
-    const provider = stringField(message?.provider);
-    const model = stringField(message?.model);
+    const provider = stringField(message.provider);
     this.resolvedModel = provider && model ? `${provider}/${model}` : model;
-    this.stopReason = stringField(message?.stopReason);
-    this.errorMessage = stringField(message?.errorMessage);
+    this.stopReason = stopReason;
+    this.errorMessage = stringField(message.errorMessage);
     return chunks;
   }
 
   private consumeToolStart(event: JsonObject): MessageChunk[] {
     const chunks = this.flushAssistant();
     const toolName = stringField(event.toolName);
-    if (!toolName) return chunks;
+    if (!toolName) throw new Error('OMP CLI tool_execution_start is missing toolName.');
     const toolCallId = stringField(event.toolCallId);
+    if (!toolCallId) throw new Error('OMP CLI tool_execution_start is missing toolCallId.');
     const toolInput = asObject(event.args);
+    if (!toolInput) throw new Error('OMP CLI tool_execution_start has invalid args.');
+    if (this.activeTools.has(toolCallId))
+      throw new Error('OMP CLI emitted a duplicate active toolCallId.');
+    this.activeTools.set(toolCallId, toolName);
     return [
       ...chunks,
       {
         type: 'tool',
         toolName,
-        ...(toolInput ? { toolInput } : {}),
-        ...(toolCallId ? { toolCallId } : {}),
+        toolInput,
+        toolCallId,
       },
     ];
   }
@@ -216,16 +261,27 @@ export class OmpEventParser {
   private consumeToolEnd(event: JsonObject): MessageChunk[] {
     const chunks = this.flushAssistant();
     const toolName = stringField(event.toolName);
-    if (!toolName) return chunks;
+    if (!toolName) throw new Error('OMP CLI tool_execution_end is missing toolName.');
     const toolCallId = stringField(event.toolCallId);
+    if (!toolCallId) throw new Error('OMP CLI tool_execution_end is missing toolCallId.');
+    const startedToolName = this.activeTools.get(toolCallId);
+    if (!startedToolName) throw new Error('OMP CLI emitted an unmatched tool_execution_end.');
+    if (startedToolName !== toolName)
+      throw new Error('OMP CLI emitted a mismatched tool_execution_end.');
+    if (!Object.hasOwn(event, 'result'))
+      throw new Error('OMP CLI errored tool_execution_end is missing result.');
+    this.activeTools.delete(toolCallId);
     const result: MessageChunk[] = [...chunks];
     if (event.isError === true)
-      result.push({ type: 'system', content: `OMP tool ${toolName} failed.` });
+      result.push({
+        type: 'system',
+        content: `OMP tool ${toolName} failed: ${serializeToolResult(event.result)}`,
+      });
     result.push({
       type: 'tool_result',
       toolName,
       toolOutput: serializeToolResult(event.result),
-      ...(toolCallId ? { toolCallId } : {}),
+      toolCallId,
     });
     return result;
   }
@@ -245,5 +301,18 @@ export class OmpEventParser {
       total: (this.tokens.total ?? 0) + numberField(usage?.totalTokens),
       cost: (this.tokens.cost ?? 0) + numberField(cost?.total),
     };
+  }
+
+  private assertUsage(usage: JsonObject): void {
+    const cost = asObject(usage.cost);
+    if (
+      !cost ||
+      !Number.isFinite(usage.input) ||
+      !Number.isFinite(usage.output) ||
+      !Number.isFinite(usage.totalTokens) ||
+      !Number.isFinite(cost.total)
+    ) {
+      throw new Error('OMP CLI assistant message_end has invalid usage.');
+    }
   }
 }
