@@ -1,6 +1,6 @@
 #!/bin/bash
 # Ralph Wiggum - Long-running AI agent loop
-# Usage: ./ralph.sh [--tool amp|claude|codex|pi|test-gpt5.5-codex|ccs-bp] [max_iterations]
+# Usage: ./ralph.sh [--tool amp|claude|codex|pi|omp|test-gpt5.5-codex|ccs-bp] [max_iterations]
 #
 # Configuration precedence (highest first):
 #   1. CLI args / env vars
@@ -136,7 +136,7 @@ if [ -f "$PRD_FILE" ] && [ -f "$LAST_BRANCH_FILE" ]; then
     # Archive the previous run
     DATE=$(date +%Y-%m-%d)
     # Strip "ralph/" prefix from branch name for folder
-    FOLDER_NAME=$(echo "$LAST_BRANCH" | sed 's|^ralph/||')
+    FOLDER_NAME="${LAST_BRANCH#ralph/}"
     ARCHIVE_FOLDER="$ARCHIVE_DIR/$DATE-$FOLDER_NAME"
 
     echo "Archiving previous run: $LAST_BRANCH"
@@ -176,7 +176,7 @@ echo "  model: $MODEL  reasoning_effort: $REASONING_EFFORT"
 TOTAL_BATCHES=$(jq -r '.userStories | length' "$PRD_FILE" 2>/dev/null || echo "?")
 [ -z "$TOTAL_BATCHES" ] && TOTAL_BATCHES="?"
 
-for i in $(seq 1 $MAX_ITERATIONS); do
+for i in $(seq 1 "$MAX_ITERATIONS"); do
   echo ""
   echo "==============================================================="
   echo "  Ralph Iteration $i of $TOTAL_BATCHES (max $MAX_ITERATIONS) ($TOOL)"
@@ -194,6 +194,7 @@ for i in $(seq 1 $MAX_ITERATIONS); do
   # Compact amp-style: one line per action — `label: "content..."` (truncated).
   # Tool-result echoes (user turns) are hidden to keep the feed scan-friendly;
   # raw JSONL is still captured for debugging via $ITER_LOG.json.
+  # shellcheck disable=SC2016 # This is a jq program, not a shell string.
   _claude_stream_formatter='
     def oneline: (. // "") | tostring | gsub("\n"; " ") | gsub("\\s+"; " ");
     def trunc(n): if (. | length) > n then .[0:n] + "..." else . end;
@@ -255,6 +256,7 @@ for i in $(seq 1 $MAX_ITERATIONS); do
   # Compact amp-style — same vocabulary as the claude formatter so the two
   # tools render identically inside the same loop. Command-output echoes are
   # hidden; raw JSONL is captured for debugging via $ITER_LOG.json.
+  # shellcheck disable=SC2016 # This is a jq program, not a shell string.
   _codex_stream_formatter='
     def oneline: (. // "") | tostring | gsub("\n"; " ") | gsub("\\s+"; " ");
     def trunc(n): if (. | length) > n then .[0:n] + "..." else . end;
@@ -324,6 +326,7 @@ for i in $(seq 1 $MAX_ITERATIONS); do
   # Live event formatter for `pi --mode json` JSONL output.
   # Pi emits session/agent/message/tool lifecycle events; this projects those
   # into the same compact labels used by the other Ralph tool runners.
+  # shellcheck disable=SC2016 # This is a jq program, not a shell string.
   _pi_stream_formatter='
     def oneline: (. // "") | tostring | gsub("\n"; " ") | gsub("\\s+"; " ");
     def trunc(n): if (. | length) > n then .[0:n] + "..." else . end;
@@ -368,13 +371,14 @@ for i in $(seq 1 $MAX_ITERATIONS); do
     else empty end
   '
 
-  # Runs Pi in JSON event-stream mode, prints compact live progress, captures raw
-  # JSONL, and writes concatenated final assistant text into $ITER_LOG so the
-  # existing <promise>COMPLETE</promise> grep works.
+  # Runs Pi or its OMP fork in JSON event-stream mode, prints compact live
+  # progress, captures raw JSONL, and writes concatenated final assistant text
+  # into $ITER_LOG so the existing <promise>COMPLETE</promise> grep works.
   _run_pi_stream() {
+    local cli="$1" approval_flag="$2"
     local iter_json="${ITER_LOG}.json"
-    pi --mode json \
-        --approve \
+    "$cli" --mode json \
+        "$approval_flag" \
         --model "$MODEL" \
         --thinking "$REASONING_EFFORT" \
         < "$SCRIPT_DIR/AGENTS.md" \
@@ -392,7 +396,9 @@ for i in $(seq 1 $MAX_ITERATIONS); do
   elif [[ "$TOOL" == "codex" ]]; then
     _run_codex_stream
   elif [[ "$TOOL" == "pi" ]]; then
-    _run_pi_stream
+    _run_pi_stream pi --approve
+  elif [[ "$TOOL" == "omp" ]]; then
+    _run_pi_stream omp --auto-approve
   elif [[ "$TOOL" == "test-gpt5.5-codex" ]]; then
     _run_claude_stream ccs test-gpt5.5-codex
   elif [[ "$TOOL" == "ccs-bp" ]]; then

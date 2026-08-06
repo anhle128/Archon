@@ -251,12 +251,12 @@ nodes:
   - id: plan
     prompt: |
       Read .specify/feature.json to resolve <feature_directory>, then run:
-      /speckit-plan create detail plan <feature_directory>, reference omnigent to know how they build this feature if they have (distill all follow, class name, function name and field name) ,spawn sub-agents for help
+      /speckit-plan create detail plan <feature_directory>
     depends_on:
       - red-team-apply
-    effort: high
-    provider: claude
-    model: "fable"
+    provider: codex
+    effort: xhigh
+    model: gpt-5.6-sol
     context: fresh
 
   - id: tasks
@@ -265,8 +265,10 @@ nodes:
       /speckit-tasks <feature_directory>
     depends_on:
       - plan
-    effort: xhigh
-    model: gpt-5.6-sol
+
+    effort: high
+    provider: claude
+    model: "fable"
     context: fresh
 
   - id: analyze

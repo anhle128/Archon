@@ -24,6 +24,9 @@ requires:
     - name: "pi"
       required: false
       reason: "Optional loop tool when ralph-config.yml uses `tool: pi`."
+    - name: "omp"
+      required: false
+      reason: "Optional loop tool when ralph-config.yml uses `tool: omp`."
     - name: "amp"
       required: false
       reason: "Optional loop tool when ralph-config.yml uses `tool: amp`."

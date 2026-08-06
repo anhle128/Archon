@@ -78,7 +78,7 @@
     "ralph-loop": {
       "version": "3.0.0",
       "source": "local",
-      "manifest_hash": "sha256:24cee57536895d35b814f1d33ea079d2b525fd61fd3997be493b85d58c4a43f9",
+      "manifest_hash": "sha256:9ef3000f927455e07f845f0f3a19337d10454087fe505524790665dfd4ffd66d",
       "enabled": true,
       "priority": 10,
       "registered_commands": {
@@ -88,7 +88,7 @@
         ]
       },
       "registered_skills": [],
-      "installed_at": "2026-08-03T17:35:27.364075+00:00"
+      "installed_at": "2026-08-05T16:18:31.407680+00:00"
     }
   }
 }

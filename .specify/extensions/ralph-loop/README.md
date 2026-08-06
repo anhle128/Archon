@@ -34,11 +34,10 @@ spec-kit-ralph/
   `main` or `master`.
 - A feature directory under `specs/` with a `tasks.md` file.
 - `git` and `jq` on `PATH`.
-- The selected loop tool installed and authenticated. `ralph.sh` supports
-  `claude`, `codex`, `pi`, `amp`, `test-gpt5.5-codex`, and `ccs-bp`.
+- The selected loop tool installed and authenticated.
+  `ralph.sh` supports `claude`, `codex`, `pi`, `omp`, `amp`, `test-gpt5.5-codex`, and `ccs-bp`.
 
-`ralph.sh` reads `AGENT.md` from the installed extension directory and passes it
-to the selected agent CLI each iteration.
+`ralph.sh` reads `AGENTS.md` from the installed extension directory and passes it to the selected agent CLI each iteration.
 
 ## Install Into a Spec Kit Project
 
@@ -120,6 +119,7 @@ Override the configured tool with `--tool`:
 RALPH_I_UNDERSTAND_DANGEROUS=1 bash .specify/extensions/ralph-loop/ralph.sh --tool claude 50
 RALPH_I_UNDERSTAND_DANGEROUS=1 bash .specify/extensions/ralph-loop/ralph.sh --tool codex 50
 RALPH_I_UNDERSTAND_DANGEROUS=1 bash .specify/extensions/ralph-loop/ralph.sh --tool pi 50
+RALPH_I_UNDERSTAND_DANGEROUS=1 bash .specify/extensions/ralph-loop/ralph.sh --tool omp 50
 ```
 
 The script requires an explicit danger consent because it runs the selected
@@ -194,8 +194,7 @@ runs. In the current script, the CLI can override only:
 - `tool`, with `--tool <name>` or `--tool=<name>`.
 - `max_iterations`, with a positional number such as `50`.
 
-For Pi, `model` maps to `pi --model` and `reasoning_effort` maps to
-`pi --thinking`.
+For Pi and OMP, `model` maps to `--model` and `reasoning_effort` maps to `--thinking` on the selected CLI.
 
 ## Task Format Expected by the Converter
 
