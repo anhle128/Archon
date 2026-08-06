@@ -176,8 +176,8 @@ nodes:
     provider: claude             # Per-node provider override
     model: haiku                 # Per-node model override
     # hooks:                     # Optional: per-node SDK hook callbacks (Claude only) — see hooks guide
-    # mcp: .archon/mcp/servers.json  # Optional: per-node MCP servers (all providers except Pi)
-    # skills: [remotion-best-practices]  # Optional: per-node skills (Claude/Pi/OpenCode/Copilot; Codex auto-discovers) — see skills guide
+    # mcp: .archon/mcp/servers.json  # Optional: per-node MCP servers — check the Provider Capability Matrix
+    # skills: [remotion-best-practices]  # Optional: per-node skills — check the Provider Capability Matrix
 ```
 
 ### Node Fields
@@ -227,7 +227,7 @@ They also do not use AI node options such as `provider`, `model`, `output_format
 | `hooks` | object | — | Per-node SDK hook callbacks. Claude only. See [Hooks](/guides/hooks/) |
 | `mcp` | string | — | Path to MCP server config JSON file. Check the [Provider Capability Matrix](/reference/provider-capabilities/) for support. See [MCP Servers](/guides/mcp-servers/) |
 | `skills` | string[] | — | Skills to preload. Check the [Provider Capability Matrix](/reference/provider-capabilities/) for support. See [Skills](/guides/skills/) |
-| `agents` | object | — | Inline sub-agent definitions keyed by kebab-case ID. Claude only. See [Inline sub-agents](#inline-sub-agents) |
+| `agents` | object | — | Inline sub-agent definitions keyed by kebab-case ID. Check the [Provider Capability Matrix](/reference/provider-capabilities/) for support. See [Inline sub-agents](#inline-sub-agents) |
 | `effort` | non-empty string | — | Provider-specific reasoning value, preserved exactly. Also settable at workflow level |
 | `thinking` | string \| object | — | Thinking mode: `'adaptive'`, `'disabled'`, or `{type:'enabled', budgetTokens:N}`. Check the [Provider Capability Matrix](/reference/provider-capabilities/) for support; object form is Claude-specific. Also settable at workflow level |
 | `maxBudgetUsd` | number | — | USD cost cap; node fails if exceeded. Claude only. Per-node only |
@@ -533,7 +533,8 @@ nodes:
 - `allowed_tools: []` disables all built-in tools (useful for MCP-only nodes). Use the `mcp` field on a node to attach per-node MCP servers — see [Node Fields](#node-fields)
 - If both are set, `denied_tools` is applied after `allowed_tools`
 - `undefined` (field absent) and `[]` have different semantics — absent means use default tool set, `[]` means no tools
-- Supported on all providers except Codex — Codex nodes/steps emit a warning and continue (Codex doesn't support per-call tool restrictions)
+- Set tool restrictions only when the [Provider Capability Matrix](/reference/provider-capabilities/) marks the resolved provider as supported.
+- Unsupported providers emit a warning and ignore these fields, so they do not enforce a security boundary.
 
 ### Inline sub-agents
 
@@ -563,7 +564,7 @@ Keys:
 - Agent IDs must be **kebab-case** (`^[a-z0-9]+(-[a-z0-9]+)*$`)
 - Each definition requires `description` and `prompt`; `model`, `tools`, `disallowedTools`, `skills`, and `maxTurns` are optional
 - Map is merged with any SDK-level agents and with the internal `dag-node-skills` wrapper created by `skills:` — user-defined agents win on ID collision (a warning is logged when this happens)
-- Claude only. Codex and community providers that don't support inline agents emit a warning and ignore the field
+- Check the [Provider Capability Matrix](/reference/provider-capabilities/) before using inline agents; unsupported providers emit a warning and ignore the field.
 
 **When to use `agents:` vs `.claude/agents/*.md` files:**
 
@@ -1648,13 +1649,14 @@ Before deploying a workflow:
 5. **Parallel by default** — nodes in the same topological layer run concurrently
 6. **Conditional branching** — `when:` conditions and `trigger_rule` control which nodes run
 7. **`output_format`** — enforce structured JSON output from AI nodes for reliable branching
-8. **`allowed_tools` / `denied_tools`** — restrict tools per node (all providers except Codex)
+8. **`allowed_tools` / `denied_tools`** — restrict tools per node only when the [Provider Capability Matrix](/reference/provider-capabilities/) marks the provider as supported
 9. **`retry:`** — AI nodes auto-retry transient errors (default: 2 retries / 3 total attempts, 3 s backoff); `bash:`/`script:` retry only with an explicit `retry:` block
 10. **`hooks`** — attach SDK hook callbacks to Claude nodes for tool control and context injection
-11. **`mcp:`** — attach per-node MCP servers via JSON config (all providers except Pi)
-12. **`skills:`** — preload skills per node (Claude/Pi/OpenCode/Copilot; Codex auto-discovers from `.agents/skills/`)
-13. **`agents:`** — inline Claude sub-agent definitions invokable via the `Task` tool
-14. **`effort` / `thinking`** — `effort` passes a raw provider-specific reasoning value; `thinking` retains provider-specific shorthand behavior15. **`maxBudgetUsd`** — set a USD cost cap per node; fails with error if exceeded (Claude only)
+11. **`mcp:`** — attach per-node MCP servers via JSON config when the [Provider Capability Matrix](/reference/provider-capabilities/) marks the provider as supported
+12. **`skills:`** — preload skills per node when the [Provider Capability Matrix](/reference/provider-capabilities/) marks the provider as supported
+13. **`agents:`** — define inline sub-agents when the [Provider Capability Matrix](/reference/provider-capabilities/) marks the provider as supported
+14. **`effort` / `thinking`** — `effort` passes a raw provider-specific reasoning value; `thinking` retains provider-specific shorthand behavior
+15. **`maxBudgetUsd`** — set a USD cost cap per node; fails with error if exceeded (Claude only)
 16. **`systemPrompt`** — override the default system prompt per node (Claude only)
 17. **`sandbox`** — OS-level filesystem/network restrictions per node or workflow (Claude only)
 18. **`output_type`** — tag a node's output with a semantic type; the engine writes a typed sidecar (`$ARTIFACTS_DIR/nodes/<id>.md` + `.meta.json`) for cross-node/cross-run lookup by type (any node type)

@@ -16,8 +16,8 @@ Common registered provider IDs in this Archon version:
 
 - `claude`
 - `codex`
-- `pi`
 - `opencode`
+- `pi`
 - `copilot`
 - `qodercli`
 - `omp`
@@ -32,8 +32,8 @@ Always run local validation because community providers can change.
 | ---------- | -------------- | --- | ----- | -------------------- | ------ | ----------------- | ----------------- | --------------------------------------- |
 | `claude`   | yes            | yes | yes   | yes                  | yes    | yes               | enforced          | yes                                     |
 | `codex`    | yes            | yes | no    | filesystem discovery | no     | no                | enforced          | through assistant config or tier preset |
+| `opencode` | yes            | yes | no    | yes                  | yes    | yes               | enforced          | use OpenCode agent config               |
 | `pi`       | yes            | no  | no    | yes                  | no     | yes               | best-effort       | yes                                     |
-| `opencode` | yes            | yes | yes   | yes                  | yes    | yes               | enforced          | use OpenCode agent config               |
 | `copilot`  | yes            | yes | no    | yes                  | yes    | yes               | best-effort       | yes                                     |
 | `qodercli` | yes            | yes | no    | no                   | no     | yes               | best-effort       | yes                                     |
 | `omp`      | yes            | no  | no    | filtered discovery   | no     | no                | best-effort       | yes                                     |
@@ -316,7 +316,7 @@ skills: [archon]
 Use OpenCode when the project is already configured for OpenCode or models.dev style providers.
 Model refs normally use `<provider>/<model>`, such as `anthropic/claude-sonnet-4-6`.
 
-OpenCode supports session resume, MCP, hooks, skills, agents, tool restrictions, env injection, and enforced structured output.
+OpenCode supports session resume, MCP, skills, agents, tool restrictions, env injection, and enforced structured output.
 OpenCode handles effort and thinking through OpenCode agent config rather than Archon node fields.
 
 Example:
