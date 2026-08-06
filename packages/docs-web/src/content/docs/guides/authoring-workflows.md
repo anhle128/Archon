@@ -536,9 +536,14 @@ nodes:
 - Set tool restrictions only when the [Provider Capability Matrix](/reference/provider-capabilities/) marks the resolved provider as supported.
 - Unsupported providers emit a warning and ignore these fields, so they do not enforce a security boundary.
 
-### Inline sub-agents
+### Inline sub-agents (`agents:`)
 
-Define Claude sub-agents directly in the workflow YAML, without authoring `.claude/agents/*.md` files. The main agent can spawn them in parallel via the `Task` tool — useful for map-reduce patterns where a cheap model (e.g. Haiku) briefs items and a stronger model reduces.
+Use `agents:` to define inline sub-agents in workflow YAML.
+Check the [Provider Capability Matrix](/reference/provider-capabilities/) for support by the resolved provider.
+On Claude, inline agents avoid authoring `.claude/agents/*.md` files and the main agent can spawn them in parallel through the `Task` tool.
+This is useful for map-reduce patterns where a cheap model (such as Haiku) briefs items and a stronger model reduces them.
+
+Claude-specific example:
 
 ```yaml
 nodes:
@@ -563,7 +568,7 @@ Keys:
 
 - Agent IDs must be **kebab-case** (`^[a-z0-9]+(-[a-z0-9]+)*$`)
 - Each definition requires `description` and `prompt`; `model`, `tools`, `disallowedTools`, `skills`, and `maxTurns` are optional
-- Map is merged with any SDK-level agents and with the internal `dag-node-skills` wrapper created by `skills:` — user-defined agents win on ID collision (a warning is logged when this happens)
+- On Claude, the map is merged with SDK-level agents and the internal `dag-node-skills` wrapper created by `skills:`; user-defined agents win on ID collision and Archon logs a warning.
 - Check the [Provider Capability Matrix](/reference/provider-capabilities/) before using inline agents; unsupported providers emit a warning and ignore the field.
 
 **When to use `agents:` vs `.claude/agents/*.md` files:**
@@ -571,7 +576,7 @@ Keys:
 - **`agents:` (inline)** — use when the sub-agent is specific to ONE workflow's needs. Keeps the workflow self-contained in a single YAML file; travels cleanly in PRs and forks.
 - **`.claude/agents/*.md` (on-disk)** — use when the sub-agent is shared across multiple workflows OR the whole project (for example, a `triage-agent` used by several maintenance workflows). On-disk agents live outside workflow YAMLs and are picked up automatically by the Claude Agent SDK.
 
-Both sources coexist — inline agents and on-disk agents are both available to `Task(subagent_type=...)` at runtime.
+On Claude, inline and on-disk agents coexist and are both available to `Task(subagent_type=...)` at runtime.
 
 ---
 
