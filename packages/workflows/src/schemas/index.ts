@@ -52,7 +52,10 @@ export {
   scriptNodeSchema,
   includeNodeSchema,
   workflowNodeSchema,
+  fanOutConfigSchema,
   dagNodeSchema,
+  INPUT_NAME_SOURCE,
+  isCommandNode,
   isBashNode,
   isLoopNode,
   isRouteLoopNode,
@@ -70,6 +73,10 @@ export {
   LOOP_GROUP_NODE_AI_FIELDS,
   INCLUDE_NODE_IGNORED_FIELDS,
   WORKFLOW_NODE_IGNORED_FIELDS,
+  KNOWN_DAG_NODE_KEYS,
+  KNOWN_NODE_NESTED_KEYS,
+  approvalConfigSchema,
+  dagNodeFlatSchema,
   effortLevelSchema,
   thinkingConfigSchema,
   sandboxSettingsSchema,
@@ -92,12 +99,14 @@ export type {
   ScriptNode,
   IncludeNode,
   WorkflowNode,
+  FanOutConfig,
   DagNode,
   EffortLevel,
   ThinkingConfig,
   SandboxSettings,
   AgentDefinition,
   PiNodeConfig,
+  NestedKeySpec,
 } from './dag-node';
 
 // Workflow definition
@@ -108,6 +117,9 @@ export {
   workflowEvidencePolicySchema,
   workflowBaseSchema,
   workflowDefinitionSchema,
+  KNOWN_WORKFLOW_KEYS,
+  KNOWN_WORKFLOW_NESTED_KEYS,
+  WORKFLOW_ONLY_KEYS,
 } from './workflow';
 export type {
   ModelReasoningEffort,
@@ -135,6 +147,8 @@ export {
   RETRYABLE_WORKFLOW_STATUSES,
   isApprovalContext,
   isRunBlockedOnChild,
+  SUBRUN_METADATA_KEYS,
+  readSubrunMetadata,
 } from './workflow-run';
 export type {
   WorkflowRunStatus,

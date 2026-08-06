@@ -347,6 +347,12 @@ export class SqliteAdapter implements IDatabase {
           'ALTER TABLE remote_agent_workflow_runs ADD COLUMN parent_run_id TEXT REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL'
         );
       }
+      // Durable output root (#2200). The resolved ~/.archon/workspaces/<project>/
+      // directory this run's artifacts, logs, and state live under, written once
+      // at run start so historical artifacts survive a codebase rename (#1192).
+      if (!wfColNames.has('output_root')) {
+        this.db.run('ALTER TABLE remote_agent_workflow_runs ADD COLUMN output_root TEXT');
+      }
       // Same rationale as idx_conversations_user_id above.
       this.db.run(
         'CREATE INDEX IF NOT EXISTS idx_workflow_runs_user_id ON remote_agent_workflow_runs(user_id) WHERE user_id IS NOT NULL'
@@ -445,6 +451,39 @@ export class SqliteAdapter implements IDatabase {
       }
     } catch (e: unknown) {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_provider_binding_columns_failed');
+      allApplied = false;
+    }
+
+    // Lifecycle ordering: SQLite timestamps have one-second precision. A trigger
+    // assigns a durable, monotonically increasing value for each inserted event.
+    try {
+      const cols = this.db.prepare("PRAGMA table_info('remote_agent_workflow_events')").all() as {
+        name: string;
+      }[];
+      if (!new Set(cols.map(c => c.name)).has('event_order')) {
+        this.db.run('ALTER TABLE remote_agent_workflow_events ADD COLUMN event_order INTEGER');
+      }
+      this.db.run(
+        `CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_events_run_order
+           ON remote_agent_workflow_events(workflow_run_id, event_order)
+           WHERE event_order IS NOT NULL`
+      );
+      this.db.run(
+        `CREATE TRIGGER IF NOT EXISTS remote_agent_workflow_events_assign_order
+           AFTER INSERT ON remote_agent_workflow_events
+           WHEN NEW.event_order IS NULL
+           BEGIN
+             UPDATE remote_agent_workflow_events
+             SET event_order = (
+               SELECT COALESCE(MAX(event_order), 0) + 1
+               FROM remote_agent_workflow_events
+             )
+             WHERE rowid = NEW.rowid;
+           END`
+      );
+    } catch (e: unknown) {
+      getLog().warn({ err: e as Error }, 'db.sqlite_migration_workflow_events_columns_failed');
+      allApplied = false;
     }
 
     // #1955: credential rows are vendor-keyed (claude→anthropic, codex→openai,
@@ -683,13 +722,15 @@ export class SqliteAdapter implements IDatabase {
         started_at TEXT DEFAULT (datetime('now')),
         completed_at TEXT,
         last_activity_at TEXT DEFAULT (datetime('now')),
-        working_path TEXT
+        working_path TEXT,
+        output_root TEXT
       );
 
       -- Workflow events table
       CREATE TABLE IF NOT EXISTS remote_agent_workflow_events (
         id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
         workflow_run_id TEXT NOT NULL REFERENCES remote_agent_workflow_runs(id) ON DELETE CASCADE,
+        event_order INTEGER,
         event_type TEXT NOT NULL,
         step_index INTEGER,
         step_name TEXT,
@@ -749,6 +790,13 @@ export class SqliteAdapter implements IDatabase {
       CREATE INDEX IF NOT EXISTS idx_workflow_node_checkpoints_run ON remote_agent_workflow_node_checkpoints(workflow_run_id);
       CREATE INDEX IF NOT EXISTS idx_workflow_node_checkpoints_run_node_epoch
         ON remote_agent_workflow_node_checkpoints(workflow_run_id, node_id, retry_epoch DESC);
+      -- NOTE: the idx_workflow_events_run_order index and the assign_order trigger
+      -- are deliberately NOT created here. Both reference event_order, which does
+      -- not exist on databases created before it was introduced — and CREATE INDEX
+      -- (or a TRIGGER body) referencing a missing column aborts this entire exec
+      -- block, so createSchema() throws before migrateColumns() can ever add the
+      -- column. That is exactly the failure the user_id index comment above warns
+      -- about. migrateColumns() creates both, after its ALTER TABLE, idempotently.
       CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON remote_agent_messages(conversation_id, created_at ASC);
       CREATE INDEX IF NOT EXISTS idx_workflow_node_sessions_scope ON remote_agent_workflow_node_sessions(scope_key);
       CREATE INDEX IF NOT EXISTS idx_workflow_node_sessions_workflow ON remote_agent_workflow_node_sessions(workflow_name);

@@ -421,12 +421,15 @@ nodes:
 
 ## Resume on Failure
 
-When a workflow fails, already-completed nodes are skipped on the next run:
+When a workflow fails, resume it explicitly to skip already-completed nodes:
 
 ```bash
 archon workflow run my-workflow --resume
+archon workflow resume <run-id>
 ```
 
+- `workflow run <name> --resume` selects the most recent resumable run for that workflow at the invocation cwd; `workflow resume <run-id>` targets a specific run and reuses its recorded working path/worktree
+- A bare `workflow run <name>` starts a fresh run
 - Nodes with `always_run: true` re-execute on resume anyway (use for fresh-state fetches)
 - **AI session context is NOT restored** — a resumed node that relied on in-session memory from a prior node starts fresh. Artifact-based handoff survives; in-context memory does not
 - Prior nodes' outputs (including structured-output field access) remain available to downstream nodes

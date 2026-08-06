@@ -121,3 +121,6 @@ skills-lock.json
 test-results/
 .archon/ralph/
 .ralph/logs/
+
+# Stray run logs from a mis-threaded logDir argument (see #2299) — never committed.
+main/

@@ -644,6 +644,7 @@ interface ToolResultEntry {
   toolName: string;
   toolOutput: string;
   toolCallId?: string;
+  toolOutcome: 'success' | 'error' | 'interrupted';
 }
 
 /** Bun-runnable JS extensions. `.ts`/`.tsx`/`.jsx` are excluded — the SDK has
@@ -801,6 +802,7 @@ function buildToolCaptureHooks(toolResultQueue: ToolResultEntry[]): Options['hoo
                 toolName,
                 toolOutput: output.length > maxLen ? output.slice(0, maxLen) + '...' : output,
                 ...(toolUseId !== undefined ? { toolCallId: toolUseId } : {}),
+                toolOutcome: 'success',
               });
             } catch (e) {
               getLog().error({ err: e, input }, 'claude.post_tool_use_hook_error');
@@ -828,6 +830,7 @@ function buildToolCaptureHooks(toolResultQueue: ToolResultEntry[]): Options['hoo
                 toolName,
                 toolOutput: `${prefix}: ${errorText}`,
                 ...(toolUseId !== undefined ? { toolCallId: toolUseId } : {}),
+                toolOutcome: isInterrupt ? 'interrupted' : 'error',
               });
             } catch (e) {
               getLog().error({ err: e, input }, 'claude.post_tool_use_failure_hook_error');
@@ -866,6 +869,7 @@ async function* streamClaudeMessages(
           toolName: tr.toolName,
           toolOutput: tr.toolOutput,
           ...(tr.toolCallId !== undefined ? { toolCallId: tr.toolCallId } : {}),
+          toolOutcome: tr.toolOutcome,
         };
       }
     }
@@ -1151,6 +1155,7 @@ async function* streamClaudeMessages(
         toolName: tr.toolName,
         toolOutput: tr.toolOutput,
         ...(tr.toolCallId !== undefined ? { toolCallId: tr.toolCallId } : {}),
+        toolOutcome: tr.toolOutcome,
       };
     }
   }

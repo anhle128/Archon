@@ -36,6 +36,8 @@ export const workflowEventRowSchema = z
     step_name: z.string().nullable(),
     data: z.record(z.string(), z.unknown()),
     created_at: z.string(),
+    // Null for lifecycle rows written before event ordering was introduced.
+    event_order: z.number().int().nullable().optional(),
   })
   .superRefine((row, ctx) => {
     if (row.event_type !== 'node_routed') return;

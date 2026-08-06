@@ -95,18 +95,19 @@ Three possibilities:
 
 ### Workflow fails mid-way; how do I resume?
 
-Resume is explicit. Use `--resume` for the most recent failed run at this cwd, or
-target a specific run id:
+Resume is explicit.
+Find the failed or paused run and resume that exact run to reuse its recorded working path/worktree:
 
 ```bash
-archon workflow run my-workflow --resume "original message"
+archon workflow runs
+archon workflow get <run-id>
 archon workflow resume <run-id>
 # → "Resuming workflow — skipping N already-completed node(s)"
 ```
 
-Plain `archon workflow run my-workflow "original message"` starts fresh. If one failed
-DAG node should run again while preserving successful upstream/sibling outputs, use
-manual node retry instead:
+As a convenience, `archon workflow run my-workflow --resume` resumes the most recent resumable run for that workflow at the invocation cwd.
+A bare `archon workflow run my-workflow` starts a fresh run.
+If one failed DAG node should run again while preserving successful upstream and sibling outputs, use manual node retry:
 
 ```bash
 archon workflow get <run-id> --verbose --json

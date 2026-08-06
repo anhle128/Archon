@@ -89,7 +89,7 @@ interface NodeStartedEvent {
   model?: string; // resolved model string (absent for bash/script nodes)
   tier?: 'small' | 'medium' | 'large'; // only set when node.model was a tier keyword
   modelReasoningEffort?: string;
-  effort?: string;
+  effort?: string; // resolved AI effort (absent when unset or unsupported)
   thinking?: ThinkingConfig;
 }
 
@@ -133,6 +133,7 @@ interface ToolStartedEvent {
   runId: string;
   toolName: string;
   stepName: string;
+  toolCallId: string;
 }
 
 interface ToolCompletedEvent {
@@ -141,6 +142,9 @@ interface ToolCompletedEvent {
   toolName: string;
   stepName: string;
   durationMs: number;
+  toolCallId: string;
+  toolOutcome?: 'success' | 'error' | 'interrupted' | 'unknown';
+  exitCode?: number;
 }
 
 interface ApprovalPendingEvent {

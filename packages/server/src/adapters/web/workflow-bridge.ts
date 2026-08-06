@@ -127,6 +127,7 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         runId: event.runId,
         toolName: event.toolName,
         stepName: event.stepName,
+        toolCallId: event.toolCallId,
         status: 'started',
         timestamp: Date.now(),
       });
@@ -137,8 +138,11 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         runId: event.runId,
         toolName: event.toolName,
         stepName: event.stepName,
+        toolCallId: event.toolCallId,
         status: 'completed',
         durationMs: event.durationMs,
+        toolOutcome: event.toolOutcome,
+        exitCode: event.exitCode,
         timestamp: Date.now(),
       });
 

@@ -2603,7 +2603,7 @@ export interface paths {
         };
         /**
          * List a run's artifact files
-         * @description Walks the run's artifact directory and returns relative file paths with size + mtime. Drives the console Artifacts tab. Returns `{ files: [] }` when the run has no codebase or the codebase name is not in `owner/repo` form.
+         * @description Walks the run's artifact directory and returns relative file paths with size + mtime. Drives the console Artifacts tab. Resolves for every project kind — `owner/repo`, `_local/<basename>`, and `_folder/<slug>` — preferring the run's persisted `output_root` and re-deriving from the codebase when it is absent or no longer inside ARCHON_HOME. Returns `{ files: [] }` only when the location resolved and the run genuinely wrote nothing; returns 404 when the output location cannot be resolved at all.
          */
         get: {
             parameters: {
@@ -3374,6 +3374,7 @@ export interface components {
         WorkflowListEntry: {
             workflow: components["schemas"]["WorkflowDefinition"];
             source: components["schemas"]["WorkflowSource"];
+            parseWarnings?: string[];
         };
         WorkflowDefinition: {
             name: string;
@@ -3740,6 +3741,17 @@ export interface components {
             input?: string;
             /** @enum {string} */
             isolation?: "inherit" | "worktree";
+            fan_out?: {
+                items: string;
+                as?: string;
+                /** @default 5 */
+                max_parallel: number;
+                /**
+                 * @default all_done
+                 * @enum {string}
+                 */
+                join: "all_success" | "all_done" | "first_success";
+            };
             with?: unknown;
             script?: string;
             /** @enum {string} */
@@ -3786,6 +3798,7 @@ export interface components {
             working_path: string | null;
             user_id: string | null;
             parent_run_id: string | null;
+            output_root: string | null;
             codebase_name: string | null;
             platform_type: string | null;
             worker_platform_id: string | null;
@@ -3846,6 +3859,7 @@ export interface components {
             working_path: string | null;
             user_id: string | null;
             parent_run_id: string | null;
+            output_root: string | null;
         };
         WorkflowRunByWorkerResponse: {
             run: components["schemas"]["WorkflowRun"];
@@ -3882,6 +3896,7 @@ export interface components {
             };
             /** Format: date-time */
             created_at: string;
+            event_order?: number | null;
         } | {
             id: string;
             workflow_run_id: string;
@@ -3893,6 +3908,7 @@ export interface components {
             };
             /** Format: date-time */
             created_at: string;
+            event_order?: number | null;
         };
         WorkflowNodeState: {
             nodeId: string;

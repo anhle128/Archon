@@ -159,9 +159,14 @@ export function makeRouteLoopWorkflow(
 /** Wrap a WorkflowDefinition as a WorkflowWithSource entry for test mocks. */
 export function makeTestWorkflowWithSource(
   overrides: TestWorkflowOverrides,
-  source: WorkflowSource = 'bundled'
+  source: WorkflowSource = 'bundled',
+  parseWarnings?: readonly string[]
 ): WorkflowWithSource {
-  return { workflow: makeTestWorkflow(overrides), source };
+  return {
+    workflow: makeTestWorkflow(overrides),
+    source,
+    ...(parseWarnings ? { parseWarnings } : {}),
+  };
 }
 
 export function makeRouteLoopWorkflowWithSource(

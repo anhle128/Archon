@@ -280,6 +280,7 @@ describe('core schemas', () => {
       last_activity_at: new Date(),
       working_path: null,
       user_id: null,
+      output_root: null,
       // dashboard extensions
       codebase_name: 'my-repo',
       platform_type: 'web',

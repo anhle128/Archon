@@ -193,6 +193,14 @@ function scanForForbiddenKeys(value: unknown, path: string[] = []): string[] {
   return hits;
 }
 
+function spyOnJsonStdout(): ReturnType<typeof spyOn> {
+  return spyOn(process.stdout, 'write').mockImplementation((...args: unknown[]) => {
+    const callback = args.find(arg => typeof arg === 'function');
+    if (typeof callback === 'function') (callback as () => void)();
+    return true;
+  });
+}
+
 describe('3.3B-CONTRACT-036 [P0] forbidden-key scan on parsed emitted envelopes (R-008, R-016)', () => {
   test('a workflow.start success envelope parses as a real envelope and contains no forbidden key', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
@@ -211,30 +219,30 @@ describe('3.3B-CONTRACT-036 [P0] forbidden-key scan on parsed emitted envelopes 
       metadata: {},
     });
 
-    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const stdoutSpy = spyOnJsonStdout();
     try {
       await workflowRunCommand('/test/path', 'assist', 'hello', { json: true, noWorktree: true });
-      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const raw = String((stdoutSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
       const envelope = JSON.parse(raw) as Record<string, unknown>;
       expect(envelope.success).toBe(true);
       expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
       expect(scanForForbiddenKeys(envelope)).toEqual([]);
     } finally {
-      consoleSpy.mockRestore();
+      stdoutSpy.mockRestore();
     }
   });
 
   test('a workflow.status not-found envelope parses as a real envelope and contains no forbidden key', async () => {
-    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const stdoutSpy = spyOnJsonStdout();
     try {
       await workflowGetCommand('does-not-exist', true);
-      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const raw = String((stdoutSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
       const envelope = JSON.parse(raw) as Record<string, unknown>;
       expect(envelope.success).toBe(false);
       expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
       expect(scanForForbiddenKeys(envelope)).toEqual([]);
     } finally {
-      consoleSpy.mockRestore();
+      stdoutSpy.mockRestore();
     }
   });
 
@@ -282,10 +290,10 @@ describe('3.3B-CONTRACT-036 [P0] forbidden-key scan on parsed emitted envelopes 
       },
     ]);
 
-    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const stdoutSpy = spyOnJsonStdout();
     try {
-      await workflowGetCommand('test-run-verbose', true, true);
-      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      await workflowGetCommand('test-run-verbose', true, true, undefined, undefined, true);
+      const raw = String((stdoutSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
       const envelope = JSON.parse(raw) as Record<string, unknown>;
       expect(envelope.success).toBe(true);
       expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
@@ -299,7 +307,7 @@ describe('3.3B-CONTRACT-036 [P0] forbidden-key scan on parsed emitted envelopes 
       expect(JSON.stringify(events[2])).not.toContain('strip from array object');
       expect(JSON.stringify(events[2])).not.toContain('strip deeply');
     } finally {
-      consoleSpy.mockRestore();
+      stdoutSpy.mockRestore();
     }
   });
 });
@@ -335,17 +343,17 @@ describe('3.3B-CONTRACT-037 [P1] fixture conformance with the documented field d
       metadata: {},
     });
 
-    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const stdoutSpy = spyOnJsonStdout();
     try {
       await workflowRunCommand('/test/path', 'assist', 'hello', { json: true, noWorktree: true });
-      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const raw = String((stdoutSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
       // Genuinely red today: JSON.parse throws on today's human-text stdout.
       const envelope = JSON.parse(raw) as Record<string, unknown>;
       const result = (envelope.result ?? {}) as Record<string, unknown>;
       expect('phase' in result).toBe(false);
       expect('projectBindingRef' in result).toBe(false);
     } finally {
-      consoleSpy.mockRestore();
+      stdoutSpy.mockRestore();
     }
   });
 });
@@ -445,16 +453,16 @@ describe('3.3C-CONTRACT-001 [P0] forbidden-key scan on approve/reject envelopes 
       metadata: { approval: { type: 'approval', nodeId: 'gate', resolved: 'approved' } },
     });
 
-    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const stdoutSpy = spyOnJsonStdout();
     try {
       await workflowApproveCommand('run-contract-ap', 'lgtm', true);
-      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const raw = String((stdoutSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
       const envelope = JSON.parse(raw) as Record<string, unknown>;
       expect(envelope.success).toBe(true);
       expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
       expect(scanForForbiddenKeys(envelope)).toEqual([]);
     } finally {
-      consoleSpy.mockRestore();
+      stdoutSpy.mockRestore();
     }
   });
 
@@ -463,16 +471,16 @@ describe('3.3C-CONTRACT-001 [P0] forbidden-key scan on approve/reject envelopes 
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
 
-    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const stdoutSpy = spyOnJsonStdout();
     try {
       await workflowApproveCommand('nonexistent', undefined, true);
-      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const raw = String((stdoutSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
       const envelope = JSON.parse(raw) as Record<string, unknown>;
       expect(envelope.success).toBe(false);
       expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
       expect(scanForForbiddenKeys(envelope)).toEqual([]);
     } finally {
-      consoleSpy.mockRestore();
+      stdoutSpy.mockRestore();
     }
   });
 
@@ -497,16 +505,16 @@ describe('3.3C-CONTRACT-001 [P0] forbidden-key scan on approve/reject envelopes 
       metadata: {},
     });
 
-    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const stdoutSpy = spyOnJsonStdout();
     try {
       await workflowRejectCommand('run-contract-rj', 'nope', true);
-      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const raw = String((stdoutSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
       const envelope = JSON.parse(raw) as Record<string, unknown>;
       expect(envelope.success).toBe(true);
       expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
       expect(scanForForbiddenKeys(envelope)).toEqual([]);
     } finally {
-      consoleSpy.mockRestore();
+      stdoutSpy.mockRestore();
     }
   });
 
@@ -515,16 +523,16 @@ describe('3.3C-CONTRACT-001 [P0] forbidden-key scan on approve/reject envelopes 
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
 
-    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const stdoutSpy = spyOnJsonStdout();
     try {
       await workflowRejectCommand('nonexistent-rj', 'nope', true);
-      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const raw = String((stdoutSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
       const envelope = JSON.parse(raw) as Record<string, unknown>;
       expect(envelope.success).toBe(false);
       expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
       expect(scanForForbiddenKeys(envelope)).toEqual([]);
     } finally {
-      consoleSpy.mockRestore();
+      stdoutSpy.mockRestore();
     }
   });
 });
@@ -572,16 +580,16 @@ describe('3.3C-CONTRACT-002 [P1] fixture delta documentation (AC #1, W-3.3C-001)
       metadata: { approval: { type: 'approval', nodeId: 'gate', resolved: 'approved' } },
     });
 
-    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const stdoutSpy = spyOnJsonStdout();
     try {
       await workflowApproveCommand('run-delta-ap', undefined, true);
-      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const raw = String((stdoutSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
       const envelope = JSON.parse(raw) as Record<string, unknown>;
       const result = (envelope.result ?? {}) as Record<string, unknown>;
       const decision = (result.decision ?? {}) as Record<string, unknown>;
       expect('gateId' in decision).toBe(false);
     } finally {
-      consoleSpy.mockRestore();
+      stdoutSpy.mockRestore();
     }
   });
 
@@ -606,15 +614,15 @@ describe('3.3C-CONTRACT-002 [P1] fixture delta documentation (AC #1, W-3.3C-001)
       metadata: {},
     });
 
-    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const stdoutSpy = spyOnJsonStdout();
     try {
       await workflowRejectCommand('run-delta-rj', 'nope', true);
-      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const raw = String((stdoutSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
       const envelope = JSON.parse(raw) as Record<string, unknown>;
       const result = (envelope.result ?? {}) as Record<string, unknown>;
       expect('nextPhase' in result).toBe(false);
     } finally {
-      consoleSpy.mockRestore();
+      stdoutSpy.mockRestore();
     }
   });
 });
@@ -679,15 +687,15 @@ describe('3.3C-CONTRACT-005 [P0] runtime envelope JSON Schema validation via con
       metadata: { approval: { type: 'approval', nodeId: 'gate', resolved: 'approved' } },
     });
 
-    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const stdoutSpy = spyOnJsonStdout();
     try {
       await workflowApproveCommand('run-schema-ap', 'lgtm', true);
-      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const raw = String((stdoutSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
       const envelope = JSON.parse(raw) as Record<string, unknown>;
       const errors = await validateRuntimeEnvelope(envelope);
       expect(errors).toEqual([]);
     } finally {
-      consoleSpy.mockRestore();
+      stdoutSpy.mockRestore();
     }
   });
 
@@ -695,15 +703,15 @@ describe('3.3C-CONTRACT-005 [P0] runtime envelope JSON Schema validation via con
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
 
-    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const stdoutSpy = spyOnJsonStdout();
     try {
       await workflowApproveCommand('nonexistent-schema', undefined, true);
-      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const raw = String((stdoutSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
       const envelope = JSON.parse(raw) as Record<string, unknown>;
       const errors = await validateRuntimeEnvelope(envelope);
       expect(errors).toEqual([]);
     } finally {
-      consoleSpy.mockRestore();
+      stdoutSpy.mockRestore();
     }
   });
 
@@ -727,15 +735,15 @@ describe('3.3C-CONTRACT-005 [P0] runtime envelope JSON Schema validation via con
       metadata: {},
     });
 
-    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const stdoutSpy = spyOnJsonStdout();
     try {
       await workflowRejectCommand('run-schema-rj', 'nope', true);
-      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const raw = String((stdoutSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
       const envelope = JSON.parse(raw) as Record<string, unknown>;
       const errors = await validateRuntimeEnvelope(envelope);
       expect(errors).toEqual([]);
     } finally {
-      consoleSpy.mockRestore();
+      stdoutSpy.mockRestore();
     }
   });
 
@@ -743,15 +751,15 @@ describe('3.3C-CONTRACT-005 [P0] runtime envelope JSON Schema validation via con
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
 
-    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const stdoutSpy = spyOnJsonStdout();
     try {
       await workflowRejectCommand('nonexistent-schema-rj', 'nope', true);
-      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const raw = String((stdoutSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
       const envelope = JSON.parse(raw) as Record<string, unknown>;
       const errors = await validateRuntimeEnvelope(envelope);
       expect(errors).toEqual([]);
     } finally {
-      consoleSpy.mockRestore();
+      stdoutSpy.mockRestore();
     }
   });
 });
@@ -804,16 +812,16 @@ describe('3.3D-CONTRACT-001 [P0] forbidden-key scan on recovery envelopes (AC #1
       metadata: {},
     });
 
-    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const stdoutSpy = spyOnJsonStdout();
     try {
       await workflowResumeCommand('run-contract-rs', true);
-      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const raw = String((stdoutSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
       const envelope = JSON.parse(raw) as Record<string, unknown>;
       expect(envelope.success).toBe(true);
       expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
       expect(scanForForbiddenKeys(envelope)).toEqual([]);
     } finally {
-      consoleSpy.mockRestore();
+      stdoutSpy.mockRestore();
     }
   });
 
@@ -821,16 +829,16 @@ describe('3.3D-CONTRACT-001 [P0] forbidden-key scan on recovery envelopes (AC #1
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
 
-    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const stdoutSpy = spyOnJsonStdout();
     try {
       await workflowResumeCommand('nonexistent-contract', true);
-      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const raw = String((stdoutSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
       const envelope = JSON.parse(raw) as Record<string, unknown>;
       expect(envelope.success).toBe(false);
       expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
       expect(scanForForbiddenKeys(envelope)).toEqual([]);
     } finally {
-      consoleSpy.mockRestore();
+      stdoutSpy.mockRestore();
     }
   });
 
@@ -851,18 +859,18 @@ describe('3.3D-CONTRACT-001 [P0] forbidden-key scan on recovery envelopes (AC #1
       unref: mock(() => undefined),
     } as unknown as ReturnType<typeof mockChildProcessSpawn>);
 
-    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const stdoutSpy = spyOnJsonStdout();
     try {
       const { workflowRetryCommand } = await import('./workflow');
       await workflowRetryCommand('run-contract-rt', undefined, true);
-      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const raw = String((stdoutSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
       const envelope = JSON.parse(raw) as Record<string, unknown>;
       expect(envelope.success).toBe(true);
       expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
       expect(scanForForbiddenKeys(envelope)).toEqual([]);
     } finally {
       mockChildProcessSpawn.mockReset();
-      consoleSpy.mockRestore();
+      stdoutSpy.mockRestore();
     }
   });
 
@@ -880,17 +888,17 @@ describe('3.3D-CONTRACT-001 [P0] forbidden-key scan on recovery envelopes (AC #1
       cancelled: true,
     });
 
-    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const stdoutSpy = spyOnJsonStdout();
     try {
       const { workflowCancelCommand } = await import('./workflow');
       await workflowCancelCommand('run-contract-cn', true);
-      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const raw = String((stdoutSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
       const envelope = JSON.parse(raw) as Record<string, unknown>;
       expect(envelope.success).toBe(true);
       expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
       expect(scanForForbiddenKeys(envelope)).toEqual([]);
     } finally {
-      consoleSpy.mockRestore();
+      stdoutSpy.mockRestore();
     }
   });
 });
@@ -954,16 +962,16 @@ describe('3.3D-CONTRACT-002 [P1] fixture delta documentation (AC #1, #4)', () =>
       metadata: {},
     });
 
-    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const stdoutSpy = spyOnJsonStdout();
     try {
       await workflowResumeCommand('run-delta-rs', true);
-      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const raw = String((stdoutSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
       const envelope = JSON.parse(raw) as Record<string, unknown>;
       const result = (envelope.result ?? {}) as Record<string, unknown>;
       expect('phase' in result).toBe(false);
       expect('projectBindingRef' in result).toBe(false);
     } finally {
-      consoleSpy.mockRestore();
+      stdoutSpy.mockRestore();
     }
   });
 });
@@ -1012,15 +1020,15 @@ describe('3.3D-CONTRACT-006 [P0] runtime envelope JSON Schema validation via con
       metadata: {},
     });
 
-    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const stdoutSpy = spyOnJsonStdout();
     try {
       await workflowResumeCommand('run-schema-rs', true);
-      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const raw = String((stdoutSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
       const envelope = JSON.parse(raw) as Record<string, unknown>;
       const errors = await validateRuntimeEnvelope(envelope);
       expect(errors).toEqual([]);
     } finally {
-      consoleSpy.mockRestore();
+      stdoutSpy.mockRestore();
     }
   });
 
@@ -1028,15 +1036,15 @@ describe('3.3D-CONTRACT-006 [P0] runtime envelope JSON Schema validation via con
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
 
-    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const stdoutSpy = spyOnJsonStdout();
     try {
       await workflowResumeCommand('nonexistent-schema-rs', true);
-      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const raw = String((stdoutSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
       const envelope = JSON.parse(raw) as Record<string, unknown>;
       const errors = await validateRuntimeEnvelope(envelope);
       expect(errors).toEqual([]);
     } finally {
-      consoleSpy.mockRestore();
+      stdoutSpy.mockRestore();
     }
   });
 
@@ -1057,18 +1065,18 @@ describe('3.3D-CONTRACT-006 [P0] runtime envelope JSON Schema validation via con
       unref: mock(() => undefined),
     } as unknown as ReturnType<typeof mockChildProcessSpawn>);
 
-    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const stdoutSpy = spyOnJsonStdout();
     try {
       const { workflowRetryCommand } = await import('./workflow');
       await workflowRetryCommand('run-schema-rt', undefined, true);
-      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const raw = String((stdoutSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
       const envelope = JSON.parse(raw) as Record<string, unknown>;
       expect(envelope.success).toBe(true);
       const errors = await validateRuntimeEnvelope(envelope);
       expect(errors).toEqual([]);
     } finally {
       mockChildProcessSpawn.mockReset();
-      consoleSpy.mockRestore();
+      stdoutSpy.mockRestore();
     }
   });
 
@@ -1086,16 +1094,16 @@ describe('3.3D-CONTRACT-006 [P0] runtime envelope JSON Schema validation via con
       cancelled: true,
     });
 
-    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const stdoutSpy = spyOnJsonStdout();
     try {
       const { workflowCancelCommand } = await import('./workflow');
       await workflowCancelCommand('run-schema-cn', true);
-      const raw = String((consoleSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
+      const raw = String((stdoutSpy.mock.calls[0] as unknown[] | undefined)?.[0]);
       const envelope = JSON.parse(raw) as Record<string, unknown>;
       const errors = await validateRuntimeEnvelope(envelope);
       expect(errors).toEqual([]);
     } finally {
-      consoleSpy.mockRestore();
+      stdoutSpy.mockRestore();
     }
   });
 });

@@ -5,7 +5,12 @@
     "declaration": false,
     "declarationMap": false,
     "sourceMap": false,
-    "types": ["bun-types"]
+    "types": ["bun-types"],
+    "baseUrl": "..",
+    "paths": {
+      "@archon/paths": ["packages/paths/src/index.ts"],
+      "@archon/core/*": ["packages/core/src/*"]
+    }
   },
   "include": ["*.ts"]
 }
