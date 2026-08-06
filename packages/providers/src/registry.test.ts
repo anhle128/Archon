@@ -15,6 +15,7 @@ import { registerPiProvider } from './community/pi/registration';
 import { registerCopilotProvider } from './community/copilot/registration';
 import { registerOpencodeProvider } from './community/opencode/registration';
 import { registerQoderCliProvider } from './community/qodercli/registration';
+import { registerOmpProvider } from './community/omp/registration';
 import { UnknownProviderError } from './errors';
 import type { ProviderRegistration, IAgentProvider, ProviderCapabilities } from './types';
 
@@ -262,6 +263,7 @@ describe('registry', () => {
       expect(isRegisteredProvider('pi')).toBe(true);
       expect(isRegisteredProvider('copilot')).toBe(true);
       expect(isRegisteredProvider('qodercli')).toBe(true);
+      expect(isRegisteredProvider('omp')).toBe(true);
     });
 
     test('is idempotent', () => {
@@ -271,10 +273,12 @@ describe('registry', () => {
       const piCount = getRegisteredProviders().filter(p => p.id === 'pi').length;
       const copilotCount = getRegisteredProviders().filter(p => p.id === 'copilot').length;
       const qoderCliCount = getRegisteredProviders().filter(p => p.id === 'qodercli').length;
+      const ompCount = getRegisteredProviders().filter(p => p.id === 'omp').length;
       expect(opencodeCount).toBe(1);
       expect(piCount).toBe(1);
       expect(copilotCount).toBe(1);
       expect(qoderCliCount).toBe(1);
+      expect(ompCount).toBe(1);
     });
   });
 
@@ -477,6 +481,36 @@ describe('registry', () => {
         .map(p => p.id)
         .sort();
       expect(ids).toEqual(['claude', 'codex', 'qodercli']);
+    });
+  });
+
+  describe('registerOmpProvider (community provider)', () => {
+    test('registers OMP with the wired capabilities and no Archon credential catalog', () => {
+      registerOmpProvider();
+      const registration = getRegistration('omp');
+      expect(registration.displayName).toBe('OMP CLI');
+      expect(registration.builtIn).toBe(false);
+      expect(registration.credentials).toEqual({ kind: 'static', specs: [] });
+      expect(getProviderCapabilities('omp')).toMatchObject({
+        sessionResume: true,
+        skills: true,
+        structuredOutput: 'best-effort',
+        envInjection: true,
+        effortControl: true,
+        thinkingControl: true,
+        mcp: false,
+        hooks: false,
+        agents: false,
+        toolRestrictions: false,
+        nativeTools: false,
+        containerExec: false,
+      });
+    });
+
+    test('is idempotent and does not collide with built-ins', () => {
+      registerOmpProvider();
+      expect(() => registerOmpProvider()).not.toThrow();
+      expect(getRegisteredProviders().filter(provider => provider.id === 'omp')).toHaveLength(1);
     });
   });
 });

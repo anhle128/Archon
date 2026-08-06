@@ -21,6 +21,7 @@ import { registerCopilotProvider } from './community/copilot/registration';
 import { registerOpencodeProvider } from './community/opencode/registration';
 import { registerPiProvider } from './community/pi/registration';
 import { registerQoderCliProvider } from './community/qodercli/registration';
+import { registerOmpProvider } from './community/omp/registration';
 import { UnknownProviderError } from './errors';
 import { instrumentProvider } from './observability';
 import { createLogger } from '@archon/paths';
@@ -182,6 +183,7 @@ export function registerCommunityProviders(): void {
   registerPiProvider();
   registerCopilotProvider();
   registerQoderCliProvider();
+  registerOmpProvider();
 }
 
 /** @internal Test-only — clears the registry. Not for production use. */

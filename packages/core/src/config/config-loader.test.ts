@@ -1052,6 +1052,25 @@ assistants:
       expect(safe.assistants.qodercli).not.toHaveProperty('configDir');
     });
 
+    test('exposes only safe OMP assistant fields', async () => {
+      mockFsReadFile.mockResolvedValue(`
+assistants:
+  omp:
+    model: openai-codex/gpt-5.6-sol
+    modelReasoningEffort: high
+    enableExtensions: true
+    ompBinaryPath: /sensitive/omp
+`);
+      const config = await loadConfig();
+      const safe = toSafeConfig(config);
+      expect(safe.assistants.omp).toEqual({
+        model: 'openai-codex/gpt-5.6-sol',
+        modelReasoningEffort: 'high',
+        enableExtensions: true,
+      });
+      expect(safe.assistants.omp).not.toHaveProperty('ompBinaryPath');
+    });
+
     test('preserves non-sensitive fields', async () => {
       mockFsReadFile.mockResolvedValue('defaultAssistant: codex');
       const config = await loadConfig();

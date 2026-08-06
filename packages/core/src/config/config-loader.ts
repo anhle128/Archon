@@ -145,6 +145,7 @@ const SAFE_ASSISTANT_FIELDS: Record<string, readonly string[]> = {
   pi: ['model'],
   copilot: ['model'],
   qodercli: ['model', 'modelReasoningEffort', 'permissionMode', 'outputFormat'],
+  omp: ['model', 'modelReasoningEffort', 'enableExtensions'],
 };
 
 function toSafeAssistantDefaults(assistants: AssistantDefaults): SafeConfig['assistants'] {

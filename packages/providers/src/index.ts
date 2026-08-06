@@ -120,3 +120,20 @@ export {
   isExecutableFile as qoderCliIsExecutableFile,
   resolveFromPath as qoderCliResolveFromPath,
 } from './community/qodercli/binary-resolver';
+
+export {
+  OMP_CAPABILITIES,
+  OmpEventParser,
+  OmpProvider,
+  buildOmpArgs,
+  parseOmpConfig,
+  registerOmpProvider,
+  type OmpProcess,
+  type OmpProviderDefaults,
+  type OmpSpawner,
+} from './community/omp';
+export {
+  resolveOmpBinaryPath,
+  isExecutableFile as ompIsExecutableFile,
+  resolveFromPath as ompResolveFromPath,
+} from './community/omp/binary-resolver';
