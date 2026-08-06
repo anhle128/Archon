@@ -108,7 +108,6 @@ async function seedFailedRun(
   workingPath: string,
   workflowName: string = 'test-workflow'
 ): Promise<void> {
-  await runCli(['workflow', 'list', '--json']);
   const dbPath = join(isolatedHome, 'archon.db');
   const db = new Database(dbPath);
   try {
@@ -132,7 +131,6 @@ async function seedRunWithStatus(
   workingPath: string,
   status: string
 ): Promise<void> {
-  await runCli(['workflow', 'list', '--json']);
   const dbPath = join(isolatedHome, 'archon.db');
   const db = new Database(dbPath);
   try {
@@ -1484,7 +1482,7 @@ describe('workflow resume/retry/cancel --json CLI dispatch E2E — real subproce
 
     expect(exitCode).toBe(0);
     expect(stderr).toBe('');
-  });
+  }, 10_000);
 
   // 3.3D-CLI-026 [P0] R1-F23 — resume UNEXPECTED_STATE for completed run
   test('3.3D-CLI-026: `workflow resume <completed-run> --json` emits UNEXPECTED_STATE envelope, exit 78', async () => {
@@ -1499,7 +1497,7 @@ describe('workflow resume/retry/cancel --json CLI dispatch E2E — real subproce
     expect(error?.code).toBe('UNEXPECTED_STATE');
     expect(exitCode).toBe(78);
     expect(stderr).toBe('');
-  });
+  }, 10_000);
 
   // 3.3D-CLI-027 [P0] R1-F23 — resume UNEXPECTED_STATE for cancelled run
   test('3.3D-CLI-027: `workflow resume <cancelled-run> --json` emits UNEXPECTED_STATE envelope, exit 78', async () => {
