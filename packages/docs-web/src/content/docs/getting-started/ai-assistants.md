@@ -1,6 +1,6 @@
 ---
 title: AI Assistants
-description: Configure Claude Code, Codex, Qoder CLI, OpenCode, GitHub Copilot, and Pi as AI assistants for Archon.
+description: Configure Claude Code, Codex, Qoder CLI, OMP CLI, OpenCode, GitHub Copilot, and Pi as AI assistants for Archon.
 category: getting-started
 area: clients
 audience: [user]
@@ -21,7 +21,7 @@ When a workflow node sets `output_format`, the guarantee level depends on the pr
 | Provider | Tier | How it works | On a validation miss |
 |----------|------|--------------|----------------------|
 | Claude, Codex, OpenCode | **enforced** | The SDK/backend grammar-constrains decoding (`output_config.format` / `outputSchema` / `format:{json_schema}`). | The node **fails** — a refusal or `max_tokens` truncation can still bypass grammar enforcement, so the parsed output is validated post-parse for these too. No reask (a failure here is a genuine edge). |
-| Pi, Copilot, Qoder CLI | **best-effort** | The schema is appended to the prompt; JSON is extracted from the response and structurally repaired (trailing commas, single quotes, truncated tails). | The executor re-asks (prompt + the schema errors) up to **3×**; if still invalid, the node **fails loudly**. |
+| Pi, Copilot, Qoder CLI, OMP CLI | **best-effort** | The schema is appended to the prompt; JSON is extracted from the response and structurally repaired (trailing commas, single quotes, truncated tails). | The executor re-asks (prompt + the schema errors) up to **3×**; if still invalid, the node **fails loudly**. |
 
 In all cases the parsed output is **validated against your `output_format` schema** before downstream nodes see it, and a node that declares `output_format` but produces no schema-valid output **fails** rather than silently degrading. See [Authoring Workflows → `output_format`](/guides/authoring-workflows/#output_format-for-structured-json) for field-access (`$node.output.field`) semantics.
 
@@ -315,6 +315,72 @@ tiers:
 
 Qoder structured output is best-effort.
 Archon appends the JSON schema instruction to the prompt, parses the final CLI output, and validates it before downstream nodes can read it.
+
+## OMP CLI (Community Provider)
+
+**CLI-backed community provider.**
+Archon invokes a user-installed `omp` executable once per turn in newline-delimited JSON mode.
+OMP owns model discovery, authentication, and persisted session files under its normal configuration roots.
+
+### Install and authenticate
+
+Install OMP through one of its supported methods:
+
+```bash
+curl -fsSL https://omp.sh/install | sh
+# or
+brew install can1357/tap/omp
+# or
+bun install -g @oh-my-pi/pi-coding-agent
+```
+
+Run `omp setup` or start `omp` interactively, select a default model, and complete `/login` for that model's upstream provider.
+Confirm the executable is available:
+
+```bash
+omp --version
+```
+
+### Binary path configuration
+
+Archon resolves `OMP_BIN_PATH`, then `assistants.omp.ompBinaryPath`, then OMP's native, Bun, Homebrew, system, and PATH install locations.
+`ompBinaryPath` is a private server-side configuration field.
+
+```ini
+OMP_BIN_PATH=/absolute/path/to/omp
+```
+
+```yaml
+assistants:
+  omp:
+    ompBinaryPath: /absolute/path/to/omp
+```
+
+### Configuration
+
+```yaml
+assistants:
+  omp:
+    model: openai-codex/gpt-5.6-sol
+    modelReasoningEffort: high
+    enableExtensions: false
+```
+
+`model` maps unchanged to `omp --model`.
+`modelReasoningEffort` is the legacy provider default for `omp --thinking`; a resolved tier, alias, workflow, or node `effort` takes precedence.
+String `thinking` values, including `off` and `auto`, also map to `omp --thinking`.
+Per-node `skills` names map to OMP's `--skills` filter and can select skills discovered from `.agents/skills` and OMP's other configured roots.
+
+Archon passes `--yolo` because workflow and remote-chat turns are non-interactive.
+The OMP process therefore has the same working-directory permissions as Archon and should normally run inside Archon's worktree isolation.
+
+Project and user extension discovery is disabled by default because OMP extensions are executable code.
+Set `enableExtensions: true` only when the OMP extension roots and the target repository are trusted.
+
+OMP structured output is best-effort.
+Archon appends the JSON schema instruction, parses the final assistant text, validates it, and lets the existing workflow reask loop handle schema misses.
+
+Archon's per-node `mcp`, `hooks`, `agents`, and tool-restriction fields are not translated in this version even though OMP has its own nearby features and configuration files.
 
 ## OpenCode (Community Provider)
 

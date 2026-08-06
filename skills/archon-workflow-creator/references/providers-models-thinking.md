@@ -19,6 +19,8 @@ Common registered provider IDs in this Archon version:
 - `pi`
 - `opencode`
 - `copilot`
+- `qodercli`
+- `omp`
 
 Provider identity is validated at workflow load time.
 Model strings are not validated by Archon and pass through to provider SDKs.
@@ -33,6 +35,8 @@ Always run local validation because community providers can change.
 | `pi`       | yes            | no  | no    | yes                  | no     | yes               | best-effort       | yes                                     |
 | `opencode` | yes            | yes | yes   | yes                  | yes    | yes               | enforced          | use OpenCode agent config               |
 | `copilot`  | yes            | yes | no    | yes                  | yes    | yes               | best-effort       | yes                                     |
+| `qodercli` | yes            | yes | no    | no                   | no     | yes               | best-effort       | yes                                     |
+| `omp`      | yes            | no  | no    | filtered discovery   | no     | no                | best-effort       | yes                                     |
 
 The DAG executor sends user-visible warnings when a node sets fields unsupported by the resolved provider.
 Treat those warnings as authoring failures unless the ignored behavior is intentional.
@@ -69,6 +73,10 @@ assistants:
   copilot:
     model: gpt-5
     modelReasoningEffort: high
+  omp:
+    model: openai-codex/gpt-5.6-sol
+    modelReasoningEffort: high
+    enableExtensions: false
 
 tiers:
   large: { provider: claude, model: opus }
@@ -286,6 +294,23 @@ Qoder CLI 1.0.x documents `low`, `medium`, `high`, and `max`; use `max` for its 
 
 `assistants.qodercli.modelReasoningEffort` remains a legacy provider default when no more specific effort is set.
 
+## OMP CLI
+
+Use OMP for a user-installed CLI that owns its authentication, model setup, and persisted sessions.
+Set `provider: omp` and pass a provider-owned model reference through unchanged.
+Archon passes raw `effort` and string `thinking` values, including `off` and `auto`, to OMP's `--thinking` flag.
+OMP resumes persisted sessions when Archon supplies a session ID.
+Per-node `skills` filters OMP skill discovery through `--skills`.
+Project and user extensions are executable code and disabled by default; set `assistants.omp.enableExtensions: true` only for trusted extension roots and repositories.
+OMP does not translate Archon `mcp`, `hooks`, `agents`, or tool-restriction node fields.
+
+```yaml
+provider: omp
+model: openai-codex/gpt-5.6-sol
+effort: high
+skills: [archon]
+```
+
 ## OpenCode
 
 Use OpenCode when the project is already configured for OpenCode or models.dev style providers.
@@ -360,6 +385,8 @@ Structured output support:
 | `opencode` | Enforced by backend and validated by Archon.                        |
 | `pi`       | Best-effort JSON prompt, repair, reask up to 3 attempts, then fail. |
 | `copilot`  | Best-effort JSON prompt, repair, reask up to 3 attempts, then fail. |
+| `qodercli` | Best-effort JSON prompt, repair, reask up to 3 attempts, then fail. |
+| `omp`      | Best-effort JSON prompt, repair, reask up to 3 attempts, then fail. |
 
 For best-effort providers, make prompts explicit:
 

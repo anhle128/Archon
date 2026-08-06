@@ -56,7 +56,7 @@ Create `~/.archon/config.yaml` for user-wide preferences:
 
 ```yaml
 # Default AI assistant
-defaultAssistant: claude # must match a registered provider (e.g. claude, codex)
+defaultAssistant: claude # must match a registered provider (e.g. claude, codex, opencode, pi, copilot, qodercli, omp)
 
 # Assistant defaults
 assistants:
@@ -79,6 +79,11 @@ assistants:
     additionalDirectories:
       - /absolute/path/to/other/repo
     # codexBinaryPath: /absolute/path/to/codex  # Optional: Codex CLI path
+  omp:
+    model: openai-codex/gpt-5.6-sol
+    modelReasoningEffort: high
+    enableExtensions: false
+    # ompBinaryPath: /absolute/path/to/omp  # Private server-side OMP CLI path
 
 # Streaming preferences per platform
 streaming:
@@ -323,7 +328,7 @@ Environment variables override all other configuration. They are organized by ca
 | `PORT` | HTTP server listen port | `3090` (auto-allocated in worktrees) |
 | `LOG_LEVEL` | Logging verbosity (`fatal`, `error`, `warn`, `info`, `debug`, `trace`) | `info` |
 | `BOT_DISPLAY_NAME` | Bot name shown in batch-mode "starting" messages | `Archon` |
-| `DEFAULT_AI_ASSISTANT` | Fallback AI assistant when no config file sets the assistant. Overridden by `defaultAssistant` in global config or `assistant` in repo config. Must match a registered provider id — currently `claude`, `codex`, `pi`, or `copilot`. | `claude` |
+| `DEFAULT_AI_ASSISTANT` | Fallback AI assistant when no config file sets the assistant. Overridden by `defaultAssistant` in global config or `assistant` in repo config. Must match a registered provider id — currently `claude`, `codex`, `opencode`, `pi`, `copilot`, `qodercli`, or `omp`. | `claude` |
 | `MAX_CONCURRENT_CONVERSATIONS` | Maximum concurrent AI conversations | `10` |
 | `SESSION_RETENTION_DAYS` | Delete inactive sessions older than N days | `30` |
 | `ARCHON_VERBOSE_BOOT` | When set to `1`, prints `[archon] loaded N keys from …` lines to stderr at boot. Also enabled by `LOG_LEVEL=debug` or `LOG_LEVEL=trace`. Silent by default to avoid interleaving with interactive command output. | -- |
@@ -359,6 +364,13 @@ When `CLAUDE_USE_GLOBAL_AUTH` is unset, Archon auto-detects: it uses explicit to
 | `COPILOT_BIN_PATH` | Absolute path to the Copilot CLI binary. Required in compiled Archon binaries when `assistants.copilot.copilotCliPath` is not set; auto-detected in dev mode. | -- |
 
 The Copilot provider also reads `assistants.copilot.{model, modelReasoningEffort, copilotCliPath, configDir, enableConfigDiscovery, useLoggedInUser, logLevel}` from `~/.archon/config.yaml` or `.archon/config.yaml`. See the [AI Assistants guide](/getting-started/ai-assistants/) for the full setup.
+
+### AI Providers -- OMP CLI (community)
+
+The OMP provider reads `assistants.omp.{model, modelReasoningEffort, ompBinaryPath, enableExtensions}` from `~/.archon/config.yaml` or `.archon/config.yaml`.
+`OMP_BIN_PATH` overrides `ompBinaryPath`.
+Authentication and upstream model configuration remain in OMP.
+See the [AI Assistants guide](/getting-started/ai-assistants/#omp-cli-community-provider) for setup and security behavior.
 
 ### Platform Adapters -- Slack
 

@@ -19,6 +19,7 @@ Set these in your shell or `.env` file:
 | `CLAUDE_CODE_OAUTH_TOKEN` | No | OAuth token from `claude setup-token` (alternative to global auth) |
 | `CLAUDE_API_KEY` | No | Anthropic API key for pay-per-use (alternative to global auth) |
 | `CODEX_BIN_PATH` | No | Absolute path to the Codex CLI binary. Overrides the SDK-pinned CLI in development and auto-detection in compiled Archon builds. |
+| `OMP_BIN_PATH` | No | Absolute path to the OMP CLI binary. Overrides `assistants.omp.ompBinaryPath` and OMP install-location detection. |
 | `CODEX_ACCESS_TOKEN` | Yes (for Codex) | Codex access token (see [AI Assistants](/getting-started/ai-assistants/)) |
 | `DATABASE_URL` | No | PostgreSQL connection string (default: SQLite) |
 | `GH_TOKEN` | No | GitHub personal access token — used to authenticate when cloning private GitHub repos |
@@ -41,6 +42,10 @@ assistants:
   codex:
     model: gpt-5.6-sol
     modelReasoningEffort: medium
+  omp:
+    model: openai-codex/gpt-5.6-sol
+    modelReasoningEffort: high
+    enableExtensions: false
 
 # docs:
 #   path: packages/docs-web/src/content/docs  # Optional: default is docs/

@@ -31,27 +31,28 @@ per-node YAML field for that provider; a ❌ means the field is accepted but ign
 - `pi` — Pi (community) *(community provider)*
 - `copilot` — Copilot (GitHub) *(community provider)*
 - `qodercli` — Qoder CLI *(community provider)*
+- `omp` — OMP CLI *(community provider)*
 
 ## Capabilities
 
-| Capability | `claude` | `codex` | `opencode` | `pi` | `copilot` | `qodercli` |
-| --- | --- | --- | --- | --- | --- | --- |
-| Session resume | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| MCP servers (`mcp:`) | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ |
-| Hooks (`hooks:`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Skills (`skills:`) | ✅ | ✅¹ | ✅ | ✅ | ✅ | ❌ |
-| Inline sub-agents (`agents:`) | ✅ | ❌ | ✅² | ❌ | ✅ | ❌ |
-| Tool restrictions (`allowed_tools`/`denied_tools`) | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ |
-| Structured output (`output_format`) | **enforced** | **enforced** | **enforced** | best-effort | best-effort | best-effort |
-| Env injection (`env:`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Cost control (`maxBudgetUsd`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Effort control (`effort`) | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ |
-| Thinking control (`thinking`) | ✅ | ❌ | ❌ | ✅ | ✅ | ✅ |
-| Fallback model (`fallbackModel`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Sandbox (`sandbox`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Setting sources (`settingSources`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| In-process native tools | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ |
-| Container exec (folder-project container backend) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Capability | `claude` | `codex` | `opencode` | `pi` | `copilot` | `qodercli` | `omp` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Session resume | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| MCP servers (`mcp:`) | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ |
+| Hooks (`hooks:`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Skills (`skills:`) | ✅ | ✅¹ | ✅ | ✅ | ✅ | ❌ | ✅ |
+| Inline sub-agents (`agents:`) | ✅ | ❌ | ✅² | ❌ | ✅ | ❌ | ❌ |
+| Tool restrictions (`allowed_tools`/`denied_tools`) | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Structured output (`output_format`) | **enforced** | **enforced** | **enforced** | best-effort | best-effort | best-effort | best-effort |
+| Env injection (`env:`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Cost control (`maxBudgetUsd`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Effort control (`effort`) | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ |
+| Thinking control (`thinking`) | ✅ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
+| Fallback model (`fallbackModel`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Sandbox (`sandbox`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Setting sources (`settingSources`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| In-process native tools | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| Container exec (folder-project container backend) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 
 ## Caveats
 

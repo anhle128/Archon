@@ -146,7 +146,7 @@ tags: [GitLab, Review]           # Optional: explicit Web UI filter tags. Overri
 nodes:
   - id: classify                 # Unique node ID (used for dependency refs and $id.output)
     command: classify-issue      # Loads from .archon/commands/classify-issue.md
-    output_format:               # Optional: structured JSON output. SDK-enforced on Claude/Codex/OpenCode; best-effort (prompt + JSON extraction + repair) on Pi/Copilot. Parsed output is validated against the schema; a node that declares output_format but returns no schema-valid output FAILS.
+    output_format:               # Optional: structured JSON output. See the Provider Capability Matrix for provider-specific guarantees. Parsed output is validated against the schema; a node that declares output_format but returns no schema-valid output FAILS.
       type: object
       properties:
         type:
@@ -221,15 +221,15 @@ They also do not use AI node options such as `provider`, `model`, `output_format
 |-------|------|---------|-------------|
 | `provider` | string | inherited | Per-node provider override (any registered provider, e.g. `'claude'`, `'codex'`) |
 | `model` | string | inherited | Per-node model override |
-| `output_format` | object | — | JSON Schema for structured output. SDK-enforced on Claude/Codex/OpenCode; best-effort on Pi/Copilot (schema appended to prompt, JSON extracted + repaired). The parsed output is validated against the schema (every provider); a node that declares `output_format` but returns no schema-valid output **fails** rather than degrading silently. |
-| `allowed_tools` | string[] | — | Whitelist of built-in tools. `[]` = no tools. All providers except Codex |
-| `denied_tools` | string[] | — | Tools to remove. Applied after `allowed_tools`. All providers except Codex |
+| `output_format` | object | — | JSON Schema for structured output. Check the [Provider Capability Matrix](/reference/provider-capabilities/) for the provider guarantee. The parsed output is validated against the schema (every provider); a node that declares `output_format` but returns no schema-valid output **fails** rather than degrading silently. |
+| `allowed_tools` | string[] | — | Whitelist of built-in tools. `[]` = no tools. Check the [Provider Capability Matrix](/reference/provider-capabilities/) for support. |
+| `denied_tools` | string[] | — | Tools to remove. Applied after `allowed_tools`. Check the [Provider Capability Matrix](/reference/provider-capabilities/) for support. |
 | `hooks` | object | — | Per-node SDK hook callbacks. Claude only. See [Hooks](/guides/hooks/) |
-| `mcp` | string | — | Path to MCP server config JSON file. All providers except Pi. See [MCP Servers](/guides/mcp-servers/) |
-| `skills` | string[] | — | Skills to preload. Per-node injection on Claude/Pi/OpenCode/Copilot; Codex auto-discovers from `.agents/skills/`. See [Skills](/guides/skills/) |
+| `mcp` | string | — | Path to MCP server config JSON file. Check the [Provider Capability Matrix](/reference/provider-capabilities/) for support. See [MCP Servers](/guides/mcp-servers/) |
+| `skills` | string[] | — | Skills to preload. Check the [Provider Capability Matrix](/reference/provider-capabilities/) for support. See [Skills](/guides/skills/) |
 | `agents` | object | — | Inline sub-agent definitions keyed by kebab-case ID. Claude only. See [Inline sub-agents](#inline-sub-agents) |
 | `effort` | non-empty string | — | Provider-specific reasoning value, preserved exactly. Also settable at workflow level |
-| `thinking` | string \| object | — | Thinking mode: `'adaptive'`, `'disabled'`, or `{type:'enabled', budgetTokens:N}`. Claude/Pi/Copilot; object form is Claude-specific. Also settable at workflow level |
+| `thinking` | string \| object | — | Thinking mode: `'adaptive'`, `'disabled'`, or `{type:'enabled', budgetTokens:N}`. Check the [Provider Capability Matrix](/reference/provider-capabilities/) for support; object form is Claude-specific. Also settable at workflow level |
 | `maxBudgetUsd` | number | — | USD cost cap; node fails if exceeded. Claude only. Per-node only |
 | `systemPrompt` | string | — | Override the default `claude_code` system prompt for this node. Claude only. Per-node only |
 | `fallbackModel` | string | — | Model to use if primary model fails. Claude only. Also settable at workflow level |
@@ -239,7 +239,7 @@ They also do not use AI node options such as `provider`, `model`, `output_format
 
 ### Advanced Reasoning Options
 
-`effort` is provider-aware: Claude receives SDK `effort`, Codex receives `modelReasoningEffort`, Qoder receives `--reasoning-effort`, Pi receives its SDK reasoning level, and Copilot receives `reasoningEffort`.
+`effort` is provider-aware; consult the [Provider Capability Matrix](/reference/provider-capabilities/) for the supported registered providers and field behavior.
 Archon does not trim, normalize, translate, or validate a shared vocabulary.
 The selected provider decides whether a value is valid and any rejection fails the node.
 Providers that declare no effort control fail before dispatch.
@@ -508,7 +508,7 @@ nodes:
 
 - The output is captured as a JSON string and available via `$classify.output` (full JSON) or `$classify.output.type` (field access)
 - Use `output_format` when downstream nodes need to branch on specific values via `when:`
-- **Validated + reask + fail-fast.** The parsed output is validated against your schema for *every* provider (a net for refusals / `max_tokens` truncation that bypass even SDK enforcement). On a miss, best-effort providers (Pi/Copilot) re-ask up to 3× with the schema errors appended; enforced providers fail immediately. A node that declares `output_format` but still has no schema-valid output **fails** — it no longer completes-with-prose and silently feeds `''` downstream.
+- **Validated + reask + fail-fast.** The parsed output is validated against your schema for *every* provider (a net for refusals / `max_tokens` truncation that bypass even SDK enforcement). On a miss, providers marked best-effort in the [Provider Capability Matrix](/reference/provider-capabilities/) re-ask up to 3× with the schema errors appended; enforced providers fail immediately. A node that declares `output_format` but still has no schema-valid output **fails** — it no longer completes-with-prose and silently feeds `''` downstream.
 - **Field access is strict.** `$classify.output.type` resolves only when `type` is in the schema. A reference to a field **not declared** in the schema fails the consuming node (a typo no longer silently becomes `''`); a field you declared **optional** but the model omitted resolves to `''`. For schemaless `bash`/`script` nodes, a `.field` ref requires the output to be JSON containing that key — otherwise the consuming node fails, so always emit every key you reference (or use whole-text `$node.output`).
 
 ### `allowed_tools` and `denied_tools` for Tool Restrictions
@@ -1142,12 +1142,12 @@ GitHub always run workflows in foreground mode regardless of this setting.
 ### Provider Validation
 
 Workflows are validated at load time for **provider identity only**:
-- Both the workflow-level `provider:` and any per-node `provider:` overrides must name a registered provider (`claude`, `codex`, `pi`, `copilot`).
+- Both the workflow-level `provider:` and any per-node `provider:` overrides must name a registered provider; consult the [Provider Capability Matrix](/reference/provider-capabilities/) or the validation error for the current runtime list.
 - Validation errors are shown in `/workflow list`.
 
 Example validation error:
 ```
-Unknown provider 'claud'. Registered: claude, codex, pi, copilot
+Unknown provider 'claud'. Registered: claude, codex, opencode, pi, copilot, qodercli, omp
 ```
 
 Tier and alias model refs are resolved during workflow validation so malformed `tiers:` / `aliases:` config, unknown aliases, and missing tier presets fail before execution. Literal model strings are not API-validated by Archon; they are forwarded to the SDK and validated by the upstream API at request time.
