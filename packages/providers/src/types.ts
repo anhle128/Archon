@@ -108,6 +108,28 @@ export interface QoderCliProviderDefaults {
 }
 
 /**
+ * Community provider defaults for the user-installed OMP CLI.
+ */
+export interface OmpProviderDefaults {
+  [key: string]: unknown;
+  /** Default OMP model ref, normally '<provider>/<model>'. */
+  model?: string;
+  /** Provider-owned value passed unchanged to `omp --thinking`. */
+  modelReasoningEffort?: string;
+  /**
+   * Absolute path to the OMP executable.
+   * `OMP_BIN_PATH` has higher precedence.
+   */
+  ompBinaryPath?: string;
+  /**
+   * Allow OMP to discover executable extensions from its normal roots.
+   * Disabled by default because a project-local extension is executable code.
+   * @default false
+   */
+  enableExtensions?: boolean;
+}
+
+/**
  * Community provider defaults for Pi (@earendil-works/pi-coding-agent).
  * v1 minimal shape; extend as capabilities are wired in.
  */
