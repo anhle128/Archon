@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { AlertCircle, Loader2, RefreshCw, Terminal } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -14,7 +14,12 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
-import { retryWorkflowNode, type RetryWorkflowNodeResponse } from '@/lib/api';
+import {
+  previewRetryWorkflowNode,
+  retryWorkflowNode,
+  type RetryWorkflowNodeCheckoutStrategy,
+  type RetryWorkflowNodeResponse,
+} from '@/lib/api';
 import {
   getWorkflowNodeRetryActionState,
   normalizeRetryWorkflowNodeError,
@@ -30,6 +35,10 @@ interface WorkflowNodeRetryActionProps {
   onRetried?: (result: RetryWorkflowNodeResponse) => void;
 }
 
+function shortSha(sha: string | undefined): string {
+  return sha ? sha.slice(0, 12) : 'unknown';
+}
+
 export function WorkflowNodeRetryAction({
   runId,
   runStatus,
@@ -40,11 +49,32 @@ export function WorkflowNodeRetryAction({
 }: WorkflowNodeRetryActionProps): React.ReactElement | null {
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [checkoutStrategy, setCheckoutStrategy] =
+    useState<RetryWorkflowNodeCheckoutStrategy>('checkpoint');
+
+  const previewQuery = useQuery({
+    queryKey: ['workflow-node-retry-preview', runId, node?.nodeId],
+    queryFn: () => {
+      if (!node) throw new Error('No retry node selected');
+      return previewRetryWorkflowNode(runId, node.nodeId);
+    },
+    enabled: open && !!node,
+    retry: false,
+  });
+
+  useEffect(() => {
+    if (!previewQuery.data) return;
+    setCheckoutStrategy(previewQuery.data.requiresCommitChoice ? 'current' : 'checkpoint');
+  }, [previewQuery.data]);
 
   const retryMutation = useMutation({
     mutationFn: () => {
       if (!node) throw new Error('No retry node selected');
-      return retryWorkflowNode(runId, node.nodeId);
+      return retryWorkflowNode(
+        runId,
+        node.nodeId,
+        previewQuery.data?.requiresCommitChoice ? { checkoutStrategy } : undefined
+      );
     },
     onSuccess: result => {
       setError(null);
@@ -136,8 +166,8 @@ export function WorkflowNodeRetryAction({
               <AlertDialogDescription asChild>
                 <div className="space-y-2 text-sm text-text-secondary">
                   <p>
-                    Retry <strong>{node.name}</strong>. Archon will reset tracked files to the
-                    selected checkpoint before rerunning this node and downstream dependent nodes.
+                    Retry <strong>{node.name}</strong>. Archon will prepare the selected checkout
+                    point before rerunning this node and downstream dependent nodes.
                   </p>
                   <p>
                     Dirty tracked changes from the failed attempt are committed to a retry safety
@@ -146,6 +176,71 @@ export function WorkflowNodeRetryAction({
                 </div>
               </AlertDialogDescription>
             </AlertDialogHeader>
+            {previewQuery.isFetching && (
+              <div className="flex items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm text-text-secondary">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span>Checking checkout state</span>
+              </div>
+            )}
+            {previewQuery.error && (
+              <div className="flex items-start gap-2 rounded-md border border-error/30 bg-error/10 px-3 py-2 text-sm text-error">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span className="min-w-0 break-words">
+                  {normalizeRetryWorkflowNodeError(previewQuery.error)}
+                </span>
+              </div>
+            )}
+            {previewQuery.data?.requiresCommitChoice && (
+              <div className="space-y-2">
+                <div className="text-xs font-medium text-text-primary">Retry checkout</div>
+                <div className="grid gap-2" role="radiogroup" aria-label="Retry checkout">
+                  <label
+                    className={`cursor-pointer rounded-md border px-3 py-2 text-sm ${
+                      checkoutStrategy === 'current'
+                        ? 'border-primary bg-primary/10 text-text-primary'
+                        : 'border-border bg-background text-text-secondary'
+                    }`}
+                  >
+                    <input
+                      className="sr-only"
+                      type="radio"
+                      name={`retry-checkout-${runId}-${node.nodeId}`}
+                      value="current"
+                      checked={checkoutStrategy === 'current'}
+                      onChange={() => {
+                        setCheckoutStrategy('current');
+                      }}
+                    />
+                    <span className="block font-medium">Current HEAD</span>
+                    <code className="mt-1 block font-mono text-xs">
+                      {shortSha(previewQuery.data.currentHeadSha)}
+                    </code>
+                  </label>
+                  <label
+                    className={`cursor-pointer rounded-md border px-3 py-2 text-sm ${
+                      checkoutStrategy === 'checkpoint'
+                        ? 'border-primary bg-primary/10 text-text-primary'
+                        : 'border-border bg-background text-text-secondary'
+                    }`}
+                  >
+                    <input
+                      className="sr-only"
+                      type="radio"
+                      name={`retry-checkout-${runId}-${node.nodeId}`}
+                      value="checkpoint"
+                      checked={checkoutStrategy === 'checkpoint'}
+                      onChange={() => {
+                        setCheckoutStrategy('checkpoint');
+                      }}
+                    />
+                    <span className="block font-medium">Node checkpoint</span>
+                    <code className="mt-1 block font-mono text-xs">
+                      {shortSha(previewQuery.data.checkpointCommitSha)}
+                    </code>
+                  </label>
+                </div>
+              </div>
+            )}
             {error && (
               <div className="flex items-start gap-2 rounded-md border border-error/30 bg-error/10 px-3 py-2 text-sm text-error">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -155,7 +250,9 @@ export function WorkflowNodeRetryAction({
             <AlertDialogFooter>
               <AlertDialogCancel disabled={retryMutation.isPending}>Cancel</AlertDialogCancel>
               <AlertDialogAction
-                disabled={retryMutation.isPending}
+                disabled={
+                  retryMutation.isPending || previewQuery.isFetching || !!previewQuery.error
+                }
                 onClick={event => {
                   event.preventDefault();
                   retryMutation.mutate();

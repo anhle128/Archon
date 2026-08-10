@@ -67,6 +67,7 @@ export {
   assertGitRepository,
   validateGitRef,
   verifyCommitRef,
+  isCommitAncestorOfHead,
   hasGitVisibleChanges,
   hasTrackedChanges,
   createGitVisibleChangesCommit,

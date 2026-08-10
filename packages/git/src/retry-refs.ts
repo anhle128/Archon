@@ -1,4 +1,6 @@
 import { execFileAsync } from './exec';
+import { isAncestorOf } from './branch';
+import { toWorktreePath } from './types';
 
 export interface RetryRefIdentity {
   runId: string;
@@ -66,6 +68,13 @@ export async function verifyCommitRef(repoPath: string, refOrSha: string): Promi
   } catch (err) {
     throw new Error(`Invalid git commit ref '${refOrSha}': ${(err as Error).message}`);
   }
+}
+
+export async function isCommitAncestorOfHead(
+  repoPath: string,
+  ancestorRefOrSha: string
+): Promise<boolean> {
+  return isAncestorOf(toWorktreePath(repoPath), ancestorRefOrSha);
 }
 
 export async function hasGitVisibleChanges(repoPath: string): Promise<boolean> {

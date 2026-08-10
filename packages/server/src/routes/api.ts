@@ -255,6 +255,8 @@ import {
   cancelWorkflowRunResponseSchema,
   workflowRunActionResponseSchema,
   retryWorkflowNodeParamsSchema,
+  retryWorkflowNodeBodySchema,
+  retryWorkflowNodePreviewResponseSchema,
   retryWorkflowNodeResponseSchema,
   dashboardRunsResponseSchema,
   dashboardRunsQuerySchema,
@@ -935,12 +937,38 @@ const resumeWorkflowRunRoute = createRoute({
   },
 });
 
+const retryWorkflowNodePreviewRoute = createRoute({
+  method: 'get',
+  path: '/api/workflows/runs/{runId}/nodes/{nodeId}/retry/preview',
+  tags: ['Workflows'],
+  summary: 'Preview checkout state before retrying one failed DAG node',
+  request: { params: retryWorkflowNodeParamsSchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: retryWorkflowNodePreviewResponseSchema } },
+      description: 'Retry preview',
+    },
+    400: jsonError('Bad request'),
+    401: jsonError('Authentication required'),
+    403: jsonError('Forbidden'),
+    404: jsonError('Not found'),
+    409: jsonError('Conflict'),
+    500: jsonError('Server error'),
+  },
+});
+
 const retryWorkflowNodeRoute = createRoute({
   method: 'post',
   path: '/api/workflows/runs/{runId}/nodes/{nodeId}/retry',
   tags: ['Workflows'],
   summary: 'Retry one failed DAG node and its descendants for a failed or cancelled run',
-  request: { params: retryWorkflowNodeParamsSchema },
+  request: {
+    params: retryWorkflowNodeParamsSchema,
+    body: {
+      content: { 'application/json': { schema: retryWorkflowNodeBodySchema } },
+      required: false,
+    },
+  },
   responses: {
     200: {
       content: { 'application/json': { schema: retryWorkflowNodeResponseSchema } },
@@ -2499,6 +2527,7 @@ export function registerApiRoutes(
         return 404;
       case 'cas_miss':
       case 'path_in_use':
+      case 'checkout_strategy_required':
         return 409;
       case 'run_not_retryable':
       case 'node_not_found':
@@ -3314,6 +3343,11 @@ export function registerApiRoutes(
     return (c.req as unknown as { valid(k: 'json'): T }).valid('json');
   }
 
+  /** Access an optional Zod-validated body without forcing legacy no-body callers to send JSON. */
+  function getOptionalValidatedBody<T>(c: Context, _schema: z.ZodType<T>): T | undefined {
+    return (c.req as unknown as { valid(k: 'json'): T | undefined }).valid('json');
+  }
+
   // Serve OpenAPI spec
   app.doc('/api/openapi.json', {
     openapi: '3.0.0',
@@ -3652,6 +3686,91 @@ export function registerApiRoutes(
     }
   });
 
+  // GET /api/workflows/runs/:runId/nodes/:nodeId/retry/preview - Preview retry checkout choice
+  registerOpenApiRoute(retryWorkflowNodePreviewRoute, async c => {
+    const runId = c.req.param('runId') ?? '';
+    const nodeId = c.req.param('nodeId') ?? '';
+    if (!runId || !nodeId) {
+      return apiError(c, 400, 'runId and nodeId are required');
+    }
+
+    try {
+      const run = await workflowDb.getWorkflowRun(runId);
+      if (!run) {
+        return apiError(c, 404, 'Workflow run not found');
+      }
+      if (!RETRYABLE_WORKFLOW_STATUSES.includes(run.status)) {
+        return apiError(
+          c,
+          400,
+          `Cannot retry workflow in '${run.status}' status. Only failed or cancelled runs can be retried.`
+        );
+      }
+
+      const auth = await authorizeWorkflowNodeRetry(c, run);
+      if ('error' in auth) return auth.error;
+
+      if (!run.parent_conversation_id) {
+        return apiError(
+          c,
+          400,
+          `This run was created outside the web UI. Use \`archon workflow retry-node ${runId} ${nodeId}\` from the CLI to retry it.`
+        );
+      }
+
+      const parentConv = await conversationDb.getConversationById(run.parent_conversation_id);
+      if (!parentConv?.platform_conversation_id || parentConv.platform_type !== 'web') {
+        return apiError(
+          c,
+          400,
+          `Cannot retry from web UI: the run's parent conversation is not a web conversation. Use \`archon workflow retry-node ${runId} ${nodeId}\` from the CLI.`
+        );
+      }
+      if (!run.working_path) {
+        return apiError(c, 400, 'Cannot retry: workflow run has no working path');
+      }
+
+      let lookup: RetryWorkflowLookup;
+      try {
+        lookup = await loadWorkflowForRetryRun(run);
+      } catch (error) {
+        const err = error as Error;
+        return apiError(c, 400, err.message);
+      }
+
+      const { getWorkflowNodeRetryPreview } =
+        await import('@archon/core/operations/workflow-retry');
+      try {
+        const preview = await getWorkflowNodeRetryPreview({
+          runId,
+          nodeId,
+          workflow: lookup.workflow,
+        });
+        return c.json({
+          runId,
+          workflowName: preview.workflowName,
+          nodeId,
+          retryEpoch: preview.retryEpoch,
+          invalidatedNodes: preview.invalidatedNodeIds,
+          resetSkipped: preview.resetSkipped,
+          ...(preview.checkpointRef ? { checkpointRef: preview.checkpointRef } : {}),
+          ...(preview.checkpointCommitSha
+            ? { checkpointCommitSha: preview.checkpointCommitSha }
+            : {}),
+          ...(preview.currentHeadSha ? { currentHeadSha: preview.currentHeadSha } : {}),
+          hasNewerHead: preview.hasNewerHead,
+          requiresCommitChoice: preview.requiresCommitChoice,
+        });
+      } catch (error) {
+        const err = error as Error;
+        return apiError(c, getRetryErrorStatus(error), err.message);
+      }
+    } catch (error) {
+      getLog().error({ err: error, runId, nodeId }, 'api.workflow_retry_preview_failed');
+      return apiError(c, 500, 'Failed to preview workflow node retry');
+    }
+  });
+
   // POST /api/workflows/runs/:runId/nodes/:nodeId/retry - Retry a failed DAG node
   registerOpenApiRoute(retryWorkflowNodeRoute, async c => {
     const runId = c.req.param('runId') ?? '';
@@ -3661,6 +3780,7 @@ export function registerApiRoutes(
     }
 
     try {
+      const body = getOptionalValidatedBody(c, retryWorkflowNodeBodySchema) ?? {};
       const run = await workflowDb.getWorkflowRun(runId);
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
@@ -3719,6 +3839,7 @@ export function registerApiRoutes(
           requesterSurface: 'web',
           requesterUserId: auth.requesterUserId,
           authorizationBasis: auth.authorizationBasis,
+          checkoutStrategy: body.checkoutStrategy,
         });
       } catch (error) {
         const err = error as Error;
@@ -3753,6 +3874,7 @@ export function registerApiRoutes(
         retryEpoch: prepared.retryEpoch,
         invalidatedNodes: prepared.invalidatedNodeIds,
         ...(prepared.safetyCommitSha ? { safetyCommitSha: prepared.safetyCommitSha } : {}),
+        checkoutStrategy: prepared.checkoutStrategy,
       });
     } catch (error) {
       getLog().error({ err: error as Error, runId, nodeId }, 'api.workflow_retry_failed');

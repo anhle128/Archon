@@ -74,6 +74,7 @@ export const nodeRetryResetEventDataSchema = z.object({
   safety_ref: z.string().nullable(),
   safety_commit_sha: z.string().nullable(),
   reset_skipped: z.boolean(),
+  checkout_strategy: z.enum(['checkpoint', 'current']).optional(),
 });
 
 export const nodeRetryFailedEventDataSchema = z.object({

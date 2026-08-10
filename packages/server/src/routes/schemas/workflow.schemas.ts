@@ -195,6 +195,34 @@ export const retryWorkflowNodeParamsSchema = z
   })
   .openapi('RetryWorkflowNodeParams');
 
+export const retryWorkflowNodeCheckoutStrategySchema = z
+  .enum(['checkpoint', 'current'])
+  .openapi('RetryWorkflowNodeCheckoutStrategy');
+
+/** POST /api/workflows/runs/:runId/nodes/:nodeId/retry request body. */
+export const retryWorkflowNodeBodySchema = z
+  .object({
+    checkoutStrategy: retryWorkflowNodeCheckoutStrategySchema.optional(),
+  })
+  .openapi('RetryWorkflowNodeBody');
+
+/** GET /api/workflows/runs/:runId/nodes/:nodeId/retry/preview response. */
+export const retryWorkflowNodePreviewResponseSchema = z
+  .object({
+    runId: z.string(),
+    workflowName: z.string(),
+    nodeId: z.string(),
+    retryEpoch: z.number().int().nonnegative(),
+    invalidatedNodes: z.array(z.string()),
+    resetSkipped: z.boolean(),
+    checkpointRef: z.string().optional(),
+    checkpointCommitSha: z.string().optional(),
+    currentHeadSha: z.string().optional(),
+    hasNewerHead: z.boolean(),
+    requiresCommitChoice: z.boolean(),
+  })
+  .openapi('RetryWorkflowNodePreviewResponse');
+
 /** POST /api/workflows/runs/:runId/nodes/:nodeId/retry response. */
 export const retryWorkflowNodeResponseSchema = z
   .object({
@@ -205,6 +233,7 @@ export const retryWorkflowNodeResponseSchema = z
     retryEpoch: z.number().int().nonnegative(),
     invalidatedNodes: z.array(z.string()),
     safetyCommitSha: z.string().optional(),
+    checkoutStrategy: retryWorkflowNodeCheckoutStrategySchema,
   })
   .openapi('RetryWorkflowNodeResponse');
 

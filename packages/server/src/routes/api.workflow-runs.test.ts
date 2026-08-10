@@ -305,6 +305,66 @@ mock.module('@archon/core/db/messages', () => ({
   listMessages: mock(async () => []),
 }));
 
+const mockGetWorkflowNodeRetryPreview = mock(async () => ({
+  runId: 'run-web-retry',
+  workflowName: 'deploy',
+  nodeId: 'build',
+  retryEpoch: 1,
+  invalidatedNodeIds: ['build'],
+  resetSkipped: false,
+  checkpointRef: 'refs/archon/checkpoints/run-web-retry/0/build',
+  checkpointCommitSha: 'checkpoint-sha',
+  currentHeadSha: 'head-sha',
+  hasNewerHead: true,
+  requiresCommitChoice: true,
+}));
+const mockPrepareWorkflowNodeRetry = mock(
+  async (input: { checkoutStrategy?: 'checkpoint' | 'current' }) => ({
+    runId: 'run-web-retry',
+    workflowName: 'deploy',
+    preCreatedRun: {
+      id: 'run-web-retry',
+      workflow_name: 'deploy',
+      conversation_id: 'worker-conv',
+      parent_conversation_id: 'parent-conv',
+      codebase_id: null,
+      status: 'running',
+      user_message: 'retry',
+      started_at: NOW,
+      completed_at: null,
+      metadata: { retry_epoch: 1 },
+      working_path: '/tmp/worktrees/feature',
+      last_activity_at: NOW,
+    },
+    retryEpoch: 1,
+    invalidatedNodeIds: ['build'],
+    preservedCompletedOutputs: new Map<string, string>(),
+    resetSkipped: input.checkoutStrategy === 'current',
+    safetyRef: 'refs/archon/retry-safety/run-web-retry/1',
+    safetyCommitSha: 'safety-sha',
+    checkoutStrategy: input.checkoutStrategy ?? 'checkpoint',
+  })
+);
+
+mock.module('@archon/core/operations/workflow-retry', () => ({
+  getWorkflowNodeRetryPreview: mockGetWorkflowNodeRetryPreview,
+  prepareWorkflowNodeRetry: mockPrepareWorkflowNodeRetry,
+}));
+
+const mockExecuteWorkflow = mock(async () => ({
+  success: true,
+  workflowRunId: 'run-web-retry',
+}));
+const mockCreateWorkflowDeps = mock(() => ({}));
+
+mock.module('@archon/workflows/executor', () => ({
+  executeWorkflow: mockExecuteWorkflow,
+}));
+
+mock.module('@archon/core/workflows/store-adapter', () => ({
+  createWorkflowDeps: mockCreateWorkflowDeps,
+}));
+
 mock.module('@archon/core/utils/commands', () => ({
   findMarkdownFilesRecursive: mock(async () => []),
 }));
@@ -2984,6 +3044,155 @@ describe('GET /api/artifacts/:runId/* storage-key resolution', () => {
 describe('POST /api/workflows/runs/:runId/nodes/:nodeId/retry', () => {
   beforeEach(() => {
     mockGetWorkflowRun.mockReset();
+    mockGetConversationById.mockReset();
+    mockGetCodebase.mockReset();
+    mockGetWorkflowNodeRetryPreview.mockReset();
+    mockPrepareWorkflowNodeRetry.mockReset();
+    mockExecuteWorkflow.mockReset();
+    mockCreateWorkflowDeps.mockReset();
+    mockGetWorkflowNodeRetryPreview.mockImplementation(async () => ({
+      runId: 'run-web-retry',
+      workflowName: 'deploy',
+      nodeId: 'build',
+      retryEpoch: 1,
+      invalidatedNodeIds: ['build'],
+      resetSkipped: false,
+      checkpointRef: 'refs/archon/checkpoints/run-web-retry/0/build',
+      checkpointCommitSha: 'checkpoint-sha',
+      currentHeadSha: 'head-sha',
+      hasNewerHead: true,
+      requiresCommitChoice: true,
+    }));
+    mockPrepareWorkflowNodeRetry.mockImplementation(
+      async (input: { checkoutStrategy?: 'checkpoint' | 'current' }) => ({
+        runId: 'run-web-retry',
+        workflowName: 'deploy',
+        preCreatedRun: {
+          id: 'run-web-retry',
+          workflow_name: 'deploy',
+          conversation_id: 'worker-conv',
+          parent_conversation_id: 'parent-conv',
+          codebase_id: null,
+          status: 'running',
+          user_message: 'retry',
+          started_at: NOW,
+          completed_at: null,
+          metadata: { retry_epoch: 1 },
+          working_path: '/tmp/worktrees/feature',
+          last_activity_at: NOW,
+        },
+        retryEpoch: 1,
+        invalidatedNodeIds: ['build'],
+        preservedCompletedOutputs: new Map<string, string>(),
+        resetSkipped: input.checkoutStrategy === 'current',
+        safetyRef: 'refs/archon/retry-safety/run-web-retry/1',
+        safetyCommitSha: 'safety-sha',
+        checkoutStrategy: input.checkoutStrategy ?? 'checkpoint',
+      })
+    );
+    mockExecuteWorkflow.mockImplementation(async () => ({
+      success: true,
+      workflowRunId: 'run-web-retry',
+    }));
+    mockCreateWorkflowDeps.mockImplementation(() => ({}));
+  });
+
+  async function mockRetryWorkflowDiscovery(): Promise<void> {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [
+        {
+          workflow: {
+            name: 'deploy',
+            description: 'Deploy workflow',
+            nodes: [{ id: 'build', command: 'build' }],
+          },
+          source: 'project',
+        },
+      ],
+      errors: [],
+    });
+  }
+
+  function mockWebRetryRun(): MockWorkflowRun {
+    return {
+      ...MOCK_FAILED_RUN,
+      id: 'run-web-retry',
+      workflow_name: 'deploy',
+      conversation_id: 'worker-conv',
+      parent_conversation_id: 'parent-conv',
+      working_path: '/tmp/worktrees/feature',
+    };
+  }
+
+  function mockWebRetryConversations(): void {
+    mockGetConversationById.mockImplementation(async id => {
+      if (id === 'parent-conv') {
+        return {
+          id,
+          platform_conversation_id: 'web-parent',
+          platform_type: 'web',
+        };
+      }
+      if (id === 'worker-conv') {
+        return {
+          id,
+          platform_conversation_id: 'web-worker',
+          platform_type: 'web',
+        };
+      }
+      return null;
+    });
+  }
+
+  test('previews newer checkout state for an eligible web-owned retry', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => mockWebRetryRun());
+    mockWebRetryConversations();
+    await mockRetryWorkflowDiscovery();
+
+    const { app } = makeApp();
+    const response = await app.request(
+      '/api/workflows/runs/run-web-retry/nodes/build/retry/preview'
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      currentHeadSha: string;
+      checkpointCommitSha: string;
+      requiresCommitChoice: boolean;
+    };
+    expect(body.currentHeadSha).toBe('head-sha');
+    expect(body.checkpointCommitSha).toBe('checkpoint-sha');
+    expect(body.requiresCommitChoice).toBe(true);
+    expect(mockGetWorkflowNodeRetryPreview).toHaveBeenCalledWith({
+      runId: 'run-web-retry',
+      nodeId: 'build',
+      workflow: expect.objectContaining({ name: 'deploy' }),
+    });
+  });
+
+  test('passes selected checkout strategy to retry preparation', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => mockWebRetryRun());
+    mockWebRetryConversations();
+    await mockRetryWorkflowDiscovery();
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-web-retry/nodes/build/retry', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ checkoutStrategy: 'current' }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { checkoutStrategy: string };
+    expect(body.checkoutStrategy).toBe('current');
+    expect(mockPrepareWorkflowNodeRetry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: 'run-web-retry',
+        nodeId: 'build',
+        checkoutStrategy: 'current',
+      })
+    );
   });
 
   test('allows cancelled runs through status validation before web ownership checks', async () => {

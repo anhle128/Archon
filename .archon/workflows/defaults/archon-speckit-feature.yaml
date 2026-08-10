@@ -92,7 +92,12 @@ nodes:
 
   - id: clarify-explain
     prompt: |
-     /speckit-question-explain --clarify giải thích chi tiết clarify bằng tiếng việt
+      Read .specify/feature.json to resolve <feature_directory>, then run:
+      /plannotator-visual-explainer giải thích file <feature_directory>/clarification-questions.md 
+      vẽ UML sequence diagram end to end mô tả chi tiết theo cấp độ function class để tôi hiểu hiện tại chúng
+      ta đang làm về tính năng nào, tính năng đó đang có follow như nào, đi qua những class và function gì,
+      với mỗi step trong follow mô tả rõ step này làm gì, sau đó mới nói đến cắc vấn đề, với mỗi vấn đề cần giải thích
+      vấn đề nằm ở đâu trong follow đang chuẩn bị implement ? tại sao nó lại là vấn đề, giải thích luôn cả về cách sửa
     depends_on:
       - clarify-respond
     effort: xhigh
@@ -203,7 +208,13 @@ nodes:
 
   - id: red-team-explain
     prompt: |
-     /speckit-question-explain --red-team giải thích chi tiết bằng tiếng việt
+      Read .specify/feature.json to resolve <feature_directory>, then run:
+      /plannotator-visual-explainer giải thích file <feature_directory>/red-team-findings-*.md
+      vẽ UML sequence diagram end to end mô tả chi tiết theo cấp độ function class để tôi hiểu hiện tại chúng
+      ta đang làm về tính năng nào, tính năng đó đang có follow như nào, đi qua những class và function gì,
+      với mỗi step trong follow mô tả rõ step này làm gì, sau đó mới nói đến cắc vấn đề, với mỗi vấn đề cần giải thích
+      vấn đề nằm ở đâu trong follow đang chuẩn bị implement ? tại sao nó lại là vấn đề, giải thích luôn cả về cách sửa,
+      chỉ giải thích các spec-fix và new-OQ , còn các cái khác thì không cần.
     depends_on:
       - red-team-respond
     effort: xhigh

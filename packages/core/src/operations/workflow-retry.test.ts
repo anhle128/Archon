@@ -51,6 +51,7 @@ mock.module('../db/workflow-checkpoints', () => ({
 }));
 
 const mockVerifyCommitRef = mock(async () => 'checkpoint-sha');
+const mockIsCommitAncestorOfHead = mock(async () => false);
 const mockCreateRetrySafetyRef = mock(async () => ({
   ref: 'refs/archon/retry-safety/run-1/1',
   commitSha: 'safety-sha',
@@ -60,6 +61,7 @@ const mockResetTrackedFilesToCommit = mock(async () => 'checkpoint-sha');
 
 mock.module('@archon/git', () => ({
   verifyCommitRef: mockVerifyCommitRef,
+  isCommitAncestorOfHead: mockIsCommitAncestorOfHead,
   createRetrySafetyRef: mockCreateRetrySafetyRef,
   resetTrackedFilesToCommit: mockResetTrackedFilesToCommit,
 }));
@@ -71,7 +73,8 @@ mock.module('../db/connection', () => ({
   getDialect: () => mockPostgresDialect,
 }));
 
-const { prepareWorkflowNodeRetry, WorkflowRetryError } = await import('./workflow-retry');
+const { getWorkflowNodeRetryPreview, prepareWorkflowNodeRetry, WorkflowRetryError } =
+  await import('./workflow-retry');
 
 function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
   return {
@@ -148,6 +151,8 @@ describe('workflow retry preparation operation', () => {
     mockFindLatestCheckpointForRetry.mockImplementation(async () => null);
     mockVerifyCommitRef.mockReset();
     mockVerifyCommitRef.mockImplementation(async () => 'checkpoint-sha');
+    mockIsCommitAncestorOfHead.mockReset();
+    mockIsCommitAncestorOfHead.mockImplementation(async () => false);
     mockCreateRetrySafetyRef.mockReset();
     mockCreateRetrySafetyRef.mockImplementation(async () => ({
       ref: 'refs/archon/retry-safety/run-1/1',
@@ -186,6 +191,24 @@ describe('workflow retry preparation operation', () => {
       { event_type: 'node_completed', step_name: 'a', data: { node_output: 'A0' } },
       { event_type: 'node_started', step_name: 'b', data: {} },
       { event_type: 'node_skipped', step_name: 'c', data: { reason: 'dependency_failed' } },
+    ]);
+
+    const result = await prepareWorkflowNodeRetry(makeRequest());
+
+    expect(result.runId).toBe('run-1');
+    expect(result.invalidatedNodeIds).toEqual(['b', 'c']);
+    expect(result.preservedCompletedOutputs).toEqual(new Map([['a', 'A0']]));
+    expect(mockClaimWorkflowRunForNodeRetry).toHaveBeenCalledWith('run-1');
+  });
+
+  test('prepares retry for a failed run with an interrupted running target node', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makeRun({ status: 'failed', metadata: { error: 'Process terminated (SIGINT)' } })
+    );
+    mockListWorkflowEvents.mockResolvedValueOnce([
+      { event_type: 'node_completed', step_name: 'a', data: { node_output: 'A0' } },
+      { event_type: 'node_started', step_name: 'b', data: {} },
+      { event_type: 'workflow_failed', step_name: null, data: { error: 'Process terminated' } },
     ]);
 
     const result = await prepareWorkflowNodeRetry(makeRequest());
@@ -427,6 +450,119 @@ describe('workflow retry preparation operation', () => {
       safety_ref: 'refs/archon/retry-safety/run-1/1',
       safety_commit_sha: 'safety-sha',
       reset_skipped: false,
+    });
+  });
+
+  test('previews newer HEAD without claiming or mutating the run', async () => {
+    mockFindLatestCheckpointForRetry.mockResolvedValueOnce({
+      workflow_run_id: 'run-1',
+      node_id: 'b',
+      retry_epoch: 0,
+      checkpoint_ref: 'refs/archon/checkpoints/run-1/0/b',
+      commit_sha: 'checkpoint-sha',
+      created_commit: false,
+      fallback_from_node_id: null,
+      created_at: new Date(),
+    });
+    mockVerifyCommitRef.mockImplementation(async (_repoPath, refOrSha) =>
+      refOrSha === 'HEAD' ? 'head-sha' : 'checkpoint-sha'
+    );
+    mockIsCommitAncestorOfHead.mockResolvedValueOnce(true);
+
+    const preview = await getWorkflowNodeRetryPreview(
+      makeRequest({ workflow: makeWorkflow({ mutates_checkout: true }) })
+    );
+
+    expect(preview).toMatchObject({
+      retryEpoch: 1,
+      checkpointRef: 'refs/archon/checkpoints/run-1/0/b',
+      checkpointCommitSha: 'checkpoint-sha',
+      currentHeadSha: 'head-sha',
+      hasNewerHead: true,
+      requiresCommitChoice: true,
+    });
+    expect(mockClaimWorkflowRunForNodeRetry).not.toHaveBeenCalled();
+    expect(mockCreateRetrySafetyRef).not.toHaveBeenCalled();
+    expect(mockResetTrackedFilesToCommit).not.toHaveBeenCalled();
+  });
+
+  test('rejects web retry without strategy when HEAD is newer than the checkpoint', async () => {
+    mockFindLatestCheckpointForRetry.mockResolvedValueOnce({
+      workflow_run_id: 'run-1',
+      node_id: 'b',
+      retry_epoch: 0,
+      checkpoint_ref: 'refs/archon/checkpoints/run-1/0/b',
+      commit_sha: 'checkpoint-sha',
+      created_commit: false,
+      fallback_from_node_id: null,
+      created_at: new Date(),
+    });
+    mockVerifyCommitRef.mockImplementation(async (_repoPath, refOrSha) =>
+      refOrSha === 'HEAD' ? 'head-sha' : 'checkpoint-sha'
+    );
+    mockIsCommitAncestorOfHead.mockResolvedValueOnce(true);
+
+    await expect(
+      prepareWorkflowNodeRetry(
+        makeRequest({
+          requesterSurface: 'web',
+          authorizationBasis: 'owner',
+          workflow: makeWorkflow({ mutates_checkout: true }),
+        })
+      )
+    ).rejects.toMatchObject({ code: 'checkout_strategy_required' });
+
+    expect(mockCreateRetrySafetyRef).not.toHaveBeenCalled();
+    expect(mockResetTrackedFilesToCommit).not.toHaveBeenCalled();
+    expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-1', {
+      status: 'failed',
+      metadata: {
+        retry_setup_error: expect.stringContaining(
+          'Choose whether to retry from current HEAD or the saved node checkpoint.'
+        ) as string,
+      },
+    });
+  });
+
+  test('web retry with current strategy skips checkpoint reset', async () => {
+    mockFindLatestCheckpointForRetry.mockResolvedValueOnce({
+      workflow_run_id: 'run-1',
+      node_id: 'b',
+      retry_epoch: 0,
+      checkpoint_ref: 'refs/archon/checkpoints/run-1/0/b',
+      commit_sha: 'checkpoint-sha',
+      created_commit: false,
+      fallback_from_node_id: null,
+      created_at: new Date(),
+    });
+    mockVerifyCommitRef.mockImplementation(async (_repoPath, refOrSha) =>
+      refOrSha === 'HEAD' ? 'head-sha' : 'checkpoint-sha'
+    );
+    mockIsCommitAncestorOfHead.mockResolvedValueOnce(true);
+
+    const result = await prepareWorkflowNodeRetry(
+      makeRequest({
+        requesterSurface: 'web',
+        authorizationBasis: 'owner',
+        checkoutStrategy: 'current',
+        workflow: makeWorkflow({ mutates_checkout: true }),
+      })
+    );
+
+    expect(result.resetSkipped).toBe(true);
+    expect(result.checkoutStrategy).toBe('current');
+    expect(result.checkpointCommitSha).toBe('safety-sha');
+    expect(mockCreateRetrySafetyRef).toHaveBeenCalledTimes(1);
+    expect(mockResetTrackedFilesToCommit).not.toHaveBeenCalled();
+    expect(auditPayloads()[1]).toMatchObject({
+      node_id: 'b',
+      retry_epoch: 1,
+      checkpoint_ref: 'refs/archon/checkpoints/run-1/0/b',
+      checkpoint_commit_sha: 'safety-sha',
+      safety_ref: 'refs/archon/retry-safety/run-1/1',
+      safety_commit_sha: 'safety-sha',
+      reset_skipped: true,
+      checkout_strategy: 'current',
     });
   });
 

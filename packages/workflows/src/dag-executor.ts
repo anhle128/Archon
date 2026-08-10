@@ -1513,11 +1513,11 @@ function assertExternalPrerequisitesCompleted(params: {
   }
 }
 
-function collectLatestRouteActivationTargetIds(params: {
+function collectLatestRouteActivations(params: {
   metadata: RouteLoopRuntimeMetadata;
   routeTargetIds: Set<string>;
   invalidatedNodeIds?: readonly string[];
-}): Set<string> {
+}): RouteLoopRuntimeMetadata['routeActivations'][string][] {
   const latestByRouteLoop = new Map<string, RouteLoopRuntimeMetadata['routeActivations'][string]>();
   const invalidatedNodeIds = new Set(params.invalidatedNodeIds ?? []);
 
@@ -1530,7 +1530,7 @@ function collectLatestRouteActivationTargetIds(params: {
     }
   }
 
-  return new Set(Array.from(latestByRouteLoop.values(), activation => activation.target_node_id));
+  return Array.from(latestByRouteLoop.values());
 }
 
 function assertRouteTargetCanBeActivated(
@@ -6948,6 +6948,16 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
     route,
   } = ctx;
   // nodeOutputs + accumulators + lastSequentialSession are mutated in place on `ctx`.
+  const knownNodes = new Map<string, readonly string[] | undefined>(
+    layers.flatMap(layer =>
+      layer.map(node => [node.id, declaredFieldsFromSchema(node.output_format)] as const)
+    )
+  );
+  for (const [nodeId, output] of ctx.nodeOutputs) {
+    if (!knownNodes.has(nodeId)) {
+      knownNodes.set(nodeId, 'declaredFields' in output ? output.declaredFields : undefined);
+    }
+  }
 
   for (let layerIdx = 0; layerIdx < layers.length; layerIdx++) {
     const layer = layers[layerIdx];
@@ -7164,7 +7174,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
           if (node.when !== undefined) {
             const { result: conditionPasses, parsed: conditionParsed } = evaluateCondition(
               node.when,
-              ctx.nodeOutputs
+              ctx.nodeOutputs,
+              knownNodes
             );
             if (!conditionParsed) {
               const parseErrMsg = `⚠️ Node '${node.id}': unparseable \`when:\` expression "${node.when}" — node skipped (fail-closed). Check syntax: \`$nodeId.output == 'VALUE'\`, \`$nodeId.output > '5'\`, or compound \`$a.output == 'X' && $b.output != 'Y'\`.`;
@@ -7534,7 +7545,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
 
             const { result: conditionResult, parsed: conditionParsed } = evaluateCondition(
               node.route_loop.condition,
-              ctx.nodeOutputs
+              ctx.nodeOutputs,
+              knownNodes
             );
 
             if (!conditionParsed) {
@@ -8727,6 +8739,15 @@ export async function executeDagWorkflow(
   const routeLoopMetadata = hasRouteLoopNodes
     ? routeLoopRuntimeMetadataSchema.parse(workflowRun.metadata)
     : routeLoopRuntimeMetadataSchema.parse({});
+  const resumePriorCompletedNodes = priorCompletedNodes ? new Map(priorCompletedNodes) : undefined;
+  const approval = isApprovalContext(workflowRun.metadata.approval)
+    ? workflowRun.metadata.approval
+    : undefined;
+  const approvedApprovalNodeId =
+    approval?.resolved === 'approved' &&
+    (approval.type === undefined || approval.type === 'approval')
+      ? approval.nodeId
+      : undefined;
 
   for (const node of workflow.nodes) {
     if (isRouteLoopNode(node)) {
@@ -8758,12 +8779,27 @@ export async function executeDagWorkflow(
     }
   }
   if (hasRouteLoopNodes) {
-    for (const targetNodeId of collectLatestRouteActivationTargetIds({
+    for (const activation of collectLatestRouteActivations({
       metadata: routeLoopMetadata,
       routeTargetIds,
       invalidatedNodeIds: retryContext?.invalidatedNodeIds,
     })) {
-      activatedRouteTargetIds.add(targetNodeId);
+      activatedRouteTargetIds.add(activation.target_node_id);
+      if (activation.outcome !== 'negative') continue;
+      const routeLoopNode = nodesById.get(activation.route_loop_node_id);
+      if (!routeLoopNode || !isRouteLoopNode(routeLoopNode)) continue;
+      const rerunPlan = buildSelectedRouteRerunPlan({
+        routeLoopNode,
+        selectedTargetId: activation.target_node_id,
+        nodesById,
+        dependents,
+      });
+      for (const rerunNodeId of rerunPlan.rerunNodeIds) {
+        scheduleRouteRerunNode(rerunNodeId, rerunPlan.activeDependenciesByNode.get(rerunNodeId));
+        if (rerunNodeId !== approvedApprovalNodeId) {
+          resumePriorCompletedNodes?.delete(rerunNodeId);
+        }
+      }
     }
   }
 
@@ -8808,10 +8844,10 @@ export async function executeDagWorkflow(
   // treated as done for trigger-rule and $nodeId.output substitution purposes.
   // Nodes flagged `always_run: true` are excluded — they re-execute on resume
   // and downstream consumers must see the fresh output, not the cached one.
-  if (priorCompletedNodes && priorCompletedNodes.size > 0) {
+  if (resumePriorCompletedNodes && resumePriorCompletedNodes.size > 0) {
     const nodesById = new Map(workflow.nodes.map(n => [n.id, n]));
     let prepopulatedCount = 0;
-    for (const [nodeId, output] of priorCompletedNodes) {
+    for (const [nodeId, output] of resumePriorCompletedNodes) {
       const node = nodesById.get(nodeId);
       // Nodes flagged always_run re-execute on resume — leave them for fresh output.
       if (node?.always_run && !retryContext) continue; // Re-derive the producer's declared field set from the loaded definition so the
@@ -8831,9 +8867,9 @@ export async function executeDagWorkflow(
     getLog().info(
       {
         workflowRunId: workflowRun.id,
-        priorCompletedCount: priorCompletedNodes.size,
+        priorCompletedCount: resumePriorCompletedNodes.size,
         prepopulatedCount,
-        alwaysRunResumedCount: priorCompletedNodes.size - prepopulatedCount,
+        alwaysRunResumedCount: resumePriorCompletedNodes.size - prepopulatedCount,
       },
       'dag.workflow_resume_prepopulated'
     );
@@ -8895,7 +8931,7 @@ export async function executeDagWorkflow(
     scopeArtifactsDir: persistScopeKey !== undefined ? scopeArtifactsDir : undefined,
     layers,
     nodeOutputs,
-    priorCompletedNodes,
+    priorCompletedNodes: resumePriorCompletedNodes,
     lastSequentialSession: undefined,
     totalCostUsd: 0,
     totalTokensIn: priorTokenUsage?.input ?? 0,

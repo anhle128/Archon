@@ -149,6 +149,34 @@ describe('evaluateCondition', () => {
     expect((caught as OutputRefError).message).toContain("'classify'");
   });
 
+  it('known node without output makes the atom false regardless of operator', () => {
+    const outputs = new Map<string, NodeOutput>();
+    const knownNodes = new Map<string, readonly string[]>([['converge', ['gate', 'tasks_added']]]);
+    expect(evaluateCondition("$converge.output.gate == 'FAIL'", outputs, knownNodes)).toEqual({
+      result: false,
+      parsed: true,
+    });
+    expect(evaluateCondition("$converge.output.gate != 'FAIL'", outputs, knownNodes)).toEqual({
+      result: false,
+      parsed: true,
+    });
+  });
+
+  it('known pending or skipped producer makes the atom false without hiding field errors', () => {
+    const knownNodes = new Map<string, readonly string[]>([['converge', ['gate']]]);
+    const pending = new Map<string, NodeOutput>([['converge', { state: 'pending', output: '' }]]);
+    const skipped = new Map<string, NodeOutput>([['converge', { state: 'skipped', output: '' }]]);
+    expect(evaluateCondition("$converge.output.gate != 'FAIL'", pending, knownNodes).result).toBe(
+      false
+    );
+    expect(evaluateCondition("$converge.output.gate != 'FAIL'", skipped, knownNodes).result).toBe(
+      false
+    );
+    expect(() =>
+      evaluateCondition("$converge.output.gaet == 'FAIL'", new Map(), knownNodes)
+    ).toThrow(OutputRefError);
+  });
+
   it('failed node: output is empty string, conditions evaluate accordingly', () => {
     const outputs = new Map([['classify', makeOutput('', 'failed')]]);
     expect(evaluateCondition("$classify.output == ''", outputs).result).toBe(true);
