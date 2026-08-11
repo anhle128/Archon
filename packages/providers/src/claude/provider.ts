@@ -61,6 +61,20 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
+interface ClosableQuery {
+  close?: () => void;
+}
+type ClosableAsyncGenerator<T> = AsyncGenerator<T> & ClosableQuery;
+
+function closeQuery(queryToClose: ClosableQuery | undefined, reason: string): void {
+  if (!queryToClose?.close) return;
+  try {
+    queryToClose.close();
+  } catch (e) {
+    getLog().warn({ err: e as Error, reason }, 'claude.query_close_failed');
+  }
+}
+
 /**
  * Content block type for assistant messages
  */
@@ -334,7 +348,7 @@ class FirstEventTimeoutError extends Error {}
  * within `timeoutMs`. If it doesn't, aborts the controller and throws.
  */
 export async function* withFirstMessageTimeout<T>(
-  gen: AsyncGenerator<T>,
+  gen: ClosableAsyncGenerator<T>,
   controller: AbortController,
   timeoutMs: number,
   diagnostics: Record<string, unknown>
@@ -353,6 +367,7 @@ export async function* withFirstMessageTimeout<T>(
   } catch (err) {
     if (err instanceof FirstEventTimeoutError) {
       controller.abort();
+      closeQuery(gen, 'first_event_timeout');
       getLog().error({ ...diagnostics, timeoutMs }, 'claude.first_event_timeout');
       throw new Error(
         'Claude Code subprocess produced no output within ' +
@@ -1313,8 +1328,10 @@ export class ClaudeProvider implements IAgentProvider {
     // Track the current attempt's controller so a single abort listener
     // can forward cancellation without accumulating per-retry listeners.
     let currentController: AbortController | undefined;
+    let currentQuery: ClosableQuery | undefined;
     const onAbort = (): void => {
       currentController?.abort();
+      closeQuery(currentQuery, 'request_abort');
     };
     if (requestOptions?.abortSignal) {
       requestOptions.abortSignal.addEventListener('abort', onAbort, { once: true });
@@ -1374,6 +1391,7 @@ export class ClaudeProvider implements IAgentProvider {
       try {
         // 4. Run query with first-event timeout protection
         const rawEvents = query({ prompt, options });
+        currentQuery = rawEvents;
         const timeoutMs = getFirstEventTimeoutMs();
         const diagnostics = buildFirstEventHangDiagnostics(
           options.env as Record<string, string>,
@@ -1417,6 +1435,8 @@ export class ClaudeProvider implements IAgentProvider {
         getLog().info({ attempt, delayMs, errorClass }, 'retrying_subprocess');
         await new Promise(resolve => setTimeout(resolve, delayMs));
         lastError = enrichedError;
+      } finally {
+        currentQuery = undefined;
       }
     }
 

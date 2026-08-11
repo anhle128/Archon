@@ -121,22 +121,68 @@ nodes:
     depends_on:
       - clarify-explain
 
-  - id: clarify-apply
-    prompt: |
-      $speckit-clarifybatch --apply
+  - id: clarify-apply-precheck
+    bash: |
+      set -euo pipefail
+      paths_json=$(.specify/scripts/bash/check-prerequisites.sh --json --paths-only)
+      feature_dir=$(node -e 'const fs=require("fs"); const data=JSON.parse(fs.readFileSync(0,"utf8")); const dir=data.FEATURE_DIR||data.feature_directory; if (!dir) process.exit(1); console.log(dir);' <<< "$paths_json")
+      questions_file="$feature_dir/clarification-questions.md"
+      if [ ! -f "$questions_file" ]; then
+        echo "Missing pending clarification file: $questions_file"
+        exit 1
+      fi
+      if ! grep -Eq '^(\*\*)?Status:(\*\*)? PENDING$' "$questions_file"; then
+        echo "Clarification file is not pending: $questions_file"
+        exit 1
+      fi
+      printf '%s\n' "$feature_dir"
     depends_on:
       - clarify-gate
-    provider: codex
-    effort: xhigh
-    model: gpt-5.6-terra
+
+  - id: clarify-apply
+    prompt: |
+      The deterministic precheck resolved this exact feature directory:
+      $clarify-apply-precheck.output
+
+      Apply only that feature directory. Do not inspect or apply any other `specs/*` directory.
+      Run:
+      $speckit-clarifybatch --apply
+
+      Before applying, run `.specify/scripts/bash/check-prerequisites.sh --json --paths-only` and use its `FEATURE_DIR`.
+      If the resolved `FEATURE_DIR` does not match the precheck path above, stop and report BLOCKED.
+      If anything prevents apply, stop and report BLOCKED with the exact missing path.
+    depends_on:
+      - clarify-apply-precheck
+    provider: claude
+    effort: max
+    model: sonnet
     context: fresh
+
+  - id: clarify-apply-verify
+    bash: |
+      set -euo pipefail
+      paths_json=$(.specify/scripts/bash/check-prerequisites.sh --json --paths-only)
+      feature_dir=$(node -e 'const fs=require("fs"); const data=JSON.parse(fs.readFileSync(0,"utf8")); const dir=data.FEATURE_DIR||data.feature_directory; if (!dir) process.exit(1); console.log(dir);' <<< "$paths_json")
+      questions_file="$feature_dir/clarification-questions.md"
+      if [ -f "$questions_file" ]; then
+        echo "Clarify apply left pending questions file in place: $questions_file"
+        exit 1
+      fi
+      archive=$(find "$feature_dir" -maxdepth 1 -type f -name 'clarifications-applied-*.md' -print | sort | tail -n 1)
+      if [ -z "$archive" ]; then
+        echo "Clarify apply did not create an archive in: $feature_dir"
+        exit 1
+      fi
+      echo "Clarify apply verified: $archive"
+    depends_on:
+      - clarify-apply
 
   - id: red-team
     prompt: |
       Read .specify/feature.json to resolve <feature_directory>, then run:
       $speckit.red-team.run <feature_directory> --yes
     depends_on:
-      - clarify-apply
+      - clarify-apply-verify
     effort: high
     provider: claude
     model: "claude-opus-4-8[1M]"
@@ -254,9 +300,9 @@ nodes:
       /speckit.red-team.apply --allow-historical-edits
     depends_on:
       - red-team-gate
-    provider: codex
-    effort: xhigh
-    model: gpt-5.6-terra
+    provider: claude
+    effort: max
+    model: sonnet
     context: fresh
 
   - id: plan
@@ -265,9 +311,9 @@ nodes:
       /speckit-plan create detail plan <feature_directory>
     depends_on:
       - red-team-apply
-    provider: codex
-    effort: xhigh
-    model: gpt-5.6-sol
+    effort: high
+    provider: claude
+    model: "fable"
     context: fresh
 
   - id: tasks
@@ -276,10 +322,9 @@ nodes:
       /speckit-tasks <feature_directory>
     depends_on:
       - plan
-
-    effort: high
-    provider: claude
-    model: "fable"
+    provider: codex
+    effort: xhigh
+    model: gpt-5.6-terra
     context: fresh
 
   - id: analyze
@@ -428,9 +473,9 @@ nodes:
       $speckit-analyzebatch --apply --allow-historical-edits
     depends_on:
       - analyze-respond
-    provider: codex
-    effort: xhigh
-    model: gpt-5.6-terra
+    provider: claude
+    effort: max
+    model: sonnet
     context: fresh
 
   - id: ralph-tasks-to-ralph

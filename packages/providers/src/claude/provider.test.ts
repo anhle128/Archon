@@ -1725,6 +1725,21 @@ describe('withFirstMessageTimeout', () => {
     expect(controller.signal.aborted).toBe(true);
   });
 
+  test('closes query when timeout fires before the first event', async () => {
+    async function* stuckGen(): AsyncGenerator<string> {
+      await new Promise(() => {});
+      yield 'never';
+    }
+    const close = mock(() => {});
+    const source = stuckGen() as AsyncGenerator<string> & { close: () => void };
+    source.close = close;
+    const controller = new AbortController();
+    const gen = withFirstMessageTimeout(source, controller, 50, {});
+
+    await expect(gen.next()).rejects.toThrow();
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
   test('handles generator that completes immediately without yielding', async () => {
     async function* emptyGen(): AsyncGenerator<string> {
       return;
@@ -1866,6 +1881,60 @@ describe('sendQuery decomposition behaviors', () => {
     // Single abort listener registered (not per-retry)
     expect(callCount).toBe(1);
   }, 5_000);
+
+  test('abort signal closes the active SDK query', async () => {
+    const abortController = new AbortController();
+    let resolvePendingNext: ((value: IteratorResult<unknown>) => void) | undefined;
+    let nextCalls = 0;
+    const close = mock(() => {
+      resolvePendingNext?.({ done: true, value: undefined });
+    });
+    const source = {
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+      next: mock(() => {
+        nextCalls++;
+        if (nextCalls === 1) {
+          return Promise.resolve({
+            done: false,
+            value: {
+              type: 'assistant',
+              message: { content: [{ type: 'text', text: 'first' }] },
+            },
+          });
+        }
+        return new Promise<IteratorResult<unknown>>(resolve => {
+          resolvePendingNext = resolve;
+        });
+      }),
+      return: mock(async () => ({ done: true, value: undefined })),
+      throw: mock(async (err?: unknown) => {
+        throw err;
+      }),
+      close,
+    };
+    mockQuery.mockImplementation(() => source);
+
+    const chunks = [];
+    const consumeGenerator = async (): Promise<void> => {
+      for await (const chunk of client.sendQuery('test', '/workspace', undefined, {
+        abortSignal: abortController.signal,
+      })) {
+        chunks.push(chunk);
+      }
+    };
+
+    const consuming = consumeGenerator();
+    for (let i = 0; i < 10 && chunks.length === 0; i++) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    abortController.abort();
+    await consuming;
+
+    expect(chunks).toEqual([{ type: 'assistant', content: 'first' }]);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
 
   test('enriched error (with stderr) is thrown at retry exhaustion, not raw error', async () => {
     mockQuery.mockImplementation(async function* (args: {
