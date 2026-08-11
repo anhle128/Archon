@@ -121,68 +121,22 @@ nodes:
     depends_on:
       - clarify-explain
 
-  - id: clarify-apply-precheck
-    bash: |
-      set -euo pipefail
-      paths_json=$(.specify/scripts/bash/check-prerequisites.sh --json --paths-only)
-      feature_dir=$(node -e 'const fs=require("fs"); const data=JSON.parse(fs.readFileSync(0,"utf8")); const dir=data.FEATURE_DIR||data.feature_directory; if (!dir) process.exit(1); console.log(dir);' <<< "$paths_json")
-      questions_file="$feature_dir/clarification-questions.md"
-      if [ ! -f "$questions_file" ]; then
-        echo "Missing pending clarification file: $questions_file"
-        exit 1
-      fi
-      if ! grep -Eq '^(\*\*)?Status:(\*\*)? PENDING$' "$questions_file"; then
-        echo "Clarification file is not pending: $questions_file"
-        exit 1
-      fi
-      printf '%s\n' "$feature_dir"
-    depends_on:
-      - clarify-gate
-
   - id: clarify-apply
     prompt: |
-      The deterministic precheck resolved this exact feature directory:
-      $clarify-apply-precheck.output
-
-      Apply only that feature directory. Do not inspect or apply any other `specs/*` directory.
-      Run:
       $speckit-clarifybatch --apply
-
-      Before applying, run `.specify/scripts/bash/check-prerequisites.sh --json --paths-only` and use its `FEATURE_DIR`.
-      If the resolved `FEATURE_DIR` does not match the precheck path above, stop and report BLOCKED.
-      If anything prevents apply, stop and report BLOCKED with the exact missing path.
     depends_on:
-      - clarify-apply-precheck
+      - clarify-gate
     provider: claude
     effort: max
     model: sonnet
     context: fresh
-
-  - id: clarify-apply-verify
-    bash: |
-      set -euo pipefail
-      paths_json=$(.specify/scripts/bash/check-prerequisites.sh --json --paths-only)
-      feature_dir=$(node -e 'const fs=require("fs"); const data=JSON.parse(fs.readFileSync(0,"utf8")); const dir=data.FEATURE_DIR||data.feature_directory; if (!dir) process.exit(1); console.log(dir);' <<< "$paths_json")
-      questions_file="$feature_dir/clarification-questions.md"
-      if [ -f "$questions_file" ]; then
-        echo "Clarify apply left pending questions file in place: $questions_file"
-        exit 1
-      fi
-      archive=$(find "$feature_dir" -maxdepth 1 -type f -name 'clarifications-applied-*.md' -print | sort | tail -n 1)
-      if [ -z "$archive" ]; then
-        echo "Clarify apply did not create an archive in: $feature_dir"
-        exit 1
-      fi
-      echo "Clarify apply verified: $archive"
-    depends_on:
-      - clarify-apply
 
   - id: red-team
     prompt: |
       Read .specify/feature.json to resolve <feature_directory>, then run:
       $speckit.red-team.run <feature_directory> --yes
     depends_on:
-      - clarify-apply-verify
+      - clarify-apply
     effort: high
     provider: claude
     model: "claude-opus-4-8[1M]"
@@ -540,7 +494,7 @@ nodes:
       condition: "$speckit-converge.output.gate == 'PASS'"
       max_iterations: 3
       routes:
-        positive: create-pull-request
+        positive: cargo-clean-before-pr
         negative: speckit-converge-review-gate
         exhausted: ralph-tasks-to-ralph-2
 
@@ -557,11 +511,18 @@ nodes:
     command: archon-create-pr
     provider: codex
     effort: medium
-    depends_on: [speckit-converge-gate]
+    depends_on: [cargo-clean-before-pr]
     context: fresh
     model: gpt-5.6-terra
     idle_timeout: 900000
     output_type: pull-request
+
+  - id: cargo-clean-before-pr
+    bash: |
+      if [ -f Cargo.toml ]; then
+        cargo clean
+      fi
+    depends_on: [speckit-converge-gate]
 
   - id: ralph-tasks-to-ralph-2
     prompt: |
@@ -596,8 +557,15 @@ nodes:
     command: archon-create-pr
     provider: codex
     effort: medium
-    depends_on: [ralph-sync-back-2]
+    depends_on: [cargo-clean-before-pr-2]
     context: fresh
     model: gpt-5.6-terra
     idle_timeout: 900000
     output_type: pull-request
+
+  - id: cargo-clean-before-pr-2
+    bash: |
+      if [ -f Cargo.toml ]; then
+        cargo clean
+      fi
+    depends_on: [ralph-sync-back-2]
