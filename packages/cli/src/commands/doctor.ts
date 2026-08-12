@@ -18,12 +18,14 @@ import {
   resolveClaudeBinaryWithSource,
   type ClaudeBinaryResolution,
 } from '@archon/providers/claude/binary-resolver';
+import { resolveGrokBinaryPath } from '@archon/providers/grok/binary-resolver';
 import type { Codebase, MergedConfig, SchemaVersionInfo } from '@archon/core';
 
 // Vendor-canonical credential id for Codex (since #1955 credentials are keyed
 // by vendor, not agent). A connected `openai` key signals Codex intent even
 // when it isn't the configured default assistant.
 const CODEX_CREDENTIAL_VENDOR = 'openai';
+const GROK_CREDENTIAL_VENDOR = 'xai';
 
 // Env vars that indicate a Pi backend API key is configured. Keep in sync with
 // `PI_BACKENDS` in setup.ts — these are the auth signals checkPi inspects.
@@ -249,6 +251,94 @@ async function defaultLoadCodexBinaryDeps(env: NodeJS.ProcessEnv): Promise<Codex
   return {
     configBinaryPath: config.assistants.codex.codexBinaryPath,
     isDefaultAssistant: config.assistant === 'codex',
+    credentialConnected,
+  };
+}
+
+export interface GrokDeps {
+  /** `assistants.grok.grokBinaryPath` from the merged config, if configured. */
+  configBinaryPath?: string;
+  /** True when the merged default assistant resolves to grok. */
+  isDefaultAssistant: boolean;
+  /** True when the CLI user has connected an xAI credential. */
+  credentialConnected: boolean;
+}
+
+/** Verify that Grok Build is installed and its current authentication can list models. */
+export async function checkGrok(
+  env: NodeJS.ProcessEnv,
+  loadDeps: (env: NodeJS.ProcessEnv) => Promise<GrokDeps> = defaultLoadGrokDeps,
+  resolve: (configPath?: string) => Promise<string> = resolveGrokBinaryPath
+): Promise<CheckResult> {
+  const label = 'Grok CLI';
+
+  let deps: GrokDeps;
+  try {
+    deps = await loadDeps(env);
+  } catch (err) {
+    getLog().debug({ err }, 'doctor.grok_deps_load_failed');
+    deps = { isDefaultAssistant: false, credentialConnected: false };
+  }
+
+  const configured =
+    env.DEFAULT_AI_ASSISTANT === 'grok' ||
+    Boolean(env.GROK_BIN_PATH) ||
+    Boolean(env.XAI_API_KEY) ||
+    deps.isDefaultAssistant ||
+    Boolean(deps.configBinaryPath) ||
+    deps.credentialConnected;
+  if (!configured) {
+    return {
+      label,
+      status: 'skip',
+      message: 'Grok not configured (not the default assistant, no xAI credential connected)',
+    };
+  }
+
+  let binaryPath: string;
+  try {
+    binaryPath = await resolve(deps.configBinaryPath);
+  } catch (err) {
+    return { label, status: 'fail', message: (err as Error).message };
+  }
+
+  try {
+    const version = await execFileAsync(binaryPath, ['--version'], { timeout: 5000 });
+    await execFileAsync(binaryPath, ['models'], { timeout: 15_000 });
+    return {
+      label,
+      status: 'pass',
+      message: `${version.stdout.trim() || binaryPath} (authenticated)`,
+    };
+  } catch (err) {
+    return {
+      label,
+      status: 'fail',
+      message: `${binaryPath} check failed: ${(err as Error).message}. Run \`grok login\` or set XAI_API_KEY.`,
+    };
+  }
+}
+
+export async function defaultLoadGrokDeps(env: NodeJS.ProcessEnv): Promise<GrokDeps> {
+  const { loadConfig, listUserProviderKeys } = await import('@archon/core');
+  const userDb = await import('@archon/core/db/users');
+  const config = await loadConfig(process.cwd());
+
+  let credentialConnected = false;
+  const cliId = env.ARCHON_USER_ID || env.USER || env.USERNAME;
+  if (cliId) {
+    try {
+      const user = await userDb.findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
+      const rows = await listUserProviderKeys(user.id);
+      credentialConnected = rows.some(r => r.provider === GROK_CREDENTIAL_VENDOR);
+    } catch (err) {
+      getLog().debug({ err }, 'doctor.grok_credential_lookup_failed');
+    }
+  }
+
+  return {
+    configBinaryPath: config.assistants.grok.grokBinaryPath,
+    isDefaultAssistant: config.assistant === 'grok',
     credentialConnected,
   };
 }
@@ -736,6 +826,7 @@ export async function doctorCommand(
     : [
         checkClaudeBinary(),
         checkCodexBinary(env),
+        checkGrok(env),
         checkGhAuth(env),
         checkPi(env),
         checkOpenCode(env, full),

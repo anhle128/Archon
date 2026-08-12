@@ -236,7 +236,7 @@ User-controlled workflow variables like `$USER_MESSAGE` and `$ARGUMENTS` are pas
 Script subprocesses receive `process.env` merged with any codebase-scoped env
 vars you've configured via the Web UI (Settings → Projects → Env Vars) or the
 `env:` block in `.archon/config.yaml`. This is the same injection surface used
-by Claude, Codex, and bash nodes.
+by Claude, Codex, Grok, and bash nodes.
 
 **Target repo `.env` isolation:** the Bun subprocess is invoked with
 `--no-env-file`, so variables in the target repo's `.env` do **not** leak into

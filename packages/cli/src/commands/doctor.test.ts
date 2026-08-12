@@ -15,6 +15,7 @@ import * as git from '@archon/git';
 import {
   checkClaudeBinary,
   checkCodexBinary,
+  checkGrok,
   checkOpenCode,
   checkDatabase,
   checkConnectedProviders,
@@ -32,6 +33,7 @@ import {
   type CodexBinaryDeps,
   type DatabaseDeps,
   type FolderProjectDeps,
+  type GrokDeps,
   type OpenCodeDeps,
 } from './doctor';
 import * as doctorModule from './doctor';
@@ -151,6 +153,7 @@ describe('checkClaudeBinary', () => {
     assistants: {
       claude: { claudeBinaryPath: '/from/claude/config' },
       codex: { codexBinaryPath: '/from/codex/config' },
+      grok: { grokBinaryPath: '/from/grok/config' },
     },
   });
 
@@ -280,6 +283,66 @@ describe('checkCodexBinary', () => {
     expect(result.status).toBe('fail');
     expect(result.message).toContain('did not spawn');
     expect(result.message).toContain('ENOENT');
+  });
+});
+
+describe('checkGrok', () => {
+  let execSpy: ReturnType<typeof spyOn<typeof git, 'execFileAsync'>>;
+  const notConfigured: GrokDeps = {
+    isDefaultAssistant: false,
+    credentialConnected: false,
+  };
+
+  beforeEach(() => {
+    execSpy = spyOn(git, 'execFileAsync');
+  });
+
+  afterEach(() => {
+    execSpy.mockRestore();
+  });
+
+  it('skips when Grok is not configured', async () => {
+    const result = await checkGrok(
+      {},
+      async () => notConfigured,
+      async () => '/opt/grok'
+    );
+
+    expect(result.status).toBe('skip');
+    expect(result.label).toBe('Grok CLI');
+    expect(execSpy).not.toHaveBeenCalled();
+  });
+
+  it('checks the version and authenticated model listing', async () => {
+    execSpy.mockResolvedValue({ stdout: 'grok 1.0.0\n', stderr: '' });
+    const result = await checkGrok(
+      { DEFAULT_AI_ASSISTANT: 'grok' },
+      async () => notConfigured,
+      async () => '/opt/grok'
+    );
+
+    expect(result).toEqual({
+      label: 'Grok CLI',
+      status: 'pass',
+      message: 'grok 1.0.0 (authenticated)',
+    });
+    expect(execSpy).toHaveBeenNthCalledWith(1, '/opt/grok', ['--version'], { timeout: 5000 });
+    expect(execSpy).toHaveBeenNthCalledWith(2, '/opt/grok', ['models'], { timeout: 15_000 });
+  });
+
+  it('reports an actionable authentication failure', async () => {
+    execSpy
+      .mockResolvedValueOnce({ stdout: 'grok 1.0.0\n', stderr: '' })
+      .mockRejectedValueOnce(new Error('not logged in'));
+    const result = await checkGrok(
+      { XAI_API_KEY: 'xai-test' },
+      async () => notConfigured,
+      async () => '/opt/grok'
+    );
+
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('not logged in');
+    expect(result.message).toContain('grok login');
   });
 });
 

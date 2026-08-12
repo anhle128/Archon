@@ -278,6 +278,7 @@ recommendedWorkflows: "archon-plan"
       // explicitly rather than asserting an exhaustive shape.
       expect(config.assistants.claude).toEqual({});
       expect(config.assistants.codex).toEqual({});
+      expect(config.assistants.grok).toEqual({});
       expect(config.streaming.telegram).toBe('stream');
       expect(config.concurrency.maxConversations).toBe(10);
     });
@@ -1029,6 +1030,25 @@ assistants:
       expect(safe.assistants.codex).not.toHaveProperty('additionalDirectories');
     });
 
+    test('exposes only safe Grok assistant fields', async () => {
+      mockFsReadFile.mockResolvedValue(`
+assistants:
+  grok:
+    model: grok-build
+    modelReasoningEffort: high
+    permissionMode: acceptEdits
+    grokBinaryPath: /sensitive/grok
+`);
+      const config = await loadConfig();
+      const safe = toSafeConfig(config);
+      expect(safe.assistants.grok).toEqual({
+        model: 'grok-build',
+        modelReasoningEffort: 'high',
+        permissionMode: 'acceptEdits',
+      });
+      expect(safe.assistants.grok).not.toHaveProperty('grokBinaryPath');
+    });
+
     test('exposes only safe qodercli assistant fields', async () => {
       mockFsReadFile.mockResolvedValue(`
 assistants:
@@ -1083,6 +1103,7 @@ assistants:
       expect(safe.assistants).toBeDefined();
       expect(safe.assistants.claude).toBeDefined();
       expect(safe.assistants.codex).toBeDefined();
+      expect(safe.assistants.grok).toBeDefined();
       expect(safe.assistants.codex).not.toHaveProperty('additionalDirectories');
     });
 

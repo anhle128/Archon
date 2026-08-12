@@ -16,6 +16,7 @@
 import type {
   ClaudeProviderDefaults,
   CodexProviderDefaults,
+  GrokProviderDefaults,
   CopilotProviderDefaults,
   PiProviderDefaults,
   ProviderDefaultsMap,
@@ -25,6 +26,7 @@ import type { RawAliasesConfig, RawTiersConfig } from '@archon/workflows/model-v
 export type {
   ClaudeProviderDefaults,
   CodexProviderDefaults,
+  GrokProviderDefaults,
   CopilotProviderDefaults,
   PiProviderDefaults,
   ProviderDefaultsMap,
@@ -47,6 +49,7 @@ export type { RawAliasesConfig, RawTiersConfig };
 export type AssistantDefaultsConfig = ProviderDefaultsMap & {
   claude?: ClaudeProviderDefaults;
   codex?: CodexProviderDefaults;
+  grok?: GrokProviderDefaults;
 };
 
 /**
@@ -56,11 +59,12 @@ export type AssistantDefaultsConfig = ProviderDefaultsMap & {
  * with `{}`, so community providers appear in the map too — just typed as
  * `ProviderDefaults` via the generic index rather than a specific shape.
  * `registerBuiltinProviders()` is called before `loadConfig()` at every
- * process entrypoint, so claude/codex are guaranteed present.
+ * process entrypoint, so claude/codex/grok are guaranteed present.
  */
 export type AssistantDefaults = ProviderDefaultsMap & {
   claude: ClaudeProviderDefaults;
   codex: CodexProviderDefaults;
+  grok: GrokProviderDefaults;
 };
 
 /**

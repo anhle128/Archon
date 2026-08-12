@@ -52,10 +52,12 @@ export {
 // Provider classes
 export { ClaudeProvider } from './claude/provider';
 export { CodexProvider } from './codex/provider';
+export { GrokProvider } from './grok/provider';
 
 // Config parsers
 export { parseClaudeConfig, type ClaudeProviderDefaults } from './claude/config';
 export { parseCodexConfig, type CodexProviderDefaults } from './codex/config';
+export { parseGrokConfig, type GrokProviderDefaults } from './grok/config';
 
 // Utilities (needed by consumers)
 export { resetCodexSingleton } from './codex/provider';
@@ -67,6 +69,12 @@ export {
   type CodexBinarySource,
 } from './codex/binary-resolver';
 export { resolveClaudeBinaryPath, fileExists as claudeFileExists } from './claude/binary-resolver';
+export {
+  resolveGrokBinaryPath,
+  isExecutableFile as grokIsExecutableFile,
+  resolveFromPath as grokResolveFromPath,
+} from './grok/binary-resolver';
+export { GROK_CAPABILITIES } from './grok/capabilities';
 
 // Skills resolution
 export { skillSearchRoots } from './shared/skills';

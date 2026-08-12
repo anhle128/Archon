@@ -1,6 +1,6 @@
 ---
 title: AI Assistants
-description: Configure Claude Code, Codex, Qoder CLI, OMP CLI, OpenCode, GitHub Copilot, and Pi as AI assistants for Archon.
+description: Configure Claude Code, Codex, Grok, Qoder CLI, OMP CLI, OpenCode, GitHub Copilot, and Pi as AI assistants for Archon.
 category: getting-started
 area: clients
 audience: [user]
@@ -20,7 +20,7 @@ When a workflow node sets `output_format`, the guarantee level depends on the pr
 
 | Provider | Tier | How it works | On a validation miss |
 |----------|------|--------------|----------------------|
-| Claude, Codex, OpenCode | **enforced** | The SDK/backend grammar-constrains decoding (`output_config.format` / `outputSchema` / `format:{json_schema}`). | The node **fails** — a refusal or `max_tokens` truncation can still bypass grammar enforcement, so the parsed output is validated post-parse for these too. No reask (a failure here is a genuine edge). |
+| Claude, Codex, Grok, OpenCode | **enforced** | The SDK/backend grammar-constrains decoding (`output_config.format` / `outputSchema` / `--json-schema` / `format:{json_schema}`). | The node **fails** — a refusal or `max_tokens` truncation can still bypass grammar enforcement, so the parsed output is validated post-parse for these too. No reask (a failure here is a genuine edge). |
 | Pi, Copilot, Qoder CLI, OMP CLI | **best-effort** | The schema is appended to the prompt; JSON is extracted from the response and structurally repaired (trailing commas, single quotes, truncated tails). | The executor re-asks (prompt + the schema errors) up to **3×**; if still invalid, the node **fails loudly**. |
 
 In all cases the parsed output is **validated against your `output_format` schema** before downstream nodes see it, and a node that declares `output_format` but produces no schema-valid output **fails** rather than silently degrading. See [Authoring Workflows → `output_format`](/guides/authoring-workflows/#output_format-for-structured-json) for field-access (`$node.output.field`) semantics.
@@ -236,7 +236,8 @@ You can configure Codex's behavior in `.archon/config.yaml`:
 assistants:
   codex:
     model: gpt-5.6-sol
-    modelReasoningEffort: medium  # Legacy provider default; passed through unchanged    webSearchMode: live           # 'disabled' | 'cached' | 'live'
+    modelReasoningEffort: medium  # Legacy provider default; passed through unchanged
+    webSearchMode: live           # 'disabled' | 'cached' | 'live'
     additionalDirectories:
       - /absolute/path/to/other/repo
 ```
@@ -251,9 +252,71 @@ DEFAULT_AI_ASSISTANT=codex
 
 ### Skills
 
-Codex supports skills via filesystem auto-discovery from `.agents/skills/`. Run `archon skill install` (or `archon setup`) to install the bundled `archon` and `manage-run` skills for both Claude Code and Codex.
+Codex supports skills via filesystem auto-discovery from `.agents/skills/`.
+Run `archon skill install` (or `archon setup`) to install the bundled `archon` and `manage-run` skills for Claude Code, Codex, and Grok.
 
 See [Per-Node Skills](/guides/skills/#codex-compatibility) for behavior details and limitations.
+
+## Grok Build
+
+Archon integrates with xAI's Grok Build CLI through its headless streaming JSON protocol.
+The CLI remains responsible for authentication, model access, and its own local configuration.
+
+### Install Grok Build
+
+```bash
+curl -fsSL https://x.ai/cli/install.sh | bash
+grok --version
+```
+
+Archon resolves the executable from `GROK_BIN_PATH`, `assistants.grok.grokBinaryPath`, common native installer locations such as `~/.local/bin/grok`, and finally `PATH`.
+
+```ini
+GROK_BIN_PATH=/absolute/path/to/grok
+```
+
+### Authenticate
+
+Use the Grok CLI login flow for ambient credentials:
+
+```bash
+grok login
+grok models
+```
+
+You can instead connect an xAI API key through Archon's per-user credential store with `archon ai key set xai` or Settings → Agents.
+Archon delivers that credential to Grok as `XAI_API_KEY` for the user's runs.
+`archon setup` checks for the binary and launches `grok login` when Grok is selected, while `archon doctor` verifies both the CLI version and authenticated model listing.
+
+### Grok Configuration Options
+
+Configure Grok in `~/.archon/config.yaml` or a repository's `.archon/config.yaml`:
+
+```yaml
+defaultAssistant: grok
+assistants:
+  grok:
+    model: grok-4.5
+    modelReasoningEffort: high
+    permissionMode: bypassPermissions
+    # grokBinaryPath: /absolute/path/to/grok
+```
+
+Supported permission modes are `default`, `acceptEdits`, `auto`, `dontAsk`, `bypassPermissions`, and `plan`.
+Omit `model` to use the default reported by `grok models`; model availability is account-dependent.
+Workflow execution defaults to `bypassPermissions` because no interactive approval channel is available to a headless provider process; set a stricter mode when the workflow's tool policy permits it.
+
+Grok supports session resume and fork, per-node effort, tool allow/deny lists, inline `agents:`, environment injection, streamed reasoning and tool lifecycle events, usage and cost metadata, and enforced `output_format` through the native `--json-schema` flag.
+Grok tool restrictions use native tool IDs such as `read_file` and `run_terminal_cmd`.
+An explicitly empty `allowed_tools: []` fails fast because the Grok CLI treats an empty `--tools` value as unset, which would otherwise silently restore full tool access.
+Skills are discovered by Grok from `.agents/skills/`; a workflow node's `skills:` list is informational and does not scope discovery for that process.
+Per-node `mcp:` and `hooks:` fields are not translated, although Grok may still discover its own CLI configuration from the filesystem.
+
+To set Grok as the default through the environment instead of YAML, use:
+
+```ini
+DEFAULT_AI_ASSISTANT=grok
+```
 
 ## Qoder CLI (Community Provider)
 

@@ -310,7 +310,7 @@ archon workflow run <name> --cwd /path/to/repo "<message>"
 |---------|-------------|
 | `archon chat <message>` | Send a message to the orchestrator |
 | `archon setup` | Interactive setup wizard for credentials and config |
-| `archon doctor` | Verify your setup (Claude/Codex binaries, gh auth, DB, adapters; `--full` also probes the OpenCode runtime) |
+| `archon doctor` | Verify your setup (Claude/Codex/Grok CLIs, gh auth, DB, adapters; `--full` also probes the OpenCode runtime) |
 | `archon workflow list` | List available workflows |
 | `archon workflow run <name> [msg]` | Run a workflow (`--detach` to background it) |
 | `archon workflow status` | Show active runs (running + paused) |
@@ -613,6 +613,6 @@ For always-on access from any device, see the [Docker Deployment Guide](/deploym
 ## Further Reading
 
 - [Configuration](/getting-started/configuration/) — All configuration options
-- [AI Assistants](/getting-started/ai-assistants/) — Claude, Codex, and Pi setup details
+- [AI Assistants](/getting-started/ai-assistants/) — Claude, Codex, Grok, and Pi setup details
 - [CLI Reference](/reference/cli/) — Full CLI documentation
 - [Authoring Workflows](/guides/authoring-workflows/) — Creating custom workflows

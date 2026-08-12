@@ -306,7 +306,8 @@ async handleWebhook(payload: any, signature: string): Promise<void> {
 
 AI agent providers wrap AI SDKs and provide a unified streaming interface. Implement the `IAgentProvider` interface to add new providers.
 
-> **Note:** This section covers built-in providers maintained by the core team (Claude, Codex). For community providers (`builtIn: false`) — which live under `packages/providers/src/community/` and register through `registerCommunityProviders()` — see [Adding a Community Provider](../contributing/adding-a-community-provider/).
+> **Note:** This section covers built-in providers maintained by the core team (Claude, Codex, Grok).
+> For community providers (`builtIn: false`) — which live under `packages/providers/src/community/` and register through `registerCommunityProviders()` — see [Adding a Community Provider](../contributing/adding-a-community-provider/).
 
 ### IAgentProvider Interface
 

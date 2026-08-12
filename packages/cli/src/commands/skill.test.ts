@@ -30,7 +30,7 @@ describe('copyArchonSkill', () => {
     }
   });
 
-  it('writes every bundled skill file under .agents/skills/archon/ (Codex path)', async () => {
+  it('writes every bundled skill file under .agents/skills/archon/ (Codex and Grok path)', async () => {
     await copyArchonSkill(tempDir);
 
     const skillRoot = join(tempDir, '.agents', 'skills', 'archon');
@@ -41,7 +41,7 @@ describe('copyArchonSkill', () => {
     }
   });
 
-  it('writes every bundled manage-run skill file under .agents/skills/manage-run/ (Codex path)', async () => {
+  it('writes every bundled manage-run skill file under .agents/skills/manage-run/ (Codex and Grok path)', async () => {
     await copyArchonSkill(tempDir);
 
     const skillRoot = join(tempDir, '.agents', 'skills', 'manage-run');
@@ -88,12 +88,12 @@ describe('skillInstallCommand', () => {
 
     expect(exitCode).toBe(0);
     expect(existsSync(join(tempDir, '.claude', 'skills', 'archon', 'SKILL.md'))).toBe(true);
-    // Also installs into the Codex path
+    // Also installs into the shared Codex and Grok path
     expect(existsSync(join(tempDir, '.agents', 'skills', 'archon', 'SKILL.md'))).toBe(true);
     expect(existsSync(join(tempDir, '.agents', 'skills', 'manage-run', 'SKILL.md'))).toBe(true);
-    // Final log line should mention restarting both Claude Code and Codex
+    // Final log line should mention restarting all supported coding agents
     const lastLog = logSpy.mock.calls.at(-1)?.[0] as string | undefined;
-    expect(lastLog).toContain('Restart Claude Code or Codex');
+    expect(lastLog).toContain('Restart Claude Code, Codex, or Grok');
   });
 
   it('returns 1 and prints an error when the target directory does not exist', async () => {

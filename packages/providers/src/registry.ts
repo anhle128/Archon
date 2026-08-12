@@ -15,8 +15,10 @@ import type {
 } from './types';
 import { ClaudeProvider } from './claude/provider';
 import { CodexProvider } from './codex/provider';
+import { GrokProvider } from './grok/provider';
 import { CLAUDE_CAPABILITIES } from './claude/capabilities';
 import { CODEX_CAPABILITIES } from './codex/capabilities';
+import { GROK_CAPABILITIES } from './grok/capabilities';
 import { registerCopilotProvider } from './community/copilot/registration';
 import { registerOpencodeProvider } from './community/opencode/registration';
 import { registerPiProvider } from './community/pi/registration';
@@ -107,7 +109,7 @@ export function isRegisteredProvider(id: string): boolean {
 }
 
 /**
- * Register built-in providers (Claude, Codex). Idempotent — skips already-registered IDs.
+ * Register built-in providers (Claude, Codex, Grok). Idempotent — skips already-registered IDs.
  * Must be called at process entrypoints (server, CLI) before any provider lookups.
  */
 export function registerBuiltinProviders(): void {
@@ -146,6 +148,17 @@ export function registerBuiltinProviders(): void {
             kinds: ['api_key', 'subscription'],
           },
         ],
+      },
+    },
+    {
+      id: 'grok',
+      displayName: 'Grok (xAI)',
+      factory: () => new GrokProvider(),
+      capabilities: GROK_CAPABILITIES,
+      builtIn: true,
+      credentials: {
+        kind: 'static',
+        specs: [{ vendor: 'xai', displayName: 'xAI', kinds: ['api_key'] }],
       },
     },
   ];

@@ -1,0 +1,35 @@
+# E2E smoke test — Grok provider
+# Verifies: provider selection, streaming protocol, and native structured output
+name: e2e-grok-smoke
+description: "E2E smoke test for Grok Build. Runs a simple prompt and a structured output node."
+provider: grok
+effort: high
+
+nodes:
+  - id: simple
+    prompt: "What is 2+2? Answer with just the number, nothing else."
+    idle_timeout: 60000
+
+  - id: structured
+    prompt: "Classify '2+2=4' as math or text."
+    output_format:
+      type: object
+      properties:
+        category:
+          type: string
+          enum: ["math", "text"]
+      required: ["category"]
+      additionalProperties: false
+    idle_timeout: 60000
+    depends_on: [simple]
+
+  - id: assert
+    bash: |
+      simple_out=$simple.output
+      structured_out=$structured.output
+      if [ -z "$simple_out" ] || [ -z "$structured_out" ]; then
+        echo "FAIL: Grok returned empty output"
+        exit 1
+      fi
+      echo "PASS: simple=$simple_out structured=$structured_out"
+    depends_on: [simple, structured]

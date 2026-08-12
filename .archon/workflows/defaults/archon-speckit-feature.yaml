@@ -138,8 +138,8 @@ nodes:
     depends_on:
       - clarify-apply
     effort: high
-    provider: claude
-    model: "claude-opus-4-8[1M]"
+    provider: grok
+    model: "grok-4.5"
     context: fresh
     denied_tools:
       - Bash
@@ -276,9 +276,9 @@ nodes:
       /speckit-tasks <feature_directory>
     depends_on:
       - plan
-    provider: codex
-    effort: xhigh
-    model: gpt-5.6-terra
+    effort: high
+    provider: grok
+    model: "grok-4.5"
     context: fresh
 
   - id: analyze
