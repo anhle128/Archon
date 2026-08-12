@@ -540,14 +540,13 @@ git commit -m "feat(cli,server): add workflow review-open for plannotator gates"
     rework:
       prompt: |
         Human annotations on the clarification explainer follow.
-
+        Two kinds: (1) content change → edit source MD + regenerate HTML;
+        (2) visual clarify/explain → HTML only, do not edit source MD.
+        Source of truth: <feature_directory>/clarification-questions.md (not under visual/).
         HTML path: $REVIEW_DOCUMENT
         Annotations:
         $REVIEW_ANNOTATIONS
-
-        Update clarification-questions.md as needed.
-        Regenerate the explainer HTML under $ARTIFACTS_DIR.
-        Print ONLY the absolute path to the HTML file for the next review.
+        Print ONLY the absolute path to the HTML for the next review.
 ```
 
 Same pattern for `red-team-gate` if included in this change.

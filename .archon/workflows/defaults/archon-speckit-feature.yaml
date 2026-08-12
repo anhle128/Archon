@@ -112,7 +112,7 @@ nodes:
          - For each open clarification / issue: where it sits in the flow, why it
            is a problem, and the proposed resolution.
       4. **Persist the final HTML** at this exact path (overwrite OK):
-         `$ARTIFACTS_DIR/speckit-clarify-explainer.html`
+         `<feature_directory>/visual/speckit-clarify-explainer.html`
          - Copy from wherever visual-explainer wrote the file if needed
            (`cp` / write).
          - Do **not** rely on an annotate session inside this node as the human
@@ -122,7 +122,7 @@ nodes:
       ## Final output (contract — required)
       Print **ONLY** the absolute path to that HTML file on the last line
       (no markdown fence, no extra commentary after the path):
-      `$ARTIFACTS_DIR/speckit-clarify-explainer.html` resolved to an absolute path.
+      `<feature_directory>/visual/speckit-clarify-explainer.html` resolved to an absolute path.
     depends_on:
       - clarify-respond
     effort: medium
@@ -151,19 +151,44 @@ nodes:
       capture_response: true
       rework:
         prompt: |
-          You are revising clarification artifacts after human Plannotator annotations.
+          You are handling human Plannotator annotations on clarification artifacts.
+          Annotations are freeform reviewer notes. Classify each one before editing.
 
           HTML path under review: $REVIEW_DOCUMENT
           Annotations:
           $REVIEW_ANNOTATIONS
 
-          Instructions:
+          Canonical source MD (answers live here — not under visual/):
+          `<feature_directory>/clarification-questions.md`
+
+          ## Two annotation kinds (pick exactly one per note)
+
+          1. **content change** — reviewer wants different answer, status, wording, or
+             missing content in the *source of truth*.
+             → Edit `<feature_directory>/clarification-questions.md`, then regenerate HTML.
+
+          2. **visual clarify / explain** — reviewer asks to explain, expand, or make
+             something clearer in the *explainer* (questions like "what does this mean?",
+             "show the flow in more detail", "elaborate here") without changing the
+             committed answers/status in the MD.
+             → Update/regenerate the HTML only. Do **not** edit the source MD.
+
+          Pure LGTM / "looks good" / ack with no ask → no MD and no HTML rewrite.
+          If ambiguous between (1) and (2), prefer **visual clarify** (HTML only) —
+          never invent source-MD edits.
+
+          ## Instructions
           1. Read `.specify/feature.json` for `<feature_directory>`.
-          2. Apply the annotations to `<feature_directory>/clarification-questions.md`
-             (edit answers/status as the reviewer requested).
-          3. Regenerate the explainer HTML and write it to:
-             `$ARTIFACTS_DIR/speckit-clarify-explainer.html` (overwrite OK).
-          4. Print ONLY the absolute path to that HTML file (one line, no fence).
+          2. Read the source MD and the current HTML under review.
+          3. Classify every annotation as content change, visual clarify, or no-op.
+          4. Apply **content change** notes only to the source MD.
+          5. If any content change or visual-clarify note needs work (or HTML is stale
+             after an MD edit), write the explainer HTML to:
+             `<feature_directory>/visual/speckit-clarify-explainer.html` (overwrite OK).
+             Visual-clarify work may add diagrams, callouts, or deeper explanations in
+             the HTML while keeping MD answers/status unchanged.
+          6. Print ONLY the absolute path to that HTML for the next annotate session
+             (one line, no fence). Prefer the stable path above, resolved absolute.
     depends_on:
       - clarify-explain
 
@@ -271,7 +296,7 @@ nodes:
            still being resolved as those categories): where they sit in the flow,
            why they matter, proposed fix
       4. Persist final HTML at:
-         `$ARTIFACTS_DIR/speckit-red-team-explainer.html` (overwrite OK).
+         `<feature_directory>/visual/speckit-red-team-explainer.html` (overwrite OK).
          Do not use this node's annotate session as the human gate.
       5. Verify the file exists and is non-empty.
 
@@ -304,19 +329,43 @@ nodes:
       capture_response: true
       rework:
         prompt: |
-          You are revising red-team findings after human Plannotator annotations.
+          You are handling human Plannotator annotations on red-team findings.
+          Annotations are freeform reviewer notes. Classify each one before editing.
 
           HTML path under review: $REVIEW_DOCUMENT
           Annotations:
           $REVIEW_ANNOTATIONS
 
-          Instructions:
+          Canonical source MD (findings / Status / Resolutions Log — not under visual/):
+          latest non-applied `red-team-findings-*.md` under `<feature_directory>/`
+
+          ## Two annotation kinds (pick exactly one per note)
+
+          1. **content change** — reviewer wants different status, resolution text,
+             severity, or other source-of-truth edits in the findings MD.
+             → Edit that MD file, then regenerate HTML.
+
+          2. **visual clarify / explain** — reviewer asks to explain, expand, or make
+             a finding/resolution clearer in the *explainer* without changing the
+             committed Status / Resolutions Log in the MD.
+             → Update/regenerate the HTML only. Do **not** edit the findings MD.
+
+          Pure LGTM / "looks good" / ack with no ask → no MD and no HTML rewrite.
+          If ambiguous between (1) and (2), prefer **visual clarify** (HTML only) —
+          never invent source-MD edits.
+
+          ## Instructions
           1. Read `.specify/feature.json` for `<feature_directory>`.
-          2. Open the latest non-applied `red-team-findings-*.md` and apply
-             annotation feedback to Status / Resolutions Log as requested.
-          3. Regenerate the explainer HTML to:
-             `$ARTIFACTS_DIR/speckit-red-team-explainer.html` (overwrite OK).
-          4. Print ONLY the absolute path to that HTML file (one line, no fence).
+          2. Open the latest non-applied findings MD and the current HTML under review.
+          3. Classify every annotation as content change, visual clarify, or no-op.
+          4. Apply **content change** notes only to the findings MD.
+          5. If any content change or visual-clarify note needs work (or HTML is stale
+             after an MD edit), write the explainer HTML to:
+             `<feature_directory>/visual/speckit-red-team-explainer.html` (overwrite OK).
+             Visual-clarify work may add diagrams, callouts, or deeper explanations in
+             the HTML while keeping MD Status / Resolutions Log unchanged.
+          6. Print ONLY the absolute path to that HTML for the next annotate session
+             (one line, no fence). Prefer the stable path above, resolved absolute.
     depends_on:
       - red-team-explain
 
@@ -567,16 +616,118 @@ nodes:
       max_iterations: 3
       routes:
         positive: cargo-clean-before-pr
-        negative: speckit-converge-review-gate
+        negative: speckit-converge-explain
         exhausted: ralph-tasks-to-ralph-2
 
+  # Explainer for human review when converge adds work to tasks.md (FAIL path).
+  - id: speckit-converge-explain
+    prompt: |
+      ## Goal
+      Produce a **delta-only** HTML explainer of what **this** `speckit-converge`
+      run just added to `tasks.md`, so a human can approve re-running Ralph.
+      Hand a **stable absolute path** to `speckit-converge-review-gate`.
+
+      Converge reported:
+      - gate: $speckit-converge.output.gate
+      - tasks_added: $speckit-converge.output.tasks_added
+
+      ## Hard scope (token budget — non-negotiable)
+      - Explain **only the newly added tasks/sections from this converge pass**.
+      - Do **NOT** re-explain pre-existing tasks, completed tasks, or the full
+        historical `tasks.md` body. Old content is out of scope for the HTML.
+      - Target ~`$speckit-converge.output.tasks_added` new items — if you cannot
+        isolate them, still prefer the smallest recent delta (git) over full file.
+
+      ## Identify the delta (in order)
+      1. Read `.specify/feature.json` → `<feature_directory>`.
+      2. Prefer `git diff HEAD -- <feature_directory>/tasks.md` and/or
+         `git show HEAD:<feature_directory>/tasks.md` vs working tree to list
+         **added/changed lines only**. Fall back to unstaged/staged diff if needed.
+      3. If git cannot isolate, use converge output + the newest unchecked tasks
+         that match the add (still do not narrate the whole file).
+      4. Never invent tasks not present in the delta / `tasks.md`.
+
+      ## HTML content (new items only)
+      Generate with `/plannotator-visual-explainer` (or write compact HTML):
+      - One-line summary: FAIL + `tasks_added` count.
+      - For **each new task only**: id/title, what it does, why converge added it,
+        minimal flow context (only if needed to understand the new item).
+      - Approve implication: another Ralph loop on these tasks.
+      - Explicitly omit a catalog of old/completed tasks.
+
+      Persist (overwrite OK):
+      `<feature_directory>/visual/speckit-converge-explainer.html`
+      Do **not** open annotate as the human gate in this node.
+
+      ## Final output (contract — required)
+      Print **ONLY** the absolute path to that HTML file on the last line
+      (no markdown fence, no extra commentary after the path).
+    when: "$speckit-converge.output.gate == 'FAIL'"
+    effort: medium
+    provider: claude
+    model: sonnet
+    context: fresh
+    allowed_tools:
+      - Read
+      - Edit
+      - Glob
+      - Grep
+      - Bash
+
   - id: speckit-converge-review-gate
-    approval:
+    plannotator_gate:
+      document: "$speckit-converge-explain.output"
       message: |
-        Speckit convergence found $speckit-converge.output.tasks_added remaining task(s) and updated `tasks.md`.
-        Review the convergence findings and task changes.
-        Approve to run `ralph-tasks-to-ralph` and repeat the Ralph implementation loop.
+        Speckit convergence added $speckit-converge.output.tasks_added task(s) to `tasks.md`.
+
+        Review the **delta-only** explainer (new tasks from this converge pass) in Plannotator.
+        - **Owner only:** Approve or Send Annotations.
+        - Teammates may Close without ending the session (`--persist-session`).
+        - After Approve: re-run `ralph-tasks-to-ralph` and the Ralph implementation loop.
+
+        Crash recovery: `archon workflow review-open <run-id>` (then `resume` if needed).
       capture_response: true
+      rework:
+        prompt: |
+          You are handling human Plannotator annotations on the **converge delta**
+          review (tasks this pass added to tasks.md). Annotations are freeform.
+          Classify each one before editing.
+
+          HTML path under review: $REVIEW_DOCUMENT
+          Annotations:
+          $REVIEW_ANNOTATIONS
+
+          Canonical source MD: `<feature_directory>/tasks.md`
+          Converge context: tasks_added=$speckit-converge.output.tasks_added
+
+          ## Two annotation kinds (pick exactly one per note)
+
+          1. **content change** — edit the new/related task text in `tasks.md`
+             (wording, remove/add, acceptance criteria).
+             → Edit MD, then regenerate **delta-only** HTML.
+
+          2. **visual clarify / explain** — explain a **new** task better in HTML
+             without changing the committed task list.
+             → Update HTML only. Do **not** edit `tasks.md`.
+
+          Pure LGTM / ack → no MD and no HTML rewrite.
+          Ambiguous (1) vs (2) → prefer visual clarify (HTML only).
+
+          ## Hard scope when regenerating HTML (token budget)
+          - Explain **only** the newly added tasks from this converge pass
+            (same delta rules as `speckit-converge-explain`: git diff preferred).
+          - Do **NOT** re-explain pre-existing or completed tasks.
+          - Do **NOT** rebuild a full-file tasks catalog.
+
+          ## Instructions
+          1. Read `.specify/feature.json` for `<feature_directory>`.
+          2. Identify the converge delta (git diff on `tasks.md` first).
+          3. Classify every annotation; apply content changes only to MD as needed.
+          4. If HTML must update, write delta-only explainer to:
+             `<feature_directory>/visual/speckit-converge-explainer.html` (overwrite OK).
+          5. Print ONLY the absolute path to that HTML (one line, no fence).
+    depends_on:
+      - speckit-converge-explain
     when: "$speckit-converge.output.gate == 'FAIL'"
 
   - id: create-pull-request
