@@ -468,6 +468,52 @@ export type ApprovalNode = z.infer<typeof approvalNodeSchema> & {
   loop_group?: never;
   cancel?: never;
   script?: never;
+  plannotator_gate?: never;
+};
+
+/**
+ * Schema for the `plannotator_gate:` config object.
+ *
+ * Pauses the workflow for a live Plannotator annotate session. Distinct from
+ * `approval:` — owns its own document path, optional capture_response, and a
+ * required rework agent config used when the reviewer sends annotations.
+ */
+export const plannotatorGateConfigSchema = z.object({
+  document: z.string().min(1, "'plannotator_gate.document' must not be empty"),
+  message: z.string().optional(),
+  capture_response: z.boolean().optional(),
+  rework: z.object({
+    prompt: z.string().min(1, "'plannotator_gate.rework.prompt' must be a non-empty string"),
+    provider: z.string().optional(),
+    model: z.string().optional(),
+    effort: z.string().optional(),
+  }),
+});
+
+export type PlannotatorGateConfig = z.infer<typeof plannotatorGateConfigSchema>;
+
+/**
+ * Plannotator gate node schema — pauses for a live Plannotator annotate session.
+ * Extends full base for type compatibility; AI-specific fields are ignored at runtime
+ * (rework provider/model/effort live inside the gate config, not on the node).
+ */
+export const plannotatorGateNodeSchema = dagNodeBaseSchema.extend({
+  plannotator_gate: plannotatorGateConfigSchema,
+});
+
+/** DAG node that pauses for a live Plannotator annotate session */
+export type PlannotatorGateNode = z.infer<typeof plannotatorGateNodeSchema> & {
+  command?: never;
+  prompt?: never;
+  bash?: never;
+  loop?: never;
+  route_loop?: never;
+  loop_group?: never;
+  approval?: never;
+  cancel?: never;
+  script?: never;
+  include?: never;
+  workflow?: never;
 };
 
 /**
@@ -627,6 +673,7 @@ export type DagNode =
   | RouteLoopNode
   | LoopGroupNode
   | ApprovalNode
+  | PlannotatorGateNode
   | CancelNode
   | ScriptNode
   | IncludeNode
@@ -731,6 +778,7 @@ export const dagNodeFlatSchema = dagNodeBaseSchema.extend({
   route_loop: routeLoopConfigSchema.optional(),
   loop_group: loopGroupNodeConfigSchema.optional(),
   approval: approvalConfigSchema.optional(),
+  plannotator_gate: plannotatorGateConfigSchema.optional(),
   cancel: z.string().optional(),
   // Load-time inlining directive — the target workflow name.
   include: z.string().min(1, "'include' must be a non-empty workflow name").optional(),
@@ -788,7 +836,7 @@ export const KNOWN_DAG_NODE_KEYS: ReadonlySet<string> = new Set(
  *
  * Enforces:
  * - Non-empty id
- * - Exactly one of command/prompt/bash/loop/route_loop/loop_group/approval/cancel/script/include/workflow
+ * - Exactly one of command/prompt/bash/loop/route_loop/loop_group/approval/plannotator_gate/cancel/script/include/workflow
  *   (mutual exclusivity)
  * - command name validity (via isValidCommandName)
  * - idle_timeout must be a finite positive number
@@ -827,6 +875,7 @@ export const dagNodeSchema = dagNodeFlatSchema
     const hasRouteLoop = data.route_loop !== undefined;
     const hasLoopGroup = data.loop_group !== undefined;
     const hasApproval = data.approval !== undefined;
+    const hasPlannotatorGate = data.plannotator_gate !== undefined;
     const hasCancel = typeof data.cancel === 'string' && data.cancel.trim().length > 0;
     const hasScript = typeof data.script === 'string' && data.script.trim().length > 0;
     const hasInclude = typeof data.include === 'string' && data.include.trim().length > 0;
@@ -840,6 +889,7 @@ export const dagNodeSchema = dagNodeFlatSchema
       hasRouteLoop,
       hasLoopGroup,
       hasApproval,
+      hasPlannotatorGate,
       hasCancel,
       hasScript,
       hasInclude,
@@ -850,7 +900,7 @@ export const dagNodeSchema = dagNodeFlatSchema
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "'command', 'prompt', 'bash', 'loop', 'route_loop', 'loop_group', 'approval', 'cancel', 'script', 'include', and 'workflow' are mutually exclusive",
+          "'command', 'prompt', 'bash', 'loop', 'route_loop', 'loop_group', 'approval', 'plannotator_gate', 'cancel', 'script', 'include', and 'workflow' are mutually exclusive",
       });
       return z.NEVER;
     }
@@ -997,7 +1047,7 @@ export const dagNodeSchema = dagNodeFlatSchema
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "must have either 'command', 'prompt', 'bash', 'loop', 'route_loop', 'loop_group', 'approval', 'cancel', 'script', 'include', or 'workflow'",
+          "must have either 'command', 'prompt', 'bash', 'loop', 'route_loop', 'loop_group', 'approval', 'plannotator_gate', 'cancel', 'script', 'include', or 'workflow'",
       });
       return z.NEVER;
     }
@@ -1182,6 +1232,13 @@ export const dagNodeSchema = dagNodeFlatSchema
     if (data.approval !== undefined) {
       return { ...base, ...shared, approval: data.approval } as ApprovalNode;
     }
+    if (data.plannotator_gate !== undefined) {
+      return {
+        ...base,
+        ...shared,
+        plannotator_gate: data.plannotator_gate,
+      } as PlannotatorGateNode;
+    }
     if (data.cancel !== undefined && data.cancel.trim().length > 0) {
       return { ...base, ...shared, cancel: data.cancel.trim() } as CancelNode;
     }
@@ -1278,6 +1335,15 @@ export function isApprovalNode(node: DagNode): node is ApprovalNode {
   return 'approval' in node && typeof node.approval === 'object' && node.approval !== null;
 }
 
+/** Type guard: check if a DAG node is a plannotator_gate (live annotate session) node */
+export function isPlannotatorGateNode(node: DagNode): node is PlannotatorGateNode {
+  return (
+    'plannotator_gate' in node &&
+    typeof node.plannotator_gate === 'object' &&
+    node.plannotator_gate !== null
+  );
+}
+
 /** Type guard: check if a DAG node is a cancel (workflow termination) node */
 export function isCancelNode(node: DagNode): node is CancelNode {
   return 'cancel' in node && typeof node.cancel === 'string';
@@ -1305,11 +1371,12 @@ export function isTriggerRule(value: unknown): value is TriggerRule {
 
 /**
  * True for node types that invoke a provider and therefore participate in cross-run
- * session persistence (`persist_session`). bash, script, approval, cancel, loop,
- * loop_group, and include nodes are excluded — they either make no provider call, manage
- * their own per-iteration sessions, or (include) are expanded away before execution.
- * Shared by the loader's load-time capability gate and any other caller that needs to
- * reason about persistence eligibility, so the exclusion list lives in one place.
+ * session persistence (`persist_session`). bash, script, approval, plannotator_gate,
+ * cancel, loop, loop_group, and include nodes are excluded — they either make no
+ * provider call, manage their own per-iteration sessions, or (include) are expanded
+ * away before execution. Shared by the loader's load-time capability gate and any
+ * other caller that needs to reason about persistence eligibility, so the exclusion
+ * list lives in one place.
  */
 export function isPersistableNode(node: DagNode): boolean {
   return (
@@ -1317,6 +1384,7 @@ export function isPersistableNode(node: DagNode): boolean {
     !isRouteLoopNode(node) &&
     !isLoopGroupNode(node) &&
     !isApprovalNode(node) &&
+    !isPlannotatorGateNode(node) &&
     !isCancelNode(node) &&
     !isScriptNode(node) &&
     !isBashNode(node) &&
@@ -1410,6 +1478,22 @@ export const KNOWN_NODE_NESTED_KEYS: ReadonlyMap<string, NestedKeySpec> = new Ma
       // `'on_rejct'` is a compile error rather than a silently disabled check.
       children: new Map<keyof typeof approvalConfigSchema.shape, NestedKeySpec>([
         ['on_reject', { kind: 'object', keys: new Set(Object.keys(approvalOnRejectSchema.shape)) }],
+      ]),
+    },
+  ],
+  [
+    'plannotator_gate',
+    {
+      kind: 'object',
+      keys: new Set(Object.keys(plannotatorGateConfigSchema.shape)),
+      children: new Map<keyof typeof plannotatorGateConfigSchema.shape, NestedKeySpec>([
+        [
+          'rework',
+          {
+            kind: 'object',
+            keys: new Set(Object.keys(plannotatorGateConfigSchema.shape.rework.shape)),
+          },
+        ],
       ]),
     },
   ],
