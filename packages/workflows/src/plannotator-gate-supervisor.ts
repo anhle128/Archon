@@ -202,7 +202,11 @@ export async function runPlannotatorGateSupervisor(
 
         if (decision.kind === 'approved') {
           await recordApproval(deps, resolveGate, decision.feedback);
-          // Won or lost CAS: gate is approved either way — complete once.
+          // CAS win or external approve → complete. External reject/cancel must not complete.
+          const afterRecord = await checkResolved(deps);
+          if (afterRecord === 'rejected') {
+            throw new Error(`plannotator gate '${deps.nodeId}' was rejected`);
+          }
           return await completeApproved(deps);
         }
 
@@ -240,8 +244,13 @@ export async function runPlannotatorGateSupervisor(
               throw new Error(`plannotator gate '${deps.nodeId}' was rejected`);
             }
             // Stay paused; do not approve. Surface controlled error to the node.
+            // External approve may land during setPhase — honor that outcome.
             phase = 'idle';
-            await setPhase(deps, documentPath, 'idle');
+            const idleAfterFail = await setPhase(deps, documentPath, 'idle');
+            if (idleAfterFail === 'approved') return await completeApproved(deps);
+            if (idleAfterFail === 'rejected') {
+              throw new Error(`plannotator gate '${deps.nodeId}' was rejected`);
+            }
             throw err instanceof Error
               ? err
               : new Error(`plannotator gate rework failed: ${String(err)}`);

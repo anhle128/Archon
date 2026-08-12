@@ -162,32 +162,43 @@ class FakeGateStore implements Pick<
     if (!approval?.nodeId) throw new Error('no approval context');
     if (approval.resolved === 'approved' || approval.resolved === 'rejected') return false;
     const nodeOutput = approval.captureResponse === true ? comment : '';
-    const events: GateResolutionEvent[] = [
-      {
-        event_type: 'node_completed',
-        step_name: approval.nodeId,
-        data: { node_output: nodeOutput, approval_decision: 'approved' },
-      },
-      {
-        event_type: 'approval_received',
-        step_name: approval.nodeId,
-        data: { decision: 'approved', comment },
-      },
-    ];
-    // Synchronous CAS for tests
     this.run.metadata = {
       ...this.run.metadata,
       approval: { ...approval, resolved: 'approved' },
       approval_response: 'approved',
     };
-    for (const event of events) {
-      this.events.push({
-        workflow_run_id: this.run.id,
-        event_type: event.event_type,
-        step_name: event.step_name,
-        data: event.data,
-      });
-    }
+    this.events.push({
+      workflow_run_id: this.run.id,
+      event_type: 'node_completed',
+      step_name: approval.nodeId,
+      data: { node_output: nodeOutput, approval_decision: 'approved' },
+    });
+    this.events.push({
+      workflow_run_id: this.run.id,
+      event_type: 'approval_received',
+      step_name: approval.nodeId,
+      data: { decision: 'approved', comment },
+    });
+    return true;
+  }
+
+  /** Mimic external rejectWorkflow: stamp resolved=rejected; stay paused. */
+  externalReject(reason = 'Rejected'): boolean {
+    const approval = this.run.metadata.approval as ApprovalContext | undefined;
+    if (!approval?.nodeId) throw new Error('no approval context');
+    if (approval.resolved === 'approved' || approval.resolved === 'rejected') return false;
+    this.run.metadata = {
+      ...this.run.metadata,
+      approval: { ...approval, resolved: 'rejected' },
+      approval_response: 'rejected',
+      rejection_reason: reason,
+    };
+    this.events.push({
+      workflow_run_id: this.run.id,
+      event_type: 'approval_received',
+      step_name: approval.nodeId,
+      data: { decision: 'rejected', comment: reason },
+    });
     return true;
   }
 
@@ -566,6 +577,71 @@ describe('runPlannotatorGateSupervisor', () => {
     expect(result.output).toBe('from-external');
     expect(store.events.filter(e => e.event_type === 'node_completed')).toHaveLength(1);
     expect(store.run.status).toBe('running');
+  });
+
+  test('child approve CAS loses to external reject — aborts, does not complete', async () => {
+    const store = new FakeGateStore('run-child-approve-vs-reject');
+    const child = makeChild({
+      exitCode: 0,
+      stdout: '{"decision":"approved","feedback":"from-child"}',
+    });
+
+    const resolveGate: ResolveGateFn = async input => {
+      // Concurrent reject wins the open gate before child CAS.
+      store.externalReject('nope');
+      return store.resolveGateCas(input);
+    };
+
+    await expect(
+      runPlannotatorGateSupervisor(
+        baseDeps(store, {
+          captureResponse: true,
+          spawnAnnotate: async () => child,
+          resolveGate,
+        })
+      )
+    ).rejects.toThrow(/rejected/i);
+
+    const approval = store.run.metadata.approval as ApprovalContext;
+    expect(approval.resolved).toBe('rejected');
+    // Reject path does not write node_completed.
+    expect(store.events.some(e => e.event_type === 'node_completed')).toBe(false);
+    // Must not have resumed as a successful approve.
+    expect(store.run.status).toBe('paused');
+  });
+
+  test('rework fail: external approve during idle setPhase still completes', async () => {
+    const store = new FakeGateStore('run-rework-fail-setphase-approve');
+    const child = makeChild({
+      exitCode: 0,
+      stdout: '{"decision":"annotated","feedback":"nits"}',
+    });
+
+    // After rework throws, setPhase('idle') reads then writes. Inject external
+    // approve on the idle phase write so setPhase's post-check / merge sees it.
+    const originalUpdate = store.updateWorkflowRun.bind(store);
+    store.updateWorkflowRun = async (id, updates) => {
+      const approval = updates.metadata?.approval as ApprovalContext | undefined;
+      if (approval?.phase === 'idle') {
+        store.externalApprove('approved-during-idle-phase');
+      }
+      return originalUpdate(id, updates);
+    };
+
+    const result = await runPlannotatorGateSupervisor(
+      baseDeps(store, {
+        captureResponse: true,
+        spawnAnnotate: async () => child,
+        runReworkAgent: async () => {
+          throw new Error('rework agent crashed');
+        },
+        pollIntervalMs: 10,
+      })
+    );
+
+    expect(result.output).toBe('approved-during-idle-phase');
+    expect(store.run.status).toBe('running');
+    expect(store.events.filter(e => e.event_type === 'node_completed')).toHaveLength(1);
   });
 
   test('resume when already running succeeds (idempotent resume)', async () => {
