@@ -4,13 +4,16 @@ description: |
   Triggers: "speckit feature", "spec-driven", "sdd pipeline", "full speckit", "speckit full",
             "specify plan implement", "speckit end-to-end", "feature with speckit",
             "speckit pipeline", "sdd feature".
-  Does: Specify → red-team adversarial review → clarify ambiguities → plan → tasks →
-        analyze cross-artifact consistency → tasks-to-ralph → run ralph.sh → sync-back → converge gate → human review before retry → PR creation.
+  Does: Specify → clarify (with Plannotator live review gate) → red-team (with Plannotator
+        live review gate) → plan → tasks → analyze → tasks-to-ralph → ralph.sh → sync-back →
+        converge gate → human review before retry → PR creation.
   NOT for: Quick one-file fixes, bug fixes, PR reviews.
   NOT for: When a spec already exists (use archon-speckit-plan-to-tasks instead).
   NOT for: Spec generation only without planning (use archon-speckit-spec instead).
 provider: codex
 effort: xhigh
+# Human gates (plannotator_gate) require foreground on web so the live annotate URL is usable.
+interactive: true
 
 nodes:
   - id: setup
@@ -93,19 +96,33 @@ nodes:
 
   - id: clarify-explain
     prompt: |
-      Read .specify/feature.json to resolve <feature_directory>, then run:
-      /plannotator-visual-explainer giải thích file <feature_directory>/clarification-questions.md 
-      vẽ UML sequence diagram end to end mô tả chi tiết theo cấp độ function class để tôi hiểu hiện tại chúng
-      ta đang làm về tính năng nào, tính năng đó đang có follow như nào, đi qua những class và function gì,
-      với mỗi step trong follow mô tả rõ step này làm gì, sau đó mới nói đến cắc vấn đề, với mỗi vấn đề cần giải thích
-      vấn đề nằm ở đâu trong follow đang chuẩn bị implement ? tại sao nó lại là vấn đề, giải thích luôn cả về cách sửa
+      ## Goal
+      Produce a self-contained HTML explainer for the clarification-questions file,
+      then hand a **stable absolute path** to the next node (`plannotator_gate`).
 
-      After the explainer HTML is generated, copy or write the FINAL HTML file under
-      `$ARTIFACTS_DIR/` (stable path). Do NOT treat the explain-node Plannotator
-      annotate session as the human gate — the next node opens a supervised gate.
+      ## Steps
+      1. Read `.specify/feature.json` to resolve `<feature_directory>`.
+      2. Confirm `<feature_directory>/clarification-questions.md` exists (Status PENDING
+         or drafted answers present). If missing, STOP and report BLOCKED.
+      3. Generate a visual explainer for that file using
+         `/plannotator-visual-explainer` (or equivalent). Content must:
+         - Describe the feature and end-to-end flow (UML/sequence style) at
+           function/class level where useful.
+         - For each step, state what it does.
+         - For each open clarification / issue: where it sits in the flow, why it
+           is a problem, and the proposed resolution.
+      4. **Persist the final HTML** at this exact path (overwrite OK):
+         `$ARTIFACTS_DIR/speckit-clarify-explainer.html`
+         - Copy from wherever visual-explainer wrote the file if needed
+           (`cp` / write).
+         - Do **not** rely on an annotate session inside this node as the human
+           gate — the next node opens a supervised live Plannotator review.
+      5. Verify the file exists and is non-empty.
 
-      Your final assistant output must be ONLY the absolute path to that HTML file
-      (one line, no markdown fence, no commentary).
+      ## Final output (contract — required)
+      Print **ONLY** the absolute path to that HTML file on the last line
+      (no markdown fence, no extra commentary after the path):
+      `$ARTIFACTS_DIR/speckit-clarify-explainer.html` resolved to an absolute path.
     depends_on:
       - clarify-respond
     effort: medium
@@ -123,22 +140,30 @@ nodes:
     plannotator_gate:
       document: "$clarify-explain.output"
       message: |
-        Drafted answers + explainer are ready. Review in Plannotator (live URL):
-        Ask AI / annotations. Only the run owner should Approve or Send Annotations;
-        teammates may Close without ending the session (--persist-session).
-        Next step: `$speckit-clarifybatch --apply`.
+        Clarification answers + explainer are ready for live Plannotator review.
+
+        - Open the live annotate URL (Ask AI, annotations).
+        - **Owner only:** Approve or Send Annotations.
+        - Teammates may Close without ending the session (`--persist-session`).
+        - After Approve, next step runs `$speckit-clarifybatch --apply`.
+
+        Crash recovery: `archon workflow review-open <run-id>` (then `resume` if the process died).
       capture_response: true
       rework:
         prompt: |
-          Human annotations on the clarification explainer follow.
+          You are revising clarification artifacts after human Plannotator annotations.
 
-          HTML path: $REVIEW_DOCUMENT
+          HTML path under review: $REVIEW_DOCUMENT
           Annotations:
           $REVIEW_ANNOTATIONS
 
-          Update clarification-questions.md as needed.
-          Regenerate the explainer HTML under $ARTIFACTS_DIR.
-          Print ONLY the absolute path to the HTML file for the next review.
+          Instructions:
+          1. Read `.specify/feature.json` for `<feature_directory>`.
+          2. Apply the annotations to `<feature_directory>/clarification-questions.md`
+             (edit answers/status as the reviewer requested).
+          3. Regenerate the explainer HTML and write it to:
+             `$ARTIFACTS_DIR/speckit-clarify-explainer.html` (overwrite OK).
+          4. Print ONLY the absolute path to that HTML file (one line, no fence).
     depends_on:
       - clarify-explain
 
@@ -229,17 +254,29 @@ nodes:
 
   - id: red-team-explain
     prompt: |
-      Read .specify/feature.json to resolve <feature_directory>, then run:
-      /plannotator-visual-explainer giải thích file <feature_directory>/red-team-findings-*.md
-      vẽ UML sequence diagram end to end mô tả chi tiết theo cấp độ function class để tôi hiểu hiện tại chúng
-      ta đang làm về tính năng nào, tính năng đó đang có follow như nào, đi qua những class và function gì,
-      với mỗi step trong follow mô tả rõ step này làm gì, sau đó mới nói đến cắc vấn đề, với mỗi vấn đề cần giải thích
-      vấn đề nằm ở đâu trong follow đang chuẩn bị implement ? tại sao nó lại là vấn đề, giải thích luôn cả về cách sửa,
-      chỉ giải thích các spec-fix và new-OQ , còn các cái khác thì không cần.
+      ## Goal
+      Produce a self-contained HTML explainer for the latest red-team findings
+      file, then hand a **stable absolute path** to `red-team-gate`.
 
-      After the explainer HTML is generated, write the FINAL HTML under
-      `$ARTIFACTS_DIR/`. Final assistant output must be ONLY the absolute path
-      to that HTML file (one line, no markdown fence).
+      ## Steps
+      1. Read `.specify/feature.json` to resolve `<feature_directory>`.
+      2. Glob `<feature_directory>/red-team-findings-*.md` and pick the MOST
+         RECENT file whose name does NOT contain `-applied-`. If missing, STOP
+         and report BLOCKED.
+      3. Generate a visual explainer with `/plannotator-visual-explainer` for that
+         file. Cover:
+         - Feature + end-to-end flow (UML/sequence) at function/class level
+         - Each step's purpose
+         - **Only** findings with Status `spec-fix` or `new-OQ` (or blank Status
+           still being resolved as those categories): where they sit in the flow,
+           why they matter, proposed fix
+      4. Persist final HTML at:
+         `$ARTIFACTS_DIR/speckit-red-team-explainer.html` (overwrite OK).
+         Do not use this node's annotate session as the human gate.
+      5. Verify the file exists and is non-empty.
+
+      ## Final output (contract — required)
+      Print **ONLY** the absolute path to that HTML file (one line, no fence).
     depends_on:
       - red-team-respond
     effort: medium
@@ -257,21 +294,29 @@ nodes:
     plannotator_gate:
       document: "$red-team-explain.output"
       message: |
-        Drafted red-team resolutions + explainer are ready. Review in Plannotator.
-        Only the run owner should Approve or Send Annotations.
-        Next: `/speckit.red-team.apply --allow-historical-edits`.
+        Red-team resolutions + explainer are ready for live Plannotator review.
+
+        - **Owner only:** Approve or Send Annotations.
+        - Teammates may Close without ending the session (`--persist-session`).
+        - After Approve: `/speckit.red-team.apply --allow-historical-edits`.
+
+        Crash recovery: `archon workflow review-open <run-id>` (then `resume` if needed).
       capture_response: true
       rework:
         prompt: |
-          Human annotations on the red-team findings explainer follow.
+          You are revising red-team findings after human Plannotator annotations.
 
-          HTML path: $REVIEW_DOCUMENT
+          HTML path under review: $REVIEW_DOCUMENT
           Annotations:
           $REVIEW_ANNOTATIONS
 
-          Update the findings file Status/Resolutions as needed.
-          Regenerate the explainer HTML under $ARTIFACTS_DIR.
-          Print ONLY the absolute path to the HTML file for the next review.
+          Instructions:
+          1. Read `.specify/feature.json` for `<feature_directory>`.
+          2. Open the latest non-applied `red-team-findings-*.md` and apply
+             annotation feedback to Status / Resolutions Log as requested.
+          3. Regenerate the explainer HTML to:
+             `$ARTIFACTS_DIR/speckit-red-team-explainer.html` (overwrite OK).
+          4. Print ONLY the absolute path to that HTML file (one line, no fence).
     depends_on:
       - red-team-explain
 
