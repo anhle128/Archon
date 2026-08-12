@@ -8,6 +8,7 @@ import {
   isRouteLoopNode,
   isLoopGroupNode,
   isApprovalNode,
+  isPlannotatorGateNode,
   isCancelNode,
   isScriptNode,
   isIncludeNode,
@@ -304,6 +305,10 @@ function parseDagNode(
     nonAiNode = { type: 'workflow', fields: WORKFLOW_NODE_IGNORED_FIELDS };
   } else if (isApprovalNode(node)) {
     nonAiNode = { type: 'approval', fields: BASH_NODE_AI_FIELDS };
+  } else if (isPlannotatorGateNode(node)) {
+    // Gate is non-AI at the node surface; rework provider/model/effort live inside
+    // the gate config and are not node-level AI fields.
+    nonAiNode = { type: 'plannotator_gate', fields: BASH_NODE_AI_FIELDS };
   } else if (isLoopNode(node)) {
     nonAiNode = { type: 'loop', fields: LOOP_NODE_AI_FIELDS };
   } else if (isLoopGroupNode(node)) {
@@ -398,9 +403,10 @@ export function validateDagStructure(
 
   // Check $nodeId.output references across EVERY field the executor substitutes at
   // runtime: when:, and the text surfaces that flow through substituteNodeOutputRefs
-  // (prompt, bash, script, approval.message, cancel, loop.prompt, loop.until_bash,
-  // loop_group.until_bash, workflow.input, workflow.fan_out.items). A dangling ref in
-  // any of them silently substitutes to '' at run time, so all must be validated here.
+  // (prompt, bash, script, approval.message, plannotator_gate.document/message/
+  // rework.prompt, cancel, loop.prompt, loop.until_bash, loop_group.until_bash,
+  // workflow.input, workflow.fan_out.items). A dangling ref in any of them silently
+  // substitutes to '' at run time, so all must be validated here.
   //
   // KEEP IN SYNC (three ref-surface enumerations must agree):
   //   1. this scan (loader validateDagStructure) — validates refs,
@@ -408,12 +414,13 @@ export function validateDagStructure(
   //   3. the substituteNodeOutputRefs call sites (dag-executor.ts) — resolves refs at run.
   // Adding a substituted field to one means updating all three.
   //
-  // Prose fields (prompt / loop.prompt) may contain triple-backtick fenced blocks or
-  // single-backtick inline code that are documentation meant to render literally to
-  // the LLM (e.g. the workflow-builder shows authors how to write `$<other-node>.output`
-  // inside a script-node example); strip those before scanning so they don't false-match.
-  // The code/expression fields (bash / script / until_bash / cancel) and when: clauses
-  // carry live refs (not documentation), so they are scanned verbatim.
+  // Prose fields (prompt / loop.prompt / plannotator_gate.rework.prompt) may contain
+  // triple-backtick fenced blocks or single-backtick inline code that are documentation
+  // meant to render literally to the LLM (e.g. the workflow-builder shows authors how
+  // to write `$<other-node>.output` inside a script-node example); strip those before
+  // scanning so they don't false-match. The code/expression fields (bash / script /
+  // until_bash / cancel) and when: clauses carry live refs (not documentation), so
+  // they are scanned verbatim.
   const outputRefPattern = new RegExp(OUTPUT_REF_SOURCE, 'g');
   const stripMarkdownCode = (s: string): string =>
     s.replace(/```[\s\S]*?```/g, '').replace(/`[^`\n]*`/g, '');
@@ -434,6 +441,13 @@ export function validateDagStructure(
     }
     if (isCancelNode(node)) sources.push(node.cancel);
     if (isApprovalNode(node)) sources.push(node.approval.message);
+    if (isPlannotatorGateNode(node)) {
+      sources.push(node.plannotator_gate.document);
+      if (node.plannotator_gate.message !== undefined) {
+        sources.push(node.plannotator_gate.message);
+      }
+      sources.push(stripMarkdownCode(node.plannotator_gate.rework.prompt));
+    }
     if (isLoopNode(node)) {
       // Only inline `loop.prompt` is scanned for `$nodeId.output` refs. A
       // command-backed loop (`loop.command`) loads its prompt text from a file
