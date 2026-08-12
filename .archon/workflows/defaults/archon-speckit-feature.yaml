@@ -80,9 +80,9 @@ nodes:
       4. trigger clarification-answer-review skill
     depends_on:
       - clarify
-    effort: xhigh
-    provider: codex
-    model: gpt-5.6-sol
+    effort: high
+    provider: grok
+    model: "grok-4.5"
     context: fresh
     allowed_tools:
       - Read
@@ -290,6 +290,7 @@ nodes:
       /speckit-analyzebatch <feature_directory>
     depends_on:
       - tasks
+    provider: codex
     effort: xhigh
     model: gpt-5.6-sol
     context: fresh
@@ -412,9 +413,9 @@ nodes:
          the findings file, then STOP.
     depends_on:
       - analyze
-    effort: xhigh
-    provider: codex
-    model: gpt-5.6-sol
+    effort: high
+    provider: grok
+    model: "grok-4.5"
     context: fresh
     allowed_tools:
       - Read
