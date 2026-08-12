@@ -99,6 +99,13 @@ nodes:
       ta đang làm về tính năng nào, tính năng đó đang có follow như nào, đi qua những class và function gì,
       với mỗi step trong follow mô tả rõ step này làm gì, sau đó mới nói đến cắc vấn đề, với mỗi vấn đề cần giải thích
       vấn đề nằm ở đâu trong follow đang chuẩn bị implement ? tại sao nó lại là vấn đề, giải thích luôn cả về cách sửa
+
+      After the explainer HTML is generated, copy or write the FINAL HTML file under
+      `$ARTIFACTS_DIR/` (stable path). Do NOT treat the explain-node Plannotator
+      annotate session as the human gate — the next node opens a supervised gate.
+
+      Your final assistant output must be ONLY the absolute path to that HTML file
+      (one line, no markdown fence, no commentary).
     depends_on:
       - clarify-respond
     effort: medium
@@ -113,12 +120,25 @@ nodes:
       - Bash
 
   - id: clarify-gate
-    approval:
+    plannotator_gate:
+      document: "$clarify-explain.output"
       message: |
-        Drafted answers are now written to `<feature_directory>/clarification-questions.md`.
-        Review and edit the file, then approve when satisfied.
-        The next step runs `$speckit-clarifybatch --apply`.
+        Drafted answers + explainer are ready. Review in Plannotator (live URL):
+        Ask AI / annotations. Only the run owner should Approve or Send Annotations;
+        teammates may Close without ending the session (--persist-session).
+        Next step: `$speckit-clarifybatch --apply`.
       capture_response: true
+      rework:
+        prompt: |
+          Human annotations on the clarification explainer follow.
+
+          HTML path: $REVIEW_DOCUMENT
+          Annotations:
+          $REVIEW_ANNOTATIONS
+
+          Update clarification-questions.md as needed.
+          Regenerate the explainer HTML under $ARTIFACTS_DIR.
+          Print ONLY the absolute path to the HTML file for the next review.
     depends_on:
       - clarify-explain
 
@@ -216,6 +236,10 @@ nodes:
       với mỗi step trong follow mô tả rõ step này làm gì, sau đó mới nói đến cắc vấn đề, với mỗi vấn đề cần giải thích
       vấn đề nằm ở đâu trong follow đang chuẩn bị implement ? tại sao nó lại là vấn đề, giải thích luôn cả về cách sửa,
       chỉ giải thích các spec-fix và new-OQ , còn các cái khác thì không cần.
+
+      After the explainer HTML is generated, write the FINAL HTML under
+      `$ARTIFACTS_DIR/`. Final assistant output must be ONLY the absolute path
+      to that HTML file (one line, no markdown fence).
     depends_on:
       - red-team-respond
     effort: medium
@@ -230,23 +254,24 @@ nodes:
       - Bash
 
   - id: red-team-gate
-    approval:
+    plannotator_gate:
+      document: "$red-team-explain.output"
       message: |
-        Drafted resolutions are now written into the most recent
-        `red-team-findings-*.md` under <feature_directory>. Open the file and:
-          - review each row's `Status` column in §2 Findings table
-          - review each block in §3 Resolutions Log (proposed diff / OQ / AR
-            text / cross-reference)
-          - overwrite anything you disagree with
-          - leave `Status: skipped` with a Reason for findings you want dropped
-          - save the file
-        Approve when satisfied. The next step runs
-        `/speckit.red-team.apply --allow-historical-edits`, which atomically
-        applies resolutions to spec.md and archives the findings file as
-        `red-team-findings-applied-<timestamp>.md`. You may include override
-        notes here, but file edits are the canonical channel — apply reads the
-        file, not this comment.
+        Drafted red-team resolutions + explainer are ready. Review in Plannotator.
+        Only the run owner should Approve or Send Annotations.
+        Next: `/speckit.red-team.apply --allow-historical-edits`.
       capture_response: true
+      rework:
+        prompt: |
+          Human annotations on the red-team findings explainer follow.
+
+          HTML path: $REVIEW_DOCUMENT
+          Annotations:
+          $REVIEW_ANNOTATIONS
+
+          Update the findings file Status/Resolutions as needed.
+          Regenerate the explainer HTML under $ARTIFACTS_DIR.
+          Print ONLY the absolute path to the HTML file for the next review.
     depends_on:
       - red-team-explain
 

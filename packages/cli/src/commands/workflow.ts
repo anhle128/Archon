@@ -79,6 +79,7 @@ import {
   abandonWorkflow,
   getWorkflowStatus,
   resetWorkflowNodeSessions,
+  reviewOpenWorkflow,
 } from '@archon/core/operations/workflow-operations';
 import * as conversationDb from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
@@ -3879,6 +3880,48 @@ export async function workflowCancelCommand(
       )
     );
     process.exitCode = classified.exitCode;
+  }
+}
+
+/**
+ * Re-open a paused plannotator_gate review surface (phase → opening).
+ * Does not approve or auto-resume; if the gate process died, also run resume.
+ */
+export async function workflowReviewOpenCommand(
+  runId: string,
+  json?: boolean,
+  cwd?: string
+): Promise<number> {
+  try {
+    const resolvedId = await resolveRunIdArg(runId, cwd);
+    const result = await reviewOpenWorkflow(resolvedId);
+    if (json) {
+      writeJsonLine({
+        success: true,
+        runId: resolvedId,
+        document: result.document,
+        nodeId: result.nodeId,
+        phase: result.phase,
+      });
+      return 0;
+    }
+    console.log(`Review re-open requested for run ${resolvedId}`);
+    console.log(`  node:     ${result.nodeId}`);
+    console.log(`  document: ${result.document}`);
+    console.log(`  phase:    ${result.phase}`);
+    console.log(
+      'If the Plannotator process is still alive (idle), it will re-spawn annotate.\n' +
+        `If the process died, run: archon workflow resume ${resolvedId}`
+    );
+    return 0;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (json) {
+      writeJsonLine({ success: false, error: message });
+      return 1;
+    }
+    console.error(message);
+    return 1;
   }
 }
 

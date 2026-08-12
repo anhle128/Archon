@@ -67,6 +67,7 @@ import {
   isRouteLoopNode,
   isLoopGroupNode,
   isApprovalNode,
+  isPlannotatorGateNode,
   isCancelNode,
   isScriptNode,
   isIncludeNode,
@@ -140,13 +141,15 @@ function dagNodeTelemetryType(node: DagNode): WorkflowNodeType {
   if (isRouteLoopNode(node)) return 'route_loop';
   if (isLoopGroupNode(node)) return 'loop_group';
   if (isApprovalNode(node)) return 'approval';
+  // Closest closed-set label until WorkflowNodeType grows a dedicated value.
+  if (isPlannotatorGateNode(node)) return 'approval';
   if (isCancelNode(node)) return 'cancel';
   if ('command' in node) return 'command';
   return 'prompt';
 }
 
 function isCheckpointableExecutableNode(node: DagNode): boolean {
-  return !isApprovalNode(node) && !isCancelNode(node);
+  return !isApprovalNode(node) && !isPlannotatorGateNode(node) && !isCancelNode(node);
 }
 
 function escapeCompletionSignalForRegExp(value: string): string {
@@ -4314,6 +4317,22 @@ export function applyLoopPrevToBodyNode(
   if (isApprovalNode(node)) {
     return { ...node, approval: { ...node.approval, message: sub(node.approval.message) } };
   }
+  if (isPlannotatorGateNode(node)) {
+    return {
+      ...node,
+      plannotator_gate: {
+        ...node.plannotator_gate,
+        document: sub(node.plannotator_gate.document),
+        ...(node.plannotator_gate.message !== undefined
+          ? { message: sub(node.plannotator_gate.message) }
+          : {}),
+        rework: {
+          ...node.plannotator_gate.rework,
+          prompt: sub(node.plannotator_gate.rework.prompt),
+        },
+      },
+    };
+  }
   if (isBashNode(node)) return { ...node, bash: sub(node.bash, true) };
   // Scripts never pass through a shell (execFile argv) — bash-quoting would inject
   // literal quote artifacts into TS/Python source. $LOOP_PREV.* refs are spliced raw
@@ -7447,6 +7466,28 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             return { nodeId: node.id, output };
           }
 
+          // 3c2. Plannotator gate — live annotate session supervised until approve.
+          if (isPlannotatorGateNode(node)) {
+            const { executePlannotatorGateNode } = await import('./plannotator-gate-executor');
+            const output = await executePlannotatorGateNode({
+              node,
+              workflowRun,
+              deps,
+              platform,
+              conversationId,
+              cwd,
+              artifactsDir,
+              nodeOutputs: ctx.nodeOutputs,
+              config,
+              workflowProvider,
+              workflowModel,
+              aiProfile,
+              workflowPreset,
+              workflowTier,
+            });
+            return { nodeId: node.id, output };
+          }
+
           // 3d. Cancel node dispatch — terminates the workflow run
           if (isCancelNode(node)) {
             const reason = substituteNodeOutputRefs(node.cancel, ctx.nodeOutputs);
@@ -8132,6 +8173,12 @@ export function collectContainerIncompatibleProviders(
         }
         continue;
       }
+      if (isPlannotatorGateNode(node)) {
+        // Rework always exists; provider is on the rework block, not the node.
+        const reworkProvider = node.plannotator_gate.rework.provider ?? workflowProvider;
+        check(reworkProvider);
+        continue;
+      }
       // command / prompt / loop → AI node
       check(resolveNodeProviderForPreflight(node, workflowProvider, aiProfile));
     }
@@ -8745,7 +8792,9 @@ export async function executeDagWorkflow(
     : undefined;
   const approvedApprovalNodeId =
     approval?.resolved === 'approved' &&
-    (approval.type === undefined || approval.type === 'approval')
+    (approval.type === undefined ||
+      approval.type === 'approval' ||
+      approval.type === 'plannotator_gate')
       ? approval.nodeId
       : undefined;
 

@@ -278,6 +278,61 @@ export async function abandonWorkflow(runId: string): Promise<AbandonWorkflowRes
 }
 
 /**
+ * Request re-open of a paused plannotator_gate review surface.
+ *
+ * Sets `metadata.approval.phase` to `opening` so a live supervisor that is
+ * idle re-spawns annotate. If the gate process has died, the operator should
+ * also `workflow resume` the run so the executor re-enters the gate node.
+ *
+ * Does NOT approve or resume the run.
+ */
+export async function reviewOpenWorkflow(
+  runId: string
+): Promise<{ document: string; nodeId: string; phase: string }> {
+  const run = await getRunOrThrow(runId, 'operations.workflow_review_open_lookup_failed');
+  if (run.status !== 'paused') {
+    throw new Error(
+      `Cannot review-open run with status '${run.status}'. Only paused plannotator_gate runs can be re-opened.`
+    );
+  }
+  const rawApproval = run.metadata.approval;
+  const approval: ApprovalContext | undefined = isApprovalContext(rawApproval)
+    ? rawApproval
+    : undefined;
+  if (approval?.type !== 'plannotator_gate') {
+    const gotType = approval?.type ?? 'none';
+    throw new Error(`Run ${runId} is not paused at a plannotator_gate (got type '${gotType}').`);
+  }
+  if (isGateResolved(approval)) {
+    throw new Error(
+      `Workflow run ${runId} was already ${String(approval.resolved)} and is awaiting resume — nothing to re-open.`
+    );
+  }
+  const document =
+    typeof approval.document === 'string' && approval.document.length > 0 ? approval.document : '';
+  if (!document) {
+    throw new Error(`plannotator_gate on run ${runId} has no document path in approval metadata.`);
+  }
+
+  await workflowDb.updateWorkflowRun(runId, {
+    metadata: {
+      approval: {
+        ...approval,
+        phase: 'opening',
+        document,
+      },
+    },
+  });
+
+  getLog().info(
+    { workflowRunId: runId, nodeId: approval.nodeId, document },
+    'workflow.review_open_requested'
+  );
+
+  return { document, nodeId: approval.nodeId, phase: 'opening' };
+}
+
+/**
  * Approve a paused workflow run.
  *
  * Handles both interactive_loop and standard approval gate paths.

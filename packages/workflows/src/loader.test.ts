@@ -1902,6 +1902,60 @@ nodes:
       expect(node.model).toBeUndefined();
     });
 
+    it('should warn about node-level AI fields on plannotator_gate (rework owns provider/model)', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'plannotator-gate-ai-fields.yaml'),
+        `
+name: plannotator-gate-ai-fields
+description: Gate with ignored node-level AI fields
+nodes:
+  - id: explain
+    prompt: "Write a plan"
+  - id: clarify-gate
+    plannotator_gate:
+      document: "$explain.output"
+      rework:
+        prompt: "Address annotations"
+        provider: claude
+        model: sonnet
+    provider: codex
+    model: gpt-5
+    output_format:
+      type: object
+    depends_on: [explain]
+`
+      );
+
+      (mockLogger.warn as Mock<() => undefined>).mockClear();
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+
+      const warnCalls = (mockLogger.warn as Mock<() => undefined>).mock.calls;
+      const aiFieldWarnings = warnCalls.filter(
+        call => typeof call[1] === 'string' && call[1] === 'plannotator_gate_node_ai_fields_ignored'
+      );
+      expect(aiFieldWarnings.length).toBeGreaterThanOrEqual(1);
+      const warnedFields = (aiFieldWarnings[0][0] as { fields: string[] }).fields;
+      expect(warnedFields).toContain('provider');
+      expect(warnedFields).toContain('model');
+      expect(warnedFields).toContain('output_format');
+
+      // Node-level AI fields must not survive parse; rework config stays intact.
+      const gate = result.workflows[0].workflow.nodes.find(n => n.id === 'clarify-gate');
+      expect(gate).toBeDefined();
+      expect(gate && 'plannotator_gate' in gate).toBe(true);
+      if (gate && 'plannotator_gate' in gate) {
+        expect(gate.provider).toBeUndefined();
+        expect(gate.model).toBeUndefined();
+        expect(gate.plannotator_gate.rework.provider).toBe('claude');
+        expect(gate.plannotator_gate.rework.model).toBe('sonnet');
+      }
+    });
+
     it('should NOT warn about model/provider on loop nodes (they are supported)', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });
@@ -2174,6 +2228,86 @@ nodes:
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors.length).toBeGreaterThan(0);
       expect(result.errors[0].error).toContain('$missing.output');
+    });
+
+    it('should reject dangling $nodeId.output in plannotator_gate.document', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'plannotator-gate-unknown-ref.yaml'),
+        `
+name: plannotator-gate-unknown-ref
+description: Gate document points at a missing node
+nodes:
+  - id: explain
+    prompt: "Write a plan"
+  - id: clarify-gate
+    plannotator_gate:
+      document: "$missing.output"
+      rework:
+        prompt: "Address annotations"
+    depends_on: [explain]
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors.length).toBeGreaterThan(0);
+      expect(result.errors[0].error).toContain('$missing.output');
+      expect(result.workflows).toHaveLength(0);
+    });
+
+    it('should reject dangling $nodeId.output in plannotator_gate.rework.prompt', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'plannotator-gate-rework-unknown-ref.yaml'),
+        `
+name: plannotator-gate-rework-unknown-ref
+description: Gate rework prompt points at a missing node
+nodes:
+  - id: explain
+    prompt: "Write a plan"
+  - id: clarify-gate
+    plannotator_gate:
+      document: "$explain.output"
+      rework:
+        prompt: "Fix using $missing.output"
+    depends_on: [explain]
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors.length).toBeGreaterThan(0);
+      expect(result.errors[0].error).toContain('$missing.output');
+    });
+
+    it('should accept known $nodeId.output refs on plannotator_gate surfaces', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'plannotator-gate-known-ref.yaml'),
+        `
+name: plannotator-gate-known-ref
+description: Gate document and rework prompt reference known nodes
+nodes:
+  - id: explain
+    prompt: "Write a plan"
+  - id: clarify-gate
+    plannotator_gate:
+      document: "$explain.output"
+      message: "Review $explain.output"
+      rework:
+        prompt: "Address notes about $explain.output"
+    depends_on: [explain]
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
     });
 
     it('should ignore $nodeId.output inside fenced code blocks in prompt: bodies', async () => {

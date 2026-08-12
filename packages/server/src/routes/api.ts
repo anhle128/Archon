@@ -235,6 +235,7 @@ import * as userDb from '@archon/core/db/users';
 import {
   abandonWorkflow,
   approveWorkflow,
+  reviewOpenWorkflow,
   rejectWorkflow,
   resetWorkflowNodeSessions,
 } from '@archon/core/operations/workflow-operations';
@@ -1013,6 +1014,34 @@ const approveWorkflowRunRoute = createRoute({
     200: {
       content: { 'application/json': { schema: workflowRunActionResponseSchema } },
       description: 'Approved',
+    },
+    400: jsonError('Bad request'),
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const reviewOpenWorkflowRunRoute = createRoute({
+  method: 'post',
+  path: '/api/workflows/runs/{runId}/review-open',
+  tags: ['Workflows'],
+  summary: 'Re-open a paused plannotator_gate review surface',
+  request: {
+    params: z.object({ runId: z.string() }),
+  },
+  responses: {
+    200: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            success: z.boolean(),
+            document: z.string(),
+            nodeId: z.string(),
+            phase: z.string(),
+          }),
+        },
+      },
+      description: 'Review re-open requested',
     },
     400: jsonError('Bad request'),
     404: jsonError('Not found'),
@@ -3916,6 +3945,39 @@ export function registerApiRoutes(
     } catch (error) {
       getLog().error({ err: error, runId }, 'api.workflow_run_abandon_failed');
       return apiError(c, 500, 'Failed to abandon workflow run');
+    }
+  });
+
+  // POST /api/workflows/runs/:runId/review-open — re-open plannotator_gate surface
+  registerOpenApiRoute(reviewOpenWorkflowRunRoute, async c => {
+    const runId = c.req.param('runId') ?? '';
+    try {
+      const run = await workflowDb.getWorkflowRun(runId);
+      if (!run) {
+        return apiError(c, 404, 'Workflow run not found');
+      }
+      const result = await reviewOpenWorkflow(runId);
+      return c.json({
+        success: true,
+        document: result.document,
+        nodeId: result.nodeId,
+        phase: result.phase,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes('not found') || message.includes('Not found')) {
+        return apiError(c, 404, message);
+      }
+      if (
+        message.includes('Cannot review-open') ||
+        message.includes('not paused at a plannotator_gate') ||
+        message.includes('already') ||
+        message.includes('no document')
+      ) {
+        return apiError(c, 400, message);
+      }
+      getLog().error({ err: error, runId }, 'api.workflow_run_review_open_failed');
+      return apiError(c, 500, 'Failed to review-open workflow run');
     }
   });
 
