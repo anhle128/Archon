@@ -7466,17 +7466,26 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             return { nodeId: node.id, output };
           }
 
-          // 3c2. Plannotator gate — schema is live; executor lands with the
-          // supervisor. Fail loud rather than fall through to AI prompt dispatch.
+          // 3c2. Plannotator gate — live annotate session supervised until approve.
           if (isPlannotatorGateNode(node)) {
-            return {
-              nodeId: node.id,
-              output: {
-                state: 'failed' as const,
-                output: '',
-                error: `plannotator_gate node '${node.id}' is not yet executable`,
-              },
-            };
+            const { executePlannotatorGateNode } = await import('./plannotator-gate-executor');
+            const output = await executePlannotatorGateNode({
+              node,
+              workflowRun,
+              deps,
+              platform,
+              conversationId,
+              cwd,
+              artifactsDir,
+              nodeOutputs: ctx.nodeOutputs,
+              config,
+              workflowProvider,
+              workflowModel,
+              aiProfile,
+              workflowPreset,
+              workflowTier,
+            });
+            return { nodeId: node.id, output };
           }
 
           // 3d. Cancel node dispatch — terminates the workflow run
@@ -8783,7 +8792,9 @@ export async function executeDagWorkflow(
     : undefined;
   const approvedApprovalNodeId =
     approval?.resolved === 'approved' &&
-    (approval.type === undefined || approval.type === 'approval')
+    (approval.type === undefined ||
+      approval.type === 'approval' ||
+      approval.type === 'plannotator_gate')
       ? approval.nodeId
       : undefined;
 

@@ -53,6 +53,7 @@ import {
   workflowCancelCommand,
   workflowAbandonCommand,
   workflowApproveCommand,
+  workflowReviewOpenCommand,
   workflowRejectCommand,
   workflowCleanupCommand,
   workflowResetSessionsCommand,
@@ -1250,6 +1251,15 @@ async function main(): Promise<number> {
             );
           }
 
+          case 'review-open': {
+            const reviewOpenRunId = positionals[2];
+            if (!reviewOpenRunId) {
+              console.error('Usage: archon workflow review-open <run-id>');
+              return 1;
+            }
+            return await workflowReviewOpenCommand(reviewOpenRunId, jsonFlag, effectiveCwd);
+          }
+
           case 'reject': {
             const rejectRunId = positionals[2];
             if (!rejectRunId) {
@@ -1384,7 +1394,7 @@ async function main(): Promise<number> {
               console.error(`Unknown workflow subcommand: ${subcommand}`);
             }
             console.error(
-              'Available: list, run, status, get, runs, resume, retry, retry-node, cancel, abandon, approve, reject, cleanup, event, search, install'
+              'Available: list, run, status, get, runs, resume, retry, retry-node, cancel, abandon, approve, review-open, reject, cleanup, event, search, install'
             );
             return 1;
         }
