@@ -1,8 +1,11 @@
 /**
- * Unit tests for the plannotator_gate supervisor loop.
- * Uses injectable spawn + in-memory store — no real plannotator binary.
+ * Unit and subprocess tests for the plannotator_gate supervisor loop.
+ * Uses an in-memory store and deterministic fake binaries.
  */
-import { describe, expect, mock, test } from 'bun:test';
+import { afterEach, describe, expect, mock, test } from 'bun:test';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { ApprovalContext, WorkflowRun } from './schemas/workflow-run';
 import type { IWorkflowStore } from './store';
 import {
@@ -272,9 +275,14 @@ function makeChild(exit: {
         await Bun.sleep(exit.delayMs);
       }
       if (killed) {
-        return { exitCode: 1, stdout: '' };
+        return { exitCode: 1, stdout: '', stderr: '', resultFilePayload: undefined };
       }
-      return { exitCode: exit.exitCode, stdout: exit.stdout };
+      return {
+        exitCode: exit.exitCode,
+        stdout: '',
+        stderr: '',
+        resultFilePayload: exit.stdout,
+      };
     },
     kill: () => {
       killed = true;
@@ -292,6 +300,7 @@ function baseDeps(
     runId: store.run.id,
     nodeId: 'clarify-gate',
     cwd: '/tmp/proj',
+    artifactsDir: '/tmp/proj/artifacts',
     initialDocumentPath: '/tmp/proj/artifacts/plan.html',
     captureResponse: false,
     message: 'Review the plan',
@@ -329,7 +338,10 @@ describe('runPlannotatorGateSupervisor', () => {
     expect(approval.resolved).toBe('approved');
     expect(approval.type).toBe('plannotator_gate');
     expect(spawnAnnotate).toHaveBeenCalledTimes(1);
-    expect(spawnAnnotate).toHaveBeenCalledWith('/tmp/proj/artifacts/plan.html');
+    expect(spawnAnnotate).toHaveBeenCalledWith(
+      '/tmp/proj/artifacts/plan.html',
+      '/tmp/proj/artifacts/plannotator-gates/gate-gate-a-attempt-1.json'
+    );
     const completed = store.events.find(e => e.event_type === 'node_completed');
     expect(completed?.data?.node_output).toBe('LGTM');
   });
@@ -364,8 +376,10 @@ describe('runPlannotatorGateSupervisor', () => {
       stdout: '{"decision":"approved","feedback":"good"}',
     });
     const paths: string[] = [];
-    const spawnAnnotate = mock(async (documentPath: string) => {
+    const resultPaths: string[] = [];
+    const spawnAnnotate = mock(async (documentPath: string, resultFilePath: string) => {
       paths.push(documentPath);
+      resultPaths.push(resultFilePath);
       return paths.length === 1 ? first : second;
     });
     const runReworkAgent = mock(async (args: { documentPath: string; annotations: string }) => {
@@ -387,6 +401,10 @@ describe('runPlannotatorGateSupervisor', () => {
     expect(result.output).toBe('good');
     expect(spawnAnnotate).toHaveBeenCalledTimes(2);
     expect(paths).toEqual(['/tmp/proj/artifacts/plan.html', '/tmp/proj/artifacts/plan-v2.html']);
+    expect(resultPaths).toEqual([
+      '/tmp/proj/artifacts/plannotator-gates/gate-gate-a-attempt-1.json',
+      '/tmp/proj/artifacts/plannotator-gates/gate-gate-a-attempt-2.json',
+    ]);
     expect(runReworkAgent).toHaveBeenCalledTimes(1);
     const approval = store.run.metadata.approval as ApprovalContext;
     expect(approval.document).toBe('/tmp/proj/artifacts/plan-v2.html');
@@ -769,5 +787,122 @@ describe('runPlannotatorGateSupervisor', () => {
     expect(result).toEqual({ kind: 'superseded' });
     expect(store.run.status).toBe('paused');
     expect(child.killed).toBe(true);
+  });
+});
+
+describe('default annotate subprocess protocol', () => {
+  const originalBinary = process.env.PLANNOTATOR_BIN;
+  const dirs: string[] = [];
+
+  afterEach(() => {
+    if (originalBinary === undefined) delete process.env.PLANNOTATOR_BIN;
+    else process.env.PLANNOTATOR_BIN = originalBinary;
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  function setup(script: string): {
+    store: FakeGateStore;
+    deps: PlannotatorGateSupervisorDeps;
+    artifactsDir: string;
+  } {
+    const dir = mkdtempSync(join(tmpdir(), 'plannotator-protocol-'));
+    dirs.push(dir);
+    const binary = join(dir, 'plannotator');
+    const artifactsDir = join(dir, 'artifacts');
+    writeFileSync(binary, `#!/bin/sh\n${script}\n`);
+    chmodSync(binary, 0o700);
+    process.env.PLANNOTATOR_BIN = binary;
+    const store = new FakeGateStore(`run-${dirs.length}`);
+    return {
+      store,
+      artifactsDir,
+      deps: baseDeps(store, {
+        cwd: dir,
+        artifactsDir,
+        initialDocumentPath: join(dir, 'plan.html'),
+      }),
+    };
+  }
+
+  test('rejects annotate non-zero exit with bounded stderr', async () => {
+    const { deps } = setup(`printf '%s\\n' 'annotate exploded' >&2\nexit 9`);
+
+    await expect(runPlannotatorGateSupervisor(deps)).rejects.toThrow(/exit.*9.*annotate exploded/i);
+  });
+
+  test('rejects exit zero without a result file', async () => {
+    const { deps } = setup(`printf '%s\\n' 'stdout is not a decision file'`);
+
+    await expect(runPlannotatorGateSupervisor(deps)).rejects.toThrow(/result file.*missing/i);
+  });
+
+  test('consumes valid atomic result JSON and removes the result file', async () => {
+    const { deps, artifactsDir } = setup(`
+[ "$1" = annotate ] && [ "$3" = --gate ] && [ "$4" = --json ] && \\
+  [ "$5" = --persist-session ] && [ "$6" = --result-file ] || exit 8
+printf '%s' '{"decision":"approved","feedback":"atomic"}' > "$7.tmp"
+mv "$7.tmp" "$7"`);
+
+    const result = await runPlannotatorGateSupervisor(deps);
+
+    expect(result).toEqual({ kind: 'approved', output: '' });
+    expect(existsSync(join(artifactsDir, 'plannotator-gates', 'gate-gate-a-attempt-1.json'))).toBe(
+      false
+    );
+  });
+
+  test('drains large stderr concurrently and bounds the failure diagnostic', async () => {
+    const { deps } = setup(`
+i=0
+while [ "$i" -lt 12000 ]; do
+  printf '%s' '0123456789abcdef0123456789abcdef' >&2
+  i=$((i + 1))
+done
+exit 12`);
+
+    let error: Error | undefined;
+    try {
+      await runPlannotatorGateSupervisor(deps);
+    } catch (caught) {
+      error = caught as Error;
+    }
+
+    expect(error?.message).toMatch(/exit.*12/i);
+    expect(error?.message.length).toBeLessThan(4300);
+  }, 5000);
+
+  test('removes a stale attempt result before spawn', async () => {
+    const { deps, artifactsDir } = setup(`
+if [ -e "$7" ]; then
+  printf '%s\\n' 'stale result was not removed' >&2
+  exit 13
+fi
+printf '%s' '{"decision":"approved"}' > "$7.tmp"
+mv "$7.tmp" "$7"`);
+    const resultPath = join(artifactsDir, 'plannotator-gates', 'gate-gate-a-attempt-1.json');
+    mkdirSync(join(artifactsDir, 'plannotator-gates'), { recursive: true });
+    writeFileSync(resultPath, '{"decision":"annotated","feedback":"stale"}');
+
+    await expect(runPlannotatorGateSupervisor(deps)).resolves.toEqual({
+      kind: 'approved',
+      output: '',
+    });
+    expect(existsSync(resultPath)).toBe(false);
+  });
+
+  test('rejects invalid result JSON and removes it', async () => {
+    const { deps, artifactsDir } = setup(`printf '%s' 'not-json' > "$7"`);
+    const resultPath = join(artifactsDir, 'plannotator-gates', 'gate-gate-a-attempt-1.json');
+
+    await expect(runPlannotatorGateSupervisor(deps)).rejects.toThrow(/valid JSON/i);
+    expect(existsSync(resultPath)).toBe(false);
+  });
+
+  test('rejects an unreadable result-file path', async () => {
+    const { deps } = setup(`mkdir "$7"`);
+
+    await expect(runPlannotatorGateSupervisor(deps)).rejects.toThrow(
+      /result file could not be read/i
+    );
   });
 });

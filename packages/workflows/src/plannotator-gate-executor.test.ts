@@ -1,5 +1,13 @@
 import { describe, expect, test, beforeEach, afterEach } from 'bun:test';
-import { chmodSync, mkdirSync, realpathSync, writeFileSync, rmSync, symlinkSync } from 'fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  writeFileSync,
+  rmSync,
+  symlinkSync,
+} from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -154,15 +162,63 @@ describe('buildReworkPrompt', () => {
 });
 
 describe('preflightPlannotatorBinary', () => {
-  test('throws a clear error when binary is missing', () => {
+  const original = process.env.PLANNOTATOR_BIN;
+  const dirs: string[] = [];
+
+  afterEach(() => {
+    if (original === undefined) delete process.env.PLANNOTATOR_BIN;
+    else process.env.PLANNOTATOR_BIN = original;
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  function fakeBinary(body: string): string {
+    const dir = mkdtempSync(join(tmpdir(), 'plannotator-preflight-'));
+    dirs.push(dir);
+    const binary = join(dir, 'plannotator');
+    writeFileSync(binary, `#!/bin/sh\n${body}\n`);
+    chmodSync(binary, 0o700);
+    return binary;
+  }
+
+  test('throws a clear error when binary is missing', async () => {
     const prev = process.env.PLANNOTATOR_BIN;
     process.env.PLANNOTATOR_BIN = '/nonexistent/plannotator-binary-xyz';
     try {
-      expect(() => preflightPlannotatorBinary()).toThrow(/binary not found/);
+      await expect(preflightPlannotatorBinary()).rejects.toThrow(/binary not found/);
     } finally {
       if (prev === undefined) delete process.env.PLANNOTATOR_BIN;
       else process.env.PLANNOTATOR_BIN = prev;
     }
+  });
+
+  test('rejects a present binary whose help omits --persist-session', async () => {
+    process.env.PLANNOTATOR_BIN = fakeBinary(
+      `printf '%s\\n' 'Usage: annotate --gate --json --result-file <path>'`
+    );
+
+    await expect(preflightPlannotatorBinary()).rejects.toThrow(/--persist-session/);
+  });
+
+  test('rejects a present binary whose help omits --result-file', async () => {
+    process.env.PLANNOTATOR_BIN = fakeBinary(
+      `printf '%s\\n' 'Usage: annotate --gate --json --persist-session'`
+    );
+
+    await expect(preflightPlannotatorBinary()).rejects.toThrow(/--result-file/);
+  });
+
+  test('reports bounded stderr when annotate --help exits non-zero', async () => {
+    process.env.PLANNOTATOR_BIN = fakeBinary(`printf '%s\\n' 'broken install' >&2\nexit 7`);
+
+    await expect(preflightPlannotatorBinary()).rejects.toThrow(/exit.*7.*broken install/i);
+  });
+
+  test('accepts capabilities printed across stdout and stderr', async () => {
+    process.env.PLANNOTATOR_BIN = fakeBinary(
+      `printf '%s\\n' '--persist-session'\nprintf '%s\\n' '--result-file <path>' >&2`
+    );
+
+    await expect(preflightPlannotatorBinary()).resolves.toBe(process.env.PLANNOTATOR_BIN);
   });
 });
 

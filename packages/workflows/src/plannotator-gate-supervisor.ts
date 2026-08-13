@@ -13,6 +13,8 @@
  * claim returns superseded so only the winning executor continues `runLayers`.
  */
 import { createLogger } from '@archon/paths';
+import { mkdir, readFile, rm } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import type { ApprovalContext, WorkflowRun } from './schemas/workflow-run';
 import type { IWorkflowStore } from './store';
 import {
@@ -25,7 +27,13 @@ import {
 const log = createLogger('workflow.plannotator-gate');
 
 export interface AnnotateChildHandle {
-  wait: () => Promise<{ exitCode: number; stdout: string }>;
+  wait: () => Promise<{
+    exitCode: number;
+    stdout: string;
+    stderr: string;
+    resultFilePayload: string | undefined;
+    resultFileError?: string;
+  }>;
   kill: () => void;
 }
 
@@ -34,6 +42,7 @@ export interface PlannotatorGateSupervisorDeps {
   nodeId: string;
   gateId: string;
   cwd: string;
+  artifactsDir: string;
   initialDocumentPath: string;
   captureResponse: boolean;
   message: string;
@@ -41,13 +50,16 @@ export interface PlannotatorGateSupervisorDeps {
   /** Spawn rework AI; must return path string (contract B) on success */
   runReworkAgent: (args: { documentPath: string; annotations: string }) => Promise<string>;
   /** Injectable for tests; default uses Bun.spawn + resolvePlannotatorBinary */
-  spawnAnnotate?: (documentPath: string) => Promise<AnnotateChildHandle>;
+  spawnAnnotate?: (documentPath: string, resultFilePath: string) => Promise<AnnotateChildHandle>;
   pollIntervalMs?: number;
 }
 
 interface Exit {
   exitCode: number;
   stdout: string;
+  stderr: string;
+  resultFilePayload: string | undefined;
+  resultFileError?: string;
 }
 type Phase = NonNullable<ApprovalContext['phase']>;
 type GateOutcome = 'continue' | 'approved' | 'rejected' | 'superseded';
@@ -63,13 +75,15 @@ export async function runPlannotatorGateSupervisor(
   const pollMs = deps.pollIntervalMs ?? 250;
   const spawn =
     deps.spawnAnnotate ??
-    ((p: string): Promise<AnnotateChildHandle> => defaultSpawnAnnotate(p, deps.cwd));
+    ((documentPath: string, resultFilePath: string): Promise<AnnotateChildHandle> =>
+      defaultSpawnAnnotate(documentPath, resultFilePath, deps.cwd));
 
   let documentPath = deps.initialDocumentPath;
   let child: AnnotateChildHandle | null = null;
   let childDone: Promise<Exit> | null = null;
   let childResult: Exit | undefined;
   let phase: Phase = 'waiting_decision';
+  let attempt = 0;
 
   await deps.store.pauseWorkflowRun(deps.runId, {
     type: 'plannotator_gate',
@@ -112,7 +126,13 @@ export async function runPlannotatorGateSupervisor(
           dropChild();
           return openResult;
         }
-        child = await spawn(documentPath);
+        attempt += 1;
+        const resultFilePath = join(
+          deps.artifactsDir,
+          'plannotator-gates',
+          `gate-${encodeURIComponent(deps.gateId)}-attempt-${attempt}.json`
+        );
+        child = await spawn(documentPath, resultFilePath);
         childResult = undefined;
         childDone = child.wait().then(r => {
           childResult = r;
@@ -142,24 +162,33 @@ export async function runPlannotatorGateSupervisor(
         const exited = childResult;
         dropChild();
 
+        if (exited.exitCode !== 0) {
+          throw processProtocolError(
+            deps,
+            exited,
+            `plannotator annotate exited with code ${exited.exitCode}`
+          );
+        }
+        if (exited.resultFileError !== undefined) {
+          throw processProtocolError(
+            deps,
+            exited,
+            `plannotator annotate result file could not be read: ${exited.resultFileError}`
+          );
+        }
+        if (exited.resultFilePayload === undefined) {
+          throw processProtocolError(deps, exited, 'plannotator annotate result file is missing');
+        }
+
         let decision;
         try {
-          decision = parsePlannotatorGateDecisionJson(exited.stdout);
+          decision = parsePlannotatorGateDecisionJson(exited.resultFilePayload);
         } catch (err) {
-          log.warn(
-            {
-              workflowRunId: deps.runId,
-              nodeId: deps.nodeId,
-              exitCode: exited.exitCode,
-              error: (err as Error).message,
-            },
-            'plannotator_gate.decision_parse_failed'
+          throw processProtocolError(
+            deps,
+            exited,
+            `plannotator annotate result file is invalid: ${err instanceof Error ? err.message : String(err)}`
           );
-          phase = 'idle';
-          const idleOut = await setPhase(deps, documentPath, 'idle');
-          const idleResult = await finishGateOutcome(deps, idleOut);
-          if (idleResult) return idleResult;
-          continue;
         }
 
         if (decision.kind === 'approved') {
@@ -327,18 +356,42 @@ async function recordApproval(
 
 async function defaultSpawnAnnotate(
   documentPath: string,
+  resultFilePath: string,
   cwd: string
 ): Promise<AnnotateChildHandle> {
-  const proc = Bun.spawn([resolvePlannotatorBinary(), ...buildAnnotateArgv(documentPath)], {
-    cwd,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
+  await mkdir(dirname(resultFilePath), { recursive: true });
+  await rm(resultFilePath, { force: true });
+  const proc = Bun.spawn(
+    [resolvePlannotatorBinary(), ...buildAnnotateArgv(documentPath, resultFilePath)],
+    {
+      cwd,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    }
+  );
   return {
-    wait: async () => ({
-      exitCode: await proc.exited,
-      stdout: proc.stdout ? await new Response(proc.stdout).text() : '',
-    }),
+    wait: async (): Promise<Exit> => {
+      const stdoutPromise = proc.stdout ? new Response(proc.stdout).text() : Promise.resolve('');
+      const stderrPromise = proc.stderr ? new Response(proc.stderr).text() : Promise.resolve('');
+      const exitCode = await proc.exited;
+      const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
+      let resultFilePayload: string | undefined;
+      let resultFileError: string | undefined;
+      try {
+        resultFilePayload = await readFile(resultFilePath, 'utf8');
+      } catch (err) {
+        if (!isMissingFileError(err)) {
+          resultFileError = err instanceof Error ? err.message : String(err);
+        }
+      } finally {
+        try {
+          await rm(resultFilePath, { force: true });
+        } catch (err) {
+          resultFileError ??= `cleanup failed: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      }
+      return { exitCode, stdout, stderr, resultFilePayload, resultFileError };
+    },
     kill: (): void => {
       try {
         proc.kill();
@@ -347,6 +400,29 @@ async function defaultSpawnAnnotate(
       }
     },
   };
+}
+
+function isMissingFileError(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && 'code' in err && err.code === 'ENOENT';
+}
+
+function processProtocolError(
+  deps: PlannotatorGateSupervisorDeps,
+  exited: Exit,
+  message: string
+): Error {
+  const stderr = exited.stderr.trim().slice(0, 4096);
+  log.warn(
+    {
+      workflowRunId: deps.runId,
+      nodeId: deps.nodeId,
+      exitCode: exited.exitCode,
+      error: message,
+      ...(stderr ? { stderr } : {}),
+    },
+    'plannotator_gate.process_protocol_failed'
+  );
+  return new Error(`${message}${stderr ? `: ${stderr}` : ''}`);
 }
 
 function killChild(child: AnnotateChildHandle | null): void {

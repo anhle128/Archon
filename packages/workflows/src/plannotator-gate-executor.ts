@@ -2,7 +2,7 @@
  * Executor entry for plannotator_gate nodes.
  *
  * Resolves the document path from YAML/substitution, validates the file and
- * Plannotator binary, then hands off to the supervisor loop (pause + annotate
+ * Plannotator binary protocol, then hands off to the supervisor loop (pause + annotate
  * spawn + rework + approve/resume).
  */
 import { accessSync, constants, existsSync, realpathSync, statSync } from 'node:fs';
@@ -96,18 +96,42 @@ export function validateGateDocumentPath(
 }
 
 /**
- * Preflight: binary must be on PATH (or PLANNOTATOR_BIN).
+ * Preflight: binary must be resolvable and support the gate process protocol.
  */
-export function preflightPlannotatorBinary(): string {
+export async function preflightPlannotatorBinary(): Promise<string> {
   const bin = resolvePlannotatorBinary();
   const which = Bun.which(bin);
   if (!which && !existsSync(bin)) {
     throw new Error(
       `plannotator binary not found ('${bin}'). Install Plannotator and ensure it is on PATH, ` +
-        'or set PLANNOTATOR_BIN. --persist-session requires a recent Plannotator build.'
+        'or set PLANNOTATOR_BIN.'
     );
   }
-  return which ?? bin;
+  const resolved = which ?? bin;
+  const proc = Bun.spawn([resolved, 'annotate', '--help'], {
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+
+  const stdoutPromise = proc.stdout ? new Response(proc.stdout).text() : Promise.resolve('');
+  const stderrPromise = proc.stderr ? new Response(proc.stderr).text() : Promise.resolve('');
+  const exitCode = await proc.exited;
+  const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
+  const stderrDiagnostic = stderr.trim().slice(0, 4096);
+  if (exitCode !== 0) {
+    throw new Error(
+      `plannotator capability check exited with code ${exitCode}${stderrDiagnostic ? `: ${stderrDiagnostic}` : ''}`
+    );
+  }
+
+  const help = `${stdout}\n${stderr}`;
+  const missing = ['--persist-session', '--result-file'].filter(flag => !help.includes(flag));
+  if (missing.length > 0) {
+    throw new Error(
+      `plannotator binary does not support required annotate option${missing.length === 1 ? '' : 's'}: ${missing.join(', ')}`
+    );
+  }
+  return resolved;
 }
 
 export function buildReworkPrompt(
@@ -192,7 +216,7 @@ export async function executePlannotatorGateNode(
   let documentPath: string;
   try {
     documentPath = resolveGateDocumentPath(gate.document, nodeOutputs, cwd, artifactsDir);
-    preflightPlannotatorBinary();
+    await preflightPlannotatorBinary();
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     log.error(
@@ -230,6 +254,7 @@ export async function executePlannotatorGateNode(
       nodeId: node.id,
       gateId,
       cwd,
+      artifactsDir,
       initialDocumentPath: documentPath,
       captureResponse: gate.capture_response === true,
       message,

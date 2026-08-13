@@ -102,17 +102,27 @@ describe('parsePlannotatorGateDecisionJson', () => {
 
 describe('buildAnnotateArgv', () => {
   test('returns fixed annotate gate flags with the document path', () => {
-    expect(buildAnnotateArgv('/tmp/doc.html')).toEqual([
+    expect(buildAnnotateArgv('/tmp/doc.html', '/tmp/result.json')).toEqual([
       'annotate',
       '/tmp/doc.html',
       '--gate',
       '--json',
       '--persist-session',
+      '--result-file',
+      '/tmp/result.json',
     ]);
   });
 
   test('does not shell-escape the path (spawn argv is already tokenized)', () => {
-    expect(buildAnnotateArgv('/tmp/my plan/doc.html')[1]).toBe('/tmp/my plan/doc.html');
+    expect(buildAnnotateArgv('/tmp/my plan/doc.html', '/tmp/my results/result.json')).toEqual([
+      'annotate',
+      '/tmp/my plan/doc.html',
+      '--gate',
+      '--json',
+      '--persist-session',
+      '--result-file',
+      '/tmp/my results/result.json',
+    ]);
   });
 });
 

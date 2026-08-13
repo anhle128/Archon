@@ -2,9 +2,9 @@
  * Pure helpers for the plannotator_gate node.
  *
  * Path contract (producer / rework stdout): entire output is one document path —
- * exactly one non-empty trimmed line. Decision contract (annotate --gate --json stdout):
- * last non-empty line is `{"decision":"approved"|"annotated"|"dismissed",...}`.
- * Spawn argv is fixed; binary resolution is env-only (PATH probe lives in the supervisor).
+ * exactly one non-empty trimmed line. Decision contract (annotate --result-file payload):
+ * one JSON object with `decision` ∈ approved|annotated|dismissed.
+ * Spawn argv is fixed; binary resolution is env-only (capability probing lives in the executor).
  */
 
 export type PlannotatorGateDecision =
@@ -34,18 +34,18 @@ export function parseDocumentPathFromNodeOutput(output: string): string {
 }
 
 /**
- * Parse Plannotator annotate `--gate --json` stdout into a typed decision.
- * Uses the last non-empty line so log noise before the decision line is ignored.
+ * Parse a Plannotator annotate result-file payload into a typed decision.
+ * Uses the last non-empty line for compatibility with a trailing newline.
  * Requires a JSON object with `decision` ∈ approved|annotated|dismissed.
  */
-export function parsePlannotatorGateDecisionJson(stdout: string): PlannotatorGateDecision {
+export function parsePlannotatorGateDecisionJson(payload: string): PlannotatorGateDecision {
   let lastNonEmpty: string | undefined;
-  for (const line of stdout.split(/\r?\n/)) {
+  for (const line of payload.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (trimmed.length > 0) lastNonEmpty = trimmed;
   }
   if (lastNonEmpty === undefined) {
-    throw new Error('plannotator gate decision stdout is empty — expected a JSON decision line');
+    throw new Error('plannotator gate result file is empty — expected a JSON decision line');
   }
 
   let parsed: unknown;
@@ -82,8 +82,16 @@ export function parsePlannotatorGateDecisionJson(stdout: string): PlannotatorGat
 /**
  * Argv for `plannotator annotate` under a gate (no binary name — caller prefixes it).
  */
-export function buildAnnotateArgv(documentPath: string): string[] {
-  return ['annotate', documentPath, '--gate', '--json', '--persist-session'];
+export function buildAnnotateArgv(documentPath: string, resultFilePath: string): string[] {
+  return [
+    'annotate',
+    documentPath,
+    '--gate',
+    '--json',
+    '--persist-session',
+    '--result-file',
+    resultFilePath,
+  ];
 }
 
 /**
