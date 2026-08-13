@@ -115,11 +115,9 @@ export function buildReworkPrompt(
   documentPath: string,
   annotations: string
 ): string {
-  return template
-    .split('$REVIEW_DOCUMENT')
-    .join(documentPath)
-    .split('$REVIEW_ANNOTATIONS')
-    .join(annotations);
+  return template.replace(/\$REVIEW_DOCUMENT|\$REVIEW_ANNOTATIONS/g, placeholder =>
+    placeholder === '$REVIEW_DOCUMENT' ? documentPath : annotations
+  );
 }
 
 export function resolvePlannotatorGateId(workflowRun: WorkflowRun, nodeId: string): string {

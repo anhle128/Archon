@@ -140,6 +140,17 @@ describe('buildReworkPrompt', () => {
       )
     ).toBe(`Document: /tmp/plan.html\nAnnotations: ${annotations}`);
   });
+
+  test('preserves placeholder text inside the document path', () => {
+    const documentPath = '/tmp/$REVIEW_ANNOTATIONS/plan.html';
+    expect(
+      buildReworkPrompt(
+        'Document: $REVIEW_DOCUMENT\nAnnotations: $REVIEW_ANNOTATIONS',
+        documentPath,
+        'Fix the heading.'
+      )
+    ).toBe(`Document: ${documentPath}\nAnnotations: Fix the heading.`);
+  });
 });
 
 describe('preflightPlannotatorBinary', () => {
