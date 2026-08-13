@@ -36,15 +36,10 @@ export interface PlannotatorGateSupervisorDeps {
   cwd: string;
   initialDocumentPath: string;
   captureResponse: boolean;
-  reworkPromptTemplate: string;
   message: string;
   store: IWorkflowStore;
   /** Spawn rework AI; must return path string (contract B) on success */
-  runReworkAgent: (args: {
-    prompt: string;
-    documentPath: string;
-    annotations: string;
-  }) => Promise<string>;
+  runReworkAgent: (args: { documentPath: string; annotations: string }) => Promise<string>;
   /** Injectable for tests; default uses Bun.spawn + resolvePlannotatorBinary */
   spawnAnnotate?: (documentPath: string) => Promise<AnnotateChildHandle>;
   pollIntervalMs?: number;
@@ -180,15 +175,8 @@ export async function runPlannotatorGateSupervisor(
           const reworkResult = await finishGateOutcome(deps, reworkPhase);
           if (reworkResult) return reworkResult;
 
-          const prompt = deps.reworkPromptTemplate
-            .split('$REVIEW_DOCUMENT')
-            .join(documentPath)
-            .split('$REVIEW_ANNOTATIONS')
-            .join(decision.feedback);
-
           try {
             const raw = await deps.runReworkAgent({
-              prompt,
               documentPath,
               annotations: decision.feedback,
             });

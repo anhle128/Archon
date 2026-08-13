@@ -5,8 +5,8 @@
  * Plannotator binary, then hands off to the supervisor loop (pause + annotate
  * spawn + rework + approve/resume).
  */
-import { existsSync } from 'fs';
-import { isAbsolute, resolve as resolvePath } from 'path';
+import { accessSync, constants, existsSync, realpathSync, statSync } from 'node:fs';
+import { extname, isAbsolute, relative, resolve as resolvePath, sep } from 'node:path';
 import { createLogger } from '@archon/paths';
 import type { WorkflowDeps, WorkflowConfig, IWorkflowPlatform } from './deps';
 import type { PlannotatorGateNode, WorkflowRun, NodeOutput } from './schemas';
@@ -44,17 +44,55 @@ export interface ExecutePlannotatorGateArgs {
 export function resolveGateDocumentPath(
   documentField: string,
   nodeOutputs: Map<string, NodeOutput>,
-  cwd: string
+  cwd: string,
+  artifactsDir: string
 ): string {
   const substituted = substituteNodeOutputRefs(documentField, nodeOutputs);
   const rawPath = parseDocumentPathFromNodeOutput(substituted);
-  const absolute = isAbsolute(rawPath) ? rawPath : resolvePath(cwd, rawPath);
-  if (!existsSync(absolute)) {
+  return validateGateDocumentPath(rawPath, cwd, artifactsDir);
+}
+
+function isInsideRoot(root: string, candidate: string): boolean {
+  const pathFromRoot = relative(root, candidate);
+  return (
+    pathFromRoot === '' ||
+    (!pathFromRoot.startsWith(`..${sep}`) && pathFromRoot !== '..' && !isAbsolute(pathFromRoot))
+  );
+}
+
+export function validateGateDocumentPath(
+  rawPath: string,
+  cwd: string,
+  artifactsDir: string
+): string {
+  const unresolved = isAbsolute(rawPath) ? rawPath : resolvePath(cwd, rawPath);
+  let candidate: string;
+  try {
+    candidate = realpathSync(unresolved);
+  } catch {
     throw new Error(
-      `plannotator_gate document not found: ${absolute} (resolved from '${rawPath}')`
+      `plannotator_gate document not found: ${unresolved} (resolved from '${rawPath}')`
     );
   }
-  return absolute;
+
+  const cwdRoot = realpathSync(cwd);
+  const artifactsRoot = realpathSync(artifactsDir);
+  if (!isInsideRoot(cwdRoot, candidate) && !isInsideRoot(artifactsRoot, candidate)) {
+    throw new Error(`plannotator_gate document is outside cwd and artifactsDir: ${candidate}`);
+  }
+  if (!statSync(candidate).isFile()) {
+    throw new Error(`plannotator_gate document must be a file: ${candidate}`);
+  }
+  const extension = extname(candidate).toLowerCase();
+  if (extension !== '.html' && extension !== '.htm') {
+    throw new Error(`plannotator_gate document must be an HTML file: ${candidate}`);
+  }
+  try {
+    accessSync(candidate, constants.R_OK);
+  } catch {
+    throw new Error(`plannotator_gate document must be readable: ${candidate}`);
+  }
+  return candidate;
 }
 
 /**
@@ -72,7 +110,11 @@ export function preflightPlannotatorBinary(): string {
   return which ?? bin;
 }
 
-function buildReworkPrompt(template: string, documentPath: string, annotations: string): string {
+export function buildReworkPrompt(
+  template: string,
+  documentPath: string,
+  annotations: string
+): string {
   return template
     .split('$REVIEW_DOCUMENT')
     .join(documentPath)
@@ -144,13 +186,14 @@ async function runReworkViaProvider(
 export async function executePlannotatorGateNode(
   args: ExecutePlannotatorGateArgs
 ): Promise<NodeOutput> {
-  const { node, workflowRun, deps, platform, conversationId, cwd, nodeOutputs } = args;
+  const { node, workflowRun, deps, platform, conversationId, cwd, artifactsDir, nodeOutputs } =
+    args;
   const gate = node.plannotator_gate;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
 
   let documentPath: string;
   try {
-    documentPath = resolveGateDocumentPath(gate.document, nodeOutputs, cwd);
+    documentPath = resolveGateDocumentPath(gate.document, nodeOutputs, cwd, artifactsDir);
     preflightPlannotatorBinary();
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -191,17 +234,12 @@ export async function executePlannotatorGateNode(
       cwd,
       initialDocumentPath: documentPath,
       captureResponse: gate.capture_response === true,
-      reworkPromptTemplate: gate.rework.prompt,
       message,
       store: deps.store,
-      runReworkAgent: async ({ prompt, documentPath: doc, annotations }) => {
-        const filled = buildReworkPrompt(prompt, doc, annotations);
+      runReworkAgent: async ({ documentPath: doc, annotations }) => {
+        const filled = buildReworkPrompt(gate.rework.prompt, doc, annotations);
         const nextPath = await runReworkViaProvider(args, filled);
-        const absolute = isAbsolute(nextPath) ? nextPath : resolvePath(cwd, nextPath);
-        if (!existsSync(absolute)) {
-          throw new Error(`plannotator_gate rework returned missing file: ${absolute}`);
-        }
-        return absolute;
+        return validateGateDocumentPath(nextPath, cwd, artifactsDir);
       },
     });
 

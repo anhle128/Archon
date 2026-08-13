@@ -11,10 +11,10 @@ describe('parseDocumentPathFromNodeOutput', () => {
     expect(parseDocumentPathFromNodeOutput('  /tmp/plan.html  ')).toBe('/tmp/plan.html');
   });
 
-  test('returns the first non-empty line and ignores later lines', () => {
-    expect(
+  test('throws when output contains trailing commentary', () => {
+    expect(() =>
       parseDocumentPathFromNodeOutput('\n\n  /artifacts/runs/1/explain.html\ntrailing noise\n')
-    ).toBe('/artifacts/runs/1/explain.html');
+    ).toThrow(/one non-empty line/i);
   });
 
   test('preserves spaces inside a path', () => {

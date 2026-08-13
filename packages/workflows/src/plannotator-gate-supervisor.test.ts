@@ -294,7 +294,6 @@ function baseDeps(
     cwd: '/tmp/proj',
     initialDocumentPath: '/tmp/proj/artifacts/plan.html',
     captureResponse: false,
-    reworkPromptTemplate: 'Doc: $REVIEW_DOCUMENT\nNotes:\n$REVIEW_ANNOTATIONS',
     message: 'Review the plan',
     gateId: 'gate-a',
     store: store.asStore(),
@@ -358,7 +357,7 @@ describe('runPlannotatorGateSupervisor', () => {
     const store = new FakeGateStore('run-rework');
     const first = makeChild({
       exitCode: 0,
-      stdout: '{"decision":"annotated","feedback":"fix the header"}',
+      stdout: '{"decision":"annotated","feedback":"keep $REVIEW_DOCUMENT and $REVIEW_ANNOTATIONS"}',
     });
     const second = makeChild({
       exitCode: 0,
@@ -369,15 +368,13 @@ describe('runPlannotatorGateSupervisor', () => {
       paths.push(documentPath);
       return paths.length === 1 ? first : second;
     });
-    const runReworkAgent = mock(
-      async (args: { prompt: string; documentPath: string; annotations: string }) => {
-        expect(args.annotations).toBe('fix the header');
-        expect(args.documentPath).toBe('/tmp/proj/artifacts/plan.html');
-        expect(args.prompt).toContain('/tmp/proj/artifacts/plan.html');
-        expect(args.prompt).toContain('fix the header');
-        return '/tmp/proj/artifacts/plan-v2.html\n';
-      }
-    );
+    const runReworkAgent = mock(async (args: { documentPath: string; annotations: string }) => {
+      expect(args).toEqual({
+        documentPath: '/tmp/proj/artifacts/plan.html',
+        annotations: 'keep $REVIEW_DOCUMENT and $REVIEW_ANNOTATIONS',
+      });
+      return '/tmp/proj/artifacts/plan-v2.html\n';
+    });
 
     const result = await runPlannotatorGateSupervisor(
       baseDeps(store, {
