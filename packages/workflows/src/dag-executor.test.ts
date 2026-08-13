@@ -10,8 +10,8 @@ import {
   type Mock,
 } from 'bun:test';
 import { mkdir, writeFile, rm, readFile } from 'fs/promises';
-import { unlinkSync } from 'fs';
-import { join } from 'path';
+import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import { tmpdir } from 'os';
 import * as git from '@archon/git';
 
@@ -48,13 +48,6 @@ mock.module('@archon/paths', () => ({
   captureWorkflowCompleted: mockCaptureWorkflowCompleted,
 }));
 
-const mockExecutePlannotatorGateNode = mock(() =>
-  Promise.resolve({ state: 'pending' as const, output: '' })
-);
-mock.module('./plannotator-gate-executor', () => ({
-  executePlannotatorGateNode: mockExecutePlannotatorGateNode,
-}));
-
 // --- Bootstrap provider registry (after path mocks, before dag-executor import) ---
 import {
   registerBuiltinProviders,
@@ -88,6 +81,7 @@ import { writeNodeArtifact } from './artifacts-index';
 import { getWorkflowEventEmitter, type WorkflowEmitterEvent } from './event-emitter';
 import { loadMcpConfig } from '@archon/providers/mcp/config';
 import type {
+  ApprovalContext,
   DagNode,
   BashNode,
   ScriptNode,
@@ -101,9 +95,10 @@ import { parseWorkflow } from './loader';
 import { expandWorkflowIncludes } from './include-expander';
 import { OutputRefError } from './output-ref';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
-import type { IWorkflowStore } from './store';
+import type { IWorkflowStore, WorkflowEventData } from './store';
 import { buildAiProfile } from './model-validation';
 import type { SendQueryOptions } from '@archon/providers/types';
+import * as plannotatorGateExecutor from './plannotator-gate-executor';
 
 // --- Mock helpers ---
 
@@ -20612,16 +20607,386 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
   });
 });
 
+type GateIntegrationEvent = Pick<
+  WorkflowEventData,
+  'workflow_run_id' | 'event_type' | 'step_name' | 'data'
+>;
+
+interface DagFakePlannotator {
+  bin: string;
+  controlDir: string;
+  invocationLog: string;
+}
+
+function createDagFakePlannotator(root: string): DagFakePlannotator {
+  const controlDir = join(root, 'controls');
+  const bin = join(root, 'plannotator');
+  const invocationLog = join(root, 'plannotator-invocations.jsonl');
+  mkdirSync(controlDir, { recursive: true });
+  writeFileSync(
+    bin,
+    `#!/usr/bin/env bun
+import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
+
+const args = Bun.argv.slice(2);
+if (args[0] === 'annotate' && args.includes('--help')) {
+  console.log('annotate --gate --json --persist-session --result-file <path>');
+  process.exit(0);
+}
+const resultIndex = args.indexOf('--result-file');
+if (args[0] !== 'annotate' || resultIndex < 0 || !args[resultIndex + 1]) process.exit(64);
+const resultFile = args[resultIndex + 1];
+const controlDir = ${JSON.stringify(controlDir)};
+const invocationLog = ${JSON.stringify(invocationLog)};
+const key = basename(resultFile);
+appendFileSync(invocationLog, JSON.stringify({ args, document: args[1], resultFile }) + '\\n');
+writeFileSync(join(controlDir, key + '.started'), 'started\\n');
+process.on('SIGTERM', () => {
+  writeFileSync(join(controlDir, key + '.terminated'), 'terminated\\n');
+  process.exit(143);
+});
+const control = join(controlDir, key + '.control.json');
+while (!existsSync(control)) {
+  if (!existsSync(controlDir)) process.exit(66);
+  await Bun.sleep(5);
+}
+const decision = JSON.parse(readFileSync(control, 'utf8'));
+if (decision.stdout) console.log(decision.stdout);
+if (decision.stderr) console.error(decision.stderr);
+if (decision.payload !== undefined) {
+  const temporary = resultFile + '.' + process.pid + '.tmp';
+  writeFileSync(temporary, JSON.stringify(decision.payload) + '\\n');
+  renameSync(temporary, resultFile);
+}
+process.exit(decision.exitCode ?? 0);
+`
+  );
+  chmodSync(bin, 0o755);
+  return { bin, controlDir, invocationLog };
+}
+
+function dagGateAttemptKey(gateId: string, attempt = 1): string {
+  return `gate-${encodeURIComponent(gateId)}-attempt-${String(attempt)}.json`;
+}
+
+function releaseDagGateDecision(
+  fake: DagFakePlannotator,
+  gateId: string,
+  payload: Record<string, unknown>
+): void {
+  writeFileSync(
+    join(fake.controlDir, `${dagGateAttemptKey(gateId)}.control.json`),
+    JSON.stringify({ payload, stdout: 'fake stdout', stderr: 'fake stderr', exitCode: 0 })
+  );
+}
+
+async function waitForDagGateInvocations(
+  fake: DagFakePlannotator,
+  count: number
+): Promise<Array<{ args: string[]; document: string; resultFile: string }>> {
+  for (let attempt = 0; attempt < 600; attempt++) {
+    if (existsSync(fake.invocationLog)) {
+      const invocations = readFileSync(fake.invocationLog, 'utf8')
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .map(line => JSON.parse(line) as { args: string[]; document: string; resultFile: string });
+      if (invocations.length >= count) return invocations;
+    }
+    await Bun.sleep(5);
+  }
+  throw new Error(`Timed out waiting for ${String(count)} Plannotator invocation(s)`);
+}
+
+function createDagGateStore(run: WorkflowRun): {
+  store: IWorkflowStore;
+  events: GateIntegrationEvent[];
+} {
+  const store = createMockStore();
+  const events: GateIntegrationEvent[] = [];
+  store.getWorkflowRun = mock(id => Promise.resolve(id === run.id ? structuredClone(run) : null));
+  store.getWorkflowRunStatus = mock(id => Promise.resolve(id === run.id ? run.status : null));
+  store.pauseWorkflowRun = mock((id, approval) => {
+    if (id === run.id) {
+      run.status = 'paused';
+      run.metadata = { ...run.metadata, approval: { ...approval, resolved: null } };
+    }
+    return Promise.resolve();
+  });
+  store.transitionPlannotatorGate = mock(async input => {
+    const approval = run.metadata.approval as ApprovalContext | undefined;
+    if (run.status !== 'paused') return { outcome: 'stopped' as const, status: run.status };
+    if (
+      input.runId !== run.id ||
+      approval?.type !== 'plannotator_gate' ||
+      approval.nodeId !== input.nodeId ||
+      approval.gateId !== input.expectedGateId
+    ) {
+      return { outcome: 'superseded' as const };
+    }
+    if (approval.resolved != null) {
+      return { outcome: 'resolved' as const, resolved: approval.resolved };
+    }
+    const next: ApprovalContext = {
+      ...approval,
+      gateId: input.nextGateId ?? input.expectedGateId,
+      document: input.document,
+      phase: input.phase,
+    };
+    run.metadata = { ...run.metadata, approval: next };
+    return { outcome: 'updated' as const, approval: next };
+  });
+  store.resolveApprovalGate = mock(async (id, expected, metadata, resolutionEvents) => {
+    const approval = run.metadata.approval as ApprovalContext | undefined;
+    if (
+      id !== run.id ||
+      run.status !== 'paused' ||
+      approval?.resolved != null ||
+      approval?.nodeId !== expected.nodeId ||
+      approval.gateId !== expected.gateId
+    ) {
+      return { resolved: false };
+    }
+    run.metadata = { ...run.metadata, ...metadata };
+    events.push(...resolutionEvents.map(event => ({ workflow_run_id: id, ...event })));
+    return { resolved: true };
+  });
+  store.resumeApprovedGate = mock(async (id, expected) => {
+    const approval = run.metadata.approval as ApprovalContext | undefined;
+    if (
+      id !== run.id ||
+      run.status !== 'paused' ||
+      approval?.resolved !== 'approved' ||
+      approval.nodeId !== expected.nodeId ||
+      approval.gateId !== expected.gateId
+    ) {
+      return { resumed: false };
+    }
+    run.status = 'running';
+    return { resumed: true };
+  });
+  store.createWorkflowEvent = mock(data => {
+    events.push(data);
+    return Promise.resolve();
+  });
+  store.getDagResumeSnapshot = mock(() =>
+    Promise.resolve({
+      completedNodeOutputs: new Map(
+        events
+          .filter(event => event.event_type === 'node_completed' && event.step_name !== undefined)
+          .map(event => [event.step_name ?? '', String(event.data?.node_output ?? '')])
+      ),
+      tokens: { input: 0, output: 0 },
+    })
+  );
+  return { store, events };
+}
+
+describe('executeDagWorkflow -- production Plannotator gate integration', () => {
+  const originalBin = process.env.PLANNOTATOR_BIN;
+  let root: string;
+  let artifactsDir: string;
+  let fake: DagFakePlannotator;
+
+  beforeEach(() => {
+    root = join(
+      tmpdir(),
+      `dag-plannotator-integration-${String(Date.now())}-${Math.random().toString(36).slice(2)}`
+    );
+    artifactsDir = join(root, 'artifacts');
+    mkdirSync(artifactsDir, { recursive: true });
+    fake = createDagFakePlannotator(root);
+    process.env.PLANNOTATOR_BIN = fake.bin;
+  });
+
+  afterEach(async () => {
+    if (originalBin === undefined) delete process.env.PLANNOTATOR_BIN;
+    else process.env.PLANNOTATOR_BIN = originalBin;
+    await rm(root, { recursive: true, force: true });
+  });
+
+  function integrationWorkflow(marker: string): WorkflowDefinition {
+    const document = join(root, 'producer.html');
+    return {
+      name: 'real-plannotator-gate',
+      nodes: [
+        {
+          id: 'producer',
+          bash: `printf '<html>review</html>' > '${document}'\nprintf '%s\\n' '${document}'`,
+        },
+        {
+          id: 'review',
+          depends_on: ['producer'],
+          plannotator_gate: {
+            document: '$producer.output',
+            capture_response: true,
+            rework: { prompt: 'Revise $REVIEW_DOCUMENT using $REVIEW_ANNOTATIONS' },
+          },
+        },
+        {
+          id: 'downstream',
+          depends_on: ['review'],
+          bash: `printf 'ran\\n' >> '${marker}'`,
+        },
+      ],
+    };
+  }
+
+  async function executeIntegrationDag(
+    deps: WorkflowDeps,
+    run: WorkflowRun,
+    workflow: WorkflowDefinition,
+    priorCompletedNodes?: Map<string, string>
+  ): Promise<string | undefined> {
+    return executeDagWorkflow(
+      deps,
+      createMockPlatform(),
+      run.conversation_id ?? 'conv-gate',
+      root,
+      workflow,
+      run,
+      'claude',
+      undefined,
+      artifactsDir,
+      join(root, 'state'),
+      join(root, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      priorCompletedNodes
+    );
+  }
+
+  it('runs producer → real gate → downstream and completes exactly once', async () => {
+    const marker = join(root, 'downstream.log');
+    const run = makeWorkflowRun('run-real-gate', {
+      metadata: {
+        approval: {
+          type: 'plannotator_gate',
+          nodeId: 'review',
+          gateId: 'gate-real',
+          phase: 'opening',
+          resolved: null,
+        },
+      },
+    });
+    const { store, events } = createDagGateStore(run);
+    const execution = executeIntegrationDag(
+      createMockDeps(store),
+      run,
+      integrationWorkflow(marker)
+    );
+
+    await waitForDagGateInvocations(fake, 1);
+    releaseDagGateDecision(fake, 'gate-real', {
+      decision: 'approved',
+      feedback: 'Approved',
+    });
+    await execution;
+
+    expect(readFileSync(marker, 'utf8').trim().split('\n')).toEqual(['ran']);
+    expect(
+      events.filter(event => event.event_type === 'node_completed' && event.step_name === 'review')
+    ).toHaveLength(1);
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('rotates ownership, terminates the old child, and lets only the replacement continue', async () => {
+    const marker = join(root, 'takeover-downstream.log');
+    const document = join(root, 'producer.html');
+    writeFileSync(document, '<html>review</html>');
+    const run = makeWorkflowRun('run-takeover', {
+      metadata: {
+        approval: {
+          type: 'plannotator_gate',
+          nodeId: 'review',
+          gateId: 'gate-a',
+          phase: 'opening',
+          resolved: null,
+        },
+      },
+    });
+    const { store, events } = createDagGateStore(run);
+    const deps = createMockDeps(store);
+    const workflow = integrationWorkflow(marker);
+    const prior = new Map([['producer', document]]);
+    const realExecuteGate = plannotatorGateExecutor.executePlannotatorGateNode;
+    const gateResults: NodeOutput[] = [];
+    const gateSpy = spyOn(plannotatorGateExecutor, 'executePlannotatorGateNode').mockImplementation(
+      async args => {
+        const result = await realExecuteGate(args);
+        gateResults.push(result);
+        return result;
+      }
+    );
+    const oldExecution = executeIntegrationDag(deps, run, workflow, prior);
+    await waitForDagGateInvocations(fake, 1);
+
+    const transition = await store.transitionPlannotatorGate({
+      runId: run.id,
+      nodeId: 'review',
+      expectedGateId: 'gate-a',
+      nextGateId: 'gate-b',
+      document,
+      phase: 'opening',
+    });
+    expect(transition.outcome).toBe('updated');
+    run.status = 'running';
+    const replacementRun = structuredClone(run);
+    const replacementExecution = executeIntegrationDag(deps, replacementRun, workflow, prior);
+    const invocations = await waitForDagGateInvocations(fake, 2);
+
+    for (let attempt = 0; attempt < 600; attempt++) {
+      if (existsSync(join(fake.controlDir, `${dagGateAttemptKey('gate-a')}.terminated`))) {
+        break;
+      }
+      await Bun.sleep(5);
+    }
+    expect(existsSync(join(fake.controlDir, `${dagGateAttemptKey('gate-a')}.terminated`))).toBe(
+      true
+    );
+    await expect(oldExecution).resolves.toBeUndefined();
+    expect(gateResults).toContainEqual({ state: 'pending', output: '' });
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    releaseDagGateDecision(fake, 'gate-b', {
+      decision: 'approved',
+      feedback: 'Replacement approved',
+    });
+    await replacementExecution;
+
+    expect(invocations.map(invocation => basename(invocation.resultFile))).toEqual([
+      dagGateAttemptKey('gate-a'),
+      dagGateAttemptKey('gate-b'),
+    ]);
+    expect(readFileSync(marker, 'utf8').trim().split('\n')).toEqual(['ran']);
+    expect(
+      events.filter(event => event.event_type === 'node_completed' && event.step_name === 'review')
+    ).toHaveLength(1);
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+    gateSpy.mockRestore();
+  });
+});
+
 describe('executeDagWorkflow -- superseded plannotator supervisor', () => {
   let testDir: string;
+  let executeGateSpy: ReturnType<typeof spyOn>;
 
   beforeEach(async () => {
     testDir = join(tmpdir(), `dag-plannotator-superseded-${String(Date.now())}`);
     await mkdir(testDir, { recursive: true });
-    mockExecutePlannotatorGateNode.mockClear();
+    executeGateSpy = spyOn(plannotatorGateExecutor, 'executePlannotatorGateNode').mockResolvedValue(
+      {
+        state: 'pending',
+        output: '',
+      }
+    );
   });
 
   afterEach(async () => {
+    executeGateSpy.mockRestore();
     await rm(testDir, { recursive: true, force: true });
   });
 
@@ -20659,7 +21024,7 @@ describe('executeDagWorkflow -- superseded plannotator supervisor', () => {
       minimalConfig
     );
 
-    expect(mockExecutePlannotatorGateNode).toHaveBeenCalledTimes(1);
+    expect(executeGateSpy).toHaveBeenCalledTimes(1);
     expect(mockSendQueryDag).not.toHaveBeenCalled();
     expect(
       (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.some(
