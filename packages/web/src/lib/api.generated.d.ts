@@ -3616,6 +3616,14 @@ export interface components {
             persist_sessions?: boolean;
             tags?: string[];
             requires?: "github"[];
+            inputs?: {
+                [key: string]: {
+                    required?: boolean;
+                    default?: string;
+                    description?: string;
+                };
+            };
+            returns?: string;
             nodes: components["schemas"]["DagNode"][];
         };
         DagNode: {

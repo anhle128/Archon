@@ -329,6 +329,10 @@ Options:
   --no-worktree              Run on branch directly without worktree isolation
   --folder                   Register the current non-git directory as a folder project and run in place
   --resume                   Resume the most recent failed or paused run of the workflow (mutually exclusive with --branch)
+  --dry-run                  Simulate workflow DAG control flow without creating a run or contacting a provider
+  --stubs <path>             YAML node-output map for --dry-run
+  --exec-code                Execute trusted bash/script nodes during --dry-run (default: require stubs)
+  --pause-at-gates           Stop a dry-run at approval gates instead of auto-approving
   --spawn                    Open setup wizard in a new terminal window (for setup command)
   --quiet, -q                Reduce log verbosity to warnings and errors only
   --verbose, -v              Show debug-level output
@@ -355,6 +359,7 @@ Examples:
   archon workflow run quick-fix --no-worktree "Fix typo"
   archon workflow run assist --folder "List every repo under this multi-repo root"
   archon workflow run archon-assist --detach "Investigate the flaky test"
+  archon workflow run assist --dry-run --stubs ./stubs.yaml --json
   archon workflow runs --json
   archon workflow get <run-id> --json
   archon workflow retry-node <run-id> <node-id>
@@ -513,6 +518,10 @@ async function main(): Promise<number> {
         route: { type: 'string' },
         'correlation-id': { type: 'string' },
         full: { type: 'boolean' },
+        'dry-run': { type: 'boolean' },
+        stubs: { type: 'string' },
+        'exec-code': { type: 'boolean' },
+        'pause-at-gates': { type: 'boolean' },
       },
       allowPositionals: true,
       strict: false, // Allow unknown flags to pass through
@@ -556,6 +565,10 @@ async function main(): Promise<number> {
   const invalidJsonFlag = rawJsonValue !== undefined && typeof rawJsonValue !== 'boolean';
   const jsonFlag = rawJsonValue === true ? true : undefined;
   const detachFlag = values.detach as boolean | undefined;
+  const dryRunFlag = values['dry-run'] as boolean | undefined;
+  const stubsPath = values.stubs as string | undefined;
+  const execCodeFlag = values['exec-code'] as boolean | undefined;
+  const pauseAtGatesFlag = values['pause-at-gates'] as boolean | undefined;
   // Handle help flag
   if (values.help) {
     printUsage();
@@ -698,6 +711,10 @@ async function main(): Promise<number> {
       if (repoRoot) {
         // Use repo root as working directory (handles subdirectory case)
         effectiveCwd = repoRoot;
+      } else if (dryRunFlag && command === 'workflow' && subcommand === 'run') {
+        // Dry-run only discovers workflow files and simulates in memory. It does
+        // not need project registration, a database lookup, or a git worktree.
+        effectiveCwd = cwd;
       } else {
         // Not a git repo. It may still be a registered FOLDER project (a
         // multi-repo root or plain ops folder). Consult the DB before rejecting.
@@ -901,6 +918,10 @@ async function main(): Promise<number> {
               detach: detachFlag,
               json: jsonFlag,
               correlationId: correlationId as string | undefined,
+              dryRun: dryRunFlag,
+              stubsPath,
+              execCode: execCodeFlag,
+              pauseAtGates: pauseAtGatesFlag,
             };
             return await workflowRunCommand(effectiveCwd, workflowName ?? '', userMessage, options);
           }
