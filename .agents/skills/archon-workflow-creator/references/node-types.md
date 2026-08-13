@@ -42,7 +42,7 @@ Common fields:
 | `when`         | most nodes except `route_loop`            | Conditional expression evaluated after dependencies. |
 | `trigger_rule` | most nodes except `route_loop`            | Defaults to `all_success`.                           |
 | `retry`        | most nodes except `loop` and `route_loop` | Retries transient or all errors.                     |
-| `idle_timeout` | AI and loop nodes                         | Milliseconds without output before timeout handling. |
+| `idle_timeout` | AI and loop nodes                         | Milliseconds without output before timeout handling, including embedded Plannotator prepare and rework calls. |
 | `always_run`   | all nodes                                 | Opt out of resume skip caching.                      |
 | `output_type`  | all nodes                                 | Writes typed sidecar artifact under run artifacts.   |
 
@@ -424,15 +424,27 @@ This is different from a normal `approval` node because the gate owns the annota
 
 Plannotator gate config:
 
-| Field              | Required | Meaning                                                                                         |
-| ------------------ | -------- | ----------------------------------------------------------------------------------------------- |
-| `document`         | yes      | HTML path or `$node.output` reference that resolves to exactly one non-empty path line.         |
-| `message`          | no       | User-facing review instructions shown by the workflow surface.                                  |
-| `capture_response` | no       | When true, the approval feedback becomes the gate node output.                                  |
-| `rework.prompt`    | yes      | AI prompt used after the reviewer sends annotations.                                            |
-| `rework.provider`  | no       | Provider override for rework; otherwise the workflow provider is used.                           |
-| `rework.model`     | no       | Model override passed to the rework provider.                                                    |
-| `rework.effort`    | no       | Provider-specific effort override for rework.                                                    |
+| Field                           | Required | Meaning                                                                                         |
+| ------------------------------- | -------- | ----------------------------------------------------------------------------------------------- |
+| `document`                      | one mode | Existing HTML path or `$node.output` reference that resolves to exactly one non-empty path line. |
+| `prepare`                       | one mode | Fresh embedded AI call that creates the initial HTML document.                                  |
+| `prepare.prompt`                | yes      | Initial-document prompt.                                                                        |
+| `prepare.provider`              | no       | Provider override for preparation; otherwise the workflow provider is used.                     |
+| `prepare.model`                 | no       | Model override passed to the preparation provider.                                              |
+| `prepare.effort`                | no       | Provider-specific effort override for preparation.                                              |
+| `prepare.allowed_tools`         | no       | Tool allowlist for preparation.                                                                 |
+| `prepare.denied_tools`          | no       | Tool denylist for preparation.                                                                  |
+| `message`                       | no       | User-facing review instructions shown by the workflow surface.                                  |
+| `capture_response`              | no       | When true, the approval feedback becomes the gate node output.                                  |
+| `rework.prompt`                 | yes      | AI prompt used after the reviewer sends annotations.                                            |
+| `rework.provider`               | no       | Provider override for rework; otherwise the workflow provider is used.                          |
+| `rework.model`                  | no       | Model override passed to the rework provider.                                                   |
+| `rework.effort`                 | no       | Provider-specific effort override for rework.                                                   |
+
+The gate requires exactly one initial mode: `document` or `prepare`.
+`prepare` accepts only `prompt`, `provider`, `model`, `effort`, `allowed_tools`, and `denied_tools`.
+Use `document` when a prior node has already produced HTML.
+Use `prepare` when the gate should create its own initial HTML.
 
 Document boundary rules:
 
@@ -440,20 +452,21 @@ Document boundary rules:
 - Relative paths resolve from the workflow `cwd`.
 - The real path must remain inside the real workflow `cwd` or the existing `$ARTIFACTS_DIR`, including after symlink resolution.
 - The target must be a readable regular file ending in `.html` or `.htm`.
-- Every rework response must also print exactly one valid HTML path line and no prose or Markdown fence.
+- Every prepare or rework response must also print exactly one valid HTML path line and no prose or Markdown fence.
 - Put rework provider, model, and effort inside `plannotator_gate.rework`; node-level AI fields do not configure the rework call.
 
 Runtime lifecycle:
 
 1. Archon checks the local `plannotator` binary with `plannotator annotate --help` and requires both `--persist-session` and `--result-file`.
-2. The gate pauses the persisted workflow with a unique `gateId`, opens the annotate subprocess, and remains the sole live supervisor.
-3. `Approve` in Plannotator records the decision, resumes the same supervisor once, and allows downstream nodes to run once.
-4. `Send Annotations` runs the configured rework provider, validates its returned HTML path, and opens another annotate attempt under the same gate owner.
-5. An approval from Web UI, CLI, Slack, or another external surface records the decision only; the existing live Plannotator supervisor owns continuation and prevents a second executor.
-6. Closing or dismissing the annotate window leaves the run paused and idle instead of implicitly approving it.
-7. `archon workflow review-open <run-id>` is explicit crash recovery: it atomically rotates ownership and starts a replacement supervisor in human CLI mode.
-8. `archon workflow review-open <run-id> --json` records the takeover but requires a separate `archon workflow resume <run-id>` call because JSON mode never streams continuation inline.
-9. Cancellation, abandonment, or takeover terminates the stale child, and a stale supervisor must not emit completion or run downstream work.
+2. For a fresh gate, Archon runs `prepare` only after this capability preflight; a matching unresolved persisted review document is reused by resume or `review-open` instead of preparing again.
+3. The gate pauses the persisted workflow with a unique `gateId`, opens the annotate subprocess, and remains the sole live supervisor.
+4. `Approve` in Plannotator records the decision, resumes the same supervisor once, and allows downstream nodes to run once.
+5. `Send Annotations` runs the configured rework provider, validates its returned HTML path, and opens another annotate attempt under the same gate owner.
+6. An approval from Web UI, CLI, Slack, or another external surface records the decision only; the existing live Plannotator supervisor owns continuation and prevents a second executor.
+7. Closing or dismissing the annotate window leaves the run paused and idle instead of implicitly approving it.
+8. `archon workflow review-open <run-id>` is explicit crash recovery: it atomically rotates ownership and starts a replacement supervisor in human CLI mode.
+9. `archon workflow review-open <run-id> --json` records the takeover but requires a separate `archon workflow resume <run-id>` call because JSON mode never streams continuation inline.
+10. Cancellation, abandonment, or takeover terminates the stale child, and a stale supervisor must not emit completion or run downstream work.
 
 Set workflow-root `interactive: true` for Web UI or chat runs so the pause and review instructions remain foreground-visible.
 The Plannotator binary runs on the Archon server host, so the browser and server must share access to that local review surface.

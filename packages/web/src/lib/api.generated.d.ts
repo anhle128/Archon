@@ -3907,7 +3907,15 @@ export interface components {
                 };
             };
             plannotator_gate?: {
-                document: string;
+                document?: string;
+                prepare?: {
+                    prompt: string;
+                    provider?: string;
+                    model?: string;
+                    effort?: string;
+                    allowed_tools?: string[];
+                    denied_tools?: string[];
+                };
                 message?: string;
                 capture_response?: boolean;
                 rework: {

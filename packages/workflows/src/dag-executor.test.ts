@@ -20924,7 +20924,7 @@ describe('executeDagWorkflow -- production Plannotator gate integration', () => 
           };
           return;
         }
-        if (nodeId === 'speckit-converge-explain') {
+        if (nodeId === 'speckit-converge-review-gate:prepare') {
           const document = join(root, `converge-${String(convergenceAttempt)}.html`);
           writeFileSync(document, '<html><body>convergence delta</body></html>');
           yield { type: 'assistant' as const, content: document };
@@ -21130,14 +21130,14 @@ describe('executeDagWorkflow -- production Plannotator gate integration', () => 
 
     const rolloutNodes = new Set([
       'speckit-converge',
-      'speckit-converge-explain',
+      'speckit-converge-review-gate:prepare',
       'speckit-converge-review-gate',
       'ralph-tasks-to-ralph',
       'create-pull-request',
     ]);
     expect(calls.filter(nodeId => rolloutNodes.has(nodeId))).toEqual([
       'speckit-converge',
-      'speckit-converge-explain',
+      'speckit-converge-review-gate:prepare',
       'speckit-converge-review-gate',
       'ralph-tasks-to-ralph',
       'speckit-converge',

@@ -2811,7 +2811,7 @@ nodes:
       expect(result.workflows).toHaveLength(1);
     });
 
-    it('loads the default Speckit convergence review loop with one routing authority', async () => {
+    it('loads the consolidated default Speckit Plannotator gates with one routing authority', async () => {
       const workflowPath = join(
         import.meta.dir,
         '..',
@@ -2837,17 +2837,43 @@ nodes:
         max_iterations: 3,
         routes: {
           positive: 'cargo-clean-before-pr',
-          negative: 'speckit-converge-explain',
+          negative: 'speckit-converge-review-gate',
           exhausted: 'speckit-converge-exhausted',
         },
       });
 
-      const explain = nodes.get('speckit-converge-explain');
+      expect(nodes.has('clarify-explain')).toBe(false);
+      expect(nodes.has('red-team-explain')).toBe(false);
+      expect(nodes.has('speckit-converge-explain')).toBe(false);
+
+      const clarifyGate = nodes.get('clarify-gate');
+      const redTeamGate = nodes.get('red-team-gate');
       const reviewGate = nodes.get('speckit-converge-review-gate');
       const ralph = nodes.get('ralph-tasks-to-ralph');
-      expect(explain?.when).toBeUndefined();
+      expect(clarifyGate?.depends_on).toEqual(['clarify-respond']);
+      expect(redTeamGate?.depends_on).toEqual(['red-team-respond']);
       expect(reviewGate?.when).toBeUndefined();
-      expect(reviewGate?.depends_on).toEqual(['speckit-converge-explain']);
+      expect(reviewGate?.depends_on).toBeUndefined();
+
+      for (const gate of [clarifyGate, redTeamGate, reviewGate]) {
+        expect(gate && 'plannotator_gate' in gate).toBe(true);
+        if (!gate || !('plannotator_gate' in gate)) {
+          throw new Error('default Speckit Plannotator gate missing');
+        }
+
+        expect(gate.plannotator_gate.prepare).toMatchObject({
+          prompt: expect.any(String),
+          provider: 'claude',
+          model: 'sonnet',
+          effort: 'medium',
+          allowed_tools: ['Read', 'Edit', 'Glob', 'Grep', 'Bash'],
+        });
+      }
+
+      expect(nodes.get('tasks')).toMatchObject({
+        provider: 'claude',
+        model: 'claude-opus-4-8[1M]',
+      });
       expect(ralph).toMatchObject({
         depends_on: ['analyze-apply', 'speckit-converge-review-gate'],
         trigger_rule: 'one_success',

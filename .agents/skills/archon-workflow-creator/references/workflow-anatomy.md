@@ -140,6 +140,7 @@ Script nodes receive `ARTIFACTS_DIR`, `LOG_DIR`, `BASE_BRANCH`, and managed proj
 These placeholders are substituted once over the original rework prompt.
 Literal placeholder text inside the document path or annotations is preserved and is not scanned again.
 They are not general workflow variables and should only be used inside `plannotator_gate.rework.prompt`.
+They are invalid in `document`, `prepare.prompt`, and every other workflow field.
 
 ## Output References
 

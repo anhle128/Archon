@@ -239,6 +239,29 @@ Do not add a second explicit resume node after `live-review`.
 Normal external approval deliberately leaves continuation to the live supervisor.
 Use `review-open` only for explicit takeover after the original review surface or process must be replaced.
 
+The example uses the legacy `document` mode because `create-html` deterministically produces the HTML.
+For a gate that needs to create its initial document with AI, replace the producer dependency and `document` with exactly one `prepare` block:
+
+```yaml
+  - id: live-review
+    plannotator_gate:
+      prepare:
+        prompt: |
+          Create a readable standalone HTML review document under $ARTIFACTS_DIR.
+          Print exactly its absolute path on one line and no other text.
+        provider: codex
+        model: gpt-5.6-terra
+        effort: medium
+        allowed_tools: [Read, Edit]
+      rework:
+        prompt: |
+          Edit $REVIEW_DOCUMENT using $REVIEW_ANNOTATIONS.
+          Print exactly its absolute HTML path on one line and no other text.
+```
+
+Do not set both `document` and `prepare`.
+`prepare` runs only for a fresh gate after Plannotator capability preflight, while matching unresolved persisted review documents are reused during resume and `review-open`.
+
 ## Deterministic Script Transform
 
 ```yaml
