@@ -69,6 +69,9 @@ class IntegrationGateStore {
   getWorkflowRun: IWorkflowStore['getWorkflowRun'] = id =>
     Promise.resolve(id === this.run.id ? structuredClone(this.run) : null);
 
+  getWorkflowRunStatus: IWorkflowStore['getWorkflowRunStatus'] = id =>
+    Promise.resolve(id === this.run.id ? this.run.status : null);
+
   readonly pauseWorkflowRun = mock<IWorkflowStore['pauseWorkflowRun']>((id, approval) => {
     if (id === this.run.id) {
       this.run.status = 'paused';
@@ -738,6 +741,263 @@ describe('executePlannotatorGateNode production spawn path', () => {
     ).resolves.toMatchObject({ state: 'failed', error: expect.stringMatching(/timed out/i) });
     expect(receivedSignal?.aborted).toBe(true);
     expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  test('uses a phase provider assistant model and standard options without session reuse', async () => {
+    const document = join(cwd, 'prepared.html');
+    const run = makeRun({});
+    const store = new IntegrationGateStore(run);
+    let receivedResumeSessionId: string | undefined;
+    let receivedOptions: SendQueryOptions | undefined;
+    const sendQuery = mock(async function* (
+      _prompt: string,
+      _cwd: string,
+      resumeSessionId: string | undefined,
+      options: SendQueryOptions | undefined
+    ) {
+      receivedResumeSessionId = resumeSessionId;
+      receivedOptions = options;
+      writeFileSync(document, '<html><body>prepared</body></html>');
+      yield { type: 'assistant' as const, content: document };
+    });
+    const getAgentProvider = mock(
+      () =>
+        ({ sendQuery, getType: () => 'codex', getCapabilities: () => ({}) }) as ReturnType<
+          WorkflowDeps['getAgentProvider']
+        >
+    );
+    const node: PlannotatorGateNode = {
+      id: 'review',
+      plannotator_gate: {
+        prepare: {
+          prompt: 'Create a review.',
+          provider: 'codex',
+          effort: 'medium',
+          allowed_tools: ['Read'],
+          denied_tools: ['Write'],
+        },
+        rework: { prompt: 'Revise $REVIEW_DOCUMENT using $REVIEW_ANNOTATIONS' },
+      },
+    };
+    const args = integrationArgs(run, store, node, cwd, artifactsDir, getAgentProvider);
+    args.workflowModel = 'claude-workflow-model';
+    args.config.assistants.codex = { model: 'codex-assistant-model' };
+    args.config.envVars = { GATE_TOKEN: 'test-token' };
+
+    const execution = executePlannotatorGateNode(args);
+    await waitForInvocations(fake, 1);
+    expect(getAgentProvider).toHaveBeenCalledWith('codex');
+    expect(receivedResumeSessionId).toBeUndefined();
+    expect(receivedOptions).toMatchObject({
+      model: 'codex-assistant-model',
+      nodeConfig: {
+        nodeId: 'review:prepare',
+        effort: 'medium',
+        allowed_tools: ['Read'],
+        denied_tools: ['Write'],
+      },
+      assistantConfig: { model: 'codex-assistant-model' },
+      env: { GATE_TOKEN: 'test-token' },
+    });
+    expect(receivedOptions?.abortSignal).toBeInstanceOf(AbortSignal);
+
+    const approval = store.run.metadata.approval as ApprovalContext;
+    releaseDecision(fake, approval.gateId ?? '', 1, { decision: 'approved' });
+    await expect(execution).resolves.toEqual({ state: 'completed', output: '' });
+  });
+
+  test('resolves phase alias and tier models to their configured providers', async () => {
+    const document = join(cwd, 'prepared.html');
+    const revisedDocument = join(cwd, 'revised.html');
+    const run = makeRun({});
+    const store = new IntegrationGateStore(run);
+    const calls: Array<{ provider: string; model: string | undefined }> = [];
+    const getAgentProvider = mock((provider: string) => ({
+      sendQuery: mock(async function* (
+        _prompt: string,
+        _cwd: string,
+        _resumeSessionId: string | undefined,
+        options: SendQueryOptions | undefined
+      ) {
+        calls.push({ provider, model: options?.model });
+        const output = calls.length === 1 ? document : revisedDocument;
+        writeFileSync(output, '<html><body>review</body></html>');
+        yield { type: 'assistant' as const, content: output };
+      }),
+      getType: () => provider,
+      getCapabilities: () => ({}),
+    })) as WorkflowDeps['getAgentProvider'];
+    const node: PlannotatorGateNode = {
+      id: 'review',
+      plannotator_gate: {
+        prepare: { prompt: 'Create a review.', model: '@prepare' },
+        rework: { prompt: 'Revise $REVIEW_DOCUMENT using $REVIEW_ANNOTATIONS', model: 'large' },
+      },
+    };
+    const args = integrationArgs(run, store, node, cwd, artifactsDir, getAgentProvider);
+    args.aiProfile = {
+      defaultProvider: 'claude',
+      aliases: {
+        '@prepare': { provider: 'codex', model: 'codex-alias-model' },
+        large: { provider: 'claude', model: 'claude-tier-model' },
+      },
+    };
+
+    const execution = executePlannotatorGateNode(args);
+    const firstInvocations = await waitForInvocations(fake, 1);
+    const approval = store.run.metadata.approval as ApprovalContext;
+    releaseDecision(fake, approval.gateId ?? '', 1, {
+      decision: 'annotated',
+      feedback: 'Revise it',
+    });
+    const invocations = await waitForInvocations(fake, 2);
+    releaseDecision(fake, approval.gateId ?? '', 2, { decision: 'approved' });
+    await expect(execution).resolves.toEqual({ state: 'completed', output: '' });
+
+    expect(firstInvocations[0]?.[1]).toBe(realpathSync(document));
+    expect(invocations[1]?.[1]).toBe(realpathSync(revisedDocument));
+    expect(calls).toEqual([
+      { provider: 'codex', model: 'codex-alias-model' },
+      { provider: 'claude', model: 'claude-tier-model' },
+    ]);
+  });
+
+  test('passes the execution context through a fresh container prepare call', async () => {
+    const document = join(cwd, 'prepared.html');
+    const run = makeRun({});
+    const store = new IntegrationGateStore(run);
+    let receivedOptions: SendQueryOptions | undefined;
+    const sendQuery = mock(async function* (
+      _prompt: string,
+      _cwd: string,
+      _resumeSessionId: string | undefined,
+      options: SendQueryOptions | undefined
+    ) {
+      receivedOptions = options;
+      writeFileSync(document, '<html><body>prepared</body></html>');
+      yield { type: 'assistant' as const, content: document };
+    });
+    const getAgentProvider = mock(
+      () =>
+        ({ sendQuery, getType: () => 'claude', getCapabilities: () => ({}) }) as ReturnType<
+          WorkflowDeps['getAgentProvider']
+        >
+    );
+    const node: PlannotatorGateNode = {
+      id: 'review',
+      plannotator_gate: {
+        prepare: { prompt: 'Create a review.' },
+        rework: { prompt: 'Revise $REVIEW_DOCUMENT using $REVIEW_ANNOTATIONS' },
+      },
+    };
+    const args = integrationArgs(run, store, node, cwd, artifactsDir, getAgentProvider);
+    args.execContext = { kind: 'container', containerId: 'gate-container' };
+
+    const execution = executePlannotatorGateNode(args);
+    await waitForInvocations(fake, 1);
+    expect(receivedOptions?.execContext).toEqual({
+      kind: 'container',
+      containerId: 'gate-container',
+    });
+    const approval = store.run.metadata.approval as ApprovalContext;
+    releaseDecision(fake, approval.gateId ?? '', 1, { decision: 'approved' });
+    await expect(execution).resolves.toEqual({ state: 'completed', output: '' });
+  });
+
+  test('aborts a cancelled prepare before accepting provider output', async () => {
+    const run = makeRun({});
+    const store = new IntegrationGateStore(run);
+    store.getWorkflowRunStatus = mock(() => Promise.resolve('cancelled'));
+    let receivedSignal: AbortSignal | undefined;
+    const sendQuery = mock(async function* (
+      _prompt: string,
+      _cwd: string,
+      _resumeSessionId: string | undefined,
+      options: SendQueryOptions | undefined
+    ) {
+      receivedSignal = options?.abortSignal;
+      if (!receivedSignal?.aborted) {
+        await new Promise<void>(resolve => receivedSignal?.addEventListener('abort', resolve));
+      }
+      yield { type: 'assistant' as const, content: join(cwd, 'ignored.html') };
+    });
+    const getAgentProvider = mock(
+      () =>
+        ({ sendQuery, getType: () => 'claude', getCapabilities: () => ({}) }) as ReturnType<
+          WorkflowDeps['getAgentProvider']
+        >
+    );
+    const node: PlannotatorGateNode = {
+      id: 'review',
+      plannotator_gate: {
+        prepare: { prompt: 'Create a review.' },
+        rework: { prompt: 'Revise $REVIEW_DOCUMENT using $REVIEW_ANNOTATIONS' },
+      },
+    };
+
+    await expect(
+      executePlannotatorGateNode(
+        integrationArgs(run, store, node, cwd, artifactsDir, getAgentProvider)
+      )
+    ).resolves.toMatchObject({ state: 'failed', error: expect.stringMatching(/cancelled/i) });
+    expect(receivedSignal?.aborted).toBe(true);
+    expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  test('aborts a cancelled rework without opening another annotate session', async () => {
+    const document = join(cwd, 'plan.html');
+    writeFileSync(document, '<html><body>plan</body></html>');
+    const run = makeRun({
+      type: 'plannotator_gate',
+      nodeId: 'review',
+      gateId: 'gate-cancel-rework',
+      phase: 'opening',
+      resolved: null,
+    });
+    const store = new IntegrationGateStore(run);
+    let receivedSignal: AbortSignal | undefined;
+    const sendQuery = mock(async function* (
+      _prompt: string,
+      _cwd: string,
+      _resumeSessionId: string | undefined,
+      options: SendQueryOptions | undefined
+    ) {
+      receivedSignal = options?.abortSignal;
+      if (!receivedSignal?.aborted) {
+        await new Promise<void>(resolve => receivedSignal?.addEventListener('abort', resolve));
+      }
+      yield { type: 'assistant' as const, content: join(cwd, 'ignored.html') };
+    });
+    const getAgentProvider = mock(
+      () =>
+        ({ sendQuery, getType: () => 'claude', getCapabilities: () => ({}) }) as ReturnType<
+          WorkflowDeps['getAgentProvider']
+        >
+    );
+    const node: PlannotatorGateNode = {
+      id: 'review',
+      plannotator_gate: {
+        document,
+        rework: { prompt: 'Revise $REVIEW_DOCUMENT using $REVIEW_ANNOTATIONS' },
+      },
+    };
+    const execution = executePlannotatorGateNode(
+      integrationArgs(run, store, node, cwd, artifactsDir, getAgentProvider)
+    );
+    await waitForInvocations(fake, 1);
+    store.getWorkflowRunStatus = mock(() => Promise.resolve('cancelled'));
+    releaseDecision(fake, 'gate-cancel-rework', 1, {
+      decision: 'annotated',
+      feedback: 'Revise it',
+    });
+
+    await expect(execution).resolves.toMatchObject({
+      state: 'failed',
+      error: expect.stringMatching(/cancelled/i),
+    });
+    expect(receivedSignal?.aborted).toBe(true);
+    expect(existsSync(fake.invocationLog)).toBe(true);
+    expect(readFileSync(fake.invocationLog, 'utf8').trim().split('\n')).toHaveLength(1);
   });
 
   test('reworks an annotated document once, then approves the replacement', async () => {

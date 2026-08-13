@@ -9,13 +9,17 @@ import { accessSync, constants, existsSync, realpathSync, statSync } from 'node:
 import { extname, isAbsolute, relative, resolve as resolvePath, sep } from 'node:path';
 import { createLogger } from '@archon/paths';
 import type { WorkflowDeps, WorkflowConfig, IWorkflowPlatform } from './deps';
-import type { PlannotatorGateNode, WorkflowRun, NodeOutput } from './schemas';
+import type { PlannotatorGateNode, WorkflowRun, NodeOutput, PromptNode } from './schemas';
 import type { ApprovalContext } from './schemas/workflow-run';
 import type { ModelAliasPreset, ResolvedAiProfile } from './model-validation';
-import { substituteNodeOutputRefs } from './dag-executor';
+import {
+  CANCEL_CHECK_INTERVAL_MS,
+  resolveNodeProviderAndModel,
+  shouldContinueStreamingForStatus,
+  substituteNodeOutputRefs,
+} from './dag-executor';
 import { parseDocumentPathFromNodeOutput, resolvePlannotatorBinary } from './plannotator-gate';
 import { runPlannotatorGateSupervisor } from './plannotator-gate-supervisor';
-import { isRegisteredProvider } from '@archon/providers';
 import type { ExecutionContext, SendQueryOptions } from '@archon/providers/types';
 import { safeSendMessage, substituteWorkflowVariables } from './executor-shared';
 import { STEP_IDLE_TIMEOUT_MS, withIdleTimeout } from './utils/idle-timeout';
@@ -171,6 +175,72 @@ interface EmbeddedGateConfig {
   denied_tools?: string[];
 }
 
+interface EmbeddedTerminalWatcher {
+  readonly terminalStatus: string | undefined;
+  stop: () => void;
+}
+
+/**
+ * Watch the run independently of provider output: an embedded gate call can be
+ * blocked in its async stream long enough to miss the normal per-message check.
+ */
+function watchEmbeddedGateTerminalStatus(
+  args: ExecutePlannotatorGateArgs,
+  phase: 'prepare' | 'rework',
+  abortController: AbortController
+): EmbeddedTerminalWatcher {
+  let stopped = false;
+  let checking = false;
+  let terminalStatus: string | undefined;
+
+  const checkStatus = async (): Promise<void> => {
+    if (stopped || checking || terminalStatus !== undefined) return;
+    checking = true;
+    try {
+      const status = await args.deps.store.getWorkflowRunStatus(args.workflowRun.id);
+      if (!stopped && !shouldContinueStreamingForStatus(status)) {
+        terminalStatus = status ?? 'deleted';
+        log.info(
+          {
+            workflowRunId: args.workflowRun.id,
+            nodeId: args.node.id,
+            phase,
+            status: terminalStatus,
+          },
+          'plannotator_gate.stop_detected_during_embedded_stream'
+        );
+        abortController.abort();
+      }
+    } catch (error) {
+      log.warn(
+        { workflowRunId: args.workflowRun.id, nodeId: args.node.id, phase, error },
+        'plannotator_gate.status_check_failed'
+      );
+    } finally {
+      checking = false;
+    }
+  };
+
+  void checkStatus();
+  const interval = setInterval(() => {
+    void checkStatus();
+  }, CANCEL_CHECK_INTERVAL_MS);
+
+  return {
+    get terminalStatus(): string | undefined {
+      return terminalStatus;
+    },
+    stop: (): void => {
+      stopped = true;
+      clearInterval(interval);
+    },
+  };
+}
+
+function terminalEmbeddedGateError(phase: 'prepare' | 'rework', status: string): Error {
+  return new Error(`plannotator_gate ${phase} stopped because workflow is ${status}`);
+}
+
 /** One-shot gate AI call: collect exactly one document path from assistant output. */
 async function runEmbeddedGateAiCall(
   args: ExecutePlannotatorGateArgs,
@@ -179,32 +249,37 @@ async function runEmbeddedGateAiCall(
   prompt: string
 ): Promise<string> {
   const { node, deps, cwd, config, workflowProvider, workflowModel, execContext } = args;
-  const providerId = phaseConfig.provider ?? workflowProvider;
-  if (!isRegisteredProvider(providerId)) {
-    throw new Error(`plannotator_gate ${phase}: unknown provider '${providerId}'`);
-  }
-
-  const assistantModel = config.assistants?.[providerId]?.model;
-  const model: string | undefined =
-    phaseConfig.model ??
-    workflowModel ??
-    (typeof assistantModel === 'string' ? assistantModel : undefined);
+  const phaseNode: PromptNode = {
+    id: `${node.id}:${phase}`,
+    prompt,
+    ...(phaseConfig.provider !== undefined ? { provider: phaseConfig.provider } : {}),
+    ...(phaseConfig.model !== undefined ? { model: phaseConfig.model } : {}),
+    ...(phaseConfig.effort !== undefined ? { effort: phaseConfig.effort } : {}),
+    ...(phaseConfig.allowed_tools !== undefined
+      ? { allowed_tools: phaseConfig.allowed_tools }
+      : {}),
+    ...(phaseConfig.denied_tools !== undefined ? { denied_tools: phaseConfig.denied_tools } : {}),
+  };
+  const { provider: providerId, options: resolvedOptions } = await resolveNodeProviderAndModel(
+    phaseNode,
+    workflowProvider,
+    workflowModel,
+    config,
+    args.platform,
+    args.conversationId,
+    args.workflowRun.id,
+    cwd,
+    {},
+    args.aiProfile,
+    args.workflowPreset,
+    args.workflowTier,
+    execContext
+  );
   const aiClient = deps.getAgentProvider(providerId);
   const abortController = new AbortController();
   let idleTimedOut = false;
   const options: SendQueryOptions = {
-    ...(model !== undefined ? { model } : {}),
-    nodeConfig: {
-      nodeId: `${node.id}:${phase}`,
-      ...(phaseConfig.effort !== undefined ? { effort: phaseConfig.effort } : {}),
-      ...(phaseConfig.allowed_tools !== undefined
-        ? { allowed_tools: phaseConfig.allowed_tools }
-        : {}),
-      ...(phaseConfig.denied_tools !== undefined ? { denied_tools: phaseConfig.denied_tools } : {}),
-    },
-    assistantConfig: { ...(config.assistants[providerId] ?? {}) },
-    ...(config.envVars && Object.keys(config.envVars).length > 0 ? { env: config.envVars } : {}),
-    ...(execContext.kind === 'container' ? { execContext } : {}),
+    ...resolvedOptions,
     abortSignal: abortController.signal,
     traceContext: {
       name: `execute-workflow-plannotator-${phase}`,
@@ -219,17 +294,31 @@ async function runEmbeddedGateAiCall(
     },
   };
   let finalText = '';
-  for await (const msg of withIdleTimeout(
-    aiClient.sendQuery(prompt, cwd, undefined, options),
-    node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS,
-    () => {
-      idleTimedOut = true;
-      abortController.abort();
+  const terminalWatcher = watchEmbeddedGateTerminalStatus(args, phase, abortController);
+  try {
+    for await (const msg of withIdleTimeout(
+      aiClient.sendQuery(prompt, cwd, undefined, options),
+      node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS,
+      () => {
+        idleTimedOut = true;
+        abortController.abort();
+      }
+    )) {
+      if (msg.type === 'assistant' && msg.content) {
+        finalText += msg.content;
+      }
     }
-  )) {
-    if (msg.type === 'assistant' && msg.content) {
-      finalText += msg.content;
+  } catch (error) {
+    if (terminalWatcher.terminalStatus !== undefined) {
+      throw terminalEmbeddedGateError(phase, terminalWatcher.terminalStatus);
     }
+    throw error;
+  } finally {
+    terminalWatcher.stop();
+  }
+
+  if (terminalWatcher.terminalStatus !== undefined) {
+    throw terminalEmbeddedGateError(phase, terminalWatcher.terminalStatus);
   }
 
   if (idleTimedOut) {

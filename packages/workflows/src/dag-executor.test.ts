@@ -19975,6 +19975,27 @@ describe('collectContainerIncompatibleProviders', () => {
       'codex',
     ]);
   });
+
+  it('resolves prepare and rework model aliases before checking container compatibility', () => {
+    const gate = {
+      id: 'review',
+      plannotator_gate: {
+        prepare: { prompt: 'Write the review.', model: '@codex' },
+        rework: { prompt: 'Revise it.', model: 'large' },
+      },
+    } as unknown as DagNode;
+    const profile = {
+      defaultProvider: 'claude',
+      aliases: {
+        '@codex': { provider: 'codex', model: 'codex-alias' },
+        large: { provider: 'codex', model: 'codex-tier' },
+      },
+    };
+
+    expect([...collectContainerIncompatibleProviders([gate], 'claude', profile)]).toEqual([
+      'codex',
+    ]);
+  });
 });
 
 describe('buildSubprocessDockerArgs — bash/script env isolation', () => {
@@ -21088,6 +21109,63 @@ describe('executeDagWorkflow -- production Plannotator gate integration', () => 
     const [invocation] = await waitForDagGateInvocations(fake, 1);
     expect(invocation?.document).toBe(realpathSync(document));
     expect(prepareCalls).toEqual(['review:prepare']);
+    approveDagGateInvocation(fake, invocation!);
+    await execution;
+
+    expect(readFileSync(marker, 'utf8').trim().split('\n')).toEqual(['ran']);
+    expect(
+      events.filter(event => event.event_type === 'node_completed' && event.step_name === 'review')
+    ).toHaveLength(1);
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('recovers a rotated opening prepare gate from its persisted document exactly once', async () => {
+    const marker = join(root, 'recovered-prepared-downstream.log');
+    const document = join(root, 'prepared-before-recovery.html');
+    writeFileSync(document, '<html><body>prepared before recovery</body></html>');
+    const run = makeWorkflowRun('run-recovered-prepare-gate', {
+      metadata: {
+        approval: {
+          type: 'plannotator_gate',
+          nodeId: 'review',
+          gateId: 'gate-rotated-after-rework',
+          document,
+          phase: 'opening',
+          resolved: null,
+        },
+      },
+    });
+    const { store, events } = createDagGateStore(run);
+    const getAgentProvider = mock(() => {
+      throw new Error('prepare must not be invoked while recovering a persisted document');
+    });
+    mockGetAgentProviderDag.mockImplementation(getAgentProvider);
+
+    const execution = executeIntegrationDag(
+      createMockDeps(store),
+      run,
+      prepareIntegrationWorkflow(marker)
+    );
+
+    const [invocation] = await waitForDagGateInvocations(fake, 1);
+    expect(invocation?.document).toBe(realpathSync(document));
+    expect(getAgentProvider).not.toHaveBeenCalled();
+    expect((store.pauseWorkflowRun as Mock).mock.calls[0]?.[1]).toMatchObject({
+      nodeId: 'review',
+      gateId: 'gate-rotated-after-rework',
+      document: realpathSync(document),
+      phase: 'waiting_decision',
+    });
+    expect((store.transitionPlannotatorGate as Mock).mock.calls).toEqual(
+      expect.arrayContaining([
+        [
+          expect.objectContaining({
+            nodeId: 'review',
+            expectedGateId: 'gate-rotated-after-rework',
+          }),
+        ],
+      ])
+    );
     approveDagGateInvocation(fake, invocation!);
     await execution;
 

@@ -386,7 +386,7 @@ export async function loadConfiguredMcpServerNames(
 }
 
 /** Workflow-level provider options — per-node overrides take precedence via ?? */
-interface WorkflowLevelOptions {
+export interface WorkflowLevelOptions {
   effort?: EffortLevel;
   /** Legacy spelling; lower precedence than workflow `effort`. */
   modelReasoningEffort?: string;
@@ -560,7 +560,7 @@ interface LayerNodeResult {
 
 /** Throttle state for cancel checks (reads — no write contention in WAL mode) */
 const lastNodeCancelCheck = new Map<string, number>();
-const CANCEL_CHECK_INTERVAL_MS = 10_000;
+export const CANCEL_CHECK_INTERVAL_MS = 10_000;
 
 /**
  * Policy for the during-streaming cancel check: should the currently-streaming
@@ -1047,7 +1047,7 @@ export function substituteLoopPrevRefs(
  * The provider internally translates nodeConfig to SDK-specific options.
  * Capability warnings inform users when features are unsupported.
  */
-async function resolveNodeProviderAndModel(
+export async function resolveNodeProviderAndModel(
   node: DagNode,
   workflowProvider: string,
   workflowModel: string | undefined,
@@ -8201,7 +8201,7 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
  * workflowProvider`, then a model tier/alias ref may override the provider.
  */
 function resolveNodeProviderForPreflight(
-  node: DagNode,
+  node: Pick<DagNode, 'provider' | 'model'>,
   workflowProvider: string,
   aiProfile?: ResolvedAiProfile
 ): string {
@@ -8247,10 +8247,17 @@ export function collectContainerIncompatibleProviders(
       }
       if (isPlannotatorGateNode(node)) {
         if (node.plannotator_gate.prepare) {
-          check(node.plannotator_gate.prepare.provider ?? workflowProvider);
+          check(
+            resolveNodeProviderForPreflight(
+              node.plannotator_gate.prepare,
+              workflowProvider,
+              aiProfile
+            )
+          );
         }
-        const reworkProvider = node.plannotator_gate.rework.provider ?? workflowProvider;
-        check(reworkProvider);
+        check(
+          resolveNodeProviderForPreflight(node.plannotator_gate.rework, workflowProvider, aiProfile)
+        );
         continue;
       }
       // command / prompt / loop → AI node
