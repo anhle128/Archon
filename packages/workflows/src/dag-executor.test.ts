@@ -20803,8 +20803,109 @@ describe('executeDagWorkflow -- production Plannotator gate integration', () => 
   afterEach(async () => {
     if (originalBin === undefined) delete process.env.PLANNOTATOR_BIN;
     else process.env.PLANNOTATOR_BIN = originalBin;
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
     await rm(root, { recursive: true, force: true });
   });
+
+  async function loadDefaultSpeckitFeature(): Promise<WorkflowDefinition> {
+    const workflowPath = join(
+      import.meta.dir,
+      '..',
+      '..',
+      '..',
+      '.archon',
+      'workflows',
+      'defaults',
+      'archon-speckit-feature.yaml'
+    );
+    const parsed = parseWorkflow(await readFile(workflowPath, 'utf8'), basename(workflowPath));
+    if (!parsed.workflow)
+      throw new Error(parsed.error?.error ?? 'default Speckit workflow missing');
+    return parsed.workflow;
+  }
+
+  async function prepareDefaultSpeckitFixture(marker: string): Promise<void> {
+    const ralphDir = join(root, '.specify', 'extensions', 'ralph-loop');
+    const commandsDir = join(root, '.archon', 'commands');
+    await mkdir(ralphDir, { recursive: true });
+    await mkdir(commandsDir, { recursive: true });
+    await writeFile(
+      join(ralphDir, 'ralph.sh'),
+      `#!/usr/bin/env bash\nprintf 'ralph\\n' >> '${marker}'\n`
+    );
+    await writeFile(join(commandsDir, 'archon-create-pr.md'), 'Create the pull request.');
+  }
+
+  function priorOutputsBeforeConvergence(workflow: WorkflowDefinition): Map<string, string> {
+    const convergeIndex = workflow.nodes.findIndex(node => node.id === 'speckit-converge');
+    if (convergeIndex < 0) throw new Error('default Speckit convergence node missing');
+    return new Map(
+      workflow.nodes.slice(0, convergeIndex).map(node => [node.id, `${node.id} first-pass output`])
+    );
+  }
+
+  function approveDagGateInvocation(
+    gate: DagFakePlannotator,
+    invocation: { resultFile: string }
+  ): void {
+    writeFileSync(
+      join(gate.controlDir, `${basename(invocation.resultFile)}.control.json`),
+      JSON.stringify({
+        payload: { decision: 'approved', feedback: 'Approved' },
+        stdout: 'fake stdout',
+        stderr: 'fake stderr',
+        exitCode: 0,
+      })
+    );
+  }
+
+  function installDefaultSpeckitProvider(
+    convergenceResults: readonly ('PASS' | 'FAIL')[],
+    calls: string[]
+  ): void {
+    let convergenceAttempt = 0;
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mock(function* (
+        _prompt: string,
+        _cwd: string,
+        _resumeSessionId?: string,
+        sendOptions?: SendQueryOptions
+      ) {
+        const nodeId = String(sendOptions?.nodeConfig?.nodeId ?? '');
+        calls.push(nodeId);
+        if (nodeId === 'speckit-converge') {
+          const gate =
+            convergenceResults[convergenceAttempt] ??
+            convergenceResults[convergenceResults.length - 1] ??
+            'FAIL';
+          convergenceAttempt += 1;
+          const structuredOutput = { gate, tasks_added: gate === 'FAIL' ? 1 : 0 };
+          yield { type: 'assistant' as const, content: JSON.stringify(structuredOutput) };
+          yield {
+            type: 'result' as const,
+            sessionId: `speckit-converge-${String(convergenceAttempt)}`,
+            structuredOutput,
+          };
+          return;
+        }
+        if (nodeId === 'speckit-converge-explain') {
+          const document = join(root, `converge-${String(convergenceAttempt)}.html`);
+          writeFileSync(document, '<html><body>convergence delta</body></html>');
+          yield { type: 'assistant' as const, content: document };
+          yield { type: 'result' as const, sessionId: `${nodeId}-session` };
+          return;
+        }
+        yield { type: 'assistant' as const, content: `${nodeId} complete` };
+        yield { type: 'result' as const, sessionId: `${nodeId}-session` };
+      }),
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+  }
 
   function integrationWorkflow(marker: string): WorkflowDefinition {
     const document = join(root, 'producer.html');
@@ -20892,6 +20993,129 @@ describe('executeDagWorkflow -- production Plannotator gate integration', () => 
       events.filter(event => event.event_type === 'node_completed' && event.step_name === 'review')
     ).toHaveLength(1);
     expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs the default Speckit FAIL → review → Ralph retry → PASS path before PR', async () => {
+    const marker = join(root, 'ralph.log');
+    await prepareDefaultSpeckitFixture(marker);
+    const workflow = await loadDefaultSpeckitFeature();
+    const run = makeWorkflowRun('run-default-speckit-retry', {
+      metadata: {
+        approval: {
+          type: 'plannotator_gate',
+          nodeId: 'speckit-converge-review-gate',
+          gateId: 'gate-default-speckit-retry',
+          phase: 'opening',
+          resolved: null,
+        },
+      },
+    });
+    const { store } = createDagGateStore(run);
+    const calls: string[] = [];
+    installDefaultSpeckitProvider(['FAIL', 'PASS'], calls);
+
+    const execution = executeIntegrationDag(
+      createMockDeps(store),
+      run,
+      workflow,
+      priorOutputsBeforeConvergence(workflow)
+    );
+    const [gateInvocation] = await waitForDagGateInvocations(fake, 1);
+    calls.push('speckit-converge-review-gate');
+    approveDagGateInvocation(fake, gateInvocation);
+    await execution;
+
+    const rolloutNodes = new Set([
+      'speckit-converge',
+      'speckit-converge-explain',
+      'speckit-converge-review-gate',
+      'ralph-tasks-to-ralph',
+      'create-pull-request',
+    ]);
+    expect(calls.filter(nodeId => rolloutNodes.has(nodeId))).toEqual([
+      'speckit-converge',
+      'speckit-converge-explain',
+      'speckit-converge-review-gate',
+      'ralph-tasks-to-ralph',
+      'speckit-converge',
+      'create-pull-request',
+    ]);
+    expect(calls.filter(nodeId => nodeId === 'create-pull-request')).toHaveLength(1);
+    expect(readFileSync(marker, 'utf8').trim().split('\n')).toEqual(['ralph']);
+    expect(
+      (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.some(
+        call =>
+          (call[0] as { event_type?: string; step_name?: string }).event_type ===
+            'node_skipped_prior_success' &&
+          ['ralph-tasks-to-ralph', 'ralph-loop-run', 'ralph-sync-back'].includes(
+            String((call[0] as { step_name?: string }).step_name)
+          )
+      )
+    ).toBe(false);
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('routes the default Speckit workflow to exhaustion without creating a PR', async () => {
+    const marker = join(root, 'ralph-exhausted.log');
+    await prepareDefaultSpeckitFixture(marker);
+    const workflow = await loadDefaultSpeckitFeature();
+    const router = workflow.nodes.find(node => node.id === 'speckit-converge-gate');
+    if (!router || !('route_loop' in router)) throw new Error('default route_loop missing');
+    const maxIterations = router.route_loop.max_iterations;
+    const exhaustedTarget = router.route_loop.routes.exhausted;
+    const run = makeWorkflowRun('run-default-speckit-exhausted', {
+      metadata: {
+        approval: {
+          type: 'plannotator_gate',
+          nodeId: 'speckit-converge-review-gate',
+          gateId: 'gate-default-speckit-exhausted',
+          phase: 'opening',
+          resolved: null,
+        },
+      },
+    });
+    const { store } = createDagGateStore(run);
+    store.cancelWorkflowRun = mock(() => {
+      run.status = 'cancelled';
+      return Promise.resolve();
+    });
+    const calls: string[] = [];
+    installDefaultSpeckitProvider(['FAIL'], calls);
+
+    const execution = executeIntegrationDag(
+      createMockDeps(store),
+      run,
+      workflow,
+      priorOutputsBeforeConvergence(workflow)
+    );
+    for (let attempt = 1; attempt <= maxIterations; attempt++) {
+      const invocations = await waitForDagGateInvocations(fake, attempt);
+      approveDagGateInvocation(fake, invocations[attempt - 1]);
+    }
+    await execution;
+
+    expect(calls.filter(nodeId => nodeId === 'speckit-converge')).toHaveLength(maxIterations + 1);
+    expect(calls.filter(nodeId => nodeId === 'ralph-tasks-to-ralph')).toHaveLength(maxIterations);
+    expect(calls).not.toContain('create-pull-request');
+    expect(calls).not.toContain('create-pull-request-2');
+    const routeDecisions = (
+      store.persistRouteDecisionTransition as ReturnType<typeof mock>
+    ).mock.calls.map(
+      call =>
+        (call[0] as Parameters<IWorkflowStore['persistRouteDecisionTransition']>[0]).event.data
+    );
+    expect(routeDecisions.map(decision => decision.outcome)).toEqual([
+      ...Array.from({ length: maxIterations }, () => 'negative'),
+      'exhausted',
+    ]);
+    expect(routeDecisions.at(-1)).toMatchObject({
+      to: exhaustedTarget,
+      negative_count: maxIterations + 1,
+      max_iterations: maxIterations,
+    });
+    expect(store.cancelWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
   });
 
   it('rotates ownership, terminates the old child, and lets only the replacement continue', async () => {

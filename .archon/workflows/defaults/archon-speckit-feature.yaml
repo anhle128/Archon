@@ -610,7 +610,7 @@ nodes:
         - tasks_added
     output_type: speckit-convergence
 
-  # PASS → PR; FAIL → explain + human review then Ralph retry; 3 FAILs → last Ralph pass.
+  # PASS → PR; FAIL → explain + human review then Ralph retry; retry exhaustion cancels.
   - id: speckit-converge-gate
     depends_on: [speckit-converge]
     route_loop:
@@ -619,7 +619,7 @@ nodes:
       routes:
         positive: cargo-clean-before-pr
         negative: speckit-converge-explain
-        exhausted: ralph-tasks-to-ralph-2
+        exhausted: speckit-converge-exhausted
 
   # Explainer for human review when converge adds work to tasks.md (FAIL path).
   - id: speckit-converge-explain
@@ -747,48 +747,8 @@ nodes:
       fi
     depends_on: [speckit-converge-gate]
 
-  - id: ralph-tasks-to-ralph-2
-    prompt: |
-      Read .specify/feature.json to resolve <feature_directory>, then run:
-      /speckit.ralph-loop.tasks-to-ralph <feature_directory>
-    depends_on:
-      - speckit-converge-gate
-    provider: codex
-    effort: medium
-    model: gpt-5.6-terra
-    context: fresh
-
-  - id: ralph-loop-run-2
-    bash: |
-      bash .specify/extensions/ralph-loop/ralph.sh
-    depends_on:
-      - ralph-tasks-to-ralph-2
-    timeout: 86400000
-
-  - id: ralph-sync-back-2
-    prompt: |
-      Read .specify/feature.json to resolve <feature_directory>, then run:
-      /speckit.ralph-loop.sync-back <feature_directory>
-    depends_on:
-      - ralph-loop-run-2
-    provider: codex
-    effort: medium
-    model: gpt-5.6-terra
-    context: fresh
-
-  - id: create-pull-request-2
-    command: archon-create-pr
-    provider: codex
-    effort: medium
-    depends_on: [cargo-clean-before-pr-2]
-    context: fresh
-    model: gpt-5.6-terra
-    idle_timeout: 900000
-    output_type: pull-request
-
-  - id: cargo-clean-before-pr-2
-    bash: |
-      if [ -f Cargo.toml ]; then
-        cargo clean
-      fi
-    depends_on: [ralph-sync-back-2]
+  - id: speckit-converge-exhausted
+    cancel: |
+      Speckit convergence still failed after 3 reviewed Ralph retries. Review the latest
+      convergence artifacts and tasks before starting another run; no pull request was created.
+    depends_on: [speckit-converge-gate]

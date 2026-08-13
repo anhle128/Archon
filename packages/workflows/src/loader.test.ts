@@ -2786,6 +2786,55 @@ nodes:
       expect(result.errors).toHaveLength(0);
       expect(result.workflows).toHaveLength(1);
     });
+
+    it('loads the default Speckit convergence review loop with one routing authority', async () => {
+      const workflowPath = join(
+        import.meta.dir,
+        '..',
+        '..',
+        '..',
+        '.archon',
+        'workflows',
+        'defaults',
+        'archon-speckit-feature.yaml'
+      );
+      const result = parseWorkflow(await readFile(workflowPath, 'utf8'), basename(workflowPath));
+
+      expect(result.error).toBeNull();
+      expect(result.workflow).not.toBeNull();
+      const nodes = new Map(result.workflow?.nodes.map(node => [node.id, node]));
+      const router = nodes.get('speckit-converge-gate');
+      expect(router && 'route_loop' in router).toBe(true);
+      if (!router || !('route_loop' in router)) return;
+
+      expect(router.depends_on).toEqual(['speckit-converge']);
+      expect(router.route_loop).toEqual({
+        condition: "$speckit-converge.output.gate == 'PASS'",
+        max_iterations: 3,
+        routes: {
+          positive: 'cargo-clean-before-pr',
+          negative: 'speckit-converge-explain',
+          exhausted: 'speckit-converge-exhausted',
+        },
+      });
+
+      const explain = nodes.get('speckit-converge-explain');
+      const reviewGate = nodes.get('speckit-converge-review-gate');
+      const ralph = nodes.get('ralph-tasks-to-ralph');
+      expect(explain?.when).toBeUndefined();
+      expect(reviewGate?.when).toBeUndefined();
+      expect(reviewGate?.depends_on).toEqual(['speckit-converge-explain']);
+      expect(ralph).toMatchObject({
+        depends_on: ['analyze-apply', 'speckit-converge-review-gate'],
+        trigger_rule: 'one_success',
+      });
+      expect(nodes.get('ralph-loop-run')?.depends_on).toEqual(['ralph-tasks-to-ralph']);
+      expect(nodes.get('ralph-sync-back')?.depends_on).toEqual(['ralph-loop-run']);
+      expect(nodes.get('speckit-converge')?.depends_on).toEqual(['ralph-sync-back']);
+      expect(nodes.get('cargo-clean-before-pr')?.depends_on).toEqual(['speckit-converge-gate']);
+      expect(nodes.get('create-pull-request')?.depends_on).toEqual(['cargo-clean-before-pr']);
+      expect(isCancelNode(nodes.get('speckit-converge-exhausted'))).toBe(true);
+    });
   });
 
   describe('retry config parsing', () => {
