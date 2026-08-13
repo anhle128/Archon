@@ -140,6 +140,12 @@ export interface ApprovalGateIdentity {
   gateId?: string;
 }
 
+/** Exact identity required to resume a resolved Plannotator gate. */
+export interface PlannotatorGateIdentity {
+  nodeId: string;
+  gateId: string;
+}
+
 /** Audit event committed in the same transaction as a winning gate resolution. */
 export interface GateResolutionEvent {
   event_type: WorkflowEventType;
@@ -231,7 +237,7 @@ export interface IWorkflowStore extends IRunTreeStore {
   findResumableRun(workflowName: string, workingPath: string): Promise<WorkflowRun | null>;
   failOrphanedRuns(): Promise<{ count: number }>;
   resumeWorkflowRun(id: string): Promise<WorkflowRun>;
-  resumeApprovedGate(id: string, expected: ApprovalGateIdentity): Promise<{ resumed: boolean }>;
+  resumeApprovedGate(id: string, expected: PlannotatorGateIdentity): Promise<{ resumed: boolean }>;
   /**
    * `output_root` (#2200) is write-once: the executor sets it at run start only
    * when the persisted value is null. Re-writing it on resume would re-derive

@@ -10,8 +10,12 @@
  * Runs in its own `bun test` invocation (see package.json) - it mock.module's
  * ./connection with a real adapter, conflicting with workflows.test.ts's fake.
  */
-import { describe, test, expect, mock } from 'bun:test';
+import { afterAll, describe, test, expect, mock } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { RouteLoopRuntimeMetadata } from '@archon/workflows/schemas/workflow-run';
+import type { QueryResult } from './adapters/types';
 
 const realArchonPaths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
@@ -32,7 +36,16 @@ mock.module('@archon/paths', () => ({
 }));
 
 const { SqliteAdapter, sqliteDialect } = await import('./adapters/sqlite');
-const db = new SqliteAdapter(':memory:');
+const sqliteFixtureDir = mkdtempSync(join(tmpdir(), 'archon-resume-gate-cas-'));
+const sqliteFixturePath = join(sqliteFixtureDir, 'workflow.db');
+const db = new SqliteAdapter(sqliteFixturePath);
+const competingDb = new SqliteAdapter(sqliteFixturePath);
+
+afterAll(async () => {
+  await competingDb.close();
+  await db.close();
+  rmSync(sqliteFixtureDir, { recursive: true, force: true });
+});
 
 mock.module('./connection', () => ({
   pool: db,
@@ -141,6 +154,75 @@ describe('resumeApprovedGate', () => {
       await resumeApprovedGate('replacement-gate', { nodeId: 'review', gateId: 'gate-a' })
     ).toEqual({ resumed: false });
     expect((await getWorkflowRun('replacement-gate'))?.status).toBe('paused');
+  });
+
+  test('returns a CAS miss when another connection replaces ownership during resume', async () => {
+    await seed('contended-gate', 'paused', "datetime('now')", {
+      approval: {
+        type: 'plannotator_gate',
+        nodeId: 'review',
+        gateId: 'gate-a',
+        message: 'Review',
+        resolved: 'approved',
+      },
+    });
+
+    const replacement = JSON.stringify({
+      approval: {
+        type: 'plannotator_gate',
+        nodeId: 'review',
+        gateId: 'gate-b',
+        message: 'Replacement review',
+        phase: 'opening',
+        resolved: null,
+      },
+    });
+    const originalQuery = db.query.bind(db);
+    let replacementWon = false;
+    db.query = async <T>(sql: string, params?: unknown[]): Promise<QueryResult<T>> => {
+      const isResumeRead = sql.includes('SELECT * FROM remote_agent_workflow_runs WHERE id = $1');
+      const isResumeUpdate =
+        sql.includes('UPDATE remote_agent_workflow_runs') &&
+        sql.includes("SET status = 'running'") &&
+        params?.[0] === 'contended-gate';
+
+      if (!replacementWon && isResumeRead) {
+        const result = await originalQuery<T>(sql, params);
+        const replacementResult = await competingDb.query(
+          `UPDATE remote_agent_workflow_runs
+           SET metadata = $2
+           WHERE id = $1 AND status = 'paused'`,
+          ['contended-gate', replacement]
+        );
+        expect(replacementResult.rowCount).toBe(1);
+        replacementWon = true;
+        return result;
+      }
+      if (!replacementWon && isResumeUpdate) {
+        const replacementResult = await competingDb.query(
+          `UPDATE remote_agent_workflow_runs
+           SET metadata = $2
+           WHERE id = $1 AND status = 'paused'`,
+          ['contended-gate', replacement]
+        );
+        expect(replacementResult.rowCount).toBe(1);
+        replacementWon = true;
+      }
+      return originalQuery<T>(sql, params);
+    };
+
+    try {
+      await expect(
+        resumeApprovedGate('contended-gate', { nodeId: 'review', gateId: 'gate-a' })
+      ).resolves.toEqual({ resumed: false });
+    } finally {
+      db.query = originalQuery;
+    }
+
+    expect(replacementWon).toBe(true);
+    const current = await getWorkflowRun('contended-gate');
+    expect(current?.status).toBe('paused');
+    expect(current?.metadata.approval).toMatchObject({ gateId: 'gate-b', resolved: null });
   });
 });
 

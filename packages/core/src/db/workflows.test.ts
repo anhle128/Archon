@@ -1641,60 +1641,29 @@ describe('workflows database', () => {
   });
 
   describe('resumeApprovedGate', () => {
-    test('locks, verifies identity, and resumes the approved paused gate', async () => {
-      mockQuery.mockResolvedValueOnce(
-        createQueryResult([
-          {
-            ...mockWorkflowRun,
-            status: 'paused',
-            metadata: {
-              approval: {
-                type: 'plannotator_gate',
-                nodeId: 'review',
-                gateId: 'gate-a',
-                message: 'Review',
-                resolved: 'approved',
-              },
-            },
-          },
-        ])
-      );
+    test('atomically resumes only the matching approved paused Plannotator gate', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
 
       await expect(
         resumeApprovedGate('workflow-run-123', { nodeId: 'review', gateId: 'gate-a' })
       ).resolves.toEqual({ resumed: true });
 
-      expect(mockWithTransaction).toHaveBeenCalledTimes(1);
-      const [selectSql, selectParams] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(selectSql).toContain('SELECT *');
-      expect(selectSql).toContain('FOR UPDATE');
-      expect(selectParams).toEqual(['workflow-run-123']);
-      const [updateSql, updateParams] = mockQuery.mock.calls[1] as [string, unknown[]];
+      expect(mockWithTransaction).not.toHaveBeenCalled();
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      const [updateSql, updateParams] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(updateSql).toContain("SET status = 'running'");
-      expect(updateSql).toContain("WHERE id = $1 AND status = 'paused'");
+      expect(updateSql).toContain('WHERE id = $1');
+      expect(updateSql).toContain("AND status = 'paused'");
+      expect(updateSql).toContain("metadata->'approval'->>'type' = 'plannotator_gate'");
+      expect(updateSql).toContain("metadata->'approval'->>'resolved' = 'approved'");
+      expect(updateSql).toContain("metadata->'approval'->>'nodeId' = $2");
+      expect(updateSql).toContain("metadata->'approval'->>'gateId' = $3");
       expect(updateSql).toContain('started_at = NOW()');
-      expect(updateParams).toEqual(['workflow-run-123']);
+      expect(updateParams).toEqual(['workflow-run-123', 'review', 'gate-a']);
     });
 
-    test('does not update when the fencing token no longer matches', async () => {
-      mockQuery.mockResolvedValueOnce(
-        createQueryResult([
-          {
-            ...mockWorkflowRun,
-            status: 'paused',
-            metadata: {
-              approval: {
-                type: 'plannotator_gate',
-                nodeId: 'review',
-                gateId: 'gate-b',
-                message: 'Review',
-                resolved: null,
-              },
-            },
-          },
-        ])
-      );
+    test('returns a CAS miss when any resume predicate does not match', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
 
       await expect(
         resumeApprovedGate('workflow-run-123', { nodeId: 'review', gateId: 'gate-a' })

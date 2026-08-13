@@ -24,6 +24,7 @@ import type {
   ApprovalGateIdentity,
   GateResolutionEvent,
   PersistRouteDecisionTransitionInput,
+  PlannotatorGateIdentity,
   PlannotatorGateTransitionInput,
   PlannotatorGateTransitionResult,
 } from '@archon/workflows/store';
@@ -172,6 +173,13 @@ function unresolvedGateClause(): string {
       ? "metadata->'approval'->>'resolved'"
       : "json_extract(metadata, '$.approval.resolved')";
   return `status = 'paused' AND ${resolvedExpr} IS NULL`;
+}
+
+/** Extract a scalar approval field using the active database's JSON syntax. */
+function approvalFieldExpression(field: 'type' | 'nodeId' | 'gateId' | 'resolved'): string {
+  return getDatabaseType() === 'postgresql'
+    ? `metadata->'approval'->>'${field}'`
+    : `json_extract(metadata, '$.approval.${field}')`;
 }
 
 /**
@@ -1025,41 +1033,25 @@ export async function resumeWorkflowRun(id: string): Promise<WorkflowRun> {
 /** Atomically resume only the still-owned, approved gate. */
 export async function resumeApprovedGate(
   id: string,
-  expected: ApprovalGateIdentity
+  expected: PlannotatorGateIdentity
 ): Promise<{ resumed: boolean }> {
   const dialect = getDialect();
   try {
-    return await getDatabase().withTransaction(async query => {
-      const currentResult = await query<WorkflowRun>(
-        `SELECT * FROM remote_agent_workflow_runs WHERE id = $1${rowLockClause()}`,
-        [id]
-      );
-      const currentRow = currentResult.rows[0];
-      if (!currentRow) return { resumed: false };
-
-      const currentRun = normalizeWorkflowRun(currentRow);
-      const approval = currentRun.metadata.approval;
-      if (
-        currentRun.status !== 'paused' ||
-        !isApprovalContext(approval) ||
-        approval.resolved !== 'approved' ||
-        approval.nodeId !== expected.nodeId ||
-        (expected.gateId !== undefined && approval.gateId !== expected.gateId)
-      ) {
-        return { resumed: false };
-      }
-
-      const result = await query(
-        `UPDATE remote_agent_workflow_runs
-         SET status = 'running',
-             completed_at = NULL,
-             started_at = ${dialect.now()},
-             last_activity_at = ${dialect.now()}
-         WHERE id = $1 AND status = 'paused'`,
-        [id]
-      );
-      return { resumed: result.rowCount > 0 };
-    });
+    const result = await pool.query(
+      `UPDATE remote_agent_workflow_runs
+       SET status = 'running',
+           completed_at = NULL,
+           started_at = ${dialect.now()},
+           last_activity_at = ${dialect.now()}
+       WHERE id = $1
+         AND status = 'paused'
+         AND ${approvalFieldExpression('type')} = 'plannotator_gate'
+         AND ${approvalFieldExpression('resolved')} = 'approved'
+         AND ${approvalFieldExpression('nodeId')} = $2
+         AND ${approvalFieldExpression('gateId')} = $3`,
+      [id, expected.nodeId, expected.gateId]
+    );
+    return { resumed: result.rowCount > 0 };
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, workflowRunId: id }, 'db.approved_gate_resume_failed');
