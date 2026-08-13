@@ -376,9 +376,9 @@ nodes:
       /speckit-plan create detail plan <feature_directory>
     depends_on:
       - red-team-apply
-    effort: xhigh
-    provider: codex
-    model: "gpt-5.6-sol"
+    effort: high
+    provider: grok
+    model: "grok-4.6"
     context: fresh
 
   - id: tasks
