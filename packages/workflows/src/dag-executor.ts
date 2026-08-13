@@ -4362,7 +4362,17 @@ export function applyLoopPrevToBodyNode(
       ...node,
       plannotator_gate: {
         ...node.plannotator_gate,
-        document: sub(node.plannotator_gate.document),
+        ...(node.plannotator_gate.document !== undefined
+          ? { document: sub(node.plannotator_gate.document) }
+          : {}),
+        ...(node.plannotator_gate.prepare !== undefined
+          ? {
+              prepare: {
+                ...node.plannotator_gate.prepare,
+                prompt: sub(node.plannotator_gate.prepare.prompt),
+              },
+            }
+          : {}),
         ...(node.plannotator_gate.message !== undefined
           ? { message: sub(node.plannotator_gate.message) }
           : {}),
@@ -7530,6 +7540,12 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
               aiProfile,
               workflowPreset,
               workflowTier,
+              stateDir,
+              baseBranch,
+              docsDir,
+              prRemote,
+              issueContext,
+              execContext,
             });
             return { nodeId: node.id, output };
           }
@@ -8230,7 +8246,9 @@ export function collectContainerIncompatibleProviders(
         continue;
       }
       if (isPlannotatorGateNode(node)) {
-        // Rework always exists; provider is on the rework block, not the node.
+        if (node.plannotator_gate.prepare) {
+          check(node.plannotator_gate.prepare.provider ?? workflowProvider);
+        }
         const reworkProvider = node.plannotator_gate.rework.provider ?? workflowProvider;
         check(reworkProvider);
         continue;

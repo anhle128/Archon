@@ -22,6 +22,7 @@ import {
 import type { ApprovalContext, NodeOutput, PlannotatorGateNode, WorkflowRun } from './schemas';
 import type { IWorkflowPlatform, WorkflowConfig, WorkflowDeps } from './deps';
 import type { IWorkflowStore, WorkflowEventData } from './store';
+import type { SendQueryOptions } from '@archon/providers/types';
 import { clearRegistry, registerBuiltinProviders } from '@archon/providers';
 
 function makeRun(approval: Record<string, unknown>): WorkflowRun {
@@ -257,6 +258,11 @@ function integrationArgs(
     config,
     workflowProvider: 'claude',
     workflowModel: undefined,
+    stateDir: join(cwd, 'state'),
+    baseBranch: 'main',
+    docsDir: 'docs/',
+    prRemote: 'origin',
+    execContext: { kind: 'host' },
   };
 }
 
@@ -522,6 +528,216 @@ describe('executePlannotatorGateNode production spawn path', () => {
     expect(store.events.filter(event => event.event_type === 'node_completed')).toHaveLength(1);
     expect(store.resumeApprovedGate).toHaveBeenCalledTimes(1);
     expect(store.run.status).toBe('running');
+  });
+
+  test('prepares an HTML document before opening the first annotate session', async () => {
+    const document = join(cwd, 'prepared.html');
+    const run = makeRun({});
+    const store = new IntegrationGateStore(run);
+    const sendQuery = mock(async function* (prompt: string) {
+      expect(prompt).toBe('Create the review for run-1 and upstream-value');
+      writeFileSync(document, '<html><body>prepared</body></html>');
+      yield { type: 'assistant' as const, content: ` ${document} \n` };
+    });
+    const getAgentProvider = mock(
+      () =>
+        ({
+          sendQuery,
+          getType: () => 'claude',
+          getCapabilities: () => ({}),
+        }) as ReturnType<WorkflowDeps['getAgentProvider']>
+    );
+    const node: PlannotatorGateNode = {
+      id: 'review',
+      plannotator_gate: {
+        prepare: { prompt: 'Create the review for $WORKFLOW_ID and $upstream.output' },
+        rework: { prompt: 'Revise $REVIEW_DOCUMENT using $REVIEW_ANNOTATIONS' },
+      },
+    };
+    const args = integrationArgs(run, store, node, cwd, artifactsDir, getAgentProvider);
+    args.nodeOutputs.set('upstream', { state: 'completed', output: 'upstream-value' });
+
+    const execution = executePlannotatorGateNode(args);
+    const invocations = await waitForInvocations(fake, 1);
+    expect(sendQuery).toHaveBeenCalledTimes(1);
+    expect(invocations[0]?.[1]).toBe(realpathSync(document));
+    expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
+
+    const approval = store.run.metadata.approval as ApprovalContext;
+    releaseDecision(fake, approval.gateId ?? '', 1, { decision: 'approved', feedback: 'Ship it' });
+    await expect(execution).resolves.toEqual({ state: 'completed', output: '' });
+  });
+
+  test('preflights Plannotator before invoking prepare', async () => {
+    const previous = process.env.PLANNOTATOR_BIN;
+    process.env.PLANNOTATOR_BIN = '/nonexistent/plannotator-before-prepare';
+    const run = makeRun({});
+    const store = new IntegrationGateStore(run);
+    const sendQuery = mock(async function* () {
+      yield { type: 'assistant' as const, content: join(cwd, 'prepared.html') };
+    });
+    const getAgentProvider = mock(
+      () =>
+        ({ sendQuery, getType: () => 'claude', getCapabilities: () => ({}) }) as ReturnType<
+          WorkflowDeps['getAgentProvider']
+        >
+    );
+    const node: PlannotatorGateNode = {
+      id: 'review',
+      plannotator_gate: {
+        prepare: { prompt: 'Create a review.' },
+        rework: { prompt: 'Revise $REVIEW_DOCUMENT using $REVIEW_ANNOTATIONS' },
+      },
+    };
+
+    try {
+      await expect(
+        executePlannotatorGateNode(
+          integrationArgs(run, store, node, cwd, artifactsDir, getAgentProvider)
+        )
+      ).resolves.toMatchObject({ state: 'failed' });
+      expect(sendQuery).not.toHaveBeenCalled();
+      expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.PLANNOTATOR_BIN;
+      else process.env.PLANNOTATOR_BIN = previous;
+    }
+  });
+
+  test('fails a prepare provider error without pausing or spawning', async () => {
+    const run = makeRun({});
+    const store = new IntegrationGateStore(run);
+    const sendQuery = mock(async function* () {
+      throw new Error('prepare provider failed');
+    });
+    const getAgentProvider = mock(
+      () =>
+        ({ sendQuery, getType: () => 'claude', getCapabilities: () => ({}) }) as ReturnType<
+          WorkflowDeps['getAgentProvider']
+        >
+    );
+    const node: PlannotatorGateNode = {
+      id: 'review',
+      plannotator_gate: {
+        prepare: { prompt: 'Create a review.' },
+        rework: { prompt: 'Revise $REVIEW_DOCUMENT using $REVIEW_ANNOTATIONS' },
+      },
+    };
+
+    await expect(
+      executePlannotatorGateNode(
+        integrationArgs(run, store, node, cwd, artifactsDir, getAgentProvider)
+      )
+    ).resolves.toMatchObject({ state: 'failed', error: 'prepare provider failed' });
+    expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+    expect(existsSync(fake.invocationLog)).toBe(false);
+  });
+
+  test('fails prepare output without pausing or spawning when it is not an HTML path', async () => {
+    const document = join(cwd, 'prepared.md');
+    writeFileSync(document, '# not HTML');
+    const run = makeRun({});
+    const store = new IntegrationGateStore(run);
+    const sendQuery = mock(async function* () {
+      yield { type: 'assistant' as const, content: document };
+    });
+    const getAgentProvider = mock(
+      () =>
+        ({ sendQuery, getType: () => 'claude', getCapabilities: () => ({}) }) as ReturnType<
+          WorkflowDeps['getAgentProvider']
+        >
+    );
+    const node: PlannotatorGateNode = {
+      id: 'review',
+      plannotator_gate: {
+        prepare: { prompt: 'Create a review.' },
+        rework: { prompt: 'Revise $REVIEW_DOCUMENT using $REVIEW_ANNOTATIONS' },
+      },
+    };
+
+    await expect(
+      executePlannotatorGateNode(
+        integrationArgs(run, store, node, cwd, artifactsDir, getAgentProvider)
+      )
+    ).resolves.toMatchObject({ state: 'failed', error: expect.stringMatching(/HTML/i) });
+    expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+    expect(existsSync(fake.invocationLog)).toBe(false);
+  });
+
+  test('reuses a matching unresolved approval document without preparing again', async () => {
+    const document = join(cwd, 'persisted.html');
+    writeFileSync(document, '<html><body>persisted</body></html>');
+    const run = makeRun({
+      type: 'plannotator_gate',
+      nodeId: 'review',
+      gateId: 'gate-persisted',
+      document,
+      phase: 'idle',
+      resolved: null,
+    });
+    const store = new IntegrationGateStore(run);
+    const getAgentProvider = mock(() => {
+      throw new Error('prepare must not run for persisted gate document');
+    }) as WorkflowDeps['getAgentProvider'];
+    const node: PlannotatorGateNode = {
+      id: 'review',
+      plannotator_gate: {
+        prepare: { prompt: 'Create a replacement review.' },
+        rework: { prompt: 'Revise $REVIEW_DOCUMENT using $REVIEW_ANNOTATIONS' },
+      },
+    };
+
+    const execution = executePlannotatorGateNode(
+      integrationArgs(run, store, node, cwd, artifactsDir, getAgentProvider)
+    );
+    const invocations = await waitForInvocations(fake, 1);
+    expect(invocations[0]?.[1]).toBe(realpathSync(document));
+    expect(getAgentProvider).not.toHaveBeenCalled();
+    const resultFileName = String(invocations[0]?.[6]).split('/').pop();
+    writeFileSync(
+      join(fake.controlDir, `${resultFileName}.control.json`),
+      JSON.stringify({ payload: { decision: 'approved', feedback: 'Approved' }, exitCode: 0 })
+    );
+    await expect(execution).resolves.toEqual({ state: 'completed', output: '' });
+  });
+
+  test('aborts an idle embedded prepare call', async () => {
+    const run = makeRun({});
+    const store = new IntegrationGateStore(run);
+    let receivedSignal: AbortSignal | undefined;
+    const sendQuery = mock(async function* (
+      _prompt: string,
+      _cwd: string,
+      _resume: string | undefined,
+      options: SendQueryOptions | undefined
+    ) {
+      receivedSignal = options?.abortSignal;
+      await Bun.sleep(50);
+      if (receivedSignal?.aborted) return;
+      yield { type: 'assistant' as const, content: join(cwd, 'late.html') };
+    });
+    const getAgentProvider = mock(
+      () =>
+        ({ sendQuery, getType: () => 'claude', getCapabilities: () => ({}) }) as ReturnType<
+          WorkflowDeps['getAgentProvider']
+        >
+    );
+    const node: PlannotatorGateNode = {
+      id: 'review',
+      idle_timeout: 5,
+      plannotator_gate: {
+        prepare: { prompt: 'Create a review.' },
+        rework: { prompt: 'Revise $REVIEW_DOCUMENT using $REVIEW_ANNOTATIONS' },
+      },
+    };
+
+    await expect(
+      executePlannotatorGateNode(
+        integrationArgs(run, store, node, cwd, artifactsDir, getAgentProvider)
+      )
+    ).resolves.toMatchObject({ state: 'failed', error: expect.stringMatching(/timed out/i) });
+    expect(receivedSignal?.aborted).toBe(true);
+    expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
   });
 
   test('reworks an annotated document once, then approves the replacement', async () => {

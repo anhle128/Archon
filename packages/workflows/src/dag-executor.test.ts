@@ -10,7 +10,15 @@ import {
   type Mock,
 } from 'bun:test';
 import { mkdir, writeFile, rm, readFile } from 'fs/promises';
-import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { basename, join } from 'node:path';
 import { tmpdir } from 'os';
 import * as git from '@archon/git';
@@ -19943,6 +19951,30 @@ describe('collectContainerIncompatibleProviders', () => {
     const bad = collectContainerIncompatibleProviders([group], 'claude');
     expect([...bad]).toEqual(['codex']);
   });
+
+  it('checks both prepare and rework providers for Plannotator gates', () => {
+    const withIncompatiblePrepare = {
+      id: 'review',
+      plannotator_gate: {
+        prepare: { prompt: 'Write the review.', provider: 'codex' },
+        rework: { prompt: 'Revise it.', provider: 'claude' },
+      },
+    } as unknown as DagNode;
+    const withIncompatibleRework = {
+      id: 'review',
+      plannotator_gate: {
+        prepare: { prompt: 'Write the review.', provider: 'claude' },
+        rework: { prompt: 'Revise it.', provider: 'codex' },
+      },
+    } as unknown as DagNode;
+
+    expect([...collectContainerIncompatibleProviders([withIncompatiblePrepare], 'claude')]).toEqual(
+      ['codex']
+    );
+    expect([...collectContainerIncompatibleProviders([withIncompatibleRework], 'claude')]).toEqual([
+      'codex',
+    ]);
+  });
 });
 
 describe('buildSubprocessDockerArgs — bash/script env isolation', () => {
@@ -20934,6 +20966,28 @@ describe('executeDagWorkflow -- production Plannotator gate integration', () => 
     };
   }
 
+  function prepareIntegrationWorkflow(marker: string): WorkflowDefinition {
+    const document = join(root, 'prepared.html');
+    return {
+      name: 'real-plannotator-prepare-gate',
+      nodes: [
+        {
+          id: 'review',
+          plannotator_gate: {
+            prepare: { prompt: 'Write the initial review document.' },
+            capture_response: true,
+            rework: { prompt: 'Revise $REVIEW_DOCUMENT using $REVIEW_ANNOTATIONS' },
+          },
+        },
+        {
+          id: 'downstream',
+          depends_on: ['review'],
+          bash: `printf 'ran\\n' >> '${marker}'`,
+        },
+      ],
+    };
+  }
+
   async function executeIntegrationDag(
     deps: WorkflowDeps,
     run: WorkflowRun,
@@ -20986,6 +21040,55 @@ describe('executeDagWorkflow -- production Plannotator gate integration', () => 
       decision: 'approved',
       feedback: 'Approved',
     });
+    await execution;
+
+    expect(readFileSync(marker, 'utf8').trim().split('\n')).toEqual(['ran']);
+    expect(
+      events.filter(event => event.event_type === 'node_completed' && event.step_name === 'review')
+    ).toHaveLength(1);
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs prepare → approve → downstream exactly once', async () => {
+    const marker = join(root, 'prepared-downstream.log');
+    const document = join(root, 'prepared.html');
+    const run = makeWorkflowRun('run-real-prepare-gate', {
+      metadata: {
+        approval: {
+          type: 'plannotator_gate',
+          nodeId: 'review',
+          gateId: 'gate-prepare-real',
+          phase: 'opening',
+          resolved: null,
+        },
+      },
+    });
+    const { store, events } = createDagGateStore(run);
+    const prepareCalls: string[] = [];
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mock(function* (
+        _prompt: string,
+        _cwd: string,
+        _resumeSessionId?: string,
+        options?: SendQueryOptions
+      ) {
+        prepareCalls.push(String(options?.nodeConfig?.nodeId));
+        writeFileSync(document, '<html><body>prepared</body></html>');
+        yield { type: 'assistant' as const, content: document };
+      }),
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+    const execution = executeIntegrationDag(
+      createMockDeps(store),
+      run,
+      prepareIntegrationWorkflow(marker)
+    );
+
+    const [invocation] = await waitForDagGateInvocations(fake, 1);
+    expect(invocation?.document).toBe(realpathSync(document));
+    expect(prepareCalls).toEqual(['review:prepare']);
+    approveDagGateInvocation(fake, invocation!);
     await execution;
 
     expect(readFileSync(marker, 'utf8').trim().split('\n')).toEqual(['ran']);
