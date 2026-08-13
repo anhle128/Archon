@@ -3,7 +3,7 @@ name: archon-workflow-creator
 description: >-
   Create, edit, review, and validate Archon workflow YAML files for `.archon/workflows/`.
   Use when the user asks to build an Archon workflow, generate workflow YAML, configure Archon workflow nodes, add commands or scripts for workflows, choose provider/model/thinking settings, use every Archon node type, or debug workflow validation errors.
-  This skill gives the workflow schema, node types, provider/model/thinking rules, examples, and validation workflow so agents do not need to scout the Archon source code first.
+  This skill gives the workflow schema, node types, Plannotator live-review lifecycle, provider/model/thinking rules, examples, and validation workflow so agents do not need to scout the Archon source code first.
 ---
 
 # Archon Workflow Creator
@@ -15,7 +15,7 @@ The goal is to produce workflows that pass Archon's local validator and behave c
 
 ## Authoring Workflow
 
-1. Clarify the workflow objective, trigger phrases, expected input, generated artifacts, provider preferences, and whether human approval is needed.
+1. Clarify the workflow objective, trigger phrases, expected input, generated artifacts, provider preferences, and whether human approval or live Plannotator review is needed.
 2. Inspect only project-level context that affects authoring: `.archon/workflows/`, `.archon/commands/`, `.archon/scripts/`, `.archon/config.yaml`, `package.json`, and existing project conventions.
 3. Read `references/workflow-anatomy.md` before creating or editing workflow YAML.
 4. Read `references/node-types.md` before configuring nodes or when validation mentions node schema, dependencies, conditions, retry, hooks, agents, skills, MCP, or output refs.
@@ -32,12 +32,14 @@ Create deterministic helper scripts under `.archon/scripts/` when shell would be
 ## Hard Rules
 
 - Use `nodes:`, never legacy `steps:`.
-- Give every node a unique safe ID and exactly one action key: `prompt`, `command`, `bash`, `script`, `loop`, `route_loop`, `approval`, or `cancel`.
+- Give every node a unique safe ID and exactly one action key: `prompt`, `command`, `bash`, `script`, `loop`, `route_loop`, `approval`, `plannotator_gate`, or `cancel`.
 - Prefer `output_format` for AI nodes whose output is consumed by later nodes.
 - Use deterministic `bash` or `script` nodes for checks, setup, parsing, file moves, and final assertions.
 - Use `allowed_tools: []` on classifier or formatting nodes that should not touch the repo.
 - Use `context: fresh` when an AI node should not inherit the previous sequential AI session.
-- Use `interactive: true` at the workflow root when approval nodes or interactive loops must be foreground-visible.
+- Use `interactive: true` at the workflow root when approval nodes, `plannotator_gate` nodes, or interactive loops must be foreground-visible.
+- For `plannotator_gate`, produce one readable `.html` or `.htm` path under the workflow `cwd` or `$ARTIFACTS_DIR`, and make producer and rework output exactly that one path line.
+- Put `$REVIEW_DOCUMENT` and `$REVIEW_ANNOTATIONS` only inside `plannotator_gate.rework.prompt`; the gate substitutes them once before invoking the rework provider.
 - For Codex-only workflows, prefer root `effort: xhigh`; Qoder CLI uses `effort: max` for its maximum level. In mixed-provider workflows, set effort only on the matching provider nodes so other providers do not inherit it.
 - Validate with `bun run cli validate workflows <workflow-name>` before reporting success.
 - Inspect workflow engine source only if local validation contradicts these references or the project clearly changed after this skill was written.

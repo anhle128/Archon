@@ -174,6 +174,71 @@ Unselected targets stay dormant.
 Downstream nodes can read route metadata from `$review-router.output`, including `outcome`, `to`, `negative_count`, `max_iterations`, `attempt`, and `execution_seq`.
 Read `$review.output` directly when the downstream node needs the latest review content.
 
+## Live Plannotator Review with Web-owned Approval
+
+This pattern creates the review artifact deterministically, allows annotation-driven rework through the live Plannotator supervisor, and then continues exactly once when the user approves from Plannotator or the Archon Web UI.
+
+```yaml
+name: plannotator-web-review
+description: |
+  Use when: User wants to test a live Plannotator gate from the Web UI.
+  Triggers: "test plannotator web review".
+  Does: Creates an HTML artifact, opens live review, applies annotations, and records downstream completion.
+  NOT for: Production document review.
+
+provider: codex
+model: gpt-5.6-terra
+effort: medium
+interactive: true
+worktree:
+  enabled: false
+mutates_checkout: false
+
+nodes:
+  - id: create-html
+    bash: |
+      set -euo pipefail
+      review_file="$ARTIFACTS_DIR/plannotator-web-review.html"
+      cat > "$review_file" <<'HTML'
+      <!doctype html>
+      <html lang="en">
+        <body>
+          <h1>Plannotator Web Review</h1>
+          <p>Add an annotation, send it for rework, then approve from Archon Web UI.</p>
+        </body>
+      </html>
+      HTML
+      printf '%s\n' "$review_file"
+
+  - id: live-review
+    depends_on: [create-html]
+    plannotator_gate:
+      document: "$create-html.output"
+      message: |
+        First send one annotation from Plannotator.
+        After the updated document reopens, click Approve in Archon Web UI to test supervisor-owned continuation.
+      capture_response: true
+      rework:
+        prompt: |
+          Edit the HTML at $REVIEW_DOCUMENT to address these reviewer annotations:
+          $REVIEW_ANNOTATIONS
+
+          Preserve valid standalone HTML.
+          Print exactly the absolute HTML path on one line and no other text.
+
+  - id: prove-continuation
+    depends_on: [live-review]
+    bash: |
+      set -euo pipefail
+      marker="$ARTIFACTS_DIR/plannotator-web-review-completed.txt"
+      printf 'completed_once\n' > "$marker"
+      printf 'Plannotator gate completed. Marker: %s\n' "$marker"
+```
+
+Do not add a second explicit resume node after `live-review`.
+Normal external approval deliberately leaves continuation to the live supervisor.
+Use `review-open` only for explicit takeover after the original review surface or process must be replaced.
+
 ## Deterministic Script Transform
 
 ```yaml

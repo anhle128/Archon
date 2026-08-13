@@ -81,7 +81,7 @@ Optional root fields:
 | ----------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
 | `provider`              | registered provider ID                                 | Default provider for AI nodes.                                                                      |
 | `model`                 | literal model, `small`, `medium`, `large`, or `@alias` | Model presets can also change the effective provider.                                               |
-| `interactive`           | boolean                                                | Use true for human gates that must pause visibly.                                                   |
+| `interactive`           | boolean                                                | Use true for approval, Plannotator, or loop gates that must pause visibly.                           |
 | `worktree.enabled`      | boolean                                                | `false` forces live checkout; `true` forces isolated worktree.                                      |
 | `mutates_checkout`      | boolean                                                | Omitted means true and path-lock applies; set false only for read-only or per-run-scoped workflows. |
 | `persist_sessions`      | boolean                                                | Default `persist_session` for eligible AI nodes.                                                    |
@@ -127,6 +127,19 @@ If context variables are referenced with no context, they become empty strings.
 
 Bash nodes receive environment variables for `ARTIFACTS_DIR`, `LOG_DIR`, `BASE_BRANCH`, `USER_MESSAGE`, `ARGUMENTS`, loop variables, rejection reason, context aliases, and managed project env vars.
 Script nodes receive `ARTIFACTS_DIR`, `LOG_DIR`, `BASE_BRANCH`, and managed project env vars.
+
+## Plannotator Gate Variables
+
+`plannotator_gate.rework.prompt` has two gate-owned placeholders.
+
+| Variable              | Meaning                                                                |
+| --------------------- | ---------------------------------------------------------------------- |
+| `$REVIEW_DOCUMENT`    | Absolute path of the HTML document currently open for review.          |
+| `$REVIEW_ANNOTATIONS` | Reviewer feedback returned by the latest Plannotator annotate session. |
+
+These placeholders are substituted once over the original rework prompt.
+Literal placeholder text inside the document path or annotations is preserved and is not scanned again.
+They are not general workflow variables and should only be used inside `plannotator_gate.rework.prompt`.
 
 ## Output References
 
