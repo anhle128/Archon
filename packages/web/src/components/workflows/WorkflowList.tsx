@@ -22,13 +22,8 @@ export function WorkflowList(): React.ReactElement {
   const [runError, setRunError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState<WorkflowCategory>('All');
-  const { codebases, selectedProjectId } = useProject();
-  const [localProjectId, setLocalProjectId] = useState<string | null>(selectedProjectId);
+  const { codebases, selectedProjectId, setSelectedProjectId } = useProject();
   const messageInputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    setLocalProjectId(selectedProjectId);
-  }, [selectedProjectId]);
 
   // Focus message input when a workflow is selected
   useEffect(() => {
@@ -44,7 +39,7 @@ export function WorkflowList(): React.ReactElement {
     setSelectedWorkflow(null);
     setRunMessage('');
     setRunError(null);
-  }, [searchQuery, activeCategory]);
+  }, [searchQuery, activeCategory, selectedProjectId]);
 
   const handleRun = async (workflowName: string): Promise<void> => {
     if (!runMessage.trim() || running) return;
@@ -53,7 +48,7 @@ export function WorkflowList(): React.ReactElement {
     let conversationId: string | undefined;
     let workflowStarted = false;
     try {
-      ({ conversationId } = await createConversation(localProjectId ?? undefined));
+      ({ conversationId } = await createConversation(selectedProjectId ?? undefined));
       await runWorkflow(workflowName, conversationId, runMessage.trim());
       workflowStarted = true;
       setRunMessage('');
@@ -79,8 +74,8 @@ export function WorkflowList(): React.ReactElement {
     }
   };
 
-  const selectedCwd = localProjectId
-    ? codebases?.find(cb => cb.id === localProjectId)?.default_cwd
+  const selectedCwd = selectedProjectId
+    ? codebases?.find(cb => cb.id === selectedProjectId)?.default_cwd
     : undefined;
 
   const {
@@ -141,6 +136,31 @@ export function WorkflowList(): React.ReactElement {
   return (
     <div className="flex flex-col h-full">
       <div className="flex-1 overflow-auto space-y-4 p-0">
+        <div className="flex items-center gap-3">
+          <label
+            htmlFor="workflow-project"
+            className="shrink-0 text-xs font-medium text-text-secondary"
+          >
+            Project
+          </label>
+          <select
+            id="workflow-project"
+            aria-label="Workflow project"
+            value={selectedProjectId ?? ''}
+            onChange={(e): void => {
+              setSelectedProjectId(e.target.value || null);
+            }}
+            className="w-full max-w-sm rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text-primary focus:outline-none focus:ring-1 focus:ring-accent"
+          >
+            <option value="">Select project</option>
+            {codebases?.map(cb => (
+              <option key={cb.id} value={cb.id}>
+                {cb.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
         {/* Search + Category Filters — only show when workflows exist */}
         {hasWorkflows && (
           <div className="space-y-3">
@@ -182,7 +202,7 @@ export function WorkflowList(): React.ReactElement {
         {/* Workflow grid */}
         {!hasWorkflows ? (
           <div className="text-sm text-text-secondary">
-            {localProjectId ? (
+            {selectedProjectId ? (
               <>
                 No workflows found in this project. Add workflow definitions to{' '}
                 <code className="text-xs bg-surface-inset px-1 py-0.5 rounded">
@@ -278,22 +298,6 @@ export function WorkflowList(): React.ReactElement {
                 <X className="size-3.5" />
               </button>
             </div>
-
-            {/* Project picker */}
-            <select
-              value={localProjectId ?? ''}
-              onChange={(e): void => {
-                setLocalProjectId(e.target.value || null);
-              }}
-              className="w-48 shrink-0 rounded-md border border-border bg-surface px-2 py-1.5 text-xs text-text-primary focus:outline-none focus:ring-1 focus:ring-accent"
-            >
-              <option value="">No project</option>
-              {codebases?.map(cb => (
-                <option key={cb.id} value={cb.id}>
-                  {cb.name}
-                </option>
-              ))}
-            </select>
 
             {/* Message input + Run button */}
             <input
