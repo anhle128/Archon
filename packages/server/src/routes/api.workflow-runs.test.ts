@@ -2533,6 +2533,35 @@ describe('approve/reject auto-resume', () => {
     expect(dispatchedMessage).toBe('/workflow resume run-auto-resume-approve');
   });
 
+  test('approve: leaves plannotator continuation to the live supervisor', async () => {
+    mockGetWorkflowRun.mockResolvedValue({
+      ...MOCK_PAUSED_RUN,
+      id: 'run-plannotator-web',
+      parent_conversation_id: 'parent-conv-uuid',
+      metadata: {
+        approval: {
+          type: 'plannotator_gate',
+          nodeId: 'review-gate',
+          message: 'Review',
+          gateId: 'gate-1',
+        },
+      },
+    });
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-plannotator-web/approve', {
+      method: 'POST',
+      body: JSON.stringify({ comment: 'LGTM' }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { message: string };
+    expect(body.message).toContain('live Plannotator supervisor will continue');
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+    expect(mockGetConversationById).not.toHaveBeenCalled();
+  });
+
   test('approve: skips dispatch when parent_conversation_id is null (CLI-dispatched run)', async () => {
     mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_PAUSED_RUN,

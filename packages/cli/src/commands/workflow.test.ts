@@ -4943,6 +4943,42 @@ describe('write command --json output', () => {
     expect(discoverSpy).not.toHaveBeenCalled();
   });
 
+  it('approve --json includes live supervisor continuation for plannotator gates', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const pausedRun = {
+      id: 'run-plannotator-json',
+      workflow_name: 'review-plan',
+      status: 'paused' as const,
+      working_path: '/tmp/wt',
+      codebase_id: 'cb',
+      conversation_id: 'conv',
+      user_message: 'go',
+      metadata: {
+        approval: {
+          type: 'plannotator_gate',
+          nodeId: 'gate',
+          message: 'Review',
+          gateId: 'gate-1',
+        },
+      },
+    };
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
+      .mockResolvedValueOnce(pausedRun)
+      .mockResolvedValueOnce({
+        ...pausedRun,
+        metadata: {
+          approval: { ...pausedRun.metadata.approval, resolved: 'approved' },
+        },
+      });
+
+    await workflowApproveCommand('run-plannotator-json', undefined, true);
+
+    const envelope = JSON.parse(firstJsonPayload(stdoutSpy)) as {
+      result: { continuation: string };
+    };
+    expect(envelope.result.continuation).toBe('live_plannotator_supervisor');
+  });
+
   it('approve --json success on interactive loop gate emits same envelope shape', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const loopRun = {
@@ -6443,6 +6479,48 @@ describe('workflowApproveCommand', () => {
       '/users/me/source-repo-with-yaml',
       expect.any(Function)
     );
+  });
+
+  it('records plannotator approval without starting a replacement execution', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const conversationsDb = await import('@archon/core/db/conversations');
+    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
+    const resolveGate = workflowDb.resolveApprovalGate as ReturnType<typeof mock>;
+    resolveGate.mockReset();
+    resolveGate.mockResolvedValue({ resolved: true });
+    const getRun = workflowDb.getWorkflowRun as ReturnType<typeof mock>;
+    getRun.mockReset();
+    getRun.mockResolvedValue({
+      id: 'run-plannotator-cli',
+      workflow_name: 'review-plan',
+      status: 'paused',
+      user_message: 'review it',
+      working_path: '/tmp/test-worktree',
+      codebase_id: 'cb-existing',
+      conversation_id: 'conv-1',
+      metadata: {
+        approval: {
+          type: 'plannotator_gate',
+          nodeId: 'review-node',
+          message: 'Review',
+          gateId: 'gate-1',
+        },
+      },
+    });
+    const discoverySpy = workflowDiscovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>;
+    discoverySpy.mockClear();
+    (codebaseDb.getCodebase as ReturnType<typeof mock>).mockClear();
+    (conversationsDb.getConversationById as ReturnType<typeof mock>).mockClear();
+
+    await workflowApproveCommand('run-plannotator-cli');
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('live Plannotator supervisor will continue')
+    );
+    expect(discoverySpy).not.toHaveBeenCalled();
+    expect(codebaseDb.getCodebase).not.toHaveBeenCalled();
+    expect(conversationsDb.getConversationById).not.toHaveBeenCalled();
   });
 });
 

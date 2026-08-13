@@ -4042,7 +4042,14 @@ export function registerApiRoutes(
       // defaults the recorded comment internally, but "no feedback" must survive
       // so a signal-bearing interactive-loop gate finalizes instead of re-running
       // (#2074, loop_feedback_given).
-      await approveWorkflow(runId, body.comment);
+      const approvalResult = await approveWorkflow(runId, body.comment);
+
+      if (approvalResult.continuation === 'live_plannotator_supervisor') {
+        return c.json({
+          success: true,
+          message: `Workflow approved: ${run.workflow_name}. The live Plannotator supervisor will continue this workflow.`,
+        });
+      }
 
       // Auto-resume: dispatch to the orchestrator so the workflow continues
       // without requiring the user to re-run the workflow command. Mirrors

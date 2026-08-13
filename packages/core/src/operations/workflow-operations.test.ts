@@ -163,6 +163,25 @@ describe('approveWorkflow', () => {
     expect(mockCaptureApprovalResolved).toHaveBeenCalledWith({ resolution: 'approved' });
   });
 
+  test('assigns continuation ownership to a live plannotator supervisor', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({
+        metadata: {
+          approval: {
+            nodeId: 'review',
+            message: 'Review in Plannotator',
+            type: 'plannotator_gate',
+            gateId: 'gate-1',
+          },
+        },
+      })
+    );
+
+    const result = await approveWorkflow('run-1', 'Looks good');
+
+    expect(result.continuation).toBe('live_plannotator_supervisor');
+  });
+
   test('approves interactive_loop — writes only approval_received, stores loop_user_input', async () => {
     const run = makePausedRun({
       metadata: {

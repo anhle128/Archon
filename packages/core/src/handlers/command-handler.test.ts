@@ -2560,6 +2560,39 @@ describe('CommandHandler', () => {
         updated_at: new Date(),
       };
 
+      test('reports live supervisor continuation for a plannotator gate', async () => {
+        mockGetWorkflowRun.mockResolvedValueOnce({
+          id: 'run-plannotator-slash',
+          workflow_name: 'review-plan',
+          conversation_id: 'conv-approve',
+          parent_conversation_id: null,
+          codebase_id: null,
+          status: 'paused',
+          user_message: 'start',
+          metadata: {
+            approval: {
+              type: 'plannotator_gate',
+              nodeId: 'review',
+              message: 'Review',
+              gateId: 'gate-1',
+            },
+          },
+          started_at: new Date(),
+          completed_at: null,
+          last_activity_at: new Date(),
+          working_path: '/repo',
+        });
+
+        const result = await handleCommand(
+          baseConversation,
+          '/workflow approve run-plannotator-slash LGTM'
+        );
+
+        expect(result.success).toBe(true);
+        expect(result.message).toContain('live Plannotator supervisor will continue');
+        expect(result.message).not.toContain('Type your response');
+      });
+
       test('stores user comment as node_output when captureResponse is true', async () => {
         mockGetWorkflowRun.mockResolvedValueOnce({
           id: 'run-cap',

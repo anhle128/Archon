@@ -42,6 +42,7 @@ export interface ApprovalOperationResult {
   /** Internal DB UUID — resolve via getConversationById() to get platform_conversation_id. */
   conversationId: string;
   type: 'interactive_loop' | 'approval_gate';
+  continuation: 'caller_resume' | 'live_plannotator_supervisor';
 }
 
 export interface RejectionOperationResult {
@@ -491,6 +492,8 @@ export async function approveWorkflow(
     codebaseId: run.codebase_id,
     conversationId: run.conversation_id,
     type: isInteractiveLoop ? 'interactive_loop' : 'approval_gate',
+    continuation:
+      approval.type === 'plannotator_gate' ? 'live_plannotator_supervisor' : 'caller_resume',
   };
 }
 

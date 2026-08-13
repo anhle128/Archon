@@ -910,9 +910,11 @@ async function handleWorkflowCommand(
         const result = await approveWorkflow(runId, comment);
         const pathInfo = result.workingPath ? `\nPath: \`${result.workingPath}\`` : '';
         const msg =
-          result.type === 'interactive_loop'
-            ? `Workflow \`${result.workflowName}\` loop input received.${pathInfo}\nType your next message in this conversation to resume the workflow.`
-            : `Workflow \`${result.workflowName}\` approved.${pathInfo}\nType your response in this conversation to resume the workflow.`;
+          result.continuation === 'live_plannotator_supervisor'
+            ? `Workflow \`${result.workflowName}\` approved.${pathInfo}\nThe live Plannotator supervisor will continue this workflow.`
+            : result.type === 'interactive_loop'
+              ? `Workflow \`${result.workflowName}\` loop input received.${pathInfo}\nType your next message in this conversation to resume the workflow.`
+              : `Workflow \`${result.workflowName}\` approved.${pathInfo}\nType your response in this conversation to resume the workflow.`;
         return { success: true, message: msg };
       } catch (error) {
         const err = error as Error;

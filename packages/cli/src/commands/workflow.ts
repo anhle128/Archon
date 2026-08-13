@@ -3929,8 +3929,9 @@ export async function workflowReviewOpenCommand(
  * Approve a paused workflow run by ID.
  *
  * Human mode records the approval on the still-'paused' run (the resolution
- * lives in metadata.approval.resolved, #2075) and then auto-resumes the run
- * inline. `--json` mode records the approval and returns a structured ack
+ * lives in metadata.approval.resolved, #2075) and auto-resumes caller-owned
+ * gates inline. Live Plannotator gates remain supervisor-owned. `--json` mode
+ * records the approval and returns a structured ack
  * WITHOUT resuming — the run stays paused-and-staged, resumable by a
  * backgrounded `resume`/`run --resume` (inline resume would stream output and
  * break the JSON).
@@ -3946,8 +3947,8 @@ export async function workflowApproveCommand(
 ): Promise<number> {
   // JSON mode records the approval and returns a structured ack WITHOUT the
   // inline auto-resume (resuming executes the workflow and streams output to
-  // stdout, which would corrupt the JSON contract). The run becomes resumable
-  // — drive it to completion with a backgrounded `resume`/`run --resume`.
+  // stdout, which would corrupt the JSON contract). The continuation field
+  // tells automation whether to resume or leave the live supervisor in charge.
   if (json) {
     const startTime = Date.now();
     let metaCorrelationId = 'unknown';
@@ -3956,7 +3957,7 @@ export async function workflowApproveCommand(
       metaCorrelationId = resolveCorrelationId(correlationId);
       metaIssuedAt = resolveIssuedAt();
       const resolvedId = await resolveRunIdArg(runId, cwd);
-      await approveWorkflow(resolvedId, comment);
+      const approvalResult = await approveWorkflow(resolvedId, comment);
       const persistedRun = await workflowDb.getWorkflowRun(resolvedId);
       if (!persistedRun) {
         throw new Error(`Failed to read back workflow run after approval: ${resolvedId}`);
@@ -3974,6 +3975,7 @@ export async function workflowApproveCommand(
         {
           operation: 'approve',
           decision: { outcome: 'approved', recorded: true },
+          continuation: approvalResult.continuation,
           resumable: true,
           state,
           terminal,
@@ -4012,6 +4014,13 @@ export async function workflowApproveCommand(
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
   const result = await approveWorkflow(resolvedId, comment);
+
+  if (result.continuation === 'live_plannotator_supervisor') {
+    console.log(`Approved workflow: ${result.workflowName}`);
+    if (result.workingPath) console.log(`Path: ${result.workingPath}`);
+    console.log('The live Plannotator supervisor will continue this workflow.');
+    return 0;
+  }
 
   // CLI auto-resumes after approval (unlike chat, which defers to next user message)
   if (!result.workingPath) {

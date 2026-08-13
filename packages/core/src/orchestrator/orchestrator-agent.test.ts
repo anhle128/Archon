@@ -2135,6 +2135,35 @@ describe('natural-language approval routing', () => {
     );
   });
 
+  test('natural language plannotator approval records the decision for the live supervisor', async () => {
+    const conversation = makeConversation({ codebase_id: 'codebase-1', cwd: '/repos/test-repo' });
+    const pausedRun = makePausedRun({
+      metadata: {
+        approval: {
+          type: 'plannotator_gate',
+          nodeId: 'gate-1',
+          message: 'Review',
+          gateId: 'gate-1',
+        },
+      },
+    });
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+    mockGetPausedWorkflowRun.mockReturnValueOnce(Promise.resolve(pausedRun));
+    mockGetWorkflowRunDb.mockReturnValueOnce(Promise.resolve(pausedRun));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'looks good');
+
+    expect(mockResolveApprovalGate).toHaveBeenCalled();
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('live Plannotator supervisor will continue')
+    );
+    expect(mockDiscoverWorkflowsWithConfig).not.toHaveBeenCalled();
+    expect(mockGetCodebase).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
   test('slash command bypasses approval interception — getPausedWorkflowRun not called', async () => {
     const conversation = makeConversation({ codebase_id: 'codebase-1' });
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
