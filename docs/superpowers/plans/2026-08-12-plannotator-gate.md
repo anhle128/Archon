@@ -623,7 +623,7 @@ git commit -m "docs: document plannotator_gate node and team review flow"
 
 ## Self-review (plan author)
 
-- No unresolved placeholders in task steps.
+- Task steps contain no unresolved marker text.
 - Types/names consistent: `plannotator_gate`, `persistSession` / `--persist-session`, `parseDocumentPathFromNodeOutput`.
 - Spec multi-repo split reflected.
 - `Send Annotations` keep-alive explicitly out of scope (decision A).

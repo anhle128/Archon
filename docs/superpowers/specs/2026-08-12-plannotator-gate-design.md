@@ -98,11 +98,10 @@ Implementation touchpoints (Plannotator repo):
 
 ### Team model (v1)
 
-- One **canonical live** annotate process per gate open (shared URL / port / tunnel).
-- Multiple browsers may attach for annotate + Ask AI.
-- **Owner** (or designated decider) clicks **Approve** or **Send Annotations**.
-- Teammates use **Close** (with flag) or close the tab — must not click Approve unless authorized.
-- Do **not** treat Share snapshot as the interactive collab path.
+- One **canonical local** annotate process is supervised per gate open.
+- Remote team access is deferred until Plannotator provides a machine-readable URL contract and Archon defines authentication and exposure.
+- The local **owner** (or designated decider) clicks **Approve** or **Send Annotations**.
+- Do not claim a shared live URL or tunnel in the v1 contract.
 
 ---
 
@@ -131,7 +130,7 @@ Implementation touchpoints (Plannotator repo):
          │                                      │
          ▼                                      ▼
   Live Plannotator session               Archon rework agent
-  (Ask AI, annotate; team share URL)     (while run paused)
+  (Ask AI, annotate; local session)       (while run paused)
 ```
 
 ### Components
