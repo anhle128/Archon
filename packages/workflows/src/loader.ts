@@ -403,8 +403,8 @@ export function validateDagStructure(
 
   // Check $nodeId.output references across EVERY field the executor substitutes at
   // runtime: when:, and the text surfaces that flow through substituteNodeOutputRefs
-  // (prompt, bash, script, approval.message, plannotator_gate.document/message/
-  // rework.prompt, cancel, loop.prompt, loop.until_bash, loop_group.until_bash,
+  // (prompt, bash, script, approval.message, plannotator_gate.document/prepare.prompt/
+  // message/rework.prompt, cancel, loop.prompt, loop.until_bash, loop_group.until_bash,
   // workflow.input, workflow.fan_out.items). A dangling ref in any of them silently
   // substitutes to '' at run time, so all must be validated here.
   //
@@ -414,7 +414,7 @@ export function validateDagStructure(
   //   3. the substituteNodeOutputRefs call sites (dag-executor.ts) — resolves refs at run.
   // Adding a substituted field to one means updating all three.
   //
-  // Prose fields (prompt / loop.prompt / plannotator_gate.rework.prompt) may contain
+  // Prose fields (prompt / loop.prompt / plannotator_gate.prepare.prompt / rework.prompt) may contain
   // triple-backtick fenced blocks or single-backtick inline code that are documentation
   // meant to render literally to the LLM (e.g. the workflow-builder shows authors how
   // to write `$<other-node>.output` inside a script-node example); strip those before
@@ -442,7 +442,12 @@ export function validateDagStructure(
     if (isCancelNode(node)) sources.push(node.cancel);
     if (isApprovalNode(node)) sources.push(node.approval.message);
     if (isPlannotatorGateNode(node)) {
-      sources.push(node.plannotator_gate.document);
+      if (node.plannotator_gate.document !== undefined) {
+        sources.push(node.plannotator_gate.document);
+      }
+      if (node.plannotator_gate.prepare !== undefined) {
+        sources.push(stripMarkdownCode(node.plannotator_gate.prepare.prompt));
+      }
       if (node.plannotator_gate.message !== undefined) {
         sources.push(node.plannotator_gate.message);
       }

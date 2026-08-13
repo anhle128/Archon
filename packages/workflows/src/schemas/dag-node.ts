@@ -475,20 +475,43 @@ export type ApprovalNode = z.infer<typeof approvalNodeSchema> & {
  * Schema for the `plannotator_gate:` config object.
  *
  * Pauses the workflow for a live Plannotator annotate session. Distinct from
- * `approval:` — owns its own document path, optional capture_response, and a
- * required rework agent config used when the reviewer sends annotations.
+ * `approval:` — owns either its initial document path or a preparation agent
+ * config, optional capture_response, and a required rework agent config used
+ * when the reviewer sends annotations.
  */
-export const plannotatorGateConfigSchema = z.object({
-  document: z.string().min(1, "'plannotator_gate.document' must not be empty"),
-  message: z.string().optional(),
-  capture_response: z.boolean().optional(),
-  rework: z.object({
-    prompt: z.string().min(1, "'plannotator_gate.rework.prompt' must be a non-empty string"),
-    provider: z.string().optional(),
-    model: z.string().optional(),
-    effort: z.string().optional(),
-  }),
+export const plannotatorGatePrepareConfigSchema = z.object({
+  prompt: z.string().min(1, "'plannotator_gate.prepare.prompt' must be a non-empty string"),
+  provider: z.string().optional(),
+  model: z.string().optional(),
+  effort: z.string().optional(),
+  allowed_tools: z.array(z.string()).optional(),
+  denied_tools: z.array(z.string()).optional(),
 });
+
+export type PlannotatorGatePrepareConfig = z.infer<typeof plannotatorGatePrepareConfigSchema>;
+
+export const plannotatorGateConfigSchema = z
+  .object({
+    document: z.string().min(1, "'plannotator_gate.document' must not be empty").optional(),
+    prepare: plannotatorGatePrepareConfigSchema.optional(),
+    message: z.string().optional(),
+    capture_response: z.boolean().optional(),
+    rework: z.object({
+      prompt: z.string().min(1, "'plannotator_gate.rework.prompt' must be a non-empty string"),
+      provider: z.string().optional(),
+      model: z.string().optional(),
+      effort: z.string().optional(),
+    }),
+  })
+  .superRefine((data, ctx) => {
+    if ((data.document === undefined) === (data.prepare === undefined)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "'plannotator_gate' must have exactly one of 'document' or 'prepare'",
+        path: ['document'],
+      });
+    }
+  });
 
 export type PlannotatorGateConfig = z.infer<typeof plannotatorGateConfigSchema>;
 
@@ -1487,6 +1510,13 @@ export const KNOWN_NODE_NESTED_KEYS: ReadonlyMap<string, NestedKeySpec> = new Ma
       kind: 'object',
       keys: new Set(Object.keys(plannotatorGateConfigSchema.shape)),
       children: new Map<keyof typeof plannotatorGateConfigSchema.shape, NestedKeySpec>([
+        [
+          'prepare',
+          {
+            kind: 'object',
+            keys: new Set(Object.keys(plannotatorGatePrepareConfigSchema.shape)),
+          },
+        ],
         [
           'rework',
           {

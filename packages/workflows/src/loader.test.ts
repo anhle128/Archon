@@ -2283,6 +2283,30 @@ nodes:
       expect(result.errors[0].error).toContain('$missing.output');
     });
 
+    it('should reject dangling $nodeId.output in plannotator_gate.prepare.prompt', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'plannotator-gate-prepare-unknown-ref.yaml'),
+        `
+name: plannotator-gate-prepare-unknown-ref
+description: Gate preparation points at a missing node
+nodes:
+  - id: clarify-gate
+    plannotator_gate:
+      prepare:
+        prompt: "Create a review for $missing.output"
+      rework:
+        prompt: "Address annotations"
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors.length).toBeGreaterThan(0);
+      expect(result.errors[0].error).toContain('$missing.output');
+    });
+
     it('should accept known $nodeId.output refs on plannotator_gate surfaces', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });
@@ -5127,6 +5151,23 @@ nodes:
       ]);
       expect(pw.length).toBe(1);
       expect(pw[0]).toContain("unknown key 'approval.on_reject.max_retries'");
+    });
+
+    it('should warn on an unknown key inside plannotator_gate.prepare', async () => {
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: gate',
+        '    plannotator_gate:',
+        '      prepare:',
+        '        prompt: Create a reviewable HTML plan',
+        '        unsupported: true',
+        '      rework:',
+        '        prompt: Address annotations',
+      ]);
+      expect(pw).toHaveLength(1);
+      expect(pw[0]).toContain("unknown key 'plannotator_gate.prepare.unsupported'");
     });
 
     it('should warn on an unknown key inside retry:', async () => {
