@@ -1439,6 +1439,43 @@ function collectPathNodesToAnyTarget(
   return pathNodes;
 }
 
+/**
+ * True when a route_loop source can still become ready if `avoidId` never runs.
+ * Fail-only prepends (explain) return true; first-pass work that is also the
+ * negative target (fix → review) returns false.
+ */
+function canSatisfyTargetsWithoutNode(
+  nodes: readonly { id: string; depends_on?: string[]; trigger_rule?: string }[],
+  targetIds: ReadonlySet<string>,
+  avoidId: string
+): boolean {
+  const available = new Set<string>();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const node of nodes) {
+      if (node.id === avoidId || available.has(node.id)) continue;
+      const deps = node.depends_on ?? [];
+      const readyDeps = deps.filter(dep => available.has(dep));
+      const rule = node.trigger_rule ?? 'all_success';
+      const ready =
+        deps.length === 0 ||
+        ((rule === 'one_success' || rule === 'none_failed_min_one_success') &&
+          readyDeps.length > 0) ||
+        (rule !== 'one_success' &&
+          rule !== 'none_failed_min_one_success' &&
+          readyDeps.length === deps.length);
+      if (!ready) continue;
+      available.add(node.id);
+      changed = true;
+    }
+  }
+  for (const targetId of targetIds) {
+    if (available.has(targetId)) return true;
+  }
+  return false;
+}
+
 interface RouteRerunExternalPrerequisite {
   rerunNodeId: string;
   prerequisiteNodeId: string;
@@ -7038,14 +7075,20 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
         visiting.delete(nodeId);
         return false;
       }
-      for (const dep of node.depends_on ?? []) {
-        if (isBlockedByInactiveRouteTarget(dep, visiting)) {
-          visiting.delete(nodeId);
-          return true;
-        }
-      }
+      const deps = node.depends_on ?? [];
+      const blockedDeps = deps.filter(dep => isBlockedByInactiveRouteTarget(dep, visiting));
       visiting.delete(nodeId);
-      return false;
+      if (deps.length === 0) return false;
+      // one_success joins (ralph / first-pass work) stay live when an alternate
+      // dep is unblocked. all_success children of a dormant FAIL target stay pending.
+      if (
+        node.trigger_rule === 'one_success' ||
+        node.trigger_rule === 'none_failed_min_one_success'
+      ) {
+        return blockedDeps.length === deps.length;
+      }
+      if (node.trigger_rule === 'all_done') return false;
+      return blockedDeps.length > 0;
     };
 
     // Execute all nodes in the layer concurrently. `sessionProvider` is the resolved
@@ -7665,6 +7708,9 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
                 rerunNodeId,
                 selectedRerunPlan.activeDependenciesByNode.get(rerunNodeId)
               );
+              // Live negative must drop resume cache too, or first-pass
+              // completions on this path skip as prior_success.
+              ctx.priorCompletedNodes?.delete(rerunNodeId);
             }
 
             const targetLayerIndex = route.nodeLayerIndex.get(transition.eventData.to);
@@ -8815,15 +8861,18 @@ export async function executeDagWorkflow(
       routeTargetIds.add(node.route_loop.routes.exhausted);
       initialBlockingRouteTargetIds.add(node.route_loop.routes.positive);
       initialBlockingRouteTargetIds.add(node.route_loop.routes.exhausted);
-      const negativeRerunPath = collectPathNodesToAnyTarget(
-        node.route_loop.routes.negative,
-        new Set(node.depends_on ?? []),
-        dependents
+      const fromIds = new Set(node.depends_on ?? []);
+      const negativeTarget = node.route_loop.routes.negative;
+      const negativeRerunPath = collectPathNodesToAnyTarget(negativeTarget, fromIds, dependents);
+      const firstPassCanSkipNegative = canSatisfyTargetsWithoutNode(
+        workflow.nodes,
+        fromIds,
+        negativeTarget
       );
-      if (negativeRerunPath === null) {
-        initialBlockingRouteTargetIds.add(node.route_loop.routes.negative);
+      if (negativeRerunPath === null || firstPassCanSkipNegative) {
+        initialBlockingRouteTargetIds.add(negativeTarget);
       } else {
-        initialAllowedRouteTargetIds.add(node.route_loop.routes.negative);
+        initialAllowedRouteTargetIds.add(negativeTarget);
       }
     }
   }
@@ -8899,14 +8948,14 @@ export async function executeDagWorkflow(
       }
     : undefined;
 
-  // Pre-populate nodeOutputs from prior run so already-completed nodes are
-  // treated as done for trigger-rule and $nodeId.output substitution purposes.
-  // Nodes flagged `always_run: true` are excluded — they re-execute on resume
-  // and downstream consumers must see the fresh output, not the cached one.
-  if (resumePriorCompletedNodes && resumePriorCompletedNodes.size > 0) {
+  // Pre-populate nodeOutputs from the full resume snapshot so `when:` and
+  // `$node.output` refs still see last completed values. Negative rerun
+  // nodes are deleted from resumePriorCompletedNodes (skip cache) only —
+  // dropping them here too makes FAIL `when:` fail-closed on resume.
+  if (priorCompletedNodes && priorCompletedNodes.size > 0) {
     const nodesById = new Map(workflow.nodes.map(n => [n.id, n]));
     let prepopulatedCount = 0;
-    for (const [nodeId, output] of resumePriorCompletedNodes) {
+    for (const [nodeId, output] of priorCompletedNodes) {
       const node = nodesById.get(nodeId);
       // Nodes flagged always_run re-execute on resume — leave them for fresh output.
       if (node?.always_run && !retryContext) continue; // Re-derive the producer's declared field set from the loaded definition so the
@@ -8926,9 +8975,9 @@ export async function executeDagWorkflow(
     getLog().info(
       {
         workflowRunId: workflowRun.id,
-        priorCompletedCount: resumePriorCompletedNodes.size,
+        priorCompletedCount: priorCompletedNodes.size,
         prepopulatedCount,
-        alwaysRunResumedCount: resumePriorCompletedNodes.size - prepopulatedCount,
+        alwaysRunResumedCount: priorCompletedNodes.size - prepopulatedCount,
       },
       'dag.workflow_resume_prepopulated'
     );

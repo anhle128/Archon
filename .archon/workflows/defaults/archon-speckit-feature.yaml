@@ -35,9 +35,9 @@ nodes:
       /speckit-specify $ARGUMENTS
     depends_on:
       - setup
-    effort: high
+    effort: xhigh
     provider: grok
-    model: "grok-4.5"
+    model: "grok-4.6"
     context: fresh
 
   - id: clarify
@@ -83,9 +83,9 @@ nodes:
       4. trigger clarification-answer-review skill
     depends_on:
       - clarify
-    effort: high
+    effort: xhigh
     provider: grok
-    model: "grok-4.5"
+    model: "grok-4.6"
     context: fresh
     allowed_tools:
       - Read
@@ -208,9 +208,9 @@ nodes:
       $speckit.red-team.run <feature_directory> --yes
     depends_on:
       - clarify-apply
-    effort: high
+    effort: xhigh
     provider: grok
-    model: "grok-4.5"
+    model: "grok-4.6"
     context: fresh
     denied_tools:
       - Bash
@@ -267,6 +267,7 @@ nodes:
     depends_on:
       - red-team
     provider: codex
+    effort: xhigh
     model: gpt-5.6-sol
     context: fresh
     allowed_tools:
@@ -396,9 +397,9 @@ nodes:
       /speckit-tasks <feature_directory>
     depends_on:
       - plan
-    effort: high
+    effort: xhigh
     provider: grok
-    model: "grok-4.5"
+    model: "grok-4.6"
     context: fresh
 
   - id: analyze
@@ -532,9 +533,9 @@ nodes:
          the findings file, then STOP.
     depends_on:
       - analyze
-    effort: high
+    effort: xhigh
     provider: grok
-    model: "grok-4.5"
+    model: "grok-4.6"
     context: fresh
     allowed_tools:
       - Read
@@ -609,6 +610,7 @@ nodes:
         - tasks_added
     output_type: speckit-convergence
 
+  # PASS → PR; FAIL → explain + human review then Ralph retry; 3 FAILs → last Ralph pass.
   - id: speckit-converge-gate
     depends_on: [speckit-converge]
     route_loop:
@@ -662,7 +664,6 @@ nodes:
       ## Final output (contract — required)
       Print **ONLY** the absolute path to that HTML file on the last line
       (no markdown fence, no extra commentary after the path).
-    when: "$speckit-converge.output.gate == 'FAIL'"
     effort: medium
     provider: claude
     model: sonnet
@@ -728,7 +729,6 @@ nodes:
           5. Print ONLY the absolute path to that HTML (one line, no fence).
     depends_on:
       - speckit-converge-explain
-    when: "$speckit-converge.output.gate == 'FAIL'"
 
   - id: create-pull-request
     command: archon-create-pr

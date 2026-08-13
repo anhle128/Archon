@@ -9441,14 +9441,6 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
     expect(
       events.some(event => event.event_type === 'node_failed' && event.step_name === 'review-gate')
     ).toBe(false);
-    expect(
-      events.some(
-        event =>
-          event.event_type === 'node_skipped' &&
-          event.step_name === 'review-gate' &&
-          event.data?.reason === 'when_condition'
-      )
-    ).toBe(true);
     expect(store.pauseWorkflowRun).toHaveBeenCalledWith(
       workflowRun.id,
       expect.objectContaining({ nodeId: 'review-gate' })
@@ -10546,6 +10538,120 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
     );
 
     expect(calls).toEqual(['review', 'done']);
+  });
+
+  it('re-executes a negative rerun path already present in priorCompletedNodes', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('route-loop-prior-success-rerun');
+    const calls: string[] = [];
+    let convergeAttempt = 0;
+
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mock(function* (
+        _prompt: string,
+        _cwd: string,
+        _resumeSessionId?: string,
+        sendOptions?: SendQueryOptions
+      ) {
+        const nodeId = String(sendOptions?.nodeConfig?.nodeId ?? '');
+        calls.push(nodeId);
+        if (nodeId === 'converge') {
+          convergeAttempt += 1;
+          const gate = convergeAttempt === 1 ? 'FAIL' : 'PASS';
+          yield {
+            type: 'assistant' as const,
+            content: JSON.stringify({ gate, tasks_added: gate === 'FAIL' ? 1 : 0 }),
+          };
+          yield {
+            type: 'result' as const,
+            sessionId: `converge-${String(convergeAttempt)}`,
+            structuredOutput: { gate, tasks_added: gate === 'FAIL' ? 1 : 0 },
+          };
+          return;
+        }
+        yield { type: 'assistant' as const, content: `${nodeId} complete` };
+        yield { type: 'result' as const, sessionId: `${nodeId}-session` };
+      }),
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-route-loop-prior-success-rerun',
+      testDir,
+      {
+        name: 'route-loop-prior-success-rerun',
+        mutates_checkout: false,
+        nodes: [
+          { id: 'setup', prompt: 'Setup.' },
+          {
+            id: 'work',
+            prompt: 'Do the work.',
+            depends_on: ['setup', 'explain'],
+            trigger_rule: 'one_success',
+          },
+          {
+            id: 'converge',
+            prompt: 'Check convergence.',
+            depends_on: ['work'],
+            output_format: {
+              type: 'object',
+              properties: {
+                gate: { type: 'string', enum: ['PASS', 'FAIL'] },
+                tasks_added: { type: 'number' },
+              },
+              required: ['gate', 'tasks_added'],
+            },
+          },
+          {
+            id: 'converge-router',
+            depends_on: ['converge'],
+            route_loop: {
+              condition: "$converge.output.gate == 'PASS'",
+              max_iterations: 3,
+              routes: {
+                positive: 'done',
+                negative: 'explain',
+                exhausted: 'exhausted',
+              },
+            },
+          },
+          { id: 'explain', prompt: 'Explain the fail.' },
+          { id: 'done', prompt: 'Done.', depends_on: ['converge-router'] },
+          { id: 'exhausted', prompt: 'Escalate.', depends_on: ['converge-router'] },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      new Map([
+        ['setup', 'setup output'],
+        ['work', 'first-pass work'],
+      ])
+    );
+
+    expect(calls).toEqual(['converge', 'explain', 'work', 'converge', 'done']);
+    expect(
+      (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.some(
+        call =>
+          (call[0] as { event_type?: string; step_name?: string }).event_type ===
+            'node_skipped_prior_success' && (call[0] as { step_name?: string }).step_name === 'work'
+      )
+    ).toBe(false);
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
   });
 });
 
