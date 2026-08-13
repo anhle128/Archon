@@ -35,9 +35,9 @@ nodes:
       /speckit-specify $ARGUMENTS
     depends_on:
       - setup
-    effort: xhigh
-    provider: grok
-    model: "grok-4.6"
+    effort: high
+    provider: claude
+    model: "fable"
     context: fresh
 
   - id: clarify
@@ -84,8 +84,8 @@ nodes:
     depends_on:
       - clarify
     effort: xhigh
-    provider: grok
-    model: "grok-4.6"
+    provider: claude
+    model: "claude-opus-4-8[1M]"
     context: fresh
     allowed_tools:
       - Read
@@ -209,8 +209,8 @@ nodes:
     depends_on:
       - clarify-apply
     effort: xhigh
-    provider: grok
-    model: "grok-4.6"
+    provider: claude
+    model: "claude-opus-4-8[1M]"
     context: fresh
     denied_tools:
       - Bash
@@ -386,9 +386,9 @@ nodes:
       /speckit-plan create detail plan <feature_directory>
     depends_on:
       - red-team-apply
-    effort: high
-    provider: claude
-    model: "fable"
+    effort: xhigh
+    provider: codex
+    model: "gpt-5.6-sol"
     context: fresh
 
   - id: tasks
@@ -398,8 +398,8 @@ nodes:
     depends_on:
       - plan
     effort: xhigh
-    provider: grok
-    model: "grok-4.6"
+    provider: codex
+    model: "claude-opus-4-8[1M]"
     context: fresh
 
   - id: analyze
@@ -534,8 +534,8 @@ nodes:
     depends_on:
       - analyze
     effort: xhigh
-    provider: grok
-    model: "grok-4.6"
+    provider: claude
+    model: "claude-opus-4-8[1M]"
     context: fresh
     allowed_tools:
       - Read
