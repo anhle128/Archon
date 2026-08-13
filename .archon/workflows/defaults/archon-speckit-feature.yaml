@@ -300,7 +300,7 @@ nodes:
 
           ## Final output (contract — required)
           Print **ONLY** the absolute path to that HTML file (one line, no fence).
-        effort: medium
+        effort: xhigh
         provider: claude
         model: sonnet
         allowed_tools:
