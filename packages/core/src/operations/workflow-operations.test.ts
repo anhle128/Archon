@@ -553,30 +553,49 @@ describe('rejectWorkflow', () => {
     // Terminal reject resolves + cancels in ONE atomic CAS (#2113) — never a
     // separate cancelWorkflowRun that could fail and strand the run. The audit
     // event rides the same transaction (#2146).
-    expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledWith('run-1', [
-      {
-        event_type: 'approval_received',
-        step_name: 'review',
-        data: { decision: 'rejected', reason: 'still broken' },
-      },
-    ]);
+    expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledWith(
+      'run-1',
+      { nodeId: 'review', gateId: undefined },
+      [
+        {
+          event_type: 'approval_received',
+          step_name: 'review',
+          data: { decision: 'rejected', reason: 'still broken' },
+        },
+      ]
+    );
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
 
   test('rejects without onRejectPrompt — cancels immediately', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun());
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({
+        metadata: {
+          approval: {
+            nodeId: 'review',
+            message: 'Please review',
+            type: 'approval',
+            gateId: 'gate-a',
+          },
+        },
+      })
+    );
 
     const result = await rejectWorkflow('run-1', 'no good');
 
     expect(result.cancelled).toBe(true);
     expect(result.maxAttemptsReached).toBe(false);
-    expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledWith('run-1', [
-      {
-        event_type: 'approval_received',
-        step_name: 'review',
-        data: { decision: 'rejected', reason: 'no good' },
-      },
-    ]);
+    expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledWith(
+      'run-1',
+      { nodeId: 'review', gateId: 'gate-a' },
+      [
+        {
+          event_type: 'approval_received',
+          step_name: 'review',
+          data: { decision: 'rejected', reason: 'no good' },
+        },
+      ]
+    );
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
 

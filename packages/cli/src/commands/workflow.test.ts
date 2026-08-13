@@ -6594,13 +6594,17 @@ describe('workflowRejectCommand', () => {
 
     // Terminal reject resolves + cancels atomically (#2113); the audit event
     // rides the same transaction (#2146).
-    expect(workflowDb.resolveAndCancelApprovalGate).toHaveBeenCalledWith('run-plain', [
-      {
-        event_type: 'approval_received',
-        step_name: 'gate',
-        data: { decision: 'rejected', reason: 'not good' },
-      },
-    ]);
+    expect(workflowDb.resolveAndCancelApprovalGate).toHaveBeenCalledWith(
+      'run-plain',
+      { nodeId: 'gate', gateId: undefined },
+      [
+        {
+          event_type: 'approval_received',
+          step_name: 'gate',
+          data: { decision: 'rejected', reason: 'not good' },
+        },
+      ]
+    );
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Rejected and cancelled'));
   });
 
@@ -6638,6 +6642,7 @@ describe('workflowRejectCommand', () => {
     // transaction (#2146)
     expect(workflowDb.resolveApprovalGate).toHaveBeenCalledWith(
       'run-on-reject',
+      { nodeId: 'gate', gateId: undefined },
       {
         approval: {
           type: 'approval',
@@ -6746,13 +6751,17 @@ describe('workflowRejectCommand', () => {
 
     // Terminal reject resolves + cancels atomically (#2113); the audit event
     // rides the same transaction (#2146).
-    expect(workflowDb.resolveAndCancelApprovalGate).toHaveBeenCalledWith('run-max', [
-      {
-        event_type: 'approval_received',
-        step_name: 'gate',
-        data: { decision: 'rejected', reason: 'still bad' },
-      },
-    ]);
+    expect(workflowDb.resolveAndCancelApprovalGate).toHaveBeenCalledWith(
+      'run-max',
+      { nodeId: 'gate', gateId: undefined },
+      [
+        {
+          event_type: 'approval_received',
+          step_name: 'gate',
+          data: { decision: 'rejected', reason: 'still bad' },
+        },
+      ]
+    );
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('max attempts reached'));
   });
 

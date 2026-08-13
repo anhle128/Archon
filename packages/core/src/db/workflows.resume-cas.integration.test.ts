@@ -826,6 +826,43 @@ describe('plannotator gate fencing — real SQLite', () => {
 });
 
 describe('resolveAndCancelApprovalGate — atomic reject+cancel CAS (#2113)', () => {
+  test('a stale terminal rejection cannot cancel a superseding gate', async () => {
+    await seedPausedRun('rc-stale-gate', 'wf-rc-stale-gate', {
+      nodeId: 'review',
+      message: 'Review the plan',
+      type: 'plannotator_gate',
+      gateId: 'gate-a',
+      document: '/tmp/plan.md',
+      phase: 'waiting_decision',
+      resolved: null,
+    });
+    expect(
+      (
+        await transitionPlannotatorGate({
+          runId: 'rc-stale-gate',
+          nodeId: 'review',
+          expectedGateId: 'gate-a',
+          nextGateId: 'gate-b',
+          document: '/tmp/reworked-plan.md',
+          phase: 'opening',
+        })
+      ).outcome
+    ).toBe('updated');
+    const before = await getWorkflowRun('rc-stale-gate');
+
+    const outcome = await resolveAndCancelApprovalGate(
+      'rc-stale-gate',
+      { nodeId: 'review', gateId: 'gate-a' },
+      [approvalEvent('rejected')]
+    );
+
+    expect(outcome.resolved).toBe(false);
+    const after = await getWorkflowRun('rc-stale-gate');
+    expect(after?.status).toBe('paused');
+    expect(after?.metadata).toEqual(before?.metadata);
+    expect(await countEvents('rc-stale-gate', 'approval_received')).toBe(0);
+  });
+
   test('wins once on an open gate and flips it terminal in one UPDATE', async () => {
     await seedPausedRun('rc-open', 'wf-rc-open', {
       nodeId: 'review',
@@ -834,7 +871,9 @@ describe('resolveAndCancelApprovalGate — atomic reject+cancel CAS (#2113)', ()
       resolved: null,
     });
 
-    const outcome = await resolveAndCancelApprovalGate('rc-open', [approvalEvent('rejected')]);
+    const outcome = await resolveAndCancelApprovalGate('rc-open', { nodeId: 'review' }, [
+      approvalEvent('rejected'),
+    ]);
     expect(outcome.resolved).toBe(true);
 
     // Single atomic transition: paused → cancelled with a completion stamp, plus
@@ -855,10 +894,16 @@ describe('resolveAndCancelApprovalGate — atomic reject+cancel CAS (#2113)', ()
       resolved: null,
     });
     expect(
-      (await resolveAndCancelApprovalGate('rc-cancelled', [approvalEvent('rejected')])).resolved
+      (
+        await resolveAndCancelApprovalGate('rc-cancelled', { nodeId: 'review' }, [
+          approvalEvent('rejected'),
+        ])
+      ).resolved
     ).toBe(true);
 
-    const outcome = await resolveAndCancelApprovalGate('rc-cancelled', [approvalEvent('rejected')]);
+    const outcome = await resolveAndCancelApprovalGate('rc-cancelled', { nodeId: 'review' }, [
+      approvalEvent('rejected'),
+    ]);
     expect(outcome.resolved).toBe(false);
     expect((await getWorkflowRun('rc-cancelled'))?.status).toBe('cancelled');
     // The loser wrote no second audit event.
@@ -875,7 +920,11 @@ describe('resolveAndCancelApprovalGate — atomic reject+cancel CAS (#2113)', ()
 
     // reject-cancel wins the open gate first...
     expect(
-      (await resolveAndCancelApprovalGate('rc-vs-approve', [approvalEvent('rejected')])).resolved
+      (
+        await resolveAndCancelApprovalGate('rc-vs-approve', { nodeId: 'review' }, [
+          approvalEvent('rejected'),
+        ])
+      ).resolved
     ).toBe(true);
     // ...so a racing approve (guarded on status='paused') can no longer resolve it.
     const approveOutcome = await resolveApprovalGate(

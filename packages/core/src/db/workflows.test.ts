@@ -48,6 +48,7 @@ import {
   failWorkflowRun,
   updateWorkflowActivity,
   resolveApprovalGate,
+  resolveAndCancelApprovalGate,
   transitionPlannotatorGate,
   persistRouteDecisionTransition,
   WorkflowRouteDecisionStaleWriteError,
@@ -653,6 +654,73 @@ describe('workflows database', () => {
         ).resolved
       ).toBe(false);
       expect(mockQuery).toHaveBeenCalledTimes(1);
+    });
+
+    test('locks and rejects a stale terminal resolver before any mutation', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            ...mockWorkflowRun,
+            status: 'paused',
+            metadata: { approval: { ...approval, gateId: 'gate-b' } },
+          },
+        ])
+      );
+
+      const outcome = await resolveAndCancelApprovalGate(
+        'workflow-run-123',
+        { nodeId: 'review', gateId: 'gate-a' },
+        [
+          {
+            event_type: 'approval_received',
+            step_name: 'review',
+            data: { decision: 'rejected' },
+          },
+        ]
+      );
+
+      expect(outcome.resolved).toBe(false);
+      expect(mockWithTransaction).toHaveBeenCalledTimes(1);
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(mockQuery).toHaveBeenCalledWith(
+        'SELECT * FROM remote_agent_workflow_runs WHERE id = $1 FOR UPDATE',
+        ['workflow-run-123']
+      );
+    });
+
+    test('cancels and audits only after the locked terminal identity matches', async () => {
+      mockQuery
+        .mockResolvedValueOnce(
+          createQueryResult([{ ...mockWorkflowRun, status: 'paused', metadata: { approval } }])
+        )
+        .mockResolvedValueOnce(createQueryResult([], 1))
+        .mockResolvedValueOnce(createQueryResult([], 1));
+
+      const outcome = await resolveAndCancelApprovalGate(
+        'workflow-run-123',
+        { nodeId: 'review', gateId: 'gate-a' },
+        [
+          {
+            event_type: 'approval_received',
+            step_name: 'review',
+            data: { decision: 'rejected' },
+          },
+        ]
+      );
+
+      expect(outcome.resolved).toBe(true);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        1,
+        'SELECT * FROM remote_agent_workflow_runs WHERE id = $1 FOR UPDATE',
+        ['workflow-run-123']
+      );
+      const [updateSql, updateParams] = mockQuery.mock.calls[1] as [string, unknown[]];
+      expect(updateSql).toContain("SET status = 'cancelled'");
+      expect(updateSql).toContain("status = 'paused'");
+      expect(updateParams).toEqual(['workflow-run-123']);
+      expect(mockQuery.mock.calls[2]?.[0] as string).toContain(
+        'INSERT INTO remote_agent_workflow_events'
+      );
     });
   });
 

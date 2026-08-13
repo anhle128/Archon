@@ -2100,7 +2100,7 @@ describe('natural-language approval routing', () => {
     // Approval events ride the CAS transaction now (#2146), not a direct write:
     // node_completed + approval_received.
     expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
-    const casEvents = (mockResolveApprovalGate.mock.calls[0] as unknown[])[2] as Array<
+    const casEvents = (mockResolveApprovalGate.mock.calls[0] as unknown[])[3] as Array<
       Record<string, unknown>
     >;
     expect(casEvents).toHaveLength(2);
@@ -2116,6 +2116,7 @@ describe('natural-language approval routing', () => {
     // transaction (#2146)
     expect(mockResolveApprovalGate).toHaveBeenCalledWith(
       'run-1',
+      { nodeId: 'gate-1', gateId: undefined },
       {
         approval: { nodeId: 'gate-1', message: 'Please review', resolved: 'approved' },
         approval_response: 'approved',

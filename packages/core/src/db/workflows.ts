@@ -312,18 +312,42 @@ export async function transitionPlannotatorGate(
  * reject retry could not self-heal past the fast-path gate guard. No `resolved`
  * marker is written: that marker only matters for the stay-paused rework path,
  * and the rejection reason is preserved in the approval_received event. The
- * status flip and that audit event commit in ONE transaction (#2146), so a
+ * transaction locks and normalizes the current row before validating the
+ * approval node and optional gate fencing token, so a stale terminal rejection
+ * cannot cancel a superseding gate.
+ *
+ * The status flip and that audit event commit in ONE transaction (#2146), so a
  * failed event write rolls the cancellation back rather than terminating the run
  * with no audit trail. Returns `{ resolved }`; `false` means a concurrent
  * resolver already won (the gate is no longer open), so nothing is written.
  */
 export async function resolveAndCancelApprovalGate(
   id: string,
+  expected: ApprovalGateIdentity,
   events: GateResolutionEvent[]
 ): Promise<{ resolved: boolean }> {
   const dialect = getDialect();
   try {
     return await getDatabase().withTransaction(async query => {
+      const currentResult = await query<WorkflowRun>(
+        `SELECT * FROM remote_agent_workflow_runs WHERE id = $1${rowLockClause()}`,
+        [id]
+      );
+      const currentRow = currentResult.rows[0];
+      if (!currentRow) return { resolved: false };
+
+      const currentRun = normalizeWorkflowRun(currentRow);
+      const currentApproval = currentRun.metadata.approval;
+      if (
+        currentRun.status !== 'paused' ||
+        !isApprovalContext(currentApproval) ||
+        currentApproval.resolved != null ||
+        currentApproval.nodeId !== expected.nodeId ||
+        (expected.gateId !== undefined && currentApproval.gateId !== expected.gateId)
+      ) {
+        return { resolved: false };
+      }
+
       const result = await query(
         `UPDATE remote_agent_workflow_runs
          SET status = 'cancelled',

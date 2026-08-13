@@ -617,7 +617,11 @@ export async function rejectWorkflow(
         },
         [rejectionEvent]
       )
-    : await workflowDb.resolveAndCancelApprovalGate(runId, [rejectionEvent]);
+    : await workflowDb.resolveAndCancelApprovalGate(
+        runId,
+        { nodeId: approval.nodeId, gateId: approval.gateId },
+        [rejectionEvent]
+      );
   if (!won) {
     throw new Error(`Workflow run ${runId} was already resolved and is awaiting resume.`);
   }
