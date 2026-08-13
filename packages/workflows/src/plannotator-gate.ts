@@ -48,7 +48,7 @@ export function parsePlannotatorGateDecisionJson(payload: string): PlannotatorGa
   try {
     parsed = JSON.parse(json);
   } catch {
-    throw new Error(`plannotator gate decision is not valid JSON: ${json}`);
+    throw new Error('plannotator gate decision is not valid JSON');
   }
 
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {

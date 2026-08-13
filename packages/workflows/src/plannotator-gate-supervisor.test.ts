@@ -2,7 +2,7 @@
  * Unit and subprocess tests for the plannotator_gate supervisor loop.
  * Uses an in-memory store and deterministic fake binaries.
  */
-import { afterEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -955,6 +955,35 @@ mv "$7.tmp" "$7"`);
 
     await expect(runPlannotatorGateSupervisor(deps)).rejects.toThrow(/valid JSON/i);
     expect(existsSync(resultPath)).toBe(false);
+  });
+
+  test('bounds the diagnostic for an oversized invalid result file', async () => {
+    const { deps } = setup(`
+printf '%s' '{"decision":"approved"}' > "$7"
+i=0
+while [ "$i" -lt 500 ]; do
+  printf '%s' '0123456789abcdef0123456789abcdef' >> "$7"
+  i=$((i + 1))
+done`);
+
+    let error: Error | undefined;
+    let logDiagnostic = '';
+    const stdoutWrite = spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
+      logDiagnostic += String(chunk);
+      return true;
+    });
+    try {
+      await runPlannotatorGateSupervisor(deps);
+    } catch (caught) {
+      error = caught as Error;
+    } finally {
+      stdoutWrite.mockRestore();
+    }
+
+    expect(error?.message).toMatch(/result file is invalid.*valid JSON/i);
+    expect(error?.message.length).toBeLessThan(4300);
+    expect(logDiagnostic).toContain('plannotator_gate.process_protocol_failed');
+    expect(logDiagnostic.length).toBeLessThan(4300);
   });
 
   test('rejects an unreadable result-file path', async () => {
