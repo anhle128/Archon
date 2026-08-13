@@ -15,6 +15,9 @@ const mockFindChildRuns = mock((): Promise<unknown[]> => Promise.resolve([]));
 // resolveAndCancelApprovalGate = atomic resolve + cancel (reject terminal paths).
 const mockResolveApprovalGate = mock(() => Promise.resolve({ resolved: true }));
 const mockResolveAndCancelApprovalGate = mock(() => Promise.resolve({ resolved: true }));
+const mockTransitionPlannotatorGate = mock(() =>
+  Promise.resolve({ outcome: 'updated' as const, approval: {} })
+);
 
 mock.module('../db/workflows', () => ({
   getWorkflowRun: mockGetWorkflowRun,
@@ -24,6 +27,7 @@ mock.module('../db/workflows', () => ({
   findChildRuns: mockFindChildRuns,
   resolveApprovalGate: mockResolveApprovalGate,
   resolveAndCancelApprovalGate: mockResolveAndCancelApprovalGate,
+  transitionPlannotatorGate: mockTransitionPlannotatorGate,
 }));
 
 const mockCreateWorkflowEvent = mock(() => Promise.resolve());
@@ -62,6 +66,7 @@ mock.module('@archon/paths', () => ({
 // Import AFTER mocks
 const {
   approveWorkflow,
+  reviewOpenWorkflow,
   rejectWorkflow,
   getWorkflowStatus,
   resumeWorkflow,
@@ -100,6 +105,131 @@ function makePausedRun(overrides: Record<string, unknown> = {}) {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+describe('reviewOpenWorkflow', () => {
+  beforeEach(() => {
+    mockGetWorkflowRun.mockReset();
+    mockUpdateWorkflowRun.mockClear();
+    mockTransitionPlannotatorGate.mockReset();
+    mockTransitionPlannotatorGate.mockResolvedValue({ outcome: 'updated', approval: {} });
+  });
+
+  test('atomically rotates an open Plannotator gate and returns explicit resume context', async () => {
+    mockGetWorkflowRun.mockResolvedValue(
+      makePausedRun({
+        metadata: {
+          approval: {
+            nodeId: 'review',
+            message: 'Please review',
+            type: 'plannotator_gate',
+            gateId: 'old-gate',
+            document: '/workspace/review.html',
+            phase: 'idle',
+          },
+        },
+      })
+    );
+
+    const result = await reviewOpenWorkflow('run-1');
+
+    expect(mockTransitionPlannotatorGate).toHaveBeenCalledTimes(1);
+    const transition = mockTransitionPlannotatorGate.mock.calls[0]?.[0];
+    expect(transition).toMatchObject({
+      runId: 'run-1',
+      nodeId: 'review',
+      expectedGateId: 'old-gate',
+      document: '/workspace/review.html',
+      phase: 'opening',
+    });
+    expect(transition?.nextGateId).toEqual(expect.any(String));
+    expect(transition?.nextGateId).not.toBe('old-gate');
+    expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      document: '/workspace/review.html',
+      nodeId: 'review',
+      phase: 'opening',
+      continuation: 'caller_resume',
+      workflowName: 'test-workflow',
+      workingPath: '/workspace/worktree',
+      userMessage: 'test',
+      codebaseId: 'cb-1',
+      conversationId: 'conv-1',
+    });
+  });
+
+  test.each([
+    [
+      'non-paused',
+      makePausedRun({ status: 'running' }),
+      "Cannot review-open run with status 'running'",
+    ],
+    [
+      'resolved',
+      makePausedRun({
+        metadata: {
+          approval: {
+            nodeId: 'review',
+            message: 'Please review',
+            type: 'plannotator_gate',
+            gateId: 'gate-1',
+            document: '/workspace/review.html',
+            resolved: 'approved',
+          },
+        },
+      }),
+      'already approved',
+    ],
+    ['non-Plannotator', makePausedRun(), 'not paused at a plannotator_gate'],
+    [
+      'missing-document',
+      makePausedRun({
+        metadata: {
+          approval: {
+            nodeId: 'review',
+            message: 'Please review',
+            type: 'plannotator_gate',
+            gateId: 'gate-1',
+          },
+        },
+      }),
+      'no document path',
+    ],
+  ])('rejects %s runs', async (_case, run, message) => {
+    mockGetWorkflowRun.mockResolvedValue(run);
+
+    await expect(reviewOpenWorkflow('run-1')).rejects.toThrow(message);
+    expect(mockTransitionPlannotatorGate).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    [
+      { outcome: 'resolved' as const, resolved: 'rejected' as const },
+      'already rejected and is awaiting resume',
+    ],
+    [{ outcome: 'superseded' as const }, 'ownership changed before review-open'],
+    [
+      { outcome: 'stopped' as const, status: 'cancelled' as const },
+      "stopped with status 'cancelled' before review-open",
+    ],
+  ])('turns transition outcome into an actionable error', async (outcome, message) => {
+    mockGetWorkflowRun.mockResolvedValue(
+      makePausedRun({
+        metadata: {
+          approval: {
+            nodeId: 'review',
+            message: 'Please review',
+            type: 'plannotator_gate',
+            gateId: 'gate-1',
+            document: '/workspace/review.html',
+          },
+        },
+      })
+    );
+    mockTransitionPlannotatorGate.mockResolvedValue(outcome);
+
+    await expect(reviewOpenWorkflow('run-1')).rejects.toThrow(message);
+  });
+});
 
 describe('approveWorkflow', () => {
   beforeEach(() => {

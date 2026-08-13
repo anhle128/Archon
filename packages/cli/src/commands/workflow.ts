@@ -81,6 +81,10 @@ import {
   resetWorkflowNodeSessions,
   reviewOpenWorkflow,
 } from '@archon/core/operations/workflow-operations';
+import type {
+  ApprovalOperationResult,
+  ReviewOpenOperationResult,
+} from '@archon/core/operations/workflow-operations';
 import * as conversationDb from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
 import * as isolationDb from '@archon/core/db/isolation-environments';
@@ -3376,7 +3380,7 @@ async function resolveRunIdArg(runId: string, cwd?: string): Promise<string> {
 async function resolveDiscoveryCwdForCodebase(
   runId: string,
   codebaseId: string,
-  action: 'resume' | 'approve' | 'reject'
+  action: 'resume' | 'approve' | 'reject' | 'review_open'
 ): Promise<string> {
   try {
     const codebase = await codebaseDb.getCodebase(codebaseId);
@@ -3401,6 +3405,61 @@ async function resolveDiscoveryCwdForCodebase(
       `Failed to load codebase '${codebaseId}' for workflow run '${runId}': ${err.message}\n` +
         'Cannot safely discover workflows from the run worktree because project workflow files may be missing.\n' +
         'Fix the codebase lookup problem, then retry.'
+    );
+  }
+}
+
+async function dispatchCallerResume(
+  runId: string,
+  result: ApprovalOperationResult | ReviewOpenOperationResult,
+  action: 'approve' | 'review_open'
+): Promise<void> {
+  if (!result.workingPath) {
+    throw new Error(
+      `Workflow run '${runId}' has no working path recorded.\n` +
+        'Cannot determine where to resume.'
+    );
+  }
+
+  let platformConversationId: string | undefined;
+  try {
+    const originalConversation = await conversationDb.getConversationById(result.conversationId);
+    platformConversationId = originalConversation?.platform_conversation_id ?? undefined;
+    if (!originalConversation) {
+      getLog().info(
+        { runId, conversationId: result.conversationId },
+        `cli.workflow_${action}_conversation_not_found`
+      );
+    }
+  } catch (error) {
+    getLog().warn(
+      { err: error as Error, runId, conversationId: result.conversationId },
+      `cli.workflow_${action}_conversation_lookup_failed`
+    );
+  }
+
+  try {
+    const discoveryCwd = result.codebaseId
+      ? await resolveDiscoveryCwdForCodebase(runId, result.codebaseId, action)
+      : undefined;
+    await workflowRunCommand(result.workingPath, result.workflowName, result.userMessage ?? '', {
+      resume: true,
+      codebaseId: result.codebaseId ?? undefined,
+      conversationId: platformConversationId,
+      discoveryCwd,
+    });
+  } catch (error) {
+    const err = error as Error;
+    getLog().error(
+      { err, runId, workflowName: result.workflowName },
+      `cli.workflow_${action}_resume_failed`
+    );
+    const recorded =
+      action === 'approve' ? 'The approval was recorded.' : 'The takeover was recorded.';
+    const verb = action === 'approve' ? 'Approved' : 'Review-open takeover recorded';
+    throw new Error(
+      `${verb} but failed to resume workflow '${result.workflowName}': ${err.message}\n` +
+        `${recorded} Run 'bun run cli workflow resume ${runId}' to retry.`
     );
   }
 }
@@ -3884,8 +3943,8 @@ export async function workflowCancelCommand(
 }
 
 /**
- * Re-open a paused plannotator_gate review surface (phase → opening).
- * Does not approve or auto-resume; if the gate process died, also run resume.
+ * Atomically take over a paused plannotator_gate and start its replacement.
+ * JSON mode records the takeover without streaming and leaves resume to the caller.
  */
 export async function workflowReviewOpenCommand(
   runId: string,
@@ -3902,6 +3961,8 @@ export async function workflowReviewOpenCommand(
         document: result.document,
         nodeId: result.nodeId,
         phase: result.phase,
+        continuation: result.continuation,
+        message: `Takeover recorded. Invoke workflow resume ${resolvedId} to start the replacement.`,
       });
       return 0;
     }
@@ -3909,10 +3970,8 @@ export async function workflowReviewOpenCommand(
     console.log(`  node:     ${result.nodeId}`);
     console.log(`  document: ${result.document}`);
     console.log(`  phase:    ${result.phase}`);
-    console.log(
-      'If the Plannotator process is still alive (idle), it will re-spawn annotate.\n' +
-        `If the process died, run: archon workflow resume ${resolvedId}`
-    );
+    console.log('Starting replacement Plannotator supervisor...');
+    await dispatchCallerResume(resolvedId, result, 'review_open');
     return 0;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -4022,7 +4081,7 @@ export async function workflowApproveCommand(
     return 0;
   }
 
-  // CLI auto-resumes after approval (unlike chat, which defers to next user message)
+  // Preserve the standard approve fail-fast behavior before printing success.
   if (!result.workingPath) {
     throw new Error(
       `Workflow run '${resolvedId}' has no working path recorded.\n` +
@@ -4033,51 +4092,7 @@ export async function workflowApproveCommand(
   console.log(`Path: ${result.workingPath}`);
   console.log('');
   console.log('Resuming workflow...');
-
-  // Look up the original platform conversation ID to keep all messages in one thread
-  let platformConversationId: string | undefined;
-  try {
-    const originalConversation = await conversationDb.getConversationById(result.conversationId);
-    platformConversationId = originalConversation?.platform_conversation_id ?? undefined;
-    if (!originalConversation) {
-      getLog().info(
-        { runId: resolvedId, conversationId: result.conversationId },
-        'cli.workflow_approve_conversation_not_found'
-      );
-    }
-  } catch (error) {
-    const err = error as Error;
-    getLog().warn(
-      { err, runId: resolvedId, conversationId: result.conversationId },
-      'cli.workflow_approve_conversation_lookup_failed'
-    );
-  }
-
-  try {
-    // Use the codebase's source path for workflow YAML discovery so the file is
-    // found even when working_path is a worktree or workspace clone that does
-    // not contain the user's local (often untracked) workflow YAML.
-    const discoveryCwd = result.codebaseId
-      ? await resolveDiscoveryCwdForCodebase(resolvedId, result.codebaseId, 'approve')
-      : undefined;
-
-    await workflowRunCommand(result.workingPath, result.workflowName, result.userMessage ?? '', {
-      resume: true,
-      codebaseId: result.codebaseId ?? undefined,
-      conversationId: platformConversationId,
-      discoveryCwd,
-    });
-  } catch (error) {
-    const err = error as Error;
-    getLog().error(
-      { err, runId: resolvedId, workflowName: result.workflowName },
-      'cli.workflow_approve_resume_failed'
-    );
-    throw new Error(
-      `Approved but failed to resume workflow '${result.workflowName}': ${err.message}\n` +
-        `The approval was recorded. Run 'bun run cli workflow resume ${resolvedId}' to retry.`
-    );
-  }
+  await dispatchCallerResume(resolvedId, result, 'approve');
   return 0;
 }
 

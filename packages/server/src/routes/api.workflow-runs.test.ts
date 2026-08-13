@@ -282,6 +282,10 @@ const mockResolveAndCancelApprovalGate = mock(
     resolved: true,
   })
 );
+const mockTransitionPlannotatorGate = mock(async (_input: unknown) => ({
+  outcome: 'updated' as const,
+  approval: {},
+}));
 const mockFindChildRuns = mock(async (_parentRunId: string): Promise<unknown[]> => []);
 
 mock.module('@archon/core/db/workflows', () => ({
@@ -294,6 +298,7 @@ mock.module('@archon/core/db/workflows', () => ({
   updateWorkflowRun: mockUpdateWorkflowRun,
   resolveApprovalGate: mockResolveApprovalGate,
   resolveAndCancelApprovalGate: mockResolveAndCancelApprovalGate,
+  transitionPlannotatorGate: mockTransitionPlannotatorGate,
   getWorkflowRunByWorkerPlatformId: mockGetWorkflowRunByWorkerPlatformId,
 }));
 
@@ -2738,6 +2743,75 @@ describe('approve/reject auto-resume', () => {
         },
       ]
     );
+  });
+});
+
+describe('review-open takeover auto-resume', () => {
+  const reviewOpenRun: MockWorkflowRun = {
+    ...MOCK_PAUSED_RUN,
+    id: 'run-review-open-web',
+    parent_conversation_id: 'parent-conv-uuid',
+    metadata: {
+      approval: {
+        type: 'plannotator_gate',
+        nodeId: 'review-gate',
+        message: 'Review',
+        gateId: 'gate-old',
+        document: '/tmp/review.html',
+        phase: 'idle',
+      },
+    },
+  };
+
+  beforeEach(() => {
+    mockGetWorkflowRun.mockReset();
+    mockGetConversationById.mockReset();
+    mockHandleMessage.mockReset();
+    mockTransitionPlannotatorGate.mockReset();
+    mockTransitionPlannotatorGate.mockResolvedValue({ outcome: 'updated', approval: {} });
+  });
+
+  test('dispatches exactly one explicit resume for a web parent', async () => {
+    mockGetWorkflowRun.mockResolvedValue(reviewOpenRun);
+    mockGetConversationById.mockResolvedValueOnce({
+      id: 'parent-conv-uuid',
+      platform_conversation_id: 'web-parent-review',
+      platform_type: 'web',
+    });
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-review-open-web/review-open', {
+      method: 'POST',
+    });
+
+    expect(response.status).toBe(200);
+    expect(mockHandleMessage).toHaveBeenCalledTimes(1);
+    const [, platformConvId, dispatchedMessage] = mockHandleMessage.mock.calls[0] as [
+      unknown,
+      string,
+      string,
+    ];
+    expect(platformConvId).toBe('web-parent-review');
+    expect(dispatchedMessage).toBe('/workflow resume run-review-open-web');
+  });
+
+  test('does not dispatch for a non-web parent and returns manual resume instruction', async () => {
+    mockGetWorkflowRun.mockResolvedValue(reviewOpenRun);
+    mockGetConversationById.mockResolvedValueOnce({
+      id: 'parent-conv-uuid',
+      platform_conversation_id: 'slack-parent-review',
+      platform_type: 'slack',
+    });
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-review-open-web/review-open', {
+      method: 'POST',
+    });
+
+    expect(response.status).toBe(200);
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+    const body = (await response.json()) as { message: string };
+    expect(body.message).toContain('archon workflow resume run-review-open-web');
   });
 });
 

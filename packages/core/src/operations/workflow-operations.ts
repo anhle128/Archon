@@ -5,6 +5,7 @@
  * Operations throw on errors; callers catch and format for their platform.
  */
 import { createLogger, captureApprovalResolved } from '@archon/paths';
+import { randomUUID } from 'node:crypto';
 import {
   RESUMABLE_WORKFLOW_STATUSES,
   isApprovalContext,
@@ -63,6 +64,19 @@ export interface RejectionOperationResult {
    * on_reject-rework message.
    */
   writeBack: boolean;
+}
+
+export interface ReviewOpenOperationResult {
+  document: string;
+  nodeId: string;
+  phase: 'opening';
+  continuation: 'caller_resume';
+  workflowName: string;
+  workingPath: string | null;
+  userMessage: string | null;
+  codebaseId: string | null;
+  /** Internal DB UUID — resolve via getConversationById() to get platform_conversation_id. */
+  conversationId: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -281,15 +295,10 @@ export async function abandonWorkflow(runId: string): Promise<AbandonWorkflowRes
 /**
  * Request re-open of a paused plannotator_gate review surface.
  *
- * Sets `metadata.approval.phase` to `opening` so a live supervisor that is
- * idle re-spawns annotate. If the gate process has died, the operator should
- * also `workflow resume` the run so the executor re-enters the gate node.
- *
- * Does NOT approve or resume the run.
+ * Atomically rotates the gate ownership token and sets the replacement phase
+ * to `opening`. The caller owns resuming the replacement supervisor.
  */
-export async function reviewOpenWorkflow(
-  runId: string
-): Promise<{ document: string; nodeId: string; phase: string }> {
+export async function reviewOpenWorkflow(runId: string): Promise<ReviewOpenOperationResult> {
   const run = await getRunOrThrow(runId, 'operations.workflow_review_open_lookup_failed');
   if (run.status !== 'paused') {
     throw new Error(
@@ -314,23 +323,51 @@ export async function reviewOpenWorkflow(
   if (!document) {
     throw new Error(`plannotator_gate on run ${runId} has no document path in approval metadata.`);
   }
+  if (!approval.gateId) {
+    throw new Error(`plannotator_gate on run ${runId} has no gate ownership token.`);
+  }
 
-  await workflowDb.updateWorkflowRun(runId, {
-    metadata: {
-      approval: {
-        ...approval,
-        phase: 'opening',
-        document,
-      },
-    },
+  const nextGateId = randomUUID();
+  const transition = await workflowDb.transitionPlannotatorGate({
+    runId,
+    nodeId: approval.nodeId,
+    expectedGateId: approval.gateId,
+    nextGateId,
+    document,
+    phase: 'opening',
   });
+  if (transition.outcome === 'resolved') {
+    throw new Error(
+      `Workflow run ${runId} was already ${transition.resolved} and is awaiting resume — nothing to re-open.`
+    );
+  }
+  if (transition.outcome === 'superseded') {
+    throw new Error(
+      `Plannotator gate ownership changed before review-open for run ${runId}. Refresh the run and retry only if it is still paused.`
+    );
+  }
+  if (transition.outcome === 'stopped') {
+    throw new Error(
+      `Workflow run ${runId} stopped with status '${transition.status}' before review-open. Refresh the run before retrying.`
+    );
+  }
 
   getLog().info(
-    { workflowRunId: runId, nodeId: approval.nodeId, document },
-    'workflow.review_open_requested'
+    { workflowRunId: runId, nodeId: approval.nodeId, document, nextGateId },
+    'workflow.review_open_takeover_recorded'
   );
 
-  return { document, nodeId: approval.nodeId, phase: 'opening' };
+  return {
+    document,
+    nodeId: approval.nodeId,
+    phase: 'opening',
+    continuation: 'caller_resume',
+    workflowName: run.workflow_name,
+    workingPath: run.working_path,
+    userMessage: run.user_message,
+    codebaseId: run.codebase_id,
+    conversationId: run.conversation_id,
+  };
 }
 
 /**

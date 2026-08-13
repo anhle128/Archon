@@ -2383,7 +2383,7 @@ export function registerApiRoutes(
    */
   async function tryAutoResumeAfterGate(
     run: WorkflowRun,
-    action: 'approve' | 'reject',
+    action: 'approve' | 'reject' | 'review-open',
     // Identity of the user who approved/rejected the gate. The resumed chat
     // turn executes as THIS user (sender-first, #1976/#1982) — without it the
     // dispatch would fall back to the conversation creator's prefs/credentials.
@@ -2403,13 +2403,23 @@ export function registerApiRoutes(
             skippedNonWebParent: 'api.workflow_approve_auto_resume_skipped_non_web_parent' as const,
             failed: 'api.workflow_approve_auto_resume_failed' as const,
           }
-        : {
-            dispatched: 'api.workflow_reject_auto_resume_dispatched' as const,
-            skippedNoPlatformConv:
-              'api.workflow_reject_auto_resume_skipped_no_platform_conv' as const,
-            skippedNonWebParent: 'api.workflow_reject_auto_resume_skipped_non_web_parent' as const,
-            failed: 'api.workflow_reject_auto_resume_failed' as const,
-          };
+        : action === 'reject'
+          ? {
+              dispatched: 'api.workflow_reject_auto_resume_dispatched' as const,
+              skippedNoPlatformConv:
+                'api.workflow_reject_auto_resume_skipped_no_platform_conv' as const,
+              skippedNonWebParent:
+                'api.workflow_reject_auto_resume_skipped_non_web_parent' as const,
+              failed: 'api.workflow_reject_auto_resume_failed' as const,
+            }
+          : {
+              dispatched: 'api.workflow_review_open_auto_resume_dispatched' as const,
+              skippedNoPlatformConv:
+                'api.workflow_review_open_auto_resume_skipped_no_platform_conv' as const,
+              skippedNonWebParent:
+                'api.workflow_review_open_auto_resume_skipped_non_web_parent' as const,
+              failed: 'api.workflow_review_open_auto_resume_failed' as const,
+            };
     try {
       const parentConv = await conversationDb.getConversationById(run.parent_conversation_id);
       const platformConvId = parentConv?.platform_conversation_id;
@@ -3957,11 +3967,20 @@ export function registerApiRoutes(
         return apiError(c, 404, 'Workflow run not found');
       }
       const result = await reviewOpenWorkflow(runId);
+      const autoResumed = await tryAutoResumeAfterGate(
+        run,
+        'review-open',
+        await resolveWebUserId(c)
+      );
       return c.json({
         success: true,
         document: result.document,
         nodeId: result.nodeId,
         phase: result.phase,
+        continuation: result.continuation,
+        message: autoResumed
+          ? `Review takeover recorded for ${run.workflow_name}. Resuming workflow.`
+          : `Review takeover recorded for ${run.workflow_name}. Run \`archon workflow resume ${runId}\` from the CLI to start the replacement, or send a new message in the originating conversation.`,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -3972,7 +3991,10 @@ export function registerApiRoutes(
         message.includes('Cannot review-open') ||
         message.includes('not paused at a plannotator_gate') ||
         message.includes('already') ||
-        message.includes('no document')
+        message.includes('no document') ||
+        message.includes('no gate ownership token') ||
+        message.includes('ownership changed') ||
+        message.includes('stopped with status')
       ) {
         return apiError(c, 400, message);
       }
