@@ -702,7 +702,7 @@ nodes:
 
           ## Hard scope when regenerating HTML (token budget)
           - Explain **only** the newly added tasks from this converge pass
-            (same delta rules as `speckit-converge-explain`: git diff preferred).
+            (same delta-only scope as this gate's initial `prepare` prompt: git diff preferred).
           - Do **NOT** re-explain pre-existing or completed tasks.
           - Do **NOT** rebuild a full-file tasks catalog.
 

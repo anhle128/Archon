@@ -16,7 +16,10 @@ The existing supervisor remains the sole owner of pause, Plannotator subprocess,
 - Keep existing `document: "$producer.output"` gates backward-compatible.
 - Require exactly one of `plannotator_gate.document` and `plannotator_gate.prepare`.
 - `prepare` supports only `prompt`, `provider`, `model`, `effort`, `allowed_tools`, and `denied_tools`.
-- Prepare and rework are independent fresh AI calls and inherit workflow provider/model only when their own values are absent.
+- Prepare and rework are independent fresh AI calls.
+  When their own values are absent, the provider inherits the workflow provider.
+  The model inherits the workflow model only while the effective provider remains the workflow provider; otherwise it uses the selected provider's assistant model.
+  Phase-local alias and tier references use normal resolution.
 - Node-level `idle_timeout` applies to embedded gate AI calls.
 - Preflight Plannotator before spending an AI call on preparation.
 - Reuse a matching persisted paused-gate document during resume or `review-open`; never regenerate it.
