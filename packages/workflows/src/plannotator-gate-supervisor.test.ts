@@ -28,6 +28,7 @@ class FakeGateStore implements Pick<
   | 'pauseWorkflowRun'
   | 'updateWorkflowRun'
   | 'resumeWorkflowRun'
+  | 'resumeApprovedGate'
   | 'createWorkflowEvent'
   | 'getDagResumeSnapshot'
   | 'getWorkflowRunStatus'
@@ -93,6 +94,21 @@ class FakeGateStore implements Pick<
     }
     this.run.status = 'running';
     return Promise.resolve(structuredClone(this.run));
+  };
+
+  resumeApprovedGate: IWorkflowStore['resumeApprovedGate'] = (id, expected) => {
+    if (id !== this.run.id || this.run.status !== 'paused')
+      return Promise.resolve({ resumed: false });
+    const approval = this.run.metadata.approval as ApprovalContext | undefined;
+    if (
+      approval?.resolved !== 'approved' ||
+      approval.nodeId !== expected.nodeId ||
+      (expected.gateId !== undefined && approval.gateId !== expected.gateId)
+    ) {
+      return Promise.resolve({ resumed: false });
+    }
+    this.run.status = 'running';
+    return Promise.resolve({ resumed: true });
   };
 
   createWorkflowEvent: IWorkflowStore['createWorkflowEvent'] = data => {
@@ -722,7 +738,7 @@ describe('runPlannotatorGateSupervisor', () => {
     expect(store.events.filter(e => e.event_type === 'node_completed')).toHaveLength(1);
   });
 
-  test('resume when already running succeeds (idempotent resume)', async () => {
+  test('ownership rotation after snapshot prevents stale resume', async () => {
     const store = new FakeGateStore('run-already-running');
     const child = makeChild({
       exitCode: 0,
@@ -741,12 +757,20 @@ describe('runPlannotatorGateSupervisor', () => {
     await child.waitStarted;
     await Bun.sleep(25);
     store.externalApprove('cli-approved');
-    // CLI auto-resume already flipped status to running.
-    store.run.status = 'running';
+    const originalSnapshot = store.getDagResumeSnapshot;
+    store.getDagResumeSnapshot = async runId => {
+      const snapshot = await originalSnapshot(runId);
+      const approval = store.run.metadata.approval as ApprovalContext;
+      store.run.metadata = {
+        ...store.run.metadata,
+        approval: { ...approval, gateId: 'gate-b', phase: 'opening', resolved: null },
+      };
+      return snapshot;
+    };
 
     const result = await supervisor;
-    expect(result.output).toBe('cli-approved');
-    expect(store.run.status).toBe('running');
+    expect(result).toEqual({ kind: 'superseded' });
+    expect(store.run.status).toBe('paused');
     expect(child.killed).toBe(true);
   });
 });

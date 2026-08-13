@@ -90,6 +90,7 @@ function createMockStore(): IWorkflowStore {
         working_path: null,
       })
     ),
+    resumeApprovedGate: mock(() => Promise.resolve({ resumed: true })),
     updateWorkflowRun: mock(() => Promise.resolve()),
     resolveApprovalGate: mock(() => Promise.resolve({ resolved: true })),
     transitionPlannotatorGate: mock(

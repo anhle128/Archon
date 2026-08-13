@@ -8,10 +8,9 @@
  *
  * Resume-after-approve: standard gate approve leaves status `paused`, and the
  * DAG between-layer check stops when status !== `running`. After recording
- * approval (or observing an external one), this supervisor calls
- * `resumeWorkflowRun` before returning so the in-process `runLayers` call
- * continues. Resume is idempotent when another surface already flipped the run
- * to `running`.
+ * approval (or observing an external one), this supervisor atomically claims
+ * paused→running only while its approved gate identity still matches. A lost
+ * claim returns superseded so only the winning executor continues `runLayers`.
  */
 import { createLogger } from '@archon/paths';
 import type { ApprovalContext, WorkflowRun } from './schemas/workflow-run';
@@ -269,24 +268,12 @@ async function completeApproved(
   const approval = readApproval(run);
   if (!ownsGate(deps, approval)) return { kind: 'superseded' };
   const output = await readApprovedOutput(deps, approval);
-  await resumeAfterGate(deps);
+  const { resumed } = await deps.store.resumeApprovedGate(deps.runId, {
+    nodeId: deps.nodeId,
+    gateId: deps.gateId,
+  });
+  if (!resumed) return { kind: 'superseded' };
   return { kind: 'approved', output };
-}
-
-/**
- * Resume is best-effort: another surface (CLI/web auto-resume) may already have
- * flipped the run to `running`. Never convert a won approve into a failed node.
- */
-async function resumeAfterGate(deps: PlannotatorGateSupervisorDeps): Promise<void> {
-  const status = await deps.store.getWorkflowRunStatus(deps.runId);
-  if (status === 'running') return;
-  try {
-    await deps.store.resumeWorkflowRun(deps.runId);
-  } catch (err) {
-    const again = await deps.store.getWorkflowRunStatus(deps.runId);
-    if (again === 'running') return;
-    throw err;
-  }
 }
 
 async function setPhase(

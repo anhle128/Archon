@@ -200,6 +200,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
       tokens: { input: 0, output: 0 },
     })),
     resumeWorkflowRun: mock(async () => makeRun()),
+    resumeApprovedGate: mock(async () => ({ resumed: true })),
     getCodebase: mock(async () => null),
     getCodebaseEnvVars: mock(async () => ({})),
     ...overrides,

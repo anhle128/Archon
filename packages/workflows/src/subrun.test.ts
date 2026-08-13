@@ -156,6 +156,9 @@ class InMemoryStore implements IWorkflowStore {
     return Promise.resolve(this.clone(r));
   };
 
+  resumeApprovedGate: IWorkflowStore['resumeApprovedGate'] = () =>
+    Promise.resolve({ resumed: false });
+
   updateWorkflowRun: IWorkflowStore['updateWorkflowRun'] = (id, updates) => {
     const r = this.runs.get(id);
     if (r) {

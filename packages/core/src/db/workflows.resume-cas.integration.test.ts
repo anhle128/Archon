@@ -47,6 +47,7 @@ mock.module('./connection', () => ({
 const { routeLoopRuntimeMetadataSchema } = await import('@archon/workflows/schemas/workflow-run');
 const {
   resumeWorkflowRun,
+  resumeApprovedGate,
   persistRouteDecisionTransition,
   transitionPlannotatorGate,
   pauseWorkflowRun,
@@ -105,6 +106,43 @@ const resumedRouteLoopMetadata = {
     },
   },
 } satisfies RouteLoopRuntimeMetadata;
+
+describe('resumeApprovedGate', () => {
+  test('resumes only the matching approved Plannotator gate', async () => {
+    await seed('approved-gate', 'paused', "datetime('now')", {
+      approval: {
+        type: 'plannotator_gate',
+        nodeId: 'review',
+        gateId: 'gate-a',
+        message: 'Review',
+        resolved: 'approved',
+      },
+    });
+
+    expect(
+      await resumeApprovedGate('approved-gate', { nodeId: 'review', gateId: 'gate-a' })
+    ).toEqual({ resumed: true });
+    expect((await getWorkflowRun('approved-gate'))?.status).toBe('running');
+  });
+
+  test('leaves a replacement gate paused when the old token loses', async () => {
+    await seed('replacement-gate', 'paused', "datetime('now')", {
+      approval: {
+        type: 'plannotator_gate',
+        nodeId: 'review',
+        gateId: 'gate-b',
+        message: 'Review',
+        phase: 'opening',
+        resolved: null,
+      },
+    });
+
+    expect(
+      await resumeApprovedGate('replacement-gate', { nodeId: 'review', gateId: 'gate-a' })
+    ).toEqual({ resumed: false });
+    expect((await getWorkflowRun('replacement-gate'))?.status).toBe('paused');
+  });
+});
 
 const nextRouteLoopMetadata = {
   loopCounters: { 'review-router': 1 },

@@ -258,6 +258,7 @@ export function createWorkflowStore(): IWorkflowStore {
     findResumableRun: workflowDb.findResumableRun,
     failOrphanedRuns: workflowDb.failOrphanedRuns,
     resumeWorkflowRun: workflowDb.resumeWorkflowRun,
+    resumeApprovedGate: workflowDb.resumeApprovedGate,
     updateWorkflowRun: workflowDb.updateWorkflowRun,
     resolveApprovalGate: workflowDb.resolveApprovalGate,
     transitionPlannotatorGate: workflowDb.transitionPlannotatorGate,

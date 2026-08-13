@@ -231,6 +231,7 @@ export interface IWorkflowStore extends IRunTreeStore {
   findResumableRun(workflowName: string, workingPath: string): Promise<WorkflowRun | null>;
   failOrphanedRuns(): Promise<{ count: number }>;
   resumeWorkflowRun(id: string): Promise<WorkflowRun>;
+  resumeApprovedGate(id: string, expected: ApprovalGateIdentity): Promise<{ resumed: boolean }>;
   /**
    * `output_root` (#2200) is write-once: the executor sets it at run start only
    * when the persisted value is null. Re-writing it on resume would re-derive

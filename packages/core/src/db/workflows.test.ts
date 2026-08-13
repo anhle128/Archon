@@ -55,6 +55,7 @@ import {
   findResumableRun,
   findResumableRunByParentConversation,
   resumeWorkflowRun,
+  resumeApprovedGate,
   pauseWorkflowRun,
   cancelWorkflowRun,
   cancelRecoveryWorkflowRun,
@@ -1636,6 +1637,69 @@ describe('workflows database', () => {
       await expect(resumeWorkflowRun('workflow-run-123')).rejects.toThrow(
         'Workflow run vanished after update (id: workflow-run-123)'
       );
+    });
+  });
+
+  describe('resumeApprovedGate', () => {
+    test('locks, verifies identity, and resumes the approved paused gate', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            ...mockWorkflowRun,
+            status: 'paused',
+            metadata: {
+              approval: {
+                type: 'plannotator_gate',
+                nodeId: 'review',
+                gateId: 'gate-a',
+                message: 'Review',
+                resolved: 'approved',
+              },
+            },
+          },
+        ])
+      );
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+
+      await expect(
+        resumeApprovedGate('workflow-run-123', { nodeId: 'review', gateId: 'gate-a' })
+      ).resolves.toEqual({ resumed: true });
+
+      expect(mockWithTransaction).toHaveBeenCalledTimes(1);
+      const [selectSql, selectParams] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(selectSql).toContain('SELECT *');
+      expect(selectSql).toContain('FOR UPDATE');
+      expect(selectParams).toEqual(['workflow-run-123']);
+      const [updateSql, updateParams] = mockQuery.mock.calls[1] as [string, unknown[]];
+      expect(updateSql).toContain("SET status = 'running'");
+      expect(updateSql).toContain("WHERE id = $1 AND status = 'paused'");
+      expect(updateSql).toContain('started_at = NOW()');
+      expect(updateParams).toEqual(['workflow-run-123']);
+    });
+
+    test('does not update when the fencing token no longer matches', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            ...mockWorkflowRun,
+            status: 'paused',
+            metadata: {
+              approval: {
+                type: 'plannotator_gate',
+                nodeId: 'review',
+                gateId: 'gate-b',
+                message: 'Review',
+                resolved: null,
+              },
+            },
+          },
+        ])
+      );
+
+      await expect(
+        resumeApprovedGate('workflow-run-123', { nodeId: 'review', gateId: 'gate-a' })
+      ).resolves.toEqual({ resumed: false });
+      expect(mockQuery).toHaveBeenCalledTimes(1);
     });
   });
 
