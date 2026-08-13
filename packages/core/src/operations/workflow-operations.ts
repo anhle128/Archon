@@ -471,7 +471,12 @@ export async function approveWorkflow(
   // transaction means a failed event write rolls the resolution back so a retry
   // can win the still-open gate (#2146). The run stays 'paused'; resume is
   // guarded independently by resumeWorkflowRun's CAS.
-  const { resolved: won } = await workflowDb.resolveApprovalGate(runId, metadataPayload, events);
+  const { resolved: won } = await workflowDb.resolveApprovalGate(
+    runId,
+    { nodeId: approval.nodeId, gateId: approval.gateId },
+    metadataPayload,
+    events
+  );
   if (!won) {
     throw new Error(`Workflow run ${runId} was already resolved and is awaiting resume.`);
   }
@@ -550,6 +555,7 @@ export async function rejectWorkflow(
     };
     const { resolved: won } = await workflowDb.resolveApprovalGate(
       runId,
+      { nodeId: approval.nodeId, gateId: approval.gateId },
       { approval: { ...approval, resolved: 'rejected' }, approval_response: 'rejected' },
       [rejectionEvent]
     );
@@ -603,6 +609,7 @@ export async function rejectWorkflow(
   const { resolved: won } = willStageRework
     ? await workflowDb.resolveApprovalGate(
         runId,
+        { nodeId: approval.nodeId, gateId: approval.gateId },
         {
           approval: { ...approval, resolved: 'rejected' },
           rejection_reason: rejectReason,

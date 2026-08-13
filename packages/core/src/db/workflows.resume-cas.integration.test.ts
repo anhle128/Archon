@@ -48,6 +48,7 @@ const { routeLoopRuntimeMetadataSchema } = await import('@archon/workflows/schem
 const {
   resumeWorkflowRun,
   persistRouteDecisionTransition,
+  transitionPlannotatorGate,
   pauseWorkflowRun,
   getWorkflowRun,
   findResumableRun,
@@ -547,6 +548,7 @@ describe('resolveApprovalGate — CAS at the DB layer (#2113)', () => {
 
     const outcome = await resolveApprovalGate(
       'cas-open',
+      { nodeId: 'review' },
       {
         approval: { nodeId: 'review', message: 'Approve?', type: 'approval', resolved: 'approved' },
         approval_response: 'approved',
@@ -578,6 +580,7 @@ describe('resolveApprovalGate — CAS at the DB layer (#2113)', () => {
     });
     const first = await resolveApprovalGate(
       'cas-resolved',
+      { nodeId: 'review' },
       {
         approval: { nodeId: 'review', message: 'Approve?', type: 'approval', resolved: 'approved' },
       },
@@ -587,6 +590,7 @@ describe('resolveApprovalGate — CAS at the DB layer (#2113)', () => {
 
     const outcome = await resolveApprovalGate(
       'cas-resolved',
+      { nodeId: 'review' },
       {
         approval: { nodeId: 'review', message: 'Approve?', type: 'approval', resolved: 'rejected' },
       },
@@ -612,6 +616,7 @@ describe('resolveApprovalGate — CAS at the DB layer (#2113)', () => {
     const [a, b] = await Promise.all([
       resolveApprovalGate(
         'cas-race',
+        { nodeId: 'review' },
         {
           approval: {
             nodeId: 'review',
@@ -624,6 +629,7 @@ describe('resolveApprovalGate — CAS at the DB layer (#2113)', () => {
       ),
       resolveApprovalGate(
         'cas-race',
+        { nodeId: 'review' },
         {
           approval: {
             nodeId: 'review',
@@ -654,6 +660,7 @@ describe('resolveApprovalGate — CAS at the DB layer (#2113)', () => {
 
     const outcome = await resolveApprovalGate(
       'cas-running',
+      { nodeId: 'review' },
       {
         approval: { nodeId: 'review', message: 'Approve?', resolved: 'approved' },
       },
@@ -686,6 +693,7 @@ describe('resolveApprovalGate — CAS at the DB layer (#2113)', () => {
     await expect(
       resolveApprovalGate(
         'cas-atomic',
+        { nodeId: 'review' },
         {
           approval: {
             nodeId: 'review',
@@ -709,6 +717,7 @@ describe('resolveApprovalGate — CAS at the DB layer (#2113)', () => {
     // The retry with a well-formed event now wins the still-open gate.
     const retry = await resolveApprovalGate(
       'cas-atomic',
+      { nodeId: 'review' },
       {
         approval: { nodeId: 'review', message: 'Approve?', type: 'approval', resolved: 'approved' },
       },
@@ -718,6 +727,101 @@ describe('resolveApprovalGate — CAS at the DB layer (#2113)', () => {
     const resolvedRow = await getWorkflowRun('cas-atomic');
     expect((resolvedRow?.metadata.approval as Record<string, unknown>).resolved).toBe('approved');
     expect(await countEvents('cas-atomic', 'approval_received')).toBe(1);
+  });
+});
+
+describe('plannotator gate fencing — real SQLite', () => {
+  const openGate = {
+    nodeId: 'review',
+    message: 'Review the plan',
+    type: 'plannotator_gate',
+    gateId: 'gate-a',
+    document: '/tmp/plan.md',
+    phase: 'waiting_decision',
+    resolved: null,
+  } as const;
+
+  test('a phase write loses after the gate resolves', async () => {
+    await seedPausedRun('plannotator-resolved', 'wf-plannotator-resolved', openGate);
+
+    expect(
+      (
+        await resolveApprovalGate(
+          'plannotator-resolved',
+          { nodeId: 'review', gateId: 'gate-a' },
+          { approval: { ...openGate, resolved: 'approved' } },
+          [approvalEvent('approved')]
+        )
+      ).resolved
+    ).toBe(true);
+
+    const transition = await transitionPlannotatorGate({
+      runId: 'plannotator-resolved',
+      nodeId: 'review',
+      expectedGateId: 'gate-a',
+      document: '/tmp/reworked-plan.md',
+      phase: 'reworking',
+    });
+
+    expect(transition).toEqual({ outcome: 'resolved', resolved: 'approved' });
+    const run = await getWorkflowRun('plannotator-resolved');
+    expect((run?.metadata.approval as Record<string, unknown>).resolved).toBe('approved');
+  });
+
+  test('a stale resolver writes nothing after ownership rotates', async () => {
+    await seedPausedRun('plannotator-rotated', 'wf-plannotator-rotated', openGate);
+
+    const transition = await transitionPlannotatorGate({
+      runId: 'plannotator-rotated',
+      nodeId: 'review',
+      expectedGateId: 'gate-a',
+      nextGateId: 'gate-b',
+      document: '/tmp/reworked-plan.md',
+      phase: 'opening',
+    });
+    expect(transition.outcome).toBe('updated');
+
+    const resolution = await resolveApprovalGate(
+      'plannotator-rotated',
+      { nodeId: 'review', gateId: 'gate-a' },
+      { approval: { ...openGate, resolved: 'approved' } },
+      [approvalEvent('approved')]
+    );
+
+    expect(resolution.resolved).toBe(false);
+    const run = await getWorkflowRun('plannotator-rotated');
+    expect((run?.metadata.approval as Record<string, unknown>).gateId).toBe('gate-b');
+    expect(await countEvents('plannotator-rotated', 'approval_received')).toBe(0);
+  });
+
+  test('concurrent phase and approval writers produce one completion event', async () => {
+    await seedPausedRun('plannotator-race', 'wf-plannotator-race', openGate);
+
+    await Promise.all([
+      transitionPlannotatorGate({
+        runId: 'plannotator-race',
+        nodeId: 'review',
+        expectedGateId: 'gate-a',
+        document: '/tmp/reworked-plan.md',
+        phase: 'reworking',
+      }),
+      resolveApprovalGate(
+        'plannotator-race',
+        { nodeId: 'review', gateId: 'gate-a' },
+        { approval: { ...openGate, resolved: 'approved' } },
+        [
+          {
+            event_type: 'node_completed',
+            step_name: 'review',
+            data: { node_output: '', approval_decision: 'approved' },
+          },
+        ]
+      ),
+    ]);
+
+    const run = await getWorkflowRun('plannotator-race');
+    expect((run?.metadata.approval as Record<string, unknown>).resolved).toBe('approved');
+    expect(await countEvents('plannotator-race', 'node_completed')).toBe(1);
   });
 });
 
@@ -776,6 +880,7 @@ describe('resolveAndCancelApprovalGate — atomic reject+cancel CAS (#2113)', ()
     // ...so a racing approve (guarded on status='paused') can no longer resolve it.
     const approveOutcome = await resolveApprovalGate(
       'rc-vs-approve',
+      { nodeId: 'review' },
       {
         approval: { nodeId: 'review', message: 'Approve?', resolved: 'approved' },
       },

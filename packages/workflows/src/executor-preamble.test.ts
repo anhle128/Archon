@@ -95,6 +95,20 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     failOrphanedRuns: mock(async () => ({ count: 0 })),
     createWorkflowRun: mock(async () => makeRun()),
     updateWorkflowRun: mock(async () => {}),
+    resolveApprovalGate: mock(async () => ({ resolved: true })),
+    transitionPlannotatorGate: mock(
+      async (input: Parameters<IWorkflowStore['transitionPlannotatorGate']>[0]) => ({
+        outcome: 'updated' as const,
+        approval: {
+          nodeId: input.nodeId,
+          message: '',
+          type: 'plannotator_gate' as const,
+          gateId: input.nextGateId ?? input.expectedGateId,
+          document: input.document,
+          phase: input.phase,
+        },
+      })
+    ),
     persistRouteDecisionTransition: mock(
       async (input: Parameters<IWorkflowStore['persistRouteDecisionTransition']>[0]) => ({
         ...makeRun(),

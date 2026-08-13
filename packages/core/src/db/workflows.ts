@@ -10,6 +10,7 @@ import type {
   ApprovalContext,
 } from '@archon/workflows/schemas/workflow-run';
 import {
+  isApprovalContext,
   RETRYABLE_WORKFLOW_STATUSES,
   TERMINAL_WORKFLOW_STATUSES,
   routeLoopRuntimeMetadataSchema,
@@ -19,7 +20,14 @@ import type {
   ListDashboardRunsOptions,
   DashboardRunsResult,
 } from '../schemas/workflow-run';
-import type { PersistRouteDecisionTransitionInput } from '@archon/workflows/store';
+import type {
+  ApprovalGateIdentity,
+  GateResolutionEvent,
+  PersistRouteDecisionTransitionInput,
+  PlannotatorGateTransitionInput,
+  PlannotatorGateTransitionResult,
+} from '@archon/workflows/store';
+export type { GateResolutionEvent } from '@archon/workflows/store';
 import { createLogger } from '@archon/paths';
 import { deleteRetryRefsByRunId } from '@archon/git';
 
@@ -167,19 +175,6 @@ function unresolvedGateClause(): string {
 }
 
 /**
- * An audit event written atomically with a gate resolution (#2146). The winning
- * resolver inserts these in the SAME transaction as the resolution UPDATE, so a
- * failed event write rolls the resolution back — a resolved gate can never be
- * left with no audit trail, which the fast-path guard would then wrongly block
- * from retrying. `workflow_run_id` is supplied by the CAS function.
- */
-export interface GateResolutionEvent {
-  event_type: string;
-  step_name: string;
-  data: Record<string, unknown>;
-}
-
-/**
  * Atomically resolve a paused approval gate (compare-and-swap) and record its
  * audit events in one transaction.
  *
@@ -202,12 +197,32 @@ export interface GateResolutionEvent {
  */
 export async function resolveApprovalGate(
   id: string,
+  expected: ApprovalGateIdentity,
   metadata: Record<string, unknown>,
   events: GateResolutionEvent[]
 ): Promise<{ resolved: boolean }> {
   const dialect = getDialect();
   try {
     return await getDatabase().withTransaction(async query => {
+      const currentResult = await query<WorkflowRun>(
+        `SELECT * FROM remote_agent_workflow_runs WHERE id = $1${rowLockClause()}`,
+        [id]
+      );
+      const currentRow = currentResult.rows[0];
+      if (!currentRow) return { resolved: false };
+
+      const currentRun = normalizeWorkflowRun(currentRow);
+      const currentApproval = currentRun.metadata.approval;
+      if (
+        currentRun.status !== 'paused' ||
+        !isApprovalContext(currentApproval) ||
+        currentApproval.resolved != null ||
+        currentApproval.nodeId !== expected.nodeId ||
+        (expected.gateId !== undefined && currentApproval.gateId !== expected.gateId)
+      ) {
+        return { resolved: false };
+      }
+
       const result = await query(
         `UPDATE remote_agent_workflow_runs
          SET metadata = ${dialect.jsonMerge('metadata', 2)}
@@ -226,6 +241,62 @@ export async function resolveApprovalGate(
     const err = error as Error;
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_resolve_gate_failed');
     throw new Error(`Failed to resolve approval gate: ${err.message}`);
+  }
+}
+
+/** Atomically replace the current Plannotator gate phase under its fencing token. */
+export async function transitionPlannotatorGate(
+  input: PlannotatorGateTransitionInput
+): Promise<PlannotatorGateTransitionResult> {
+  const dialect = getDialect();
+  try {
+    return await getDatabase().withTransaction(async query => {
+      const currentResult = await query<WorkflowRun>(
+        `SELECT * FROM remote_agent_workflow_runs WHERE id = $1${rowLockClause()}`,
+        [input.runId]
+      );
+      const currentRow = currentResult.rows[0];
+      if (!currentRow) throw new Error(`Workflow run not found: ${input.runId}`);
+
+      const currentRun = normalizeWorkflowRun(currentRow);
+      if (currentRun.status !== 'paused') {
+        return { outcome: 'stopped', status: currentRun.status };
+      }
+
+      const currentApproval = currentRun.metadata.approval;
+      if (
+        !isApprovalContext(currentApproval) ||
+        currentApproval.type !== 'plannotator_gate' ||
+        currentApproval.nodeId !== input.nodeId ||
+        currentApproval.gateId !== input.expectedGateId
+      ) {
+        return { outcome: 'superseded' };
+      }
+      if (currentApproval.resolved != null) {
+        return { outcome: 'resolved', resolved: currentApproval.resolved };
+      }
+
+      const nextApproval: ApprovalContext = {
+        ...currentApproval,
+        gateId: input.nextGateId ?? input.expectedGateId,
+        document: input.document,
+        phase: input.phase,
+      };
+      const result = await query(
+        `UPDATE remote_agent_workflow_runs
+         SET metadata = ${dialect.jsonMerge('metadata', 2)}, last_activity_at = ${dialect.now()}
+         WHERE id = $1`,
+        [input.runId, JSON.stringify({ approval: nextApproval })]
+      );
+      if (result.rowCount === 0) {
+        throw new Error(`Workflow run update returned no rows: ${input.runId}`);
+      }
+      return { outcome: 'updated', approval: nextApproval };
+    });
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, workflowRunId: input.runId }, 'db.plannotator_gate_transition_failed');
+    throw new Error(`Failed to transition plannotator gate: ${err.message}`);
   }
 }
 

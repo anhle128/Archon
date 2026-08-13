@@ -264,6 +264,12 @@ export interface ApprovalContext {
    */
   type?: 'approval' | 'interactive_loop' | 'writeback' | 'child_workflow' | 'plannotator_gate';
   /**
+   * Fencing token for the current plannotator_gate supervisor instance.
+   * Optional for persisted-run migration compatibility; every newly paused
+   * plannotator_gate must set it.
+   */
+  gateId?: string;
+  /**
    * Child run id when `type === 'child_workflow'` — the specific paused sub-run
    * the parent is blocked on. Read by the parent auto-resume guard so a DIFFERENT
    * child of the same parent can't trigger the wrong re-entry.

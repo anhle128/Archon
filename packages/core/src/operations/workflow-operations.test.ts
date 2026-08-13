@@ -124,7 +124,7 @@ describe('approveWorkflow', () => {
     expect(result.workingPath).toBe('/workspace/worktree');
 
     // Operations no longer writes events directly — node_completed + approval_received
-    // ride the CAS transaction as its 3rd argument (#2146).
+    // ride the CAS transaction as its 4th argument (#2146).
     expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
 
     // Stays 'paused' (no status write) — resolution recorded atomically via the
@@ -132,6 +132,7 @@ describe('approveWorkflow', () => {
     // audit events written in the same transaction (#2146).
     expect(mockResolveApprovalGate).toHaveBeenCalledWith(
       'run-1',
+      { nodeId: 'review', gateId: undefined },
       {
         approval: {
           nodeId: 'review',
@@ -183,7 +184,7 @@ describe('approveWorkflow', () => {
     expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
     // Only approval_received rides the CAS — NOT node_completed (the executor
     // writes that on the real completion signal / at resume).
-    const casEvents = mockResolveApprovalGate.mock.calls[0][2] as Array<Record<string, unknown>>;
+    const casEvents = mockResolveApprovalGate.mock.calls[0][3] as Array<Record<string, unknown>>;
     expect(casEvents).toHaveLength(1);
     expect(casEvents[0].event_type).toBe('approval_received');
 
@@ -191,6 +192,7 @@ describe('approveWorkflow', () => {
     // approval context resolved, preserving iteration for startIteration detection
     expect(mockResolveApprovalGate).toHaveBeenCalledWith(
       'run-1',
+      { nodeId: 'iterate', gateId: undefined },
       {
         approval: {
           nodeId: 'iterate',
@@ -232,6 +234,7 @@ describe('approveWorkflow', () => {
 
     expect(mockResolveApprovalGate).toHaveBeenCalledWith(
       'run-1',
+      { nodeId: 'iterate', gateId: undefined },
       {
         approval: {
           nodeId: 'iterate',
@@ -272,7 +275,7 @@ describe('approveWorkflow', () => {
 
     await approveWorkflow('run-1', '   ');
 
-    const casMetadata = mockResolveApprovalGate.mock.calls[0][1] as Record<string, unknown>;
+    const casMetadata = mockResolveApprovalGate.mock.calls[0][2] as Record<string, unknown>;
     expect(casMetadata.loop_feedback_given).toBe(false);
     // Whitespace-only also gets the documented recorded-comment default —
     // '   ' must never be stored verbatim as $LOOP_USER_INPUT.
@@ -334,7 +337,7 @@ describe('approveWorkflow', () => {
     await approveWorkflow('run-1', 'My review notes');
 
     // The node_output rides the CAS events (#2146), not a separate event write.
-    const casEvents = mockResolveApprovalGate.mock.calls[0][2] as Array<Record<string, unknown>>;
+    const casEvents = mockResolveApprovalGate.mock.calls[0][3] as Array<Record<string, unknown>>;
     const nodeCompleted = casEvents.find(e => e.event_type === 'node_completed');
     expect((nodeCompleted?.data as Record<string, unknown>).node_output).toBe('My review notes');
   });
@@ -373,6 +376,7 @@ describe('approveWorkflow', () => {
     // The resumed executor's write-back gate reads approval_response to APPLY.
     expect(mockResolveApprovalGate).toHaveBeenCalledWith(
       'run-1',
+      { nodeId: '__writeback__', gateId: undefined },
       {
         approval: {
           nodeId: '__writeback__',
@@ -391,7 +395,7 @@ describe('approveWorkflow', () => {
       ]
     );
     // No node_completed — there is no DAG node behind the write-back gate.
-    const casEvents = mockResolveApprovalGate.mock.calls[0][2] as Array<Record<string, unknown>>;
+    const casEvents = mockResolveApprovalGate.mock.calls[0][3] as Array<Record<string, unknown>>;
     expect(casEvents.every(e => e.event_type !== 'node_completed')).toBe(true);
   });
 
@@ -453,6 +457,7 @@ describe('rejectWorkflow', () => {
     // transaction (#2146)
     expect(mockResolveApprovalGate).toHaveBeenCalledWith(
       'run-1',
+      { nodeId: 'review', gateId: undefined },
       {
         approval: {
           nodeId: 'review',
@@ -605,6 +610,7 @@ describe('rejectWorkflow', () => {
     expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
     expect(mockResolveApprovalGate).toHaveBeenCalledWith(
       'run-1',
+      { nodeId: '__writeback__', gateId: undefined },
       {
         approval: {
           nodeId: '__writeback__',
