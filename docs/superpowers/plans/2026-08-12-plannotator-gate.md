@@ -1,5 +1,7 @@
 # Plannotator Gate Implementation Plan
 
+> **Superseded:** This historical implementation plan is superseded by `2026-08-13-plannotator-gate-stabilization.md`, which defines the corrected ownership, fencing, and rollback boundary.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add an Archon `plannotator_gate` node that pauses a durable workflow gate while supervising a live Plannotator annotate session (Ask AI + annotate + Approve), plus an opt-in Plannotator `--persist-session` flag so Close does not kill the shared live server for team review.
@@ -621,7 +623,7 @@ git commit -m "docs: document plannotator_gate node and team review flow"
 
 ## Self-review (plan author)
 
-- No TBD placeholders in task steps.
+- No unresolved placeholders in task steps.
 - Types/names consistent: `plannotator_gate`, `persistSession` / `--persist-session`, `parseDocumentPathFromNodeOutput`.
 - Spec multi-repo split reflected.
 - `Send Annotations` keep-alive explicitly out of scope (decision A).

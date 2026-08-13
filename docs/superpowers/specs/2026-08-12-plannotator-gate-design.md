@@ -416,7 +416,7 @@ Approve/reject/abandon remain existing commands and routes.
 - [ ] User reviews clarify explainer in Plannotator with Ask AI without keeping the explain agent node open.
 - [ ] Approve (Plannotator or Archon) advances to apply step.
 - [ ] Annotations rework without leaving durable pause (session ends on annotations, then re-spawns).
-- [ ] With `--persist-session`, Close does not kill the live server; second browser can still use the same session.
+- [ ] With `--persist-session`, Close does not kill the locally supervised live server.
 - [ ] Without the flag, Plannotator stock lifecycle is unchanged.
 - [ ] Default hooks/CLI without the flag keep existing behavior.
 - [ ] Existing Archon `approval:` nodes unaffected.
@@ -434,7 +434,17 @@ Ordered work packages for a later implementation plan:
 5. review-open CLI + API (crash / stock dismiss recovery).
 6. Unit/integration tests (both repos as applicable).
 7. Update `archon-speckit-feature` (and red-team pair); bundled defaults regenerate if applicable.
-8. Docs: node reference + SDD recipe + team live-URL guidance.
+8. Docs: node reference and SDD recipe; remote sharing remains deferred pending an upstream machine-readable URL contract plus Archon authentication and exposure design.
+
+## 2026-08-13 stabilization correction
+
+`gateId` is the logical process owner for a `plannotator_gate` supervisor instance.
+Normal Plannotator approval is supervisor-owned: the live supervisor resolves the gate and owns workflow continuation after the child reports approval.
+`review-open` is an explicit takeover that replaces the current owner by rotating `gateId` before starting a replacement supervisor.
+Generic Archon approve must not auto-resume this gate type, because an external approval records the decision but must not start a second executor while the live supervisor may still own continuation.
+
+The v1 guarantee is that Archon launches and supervises a local Plannotator session.
+Remote sharing is deferred until Plannotator provides a stable machine-readable URL contract and Archon has an authentication and exposure design for that surface.
 
 ---
 
