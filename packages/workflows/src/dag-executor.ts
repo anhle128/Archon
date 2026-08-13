@@ -3882,7 +3882,10 @@ async function executeLoopGroupNode(
       // (never spliced into source — #2115); matches applyLoopPrevToBodyNode's skip.
       bodyLoopUserInput: userInputForIter,
     };
-    await runLayers(iterCtx);
+    const bodyOutcome = await runLayers(iterCtx);
+    if (bodyOutcome === 'pending') {
+      return { state: 'pending', output: '' };
+    }
     // A body approval/cancel node may have paused or cancelled the run mid-iteration.
     // `paused` is tolerated (a sibling gate in the same iteration layer) — mirror
     // executeLoopNode's between-iteration tolerance — but a terminal/cancelled state
@@ -6930,7 +6933,7 @@ interface RunLayersContext {
  * addition is `ctx.stepNamePrefix` (empty for the top-level DAG → identical `step_name`s).
  * Shared by the top-level DAG and `executeLoopGroupNode`'s per-iteration body execution.
  */
-async function runLayers(ctx: RunLayersContext): Promise<void> {
+async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'> {
   const {
     deps,
     platform,
@@ -7982,6 +7985,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
     // Process layer results — store all outputs, track failures
     const nodeById = new Map(layer.map(n => [n.id, n]));
     let layerHadFailure = false;
+    let layerHadPending = false;
     for (const result of layerResults) {
       if (result.status === 'fulfilled') {
         const { nodeId, output, sessionProvider } = result.value;
@@ -8055,6 +8059,9 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               : undefined;
         }
         if (output.state === 'failed') layerHadFailure = true;
+        if (output.state === 'pending' && !(route && isBlockedByInactiveRouteTarget(nodeId))) {
+          layerHadPending = true;
+        }
         if (
           route &&
           scheduledAtLayerStart.has(nodeId) &&
@@ -8083,6 +8090,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
       getLog().warn({ layerIdx, nodeCount: layer.length }, 'dag_layer_had_failures');
     }
 
+    if (layerHadPending) return 'pending';
+
     if (routeJumpLayerIndex !== undefined && routeJumpLayerIndex <= layerIdx) {
       layerIdx = routeJumpLayerIndex - 1;
     }
@@ -8110,7 +8119,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             { workflowId: workflowRun.id }
           );
         }
-        break;
+        return 'completed';
       }
     } catch (statusErr) {
       // Non-fatal — status check failure should not crash the workflow
@@ -8120,6 +8129,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
       );
     }
   }
+  return 'completed';
 }
 
 /**
@@ -8989,7 +8999,8 @@ export async function executeDagWorkflow(
     stepNamePrefix: '',
     route: routeState,
   };
-  await runLayers(runCtx);
+  const runOutcome = await runLayers(runCtx);
+  if (runOutcome === 'pending') return;
   // Pull the mutated accumulators back into local scope for the terminal tally below.
   const totalCostUsd = runCtx.totalCostUsd;
   const totalTokensIn = runCtx.totalTokensIn;

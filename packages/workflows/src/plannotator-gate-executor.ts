@@ -10,6 +10,7 @@ import { isAbsolute, resolve as resolvePath } from 'path';
 import { createLogger } from '@archon/paths';
 import type { WorkflowDeps, WorkflowConfig, IWorkflowPlatform } from './deps';
 import type { PlannotatorGateNode, WorkflowRun, NodeOutput } from './schemas';
+import type { ApprovalContext } from './schemas/workflow-run';
 import type { ModelAliasPreset, ResolvedAiProfile } from './model-validation';
 import { substituteNodeOutputRefs } from './dag-executor';
 import { parseDocumentPathFromNodeOutput, resolvePlannotatorBinary } from './plannotator-gate';
@@ -77,6 +78,18 @@ function buildReworkPrompt(template: string, documentPath: string, annotations: 
     .join(documentPath)
     .split('$REVIEW_ANNOTATIONS')
     .join(annotations);
+}
+
+export function resolvePlannotatorGateId(workflowRun: WorkflowRun, nodeId: string): string {
+  const raw = workflowRun.metadata.approval;
+  const approval = typeof raw === 'object' && raw !== null ? (raw as ApprovalContext) : undefined;
+  return approval?.type === 'plannotator_gate' &&
+    approval.nodeId === nodeId &&
+    approval.resolved == null &&
+    approval.phase === 'opening' &&
+    typeof approval.gateId === 'string'
+    ? approval.gateId
+    : crypto.randomUUID();
 }
 
 /**
@@ -158,6 +171,7 @@ export async function executePlannotatorGateNode(
     gate.message !== undefined && gate.message.trim().length > 0
       ? substituteNodeOutputRefs(gate.message, nodeOutputs)
       : `Review \`${documentPath}\` in Plannotator, then Approve or Send Annotations.`;
+  const gateId = resolvePlannotatorGateId(workflowRun, node.id);
 
   await safeSendMessage(
     platform,
@@ -173,6 +187,7 @@ export async function executePlannotatorGateNode(
     const result = await runPlannotatorGateSupervisor({
       runId: workflowRun.id,
       nodeId: node.id,
+      gateId,
       cwd,
       initialDocumentPath: documentPath,
       captureResponse: gate.capture_response === true,
@@ -190,6 +205,9 @@ export async function executePlannotatorGateNode(
       },
     });
 
+    if (result.kind === 'superseded') {
+      return { state: 'pending', output: '' };
+    }
     return { state: 'completed', output: result.output };
   } catch (err) {
     const messageText = err instanceof Error ? err.message : String(err);

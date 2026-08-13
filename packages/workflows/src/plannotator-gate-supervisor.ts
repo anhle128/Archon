@@ -15,7 +15,7 @@
  */
 import { createLogger } from '@archon/paths';
 import type { ApprovalContext, WorkflowRun } from './schemas/workflow-run';
-import type { IWorkflowStore, WorkflowEventType } from './store';
+import type { IWorkflowStore } from './store';
 import {
   buildAnnotateArgv,
   parseDocumentPathFromNodeOutput,
@@ -30,25 +30,10 @@ export interface AnnotateChildHandle {
   kill: () => void;
 }
 
-/** One audit event written atomically with a gate resolution (CAS). */
-export interface GateResolutionEvent {
-  event_type: WorkflowEventType;
-  step_name: string;
-  data: Record<string, unknown>;
-}
-
-/**
- * Atomic gate resolution — wrap core `resolveApprovalGate` in production.
- * Returns `{ won: true }` only for the caller that stamped the open gate.
- */
-export type ResolveGateFn = (input: {
-  metadata: Record<string, unknown>;
-  events: GateResolutionEvent[];
-}) => Promise<{ won: boolean }>;
-
 export interface PlannotatorGateSupervisorDeps {
   runId: string;
   nodeId: string;
+  gateId: string;
   cwd: string;
   initialDocumentPath: string;
   captureResponse: boolean;
@@ -61,12 +46,6 @@ export interface PlannotatorGateSupervisorDeps {
     documentPath: string;
     annotations: string;
   }) => Promise<string>;
-  /**
-   * Atomic approval CAS (preferred: core resolveApprovalGate).
-   * When omitted, a store read/check/write fallback is used — inject CAS for
-   * multi-surface installs.
-   */
-  resolveGate?: ResolveGateFn;
   /** Injectable for tests; default uses Bun.spawn + resolvePlannotatorBinary */
   spawnAnnotate?: (documentPath: string) => Promise<AnnotateChildHandle>;
   pollIntervalMs?: number;
@@ -77,18 +56,20 @@ interface Exit {
   stdout: string;
 }
 type Phase = NonNullable<ApprovalContext['phase']>;
-type GateOutcome = 'continue' | 'approved' | 'rejected';
+type GateOutcome = 'continue' | 'approved' | 'rejected' | 'superseded';
+
+export type PlannotatorGateSupervisorResult =
+  | { kind: 'approved'; output: string }
+  | { kind: 'superseded' };
 
 /** Run until the gate is approved; throws on cancel / hard rework failure. */
 export async function runPlannotatorGateSupervisor(
   deps: PlannotatorGateSupervisorDeps
-): Promise<{ output: string }> {
+): Promise<PlannotatorGateSupervisorResult> {
   const pollMs = deps.pollIntervalMs ?? 250;
   const spawn =
     deps.spawnAnnotate ??
     ((p: string): Promise<AnnotateChildHandle> => defaultSpawnAnnotate(p, deps.cwd));
-  const resolveGate: ResolveGateFn =
-    deps.resolveGate ?? ((input): Promise<{ won: boolean }> => fallbackResolveGate(deps, input));
 
   let documentPath = deps.initialDocumentPath;
   let child: AnnotateChildHandle | null = null;
@@ -99,6 +80,7 @@ export async function runPlannotatorGateSupervisor(
   await deps.store.pauseWorkflowRun(deps.runId, {
     type: 'plannotator_gate',
     nodeId: deps.nodeId,
+    gateId: deps.gateId,
     message: deps.message,
     captureResponse: deps.captureResponse,
     document: documentPath,
@@ -116,13 +98,10 @@ export async function runPlannotatorGateSupervisor(
   try {
     while (true) {
       const early = await checkResolved(deps);
-      if (early === 'approved') {
+      const earlyResult = await finishGateOutcome(deps, early);
+      if (earlyResult) {
         dropChild();
-        return await completeApproved(deps);
-      }
-      if (early === 'rejected') {
-        dropChild();
-        throw new Error(`plannotator gate '${deps.nodeId}' was rejected`);
+        return earlyResult;
       }
 
       const run = await requireRun(deps.store, deps.runId);
@@ -134,13 +113,10 @@ export async function runPlannotatorGateSupervisor(
 
       if (!child && phase !== 'idle') {
         const open = await setPhase(deps, documentPath, 'opening');
-        if (open === 'approved') {
+        const openResult = await finishGateOutcome(deps, open);
+        if (openResult) {
           dropChild();
-          return await completeApproved(deps);
-        }
-        if (open === 'rejected') {
-          dropChild();
-          throw new Error(`plannotator gate '${deps.nodeId}' was rejected`);
+          return openResult;
         }
         child = await spawn(documentPath);
         childResult = undefined;
@@ -151,13 +127,10 @@ export async function runPlannotatorGateSupervisor(
         childDone.catch(() => undefined);
         phase = 'waiting_decision';
         const waiting = await setPhase(deps, documentPath, 'waiting_decision');
-        if (waiting === 'approved') {
+        const waitingResult = await finishGateOutcome(deps, waiting);
+        if (waitingResult) {
           dropChild();
-          return await completeApproved(deps);
-        }
-        if (waiting === 'rejected') {
-          dropChild();
-          throw new Error(`plannotator gate '${deps.nodeId}' was rejected`);
+          return waitingResult;
         }
       }
 
@@ -165,13 +138,10 @@ export async function runPlannotatorGateSupervisor(
         await Promise.race([childDone, sleep(pollMs)]);
 
         const mid = await checkResolved(deps);
-        if (mid === 'approved') {
+        const midResult = await finishGateOutcome(deps, mid);
+        if (midResult) {
           dropChild();
-          return await completeApproved(deps);
-        }
-        if (mid === 'rejected') {
-          dropChild();
-          throw new Error(`plannotator gate '${deps.nodeId}' was rejected`);
+          return midResult;
         }
         if (childResult === undefined) continue;
 
@@ -193,30 +163,23 @@ export async function runPlannotatorGateSupervisor(
           );
           phase = 'idle';
           const idleOut = await setPhase(deps, documentPath, 'idle');
-          if (idleOut === 'approved') return await completeApproved(deps);
-          if (idleOut === 'rejected') {
-            throw new Error(`plannotator gate '${deps.nodeId}' was rejected`);
-          }
+          const idleResult = await finishGateOutcome(deps, idleOut);
+          if (idleResult) return idleResult;
           continue;
         }
 
         if (decision.kind === 'approved') {
-          await recordApproval(deps, resolveGate, decision.feedback);
-          // CAS win or external approve → complete. External reject/cancel must not complete.
-          const afterRecord = await checkResolved(deps);
-          if (afterRecord === 'rejected') {
-            throw new Error(`plannotator gate '${deps.nodeId}' was rejected`);
-          }
-          return await completeApproved(deps);
+          const recorded = await recordApproval(deps, decision.feedback);
+          const recordedResult = await finishGateOutcome(deps, recorded);
+          if (recordedResult) return recordedResult;
+          throw new Error(`plannotator gate '${deps.nodeId}' approval was not recorded`);
         }
 
         if (decision.kind === 'annotated') {
           phase = 'reworking';
           const reworkPhase = await setPhase(deps, documentPath, 'reworking');
-          if (reworkPhase === 'approved') return await completeApproved(deps);
-          if (reworkPhase === 'rejected') {
-            throw new Error(`plannotator gate '${deps.nodeId}' was rejected`);
-          }
+          const reworkResult = await finishGateOutcome(deps, reworkPhase);
+          if (reworkResult) return reworkResult;
 
           const prompt = deps.reworkPromptTemplate
             .split('$REVIEW_DOCUMENT')
@@ -232,25 +195,19 @@ export async function runPlannotatorGateSupervisor(
             });
             // External approve may have won during rework — prefer that over new path.
             const afterRework = await checkResolved(deps);
-            if (afterRework === 'approved') return await completeApproved(deps);
-            if (afterRework === 'rejected') {
-              throw new Error(`plannotator gate '${deps.nodeId}' was rejected`);
-            }
+            const afterReworkResult = await finishGateOutcome(deps, afterRework);
+            if (afterReworkResult) return afterReworkResult;
             documentPath = parseDocumentPathFromNodeOutput(raw);
           } catch (err) {
             const afterFail = await checkResolved(deps);
-            if (afterFail === 'approved') return await completeApproved(deps);
-            if (afterFail === 'rejected') {
-              throw new Error(`plannotator gate '${deps.nodeId}' was rejected`);
-            }
+            const afterFailResult = await finishGateOutcome(deps, afterFail);
+            if (afterFailResult) return afterFailResult;
             // Stay paused; do not approve. Surface controlled error to the node.
             // External approve may land during setPhase — honor that outcome.
             phase = 'idle';
             const idleAfterFail = await setPhase(deps, documentPath, 'idle');
-            if (idleAfterFail === 'approved') return await completeApproved(deps);
-            if (idleAfterFail === 'rejected') {
-              throw new Error(`plannotator gate '${deps.nodeId}' was rejected`);
-            }
+            const idleAfterFailResult = await finishGateOutcome(deps, idleAfterFail);
+            if (idleAfterFailResult) return idleAfterFailResult;
             throw err instanceof Error
               ? err
               : new Error(`plannotator gate rework failed: ${String(err)}`);
@@ -258,20 +215,16 @@ export async function runPlannotatorGateSupervisor(
 
           phase = 'waiting_decision';
           const next = await setPhase(deps, documentPath, 'waiting_decision');
-          if (next === 'approved') return await completeApproved(deps);
-          if (next === 'rejected') {
-            throw new Error(`plannotator gate '${deps.nodeId}' was rejected`);
-          }
+          const nextResult = await finishGateOutcome(deps, next);
+          if (nextResult) return nextResult;
           continue;
         }
 
         // stock dismissed (Close without --persist-session)
         phase = 'idle';
         const dismissed = await setPhase(deps, documentPath, 'idle');
-        if (dismissed === 'approved') return await completeApproved(deps);
-        if (dismissed === 'rejected') {
-          throw new Error(`plannotator gate '${deps.nodeId}' was rejected`);
-        }
+        const dismissedResult = await finishGateOutcome(deps, dismissed);
+        if (dismissedResult) return dismissedResult;
         continue;
       }
 
@@ -291,17 +244,33 @@ async function checkResolved(deps: PlannotatorGateSupervisorDeps): Promise<GateO
   const run = await requireRun(deps.store, deps.runId);
   assertNotTerminal(run);
   const approval = readApproval(run);
+  if (!approval || !ownsGate(deps, approval)) return 'superseded';
   if (approval?.resolved === 'approved') return 'approved';
   if (approval?.resolved === 'rejected') return 'rejected';
   return 'continue';
 }
 
-async function completeApproved(deps: PlannotatorGateSupervisorDeps): Promise<{ output: string }> {
+async function finishGateOutcome(
+  deps: PlannotatorGateSupervisorDeps,
+  outcome: GateOutcome
+): Promise<PlannotatorGateSupervisorResult | undefined> {
+  if (outcome === 'continue') return undefined;
+  if (outcome === 'superseded') return { kind: 'superseded' };
+  if (outcome === 'rejected') {
+    throw new Error(`plannotator gate '${deps.nodeId}' was rejected`);
+  }
+  return completeApproved(deps);
+}
+
+async function completeApproved(
+  deps: PlannotatorGateSupervisorDeps
+): Promise<PlannotatorGateSupervisorResult> {
   const run = await requireRun(deps.store, deps.runId);
   const approval = readApproval(run);
+  if (!ownsGate(deps, approval)) return { kind: 'superseded' };
   const output = await readApprovedOutput(deps, approval);
   await resumeAfterGate(deps);
-  return { output };
+  return { kind: 'approved', output };
 }
 
 /**
@@ -320,73 +289,52 @@ async function resumeAfterGate(deps: PlannotatorGateSupervisorDeps): Promise<voi
   }
 }
 
-/**
- * Phase/document patch. Never writes when the gate is already resolved, and
- * never stamps `resolved: null` (would clear a concurrent approve on deep-merge
- * dialects). Re-reads after write so a concurrent stamp wins.
- */
 async function setPhase(
   deps: PlannotatorGateSupervisorDeps,
   document: string,
   phase: Phase
 ): Promise<GateOutcome> {
-  const run = await requireRun(deps.store, deps.runId);
-  assertNotTerminal(run);
-  const current = readApproval(run);
-  if (current?.resolved === 'approved') return 'approved';
-  if (current?.resolved === 'rejected') return 'rejected';
-
-  // Omit `resolved` entirely on phase-only writes so deep-merge dialects keep a
-  // concurrent stamp; never write resolved:null (would clear an external approve).
-  const next: ApprovalContext = {
-    type: 'plannotator_gate',
+  const result = await deps.store.transitionPlannotatorGate({
+    runId: deps.runId,
     nodeId: deps.nodeId,
-    message: current?.message ?? deps.message,
-    captureResponse: current?.captureResponse ?? deps.captureResponse,
+    expectedGateId: deps.gateId,
     document,
     phase,
-  };
-
-  await deps.store.updateWorkflowRun(deps.runId, {
-    metadata: { approval: next },
   });
-
-  return checkResolved(deps);
+  if (result.outcome === 'updated') return 'continue';
+  if (result.outcome === 'resolved') return result.resolved;
+  if (result.outcome === 'superseded') return 'superseded';
+  throw new Error(`plannotator gate aborted: run '${deps.runId}' is ${result.status}`);
 }
 
 async function recordApproval(
   deps: PlannotatorGateSupervisorDeps,
-  resolveGate: ResolveGateFn,
   feedback: string
-): Promise<void> {
+): Promise<GateOutcome> {
   const run = await requireRun(deps.store, deps.runId);
+  assertNotTerminal(run);
   const approval = readApproval(run);
-  if (approval?.resolved === 'approved' || approval?.resolved === 'rejected') {
-    return; // external already won — single complete
-  }
-
+  if (!approval || !ownsGate(deps, approval)) return 'superseded';
+  if (approval.resolved === 'approved') return 'approved';
+  if (approval.resolved === 'rejected') return 'rejected';
   const approvalComment = feedback.trim().length > 0 ? feedback : 'Approved';
   const nodeOutput = deps.captureResponse ? approvalComment : '';
-  const base = approval ?? {
-    type: 'plannotator_gate' as const,
-    nodeId: deps.nodeId,
-    message: deps.message,
-    captureResponse: deps.captureResponse,
-  };
-
-  await resolveGate({
-    metadata: {
+  const { resolved } = await deps.store.resolveApprovalGate(
+    deps.runId,
+    { nodeId: deps.nodeId, gateId: deps.gateId },
+    {
       approval: {
-        ...base,
+        ...approval,
         resolved: 'approved',
         type: 'plannotator_gate',
         nodeId: deps.nodeId,
+        gateId: deps.gateId,
       },
       approval_response: 'approved',
       rejection_reason: '',
       rejection_count: 0,
     },
-    events: [
+    [
       {
         event_type: 'node_completed',
         step_name: deps.nodeId,
@@ -397,31 +345,9 @@ async function recordApproval(
         step_name: deps.nodeId,
         data: { decision: 'approved', comment: approvalComment },
       },
-    ],
-  });
-  // won or lost: caller completes via completeApproved either way
-}
-
-/** Best-effort fallback when deps.resolveGate is not injected (single-writer only). */
-async function fallbackResolveGate(
-  deps: PlannotatorGateSupervisorDeps,
-  input: { metadata: Record<string, unknown>; events: GateResolutionEvent[] }
-): Promise<{ won: boolean }> {
-  const run = await requireRun(deps.store, deps.runId);
-  const approval = readApproval(run);
-  if (approval?.resolved === 'approved' || approval?.resolved === 'rejected') {
-    return { won: false };
-  }
-  await deps.store.updateWorkflowRun(deps.runId, { metadata: input.metadata });
-  for (const event of input.events) {
-    await deps.store.createWorkflowEvent({
-      workflow_run_id: deps.runId,
-      event_type: event.event_type,
-      step_name: event.step_name,
-      data: event.data,
-    });
-  }
-  return { won: true };
+    ]
+  );
+  return resolved ? 'approved' : checkResolved(deps);
 }
 
 async function defaultSpawnAnnotate(
@@ -477,6 +403,13 @@ function readApproval(run: WorkflowRun): ApprovalContext | undefined {
   const raw = run.metadata.approval;
   if (typeof raw !== 'object' || raw === null) return undefined;
   return raw as ApprovalContext;
+}
+
+function ownsGate(
+  deps: PlannotatorGateSupervisorDeps,
+  approval: ApprovalContext | undefined
+): boolean {
+  return approval?.nodeId === deps.nodeId && approval.gateId === deps.gateId;
 }
 
 async function readApprovedOutput(

@@ -48,6 +48,13 @@ mock.module('@archon/paths', () => ({
   captureWorkflowCompleted: mockCaptureWorkflowCompleted,
 }));
 
+const mockExecutePlannotatorGateNode = mock(() =>
+  Promise.resolve({ state: 'pending' as const, output: '' })
+);
+mock.module('./plannotator-gate-executor', () => ({
+  executePlannotatorGateNode: mockExecutePlannotatorGateNode,
+}));
+
 // --- Bootstrap provider registry (after path mocks, before dag-executor import) ---
 import {
   registerBuiltinProviders,
@@ -20495,5 +20502,66 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
     );
     expect(events).toContain('node_failed');
     expect(store.failWorkflowRun).toHaveBeenCalled();
+  });
+});
+
+describe('executeDagWorkflow -- superseded plannotator supervisor', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `dag-plannotator-superseded-${String(Date.now())}`);
+    await mkdir(testDir, { recursive: true });
+    mockExecutePlannotatorGateNode.mockClear();
+  });
+
+  afterEach(async () => {
+    await rm(testDir, { recursive: true, force: true });
+  });
+
+  it('stops before downstream work and terminal writes while status is running', async () => {
+    const store = createMockStore();
+    store.getWorkflowRunStatus = mock(() => Promise.resolve('running' as const));
+    const deps = createMockDeps(store);
+
+    await executeDagWorkflow(
+      deps,
+      createMockPlatform(),
+      'conv-superseded',
+      testDir,
+      {
+        name: 'superseded-gate',
+        nodes: [
+          {
+            id: 'review',
+            plannotator_gate: {
+              document: 'plan.html',
+              rework: { prompt: 'Revise $REVIEW_DOCUMENT using $REVIEW_ANNOTATIONS' },
+            },
+          },
+          { id: 'downstream', command: 'downstream', depends_on: ['review'] },
+        ],
+      },
+      makeWorkflowRun('run-superseded'),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(mockExecutePlannotatorGateNode).toHaveBeenCalledTimes(1);
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
+    expect(
+      (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.some(
+        call =>
+          (call[0] as { event_type?: string; step_name?: string }).event_type ===
+            'node_completed' && (call[0] as { step_name?: string }).step_name === 'review'
+      )
+    ).toBe(false);
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
   });
 });

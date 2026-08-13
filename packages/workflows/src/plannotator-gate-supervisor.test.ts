@@ -8,9 +8,7 @@ import type { IWorkflowStore } from './store';
 import {
   runPlannotatorGateSupervisor,
   type AnnotateChildHandle,
-  type GateResolutionEvent,
   type PlannotatorGateSupervisorDeps,
-  type ResolveGateFn,
 } from './plannotator-gate-supervisor';
 
 // ---------------------------------------------------------------------------
@@ -33,6 +31,8 @@ class FakeGateStore implements Pick<
   | 'createWorkflowEvent'
   | 'getDagResumeSnapshot'
   | 'getWorkflowRunStatus'
+  | 'resolveApprovalGate'
+  | 'transitionPlannotatorGate'
 > {
   run: WorkflowRun;
   events: StoredEvent[] = [];
@@ -77,26 +77,7 @@ class FakeGateStore implements Pick<
     if (id !== this.run.id) return Promise.resolve();
     if (updates.status !== undefined) this.run.status = updates.status;
     if (updates.metadata !== undefined) {
-      const nextMeta = { ...this.run.metadata, ...updates.metadata };
-      // Deep-merge approval; never let a phase patch with missing/null resolved
-      // clear a concurrent terminal stamp (SQLite deep-merge + supervisor omit).
-      if (
-        updates.metadata.approval &&
-        typeof updates.metadata.approval === 'object' &&
-        updates.metadata.approval !== null
-      ) {
-        const prev = (this.run.metadata.approval ?? {}) as ApprovalContext;
-        const incoming = updates.metadata.approval as ApprovalContext;
-        const merged: ApprovalContext = { ...prev, ...incoming };
-        if (
-          (prev.resolved === 'approved' || prev.resolved === 'rejected') &&
-          (incoming.resolved === null || incoming.resolved === undefined)
-        ) {
-          merged.resolved = prev.resolved;
-        }
-        nextMeta.approval = merged;
-      }
-      this.run.metadata = nextMeta;
+      this.run.metadata = { ...this.run.metadata, ...updates.metadata };
     }
     return Promise.resolve();
   };
@@ -138,14 +119,23 @@ class FakeGateStore implements Pick<
     return Promise.resolve({ completedNodeOutputs, tokens: { input: 0, output: 0 } });
   };
 
-  /** CAS gate resolution — only the first resolver wins (mirrors resolveApprovalGate). */
-  resolveGateCas: ResolveGateFn = async input => {
+  resolveApprovalGate: IWorkflowStore['resolveApprovalGate'] = async (
+    id,
+    expected,
+    metadata,
+    events
+  ) => {
+    if (id !== this.run.id || this.run.status !== 'paused') return { resolved: false };
     const approval = this.run.metadata.approval as ApprovalContext | undefined;
-    if (approval?.resolved === 'approved' || approval?.resolved === 'rejected') {
-      return { won: false };
+    if (
+      approval?.resolved != null ||
+      approval?.nodeId !== expected.nodeId ||
+      (expected.gateId !== undefined && approval.gateId !== expected.gateId)
+    ) {
+      return { resolved: false };
     }
-    this.run.metadata = { ...this.run.metadata, ...input.metadata };
-    for (const event of input.events) {
+    this.run.metadata = { ...this.run.metadata, ...metadata };
+    for (const event of events) {
       this.events.push({
         workflow_run_id: this.run.id,
         event_type: event.event_type,
@@ -153,7 +143,31 @@ class FakeGateStore implements Pick<
         data: event.data,
       });
     }
-    return { won: true };
+    return { resolved: true };
+  };
+
+  transitionPlannotatorGate: IWorkflowStore['transitionPlannotatorGate'] = async input => {
+    if (input.runId !== this.run.id) throw new Error(`no run ${input.runId}`);
+    if (this.run.status !== 'paused') return { outcome: 'stopped', status: this.run.status };
+    const approval = this.run.metadata.approval as ApprovalContext | undefined;
+    if (
+      approval?.type !== 'plannotator_gate' ||
+      approval.nodeId !== input.nodeId ||
+      approval.gateId !== input.expectedGateId
+    ) {
+      return { outcome: 'superseded' };
+    }
+    if (approval.resolved != null) {
+      return { outcome: 'resolved', resolved: approval.resolved };
+    }
+    const next: ApprovalContext = {
+      ...approval,
+      gateId: input.nextGateId ?? input.expectedGateId,
+      document: input.document,
+      phase: input.phase,
+    };
+    this.run.metadata = { ...this.run.metadata, approval: next };
+    return { outcome: 'updated', approval: next };
   };
 
   /** Mimic external approveWorkflow via the same CAS. */
@@ -266,8 +280,8 @@ function baseDeps(
     captureResponse: false,
     reworkPromptTemplate: 'Doc: $REVIEW_DOCUMENT\nNotes:\n$REVIEW_ANNOTATIONS',
     message: 'Review the plan',
+    gateId: 'gate-a',
     store: store.asStore(),
-    resolveGate: store.resolveGateCas,
     runReworkAgent: mock(async () => '/tmp/proj/artifacts/plan-v2.html'),
     pollIntervalMs: 15,
     ...overrides,
@@ -475,6 +489,74 @@ describe('runPlannotatorGateSupervisor', () => {
     expect(child.killed).toBe(true);
   });
 
+  test('review-open rotation supersedes the old live supervisor', async () => {
+    const store = new FakeGateStore('run-rotated-live');
+    const child = makeChild({ exitCode: 0, stdout: '', delayMs: 60_000 });
+    const resumeWorkflowRun = mock(store.resumeWorkflowRun);
+    store.resumeWorkflowRun = resumeWorkflowRun;
+
+    const supervisor = runPlannotatorGateSupervisor(
+      baseDeps(store, { spawnAnnotate: async () => child, pollIntervalMs: 10 })
+    );
+
+    await child.waitStarted;
+    const approval = store.run.metadata.approval as ApprovalContext;
+    store.run.metadata = {
+      ...store.run.metadata,
+      approval: { ...approval, gateId: 'gate-b', phase: 'opening' },
+    };
+    store.run.status = 'running';
+
+    await expect(supervisor).resolves.toEqual({ kind: 'superseded' });
+    expect(child.killed).toBe(true);
+    expect(store.events.some(event => event.event_type === 'node_completed')).toBe(false);
+    expect(resumeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  test('old child approval loses resolution after gate rotation', async () => {
+    const store = new FakeGateStore('run-rotated-approval');
+    const child = makeChild({
+      exitCode: 0,
+      stdout: '{"decision":"approved","feedback":"stale"}',
+    });
+    const originalResolve = store.resolveApprovalGate;
+    store.resolveApprovalGate = async (id, expected, metadata, events) => {
+      const approval = store.run.metadata.approval as ApprovalContext;
+      store.run.metadata = {
+        ...store.run.metadata,
+        approval: { ...approval, gateId: 'gate-b', phase: 'opening' },
+      };
+      return originalResolve(id, expected, metadata, events);
+    };
+
+    await expect(
+      runPlannotatorGateSupervisor(baseDeps(store, { spawnAnnotate: async () => child }))
+    ).resolves.toEqual({ kind: 'superseded' });
+    expect(store.events.some(event => event.event_type === 'node_completed')).toBe(false);
+  });
+
+  test('approval survives a concurrent phase transition', async () => {
+    const store = new FakeGateStore('run-phase-vs-approval');
+    const child = makeChild({ exitCode: 0, stdout: '', delayMs: 60_000 });
+    const originalTransition = store.transitionPlannotatorGate;
+    let raced = false;
+    store.transitionPlannotatorGate = async input => {
+      if (!raced && input.phase === 'waiting_decision') {
+        raced = true;
+        store.externalApprove('won-the-race');
+      }
+      return originalTransition(input);
+    };
+
+    const result = await runPlannotatorGateSupervisor(
+      baseDeps(store, { captureResponse: true, spawnAnnotate: async () => child })
+    );
+
+    expect(result).toEqual({ kind: 'approved', output: 'won-the-race' });
+    expect((store.run.metadata.approval as ApprovalContext).resolved).toBe('approved');
+    expect(store.events.filter(event => event.event_type === 'node_completed')).toHaveLength(1);
+  });
+
   // ---------------------------------------------------------------------------
   // Concurrency / race coverage (fix round 1)
   // ---------------------------------------------------------------------------
@@ -558,18 +640,17 @@ describe('runPlannotatorGateSupervisor', () => {
       stdout: '{"decision":"approved","feedback":"from-child"}',
     });
 
-    // Interpose resolveGate: external stamps first, then child CAS loses.
-    const resolveGate: ResolveGateFn = async input => {
+    const originalResolve = store.resolveApprovalGate;
+    store.resolveApprovalGate = async (id, expected, metadata, events) => {
       // External wins first (simulates concurrent approveWorkflow).
       store.externalApprove('from-external');
-      return store.resolveGateCas(input);
+      return originalResolve(id, expected, metadata, events);
     };
 
     const result = await runPlannotatorGateSupervisor(
       baseDeps(store, {
         captureResponse: true,
         spawnAnnotate: async () => child,
-        resolveGate,
       })
     );
 
@@ -586,10 +667,11 @@ describe('runPlannotatorGateSupervisor', () => {
       stdout: '{"decision":"approved","feedback":"from-child"}',
     });
 
-    const resolveGate: ResolveGateFn = async input => {
+    const originalResolve = store.resolveApprovalGate;
+    store.resolveApprovalGate = async (id, expected, metadata, events) => {
       // Concurrent reject wins the open gate before child CAS.
       store.externalReject('nope');
-      return store.resolveGateCas(input);
+      return originalResolve(id, expected, metadata, events);
     };
 
     await expect(
@@ -597,7 +679,6 @@ describe('runPlannotatorGateSupervisor', () => {
         baseDeps(store, {
           captureResponse: true,
           spawnAnnotate: async () => child,
-          resolveGate,
         })
       )
     ).rejects.toThrow(/rejected/i);
@@ -617,15 +698,12 @@ describe('runPlannotatorGateSupervisor', () => {
       stdout: '{"decision":"annotated","feedback":"nits"}',
     });
 
-    // After rework throws, setPhase('idle') reads then writes. Inject external
-    // approve on the idle phase write so setPhase's post-check / merge sees it.
-    const originalUpdate = store.updateWorkflowRun.bind(store);
-    store.updateWorkflowRun = async (id, updates) => {
-      const approval = updates.metadata?.approval as ApprovalContext | undefined;
-      if (approval?.phase === 'idle') {
+    const originalTransition = store.transitionPlannotatorGate;
+    store.transitionPlannotatorGate = async input => {
+      if (input.phase === 'idle') {
         store.externalApprove('approved-during-idle-phase');
       }
-      return originalUpdate(id, updates);
+      return originalTransition(input);
     };
 
     const result = await runPlannotatorGateSupervisor(
