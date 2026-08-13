@@ -63,26 +63,26 @@ describe('parsePlannotatorGateDecisionJson', () => {
     });
   });
 
-  test('uses the last non-empty line when stdout has log noise', () => {
-    const stdout = [
-      'Starting annotate server on :8787',
-      'Session ready',
-      '',
-      '{"decision":"approved","feedback":"ok"}',
-      '',
-    ].join('\n');
-    expect(parsePlannotatorGateDecisionJson(stdout)).toEqual({
+  test('allows surrounding whitespace around the JSON object', () => {
+    expect(
+      parsePlannotatorGateDecisionJson(' \t\n  {"decision":"approved","feedback":"ok"}\r\n\t ')
+    ).toEqual({
       kind: 'approved',
       feedback: 'ok',
     });
   });
 
-  test('throws on empty stdout', () => {
+  test('rejects non-whitespace before or after the JSON object', () => {
+    expect(() => parsePlannotatorGateDecisionJson('log\n{"decision":"approved"}')).toThrow(/json/i);
+    expect(() => parsePlannotatorGateDecisionJson('{"decision":"approved"}\nlog')).toThrow(/json/i);
+  });
+
+  test('throws on an empty result-file payload', () => {
     expect(() => parsePlannotatorGateDecisionJson('')).toThrow();
     expect(() => parsePlannotatorGateDecisionJson('  \n\n')).toThrow();
   });
 
-  test('throws on non-JSON last line (no false approve)', () => {
+  test('throws on a non-JSON payload (no false approve)', () => {
     expect(() => parsePlannotatorGateDecisionJson('The user approved.')).toThrow(/json/i);
   });
 
@@ -94,7 +94,7 @@ describe('parsePlannotatorGateDecisionJson', () => {
     expect(() => parsePlannotatorGateDecisionJson('{"decision":"maybe"}')).toThrow(/decision/i);
   });
 
-  test('throws when last line is a JSON array or primitive', () => {
+  test('throws when the payload is a JSON array or primitive', () => {
     expect(() => parsePlannotatorGateDecisionJson('"approved"')).toThrow();
     expect(() => parsePlannotatorGateDecisionJson('["approved"]')).toThrow();
   });

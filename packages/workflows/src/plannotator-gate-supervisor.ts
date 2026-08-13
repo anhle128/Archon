@@ -33,6 +33,7 @@ export interface AnnotateChildHandle {
     stderr: string;
     resultFilePayload: string | undefined;
     resultFileError?: string;
+    resultFileCleanupError?: string;
   }>;
   kill: () => void;
 }
@@ -60,6 +61,7 @@ interface Exit {
   stderr: string;
   resultFilePayload: string | undefined;
   resultFileError?: string;
+  resultFileCleanupError?: string;
 }
 type Phase = NonNullable<ApprovalContext['phase']>;
 type GateOutcome = 'continue' | 'approved' | 'rejected' | 'superseded';
@@ -188,6 +190,13 @@ export async function runPlannotatorGateSupervisor(
             deps,
             exited,
             `plannotator annotate result file is invalid: ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
+        if (exited.resultFileCleanupError !== undefined) {
+          throw processProtocolError(
+            deps,
+            exited,
+            `plannotator annotate result file cleanup failed: ${exited.resultFileCleanupError.trim().slice(0, 4096)}`
           );
         }
 
@@ -377,6 +386,7 @@ async function defaultSpawnAnnotate(
       const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
       let resultFilePayload: string | undefined;
       let resultFileError: string | undefined;
+      let resultFileCleanupError: string | undefined;
       try {
         resultFilePayload = await readFile(resultFilePath, 'utf8');
       } catch (err) {
@@ -387,10 +397,17 @@ async function defaultSpawnAnnotate(
         try {
           await rm(resultFilePath, { force: true });
         } catch (err) {
-          resultFileError ??= `cleanup failed: ${err instanceof Error ? err.message : String(err)}`;
+          resultFileCleanupError = err instanceof Error ? err.message : String(err);
         }
       }
-      return { exitCode, stdout, stderr, resultFilePayload, resultFileError };
+      return {
+        exitCode,
+        stdout,
+        stderr,
+        resultFilePayload,
+        resultFileError,
+        resultFileCleanupError,
+      };
     },
     kill: (): void => {
       try {

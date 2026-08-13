@@ -35,26 +35,20 @@ export function parseDocumentPathFromNodeOutput(output: string): string {
 
 /**
  * Parse a Plannotator annotate result-file payload into a typed decision.
- * Uses the last non-empty line for compatibility with a trailing newline.
+ * Allows surrounding whitespace but rejects any content outside the JSON object.
  * Requires a JSON object with `decision` ∈ approved|annotated|dismissed.
  */
 export function parsePlannotatorGateDecisionJson(payload: string): PlannotatorGateDecision {
-  let lastNonEmpty: string | undefined;
-  for (const line of payload.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (trimmed.length > 0) lastNonEmpty = trimmed;
-  }
-  if (lastNonEmpty === undefined) {
+  const json = payload.trim();
+  if (json.length === 0) {
     throw new Error('plannotator gate result file is empty — expected a JSON decision line');
   }
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(lastNonEmpty);
+    parsed = JSON.parse(json);
   } catch {
-    throw new Error(
-      `plannotator gate decision is not valid JSON (last non-empty line): ${lastNonEmpty}`
-    );
+    throw new Error(`plannotator gate decision is not valid JSON: ${json}`);
   }
 
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {

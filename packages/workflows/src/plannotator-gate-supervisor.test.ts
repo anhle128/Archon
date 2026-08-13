@@ -260,7 +260,10 @@ function deferred<T>(): {
 
 function makeChild(exit: {
   exitCode: number;
-  stdout: string;
+  stdout?: string;
+  stderr?: string;
+  resultFileError?: string;
+  resultFileCleanupError?: string;
   /** Delay before exit resolves; 0 = immediate on wait */
   delayMs?: number;
 }): AnnotateChildHandle & { killed: boolean; waitStarted: Promise<void> } {
@@ -280,8 +283,10 @@ function makeChild(exit: {
       return {
         exitCode: exit.exitCode,
         stdout: '',
-        stderr: '',
+        stderr: exit.stderr ?? '',
         resultFilePayload: exit.stdout,
+        resultFileError: exit.resultFileError,
+        resultFileCleanupError: exit.resultFileCleanupError,
       };
     },
     kill: () => {
@@ -586,6 +591,60 @@ describe('runPlannotatorGateSupervisor', () => {
     expect(result).toEqual({ kind: 'approved', output: 'won-the-race' });
     expect((store.run.metadata.approval as ApprovalContext).resolved).toBe('approved');
     expect(store.events.filter(event => event.event_type === 'node_completed')).toHaveLength(1);
+  });
+
+  test.each([
+    [
+      'non-zero process',
+      { exitCode: 9, stdout: 'not-json', resultFileCleanupError: 'cleanup exploded' },
+      /exited with code 9/i,
+    ],
+    [
+      'unreadable result file',
+      {
+        exitCode: 0,
+        resultFileError: 'read exploded',
+        resultFileCleanupError: 'cleanup exploded',
+      },
+      /could not be read.*read exploded/i,
+    ],
+    [
+      'missing result file',
+      { exitCode: 0, resultFileCleanupError: 'cleanup exploded' },
+      /result file is missing/i,
+    ],
+    [
+      'invalid result file',
+      { exitCode: 0, stdout: 'not-json', resultFileCleanupError: 'cleanup exploded' },
+      /result file is invalid.*valid JSON/i,
+    ],
+  ])('%s failure takes precedence over cleanup failure', async (_name, exit, expected) => {
+    const store = new FakeGateStore(`run-primary-${exit.exitCode}-${_name}`);
+    const child = makeChild(exit);
+
+    await expect(
+      runPlannotatorGateSupervisor(baseDeps(store, { spawnAnnotate: async () => child }))
+    ).rejects.toThrow(expected);
+  });
+
+  test('reports a bounded cleanup-only failure', async () => {
+    const store = new FakeGateStore('run-cleanup-only');
+    const child = makeChild({
+      exitCode: 0,
+      stdout: '{"decision":"approved"}',
+      resultFileCleanupError: `cleanup exploded ${'x'.repeat(10_000)}`,
+    });
+
+    let error: Error | undefined;
+    try {
+      await runPlannotatorGateSupervisor(baseDeps(store, { spawnAnnotate: async () => child }));
+    } catch (caught) {
+      error = caught as Error;
+    }
+
+    expect(error?.message).toMatch(/cleanup.*exploded/i);
+    expect(error?.message.length).toBeLessThan(4300);
+    expect(store.run.status).toBe('paused');
   });
 
   // ---------------------------------------------------------------------------
