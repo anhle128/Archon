@@ -32,9 +32,10 @@ import { Database } from 'bun:sqlite';
 // `{ok:false, runId, error:'not_found'}` shape with no `correlationId`.
 
 const CLI_ENTRY = join(import.meta.dir, '..', 'cli.ts');
+const CLI_PROCESS_TIMEOUT_MS = 20_000;
 
-// Fresh CLI subprocesses may wait for SQLite's 5s busy timeout plus startup under package-parallel load.
-setDefaultTimeout(10_000);
+// Leave enough headroom for SQLite's 5s busy timeout and startup under package-parallel load.
+setDefaultTimeout(30_000);
 
 let isolatedHome: string;
 let isolatedRepo: string;
@@ -72,6 +73,8 @@ async function runCli(args: string[], cwd: string = isolatedRepo): Promise<CliRe
     stdout: 'pipe',
     stderr: 'pipe',
     env: childEnv,
+    timeout: CLI_PROCESS_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
   });
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(proc.stdout).text(),
@@ -1362,7 +1365,7 @@ describe('workflow resume/retry/cancel --json CLI dispatch E2E — real subproce
 
     expect(exitCode).toBe(0);
     expect(stderr).toBe('');
-  }, 10_000);
+  });
 
   // 3.3D-CLI-024 [P0] TD-003 — parent acknowledges dispatch; exact-node worker owns validation
   test('3.3D-CLI-024: targeted retry matches the JSON contract and records invalid-node validation as a later worker outcome', async () => {
@@ -1454,7 +1457,7 @@ describe('workflow resume/retry/cancel --json CLI dispatch E2E — real subproce
     }
     expect(logContent).toContain("Retry target node 'missing-target'");
     expect(queryRunStatus(runId)).toBe('failed');
-  }, 10_000);
+  });
 
   // 3.3D-CLI-025 [P0] R1-F23 — resume success envelope for a paused run
   test('3.3D-CLI-025: `workflow resume <paused-run> --json` emits success envelope with resumable:true, executed:false', async () => {
@@ -1927,7 +1930,7 @@ describe('R1-F30 — durable side-effect proofs (Story 3.3d)', () => {
     }
 
     expect(logContent).toContain('retry-worker-proof');
-  }, 15_000);
+  });
 
   // 3.3D-CLI-045 [P0] TD-003 — exact-node worker owns claim, preparation, and execution
   test('3.3D-CLI-045: targeted retry worker claims and completes the exact persisted failed node once', async () => {
@@ -1984,7 +1987,7 @@ describe('R1-F30 — durable side-effect proofs (Story 3.3d)', () => {
     expect(status).toBe('completed');
     expect(targetCompletionCount).toBe(1);
     expect(queryNodeEventCount(runId, 'node_retry_requested', 'exact-target')).toBe(1);
-  }, 15_000);
+  });
 
   // 3.3D-CLI-046 [P0] TD-002 — duplicate parents may ack; exactly one worker executes
   test('3.3D-CLI-046: concurrent whole-run retry dispatches produce one winning worker execution', async () => {
@@ -2041,7 +2044,7 @@ describe('R1-F30 — durable side-effect proofs (Story 3.3d)', () => {
       .map(file => readFileSync(join(isolatedHome, 'logs', file), 'utf8'))
       .join('\n');
     expect(combinedLogs.split('concurrent-worker-proof').length - 1).toBe(1);
-  }, 20_000);
+  });
 });
 
 // ---------------------------------------------------------------------------
