@@ -61,7 +61,7 @@ export function parsePlannotatorGateDecisionJson(payload: string): PlannotatorGa
   const decision = record.decision;
   if (!isDecisionKind(decision)) {
     throw new Error(
-      `plannotator gate decision field missing or unknown: ${JSON.stringify(decision)}`
+      'plannotator gate decision field is missing or unknown — expected approved, annotated, or dismissed'
     );
   }
 

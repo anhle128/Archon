@@ -986,6 +986,36 @@ done`);
     expect(logDiagnostic.length).toBeLessThan(4300);
   });
 
+  test('bounds the diagnostic for an oversized unknown decision', async () => {
+    const { deps } = setup(`
+printf '%s' '{"decision":"' > "$7"
+i=0
+while [ "$i" -lt 640 ]; do
+  printf '%s' '0123456789abcdef0123456789abcdef' >> "$7"
+  i=$((i + 1))
+done
+printf '%s' '"}' >> "$7"`);
+
+    let error: Error | undefined;
+    let logDiagnostic = '';
+    const stdoutWrite = spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
+      logDiagnostic += String(chunk);
+      return true;
+    });
+    try {
+      await runPlannotatorGateSupervisor(deps);
+    } catch (caught) {
+      error = caught as Error;
+    } finally {
+      stdoutWrite.mockRestore();
+    }
+
+    expect(error?.message).toMatch(/result file is invalid.*decision field/i);
+    expect(error?.message.length).toBeLessThan(4300);
+    expect(logDiagnostic).toContain('plannotator_gate.process_protocol_failed');
+    expect(logDiagnostic.length).toBeLessThan(4300);
+  });
+
   test('rejects an unreadable result-file path', async () => {
     const { deps } = setup(`mkdir "$7"`);
 
