@@ -176,6 +176,7 @@ interface EmbeddedGateConfig {
 }
 
 interface EmbeddedTerminalWatcher {
+  readonly ready: Promise<void>;
   readonly terminalStatus: string | undefined;
   stop: () => void;
 }
@@ -221,12 +222,13 @@ function watchEmbeddedGateTerminalStatus(
     }
   };
 
-  void checkStatus();
+  const ready = checkStatus();
   const interval = setInterval(() => {
     void checkStatus();
   }, CANCEL_CHECK_INTERVAL_MS);
 
   return {
+    ready,
     get terminalStatus(): string | undefined {
       return terminalStatus;
     },
@@ -275,7 +277,6 @@ async function runEmbeddedGateAiCall(
     args.workflowTier,
     execContext
   );
-  const aiClient = deps.getAgentProvider(providerId);
   const abortController = new AbortController();
   let idleTimedOut = false;
   const options: SendQueryOptions = {
@@ -296,6 +297,11 @@ async function runEmbeddedGateAiCall(
   let finalText = '';
   const terminalWatcher = watchEmbeddedGateTerminalStatus(args, phase, abortController);
   try {
+    await terminalWatcher.ready;
+    if (terminalWatcher.terminalStatus !== undefined) {
+      throw terminalEmbeddedGateError(phase, terminalWatcher.terminalStatus);
+    }
+    const aiClient = deps.getAgentProvider(providerId);
     for await (const msg of withIdleTimeout(
       aiClient.sendQuery(prompt, cwd, undefined, options),
       node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS,

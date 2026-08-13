@@ -198,6 +198,14 @@ function gateAttemptKey(gateId: string, attempt: number): string {
   return `gate-${encodeURIComponent(gateId)}-attempt-${String(attempt)}.json`;
 }
 
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve: (value: T) => void;
+  const promise = new Promise<T>(completion => {
+    resolve = completion;
+  });
+  return { promise, resolve };
+}
+
 function releaseDecision(
   fake: FakePlannotator,
   gateId: string,
@@ -904,22 +912,12 @@ describe('executePlannotatorGateNode production spawn path', () => {
     await expect(execution).resolves.toEqual({ state: 'completed', output: '' });
   });
 
-  test('aborts a cancelled prepare before accepting provider output', async () => {
+  test('does not start prepare when the initial workflow status is cancelled', async () => {
     const run = makeRun({});
     const store = new IntegrationGateStore(run);
     store.getWorkflowRunStatus = mock(() => Promise.resolve('cancelled'));
-    let receivedSignal: AbortSignal | undefined;
-    const sendQuery = mock(async function* (
-      _prompt: string,
-      _cwd: string,
-      _resumeSessionId: string | undefined,
-      options: SendQueryOptions | undefined
-    ) {
-      receivedSignal = options?.abortSignal;
-      if (!receivedSignal?.aborted) {
-        await new Promise<void>(resolve => receivedSignal?.addEventListener('abort', resolve));
-      }
-      yield { type: 'assistant' as const, content: join(cwd, 'ignored.html') };
+    const sendQuery = mock(async function* () {
+      throw new Error('cancelled prepare must not dispatch a provider call');
     });
     const getAgentProvider = mock(
       () =>
@@ -940,11 +938,61 @@ describe('executePlannotatorGateNode production spawn path', () => {
         integrationArgs(run, store, node, cwd, artifactsDir, getAgentProvider)
       )
     ).resolves.toMatchObject({ state: 'failed', error: expect.stringMatching(/cancelled/i) });
-    expect(receivedSignal?.aborted).toBe(true);
+    expect(sendQuery).not.toHaveBeenCalled();
+    expect(getAgentProvider).not.toHaveBeenCalled();
     expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
   });
 
-  test('aborts a cancelled rework without opening another annotate session', async () => {
+  test('waits for a delayed cancelled initial status before starting prepare', async () => {
+    const document = join(cwd, 'prepared-race.html');
+    const run = makeRun({});
+    const store = new IntegrationGateStore(run);
+    const statusRequested = deferred<void>();
+    const initialStatus = deferred<string | null>();
+    store.getWorkflowRunStatus = mock(() => {
+      statusRequested.resolve();
+      return initialStatus.promise;
+    });
+    let providerOutputConsumed = false;
+    const sendQuery = mock(async function* () {
+      providerOutputConsumed = true;
+      writeFileSync(document, '<html><body>must not be accepted</body></html>');
+      yield { type: 'assistant' as const, content: document };
+    });
+    const getAgentProvider = mock(
+      () =>
+        ({ sendQuery, getType: () => 'claude', getCapabilities: () => ({}) }) as ReturnType<
+          WorkflowDeps['getAgentProvider']
+        >
+    );
+    const node: PlannotatorGateNode = {
+      id: 'review',
+      plannotator_gate: {
+        prepare: { prompt: 'Create a review.' },
+        rework: { prompt: 'Revise $REVIEW_DOCUMENT using $REVIEW_ANNOTATIONS' },
+      },
+    };
+
+    const execution = executePlannotatorGateNode(
+      integrationArgs(run, store, node, cwd, artifactsDir, getAgentProvider)
+    );
+    await statusRequested.promise;
+    expect(sendQuery).not.toHaveBeenCalled();
+    expect(providerOutputConsumed).toBe(false);
+    expect(getAgentProvider).not.toHaveBeenCalled();
+
+    initialStatus.resolve('cancelled');
+    await expect(execution).resolves.toMatchObject({
+      state: 'failed',
+      error: expect.stringMatching(/cancelled/i),
+    });
+    expect(sendQuery).not.toHaveBeenCalled();
+    expect(getAgentProvider).not.toHaveBeenCalled();
+    expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+    expect(existsSync(fake.invocationLog)).toBe(false);
+  });
+
+  test('does not start cancelled rework or open another annotate session', async () => {
     const document = join(cwd, 'plan.html');
     writeFileSync(document, '<html><body>plan</body></html>');
     const run = makeRun({
@@ -955,18 +1003,8 @@ describe('executePlannotatorGateNode production spawn path', () => {
       resolved: null,
     });
     const store = new IntegrationGateStore(run);
-    let receivedSignal: AbortSignal | undefined;
-    const sendQuery = mock(async function* (
-      _prompt: string,
-      _cwd: string,
-      _resumeSessionId: string | undefined,
-      options: SendQueryOptions | undefined
-    ) {
-      receivedSignal = options?.abortSignal;
-      if (!receivedSignal?.aborted) {
-        await new Promise<void>(resolve => receivedSignal?.addEventListener('abort', resolve));
-      }
-      yield { type: 'assistant' as const, content: join(cwd, 'ignored.html') };
+    const sendQuery = mock(async function* () {
+      throw new Error('cancelled rework must not dispatch a provider call');
     });
     const getAgentProvider = mock(
       () =>
@@ -995,7 +1033,8 @@ describe('executePlannotatorGateNode production spawn path', () => {
       state: 'failed',
       error: expect.stringMatching(/cancelled/i),
     });
-    expect(receivedSignal?.aborted).toBe(true);
+    expect(sendQuery).not.toHaveBeenCalled();
+    expect(getAgentProvider).not.toHaveBeenCalled();
     expect(existsSync(fake.invocationLog)).toBe(true);
     expect(readFileSync(fake.invocationLog, 'utf8').trim().split('\n')).toHaveLength(1);
   });
