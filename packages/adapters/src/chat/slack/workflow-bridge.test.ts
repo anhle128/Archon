@@ -34,8 +34,14 @@ mock.module('@archon/workflows/event-emitter', () => ({
 }));
 
 const mockApproveWorkflow = mock<
-  (runId: string, comment?: string) => Promise<{ type: 'approval_gate' | 'interactive_loop' }>
->(async () => ({ type: 'approval_gate' }));
+  (
+    runId: string,
+    comment?: string
+  ) => Promise<{
+    type: 'approval_gate' | 'interactive_loop';
+    continuation: 'caller_resume' | 'live_plannotator_supervisor';
+  }>
+>(async () => ({ type: 'approval_gate', continuation: 'caller_resume' }));
 const mockRejectWorkflow = mock<
   (runId: string, reason?: string) => Promise<{ cancelled: boolean; maxAttemptsReached: boolean }>
 >(async () => ({ cancelled: false, maxAttemptsReached: false }));
@@ -168,7 +174,10 @@ describe('SlackWorkflowBridge', () => {
     mockGetConversationId.mockReset();
     mockSubscribe.mockClear();
     mockApproveWorkflow.mockReset();
-    mockApproveWorkflow.mockResolvedValue({ type: 'approval_gate' });
+    mockApproveWorkflow.mockResolvedValue({
+      type: 'approval_gate',
+      continuation: 'caller_resume',
+    });
     mockRejectWorkflow.mockReset();
     mockRejectWorkflow.mockResolvedValue({ cancelled: false, maxAttemptsReached: false });
     mockAbandonWorkflow.mockReset();
@@ -293,6 +302,43 @@ describe('SlackWorkflowBridge', () => {
     expect(headerText).toContain('Approved');
     expect(headerText).toContain('<@U123>');
     expect(headerText).toContain('workflow resumed');
+  });
+
+  test('plannotator approve records the decision for the live supervisor', async () => {
+    const { adapter, updated, triggerMap, dispatchAction } = makeFakeAdapter();
+    triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
+    mockGetConversationId.mockReturnValue('C1:111.0');
+    mockApproveWorkflow.mockResolvedValue({
+      type: 'approval_gate',
+      continuation: 'live_plannotator_supervisor',
+    });
+
+    new SlackWorkflowBridge(adapter as never).attach();
+    await dispatchEvent({
+      type: 'workflow_started',
+      runId: 'r1',
+      workflowName: 'assist',
+      conversationId: 'conv-db-uuid',
+    });
+    await dispatchEvent({
+      type: 'approval_pending',
+      runId: 'r1',
+      nodeId: 'review',
+      message: 'Approve?',
+    });
+
+    await dispatchAction('approve:r1:review', {
+      user: { id: 'U123' },
+      channel: { id: 'C1' },
+      message: { ts: '2.000' },
+    });
+
+    expect(mockApproveWorkflow).toHaveBeenCalledWith('r1');
+    const headerText = (updated[0]?.blocks?.[0] as { text?: { text?: string } } | undefined)?.text
+      ?.text;
+    expect(headerText).toContain('approval recorded');
+    expect(headerText).toContain('live Plannotator supervisor continues');
+    expect(headerText).not.toContain('workflow resumed');
   });
 
   test('reject button under retry threshold notes workflow will retry', async () => {

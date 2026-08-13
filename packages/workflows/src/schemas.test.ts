@@ -7,6 +7,7 @@ import {
   isLoopNode,
   isLoopGroupNode,
   isIncludeNode,
+  isPlannotatorGateNode,
   isTriggerRule,
   TRIGGER_RULES,
   SCRIPT_NODE_AI_FIELDS,
@@ -1502,5 +1503,122 @@ describe('readSubrunMetadata — inputs (#2470)', () => {
     expect(readSubrunMetadata({ inputs: ['a'] }).inputs).toBeUndefined();
     expect(readSubrunMetadata({}).inputs).toBeUndefined();
     expect(readSubrunMetadata(undefined).inputs).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// dagNodeSchema — plannotator_gate
+// ---------------------------------------------------------------------------
+
+describe('dagNodeSchema — plannotator_gate', () => {
+  test('parses plannotator_gate node', () => {
+    const raw = {
+      id: 'clarify-gate',
+      plannotator_gate: {
+        document: '$explain.output',
+        rework: { prompt: 'fix $REVIEW_ANNOTATIONS' },
+      },
+    };
+    const parsed = dagNodeSchema.safeParse(raw);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(isPlannotatorGateNode(parsed.data)).toBe(true);
+      if (isPlannotatorGateNode(parsed.data)) {
+        expect(parsed.data.plannotator_gate.document).toBe('$explain.output');
+        expect(parsed.data.plannotator_gate.rework.prompt).toBe('fix $REVIEW_ANNOTATIONS');
+      }
+    }
+  });
+
+  test('parses optional message, capture_response, and rework provider/model/effort', () => {
+    const parsed = dagNodeSchema.safeParse({
+      id: 'clarify-gate',
+      plannotator_gate: {
+        document: '$plan.output',
+        message: 'Review the plan',
+        capture_response: true,
+        rework: {
+          prompt: 'Address annotations: $REVIEW_ANNOTATIONS',
+          provider: 'claude',
+          model: 'sonnet',
+          effort: 'high',
+        },
+      },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success && isPlannotatorGateNode(parsed.data)) {
+      expect(parsed.data.plannotator_gate.message).toBe('Review the plan');
+      expect(parsed.data.plannotator_gate.capture_response).toBe(true);
+      expect(parsed.data.plannotator_gate.rework.provider).toBe('claude');
+      expect(parsed.data.plannotator_gate.rework.model).toBe('sonnet');
+      expect(parsed.data.plannotator_gate.rework.effort).toBe('high');
+    }
+  });
+
+  test('rejects plannotator_gate without rework.prompt', () => {
+    const parsed = dagNodeSchema.safeParse({
+      id: 'g',
+      plannotator_gate: { document: '/tmp/a.html' },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  test('rejects plannotator_gate without document', () => {
+    const parsed = dagNodeSchema.safeParse({
+      id: 'g',
+      plannotator_gate: { rework: { prompt: 'fix it' } },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  test('rejects empty document', () => {
+    const parsed = dagNodeSchema.safeParse({
+      id: 'g',
+      plannotator_gate: { document: '', rework: { prompt: 'fix it' } },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  test('rejects empty rework.prompt', () => {
+    const parsed = dagNodeSchema.safeParse({
+      id: 'g',
+      plannotator_gate: { document: 'p', rework: { prompt: '' } },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  test('rejects plannotator_gate combined with approval', () => {
+    const parsed = dagNodeSchema.safeParse({
+      id: 'g',
+      approval: { message: 'x' },
+      plannotator_gate: { document: 'p', rework: { prompt: 'y' } },
+    });
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues[0].message).toContain('mutually exclusive');
+    }
+  });
+
+  test('rejects plannotator_gate combined with prompt', () => {
+    const parsed = dagNodeSchema.safeParse({
+      id: 'g',
+      prompt: 'do something',
+      plannotator_gate: { document: 'p', rework: { prompt: 'y' } },
+    });
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues[0].message).toContain('mutually exclusive');
+    }
+  });
+
+  test('isPlannotatorGateNode returns false for approval nodes', () => {
+    const parsed = dagNodeSchema.safeParse({
+      id: 'gate',
+      approval: { message: 'Approve?' },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(isPlannotatorGateNode(parsed.data)).toBe(false);
+    }
   });
 });

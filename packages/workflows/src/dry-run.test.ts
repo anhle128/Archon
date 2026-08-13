@@ -280,6 +280,49 @@ describe('dryRunWorkflow', () => {
     expect(paused.unusedStubs).toEqual(['after']);
   });
 
+  test('auto-approves or pauses plannotator gates', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'plannotator',
+      nodes: [
+        { id: 'before', prompt: 'before' },
+        {
+          id: 'gate',
+          plannotator_gate: {
+            document: '$before.output',
+            rework: { prompt: 'Apply $REVIEW_ANNOTATIONS to $REVIEW_DOCUMENT' },
+          },
+          depends_on: ['before'],
+        },
+      ],
+    });
+    const automatic = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { before: '/tmp/review.html' },
+    });
+    expect(automatic.trace.at(-1)).toMatchObject({
+      nodeType: 'plannotator_gate',
+      state: 'completed',
+      reason: 'auto-approved',
+      resolvedText: '/tmp/review.html',
+    });
+
+    const paused = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { before: '/tmp/review.html' },
+      pauseAtGates: true,
+    });
+    expect(paused).toMatchObject({ outcome: 'paused' });
+    expect(paused.trace.at(-1)).toMatchObject({
+      nodeType: 'plannotator_gate',
+      state: 'paused',
+      reason: 'plannotator gate',
+    });
+  });
+
   test('simulates loop completion and max-iteration failure', async () => {
     const completing = makeTestWorkflow({
       name: 'loop-ok',

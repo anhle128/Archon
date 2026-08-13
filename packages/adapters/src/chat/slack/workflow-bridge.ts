@@ -479,9 +479,11 @@ export class SlackWorkflowBridge {
           // otherwise the loop runs another iteration. Hedge like manage_run does —
           // this bridge approves with no comment, so both outcomes are reachable.
           outcomeNote =
-            result.type === 'interactive_loop'
-              ? 'recorded — finalizes if the gate paused on a completion signal, otherwise the loop runs another iteration on resume'
-              : 'workflow resumed';
+            result.continuation === 'live_plannotator_supervisor'
+              ? 'approval recorded — live Plannotator supervisor continues the workflow'
+              : result.type === 'interactive_loop'
+                ? 'recorded — finalizes if the gate paused on a completion signal, otherwise the loop runs another iteration on resume'
+                : 'workflow resumed';
         } else {
           const result = await workflowOperations.rejectWorkflow(runId);
           outcomeNote = result.cancelled

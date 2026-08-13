@@ -1299,7 +1299,15 @@ export async function handleMessage(
         try {
           // Shared gate logic (events, telemetry, metadata staging) — the run
           // stays 'paused' with metadata.approval.resolved = 'approved'.
-          await approveWorkflow(pausedRun.id, message);
+          const approvalResult = await approveWorkflow(pausedRun.id, message);
+
+          if (approvalResult.continuation === 'live_plannotator_supervisor') {
+            await platform.sendMessage(
+              conversationId,
+              `Approved **${pausedRun.workflow_name}**. The live Plannotator supervisor will continue this workflow.`
+            );
+            return;
+          }
 
           // Discover workflow and resume
           const { workflows: discoveredWorkflows } = await discoverAllWorkflows(conversation);

@@ -35,7 +35,7 @@ spec-kit-ralph/
 - A feature directory under `specs/` with a `tasks.md` file.
 - `git` and `jq` on `PATH`.
 - The selected loop tool installed and authenticated.
-  `ralph.sh` supports `claude`, `codex`, `pi`, `omp`, `amp`, `test-gpt5.5-codex`, and `ccs-bp`.
+  `ralph.sh` supports `claude`, `codex`, `grok`, `pi`, `omp`, `amp`, `test-gpt5.5-codex`, and `ccs-bp`.
 
 `ralph.sh` reads `AGENTS.md` from the installed extension directory and passes it to the selected agent CLI each iteration.
 
@@ -118,6 +118,7 @@ Override the configured tool with `--tool`:
 ```bash
 RALPH_I_UNDERSTAND_DANGEROUS=1 bash .specify/extensions/ralph-loop/ralph.sh --tool claude 50
 RALPH_I_UNDERSTAND_DANGEROUS=1 bash .specify/extensions/ralph-loop/ralph.sh --tool codex 50
+RALPH_I_UNDERSTAND_DANGEROUS=1 bash .specify/extensions/ralph-loop/ralph.sh --tool grok 50
 RALPH_I_UNDERSTAND_DANGEROUS=1 bash .specify/extensions/ralph-loop/ralph.sh --tool pi 50
 RALPH_I_UNDERSTAND_DANGEROUS=1 bash .specify/extensions/ralph-loop/ralph.sh --tool omp 50
 ```
@@ -195,6 +196,8 @@ runs. In the current script, the CLI can override only:
 - `max_iterations`, with a positional number such as `50`.
 
 For Pi and OMP, `model` maps to `--model` and `reasoning_effort` maps to `--thinking` on the selected CLI.
+For Grok, `model` maps to `--model` and `reasoning_effort` maps to `--reasoning-effort`.
+Before selecting `tool: grok`, run `grok models` for the model ID and choose an effort level supported by that model (for example, `high` rather than Codex's `xhigh`).
 
 ## Task Format Expected by the Converter
 

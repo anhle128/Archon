@@ -56,7 +56,7 @@ import { discoverWorkflows } from './workflow-discovery';
 import { validateWorkflowResources } from './validator';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
-import type { WorkflowRun } from './schemas/workflow-run';
+import type { ApprovalContext, WorkflowRun } from './schemas/workflow-run';
 import type { WorkflowDefinition } from './schemas/workflow';
 import type {
   ChildIsolationResolver,
@@ -156,6 +156,9 @@ class InMemoryStore implements IWorkflowStore {
     return Promise.resolve(this.clone(r));
   };
 
+  resumeApprovedGate: IWorkflowStore['resumeApprovedGate'] = () =>
+    Promise.resolve({ resumed: false });
+
   updateWorkflowRun: IWorkflowStore['updateWorkflowRun'] = (id, updates) => {
     const r = this.runs.get(id);
     if (r) {
@@ -163,6 +166,51 @@ class InMemoryStore implements IWorkflowStore {
       if (updates.metadata) r.metadata = { ...r.metadata, ...updates.metadata };
     }
     return Promise.resolve();
+  };
+
+  resolveApprovalGate: IWorkflowStore['resolveApprovalGate'] = (id, expected, metadata, events) => {
+    const run = this.runs.get(id);
+    const approval = run?.metadata.approval as ApprovalContext | undefined;
+    if (
+      !run ||
+      run.status !== 'paused' ||
+      !approval ||
+      approval.resolved != null ||
+      approval.nodeId !== expected.nodeId ||
+      (expected.gateId !== undefined && approval.gateId !== expected.gateId)
+    ) {
+      return Promise.resolve({ resolved: false });
+    }
+    run.metadata = { ...run.metadata, ...metadata };
+    this.events.push(...events.map(event => ({ workflow_run_id: id, ...event })));
+    return Promise.resolve({ resolved: true });
+  };
+
+  transitionPlannotatorGate: IWorkflowStore['transitionPlannotatorGate'] = input => {
+    const run = this.runs.get(input.runId);
+    if (!run) throw new Error(`no run ${input.runId}`);
+    if (run.status !== 'paused') {
+      return Promise.resolve({ outcome: 'stopped', status: run.status });
+    }
+    const approval = run.metadata.approval as ApprovalContext | undefined;
+    if (
+      approval?.type !== 'plannotator_gate' ||
+      approval.nodeId !== input.nodeId ||
+      approval.gateId !== input.expectedGateId
+    ) {
+      return Promise.resolve({ outcome: 'superseded' });
+    }
+    if (approval.resolved != null) {
+      return Promise.resolve({ outcome: 'resolved', resolved: approval.resolved });
+    }
+    const nextApproval: ApprovalContext = {
+      ...approval,
+      gateId: input.nextGateId ?? input.expectedGateId,
+      document: input.document,
+      phase: input.phase,
+    };
+    run.metadata = { ...run.metadata, approval: nextApproval };
+    return Promise.resolve({ outcome: 'updated', approval: nextApproval });
   };
 
   updateWorkflowActivity = (): Promise<void> => Promise.resolve();

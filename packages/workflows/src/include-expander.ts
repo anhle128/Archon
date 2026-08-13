@@ -36,6 +36,7 @@ import {
   isLoopNode,
   isLoopGroupNode,
   isApprovalNode,
+  isPlannotatorGateNode,
   isCancelNode,
   isBashNode,
   isScriptNode,
@@ -156,8 +157,10 @@ class IncludeExpansionError extends Error {}
  *   - `when:` — dual grammar (`$id.output[.field]` AND shorthand `$id.field`), never
  *     markdown → `applyWhenRefRename`. Missing the shorthand would leave e.g.
  *     `$verify.exit_code` pointing at a renamed sibling (silent fail-closed skip).
- *   - Prose (prompt / loop.prompt / approval.message) — canonical `.output` refs, but may
- *     embed fenced/inline code examples that must NOT be rewritten → fence-aware.
+ *   - Prose (prompt / loop.prompt / approval.message / plannotator_gate.document /
+ *     plannotator_gate.message / plannotator_gate.rework.prompt) — canonical `.output`
+ *     refs, but may embed fenced/inline code examples that must NOT be rewritten →
+ *     fence-aware.
  *   - Code/expression (bash / script / loop.until_bash / loop_group.until_bash / cancel /
  *     workflow.input / workflow.fan_out.items) — canonical `.output` refs are LIVE (never
  *     documentation) → rewritten verbatim.
@@ -192,6 +195,12 @@ function rewriteNodeOutputRefs(node: DagNode, rename: (id: string) => string): v
     for (const body of node.loop_group.nodes) rewriteNodeOutputRefs(body, rename);
   } else if (isApprovalNode(node)) {
     node.approval.message = prose(node.approval.message);
+  } else if (isPlannotatorGateNode(node)) {
+    node.plannotator_gate.document = prose(node.plannotator_gate.document);
+    if (node.plannotator_gate.message !== undefined) {
+      node.plannotator_gate.message = prose(node.plannotator_gate.message);
+    }
+    node.plannotator_gate.rework.prompt = prose(node.plannotator_gate.rework.prompt);
   } else if (isBashNode(node)) {
     node.bash = code(node.bash);
   } else if (isScriptNode(node)) {
@@ -279,6 +288,12 @@ function applyInputsMacro(node: DagNode, args: Record<string, string>, missing: 
     if (node.approval.on_reject !== undefined) {
       node.approval.on_reject.prompt = substitute(node.approval.on_reject.prompt);
     }
+  } else if (isPlannotatorGateNode(node)) {
+    node.plannotator_gate.document = substitute(node.plannotator_gate.document);
+    if (node.plannotator_gate.message !== undefined) {
+      node.plannotator_gate.message = substitute(node.plannotator_gate.message);
+    }
+    node.plannotator_gate.rework.prompt = substitute(node.plannotator_gate.rework.prompt);
   } else if (isBashNode(node)) {
     node.bash = substitute(node.bash);
   } else if (isScriptNode(node)) {

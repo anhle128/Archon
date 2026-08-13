@@ -2,7 +2,7 @@
 max_iterations: 100
 
 # Which agent CLI to invoke per iteration. One of:
-# amp | claude | codex | pi | omp | test-gpt5.5-codex | ccs-bp
+# amp | claude | codex | grok | pi | omp | test-gpt5.5-codex | ccs-bp
 # Overridden by `--tool <name>` on the command line.
 
 tool: codex

@@ -10,8 +10,12 @@
  * Runs in its own `bun test` invocation (see package.json) - it mock.module's
  * ./connection with a real adapter, conflicting with workflows.test.ts's fake.
  */
-import { describe, test, expect, mock } from 'bun:test';
+import { afterAll, describe, test, expect, mock } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { RouteLoopRuntimeMetadata } from '@archon/workflows/schemas/workflow-run';
+import type { QueryResult } from './adapters/types';
 
 const realArchonPaths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
@@ -32,7 +36,16 @@ mock.module('@archon/paths', () => ({
 }));
 
 const { SqliteAdapter, sqliteDialect } = await import('./adapters/sqlite');
-const db = new SqliteAdapter(':memory:');
+const sqliteFixtureDir = mkdtempSync(join(tmpdir(), 'archon-resume-gate-cas-'));
+const sqliteFixturePath = join(sqliteFixtureDir, 'workflow.db');
+const db = new SqliteAdapter(sqliteFixturePath);
+const competingDb = new SqliteAdapter(sqliteFixturePath);
+
+afterAll(async () => {
+  await competingDb.close();
+  await db.close();
+  rmSync(sqliteFixtureDir, { recursive: true, force: true });
+});
 
 mock.module('./connection', () => ({
   pool: db,
@@ -47,7 +60,9 @@ mock.module('./connection', () => ({
 const { routeLoopRuntimeMetadataSchema } = await import('@archon/workflows/schemas/workflow-run');
 const {
   resumeWorkflowRun,
+  resumeApprovedGate,
   persistRouteDecisionTransition,
+  transitionPlannotatorGate,
   pauseWorkflowRun,
   getWorkflowRun,
   findResumableRun,
@@ -104,6 +119,112 @@ const resumedRouteLoopMetadata = {
     },
   },
 } satisfies RouteLoopRuntimeMetadata;
+
+describe('resumeApprovedGate', () => {
+  test('resumes only the matching approved Plannotator gate', async () => {
+    await seed('approved-gate', 'paused', "datetime('now')", {
+      approval: {
+        type: 'plannotator_gate',
+        nodeId: 'review',
+        gateId: 'gate-a',
+        message: 'Review',
+        resolved: 'approved',
+      },
+    });
+
+    expect(
+      await resumeApprovedGate('approved-gate', { nodeId: 'review', gateId: 'gate-a' })
+    ).toEqual({ resumed: true });
+    expect((await getWorkflowRun('approved-gate'))?.status).toBe('running');
+  });
+
+  test('leaves a replacement gate paused when the old token loses', async () => {
+    await seed('replacement-gate', 'paused', "datetime('now')", {
+      approval: {
+        type: 'plannotator_gate',
+        nodeId: 'review',
+        gateId: 'gate-b',
+        message: 'Review',
+        phase: 'opening',
+        resolved: null,
+      },
+    });
+
+    expect(
+      await resumeApprovedGate('replacement-gate', { nodeId: 'review', gateId: 'gate-a' })
+    ).toEqual({ resumed: false });
+    expect((await getWorkflowRun('replacement-gate'))?.status).toBe('paused');
+  });
+
+  test('returns a CAS miss when another connection replaces ownership during resume', async () => {
+    await seed('contended-gate', 'paused', "datetime('now')", {
+      approval: {
+        type: 'plannotator_gate',
+        nodeId: 'review',
+        gateId: 'gate-a',
+        message: 'Review',
+        resolved: 'approved',
+      },
+    });
+
+    const replacement = JSON.stringify({
+      approval: {
+        type: 'plannotator_gate',
+        nodeId: 'review',
+        gateId: 'gate-b',
+        message: 'Replacement review',
+        phase: 'opening',
+        resolved: null,
+      },
+    });
+    const originalQuery = db.query.bind(db);
+    let replacementWon = false;
+    db.query = async <T>(sql: string, params?: unknown[]): Promise<QueryResult<T>> => {
+      const isResumeRead = sql.includes('SELECT * FROM remote_agent_workflow_runs WHERE id = $1');
+      const isResumeUpdate =
+        sql.includes('UPDATE remote_agent_workflow_runs') &&
+        sql.includes("SET status = 'running'") &&
+        params?.[0] === 'contended-gate';
+
+      if (!replacementWon && isResumeRead) {
+        const result = await originalQuery<T>(sql, params);
+        const replacementResult = await competingDb.query(
+          `UPDATE remote_agent_workflow_runs
+           SET metadata = $2
+           WHERE id = $1 AND status = 'paused'`,
+          ['contended-gate', replacement]
+        );
+        expect(replacementResult.rowCount).toBe(1);
+        replacementWon = true;
+        return result;
+      }
+      if (!replacementWon && isResumeUpdate) {
+        const replacementResult = await competingDb.query(
+          `UPDATE remote_agent_workflow_runs
+           SET metadata = $2
+           WHERE id = $1 AND status = 'paused'`,
+          ['contended-gate', replacement]
+        );
+        expect(replacementResult.rowCount).toBe(1);
+        replacementWon = true;
+      }
+      return originalQuery<T>(sql, params);
+    };
+
+    try {
+      await expect(
+        resumeApprovedGate('contended-gate', { nodeId: 'review', gateId: 'gate-a' })
+      ).resolves.toEqual({ resumed: false });
+    } finally {
+      db.query = originalQuery;
+    }
+
+    expect(replacementWon).toBe(true);
+    const current = await getWorkflowRun('contended-gate');
+    expect(current?.status).toBe('paused');
+    expect(current?.metadata.approval).toMatchObject({ gateId: 'gate-b', resolved: null });
+  });
+});
 
 const nextRouteLoopMetadata = {
   loopCounters: { 'review-router': 1 },
@@ -547,6 +668,7 @@ describe('resolveApprovalGate — CAS at the DB layer (#2113)', () => {
 
     const outcome = await resolveApprovalGate(
       'cas-open',
+      { nodeId: 'review' },
       {
         approval: { nodeId: 'review', message: 'Approve?', type: 'approval', resolved: 'approved' },
         approval_response: 'approved',
@@ -578,6 +700,7 @@ describe('resolveApprovalGate — CAS at the DB layer (#2113)', () => {
     });
     const first = await resolveApprovalGate(
       'cas-resolved',
+      { nodeId: 'review' },
       {
         approval: { nodeId: 'review', message: 'Approve?', type: 'approval', resolved: 'approved' },
       },
@@ -587,6 +710,7 @@ describe('resolveApprovalGate — CAS at the DB layer (#2113)', () => {
 
     const outcome = await resolveApprovalGate(
       'cas-resolved',
+      { nodeId: 'review' },
       {
         approval: { nodeId: 'review', message: 'Approve?', type: 'approval', resolved: 'rejected' },
       },
@@ -612,6 +736,7 @@ describe('resolveApprovalGate — CAS at the DB layer (#2113)', () => {
     const [a, b] = await Promise.all([
       resolveApprovalGate(
         'cas-race',
+        { nodeId: 'review' },
         {
           approval: {
             nodeId: 'review',
@@ -624,6 +749,7 @@ describe('resolveApprovalGate — CAS at the DB layer (#2113)', () => {
       ),
       resolveApprovalGate(
         'cas-race',
+        { nodeId: 'review' },
         {
           approval: {
             nodeId: 'review',
@@ -654,6 +780,7 @@ describe('resolveApprovalGate — CAS at the DB layer (#2113)', () => {
 
     const outcome = await resolveApprovalGate(
       'cas-running',
+      { nodeId: 'review' },
       {
         approval: { nodeId: 'review', message: 'Approve?', resolved: 'approved' },
       },
@@ -686,6 +813,7 @@ describe('resolveApprovalGate — CAS at the DB layer (#2113)', () => {
     await expect(
       resolveApprovalGate(
         'cas-atomic',
+        { nodeId: 'review' },
         {
           approval: {
             nodeId: 'review',
@@ -709,6 +837,7 @@ describe('resolveApprovalGate — CAS at the DB layer (#2113)', () => {
     // The retry with a well-formed event now wins the still-open gate.
     const retry = await resolveApprovalGate(
       'cas-atomic',
+      { nodeId: 'review' },
       {
         approval: { nodeId: 'review', message: 'Approve?', type: 'approval', resolved: 'approved' },
       },
@@ -721,7 +850,139 @@ describe('resolveApprovalGate — CAS at the DB layer (#2113)', () => {
   });
 });
 
+describe('plannotator gate fencing — real SQLite', () => {
+  const openGate = {
+    nodeId: 'review',
+    message: 'Review the plan',
+    type: 'plannotator_gate',
+    gateId: 'gate-a',
+    document: '/tmp/plan.md',
+    phase: 'waiting_decision',
+    resolved: null,
+  } as const;
+
+  test('a phase write loses after the gate resolves', async () => {
+    await seedPausedRun('plannotator-resolved', 'wf-plannotator-resolved', openGate);
+
+    expect(
+      (
+        await resolveApprovalGate(
+          'plannotator-resolved',
+          { nodeId: 'review', gateId: 'gate-a' },
+          { approval: { ...openGate, resolved: 'approved' } },
+          [approvalEvent('approved')]
+        )
+      ).resolved
+    ).toBe(true);
+
+    const transition = await transitionPlannotatorGate({
+      runId: 'plannotator-resolved',
+      nodeId: 'review',
+      expectedGateId: 'gate-a',
+      document: '/tmp/reworked-plan.md',
+      phase: 'reworking',
+    });
+
+    expect(transition).toEqual({ outcome: 'resolved', resolved: 'approved' });
+    const run = await getWorkflowRun('plannotator-resolved');
+    expect((run?.metadata.approval as Record<string, unknown>).resolved).toBe('approved');
+  });
+
+  test('a stale resolver writes nothing after ownership rotates', async () => {
+    await seedPausedRun('plannotator-rotated', 'wf-plannotator-rotated', openGate);
+
+    const transition = await transitionPlannotatorGate({
+      runId: 'plannotator-rotated',
+      nodeId: 'review',
+      expectedGateId: 'gate-a',
+      nextGateId: 'gate-b',
+      document: '/tmp/reworked-plan.md',
+      phase: 'opening',
+    });
+    expect(transition.outcome).toBe('updated');
+
+    const resolution = await resolveApprovalGate(
+      'plannotator-rotated',
+      { nodeId: 'review', gateId: 'gate-a' },
+      { approval: { ...openGate, resolved: 'approved' } },
+      [approvalEvent('approved')]
+    );
+
+    expect(resolution.resolved).toBe(false);
+    const run = await getWorkflowRun('plannotator-rotated');
+    expect((run?.metadata.approval as Record<string, unknown>).gateId).toBe('gate-b');
+    expect(await countEvents('plannotator-rotated', 'approval_received')).toBe(0);
+  });
+
+  test('concurrent phase and approval writers produce one completion event', async () => {
+    await seedPausedRun('plannotator-race', 'wf-plannotator-race', openGate);
+
+    await Promise.all([
+      transitionPlannotatorGate({
+        runId: 'plannotator-race',
+        nodeId: 'review',
+        expectedGateId: 'gate-a',
+        document: '/tmp/reworked-plan.md',
+        phase: 'reworking',
+      }),
+      resolveApprovalGate(
+        'plannotator-race',
+        { nodeId: 'review', gateId: 'gate-a' },
+        { approval: { ...openGate, resolved: 'approved' } },
+        [
+          {
+            event_type: 'node_completed',
+            step_name: 'review',
+            data: { node_output: '', approval_decision: 'approved' },
+          },
+        ]
+      ),
+    ]);
+
+    const run = await getWorkflowRun('plannotator-race');
+    expect((run?.metadata.approval as Record<string, unknown>).resolved).toBe('approved');
+    expect(await countEvents('plannotator-race', 'node_completed')).toBe(1);
+  });
+});
+
 describe('resolveAndCancelApprovalGate — atomic reject+cancel CAS (#2113)', () => {
+  test('a stale terminal rejection cannot cancel a superseding gate', async () => {
+    await seedPausedRun('rc-stale-gate', 'wf-rc-stale-gate', {
+      nodeId: 'review',
+      message: 'Review the plan',
+      type: 'plannotator_gate',
+      gateId: 'gate-a',
+      document: '/tmp/plan.md',
+      phase: 'waiting_decision',
+      resolved: null,
+    });
+    expect(
+      (
+        await transitionPlannotatorGate({
+          runId: 'rc-stale-gate',
+          nodeId: 'review',
+          expectedGateId: 'gate-a',
+          nextGateId: 'gate-b',
+          document: '/tmp/reworked-plan.md',
+          phase: 'opening',
+        })
+      ).outcome
+    ).toBe('updated');
+    const before = await getWorkflowRun('rc-stale-gate');
+
+    const outcome = await resolveAndCancelApprovalGate(
+      'rc-stale-gate',
+      { nodeId: 'review', gateId: 'gate-a' },
+      [approvalEvent('rejected')]
+    );
+
+    expect(outcome.resolved).toBe(false);
+    const after = await getWorkflowRun('rc-stale-gate');
+    expect(after?.status).toBe('paused');
+    expect(after?.metadata).toEqual(before?.metadata);
+    expect(await countEvents('rc-stale-gate', 'approval_received')).toBe(0);
+  });
+
   test('wins once on an open gate and flips it terminal in one UPDATE', async () => {
     await seedPausedRun('rc-open', 'wf-rc-open', {
       nodeId: 'review',
@@ -730,7 +991,9 @@ describe('resolveAndCancelApprovalGate — atomic reject+cancel CAS (#2113)', ()
       resolved: null,
     });
 
-    const outcome = await resolveAndCancelApprovalGate('rc-open', [approvalEvent('rejected')]);
+    const outcome = await resolveAndCancelApprovalGate('rc-open', { nodeId: 'review' }, [
+      approvalEvent('rejected'),
+    ]);
     expect(outcome.resolved).toBe(true);
 
     // Single atomic transition: paused → cancelled with a completion stamp, plus
@@ -751,10 +1014,16 @@ describe('resolveAndCancelApprovalGate — atomic reject+cancel CAS (#2113)', ()
       resolved: null,
     });
     expect(
-      (await resolveAndCancelApprovalGate('rc-cancelled', [approvalEvent('rejected')])).resolved
+      (
+        await resolveAndCancelApprovalGate('rc-cancelled', { nodeId: 'review' }, [
+          approvalEvent('rejected'),
+        ])
+      ).resolved
     ).toBe(true);
 
-    const outcome = await resolveAndCancelApprovalGate('rc-cancelled', [approvalEvent('rejected')]);
+    const outcome = await resolveAndCancelApprovalGate('rc-cancelled', { nodeId: 'review' }, [
+      approvalEvent('rejected'),
+    ]);
     expect(outcome.resolved).toBe(false);
     expect((await getWorkflowRun('rc-cancelled'))?.status).toBe('cancelled');
     // The loser wrote no second audit event.
@@ -771,11 +1040,16 @@ describe('resolveAndCancelApprovalGate — atomic reject+cancel CAS (#2113)', ()
 
     // reject-cancel wins the open gate first...
     expect(
-      (await resolveAndCancelApprovalGate('rc-vs-approve', [approvalEvent('rejected')])).resolved
+      (
+        await resolveAndCancelApprovalGate('rc-vs-approve', { nodeId: 'review' }, [
+          approvalEvent('rejected'),
+        ])
+      ).resolved
     ).toBe(true);
     // ...so a racing approve (guarded on status='paused') can no longer resolve it.
     const approveOutcome = await resolveApprovalGate(
       'rc-vs-approve',
+      { nodeId: 'review' },
       {
         approval: { nodeId: 'review', message: 'Approve?', resolved: 'approved' },
       },

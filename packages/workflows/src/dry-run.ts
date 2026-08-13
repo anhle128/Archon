@@ -20,6 +20,7 @@ import {
   isIncludeNode,
   isLoopGroupNode,
   isLoopNode,
+  isPlannotatorGateNode,
   isRouteLoopNode,
   isScriptNode,
   isWorkflowNode,
@@ -42,6 +43,7 @@ const dryRunNodeTypeSchema = z.enum([
   'loop_group',
   'route_loop',
   'approval',
+  'plannotator_gate',
   'cancel',
   'include',
   'workflow',
@@ -126,6 +128,7 @@ function nodeType(node: DagNode): z.infer<typeof dryRunNodeTypeSchema> {
   if (isLoopGroupNode(node)) return 'loop_group';
   if (isRouteLoopNode(node)) return 'route_loop';
   if (isApprovalNode(node)) return 'approval';
+  if (isPlannotatorGateNode(node)) return 'plannotator_gate';
   if (isCancelNode(node)) return 'cancel';
   if (isIncludeNode(node)) return 'include';
   if (isWorkflowNode(node)) return 'workflow';
@@ -457,15 +460,21 @@ async function simulateNode(
       );
       return;
     }
-    if (isApprovalNode(node)) {
-      const resolvedText = resolveText(node.approval.message, ctx, outputs);
+    if (isApprovalNode(node) || isPlannotatorGateNode(node)) {
+      const isPlannotatorGate = isPlannotatorGateNode(node);
+      const gateType = isPlannotatorGate ? 'plannotator_gate' : 'approval';
+      const gateReason = isPlannotatorGate ? 'plannotator gate' : 'approval gate';
+      const gateText = isPlannotatorGate
+        ? (node.plannotator_gate.message ?? node.plannotator_gate.document)
+        : node.approval.message;
+      const resolvedText = resolveText(gateText, ctx, outputs);
       if (ctx.pauseAtGates) {
         outputs.set(node.id, { state: 'pending', output: '' });
         ctx.trace.push({
           nodeId: node.id,
-          nodeType: 'approval',
+          nodeType: gateType,
           state: 'paused',
-          reason: 'approval gate',
+          reason: gateReason,
           resolvedText,
           ...(iteration ? { iteration } : {}),
         });
@@ -474,7 +483,7 @@ async function simulateNode(
         outputs.set(node.id, { state: 'completed', output: 'approved' });
         ctx.trace.push({
           nodeId: node.id,
-          nodeType: 'approval',
+          nodeType: gateType,
           state: 'completed',
           reason: 'auto-approved',
           resolvedText,

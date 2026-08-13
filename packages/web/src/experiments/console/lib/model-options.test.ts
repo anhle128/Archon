@@ -3,6 +3,7 @@ import {
   CLAUDE_MODEL_OPTIONS,
   CODEX_MODEL_OPTIONS,
   COPILOT_MODEL_OPTIONS,
+  GROK_MODEL_OPTIONS,
   curatedOptionsForAgent,
   effortForProviderSwitch,
   filterModelOptions,
@@ -55,6 +56,7 @@ describe('modelPickerShape', () => {
     expect(modelPickerShape('copilot')).toBe('select');
     expect(modelPickerShape('claude')).toBe('curated');
     expect(modelPickerShape('codex')).toBe('curated');
+    expect(modelPickerShape('grok')).toBe('curated');
   });
 
   test('unknown agents (and the unset row sentinel) fall back to free text', () => {
@@ -64,10 +66,11 @@ describe('modelPickerShape', () => {
 });
 
 describe('curatedOptionsForAgent', () => {
-  test('claude/codex/copilot get their curated lists; others get none', () => {
+  test('known providers get their curated lists; others get none', () => {
     expect(curatedOptionsForAgent('claude')).toBe(CLAUDE_MODEL_OPTIONS);
     expect(curatedOptionsForAgent('codex')).toBe(CODEX_MODEL_OPTIONS);
     expect(curatedOptionsForAgent('copilot')).toBe(COPILOT_MODEL_OPTIONS);
+    expect(curatedOptionsForAgent('grok')).toBe(GROK_MODEL_OPTIONS);
     expect(curatedOptionsForAgent('pi')).toEqual([]);
     expect(curatedOptionsForAgent('')).toEqual([]);
   });

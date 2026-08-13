@@ -27,6 +27,7 @@ per-node YAML field for that provider; a ❌ means the field is accepted but ign
 
 - `claude` — Claude (Anthropic)
 - `codex` — Codex (OpenAI)
+- `grok` — Grok (xAI)
 - `opencode` — OpenCode (community) *(community provider)*
 - `pi` — Pi (community) *(community provider)*
 - `copilot` — Copilot (GitHub) *(community provider)*
@@ -35,29 +36,31 @@ per-node YAML field for that provider; a ❌ means the field is accepted but ign
 
 ## Capabilities
 
-| Capability | `claude` | `codex` | `opencode` | `pi` | `copilot` | `qodercli` | `omp` |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Session resume | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| MCP servers (`mcp:`) | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ |
-| Hooks (`hooks:`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Skills (`skills:`) | ✅ | ✅¹ | ✅ | ✅ | ✅ | ❌ | ✅ |
-| Inline sub-agents (`agents:`) | ✅ | ❌ | ✅² | ❌ | ✅ | ❌ | ❌ |
-| Tool restrictions (`allowed_tools`/`denied_tools`) | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Structured output (`output_format`) | **enforced** | **enforced** | **enforced** | best-effort | best-effort | best-effort | best-effort |
-| Env injection (`env:`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Cost control (`maxBudgetUsd`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Effort control (`effort`) | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ |
-| Thinking control (`thinking`) | ✅ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
-| Fallback model (`fallbackModel`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Sandbox (`sandbox`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Setting sources (`settingSources`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| In-process native tools | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ |
-| Container exec (folder-project container backend) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Capability | `claude` | `codex` | `grok` | `opencode` | `pi` | `copilot` | `qodercli` | `omp` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Session resume | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| MCP servers (`mcp:`) | ✅ | ✅ | ❌ | ✅ | ❌ | ✅ | ✅ | ❌ |
+| Hooks (`hooks:`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Skills (`skills:`) | ✅ | ✅¹ | ✅² | ✅ | ✅ | ✅ | ❌ | ✅ |
+| Inline sub-agents (`agents:`) | ✅ | ❌ | ✅ | ✅⁴ | ❌ | ✅ | ❌ | ❌ |
+| Tool restrictions (`allowed_tools`/`denied_tools`) | ✅ | ❌ | ✅³ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Structured output (`output_format`) | **enforced** | **enforced** | **enforced** | **enforced** | best-effort | best-effort | best-effort | best-effort |
+| Env injection (`env:`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Cost control (`maxBudgetUsd`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Effort control (`effort`) | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ |
+| Thinking control (`thinking`) | ✅ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
+| Fallback model (`fallbackModel`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Sandbox (`sandbox`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Setting sources (`settingSources`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| In-process native tools | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| Container exec (folder-project container backend) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 
 ## Caveats
 
 - ¹ `codex` — Skills (`skills:`) — Filesystem auto-discovery from `.agents/skills/` — per-node `skills:` lists are informational; use `provider: claude` for node-scoped skills.
-- ² `opencode` — Inline sub-agents (`agents:`) — Config-file-based agent selection (named agents from `opencode.json`) with per-call model/tools overrides — not inline sub-agent definitions.
+- ² `grok` — Skills (`skills:`) — Filesystem auto-discovery from `.agents/skills/` — per-node `skills:` lists are informational; use `provider: claude` for node-scoped skills.
+- ³ `grok` — Tool restrictions (`allowed_tools`/`denied_tools`) — Uses Grok native tool ids. An empty `allowed_tools: []` fails fast because the CLI interprets an empty allowlist as unset (full access).
+- ⁴ `opencode` — Inline sub-agents (`agents:`) — Config-file-based agent selection (named agents from `opencode.json`) with per-call model/tools overrides — not inline sub-agent definitions.
 
 ## Legend
 

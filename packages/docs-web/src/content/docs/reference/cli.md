@@ -222,7 +222,7 @@ Note that a real `run` emits a JSON payload **only** under `--detach`. Without i
 | `--dry-run` | Simulate deterministic DAG control flow in memory. Creates no run, worktree, session, event, artifact, or provider request. |
 | `--stubs <path>` | YAML mapping of node ids to scalar or structured outputs for `--dry-run`. Relative paths resolve from `--cwd`. |
 | `--exec-code` | During `--dry-run`, execute trusted `bash:`/`script:` nodes locally instead of requiring stubs. Default is no code execution. |
-| `--pause-at-gates` | During `--dry-run`, stop at the first approval gate instead of auto-approving it. |
+| `--pause-at-gates` | During `--dry-run`, stop at the first approval or Plannotator gate instead of auto-approving it. |
 
 #### Deterministic dry-run
 
@@ -246,7 +246,11 @@ archon workflow run triage --cwd /path/to/repo \
 
 The stub file must contain one YAML mapping. Each value is either a string or an object. Object stubs are preserved as structured output, so downstream `$classify.output.severity` references behave like live structured producers. A reachable AI, bash, or script node without a stub fails the simulation and appears in `missingStubs`; stubs for unknown or unreachable nodes appear in `unusedStubs`. Whole-output references retain their normal lenient behavior, while invalid strict `$node.output.field` references fail the consuming node exactly as they do in a real run. See [Node Output References](/reference/variables/#node-output-references).
 
-By default, bash and script nodes are never executed. `--exec-code` is an explicit opt-in for trusted local workflow code and is the only dry-run mode that can cause code-level side effects. Approval nodes auto-complete unless `--pause-at-gates` is set. Runtime `workflow:` sub-runs are reported as unsupported instead of being launched. Dry-run is incompatible with lifecycle and isolation flags such as `--branch`, `--no-worktree`, `--folder`, `--container`, `--resume`, and `--detach`.
+By default, bash and script nodes are never executed.
+`--exec-code` is an explicit opt-in for trusted local workflow code and is the only dry-run mode that can cause code-level side effects.
+Approval and `plannotator_gate` nodes auto-complete unless `--pause-at-gates` is set.
+Runtime `workflow:` sub-runs are reported as unsupported instead of being launched.
+Dry-run is incompatible with lifecycle and isolation flags such as `--branch`, `--no-worktree`, `--folder`, `--container`, `--resume`, and `--detach`.
 
 The ordered trace records each node as completed, stubbed, skipped, failed, or paused, including its reason, resolved text, safe output, and final outcome. This validates deterministic engine wiring; it does not validate model reasoning. It adds no workflow-YAML language surface and follows the [workflow language constitution](/reference/workflow-language-constitution/): YAML coordinates, code computes, and agents judge.
 

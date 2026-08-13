@@ -10,6 +10,7 @@ import type {
   ApprovalContext,
 } from '@archon/workflows/schemas/workflow-run';
 import {
+  isApprovalContext,
   RETRYABLE_WORKFLOW_STATUSES,
   TERMINAL_WORKFLOW_STATUSES,
   routeLoopRuntimeMetadataSchema,
@@ -19,7 +20,15 @@ import type {
   ListDashboardRunsOptions,
   DashboardRunsResult,
 } from '../schemas/workflow-run';
-import type { PersistRouteDecisionTransitionInput } from '@archon/workflows/store';
+import type {
+  ApprovalGateIdentity,
+  GateResolutionEvent,
+  PersistRouteDecisionTransitionInput,
+  PlannotatorGateIdentity,
+  PlannotatorGateTransitionInput,
+  PlannotatorGateTransitionResult,
+} from '@archon/workflows/store';
+export type { GateResolutionEvent } from '@archon/workflows/store';
 import { createLogger } from '@archon/paths';
 import { deleteRetryRefsByRunId } from '@archon/git';
 
@@ -166,17 +175,11 @@ function unresolvedGateClause(): string {
   return `status = 'paused' AND ${resolvedExpr} IS NULL`;
 }
 
-/**
- * An audit event written atomically with a gate resolution (#2146). The winning
- * resolver inserts these in the SAME transaction as the resolution UPDATE, so a
- * failed event write rolls the resolution back — a resolved gate can never be
- * left with no audit trail, which the fast-path guard would then wrongly block
- * from retrying. `workflow_run_id` is supplied by the CAS function.
- */
-export interface GateResolutionEvent {
-  event_type: string;
-  step_name: string;
-  data: Record<string, unknown>;
+/** Extract a scalar approval field using the active database's JSON syntax. */
+function approvalFieldExpression(field: 'type' | 'nodeId' | 'gateId' | 'resolved'): string {
+  return getDatabaseType() === 'postgresql'
+    ? `metadata->'approval'->>'${field}'`
+    : `json_extract(metadata, '$.approval.${field}')`;
 }
 
 /**
@@ -202,12 +205,32 @@ export interface GateResolutionEvent {
  */
 export async function resolveApprovalGate(
   id: string,
+  expected: ApprovalGateIdentity,
   metadata: Record<string, unknown>,
   events: GateResolutionEvent[]
 ): Promise<{ resolved: boolean }> {
   const dialect = getDialect();
   try {
     return await getDatabase().withTransaction(async query => {
+      const currentResult = await query<WorkflowRun>(
+        `SELECT * FROM remote_agent_workflow_runs WHERE id = $1${rowLockClause()}`,
+        [id]
+      );
+      const currentRow = currentResult.rows[0];
+      if (!currentRow) return { resolved: false };
+
+      const currentRun = normalizeWorkflowRun(currentRow);
+      const currentApproval = currentRun.metadata.approval;
+      if (
+        currentRun.status !== 'paused' ||
+        !isApprovalContext(currentApproval) ||
+        currentApproval.resolved != null ||
+        currentApproval.nodeId !== expected.nodeId ||
+        (expected.gateId !== undefined && currentApproval.gateId !== expected.gateId)
+      ) {
+        return { resolved: false };
+      }
+
       const result = await query(
         `UPDATE remote_agent_workflow_runs
          SET metadata = ${dialect.jsonMerge('metadata', 2)}
@@ -229,6 +252,62 @@ export async function resolveApprovalGate(
   }
 }
 
+/** Atomically replace the current Plannotator gate phase under its fencing token. */
+export async function transitionPlannotatorGate(
+  input: PlannotatorGateTransitionInput
+): Promise<PlannotatorGateTransitionResult> {
+  const dialect = getDialect();
+  try {
+    return await getDatabase().withTransaction(async query => {
+      const currentResult = await query<WorkflowRun>(
+        `SELECT * FROM remote_agent_workflow_runs WHERE id = $1${rowLockClause()}`,
+        [input.runId]
+      );
+      const currentRow = currentResult.rows[0];
+      if (!currentRow) throw new Error(`Workflow run not found: ${input.runId}`);
+
+      const currentRun = normalizeWorkflowRun(currentRow);
+      if (currentRun.status !== 'paused') {
+        return { outcome: 'stopped', status: currentRun.status };
+      }
+
+      const currentApproval = currentRun.metadata.approval;
+      if (
+        !isApprovalContext(currentApproval) ||
+        currentApproval.type !== 'plannotator_gate' ||
+        currentApproval.nodeId !== input.nodeId ||
+        currentApproval.gateId !== input.expectedGateId
+      ) {
+        return { outcome: 'superseded' };
+      }
+      if (currentApproval.resolved != null) {
+        return { outcome: 'resolved', resolved: currentApproval.resolved };
+      }
+
+      const nextApproval: ApprovalContext = {
+        ...currentApproval,
+        gateId: input.nextGateId ?? input.expectedGateId,
+        document: input.document,
+        phase: input.phase,
+      };
+      const result = await query(
+        `UPDATE remote_agent_workflow_runs
+         SET metadata = ${dialect.jsonMerge('metadata', 2)}, last_activity_at = ${dialect.now()}
+         WHERE id = $1`,
+        [input.runId, JSON.stringify({ approval: nextApproval })]
+      );
+      if (result.rowCount === 0) {
+        throw new Error(`Workflow run update returned no rows: ${input.runId}`);
+      }
+      return { outcome: 'updated', approval: nextApproval };
+    });
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, workflowRunId: input.runId }, 'db.plannotator_gate_transition_failed');
+    throw new Error(`Failed to transition plannotator gate: ${err.message}`);
+  }
+}
+
 /**
  * Atomically cancel a paused approval gate (compare-and-swap).
  *
@@ -241,18 +320,42 @@ export async function resolveApprovalGate(
  * reject retry could not self-heal past the fast-path gate guard. No `resolved`
  * marker is written: that marker only matters for the stay-paused rework path,
  * and the rejection reason is preserved in the approval_received event. The
- * status flip and that audit event commit in ONE transaction (#2146), so a
+ * transaction locks and normalizes the current row before validating the
+ * approval node and optional gate fencing token, so a stale terminal rejection
+ * cannot cancel a superseding gate.
+ *
+ * The status flip and that audit event commit in ONE transaction (#2146), so a
  * failed event write rolls the cancellation back rather than terminating the run
  * with no audit trail. Returns `{ resolved }`; `false` means a concurrent
  * resolver already won (the gate is no longer open), so nothing is written.
  */
 export async function resolveAndCancelApprovalGate(
   id: string,
+  expected: ApprovalGateIdentity,
   events: GateResolutionEvent[]
 ): Promise<{ resolved: boolean }> {
   const dialect = getDialect();
   try {
     return await getDatabase().withTransaction(async query => {
+      const currentResult = await query<WorkflowRun>(
+        `SELECT * FROM remote_agent_workflow_runs WHERE id = $1${rowLockClause()}`,
+        [id]
+      );
+      const currentRow = currentResult.rows[0];
+      if (!currentRow) return { resolved: false };
+
+      const currentRun = normalizeWorkflowRun(currentRow);
+      const currentApproval = currentRun.metadata.approval;
+      if (
+        currentRun.status !== 'paused' ||
+        !isApprovalContext(currentApproval) ||
+        currentApproval.resolved != null ||
+        currentApproval.nodeId !== expected.nodeId ||
+        (expected.gateId !== undefined && currentApproval.gateId !== expected.gateId)
+      ) {
+        return { resolved: false };
+      }
+
       const result = await query(
         `UPDATE remote_agent_workflow_runs
          SET status = 'cancelled',
@@ -925,6 +1028,35 @@ export async function resumeWorkflowRun(id: string): Promise<WorkflowRun> {
     throw new Error(`Workflow run vanished after update (id: ${id})`);
   }
   return normalizeWorkflowRun(row);
+}
+
+/** Atomically resume only the still-owned, approved gate. */
+export async function resumeApprovedGate(
+  id: string,
+  expected: PlannotatorGateIdentity
+): Promise<{ resumed: boolean }> {
+  const dialect = getDialect();
+  try {
+    const result = await pool.query(
+      `UPDATE remote_agent_workflow_runs
+       SET status = 'running',
+           completed_at = NULL,
+           started_at = ${dialect.now()},
+           last_activity_at = ${dialect.now()}
+       WHERE id = $1
+         AND status = 'paused'
+         AND ${approvalFieldExpression('type')} = 'plannotator_gate'
+         AND ${approvalFieldExpression('resolved')} = 'approved'
+         AND ${approvalFieldExpression('nodeId')} = $2
+         AND ${approvalFieldExpression('gateId')} = $3`,
+      [id, expected.nodeId, expected.gateId]
+    );
+    return { resumed: result.rowCount > 0 };
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, workflowRunId: id }, 'db.approved_gate_resume_failed');
+    throw new Error(`Failed to resume approved gate: ${err.message}`);
+  }
 }
 
 export async function claimWorkflowRunForNodeRetry(id: string): Promise<WorkflowRun> {

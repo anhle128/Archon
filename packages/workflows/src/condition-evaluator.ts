@@ -18,9 +18,12 @@
  * Two different error modes:
  *   - A malformed/unparseable EXPRESSION (bad syntax) is fail-closed → result
  *     false (skip the node), parsed: false.
- *   - An unresolvable `$node.output.field` REFERENCE (field not in the producer's
- *     declared schema, or a schemaless node whose output isn't JSON / lacks the
- *     key) THROWS an `OutputRefError` that propagates to FAIL the node — under the
+ *   - A reference to a statically known producer that has not run yet is unavailable,
+ *     so its atom evaluates false. This lets optional route-loop bootstrap paths skip
+ *     their `when:` guards without hiding typos: unknown node IDs still throw.
+ *   - Any other unresolvable `$node.output.field` REFERENCE (field not in the producer's
+ *     declared schema, or a schemaless node whose output isn't JSON / lacks the key)
+ *     THROWS an `OutputRefError` that propagates to FAIL the node — under the
  *     no-silent-drop contract a referenced-but-missing value is a visible failure,
  *     not a silent skip. (Declared-optional fields and whole-text `$node.output`
  *     still resolve to '' and never throw.)
@@ -225,7 +228,8 @@ export function serializeSafeCondition(expr: string): string {
  */
 function evaluateAtom(
   expr: string,
-  nodeOutputs: Map<string, NodeOutput>
+  nodeOutputs: Map<string, NodeOutput>,
+  knownNodes?: ReadonlyMap<string, readonly string[] | undefined>
 ): { result: boolean; parsed: boolean } {
   const trimmed = expr.trim();
   const match = atomPattern.exec(trimmed);
@@ -266,6 +270,22 @@ function evaluateAtom(
     return { result: false, parsed: false };
   }
 
+  const producer = nodeOutputs.get(nodeId);
+  const declaredFields = knownNodes?.get(nodeId);
+  if (field !== undefined && declaredFields !== undefined && !declaredFields.includes(field)) {
+    throw new OutputRefError(nodeId, field, 'not-in-schema');
+  }
+  if (
+    knownNodes?.has(nodeId) &&
+    (producer === undefined ||
+      producer.state === 'pending' ||
+      producer.state === 'running' ||
+      producer.state === 'skipped')
+  ) {
+    getLog().debug({ nodeId, field: field ?? null }, 'condition_producer_unavailable');
+    return { result: false, parsed: true };
+  }
+
   // resolveOutputRef may throw OutputRefError for an unresolvable `.field` ref
   // (typo / schemaless non-JSON / missing key). It is deliberately NOT caught
   // here — under the no-silent-drop contract it must propagate to fail the node,
@@ -302,12 +322,15 @@ function evaluateAtom(
  *
  * @param expr - The when: expression string e.g. "$classify.output.type == 'BUG'"
  * @param nodeOutputs - Map of nodeId → NodeOutput for all settled upstream nodes (completed, failed, or skipped)
+ * @param knownNodes - Statically validated node IDs mapped to their declared output fields.
+ *   A known producer without usable output makes its atom false; schema typos still throw.
  * @returns `{ result: boolean; parsed: boolean }` — result is true to run the node, false to skip;
  *   parsed is false when the expression could not be parsed (fail-closed: result defaults to false)
  */
 export function evaluateCondition(
   expr: string,
-  nodeOutputs: Map<string, NodeOutput>
+  nodeOutputs: Map<string, NodeOutput>,
+  knownNodes?: ReadonlyMap<string, readonly string[] | undefined>
 ): { result: boolean; parsed: boolean } {
   const trimmed = expr.trim();
 
@@ -320,7 +343,7 @@ export function evaluateCondition(
     let orClauseResult = true;
 
     for (const atom of andAtoms) {
-      const { result, parsed } = evaluateAtom(atom, nodeOutputs);
+      const { result, parsed } = evaluateAtom(atom, nodeOutputs, knownNodes);
       if (!parsed) return { result: false, parsed: false }; // fail-closed on any parse error
       if (!result) {
         orClauseResult = false;

@@ -10,6 +10,7 @@
 - Loop nodes
 - Route-loop nodes
 - Approval nodes
+- Plannotator gate nodes
 - Cancel nodes
 - Conditions and trigger rules
 - Retry, hooks, MCP, skills, and agents
@@ -30,6 +31,7 @@ Each node must define exactly one action key:
 - `loop`
 - `route_loop`
 - `approval`
+- `plannotator_gate`
 - `cancel`
 
 Common fields:
@@ -386,6 +388,76 @@ approval:
 ```
 
 Set root `interactive: true` when using approval nodes from user-facing surfaces.
+
+## Plannotator Gate Nodes
+
+Use `plannotator_gate` when a human must review a real HTML document in a live local Plannotator annotate session.
+This is different from a normal `approval` node because the gate owns the annotate subprocess, supports annotation-driven AI rework, and reopens the updated document until it is approved.
+
+```yaml
+- id: build-review-document
+  bash: |
+    set -euo pipefail
+    review_file="$ARTIFACTS_DIR/review.html"
+    printf '%s\n' '<!doctype html><html><body><h1>Review me</h1></body></html>' > "$review_file"
+    printf '%s\n' "$review_file"
+
+- id: review-document
+  depends_on: [build-review-document]
+  plannotator_gate:
+    document: "$build-review-document.output"
+    message: |
+      Review the document in Plannotator.
+      Approve it or send annotations for one rework pass.
+    capture_response: true
+    rework:
+      provider: codex
+      model: gpt-5.6-terra
+      effort: medium
+      prompt: |
+        Update the HTML document at $REVIEW_DOCUMENT to address these annotations:
+        $REVIEW_ANNOTATIONS
+
+        Keep the file as readable HTML under its current path.
+        Print exactly the absolute HTML path on one line and no other text.
+```
+
+Plannotator gate config:
+
+| Field              | Required | Meaning                                                                                         |
+| ------------------ | -------- | ----------------------------------------------------------------------------------------------- |
+| `document`         | yes      | HTML path or `$node.output` reference that resolves to exactly one non-empty path line.         |
+| `message`          | no       | User-facing review instructions shown by the workflow surface.                                  |
+| `capture_response` | no       | When true, the approval feedback becomes the gate node output.                                  |
+| `rework.prompt`    | yes      | AI prompt used after the reviewer sends annotations.                                            |
+| `rework.provider`  | no       | Provider override for rework; otherwise the workflow provider is used.                           |
+| `rework.model`     | no       | Model override passed to the rework provider.                                                    |
+| `rework.effort`    | no       | Provider-specific effort override for rework.                                                    |
+
+Document boundary rules:
+
+- After output substitution, `document` must contain exactly one non-empty line.
+- Relative paths resolve from the workflow `cwd`.
+- The real path must remain inside the real workflow `cwd` or the existing `$ARTIFACTS_DIR`, including after symlink resolution.
+- The target must be a readable regular file ending in `.html` or `.htm`.
+- Every rework response must also print exactly one valid HTML path line and no prose or Markdown fence.
+- Put rework provider, model, and effort inside `plannotator_gate.rework`; node-level AI fields do not configure the rework call.
+
+Runtime lifecycle:
+
+1. Archon checks the local `plannotator` binary with `plannotator annotate --help` and requires both `--persist-session` and `--result-file`.
+2. The gate pauses the persisted workflow with a unique `gateId`, opens the annotate subprocess, and remains the sole live supervisor.
+3. `Approve` in Plannotator records the decision, resumes the same supervisor once, and allows downstream nodes to run once.
+4. `Send Annotations` runs the configured rework provider, validates its returned HTML path, and opens another annotate attempt under the same gate owner.
+5. An approval from Web UI, CLI, Slack, or another external surface records the decision only; the existing live Plannotator supervisor owns continuation and prevents a second executor.
+6. Closing or dismissing the annotate window leaves the run paused and idle instead of implicitly approving it.
+7. `archon workflow review-open <run-id>` is explicit crash recovery: it atomically rotates ownership and starts a replacement supervisor in human CLI mode.
+8. `archon workflow review-open <run-id> --json` records the takeover but requires a separate `archon workflow resume <run-id>` call because JSON mode never streams continuation inline.
+9. Cancellation, abandonment, or takeover terminates the stale child, and a stale supervisor must not emit completion or run downstream work.
+
+Set workflow-root `interactive: true` for Web UI or chat runs so the pause and review instructions remain foreground-visible.
+The Plannotator binary runs on the Archon server host, so the browser and server must share access to that local review surface.
+Use `PLANNOTATOR_BIN` only when the compatible binary is not discoverable as `plannotator` on the server `PATH`.
 
 ## Cancel Nodes
 

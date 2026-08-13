@@ -5,6 +5,7 @@
  * Operations throw on errors; callers catch and format for their platform.
  */
 import { createLogger, captureApprovalResolved } from '@archon/paths';
+import { randomUUID } from 'node:crypto';
 import {
   RESUMABLE_WORKFLOW_STATUSES,
   isApprovalContext,
@@ -42,6 +43,7 @@ export interface ApprovalOperationResult {
   /** Internal DB UUID — resolve via getConversationById() to get platform_conversation_id. */
   conversationId: string;
   type: 'interactive_loop' | 'approval_gate';
+  continuation: 'caller_resume' | 'live_plannotator_supervisor';
 }
 
 export interface RejectionOperationResult {
@@ -62,6 +64,19 @@ export interface RejectionOperationResult {
    * on_reject-rework message.
    */
   writeBack: boolean;
+}
+
+export interface ReviewOpenOperationResult {
+  document: string;
+  nodeId: string;
+  phase: 'opening';
+  continuation: 'caller_resume';
+  workflowName: string;
+  workingPath: string | null;
+  userMessage: string | null;
+  codebaseId: string | null;
+  /** Internal DB UUID — resolve via getConversationById() to get platform_conversation_id. */
+  conversationId: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -278,6 +293,84 @@ export async function abandonWorkflow(runId: string): Promise<AbandonWorkflowRes
 }
 
 /**
+ * Request re-open of a paused plannotator_gate review surface.
+ *
+ * Atomically rotates the gate ownership token and sets the replacement phase
+ * to `opening`. The caller owns resuming the replacement supervisor.
+ */
+export async function reviewOpenWorkflow(runId: string): Promise<ReviewOpenOperationResult> {
+  const run = await getRunOrThrow(runId, 'operations.workflow_review_open_lookup_failed');
+  if (run.status !== 'paused') {
+    throw new Error(
+      `Cannot review-open run with status '${run.status}'. Only paused plannotator_gate runs can be re-opened.`
+    );
+  }
+  const rawApproval = run.metadata.approval;
+  const approval: ApprovalContext | undefined = isApprovalContext(rawApproval)
+    ? rawApproval
+    : undefined;
+  if (approval?.type !== 'plannotator_gate') {
+    const gotType = approval?.type ?? 'none';
+    throw new Error(`Run ${runId} is not paused at a plannotator_gate (got type '${gotType}').`);
+  }
+  if (isGateResolved(approval)) {
+    throw new Error(
+      `Workflow run ${runId} was already ${String(approval.resolved)} and is awaiting resume — nothing to re-open.`
+    );
+  }
+  const document =
+    typeof approval.document === 'string' && approval.document.length > 0 ? approval.document : '';
+  if (!document) {
+    throw new Error(`plannotator_gate on run ${runId} has no document path in approval metadata.`);
+  }
+  if (!approval.gateId) {
+    throw new Error(`plannotator_gate on run ${runId} has no gate ownership token.`);
+  }
+
+  const nextGateId = randomUUID();
+  const transition = await workflowDb.transitionPlannotatorGate({
+    runId,
+    nodeId: approval.nodeId,
+    expectedGateId: approval.gateId,
+    nextGateId,
+    document,
+    phase: 'opening',
+  });
+  if (transition.outcome === 'resolved') {
+    throw new Error(
+      `Workflow run ${runId} was already ${transition.resolved} and is awaiting resume — nothing to re-open.`
+    );
+  }
+  if (transition.outcome === 'superseded') {
+    throw new Error(
+      `Plannotator gate ownership changed before review-open for run ${runId}. Refresh the run and retry only if it is still paused.`
+    );
+  }
+  if (transition.outcome === 'stopped') {
+    throw new Error(
+      `Workflow run ${runId} stopped with status '${transition.status}' before review-open. Refresh the run before retrying.`
+    );
+  }
+
+  getLog().info(
+    { workflowRunId: runId, nodeId: approval.nodeId, document, nextGateId },
+    'workflow.review_open_takeover_recorded'
+  );
+
+  return {
+    document,
+    nodeId: approval.nodeId,
+    phase: 'opening',
+    continuation: 'caller_resume',
+    workflowName: run.workflow_name,
+    workingPath: run.working_path,
+    userMessage: run.user_message,
+    codebaseId: run.codebase_id,
+    conversationId: run.conversation_id,
+  };
+}
+
+/**
  * Approve a paused workflow run.
  *
  * Handles both interactive_loop and standard approval gate paths.
@@ -416,7 +509,12 @@ export async function approveWorkflow(
   // transaction means a failed event write rolls the resolution back so a retry
   // can win the still-open gate (#2146). The run stays 'paused'; resume is
   // guarded independently by resumeWorkflowRun's CAS.
-  const { resolved: won } = await workflowDb.resolveApprovalGate(runId, metadataPayload, events);
+  const { resolved: won } = await workflowDb.resolveApprovalGate(
+    runId,
+    { nodeId: approval.nodeId, gateId: approval.gateId },
+    metadataPayload,
+    events
+  );
   if (!won) {
     throw new Error(`Workflow run ${runId} was already resolved and is awaiting resume.`);
   }
@@ -431,6 +529,8 @@ export async function approveWorkflow(
     codebaseId: run.codebase_id,
     conversationId: run.conversation_id,
     type: isInteractiveLoop ? 'interactive_loop' : 'approval_gate',
+    continuation:
+      approval.type === 'plannotator_gate' ? 'live_plannotator_supervisor' : 'caller_resume',
   };
 }
 
@@ -495,6 +595,7 @@ export async function rejectWorkflow(
     };
     const { resolved: won } = await workflowDb.resolveApprovalGate(
       runId,
+      { nodeId: approval.nodeId, gateId: approval.gateId },
       { approval: { ...approval, resolved: 'rejected' }, approval_response: 'rejected' },
       [rejectionEvent]
     );
@@ -548,6 +649,7 @@ export async function rejectWorkflow(
   const { resolved: won } = willStageRework
     ? await workflowDb.resolveApprovalGate(
         runId,
+        { nodeId: approval.nodeId, gateId: approval.gateId },
         {
           approval: { ...approval, resolved: 'rejected' },
           rejection_reason: rejectReason,
@@ -555,7 +657,11 @@ export async function rejectWorkflow(
         },
         [rejectionEvent]
       )
-    : await workflowDb.resolveAndCancelApprovalGate(runId, [rejectionEvent]);
+    : await workflowDb.resolveAndCancelApprovalGate(
+        runId,
+        { nodeId: approval.nodeId, gateId: approval.gateId },
+        [rejectionEvent]
+      );
   if (!won) {
     throw new Error(`Workflow run ${runId} was already resolved and is awaiting resume.`);
   }

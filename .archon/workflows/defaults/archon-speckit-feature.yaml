@@ -4,13 +4,16 @@ description: |
   Triggers: "speckit feature", "spec-driven", "sdd pipeline", "full speckit", "speckit full",
             "specify plan implement", "speckit end-to-end", "feature with speckit",
             "speckit pipeline", "sdd feature".
-  Does: Specify → red-team adversarial review → clarify ambiguities → plan → tasks →
-        analyze cross-artifact consistency → tasks-to-ralph → run ralph.sh → sync-back → converge gate → PR creation.
+  Does: Specify → clarify (with Plannotator live review gate) → red-team (with Plannotator
+        live review gate) → plan → tasks → analyze → tasks-to-ralph → ralph.sh → sync-back →
+        converge gate → human review before retry → PR creation.
   NOT for: Quick one-file fixes, bug fixes, PR reviews.
   NOT for: When a spec already exists (use archon-speckit-plan-to-tasks instead).
   NOT for: Spec generation only without planning (use archon-speckit-spec instead).
 provider: codex
 effort: xhigh
+# Human gates (plannotator_gate) require foreground on web so the live annotate URL is usable.
+interactive: true
 
 nodes:
   - id: setup
@@ -34,7 +37,7 @@ nodes:
       - setup
     effort: high
     provider: claude
-    model: "claude-opus-4-8[1M]"
+    model: "fable"
     context: fresh
 
   - id: clarify
@@ -80,8 +83,9 @@ nodes:
       4. trigger clarification-answer-review skill
     depends_on:
       - clarify
-    provider: codex
-    model: gpt-5.6-sol
+    effort: xhigh
+    provider: claude
+    model: "claude-opus-4-8[1M]"
     context: fresh
     allowed_tools:
       - Read
@@ -92,10 +96,36 @@ nodes:
 
   - id: clarify-explain
     prompt: |
-     /speckit-question-explain --clarify giải thích chi tiết clarify bằng tiếng việt
+      ## Goal
+      Produce a self-contained HTML explainer for the clarification-questions file,
+      then hand a **stable absolute path** to the next node (`plannotator_gate`).
+
+      ## Steps
+      1. Read `.specify/feature.json` to resolve `<feature_directory>`.
+      2. Confirm `<feature_directory>/clarification-questions.md` exists (Status PENDING
+         or drafted answers present). If missing, STOP and report BLOCKED.
+      3. Generate a visual explainer for that file using
+         `/plannotator-visual-explainer` (or equivalent). Content must:
+         - Describe the feature and end-to-end flow (UML/sequence style) at
+           function/class level where useful.
+         - For each step, state what it does.
+         - For each open clarification / issue: where it sits in the flow, why it
+           is a problem, and the proposed resolution.
+      4. **Persist the final HTML** at this exact path (overwrite OK):
+         `<feature_directory>/visual/speckit-clarify-explainer.html`
+         - Copy from wherever visual-explainer wrote the file if needed
+           (`cp` / write).
+         - Do **not** rely on an annotate session inside this node as the human
+           gate — the next node opens a supervised live Plannotator review.
+      5. Verify the file exists and is non-empty.
+
+      ## Final output (contract — required)
+      Print **ONLY** the absolute path to that HTML file on the last line
+      (no markdown fence, no extra commentary after the path):
+      `<feature_directory>/visual/speckit-clarify-explainer.html` resolved to an absolute path.
     depends_on:
       - clarify-respond
-    effort: xhigh
+    effort: medium
     provider: claude
     model: sonnet
     context: fresh
@@ -107,12 +137,58 @@ nodes:
       - Bash
 
   - id: clarify-gate
-    approval:
+    plannotator_gate:
+      document: "$clarify-explain.output"
       message: |
-        Drafted answers are now written to `<feature_directory>/clarification-questions.md`.
-        Review and edit the file, then approve when satisfied.
-        The next step runs `$speckit-clarifybatch --apply`.
+        Clarification answers + explainer are ready for live Plannotator review.
+
+        - Open the live annotate URL (Ask AI, annotations).
+        - **Owner only:** Approve or Send Annotations.
+        - Teammates may Close without ending the session (`--persist-session`).
+        - After Approve, next step runs `$speckit-clarifybatch --apply`.
+
+        Crash recovery: `archon workflow review-open <run-id>` (then `resume` if the process died).
       capture_response: true
+      rework:
+        prompt: |
+          You are handling human Plannotator annotations on clarification artifacts.
+          Annotations are freeform reviewer notes. Classify each one before editing.
+
+          HTML path under review: $REVIEW_DOCUMENT
+          Annotations:
+          $REVIEW_ANNOTATIONS
+
+          Canonical source MD (answers live here — not under visual/):
+          `<feature_directory>/clarification-questions.md`
+
+          ## Two annotation kinds (pick exactly one per note)
+
+          1. **content change** — reviewer wants different answer, status, wording, or
+             missing content in the *source of truth*.
+             → Edit `<feature_directory>/clarification-questions.md`, then regenerate HTML.
+
+          2. **visual clarify / explain** — reviewer asks to explain, expand, or make
+             something clearer in the *explainer* (questions like "what does this mean?",
+             "show the flow in more detail", "elaborate here") without changing the
+             committed answers/status in the MD.
+             → Update/regenerate the HTML only. Do **not** edit the source MD.
+
+          Pure LGTM / "looks good" / ack with no ask → no MD and no HTML rewrite.
+          If ambiguous between (1) and (2), prefer **visual clarify** (HTML only) —
+          never invent source-MD edits.
+
+          ## Instructions
+          1. Read `.specify/feature.json` for `<feature_directory>`.
+          2. Read the source MD and the current HTML under review.
+          3. Classify every annotation as content change, visual clarify, or no-op.
+          4. Apply **content change** notes only to the source MD.
+          5. If any content change or visual-clarify note needs work (or HTML is stale
+             after an MD edit), write the explainer HTML to:
+             `<feature_directory>/visual/speckit-clarify-explainer.html` (overwrite OK).
+             Visual-clarify work may add diagrams, callouts, or deeper explanations in
+             the HTML while keeping MD answers/status unchanged.
+          6. Print ONLY the absolute path to that HTML for the next annotate session
+             (one line, no fence). Prefer the stable path above, resolved absolute.
     depends_on:
       - clarify-explain
 
@@ -121,9 +197,9 @@ nodes:
       $speckit-clarifybatch --apply
     depends_on:
       - clarify-gate
-    provider: codex
-    effort: xhigh
-    model: gpt-5.6-terra
+    provider: claude
+    effort: max
+    model: sonnet
     context: fresh
 
   - id: red-team
@@ -132,7 +208,7 @@ nodes:
       $speckit.red-team.run <feature_directory> --yes
     depends_on:
       - clarify-apply
-    effort: high
+    effort: xhigh
     provider: claude
     model: "claude-opus-4-8[1M]"
     context: fresh
@@ -191,6 +267,7 @@ nodes:
     depends_on:
       - red-team
     provider: codex
+    effort: xhigh
     model: gpt-5.6-sol
     context: fresh
     allowed_tools:
@@ -203,10 +280,32 @@ nodes:
 
   - id: red-team-explain
     prompt: |
-     /speckit-question-explain --red-team giải thích chi tiết bằng tiếng việt
+      ## Goal
+      Produce a self-contained HTML explainer for the latest red-team findings
+      file, then hand a **stable absolute path** to `red-team-gate`.
+
+      ## Steps
+      1. Read `.specify/feature.json` to resolve `<feature_directory>`.
+      2. Glob `<feature_directory>/red-team-findings-*.md` and pick the MOST
+         RECENT file whose name does NOT contain `-applied-`. If missing, STOP
+         and report BLOCKED.
+      3. Generate a visual explainer with `/plannotator-visual-explainer` for that
+         file. Cover:
+         - Feature + end-to-end flow (UML/sequence) at function/class level
+         - Each step's purpose
+         - **Only** findings with Status `spec-fix` or `new-OQ` (or blank Status
+           still being resolved as those categories): where they sit in the flow,
+           why they matter, proposed fix
+      4. Persist final HTML at:
+         `<feature_directory>/visual/speckit-red-team-explainer.html` (overwrite OK).
+         Do not use this node's annotate session as the human gate.
+      5. Verify the file exists and is non-empty.
+
+      ## Final output (contract — required)
+      Print **ONLY** the absolute path to that HTML file (one line, no fence).
     depends_on:
       - red-team-respond
-    effort: xhigh
+    effort: medium
     provider: claude
     model: sonnet
     context: fresh
@@ -218,23 +317,56 @@ nodes:
       - Bash
 
   - id: red-team-gate
-    approval:
+    plannotator_gate:
+      document: "$red-team-explain.output"
       message: |
-        Drafted resolutions are now written into the most recent
-        `red-team-findings-*.md` under <feature_directory>. Open the file and:
-          - review each row's `Status` column in §2 Findings table
-          - review each block in §3 Resolutions Log (proposed diff / OQ / AR
-            text / cross-reference)
-          - overwrite anything you disagree with
-          - leave `Status: skipped` with a Reason for findings you want dropped
-          - save the file
-        Approve when satisfied. The next step runs
-        `/speckit.red-team.apply --allow-historical-edits`, which atomically
-        applies resolutions to spec.md and archives the findings file as
-        `red-team-findings-applied-<timestamp>.md`. You may include override
-        notes here, but file edits are the canonical channel — apply reads the
-        file, not this comment.
+        Red-team resolutions + explainer are ready for live Plannotator review.
+
+        - **Owner only:** Approve or Send Annotations.
+        - Teammates may Close without ending the session (`--persist-session`).
+        - After Approve: `/speckit.red-team.apply --allow-historical-edits`.
+
+        Crash recovery: `archon workflow review-open <run-id>` (then `resume` if needed).
       capture_response: true
+      rework:
+        prompt: |
+          You are handling human Plannotator annotations on red-team findings.
+          Annotations are freeform reviewer notes. Classify each one before editing.
+
+          HTML path under review: $REVIEW_DOCUMENT
+          Annotations:
+          $REVIEW_ANNOTATIONS
+
+          Canonical source MD (findings / Status / Resolutions Log — not under visual/):
+          latest non-applied `red-team-findings-*.md` under `<feature_directory>/`
+
+          ## Two annotation kinds (pick exactly one per note)
+
+          1. **content change** — reviewer wants different status, resolution text,
+             severity, or other source-of-truth edits in the findings MD.
+             → Edit that MD file, then regenerate HTML.
+
+          2. **visual clarify / explain** — reviewer asks to explain, expand, or make
+             a finding/resolution clearer in the *explainer* without changing the
+             committed Status / Resolutions Log in the MD.
+             → Update/regenerate the HTML only. Do **not** edit the findings MD.
+
+          Pure LGTM / "looks good" / ack with no ask → no MD and no HTML rewrite.
+          If ambiguous between (1) and (2), prefer **visual clarify** (HTML only) —
+          never invent source-MD edits.
+
+          ## Instructions
+          1. Read `.specify/feature.json` for `<feature_directory>`.
+          2. Open the latest non-applied findings MD and the current HTML under review.
+          3. Classify every annotation as content change, visual clarify, or no-op.
+          4. Apply **content change** notes only to the findings MD.
+          5. If any content change or visual-clarify note needs work (or HTML is stale
+             after an MD edit), write the explainer HTML to:
+             `<feature_directory>/visual/speckit-red-team-explainer.html` (overwrite OK).
+             Visual-clarify work may add diagrams, callouts, or deeper explanations in
+             the HTML while keeping MD Status / Resolutions Log unchanged.
+          6. Print ONLY the absolute path to that HTML for the next annotate session
+             (one line, no fence). Prefer the stable path above, resolved absolute.
     depends_on:
       - red-team-explain
 
@@ -243,9 +375,9 @@ nodes:
       /speckit.red-team.apply --allow-historical-edits
     depends_on:
       - red-team-gate
-    provider: codex
-    effort: xhigh
-    model: gpt-5.6-terra
+    provider: claude
+    effort: max
+    model: sonnet
     context: fresh
 
   - id: plan
@@ -254,9 +386,9 @@ nodes:
       /speckit-plan create detail plan <feature_directory>
     depends_on:
       - red-team-apply
-    provider: codex
     effort: xhigh
-    model: gpt-5.6-sol
+    provider: codex
+    model: "gpt-5.6-sol"
     context: fresh
 
   - id: tasks
@@ -265,10 +397,9 @@ nodes:
       /speckit-tasks <feature_directory>
     depends_on:
       - plan
-
-    effort: high
-    provider: claude
-    model: "fable"
+    effort: xhigh
+    provider: codex
+    model: "gpt-5.6-sol"
     context: fresh
 
   - id: analyze
@@ -279,6 +410,7 @@ nodes:
       /speckit-analyzebatch <feature_directory>
     depends_on:
       - tasks
+    provider: codex
     effort: xhigh
     model: gpt-5.6-sol
     context: fresh
@@ -402,8 +534,8 @@ nodes:
     depends_on:
       - analyze
     effort: xhigh
-    provider: codex
-    model: gpt-5.6-sol
+    provider: claude
+    model: "claude-opus-4-8[1M]"
     context: fresh
     allowed_tools:
       - Read
@@ -417,9 +549,9 @@ nodes:
       $speckit-analyzebatch --apply --allow-historical-edits
     depends_on:
       - analyze-respond
-    provider: codex
-    effort: xhigh
-    model: gpt-5.6-terra
+    provider: claude
+    effort: max
+    model: sonnet
     context: fresh
 
   - id: ralph-tasks-to-ralph
@@ -428,6 +560,8 @@ nodes:
       /speckit.ralph-loop.tasks-to-ralph <feature_directory>
     depends_on:
       - analyze-apply
+      - speckit-converge-review-gate
+    trigger_rule: one_success
     provider: codex
     effort: xhigh
     model: gpt-5.6-terra
@@ -476,61 +610,145 @@ nodes:
         - tasks_added
     output_type: speckit-convergence
 
+  # PASS → PR; FAIL → explain + human review then Ralph retry; retry exhaustion cancels.
   - id: speckit-converge-gate
     depends_on: [speckit-converge]
     route_loop:
       condition: "$speckit-converge.output.gate == 'PASS'"
       max_iterations: 3
       routes:
-        positive: create-pull-request
-        negative: ralph-tasks-to-ralph
-        exhausted: ralph-tasks-to-ralph-2
+        positive: cargo-clean-before-pr
+        negative: speckit-converge-explain
+        exhausted: speckit-converge-exhausted
+
+  # Explainer for human review when converge adds work to tasks.md (FAIL path).
+  - id: speckit-converge-explain
+    prompt: |
+      ## Goal
+      Produce a **delta-only** HTML explainer of what **this** `speckit-converge`
+      run just added to `tasks.md`, so a human can approve re-running Ralph.
+      Hand a **stable absolute path** to `speckit-converge-review-gate`.
+
+      Converge reported:
+      - gate: $speckit-converge.output.gate
+      - tasks_added: $speckit-converge.output.tasks_added
+
+      ## Hard scope (token budget — non-negotiable)
+      - Explain **only the newly added tasks/sections from this converge pass**.
+      - Do **NOT** re-explain pre-existing tasks, completed tasks, or the full
+        historical `tasks.md` body. Old content is out of scope for the HTML.
+      - Target ~`$speckit-converge.output.tasks_added` new items — if you cannot
+        isolate them, still prefer the smallest recent delta (git) over full file.
+
+      ## Identify the delta (in order)
+      1. Read `.specify/feature.json` → `<feature_directory>`.
+      2. Prefer `git diff HEAD -- <feature_directory>/tasks.md` and/or
+         `git show HEAD:<feature_directory>/tasks.md` vs working tree to list
+         **added/changed lines only**. Fall back to unstaged/staged diff if needed.
+      3. If git cannot isolate, use converge output + the newest unchecked tasks
+         that match the add (still do not narrate the whole file).
+      4. Never invent tasks not present in the delta / `tasks.md`.
+
+      ## HTML content (new items only)
+      Generate with `/plannotator-visual-explainer` (or write compact HTML):
+      - One-line summary: FAIL + `tasks_added` count.
+      - For **each new task only**: id/title, what it does, why converge added it,
+        minimal flow context (only if needed to understand the new item).
+      - Approve implication: another Ralph loop on these tasks.
+      - Explicitly omit a catalog of old/completed tasks.
+
+      Persist (overwrite OK):
+      `<feature_directory>/visual/speckit-converge-explainer.html`
+      Do **not** open annotate as the human gate in this node.
+
+      ## Final output (contract — required)
+      Print **ONLY** the absolute path to that HTML file on the last line
+      (no markdown fence, no extra commentary after the path).
+    effort: medium
+    provider: claude
+    model: sonnet
+    context: fresh
+    allowed_tools:
+      - Read
+      - Edit
+      - Glob
+      - Grep
+      - Bash
+
+  - id: speckit-converge-review-gate
+    plannotator_gate:
+      document: "$speckit-converge-explain.output"
+      message: |
+        Speckit convergence added $speckit-converge.output.tasks_added task(s) to `tasks.md`.
+
+        Review the **delta-only** explainer (new tasks from this converge pass) in Plannotator.
+        - **Owner only:** Approve or Send Annotations.
+        - Teammates may Close without ending the session (`--persist-session`).
+        - After Approve: re-run `ralph-tasks-to-ralph` and the Ralph implementation loop.
+
+        Crash recovery: `archon workflow review-open <run-id>` (then `resume` if needed).
+      capture_response: true
+      rework:
+        prompt: |
+          You are handling human Plannotator annotations on the **converge delta**
+          review (tasks this pass added to tasks.md). Annotations are freeform.
+          Classify each one before editing.
+
+          HTML path under review: $REVIEW_DOCUMENT
+          Annotations:
+          $REVIEW_ANNOTATIONS
+
+          Canonical source MD: `<feature_directory>/tasks.md`
+          Converge context: tasks_added=$speckit-converge.output.tasks_added
+
+          ## Two annotation kinds (pick exactly one per note)
+
+          1. **content change** — edit the new/related task text in `tasks.md`
+             (wording, remove/add, acceptance criteria).
+             → Edit MD, then regenerate **delta-only** HTML.
+
+          2. **visual clarify / explain** — explain a **new** task better in HTML
+             without changing the committed task list.
+             → Update HTML only. Do **not** edit `tasks.md`.
+
+          Pure LGTM / ack → no MD and no HTML rewrite.
+          Ambiguous (1) vs (2) → prefer visual clarify (HTML only).
+
+          ## Hard scope when regenerating HTML (token budget)
+          - Explain **only** the newly added tasks from this converge pass
+            (same delta rules as `speckit-converge-explain`: git diff preferred).
+          - Do **NOT** re-explain pre-existing or completed tasks.
+          - Do **NOT** rebuild a full-file tasks catalog.
+
+          ## Instructions
+          1. Read `.specify/feature.json` for `<feature_directory>`.
+          2. Identify the converge delta (git diff on `tasks.md` first).
+          3. Classify every annotation; apply content changes only to MD as needed.
+          4. If HTML must update, write delta-only explainer to:
+             `<feature_directory>/visual/speckit-converge-explainer.html` (overwrite OK).
+          5. Print ONLY the absolute path to that HTML (one line, no fence).
+    depends_on:
+      - speckit-converge-explain
 
   - id: create-pull-request
     command: archon-create-pr
     provider: codex
     effort: medium
-    depends_on: [speckit-converge-gate]
+    depends_on: [cargo-clean-before-pr]
     context: fresh
     model: gpt-5.6-terra
     idle_timeout: 900000
     output_type: pull-request
 
-  - id: ralph-tasks-to-ralph-2
-    prompt: |
-      Read .specify/feature.json to resolve <feature_directory>, then run:
-      /speckit.ralph-loop.tasks-to-ralph <feature_directory>
-    depends_on:
-      - speckit-converge-gate
-    provider: codex
-    effort: medium
-    model: gpt-5.6-terra
-    context: fresh
-
-  - id: ralph-loop-run-2
+  - id: cargo-clean-before-pr
     bash: |
-      bash .specify/extensions/ralph-loop/ralph.sh
-    depends_on:
-      - ralph-tasks-to-ralph-2
-    timeout: 86400000
+      if [ -f Cargo.toml ]; then
+        cargo clean
+      fi
+    depends_on: [speckit-converge-gate]
 
-  - id: ralph-sync-back-2
-    prompt: |
-      Read .specify/feature.json to resolve <feature_directory>, then run:
-      /speckit.ralph-loop.sync-back <feature_directory>
-    depends_on:
-      - ralph-loop-run-2
-    provider: codex
-    effort: medium
-    model: gpt-5.6-terra
-    context: fresh
-
-  - id: create-pull-request-2
-    command: archon-create-pr
-    provider: codex
-    effort: medium
-    depends_on: [ralph-sync-back-2]
-    context: fresh
-    model: gpt-5.6-terra
-    idle_timeout: 900000
-    output_type: pull-request
+  - id: speckit-converge-exhausted
+    cancel: |
+      Speckit convergence still failed after 3 reviewed Ralph retries. Review the latest
+      convergence artifacts and tasks before starting another run; no pull request was created.
+    depends_on: [speckit-converge-gate]

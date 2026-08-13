@@ -2406,6 +2406,7 @@ describe('CommandHandler', () => {
         // same transaction (#2146)
         expect(mockResolveApprovalGate).toHaveBeenCalledWith(
           'run-123',
+          { nodeId: 'refine', gateId: undefined },
           {
             approval: {
               type: 'interactive_loop',
@@ -2458,7 +2459,7 @@ describe('CommandHandler', () => {
         // approve command — only the executor writes it when the AI emits the
         // completion signal (actual loop exit).
         expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
-        const casEvents = mockResolveApprovalGate.mock.calls[0][2] as Array<
+        const casEvents = mockResolveApprovalGate.mock.calls[0][3] as Array<
           Record<string, unknown>
         >;
         expect(casEvents.filter(e => e.event_type === 'node_completed')).toHaveLength(0);
@@ -2500,6 +2501,7 @@ describe('CommandHandler', () => {
         // no-feedback would make every chat approve iterate instead of finalize.
         expect(mockResolveApprovalGate).toHaveBeenCalledWith(
           'run-bare',
+          { nodeId: 'validate', gateId: undefined },
           expect.objectContaining({
             loop_feedback_given: false,
             loop_user_input: 'Approved',
@@ -2558,6 +2560,39 @@ describe('CommandHandler', () => {
         updated_at: new Date(),
       };
 
+      test('reports live supervisor continuation for a plannotator gate', async () => {
+        mockGetWorkflowRun.mockResolvedValueOnce({
+          id: 'run-plannotator-slash',
+          workflow_name: 'review-plan',
+          conversation_id: 'conv-approve',
+          parent_conversation_id: null,
+          codebase_id: null,
+          status: 'paused',
+          user_message: 'start',
+          metadata: {
+            approval: {
+              type: 'plannotator_gate',
+              nodeId: 'review',
+              message: 'Review',
+              gateId: 'gate-1',
+            },
+          },
+          started_at: new Date(),
+          completed_at: null,
+          last_activity_at: new Date(),
+          working_path: '/repo',
+        });
+
+        const result = await handleCommand(
+          baseConversation,
+          '/workflow approve run-plannotator-slash LGTM'
+        );
+
+        expect(result.success).toBe(true);
+        expect(result.message).toContain('live Plannotator supervisor will continue');
+        expect(result.message).not.toContain('Type your response');
+      });
+
       test('stores user comment as node_output when captureResponse is true', async () => {
         mockGetWorkflowRun.mockResolvedValueOnce({
           id: 'run-cap',
@@ -2584,7 +2619,7 @@ describe('CommandHandler', () => {
         await handleCommand(baseConversation, '/workflow approve run-cap LGTM looks good');
 
         // node_completed rides the CAS transaction now (#2146), not a direct write.
-        const casEvents = mockResolveApprovalGate.mock.calls[0][2] as Array<
+        const casEvents = mockResolveApprovalGate.mock.calls[0][3] as Array<
           Record<string, unknown>
         >;
         const nodeCompleted = casEvents.find(e => e.event_type === 'node_completed');
@@ -2618,7 +2653,7 @@ describe('CommandHandler', () => {
         await handleCommand(baseConversation, '/workflow approve run-nocap a comment');
 
         // node_completed rides the CAS transaction now (#2146), not a direct write.
-        const casEvents = mockResolveApprovalGate.mock.calls[0][2] as Array<
+        const casEvents = mockResolveApprovalGate.mock.calls[0][3] as Array<
           Record<string, unknown>
         >;
         const nodeCompleted = casEvents.find(e => e.event_type === 'node_completed');
@@ -2679,6 +2714,7 @@ describe('CommandHandler', () => {
         // same transaction (#2146)
         expect(mockResolveApprovalGate).toHaveBeenCalledWith(
           'run-reject-1',
+          { nodeId: 'review', gateId: undefined },
           {
             approval: {
               type: 'approval',
@@ -2732,13 +2768,17 @@ describe('CommandHandler', () => {
         expect(result.message).toContain('max attempts reached');
         // Terminal reject resolves + cancels atomically (#2113); the audit event
         // rides the same transaction (#2146).
-        expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledWith('run-reject-max', [
-          {
-            event_type: 'approval_received',
-            step_name: 'review',
-            data: { decision: 'rejected', reason: 'bad' },
-          },
-        ]);
+        expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledWith(
+          'run-reject-max',
+          { nodeId: 'review', gateId: undefined },
+          [
+            {
+              event_type: 'approval_received',
+              step_name: 'review',
+              data: { decision: 'rejected', reason: 'bad' },
+            },
+          ]
+        );
         expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
       });
 
@@ -2772,13 +2812,17 @@ describe('CommandHandler', () => {
         expect(result.success).toBe(true);
         // Terminal reject resolves + cancels atomically (#2113); the audit event
         // rides the same transaction (#2146).
-        expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledWith('run-reject-plain', [
-          {
-            event_type: 'approval_received',
-            step_name: 'gate',
-            data: { decision: 'rejected', reason: 'reason' },
-          },
-        ]);
+        expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledWith(
+          'run-reject-plain',
+          { nodeId: 'gate', gateId: undefined },
+          [
+            {
+              event_type: 'approval_received',
+              step_name: 'gate',
+              data: { decision: 'rejected', reason: 'reason' },
+            },
+          ]
+        );
         expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
       });
     });

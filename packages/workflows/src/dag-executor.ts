@@ -67,6 +67,7 @@ import {
   isRouteLoopNode,
   isLoopGroupNode,
   isApprovalNode,
+  isPlannotatorGateNode,
   isCancelNode,
   isScriptNode,
   isIncludeNode,
@@ -141,13 +142,15 @@ function dagNodeTelemetryType(node: DagNode): WorkflowNodeType {
   if (isRouteLoopNode(node)) return 'route_loop';
   if (isLoopGroupNode(node)) return 'loop_group';
   if (isApprovalNode(node)) return 'approval';
+  // Closest closed-set label until WorkflowNodeType grows a dedicated value.
+  if (isPlannotatorGateNode(node)) return 'approval';
   if (isCancelNode(node)) return 'cancel';
   if ('command' in node) return 'command';
   return 'prompt';
 }
 
 function isCheckpointableExecutableNode(node: DagNode): boolean {
-  return !isApprovalNode(node) && !isCancelNode(node);
+  return !isApprovalNode(node) && !isPlannotatorGateNode(node) && !isCancelNode(node);
 }
 
 function escapeCompletionSignalForRegExp(value: string): string {
@@ -1463,6 +1466,43 @@ function collectPathNodesToAnyTarget(
   return pathNodes;
 }
 
+/**
+ * True when a route_loop source can still become ready if `avoidId` never runs.
+ * Fail-only prepends (explain) return true; first-pass work that is also the
+ * negative target (fix → review) returns false.
+ */
+function canSatisfyTargetsWithoutNode(
+  nodes: readonly { id: string; depends_on?: string[]; trigger_rule?: string }[],
+  targetIds: ReadonlySet<string>,
+  avoidId: string
+): boolean {
+  const available = new Set<string>();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const node of nodes) {
+      if (node.id === avoidId || available.has(node.id)) continue;
+      const deps = node.depends_on ?? [];
+      const readyDeps = deps.filter(dep => available.has(dep));
+      const rule = node.trigger_rule ?? 'all_success';
+      const ready =
+        deps.length === 0 ||
+        ((rule === 'one_success' || rule === 'none_failed_min_one_success') &&
+          readyDeps.length > 0) ||
+        (rule !== 'one_success' &&
+          rule !== 'none_failed_min_one_success' &&
+          readyDeps.length === deps.length);
+      if (!ready) continue;
+      available.add(node.id);
+      changed = true;
+    }
+  }
+  for (const targetId of targetIds) {
+    if (available.has(targetId)) return true;
+  }
+  return false;
+}
+
 interface RouteRerunExternalPrerequisite {
   rerunNodeId: string;
   prerequisiteNodeId: string;
@@ -1540,11 +1580,11 @@ function assertExternalPrerequisitesCompleted(params: {
   }
 }
 
-function collectLatestRouteActivationTargetIds(params: {
+function collectLatestRouteActivations(params: {
   metadata: RouteLoopRuntimeMetadata;
   routeTargetIds: Set<string>;
   invalidatedNodeIds?: readonly string[];
-}): Set<string> {
+}): RouteLoopRuntimeMetadata['routeActivations'][string][] {
   const latestByRouteLoop = new Map<string, RouteLoopRuntimeMetadata['routeActivations'][string]>();
   const invalidatedNodeIds = new Set(params.invalidatedNodeIds ?? []);
 
@@ -1557,7 +1597,7 @@ function collectLatestRouteActivationTargetIds(params: {
     }
   }
 
-  return new Set(Array.from(latestByRouteLoop.values(), activation => activation.target_node_id));
+  return Array.from(latestByRouteLoop.values());
 }
 
 function assertRouteTargetCanBeActivated(
@@ -3921,7 +3961,10 @@ async function executeLoopGroupNode(
       // (never spliced into source — #2115); matches applyLoopPrevToBodyNode's skip.
       bodyLoopUserInput: userInputForIter,
     };
-    await runLayers(iterCtx);
+    const bodyOutcome = await runLayers(iterCtx);
+    if (bodyOutcome === 'pending') {
+      return { state: 'pending', output: '' };
+    }
     // A body approval/cancel node may have paused or cancelled the run mid-iteration.
     // `paused` is tolerated (a sibling gate in the same iteration layer) — mirror
     // executeLoopNode's between-iteration tolerance — but a terminal/cancelled state
@@ -4359,6 +4402,22 @@ export function applyLoopPrevToBodyNode(
   }
   if (isApprovalNode(node)) {
     return { ...node, approval: { ...node.approval, message: sub(node.approval.message) } };
+  }
+  if (isPlannotatorGateNode(node)) {
+    return {
+      ...node,
+      plannotator_gate: {
+        ...node.plannotator_gate,
+        document: sub(node.plannotator_gate.document),
+        ...(node.plannotator_gate.message !== undefined
+          ? { message: sub(node.plannotator_gate.message) }
+          : {}),
+        rework: {
+          ...node.plannotator_gate.rework,
+          prompt: sub(node.plannotator_gate.rework.prompt),
+        },
+      },
+    };
   }
   if (isBashNode(node)) return { ...node, bash: sub(node.bash, true) };
   // Scripts never pass through a shell (execFile argv) — bash-quoting would inject
@@ -7031,7 +7090,7 @@ interface RunLayersContext {
  * addition is `ctx.stepNamePrefix` (empty for the top-level DAG → identical `step_name`s).
  * Shared by the top-level DAG and `executeLoopGroupNode`'s per-iteration body execution.
  */
-async function runLayers(ctx: RunLayersContext): Promise<void> {
+async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'> {
   const {
     deps,
     platform,
@@ -7068,6 +7127,16 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
     route,
   } = ctx;
   // nodeOutputs + accumulators + lastSequentialSession are mutated in place on `ctx`.
+  const knownNodes = new Map<string, readonly string[] | undefined>(
+    layers.flatMap(layer =>
+      layer.map(node => [node.id, declaredFieldsFromSchema(node.output_format)] as const)
+    )
+  );
+  for (const [nodeId, output] of ctx.nodeOutputs) {
+    if (!knownNodes.has(nodeId)) {
+      knownNodes.set(nodeId, 'declaredFields' in output ? output.declaredFields : undefined);
+    }
+  }
 
   for (let layerIdx = 0; layerIdx < layers.length; layerIdx++) {
     const layer = layers[layerIdx];
@@ -7126,14 +7195,20 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
         visiting.delete(nodeId);
         return false;
       }
-      for (const dep of node.depends_on ?? []) {
-        if (isBlockedByInactiveRouteTarget(dep, visiting)) {
-          visiting.delete(nodeId);
-          return true;
-        }
-      }
+      const deps = node.depends_on ?? [];
+      const blockedDeps = deps.filter(dep => isBlockedByInactiveRouteTarget(dep, visiting));
       visiting.delete(nodeId);
-      return false;
+      if (deps.length === 0) return false;
+      // one_success joins (ralph / first-pass work) stay live when an alternate
+      // dep is unblocked. all_success children of a dormant FAIL target stay pending.
+      if (
+        node.trigger_rule === 'one_success' ||
+        node.trigger_rule === 'none_failed_min_one_success'
+      ) {
+        return blockedDeps.length === deps.length;
+      }
+      if (node.trigger_rule === 'all_done') return false;
+      return blockedDeps.length > 0;
     };
 
     // Execute all nodes in the layer concurrently. `sessionProvider` is the resolved
@@ -7284,7 +7359,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
           if (node.when !== undefined) {
             const { result: conditionPasses, parsed: conditionParsed } = evaluateCondition(
               node.when,
-              ctx.nodeOutputs
+              ctx.nodeOutputs,
+              knownNodes
             );
             if (!conditionParsed) {
               const parseErrMsg = `⚠️ Node '${node.id}': unparseable \`when:\` expression "${node.when}" — node skipped (fail-closed). Check syntax: \`$nodeId.output == 'VALUE'\`, \`$nodeId.output > '5'\`, or compound \`$a.output == 'X' && $b.output != 'Y'\`.`;
@@ -7556,6 +7632,28 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             return { nodeId: node.id, output };
           }
 
+          // 3c2. Plannotator gate — live annotate session supervised until approve.
+          if (isPlannotatorGateNode(node)) {
+            const { executePlannotatorGateNode } = await import('./plannotator-gate-executor');
+            const output = await executePlannotatorGateNode({
+              node,
+              workflowRun,
+              deps,
+              platform,
+              conversationId,
+              cwd,
+              artifactsDir,
+              nodeOutputs: ctx.nodeOutputs,
+              config,
+              workflowProvider,
+              workflowModel,
+              aiProfile,
+              workflowPreset,
+              workflowTier,
+            });
+            return { nodeId: node.id, output };
+          }
+
           // 3d. Cancel node dispatch — terminates the workflow run
           if (isCancelNode(node)) {
             const reason = substituteNodeOutputRefs(node.cancel, ctx.nodeOutputs);
@@ -7654,7 +7752,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
 
             const { result: conditionResult, parsed: conditionParsed } = evaluateCondition(
               node.route_loop.condition,
-              ctx.nodeOutputs
+              ctx.nodeOutputs,
+              knownNodes
             );
 
             if (!conditionParsed) {
@@ -7729,6 +7828,9 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                 rerunNodeId,
                 selectedRerunPlan.activeDependenciesByNode.get(rerunNodeId)
               );
+              // Live negative must drop resume cache too, or first-pass
+              // completions on this path skip as prior_success.
+              ctx.priorCompletedNodes?.delete(rerunNodeId);
             }
 
             const targetLayerIndex = route.nodeLayerIndex.get(transition.eventData.to);
@@ -8049,6 +8151,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
     // Process layer results — store all outputs, track failures
     const nodeById = new Map(layer.map(n => [n.id, n]));
     let layerHadFailure = false;
+    let layerHadPending = false;
     for (const result of layerResults) {
       if (result.status === 'fulfilled') {
         const { nodeId, output, sessionProvider } = result.value;
@@ -8122,6 +8225,9 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               : undefined;
         }
         if (output.state === 'failed') layerHadFailure = true;
+        if (output.state === 'pending' && !(route && isBlockedByInactiveRouteTarget(nodeId))) {
+          layerHadPending = true;
+        }
         if (
           route &&
           scheduledAtLayerStart.has(nodeId) &&
@@ -8150,6 +8256,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
       getLog().warn({ layerIdx, nodeCount: layer.length }, 'dag_layer_had_failures');
     }
 
+    if (layerHadPending) return 'pending';
+
     if (routeJumpLayerIndex !== undefined && routeJumpLayerIndex <= layerIdx) {
       layerIdx = routeJumpLayerIndex - 1;
     }
@@ -8177,7 +8285,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             { workflowId: workflowRun.id }
           );
         }
-        break;
+        return 'completed';
       }
     } catch (statusErr) {
       // Non-fatal — status check failure should not crash the workflow
@@ -8187,6 +8295,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
       );
     }
   }
+  return 'completed';
 }
 
 /**
@@ -8238,6 +8347,12 @@ export function collectContainerIncompatibleProviders(
         if (node.approval.on_reject) {
           check(resolveNodeProviderForPreflight(node, workflowProvider, aiProfile));
         }
+        continue;
+      }
+      if (isPlannotatorGateNode(node)) {
+        // Rework always exists; provider is on the rework block, not the node.
+        const reworkProvider = node.plannotator_gate.rework.provider ?? workflowProvider;
+        check(reworkProvider);
         continue;
       }
       // command / prompt / loop → AI node
@@ -8849,6 +8964,17 @@ export async function executeDagWorkflow(
   const routeLoopMetadata = hasRouteLoopNodes
     ? routeLoopRuntimeMetadataSchema.parse(workflowRun.metadata)
     : routeLoopRuntimeMetadataSchema.parse({});
+  const resumePriorCompletedNodes = priorCompletedNodes ? new Map(priorCompletedNodes) : undefined;
+  const approval = isApprovalContext(workflowRun.metadata.approval)
+    ? workflowRun.metadata.approval
+    : undefined;
+  const approvedApprovalNodeId =
+    approval?.resolved === 'approved' &&
+    (approval.type === undefined ||
+      approval.type === 'approval' ||
+      approval.type === 'plannotator_gate')
+      ? approval.nodeId
+      : undefined;
 
   for (const node of workflow.nodes) {
     if (isRouteLoopNode(node)) {
@@ -8857,15 +8983,18 @@ export async function executeDagWorkflow(
       routeTargetIds.add(node.route_loop.routes.exhausted);
       initialBlockingRouteTargetIds.add(node.route_loop.routes.positive);
       initialBlockingRouteTargetIds.add(node.route_loop.routes.exhausted);
-      const negativeRerunPath = collectPathNodesToAnyTarget(
-        node.route_loop.routes.negative,
-        new Set(node.depends_on ?? []),
-        dependents
+      const fromIds = new Set(node.depends_on ?? []);
+      const negativeTarget = node.route_loop.routes.negative;
+      const negativeRerunPath = collectPathNodesToAnyTarget(negativeTarget, fromIds, dependents);
+      const firstPassCanSkipNegative = canSatisfyTargetsWithoutNode(
+        workflow.nodes,
+        fromIds,
+        negativeTarget
       );
-      if (negativeRerunPath === null) {
-        initialBlockingRouteTargetIds.add(node.route_loop.routes.negative);
+      if (negativeRerunPath === null || firstPassCanSkipNegative) {
+        initialBlockingRouteTargetIds.add(negativeTarget);
       } else {
-        initialAllowedRouteTargetIds.add(node.route_loop.routes.negative);
+        initialAllowedRouteTargetIds.add(negativeTarget);
       }
     }
   }
@@ -8880,12 +9009,27 @@ export async function executeDagWorkflow(
     }
   }
   if (hasRouteLoopNodes) {
-    for (const targetNodeId of collectLatestRouteActivationTargetIds({
+    for (const activation of collectLatestRouteActivations({
       metadata: routeLoopMetadata,
       routeTargetIds,
       invalidatedNodeIds: retryContext?.invalidatedNodeIds,
     })) {
-      activatedRouteTargetIds.add(targetNodeId);
+      activatedRouteTargetIds.add(activation.target_node_id);
+      if (activation.outcome !== 'negative') continue;
+      const routeLoopNode = nodesById.get(activation.route_loop_node_id);
+      if (!routeLoopNode || !isRouteLoopNode(routeLoopNode)) continue;
+      const rerunPlan = buildSelectedRouteRerunPlan({
+        routeLoopNode,
+        selectedTargetId: activation.target_node_id,
+        nodesById,
+        dependents,
+      });
+      for (const rerunNodeId of rerunPlan.rerunNodeIds) {
+        scheduleRouteRerunNode(rerunNodeId, rerunPlan.activeDependenciesByNode.get(rerunNodeId));
+        if (rerunNodeId !== approvedApprovalNodeId) {
+          resumePriorCompletedNodes?.delete(rerunNodeId);
+        }
+      }
     }
   }
 
@@ -8926,10 +9070,10 @@ export async function executeDagWorkflow(
       }
     : undefined;
 
-  // Pre-populate nodeOutputs from prior run so already-completed nodes are
-  // treated as done for trigger-rule and $nodeId.output substitution purposes.
-  // Nodes flagged `always_run: true` are excluded — they re-execute on resume
-  // and downstream consumers must see the fresh output, not the cached one.
+  // Pre-populate nodeOutputs from the full resume snapshot so `when:` and
+  // `$node.output` refs still see last completed values. Negative rerun
+  // nodes are deleted from resumePriorCompletedNodes (skip cache) only —
+  // dropping them here too makes FAIL `when:` fail-closed on resume.
   if (priorCompletedNodes && priorCompletedNodes.size > 0) {
     const nodesById = new Map(workflow.nodes.map(n => [n.id, n]));
     let prepopulatedCount = 0;
@@ -9017,7 +9161,7 @@ export async function executeDagWorkflow(
     scopeArtifactsDir: persistScopeKey !== undefined ? scopeArtifactsDir : undefined,
     layers,
     nodeOutputs,
-    priorCompletedNodes,
+    priorCompletedNodes: resumePriorCompletedNodes,
     lastSequentialSession: undefined,
     totalCostUsd: 0,
     totalTokensIn: priorTokenUsage?.input ?? 0,
@@ -9026,7 +9170,8 @@ export async function executeDagWorkflow(
     stepNamePrefix: '',
     route: routeState,
   };
-  await runLayers(runCtx);
+  const runOutcome = await runLayers(runCtx);
+  if (runOutcome === 'pending') return;
   // Pull the mutated accumulators back into local scope for the terminal tally below.
   const totalCostUsd = runCtx.totalCostUsd;
   const totalTokensIn = runCtx.totalTokensIn;

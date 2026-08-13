@@ -90,7 +90,23 @@ function createMockStore(): IWorkflowStore {
         working_path: null,
       })
     ),
+    resumeApprovedGate: mock(() => Promise.resolve({ resumed: true })),
     updateWorkflowRun: mock(() => Promise.resolve()),
+    resolveApprovalGate: mock(() => Promise.resolve({ resolved: true })),
+    transitionPlannotatorGate: mock(
+      (input: Parameters<IWorkflowStore['transitionPlannotatorGate']>[0]) =>
+        Promise.resolve({
+          outcome: 'updated' as const,
+          approval: {
+            nodeId: input.nodeId,
+            message: '',
+            type: 'plannotator_gate' as const,
+            gateId: input.nextGateId ?? input.expectedGateId,
+            document: input.document,
+            phase: input.phase,
+          },
+        })
+    ),
     persistRouteDecisionTransition: mock(
       (input: Parameters<IWorkflowStore['persistRouteDecisionTransition']>[0]) =>
         Promise.resolve({

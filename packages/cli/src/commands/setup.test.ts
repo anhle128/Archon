@@ -19,6 +19,7 @@ import {
   writeHomePiModelConfig,
   buildDefaultModelChoices,
   readInstallDefaultModel,
+  runGrokLogin,
   writeInstallDefaults,
 } from './setup';
 import * as setupModule from './setup';
@@ -102,6 +103,7 @@ CODEX_ACCOUNT_ID=account1
       expect(result).not.toBeNull();
       expect(result?.hasClaude).toBe(true);
       expect(result?.hasCodex).toBe(true);
+      expect(result?.hasGrok).toBe(false);
       expect(result?.platforms.telegram).toBe(true);
       expect(result?.platforms.github).toBe(false);
       expect(result?.platforms.slack).toBe(false);
@@ -126,6 +128,33 @@ CODEX_ACCOUNT_ID=account1
       expect(result?.hasPi).toBe(true);
       expect(result?.hasClaude).toBe(false);
       expect(result?.hasCodex).toBe(false);
+    });
+
+    it('detects Grok from xAI credentials or the configured default', () => {
+      const envPath = join(TEST_DIR, 'grok.env');
+      writeFileSync(envPath, 'XAI_API_KEY=xai-test\n');
+      expect(checkExistingConfig(envPath)?.hasGrok).toBe(true);
+
+      writeFileSync(envPath, 'DEFAULT_AI_ASSISTANT=grok\n');
+      expect(checkExistingConfig(envPath)?.hasGrok).toBe(true);
+    });
+  });
+
+  describe('runGrokLogin', () => {
+    it('runs the Grok CLI login command and reports failures', () => {
+      const calls: unknown[][] = [];
+      const success = runGrokLogin((command, args, options) => {
+        calls.push([command, args, options]);
+        return { status: 0 };
+      });
+      const failure = runGrokLogin(() => ({ status: 1 }));
+
+      expect(calls).toEqual([['grok', ['login'], { stdio: 'inherit' }]]);
+      expect(success.ok).toBe(true);
+      expect(failure).toEqual({
+        ok: false,
+        message: '`grok login` exited with code 1.',
+      });
     });
   });
 

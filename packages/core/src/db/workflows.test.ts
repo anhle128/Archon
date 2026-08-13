@@ -47,11 +47,15 @@ import {
   completeWorkflowRun,
   failWorkflowRun,
   updateWorkflowActivity,
+  resolveApprovalGate,
+  resolveAndCancelApprovalGate,
+  transitionPlannotatorGate,
   persistRouteDecisionTransition,
   WorkflowRouteDecisionStaleWriteError,
   findResumableRun,
   findResumableRunByParentConversation,
   resumeWorkflowRun,
+  resumeApprovedGate,
   pauseWorkflowRun,
   cancelWorkflowRun,
   cancelRecoveryWorkflowRun,
@@ -526,6 +530,198 @@ describe('workflows database', () => {
         false
       );
       expect(mockWithTransaction).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('Plannotator gate transactions', () => {
+    const approval = {
+      nodeId: 'review',
+      message: 'Review the plan',
+      type: 'plannotator_gate' as const,
+      gateId: 'gate-a',
+      document: '/tmp/plan.md',
+      phase: 'waiting_decision' as const,
+      resolved: null,
+    };
+
+    test('locks and replaces the nested approval for a phase transition', async () => {
+      mockQuery
+        .mockResolvedValueOnce(
+          createQueryResult([{ ...mockWorkflowRun, status: 'paused', metadata: { approval } }])
+        )
+        .mockResolvedValueOnce(createQueryResult([], 1));
+
+      const result = await transitionPlannotatorGate({
+        runId: 'workflow-run-123',
+        nodeId: 'review',
+        expectedGateId: 'gate-a',
+        nextGateId: 'gate-b',
+        document: '/tmp/reworked-plan.md',
+        phase: 'opening',
+      });
+
+      expect(result).toEqual({
+        outcome: 'updated',
+        approval: {
+          ...approval,
+          gateId: 'gate-b',
+          document: '/tmp/reworked-plan.md',
+          phase: 'opening',
+        },
+      });
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        1,
+        'SELECT * FROM remote_agent_workflow_runs WHERE id = $1 FOR UPDATE',
+        ['workflow-run-123']
+      );
+      const [updateSql, updateParams] = mockQuery.mock.calls[1] as [string, unknown[]];
+      expect(updateSql).toContain('metadata = metadata || $2::jsonb');
+      expect(updateParams).toEqual([
+        'workflow-run-123',
+        JSON.stringify({
+          approval: {
+            ...approval,
+            gateId: 'gate-b',
+            document: '/tmp/reworked-plan.md',
+            phase: 'opening',
+          },
+        }),
+      ]);
+    });
+
+    test('writes resolution metadata and audit events only for the winning identity', async () => {
+      mockQuery
+        .mockResolvedValueOnce(
+          createQueryResult([{ ...mockWorkflowRun, status: 'paused', metadata: { approval } }])
+        )
+        .mockResolvedValueOnce(createQueryResult([], 1))
+        .mockResolvedValueOnce(createQueryResult([], 1));
+
+      const metadata = { approval: { ...approval, resolved: 'approved' as const } };
+      expect(
+        (
+          await resolveApprovalGate(
+            'workflow-run-123',
+            { nodeId: 'review', gateId: 'gate-a' },
+            metadata,
+            [
+              {
+                event_type: 'approval_received',
+                step_name: 'review',
+                data: { decision: 'approved' },
+              },
+            ]
+          )
+        ).resolved
+      ).toBe(true);
+
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        1,
+        'SELECT * FROM remote_agent_workflow_runs WHERE id = $1 FOR UPDATE',
+        ['workflow-run-123']
+      );
+      const [updateSql, updateParams] = mockQuery.mock.calls[1] as [string, unknown[]];
+      expect(updateSql).toContain("status = 'paused'");
+      expect(updateParams).toEqual(['workflow-run-123', JSON.stringify(metadata)]);
+      expect(mockQuery.mock.calls[2]?.[0] as string).toContain(
+        'INSERT INTO remote_agent_workflow_events'
+      );
+
+      mockQuery.mockClear();
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            ...mockWorkflowRun,
+            status: 'paused',
+            metadata: { approval: { ...approval, gateId: 'gate-b' } },
+          },
+        ])
+      );
+
+      expect(
+        (
+          await resolveApprovalGate(
+            'workflow-run-123',
+            { nodeId: 'review', gateId: 'gate-a' },
+            metadata,
+            [
+              {
+                event_type: 'approval_received',
+                step_name: 'review',
+                data: { decision: 'approved' },
+              },
+            ]
+          )
+        ).resolved
+      ).toBe(false);
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+    });
+
+    test('locks and rejects a stale terminal resolver before any mutation', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            ...mockWorkflowRun,
+            status: 'paused',
+            metadata: { approval: { ...approval, gateId: 'gate-b' } },
+          },
+        ])
+      );
+
+      const outcome = await resolveAndCancelApprovalGate(
+        'workflow-run-123',
+        { nodeId: 'review', gateId: 'gate-a' },
+        [
+          {
+            event_type: 'approval_received',
+            step_name: 'review',
+            data: { decision: 'rejected' },
+          },
+        ]
+      );
+
+      expect(outcome.resolved).toBe(false);
+      expect(mockWithTransaction).toHaveBeenCalledTimes(1);
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(mockQuery).toHaveBeenCalledWith(
+        'SELECT * FROM remote_agent_workflow_runs WHERE id = $1 FOR UPDATE',
+        ['workflow-run-123']
+      );
+    });
+
+    test('cancels and audits only after the locked terminal identity matches', async () => {
+      mockQuery
+        .mockResolvedValueOnce(
+          createQueryResult([{ ...mockWorkflowRun, status: 'paused', metadata: { approval } }])
+        )
+        .mockResolvedValueOnce(createQueryResult([], 1))
+        .mockResolvedValueOnce(createQueryResult([], 1));
+
+      const outcome = await resolveAndCancelApprovalGate(
+        'workflow-run-123',
+        { nodeId: 'review', gateId: 'gate-a' },
+        [
+          {
+            event_type: 'approval_received',
+            step_name: 'review',
+            data: { decision: 'rejected' },
+          },
+        ]
+      );
+
+      expect(outcome.resolved).toBe(true);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        1,
+        'SELECT * FROM remote_agent_workflow_runs WHERE id = $1 FOR UPDATE',
+        ['workflow-run-123']
+      );
+      const [updateSql, updateParams] = mockQuery.mock.calls[1] as [string, unknown[]];
+      expect(updateSql).toContain("SET status = 'cancelled'");
+      expect(updateSql).toContain("status = 'paused'");
+      expect(updateParams).toEqual(['workflow-run-123']);
+      expect(mockQuery.mock.calls[2]?.[0] as string).toContain(
+        'INSERT INTO remote_agent_workflow_events'
+      );
     });
   });
 
@@ -1441,6 +1637,38 @@ describe('workflows database', () => {
       await expect(resumeWorkflowRun('workflow-run-123')).rejects.toThrow(
         'Workflow run vanished after update (id: workflow-run-123)'
       );
+    });
+  });
+
+  describe('resumeApprovedGate', () => {
+    test('atomically resumes only the matching approved paused Plannotator gate', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+
+      await expect(
+        resumeApprovedGate('workflow-run-123', { nodeId: 'review', gateId: 'gate-a' })
+      ).resolves.toEqual({ resumed: true });
+
+      expect(mockWithTransaction).not.toHaveBeenCalled();
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      const [updateSql, updateParams] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(updateSql).toContain("SET status = 'running'");
+      expect(updateSql).toContain('WHERE id = $1');
+      expect(updateSql).toContain("AND status = 'paused'");
+      expect(updateSql).toContain("metadata->'approval'->>'type' = 'plannotator_gate'");
+      expect(updateSql).toContain("metadata->'approval'->>'resolved' = 'approved'");
+      expect(updateSql).toContain("metadata->'approval'->>'nodeId' = $2");
+      expect(updateSql).toContain("metadata->'approval'->>'gateId' = $3");
+      expect(updateSql).toContain('started_at = NOW()');
+      expect(updateParams).toEqual(['workflow-run-123', 'review', 'gate-a']);
+    });
+
+    test('returns a CAS miss when any resume predicate does not match', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
+
+      await expect(
+        resumeApprovedGate('workflow-run-123', { nodeId: 'review', gateId: 'gate-a' })
+      ).resolves.toEqual({ resumed: false });
+      expect(mockQuery).toHaveBeenCalledTimes(1);
     });
   });
 

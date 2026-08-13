@@ -152,8 +152,8 @@ function EnvVarsBody({ projectId, projectName, onClose }: BodyProps): ReactEleme
             Environment variables
           </h2>
           <p className="mt-1 text-[13px] leading-relaxed text-text-tertiary">
-            Injected into project-scoped execution (Claude, Codex, bash, scripts). Values are stored
-            server-side; the UI only ever sees the names.
+            Injected into project-scoped execution (Claude, Codex, Grok, bash, scripts). Values are
+            stored server-side; the UI only ever sees the names.
           </p>
         </div>
         <span className="shrink-0 truncate pt-1 font-mono text-[12px] text-text-tertiary">

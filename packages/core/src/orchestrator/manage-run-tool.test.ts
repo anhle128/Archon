@@ -323,6 +323,21 @@ describe('manage_run — destructive confirmation gate', () => {
     expect(mockApprove).toHaveBeenCalledWith('r1abcdef-1234', 'lgtm');
   });
 
+  test('approve reports live supervisor continuation for plannotator gates', async () => {
+    mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
+    mockApprove.mockResolvedValue({
+      workflowName: 'wf',
+      type: 'approval_gate',
+      continuation: 'live_plannotator_supervisor',
+    });
+    const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
+
+    const out = await tool.handler({ action: 'approve', runId: 'r1abcdef', confirm: true });
+
+    expect(out).toContain('live Plannotator supervisor will continue');
+    expect(out).not.toContain('set to resume');
+  });
+
   test('approve with confirm and no message on an interactive loop reports the finalize semantics (#2074)', async () => {
     mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
     mockApprove.mockResolvedValue({ workflowName: 'wf', type: 'interactive_loop' });

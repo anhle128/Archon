@@ -2100,7 +2100,7 @@ describe('natural-language approval routing', () => {
     // Approval events ride the CAS transaction now (#2146), not a direct write:
     // node_completed + approval_received.
     expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
-    const casEvents = (mockResolveApprovalGate.mock.calls[0] as unknown[])[2] as Array<
+    const casEvents = (mockResolveApprovalGate.mock.calls[0] as unknown[])[3] as Array<
       Record<string, unknown>
     >;
     expect(casEvents).toHaveLength(2);
@@ -2116,6 +2116,7 @@ describe('natural-language approval routing', () => {
     // transaction (#2146)
     expect(mockResolveApprovalGate).toHaveBeenCalledWith(
       'run-1',
+      { nodeId: 'gate-1', gateId: undefined },
       {
         approval: { nodeId: 'gate-1', message: 'Please review', resolved: 'approved' },
         approval_response: 'approved',
@@ -2132,6 +2133,35 @@ describe('natural-language approval routing', () => {
       'conv-1',
       expect.stringContaining('Found a prior failed run')
     );
+  });
+
+  test('natural language plannotator approval records the decision for the live supervisor', async () => {
+    const conversation = makeConversation({ codebase_id: 'codebase-1', cwd: '/repos/test-repo' });
+    const pausedRun = makePausedRun({
+      metadata: {
+        approval: {
+          type: 'plannotator_gate',
+          nodeId: 'gate-1',
+          message: 'Review',
+          gateId: 'gate-1',
+        },
+      },
+    });
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+    mockGetPausedWorkflowRun.mockReturnValueOnce(Promise.resolve(pausedRun));
+    mockGetWorkflowRunDb.mockReturnValueOnce(Promise.resolve(pausedRun));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'looks good');
+
+    expect(mockResolveApprovalGate).toHaveBeenCalled();
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('live Plannotator supervisor will continue')
+    );
+    expect(mockDiscoverWorkflowsWithConfig).not.toHaveBeenCalled();
+    expect(mockGetCodebase).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
   test('slash command bypasses approval interception — getPausedWorkflowRun not called', async () => {

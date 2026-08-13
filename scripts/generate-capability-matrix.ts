@@ -93,6 +93,20 @@ const CAVEATS: readonly { provider: string; key: keyof ProviderCapabilities; not
       'informational; use `provider: claude` for node-scoped skills.',
   },
   {
+    provider: 'grok',
+    key: 'skills',
+    note:
+      'Filesystem auto-discovery from `.agents/skills/` — per-node `skills:` lists are ' +
+      'informational; use `provider: claude` for node-scoped skills.',
+  },
+  {
+    provider: 'grok',
+    key: 'toolRestrictions',
+    note:
+      'Uses Grok native tool ids. An empty `allowed_tools: []` fails fast because the CLI ' +
+      'interprets an empty allowlist as unset (full access).',
+  },
+  {
     provider: 'opencode',
     key: 'agents',
     note:

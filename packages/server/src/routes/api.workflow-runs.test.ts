@@ -270,13 +270,21 @@ const mockUpdateWorkflowRun = mock(async (_id: string, _update: unknown) => {});
 // CAS gate resolvers (#2113) — the real approve/reject operations stamp the
 // resolution here. resolveAndCancelApprovalGate is the atomic resolve+cancel for
 // terminal reject outcomes. Default to "won the race".
-// The 3rd arg (approve) / 2nd arg (cancel) is the audit-event batch written in the
+// The 4th arg (approve) / 3rd arg (cancel) is the audit-event batch written in the
 // same transaction as the resolution (#2146).
-const mockResolveApprovalGate = mock(async (_id: string, _md: unknown, _events?: unknown) => ({
-  resolved: true,
-}));
-const mockResolveAndCancelApprovalGate = mock(async (_id: string, _events?: unknown) => ({
-  resolved: true,
+const mockResolveApprovalGate = mock(
+  async (_id: string, _identity: unknown, _md: unknown, _events?: unknown) => ({
+    resolved: true,
+  })
+);
+const mockResolveAndCancelApprovalGate = mock(
+  async (_id: string, _identity: unknown, _events?: unknown) => ({
+    resolved: true,
+  })
+);
+const mockTransitionPlannotatorGate = mock(async (_input: unknown) => ({
+  outcome: 'updated' as const,
+  approval: {},
 }));
 const mockFindChildRuns = mock(async (_parentRunId: string): Promise<unknown[]> => []);
 
@@ -290,6 +298,7 @@ mock.module('@archon/core/db/workflows', () => ({
   updateWorkflowRun: mockUpdateWorkflowRun,
   resolveApprovalGate: mockResolveApprovalGate,
   resolveAndCancelApprovalGate: mockResolveAndCancelApprovalGate,
+  transitionPlannotatorGate: mockTransitionPlannotatorGate,
   getWorkflowRunByWorkerPlatformId: mockGetWorkflowRunByWorkerPlatformId,
 }));
 
@@ -303,6 +312,66 @@ mock.module('@archon/core/db/workflow-events', () => ({
 mock.module('@archon/core/db/messages', () => ({
   addMessage: mockAddMessage,
   listMessages: mock(async () => []),
+}));
+
+const mockGetWorkflowNodeRetryPreview = mock(async () => ({
+  runId: 'run-web-retry',
+  workflowName: 'deploy',
+  nodeId: 'build',
+  retryEpoch: 1,
+  invalidatedNodeIds: ['build'],
+  resetSkipped: false,
+  checkpointRef: 'refs/archon/checkpoints/run-web-retry/0/build',
+  checkpointCommitSha: 'checkpoint-sha',
+  currentHeadSha: 'head-sha',
+  hasNewerHead: true,
+  requiresCommitChoice: true,
+}));
+const mockPrepareWorkflowNodeRetry = mock(
+  async (input: { checkoutStrategy?: 'checkpoint' | 'current' }) => ({
+    runId: 'run-web-retry',
+    workflowName: 'deploy',
+    preCreatedRun: {
+      id: 'run-web-retry',
+      workflow_name: 'deploy',
+      conversation_id: 'worker-conv',
+      parent_conversation_id: 'parent-conv',
+      codebase_id: null,
+      status: 'running',
+      user_message: 'retry',
+      started_at: NOW,
+      completed_at: null,
+      metadata: { retry_epoch: 1 },
+      working_path: '/tmp/worktrees/feature',
+      last_activity_at: NOW,
+    },
+    retryEpoch: 1,
+    invalidatedNodeIds: ['build'],
+    preservedCompletedOutputs: new Map<string, string>(),
+    resetSkipped: input.checkoutStrategy === 'current',
+    safetyRef: 'refs/archon/retry-safety/run-web-retry/1',
+    safetyCommitSha: 'safety-sha',
+    checkoutStrategy: input.checkoutStrategy ?? 'checkpoint',
+  })
+);
+
+mock.module('@archon/core/operations/workflow-retry', () => ({
+  getWorkflowNodeRetryPreview: mockGetWorkflowNodeRetryPreview,
+  prepareWorkflowNodeRetry: mockPrepareWorkflowNodeRetry,
+}));
+
+const mockExecuteWorkflow = mock(async () => ({
+  success: true,
+  workflowRunId: 'run-web-retry',
+}));
+const mockCreateWorkflowDeps = mock(() => ({}));
+
+mock.module('@archon/workflows/executor', () => ({
+  executeWorkflow: mockExecuteWorkflow,
+}));
+
+mock.module('@archon/core/workflows/store-adapter', () => ({
+  createWorkflowDeps: mockCreateWorkflowDeps,
 }));
 
 mock.module('@archon/core/utils/commands', () => ({
@@ -2115,7 +2184,7 @@ describe('POST /api/workflows/runs/:runId/approve', () => {
     });
     expect(response.status).toBe(200);
     // Audit events ride the CAS transaction now (#2146), not a separate write.
-    const casEvents = (mockResolveApprovalGate.mock.calls[0] as unknown[])[2] as Array<
+    const casEvents = (mockResolveApprovalGate.mock.calls[0] as unknown[])[3] as Array<
       Record<string, unknown>
     >;
     const nodeCompleted = casEvents.find(e => e.event_type === 'node_completed');
@@ -2134,7 +2203,7 @@ describe('POST /api/workflows/runs/:runId/approve', () => {
     });
     expect(response.status).toBe(200);
     // Audit events ride the CAS transaction now (#2146), not a separate write.
-    const casEvents = (mockResolveApprovalGate.mock.calls[0] as unknown[])[2] as Array<
+    const casEvents = (mockResolveApprovalGate.mock.calls[0] as unknown[])[3] as Array<
       Record<string, unknown>
     >;
     const nodeCompleted = casEvents.find(e => e.event_type === 'node_completed');
@@ -2170,7 +2239,7 @@ describe('POST /api/workflows/runs/:runId/approve', () => {
     });
     expect(response.status).toBe(200);
     const casCall = mockResolveApprovalGate.mock.calls[0] as unknown[];
-    expect(casCall[1]).toMatchObject({
+    expect(casCall[2]).toMatchObject({
       loop_feedback_given: false,
       loop_user_input: 'Approved',
     });
@@ -2224,7 +2293,7 @@ describe('POST /api/workflows/runs/:runId/approve', () => {
     });
     expect(response.status).toBe(200);
     const casCall = mockResolveApprovalGate.mock.calls[0] as unknown[];
-    expect(casCall[1]).toMatchObject({
+    expect(casCall[2]).toMatchObject({
       loop_feedback_given: true,
       loop_user_input: 'actually re-check X',
     });
@@ -2307,13 +2376,17 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
     expect(body.success).toBe(true);
     // Terminal reject resolves + cancels atomically (#2113); the audit event rides
     // the same transaction (#2146).
-    expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledWith('run-paused-1', [
-      {
-        event_type: 'approval_received',
-        step_name: 'review-gate',
-        data: { decision: 'rejected', reason: 'needs work' },
-      },
-    ]);
+    expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledWith(
+      'run-paused-1',
+      { nodeId: 'review-gate', gateId: undefined },
+      [
+        {
+          event_type: 'approval_received',
+          step_name: 'review-gate',
+          data: { decision: 'rejected', reason: 'needs work' },
+        },
+      ]
+    );
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
     expect(mockCaptureApprovalResolved).toHaveBeenCalledWith({ resolution: 'rejected' });
   });
@@ -2345,6 +2418,7 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
     expect(body.message).toContain('On-reject prompt');
     expect(mockResolveApprovalGate).toHaveBeenCalledWith(
       'run-on-reject',
+      { nodeId: 'review-gate', gateId: undefined },
       {
         approval: {
           type: 'approval',
@@ -2395,13 +2469,17 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
     expect(body.message).toContain('max attempts reached');
     // Terminal reject resolves + cancels atomically (#2113); the audit event rides
     // the same transaction (#2146).
-    expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledWith('run-max-attempts', [
-      {
-        event_type: 'approval_received',
-        step_name: 'review-gate',
-        data: { decision: 'rejected', reason: 'still bad' },
-      },
-    ]);
+    expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledWith(
+      'run-max-attempts',
+      { nodeId: 'review-gate', gateId: undefined },
+      [
+        {
+          event_type: 'approval_received',
+          step_name: 'review-gate',
+          data: { decision: 'rejected', reason: 'still bad' },
+        },
+      ]
+    );
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
     expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
   });
@@ -2458,6 +2536,35 @@ describe('approve/reject auto-resume', () => {
     ];
     expect(platformConvId).toBe('web-plat-abc');
     expect(dispatchedMessage).toBe('/workflow resume run-auto-resume-approve');
+  });
+
+  test('approve: leaves plannotator continuation to the live supervisor', async () => {
+    mockGetWorkflowRun.mockResolvedValue({
+      ...MOCK_PAUSED_RUN,
+      id: 'run-plannotator-web',
+      parent_conversation_id: 'parent-conv-uuid',
+      metadata: {
+        approval: {
+          type: 'plannotator_gate',
+          nodeId: 'review-gate',
+          message: 'Review',
+          gateId: 'gate-1',
+        },
+      },
+    });
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-plannotator-web/approve', {
+      method: 'POST',
+      body: JSON.stringify({ comment: 'LGTM' }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { message: string };
+    expect(body.message).toContain('live Plannotator supervisor will continue');
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+    expect(mockGetConversationById).not.toHaveBeenCalled();
   });
 
   test('approve: skips dispatch when parent_conversation_id is null (CLI-dispatched run)', async () => {
@@ -2625,13 +2732,121 @@ describe('approve/reject auto-resume', () => {
     expect(mockHandleMessage).not.toHaveBeenCalled();
     // Terminal reject resolves + cancels atomically (#2113); the audit event rides
     // the same transaction (#2146).
-    expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledWith('run-paused-1', [
-      {
-        event_type: 'approval_received',
-        step_name: 'review-gate',
-        data: { decision: 'rejected', reason: 'no' },
+    expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledWith(
+      'run-paused-1',
+      { nodeId: 'review-gate', gateId: undefined },
+      [
+        {
+          event_type: 'approval_received',
+          step_name: 'review-gate',
+          data: { decision: 'rejected', reason: 'no' },
+        },
+      ]
+    );
+  });
+});
+
+describe('review-open takeover auto-resume', () => {
+  const reviewOpenRun: MockWorkflowRun = {
+    ...MOCK_PAUSED_RUN,
+    id: 'run-review-open-web',
+    parent_conversation_id: 'parent-conv-uuid',
+    metadata: {
+      approval: {
+        type: 'plannotator_gate',
+        nodeId: 'review-gate',
+        message: 'Review',
+        gateId: 'gate-old',
+        document: '/tmp/review.html',
+        phase: 'idle',
       },
-    ]);
+    },
+  };
+
+  beforeEach(() => {
+    mockGetWorkflowRun.mockReset();
+    mockGetConversationById.mockReset();
+    mockHandleMessage.mockReset();
+    mockTransitionPlannotatorGate.mockReset();
+    mockTransitionPlannotatorGate.mockResolvedValue({ outcome: 'updated', approval: {} });
+  });
+
+  test('publishes the exact review-open success response contract', async () => {
+    const { app } = makeApp();
+
+    const response = await app.request('/api/openapi.json');
+    const document = (await response.json()) as {
+      paths: Record<
+        string,
+        {
+          post?: {
+            responses?: Record<
+              string,
+              { content?: Record<string, { schema?: Record<string, unknown> }> }
+            >;
+          };
+        }
+      >;
+    };
+
+    const schema =
+      document.paths['/api/workflows/runs/{runId}/review-open']?.post?.responses?.['200']
+        ?.content?.['application/json']?.schema;
+    expect(schema).toEqual({
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        document: { type: 'string' },
+        nodeId: { type: 'string' },
+        phase: { type: 'string', enum: ['opening'] },
+        continuation: { type: 'string', enum: ['caller_resume'] },
+        message: { type: 'string' },
+      },
+      required: ['success', 'document', 'nodeId', 'phase', 'continuation', 'message'],
+    });
+  });
+
+  test('dispatches exactly one explicit resume for a web parent', async () => {
+    mockGetWorkflowRun.mockResolvedValue(reviewOpenRun);
+    mockGetConversationById.mockResolvedValueOnce({
+      id: 'parent-conv-uuid',
+      platform_conversation_id: 'web-parent-review',
+      platform_type: 'web',
+    });
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-review-open-web/review-open', {
+      method: 'POST',
+    });
+
+    expect(response.status).toBe(200);
+    expect(mockHandleMessage).toHaveBeenCalledTimes(1);
+    const [, platformConvId, dispatchedMessage] = mockHandleMessage.mock.calls[0] as [
+      unknown,
+      string,
+      string,
+    ];
+    expect(platformConvId).toBe('web-parent-review');
+    expect(dispatchedMessage).toBe('/workflow resume run-review-open-web');
+  });
+
+  test('does not dispatch for a non-web parent and returns manual resume instruction', async () => {
+    mockGetWorkflowRun.mockResolvedValue(reviewOpenRun);
+    mockGetConversationById.mockResolvedValueOnce({
+      id: 'parent-conv-uuid',
+      platform_conversation_id: 'slack-parent-review',
+      platform_type: 'slack',
+    });
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-review-open-web/review-open', {
+      method: 'POST',
+    });
+
+    expect(response.status).toBe(200);
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+    const body = (await response.json()) as { message: string };
+    expect(body.message).toContain('archon workflow resume run-review-open-web');
   });
 });
 
@@ -2984,6 +3199,155 @@ describe('GET /api/artifacts/:runId/* storage-key resolution', () => {
 describe('POST /api/workflows/runs/:runId/nodes/:nodeId/retry', () => {
   beforeEach(() => {
     mockGetWorkflowRun.mockReset();
+    mockGetConversationById.mockReset();
+    mockGetCodebase.mockReset();
+    mockGetWorkflowNodeRetryPreview.mockReset();
+    mockPrepareWorkflowNodeRetry.mockReset();
+    mockExecuteWorkflow.mockReset();
+    mockCreateWorkflowDeps.mockReset();
+    mockGetWorkflowNodeRetryPreview.mockImplementation(async () => ({
+      runId: 'run-web-retry',
+      workflowName: 'deploy',
+      nodeId: 'build',
+      retryEpoch: 1,
+      invalidatedNodeIds: ['build'],
+      resetSkipped: false,
+      checkpointRef: 'refs/archon/checkpoints/run-web-retry/0/build',
+      checkpointCommitSha: 'checkpoint-sha',
+      currentHeadSha: 'head-sha',
+      hasNewerHead: true,
+      requiresCommitChoice: true,
+    }));
+    mockPrepareWorkflowNodeRetry.mockImplementation(
+      async (input: { checkoutStrategy?: 'checkpoint' | 'current' }) => ({
+        runId: 'run-web-retry',
+        workflowName: 'deploy',
+        preCreatedRun: {
+          id: 'run-web-retry',
+          workflow_name: 'deploy',
+          conversation_id: 'worker-conv',
+          parent_conversation_id: 'parent-conv',
+          codebase_id: null,
+          status: 'running',
+          user_message: 'retry',
+          started_at: NOW,
+          completed_at: null,
+          metadata: { retry_epoch: 1 },
+          working_path: '/tmp/worktrees/feature',
+          last_activity_at: NOW,
+        },
+        retryEpoch: 1,
+        invalidatedNodeIds: ['build'],
+        preservedCompletedOutputs: new Map<string, string>(),
+        resetSkipped: input.checkoutStrategy === 'current',
+        safetyRef: 'refs/archon/retry-safety/run-web-retry/1',
+        safetyCommitSha: 'safety-sha',
+        checkoutStrategy: input.checkoutStrategy ?? 'checkpoint',
+      })
+    );
+    mockExecuteWorkflow.mockImplementation(async () => ({
+      success: true,
+      workflowRunId: 'run-web-retry',
+    }));
+    mockCreateWorkflowDeps.mockImplementation(() => ({}));
+  });
+
+  async function mockRetryWorkflowDiscovery(): Promise<void> {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [
+        {
+          workflow: {
+            name: 'deploy',
+            description: 'Deploy workflow',
+            nodes: [{ id: 'build', command: 'build' }],
+          },
+          source: 'project',
+        },
+      ],
+      errors: [],
+    });
+  }
+
+  function mockWebRetryRun(): MockWorkflowRun {
+    return {
+      ...MOCK_FAILED_RUN,
+      id: 'run-web-retry',
+      workflow_name: 'deploy',
+      conversation_id: 'worker-conv',
+      parent_conversation_id: 'parent-conv',
+      working_path: '/tmp/worktrees/feature',
+    };
+  }
+
+  function mockWebRetryConversations(): void {
+    mockGetConversationById.mockImplementation(async id => {
+      if (id === 'parent-conv') {
+        return {
+          id,
+          platform_conversation_id: 'web-parent',
+          platform_type: 'web',
+        };
+      }
+      if (id === 'worker-conv') {
+        return {
+          id,
+          platform_conversation_id: 'web-worker',
+          platform_type: 'web',
+        };
+      }
+      return null;
+    });
+  }
+
+  test('previews newer checkout state for an eligible web-owned retry', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => mockWebRetryRun());
+    mockWebRetryConversations();
+    await mockRetryWorkflowDiscovery();
+
+    const { app } = makeApp();
+    const response = await app.request(
+      '/api/workflows/runs/run-web-retry/nodes/build/retry/preview'
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      currentHeadSha: string;
+      checkpointCommitSha: string;
+      requiresCommitChoice: boolean;
+    };
+    expect(body.currentHeadSha).toBe('head-sha');
+    expect(body.checkpointCommitSha).toBe('checkpoint-sha');
+    expect(body.requiresCommitChoice).toBe(true);
+    expect(mockGetWorkflowNodeRetryPreview).toHaveBeenCalledWith({
+      runId: 'run-web-retry',
+      nodeId: 'build',
+      workflow: expect.objectContaining({ name: 'deploy' }),
+    });
+  });
+
+  test('passes selected checkout strategy to retry preparation', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => mockWebRetryRun());
+    mockWebRetryConversations();
+    await mockRetryWorkflowDiscovery();
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-web-retry/nodes/build/retry', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ checkoutStrategy: 'current' }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { checkoutStrategy: string };
+    expect(body.checkoutStrategy).toBe('current');
+    expect(mockPrepareWorkflowNodeRetry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: 'run-web-retry',
+        nodeId: 'build',
+        checkoutStrategy: 'current',
+      })
+    );
   });
 
   test('allows cancelled runs through status validation before web ownership checks', async () => {

@@ -2,7 +2,7 @@
  * Pure helpers for the agent-aware model pickers (#1957) in the Model Tiers /
  * Aliases / Defaults panels. The valid model space is agent-shaped — Pi has a
  * baked catalog, OpenCode a runtime-introspected one, Copilot a small fixed
- * list, Claude/Codex small curated sets that evolve — so each agent gets a
+ * list, Claude/Codex/Grok small curated sets that evolve — so each agent gets a
  * differently sourced suggestion list. Pickers GUIDE, they never GATE: every
  * shape keeps a free-text path and the server stays permissive.
  *
@@ -42,6 +42,7 @@ export function modelPickerShape(agentId: string): ModelPickerShape {
       return 'select';
     case 'claude':
     case 'codex':
+    case 'grok':
       return 'curated';
     default:
       return 'free';
@@ -76,6 +77,9 @@ export const CODEX_MODEL_OPTIONS: readonly ModelOption[] = [
   { value: 'gpt-5.6-luna' },
 ];
 
+/** Current Grok Build coding-agent model; free text remains available for future ids. */
+export const GROK_MODEL_OPTIONS: readonly ModelOption[] = [{ value: 'grok-4.5' }];
+
 /**
  * Copilot model list. PROVENANCE: no Archon API exposes Copilot's model
  * catalog (the Copilot CLI negotiates it per subscription at runtime), so this
@@ -94,6 +98,7 @@ export const COPILOT_MODEL_OPTIONS: readonly ModelOption[] = [
 export function curatedOptionsForAgent(agentId: string): readonly ModelOption[] {
   if (agentId === 'claude') return CLAUDE_MODEL_OPTIONS;
   if (agentId === 'codex') return CODEX_MODEL_OPTIONS;
+  if (agentId === 'grok') return GROK_MODEL_OPTIONS;
   if (agentId === 'copilot') return COPILOT_MODEL_OPTIONS;
   return [];
 }

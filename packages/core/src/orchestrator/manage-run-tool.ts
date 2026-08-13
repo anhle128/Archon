@@ -357,6 +357,9 @@ async function handleWrite(
       // so a signal-bearing loop completes from its persisted output on resume.
       const feedback = willFinalize ? undefined : message;
       const result = await approveWorkflow(id, feedback);
+      if (result.continuation === 'live_plannotator_supervisor') {
+        return `Approved ${result.workflowName} (${id.slice(0, 8)}). The live Plannotator supervisor will continue this workflow.`;
+      }
       if (result.type !== 'interactive_loop') {
         return `Approved ${result.workflowName} (${id.slice(0, 8)}). The run is now set to resume.`;
       }

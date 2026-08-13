@@ -41,6 +41,9 @@ Use `--json` on list and status commands when machine-readable output is needed.
 - The root has `name`, `description`, and non-empty `nodes`.
 - The workflow uses `nodes`, not `steps`.
 - Every node has one action key only.
+- Every `plannotator_gate` has a non-empty `document` and required `rework.prompt`.
+- Every `plannotator_gate` document producer and rework prompt promise exactly one readable HTML path line under `cwd` or `$ARTIFACTS_DIR`.
+- Every Web-facing workflow with `plannotator_gate` sets root `interactive: true`.
 - Every node ID is unique and safe.
 - Every `depends_on` target exists.
 - The graph is acyclic unless using `route_loop` for controlled reruns.
@@ -116,6 +119,23 @@ Remove the field or switch providers.
 
 `persist_session: true but provider does not support sessionResume` means the provider cannot resume sessions.
 Use a provider with session resume or disable persistence.
+
+`plannotator_gate document path must be exactly one non-empty line` means the producer or rework agent emitted commentary, a Markdown fence, or multiple paths.
+Make its final output the path only.
+
+`plannotator_gate document is outside cwd and artifactsDir` means the resolved real path, including symlink resolution, escaped both permitted roots.
+Write the HTML under the workflow checkout or `$ARTIFACTS_DIR`.
+
+`plannotator binary does not support required annotate options` means the installed binary is older or incompatible.
+Run `plannotator annotate --help` on the Archon server host and require `--persist-session` plus `--result-file`.
+
+Before validating or running a workflow with `plannotator_gate`, check the local binary contract:
+
+```bash
+plannotator annotate --help
+```
+
+The output must contain `--persist-session` and `--result-file`.
 
 `$nodeId.output double-quoted` warning means bash output substitution is already shell-quoted.
 Use `value=$node.output.field` and then quote the shell variable.

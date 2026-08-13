@@ -135,6 +135,39 @@ export const WORKFLOW_EVENT_TYPES = [
 
 export type WorkflowEventType = (typeof WORKFLOW_EVENT_TYPES)[number];
 
+export interface ApprovalGateIdentity {
+  nodeId: string;
+  gateId?: string;
+}
+
+/** Exact identity required to resume a resolved Plannotator gate. */
+export interface PlannotatorGateIdentity {
+  nodeId: string;
+  gateId: string;
+}
+
+/** Audit event committed in the same transaction as a winning gate resolution. */
+export interface GateResolutionEvent {
+  event_type: WorkflowEventType;
+  step_name: string;
+  data: Record<string, unknown>;
+}
+
+export interface PlannotatorGateTransitionInput {
+  runId: string;
+  nodeId: string;
+  expectedGateId: string;
+  nextGateId?: string;
+  document: string;
+  phase: NonNullable<ApprovalContext['phase']>;
+}
+
+export type PlannotatorGateTransitionResult =
+  | { outcome: 'updated'; approval: ApprovalContext }
+  | { outcome: 'resolved'; resolved: 'approved' | 'rejected' }
+  | { outcome: 'superseded' }
+  | { outcome: 'stopped'; status: WorkflowRunStatus };
+
 /**
  * Run-tree navigation (#2121 Phase 2) — a narrow, distinct concern (walking the
  * `parent_run_id` graph) kept out of the fat `IWorkflowStore` per the project's ISP
@@ -204,6 +237,7 @@ export interface IWorkflowStore extends IRunTreeStore {
   findResumableRun(workflowName: string, workingPath: string): Promise<WorkflowRun | null>;
   failOrphanedRuns(): Promise<{ count: number }>;
   resumeWorkflowRun(id: string): Promise<WorkflowRun>;
+  resumeApprovedGate(id: string, expected: PlannotatorGateIdentity): Promise<{ resumed: boolean }>;
   /**
    * `output_root` (#2200) is write-once: the executor sets it at run start only
    * when the persisted value is null. Re-writing it on resume would re-derive
@@ -214,6 +248,15 @@ export interface IWorkflowStore extends IRunTreeStore {
     id: string,
     updates: Partial<Pick<WorkflowRun, 'status' | 'metadata' | 'output_root'>>
   ): Promise<void>;
+  resolveApprovalGate(
+    id: string,
+    expected: ApprovalGateIdentity,
+    metadata: Record<string, unknown>,
+    events: GateResolutionEvent[]
+  ): Promise<{ resolved: boolean }>;
+  transitionPlannotatorGate(
+    input: PlannotatorGateTransitionInput
+  ): Promise<PlannotatorGateTransitionResult>;
   persistRouteDecisionTransition(input: PersistRouteDecisionTransitionInput): Promise<WorkflowRun>;
   updateWorkflowActivity(id: string): Promise<void>;
   getWorkflowRunStatus(id: string): Promise<WorkflowRunStatus | null>;

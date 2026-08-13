@@ -35,6 +35,18 @@ export interface CodexProviderDefaults {
   codexBinaryPath?: string;
 }
 
+/** Built-in Grok Build CLI provider defaults. */
+export interface GrokProviderDefaults {
+  [key: string]: unknown;
+  model?: string;
+  /** Raw provider-owned value passed to `grok --reasoning-effort`. */
+  modelReasoningEffort?: string;
+  /** Path to the Grok CLI binary. `GROK_BIN_PATH` has higher precedence. */
+  grokBinaryPath?: string;
+  /** Grok's non-interactive permission posture. */
+  permissionMode?: 'default' | 'acceptEdits' | 'auto' | 'dontAsk' | 'bypassPermissions' | 'plan';
+}
+
 /**
  * Community provider defaults for GitHub Copilot (@github/copilot-sdk).
  */
@@ -670,7 +682,7 @@ export interface ProviderCapabilities {
   /**
    * Structured-output guarantee tier for `output_format`:
    *  - `'enforced'`    — SDK/backend grammar-constrains decoding (Claude, Codex,
-   *    OpenCode). The request path is native; Archon still validates post-parse
+   *    Grok, OpenCode). The request path is native; Archon still validates post-parse
    *    as a net for the refusal / `max_tokens`-truncation edges.
    *  - `'best-effort'` — prompt-augmentation + repair + post-parse validate (Pi,
    *    Copilot). No backend grammar; on a validation miss the executor re-asks up

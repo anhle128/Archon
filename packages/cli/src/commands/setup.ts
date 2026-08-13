@@ -2,7 +2,7 @@
  * Setup command - Interactive CLI wizard for Archon credential configuration
  *
  * Guides users through configuring:
- * - AI assistants (Claude and/or Codex)
+ * - AI assistants (Claude, Codex, Grok, and/or Pi)
  * - Platform connections (GitHub, Telegram, Slack — all skippable)
  *
  * SQLite is the implicit default; no database prompt. PostgreSQL users set
@@ -133,6 +133,7 @@ const DEFAULT_CHAT_MODEL_OPTIONS: Record<string, { value: string; hint?: string 
     { value: 'haiku', hint: 'fastest' },
   ],
   codex: [{ value: 'gpt-5.6-sol' }, { value: 'gpt-5.6-terra' }, { value: 'gpt-5.6-luna' }],
+  grok: [{ value: 'grok-4.5' }],
 };
 
 /** Sentinel select values for the default-chat-model prompt. Prefixed with
@@ -151,6 +152,7 @@ interface SetupConfig {
     claudeBinaryPath?: string;
     codex: boolean;
     codexTokens?: CodexTokens;
+    grok: boolean;
     pi: boolean;
     /** e.g. 'anthropic/claude-haiku-4-5' — written to ~/.archon/config.yaml */
     piModel?: string;
@@ -210,6 +212,7 @@ interface CodexTokens {
 interface ExistingConfig {
   hasClaude: boolean;
   hasCodex: boolean;
+  hasGrok: boolean;
   hasPi: boolean;
   platforms: {
     github: boolean;
@@ -277,6 +280,31 @@ function isCommandAvailable(command: string): boolean {
   } catch {
     return false;
   }
+}
+
+type GrokLoginRunner = (
+  command: string,
+  args: string[],
+  options: { stdio: 'inherit' }
+) => { error?: Error; status: number | null };
+
+export interface GrokLoginResult {
+  ok: boolean;
+  message: string;
+}
+
+export function runGrokLogin(
+  runner: GrokLoginRunner = (command, args, options) => spawnSync(command, args, options)
+): GrokLoginResult {
+  const result = runner('grok', ['login'], { stdio: 'inherit' });
+  if (result.error) return { ok: false, message: result.error.message };
+  if (result.status !== 0) {
+    return {
+      ok: false,
+      message: `\`grok login\` exited with code ${String(result.status ?? 'unknown')}.`,
+    };
+  }
+  return { ok: true, message: 'Grok login completed.' };
 }
 
 /**
@@ -422,6 +450,16 @@ Install via npm:
 Requires Node.js 18 or later.
 After installation, run 'codex' to authenticate.`,
   },
+  grok: {
+    name: 'Grok Build',
+    checkCommand: 'grok',
+    instructions: `Grok Build is not installed.
+
+Install it with:
+    curl -fsSL https://x.ai/cli/install.sh | bash
+
+After installation, run 'grok login' to authenticate.`,
+  },
 };
 
 /**
@@ -449,6 +487,7 @@ export function checkExistingConfig(envPath?: string): ExistingConfig | null {
       hasEnvValue(content, 'CODEX_ACCESS_TOKEN') &&
       hasEnvValue(content, 'CODEX_REFRESH_TOKEN') &&
       hasEnvValue(content, 'CODEX_ACCOUNT_ID'),
+    hasGrok: hasEnvValue(content, 'XAI_API_KEY') || /^DEFAULT_AI_ASSISTANT=grok\s*$/m.test(content),
     // Detection is intentionally API-key-only (no DEFAULT_AI_ASSISTANT=pi check)
     // so that re-runs after partial configs still surface Pi. Doctor's checkPi
     // uses the stricter DEFAULT_AI_ASSISTANT=pi gate to avoid false passes for
@@ -979,6 +1018,7 @@ async function collectAIConfig(): Promise<SetupConfig['ai']> {
     options: [
       { value: 'claude', label: 'Claude (Recommended)', hint: 'Anthropic Claude Code SDK' },
       { value: 'codex', label: 'Codex', hint: 'OpenAI Codex SDK' },
+      { value: 'grok', label: 'Grok', hint: 'xAI Grok Build CLI' },
       {
         value: 'pi',
         label: 'Pi (community)',
@@ -995,6 +1035,7 @@ async function collectAIConfig(): Promise<SetupConfig['ai']> {
 
   let hasClaude = assistants.includes('claude');
   let hasCodex = assistants.includes('codex');
+  let hasGrok = assistants.includes('grok');
   let hasPi = assistants.includes('pi');
 
   // Check if selected CLI tools are installed
@@ -1095,11 +1136,29 @@ After upgrading, run 'archon setup' again.`,
     }
   }
 
-  if (!hasClaude && !hasCodex && !hasPi) {
+  if (hasGrok && !isCommandAvailable('grok')) {
+    note(CLI_INSTALL_INSTRUCTIONS.grok.instructions, 'Grok Build Not Found');
+    const continueWithoutGrok = await confirm({
+      message: 'Continue setup without Grok?',
+      initialValue: false,
+    });
+    if (isCancel(continueWithoutGrok)) {
+      cancel('Setup cancelled.');
+      process.exit(0);
+    }
+    if (!continueWithoutGrok) {
+      cancel('Please install Grok Build and run setup again.');
+      process.exit(0);
+    }
+    hasGrok = false;
+  }
+
+  if (!hasClaude && !hasCodex && !hasGrok && !hasPi) {
     log.warning('No AI assistant selected. You can add one later by running `archon setup` again.');
     return {
       claude: false,
       codex: false,
+      grok: false,
       pi: false,
       defaultAssistant: getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude',
     };
@@ -1127,6 +1186,27 @@ After upgrading, run 'archon setup' again.`,
   if (hasCodex) {
     const tokens = await collectCodexAuth();
     codexTokens = tokens ?? undefined;
+  }
+
+  if (hasGrok) {
+    const login = runGrokLogin();
+    if (!login.ok) {
+      note(login.message, 'Grok Login Failed');
+      const continueWithoutGrok = await confirm({
+        message: 'Continue setup without Grok?',
+        initialValue: false,
+      });
+      if (isCancel(continueWithoutGrok)) {
+        cancel('Setup cancelled.');
+        process.exit(0);
+      }
+      if (continueWithoutGrok) {
+        hasGrok = false;
+      } else {
+        cancel('Complete `grok login`, then run setup again.');
+        process.exit(0);
+      }
+    }
   }
 
   // Collect Pi config if selected. Pi is bundled, so there's no PATH check —
@@ -1173,6 +1253,7 @@ After upgrading, run 'archon setup' again.`,
   const selectedProviders = [
     ...(hasClaude ? ['claude'] : []),
     ...(hasCodex ? ['codex'] : []),
+    ...(hasGrok ? ['grok'] : []),
     ...(hasPi ? ['pi'] : []),
   ];
 
@@ -1217,6 +1298,7 @@ After upgrading, run 'archon setup' again.`,
     ...(claudeBinaryPath !== undefined ? { claudeBinaryPath } : {}),
     codex: hasCodex,
     codexTokens,
+    grok: hasGrok,
     pi: hasPi,
     piModel,
     piApiKey,
@@ -2110,6 +2192,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
     const summary = [
       `Claude: ${existing.hasClaude ? 'Configured' : 'Not configured'}`,
       `Codex: ${existing.hasCodex ? 'Configured' : 'Not configured'}`,
+      `Grok: ${existing.hasGrok ? 'Configured' : 'Not configured'}`,
       `Pi: ${existing.hasPi ? 'Configured' : 'Not configured'}`,
       `Platforms: ${configuredPlatforms.length > 0 ? configuredPlatforms.join(', ') : 'None'}`,
     ].join('\n');
@@ -2147,6 +2230,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
       ai: {
         claude: existing?.hasClaude ?? false,
         codex: existing?.hasCodex ?? false,
+        grok: existing?.hasGrok ?? false,
         pi: existing?.hasPi ?? false,
         defaultAssistant: getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude',
       },
@@ -2367,6 +2451,9 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
   }
   if (config.ai.codex && config.ai.codexTokens) {
     aiConfigured.push('Codex');
+  }
+  if (config.ai.grok) {
+    aiConfigured.push('Grok');
   }
   if (config.ai.pi) {
     aiConfigured.push(config.ai.piApiKey ? `Pi (${config.ai.piApiKeyEnvVar})` : 'Pi');

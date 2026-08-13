@@ -1,6 +1,6 @@
 #!/bin/bash
 # Ralph Wiggum - Long-running AI agent loop
-# Usage: ./ralph.sh [--tool amp|claude|codex|pi|omp|test-gpt5.5-codex|ccs-bp] [max_iterations]
+# Usage: ./ralph.sh [--tool amp|claude|codex|grok|pi|omp|test-gpt5.5-codex|ccs-bp] [max_iterations]
 #
 # Configuration precedence (highest first):
 #   1. CLI args / env vars
@@ -209,17 +209,17 @@ for i in $(seq 1 "$MAX_ITERATIONS"); do
           fmt("message"; .text // "")
         elif .type == "tool_use" then
           .name as $tool | (.input // {}) as $in |
-          if $tool == "Bash" then fmt("terminal"; $in.command // "")
-          elif $tool == "Read" then fmt("read_file"; $in.file_path // "")
-          elif $tool == "Edit" then fmt("patch"; $in.file_path // "")
+          if $tool == "Bash" or $tool == "run_terminal_cmd" or $tool == "run_terminal_command" then fmt("terminal"; $in.command // "")
+          elif $tool == "Read" or $tool == "read_file" then fmt("read_file"; $in.file_path // $in.path // "")
+          elif $tool == "Edit" or $tool == "search_replace" then fmt("patch"; $in.file_path // $in.path // "")
           elif $tool == "MultiEdit" then fmt("patch"; ($in.file_path // "") + " (×" + (($in.edits // [] | length) | tostring) + ")")
-          elif $tool == "Write" then fmt("write_file"; $in.file_path // "")
-          elif $tool == "Grep" then fmt("search_files"; ($in.pattern // "") + (if $in.path then " in " + $in.path else "" end))
-          elif $tool == "Glob" then fmt("search_files"; $in.pattern // "")
-          elif $tool == "Task" or $tool == "Agent" then fmt("agent"; ($in.subagent_type // "?") + ": " + ($in.description // ""))
-          elif $tool == "TodoWrite" then fmt("todo"; "updating " + (($in.todos // [] | length) | tostring) + " task(s)")
-          elif $tool == "WebFetch" then fmt("fetch_url"; $in.url // "")
-          elif $tool == "WebSearch" then fmt("search_web"; $in.query // "")
+          elif $tool == "Write" or $tool == "write_file" or $tool == "write" then fmt("write_file"; $in.file_path // $in.path // "")
+          elif $tool == "Grep" or $tool == "grep" then fmt("search_files"; ($in.pattern // "") + (if $in.path then " in " + $in.path else "" end))
+          elif $tool == "Glob" or $tool == "glob" then fmt("search_files"; $in.pattern // "")
+          elif $tool == "Task" or $tool == "Agent" or $tool == "spawn_subagent" then fmt("agent"; ($in.subagent_type // $in.agent_type // "?") + ": " + ($in.description // $in.prompt // ""))
+          elif $tool == "TodoWrite" or $tool == "todo_write" then fmt("todo"; "updating " + (($in.todos // [] | length) | tostring) + " task(s)")
+          elif $tool == "WebFetch" or $tool == "web_fetch" then fmt("fetch_url"; $in.url // "")
+          elif $tool == "WebSearch" or $tool == "web_search" then fmt("search_web"; $in.query // "")
           elif $tool == "Skill" then
             fmt("skill"; ($in.skill // "?") + (if ($in.args // "") != "" then " " + $in.args else "" end))
           elif ($tool | startswith("mcp__")) then
@@ -230,9 +230,13 @@ for i in $(seq 1 "$MAX_ITERATIONS"); do
         else empty end
     elif $e.type == "user" then empty
     elif $e.type == "result" then
-      fmt("done"; "$" + ((.total_cost_usd // .cost_usd // 0) | tostring)
-        + " · " + ((.duration_ms // 0) | tostring) + "ms"
-        + (if .num_turns then " · " + (.num_turns | tostring) + "t" else "" end))
+      if ($e.is_error // false) then
+        fmt("error"; $e.result // $e.message // (($e.errors // []) | join("; ")) // $e.subtype // "unknown error")
+      else
+        fmt("done"; "$" + (($e.total_cost_usd // $e.cost_usd // 0) | tostring)
+          + " · " + (($e.duration_ms // 0) | tostring) + "ms"
+          + (if $e.num_turns then " · " + ($e.num_turns | tostring) + "t" else "" end))
+      end
     else empty end
   '
 
@@ -250,6 +254,30 @@ for i in $(seq 1 "$MAX_ITERATIONS"); do
     jq -sr '[.[]? | select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text] | join("\n")' \
         "$iter_json" > "$ITER_LOG" 2>/dev/null || cp "$iter_json" "$ITER_LOG"
     rm -f "$iter_json"
+  }
+
+  # Grok Build's streaming-messages-json mode follows the same
+  # system/assistant/user/result envelope as Claude's stream formatter.
+  _run_grok_stream() {
+    local iter_json="${ITER_LOG}.json"
+    set +e
+    grok --yolo \
+        --model "$MODEL" \
+        --reasoning-effort "$REASONING_EFFORT" \
+        --output-format streaming-messages-json \
+        --prompt-file "$SCRIPT_DIR/AGENTS.md" \
+      | tee "$iter_json" \
+      | jq -r --unbuffered "$_claude_stream_formatter"
+    local cli_status="${PIPESTATUS[0]}"
+    set -e
+    jq -sr '[.[]? | select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text // ""] | join("\n")' \
+        "$iter_json" > "$ITER_LOG" 2>/dev/null || cp "$iter_json" "$ITER_LOG"
+    if [ "$cli_status" -ne 0 ] \
+       && ! jq -e 'select(.type=="result" and (.is_error // false))' "$iter_json" >/dev/null 2>&1; then
+      echo "[ralph] grok exited with status $cli_status" >&2
+    fi
+    rm -f "$iter_json"
+    return "$cli_status"
   }
 
   # Live event formatter for `codex exec --json` JSONL output.
@@ -344,8 +372,13 @@ for i in $(seq 1 "$MAX_ITERATIONS"); do
     elif $e.type == "message_end" then
       ($e.message // {}) as $m |
       if $m.role == "assistant" then
-        ([$m.content[]? | select((.type // "") == "text") | .text // ""] | join("\n")) as $text |
-        if $text == "" then empty else fmt("message"; $text) end
+        if (($m.stopReason // "") == "error" or ($m.stopReason // "") == "aborted")
+            and (($m.errorMessage // "") != "") then
+          fmt("error"; $m.errorMessage)
+        else
+          ([$m.content[]? | select((.type // "") == "text") | .text // ""] | join("\n")) as $text |
+          if $text == "" then empty else fmt("message"; $text) end
+        end
       else empty end
     elif $e.type == "tool_execution_start" then
       ($e.toolName // "?") as $tool | ($e.args // {}) as $in |
@@ -377,16 +410,24 @@ for i in $(seq 1 "$MAX_ITERATIONS"); do
   _run_pi_stream() {
     local cli="$1" approval_flag="$2"
     local iter_json="${ITER_LOG}.json"
+    set +e
     "$cli" --mode json \
         "$approval_flag" \
         --model "$MODEL" \
         --thinking "$REASONING_EFFORT" \
         < "$SCRIPT_DIR/AGENTS.md" \
       | tee "$iter_json" \
-      | jq -r --unbuffered "$_pi_stream_formatter" || true
+      | jq -r --unbuffered "$_pi_stream_formatter"
+    local cli_status="${PIPESTATUS[0]}"
+    set -e
     jq -sr '[.[]? | select(.type=="message_end") | .message // {} | select(.role=="assistant") | .content[]? | select((.type // "")=="text") | .text // ""] | join("\n")' \
         "$iter_json" > "$ITER_LOG" 2>/dev/null || cp "$iter_json" "$ITER_LOG"
+    if [ "$cli_status" -ne 0 ] \
+       && ! jq -e 'select(.type=="message_end" and (.message.errorMessage // "") != "")' "$iter_json" >/dev/null 2>&1; then
+      echo "[ralph] $cli exited with status $cli_status" >&2
+    fi
     rm -f "$iter_json"
+    return "$cli_status"
   }
 
   if [[ "$TOOL" == "amp" ]]; then
@@ -395,6 +436,8 @@ for i in $(seq 1 "$MAX_ITERATIONS"); do
     _run_claude_stream claude
   elif [[ "$TOOL" == "codex" ]]; then
     _run_codex_stream
+  elif [[ "$TOOL" == "grok" ]]; then
+    _run_grok_stream
   elif [[ "$TOOL" == "pi" ]]; then
     _run_pi_stream pi --approve
   elif [[ "$TOOL" == "omp" ]]; then

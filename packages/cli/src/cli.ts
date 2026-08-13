@@ -53,6 +53,7 @@ import {
   workflowCancelCommand,
   workflowAbandonCommand,
   workflowApproveCommand,
+  workflowReviewOpenCommand,
   workflowRejectCommand,
   workflowCleanupCommand,
   workflowResetSessionsCommand,
@@ -300,7 +301,7 @@ Commands:
   complete <branch> [...]    Complete branch lifecycle (remove worktree + branches)
   serve                      Start the web UI server (downloads web UI on first run)
   skill install [path]       Install the bundled Archon skill into .claude/skills/archon
-  doctor [--full]            Verify your Archon setup (Claude/Codex binaries, gh auth, DB, adapters; --full also probes the OpenCode runtime SDK)
+  doctor [--full]            Verify your Archon setup (Claude/Codex/Grok CLIs, gh auth, DB, adapters; --full also probes OpenCode)
   auth github                Connect your GitHub identity via device flow (multi-user installs)
   ai key set <provider>      Connect an AI provider API key (multi-user installs; key read from prompt/stdin)
   ai login <provider>        Connect a subscription (claude/copilot) via OAuth — codex is API-key only
@@ -1271,6 +1272,15 @@ async function main(): Promise<number> {
             );
           }
 
+          case 'review-open': {
+            const reviewOpenRunId = positionals[2];
+            if (!reviewOpenRunId) {
+              console.error('Usage: archon workflow review-open <run-id>');
+              return 1;
+            }
+            return await workflowReviewOpenCommand(reviewOpenRunId, jsonFlag, effectiveCwd);
+          }
+
           case 'reject': {
             const rejectRunId = positionals[2];
             if (!rejectRunId) {
@@ -1405,7 +1415,7 @@ async function main(): Promise<number> {
               console.error(`Unknown workflow subcommand: ${subcommand}`);
             }
             console.error(
-              'Available: list, run, status, get, runs, resume, retry, retry-node, cancel, abandon, approve, reject, cleanup, event, search, install'
+              'Available: list, run, status, get, runs, resume, retry, retry-node, cancel, abandon, approve, review-open, reject, cleanup, event, search, install'
             );
             return 1;
         }

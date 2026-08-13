@@ -21,6 +21,12 @@ _fake_pi_runner() {
 }
 
 omp() {
+  if [ "${OMP_TEST_ERROR:-0}" = "1" ]; then
+    printf '%s\n' '{"type":"session","id":"error-test","cwd":"/tmp"}'
+    printf '%s\n' '{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"error","errorMessage":"402 Insufficient credits"}}'
+    printf '%s\n' '{"type":"turn_end","message":{"usage":{"input":0,"output":0,"cacheRead":0}}}'
+    return 7
+  fi
   _fake_pi_runner --auto-approve "$@"
 }
 
@@ -28,16 +34,38 @@ pi() {
   _fake_pi_runner --approve "$@"
 }
 
-export -f _fake_pi_runner omp pi
+grok() {
+  [ "$#" -eq 9 ]
+  [ "$1" = "--yolo" ]
+  [ "$2" = "--model" ]
+  [ -n "$3" ]
+  [ "$4" = "--reasoning-effort" ]
+  [ -n "$5" ]
+  [ "$6" = "--output-format" ]
+  [ "$7" = "streaming-messages-json" ]
+  [ "$8" = "--prompt-file" ]
+  [ -f "$9" ]
+  printf '%s\n' "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"grok-test\",\"model\":\"$3\"}"
+  if [ "${GROK_TEST_ERROR:-0}" = "1" ]; then
+    printf '%s\n' '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["401 Unauthorized"]}'
+    return 9
+  fi
+  printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"run_terminal_command","input":{"command":"pwd"}}]}}'
+  printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"<promise>COMPLETE</promise>"}]}}'
+  printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"duration_ms":1,"num_turns":1}'
+}
+
+export -f _fake_pi_runner omp pi grok
 
 assert_runner() {
-  local tool="$1" output
+  local tool="$1" expected_session="${2:-runner-t (/tmp)}" expected_action="${3:-}" output
   output=$(RALPH_I_UNDERSTAND_DANGEROUS=1 \
     RALPH_PRD_FILE=/dev/null \
     RALPH_PROGRESS_FILE=/dev/null \
     "$REPO_ROOT/ralph.sh" --tool "$tool" 1)
   grep -q "Starting Ralph - Tool: $tool" <<< "$output"
-  grep -q 'session: "runner-t (/tmp)"' <<< "$output"
+  grep -q "session: \"$expected_session\"" <<< "$output"
+  [ -z "$expected_action" ] || grep -q "$expected_action" <<< "$output"
   grep -q 'Ralph completed all tasks!' <<< "$output"
 }
 
@@ -48,5 +76,36 @@ done
 
 assert_runner omp
 assert_runner pi
+assert_runner grok 'grok-tes (gpt-5.5)' 'terminal: "pwd"'
+
+set +e
+error_output=$(OMP_TEST_ERROR=1 \
+  RALPH_I_UNDERSTAND_DANGEROUS=1 \
+  RALPH_PRD_FILE=/dev/null \
+  RALPH_PROGRESS_FILE=/dev/null \
+  "$REPO_ROOT/ralph.sh" --tool omp 1 2>&1)
+error_status=$?
+set -e
+
+[ "$error_status" -eq 7 ]
+grep -q 'error: "402 Insufficient credits"' <<< "$error_output"
+if grep -q 'Iteration 1 complete' <<< "$error_output"; then
+  exit 1
+fi
+
+set +e
+grok_error_output=$(GROK_TEST_ERROR=1 \
+  RALPH_I_UNDERSTAND_DANGEROUS=1 \
+  RALPH_PRD_FILE=/dev/null \
+  RALPH_PROGRESS_FILE=/dev/null \
+  "$REPO_ROOT/ralph.sh" --tool grok 1 2>&1)
+grok_error_status=$?
+set -e
+
+[ "$grok_error_status" -eq 9 ]
+grep -q 'error: "401 Unauthorized"' <<< "$grok_error_output"
+if grep -q 'Iteration 1 complete' <<< "$grok_error_output"; then
+  exit 1
+fi
 
 echo "Ralph loop regression tests passed."

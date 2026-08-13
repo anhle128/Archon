@@ -247,7 +247,24 @@ export async function deleteCodebase(id: string): Promise<{ success: boolean }> 
 
 export type WorkflowRunResponse = components['schemas']['WorkflowRun'];
 export type WorkflowEventResponse = components['schemas']['WorkflowEvent'];
-export type RetryWorkflowNodeResponse = components['schemas']['RetryWorkflowNodeResponse'];
+export type RetryWorkflowNodeCheckoutStrategy = 'checkpoint' | 'current';
+export type RetryWorkflowNodeResponse = components['schemas']['RetryWorkflowNodeResponse'] & {
+  checkoutStrategy: RetryWorkflowNodeCheckoutStrategy;
+};
+
+export interface RetryWorkflowNodePreviewResponse {
+  runId: string;
+  workflowName: string;
+  nodeId: string;
+  retryEpoch: number;
+  invalidatedNodes: string[];
+  resetSkipped: boolean;
+  checkpointRef?: string;
+  checkpointCommitSha?: string;
+  currentHeadSha?: string;
+  hasNewerHead: boolean;
+  requiresCommitChoice: boolean;
+}
 
 export type WorkflowListEntry = components['schemas']['WorkflowListEntry'];
 
@@ -321,11 +338,27 @@ export async function resumeWorkflowRun(
 
 export async function retryWorkflowNode(
   runId: string,
-  nodeId: string
+  nodeId: string,
+  options?: { checkoutStrategy?: RetryWorkflowNodeCheckoutStrategy }
 ): Promise<RetryWorkflowNodeResponse> {
+  const body = options?.checkoutStrategy
+    ? {
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ checkoutStrategy: options.checkoutStrategy }),
+      }
+    : {};
   return fetchJSON(
     `/api/workflows/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/retry`,
-    { method: 'POST' }
+    { method: 'POST', ...body }
+  );
+}
+
+export async function previewRetryWorkflowNode(
+  runId: string,
+  nodeId: string
+): Promise<RetryWorkflowNodePreviewResponse> {
+  return fetchJSON(
+    `/api/workflows/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/retry/preview`
   );
 }
 

@@ -8,6 +8,7 @@ const mockGetActiveWorkflowRunByPath = mock(() => Promise.resolve(null));
 const mockFailOrphanedRuns = mock(() => Promise.resolve({ count: 0 }));
 const mockFindResumableRun = mock(() => Promise.resolve(null));
 const mockResumeWorkflowRun = mock(() => Promise.resolve({ id: 'run-1' }));
+const mockResumeApprovedGate = mock(() => Promise.resolve({ resumed: true }));
 const mockUpdateWorkflowRun = mock(() => Promise.resolve());
 const mockUpdateWorkflowActivity = mock(() => Promise.resolve());
 const mockGetWorkflowRunStatus = mock(() => Promise.resolve('running'));
@@ -15,6 +16,10 @@ const mockCompleteWorkflowRun = mock(() => Promise.resolve());
 const mockFailWorkflowRun = mock(() => Promise.resolve());
 const mockCancelWorkflowRun = mock(() => Promise.resolve());
 const mockPauseWorkflowRun = mock(() => Promise.resolve());
+const mockResolveApprovalGate = mock(() => Promise.resolve({ resolved: true }));
+const mockTransitionPlannotatorGate = mock(() =>
+  Promise.resolve({ outcome: 'superseded' as const })
+);
 const mockPersistRouteDecisionTransition = mock(() => Promise.resolve({ id: 'run-1' }));
 
 mock.module('../db/workflows', () => ({
@@ -24,6 +29,7 @@ mock.module('../db/workflows', () => ({
   failOrphanedRuns: mockFailOrphanedRuns,
   findResumableRun: mockFindResumableRun,
   resumeWorkflowRun: mockResumeWorkflowRun,
+  resumeApprovedGate: mockResumeApprovedGate,
   updateWorkflowRun: mockUpdateWorkflowRun,
   updateWorkflowActivity: mockUpdateWorkflowActivity,
   getWorkflowRunStatus: mockGetWorkflowRunStatus,
@@ -31,6 +37,8 @@ mock.module('../db/workflows', () => ({
   failWorkflowRun: mockFailWorkflowRun,
   cancelWorkflowRun: mockCancelWorkflowRun,
   pauseWorkflowRun: mockPauseWorkflowRun,
+  resolveApprovalGate: mockResolveApprovalGate,
+  transitionPlannotatorGate: mockTransitionPlannotatorGate,
   persistRouteDecisionTransition: mockPersistRouteDecisionTransition,
   claimWriteback: mock(() => Promise.resolve({ claimed: true })),
   releaseWritebackClaim: mock(() => Promise.resolve()),
@@ -175,6 +183,8 @@ describe('createWorkflowStore', () => {
     mockCreateWorkflowEvent.mockImplementation(() => Promise.resolve());
     mockGetWorkflowRun.mockReset();
     mockGetWorkflowRun.mockImplementation(() => Promise.resolve(null));
+    mockResolveApprovalGate.mockClear();
+    mockTransitionPlannotatorGate.mockClear();
     mockEnqueueExternalWorkflowEvent.mockReset();
     mockEnqueueExternalWorkflowEvent.mockImplementation(() => Promise.resolve());
     mockResolveEventRoute.mockReset();
@@ -197,12 +207,15 @@ describe('createWorkflowStore', () => {
       'failOrphanedRuns',
       'findResumableRun',
       'resumeWorkflowRun',
+      'resumeApprovedGate',
       'updateWorkflowRun',
       'updateWorkflowActivity',
       'getWorkflowRunStatus',
       'completeWorkflowRun',
       'failWorkflowRun',
       'pauseWorkflowRun',
+      'resolveApprovalGate',
+      'transitionPlannotatorGate',
       'claimWriteback',
       'releaseWritebackClaim',
       'cancelWorkflowRun',
@@ -248,6 +261,34 @@ describe('createWorkflowStore', () => {
     const store = createWorkflowStore();
     await store.persistRouteDecisionTransition(input);
     expect(mockPersistRouteDecisionTransition).toHaveBeenCalledWith(input);
+  });
+
+  test('delegates atomic gate operations directly to DB', async () => {
+    const store = createWorkflowStore();
+    const identity = { nodeId: 'review', gateId: 'gate-a' };
+    const metadata = { approval: { resolved: 'approved' } };
+    const events = [
+      {
+        event_type: 'approval_received' as const,
+        step_name: 'review',
+        data: { decision: 'approved' },
+      },
+    ];
+    const transition = {
+      runId: 'run-123',
+      nodeId: 'review',
+      expectedGateId: 'gate-a',
+      document: '/tmp/plan.md',
+      phase: 'waiting_decision' as const,
+    };
+
+    await store.resolveApprovalGate('run-123', identity, metadata, events);
+    await store.transitionPlannotatorGate(transition);
+    await store.resumeApprovedGate('run-123', identity);
+
+    expect(mockResolveApprovalGate).toHaveBeenCalledWith('run-123', identity, metadata, events);
+    expect(mockTransitionPlannotatorGate).toHaveBeenCalledWith(transition);
+    expect(mockResumeApprovedGate).toHaveBeenCalledWith('run-123', identity);
   });
 
   test('createWorkflowEvent catches and logs unexpected throws', async () => {

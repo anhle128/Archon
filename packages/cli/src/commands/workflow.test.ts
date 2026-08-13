@@ -17,6 +17,7 @@ import {
   workflowResumeCommand,
   workflowAbandonCommand,
   workflowApproveCommand,
+  workflowReviewOpenCommand,
   workflowRejectCommand,
   workflowCleanupCommand,
   workflowResetSessionsCommand,
@@ -226,6 +227,9 @@ mock.module('@archon/core/db/workflows', () => ({
   // resolveAndCancelApprovalGate atomically resolves+cancels terminal rejects.
   resolveApprovalGate: mock(() => Promise.resolve({ resolved: true })),
   resolveAndCancelApprovalGate: mock(() => Promise.resolve({ resolved: true })),
+  transitionPlannotatorGate: mock(() =>
+    Promise.resolve({ outcome: 'updated' as const, approval: {} })
+  ),
   listWorkflowRuns: mock(() => Promise.resolve([])),
   listDashboardRuns: mock(() =>
     Promise.resolve({
@@ -5070,6 +5074,42 @@ describe('write command --json output', () => {
     expect(discoverSpy).not.toHaveBeenCalled();
   });
 
+  it('approve --json includes live supervisor continuation for plannotator gates', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const pausedRun = {
+      id: 'run-plannotator-json',
+      workflow_name: 'review-plan',
+      status: 'paused' as const,
+      working_path: '/tmp/wt',
+      codebase_id: 'cb',
+      conversation_id: 'conv',
+      user_message: 'go',
+      metadata: {
+        approval: {
+          type: 'plannotator_gate',
+          nodeId: 'gate',
+          message: 'Review',
+          gateId: 'gate-1',
+        },
+      },
+    };
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
+      .mockResolvedValueOnce(pausedRun)
+      .mockResolvedValueOnce({
+        ...pausedRun,
+        metadata: {
+          approval: { ...pausedRun.metadata.approval, resolved: 'approved' },
+        },
+      });
+
+    await workflowApproveCommand('run-plannotator-json', undefined, true);
+
+    const envelope = JSON.parse(firstJsonPayload(stdoutSpy)) as {
+      result: { continuation: string };
+    };
+    expect(envelope.result.continuation).toBe('live_plannotator_supervisor');
+  });
+
   it('approve --json success on interactive loop gate emits same envelope shape', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const loopRun = {
@@ -6571,6 +6611,185 @@ describe('workflowApproveCommand', () => {
       expect.any(Function)
     );
   });
+
+  it('records plannotator approval without starting a replacement execution', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const conversationsDb = await import('@archon/core/db/conversations');
+    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
+    const resolveGate = workflowDb.resolveApprovalGate as ReturnType<typeof mock>;
+    resolveGate.mockReset();
+    resolveGate.mockResolvedValue({ resolved: true });
+    const getRun = workflowDb.getWorkflowRun as ReturnType<typeof mock>;
+    getRun.mockReset();
+    getRun.mockResolvedValue({
+      id: 'run-plannotator-cli',
+      workflow_name: 'review-plan',
+      status: 'paused',
+      user_message: 'review it',
+      working_path: '/tmp/test-worktree',
+      codebase_id: 'cb-existing',
+      conversation_id: 'conv-1',
+      metadata: {
+        approval: {
+          type: 'plannotator_gate',
+          nodeId: 'review-node',
+          message: 'Review',
+          gateId: 'gate-1',
+        },
+      },
+    });
+    const discoverySpy = workflowDiscovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>;
+    discoverySpy.mockClear();
+    (codebaseDb.getCodebase as ReturnType<typeof mock>).mockClear();
+    (conversationsDb.getConversationById as ReturnType<typeof mock>).mockClear();
+
+    await workflowApproveCommand('run-plannotator-cli');
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('live Plannotator supervisor will continue')
+    );
+    expect(discoverySpy).not.toHaveBeenCalled();
+    expect(codebaseDb.getCodebase).not.toHaveBeenCalled();
+    expect(conversationsDb.getConversationById).not.toHaveBeenCalled();
+  });
+});
+
+describe('workflowReviewOpenCommand', () => {
+  let consoleSpy: ReturnType<typeof spyOn>;
+  let stdoutSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(async () => {
+    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    stdoutSpy = spyOnJsonStdout();
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.transitionPlannotatorGate as ReturnType<typeof mock>).mockReset();
+    (workflowDb.transitionPlannotatorGate as ReturnType<typeof mock>).mockResolvedValue({
+      outcome: 'updated',
+      approval: {},
+    });
+  });
+
+  afterEach(() => {
+    consoleSpy.mockRestore();
+    stdoutSpy.mockRestore();
+  });
+
+  it('human mode dispatches the replacement exactly once from persisted run context', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const conversationsDb = await import('@archon/core/db/conversations');
+    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
+    const executor = await import('@archon/workflows/executor');
+    const pausedRun = {
+      id: 'run-review-open',
+      workflow_name: 'review-plan',
+      status: 'paused' as const,
+      user_message: 'review it',
+      working_path: '/persisted/worktree',
+      codebase_id: 'cb-review',
+      conversation_id: 'conv-review',
+      metadata: {
+        approval: {
+          type: 'plannotator_gate',
+          nodeId: 'review-node',
+          message: 'Review',
+          gateId: 'gate-old',
+          document: '/persisted/worktree/review.html',
+          phase: 'idle',
+        },
+      },
+    };
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockReset();
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValue(pausedRun);
+    (workflowDb.findResumableRun as ReturnType<typeof mock>).mockReset();
+    (workflowDb.findResumableRun as ReturnType<typeof mock>).mockResolvedValue(pausedRun);
+    (codebaseDb.getCodebase as ReturnType<typeof mock>).mockReset();
+    (codebaseDb.getCodebase as ReturnType<typeof mock>).mockResolvedValue({
+      id: 'cb-review',
+      name: 'owner/repo',
+      default_cwd: '/persisted/source',
+    });
+    (conversationsDb.getConversationById as ReturnType<typeof mock>).mockReset();
+    (conversationsDb.getConversationById as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-review',
+      platform_type: 'cli',
+      platform_conversation_id: 'cli-review',
+    });
+    const discover = workflowDiscovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>;
+    discover.mockReset();
+    discover.mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'review-plan' })],
+      errors: [],
+    });
+    const execute = executor.executeWorkflow as ReturnType<typeof mock>;
+    execute.mockClear();
+    (executor.hydrateResumableRun as ReturnType<typeof mock>).mockReset();
+    (executor.hydrateResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      preCreatedRun: pausedRun,
+      priorCompletedNodes: new Map(),
+      priorTokenUsage: { input: 0, output: 0 },
+    });
+
+    const exitCode = await workflowReviewOpenCommand('run-review-open', false, '/ambient/cwd');
+    discover.mockResolvedValue({ workflows: [], errors: [] });
+
+    expect(exitCode).toBe(0);
+    expect(discover).toHaveBeenCalledTimes(1);
+    expect(discover).toHaveBeenCalledWith('/persisted/source', expect.any(Function));
+    expect(workflowDb.findResumableRun).toHaveBeenCalledWith('review-plan', '/persisted/worktree');
+    expect(conversationsDb.getConversationById).toHaveBeenCalledWith('conv-review');
+    expect(execute).toHaveBeenCalledTimes(1);
+    const executeOptions = execute.mock.calls[0]?.[7] as
+      | {
+          preCreatedRun?: typeof pausedRun;
+          priorCompletedNodes?: Map<string, string>;
+        }
+      | undefined;
+    expect(executeOptions?.preCreatedRun).toBe(pausedRun);
+    expect(executeOptions?.priorCompletedNodes?.size).toBe(0);
+  });
+
+  it('JSON mode records takeover without dispatch and tells callers how to resume', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
+    const executor = await import('@archon/workflows/executor');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-review-open-json',
+      workflow_name: 'review-plan',
+      status: 'paused',
+      user_message: 'review it',
+      working_path: '/persisted/worktree',
+      codebase_id: null,
+      conversation_id: 'conv-review',
+      metadata: {
+        approval: {
+          type: 'plannotator_gate',
+          nodeId: 'review-node',
+          message: 'Review',
+          gateId: 'gate-old',
+          document: '/persisted/worktree/review.html',
+        },
+      },
+    });
+    const discover = workflowDiscovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>;
+    discover.mockClear();
+    const execute = executor.executeWorkflow as ReturnType<typeof mock>;
+    execute.mockClear();
+
+    const exitCode = await workflowReviewOpenCommand('run-review-open-json', true);
+
+    expect(exitCode).toBe(0);
+    expect(discover).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+    expect(stdoutSpy).toHaveBeenCalledTimes(1);
+    const payload = JSON.parse(firstJsonPayload(stdoutSpy)) as {
+      continuation: string;
+      message: string;
+    };
+    expect(payload.continuation).toBe('caller_resume');
+    expect(payload.message).toContain('workflow resume run-review-open-json');
+  });
 });
 
 describe('workflowAbandonCommand', () => {
@@ -6721,13 +6940,17 @@ describe('workflowRejectCommand', () => {
 
     // Terminal reject resolves + cancels atomically (#2113); the audit event
     // rides the same transaction (#2146).
-    expect(workflowDb.resolveAndCancelApprovalGate).toHaveBeenCalledWith('run-plain', [
-      {
-        event_type: 'approval_received',
-        step_name: 'gate',
-        data: { decision: 'rejected', reason: 'not good' },
-      },
-    ]);
+    expect(workflowDb.resolveAndCancelApprovalGate).toHaveBeenCalledWith(
+      'run-plain',
+      { nodeId: 'gate', gateId: undefined },
+      [
+        {
+          event_type: 'approval_received',
+          step_name: 'gate',
+          data: { decision: 'rejected', reason: 'not good' },
+        },
+      ]
+    );
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Rejected and cancelled'));
   });
 
@@ -6765,6 +6988,7 @@ describe('workflowRejectCommand', () => {
     // transaction (#2146)
     expect(workflowDb.resolveApprovalGate).toHaveBeenCalledWith(
       'run-on-reject',
+      { nodeId: 'gate', gateId: undefined },
       {
         approval: {
           type: 'approval',
@@ -6873,13 +7097,17 @@ describe('workflowRejectCommand', () => {
 
     // Terminal reject resolves + cancels atomically (#2113); the audit event
     // rides the same transaction (#2146).
-    expect(workflowDb.resolveAndCancelApprovalGate).toHaveBeenCalledWith('run-max', [
-      {
-        event_type: 'approval_received',
-        step_name: 'gate',
-        data: { decision: 'rejected', reason: 'still bad' },
-      },
-    ]);
+    expect(workflowDb.resolveAndCancelApprovalGate).toHaveBeenCalledWith(
+      'run-max',
+      { nodeId: 'gate', gateId: undefined },
+      [
+        {
+          event_type: 'approval_received',
+          step_name: 'gate',
+          data: { decision: 'rejected', reason: 'still bad' },
+        },
+      ]
+    );
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('max attempts reached'));
   });
 

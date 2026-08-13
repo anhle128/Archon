@@ -33,6 +33,7 @@ package-lock.json
 .qoder/
 .omx/
 _bmad/
+.superpowers/
 
 # Website (Astro/Starlight - uses own formatting)
 packages/docs-web/

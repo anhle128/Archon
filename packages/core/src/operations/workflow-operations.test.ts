@@ -15,6 +15,9 @@ const mockFindChildRuns = mock((): Promise<unknown[]> => Promise.resolve([]));
 // resolveAndCancelApprovalGate = atomic resolve + cancel (reject terminal paths).
 const mockResolveApprovalGate = mock(() => Promise.resolve({ resolved: true }));
 const mockResolveAndCancelApprovalGate = mock(() => Promise.resolve({ resolved: true }));
+const mockTransitionPlannotatorGate = mock(() =>
+  Promise.resolve({ outcome: 'updated' as const, approval: {} })
+);
 
 mock.module('../db/workflows', () => ({
   getWorkflowRun: mockGetWorkflowRun,
@@ -24,6 +27,7 @@ mock.module('../db/workflows', () => ({
   findChildRuns: mockFindChildRuns,
   resolveApprovalGate: mockResolveApprovalGate,
   resolveAndCancelApprovalGate: mockResolveAndCancelApprovalGate,
+  transitionPlannotatorGate: mockTransitionPlannotatorGate,
 }));
 
 const mockCreateWorkflowEvent = mock(() => Promise.resolve());
@@ -62,6 +66,7 @@ mock.module('@archon/paths', () => ({
 // Import AFTER mocks
 const {
   approveWorkflow,
+  reviewOpenWorkflow,
   rejectWorkflow,
   getWorkflowStatus,
   resumeWorkflow,
@@ -101,6 +106,131 @@ function makePausedRun(overrides: Record<string, unknown> = {}) {
 // Tests
 // ---------------------------------------------------------------------------
 
+describe('reviewOpenWorkflow', () => {
+  beforeEach(() => {
+    mockGetWorkflowRun.mockReset();
+    mockUpdateWorkflowRun.mockClear();
+    mockTransitionPlannotatorGate.mockReset();
+    mockTransitionPlannotatorGate.mockResolvedValue({ outcome: 'updated', approval: {} });
+  });
+
+  test('atomically rotates an open Plannotator gate and returns explicit resume context', async () => {
+    mockGetWorkflowRun.mockResolvedValue(
+      makePausedRun({
+        metadata: {
+          approval: {
+            nodeId: 'review',
+            message: 'Please review',
+            type: 'plannotator_gate',
+            gateId: 'old-gate',
+            document: '/workspace/review.html',
+            phase: 'idle',
+          },
+        },
+      })
+    );
+
+    const result = await reviewOpenWorkflow('run-1');
+
+    expect(mockTransitionPlannotatorGate).toHaveBeenCalledTimes(1);
+    const transition = mockTransitionPlannotatorGate.mock.calls[0]?.[0];
+    expect(transition).toMatchObject({
+      runId: 'run-1',
+      nodeId: 'review',
+      expectedGateId: 'old-gate',
+      document: '/workspace/review.html',
+      phase: 'opening',
+    });
+    expect(transition?.nextGateId).toEqual(expect.any(String));
+    expect(transition?.nextGateId).not.toBe('old-gate');
+    expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      document: '/workspace/review.html',
+      nodeId: 'review',
+      phase: 'opening',
+      continuation: 'caller_resume',
+      workflowName: 'test-workflow',
+      workingPath: '/workspace/worktree',
+      userMessage: 'test',
+      codebaseId: 'cb-1',
+      conversationId: 'conv-1',
+    });
+  });
+
+  test.each([
+    [
+      'non-paused',
+      makePausedRun({ status: 'running' }),
+      "Cannot review-open run with status 'running'",
+    ],
+    [
+      'resolved',
+      makePausedRun({
+        metadata: {
+          approval: {
+            nodeId: 'review',
+            message: 'Please review',
+            type: 'plannotator_gate',
+            gateId: 'gate-1',
+            document: '/workspace/review.html',
+            resolved: 'approved',
+          },
+        },
+      }),
+      'already approved',
+    ],
+    ['non-Plannotator', makePausedRun(), 'not paused at a plannotator_gate'],
+    [
+      'missing-document',
+      makePausedRun({
+        metadata: {
+          approval: {
+            nodeId: 'review',
+            message: 'Please review',
+            type: 'plannotator_gate',
+            gateId: 'gate-1',
+          },
+        },
+      }),
+      'no document path',
+    ],
+  ])('rejects %s runs', async (_case, run, message) => {
+    mockGetWorkflowRun.mockResolvedValue(run);
+
+    await expect(reviewOpenWorkflow('run-1')).rejects.toThrow(message);
+    expect(mockTransitionPlannotatorGate).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    [
+      { outcome: 'resolved' as const, resolved: 'rejected' as const },
+      'already rejected and is awaiting resume',
+    ],
+    [{ outcome: 'superseded' as const }, 'ownership changed before review-open'],
+    [
+      { outcome: 'stopped' as const, status: 'cancelled' as const },
+      "stopped with status 'cancelled' before review-open",
+    ],
+  ])('turns transition outcome into an actionable error', async (outcome, message) => {
+    mockGetWorkflowRun.mockResolvedValue(
+      makePausedRun({
+        metadata: {
+          approval: {
+            nodeId: 'review',
+            message: 'Please review',
+            type: 'plannotator_gate',
+            gateId: 'gate-1',
+            document: '/workspace/review.html',
+          },
+        },
+      })
+    );
+    mockTransitionPlannotatorGate.mockResolvedValue(outcome);
+
+    await expect(reviewOpenWorkflow('run-1')).rejects.toThrow(message);
+  });
+});
+
 describe('approveWorkflow', () => {
   beforeEach(() => {
     mockCaptureApprovalResolved.mockClear();
@@ -124,7 +254,7 @@ describe('approveWorkflow', () => {
     expect(result.workingPath).toBe('/workspace/worktree');
 
     // Operations no longer writes events directly — node_completed + approval_received
-    // ride the CAS transaction as its 3rd argument (#2146).
+    // ride the CAS transaction as its 4th argument (#2146).
     expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
 
     // Stays 'paused' (no status write) — resolution recorded atomically via the
@@ -132,6 +262,7 @@ describe('approveWorkflow', () => {
     // audit events written in the same transaction (#2146).
     expect(mockResolveApprovalGate).toHaveBeenCalledWith(
       'run-1',
+      { nodeId: 'review', gateId: undefined },
       {
         approval: {
           nodeId: 'review',
@@ -162,6 +293,25 @@ describe('approveWorkflow', () => {
     expect(mockCaptureApprovalResolved).toHaveBeenCalledWith({ resolution: 'approved' });
   });
 
+  test('assigns continuation ownership to a live plannotator supervisor', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({
+        metadata: {
+          approval: {
+            nodeId: 'review',
+            message: 'Review in Plannotator',
+            type: 'plannotator_gate',
+            gateId: 'gate-1',
+          },
+        },
+      })
+    );
+
+    const result = await approveWorkflow('run-1', 'Looks good');
+
+    expect(result.continuation).toBe('live_plannotator_supervisor');
+  });
+
   test('approves interactive_loop — writes only approval_received, stores loop_user_input', async () => {
     const run = makePausedRun({
       metadata: {
@@ -183,7 +333,7 @@ describe('approveWorkflow', () => {
     expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
     // Only approval_received rides the CAS — NOT node_completed (the executor
     // writes that on the real completion signal / at resume).
-    const casEvents = mockResolveApprovalGate.mock.calls[0][2] as Array<Record<string, unknown>>;
+    const casEvents = mockResolveApprovalGate.mock.calls[0][3] as Array<Record<string, unknown>>;
     expect(casEvents).toHaveLength(1);
     expect(casEvents[0].event_type).toBe('approval_received');
 
@@ -191,6 +341,7 @@ describe('approveWorkflow', () => {
     // approval context resolved, preserving iteration for startIteration detection
     expect(mockResolveApprovalGate).toHaveBeenCalledWith(
       'run-1',
+      { nodeId: 'iterate', gateId: undefined },
       {
         approval: {
           nodeId: 'iterate',
@@ -232,6 +383,7 @@ describe('approveWorkflow', () => {
 
     expect(mockResolveApprovalGate).toHaveBeenCalledWith(
       'run-1',
+      { nodeId: 'iterate', gateId: undefined },
       {
         approval: {
           nodeId: 'iterate',
@@ -272,7 +424,7 @@ describe('approveWorkflow', () => {
 
     await approveWorkflow('run-1', '   ');
 
-    const casMetadata = mockResolveApprovalGate.mock.calls[0][1] as Record<string, unknown>;
+    const casMetadata = mockResolveApprovalGate.mock.calls[0][2] as Record<string, unknown>;
     expect(casMetadata.loop_feedback_given).toBe(false);
     // Whitespace-only also gets the documented recorded-comment default —
     // '   ' must never be stored verbatim as $LOOP_USER_INPUT.
@@ -334,7 +486,7 @@ describe('approveWorkflow', () => {
     await approveWorkflow('run-1', 'My review notes');
 
     // The node_output rides the CAS events (#2146), not a separate event write.
-    const casEvents = mockResolveApprovalGate.mock.calls[0][2] as Array<Record<string, unknown>>;
+    const casEvents = mockResolveApprovalGate.mock.calls[0][3] as Array<Record<string, unknown>>;
     const nodeCompleted = casEvents.find(e => e.event_type === 'node_completed');
     expect((nodeCompleted?.data as Record<string, unknown>).node_output).toBe('My review notes');
   });
@@ -373,6 +525,7 @@ describe('approveWorkflow', () => {
     // The resumed executor's write-back gate reads approval_response to APPLY.
     expect(mockResolveApprovalGate).toHaveBeenCalledWith(
       'run-1',
+      { nodeId: '__writeback__', gateId: undefined },
       {
         approval: {
           nodeId: '__writeback__',
@@ -391,7 +544,7 @@ describe('approveWorkflow', () => {
       ]
     );
     // No node_completed — there is no DAG node behind the write-back gate.
-    const casEvents = mockResolveApprovalGate.mock.calls[0][2] as Array<Record<string, unknown>>;
+    const casEvents = mockResolveApprovalGate.mock.calls[0][3] as Array<Record<string, unknown>>;
     expect(casEvents.every(e => e.event_type !== 'node_completed')).toBe(true);
   });
 
@@ -453,6 +606,7 @@ describe('rejectWorkflow', () => {
     // transaction (#2146)
     expect(mockResolveApprovalGate).toHaveBeenCalledWith(
       'run-1',
+      { nodeId: 'review', gateId: undefined },
       {
         approval: {
           nodeId: 'review',
@@ -548,30 +702,49 @@ describe('rejectWorkflow', () => {
     // Terminal reject resolves + cancels in ONE atomic CAS (#2113) — never a
     // separate cancelWorkflowRun that could fail and strand the run. The audit
     // event rides the same transaction (#2146).
-    expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledWith('run-1', [
-      {
-        event_type: 'approval_received',
-        step_name: 'review',
-        data: { decision: 'rejected', reason: 'still broken' },
-      },
-    ]);
+    expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledWith(
+      'run-1',
+      { nodeId: 'review', gateId: undefined },
+      [
+        {
+          event_type: 'approval_received',
+          step_name: 'review',
+          data: { decision: 'rejected', reason: 'still broken' },
+        },
+      ]
+    );
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
 
   test('rejects without onRejectPrompt — cancels immediately', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun());
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({
+        metadata: {
+          approval: {
+            nodeId: 'review',
+            message: 'Please review',
+            type: 'approval',
+            gateId: 'gate-a',
+          },
+        },
+      })
+    );
 
     const result = await rejectWorkflow('run-1', 'no good');
 
     expect(result.cancelled).toBe(true);
     expect(result.maxAttemptsReached).toBe(false);
-    expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledWith('run-1', [
-      {
-        event_type: 'approval_received',
-        step_name: 'review',
-        data: { decision: 'rejected', reason: 'no good' },
-      },
-    ]);
+    expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledWith(
+      'run-1',
+      { nodeId: 'review', gateId: 'gate-a' },
+      [
+        {
+          event_type: 'approval_received',
+          step_name: 'review',
+          data: { decision: 'rejected', reason: 'no good' },
+        },
+      ]
+    );
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
 
@@ -605,6 +778,7 @@ describe('rejectWorkflow', () => {
     expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
     expect(mockResolveApprovalGate).toHaveBeenCalledWith(
       'run-1',
+      { nodeId: '__writeback__', gateId: undefined },
       {
         approval: {
           nodeId: '__writeback__',

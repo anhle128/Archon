@@ -261,7 +261,7 @@ export type StructuredValidationResult = { valid: true } | { valid: false; error
 /**
  * Validate a parsed structured-output value against the node's declared JSON
  * Schema. Used for EVERY provider that declares `output_format` — even
- * SDK-enforced ones (Claude/Codex/OpenCode) need this net for the refusal /
+ * SDK-enforced ones (Claude/Codex/Grok/OpenCode) need this net for the refusal /
  * `max_tokens`-truncation edges that bypass grammar-constrained decoding.
  *
  * The author's schema is validated as written — `additionalProperties` is NOT

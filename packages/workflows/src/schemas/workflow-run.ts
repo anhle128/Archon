@@ -276,14 +276,39 @@ export interface ApprovalContext {
    *    auto-resume hook re-enters the parent (executor.ts), which re-runs the
    *    workflow node, finds the child terminal, and threads its output. NO
    *    node_completed is written for the parent's node on this pause.
+   *  - `plannotator_gate` — a DAG plannotator_gate node supervising a live
+   *    Plannotator annotate session. Approve path treats it like standard
+   *    approval for `node_completed` writing; rework loops in-place via the
+   *    gate's rework agent without leaving the pause.
    */
-  type?: 'approval' | 'interactive_loop' | 'writeback' | 'child_workflow';
+  type?: 'approval' | 'interactive_loop' | 'writeback' | 'child_workflow' | 'plannotator_gate';
+  /**
+   * Fencing token for the current plannotator_gate supervisor instance.
+   * Optional for persisted-run migration compatibility; every newly paused
+   * plannotator_gate must set it.
+   */
+  gateId?: string;
   /**
    * Child run id when `type === 'child_workflow'` — the specific paused sub-run
    * the parent is blocked on. Read by the parent auto-resume guard so a DIFFERENT
    * child of the same parent can't trigger the wrong re-entry.
    */
   childRunId?: string;
+  /**
+   * Absolute (or resolved) document path being reviewed when
+   * `type === 'plannotator_gate'`. Optional so older/partial contexts remain
+   * parseable; the gate executor sets it at pause time.
+   */
+  document?: string;
+  /**
+   * Supervisor phase for `type === 'plannotator_gate'`:
+   *  - `opening`           — spawning / recovering the annotate session
+   *  - `waiting_decision`  — session live; blocked on Approve / annotations
+   *  - `reworking`         — rework agent running against annotations
+   *  - `idle`              — process dead; awaiting review-open recovery
+   * Optional metadata only — not required by the type guard.
+   */
+  phase?: 'opening' | 'waiting_decision' | 'reworking' | 'idle';
   /** Current loop iteration when paused (interactive loops only). */
   iteration?: number;
   /**

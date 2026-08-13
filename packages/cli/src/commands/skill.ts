@@ -4,7 +4,7 @@
  * Writes the bundled `archon` skill (SKILL.md, guides, references, examples) and
  * the focused `manage-run` skill into <targetPath>/.claude/skills/<skill>/ (for
  * Claude Code) and <targetPath>/.agents/skills/<skill>/ (the canonical Codex
- * project-level skill path) so both Claude Code and Codex pick them up.
+ * project-level skill path) so Claude Code, Codex, and Grok pick them up.
  *
  * Always overwrites existing files to ensure the latest skill version
  * shipped with the current Archon binary is installed.
@@ -26,7 +26,7 @@ function writeSkillFiles(skillRoot: string, files: Record<string, string>): void
 
 /**
  * Copy the bundled Archon skills into <targetPath>/.claude/skills/ (Claude Code)
- * and <targetPath>/.agents/skills/ (Codex):
+ * and <targetPath>/.agents/skills/ (Codex and Grok):
  *   - `archon`     — the broad authoring/setup/run skill
  *   - `manage-run` — the focused run-management skill
  *
@@ -82,7 +82,7 @@ export async function skillInstallCommand(targetPath: string): Promise<number> {
     );
 
     await copyArchonSkill(absoluteTarget);
-    console.log('Done. Restart Claude Code or Codex to load the skills.');
+    console.log('Done. Restart Claude Code, Codex, or Grok to load the skills.');
     return 0;
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
