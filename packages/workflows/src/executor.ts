@@ -551,7 +551,7 @@ export type ExecuteWorkflowOptions = ResumePayload & {
 /**
  * Hydrate an already-located resumable `WorkflowRun` candidate into the form
  * {@link executeWorkflow} expects. Returns `null` when the candidate has no
- * completed nodes and no interactive-loop gate state — nothing worth resuming.
+ * completed nodes and no re-runnable gate state — nothing worth resuming.
  *
  * The return shape is spread-compatible with {@link ExecuteWorkflowOptions}
  * so callers can write `executeWorkflow(..., { ...hydrated, codebaseId })`.
@@ -572,14 +572,18 @@ export async function hydrateResumableRun(
   const snapshot = await deps.store.getDagResumeSnapshot(candidate.id);
   const priorCompletedNodes = snapshot.completedNodeOutputs;
   // A gate whose node deliberately writes NO node_completed on pause must still be
-  // resumable with zero completed nodes: interactive loops, and a `workflow:` node
-  // blocked on a child (#2121 Phase 2) whose child is the very first node.
-  const approvalType =
-    candidate.metadata?.approval !== undefined
-      ? (candidate.metadata.approval as Record<string, unknown>).type
+  // resumable with zero completed nodes: interactive loops, Plannotator takeover,
+  // and a `workflow:` node blocked on a child (#2121 Phase 2) whose child is first.
+  const rawApproval = candidate.metadata?.approval;
+  const approval =
+    typeof rawApproval === 'object' && rawApproval !== null
+      ? (rawApproval as Record<string, unknown>)
       : undefined;
+  const approvalType = approval?.type;
   const hasReRunGateState =
-    approvalType === 'interactive_loop' || approvalType === 'child_workflow';
+    approvalType === 'interactive_loop' ||
+    (approvalType === 'plannotator_gate' && approval?.phase === 'opening') ||
+    approvalType === 'child_workflow';
   if (priorCompletedNodes.size === 0 && !hasReRunGateState) {
     getLog().info(
       { resumableRunId: candidate.id },

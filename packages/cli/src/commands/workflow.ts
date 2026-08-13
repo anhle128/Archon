@@ -2184,7 +2184,7 @@ async function workflowRunCommandInner(
     }
     if (!prepared) {
       throw new Error(
-        `Cannot resume: the prior run for '${workflowName}' has no completed nodes and no interactive-loop state.`
+        `Cannot resume: the prior run for '${workflowName}' has no completed nodes or resumable gate state.`
       );
     }
   }

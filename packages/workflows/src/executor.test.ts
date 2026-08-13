@@ -2078,6 +2078,66 @@ describe('hydrateResumableRun', () => {
     expect(store.resumeWorkflowRun).toHaveBeenCalledWith('paused-loop');
   });
 
+  it('resumes a first-node Plannotator gate takeover with zero completed nodes', async () => {
+    const candidate = makeRun({
+      id: 'paused-plannotator',
+      status: 'paused',
+      metadata: {
+        approval: {
+          type: 'plannotator_gate',
+          nodeId: 'review',
+          message: 'Review the plan',
+          gateId: 'replacement-gate',
+          document: '/tmp/review.html',
+          phase: 'opening',
+        },
+      },
+    });
+    const resumed = makeRun({ id: 'paused-plannotator', status: 'running' });
+    const store = makeStore({
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: new Map(),
+        tokens: { input: 0, output: 0 },
+      })),
+      resumeWorkflowRun: mock(async () => resumed),
+    });
+
+    const result = await hydrateResumableRun(makeDeps(store), candidate);
+
+    expect(result).not.toBeNull();
+    expect(result?.preCreatedRun).toBe(resumed);
+    expect(result?.priorCompletedNodes.size).toBe(0);
+    expect(store.resumeWorkflowRun).toHaveBeenCalledWith('paused-plannotator');
+  });
+
+  it('does not resume an unstaged first-node Plannotator gate with zero completed nodes', async () => {
+    const candidate = makeRun({
+      id: 'live-plannotator',
+      status: 'paused',
+      metadata: {
+        approval: {
+          type: 'plannotator_gate',
+          nodeId: 'review',
+          message: 'Review the plan',
+          gateId: 'live-supervisor-gate',
+          document: '/tmp/review.html',
+          phase: 'idle',
+        },
+      },
+    });
+    const store = makeStore({
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: new Map(),
+        tokens: { input: 0, output: 0 },
+      })),
+    });
+
+    const result = await hydrateResumableRun(makeDeps(store), candidate);
+
+    expect(result).toBeNull();
+    expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
+  });
+
   it('propagates DB errors from getDagResumeSnapshot (no silent fallback)', async () => {
     const candidate = makeRun({ id: 'prior-failed', status: 'failed' });
     const store = makeStore({

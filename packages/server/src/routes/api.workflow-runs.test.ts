@@ -2771,6 +2771,41 @@ describe('review-open takeover auto-resume', () => {
     mockTransitionPlannotatorGate.mockResolvedValue({ outcome: 'updated', approval: {} });
   });
 
+  test('publishes the exact review-open success response contract', async () => {
+    const { app } = makeApp();
+
+    const response = await app.request('/api/openapi.json');
+    const document = (await response.json()) as {
+      paths: Record<
+        string,
+        {
+          post?: {
+            responses?: Record<
+              string,
+              { content?: Record<string, { schema?: Record<string, unknown> }> }
+            >;
+          };
+        }
+      >;
+    };
+
+    const schema =
+      document.paths['/api/workflows/runs/{runId}/review-open']?.post?.responses?.['200']
+        ?.content?.['application/json']?.schema;
+    expect(schema).toEqual({
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        document: { type: 'string' },
+        nodeId: { type: 'string' },
+        phase: { type: 'string', enum: ['opening'] },
+        continuation: { type: 'string', enum: ['caller_resume'] },
+        message: { type: 'string' },
+      },
+      required: ['success', 'document', 'nodeId', 'phase', 'continuation', 'message'],
+    });
+  });
+
   test('dispatches exactly one explicit resume for a web parent', async () => {
     mockGetWorkflowRun.mockResolvedValue(reviewOpenRun);
     mockGetConversationById.mockResolvedValueOnce({

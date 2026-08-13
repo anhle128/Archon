@@ -1746,6 +1746,99 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/workflows/runs/{runId}/nodes/{nodeId}/retry/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Preview checkout state before retrying one failed DAG node */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    runId: string;
+                    nodeId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Retry preview */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RetryWorkflowNodePreviewResponse"];
+                    };
+                };
+                /** @description Bad request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Authentication required */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Conflict */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Server error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/workflows/runs/{runId}/nodes/{nodeId}/retry": {
         parameters: {
             query?: never;
@@ -1766,7 +1859,11 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["RetryWorkflowNodeBody"];
+                };
+            };
             responses: {
                 /** @description Retry accepted and dispatched */
                 200: {
@@ -1867,6 +1964,80 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["WorkflowRunActionResponse"];
+                    };
+                };
+                /** @description Bad request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Server error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workflows/runs/{runId}/review-open": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Re-open a paused plannotator_gate review surface */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    runId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Review re-open requested */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            success: boolean;
+                            document: string;
+                            nodeId: string;
+                            /** @enum {string} */
+                            phase: "opening";
+                            /** @enum {string} */
+                            continuation: "caller_resume";
+                            message: string;
+                        };
                     };
                 };
                 /** @description Bad request */
@@ -3735,6 +3906,17 @@ export interface components {
                     max_attempts?: number;
                 };
             };
+            plannotator_gate?: {
+                document: string;
+                message?: string;
+                capture_response?: boolean;
+                rework: {
+                    prompt: string;
+                    provider?: string;
+                    model?: string;
+                    effort?: string;
+                };
+            };
             cancel?: string;
             include?: string;
             workflow?: string;
@@ -3819,6 +4001,19 @@ export interface components {
             success: boolean;
             message: string;
         };
+        RetryWorkflowNodePreviewResponse: {
+            runId: string;
+            workflowName: string;
+            nodeId: string;
+            retryEpoch: number;
+            invalidatedNodes: string[];
+            resetSkipped: boolean;
+            checkpointRef?: string;
+            checkpointCommitSha?: string;
+            currentHeadSha?: string;
+            hasNewerHead: boolean;
+            requiresCommitChoice: boolean;
+        };
         RetryWorkflowNodeResponse: {
             success: boolean;
             message: string;
@@ -3827,6 +4022,12 @@ export interface components {
             retryEpoch: number;
             invalidatedNodes: string[];
             safetyCommitSha?: string;
+            checkoutStrategy: components["schemas"]["RetryWorkflowNodeCheckoutStrategy"];
+        };
+        /** @enum {string} */
+        RetryWorkflowNodeCheckoutStrategy: "checkpoint" | "current";
+        RetryWorkflowNodeBody: {
+            checkoutStrategy?: components["schemas"]["RetryWorkflowNodeCheckoutStrategy"];
         };
         ApproveWorkflowRunBody: {
             comment?: string;

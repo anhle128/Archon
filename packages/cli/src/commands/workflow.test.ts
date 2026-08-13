@@ -6600,7 +6600,7 @@ describe('workflowReviewOpenCommand', () => {
     (executor.hydrateResumableRun as ReturnType<typeof mock>).mockReset();
     (executor.hydrateResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       preCreatedRun: pausedRun,
-      priorCompletedNodes: new Map([['before-review', 'done']]),
+      priorCompletedNodes: new Map(),
       priorTokenUsage: { input: 0, output: 0 },
     });
 
@@ -6610,8 +6610,17 @@ describe('workflowReviewOpenCommand', () => {
     expect(exitCode).toBe(0);
     expect(discover).toHaveBeenCalledTimes(1);
     expect(discover).toHaveBeenCalledWith('/persisted/source', expect.any(Function));
+    expect(workflowDb.findResumableRun).toHaveBeenCalledWith('review-plan', '/persisted/worktree');
     expect(conversationsDb.getConversationById).toHaveBeenCalledWith('conv-review');
     expect(execute).toHaveBeenCalledTimes(1);
+    const executeOptions = execute.mock.calls[0]?.[7] as
+      | {
+          preCreatedRun?: typeof pausedRun;
+          priorCompletedNodes?: Map<string, string>;
+        }
+      | undefined;
+    expect(executeOptions?.preCreatedRun).toBe(pausedRun);
+    expect(executeOptions?.priorCompletedNodes?.size).toBe(0);
   });
 
   it('JSON mode records takeover without dispatch and tells callers how to resume', async () => {
