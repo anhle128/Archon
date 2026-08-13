@@ -100,6 +100,17 @@ describe('serializeToYaml', () => {
     );
   });
 
+  test('plannotator gate preview includes the complete nested payload', () => {
+    const yaml = serializeToYaml(FIXTURES.plannotatorGate);
+
+    expect(yaml).toContain('    plannotator_gate:\n');
+    expect(yaml).toContain('      prepare:\n');
+    expect(yaml).toContain('        allowed_tools:\n          - Read\n          - Edit');
+    expect(yaml).toContain('      capture_response: true');
+    expect(yaml).toContain('      rework:\n');
+    expect(yaml).toContain('        prompt: Apply $REVIEW_ANNOTATIONS to $REVIEW_DOCUMENT.');
+  });
+
   test('every fixture serializes without throwing and starts with its name', () => {
     for (const [key, fixture] of Object.entries(FIXTURES)) {
       const yaml = serializeToYaml(fixture);

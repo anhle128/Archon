@@ -7,7 +7,15 @@ import { cn } from '@/lib/utils';
 export interface DagNodeData extends DagNode {
   /** For command nodes: the command name. For prompt nodes: display label ("Prompt"). For bash: display label ("Shell"). */
   label: string;
-  nodeType: 'command' | 'prompt' | 'bash' | 'loop' | 'route_loop' | 'approval';
+  nodeType:
+    | 'command'
+    | 'prompt'
+    | 'bash'
+    | 'loop'
+    | 'route_loop'
+    | 'approval'
+    | 'plannotator_gate'
+    | 'cancel';
   promptText?: string;
   bashScript?: string;
   bashTimeout?: number;
@@ -54,6 +62,18 @@ const TYPE_CONFIG = {
     badgeBg: 'bg-node-approval/20',
     badgeText: 'text-node-approval',
   },
+  plannotator_gate: {
+    badge: 'REVIEW',
+    stripeColor: 'bg-node-approval',
+    badgeBg: 'bg-node-approval/20',
+    badgeText: 'text-node-approval',
+  },
+  cancel: {
+    badge: 'CANCEL',
+    stripeColor: 'bg-error',
+    badgeBg: 'bg-error/20',
+    badgeText: 'text-error',
+  },
 } as const;
 
 export function getContentPreview(data: DagNodeData): string {
@@ -68,6 +88,15 @@ export function getContentPreview(data: DagNodeData): string {
       return data.bashScript?.split('\n')[0] ?? '';
     case 'approval':
       return '';
+    case 'plannotator_gate':
+      return (
+        data.plannotator_gate?.message?.split('\n')[0] ??
+        data.plannotator_gate?.document ??
+        data.plannotator_gate?.prepare?.prompt.split('\n')[0] ??
+        ''
+      );
+    case 'cancel':
+      return data.cancel?.split('\n')[0] ?? '';
   }
 }
 

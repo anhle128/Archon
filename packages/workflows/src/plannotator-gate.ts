@@ -1,8 +1,8 @@
 /**
  * Pure helpers for the plannotator_gate node.
  *
- * Path contract (producer / rework stdout): entire output is one document path —
- * exactly one non-empty trimmed line. Decision contract (annotate --result-file payload):
+ * Path contract (producer / rework stdout): the last non-empty line is the document path.
+ * Decision contract (annotate --result-file payload):
  * one JSON object with `decision` ∈ approved|annotated|dismissed.
  * Spawn argv is fixed; binary resolution is env-only (capability probing lives in the executor).
  */
@@ -17,20 +17,20 @@ function isDecisionKind(value: unknown): value is 'approved' | 'annotated' | 'di
 }
 
 /**
- * Extract a document path from producer / rework node stdout.
- * Requires exactly one non-empty line after per-line trim.
+ * Extract the final non-empty line from producer / rework node stdout.
+ * Providers may add commentary before the requested final path despite the prompt contract.
  */
 export function parseDocumentPathFromNodeOutput(output: string): string {
   const lines = output
     .split(/\r?\n/)
     .map(line => line.trim())
     .filter(line => line.length > 0);
-  if (lines.length !== 1) {
-    throw new Error(
-      `plannotator_gate document path must be exactly one non-empty line, got ${lines.length}`
-    );
+  const documentPath = lines.at(-1);
+  if (documentPath === undefined) {
+    throw new Error('plannotator_gate document path output is empty');
   }
-  return lines[0];
+  const inlineCode = /^`([^`]+)`$/.exec(documentPath);
+  return inlineCode?.[1] ?? documentPath;
 }
 
 /**

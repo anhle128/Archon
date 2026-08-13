@@ -8,6 +8,7 @@ export type {
   RouteLoopNodeData,
   ApprovalOnReject,
   ApprovalNodeData,
+  PlannotatorGateNodeData,
   CancelNodeData,
   ScriptNodeData,
   CommandNodeData,

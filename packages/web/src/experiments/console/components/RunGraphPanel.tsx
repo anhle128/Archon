@@ -160,6 +160,8 @@ function kindGlyph(k: WorkflowNodeKind): string {
       return '⇄';
     case 'approval':
       return '◈';
+    case 'plannotator_gate':
+      return '◇';
     case 'cancel':
       return '⊘';
     case 'bash':

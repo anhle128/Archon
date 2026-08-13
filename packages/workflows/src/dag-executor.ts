@@ -7647,6 +7647,9 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
             const { executePlannotatorGateNode } = await import('./plannotator-gate-executor');
             const output = await executePlannotatorGateNode({
               node,
+              stepName: stepNamePrefix + node.id,
+              retryEpoch,
+              iteration,
               workflowRun,
               deps,
               platform,

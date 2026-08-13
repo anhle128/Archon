@@ -23,6 +23,28 @@ describe('getContentPreview', () => {
     };
     expect(getContentPreview(data)).toBe('');
   });
+
+  test('plannotator gate and cancel previews use their actual content', () => {
+    const gate: DagNodeData = {
+      id: 'review',
+      label: 'Plannotator Gate',
+      nodeType: 'plannotator_gate',
+      plannotator_gate: {
+        document: 'review.html',
+        message: 'Review this document.\nThen approve it.',
+        rework: { prompt: 'Apply annotations.' },
+      },
+    };
+    const cancel: DagNodeData = {
+      id: 'abort',
+      label: 'Cancel',
+      nodeType: 'cancel',
+      cancel: 'Stop this run.\nInvestigate first.',
+    };
+
+    expect(getContentPreview(gate)).toBe('Review this document.');
+    expect(getContentPreview(cancel)).toBe('Stop this run.');
+  });
 });
 
 interface ElementWithChildren {

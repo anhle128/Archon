@@ -12,6 +12,7 @@ export type WorkflowNodeKind =
   | 'approval'
   | 'loop'
   | 'route_loop'
+  | 'plannotator_gate'
   | 'cancel';
 
 export type WorkflowNodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';

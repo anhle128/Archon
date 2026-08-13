@@ -25,8 +25,8 @@ export type VariantId = WorkflowNodeKind;
 
 /**
  * The base-field keys present on every wire `DagNode`, excluding `id` (which is
- * partitioned out separately) and the seven mutually-exclusive mode fields
- * (command/prompt/bash/script/loop/route_loop/approval/cancel) plus their satellites
+ * partitioned out separately) and the nine mutually-exclusive mode fields
+ * (command/prompt/bash/script/loop/route_loop/approval/plannotator_gate/cancel) plus their satellites
  * (runtime/deps/timeout). Picking from `WireDagNode` keeps `BaseFields` exactly
  * in sync with the generated spec.
  *
@@ -109,6 +109,9 @@ export interface CancelNodeData {
   reason: string;
 }
 
+/** Live Plannotator review gate data. Its payload is read-only in the builder. */
+export type PlannotatorGateNodeData = NonNullable<WireDagNode['plannotator_gate']>;
+
 /** Script node data (inline code or named script run via bun/uv). */
 export interface ScriptNodeData {
   script: string;
@@ -138,6 +141,7 @@ export interface VariantDataMap {
   loop: LoopNodeData;
   route_loop: RouteLoopNodeData;
   approval: ApprovalNodeData;
+  plannotator_gate: PlannotatorGateNodeData;
   cancel: CancelNodeData;
   script: ScriptNodeData;
   command: CommandNodeData;

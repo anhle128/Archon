@@ -83,9 +83,9 @@ nodes:
       4. trigger clarification-answer-review skill
     depends_on:
       - clarify
-    effort: xhigh
-    provider: claude
-    model: "claude-opus-4-8[1M]"
+    effort: high
+    provider: grok
+    model: "grok-4.6"
     context: fresh
     allowed_tools:
       - Read
@@ -193,7 +193,7 @@ nodes:
     depends_on:
       - clarify-gate
     provider: claude
-    effort: max
+    effort: xhigh
     model: sonnet
     context: fresh
 
@@ -261,9 +261,9 @@ nodes:
       5. trigger red-team-answer-review skill
     depends_on:
       - red-team
-    provider: codex
-    effort: xhigh
-    model: gpt-5.6-sol
+    provider: grok
+    effort: high
+    model: grok-4.6
     context: fresh
     allowed_tools:
       - Read
@@ -366,7 +366,7 @@ nodes:
     depends_on:
       - red-team-gate
     provider: claude
-    effort: max
+    effort: xhigh
     model: sonnet
     context: fresh
 
@@ -523,9 +523,9 @@ nodes:
          the findings file, then STOP.
     depends_on:
       - analyze
-    effort: xhigh
-    provider: claude
-    model: "claude-opus-4-8[1M]"
+    effort: high
+    provider: grok
+    model: "grok-4.6"
     context: fresh
     allowed_tools:
       - Read
@@ -540,7 +540,7 @@ nodes:
     depends_on:
       - analyze-respond
     provider: claude
-    effort: max
+    effort: xhigh
     model: sonnet
     context: fresh
 

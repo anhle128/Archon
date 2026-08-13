@@ -228,6 +228,8 @@ function GeneralTab({
   commands: CommandEntry[];
   onUpdate: (updates: Partial<DagNodeData>) => void;
 }): React.ReactElement {
+  const hasReadOnlyContent = node.nodeType === 'plannotator_gate' || node.nodeType === 'cancel';
+
   return (
     <div className="flex flex-col gap-3 p-3">
       {/* Node ID */}
@@ -247,57 +249,63 @@ function GeneralTab({
 
       {/* Type selector */}
       <Field label="Type">
-        <select
-          value={node.nodeType}
-          onChange={(e): void => {
-            const newType = e.target.value as DagNodeData['nodeType'];
-            const updates: Partial<DagNodeData> = { nodeType: newType, route_loop: undefined };
-            if (newType === 'command') {
-              updates.promptText = undefined;
-              updates.bashScript = undefined;
-              updates.bashTimeout = undefined;
-              updates.label = '';
-            } else if (newType === 'prompt') {
-              updates.bashScript = undefined;
-              updates.bashTimeout = undefined;
-              updates.label = 'Prompt';
-            } else if (newType === 'bash') {
-              updates.promptText = undefined;
-              updates.label = 'Shell';
-              updates.allowed_tools = undefined;
-              updates.denied_tools = undefined;
-              updates.output_format = undefined;
-              updates.hooks = undefined;
-              updates.mcp = undefined;
-              updates.skills = undefined;
-            } else if (newType === 'route_loop') {
-              updates.promptText = '';
-              updates.bashScript = undefined;
-              updates.bashTimeout = undefined;
-              updates.label = 'Route';
-              updates.route_loop = node.route_loop ?? defaultRouteLoopConfig();
-              updates.when = undefined;
-              updates.trigger_rule = undefined;
-              updates.retry = undefined;
-              updates.model = undefined;
-              updates.provider = undefined;
-              updates.context = undefined;
-              updates.output_format = undefined;
-              updates.allowed_tools = undefined;
-              updates.denied_tools = undefined;
-              updates.hooks = undefined;
-              updates.mcp = undefined;
-              updates.skills = undefined;
-            }
-            onUpdate(updates);
-          }}
-          className={selectClass}
-        >
-          <option value="command">Command</option>
-          <option value="prompt">Prompt</option>
-          <option value="bash">Bash</option>
-          <option value="route_loop">Route Loop</option>
-        </select>
+        {hasReadOnlyContent ? (
+          <div className="rounded-md border border-border bg-surface-inset px-2 py-1.5 text-xs text-text-primary">
+            {node.nodeType === 'plannotator_gate' ? 'Plannotator Gate' : 'Cancel'}
+          </div>
+        ) : (
+          <select
+            value={node.nodeType}
+            onChange={(e): void => {
+              const newType = e.target.value as DagNodeData['nodeType'];
+              const updates: Partial<DagNodeData> = { nodeType: newType, route_loop: undefined };
+              if (newType === 'command') {
+                updates.promptText = undefined;
+                updates.bashScript = undefined;
+                updates.bashTimeout = undefined;
+                updates.label = '';
+              } else if (newType === 'prompt') {
+                updates.bashScript = undefined;
+                updates.bashTimeout = undefined;
+                updates.label = 'Prompt';
+              } else if (newType === 'bash') {
+                updates.promptText = undefined;
+                updates.label = 'Shell';
+                updates.allowed_tools = undefined;
+                updates.denied_tools = undefined;
+                updates.output_format = undefined;
+                updates.hooks = undefined;
+                updates.mcp = undefined;
+                updates.skills = undefined;
+              } else if (newType === 'route_loop') {
+                updates.promptText = '';
+                updates.bashScript = undefined;
+                updates.bashTimeout = undefined;
+                updates.label = 'Route';
+                updates.route_loop = node.route_loop ?? defaultRouteLoopConfig();
+                updates.when = undefined;
+                updates.trigger_rule = undefined;
+                updates.retry = undefined;
+                updates.model = undefined;
+                updates.provider = undefined;
+                updates.context = undefined;
+                updates.output_format = undefined;
+                updates.allowed_tools = undefined;
+                updates.denied_tools = undefined;
+                updates.hooks = undefined;
+                updates.mcp = undefined;
+                updates.skills = undefined;
+              }
+              onUpdate(updates);
+            }}
+            className={selectClass}
+          >
+            <option value="command">Command</option>
+            <option value="prompt">Prompt</option>
+            <option value="bash">Bash</option>
+            <option value="route_loop">Route Loop</option>
+          </select>
+        )}
       </Field>
 
       {/* Type-adaptive content */}
@@ -418,6 +426,21 @@ function GeneralTab({
             </Field>
           ))}
         </>
+      )}
+
+      {hasReadOnlyContent && (
+        <Field label={node.nodeType === 'plannotator_gate' ? 'Gate Payload' : 'Cancel Reason'}>
+          <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-surface-inset p-2 font-mono text-[10px] leading-relaxed text-text-secondary">
+            {JSON.stringify(
+              node.nodeType === 'plannotator_gate' ? node.plannotator_gate : node.cancel,
+              null,
+              2
+            )}
+          </pre>
+          <p className="text-[9px] text-text-tertiary">
+            Read-only here. Edit the workflow YAML to change this payload.
+          </p>
+        </Field>
       )}
 
       {/* Dependencies */}
@@ -823,7 +846,8 @@ function DagInspector({
 }: NodeInspectorProps): React.ReactElement {
   const isBash = node.nodeType === 'bash';
   const isRouteLoop = node.nodeType === 'route_loop';
-  const showAiTabs = !isBash && !isRouteLoop;
+  const hasReadOnlyContent = node.nodeType === 'plannotator_gate' || node.nodeType === 'cancel';
+  const showAiTabs = !isBash && !isRouteLoop && !hasReadOnlyContent;
 
   return (
     <div key={node.id} className="flex flex-col h-full border-l border-border bg-surface">
@@ -857,7 +881,7 @@ function DagInspector({
           <TabsTrigger value="general" className="text-xs">
             General
           </TabsTrigger>
-          {!isRouteLoop && (
+          {!isRouteLoop && !hasReadOnlyContent && (
             <TabsTrigger value="execution" className="text-xs">
               Execution
             </TabsTrigger>
@@ -879,7 +903,7 @@ function DagInspector({
             <GeneralTab node={node} commands={commands} onUpdate={onUpdate} />
           </TabsContent>
 
-          {!isRouteLoop && (
+          {!isRouteLoop && !hasReadOnlyContent && (
             <TabsContent value="execution">
               <ExecutionTab node={node} onUpdate={onUpdate} />
             </TabsContent>

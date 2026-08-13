@@ -126,6 +126,22 @@ describe('validateStructural', () => {
     expect(issues.some(i => i.path.field === 'cancel')).toBe(true);
   });
 
+  test('plannotator gate enforces one source and non-empty rework prompt', () => {
+    const issues = validateStructural(
+      wf([
+        {
+          id: 'review',
+          variant: 'plannotator_gate',
+          base: {},
+          data: { document: 'review.html', prepare: { prompt: 'prepare' }, rework: { prompt: '' } },
+        },
+      ])
+    );
+
+    expect(issues.some(i => i.path.field === 'plannotator_gate')).toBe(true);
+    expect(issues.some(i => i.path.field === 'plannotator_gate.rework.prompt')).toBe(true);
+  });
+
   test('empty prompt, command, and bash bodies are flagged as missing', () => {
     const issues = validateStructural(
       wf([

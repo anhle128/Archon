@@ -85,7 +85,15 @@ export function layoutWithDagre(
 
 export function resolveNodeDisplay(dn: DagNode): {
   label: string;
-  nodeType: 'command' | 'prompt' | 'bash' | 'loop' | 'route_loop' | 'approval';
+  nodeType:
+    | 'command'
+    | 'prompt'
+    | 'bash'
+    | 'loop'
+    | 'route_loop'
+    | 'approval'
+    | 'plannotator_gate'
+    | 'cancel';
   promptText?: string;
   bashScript?: string;
   bashTimeout?: number;
@@ -113,6 +121,12 @@ export function resolveNodeDisplay(dn: DagNode): {
   }
   if ('approval' in dn && dn.approval) {
     return { label: 'Approval', nodeType: 'approval' };
+  }
+  if ('plannotator_gate' in dn && dn.plannotator_gate) {
+    return { label: 'Plannotator Gate', nodeType: 'plannotator_gate' };
+  }
+  if ('cancel' in dn && dn.cancel !== undefined) {
+    return { label: 'Cancel', nodeType: 'cancel' };
   }
   return {
     label: 'Prompt',

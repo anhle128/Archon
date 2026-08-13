@@ -144,6 +144,22 @@ describe('resolveNodeDisplay', () => {
       nodeType: 'approval',
     });
   });
+
+  test('plannotator gate and cancel nodes keep distinct display types', () => {
+    expect(
+      resolveNodeDisplay({
+        id: 'review',
+        plannotator_gate: {
+          document: 'review.html',
+          rework: { prompt: 'Apply annotations.' },
+        },
+      })
+    ).toEqual({ label: 'Plannotator Gate', nodeType: 'plannotator_gate' });
+    expect(resolveNodeDisplay({ id: 'abort', cancel: 'Stop.' })).toEqual({
+      label: 'Cancel',
+      nodeType: 'cancel',
+    });
+  });
 });
 
 describe('resolveExecutionNodeDisplay', () => {

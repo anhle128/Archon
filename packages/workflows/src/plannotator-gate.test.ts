@@ -11,10 +11,20 @@ describe('parseDocumentPathFromNodeOutput', () => {
     expect(parseDocumentPathFromNodeOutput('  /tmp/plan.html  ')).toBe('/tmp/plan.html');
   });
 
-  test('throws when output contains trailing commentary', () => {
-    expect(() =>
-      parseDocumentPathFromNodeOutput('\n\n  /artifacts/runs/1/explain.html\ntrailing noise\n')
-    ).toThrow(/one non-empty line/i);
+  test('returns the final path when a provider adds leading commentary', () => {
+    expect(
+      parseDocumentPathFromNodeOutput(
+        'File written, non-empty, self-contained.\n\n  /artifacts/runs/1/explain.html\n'
+      )
+    ).toBe('/artifacts/runs/1/explain.html');
+  });
+
+  test('unwraps a final path formatted as inline Markdown code', () => {
+    expect(
+      parseDocumentPathFromNodeOutput(
+        'Existing explainer HTML is already up to date.\n\n**Final output:**\n`/artifacts/runs/1/explain.html`\n'
+      )
+    ).toBe('/artifacts/runs/1/explain.html');
   });
 
   test('preserves spaces inside a path', () => {

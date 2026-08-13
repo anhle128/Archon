@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { Edge } from '@xyflow/react';
-import { reactFlowToDagNodes } from './WorkflowCanvas';
+import { dagNodesToReactFlow, reactFlowToDagNodes } from './WorkflowCanvas';
+import type { DagNode } from '@/lib/api';
 import type { DagFlowNode } from './DagNodeComponent';
 
 describe('reactFlowToDagNodes route_loop serialization', () => {
@@ -53,5 +54,44 @@ describe('reactFlowToDagNodes route_loop serialization', () => {
         exhausted: 'escalate',
       },
     });
+  });
+});
+
+describe('reactFlowToDagNodes read-only node passthrough', () => {
+  test('preserves nested plannotator gate and cancel payloads', () => {
+    const original: DagNode[] = [
+      { id: 'prepare', prompt: 'Prepare the review.' },
+      {
+        id: 'review-gate',
+        depends_on: ['prepare'],
+        plannotator_gate: {
+          prepare: {
+            prompt: 'Build $prepare.output into review.html.',
+            provider: 'claude',
+            model: 'sonnet',
+            effort: 'medium',
+            allowed_tools: ['Read', 'Edit'],
+          },
+          message: 'Review the generated document.',
+          capture_response: true,
+          rework: {
+            prompt: 'Apply $REVIEW_ANNOTATIONS to $REVIEW_DOCUMENT.',
+            provider: 'codex',
+            model: 'gpt-5.6-terra',
+            effort: 'high',
+          },
+        },
+      },
+      {
+        id: 'abort',
+        depends_on: ['review-gate'],
+        cancel: 'Reviewer rejected the workflow.',
+      },
+    ];
+
+    const flow = dagNodesToReactFlow(original);
+    const roundTripped = reactFlowToDagNodes(flow.nodes, flow.edges);
+
+    expect(JSON.parse(JSON.stringify(roundTripped))).toEqual(original);
   });
 });

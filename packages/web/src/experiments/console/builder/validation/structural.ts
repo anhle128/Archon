@@ -163,6 +163,28 @@ function checkRequiredFields(node: BuilderNode): Issue[] {
       if (node.data.message.trim().length === 0)
         missing('approval.message', 'approval requires a message');
       break;
+    case 'plannotator_gate': {
+      const sourceCount =
+        Number(node.data.document !== undefined) + Number(node.data.prepare !== undefined);
+      if (sourceCount !== 1)
+        invalid(
+          'plannotator_gate',
+          "plannotator_gate requires exactly one of 'document' or 'prepare'"
+        );
+      if (node.data.document?.trim().length === 0)
+        missing('plannotator_gate.document', 'plannotator_gate document must not be empty');
+      if (node.data.prepare?.prompt.trim().length === 0)
+        missing(
+          'plannotator_gate.prepare.prompt',
+          'plannotator_gate prepare prompt must not be empty'
+        );
+      if (node.data.rework.prompt.trim().length === 0)
+        missing(
+          'plannotator_gate.rework.prompt',
+          'plannotator_gate rework prompt must not be empty'
+        );
+      break;
+    }
     case 'cancel':
       if (node.data.reason.trim().length === 0) missing('cancel', 'cancel requires a reason');
       break;

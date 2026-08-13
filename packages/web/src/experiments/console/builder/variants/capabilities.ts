@@ -24,6 +24,7 @@ export const VARIANT_CAPABILITIES: Record<VariantId, VariantCapabilities> = {
   // Approval is a human gate; it makes no provider call (no AI fields) and
   // requires interactive mode because it pauses the run for human input.
   approval: { honorsAiFields: false, requiresInteractive: true },
+  plannotator_gate: { honorsAiFields: false, requiresInteractive: true },
   // bash/script/cancel make no provider call — AI fields are meaningless on them.
   bash: { honorsAiFields: false },
   script: { honorsAiFields: false },

@@ -9,6 +9,7 @@ import { cancelFixture } from './cancel.fixture';
 import { scriptFixture } from './script.fixture';
 import { mixedFixture } from './mixed.fixture';
 import { routeLoopFixture } from './route-loop.fixture';
+import { plannotatorGateFixture } from './plannotator-gate.fixture';
 
 export {
   loopFixture,
@@ -18,6 +19,7 @@ export {
   scriptFixture,
   mixedFixture,
   routeLoopFixture,
+  plannotatorGateFixture,
 };
 
 /** All builder fixtures keyed by name, for table-driven tests. */
@@ -29,4 +31,5 @@ export const FIXTURES: Record<string, WireWorkflowDefinition> = {
   script: scriptFixture,
   mixed: mixedFixture,
   routeLoop: routeLoopFixture,
+  plannotatorGate: plannotatorGateFixture,
 };

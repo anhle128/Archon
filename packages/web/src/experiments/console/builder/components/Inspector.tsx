@@ -108,6 +108,17 @@ function VariantFields({
           }}
         />
       );
+    case 'plannotator_gate':
+      return (
+        <Field label="Gate payload (read-only)">
+          <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-[8px] border border-border bg-surface-inset p-2 font-mono text-[10.5px] leading-relaxed text-text-secondary">
+            {JSON.stringify(node.data, null, 2)}
+          </pre>
+          <p className="text-[10.5px] text-text-tertiary">
+            Edit the workflow YAML to change prepare, message, capture response, or rework.
+          </p>
+        </Field>
+      );
     case 'cancel':
       return (
         <CancelFields

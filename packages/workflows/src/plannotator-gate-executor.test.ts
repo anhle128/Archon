@@ -24,6 +24,7 @@ import type { IWorkflowPlatform, WorkflowConfig, WorkflowDeps } from './deps';
 import type { IWorkflowStore, WorkflowEventData } from './store';
 import type { SendQueryOptions } from '@archon/providers/types';
 import { clearRegistry, registerBuiltinProviders } from '@archon/providers';
+import { projectLatestEffectiveNodeStates } from './retry-state';
 
 function makeRun(approval: Record<string, unknown>): WorkflowRun {
   return {
@@ -71,6 +72,11 @@ class IntegrationGateStore {
 
   getWorkflowRunStatus: IWorkflowStore['getWorkflowRunStatus'] = id =>
     Promise.resolve(id === this.run.id ? this.run.status : null);
+
+  createWorkflowEvent: IWorkflowStore['createWorkflowEvent'] = data => {
+    this.events.push(data);
+    return Promise.resolve();
+  };
 
   readonly pauseWorkflowRun = mock<IWorkflowStore['pauseWorkflowRun']>((id, approval) => {
     if (id === this.run.id) {
@@ -255,6 +261,8 @@ function integrationArgs(
   };
   return {
     node,
+    stepName: node.id,
+    retryEpoch: 0,
     workflowRun: run,
     deps: {
       store: store.asStore(),
@@ -602,13 +610,37 @@ describe('executePlannotatorGateNode production spawn path', () => {
     };
 
     try {
-      await expect(
-        executePlannotatorGateNode(
-          integrationArgs(run, store, node, cwd, artifactsDir, getAgentProvider)
-        )
-      ).resolves.toMatchObject({ state: 'failed' });
+      const args = integrationArgs(run, store, node, cwd, artifactsDir, getAgentProvider);
+      args.stepName = 'review-loop.review';
+      args.retryEpoch = 2;
+      args.iteration = 3;
+
+      await expect(executePlannotatorGateNode(args)).resolves.toMatchObject({ state: 'failed' });
       expect(sendQuery).not.toHaveBeenCalled();
       expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+      expect(
+        store.events.map(event => ({
+          event_type: event.event_type,
+          step_name: event.step_name,
+          data: event.data,
+        }))
+      ).toEqual([
+        {
+          event_type: 'node_failed',
+          step_name: 'review-loop.review',
+          data: {
+            error: expect.stringMatching(/binary not found/i),
+            retry_epoch: 2,
+            iteration: 3,
+          },
+        },
+      ]);
+      expect(
+        projectLatestEffectiveNodeStates(store.events).get('review-loop.review')
+      ).toMatchObject({
+        state: 'failed',
+        retry_epoch: 2,
+      });
     } finally {
       if (previous === undefined) delete process.env.PLANNOTATOR_BIN;
       else process.env.PLANNOTATOR_BIN = previous;

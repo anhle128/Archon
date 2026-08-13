@@ -29,7 +29,7 @@ import {
   type NodeChange,
   type ReactFlowInstance,
 } from '@xyflow/react';
-import { VARIANTS, VARIANT_REGISTRY, isVariantId } from '../variants';
+import { CREATABLE_VARIANTS, VARIANT_REGISTRY, isVariantId } from '../variants';
 import type { VariantId } from '../types';
 import type { BuilderFlowEdge, BuilderFlowNode, XYPosition } from '../flow/types';
 import { BUILDER_NODE_TYPE } from '../flow/to-flow';
@@ -312,7 +312,7 @@ function CanvasInner({
         {
           kind: 'submenu',
           label: 'Add node here',
-          items: VARIANTS.map(variant => ({
+          items: CREATABLE_VARIANTS.map(variant => ({
             kind: 'item' as const,
             label: VARIANT_REGISTRY[variant].label,
             onSelect: (): void => {

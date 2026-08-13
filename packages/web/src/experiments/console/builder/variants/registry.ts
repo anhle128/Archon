@@ -18,8 +18,13 @@ import { commandFromDag, commandToDag, defaultCommandData } from './command';
 import { defaultPromptData, promptFromDag, promptToDag } from './prompt';
 import { bashFromDag, bashToDag, defaultBashData } from './bash';
 import { defaultRouteLoopData, routeLoopFromDag, routeLoopToDag } from './route-loop';
+import {
+  defaultPlannotatorGateData,
+  plannotatorGateFromDag,
+  plannotatorGateToDag,
+} from './plannotator-gate';
 
-/** Canonical variant order (three existing kinds, then the four new variants). */
+/** Canonical order for every variant the builder can load. */
 export const VARIANTS: readonly VariantId[] = [
   'prompt',
   'command',
@@ -28,8 +33,21 @@ export const VARIANTS: readonly VariantId[] = [
   'loop',
   'route_loop',
   'approval',
+  'plannotator_gate',
   'cancel',
 ];
+
+/** Gate nodes load and round-trip, but their payload is authored in YAML only. */
+export const CREATABLE_VARIANTS = [
+  'prompt',
+  'command',
+  'bash',
+  'script',
+  'loop',
+  'route_loop',
+  'approval',
+  'cancel',
+] as const satisfies readonly VariantId[];
 
 const VARIANT_SET: ReadonlySet<string> = new Set(VARIANTS);
 
@@ -113,6 +131,14 @@ export const VARIANT_REGISTRY: { [K in VariantId]: VariantRegistryEntry<K> } = {
     wireKeys: ['approval'],
     capabilities: VARIANT_CAPABILITIES.approval,
   },
+  plannotator_gate: {
+    label: 'Plannotator Gate',
+    defaultData: defaultPlannotatorGateData,
+    fromDag: plannotatorGateFromDag,
+    toDag: plannotatorGateToDag,
+    wireKeys: ['plannotator_gate'],
+    capabilities: VARIANT_CAPABILITIES.plannotator_gate,
+  },
   cancel: {
     label: 'Cancel',
     defaultData: defaultCancelData,
@@ -148,6 +174,8 @@ export function nodeDataToDag(node: BuilderNode): Partial<WireDagNode> {
       return routeLoopToDag(node.data);
     case 'approval':
       return approvalToDag(node.data);
+    case 'plannotator_gate':
+      return plannotatorGateToDag(node.data);
     case 'cancel':
       return cancelToDag(node.data);
     case 'script':

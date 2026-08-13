@@ -37,6 +37,13 @@ function textBodies(node: BuilderNode): string[] {
       return [node.data.script];
     case 'approval':
       return [node.data.message];
+    case 'plannotator_gate':
+      return [
+        node.data.document,
+        node.data.prepare?.prompt,
+        node.data.message,
+        node.data.rework.prompt,
+      ].filter((body): body is string => body !== undefined);
     case 'loop':
       // A command-backed loop has no inline text to scan — the command file's
       // body is loaded at runtime (same posture as the engine loader's ref scan).
@@ -69,6 +76,15 @@ export function validateContent(workflow: BuilderWorkflow): Issue[] {
   const depsById = new Map<string, string[]>();
   for (const node of workflow.nodes) {
     depsById.set(node.id, node.base.depends_on ?? []);
+  }
+  for (const node of workflow.nodes) {
+    if (node.variant !== 'route_loop') continue;
+    for (const target of Object.values(node.data.routes)) {
+      const dependencies = depsById.get(target);
+      if (dependencies !== undefined && !dependencies.includes(node.id)) {
+        depsById.set(target, [...dependencies, node.id]);
+      }
+    }
   }
 
   for (const node of workflow.nodes) {

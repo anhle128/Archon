@@ -91,6 +91,16 @@ export function reactFlowToDagNodes(rfNodes: DagFlowNode[], rfEdges: Edge[]): Da
       trigger_rule: node.data.trigger_rule || undefined,
     };
 
+    if (node.data.nodeType === 'plannotator_gate' || node.data.nodeType === 'cancel') {
+      const wireNode: Record<string, unknown> = { ...node.data };
+      delete wireNode.label;
+      delete wireNode.nodeType;
+      delete wireNode.promptText;
+      delete wireNode.bashScript;
+      delete wireNode.bashTimeout;
+      return { ...wireNode, ...dagBase } as DagNode;
+    }
+
     if (node.data.nodeType === 'bash') {
       // DagNode uses `never` discriminant fields that can't be set on object literals
       return {

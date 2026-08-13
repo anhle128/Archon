@@ -33,6 +33,8 @@ const TYPE_COLORS: Record<string, string> = {
   loop: 'text-orange-400',
   route_loop: 'text-node-loop',
   approval: 'text-node-approval',
+  plannotator_gate: 'text-node-approval',
+  cancel: 'text-error',
 };
 
 const TYPE_LABELS: Record<string, string> = {
@@ -42,6 +44,8 @@ const TYPE_LABELS: Record<string, string> = {
   loop: 'LOOP',
   route_loop: 'ROUTE',
   approval: 'APPROVAL',
+  plannotator_gate: 'REVIEW',
+  cancel: 'CANCEL',
 };
 
 function formatRouteDecisionField(value: unknown, fallback: string): string {

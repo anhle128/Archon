@@ -185,6 +185,9 @@ function WorkflowBuilderInner(): React.ReactElement {
   const [workflowDescription, setWorkflowDescription] = useState('');
   const [provider, setProvider] = useState<string | undefined>(undefined);
   const [model, setModel] = useState<string | undefined>(undefined);
+  const [workflowMetadata, setWorkflowMetadata] = useState<
+    Omit<WorkflowDefinition, 'name' | 'description' | 'provider' | 'model' | 'nodes'>
+  >({});
   const [workflowSource, setWorkflowSource] = useState<WorkflowSource | undefined>(undefined);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
@@ -249,24 +252,34 @@ function WorkflowBuilderInner(): React.ReactElement {
     return {
       name,
       description,
+      ...workflowMetadata,
       provider,
       model,
       nodes: dagNodes,
     };
-  }, [workflowName, workflowDescription, provider, model, nodes, edges]);
+  }, [workflowName, workflowDescription, workflowMetadata, provider, model, nodes, edges]);
 
   const loadWorkflow = useCallback(
     async (name: string): Promise<void> => {
       try {
         const { workflow, source } = await getWorkflow(name, cwd);
-        setWorkflowName(workflow.name);
-        setWorkflowDescription(workflow.description);
-        setProvider(workflow.provider);
-        setModel(workflow.model);
+        const {
+          name: loadedName,
+          description: loadedDescription,
+          provider: loadedProvider,
+          model: loadedModel,
+          nodes: loadedNodes,
+          ...metadata
+        } = workflow;
+        setWorkflowName(loadedName);
+        setWorkflowDescription(loadedDescription);
+        setProvider(loadedProvider);
+        setModel(loadedModel);
+        setWorkflowMetadata(metadata);
         setWorkflowSource(source);
         setValidationErrors([]);
 
-        const { nodes: rfNodes, edges: rfEdges } = dagNodesToReactFlow(workflow.nodes);
+        const { nodes: rfNodes, edges: rfEdges } = dagNodesToReactFlow(loadedNodes);
         setNodes(rfNodes);
         setEdges(rfEdges);
 

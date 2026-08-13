@@ -23,11 +23,15 @@ import { runPlannotatorGateSupervisor } from './plannotator-gate-supervisor';
 import type { ExecutionContext, SendQueryOptions } from '@archon/providers/types';
 import { safeSendMessage, substituteWorkflowVariables } from './executor-shared';
 import { STEP_IDLE_TIMEOUT_MS, withIdleTimeout } from './utils/idle-timeout';
+import { getWorkflowEventEmitter } from './event-emitter';
 
 const log = createLogger('workflow.plannotator-gate-executor');
 
 export interface ExecutePlannotatorGateArgs {
   node: PlannotatorGateNode;
+  stepName: string;
+  retryEpoch: number;
+  iteration?: number;
   workflowRun: WorkflowRun;
   deps: WorkflowDeps;
   platform: IWorkflowPlatform;
@@ -348,6 +352,36 @@ export async function executePlannotatorGateNode(
     args;
   const gate = node.plannotator_gate;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
+  const lifecycleData = {
+    ...(args.retryEpoch > 0 ? { retry_epoch: args.retryEpoch } : {}),
+    ...(args.iteration !== undefined ? { iteration: args.iteration } : {}),
+  };
+
+  // This executor returns failures instead of throwing, so it owns the terminal event.
+  // Await persistence before returning to keep retry projection consistent with run status.
+  const failGateNode = async (error: string): Promise<NodeOutput> => {
+    await deps.store
+      .createWorkflowEvent({
+        workflow_run_id: workflowRun.id,
+        event_type: 'node_failed',
+        step_name: args.stepName,
+        data: { error, ...lifecycleData },
+      })
+      .catch((persistError: Error) => {
+        log.error(
+          { error: persistError, workflowRunId: workflowRun.id, nodeId: node.id },
+          'plannotator_gate.lifecycle_persist_failed'
+        );
+      });
+    getWorkflowEventEmitter().emit({
+      type: 'node_failed',
+      runId: workflowRun.id,
+      nodeId: node.id,
+      nodeName: node.id,
+      error,
+    });
+    return { state: 'failed', output: '', error };
+  };
 
   const rawApproval = workflowRun.metadata.approval;
   const approval =
@@ -407,7 +441,7 @@ export async function executePlannotatorGateNode(
       `❌ **plannotator_gate \`${node.id}\` failed**: ${message}`,
       msgContext
     );
-    return { state: 'failed', output: '', error: message };
+    return failGateNode(message);
   }
 
   const message =
@@ -477,6 +511,6 @@ export async function executePlannotatorGateNode(
       `❌ **plannotator_gate \`${node.id}\`**: ${messageText}`,
       msgContext
     );
-    return { state: 'failed', output: '', error: messageText };
+    return failGateNode(messageText);
   }
 }

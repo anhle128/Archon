@@ -54,7 +54,7 @@ describe('validateContent', () => {
     expect(issues.some(i => i.rule === 'content.var.unknown')).toBe(true);
   });
 
-  test('body scanning covers bash, script, loop, and approval text bodies', () => {
+  test('body scanning covers bash, script, loop, approval, and plannotator text bodies', () => {
     const issues = validateContent(
       wf([
         { id: 'b', variant: 'bash', base: {}, data: { bash: 'echo $ghostA.output' } },
@@ -81,13 +81,23 @@ describe('validateContent', () => {
           base: {},
           data: { message: 'Approve $ghostD.output?' },
         },
+        {
+          id: 'g',
+          variant: 'plannotator_gate',
+          base: {},
+          data: {
+            prepare: { prompt: 'Build $ghostE.output.' },
+            message: 'Review $ghostF.output.',
+            rework: { prompt: 'Apply $ghostG.output.' },
+          },
+        },
       ])
     );
     const flagged = issues
       .filter(i => i.rule === 'content.var.unknown')
       .map(i => i.path.nodeId)
       .sort();
-    expect(flagged).toEqual(['a', 'b', 'l', 's']);
+    expect(flagged).toEqual(['a', 'b', 'g', 'g', 'g', 'l', 's']);
   });
 
   test('upstream refs in non-prompt bodies pass', () => {
@@ -102,6 +112,36 @@ describe('validateContent', () => {
         },
       ])
     );
+    expect(issues.filter(i => i.rule === 'content.var.unknown')).toEqual([]);
+  });
+
+  test('route targets can reference nodes upstream of their route controller', () => {
+    const issues = validateContent(
+      wf([
+        { id: 'review', variant: 'prompt', base: {}, data: { prompt: 'Review it.' } },
+        {
+          id: 'router',
+          variant: 'route_loop',
+          base: { depends_on: ['review'] },
+          data: {
+            condition: "$review.output.status == 'approved'",
+            max_iterations: 3,
+            routes: { positive: 'done', negative: 'gate', exhausted: 'abort' },
+          },
+        },
+        {
+          id: 'gate',
+          variant: 'plannotator_gate',
+          base: {},
+          data: {
+            document: 'review.html',
+            message: 'Review $review.output.',
+            rework: { prompt: 'Apply annotations to $review.output.' },
+          },
+        },
+      ])
+    );
+
     expect(issues.filter(i => i.rule === 'content.var.unknown')).toEqual([]);
   });
 

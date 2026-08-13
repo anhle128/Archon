@@ -5,7 +5,7 @@
  * adds the variant at a default spot for keyboard/trackpad users.
  */
 import type { CSSProperties, DragEvent, ReactElement } from 'react';
-import { VARIANTS, VARIANT_REGISTRY } from '../variants';
+import { CREATABLE_VARIANTS, VARIANT_REGISTRY } from '../variants';
 import type { VariantId } from '../types';
 import { PALETTE_DATA_KEY } from './BuilderCanvas';
 
@@ -29,6 +29,8 @@ function variantHint(variant: VariantId): string {
       return 'Route retry outcomes';
     case 'approval':
       return 'Human gate (interactive)';
+    case 'plannotator_gate':
+      return 'Live review gate (YAML-authored)';
     case 'cancel':
       return 'Stop the run';
   }
@@ -43,7 +45,7 @@ export function NodePalette({ onAddVariant }: NodePaletteProps): ReactElement {
       <h2 className="px-1 pb-1 font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-text-tertiary">
         Nodes
       </h2>
-      {VARIANTS.map(variant => {
+      {CREATABLE_VARIANTS.map(variant => {
         const swatch: CSSProperties = { background: `var(--node-${variant})` };
         return (
           <button

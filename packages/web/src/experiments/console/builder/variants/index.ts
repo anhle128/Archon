@@ -4,6 +4,7 @@ export { detectVariant, detectVariantOrNull } from './detect';
 export { VARIANT_CAPABILITIES, type VariantCapabilities } from './capabilities';
 export {
   VARIANTS,
+  CREATABLE_VARIANTS,
   VARIANT_REGISTRY,
   isVariantId,
   variantDataFromDag,
@@ -13,6 +14,11 @@ export {
 export { defaultLoopData, loopFromDag, loopToDag } from './loop';
 export { defaultRouteLoopData, routeLoopFromDag, routeLoopToDag } from './route-loop';
 export { defaultApprovalData, approvalFromDag, approvalToDag } from './approval';
+export {
+  defaultPlannotatorGateData,
+  plannotatorGateFromDag,
+  plannotatorGateToDag,
+} from './plannotator-gate';
 export { defaultCancelData, cancelFromDag, cancelToDag } from './cancel';
 export { defaultScriptData, scriptFromDag, scriptToDag } from './script';
 export { defaultCommandData, commandFromDag, commandToDag } from './command';
