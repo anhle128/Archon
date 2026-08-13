@@ -406,7 +406,7 @@ export async function loadConfiguredMcpServerNames(
 }
 
 /** Workflow-level provider options — per-node overrides take precedence via ?? */
-interface WorkflowLevelOptions {
+export interface WorkflowLevelOptions {
   effort?: EffortLevel;
   /** Legacy spelling; lower precedence than workflow `effort`. */
   modelReasoningEffort?: string;
@@ -587,7 +587,7 @@ interface LayerNodeResult {
 
 /** Throttle state for cancel checks (reads — no write contention in WAL mode) */
 const lastNodeCancelCheck = new Map<string, number>();
-const CANCEL_CHECK_INTERVAL_MS = 10_000;
+export const CANCEL_CHECK_INTERVAL_MS = 10_000;
 
 /**
  * Policy for the during-streaming cancel check: should the currently-streaming
@@ -1074,7 +1074,7 @@ export function substituteLoopPrevRefs(
  * The provider internally translates nodeConfig to SDK-specific options.
  * Capability warnings inform users when features are unsupported.
  */
-async function resolveNodeProviderAndModel(
+export async function resolveNodeProviderAndModel(
   node: DagNode,
   workflowProvider: string,
   workflowModel: string | undefined,
@@ -4408,7 +4408,17 @@ export function applyLoopPrevToBodyNode(
       ...node,
       plannotator_gate: {
         ...node.plannotator_gate,
-        document: sub(node.plannotator_gate.document),
+        ...(node.plannotator_gate.document !== undefined
+          ? { document: sub(node.plannotator_gate.document) }
+          : {}),
+        ...(node.plannotator_gate.prepare !== undefined
+          ? {
+              prepare: {
+                ...node.plannotator_gate.prepare,
+                prompt: sub(node.plannotator_gate.prepare.prompt),
+              },
+            }
+          : {}),
         ...(node.plannotator_gate.message !== undefined
           ? { message: sub(node.plannotator_gate.message) }
           : {}),
@@ -7650,6 +7660,12 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
               aiProfile,
               workflowPreset,
               workflowTier,
+              stateDir,
+              baseBranch,
+              docsDir,
+              prRemote,
+              issueContext,
+              execContext,
             });
             return { nodeId: node.id, output };
           }
@@ -8305,7 +8321,7 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
  * workflowProvider`, then a model tier/alias ref may override the provider.
  */
 function resolveNodeProviderForPreflight(
-  node: DagNode,
+  node: Pick<DagNode, 'provider' | 'model'>,
   workflowProvider: string,
   aiProfile?: ResolvedAiProfile
 ): string {
@@ -8350,9 +8366,18 @@ export function collectContainerIncompatibleProviders(
         continue;
       }
       if (isPlannotatorGateNode(node)) {
-        // Rework always exists; provider is on the rework block, not the node.
-        const reworkProvider = node.plannotator_gate.rework.provider ?? workflowProvider;
-        check(reworkProvider);
+        if (node.plannotator_gate.prepare) {
+          check(
+            resolveNodeProviderForPreflight(
+              node.plannotator_gate.prepare,
+              workflowProvider,
+              aiProfile
+            )
+          );
+        }
+        check(
+          resolveNodeProviderForPreflight(node.plannotator_gate.rework, workflowProvider, aiProfile)
+        );
         continue;
       }
       // command / prompt / loop → AI node

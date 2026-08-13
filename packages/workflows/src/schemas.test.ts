@@ -1511,7 +1511,7 @@ describe('readSubrunMetadata — inputs (#2470)', () => {
 // ---------------------------------------------------------------------------
 
 describe('dagNodeSchema — plannotator_gate', () => {
-  test('parses plannotator_gate node', () => {
+  test('keeps document-only gates compatible', () => {
     const raw = {
       id: 'clarify-gate',
       plannotator_gate: {
@@ -1555,6 +1555,46 @@ describe('dagNodeSchema — plannotator_gate', () => {
     }
   });
 
+  test('parses a prepare-only gate', () => {
+    const parsed = dagNodeSchema.safeParse({
+      id: 'clarify-gate',
+      plannotator_gate: {
+        prepare: {
+          prompt: 'Create a reviewable HTML plan',
+          provider: 'claude',
+          model: 'sonnet',
+          effort: 'high',
+          allowed_tools: ['Read'],
+          denied_tools: ['Bash'],
+        },
+        rework: { prompt: 'Address annotations' },
+      },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success && isPlannotatorGateNode(parsed.data)) {
+      expect(parsed.data.plannotator_gate.prepare).toEqual({
+        prompt: 'Create a reviewable HTML plan',
+        provider: 'claude',
+        model: 'sonnet',
+        effort: 'high',
+        allowed_tools: ['Read'],
+        denied_tools: ['Bash'],
+      });
+    }
+  });
+
+  test('rejects a gate with both document and prepare', () => {
+    const parsed = dagNodeSchema.safeParse({
+      id: 'g',
+      plannotator_gate: {
+        document: '/tmp/a.html',
+        prepare: { prompt: 'Create a reviewable HTML plan' },
+        rework: { prompt: 'fix it' },
+      },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
   test('rejects plannotator_gate without rework.prompt', () => {
     const parsed = dagNodeSchema.safeParse({
       id: 'g',
@@ -1563,12 +1603,36 @@ describe('dagNodeSchema — plannotator_gate', () => {
     expect(parsed.success).toBe(false);
   });
 
-  test('rejects plannotator_gate without document', () => {
+  test('rejects plannotator_gate with neither document nor prepare', () => {
     const parsed = dagNodeSchema.safeParse({
       id: 'g',
       plannotator_gate: { rework: { prompt: 'fix it' } },
     });
     expect(parsed.success).toBe(false);
+  });
+
+  test('rejects an empty prepare prompt', () => {
+    const parsed = dagNodeSchema.safeParse({
+      id: 'g',
+      plannotator_gate: { prepare: { prompt: '' }, rework: { prompt: 'fix it' } },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  test('strips unknown prepare keys', () => {
+    const parsed = dagNodeSchema.safeParse({
+      id: 'g',
+      plannotator_gate: {
+        prepare: { prompt: 'Create a reviewable HTML plan', unsupported: true },
+        rework: { prompt: 'fix it' },
+      },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success && isPlannotatorGateNode(parsed.data)) {
+      expect(parsed.data.plannotator_gate.prepare).toEqual({
+        prompt: 'Create a reviewable HTML plan',
+      });
+    }
   });
 
   test('rejects empty document', () => {

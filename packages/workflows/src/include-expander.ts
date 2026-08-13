@@ -158,7 +158,8 @@ class IncludeExpansionError extends Error {}
  *     markdown → `applyWhenRefRename`. Missing the shorthand would leave e.g.
  *     `$verify.exit_code` pointing at a renamed sibling (silent fail-closed skip).
  *   - Prose (prompt / loop.prompt / approval.message / plannotator_gate.document /
- *     plannotator_gate.message / plannotator_gate.rework.prompt) — canonical `.output`
+ *     plannotator_gate.prepare.prompt / plannotator_gate.message /
+ *     plannotator_gate.rework.prompt) — canonical `.output`
  *     refs, but may embed fenced/inline code examples that must NOT be rewritten →
  *     fence-aware.
  *   - Code/expression (bash / script / loop.until_bash / loop_group.until_bash / cancel /
@@ -196,7 +197,12 @@ function rewriteNodeOutputRefs(node: DagNode, rename: (id: string) => string): v
   } else if (isApprovalNode(node)) {
     node.approval.message = prose(node.approval.message);
   } else if (isPlannotatorGateNode(node)) {
-    node.plannotator_gate.document = prose(node.plannotator_gate.document);
+    if (node.plannotator_gate.document !== undefined) {
+      node.plannotator_gate.document = prose(node.plannotator_gate.document);
+    }
+    if (node.plannotator_gate.prepare !== undefined) {
+      node.plannotator_gate.prepare.prompt = prose(node.plannotator_gate.prepare.prompt);
+    }
     if (node.plannotator_gate.message !== undefined) {
       node.plannotator_gate.message = prose(node.plannotator_gate.message);
     }
@@ -289,7 +295,12 @@ function applyInputsMacro(node: DagNode, args: Record<string, string>, missing: 
       node.approval.on_reject.prompt = substitute(node.approval.on_reject.prompt);
     }
   } else if (isPlannotatorGateNode(node)) {
-    node.plannotator_gate.document = substitute(node.plannotator_gate.document);
+    if (node.plannotator_gate.document !== undefined) {
+      node.plannotator_gate.document = substitute(node.plannotator_gate.document);
+    }
+    if (node.plannotator_gate.prepare !== undefined) {
+      node.plannotator_gate.prepare.prompt = substitute(node.plannotator_gate.prepare.prompt);
+    }
     if (node.plannotator_gate.message !== undefined) {
       node.plannotator_gate.message = substitute(node.plannotator_gate.message);
     }

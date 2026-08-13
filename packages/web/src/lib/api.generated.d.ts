@@ -3616,6 +3616,14 @@ export interface components {
             persist_sessions?: boolean;
             tags?: string[];
             requires?: "github"[];
+            inputs?: {
+                [key: string]: {
+                    required?: boolean;
+                    default?: string;
+                    description?: string;
+                };
+            };
+            returns?: string;
             nodes: components["schemas"]["DagNode"][];
         };
         DagNode: {
@@ -3907,7 +3915,15 @@ export interface components {
                 };
             };
             plannotator_gate?: {
-                document: string;
+                document?: string;
+                prepare?: {
+                    prompt: string;
+                    provider?: string;
+                    model?: string;
+                    effort?: string;
+                    allowed_tools?: string[];
+                    denied_tools?: string[];
+                };
                 message?: string;
                 capture_response?: boolean;
                 rework: {

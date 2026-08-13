@@ -2424,6 +2424,30 @@ nodes:
       expect(result.errors[0].error).toContain('$missing.output');
     });
 
+    it('should reject dangling $nodeId.output in plannotator_gate.prepare.prompt', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'plannotator-gate-prepare-unknown-ref.yaml'),
+        `
+name: plannotator-gate-prepare-unknown-ref
+description: Gate preparation points at a missing node
+nodes:
+  - id: clarify-gate
+    plannotator_gate:
+      prepare:
+        prompt: "Create a review for $missing.output"
+      rework:
+        prompt: "Address annotations"
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors.length).toBeGreaterThan(0);
+      expect(result.errors[0].error).toContain('$missing.output');
+    });
+
     it('should accept known $nodeId.output refs on plannotator_gate surfaces', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });
@@ -2928,7 +2952,7 @@ nodes:
       expect(result.workflows).toHaveLength(1);
     });
 
-    it('loads the default Speckit convergence review loop with one routing authority', async () => {
+    it('loads the consolidated default Speckit Plannotator gates with one routing authority', async () => {
       const workflowPath = join(
         import.meta.dir,
         '..',
@@ -2954,17 +2978,43 @@ nodes:
         max_iterations: 3,
         routes: {
           positive: 'cargo-clean-before-pr',
-          negative: 'speckit-converge-explain',
+          negative: 'speckit-converge-review-gate',
           exhausted: 'speckit-converge-exhausted',
         },
       });
 
-      const explain = nodes.get('speckit-converge-explain');
+      expect(nodes.has('clarify-explain')).toBe(false);
+      expect(nodes.has('red-team-explain')).toBe(false);
+      expect(nodes.has('speckit-converge-explain')).toBe(false);
+
+      const clarifyGate = nodes.get('clarify-gate');
+      const redTeamGate = nodes.get('red-team-gate');
       const reviewGate = nodes.get('speckit-converge-review-gate');
       const ralph = nodes.get('ralph-tasks-to-ralph');
-      expect(explain?.when).toBeUndefined();
+      expect(clarifyGate?.depends_on).toEqual(['clarify-respond']);
+      expect(redTeamGate?.depends_on).toEqual(['red-team-respond']);
       expect(reviewGate?.when).toBeUndefined();
-      expect(reviewGate?.depends_on).toEqual(['speckit-converge-explain']);
+      expect(reviewGate?.depends_on).toBeUndefined();
+
+      for (const gate of [clarifyGate, redTeamGate, reviewGate]) {
+        expect(gate && 'plannotator_gate' in gate).toBe(true);
+        if (!gate || !('plannotator_gate' in gate)) {
+          throw new Error('default Speckit Plannotator gate missing');
+        }
+
+        expect(gate.plannotator_gate.prepare).toMatchObject({
+          prompt: expect.any(String),
+          provider: 'claude',
+          model: 'sonnet',
+          effort: 'medium',
+          allowed_tools: ['Read', 'Edit', 'Glob', 'Grep', 'Bash'],
+        });
+      }
+
+      expect(nodes.get('tasks')).toMatchObject({
+        provider: 'codex',
+        model: 'gpt-5.6-sol',
+      });
       expect(ralph).toMatchObject({
         depends_on: ['analyze-apply', 'speckit-converge-review-gate'],
         trigger_rule: 'one_success',
@@ -5312,6 +5362,23 @@ nodes:
       ]);
       expect(pw.length).toBe(1);
       expect(pw[0]).toContain("unknown key 'approval.on_reject.max_retries'");
+    });
+
+    it('should warn on an unknown key inside plannotator_gate.prepare', async () => {
+      const pw = await warningsFor([
+        'name: test',
+        'description: test',
+        'nodes:',
+        '  - id: gate',
+        '    plannotator_gate:',
+        '      prepare:',
+        '        prompt: Create a reviewable HTML plan',
+        '        unsupported: true',
+        '      rework:',
+        '        prompt: Address annotations',
+      ]);
+      expect(pw).toHaveLength(1);
+      expect(pw[0]).toContain("unknown key 'plannotator_gate.prepare.unsupported'");
     });
 
     it('should warn on an unknown key inside retry:', async () => {

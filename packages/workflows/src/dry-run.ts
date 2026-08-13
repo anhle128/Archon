@@ -465,8 +465,13 @@ async function simulateNode(
       const gateType = isPlannotatorGate ? 'plannotator_gate' : 'approval';
       const gateReason = isPlannotatorGate ? 'plannotator gate' : 'approval gate';
       const gateText = isPlannotatorGate
-        ? (node.plannotator_gate.message ?? node.plannotator_gate.document)
+        ? (node.plannotator_gate.message ??
+          node.plannotator_gate.document ??
+          node.plannotator_gate.prepare?.prompt)
         : node.approval.message;
+      if (gateText === undefined) {
+        throw new Error("plannotator_gate requires either 'document' or 'prepare'");
+      }
       const resolvedText = resolveText(gateText, ctx, outputs);
       if (ctx.pauseAtGates) {
         outputs.set(node.id, { state: 'pending', output: '' });

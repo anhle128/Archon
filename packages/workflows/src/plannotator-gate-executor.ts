@@ -9,15 +9,20 @@ import { accessSync, constants, existsSync, realpathSync, statSync } from 'node:
 import { extname, isAbsolute, relative, resolve as resolvePath, sep } from 'node:path';
 import { createLogger } from '@archon/paths';
 import type { WorkflowDeps, WorkflowConfig, IWorkflowPlatform } from './deps';
-import type { PlannotatorGateNode, WorkflowRun, NodeOutput } from './schemas';
+import type { PlannotatorGateNode, WorkflowRun, NodeOutput, PromptNode } from './schemas';
 import type { ApprovalContext } from './schemas/workflow-run';
 import type { ModelAliasPreset, ResolvedAiProfile } from './model-validation';
-import { substituteNodeOutputRefs } from './dag-executor';
+import {
+  CANCEL_CHECK_INTERVAL_MS,
+  resolveNodeProviderAndModel,
+  shouldContinueStreamingForStatus,
+  substituteNodeOutputRefs,
+} from './dag-executor';
 import { parseDocumentPathFromNodeOutput, resolvePlannotatorBinary } from './plannotator-gate';
 import { runPlannotatorGateSupervisor } from './plannotator-gate-supervisor';
-import { isRegisteredProvider } from '@archon/providers';
-import type { SendQueryOptions } from '@archon/providers/types';
-import { safeSendMessage } from './executor-shared';
+import type { ExecutionContext, SendQueryOptions } from '@archon/providers/types';
+import { safeSendMessage, substituteWorkflowVariables } from './executor-shared';
+import { STEP_IDLE_TIMEOUT_MS, withIdleTimeout } from './utils/idle-timeout';
 
 const log = createLogger('workflow.plannotator-gate-executor');
 
@@ -36,6 +41,12 @@ export interface ExecutePlannotatorGateArgs {
   aiProfile?: ResolvedAiProfile;
   workflowPreset?: ModelAliasPreset;
   workflowTier?: string;
+  stateDir: string;
+  baseBranch: string;
+  docsDir: string;
+  prRemote: string;
+  issueContext?: string;
+  execContext: ExecutionContext;
 }
 
 /**
@@ -156,49 +167,174 @@ export function resolvePlannotatorGateId(workflowRun: WorkflowRun, nodeId: strin
     : crypto.randomUUID();
 }
 
+interface EmbeddedGateConfig {
+  provider?: string;
+  model?: string;
+  effort?: string;
+  allowed_tools?: string[];
+  denied_tools?: string[];
+}
+
+interface EmbeddedTerminalWatcher {
+  readonly ready: Promise<void>;
+  readonly terminalStatus: string | undefined;
+  stop: () => void;
+}
+
 /**
- * One-shot AI rework: send prompt, collect assistant text, parse path.
+ * Watch the run independently of provider output: an embedded gate call can be
+ * blocked in its async stream long enough to miss the normal per-message check.
  */
-async function runReworkViaProvider(
+function watchEmbeddedGateTerminalStatus(
   args: ExecutePlannotatorGateArgs,
-  prompt: string
-): Promise<string> {
-  const { node, deps, cwd, config, workflowProvider, workflowModel } = args;
-  const rework = node.plannotator_gate.rework;
-  const providerId = rework.provider ?? workflowProvider;
-  if (!isRegisteredProvider(providerId)) {
-    throw new Error(`plannotator_gate rework: unknown provider '${providerId}'`);
-  }
+  phase: 'prepare' | 'rework',
+  abortController: AbortController
+): EmbeddedTerminalWatcher {
+  let stopped = false;
+  let checking = false;
+  let terminalStatus: string | undefined;
 
-  const assistantModel = config.assistants?.[providerId]?.model;
-  const model: string | undefined =
-    rework.model ??
-    workflowModel ??
-    (typeof assistantModel === 'string' ? assistantModel : undefined);
-
-  const aiClient = deps.getAgentProvider(providerId);
-
-  let finalText = '';
-  const options: SendQueryOptions = {
-    ...(model !== undefined ? { model } : {}),
-    nodeConfig: {
-      nodeId: `${node.id}:rework`,
-      ...(rework.effort ? { effort: rework.effort } : {}),
-    },
+  const checkStatus = async (): Promise<void> => {
+    if (stopped || checking || terminalStatus !== undefined) return;
+    checking = true;
+    try {
+      const status = await args.deps.store.getWorkflowRunStatus(args.workflowRun.id);
+      if (!stopped && !shouldContinueStreamingForStatus(status)) {
+        terminalStatus = status ?? 'deleted';
+        log.info(
+          {
+            workflowRunId: args.workflowRun.id,
+            nodeId: args.node.id,
+            phase,
+            status: terminalStatus,
+          },
+          'plannotator_gate.stop_detected_during_embedded_stream'
+        );
+        abortController.abort();
+      }
+    } catch (error) {
+      log.warn(
+        { workflowRunId: args.workflowRun.id, nodeId: args.node.id, phase, error },
+        'plannotator_gate.status_check_failed'
+      );
+    } finally {
+      checking = false;
+    }
   };
 
-  for await (const msg of aiClient.sendQuery(prompt, cwd, undefined, options)) {
-    if (msg.type === 'assistant' && msg.content) {
-      finalText += msg.content;
+  const ready = checkStatus();
+  const interval = setInterval(() => {
+    void checkStatus();
+  }, CANCEL_CHECK_INTERVAL_MS);
+
+  return {
+    ready,
+    get terminalStatus(): string | undefined {
+      return terminalStatus;
+    },
+    stop: (): void => {
+      stopped = true;
+      clearInterval(interval);
+    },
+  };
+}
+
+function terminalEmbeddedGateError(phase: 'prepare' | 'rework', status: string): Error {
+  return new Error(`plannotator_gate ${phase} stopped because workflow is ${status}`);
+}
+
+/** One-shot gate AI call: collect exactly one document path from assistant output. */
+async function runEmbeddedGateAiCall(
+  args: ExecutePlannotatorGateArgs,
+  phase: 'prepare' | 'rework',
+  phaseConfig: EmbeddedGateConfig,
+  prompt: string
+): Promise<string> {
+  const { node, deps, cwd, config, workflowProvider, workflowModel, execContext } = args;
+  const phaseNode: PromptNode = {
+    id: `${node.id}:${phase}`,
+    prompt,
+    ...(phaseConfig.provider !== undefined ? { provider: phaseConfig.provider } : {}),
+    ...(phaseConfig.model !== undefined ? { model: phaseConfig.model } : {}),
+    ...(phaseConfig.effort !== undefined ? { effort: phaseConfig.effort } : {}),
+    ...(phaseConfig.allowed_tools !== undefined
+      ? { allowed_tools: phaseConfig.allowed_tools }
+      : {}),
+    ...(phaseConfig.denied_tools !== undefined ? { denied_tools: phaseConfig.denied_tools } : {}),
+  };
+  const { provider: providerId, options: resolvedOptions } = await resolveNodeProviderAndModel(
+    phaseNode,
+    workflowProvider,
+    workflowModel,
+    config,
+    args.platform,
+    args.conversationId,
+    args.workflowRun.id,
+    cwd,
+    {},
+    args.aiProfile,
+    args.workflowPreset,
+    args.workflowTier,
+    execContext
+  );
+  const abortController = new AbortController();
+  let idleTimedOut = false;
+  const options: SendQueryOptions = {
+    ...resolvedOptions,
+    abortSignal: abortController.signal,
+    traceContext: {
+      name: `execute-workflow-plannotator-${phase}`,
+      sessionId: args.workflowRun.id,
+      userId: args.workflowRun.user_id ?? undefined,
+      tags: ['feature:workflow', `platform:${args.platform.getPlatformType()}`],
+      metadata: {
+        workflowName: args.workflowRun.workflow_name,
+        nodeId: `${node.id}:${phase}`,
+        platform: args.platform.getPlatformType(),
+      },
+    },
+  };
+  let finalText = '';
+  const terminalWatcher = watchEmbeddedGateTerminalStatus(args, phase, abortController);
+  try {
+    await terminalWatcher.ready;
+    if (terminalWatcher.terminalStatus !== undefined) {
+      throw terminalEmbeddedGateError(phase, terminalWatcher.terminalStatus);
     }
+    const aiClient = deps.getAgentProvider(providerId);
+    for await (const msg of withIdleTimeout(
+      aiClient.sendQuery(prompt, cwd, undefined, options),
+      node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS,
+      () => {
+        idleTimedOut = true;
+        abortController.abort();
+      }
+    )) {
+      if (msg.type === 'assistant' && msg.content) {
+        finalText += msg.content;
+      }
+    }
+  } catch (error) {
+    if (terminalWatcher.terminalStatus !== undefined) {
+      throw terminalEmbeddedGateError(phase, terminalWatcher.terminalStatus);
+    }
+    throw error;
+  } finally {
+    terminalWatcher.stop();
   }
 
+  if (terminalWatcher.terminalStatus !== undefined) {
+    throw terminalEmbeddedGateError(phase, terminalWatcher.terminalStatus);
+  }
+
+  if (idleTimedOut) {
+    throw new Error(`plannotator_gate ${phase} timed out waiting for provider output`);
+  }
   if (!finalText.trim()) {
     throw new Error(
-      `plannotator_gate rework produced no assistant output (provider '${providerId}')`
+      `plannotator_gate ${phase} produced no assistant output (provider '${providerId}')`
     );
   }
-
   return parseDocumentPathFromNodeOutput(finalText);
 }
 
@@ -213,10 +349,52 @@ export async function executePlannotatorGateNode(
   const gate = node.plannotator_gate;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
 
+  const rawApproval = workflowRun.metadata.approval;
+  const approval =
+    typeof rawApproval === 'object' && rawApproval !== null
+      ? (rawApproval as ApprovalContext)
+      : undefined;
+  const persistedDocument =
+    approval?.type === 'plannotator_gate' &&
+    approval.nodeId === node.id &&
+    approval.resolved == null &&
+    typeof approval.document === 'string'
+      ? approval.document
+      : undefined;
+
   let documentPath: string;
   try {
-    documentPath = resolveGateDocumentPath(gate.document, nodeOutputs, cwd, artifactsDir);
-    await preflightPlannotatorBinary();
+    if (persistedDocument !== undefined) {
+      documentPath = validateGateDocumentPath(persistedDocument, cwd, artifactsDir);
+      await preflightPlannotatorBinary();
+    } else if (gate.document !== undefined) {
+      documentPath = resolveGateDocumentPath(gate.document, nodeOutputs, cwd, artifactsDir);
+      await preflightPlannotatorBinary();
+    } else if (gate.prepare !== undefined) {
+      await preflightPlannotatorBinary();
+      const { prompt: preparedTemplate } = substituteWorkflowVariables(
+        gate.prepare.prompt,
+        workflowRun.id,
+        workflowRun.user_message,
+        artifactsDir,
+        args.baseBranch,
+        args.docsDir,
+        args.issueContext,
+        undefined,
+        undefined,
+        undefined,
+        { stateDir: args.stateDir, prRemote: args.prRemote }
+      );
+      const preparedPath = await runEmbeddedGateAiCall(
+        args,
+        'prepare',
+        gate.prepare,
+        substituteNodeOutputRefs(preparedTemplate, nodeOutputs)
+      );
+      documentPath = validateGateDocumentPath(preparedPath, cwd, artifactsDir);
+    } else {
+      throw new Error("plannotator_gate requires either 'document' or 'prepare'");
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     log.error(
@@ -260,8 +438,25 @@ export async function executePlannotatorGateNode(
       message,
       store: deps.store,
       runReworkAgent: async ({ documentPath: doc, annotations }) => {
-        const filled = buildReworkPrompt(gate.rework.prompt, doc, annotations);
-        const nextPath = await runReworkViaProvider(args, filled);
+        const { prompt: reworkTemplate } = substituteWorkflowVariables(
+          gate.rework.prompt,
+          workflowRun.id,
+          workflowRun.user_message,
+          artifactsDir,
+          args.baseBranch,
+          args.docsDir,
+          args.issueContext,
+          undefined,
+          undefined,
+          undefined,
+          { stateDir: args.stateDir, prRemote: args.prRemote }
+        );
+        const filled = buildReworkPrompt(
+          substituteNodeOutputRefs(reworkTemplate, nodeOutputs),
+          doc,
+          annotations
+        );
+        const nextPath = await runEmbeddedGateAiCall(args, 'rework', gate.rework, filled);
         return validateGateDocumentPath(nextPath, cwd, artifactsDir);
       },
     });

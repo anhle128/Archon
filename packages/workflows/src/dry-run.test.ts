@@ -323,6 +323,37 @@ describe('dryRunWorkflow', () => {
     });
   });
 
+  test('resolves prepare prompts for prepare-mode plannotator gates', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'plannotator-prepare',
+      nodes: [
+        { id: 'before', prompt: 'before' },
+        {
+          id: 'gate',
+          plannotator_gate: {
+            prepare: { prompt: 'Prepare HTML for $before.output in $ARTIFACTS_DIR' },
+            rework: { prompt: 'Apply $REVIEW_ANNOTATIONS to $REVIEW_DOCUMENT' },
+          },
+          depends_on: ['before'],
+        },
+      ],
+    });
+
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: '/tmp/project',
+      stubs: { before: 'the plan' },
+    });
+
+    expect(result.trace.at(-1)).toMatchObject({
+      nodeType: 'plannotator_gate',
+      state: 'completed',
+      reason: 'auto-approved',
+      resolvedText: 'Prepare HTML for the plan in /tmp/project/.archon/dry-run/artifacts',
+    });
+  });
+
   test('simulates loop completion and max-iteration failure', async () => {
     const completing = makeTestWorkflow({
       name: 'loop-ok',

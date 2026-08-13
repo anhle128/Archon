@@ -94,51 +94,46 @@ nodes:
       - Grep
       - Bash
 
-  - id: clarify-explain
-    prompt: |
-      ## Goal
-      Produce a self-contained HTML explainer for the clarification-questions file,
-      then hand a **stable absolute path** to the next node (`plannotator_gate`).
-
-      ## Steps
-      1. Read `.specify/feature.json` to resolve `<feature_directory>`.
-      2. Confirm `<feature_directory>/clarification-questions.md` exists (Status PENDING
-         or drafted answers present). If missing, STOP and report BLOCKED.
-      3. Generate a visual explainer for that file using
-         `/plannotator-visual-explainer` (or equivalent). Content must:
-         - Describe the feature and end-to-end flow (UML/sequence style) at
-           function/class level where useful.
-         - For each step, state what it does.
-         - For each open clarification / issue: where it sits in the flow, why it
-           is a problem, and the proposed resolution.
-      4. **Persist the final HTML** at this exact path (overwrite OK):
-         `<feature_directory>/visual/speckit-clarify-explainer.html`
-         - Copy from wherever visual-explainer wrote the file if needed
-           (`cp` / write).
-         - Do **not** rely on an annotate session inside this node as the human
-           gate — the next node opens a supervised live Plannotator review.
-      5. Verify the file exists and is non-empty.
-
-      ## Final output (contract — required)
-      Print **ONLY** the absolute path to that HTML file on the last line
-      (no markdown fence, no extra commentary after the path):
-      `<feature_directory>/visual/speckit-clarify-explainer.html` resolved to an absolute path.
-    depends_on:
-      - clarify-respond
-    effort: medium
-    provider: claude
-    model: sonnet
-    context: fresh
-    allowed_tools:
-      - Read
-      - Edit
-      - Glob
-      - Grep
-      - Bash
-
   - id: clarify-gate
     plannotator_gate:
-      document: "$clarify-explain.output"
+      prepare:
+        prompt: |
+          ## Goal
+          Produce a self-contained HTML explainer for the clarification-questions file,
+          then hand a **stable absolute path** to the next node (`plannotator_gate`).
+
+          ## Steps
+          1. Read `.specify/feature.json` to resolve `<feature_directory>`.
+          2. Confirm `<feature_directory>/clarification-questions.md` exists (Status PENDING
+             or drafted answers present). If missing, STOP and report BLOCKED.
+          3. Generate a visual explainer for that file using
+             `/plannotator-visual-explainer` (or equivalent). Content must:
+             - Describe the feature and end-to-end flow (UML/sequence style) at
+               function/class level where useful.
+             - For each step, state what it does.
+             - For each open clarification / issue: where it sits in the flow, why it
+               is a problem, and the proposed resolution.
+          4. **Persist the final HTML** at this exact path (overwrite OK):
+             `<feature_directory>/visual/speckit-clarify-explainer.html`
+             - Copy from wherever visual-explainer wrote the file if needed
+               (`cp` / write).
+             - Do **not** rely on an annotate session inside this node as the human
+               gate — the next node opens a supervised live Plannotator review.
+          5. Verify the file exists and is non-empty.
+
+          ## Final output (contract — required)
+          Print **ONLY** the absolute path to that HTML file on the last line
+          (no markdown fence, no extra commentary after the path):
+          `<feature_directory>/visual/speckit-clarify-explainer.html` resolved to an absolute path.
+        effort: medium
+        provider: claude
+        model: sonnet
+        allowed_tools:
+          - Read
+          - Edit
+          - Glob
+          - Grep
+          - Bash
       message: |
         Clarification answers + explainer are ready for live Plannotator review.
 
@@ -190,7 +185,7 @@ nodes:
           6. Print ONLY the absolute path to that HTML for the next annotate session
              (one line, no fence). Prefer the stable path above, resolved absolute.
     depends_on:
-      - clarify-explain
+      - clarify-respond
 
   - id: clarify-apply
     prompt: |
@@ -278,47 +273,42 @@ nodes:
       - Bash
       - Task
 
-  - id: red-team-explain
-    prompt: |
-      ## Goal
-      Produce a self-contained HTML explainer for the latest red-team findings
-      file, then hand a **stable absolute path** to `red-team-gate`.
-
-      ## Steps
-      1. Read `.specify/feature.json` to resolve `<feature_directory>`.
-      2. Glob `<feature_directory>/red-team-findings-*.md` and pick the MOST
-         RECENT file whose name does NOT contain `-applied-`. If missing, STOP
-         and report BLOCKED.
-      3. Generate a visual explainer with `/plannotator-visual-explainer` for that
-         file. Cover:
-         - Feature + end-to-end flow (UML/sequence) at function/class level
-         - Each step's purpose
-         - **Only** findings with Status `spec-fix` or `new-OQ` (or blank Status
-           still being resolved as those categories): where they sit in the flow,
-           why they matter, proposed fix
-      4. Persist final HTML at:
-         `<feature_directory>/visual/speckit-red-team-explainer.html` (overwrite OK).
-         Do not use this node's annotate session as the human gate.
-      5. Verify the file exists and is non-empty.
-
-      ## Final output (contract — required)
-      Print **ONLY** the absolute path to that HTML file (one line, no fence).
-    depends_on:
-      - red-team-respond
-    effort: medium
-    provider: claude
-    model: sonnet
-    context: fresh
-    allowed_tools:
-      - Read
-      - Edit
-      - Glob
-      - Grep
-      - Bash
-
   - id: red-team-gate
     plannotator_gate:
-      document: "$red-team-explain.output"
+      prepare:
+        prompt: |
+          ## Goal
+          Produce a self-contained HTML explainer for the latest red-team findings
+          file, then hand a **stable absolute path** to `red-team-gate`.
+
+          ## Steps
+          1. Read `.specify/feature.json` to resolve `<feature_directory>`.
+          2. Glob `<feature_directory>/red-team-findings-*.md` and pick the MOST
+             RECENT file whose name does NOT contain `-applied-`. If missing, STOP
+             and report BLOCKED.
+          3. Generate a visual explainer with `/plannotator-visual-explainer` for that
+             file. Cover:
+             - Feature + end-to-end flow (UML/sequence) at function/class level
+             - Each step's purpose
+             - **Only** findings with Status `spec-fix` or `new-OQ` (or blank Status
+               still being resolved as those categories): where they sit in the flow,
+               why they matter, proposed fix
+          4. Persist final HTML at:
+             `<feature_directory>/visual/speckit-red-team-explainer.html` (overwrite OK).
+             Do not use this node's annotate session as the human gate.
+          5. Verify the file exists and is non-empty.
+
+          ## Final output (contract — required)
+          Print **ONLY** the absolute path to that HTML file (one line, no fence).
+        effort: medium
+        provider: claude
+        model: sonnet
+        allowed_tools:
+          - Read
+          - Edit
+          - Glob
+          - Grep
+          - Bash
       message: |
         Red-team resolutions + explainer are ready for live Plannotator review.
 
@@ -368,7 +358,7 @@ nodes:
           6. Print ONLY the absolute path to that HTML for the next annotate session
              (one line, no fence). Prefer the stable path above, resolved absolute.
     depends_on:
-      - red-team-explain
+      - red-team-respond
 
   - id: red-team-apply
     prompt: |
@@ -610,7 +600,7 @@ nodes:
         - tasks_added
     output_type: speckit-convergence
 
-  # PASS → PR; FAIL → explain + human review then Ralph retry; retry exhaustion cancels.
+  # PASS → PR; FAIL → human review then Ralph retry; retry exhaustion cancels.
   - id: speckit-converge-gate
     depends_on: [speckit-converge]
     route_loop:
@@ -618,66 +608,62 @@ nodes:
       max_iterations: 3
       routes:
         positive: cargo-clean-before-pr
-        negative: speckit-converge-explain
+        negative: speckit-converge-review-gate
         exhausted: speckit-converge-exhausted
-
-  # Explainer for human review when converge adds work to tasks.md (FAIL path).
-  - id: speckit-converge-explain
-    prompt: |
-      ## Goal
-      Produce a **delta-only** HTML explainer of what **this** `speckit-converge`
-      run just added to `tasks.md`, so a human can approve re-running Ralph.
-      Hand a **stable absolute path** to `speckit-converge-review-gate`.
-
-      Converge reported:
-      - gate: $speckit-converge.output.gate
-      - tasks_added: $speckit-converge.output.tasks_added
-
-      ## Hard scope (token budget — non-negotiable)
-      - Explain **only the newly added tasks/sections from this converge pass**.
-      - Do **NOT** re-explain pre-existing tasks, completed tasks, or the full
-        historical `tasks.md` body. Old content is out of scope for the HTML.
-      - Target ~`$speckit-converge.output.tasks_added` new items — if you cannot
-        isolate them, still prefer the smallest recent delta (git) over full file.
-
-      ## Identify the delta (in order)
-      1. Read `.specify/feature.json` → `<feature_directory>`.
-      2. Prefer `git diff HEAD -- <feature_directory>/tasks.md` and/or
-         `git show HEAD:<feature_directory>/tasks.md` vs working tree to list
-         **added/changed lines only**. Fall back to unstaged/staged diff if needed.
-      3. If git cannot isolate, use converge output + the newest unchecked tasks
-         that match the add (still do not narrate the whole file).
-      4. Never invent tasks not present in the delta / `tasks.md`.
-
-      ## HTML content (new items only)
-      Generate with `/plannotator-visual-explainer` (or write compact HTML):
-      - One-line summary: FAIL + `tasks_added` count.
-      - For **each new task only**: id/title, what it does, why converge added it,
-        minimal flow context (only if needed to understand the new item).
-      - Approve implication: another Ralph loop on these tasks.
-      - Explicitly omit a catalog of old/completed tasks.
-
-      Persist (overwrite OK):
-      `<feature_directory>/visual/speckit-converge-explainer.html`
-      Do **not** open annotate as the human gate in this node.
-
-      ## Final output (contract — required)
-      Print **ONLY** the absolute path to that HTML file on the last line
-      (no markdown fence, no extra commentary after the path).
-    effort: medium
-    provider: claude
-    model: sonnet
-    context: fresh
-    allowed_tools:
-      - Read
-      - Edit
-      - Glob
-      - Grep
-      - Bash
 
   - id: speckit-converge-review-gate
     plannotator_gate:
-      document: "$speckit-converge-explain.output"
+      prepare:
+        prompt: |
+          ## Goal
+          Produce a **delta-only** HTML explainer of what **this** `speckit-converge`
+          run just added to `tasks.md`, so a human can approve re-running Ralph.
+          Hand a **stable absolute path** to `speckit-converge-review-gate`.
+
+          Converge reported:
+          - gate: $speckit-converge.output.gate
+          - tasks_added: $speckit-converge.output.tasks_added
+
+          ## Hard scope (token budget — non-negotiable)
+          - Explain **only the newly added tasks/sections from this converge pass**.
+          - Do **NOT** re-explain pre-existing tasks, completed tasks, or the full
+            historical `tasks.md` body. Old content is out of scope for the HTML.
+          - Target ~`$speckit-converge.output.tasks_added` new items — if you cannot
+            isolate them, still prefer the smallest recent delta (git) over full file.
+
+          ## Identify the delta (in order)
+          1. Read `.specify/feature.json` → `<feature_directory>`.
+          2. Prefer `git diff HEAD -- <feature_directory>/tasks.md` and/or
+             `git show HEAD:<feature_directory>/tasks.md` vs working tree to list
+             **added/changed lines only**. Fall back to unstaged/staged diff if needed.
+          3. If git cannot isolate, use converge output + the newest unchecked tasks
+             that match the add (still do not narrate the whole file).
+          4. Never invent tasks not present in the delta / `tasks.md`.
+
+          ## HTML content (new items only)
+          Generate with `/plannotator-visual-explainer` (or write compact HTML):
+          - One-line summary: FAIL + `tasks_added` count.
+          - For **each new task only**: id/title, what it does, why converge added it,
+            minimal flow context (only if needed to understand the new item).
+          - Approve implication: another Ralph loop on these tasks.
+          - Explicitly omit a catalog of old/completed tasks.
+
+          Persist (overwrite OK):
+          `<feature_directory>/visual/speckit-converge-explainer.html`
+          Do **not** open annotate as the human gate in this node.
+
+          ## Final output (contract — required)
+          Print **ONLY** the absolute path to that HTML file on the last line
+          (no markdown fence, no extra commentary after the path).
+        effort: medium
+        provider: claude
+        model: sonnet
+        allowed_tools:
+          - Read
+          - Edit
+          - Glob
+          - Grep
+          - Bash
       message: |
         Speckit convergence added $speckit-converge.output.tasks_added task(s) to `tasks.md`.
 
@@ -716,7 +702,7 @@ nodes:
 
           ## Hard scope when regenerating HTML (token budget)
           - Explain **only** the newly added tasks from this converge pass
-            (same delta rules as `speckit-converge-explain`: git diff preferred).
+            (same delta-only scope as this gate's initial `prepare` prompt: git diff preferred).
           - Do **NOT** re-explain pre-existing or completed tasks.
           - Do **NOT** rebuild a full-file tasks catalog.
 
@@ -727,9 +713,6 @@ nodes:
           4. If HTML must update, write delta-only explainer to:
              `<feature_directory>/visual/speckit-converge-explainer.html` (overwrite OK).
           5. Print ONLY the absolute path to that HTML (one line, no fence).
-    depends_on:
-      - speckit-converge-explain
-
   - id: create-pull-request
     command: archon-create-pr
     provider: codex

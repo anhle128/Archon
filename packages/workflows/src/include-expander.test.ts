@@ -409,7 +409,7 @@ describe('expandWorkflowIncludes — with input mapping', () => {
       {
         id: 'plan-gate',
         plannotator_gate: {
-          document: '$INPUTS.doc',
+          prepare: { prompt: 'Create $INPUTS.value for $INPUTS.doc' },
           message: 'Review $INPUTS.value',
           rework: { prompt: 'Fix $INPUTS.value notes' },
         },
@@ -427,7 +427,17 @@ describe('expandWorkflowIncludes — with input mapping', () => {
           until: 'DONE',
           max_iterations: 1,
           until_bash: 'test "$INPUTS.value" = done',
-          nodes: [{ id: 'body', bash: 'echo $INPUTS.value' }],
+          nodes: [
+            { id: 'body', bash: 'echo $INPUTS.value' },
+            {
+              id: 'gate',
+              plannotator_gate: {
+                prepare: { prompt: 'Create $INPUTS.value for review' },
+                rework: { prompt: 'Fix annotations' },
+              },
+              depends_on: ['body'],
+            },
+          ],
         },
       },
     ]);
@@ -454,7 +464,7 @@ describe('expandWorkflowIncludes — with input mapping', () => {
     expect(approval).toMatchObject({ approval: { message: 'Approve done?' } });
     expect(planGate).toMatchObject({
       plannotator_gate: {
-        document: '/tmp/plan.md',
+        prepare: { prompt: 'Create done for /tmp/plan.md' },
         message: 'Review done',
         rework: { prompt: 'Fix done notes' },
       },
@@ -470,18 +480,28 @@ describe('expandWorkflowIncludes — with input mapping', () => {
     expect(group).toMatchObject({
       loop_group: {
         until_bash: 'test "done" = done',
-        nodes: [{ id: 'body', bash: 'echo done' }],
+        nodes: [
+          { id: 'body', bash: 'echo done' },
+          {
+            id: 'gate',
+            plannotator_gate: {
+              prepare: { prompt: 'Create done for review' },
+              rework: { prompt: 'Fix annotations' },
+            },
+            depends_on: ['body'],
+          },
+        ],
       },
     });
   });
 
-  test('rewrites sibling $node.output refs on plannotator_gate document and rework.prompt', () => {
+  test('rewrites sibling $node.output refs on plannotator_gate prepare.prompt and rework.prompt', () => {
     const block = wf('plan-block', [
       { id: 'explain', prompt: 'Write the plan' },
       {
         id: 'gate',
         plannotator_gate: {
-          document: '$explain.output',
+          prepare: { prompt: 'Create a review for $explain.output' },
           message: 'Review $explain.output',
           rework: { prompt: 'Address notes on $explain.output' },
         },
@@ -495,7 +515,7 @@ describe('expandWorkflowIncludes — with input mapping', () => {
     const gate = nodeById(workflows.get('parent')!, 'review__gate');
     expect(gate).toMatchObject({
       plannotator_gate: {
-        document: '$review__explain.output',
+        prepare: { prompt: 'Create a review for $review__explain.output' },
         message: 'Review $review__explain.output',
         rework: { prompt: 'Address notes on $review__explain.output' },
       },

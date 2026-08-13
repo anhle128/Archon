@@ -41,8 +41,9 @@ Use `--json` on list and status commands when machine-readable output is needed.
 - The root has `name`, `description`, and non-empty `nodes`.
 - The workflow uses `nodes`, not `steps`.
 - Every node has one action key only.
-- Every `plannotator_gate` has a non-empty `document` and required `rework.prompt`.
-- Every `plannotator_gate` document producer and rework prompt promise exactly one readable HTML path line under `cwd` or `$ARTIFACTS_DIR`.
+- Every `plannotator_gate` has exactly one initial mode: a non-empty `document` or `prepare` with a non-empty `prompt`, plus required `rework.prompt`.
+- Every `prepare` block uses only `prompt`, `provider`, `model`, `effort`, `allowed_tools`, and `denied_tools`.
+- Every `plannotator_gate` document producer, prepare prompt, and rework prompt promises exactly one readable HTML path line under `cwd` or `$ARTIFACTS_DIR`.
 - Every Web-facing workflow with `plannotator_gate` sets root `interactive: true`.
 - Every node ID is unique and safe.
 - Every `depends_on` target exists.
@@ -120,7 +121,7 @@ Remove the field or switch providers.
 `persist_session: true but provider does not support sessionResume` means the provider cannot resume sessions.
 Use a provider with session resume or disable persistence.
 
-`plannotator_gate document path must be exactly one non-empty line` means the producer or rework agent emitted commentary, a Markdown fence, or multiple paths.
+`plannotator_gate document path must be exactly one non-empty line` means the producer, prepare, or rework agent emitted commentary, a Markdown fence, or multiple paths.
 Make its final output the path only.
 
 `plannotator_gate document is outside cwd and artifactsDir` means the resolved real path, including symlink resolution, escaped both permitted roots.
