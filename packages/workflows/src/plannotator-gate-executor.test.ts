@@ -355,10 +355,20 @@ describe('resolveGateDocumentPath', () => {
     chmodSync(html, 0o600);
   });
 
-  test('rejects a non-HTML file', () => {
+  test('allows a readable Markdown file under cwd', () => {
     const markdown = join(cwd, 'plan.md');
     writeFileSync(markdown, '# Plan');
-    expect(() => resolveGateDocumentPath(markdown, new Map(), cwd, artifactsDir)).toThrow(/html/i);
+    expect(resolveGateDocumentPath(markdown, new Map(), cwd, artifactsDir)).toBe(
+      realpathSync(markdown)
+    );
+  });
+
+  test('rejects an unsupported document type', () => {
+    const text = join(cwd, 'plan.txt');
+    writeFileSync(text, 'Plan');
+    expect(() => resolveGateDocumentPath(text, new Map(), cwd, artifactsDir)).toThrow(
+      /HTML or Markdown/i
+    );
   });
 
   test('rejects a relative path escaping cwd and both allowed roots', () => {
@@ -495,8 +505,8 @@ describe('executePlannotatorGateNode production spawn path', () => {
   });
 
   test('approves through Bun.spawn, records completion once, and resumes once', async () => {
-    const document = join(cwd, 'plan.html');
-    writeFileSync(document, '<html><body>plan</body></html>');
+    const document = join(cwd, 'plan.md');
+    writeFileSync(document, '# Plan');
     const run = makeRun({
       type: 'plannotator_gate',
       nodeId: 'review',
@@ -545,18 +555,38 @@ describe('executePlannotatorGateNode production spawn path', () => {
       join(artifactsDir, 'plannotator-gates', 'gate-gate-approve-attempt-1.json'),
     ]);
     expect(store.events.filter(event => event.event_type === 'node_completed')).toHaveLength(1);
+    expect(store.events.filter(event => event.event_type === 'approval_received')).toEqual([
+      expect.objectContaining({
+        step_name: 'review',
+        data: { decision: 'approved', comment: 'Ship it' },
+      }),
+    ]);
+    expect(store.run.metadata.approval).toMatchObject({ resolved: 'approved' });
     expect(store.resumeApprovedGate).toHaveBeenCalledTimes(1);
     expect(store.run.status).toBe('running');
   });
 
-  test('prepares an HTML document before opening the first annotate session', async () => {
-    const document = join(cwd, 'prepared.html');
+  test('uses the final assistant response after prepare tool calls as the document path', async () => {
+    const document = join(cwd, 'prepared.md');
     const run = makeRun({});
     const store = new IntegrationGateStore(run);
     const sendQuery = mock(async function* (prompt: string) {
       expect(prompt).toBe('Create the review for run-1 and upstream-value');
-      writeFileSync(document, '<html><body>prepared</body></html>');
-      yield { type: 'assistant' as const, content: ` ${document} \n` };
+      writeFileSync(document, '# Prepared review');
+      yield {
+        type: 'assistant' as const,
+        content: 'I found the requested delta and will now write the explainer.',
+      };
+      yield { type: 'tool' as const, toolName: 'Write', toolInput: { file_path: document } };
+      yield {
+        type: 'tool_result' as const,
+        toolName: 'Write',
+        toolOutput: 'File written.',
+        toolOutcome: 'success' as const,
+      };
+      const splitAt = Math.floor(document.length / 2);
+      yield { type: 'assistant' as const, content: ` ${document.slice(0, splitAt)}` };
+      yield { type: 'assistant' as const, content: `${document.slice(splitAt)} \n` };
     });
     const getAgentProvider = mock(
       () =>
@@ -676,9 +706,9 @@ describe('executePlannotatorGateNode production spawn path', () => {
     expect(existsSync(fake.invocationLog)).toBe(false);
   });
 
-  test('fails prepare output without pausing or spawning when it is not an HTML path', async () => {
-    const document = join(cwd, 'prepared.md');
-    writeFileSync(document, '# not HTML');
+  test('fails prepare output without pausing or spawning for an unsupported file type', async () => {
+    const document = join(cwd, 'prepared.txt');
+    writeFileSync(document, 'unsupported');
     const run = makeRun({});
     const store = new IntegrationGateStore(run);
     const sendQuery = mock(async function* () {
@@ -702,7 +732,10 @@ describe('executePlannotatorGateNode production spawn path', () => {
       executePlannotatorGateNode(
         integrationArgs(run, store, node, cwd, artifactsDir, getAgentProvider)
       )
-    ).resolves.toMatchObject({ state: 'failed', error: expect.stringMatching(/HTML/i) });
+    ).resolves.toMatchObject({
+      state: 'failed',
+      error: expect.stringMatching(/HTML or Markdown/i),
+    });
     expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
     expect(existsSync(fake.invocationLog)).toBe(false);
   });

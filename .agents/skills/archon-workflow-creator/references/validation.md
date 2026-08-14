@@ -43,7 +43,7 @@ Use `--json` on list and status commands when machine-readable output is needed.
 - Every node has one action key only.
 - Every `plannotator_gate` has exactly one initial mode: a non-empty `document` or `prepare` with a non-empty `prompt`, plus required `rework.prompt`.
 - Every `prepare` block uses only `prompt`, `provider`, `model`, `effort`, `allowed_tools`, and `denied_tools`.
-- Every `plannotator_gate` document producer, prepare prompt, and rework prompt promises exactly one readable HTML path line under `cwd` or `$ARTIFACTS_DIR`.
+- Every `plannotator_gate` document producer, prepare prompt, and rework prompt promises exactly one readable `.html`, `.htm`, or `.md` path line under `cwd` or `$ARTIFACTS_DIR`.
 - Every Web-facing workflow with `plannotator_gate` sets root `interactive: true`.
 - Every node ID is unique and safe.
 - Every `depends_on` target exists.
@@ -125,7 +125,7 @@ Use a provider with session resume or disable persistence.
 Make its final output the path only.
 
 `plannotator_gate document is outside cwd and artifactsDir` means the resolved real path, including symlink resolution, escaped both permitted roots.
-Write the HTML under the workflow checkout or `$ARTIFACTS_DIR`.
+Write the review document under the workflow checkout or `$ARTIFACTS_DIR`.
 
 `plannotator binary does not support required annotate options` means the installed binary is older or incompatible.
 Run `plannotator annotate --help` on the Archon server host and require `--persist-session` plus `--result-file`.

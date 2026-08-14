@@ -391,7 +391,7 @@ Set root `interactive: true` when using approval nodes from user-facing surfaces
 
 ## Plannotator Gate Nodes
 
-Use `plannotator_gate` when a human must review a real HTML document in a live local Plannotator annotate session.
+Use `plannotator_gate` when a human must review a real HTML or Markdown document in a live local Plannotator annotate session.
 This is different from a normal `approval` node because the gate owns the annotate subprocess, supports annotation-driven AI rework, and reopens the updated document until it is approved.
 
 ```yaml
@@ -426,8 +426,8 @@ Plannotator gate config:
 
 | Field                           | Required | Meaning                                                                                         |
 | ------------------------------- | -------- | ----------------------------------------------------------------------------------------------- |
-| `document`                      | one mode | Existing HTML path or `$node.output` reference that resolves to exactly one non-empty path line. |
-| `prepare`                       | one mode | Fresh embedded AI call that creates the initial HTML document.                                  |
+| `document`                      | one mode | Existing HTML or Markdown path, or a `$node.output` reference that resolves to one path line. |
+| `prepare`                       | one mode | Fresh embedded AI call that creates or selects the initial review document.                  |
 | `prepare.prompt`                | yes      | Initial-document prompt.                                                                        |
 | `prepare.provider`              | no       | Provider override for preparation; otherwise the workflow provider is used.                     |
 | `prepare.model`                 | no       | Model override passed to the preparation provider.                                              |
@@ -443,16 +443,16 @@ Plannotator gate config:
 
 The gate requires exactly one initial mode: `document` or `prepare`.
 `prepare` accepts only `prompt`, `provider`, `model`, `effort`, `allowed_tools`, and `denied_tools`.
-Use `document` when a prior node has already produced HTML.
-Use `prepare` when the gate should create its own initial HTML.
+Use `document` when a prior node has already produced an HTML or Markdown document.
+Use `prepare` when the gate should create or select its initial review document.
 
 Document boundary rules:
 
 - After output substitution, `document` must contain exactly one non-empty line.
 - Relative paths resolve from the workflow `cwd`.
 - The real path must remain inside the real workflow `cwd` or the existing `$ARTIFACTS_DIR`, including after symlink resolution.
-- The target must be a readable regular file ending in `.html` or `.htm`.
-- Every prepare or rework response must also print exactly one valid HTML path line and no prose or Markdown fence.
+- The target must be a readable regular file ending in `.html`, `.htm`, or `.md`.
+- Every prepare or rework response must also print exactly one valid review-document path line and no prose or Markdown fence.
 - Put rework provider, model, and effort inside `plannotator_gate.rework`; node-level AI fields do not configure the rework call.
 
 Runtime lifecycle:
@@ -461,7 +461,7 @@ Runtime lifecycle:
 2. For a fresh gate, Archon runs `prepare` only after this capability preflight; a matching unresolved persisted review document is reused by resume or `review-open` instead of preparing again.
 3. The gate pauses the persisted workflow with a unique `gateId`, opens the annotate subprocess, and remains the sole live supervisor.
 4. `Approve` in Plannotator records the decision, resumes the same supervisor once, and allows downstream nodes to run once.
-5. `Send Annotations` runs the configured rework provider, validates its returned HTML path, and opens another annotate attempt under the same gate owner.
+5. `Send Annotations` runs the configured rework provider, validates its returned document path, and opens another annotate attempt under the same gate owner.
 6. An approval from Web UI, CLI, Slack, or another external surface records the decision only; the existing live Plannotator supervisor owns continuation and prevents a second executor.
 7. Closing or dismissing the annotate window leaves the run paused and idle instead of implicitly approving it.
 8. `archon workflow review-open <run-id>` is explicit crash recovery: it atomically rotates ownership and starts a replacement supervisor in human CLI mode.

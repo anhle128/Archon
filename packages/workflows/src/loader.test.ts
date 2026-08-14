@@ -2996,7 +2996,7 @@ nodes:
       expect(reviewGate?.when).toBeUndefined();
       expect(reviewGate?.depends_on).toBeUndefined();
 
-      for (const gate of [clarifyGate, redTeamGate, reviewGate]) {
+      for (const gate of [clarifyGate, redTeamGate]) {
         expect(gate && 'plannotator_gate' in gate).toBe(true);
         if (!gate || !('plannotator_gate' in gate)) {
           throw new Error('default Speckit Plannotator gate missing');
@@ -3010,6 +3010,25 @@ nodes:
           allowed_tools: ['Read', 'Edit', 'Glob', 'Grep', 'Bash'],
         });
       }
+
+      expect(reviewGate && 'plannotator_gate' in reviewGate).toBe(true);
+      if (!reviewGate || !('plannotator_gate' in reviewGate)) {
+        throw new Error('default Speckit convergence review gate missing');
+      }
+      const reviewPrepare = reviewGate.plannotator_gate.prepare;
+      expect(reviewPrepare).toBeDefined();
+      if (!reviewPrepare) throw new Error('default Speckit convergence prepare config missing');
+      expect(reviewPrepare.prompt).toContain('<feature_directory>/tasks.md');
+      expect(reviewPrepare.prompt).toContain('Do not generate HTML');
+      expect(reviewPrepare).toMatchObject({
+        provider: 'claude',
+        model: 'sonnet',
+        effort: 'medium',
+        allowed_tools: ['Read', 'Bash'],
+      });
+      expect(reviewGate.plannotator_gate.rework.prompt).toContain(
+        'Markdown path under review: $REVIEW_DOCUMENT'
+      );
 
       expect(nodes.get('tasks')).toMatchObject({
         provider: 'codex',

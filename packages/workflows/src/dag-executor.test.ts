@@ -21003,12 +21003,19 @@ describe('executeDagWorkflow -- production Plannotator gate integration', () => 
   async function prepareDefaultSpeckitFixture(marker: string): Promise<void> {
     const ralphDir = join(root, '.specify', 'extensions', 'ralph-loop');
     const commandsDir = join(root, '.archon', 'commands');
+    const featureDir = join(root, 'specs', 'test-feature');
     await mkdir(ralphDir, { recursive: true });
     await mkdir(commandsDir, { recursive: true });
+    await mkdir(featureDir, { recursive: true });
     await writeFile(
       join(ralphDir, 'ralph.sh'),
       `#!/usr/bin/env bash\nprintf 'ralph\\n' >> '${marker}'\n`
     );
+    await writeFile(
+      join(root, '.specify', 'feature.json'),
+      `${JSON.stringify({ feature_directory: 'specs/test-feature' }, null, 2)}\n`
+    );
+    await writeFile(join(featureDir, 'tasks.md'), '# Tasks\n\n- [ ] T001 Implement the fix.\n');
     await writeFile(join(commandsDir, 'archon-create-pr.md'), 'Create the pull request.');
   }
 
@@ -21065,8 +21072,7 @@ describe('executeDagWorkflow -- production Plannotator gate integration', () => 
           return;
         }
         if (nodeId === 'speckit-converge-review-gate:prepare') {
-          const document = join(root, `converge-${String(convergenceAttempt)}.html`);
-          writeFileSync(document, '<html><body>convergence delta</body></html>');
+          const document = join(root, 'specs', 'test-feature', 'tasks.md');
           yield { type: 'assistant' as const, content: document };
           yield { type: 'result' as const, sessionId: `${nodeId}-session` };
           return;
@@ -21321,6 +21327,9 @@ describe('executeDagWorkflow -- production Plannotator gate integration', () => 
       priorOutputsBeforeConvergence(workflow)
     );
     const [gateInvocation] = await waitForDagGateInvocations(fake, 1);
+    expect(gateInvocation.document).toBe(
+      realpathSync(join(root, 'specs', 'test-feature', 'tasks.md'))
+    );
     calls.push('speckit-converge-review-gate');
     approveDagGateInvocation(fake, gateInvocation);
     await execution;

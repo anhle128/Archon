@@ -99,8 +99,8 @@ export function validateGateDocumentPath(
     throw new Error(`plannotator_gate document must be a file: ${candidate}`);
   }
   const extension = extname(candidate).toLowerCase();
-  if (extension !== '.html' && extension !== '.htm') {
-    throw new Error(`plannotator_gate document must be an HTML file: ${candidate}`);
+  if (extension !== '.html' && extension !== '.htm' && extension !== '.md') {
+    throw new Error(`plannotator_gate document must be an HTML or Markdown file: ${candidate}`);
   }
   try {
     accessSync(candidate, constants.R_OK);
@@ -316,6 +316,9 @@ async function runEmbeddedGateAiCall(
     )) {
       if (msg.type === 'assistant' && msg.content) {
         finalText += msg.content;
+      } else if (msg.type === 'tool') {
+        // Keep only the assistant response after the final tool call.
+        finalText = '';
       }
     }
   } catch (error) {

@@ -38,7 +38,7 @@ Create deterministic helper scripts under `.archon/scripts/` when shell would be
 - Use `allowed_tools: []` on classifier or formatting nodes that should not touch the repo.
 - Use `context: fresh` when an AI node should not inherit the previous sequential AI session.
 - Use `interactive: true` at the workflow root when approval nodes, `plannotator_gate` nodes, or interactive loops must be foreground-visible.
-- For `plannotator_gate`, choose exactly one initial mode: `document` for an existing HTML path, or `prepare` for a fresh embedded AI call; make prepare and rework output exactly one readable `.html` or `.htm` path line under the workflow `cwd` or `$ARTIFACTS_DIR`.
+- For `plannotator_gate`, choose exactly one initial mode: `document` for an existing HTML or Markdown path, or `prepare` for a fresh embedded AI call; make prepare and rework output exactly one readable `.html`, `.htm`, or `.md` path line under the workflow `cwd` or `$ARTIFACTS_DIR`.
 - Put `$REVIEW_DOCUMENT` and `$REVIEW_ANNOTATIONS` only inside `plannotator_gate.rework.prompt`; the gate substitutes them once before invoking the rework provider.
 - For Codex-only workflows, prefer root `effort: xhigh`; Qoder CLI uses `effort: max` for its maximum level. In mixed-provider workflows, set effort only on the matching provider nodes so other providers do not inherit it.
 - Validate with `bun run cli validate workflows <workflow-name>` before reporting success.

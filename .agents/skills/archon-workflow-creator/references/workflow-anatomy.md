@@ -134,7 +134,7 @@ Script nodes receive `ARTIFACTS_DIR`, `LOG_DIR`, `BASE_BRANCH`, and managed proj
 
 | Variable              | Meaning                                                                |
 | --------------------- | ---------------------------------------------------------------------- |
-| `$REVIEW_DOCUMENT`    | Absolute path of the HTML document currently open for review.          |
+| `$REVIEW_DOCUMENT`    | Absolute path of the HTML or Markdown document open for review.        |
 | `$REVIEW_ANNOTATIONS` | Reviewer feedback returned by the latest Plannotator annotate session. |
 
 These placeholders are substituted once over the original rework prompt.
