@@ -99,6 +99,7 @@ nodes:
       prepare:
         prompt: |
           ## Goal
+          Using vietnamese
           Produce a self-contained HTML explainer for the clarification-questions file,
           then hand a **stable absolute path** to the next node (`plannotator_gate`).
 
@@ -122,9 +123,9 @@ nodes:
           5. Verify the file exists and is non-empty.
 
           ## Final output (contract — required)
-          Print **ONLY** the absolute path to that HTML file on the last line
+          Print **ONLY**
           (no markdown fence, no extra commentary after the path):
-          `<feature_directory>/visual/speckit-clarify-explainer.html` resolved to an absolute path.
+          `<feature_directory>/visual/speckit-clarify-explainer.html`.
         effort: medium
         provider: claude
         model: sonnet
@@ -278,6 +279,7 @@ nodes:
       prepare:
         prompt: |
           ## Goal
+          Using vietnamese
           Produce a self-contained HTML explainer for the latest red-team findings
           file, then hand a **stable absolute path** to `red-team-gate`.
 
@@ -616,6 +618,7 @@ nodes:
       prepare:
         prompt: |
           ## Goal
+          Using vietnamese
           Produce a **delta-only** HTML explainer of what **this** `speckit-converge`
           run just added to `tasks.md`, so a human can approve re-running Ralph.
           Hand a **stable absolute path** to `speckit-converge-review-gate`.
