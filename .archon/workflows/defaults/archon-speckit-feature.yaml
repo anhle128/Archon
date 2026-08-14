@@ -299,7 +299,7 @@ nodes:
           5. Verify the file exists and is non-empty.
 
           ## Final output (contract — required)
-          Print **ONLY** the absolute path to that HTML file (one line, no fence).
+          Print **ONLY** `<feature_directory>/visual/speckit-red-team-explainer.html` (one line, no fence).
         effort: medium
         provider: claude
         model: sonnet
@@ -653,7 +653,7 @@ nodes:
           Do **not** open annotate as the human gate in this node.
 
           ## Final output (contract — required)
-          Print **ONLY** the absolute path to that HTML file on the last line
+          Print **ONLY** `<feature_directory>/visual/speckit-converge-explainer.html`
           (no markdown fence, no extra commentary after the path).
         effort: medium
         provider: claude

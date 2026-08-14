@@ -150,7 +150,7 @@ function dagNodeTelemetryType(node: DagNode): WorkflowNodeType {
 }
 
 function isCheckpointableExecutableNode(node: DagNode): boolean {
-  return !isApprovalNode(node) && !isPlannotatorGateNode(node) && !isCancelNode(node);
+  return !isApprovalNode(node) && !isCancelNode(node);
 }
 
 function escapeCompletionSignalForRegExp(value: string): string {

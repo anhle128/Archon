@@ -10763,6 +10763,72 @@ describe('executeDagWorkflow -- retry checkpoints', () => {
     }
   });
 
+  it('persists a pre-node checkpoint when entering a Plannotator gate', async () => {
+    const testDir = join(
+      tmpdir(),
+      `dag-plannotator-checkpoint-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(testDir, { recursive: true });
+    await runGit(testDir, ['init']);
+    await runGit(testDir, ['config', 'user.name', 'Archon Test']);
+    await runGit(testDir, ['config', 'user.email', 'archon-test@example.com']);
+    await writeFile(join(testDir, 'README.md'), 'initial\n');
+    await runGit(testDir, ['add', 'README.md']);
+    await runGit(testDir, ['commit', '-m', 'initial']);
+
+    const upsertCheckpoint = mock(
+      async (data: Parameters<NonNullable<IWorkflowStore['upsertWorkflowNodeCheckpoint']>>[0]) => ({
+        ...data,
+        created_at: new Date(),
+      })
+    );
+    const store = createMockStore();
+    store.upsertWorkflowNodeCheckpoint = upsertCheckpoint;
+    const gateSpy = spyOn(plannotatorGateExecutor, 'executePlannotatorGateNode').mockResolvedValue({
+      state: 'completed',
+      output: 'approved',
+    });
+
+    try {
+      await executeDagWorkflow(
+        createMockDeps(store),
+        createMockPlatform(),
+        'conv-dag',
+        testDir,
+        {
+          name: 'dag-plannotator-checkpoint-test',
+          nodes: [
+            {
+              id: 'review',
+              plannotator_gate: {
+                document: 'review.html',
+                rework: { prompt: 'Revise the review.' },
+              },
+            },
+          ],
+        },
+        makeWorkflowRun('plannotator-checkpoint-run', {
+          working_path: testDir,
+          metadata: { retry_epoch: 0 },
+        }),
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      expect(gateSpy).toHaveBeenCalledTimes(1);
+      expect(upsertCheckpoint.mock.calls.map(call => call[0].node_id)).toEqual(['review']);
+    } finally {
+      gateSpy.mockRestore();
+      await rm(testDir, { recursive: true, force: true });
+    }
+  });
+
   it('persists untracked files from a completed dependency before the next node starts', async () => {
     const testDir = join(
       tmpdir(),
