@@ -204,9 +204,9 @@ nodes:
       $speckit.red-team.run <feature_directory> --yes
     depends_on:
       - clarify-apply
-    effort: xhigh
+    effort: high
     provider: claude
-    model: "claude-opus-4-8[1M]"
+    model: "fabel"
     context: fresh
     denied_tools:
       - Bash
