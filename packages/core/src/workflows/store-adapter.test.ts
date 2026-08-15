@@ -171,6 +171,7 @@ function bindingRow(overrides: Record<string, unknown> = {}): Record<string, unk
     name: 'workflow-engine-primary',
     codebase_id: 'cb-1',
     event_route: 'https://hermes.example/events',
+    event_types: [],
     signing_secret: 'test-secret',
     state: 'active',
     ...overrides,
@@ -362,6 +363,78 @@ describe('createWorkflowStore', () => {
     });
     expect(body).not.toHaveProperty('signature');
     expect(body).not.toHaveProperty('delivery');
+  });
+
+  test('enqueueExternalWorkflowEvent filters events disallowed by the binding', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(workflowRunRow());
+    mockResolveEventRoute.mockResolvedValueOnce({
+      routable: true,
+      codebase: codebaseRow(),
+      binding: bindingRow({ event_types: ['workflow.approval.requested'] }),
+      route: 'https://hermes.example/events',
+      secret: 'test-secret',
+    });
+    const store = createWorkflowStore();
+
+    await store.enqueueExternalWorkflowEvent({
+      workflow_run_id: 'run-1',
+      event_type: 'workflow.run.started',
+      occurred_at: '2026-08-15T00:00:00.000Z',
+      payload: { state: 'running', startedAt: '2026-08-15T00:00:00.000Z' },
+    });
+
+    expect(mockEnqueueExternalWorkflowEvent).not.toHaveBeenCalled();
+  });
+
+  test('enqueueExternalWorkflowEvent filters disallowed events before not-routable insertion', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(workflowRunRow());
+    mockResolveEventRoute.mockResolvedValueOnce({
+      routable: false,
+      codebase: codebaseRow(),
+      binding: bindingRow({
+        event_types: ['workflow.approval.requested'],
+        signing_secret: null,
+      }),
+      reason: 'missing-secret',
+    });
+    const store = createWorkflowStore();
+
+    await store.enqueueExternalWorkflowEvent({
+      workflow_run_id: 'run-1',
+      event_type: 'workflow.run.started',
+      occurred_at: '2026-08-15T00:00:00.000Z',
+      payload: { state: 'running', startedAt: '2026-08-15T00:00:00.000Z' },
+    });
+
+    expect(mockEnqueueExternalWorkflowEvent).not.toHaveBeenCalled();
+  });
+
+  test('enqueueExternalWorkflowEvent persists events allowed by the binding', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(workflowRunRow());
+    mockResolveEventRoute.mockResolvedValueOnce({
+      routable: true,
+      codebase: codebaseRow(),
+      binding: bindingRow({ event_types: ['workflow.approval.requested'] }),
+      route: 'https://hermes.example/events',
+      secret: 'test-secret',
+    });
+    const store = createWorkflowStore();
+
+    await store.enqueueExternalWorkflowEvent({
+      workflow_run_id: 'run-1',
+      event_type: 'workflow.approval.requested',
+      occurred_at: '2026-08-15T00:00:00.000Z',
+      payload: {
+        state: 'waiting-for-approval',
+        approval: {
+          requestId: 'approval:run-1:review',
+          requestedAction: 'approve-or-reject',
+          phase: 'review',
+        },
+      },
+    });
+
+    expect(mockEnqueueExternalWorkflowEvent).toHaveBeenCalledTimes(1);
   });
 
   test('enqueueExternalWorkflowEvent does not persist invalid typed event payloads', async () => {

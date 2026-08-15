@@ -18,6 +18,7 @@ import {
   buildWorkflowEventEnvelope,
   type ExternalWorkflowEventType,
 } from '../events/workflow-event-envelope';
+import { externalWorkflowEventTypeSchema } from '../schemas/workflow-event';
 import { getAgentProvider } from '@archon/providers';
 import { loadConfig as loadMergedConfig } from '../config/config-loader';
 import { createLogger } from '@archon/paths';
@@ -47,15 +48,6 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-const EXTERNAL_EVENT_TYPES = new Set<string>([
-  'workflow.run.started',
-  'workflow.run.completed',
-  'workflow.run.failed',
-  'workflow.approval.requested',
-  'workflow.delivery.failed',
-  'workflow.artifact.recorded',
-]);
-
 const INTERNAL_EVENT_TYPE_MAP = new Map<string, ExternalWorkflowEventType>([
   ['workflow_started', 'workflow.run.started'],
   ['workflow_completed', 'workflow.run.completed'],
@@ -70,7 +62,15 @@ interface ExternalWorkflowEventInput {
 }
 
 function toExternalEventType(value: string): ExternalWorkflowEventType | null {
-  return EXTERNAL_EVENT_TYPES.has(value) ? (value as ExternalWorkflowEventType) : null;
+  const result = externalWorkflowEventTypeSchema.safeParse(value);
+  return result.success ? result.data : null;
+}
+
+function bindingAllowsEvent(
+  eventTypes: readonly ExternalWorkflowEventType[],
+  eventType: ExternalWorkflowEventType
+): boolean {
+  return eventTypes.length === 0 || eventTypes.includes(eventType);
 }
 
 function buildInternalEventPayload(input: {
@@ -180,6 +180,13 @@ async function enqueueExternalWorkflowEvent(input: ExternalWorkflowEventInput): 
     }
 
     const resolution = await resolveEventRoute(codebaseId);
+    if (resolution.binding && !bindingAllowsEvent(resolution.binding.event_types, eventType)) {
+      getLog().debug(
+        { eventType, runId: run.id, bindingId: resolution.binding.id },
+        'workflow_event_outbox_filtered_by_binding'
+      );
+      return;
+    }
     if (!resolution.routable) {
       const idempotencyKey = resolution.binding
         ? `archon:${resolution.binding.name}:${eventId}`

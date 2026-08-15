@@ -19,6 +19,7 @@ const binding = {
   name: 'workflow-engine-primary',
   codebase_id: 'cb-1',
   event_route: 'https://hermes.example/events',
+  event_types: [],
   signing_secret: 'test-secret',
   state: 'active' as const,
   binding_version: 1,
