@@ -42,6 +42,11 @@ const payloads: Record<ExternalWorkflowEventType, Record<string, unknown>> = {
       requestId: 'approval:run-1:review',
       requestedAction: 'approve-or-reject',
       phase: 'review',
+      gateType: 'approval',
+      nodeId: 'review',
+      message: 'Review the plan.',
+      userPrompt: 'Build the approved bridge.',
+      reviewUrl: 'https://archon.example.ts.net/console/p/cb-1/r/run-1',
     },
   },
   'workflow.delivery.failed': {
@@ -133,6 +138,68 @@ describe('buildWorkflowEventEnvelope', () => {
         codebase: baseCodebase,
         binding,
         payload: { state: 'completed' },
+      })
+    ).toThrow();
+  });
+
+  test('rejects approval payloads missing userPrompt or reviewUrl', () => {
+    const approvalPayload = payloads['workflow.approval.requested'];
+
+    expect(() =>
+      buildWorkflowEventEnvelope({
+        eventId: 'evt-missing-user-prompt',
+        eventType: 'workflow.approval.requested',
+        occurredAt: '2026-07-25T00:00:00.000Z',
+        run,
+        codebase: baseCodebase,
+        binding,
+        payload: {
+          ...approvalPayload,
+          approval: {
+            ...(approvalPayload.approval as Record<string, unknown>),
+            userPrompt: undefined,
+          },
+        },
+      })
+    ).toThrow();
+
+    expect(() =>
+      buildWorkflowEventEnvelope({
+        eventId: 'evt-missing-review-url',
+        eventType: 'workflow.approval.requested',
+        occurredAt: '2026-07-25T00:00:00.000Z',
+        run,
+        codebase: baseCodebase,
+        binding,
+        payload: {
+          ...approvalPayload,
+          approval: {
+            ...(approvalPayload.approval as Record<string, unknown>),
+            reviewUrl: undefined,
+          },
+        },
+      })
+    ).toThrow();
+  });
+
+  test('rejects approval review URLs outside HTTP and HTTPS', () => {
+    const approvalPayload = payloads['workflow.approval.requested'];
+
+    expect(() =>
+      buildWorkflowEventEnvelope({
+        eventId: 'evt-file-review-url',
+        eventType: 'workflow.approval.requested',
+        occurredAt: '2026-07-25T00:00:00.000Z',
+        run,
+        codebase: baseCodebase,
+        binding,
+        payload: {
+          ...approvalPayload,
+          approval: {
+            ...(approvalPayload.approval as Record<string, unknown>),
+            reviewUrl: 'file:///tmp/review',
+          },
+        },
       })
     ).toThrow();
   });

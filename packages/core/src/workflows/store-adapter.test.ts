@@ -1,4 +1,4 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
 import type { IWorkflowStore } from '@archon/workflows/store';
 
 // Mock DB modules before importing store-adapter
@@ -145,11 +145,14 @@ mock.module('../db/workflow-node-sessions', () => ({
 
 const { createWorkflowStore, createWorkflowDeps } = await import('./store-adapter');
 
+const originalArchonPublicUrl = process.env.ARCHON_PUBLIC_URL;
+
 function workflowRunRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: 'run-1',
     workflow_name: 'bmad-dev-story',
     codebase_id: 'cb-1',
+    user_message: 'Build the approved bridge.',
     ...overrides,
   };
 }
@@ -180,6 +183,7 @@ function bindingRow(overrides: Record<string, unknown> = {}): Record<string, unk
 
 describe('createWorkflowStore', () => {
   beforeEach(() => {
+    process.env.ARCHON_PUBLIC_URL = 'https://archon.example.ts.net';
     mockCreateWorkflowEvent.mockReset();
     mockCreateWorkflowEvent.mockImplementation(() => Promise.resolve());
     mockGetWorkflowRun.mockReset();
@@ -197,6 +201,14 @@ describe('createWorkflowStore', () => {
         reason: 'missing-codebase',
       })
     );
+  });
+
+  afterEach(() => {
+    if (originalArchonPublicUrl === undefined) {
+      delete process.env.ARCHON_PUBLIC_URL;
+    } else {
+      process.env.ARCHON_PUBLIC_URL = originalArchonPublicUrl;
+    }
   });
 
   test('returns object with all IWorkflowStore methods', () => {
@@ -430,11 +442,89 @@ describe('createWorkflowStore', () => {
           requestId: 'approval:run-1:review',
           requestedAction: 'approve-or-reject',
           phase: 'review',
+          gateType: 'approval',
+          nodeId: 'review',
+          message: 'Review the plan.',
         },
       },
     });
 
     expect(mockEnqueueExternalWorkflowEvent).toHaveBeenCalledTimes(1);
+  });
+
+  test('createWorkflowEvent enriches standard approval callbacks with user prompt and run URL', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(workflowRunRow());
+    mockResolveEventRoute.mockResolvedValueOnce({
+      routable: true,
+      codebase: codebaseRow(),
+      binding: bindingRow({ event_types: ['workflow.approval.requested'] }),
+      route: 'https://hermes.example/events',
+      secret: 'test-secret',
+    });
+    const store = createWorkflowStore();
+
+    await store.createWorkflowEvent({
+      workflow_run_id: 'run-1',
+      event_type: 'approval_requested',
+      step_name: 'review',
+      data: {
+        gateType: 'approval',
+        nodeId: 'review',
+        message: 'Review the plan.',
+      },
+    });
+
+    const [insert] = mockEnqueueExternalWorkflowEvent.mock.calls[0] as [Record<string, unknown>];
+    expect(JSON.parse(insert.event_body as string)).toMatchObject({
+      eventType: 'workflow.approval.requested',
+      payload: {
+        approval: {
+          gateType: 'approval',
+          nodeId: 'review',
+          message: 'Review the plan.',
+          userPrompt: 'Build the approved bridge.',
+          reviewUrl: 'https://archon.example.ts.net/console/p/cb-1/r/run-1',
+        },
+      },
+    });
+  });
+
+  test('createWorkflowEvent keeps Plannotator approval callbacks on the live review URL', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(workflowRunRow());
+    mockResolveEventRoute.mockResolvedValueOnce({
+      routable: true,
+      codebase: codebaseRow(),
+      binding: bindingRow({ event_types: ['workflow.approval.requested'] }),
+      route: 'https://hermes.example/events',
+      secret: 'test-secret',
+    });
+    const store = createWorkflowStore();
+
+    await store.createWorkflowEvent({
+      workflow_run_id: 'run-1',
+      event_type: 'approval_requested',
+      step_name: 'review',
+      data: {
+        gateType: 'plannotator_gate',
+        nodeId: 'review',
+        message: 'Review the document.',
+        reviewUrl: 'https://archon-host.example.ts.net:19432',
+      },
+    });
+
+    const [insert] = mockEnqueueExternalWorkflowEvent.mock.calls[0] as [Record<string, unknown>];
+    expect(JSON.parse(insert.event_body as string)).toMatchObject({
+      eventType: 'workflow.approval.requested',
+      payload: {
+        approval: {
+          gateType: 'plannotator_gate',
+          nodeId: 'review',
+          message: 'Review the document.',
+          userPrompt: 'Build the approved bridge.',
+          reviewUrl: 'https://archon-host.example.ts.net:19432',
+        },
+      },
+    });
   });
 
   test('enqueueExternalWorkflowEvent does not persist invalid typed event payloads', async () => {

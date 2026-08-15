@@ -61,6 +61,19 @@ export interface WorkflowEventEnvelope {
 
 const nonEmptyStringSchema = z.string().min(1);
 const dateTimeSchema = z.string().datetime();
+const approvalGateTypeSchema = z.enum([
+  'approval',
+  'interactive_loop',
+  'writeback',
+  'plannotator_gate',
+]);
+const httpUrlSchema = z
+  .string()
+  .url()
+  .refine(value => {
+    const protocol = new URL(value).protocol;
+    return protocol === 'http:' || protocol === 'https:';
+  });
 
 const workflowEventPayloadSchemas = {
   'workflow.run.started': z
@@ -93,6 +106,11 @@ const workflowEventPayloadSchemas = {
           requestId: nonEmptyStringSchema,
           requestedAction: nonEmptyStringSchema,
           phase: nonEmptyStringSchema,
+          gateType: approvalGateTypeSchema,
+          nodeId: nonEmptyStringSchema,
+          message: nonEmptyStringSchema,
+          userPrompt: nonEmptyStringSchema,
+          reviewUrl: httpUrlSchema,
         })
         .passthrough(),
     })

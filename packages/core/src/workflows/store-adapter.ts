@@ -4,7 +4,7 @@
  */
 import type { IWorkflowStore } from '@archon/workflows/store';
 import type { WorkflowConfig, WorkflowDeps } from '@archon/workflows/deps';
-import type { WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
+import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import type { MergedConfig } from '../config/config-types';
 import * as workflowDb from '../db/workflows';
 import * as workflowEventDb from '../db/workflow-events';
@@ -71,6 +71,60 @@ function bindingAllowsEvent(
   eventType: ExternalWorkflowEventType
 ): boolean {
   return eventTypes.length === 0 || eventTypes.includes(eventType);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function requireHttpUrl(value: string, source: string): URL {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${source} must be a valid URL`);
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error(`${source} must use HTTP or HTTPS`);
+  }
+  return url;
+}
+
+function enrichApprovalPayload(
+  eventType: ExternalWorkflowEventType,
+  payload: Record<string, unknown>,
+  run: Pick<WorkflowRun, 'id' | 'codebase_id' | 'user_message'>
+): Record<string, unknown> {
+  if (eventType !== 'workflow.approval.requested') return payload;
+  if (!isRecord(payload.approval)) return payload;
+
+  const approval = payload.approval;
+  let reviewUrl: string;
+  if (approval.gateType === 'plannotator_gate') {
+    if (typeof approval.reviewUrl !== 'string') {
+      throw new Error('Plannotator approval event is missing reviewUrl');
+    }
+    requireHttpUrl(approval.reviewUrl, 'Plannotator reviewUrl');
+    reviewUrl = approval.reviewUrl;
+  } else {
+    if (!run.codebase_id) throw new Error('Approval event is missing codebase_id');
+    const configured = process.env.ARCHON_PUBLIC_URL?.trim();
+    if (!configured) throw new Error('ARCHON_PUBLIC_URL is required for approval callbacks');
+    const url = requireHttpUrl(configured, 'ARCHON_PUBLIC_URL');
+    url.pathname = `/console/p/${encodeURIComponent(run.codebase_id)}/r/${encodeURIComponent(run.id)}`;
+    url.search = '';
+    url.hash = '';
+    reviewUrl = url.toString();
+  }
+
+  return {
+    ...payload,
+    approval: {
+      ...approval,
+      userPrompt: run.user_message,
+      reviewUrl,
+    },
+  };
 }
 
 function buildInternalEventPayload(input: {
@@ -187,6 +241,7 @@ async function enqueueExternalWorkflowEvent(input: ExternalWorkflowEventInput): 
       );
       return;
     }
+    const enrichedPayload = enrichApprovalPayload(eventType, input.payload, run);
     if (!resolution.routable) {
       const idempotencyKey = resolution.binding
         ? `archon:${resolution.binding.name}:${eventId}`
@@ -201,7 +256,7 @@ async function enqueueExternalWorkflowEvent(input: ExternalWorkflowEventInput): 
                 run,
                 codebase: resolution.codebase,
                 binding: resolution.binding,
-                payload: input.payload,
+                payload: enrichedPayload,
               })
             )
           : buildNotRoutableBody({
@@ -210,7 +265,7 @@ async function enqueueExternalWorkflowEvent(input: ExternalWorkflowEventInput): 
               occurredAt: input.occurred_at,
               idempotencyKey,
               reason: resolution.reason,
-              payload: input.payload,
+              payload: enrichedPayload,
             });
       await workflowEventOutboxDb.enqueueExternalWorkflowEvent({
         event_id: eventId,
@@ -233,7 +288,7 @@ async function enqueueExternalWorkflowEvent(input: ExternalWorkflowEventInput): 
       run,
       codebase: resolution.codebase,
       binding: resolution.binding,
-      payload: input.payload,
+      payload: enrichedPayload,
     });
     await workflowEventOutboxDb.enqueueExternalWorkflowEvent({
       event_id: envelope.eventId,
