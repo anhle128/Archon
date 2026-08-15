@@ -572,6 +572,33 @@ describe('runPlannotatorGateSupervisor', () => {
     expect(resumeWorkflowRun).not.toHaveBeenCalled();
   });
 
+  test('stopped phase transition supersedes a rotated gate', async () => {
+    const store = new FakeGateStore('run-stopped-rotated');
+    const child = makeChild({ exitCode: 0 });
+    const spawnAnnotate = mock(async () => child);
+    const transitionPlannotatorGate = mock(async input => {
+      const approval = store.run.metadata.approval as ApprovalContext;
+      store.run.status = 'running';
+      store.run.metadata = {
+        ...store.run.metadata,
+        approval: { ...approval, gateId: 'gate-b', phase: 'opening' },
+      };
+      return { outcome: 'stopped' as const, status: 'running' as const };
+    });
+    store.transitionPlannotatorGate = transitionPlannotatorGate;
+
+    await expect(runPlannotatorGateSupervisor(baseDeps(store, { spawnAnnotate }))).resolves.toEqual(
+      { kind: 'superseded' }
+    );
+
+    expect(transitionPlannotatorGate).toHaveBeenCalledTimes(1);
+    expect(transitionPlannotatorGate).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedGateId: 'gate-a', phase: 'opening' })
+    );
+    expect(spawnAnnotate).not.toHaveBeenCalled();
+    expect(store.events.some(event => event.event_type === 'node_completed')).toBe(false);
+  });
+
   test('old child approval loses resolution after gate rotation', async () => {
     const store = new FakeGateStore('run-rotated-approval');
     const child = makeChild({
