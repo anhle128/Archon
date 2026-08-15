@@ -4237,17 +4237,7 @@ async function executeLoopGroupNode(
           error: `Loop-group gate message failed to deliver for node '${node.id}' — cannot pause safely`,
         };
       }
-      deps.store
-        .createWorkflowEvent({
-          workflow_run_id: workflowRun.id,
-          event_type: 'approval_requested',
-          step_name: stepName,
-          data: { message: honestMessage, iteration: i, completionSignaled: completionDetected },
-        })
-        .catch((err: Error) => {
-          logEventStoreError(err, i);
-        });
-      await pauseGateRespectingExternalTransition(deps, workflowRun.id, {
+      const paused = await pauseGateRespectingExternalTransition(deps, workflowRun.id, {
         nodeId: node.id,
         message: honestMessage,
         type: 'interactive_loop',
@@ -4270,6 +4260,16 @@ async function executeLoopGroupNode(
         // the pause, so the finalize path deliberately writes no `tokens` (see the
         // finalizeLoopFromSignal call above). Only the plain `loop` gate carries it.
       });
+      if (paused) {
+        await recordApprovalRequested(deps, {
+          runId: workflowRun.id,
+          stepName,
+          gateType: 'interactive_loop',
+          nodeId: node.id,
+          message: honestMessage,
+          data: { iteration: i, completionSignaled: completionDetected },
+        });
+      }
       return {
         state: 'completed',
         output: lastIterationOutput,
@@ -5501,17 +5501,7 @@ async function executeLoopNode(
           }
         );
       }
-      deps.store
-        .createWorkflowEvent({
-          workflow_run_id: workflowRun.id,
-          event_type: 'approval_requested',
-          step_name: stepName,
-          data: { message: honestMessage, iteration: i, completionSignaled: completionDetected },
-        })
-        .catch((err: Error) => {
-          logEventStoreError(err, i);
-        });
-      await pauseGateRespectingExternalTransition(deps, workflowRun.id, {
+      const paused = await pauseGateRespectingExternalTransition(deps, workflowRun.id, {
         nodeId: node.id,
         message: honestMessage,
         type: 'interactive_loop',
@@ -5532,6 +5522,16 @@ async function executeLoopNode(
         // prompt-based loops — same json_patch convention as `sessionId`).
         commandSnapshot: typeof loop.command === 'string' ? loopPromptTemplate : null,
       });
+      if (paused) {
+        await recordApprovalRequested(deps, {
+          runId: workflowRun.id,
+          stepName,
+          gateType: 'interactive_loop',
+          nodeId: node.id,
+          message: honestMessage,
+          data: { iteration: i, completionSignaled: completionDetected },
+        });
+      }
       // Return completed — the between-layer status check sees 'paused' and halts cleanly.
       // This mirrors the approval-node pattern, preventing false "DAG nodes failed" warnings
       // in multi-node workflows. Resume correctness relies on the 'paused' DB status, not
@@ -5562,6 +5562,39 @@ async function executeLoopNode(
   });
 }
 
+type NotifiableApprovalGateType = 'approval' | 'interactive_loop' | 'writeback';
+
+async function recordApprovalRequested(
+  deps: WorkflowDeps,
+  input: {
+    runId: string;
+    stepName: string;
+    gateType: NotifiableApprovalGateType;
+    nodeId: string;
+    message: string;
+    data?: Record<string, unknown>;
+  }
+): Promise<void> {
+  try {
+    await deps.store.createWorkflowEvent({
+      workflow_run_id: input.runId,
+      event_type: 'approval_requested',
+      step_name: input.stepName,
+      data: {
+        gateType: input.gateType,
+        nodeId: input.nodeId,
+        message: input.message,
+        ...input.data,
+      },
+    });
+  } catch (err) {
+    getLog().error(
+      { err: err as Error, workflowRunId: input.runId, eventType: 'approval_requested' },
+      'workflow.event_persist_failed'
+    );
+  }
+}
+
 /**
  * Pause the run for a human gate, tolerating a lost CAS when the run was
  * externally transitioned while the gate was being raised — e.g. a killed CLI's
@@ -5585,7 +5618,7 @@ async function pauseGateRespectingExternalTransition(
   deps: WorkflowDeps,
   runId: string,
   approvalContext: ApprovalContext
-): Promise<void> {
+): Promise<boolean> {
   try {
     await deps.store.pauseWorkflowRun(runId, approvalContext);
   } catch (pauseErr) {
@@ -5596,12 +5629,12 @@ async function pauseGateRespectingExternalTransition(
       // Status unknowable — surface the original pause failure.
       throw pauseErr;
     }
-    if (status === 'running') throw pauseErr;
+    if (status === null || status === 'running') throw pauseErr;
     getLog().warn(
       { workflowRunId: runId, status, err: pauseErr as Error },
       'dag.gate_pause_skipped_external_transition'
     );
-    return;
+    return false;
   }
   getWorkflowEventEmitter().emit({
     type: 'approval_pending',
@@ -5609,6 +5642,7 @@ async function pauseGateRespectingExternalTransition(
     nodeId: approvalContext.nodeId,
     message: approvalContext.message,
   });
+  return true;
 }
 
 /**
@@ -5787,21 +5821,7 @@ async function executeApprovalNode(
     `Approve: \`/workflow approve ${workflowRun.id}\` | Reject: \`/workflow reject ${workflowRun.id}\``;
   await safeSendMessage(platform, conversationId, approvalMsg, msgContext);
 
-  deps.store
-    .createWorkflowEvent({
-      workflow_run_id: workflowRun.id,
-      event_type: 'approval_requested',
-      step_name: stepName,
-      data: { message: renderedMessage },
-    })
-    .catch((err: Error) => {
-      getLog().error(
-        { err, workflowRunId: workflowRun.id, eventType: 'approval_requested' },
-        'workflow.event_persist_failed'
-      );
-    });
-
-  await pauseGateRespectingExternalTransition(deps, workflowRun.id, {
+  const paused = await pauseGateRespectingExternalTransition(deps, workflowRun.id, {
     message: renderedMessage,
     nodeId: node.id,
     type: 'approval',
@@ -5809,6 +5829,15 @@ async function executeApprovalNode(
     onRejectPrompt: node.approval.on_reject?.prompt,
     onRejectMaxAttempts: node.approval.on_reject?.max_attempts,
   });
+  if (paused) {
+    await recordApprovalRequested(deps, {
+      runId: workflowRun.id,
+      stepName,
+      gateType: 'approval',
+      nodeId: node.id,
+      message: renderedMessage,
+    });
+  }
 
   // Return completed — the between-layer status check will see 'paused' (or the
   // external transition that beat the pause) and break.
@@ -8743,6 +8772,13 @@ async function raiseWriteBackGate(
     { nodeId: WRITEBACK_GATE_NODE_ID, message, type: 'writeback' },
     { pending_writeback: { envId: containerCtx.envId, ...(summary ? { summary } : {}) } }
   );
+  await recordApprovalRequested(deps, {
+    runId,
+    stepName: WRITEBACK_GATE_NODE_ID,
+    gateType: 'writeback',
+    nodeId: WRITEBACK_GATE_NODE_ID,
+    message,
+  });
   emitContainerLifecycleEvent(
     deps,
     runId,

@@ -7223,7 +7223,18 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         yield { type: 'result', sessionId: 'loop-session-1' };
       });
 
-      const mockDeps = createMockDeps();
+      const store = createMockStore();
+      let pauseCommitted = false;
+      let pauseCommittedAtApprovalRequest = false;
+      store.pauseWorkflowRun = mock(async (): Promise<void> => {
+        pauseCommitted = true;
+      });
+      store.createWorkflowEvent = mock(async event => {
+        if (event.event_type === 'approval_requested') {
+          pauseCommittedAtApprovalRequest = pauseCommitted;
+        }
+      });
+      const mockDeps = createMockDeps(store);
       const platform = createMockPlatform();
       const workflowRun = makeWorkflowRun();
 
@@ -7279,6 +7290,19 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       const pausedMessage = (pauseCalls[0][1] as { message: string }).message;
       expect(pausedMessage).toContain('No completion signal');
       expect(pausedMessage).toContain('Review the plan and provide feedback.');
+      expect(pauseCommittedAtApprovalRequest).toBe(true);
+      expect(store.createWorkflowEvent).toHaveBeenCalledWith({
+        workflow_run_id: workflowRun.id,
+        event_type: 'approval_requested',
+        step_name: 'refine',
+        data: {
+          gateType: 'interactive_loop',
+          nodeId: 'refine',
+          message: pausedMessage,
+          iteration: 1,
+          completionSignaled: false,
+        },
+      });
     });
 
     it('interactive loop first iteration always gates even if AI emits signal', async () => {
@@ -12381,6 +12405,16 @@ describe('executeDagWorkflow -- approval node', () => {
 
   it('fresh approval node pauses with extended context (capture_response + on_reject)', async () => {
     const store = createMockStore();
+    let pauseCommitted = false;
+    let pauseCommittedAtApprovalRequest = false;
+    store.pauseWorkflowRun = mock(async (): Promise<void> => {
+      pauseCommitted = true;
+    });
+    store.createWorkflowEvent = mock(async event => {
+      if (event.event_type === 'approval_requested') {
+        pauseCommittedAtApprovalRequest = pauseCommitted;
+      }
+    });
     const mockDeps = createMockDeps(store);
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun();
@@ -12396,7 +12430,7 @@ describe('executeDagWorkflow -- approval node', () => {
           {
             id: 'review',
             approval: {
-              message: 'Approve this plan?',
+              message: 'Review the plan.',
               capture_response: true,
               on_reject: { prompt: 'Fix based on: $REJECTION_REASON', max_attempts: 3 },
             },
@@ -12425,10 +12459,21 @@ describe('executeDagWorkflow -- approval node', () => {
     expect(pauseCalls[0][1]).toMatchObject({
       type: 'approval',
       nodeId: 'review',
-      message: 'Approve this plan?',
+      message: 'Review the plan.',
       captureResponse: true,
       onRejectPrompt: 'Fix based on: $REJECTION_REASON',
       onRejectMaxAttempts: 3,
+    });
+    expect(pauseCommittedAtApprovalRequest).toBe(true);
+    expect(store.createWorkflowEvent).toHaveBeenCalledWith({
+      workflow_run_id: workflowRun.id,
+      event_type: 'approval_requested',
+      step_name: 'review',
+      data: {
+        gateType: 'approval',
+        nodeId: 'review',
+        message: 'Review the plan.',
+      },
     });
   });
 
@@ -17577,7 +17622,18 @@ describe('executeDagWorkflow -- loop_group node', () => {
       yield { type: 'result', sessionId: 'lg-gate-sess-1' };
     });
 
-    const mockDeps = createMockDeps();
+    const store = createMockStore();
+    let pauseCommitted = false;
+    let pauseCommittedAtApprovalRequest = false;
+    store.pauseWorkflowRun = mock(async (): Promise<void> => {
+      pauseCommitted = true;
+    });
+    store.createWorkflowEvent = mock(async event => {
+      if (event.event_type === 'approval_requested') {
+        pauseCommittedAtApprovalRequest = pauseCommitted;
+      }
+    });
+    const mockDeps = createMockDeps(store);
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun('lg-interactive');
 
@@ -17631,6 +17687,19 @@ describe('executeDagWorkflow -- loop_group node', () => {
     const pausedGroupMessage = (pauseCalls[0][1] as { message: string }).message;
     expect(pausedGroupMessage).toContain('No completion signal');
     expect(pausedGroupMessage).toContain('Review the result.');
+    expect(pauseCommittedAtApprovalRequest).toBe(true);
+    expect(store.createWorkflowEvent).toHaveBeenCalledWith({
+      workflow_run_id: workflowRun.id,
+      event_type: 'approval_requested',
+      step_name: 'refine',
+      data: {
+        gateType: 'interactive_loop',
+        nodeId: 'refine',
+        message: pausedGroupMessage,
+        iteration: 1,
+        completionSignaled: false,
+      },
+    });
   });
 
   it('INTERACTIVE: loop_group gate persists signal state when iteration 1 signals (#2074)', async () => {
@@ -20206,8 +20275,21 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     runMetadata?: Record<string, unknown>;
     status?: 'running' | 'paused';
     claimed?: boolean;
+    failApprovalEvent?: boolean;
+    onApprovalRequested?: (pauseCommitted: boolean) => void;
   }): Promise<IWorkflowStore> {
     const store = createMockStore();
+    let pauseCommitted = false;
+    store.pauseWorkflowRun = mock(async (): Promise<void> => {
+      pauseCommitted = true;
+    });
+    store.createWorkflowEvent = mock(event => {
+      if (event.event_type === 'approval_requested') {
+        opts.onApprovalRequested?.(pauseCommitted);
+        if (opts.failApprovalEvent) return Promise.reject(new Error('event store unavailable'));
+      }
+      return Promise.resolve();
+    });
     store.getWorkflowRunStatus = mock(() => Promise.resolve(opts.status ?? ('running' as const)));
     store.getWorkflowRun = mock(() =>
       Promise.resolve(makeWorkflowRun('wb-run', { metadata: opts.runMetadata ?? {} }))
@@ -20268,7 +20350,14 @@ describe('executeDagWorkflow -- container write-back gate', () => {
         },
       })),
     });
-    const store = await runGate({ backend });
+    let pauseCommittedAtApprovalRequest = false;
+    const store = await runGate({
+      backend,
+      failApprovalEvent: true,
+      onApprovalRequested: committed => {
+        pauseCommittedAtApprovalRequest = committed;
+      },
+    });
     expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
     const pauseCall = (store.pauseWorkflowRun as ReturnType<typeof mock>).mock.calls[0];
     const pauseArg = pauseCall[1] as { nodeId: string; type: string };
@@ -20277,6 +20366,17 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     // pending_writeback is folded into the SAME pause write (M3), not a 2nd update.
     const extraMeta = pauseCall[2] as { pending_writeback?: { envId: string } };
     expect(extraMeta.pending_writeback?.envId).toBe('env-x');
+    expect(pauseCommittedAtApprovalRequest).toBe(true);
+    expect(store.createWorkflowEvent).toHaveBeenCalledWith({
+      workflow_run_id: 'wb-run',
+      event_type: 'approval_requested',
+      step_name: '__writeback__',
+      data: {
+        gateType: 'writeback',
+        nodeId: '__writeback__',
+        message: expect.any(String),
+      },
+    });
     expect(backend.suspend).toHaveBeenCalledTimes(1);
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
   });
@@ -20614,11 +20714,9 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
     }
   });
 
-  /** Store whose pauseWorkflowRun loses the CAS: the run was externally
-   *  transitioned (e.g. a killed CLI's signal cleanup marked it failed) in the
-   *  window between gate raise and pause commit. getWorkflowRunStatus reports
-   *  'running' until the pause attempt, then the external 'failed'. */
-  function createExternallyFailedStore(): IWorkflowStore {
+  /** Store whose pauseWorkflowRun loses the CAS because an operator cancelled
+   *  the run in the window between gate raise and pause commit. */
+  function createExternallyCancelledStore(): IWorkflowStore {
     const store = createMockStore();
     let pauseAttempted = false;
     store.pauseWorkflowRun = mock(() => {
@@ -20628,13 +20726,13 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
       );
     });
     store.getWorkflowRunStatus = mock(() =>
-      Promise.resolve(pauseAttempted ? ('failed' as const) : ('running' as const))
+      Promise.resolve(pauseAttempted ? ('cancelled' as const) : ('running' as const))
     );
     return store;
   }
 
   it('approval gate that loses the pause CAS to an external transition halts cleanly', async () => {
-    const store = createExternallyFailedStore();
+    const store = createExternallyCancelledStore();
     const mockDeps = createMockDeps(store);
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun();
@@ -20676,6 +20774,7 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
     const events = (store.createWorkflowEvent as Mock<() => Promise<void>>).mock.calls.map(
       (c: unknown[]) => (c[0] as { event_type: string }).event_type
     );
+    expect(events).not.toContain('approval_requested');
     expect(events).not.toContain('node_failed');
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
@@ -20687,7 +20786,7 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
       yield { type: 'result', sessionId: 'loop-session-race' };
     });
 
-    const store = createExternallyFailedStore();
+    const store = createExternallyCancelledStore();
     const mockDeps = createMockDeps(store);
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun();
@@ -20736,6 +20835,7 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
     const events = (store.createWorkflowEvent as Mock<() => Promise<void>>).mock.calls.map(
       (c: unknown[]) => (c[0] as { event_type: string }).event_type
     );
+    expect(events).not.toContain('approval_requested');
     expect(events).not.toContain('node_failed');
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();

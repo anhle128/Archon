@@ -164,6 +164,26 @@ export async function runPlannotatorGateSupervisor(
           dropChild();
           return waitingResult;
         }
+        if (reviewUrl !== undefined) {
+          try {
+            await deps.store.createWorkflowEvent({
+              workflow_run_id: deps.runId,
+              event_type: 'approval_requested',
+              step_name: deps.nodeId,
+              data: {
+                gateType: 'plannotator_gate',
+                nodeId: deps.nodeId,
+                message: deps.message,
+                reviewUrl,
+              },
+            });
+          } catch (err) {
+            log.error(
+              { err: err as Error, workflowRunId: deps.runId, nodeId: deps.nodeId },
+              'plannotator_gate.approval_event_persist_failed'
+            );
+          }
+        }
       }
 
       if (child && childDone) {

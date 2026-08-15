@@ -324,14 +324,30 @@ function baseDeps(
 
 describe('runPlannotatorGateSupervisor', () => {
   test('persists the live Plannotator URL while the gate waits for review', async () => {
-    const store = new FakeGateStore('run-review-url');
+    const store = new FakeGateStore('run-1');
+    const createWorkflowEvent = store.createWorkflowEvent;
+    let waitingCommittedAtApprovalRequest = false;
+    store.createWorkflowEvent = event => {
+      if (event.event_type === 'approval_requested') {
+        const approval = store.run.metadata.approval as ApprovalContext;
+        waitingCommittedAtApprovalRequest =
+          approval.phase === 'waiting_decision' &&
+          approval.reviewUrl === 'https://archon-host.example.ts.net:19432';
+      }
+      return createWorkflowEvent(event);
+    };
     const child = {
       ...makeChild({ exitCode: 0, stdout: '', delayMs: 60_000 }),
-      reviewUrl: Promise.resolve('http://minis-mac-mini.taildae6a9.ts.net:19432'),
+      reviewUrl: Promise.resolve('https://archon-host.example.ts.net:19432'),
     };
 
     const supervisor = runPlannotatorGateSupervisor(
-      baseDeps(store, { spawnAnnotate: async () => child, pollIntervalMs: 10 })
+      baseDeps(store, {
+        nodeId: 'review',
+        message: 'Review the document.',
+        spawnAnnotate: async () => child,
+        pollIntervalMs: 10,
+      })
     );
 
     await child.waitStarted;
@@ -339,10 +355,54 @@ describe('runPlannotatorGateSupervisor', () => {
     const approval = store.run.metadata.approval as ApprovalContext;
     expect(approval.type).toBe('plannotator_gate');
     expect(approval.phase).toBe('waiting_decision');
-    expect(approval.reviewUrl).toBe('http://minis-mac-mini.taildae6a9.ts.net:19432');
+    expect(approval.reviewUrl).toBe('https://archon-host.example.ts.net:19432');
+    expect(waitingCommittedAtApprovalRequest).toBe(true);
+    expect(store.events.filter(event => event.event_type === 'approval_requested')).toEqual([
+      {
+        workflow_run_id: 'run-1',
+        event_type: 'approval_requested',
+        step_name: 'review',
+        data: {
+          gateType: 'plannotator_gate',
+          nodeId: 'review',
+          message: 'Review the document.',
+          reviewUrl: 'https://archon-host.example.ts.net:19432',
+        },
+      },
+    ]);
 
     store.externalApprove();
     await supervisor;
+  });
+
+  test('approval event persistence failure does not fail the live gate', async () => {
+    const store = new FakeGateStore('run-event-failure');
+    const createWorkflowEvent = mock(() => Promise.reject(new Error('event store unavailable')));
+    store.createWorkflowEvent = createWorkflowEvent;
+    const child = {
+      ...makeChild({
+        exitCode: 0,
+        stdout: '{"decision":"approved","feedback":"LGTM"}',
+      }),
+      reviewUrl: Promise.resolve('https://archon-host.example.ts.net:19432'),
+    };
+
+    const result = await runPlannotatorGateSupervisor(
+      baseDeps(store, { spawnAnnotate: async () => child })
+    );
+
+    expect(result).toEqual({ kind: 'approved', output: '' });
+    expect(createWorkflowEvent).toHaveBeenCalledWith({
+      workflow_run_id: 'run-event-failure',
+      event_type: 'approval_requested',
+      step_name: 'clarify-gate',
+      data: {
+        gateType: 'plannotator_gate',
+        nodeId: 'clarify-gate',
+        message: 'Review the plan',
+        reviewUrl: 'https://archon-host.example.ts.net:19432',
+      },
+    });
   });
 
   test('child approved JSON records approval, resumes run, returns output', async () => {
@@ -641,6 +701,7 @@ describe('runPlannotatorGateSupervisor', () => {
     expect(result).toEqual({ kind: 'approved', output: 'won-the-race' });
     expect((store.run.metadata.approval as ApprovalContext).resolved).toBe('approved');
     expect(store.events.filter(event => event.event_type === 'node_completed')).toHaveLength(1);
+    expect(store.events.filter(event => event.event_type === 'approval_requested')).toHaveLength(0);
   });
 
   test.each([
