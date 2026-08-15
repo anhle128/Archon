@@ -160,6 +160,7 @@ export interface PlannotatorGateTransitionInput {
   nextGateId?: string;
   document: string;
   phase: NonNullable<ApprovalContext['phase']>;
+  reviewUrl?: string | null;
 }
 
 export type PlannotatorGateTransitionResult =

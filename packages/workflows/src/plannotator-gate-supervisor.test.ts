@@ -184,6 +184,7 @@ class FakeGateStore implements Pick<
       gateId: input.nextGateId ?? input.expectedGateId,
       document: input.document,
       phase: input.phase,
+      reviewUrl: input.reviewUrl ?? null,
     };
     this.run.metadata = { ...this.run.metadata, approval: next };
     return { outcome: 'updated', approval: next };
@@ -322,6 +323,28 @@ function baseDeps(
 // ---------------------------------------------------------------------------
 
 describe('runPlannotatorGateSupervisor', () => {
+  test('persists the live Plannotator URL while the gate waits for review', async () => {
+    const store = new FakeGateStore('run-review-url');
+    const child = {
+      ...makeChild({ exitCode: 0, stdout: '', delayMs: 60_000 }),
+      reviewUrl: Promise.resolve('http://minis-mac-mini.taildae6a9.ts.net:19432'),
+    };
+
+    const supervisor = runPlannotatorGateSupervisor(
+      baseDeps(store, { spawnAnnotate: async () => child, pollIntervalMs: 10 })
+    );
+
+    await child.waitStarted;
+    await Bun.sleep(25);
+    const approval = store.run.metadata.approval as ApprovalContext;
+    expect(approval.type).toBe('plannotator_gate');
+    expect(approval.phase).toBe('waiting_decision');
+    expect(approval.reviewUrl).toBe('http://minis-mac-mini.taildae6a9.ts.net:19432');
+
+    store.externalApprove();
+    await supervisor;
+  });
+
   test('child approved JSON records approval, resumes run, returns output', async () => {
     const store = new FakeGateStore('run-approve');
     const child = makeChild({
@@ -859,7 +882,10 @@ describe('default annotate subprocess protocol', () => {
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
 
-  function setup(script: string): {
+  function setup(
+    script: string,
+    readyPayload = '{"url":"http://minis-mac-mini.taildae6a9.ts.net:19432","isRemote":true,"port":19432}'
+  ): {
     store: FakeGateStore;
     deps: PlannotatorGateSupervisorDeps;
     artifactsDir: string;
@@ -868,7 +894,10 @@ describe('default annotate subprocess protocol', () => {
     dirs.push(dir);
     const binary = join(dir, 'plannotator');
     const artifactsDir = join(dir, 'artifacts');
-    writeFileSync(binary, `#!/bin/sh\n${script}\n`);
+    writeFileSync(
+      binary,
+      `#!/bin/sh\nprintf '%s\\n' '${readyPayload}' > "$PLANNOTATOR_READY_FILE"\n${script}\n`
+    );
     chmodSync(binary, 0o700);
     process.env.PLANNOTATOR_BIN = binary;
     const store = new FakeGateStore(`run-${dirs.length}`);
@@ -889,6 +918,15 @@ describe('default annotate subprocess protocol', () => {
     await expect(runPlannotatorGateSupervisor(deps)).rejects.toThrow(/exit.*9.*annotate exploded/i);
   });
 
+  test('rejects a non-HTTP review URL from the ready file', async () => {
+    const { deps } = setup(
+      `printf '%s' '{"decision":"approved"}' > "$7"`,
+      '{"url":"javascript:alert(1)"}'
+    );
+
+    await expect(runPlannotatorGateSupervisor(deps)).rejects.toThrow(/HTTP or HTTPS/i);
+  });
+
   test('rejects exit zero without a result file', async () => {
     const { deps } = setup(`printf '%s\\n' 'stdout is not a decision file'`);
 
@@ -896,7 +934,7 @@ describe('default annotate subprocess protocol', () => {
   });
 
   test('consumes valid atomic result JSON and removes the result file', async () => {
-    const { deps, artifactsDir } = setup(`
+    const { store, deps, artifactsDir } = setup(`
 [ "$1" = annotate ] && [ "$3" = --gate ] && [ "$4" = --json ] && \\
   [ "$5" = --persist-session ] && [ "$6" = --result-file ] || exit 8
 printf '%s' '{"decision":"approved","feedback":"atomic"}' > "$7.tmp"
@@ -908,6 +946,8 @@ mv "$7.tmp" "$7"`);
     expect(existsSync(join(artifactsDir, 'plannotator-gates', 'gate-gate-a-attempt-1.json'))).toBe(
       false
     );
+    const approval = store.run.metadata.approval as ApprovalContext;
+    expect(approval.reviewUrl).toBe('http://minis-mac-mini.taildae6a9.ts.net:19432');
   });
 
   test('drains large stderr concurrently and bounds the failure diagnostic', async () => {

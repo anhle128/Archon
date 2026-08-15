@@ -115,6 +115,23 @@ function isValidNodeCounts(value: unknown): value is NodeCounts {
   );
 }
 
+function getPlannotatorReviewUrl(run: DashboardRunResponse): string | null {
+  if (run.status !== 'paused') return null;
+
+  const approval = run.metadata.approval;
+  if (typeof approval !== 'object' || approval === null) return null;
+
+  const { type, reviewUrl } = approval as Record<string, unknown>;
+  if (type !== 'plannotator_gate' || typeof reviewUrl !== 'string') return null;
+
+  try {
+    const url = new URL(reviewUrl);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
 function NodeCountsSummary({ counts }: { counts: NodeCounts }): React.ReactElement {
   const hasFailures = counts.failed > 0 || counts.skipped > 0;
   return (
@@ -173,6 +190,7 @@ export function WorkflowRunCard({
       ? run.user_message
       : run.user_message.slice(0, 80) + '…'
     : null;
+  const plannotatorReviewUrl = getPlannotatorReviewUrl(run);
 
   return (
     <div className="rounded-lg border border-border bg-surface p-4 space-y-3">
@@ -312,6 +330,17 @@ export function WorkflowRunCard({
           </a>
         )}
         <div className="ml-auto flex items-center gap-1">
+          {plannotatorReviewUrl && (
+            <a
+              href={plannotatorReviewUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-primary/80 hover:bg-primary/10 hover:text-primary focus-visible:bg-primary/10 focus-visible:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 transition-colors"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              Open Plannotator
+            </a>
+          )}
           {run.status === 'paused' && onApprove && (
             <button
               onClick={(): void => {

@@ -103,6 +103,7 @@ class IntegrationGateStore {
       gateId: input.nextGateId ?? input.expectedGateId,
       document: input.document,
       phase: input.phase,
+      reviewUrl: input.reviewUrl ?? null,
     };
     this.run.metadata = { ...this.run.metadata, approval: next };
     return { outcome: 'updated', approval: next };
@@ -175,6 +176,12 @@ const key = basename(resultFile);
 const started = join(controlDir, key + '.started');
 const terminated = join(controlDir, key + '.terminated');
 const control = join(controlDir, key + '.control.json');
+const readyFile = process.env.PLANNOTATOR_READY_FILE;
+if (!readyFile) process.exit(65);
+writeFileSync(
+  readyFile,
+  JSON.stringify({ url: 'http://mac-mini.example.ts.net:19432', isRemote: true, port: 19432 }) + '\\n'
+);
 appendFileSync(invocationLog, JSON.stringify({ args, document: args[1], resultFile }) + '\\n');
 writeFileSync(started, 'started\\n');
 process.on('SIGTERM', () => {
@@ -531,12 +538,19 @@ describe('executePlannotatorGateNode production spawn path', () => {
       integrationArgs(run, store, node, cwd, artifactsDir, getAgentProvider)
     );
     const invocations = await waitForInvocations(fake, 1);
+    for (let attempt = 0; attempt < 600; attempt++) {
+      const approval = store.run.metadata.approval as ApprovalContext;
+      if (approval.reviewUrl) break;
+      await Bun.sleep(5);
+    }
     expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
     expect(store.run.status).toBe('paused');
     expect(store.run.metadata.approval).toMatchObject({
       type: 'plannotator_gate',
       nodeId: 'review',
       gateId: 'gate-approve',
+      phase: 'waiting_decision',
+      reviewUrl: 'http://mac-mini.example.ts.net:19432',
       resolved: null,
     });
     releaseDecision(fake, 'gate-approve', 1, {

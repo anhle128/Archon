@@ -27,6 +27,7 @@ import {
 const log = createLogger('workflow.plannotator-gate');
 
 export interface AnnotateChildHandle {
+  reviewUrl?: Promise<string>;
   wait: () => Promise<{
     exitCode: number;
     stdout: string;
@@ -95,6 +96,7 @@ export async function runPlannotatorGateSupervisor(
     captureResponse: deps.captureResponse,
     document: documentPath,
     phase: 'waiting_decision',
+    reviewUrl: null,
     resolved: null,
   });
 
@@ -141,8 +143,22 @@ export async function runPlannotatorGateSupervisor(
           return r;
         });
         childDone.catch(() => undefined);
+        let reviewUrl: string | undefined;
+        if (child.reviewUrl) {
+          try {
+            reviewUrl = await child.reviewUrl;
+          } catch (err) {
+            const duringOpening = await checkResolved(deps);
+            const duringOpeningResult = await finishGateOutcome(deps, duringOpening);
+            if (duringOpeningResult) {
+              dropChild();
+              return duringOpeningResult;
+            }
+            throw err;
+          }
+        }
         phase = 'waiting_decision';
-        const waiting = await setPhase(deps, documentPath, 'waiting_decision');
+        const waiting = await setPhase(deps, documentPath, 'waiting_decision', reviewUrl);
         const waitingResult = await finishGateOutcome(deps, waiting);
         if (waitingResult) {
           dropChild();
@@ -305,7 +321,8 @@ async function completeApproved(
 async function setPhase(
   deps: PlannotatorGateSupervisorDeps,
   document: string,
-  phase: Phase
+  phase: Phase,
+  reviewUrl?: string
 ): Promise<GateOutcome> {
   const result = await deps.store.transitionPlannotatorGate({
     runId: deps.runId,
@@ -313,6 +330,7 @@ async function setPhase(
     expectedGateId: deps.gateId,
     document,
     phase,
+    reviewUrl: reviewUrl ?? null,
   });
   if (result.outcome === 'updated') return 'continue';
   if (result.outcome === 'resolved') return result.resolved;
@@ -369,16 +387,20 @@ async function defaultSpawnAnnotate(
   cwd: string
 ): Promise<AnnotateChildHandle> {
   await mkdir(dirname(resultFilePath), { recursive: true });
-  await rm(resultFilePath, { force: true });
+  const readyFilePath = `${resultFilePath}.ready`;
+  await Promise.all([rm(resultFilePath, { force: true }), rm(readyFilePath, { force: true })]);
   const proc = Bun.spawn(
     [resolvePlannotatorBinary(), ...buildAnnotateArgv(documentPath, resultFilePath)],
     {
       cwd,
+      env: { ...process.env, PLANNOTATOR_READY_FILE: readyFilePath },
       stdout: 'pipe',
       stderr: 'pipe',
     }
   );
+  const reviewUrl = waitForReviewUrl(readyFilePath, proc.exited);
   return {
+    reviewUrl,
     wait: async (): Promise<Exit> => {
       const stdoutPromise = proc.stdout ? new Response(proc.stdout).text() : Promise.resolve('');
       const stderrPromise = proc.stderr ? new Response(proc.stderr).text() : Promise.resolve('');
@@ -394,11 +416,16 @@ async function defaultSpawnAnnotate(
           resultFileError = err instanceof Error ? err.message : String(err);
         }
       } finally {
-        try {
-          await rm(resultFilePath, { force: true });
-        } catch (err) {
-          resultFileCleanupError = err instanceof Error ? err.message : String(err);
+        const cleanupErrors: string[] = [];
+        await reviewUrl.catch(() => undefined);
+        for (const path of [resultFilePath, readyFilePath]) {
+          try {
+            await rm(path, { force: true });
+          } catch (err) {
+            cleanupErrors.push(err instanceof Error ? err.message : String(err));
+          }
         }
+        resultFileCleanupError = cleanupErrors.length > 0 ? cleanupErrors.join('; ') : undefined;
       }
       return {
         exitCode,
@@ -417,6 +444,60 @@ async function defaultSpawnAnnotate(
       }
     },
   };
+}
+
+async function waitForReviewUrl(readyFilePath: string, exited: Promise<number>): Promise<string> {
+  let processExited = false;
+  void exited.then(
+    () => {
+      processExited = true;
+    },
+    () => {
+      processExited = true;
+    }
+  );
+  const deadline = Date.now() + 30_000;
+  while (true) {
+    try {
+      return parseReviewUrl(await readFile(readyFilePath, 'utf8'));
+    } catch (err) {
+      if (!isMissingFileError(err)) throw err;
+    }
+    if (processExited) {
+      throw new Error('plannotator annotate exited before publishing its review URL');
+    }
+    if (Date.now() >= deadline) {
+      throw new Error('plannotator annotate did not publish its review URL within 30 seconds');
+    }
+    await sleep(50);
+  }
+}
+
+function parseReviewUrl(payload: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload.trim());
+  } catch {
+    throw new Error('plannotator ready file is not valid JSON');
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error('plannotator ready file must contain a JSON object');
+  }
+  const rawReviewUrl = (parsed as Record<string, unknown>).url;
+  if (typeof rawReviewUrl !== 'string') {
+    throw new Error('plannotator ready file does not contain a URL');
+  }
+  const reviewUrl = rawReviewUrl.trim();
+  let url: URL;
+  try {
+    url = new URL(reviewUrl);
+  } catch {
+    throw new Error('plannotator ready file contains an invalid URL');
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error('plannotator ready file URL must use HTTP or HTTPS');
+  }
+  return reviewUrl;
 }
 
 function isMissingFileError(err: unknown): boolean {

@@ -558,6 +558,7 @@ describe('workflows database', () => {
         nextGateId: 'gate-b',
         document: '/tmp/reworked-plan.md',
         phase: 'opening',
+        reviewUrl: 'https://mac-mini.example.ts.net:19432',
       });
 
       expect(result).toEqual({
@@ -567,6 +568,7 @@ describe('workflows database', () => {
           gateId: 'gate-b',
           document: '/tmp/reworked-plan.md',
           phase: 'opening',
+          reviewUrl: 'https://mac-mini.example.ts.net:19432',
         },
       });
       expect(mockQuery).toHaveBeenNthCalledWith(
@@ -584,6 +586,7 @@ describe('workflows database', () => {
             gateId: 'gate-b',
             document: '/tmp/reworked-plan.md',
             phase: 'opening',
+            reviewUrl: 'https://mac-mini.example.ts.net:19432',
           },
         }),
       ]);
@@ -796,6 +799,8 @@ describe('workflows database', () => {
       // rule — a stale snapshot from a prior loop gate must never survive
       // into an unrelated pause.
       expect(payload.approval.commandSnapshot).toBeNull();
+      // A stale Plannotator URL must not leak into a later approval gate.
+      expect(payload.approval.reviewUrl).toBeNull();
     });
 
     test('preserves completionSignaled/signaledOutput when the gate provides them (#2074)', async () => {

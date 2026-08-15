@@ -289,6 +289,7 @@ export async function transitionPlannotatorGate(
         gateId: input.nextGateId ?? input.expectedGateId,
         document: input.document,
         phase: input.phase,
+        reviewUrl: input.reviewUrl ?? null,
       };
       const result = await query(
         `UPDATE remote_agent_workflow_runs
@@ -1486,6 +1487,7 @@ export async function pauseWorkflowRun(
             // like every other optional sub-field so a prior gate's childRunId can't
             // leak into a later non-child gate via SQLite json_patch deep-merge.
             childRunId: approvalContext.childRunId ?? null,
+            reviewUrl: approvalContext.reviewUrl ?? null,
           },
           // Fold caller-supplied run-level metadata (e.g. `pending_writeback`) into the
           // SAME atomic write so there is no window where the run is paused without it (M3).

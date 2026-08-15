@@ -309,6 +309,12 @@ export interface ApprovalContext {
    * Optional metadata only — not required by the type guard.
    */
   phase?: 'opening' | 'waiting_decision' | 'reworking' | 'idle';
+  /**
+   * Live HTTP(S) URL for the current Plannotator session.
+   * Set only while `type === 'plannotator_gate'` and `phase === 'waiting_decision'`.
+   * Reset explicitly on every other gate or phase so SQLite cannot retain a stale URL.
+   */
+  reviewUrl?: string | null;
   /** Current loop iteration when paused (interactive loops only). */
   iteration?: number;
   /**
