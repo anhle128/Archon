@@ -41,3 +41,36 @@ Commit message: `feat(core): enrich approval callback payloads`.
 
 `ARCHON_PUBLIC_URL` is required only when a non-Plannotator approval callback reaches an allowed binding.
 If it is unset or invalid, Archon logs the callback enqueue error and does not fail the workflow gate.
+
+## Fix Round 1
+
+### Summary
+
+Added regression coverage for `ARCHON_PUBLIC_URL` values that include an existing path, query, and hash.
+The callback URL now has the expected console path, encoded codebase and run IDs, and no old query or hash.
+Added best-effort negative coverage for unset `ARCHON_PUBLIC_URL`, invalid `ARCHON_PUBLIC_URL`, and missing `codebase_id`.
+The missing `codebase_id` case exposed a bug where approval callbacks wrote a not-routable outbox row before enrichment could fail.
+The fix adds an approval-only guard before the legacy missing-codebase outbox path.
+
+### Red Evidence
+
+`cd packages/core && bun test src/workflows/store-adapter.test.ts` failed before the production fix.
+The failing case was `createWorkflowEvent keeps internal approval event when codebase_id is missing`.
+The test expected no external callback enqueue, but the old path wrote one not-routable outbox row.
+
+### Green Evidence
+
+`cd packages/core && bun test src/workflows/store-adapter.test.ts` passed with 30 tests.
+`cd packages/core && bun test src/events/workflow-event-envelope.test.ts` passed with 9 tests.
+`cd packages/core && bun run type-check` passed.
+
+### Self-Review
+
+The production change is limited to approval callbacks.
+Non-approval missing-codebase events keep the existing not-routable outbox behavior.
+`WorkflowRun.user_message` is a required `z.string()` in `packages/workflows/src/schemas/workflow-run.ts`.
+An empty string is schema-valid there, but the existing approval envelope schema rejects it as an empty `userPrompt`, so no new production constraint was added.
+
+### Commit
+
+Fix commit hash: `d558cc667c64bed220ac8b44bed181940022eaa0`.
