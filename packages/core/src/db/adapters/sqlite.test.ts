@@ -634,6 +634,7 @@ describe('SqliteAdapter', () => {
       expect(cols).toContain('provider');
       expect(cols).toContain('name');
       expect(cols).toContain('event_route');
+      expect(cols).toContain('event_types');
       expect(cols).toContain('signing_secret');
 
       // The pre-existing row must survive the upgrade untouched.
@@ -667,6 +668,42 @@ describe('SqliteAdapter', () => {
       );
 
       expect(result.rows[0]?.signing_secret).toBe('local-test-value');
+    });
+
+    test('upgrade: adds event_types with an empty allowlist for existing bindings', async () => {
+      const dbPath = join(
+        import.meta.dir,
+        `.test-sqlite-binding-events-${Date.now()}-${Math.random().toString(36).slice(2)}.db`
+      );
+      currentDbPath = dbPath;
+      const raw = new Database(dbPath);
+      raw.exec(`
+        CREATE TABLE remote_agent_workflow_provider_bindings (
+          id TEXT PRIMARY KEY,
+          provider TEXT NOT NULL,
+          name TEXT NOT NULL,
+          codebase_id TEXT NOT NULL,
+          event_route TEXT NOT NULL,
+          state TEXT NOT NULL DEFAULT 'active',
+          binding_version INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT,
+          updated_at TEXT,
+          UNIQUE (provider, name)
+        );
+        INSERT INTO remote_agent_workflow_provider_bindings
+          (id, provider, name, codebase_id, event_route)
+        VALUES ('wpb-legacy', 'archon', 'legacy', 'cb-legacy', 'https://hermes.example/events');
+      `);
+      raw.close();
+
+      db = new SqliteAdapter(dbPath);
+      const cols = raw_pragma(dbPath, 'remote_agent_workflow_provider_bindings');
+      expect(cols).toContain('event_types');
+      const rows = await db.query<{ event_types: string }>(
+        'SELECT event_types FROM remote_agent_workflow_provider_bindings WHERE id = $1',
+        ['wpb-legacy']
+      );
+      expect(rows.rows[0]?.event_types).toBe('[]');
     });
 
     // ---------------------------------------------------------------------------

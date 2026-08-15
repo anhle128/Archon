@@ -9,6 +9,7 @@ describe('workflowProviderBindingSchema (Story 3.1)', () => {
       name: 'workflow-engine-primary',
       codebase_id: 'cb-1',
       event_route: 'https://hermes.example/events/workflow-engine',
+      event_types: ['workflow.approval.requested'],
       state: 'active',
       binding_version: 1,
       created_at: '2026-07-11T11:48:27.000Z',
@@ -24,12 +25,35 @@ describe('workflowProviderBindingSchema (Story 3.1)', () => {
         'name',
         'codebase_id',
         'event_route',
+        'event_types',
         'state',
         'binding_version',
         'created_at',
         'updated_at',
       ].sort()
     );
+  });
+
+  test('accepts only external workflow event types', () => {
+    const row = {
+      id: 'wpb-1',
+      provider: 'archon',
+      name: 'workflow-engine-primary',
+      codebase_id: 'cb-1',
+      event_route: 'https://hermes.example/events/workflow-engine',
+      event_types: ['workflow.approval.requested'],
+      state: 'active',
+      binding_version: 1,
+      created_at: '2026-07-11T11:48:27.000Z',
+      updated_at: '2026-07-11T11:48:27.000Z',
+    };
+
+    expect(workflowProviderBindingSchema.parse(row).event_types).toEqual([
+      'workflow.approval.requested',
+    ]);
+    expect(() =>
+      workflowProviderBindingSchema.parse({ ...row, event_types: ['workflow.unknown'] })
+    ).toThrow();
   });
 
   test('state accepts all persisted state values', () => {
@@ -40,6 +64,7 @@ describe('workflowProviderBindingSchema (Story 3.1)', () => {
         name: 'workflow-engine-primary',
         codebase_id: 'cb-1',
         event_route: 'https://hermes.example/events/workflow-engine',
+        event_types: ['workflow.approval.requested'],
         state,
         binding_version: 1,
         created_at: '2026-07-11T11:48:27.000Z',
@@ -57,6 +82,7 @@ describe('workflowProviderBindingSchema (Story 3.1)', () => {
       name: 'workflow-engine-primary',
       codebase_id: 'cb-1',
       event_route: 'https://hermes.example/events/workflow-engine',
+      event_types: ['workflow.approval.requested'],
       state: 'active',
       binding_version: 1,
       created_at: timestamp,
@@ -75,6 +101,7 @@ describe('workflowProviderBindingSchema (Story 3.1)', () => {
       name: 'workflow-engine-primary',
       codebase_id: 'cb-1',
       event_route: 'https://hermes.example/events/workflow-engine',
+      event_types: ['workflow.approval.requested'],
       state: 'conflicting',
       binding_version: 1,
       created_at: '2026-07-11T11:48:27.000Z',
@@ -104,6 +131,7 @@ describe('workflowProviderBindingSchema (Story 3.1)', () => {
       name: 'workflow-engine-primary',
       codebase_id: 'cb-1',
       event_route: 'https://hermes.example/events/workflow-engine',
+      event_types: ['workflow.approval.requested'],
       signing_secret: 'local-test-value',
       state: 'active',
       binding_version: 1,

@@ -669,6 +669,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_workflow_provider_bindings (
   name            TEXT NOT NULL,
   codebase_id     UUID NOT NULL REFERENCES remote_agent_codebases(id) ON DELETE CASCADE,
   event_route     TEXT NOT NULL,
+  event_types     TEXT NOT NULL DEFAULT '[]',
   signing_secret  TEXT,
   state           TEXT NOT NULL DEFAULT 'active',
   binding_version INTEGER NOT NULL DEFAULT 1,
@@ -698,6 +699,9 @@ COMMENT ON COLUMN remote_agent_workflow_provider_bindings.signing_secret IS
 -- Story 3.5: existing provider-binding tables predate the private signing secret.
 ALTER TABLE remote_agent_workflow_provider_bindings
   ADD COLUMN IF NOT EXISTS signing_secret TEXT;
+
+ALTER TABLE remote_agent_workflow_provider_bindings
+  ADD COLUMN IF NOT EXISTS event_types TEXT NOT NULL DEFAULT '[]';
 
 -- ============================================================================
 -- Table 12: Workflow Event Outbox

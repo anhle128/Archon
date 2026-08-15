@@ -47,6 +47,7 @@ function bindingRow(overrides: Record<string, unknown> = {}): Record<string, unk
     name: 'workflow-engine-primary',
     codebase_id: 'cb-1',
     event_route: 'https://hermes.example/events/workflow-engine',
+    event_types: '["workflow.approval.requested"]',
     state: 'active',
     binding_version: 1,
     created_at: '2026-07-11T11:48:27.000Z',
@@ -62,7 +63,7 @@ describe('provider-bindings db layer (Story 3.1)', () => {
   });
 
   describe('createBinding()', () => {
-    test('inserts provider/name/codebase_id/event_route/signing_secret with ON CONFLICT DO NOTHING', async () => {
+    test('inserts provider/name/codebase_id/event_route/event_types/signing_secret with ON CONFLICT DO NOTHING', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
       mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
 
@@ -71,6 +72,7 @@ describe('provider-bindings db layer (Story 3.1)', () => {
         name: 'workflow-engine-primary',
         codebaseId: 'cb-1',
         eventRoute: 'https://hermes.example/events/workflow-engine',
+        eventTypes: ['workflow.approval.requested'],
         signingSecret: 'local-test-value',
       });
 
@@ -84,6 +86,7 @@ describe('provider-bindings db layer (Story 3.1)', () => {
       expect(params).toContain('workflow-engine-primary');
       expect(params).toContain('cb-1');
       expect(params).toContain('https://hermes.example/events/workflow-engine');
+      expect(params).toContain('["workflow.approval.requested"]');
       expect(params).toContain('local-test-value');
     });
 
@@ -112,6 +115,7 @@ describe('provider-bindings db layer (Story 3.1)', () => {
       const result = await getBinding('archon', 'workflow-engine-primary');
 
       expect(result).not.toBeNull();
+      expect(result?.event_types).toEqual(['workflow.approval.requested']);
       expect('signing_secret' in (result ?? {})).toBe(false);
     });
 
@@ -163,6 +167,7 @@ describe('provider-bindings db layer (Story 3.1)', () => {
         name: 'workflow-engine-primary',
         codebaseId: 'cb-1',
         eventRoute: 'https://hermes.example/events/v2',
+        eventTypes: ['workflow.approval.requested'],
         signingSecret: 'local-test-value-v2',
       });
 
@@ -175,6 +180,7 @@ describe('provider-bindings db layer (Story 3.1)', () => {
       expect(updateSql).not.toContain('INSERT INTO');
       expect(updateSql).toMatch(/WHERE\s+provider\s*=\s*\$\d+\s+AND\s+name\s*=\s*\$\d+/);
       expect(updateParams).toContain('https://hermes.example/events/v2');
+      expect(updateParams).toContain('["workflow.approval.requested"]');
       expect(updateParams).toContain('local-test-value-v2');
     });
 
@@ -421,6 +427,14 @@ describe('provider-bindings db layer (Story 3.1)', () => {
       const corruptRow = bindingRow();
       delete corruptRow.codebase_id;
       mockQuery.mockResolvedValueOnce(createQueryResult([corruptRow]));
+
+      await expect(getBinding('archon', 'workflow-engine-primary')).rejects.toThrow(
+        /BINDING_CORRUPT_ROW/
+      );
+    });
+
+    test('throws BINDING_CORRUPT_ROW for invalid event_types JSON', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow({ event_types: '{' })]));
 
       await expect(getBinding('archon', 'workflow-engine-primary')).rejects.toThrow(
         /BINDING_CORRUPT_ROW/

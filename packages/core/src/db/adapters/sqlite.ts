@@ -434,9 +434,7 @@ export class SqliteAdapter implements IDatabase {
       allApplied = false;
     }
 
-    // Workflow provider binding columns. Story 3.5 adds a private signing
-    // secret for outbound workflow-event HMACs; public binding projections
-    // intentionally keep using the secret-free row schema.
+    // Workflow provider binding columns added after the table first shipped.
     try {
       const cols = this.db
         .prepare("PRAGMA table_info('remote_agent_workflow_provider_bindings')")
@@ -447,6 +445,11 @@ export class SqliteAdapter implements IDatabase {
       if (cols.length > 0 && !colNames.has('signing_secret')) {
         this.db.run(
           'ALTER TABLE remote_agent_workflow_provider_bindings ADD COLUMN signing_secret TEXT'
+        );
+      }
+      if (cols.length > 0 && !colNames.has('event_types')) {
+        this.db.run(
+          "ALTER TABLE remote_agent_workflow_provider_bindings ADD COLUMN event_types TEXT NOT NULL DEFAULT '[]'"
         );
       }
     } catch (e: unknown) {
@@ -833,6 +836,7 @@ export class SqliteAdapter implements IDatabase {
         name TEXT NOT NULL,
         codebase_id TEXT NOT NULL REFERENCES remote_agent_codebases(id) ON DELETE CASCADE,
         event_route TEXT NOT NULL,
+        event_types TEXT NOT NULL DEFAULT '[]',
         signing_secret TEXT,
         state TEXT NOT NULL DEFAULT 'active',
         binding_version INTEGER NOT NULL DEFAULT 1,

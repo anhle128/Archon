@@ -3,6 +3,7 @@ import {
   workflowProviderBindingSchema,
   type WorkflowProviderBinding,
 } from '../schemas/workflow-provider-binding';
+import type { ExternalWorkflowEventType } from '../schemas/workflow-event';
 import { createLogger } from '@archon/paths';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -31,8 +32,19 @@ function hexEncode(value: string): string {
   ).join('');
 }
 
+function normalizeBindingRow(row: unknown): unknown {
+  if (typeof row !== 'object' || row === null || !('event_types' in row)) return row;
+  const eventTypes = (row as { event_types?: unknown }).event_types;
+  if (typeof eventTypes !== 'string') return row;
+  try {
+    return { ...row, event_types: JSON.parse(eventTypes) as unknown };
+  } catch {
+    return row;
+  }
+}
+
 function parseBindingRow(row: unknown): WorkflowProviderBinding {
-  const parsed = workflowProviderBindingSchema.safeParse(row);
+  const parsed = workflowProviderBindingSchema.safeParse(normalizeBindingRow(row));
   if (parsed.success) {
     return parsed.data;
   }
@@ -51,7 +63,7 @@ function parseBindingRow(row: unknown): WorkflowProviderBinding {
 }
 
 function parseBindingRowWithSecret(row: unknown): WorkflowProviderBindingWithSecret {
-  const parsed = workflowProviderBindingWithSecretSchema.safeParse(row);
+  const parsed = workflowProviderBindingWithSecretSchema.safeParse(normalizeBindingRow(row));
   if (parsed.success) {
     return parsed.data;
   }
@@ -69,6 +81,7 @@ export async function createBinding(input: {
   name: string;
   codebaseId: string;
   eventRoute: string;
+  eventTypes?: readonly ExternalWorkflowEventType[];
   signingSecret?: string | null;
 }): Promise<WorkflowProviderBinding> {
   const dialect = getDialect();
@@ -78,8 +91,8 @@ export async function createBinding(input: {
   return await db.withTransaction(async query => {
     const result = await query<WorkflowProviderBinding>(
       `INSERT INTO remote_agent_workflow_provider_bindings
-         (id, provider, name, codebase_id, event_route, signing_secret, state, binding_version)
-       VALUES ($1, $2, $3, $4, $5, $6, 'active', 1)
+         (id, provider, name, codebase_id, event_route, event_types, signing_secret, state, binding_version)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', 1)
        ON CONFLICT (provider, name) DO NOTHING`,
       [
         id,
@@ -87,6 +100,7 @@ export async function createBinding(input: {
         input.name,
         input.codebaseId,
         input.eventRoute,
+        JSON.stringify(input.eventTypes ?? []),
         input.signingSecret ?? null,
       ]
     );
@@ -148,6 +162,7 @@ export async function updateBinding(input: {
   name: string;
   codebaseId: string;
   eventRoute: string;
+  eventTypes?: readonly ExternalWorkflowEventType[];
   signingSecret?: string | null;
 }): Promise<WorkflowProviderBinding> {
   const dialect = getDialect();
@@ -172,12 +187,14 @@ export async function updateBinding(input: {
       `UPDATE remote_agent_workflow_provider_bindings
        SET codebase_id = $1,
            event_route = $2,
-           signing_secret = COALESCE($3, signing_secret),
+           event_types = COALESCE($3, event_types),
+           signing_secret = COALESCE($4, signing_secret),
            updated_at = ${dialect.now()}
-       WHERE provider = $4 AND name = $5 AND binding_version = $6 AND state = $7`,
+       WHERE provider = $5 AND name = $6 AND binding_version = $7 AND state = $8`,
       [
         input.codebaseId,
         input.eventRoute,
+        input.eventTypes === undefined ? null : JSON.stringify(input.eventTypes),
         input.signingSecret ?? null,
         input.provider,
         input.name,

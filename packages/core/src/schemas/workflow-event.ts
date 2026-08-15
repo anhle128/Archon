@@ -3,6 +3,17 @@
  */
 import { z } from '@hono/zod-openapi';
 
+export const externalWorkflowEventTypeSchema = z.enum([
+  'workflow.run.started',
+  'workflow.run.completed',
+  'workflow.run.failed',
+  'workflow.approval.requested',
+  'workflow.delivery.failed',
+  'workflow.artifact.recorded',
+]);
+
+export type ExternalWorkflowEventType = z.infer<typeof externalWorkflowEventTypeSchema>;
+
 // ---------------------------------------------------------------------------
 // Event data schemas
 // ---------------------------------------------------------------------------

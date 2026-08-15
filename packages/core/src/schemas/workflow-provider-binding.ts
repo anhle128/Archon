@@ -1,4 +1,5 @@
 import { z } from '@hono/zod-openapi';
+import { externalWorkflowEventTypeSchema } from './workflow-event';
 
 export const workflowProviderBindingStateSchema = z.enum(['active', 'disabled', 'rotated']);
 
@@ -12,6 +13,7 @@ export const workflowProviderBindingSchema = z.object({
   name: z.string(),
   codebase_id: z.string(),
   event_route: z.string(),
+  event_types: z.array(externalWorkflowEventTypeSchema),
   state: workflowProviderBindingStateSchema,
   binding_version: z.number(),
   created_at: dbTimestamp,

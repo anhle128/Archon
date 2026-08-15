@@ -31,6 +31,7 @@ export type { Session, SessionMetadata } from './session';
 
 // WorkflowEvent
 export {
+  externalWorkflowEventTypeSchema,
   workflowEventRowSchema,
   routeLoopDecisionEventDataSchema,
   nodeRetryRequestedEventDataSchema,
@@ -38,6 +39,7 @@ export {
   nodeRetryFailedEventDataSchema,
 } from './workflow-event';
 export type {
+  ExternalWorkflowEventType,
   WorkflowEventRow,
   RouteLoopDecisionEventData,
   NodeRetryRequestedEventData,

@@ -1,13 +1,8 @@
 import { deriveBindingId } from '../db/provider-bindings';
+import type { ExternalWorkflowEventType } from '../schemas/workflow-event';
 import { z } from '@hono/zod-openapi';
 
-export type ExternalWorkflowEventType =
-  | 'workflow.run.started'
-  | 'workflow.run.completed'
-  | 'workflow.run.failed'
-  | 'workflow.approval.requested'
-  | 'workflow.delivery.failed'
-  | 'workflow.artifact.recorded';
+export type { ExternalWorkflowEventType } from '../schemas/workflow-event';
 
 export interface WorkflowEventEnvelopeRun {
   id: string;
