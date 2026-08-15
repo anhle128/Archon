@@ -20812,6 +20812,12 @@ const resultFile = args[resultIndex + 1];
 const controlDir = ${JSON.stringify(controlDir)};
 const invocationLog = ${JSON.stringify(invocationLog)};
 const key = basename(resultFile);
+const readyFile = process.env.PLANNOTATOR_READY_FILE;
+if (!readyFile) process.exit(65);
+writeFileSync(
+  readyFile,
+  JSON.stringify({ url: 'http://mac-mini.example.ts.net:19432', isRemote: true, port: 19432 }) + '\\n'
+);
 appendFileSync(invocationLog, JSON.stringify({ args, document: args[1], resultFile }) + '\\n');
 writeFileSync(join(controlDir, key + '.started'), 'started\\n');
 process.on('SIGTERM', () => {
@@ -21339,6 +21345,7 @@ describe('executeDagWorkflow -- production Plannotator gate integration', () => 
       'speckit-converge-review-gate:prepare',
       'speckit-converge-review-gate',
       'ralph-tasks-to-ralph',
+      'update-bmad-sprint-status',
       'create-pull-request',
     ]);
     expect(calls.filter(nodeId => rolloutNodes.has(nodeId))).toEqual([
@@ -21347,6 +21354,7 @@ describe('executeDagWorkflow -- production Plannotator gate integration', () => 
       'speckit-converge-review-gate',
       'ralph-tasks-to-ralph',
       'speckit-converge',
+      'update-bmad-sprint-status',
       'create-pull-request',
     ]);
     expect(calls.filter(nodeId => nodeId === 'create-pull-request')).toHaveLength(1);

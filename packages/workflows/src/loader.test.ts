@@ -3042,7 +3042,8 @@ nodes:
       expect(nodes.get('ralph-sync-back')?.depends_on).toEqual(['ralph-loop-run']);
       expect(nodes.get('speckit-converge')?.depends_on).toEqual(['ralph-sync-back']);
       expect(nodes.get('cargo-clean-before-pr')?.depends_on).toEqual(['speckit-converge-gate']);
-      expect(nodes.get('create-pull-request')?.depends_on).toEqual(['cargo-clean-before-pr']);
+      expect(nodes.get('update-bmad-sprint-status')?.depends_on).toEqual(['cargo-clean-before-pr']);
+      expect(nodes.get('create-pull-request')?.depends_on).toEqual(['update-bmad-sprint-status']);
       expect(isCancelNode(nodes.get('speckit-converge-exhausted'))).toBe(true);
     });
   });
