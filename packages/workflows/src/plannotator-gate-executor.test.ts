@@ -511,7 +511,7 @@ describe('executePlannotatorGateNode production spawn path', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  test('approves through Bun.spawn, records completion once, and resumes once', async () => {
+  test('approves a nested gate with scoped ready identity, one completion, and one resume', async () => {
     const document = join(cwd, 'plan.md');
     writeFileSync(document, '# Plan');
     const run = makeRun({
@@ -534,9 +534,9 @@ describe('executePlannotatorGateNode production spawn path', () => {
       },
     };
 
-    const execution = executePlannotatorGateNode(
-      integrationArgs(run, store, node, cwd, artifactsDir, getAgentProvider)
-    );
+    const args = integrationArgs(run, store, node, cwd, artifactsDir, getAgentProvider);
+    args.stepName = 'review-loop.review';
+    const execution = executePlannotatorGateNode(args);
     const invocations = await waitForInvocations(fake, 1);
     for (let attempt = 0; attempt < 600; attempt++) {
       const approval = store.run.metadata.approval as ApprovalContext;
@@ -553,6 +553,19 @@ describe('executePlannotatorGateNode production spawn path', () => {
       reviewUrl: 'http://mac-mini.example.ts.net:19432',
       resolved: null,
     });
+    expect(store.events.filter(event => event.event_type === 'approval_requested')).toEqual([
+      {
+        workflow_run_id: 'run-1',
+        event_type: 'approval_requested',
+        step_name: 'review-loop.review',
+        data: {
+          gateType: 'plannotator_gate',
+          nodeId: 'review',
+          message: expect.any(String),
+          reviewUrl: 'http://mac-mini.example.ts.net:19432',
+        },
+      },
+    ]);
     releaseDecision(fake, 'gate-approve', 1, {
       decision: 'approved',
       feedback: 'Ship it',

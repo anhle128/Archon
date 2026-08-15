@@ -42,6 +42,7 @@ export interface AnnotateChildHandle {
 export interface PlannotatorGateSupervisorDeps {
   runId: string;
   nodeId: string;
+  stepName: string;
   gateId: string;
   cwd: string;
   artifactsDir: string;
@@ -169,7 +170,7 @@ export async function runPlannotatorGateSupervisor(
             await deps.store.createWorkflowEvent({
               workflow_run_id: deps.runId,
               event_type: 'approval_requested',
-              step_name: deps.nodeId,
+              step_name: deps.stepName,
               data: {
                 gateType: 'plannotator_gate',
                 nodeId: deps.nodeId,

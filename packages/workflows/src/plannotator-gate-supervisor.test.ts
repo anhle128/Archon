@@ -305,6 +305,7 @@ function baseDeps(
   return {
     runId: store.run.id,
     nodeId: 'clarify-gate',
+    stepName: 'clarify-gate',
     cwd: '/tmp/proj',
     artifactsDir: '/tmp/proj/artifacts',
     initialDocumentPath: '/tmp/proj/artifacts/plan.html',
@@ -344,6 +345,7 @@ describe('runPlannotatorGateSupervisor', () => {
     const supervisor = runPlannotatorGateSupervisor(
       baseDeps(store, {
         nodeId: 'review',
+        stepName: 'review',
         message: 'Review the document.',
         spawnAnnotate: async () => child,
         pollIntervalMs: 10,

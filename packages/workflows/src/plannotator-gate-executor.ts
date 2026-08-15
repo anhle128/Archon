@@ -467,6 +467,7 @@ export async function executePlannotatorGateNode(
     const result = await runPlannotatorGateSupervisor({
       runId: workflowRun.id,
       nodeId: node.id,
+      stepName: args.stepName,
       gateId,
       cwd,
       artifactsDir,
