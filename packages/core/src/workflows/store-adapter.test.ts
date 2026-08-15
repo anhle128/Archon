@@ -621,6 +621,34 @@ describe('createWorkflowStore', () => {
     expect(mockEnqueueExternalWorkflowEvent).not.toHaveBeenCalled();
   });
 
+  test('createWorkflowEvent keeps internal approval event when ARCHON_PUBLIC_URL has credentials', async () => {
+    process.env.ARCHON_PUBLIC_URL = 'https://user:token@archon.example.ts.net';
+    mockGetWorkflowRun.mockResolvedValueOnce(workflowRunRow());
+    mockResolveEventRoute.mockResolvedValueOnce({
+      routable: true,
+      codebase: codebaseRow(),
+      binding: bindingRow({ event_types: ['workflow.approval.requested'] }),
+      route: 'https://hermes.example/events',
+      secret: 'test-secret',
+    });
+    const store = createWorkflowStore();
+    const event = {
+      workflow_run_id: 'run-1',
+      event_type: 'approval_requested',
+      step_name: 'review',
+      data: {
+        gateType: 'approval',
+        nodeId: 'review',
+        message: 'Review the plan.',
+      },
+    };
+
+    await expect(store.createWorkflowEvent(event)).resolves.toBeUndefined();
+
+    expect(mockCreateWorkflowEvent).toHaveBeenCalledWith(event);
+    expect(mockEnqueueExternalWorkflowEvent).not.toHaveBeenCalled();
+  });
+
   test('createWorkflowEvent keeps internal approval event when codebase_id is missing', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(workflowRunRow({ codebase_id: null }));
     const store = createWorkflowStore();

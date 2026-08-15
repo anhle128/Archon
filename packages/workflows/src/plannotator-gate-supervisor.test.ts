@@ -1017,6 +1017,16 @@ describe('default annotate subprocess protocol', () => {
     await expect(runPlannotatorGateSupervisor(deps)).rejects.toThrow(/HTTP or HTTPS/i);
   });
 
+  test('rejects a credential-bearing review URL from the ready file', async () => {
+    const { store, deps } = setup(
+      `printf '%s' '{"decision":"approved"}' > "$7"`,
+      '{"url":"https://user:token@archon-host.example.ts.net:19432"}'
+    );
+
+    await expect(runPlannotatorGateSupervisor(deps)).rejects.toThrow(/credentials/i);
+    expect(store.events.filter(event => event.event_type === 'approval_requested')).toEqual([]);
+  });
+
   test('rejects exit zero without a result file', async () => {
     const { deps } = setup(`printf '%s\\n' 'stdout is not a decision file'`);
 

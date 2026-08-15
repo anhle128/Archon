@@ -203,4 +203,31 @@ describe('buildWorkflowEventEnvelope', () => {
       })
     ).toThrow();
   });
+
+  test('rejects approval review URLs with user-info credentials', () => {
+    const approvalPayload = payloads['workflow.approval.requested'];
+
+    for (const reviewUrl of [
+      'https://user@archon.example.ts.net/console/p/cb-1/r/run-1',
+      'https://user:token@archon.example.ts.net/console/p/cb-1/r/run-1',
+    ]) {
+      expect(() =>
+        buildWorkflowEventEnvelope({
+          eventId: 'evt-credential-review-url',
+          eventType: 'workflow.approval.requested',
+          occurredAt: '2026-07-25T00:00:00.000Z',
+          run,
+          codebase: baseCodebase,
+          binding,
+          payload: {
+            ...approvalPayload,
+            approval: {
+              ...(approvalPayload.approval as Record<string, unknown>),
+              reviewUrl,
+            },
+          },
+        })
+      ).toThrow();
+    }
+  });
 });

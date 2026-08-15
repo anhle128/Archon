@@ -87,6 +87,9 @@ function requireHttpUrl(value: string, source: string): URL {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new Error(`${source} must use HTTP or HTTPS`);
   }
+  if (url.username !== '' || url.password !== '') {
+    throw new Error(`${source} must not include credentials`);
+  }
   return url;
 }
 

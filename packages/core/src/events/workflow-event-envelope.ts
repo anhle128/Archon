@@ -71,8 +71,12 @@ const httpUrlSchema = z
   .string()
   .url()
   .refine(value => {
-    const protocol = new URL(value).protocol;
-    return protocol === 'http:' || protocol === 'https:';
+    const url = new URL(value);
+    return (
+      (url.protocol === 'http:' || url.protocol === 'https:') &&
+      url.username === '' &&
+      url.password === ''
+    );
   });
 
 const workflowEventPayloadSchemas = {

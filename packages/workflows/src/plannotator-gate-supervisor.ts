@@ -520,6 +520,9 @@ function parseReviewUrl(payload: string): string {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new Error('plannotator ready file URL must use HTTP or HTTPS');
   }
+  if (url.username !== '' || url.password !== '') {
+    throw new Error('plannotator ready file URL must not include credentials');
+  }
   return reviewUrl;
 }
 
