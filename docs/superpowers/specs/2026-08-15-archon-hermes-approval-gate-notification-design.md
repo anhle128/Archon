@@ -98,7 +98,7 @@ The field stores a JSON array of external workflow event names.
 An empty array keeps the current behavior and allows every supported external event type.
 This default preserves all existing bindings.
 
-The provider-binding CLI gains an `--events` option for create and update operations.
+The provider-binding CLI gains an `--event-types` option for create and update operations.
 The Hermes binding is configured with only this value:
 
 ```text
