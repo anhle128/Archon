@@ -335,6 +335,8 @@ async function setPhase(
   if (result.outcome === 'updated') return 'continue';
   if (result.outcome === 'resolved') return result.resolved;
   if (result.outcome === 'superseded') return 'superseded';
+  const run = await requireRun(deps.store, deps.runId);
+  if (!ownsGate(deps, readApproval(run))) return 'superseded';
   throw new Error(`plannotator gate aborted: run '${deps.runId}' is ${result.status}`);
 }
 
