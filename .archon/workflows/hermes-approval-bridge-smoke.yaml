@@ -1,0 +1,9 @@
+name: hermes-approval-bridge-smoke
+description: Verify that a standard Archon approval gate notifies Hermes.
+interactive: true
+
+nodes:
+  - id: approval-review
+    approval:
+      message: "Confirm the standard approval bridge smoke test."
+
