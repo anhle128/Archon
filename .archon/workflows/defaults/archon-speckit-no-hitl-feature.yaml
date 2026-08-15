@@ -1,18 +1,19 @@
-name: archon-speckit-no-hitl-feature
+name: archon-speckit-feature
 description: |
   Use when: User wants to develop a feature using the speckit SDD (Spec-Driven Development) pipeline end-to-end.
   Triggers: "speckit feature", "spec-driven", "sdd pipeline", "full speckit", "speckit full",
             "specify plan implement", "speckit end-to-end", "feature with speckit",
             "speckit pipeline", "sdd feature".
-  Does: Specify → red-team adversarial review → clarify ambiguities → plan → tasks →
-        analyze cross-artifact consistency → tasks-to-ralph → run ralph.sh → sync-back →
-        no-mistakes validation.
-  Prereq: run `no-mistakes init` once in the target repository before validation.
+  Does: Specify → clarify (with Plannotator live review gate) → red-team (with Plannotator
+        live review gate) → plan → tasks → analyze → tasks-to-ralph → ralph.sh → sync-back →
+        converge gate → human review before retry → BMAD sprint status update → PR creation.
   NOT for: Quick one-file fixes, bug fixes, PR reviews.
   NOT for: When a spec already exists (use archon-speckit-plan-to-tasks instead).
   NOT for: Spec generation only without planning (use archon-speckit-spec instead).
 provider: codex
 effort: xhigh
+# Human gates (plannotator_gate) require foreground on web so the live annotate URL is usable.
+interactive: true
 
 nodes:
   - id: setup
@@ -27,16 +28,18 @@ nodes:
       echo "ARTIFACTS_DIR=$ARTIFACTS_DIR"
       echo ""
       echo "Artifacts will be saved to: $ARTIFACTS_DIR"
-      echo "Starting Step 1 of 8: Generating feature specification..."
+      echo "Starting Step 1 of 7: Generating feature specification..."
+  
   - id: specify
     prompt: |
-      /speckit-specify read requirement in $ARGUMENTS , scout source code and all related documents to know the context, don't guess , create detail spec, spawn sub-agents for help
+      /speckit-specify $ARGUMENTS
     depends_on:
       - setup
     effort: high
-    provider: claude
-    model: "fable"
+    provider: grok
+    model: "grok-4.6"
     context: fresh
+
   - id: clarify
     prompt: |
       $speckit-clarifybatch --turn 10
@@ -46,6 +49,7 @@ nodes:
     provider: codex
     model: gpt-5.6-sol
     context: fresh
+
   - id: clarify-respond
     prompt: |
       ## Persona
@@ -79,9 +83,9 @@ nodes:
       4. trigger clarification-answer-review skill
     depends_on:
       - clarify
-    effort: xhigh
-    provider: codex
-    model: gpt-5.6-sol
+    effort: high
+    provider: grok
+    model: "grok-4.6"
     context: fresh
     allowed_tools:
       - Read
@@ -89,15 +93,17 @@ nodes:
       - Glob
       - Grep
       - Bash
+
   - id: clarify-apply
     prompt: |
       $speckit-clarifybatch --apply
     depends_on:
       - clarify-respond
-    provider: codex
-    effort: high
-    model: gpt-5.6-terra
+    provider: claude
+    effort: xhigh
+    model: sonnet
     context: fresh
+
   - id: red-team
     prompt: |
       Read .specify/feature.json to resolve <feature_directory>, then run:
@@ -110,6 +116,7 @@ nodes:
     context: fresh
     denied_tools:
       - Bash
+
   - id: red-team-respond
     prompt: |
       ## Persona
@@ -161,8 +168,9 @@ nodes:
       5. trigger red-team-answer-review skill
     depends_on:
       - red-team
-    provider: codex
-    model: gpt-5.6-sol
+    provider: grok
+    effort: high
+    model: grok-4.6
     context: fresh
     allowed_tools:
       - Read
@@ -171,25 +179,28 @@ nodes:
       - Grep
       - Bash
       - Task
+
   - id: red-team-apply
     prompt: |
       /speckit.red-team.apply --allow-historical-edits
     depends_on:
       - red-team-respond
-    provider: codex
-    effort: high
-    model: gpt-5.6-terra
+    provider: claude
+    effort: xhigh
+    model: sonnet
     context: fresh
+
   - id: plan
     prompt: |
       Read .specify/feature.json to resolve <feature_directory>, then run:
-      /speckit-plan create detail plan <feature_directory>, spawn sub-agents for help
+      /speckit-plan create detail plan <feature_directory>
     depends_on:
       - red-team-apply
     effort: high
-    provider: claude
-    model: "claude-opus-4-8[1M]"
+    provider: grok
+    model: "grok-4.6"
     context: fresh
+
   - id: tasks
     prompt: |
       Read .specify/feature.json to resolve <feature_directory>, then run:
@@ -197,18 +208,23 @@ nodes:
     depends_on:
       - plan
     effort: xhigh
-    model: gpt-5.6-sol
+    provider: codex
+    model: "gpt-5.6-sol"
     context: fresh
+
   - id: analyze
     prompt: |
       Read .specify/feature.json to resolve <feature_directory>.
+      If there is a grill-me reference, read it and follow all decisions.
       Then run:
       /speckit-analyzebatch <feature_directory>
     depends_on:
       - tasks
+    provider: codex
     effort: xhigh
     model: gpt-5.6-sol
     context: fresh
+
   - id: analyze-respond
     prompt: |
       ## Persona
@@ -230,8 +246,7 @@ nodes:
 
       Draft per-finding resolutions for the analyze findings file produced
       by the previous `analyze` node. The file is the single source of
-      truth — no chat-only RECAP drafts. Mirror of the `red-team-respond`
-      flow earlier in this workflow (file-centric, in-place edits).
+      truth — no chat-only RECAP drafts.
       Run all commands from the current working directory; use only relative paths.
 
       ## Instructions
@@ -244,8 +259,7 @@ nodes:
          If the file is missing, or already archived (filename contains
          `-applied-`), STOP and report BLOCKED — do NOT fabricate findings.
       3. Read `<feature_directory>/spec.md`, `plan.md`, and `tasks.md` for context.
-      4. If there is a grill-me reference, read it and follow all decisions.
-      5. For EACH finding row in §2 Findings, INVESTIGATE FIRST — do not punt
+      4. For EACH finding row in §2 Findings, INVESTIGATE FIRST — do not punt
          ambiguity to a human when the answer is available in bounded local
          context. Start with spec.md / plan.md / tasks.md. Inspect code only
          when the finding depends on an existing API, data model, integration
@@ -280,7 +294,7 @@ nodes:
                             Reason MUST cite the verification source
                             (file:line + quoted snippet, or the artifact
                             path:line that disproves the premise).
-      6. Edit the findings file IN-PLACE using the Edit tool. For EACH finding ID:
+      5. Edit the findings file IN-PLACE using the Edit tool. For EACH finding ID:
          a. §2 Findings table — fill the `Status` column with the chosen category.
          b. §3 Resolutions Log block — fill the payload per category:
               - spec-fix: `Target: <path>` (typically `<feature_directory>/spec.md`,
@@ -322,16 +336,16 @@ nodes:
                 auto-tag, but be explicit when obvious).
               - out-of-scope: `Cross-reference: <spec path or ID>` + `Reason:`.
               - skipped: `Reason: <why>`.
-      7. Do NOT modify finding ID, category, severity, location, summary, or
+      6. Do NOT modify finding ID, category, severity, location, summary, or
          recommendation in §2. Do NOT touch §1 Session Summary or §5 Session
          Metadata YAML — `/speckit-analyzebatch --apply` manages those at apply time.
-      8. After editing, print "RESOLUTIONS_DRAFTED" and the absolute path of
+      7. After editing, print "RESOLUTIONS_DRAFTED" and the absolute path of
          the findings file, then STOP.
     depends_on:
       - analyze
-    effort: xhigh
-    provider: codex
-    model: gpt-5.6-sol
+    effort: high
+    provider: grok
+    model: "grok-4.6"
     context: fresh
     allowed_tools:
       - Read
@@ -339,31 +353,37 @@ nodes:
       - Glob
       - Grep
       - Bash
+
   - id: analyze-apply
     prompt: |
       $speckit-analyzebatch --apply --allow-historical-edits
     depends_on:
       - analyze-respond
-    provider: codex
-    effort: high
-    model: gpt-5.6-terra
+    provider: claude
+    effort: xhigh
+    model: sonnet
     context: fresh
+
   - id: ralph-tasks-to-ralph
     prompt: |
       Read .specify/feature.json to resolve <feature_directory>, then run:
       /speckit.ralph-loop.tasks-to-ralph <feature_directory>
     depends_on:
       - analyze-apply
+      - speckit-converge-review-gate
+    trigger_rule: one_success
     provider: codex
-    effort: high
+    effort: xhigh
     model: gpt-5.6-terra
     context: fresh
+
   - id: ralph-loop-run
     bash: |
       bash .specify/extensions/ralph-loop/ralph.sh
     depends_on:
       - ralph-tasks-to-ralph
     timeout: 86400000
+
   - id: ralph-sync-back
     prompt: |
       Read .specify/feature.json to resolve <feature_directory>, then run:
@@ -371,15 +391,141 @@ nodes:
     depends_on:
       - ralph-loop-run
     provider: codex
-    effort: high
+    effort: medium
     model: gpt-5.6-terra
     context: fresh
-  - id: test
-    bash: |
-      no-mistakes axi run \
-        --intent "Validate the completed speckit no-HITL feature implementation for: $ARGUMENTS" \
-        --no-worktree \
-        --yolo
+
+  - id: speckit-converge
+    prompt: |
+      Read .specify/feature.json to resolve <feature_directory>.
+      run speckit-converge
+      Return PASS only when there are no any problem.
+      Return FAIL when it added one or more tasks to tasks.md .
     depends_on:
       - ralph-sync-back
-    timeout: 86400000
+    provider: codex
+    effort: xhigh
+    model: gpt-5.6-sol
+    context: fresh
+    output_format:
+      type: object
+      properties:
+        gate:
+          type: string
+          enum: [PASS, FAIL]
+        tasks_added:
+          type: number
+      required:
+        - gate
+        - tasks_added
+    output_type: speckit-convergence
+
+  # PASS → BMAD sprint status update → PR; FAIL → human review then Ralph retry.
+  - id: speckit-converge-gate
+    depends_on: [speckit-converge]
+    route_loop:
+      condition: "$speckit-converge.output.gate == 'PASS'"
+      max_iterations: 3
+      routes:
+        positive: cargo-clean-before-pr
+        negative: speckit-converge-review-gate
+        exhausted: speckit-converge-exhausted
+
+  - id: speckit-converge-review-gate
+    plannotator_gate:
+      prepare:
+        prompt: |
+          ## Goal
+          Open the active feature's `tasks.md` directly in the supervised
+          `speckit-converge-review-gate` session.
+
+          Converge reported:
+          - gate: $speckit-converge.output.gate
+          - tasks_added: $speckit-converge.output.tasks_added
+
+          ## Steps
+          1. Read `.specify/feature.json` to resolve `<feature_directory>`.
+          2. Confirm `<feature_directory>/tasks.md` exists, is a regular file, and is readable.
+          3. Resolve it to an absolute path.
+          4. Do not generate HTML and do not start a separate Plannotator session.
+             The supervised gate opens the returned Markdown file.
+
+          ## Final output (contract — required)
+          Print only the absolute path to `<feature_directory>/tasks.md`.
+          Do not add a Markdown fence or commentary.
+        effort: medium
+        provider: claude
+        model: sonnet
+        allowed_tools:
+          - Read
+          - Bash
+      message: |
+        Speckit convergence added $speckit-converge.output.tasks_added task(s) to `tasks.md`.
+
+        Review the tasks added by this converge pass directly in `tasks.md`.
+        - **Owner only:** Approve or Send Annotations.
+        - Teammates may Close without ending the session (`--persist-session`).
+        - After Approve: re-run `ralph-tasks-to-ralph` and the Ralph implementation loop.
+
+        Crash recovery: `archon workflow review-open <run-id>` (then `resume` if needed).
+      capture_response: true
+      rework:
+        prompt: |
+          You are handling human Plannotator annotations on the tasks added by
+          this `speckit-converge` pass.
+
+          Markdown path under review: $REVIEW_DOCUMENT
+          Annotations:
+          $REVIEW_ANNOTATIONS
+
+          Converge context: tasks_added=$speckit-converge.output.tasks_added
+
+          ## Instructions
+          1. Read `.specify/feature.json` for `<feature_directory>`.
+          2. Confirm `$REVIEW_DOCUMENT` is that feature's `tasks.md`.
+          3. Apply each actionable annotation directly to the new or related tasks.
+          4. Preserve unrelated, pre-existing, and completed tasks.
+          5. Treat a pure approval or acknowledgement as a no-op.
+          6. Do not generate HTML and do not start another Plannotator session.
+          7. Print only the absolute path to the updated `tasks.md`.
+             Do not add a Markdown fence or commentary.
+  - id: cargo-clean-before-pr
+    bash: |
+      if [ -f Cargo.toml ]; then
+        cargo clean
+      fi
+    depends_on: [speckit-converge-gate]
+
+  - id: update-bmad-sprint-status
+    prompt: |
+      Read `.specify/feature.json` and the active feature's `spec.md` to identify the
+      corresponding BMAD story.
+      Read `_bmad-output/implementation-artifacts/sprint-status.yaml` completely.
+      Match the feature to exactly one story under `development_status` by its story
+      identifier and title, not only by its current status.
+      If exactly one matching story is `backlog`, change only that status to `done`.
+      If the matching story is already `done`, make no change and succeed.
+      If the file is missing, the match is absent or ambiguous, or the matching story
+      has any other status, stop with a clear error and do not modify the file.
+      Verify the final status before completing.
+    provider: codex
+    effort: medium
+    depends_on: [cargo-clean-before-pr]
+    context: fresh
+    model: gpt-5.6-terra
+
+  - id: create-pull-request
+    command: archon-create-pr
+    provider: codex
+    effort: medium
+    depends_on: [update-bmad-sprint-status]
+    context: fresh
+    model: gpt-5.6-terra
+    idle_timeout: 900000
+    output_type: pull-request
+
+  - id: speckit-converge-exhausted
+    cancel: |
+      Speckit convergence still failed after 3 reviewed Ralph retries. Review the latest
+      convergence artifacts and tasks before starting another run; no pull request was created.
+    depends_on: [speckit-converge-gate]
