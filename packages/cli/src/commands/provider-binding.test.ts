@@ -381,6 +381,60 @@ describe('provider-binding CLI command (Story 3.1)', () => {
         })
       );
     });
+
+    test('status ignores invalid event types', async () => {
+      mockGetBinding.mockClear();
+      const logs: string[] = [];
+
+      const exitCode = await providerBindingStatusCommand(
+        {
+          provider: 'archon',
+          name: 'workflow-engine-primary',
+          eventTypes: 'workflow.unknown',
+        },
+        { json: true, log: (line: string): void => logs.push(line) }
+      );
+
+      expect(exitCode).toBe(0);
+      expect(JSON.parse(logs[0] ?? '{}')).toMatchObject({ success: true });
+      expect(mockGetBinding).toHaveBeenCalledWith('archon', 'workflow-engine-primary');
+    });
+
+    test('rotate ignores invalid event types', async () => {
+      mockRotateBinding.mockClear();
+      const logs: string[] = [];
+
+      const exitCode = await providerBindingRotateCommand(
+        {
+          provider: 'archon',
+          name: 'workflow-engine-primary',
+          eventTypes: 'workflow.unknown',
+        },
+        { json: true, log: (line: string): void => logs.push(line) }
+      );
+
+      expect(exitCode).toBe(0);
+      expect(JSON.parse(logs[0] ?? '{}')).toMatchObject({ success: true });
+      expect(mockRotateBinding).toHaveBeenCalled();
+    });
+
+    test('disable ignores invalid event types', async () => {
+      mockDisableBinding.mockClear();
+      const logs: string[] = [];
+
+      const exitCode = await providerBindingDisableCommand(
+        {
+          provider: 'archon',
+          name: 'workflow-engine-primary',
+          eventTypes: 'workflow.unknown',
+        },
+        { json: true, log: (line: string): void => logs.push(line) }
+      );
+
+      expect(exitCode).toBe(0);
+      expect(JSON.parse(logs[0] ?? '{}')).toMatchObject({ success: true });
+      expect(mockDisableBinding).toHaveBeenCalledWith('archon', 'workflow-engine-primary');
+    });
   });
 
   describe('status state matrix', () => {

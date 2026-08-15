@@ -236,7 +236,8 @@ function validateAndExtract(
   required: ('provider' | 'name' | 'projectRef' | 'route')[],
   deps: EnvelopeMeta,
   opts: CommandOptions,
-  startTime: number
+  startTime: number,
+  includeEventTypes = false
 ): ValidatedArgs | null {
   const fieldDefs: { path: string; value: string | undefined }[] = [];
   for (const key of required) {
@@ -249,7 +250,7 @@ function validateAndExtract(
       fieldErrors.push({ path: f.path, code: 'required' });
     }
   }
-  const eventTypes = parseEventTypes(args.eventTypes);
+  const eventTypes = includeEventTypes ? parseEventTypes(args.eventTypes) : undefined;
   if (eventTypes === null) {
     fieldErrors.push({ path: '/eventTypes', code: 'invalid' });
   }
@@ -346,7 +347,8 @@ export async function providerBindingCreateCommand(
       ['provider', 'name', 'projectRef', 'route'],
       deps,
       opts,
-      startTime
+      startTime,
+      true
     );
     if (!validated) return EXIT_USAGE;
 
@@ -408,7 +410,8 @@ export async function providerBindingUpdateCommand(
       ['provider', 'name', 'projectRef', 'route'],
       deps,
       opts,
-      startTime
+      startTime,
+      true
     );
     if (!validated) return EXIT_USAGE;
 
