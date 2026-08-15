@@ -184,6 +184,23 @@ describe('provider-bindings db layer (Story 3.1)', () => {
       expect(updateParams).toContain('local-test-value-v2');
     });
 
+    test('preserves the stored allowlist when eventTypes is omitted', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
+
+      await updateBinding({
+        provider: 'archon',
+        name: 'workflow-engine-primary',
+        codebaseId: 'cb-1',
+        eventRoute: 'https://hermes.example/events/v2',
+      });
+
+      const [updateSql, updateParams] = mockQuery.mock.calls[1] as [string, unknown[]];
+      expect(updateSql).toContain('event_types = COALESCE($3, event_types)');
+      expect(updateParams[2]).toBeNull();
+    });
+
     test('rejects with BINDING_NOT_FOUND when rowCount is 0 and issues no INSERT fallback', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
 
