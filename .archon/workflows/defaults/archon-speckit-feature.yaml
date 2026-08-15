@@ -36,8 +36,8 @@ nodes:
     depends_on:
       - setup
     effort: high
-    provider: claude
-    model: "fable"
+    provider: grok
+    model: "grok-4.6"
     context: fresh
 
   - id: clarify
