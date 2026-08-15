@@ -313,6 +313,76 @@ describe('provider-binding CLI command (Story 3.1)', () => {
     });
   });
 
+  describe('event type allowlist input', () => {
+    test('create passes parsed event types to the DB layer', async () => {
+      mockCreateBinding.mockClear();
+      const logs: string[] = [];
+
+      await providerBindingCreateCommand(
+        {
+          provider: 'archon',
+          name: 'workflow-engine-primary',
+          projectRef: 'workflow-engine',
+          route: 'https://hermes.example/webhooks/archon-workflow-engine',
+          eventTypes: 'workflow.approval.requested',
+        },
+        { json: true, log: (line: string): void => logs.push(line) }
+      );
+
+      expect(mockCreateBinding).toHaveBeenCalledWith(
+        expect.objectContaining({ eventTypes: ['workflow.approval.requested'] })
+      );
+    });
+
+    test('create rejects an invalid event type before calling the DB layer', async () => {
+      mockCreateBinding.mockClear();
+      const logs: string[] = [];
+
+      const exitCode = await providerBindingCreateCommand(
+        {
+          provider: 'archon',
+          name: 'workflow-engine-primary',
+          projectRef: 'workflow-engine',
+          route: 'https://hermes.example/webhooks/archon-workflow-engine',
+          eventTypes: 'workflow.unknown',
+        },
+        { json: true, log: (line: string): void => logs.push(line) }
+      );
+
+      expect(exitCode).toBe(64);
+      expect(JSON.parse(logs[0] ?? '{}')).toMatchObject({
+        success: false,
+        error: {
+          code: 'MALFORMED_REQUEST',
+          details: { fieldErrors: [{ path: '/eventTypes', code: 'invalid' }] },
+        },
+      });
+      expect(mockCreateBinding).not.toHaveBeenCalled();
+    });
+
+    test('update passes parsed event types to the DB layer', async () => {
+      mockUpdateBinding.mockClear();
+      const logs: string[] = [];
+
+      await providerBindingUpdateCommand(
+        {
+          provider: 'archon',
+          name: 'workflow-engine-primary',
+          projectRef: 'workflow-engine',
+          route: 'https://hermes.example/webhooks/archon-workflow-engine',
+          eventTypes: 'workflow.run.started, workflow.approval.requested,workflow.run.started',
+        },
+        { json: true, log: (line: string): void => logs.push(line) }
+      );
+
+      expect(mockUpdateBinding).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventTypes: ['workflow.run.started', 'workflow.approval.requested'],
+        })
+      );
+    });
+  });
+
   describe('status state matrix', () => {
     test('supplying a --project-ref that resolves to a different codebase reports state=conflicting', async () => {
       const codebasesMod = await import('@archon/core/db/codebases');

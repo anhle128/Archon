@@ -7,6 +7,10 @@ import {
   deriveBindingId,
 } from '@archon/core/db/provider-bindings';
 import { getCodebaseById } from '@archon/core/db/codebases';
+import {
+  externalWorkflowEventTypeSchema,
+  type ExternalWorkflowEventType,
+} from '@archon/core/schemas/workflow-event';
 import { createLogger } from '@archon/paths';
 import {
   safeStringify,
@@ -48,6 +52,7 @@ interface BindingArgs {
   name?: string;
   projectRef?: string;
   route?: string;
+  eventTypes?: string;
   correlationId?: string;
   signingSecret?: string;
 }
@@ -57,6 +62,7 @@ interface ValidatedArgs {
   name: string;
   projectRef: string;
   route: string;
+  eventTypes?: ExternalWorkflowEventType[];
   signingSecret?: string;
 }
 
@@ -77,6 +83,24 @@ function nonBlank(v: string | undefined, fallback: string): string {
 function normalizeProjectRef(projectRef: string): string {
   const trimmed = projectRef.trim();
   return trimmed.startsWith('project:') ? trimmed.slice('project:'.length) : trimmed;
+}
+
+function parseEventTypes(
+  value: string | undefined
+): ExternalWorkflowEventType[] | null | undefined {
+  if (value === undefined) return undefined;
+  const values = value
+    .split(',')
+    .map(item => item.trim())
+    .filter(item => item.length > 0);
+  if (values.length === 0) return null;
+  const parsed: ExternalWorkflowEventType[] = [];
+  for (const item of values) {
+    const result = externalWorkflowEventTypeSchema.safeParse(item);
+    if (!result.success) return null;
+    if (!parsed.includes(result.data)) parsed.push(result.data);
+  }
+  return parsed;
 }
 
 function resolveSigningSecret(args: BindingArgs): string | undefined {
@@ -225,6 +249,10 @@ function validateAndExtract(
       fieldErrors.push({ path: f.path, code: 'required' });
     }
   }
+  const eventTypes = parseEventTypes(args.eventTypes);
+  if (eventTypes === null) {
+    fieldErrors.push({ path: '/eventTypes', code: 'invalid' });
+  }
   if (fieldErrors.length > 0) {
     emitEnvelope(
       buildErrorEnvelope(
@@ -248,6 +276,7 @@ function validateAndExtract(
     name: args.name?.trim() ?? '',
     projectRef: args.projectRef === undefined ? '' : normalizeProjectRef(args.projectRef),
     route: args.route?.trim() ?? '',
+    eventTypes: eventTypes ?? undefined,
     signingSecret: resolveSigningSecret(args),
   };
 }
@@ -330,6 +359,7 @@ export async function providerBindingCreateCommand(
         name: validated.name,
         codebaseId: resolved.codebaseId,
         eventRoute: validated.route,
+        eventTypes: validated.eventTypes,
         signingSecret: validated.signingSecret,
       });
 
@@ -391,6 +421,7 @@ export async function providerBindingUpdateCommand(
         name: validated.name,
         codebaseId: resolved.codebaseId,
         eventRoute: validated.route,
+        eventTypes: validated.eventTypes,
         signingSecret: validated.signingSecret,
       });
 

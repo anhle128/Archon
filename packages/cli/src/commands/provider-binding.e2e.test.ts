@@ -113,6 +113,67 @@ describe('provider-binding CLI E2E — real subprocess (Story 3.1)', () => {
     }
   });
 
+  test('accepts --event-types with a valid workflow event type', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'archon-provider-binding-no-git-'));
+    try {
+      const { stdout, stderr } = await runCli(
+        ['provider-binding', 'create', '--event-types', 'workflow.approval.requested', '--json'],
+        cwd
+      );
+      const lines = stdout.trim().split('\n').filter(Boolean);
+      expect(lines).toHaveLength(1);
+      const parsed = JSON.parse(lines[0] as string) as {
+        error?: { details?: { fieldErrors?: Array<{ path: string; code: string }> } };
+      };
+      expect(parsed.error?.details?.fieldErrors ?? []).not.toContainEqual({
+        path: '/eventTypes',
+        code: 'invalid',
+      });
+      expect(stderr).toBe('');
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  test('a missing --event-types value does not swallow --json', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'archon-provider-binding-no-git-'));
+    try {
+      const { stdout, stderr, exitCode } = await runCli(
+        [
+          'provider-binding',
+          'create',
+          '--provider',
+          'archon',
+          '--name',
+          'workflow-engine-primary',
+          '--project-ref',
+          'workflow-engine',
+          '--route',
+          'https://hermes.example/events/workflow-engine',
+          '--event-types',
+          '--json',
+        ],
+        cwd
+      );
+      const lines = stdout.trim().split('\n').filter(Boolean);
+      expect(lines).toHaveLength(1);
+      const parsed = JSON.parse(lines[0] as string) as {
+        success: boolean;
+        error: { code: string; details: { fieldErrors: Array<{ path: string; code: string }> } };
+      };
+      expect(exitCode).toBe(64);
+      expect(parsed.success).toBe(false);
+      expect(parsed.error.code).toBe('MALFORMED_REQUEST');
+      expect(parsed.error.details.fieldErrors).toContainEqual({
+        path: '/eventTypes',
+        code: 'invalid',
+      });
+      expect(stderr).toBe('');
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   test('unsupported provider-binding subcommand fails closed outside a git repo', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'archon-provider-binding-no-git-'));
     try {

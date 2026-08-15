@@ -423,6 +423,7 @@ function normalizeProviderBindingArgs(args: string[]): string[] {
     '--name',
     '--project-ref',
     '--route',
+    '--event-types',
     '--correlation-id',
   ]);
   const normalized: string[] = [];
@@ -516,6 +517,7 @@ async function main(): Promise<number> {
         name: { type: 'string' },
         'project-ref': { type: 'string' },
         route: { type: 'string' },
+        'event-types': { type: 'string' },
         'correlation-id': { type: 'string' },
         full: { type: 'boolean' },
         'dry-run': { type: 'boolean' },
@@ -1463,6 +1465,7 @@ async function main(): Promise<number> {
           name: values.name as string | undefined,
           projectRef: values['project-ref'] as string | undefined,
           route: values.route as string | undefined,
+          eventTypes: values['event-types'] as string | undefined,
           correlationId: values['correlation-id'] as string | undefined,
         };
         switch (subcommand) {
