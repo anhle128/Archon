@@ -1,4 +1,4 @@
-name: archon-speckit-feature
+name: archon-speckit-no-hitl-feature
 description: |
   Use when: User wants to develop a feature using the speckit SDD (Spec-Driven Development) pipeline end-to-end.
   Triggers: "speckit feature", "spec-driven", "sdd pipeline", "full speckit", "speckit full",
