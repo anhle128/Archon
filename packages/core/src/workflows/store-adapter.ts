@@ -212,6 +212,9 @@ async function enqueueExternalWorkflowEvent(input: ExternalWorkflowEventInput): 
     const eventId = `evt_${randomUUID()}`;
     const codebaseId = run.codebase_id;
     if (!codebaseId) {
+      if (eventType === 'workflow.approval.requested') {
+        throw new Error('Approval event is missing codebase_id');
+      }
       const reason: NotRoutableReason = 'missing-codebase';
       const idempotencyKey = `archon:not-routable:${eventId}`;
       await workflowEventOutboxDb.enqueueExternalWorkflowEvent({

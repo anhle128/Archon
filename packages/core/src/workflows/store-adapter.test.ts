@@ -489,6 +489,44 @@ describe('createWorkflowStore', () => {
     });
   });
 
+  test('createWorkflowEvent replaces configured URL path and encodes approval route parts', async () => {
+    process.env.ARCHON_PUBLIC_URL = 'https://archon.example.ts.net/base/path?old=1#stale';
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      workflowRunRow({
+        id: 'run/1?x#y',
+        codebase_id: 'cb/1?x#y',
+      })
+    );
+    mockResolveEventRoute.mockResolvedValueOnce({
+      routable: true,
+      codebase: codebaseRow({ id: 'cb/1?x#y' }),
+      binding: bindingRow({ event_types: ['workflow.approval.requested'] }),
+      route: 'https://hermes.example/events',
+      secret: 'test-secret',
+    });
+    const store = createWorkflowStore();
+
+    await store.createWorkflowEvent({
+      workflow_run_id: 'run/1?x#y',
+      event_type: 'approval_requested',
+      step_name: 'review',
+      data: {
+        gateType: 'approval',
+        nodeId: 'review',
+        message: 'Review the plan.',
+      },
+    });
+
+    const [insert] = mockEnqueueExternalWorkflowEvent.mock.calls[0] as [Record<string, unknown>];
+    expect(JSON.parse(insert.event_body as string)).toMatchObject({
+      payload: {
+        approval: {
+          reviewUrl: 'https://archon.example.ts.net/console/p/cb%2F1%3Fx%23y/r/run%2F1%3Fx%23y',
+        },
+      },
+    });
+  });
+
   test('createWorkflowEvent keeps Plannotator approval callbacks on the live review URL', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(workflowRunRow());
     mockResolveEventRoute.mockResolvedValueOnce({
@@ -525,6 +563,82 @@ describe('createWorkflowStore', () => {
         },
       },
     });
+  });
+
+  test('createWorkflowEvent keeps internal approval event when ARCHON_PUBLIC_URL is unset', async () => {
+    delete process.env.ARCHON_PUBLIC_URL;
+    mockGetWorkflowRun.mockResolvedValueOnce(workflowRunRow());
+    mockResolveEventRoute.mockResolvedValueOnce({
+      routable: true,
+      codebase: codebaseRow(),
+      binding: bindingRow({ event_types: ['workflow.approval.requested'] }),
+      route: 'https://hermes.example/events',
+      secret: 'test-secret',
+    });
+    const store = createWorkflowStore();
+    const event = {
+      workflow_run_id: 'run-1',
+      event_type: 'approval_requested',
+      step_name: 'review',
+      data: {
+        gateType: 'approval',
+        nodeId: 'review',
+        message: 'Review the plan.',
+      },
+    };
+
+    await expect(store.createWorkflowEvent(event)).resolves.toBeUndefined();
+
+    expect(mockCreateWorkflowEvent).toHaveBeenCalledWith(event);
+    expect(mockEnqueueExternalWorkflowEvent).not.toHaveBeenCalled();
+  });
+
+  test('createWorkflowEvent keeps internal approval event when ARCHON_PUBLIC_URL is invalid', async () => {
+    process.env.ARCHON_PUBLIC_URL = 'file:///tmp/archon';
+    mockGetWorkflowRun.mockResolvedValueOnce(workflowRunRow());
+    mockResolveEventRoute.mockResolvedValueOnce({
+      routable: true,
+      codebase: codebaseRow(),
+      binding: bindingRow({ event_types: ['workflow.approval.requested'] }),
+      route: 'https://hermes.example/events',
+      secret: 'test-secret',
+    });
+    const store = createWorkflowStore();
+    const event = {
+      workflow_run_id: 'run-1',
+      event_type: 'approval_requested',
+      step_name: 'review',
+      data: {
+        gateType: 'approval',
+        nodeId: 'review',
+        message: 'Review the plan.',
+      },
+    };
+
+    await expect(store.createWorkflowEvent(event)).resolves.toBeUndefined();
+
+    expect(mockCreateWorkflowEvent).toHaveBeenCalledWith(event);
+    expect(mockEnqueueExternalWorkflowEvent).not.toHaveBeenCalled();
+  });
+
+  test('createWorkflowEvent keeps internal approval event when codebase_id is missing', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(workflowRunRow({ codebase_id: null }));
+    const store = createWorkflowStore();
+    const event = {
+      workflow_run_id: 'run-1',
+      event_type: 'approval_requested',
+      step_name: 'review',
+      data: {
+        gateType: 'approval',
+        nodeId: 'review',
+        message: 'Review the plan.',
+      },
+    };
+
+    await expect(store.createWorkflowEvent(event)).resolves.toBeUndefined();
+
+    expect(mockCreateWorkflowEvent).toHaveBeenCalledWith(event);
+    expect(mockEnqueueExternalWorkflowEvent).not.toHaveBeenCalled();
   });
 
   test('enqueueExternalWorkflowEvent does not persist invalid typed event payloads', async () => {
