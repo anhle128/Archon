@@ -2979,7 +2979,7 @@ nodes:
         routes: {
           positive: 'cargo-clean-before-pr',
           negative: 'speckit-converge-review-gate',
-          exhausted: 'speckit-converge-exhausted',
+          exhausted: 'speckit-final-ralph-tasks-to-ralph',
         },
       });
 
@@ -3041,10 +3041,25 @@ nodes:
       expect(nodes.get('ralph-loop-run')?.depends_on).toEqual(['ralph-tasks-to-ralph']);
       expect(nodes.get('ralph-sync-back')?.depends_on).toEqual(['ralph-loop-run']);
       expect(nodes.get('speckit-converge')?.depends_on).toEqual(['ralph-sync-back']);
+      expect(nodes.get('speckit-final-ralph-tasks-to-ralph')?.depends_on).toEqual([
+        'speckit-converge-gate',
+      ]);
+      expect(nodes.get('speckit-final-ralph-loop-run')?.depends_on).toEqual([
+        'speckit-final-ralph-tasks-to-ralph',
+      ]);
+      expect(nodes.get('speckit-final-ralph-sync-back')?.depends_on).toEqual([
+        'speckit-final-ralph-loop-run',
+      ]);
       expect(nodes.get('cargo-clean-before-pr')?.depends_on).toEqual(['speckit-converge-gate']);
-      expect(nodes.get('update-bmad-sprint-status')?.depends_on).toEqual(['cargo-clean-before-pr']);
+      expect(nodes.get('speckit-final-cargo-clean-before-pr')?.depends_on).toEqual([
+        'speckit-final-ralph-sync-back',
+      ]);
+      expect(nodes.get('update-bmad-sprint-status')).toMatchObject({
+        depends_on: ['cargo-clean-before-pr', 'speckit-final-cargo-clean-before-pr'],
+        trigger_rule: 'one_success',
+      });
       expect(nodes.get('create-pull-request')?.depends_on).toEqual(['update-bmad-sprint-status']);
-      expect(isCancelNode(nodes.get('speckit-converge-exhausted'))).toBe(true);
+      expect(nodes.has('speckit-converge-exhausted')).toBe(false);
     });
   });
 

@@ -21373,7 +21373,7 @@ describe('executeDagWorkflow -- production Plannotator gate integration', () => 
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
   });
 
-  it('routes the default Speckit workflow to exhaustion without creating a PR', async () => {
+  it('routes the default Speckit workflow through one final Ralph pass before creating a PR', async () => {
     const marker = join(root, 'ralph-exhausted.log');
     await prepareDefaultSpeckitFixture(marker);
     const workflow = await loadDefaultSpeckitFeature();
@@ -21393,10 +21393,6 @@ describe('executeDagWorkflow -- production Plannotator gate integration', () => 
       },
     });
     const { store } = createDagGateStore(run);
-    store.cancelWorkflowRun = mock(() => {
-      run.status = 'cancelled';
-      return Promise.resolve();
-    });
     const calls: string[] = [];
     installDefaultSpeckitProvider(['FAIL'], calls);
 
@@ -21414,8 +21410,14 @@ describe('executeDagWorkflow -- production Plannotator gate integration', () => 
 
     expect(calls.filter(nodeId => nodeId === 'speckit-converge')).toHaveLength(maxIterations + 1);
     expect(calls.filter(nodeId => nodeId === 'ralph-tasks-to-ralph')).toHaveLength(maxIterations);
-    expect(calls).not.toContain('create-pull-request');
+    expect(calls.filter(nodeId => nodeId === 'speckit-final-ralph-tasks-to-ralph')).toHaveLength(1);
+    expect(calls.filter(nodeId => nodeId === 'speckit-final-ralph-sync-back')).toHaveLength(1);
+    expect(calls.filter(nodeId => nodeId === 'update-bmad-sprint-status')).toHaveLength(1);
+    expect(calls.filter(nodeId => nodeId === 'create-pull-request')).toHaveLength(1);
     expect(calls).not.toContain('create-pull-request-2');
+    expect(readFileSync(marker, 'utf8').trim().split('\n')).toEqual(
+      Array.from({ length: maxIterations + 1 }, () => 'ralph')
+    );
     const routeDecisions = (
       store.persistRouteDecisionTransition as ReturnType<typeof mock>
     ).mock.calls.map(
@@ -21431,8 +21433,9 @@ describe('executeDagWorkflow -- production Plannotator gate integration', () => 
       negative_count: maxIterations + 1,
       max_iterations: maxIterations,
     });
-    expect(store.cancelWorkflowRun).toHaveBeenCalledTimes(1);
-    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
   });
 
   it('rotates ownership, terminates the old child, and lets only the replacement continue', async () => {

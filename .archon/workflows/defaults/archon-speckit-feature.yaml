@@ -6,7 +6,8 @@ description: |
             "speckit pipeline", "sdd feature".
   Does: Specify → clarify (with Plannotator live review gate) → red-team (with Plannotator
         live review gate) → plan → tasks → analyze → tasks-to-ralph → ralph.sh → sync-back →
-        converge gate → human review before retry → BMAD sprint status update → PR creation.
+        converge gate → human review before retry → final Ralph pass on exhaustion →
+        BMAD sprint status update → PR creation.
   NOT for: Quick one-file fixes, bug fixes, PR reviews.
   NOT for: When a spec already exists (use archon-speckit-plan-to-tasks instead).
   NOT for: Spec generation only without planning (use archon-speckit-spec instead).
@@ -602,7 +603,7 @@ nodes:
         - tasks_added
     output_type: speckit-convergence
 
-  # PASS → BMAD sprint status update → PR; FAIL → human review then Ralph retry.
+  # PASS → PR preparation; FAIL → reviewed Ralph retry; exhausted → one final Ralph pass → PR preparation.
   - id: speckit-converge-gate
     depends_on: [speckit-converge]
     route_loop:
@@ -611,7 +612,7 @@ nodes:
       routes:
         positive: cargo-clean-before-pr
         negative: speckit-converge-review-gate
-        exhausted: speckit-converge-exhausted
+        exhausted: speckit-final-ralph-tasks-to-ralph
 
   - id: speckit-converge-review-gate
     plannotator_gate:
@@ -671,12 +672,46 @@ nodes:
           6. Do not generate HTML and do not start another Plannotator session.
           7. Print only the absolute path to the updated `tasks.md`.
              Do not add a Markdown fence or commentary.
+
+  - id: speckit-final-ralph-tasks-to-ralph
+    prompt: |
+      Read .specify/feature.json to resolve <feature_directory>, then run:
+      /speckit.ralph-loop.tasks-to-ralph <feature_directory>
+    depends_on: [speckit-converge-gate]
+    provider: codex
+    effort: xhigh
+    model: gpt-5.6-terra
+    context: fresh
+
+  - id: speckit-final-ralph-loop-run
+    bash: |
+      bash .specify/extensions/ralph-loop/ralph.sh
+    depends_on: [speckit-final-ralph-tasks-to-ralph]
+    timeout: 86400000
+
+  - id: speckit-final-ralph-sync-back
+    prompt: |
+      Read .specify/feature.json to resolve <feature_directory>, then run:
+      /speckit.ralph-loop.sync-back <feature_directory>
+    depends_on: [speckit-final-ralph-loop-run]
+    provider: codex
+    effort: medium
+    model: gpt-5.6-terra
+    context: fresh
+
   - id: cargo-clean-before-pr
     bash: |
       if [ -f Cargo.toml ]; then
         cargo clean
       fi
     depends_on: [speckit-converge-gate]
+
+  - id: speckit-final-cargo-clean-before-pr
+    bash: |
+      if [ -f Cargo.toml ]; then
+        cargo clean
+      fi
+    depends_on: [speckit-final-ralph-sync-back]
 
   - id: update-bmad-sprint-status
     prompt: |
@@ -692,7 +727,8 @@ nodes:
       Verify the final status before completing.
     provider: codex
     effort: medium
-    depends_on: [cargo-clean-before-pr]
+    depends_on: [cargo-clean-before-pr, speckit-final-cargo-clean-before-pr]
+    trigger_rule: one_success
     context: fresh
     model: gpt-5.6-terra
 
@@ -705,9 +741,3 @@ nodes:
     model: gpt-5.6-terra
     idle_timeout: 900000
     output_type: pull-request
-
-  - id: speckit-converge-exhausted
-    cancel: |
-      Speckit convergence still failed after 3 reviewed Ralph retries. Review the latest
-      convergence artifacts and tasks before starting another run; no pull request was created.
-    depends_on: [speckit-converge-gate]
