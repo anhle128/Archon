@@ -33,7 +33,11 @@ nodes:
   
   - id: specify
     prompt: |
-      /speckit-specify $ARGUMENTS
+      /speckit-specify create detail spec for $ARGUMENTS, 
+      read related documents for understand the origin context and purpose, 
+      save references document to let the next phases know the origin purpose, 
+      read deeply to understand before writing, 
+      don't guess, spawn sub-agents for help
     depends_on:
       - setup
     effort: high
