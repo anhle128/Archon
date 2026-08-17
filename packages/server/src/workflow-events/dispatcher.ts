@@ -211,8 +211,6 @@ export class WorkflowEventDispatcher {
     const timeout = setTimeout(() => {
       controller.abort();
     }, this.requestTimeoutMs);
-    const timer = timeout as unknown as { unref?: () => void };
-    if (typeof timer.unref === 'function') timer.unref();
     try {
       const response = await this.fetchImpl(url, {
         method: 'POST',

@@ -254,7 +254,11 @@ describe('pathKind', () => {
     const dir = mkdtempSync(join(tmpdir(), 'archon-pathkind-'));
     const link = join(dir, 'broken-link');
     try {
-      symlinkSync(join(dir, 'nonexistent-target'), link);
+      symlinkSync(
+        join(dir, 'nonexistent-target'),
+        link,
+        process.platform === 'win32' ? 'junction' : undefined
+      );
       expect(resolver.pathKind(link)).toBe('missing');
     } finally {
       rmSync(dir, { recursive: true, force: true });

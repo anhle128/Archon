@@ -6,7 +6,8 @@
  * Captures all assistant output regardless of streaming mode for $node_id.output substitution.
  */
 import { existsSync, writeFileSync } from 'fs';
-import { readFile } from 'fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
 import { isAbsolute, join as joinPath, resolve as resolvePath } from 'path';
 import { execFileAsync, resolveBashPath, upsertCheckpointRef } from '@archon/git';
 import { discoverScriptsForCwd } from './script-discovery';
@@ -2908,6 +2909,28 @@ async function runSubprocess(
       env: options.env,
     });
     return execFileAsync('docker', dockerArgs, { timeout: options.timeout });
+  }
+  // Git Bash can change backslashes in a Windows `-c` argument before it reads the script.
+  // Use a file so structured node output stays byte-identical.
+  const inlineScript = args[1];
+  if (
+    process.platform === 'win32' &&
+    args[0] === '-c' &&
+    args.length === 2 &&
+    inlineScript !== undefined
+  ) {
+    const scriptDir = await mkdtemp(joinPath(tmpdir(), 'archon-bash-'));
+    const scriptPath = joinPath(scriptDir, 'node.sh');
+    try {
+      await writeFile(scriptPath, inlineScript, { mode: 0o600 });
+      return await execFileAsync(cmd, [scriptPath], {
+        cwd: options.cwd,
+        timeout: options.timeout,
+        env: { ...process.env, ...options.env },
+      });
+    } finally {
+      await rm(scriptDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
   }
   return execFileAsync(cmd, args, {
     cwd: options.cwd,

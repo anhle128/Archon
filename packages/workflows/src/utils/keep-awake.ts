@@ -46,9 +46,8 @@ export interface KeepAwake {
 }
 
 /**
- * Lazy-initialized logger. Deferred until first use in the common case; the
- * one import-time invocation is `loadNative()`'s catch path (Windows dlopen
- * failure), which is acceptable — it's already an error-reporting path.
+ * Lazy-initialized logger. Deferred until first use so importing the workflow
+ * package cannot write before a CLI command applies its `--json` log policy.
  */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -159,4 +158,21 @@ function loadNative(): SetExecStateFn | undefined {
  * of the per-thread `SetThreadExecutionState` API. If workflow execution ever
  * moves to a Worker, do NOT call these from it.
  */
-export const keepAwake: KeepAwake = createKeepAwake(loadNative(), process.platform);
+let keepAwakeController: KeepAwake | undefined;
+
+function getKeepAwakeController(): KeepAwake {
+  keepAwakeController ??= createKeepAwake(loadNative(), process.platform);
+  return keepAwakeController;
+}
+
+export const keepAwake: KeepAwake = {
+  acquire(): void {
+    getKeepAwakeController().acquire();
+  },
+  release(): void {
+    getKeepAwakeController().release();
+  },
+  activeCount(): number {
+    return keepAwakeController?.activeCount() ?? 0;
+  },
+};

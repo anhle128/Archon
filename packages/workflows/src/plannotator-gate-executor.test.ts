@@ -1,4 +1,13 @@
-import { describe, expect, test, beforeEach, afterEach, mock, setDefaultTimeout } from 'bun:test';
+import {
+  describe,
+  expect,
+  test,
+  beforeEach,
+  afterEach,
+  afterAll,
+  mock,
+  setDefaultTimeout,
+} from 'bun:test';
 import {
   chmodSync,
   existsSync,
@@ -10,9 +19,8 @@ import {
   rmSync,
   symlinkSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { resolveBashPath } from '@archon/git';
 import {
   buildReworkPrompt,
   executePlannotatorGateNode,
@@ -26,8 +34,22 @@ import type { IWorkflowStore, WorkflowEventData } from './store';
 import type { SendQueryOptions } from '@archon/providers/types';
 import { clearRegistry, registerBuiltinProviders } from '@archon/providers';
 import { projectLatestEffectiveNodeStates } from './retry-state';
+import {
+  cleanupPortableTestExecutables,
+  writePortableBunExecutable,
+  writePortableShellExecutable,
+} from './plannotator-test-utils';
+
+const fakeRootEnv = 'ARCHON_TEST_PLANNOTATOR_ROOT';
+const originalFakeRoot = process.env[fakeRootEnv];
 
 setDefaultTimeout(20_000);
+
+afterAll(async () => {
+  if (originalFakeRoot === undefined) delete process.env[fakeRootEnv];
+  else process.env[fakeRootEnv] = originalFakeRoot;
+  await cleanupPortableTestExecutables('executor');
+});
 
 function makeRun(approval: Record<string, unknown>): WorkflowRun {
   return {
@@ -156,10 +178,9 @@ interface FakePlannotator {
 
 function createFakePlannotator(root: string): FakePlannotator {
   const controlDir = join(root, 'controls');
-  const bin = join(root, process.platform === 'win32' ? 'plannotator.cmd' : 'plannotator');
-  const script = join(root, 'plannotator.js');
   const invocationLog = join(root, 'invocations.jsonl');
   mkdirSync(controlDir, { recursive: true });
+  process.env[fakeRootEnv] = root;
   const source = `
 import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -172,11 +193,12 @@ if (args[0] === 'annotate' && args.includes('--help')) {
 const resultIndex = args.indexOf('--result-file');
 if (args[0] !== 'annotate' || resultIndex < 0 || !args[resultIndex + 1]) process.exit(64);
 const resultFile = args[resultIndex + 1];
-const controlDir = ${JSON.stringify(controlDir)};
-const invocationLog = ${JSON.stringify(invocationLog)};
+const fixtureRoot = process.env.${fakeRootEnv};
+if (!fixtureRoot) process.exit(65);
+const controlDir = join(fixtureRoot, 'controls');
+const invocationLog = join(fixtureRoot, 'invocations.jsonl');
 const key = basename(resultFile);
 const started = join(controlDir, key + '.started');
-const terminated = join(controlDir, key + '.terminated');
 const control = join(controlDir, key + '.control.json');
 const readyFile = process.env.PLANNOTATOR_READY_FILE;
 if (!readyFile) process.exit(65);
@@ -186,10 +208,6 @@ writeFileSync(
 );
 appendFileSync(invocationLog, JSON.stringify({ args, document: args[1], resultFile }) + '\\n');
 writeFileSync(started, 'started\\n');
-process.on('SIGTERM', () => {
-  writeFileSync(terminated, 'terminated\\n');
-  process.exit(143);
-});
 while (!existsSync(control)) {
   if (!existsSync(controlDir)) process.exit(66);
   await Bun.sleep(5);
@@ -204,16 +222,7 @@ if (decision.payload !== undefined) {
 }
 process.exit(decision.exitCode ?? 0);
 `;
-  if (process.platform === 'win32') {
-    writeFileSync(script, source);
-    writeFileSync(
-      bin,
-      `@echo off\r\n"${process.execPath.replaceAll('"', '""')}" "${script.replaceAll('"', '""')}" %*\r\n`
-    );
-  } else {
-    writeFileSync(bin, `#!/usr/bin/env bun\n${source}`);
-    chmodSync(bin, 0o755);
-  }
+  const bin = writePortableBunExecutable(root, 'plannotator', source);
   return { bin, controlDir, invocationLog };
 }
 
@@ -242,7 +251,7 @@ function releaseDecision(
 }
 
 async function waitForInvocations(fake: FakePlannotator, count: number): Promise<unknown[][]> {
-  for (let attempt = 0; attempt < 2_000; attempt++) {
+  for (let attempt = 0; attempt < 600; attempt++) {
     if (existsSync(fake.invocationLog)) {
       const invocations = readFileSync(fake.invocationLog, 'utf8')
         .trim()
@@ -254,6 +263,11 @@ async function waitForInvocations(fake: FakePlannotator, count: number): Promise
     await Bun.sleep(5);
   }
   throw new Error(`Timed out waiting for ${String(count)} fake Plannotator invocation(s)`);
+}
+
+function observeWhileWaiting<T>(promise: Promise<T>): Promise<T> {
+  void promise.catch(() => undefined);
+  return promise;
 }
 
 function integrationArgs(
@@ -364,7 +378,7 @@ describe('resolveGateDocumentPath', () => {
     expect(() => resolveGateDocumentPath(directory, new Map(), cwd, artifactsDir)).toThrow(/file/i);
   });
 
-  test('rejects an unreadable HTML file', () => {
+  test.skipIf(process.platform === 'win32')('rejects an unreadable HTML file', () => {
     const html = join(cwd, 'unreadable.html');
     writeFileSync(html, '<html></html>');
     chmodSync(html, 0o000);
@@ -404,10 +418,18 @@ describe('resolveGateDocumentPath', () => {
 
   test('rejects a symlink under cwd whose real target escapes both roots', () => {
     const target = join(outsideDir, 'target.html');
-    const link = join(cwd, 'linked.html');
     writeFileSync(target, '<html></html>');
-    symlinkSync(target, link);
-    expect(() => resolveGateDocumentPath(link, new Map(), cwd, artifactsDir)).toThrow(/outside/i);
+    if (process.platform === 'win32') {
+      const link = join(cwd, 'outside-link');
+      symlinkSync(outsideDir, link, 'junction');
+      expect(() =>
+        resolveGateDocumentPath(join(link, 'target.html'), new Map(), cwd, artifactsDir)
+      ).toThrow(/outside/i);
+    } else {
+      const link = join(cwd, 'linked.html');
+      symlinkSync(target, link);
+      expect(() => resolveGateDocumentPath(link, new Map(), cwd, artifactsDir)).toThrow(/outside/i);
+    }
   });
 });
 
@@ -448,19 +470,7 @@ describe('preflightPlannotatorBinary', () => {
   function fakeBinary(body: string): string {
     const dir = mkdtempSync(join(tmpdir(), 'plannotator-preflight-'));
     dirs.push(dir);
-    const binary = join(dir, process.platform === 'win32' ? 'plannotator.cmd' : 'plannotator');
-    if (process.platform === 'win32') {
-      const script = join(dir, 'plannotator.sh');
-      writeFileSync(script, `#!/bin/sh\n${body}\n`);
-      writeFileSync(
-        binary,
-        `@echo off\r\n"${resolveBashPath().replaceAll('"', '""')}" "${script.replaceAll('"', '""')}" %*\r\n`
-      );
-    } else {
-      writeFileSync(binary, `#!/bin/sh\n${body}\n`);
-      chmodSync(binary, 0o700);
-    }
-    return binary;
+    return writePortableShellExecutable(dir, 'plannotator', body, 'executor');
   }
 
   test('throws a clear error when binary is missing', async () => {
@@ -555,7 +565,7 @@ describe('executePlannotatorGateNode production spawn path', () => {
 
     const args = integrationArgs(run, store, node, cwd, artifactsDir, getAgentProvider);
     args.stepName = 'review-loop.review';
-    const execution = executePlannotatorGateNode(args);
+    const execution = observeWhileWaiting(executePlannotatorGateNode(args));
     const invocations = await waitForInvocations(fake, 1);
     for (let attempt = 0; attempt < 600; attempt++) {
       const approval = store.run.metadata.approval as ApprovalContext;
@@ -610,7 +620,7 @@ describe('executePlannotatorGateNode production spawn path', () => {
     expect(store.run.metadata.approval).toMatchObject({ resolved: 'approved' });
     expect(store.resumeApprovedGate).toHaveBeenCalledTimes(1);
     expect(store.run.status).toBe('running');
-  });
+  }, 15_000);
 
   test('uses the final assistant response after prepare tool calls as the document path', async () => {
     const document = join(cwd, 'prepared.md');
@@ -652,7 +662,7 @@ describe('executePlannotatorGateNode production spawn path', () => {
     const args = integrationArgs(run, store, node, cwd, artifactsDir, getAgentProvider);
     args.nodeOutputs.set('upstream', { state: 'completed', output: 'upstream-value' });
 
-    const execution = executePlannotatorGateNode(args);
+    const execution = observeWhileWaiting(executePlannotatorGateNode(args));
     const invocations = await waitForInvocations(fake, 1);
     expect(sendQuery).toHaveBeenCalledTimes(1);
     expect(invocations[0]?.[1]).toBe(realpathSync(document));
@@ -809,13 +819,15 @@ describe('executePlannotatorGateNode production spawn path', () => {
       },
     };
 
-    const execution = executePlannotatorGateNode(
-      integrationArgs(run, store, node, cwd, artifactsDir, getAgentProvider)
+    const execution = observeWhileWaiting(
+      executePlannotatorGateNode(
+        integrationArgs(run, store, node, cwd, artifactsDir, getAgentProvider)
+      )
     );
     const invocations = await waitForInvocations(fake, 1);
     expect(invocations[0]?.[1]).toBe(realpathSync(document));
     expect(getAgentProvider).not.toHaveBeenCalled();
-    const resultFileName = String(invocations[0]?.[6]).split('/').pop();
+    const resultFileName = basename(String(invocations[0]?.[6]));
     writeFileSync(
       join(fake.controlDir, `${resultFileName}.control.json`),
       JSON.stringify({ payload: { decision: 'approved', feedback: 'Approved' }, exitCode: 0 })
@@ -903,7 +915,7 @@ describe('executePlannotatorGateNode production spawn path', () => {
     args.config.assistants.codex = { model: 'codex-assistant-model' };
     args.config.envVars = { GATE_TOKEN: 'test-token' };
 
-    const execution = executePlannotatorGateNode(args);
+    const execution = observeWhileWaiting(executePlannotatorGateNode(args));
     await waitForInvocations(fake, 1);
     expect(getAgentProvider).toHaveBeenCalledWith('codex');
     expect(receivedResumeSessionId).toBeUndefined();
@@ -962,7 +974,7 @@ describe('executePlannotatorGateNode production spawn path', () => {
       },
     };
 
-    const execution = executePlannotatorGateNode(args);
+    const execution = observeWhileWaiting(executePlannotatorGateNode(args));
     const firstInvocations = await waitForInvocations(fake, 1);
     const approval = store.run.metadata.approval as ApprovalContext;
     releaseDecision(fake, approval.gateId ?? '', 1, {
@@ -1012,7 +1024,7 @@ describe('executePlannotatorGateNode production spawn path', () => {
     const args = integrationArgs(run, store, node, cwd, artifactsDir, getAgentProvider);
     args.execContext = { kind: 'container', containerId: 'gate-container' };
 
-    const execution = executePlannotatorGateNode(args);
+    const execution = observeWhileWaiting(executePlannotatorGateNode(args));
     await waitForInvocations(fake, 1);
     expect(receivedOptions?.execContext).toEqual({
       kind: 'container',
@@ -1084,8 +1096,10 @@ describe('executePlannotatorGateNode production spawn path', () => {
       },
     };
 
-    const execution = executePlannotatorGateNode(
-      integrationArgs(run, store, node, cwd, artifactsDir, getAgentProvider)
+    const execution = observeWhileWaiting(
+      executePlannotatorGateNode(
+        integrationArgs(run, store, node, cwd, artifactsDir, getAgentProvider)
+      )
     );
     await statusRequested.promise;
     expect(sendQuery).not.toHaveBeenCalled();
@@ -1130,8 +1144,10 @@ describe('executePlannotatorGateNode production spawn path', () => {
         rework: { prompt: 'Revise $REVIEW_DOCUMENT using $REVIEW_ANNOTATIONS' },
       },
     };
-    const execution = executePlannotatorGateNode(
-      integrationArgs(run, store, node, cwd, artifactsDir, getAgentProvider)
+    const execution = observeWhileWaiting(
+      executePlannotatorGateNode(
+        integrationArgs(run, store, node, cwd, artifactsDir, getAgentProvider)
+      )
     );
     await waitForInvocations(fake, 1);
     store.getWorkflowRunStatus = mock(() => Promise.resolve('cancelled'));
@@ -1184,8 +1200,10 @@ describe('executePlannotatorGateNode production spawn path', () => {
       },
     };
 
-    const execution = executePlannotatorGateNode(
-      integrationArgs(run, store, node, cwd, artifactsDir, getAgentProvider)
+    const execution = observeWhileWaiting(
+      executePlannotatorGateNode(
+        integrationArgs(run, store, node, cwd, artifactsDir, getAgentProvider)
+      )
     );
     await waitForInvocations(fake, 1);
     releaseDecision(fake, 'gate-rework', 1, {

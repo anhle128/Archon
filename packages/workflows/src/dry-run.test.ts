@@ -324,6 +324,7 @@ describe('dryRunWorkflow', () => {
   });
 
   test('resolves prepare prompts for prepare-mode plannotator gates', async () => {
+    const projectDirectory = join('/tmp', 'project');
     const workflow = makeTestWorkflow({
       name: 'plannotator-prepare',
       nodes: [
@@ -342,7 +343,7 @@ describe('dryRunWorkflow', () => {
     const result = await dryRunWorkflow({
       workflow,
       userMessage: '',
-      cwd: '/tmp/project',
+      cwd: projectDirectory,
       stubs: { before: 'the plan' },
     });
 
@@ -350,7 +351,7 @@ describe('dryRunWorkflow', () => {
       nodeType: 'plannotator_gate',
       state: 'completed',
       reason: 'auto-approved',
-      resolvedText: 'Prepare HTML for the plan in /tmp/project/.archon/dry-run/artifacts',
+      resolvedText: `Prepare HTML for the plan in ${join(projectDirectory, '.archon', 'dry-run', 'artifacts')}`,
     });
   });
 

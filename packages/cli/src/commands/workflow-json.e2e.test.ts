@@ -50,16 +50,33 @@ beforeAll(async () => {
   await initializeIsolatedDatabase();
 });
 
-afterAll(() => {
-  rmSync(isolatedHome, { recursive: true, force: true });
-  rmSync(isolatedRepo, { recursive: true, force: true });
-  rmSync(isolatedRetryProofRepo, { recursive: true, force: true });
+afterAll(async () => {
+  await Promise.all([
+    removeTestDirectory(isolatedHome),
+    removeTestDirectory(isolatedRepo),
+    removeTestDirectory(isolatedRetryProofRepo),
+  ]);
 });
 
 interface CliResult {
   stdout: string;
   stderr: string;
   exitCode: number;
+}
+
+async function removeTestDirectory(path: string): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt++) {
+    try {
+      rmSync(path, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (attempt === 49 || (code !== 'EBUSY' && code !== 'EPERM' && code !== 'ENOTEMPTY')) {
+        throw error;
+      }
+      await Bun.sleep(100);
+    }
+  }
 }
 
 async function runCli(args: string[], cwd: string = isolatedRepo): Promise<CliResult> {

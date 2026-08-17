@@ -2854,7 +2854,7 @@ branch refs/heads/feature/auth
         createdCommit: false,
       });
       await expect(git.verifyCommitRef(repoPath, result.ref)).resolves.toBe(initialSha);
-    });
+    }, 30_000);
 
     test('creates a checkpoint commit from tracked and untracked Git-visible changes without including ignored files', async () => {
       const { repoPath, initialSha } = await initRetryRepo('checkpoint-dirty');
@@ -2908,7 +2908,7 @@ branch refs/heads/feature/auth
       expect(status).toBe('');
       const ignoredStatus = await runGit(repoPath, ['status', '--porcelain', '--ignored']);
       expect(ignoredStatus).toContain('!! ignored.tmp');
-    }, 15_000);
+    }, 30_000);
 
     test('fails dirty checkpoint commits with git identity guidance and no stash fallback', async () => {
       const originalEnv = {
@@ -3017,7 +3017,9 @@ branch refs/heads/feature/auth
       await expect(git.resetTrackedFilesToCommit(repoPath, checkpoint.ref)).resolves.toBe(
         initialSha
       );
-      expect(await readFile(join(repoPath, 'tracked.txt'), 'utf8')).toBe('initial\n');
+      expect((await readFile(join(repoPath, 'tracked.txt'), 'utf8')).replaceAll('\r\n', '\n')).toBe(
+        'initial\n'
+      );
       const postResetStatus = await runGit(repoPath, [
         'status',
         '--porcelain',
@@ -3025,7 +3027,7 @@ branch refs/heads/feature/auth
       ]);
       expect(postResetStatus).toBe('');
       expect(await readFile(join(repoPath, 'ignored.tmp'), 'utf8')).toBe('ignored work\n');
-    }, 15_000);
+    }, 30_000);
 
     test('validates checkpoint and safety refs before mutation and rejects missing commit refs', async () => {
       const { repoPath } = await initRetryRepo('retry-ref-validation');

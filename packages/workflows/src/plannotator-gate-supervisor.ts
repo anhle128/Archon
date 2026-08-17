@@ -13,7 +13,8 @@
  * claim returns superseded so only the winning executor continues `runLayers`.
  */
 import { createLogger } from '@archon/paths';
-import { mkdir, readFile, rm } from 'node:fs/promises';
+import { closeSync, openSync, readFileSync, rmSync } from 'node:fs';
+import { mkdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { ApprovalContext, WorkflowRun } from './schemas/workflow-run';
 import type { IWorkflowStore } from './store';
@@ -54,7 +55,7 @@ export interface PlannotatorGateSupervisorDeps {
   store: IWorkflowStore;
   /** Spawn rework AI; must return path string (contract B) on success */
   runReworkAgent: (args: { documentPath: string; annotations: string }) => Promise<string>;
-  /** Injectable for tests; default uses Bun.spawn + resolvePlannotatorBinary */
+  /** Injectable for tests; default spawns resolvePlannotatorBinary */
   spawnAnnotate?: (documentPath: string, resultFilePath: string) => Promise<AnnotateChildHandle>;
   pollIntervalMs?: number;
 }
@@ -433,31 +434,63 @@ async function defaultSpawnAnnotate(
 ): Promise<AnnotateChildHandle> {
   await mkdir(dirname(resultFilePath), { recursive: true });
   const readyFilePath = `${resultFilePath}.ready`;
-  await Promise.all([rm(resultFilePath, { force: true }), rm(readyFilePath, { force: true })]);
+  const stdoutFilePath = `${resultFilePath}.stdout`;
+  const stderrFilePath = `${resultFilePath}.stderr`;
+  const isWindows = process.platform === 'win32';
+  const cleanupPaths = [resultFilePath, readyFilePath, stdoutFilePath, stderrFilePath];
+  for (const path of cleanupPaths) rmSync(path, { force: true });
   const configuredBinary = resolvePlannotatorBinary();
   const binary = Bun.which(configuredBinary) ?? configuredBinary;
-  const proc = Bun.spawn(
-    buildPlannotatorSpawnArgv(binary, buildAnnotateArgv(documentPath, resultFilePath)),
-    {
+  const annotateArgs = buildAnnotateArgv(documentPath, resultFilePath);
+  const stdoutFd = openSync(stdoutFilePath, 'w');
+  const stderrFd = openSync(stderrFilePath, 'w');
+  let proc: Bun.Subprocess<'ignore', number, number>;
+  try {
+    proc = Bun.spawn(buildPlannotatorSpawnArgv(binary, annotateArgs), {
       cwd,
       env: { ...process.env, PLANNOTATOR_READY_FILE: readyFilePath },
-      stdout: 'pipe',
-      stderr: 'pipe',
+      stdin: 'ignore',
+      stdout: stdoutFd,
+      stderr: stderrFd,
+      windowsHide: true,
+    });
+  } catch (error) {
+    closeSync(stdoutFd);
+    closeSync(stderrFd);
+    throw error;
+  }
+  let processFinished = false;
+  const exited = proc.exited.then(
+    exitCode => {
+      processFinished = true;
+      return exitCode;
+    },
+    error => {
+      processFinished = true;
+      throw error;
     }
   );
-  const reviewUrl = waitForReviewUrl(readyFilePath, proc.exited);
+  const reviewUrl = waitForReviewUrl(readyFilePath, exited);
   return {
     reviewUrl,
     wait: async (): Promise<Exit> => {
-      const stdoutPromise = proc.stdout ? new Response(proc.stdout).text() : Promise.resolve('');
-      const stderrPromise = proc.stderr ? new Response(proc.stderr).text() : Promise.resolve('');
-      const exitCode = await proc.exited;
-      const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
+      let exitCode: number;
+      try {
+        exitCode = await exited;
+      } catch (error) {
+        closeSync(stdoutFd);
+        closeSync(stderrFd);
+        throw error;
+      }
+      closeSync(stdoutFd);
+      closeSync(stderrFd);
+      const stdout = readFileSync(stdoutFilePath, 'utf8');
+      const stderr = readFileSync(stderrFilePath, 'utf8');
       let resultFilePayload: string | undefined;
       let resultFileError: string | undefined;
       let resultFileCleanupError: string | undefined;
       try {
-        resultFilePayload = await readFile(resultFilePath, 'utf8');
+        resultFilePayload = readFileSync(resultFilePath, 'utf8');
       } catch (err) {
         if (!isMissingFileError(err)) {
           resultFileError = err instanceof Error ? err.message : String(err);
@@ -465,9 +498,9 @@ async function defaultSpawnAnnotate(
       } finally {
         const cleanupErrors: string[] = [];
         await reviewUrl.catch(() => undefined);
-        for (const path of [resultFilePath, readyFilePath]) {
+        for (const path of cleanupPaths) {
           try {
-            await rm(path, { force: true });
+            rmSync(path, { force: true });
           } catch (err) {
             cleanupErrors.push(err instanceof Error ? err.message : String(err));
           }
@@ -484,14 +517,8 @@ async function defaultSpawnAnnotate(
       };
     },
     kill: async (): Promise<void> => {
-      const killOuterProcess = (): void => {
-        try {
-          proc.kill();
-        } catch {
-          /* already exited */
-        }
-      };
-      if (process.platform === 'win32') {
+      if (isWindows) {
+        if (processFinished) return;
         try {
           const taskkill = Bun.spawn(['taskkill.exe', '/PID', String(proc.pid), '/T', '/F'], {
             stdout: 'ignore',
@@ -499,13 +526,15 @@ async function defaultSpawnAnnotate(
             timeout: 5_000,
             windowsHide: true,
           });
-          const exitCode = await taskkill.exited;
-          if (exitCode !== 0) killOuterProcess();
+          if ((await taskkill.exited) === 0) return;
         } catch {
-          killOuterProcess();
+          /* fall back to the direct process handle */
         }
-      } else {
-        killOuterProcess();
+      }
+      try {
+        proc.kill();
+      } catch {
+        /* already exited */
       }
     },
   };
@@ -522,13 +551,17 @@ async function waitForReviewUrl(readyFilePath: string, exited: Promise<number>):
     }
   );
   const deadline = Date.now() + 30_000;
+  let invalidJsonAttempts = 0;
   while (true) {
     try {
       return parseReviewUrl(await readFile(readyFilePath, 'utf8'));
     } catch (err) {
-      const incompleteJson =
-        err instanceof Error && err.message === 'plannotator ready file is not valid JSON';
-      if (!isMissingFileError(err) && !(incompleteJson && !processExited)) throw err;
+      if (err instanceof InvalidReadyFileJsonError && invalidJsonAttempts < 10) {
+        invalidJsonAttempts++;
+        await sleep(50);
+        continue;
+      }
+      if (!isMissingFileError(err)) throw err;
     }
     if (processExited) {
       throw new Error('plannotator annotate exited before publishing its review URL');
@@ -540,12 +573,14 @@ async function waitForReviewUrl(readyFilePath: string, exited: Promise<number>):
   }
 }
 
+class InvalidReadyFileJsonError extends Error {}
+
 function parseReviewUrl(payload: string): string {
   let parsed: unknown;
   try {
     parsed = JSON.parse(payload.trim());
   } catch {
-    throw new Error('plannotator ready file is not valid JSON');
+    throw new InvalidReadyFileJsonError('plannotator ready file is not valid JSON');
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
     throw new Error('plannotator ready file must contain a JSON object');

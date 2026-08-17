@@ -494,7 +494,8 @@ describe('OmpProvider', () => {
         env: { [key]: 'request' },
       });
       expect(calls[0]?.options.env[key]).toBe('request');
-      expect(calls[0]?.options.env.PATH).toBeDefined();
+      const envPath = calls[0]?.options.env.PATH ?? calls[0]?.options.env.Path;
+      expect(envPath).toBeDefined();
     } finally {
       if (original === undefined) delete process.env[key];
       else process.env[key] = original;

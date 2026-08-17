@@ -2,11 +2,10 @@
  * Unit and subprocess tests for the plannotator_gate supervisor loop.
  * Uses an in-memory store and deterministic fake binaries.
  */
-import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { afterAll, afterEach, describe, expect, mock, spyOn, test } from 'bun:test';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { resolveBashPath } from '@archon/git';
 import type { ApprovalContext, WorkflowRun } from './schemas/workflow-run';
 import type { IWorkflowStore } from './store';
 import {
@@ -14,6 +13,12 @@ import {
   type AnnotateChildHandle,
   type PlannotatorGateSupervisorDeps,
 } from './plannotator-gate-supervisor';
+import {
+  cleanupPortableTestExecutables,
+  writePortableShellExecutable,
+} from './plannotator-test-utils';
+
+afterAll(() => cleanupPortableTestExecutables('supervisor'));
 
 // ---------------------------------------------------------------------------
 // In-memory store (CAS-aware; models gate resolve + phase-merge safety)
@@ -270,15 +275,24 @@ function makeChild(exit: {
   delayMs?: number;
 }): AnnotateChildHandle & { killed: boolean; waitStarted: Promise<void> } {
   let killed = false;
+  let cancelDelay: (() => void) | undefined;
   const waitGate = deferred<void>();
-  const killGate = deferred<void>();
   const handle: AnnotateChildHandle & { killed: boolean; waitStarted: Promise<void> } = {
     killed: false,
     waitStarted: waitGate.promise,
     wait: async () => {
       waitGate.resolve();
-      if (exit.delayMs && exit.delayMs > 0) {
-        await Promise.race([Bun.sleep(exit.delayMs), killGate.promise]);
+      if (!killed && exit.delayMs && exit.delayMs > 0) {
+        await new Promise<void>(resolve => {
+          const timer = setTimeout(() => {
+            cancelDelay = undefined;
+            resolve();
+          }, exit.delayMs);
+          cancelDelay = () => {
+            clearTimeout(timer);
+            resolve();
+          };
+        });
       }
       if (killed) {
         return { exitCode: 1, stdout: '', stderr: '', resultFilePayload: undefined };
@@ -295,7 +309,8 @@ function makeChild(exit: {
     kill: () => {
       killed = true;
       handle.killed = true;
-      killGate.resolve();
+      cancelDelay?.();
+      cancelDelay = undefined;
     },
   };
   return handle;
@@ -433,7 +448,7 @@ describe('runPlannotatorGateSupervisor', () => {
     expect(spawnAnnotate).toHaveBeenCalledTimes(1);
     expect(spawnAnnotate).toHaveBeenCalledWith(
       '/tmp/proj/artifacts/plan.html',
-      '/tmp/proj/artifacts/plannotator-gates/gate-gate-a-attempt-1.json'
+      join('/tmp/proj/artifacts', 'plannotator-gates', 'gate-gate-a-attempt-1.json')
     );
     const completed = store.events.find(e => e.event_type === 'node_completed');
     expect(completed?.data?.node_output).toBe('LGTM');
@@ -495,8 +510,8 @@ describe('runPlannotatorGateSupervisor', () => {
     expect(spawnAnnotate).toHaveBeenCalledTimes(2);
     expect(paths).toEqual(['/tmp/proj/artifacts/plan.html', '/tmp/proj/artifacts/plan-v2.html']);
     expect(resultPaths).toEqual([
-      '/tmp/proj/artifacts/plannotator-gates/gate-gate-a-attempt-1.json',
-      '/tmp/proj/artifacts/plannotator-gates/gate-gate-a-attempt-2.json',
+      join('/tmp/proj/artifacts', 'plannotator-gates', 'gate-gate-a-attempt-1.json'),
+      join('/tmp/proj/artifacts', 'plannotator-gates', 'gate-gate-a-attempt-2.json'),
     ]);
     expect(runReworkAgent).toHaveBeenCalledTimes(1);
     const approval = store.run.metadata.approval as ApprovalContext;
@@ -641,7 +656,14 @@ describe('runPlannotatorGateSupervisor', () => {
     await Bun.sleep(25);
     store.run.status = 'cancelled';
 
-    await expect(supervisor).rejects.toThrow(/cancel/i);
+    let error: unknown;
+    try {
+      await supervisor;
+    } catch (caught) {
+      error = caught;
+    }
+    if (!(error instanceof Error)) throw new Error('Expected the supervisor to reject.');
+    expect(error.message).toMatch(/cancel/i);
     expect(child.killed).toBe(true);
   });
 
@@ -1009,9 +1031,7 @@ describe('default annotate subprocess protocol', () => {
 
   function setup(
     script: string,
-    readyPayload:
-      | string
-      | null = '{"url":"http://minis-mac-mini.taildae6a9.ts.net:19432","isRemote":true,"port":19432}'
+    readyPayload = '{"url":"http://minis-mac-mini.taildae6a9.ts.net:19432","isRemote":true,"port":19432}'
   ): {
     store: FakeGateStore;
     deps: PlannotatorGateSupervisorDeps;
@@ -1019,22 +1039,13 @@ describe('default annotate subprocess protocol', () => {
   } {
     const dir = mkdtempSync(join(tmpdir(), 'plannotator-protocol-'));
     dirs.push(dir);
-    const binary = join(dir, process.platform === 'win32' ? 'plannotator.cmd' : 'plannotator');
     const artifactsDir = join(dir, 'artifacts');
-    const publishReady =
-      readyPayload === null ? '' : `printf '%s\\n' '${readyPayload}' > "$PLANNOTATOR_READY_FILE"\n`;
-    const source = `#!/bin/sh\n${publishReady}${script}\n`;
-    if (process.platform === 'win32') {
-      const scriptPath = join(dir, 'plannotator.sh');
-      writeFileSync(scriptPath, source);
-      writeFileSync(
-        binary,
-        `@echo off\r\n"${resolveBashPath().replaceAll('"', '""')}" "${scriptPath.replaceAll('"', '""')}" %*\r\n`
-      );
-    } else {
-      writeFileSync(binary, source);
-      chmodSync(binary, 0o700);
-    }
+    const binary = writePortableShellExecutable(
+      dir,
+      'plannotator',
+      `printf '%s\\n' '${readyPayload}' > "$PLANNOTATOR_READY_FILE"\n${script}`,
+      'supervisor'
+    );
     process.env.PLANNOTATOR_BIN = binary;
     const store = new FakeGateStore(`run-${dirs.length}`);
     return {
@@ -1061,6 +1072,20 @@ describe('default annotate subprocess protocol', () => {
     );
 
     await expect(runPlannotatorGateSupervisor(deps)).rejects.toThrow(/HTTP or HTTPS/i);
+  });
+
+  test('waits for a partial ready-file write to finish', async () => {
+    const { deps } = setup(
+      `sleep 0.2
+printf '%s\\n' '{"url":"http://minis-mac-mini.taildae6a9.ts.net:19432"}' > "$PLANNOTATOR_READY_FILE"
+printf '%s' '{"decision":"approved"}' > "$7"`,
+      ''
+    );
+
+    await expect(runPlannotatorGateSupervisor(deps)).resolves.toEqual({
+      kind: 'approved',
+      output: '',
+    });
   });
 
   test('rejects a credential-bearing review URL from the ready file', async () => {
@@ -1115,23 +1140,6 @@ exit 12`);
     expect(error?.message).toMatch(/exit.*12/i);
     expect(error?.message.length).toBeLessThan(4300);
   }, 5000);
-
-  test('waits for a partially written ready file to become valid JSON', async () => {
-    const { deps } = setup(
-      `
-printf '%s' '{"url":' > "$PLANNOTATOR_READY_FILE"
-sleep 0.2
-printf '%s' '{"url":"http://minis-mac-mini.taildae6a9.ts.net:19432"}' > "$PLANNOTATOR_READY_FILE"
-printf '%s' '{"decision":"approved"}' > "$7.tmp"
-mv "$7.tmp" "$7"`,
-      null
-    );
-
-    await expect(runPlannotatorGateSupervisor(deps)).resolves.toEqual({
-      kind: 'approved',
-      output: '',
-    });
-  });
 
   test('removes a stale attempt result before spawn', async () => {
     const { deps, artifactsDir } = setup(`
