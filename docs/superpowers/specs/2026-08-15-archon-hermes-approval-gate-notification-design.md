@@ -2,7 +2,9 @@
 
 **Date:** 2026-08-15
 
-**Status:** Approved for implementation planning
+**Status:** Implemented, with Hermes destination routing superseded on 2026-08-17
+
+The fixed-platform and fixed-channel Hermes delivery sections in this document are superseded by `2026-08-17-hermes-sethome-approval-notification-delivery-design.md`.
 
 ## Summary
 
