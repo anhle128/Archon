@@ -155,31 +155,35 @@ async function seedRunWithStatus(
   }
 }
 
-function openQueryDatabase(): Database {
-  const db = new Database(join(isolatedHome, 'archon.db'), { readonly: true });
-  db.run('PRAGMA busy_timeout = 5000');
-  return db;
+function isSqliteBusyError(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'SQLITE_BUSY';
 }
 
 function queryRunStatus(runId: string): string | null {
-  const db = openQueryDatabase();
+  const db = new Database(join(isolatedHome, 'archon.db'), { readonly: true });
   try {
     const row = db
       .query('SELECT status FROM remote_agent_workflow_runs WHERE id = ?')
       .get(runId) as { status: string } | undefined;
     return row?.status ?? null;
+  } catch (error) {
+    if (isSqliteBusyError(error)) return null;
+    throw error;
   } finally {
     db.close();
   }
 }
 
 function queryEventCount(runId: string): number {
-  const db = openQueryDatabase();
+  const db = new Database(join(isolatedHome, 'archon.db'), { readonly: true });
   try {
     const row = db
       .query('SELECT COUNT(*) as cnt FROM remote_agent_workflow_events WHERE workflow_run_id = ?')
       .get(runId) as { cnt: number } | undefined;
     return row?.cnt ?? 0;
+  } catch (error) {
+    if (isSqliteBusyError(error)) return 0;
+    throw error;
   } finally {
     db.close();
   }
@@ -204,7 +208,7 @@ function seedNodeEvent(
 }
 
 function queryNodeEventCount(runId: string, eventType: string, nodeId: string): number {
-  const db = openQueryDatabase();
+  const db = new Database(join(isolatedHome, 'archon.db'), { readonly: true });
   try {
     const row = db
       .query(
@@ -213,6 +217,9 @@ function queryNodeEventCount(runId: string, eventType: string, nodeId: string): 
       )
       .get(runId, eventType, nodeId) as { cnt: number } | undefined;
     return row?.cnt ?? 0;
+  } catch (error) {
+    if (isSqliteBusyError(error)) return 0;
+    throw error;
   } finally {
     db.close();
   }
