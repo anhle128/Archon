@@ -463,6 +463,17 @@ async function defaultSpawnAnnotate(
       };
     },
     kill: (): void => {
+      if (process.platform === 'win32') {
+        try {
+          const result = Bun.spawnSync(['taskkill.exe', '/PID', String(proc.pid), '/T', '/F'], {
+            stdout: 'ignore',
+            stderr: 'ignore',
+          });
+          if (result.exitCode === 0) return;
+        } catch {
+          /* fall back to the outer process */
+        }
+      }
       try {
         proc.kill();
       } catch {

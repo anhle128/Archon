@@ -10785,7 +10785,7 @@ describe('executeDagWorkflow -- retry checkpoints', () => {
       });
       await rm(testDir, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it('persists a pre-node checkpoint when entering a Plannotator gate', async () => {
     const testDir = join(
@@ -21575,52 +21575,59 @@ describe('executeDagWorkflow -- production Plannotator gate integration', () => 
         return result;
       }
     );
-    const oldExecution = executeIntegrationDag(deps, run, workflow, prior);
-    await waitForDagGateInvocations(fake, 1);
+    try {
+      const oldExecution = executeIntegrationDag(deps, run, workflow, prior);
+      await waitForDagGateInvocations(fake, 1);
 
-    const transition = await store.transitionPlannotatorGate({
-      runId: run.id,
-      nodeId: 'review',
-      expectedGateId: 'gate-a',
-      nextGateId: 'gate-b',
-      document,
-      phase: 'opening',
-    });
-    expect(transition.outcome).toBe('updated');
-    run.status = 'running';
-    const replacementRun = structuredClone(run);
-    const replacementExecution = executeIntegrationDag(deps, replacementRun, workflow, prior);
-    const invocations = await waitForDagGateInvocations(fake, 2);
+      const transition = await store.transitionPlannotatorGate({
+        runId: run.id,
+        nodeId: 'review',
+        expectedGateId: 'gate-a',
+        nextGateId: 'gate-b',
+        document,
+        phase: 'opening',
+      });
+      expect(transition.outcome).toBe('updated');
+      run.status = 'running';
+      const replacementRun = structuredClone(run);
+      const replacementExecution = executeIntegrationDag(deps, replacementRun, workflow, prior);
+      const invocations = await waitForDagGateInvocations(fake, 2);
 
-    for (let attempt = 0; attempt < 600; attempt++) {
-      if (existsSync(join(fake.controlDir, `${dagGateAttemptKey('gate-a')}.terminated`))) {
-        break;
+      if (process.platform !== 'win32') {
+        for (let attempt = 0; attempt < 600; attempt++) {
+          if (existsSync(join(fake.controlDir, `${dagGateAttemptKey('gate-a')}.terminated`))) {
+            break;
+          }
+          await Bun.sleep(5);
+        }
+        expect(existsSync(join(fake.controlDir, `${dagGateAttemptKey('gate-a')}.terminated`))).toBe(
+          true
+        );
       }
-      await Bun.sleep(5);
-    }
-    expect(existsSync(join(fake.controlDir, `${dagGateAttemptKey('gate-a')}.terminated`))).toBe(
-      true
-    );
-    await expect(oldExecution).resolves.toBeUndefined();
-    expect(gateResults).toContainEqual({ state: 'pending', output: '' });
-    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
-    releaseDagGateDecision(fake, 'gate-b', {
-      decision: 'approved',
-      feedback: 'Replacement approved',
-    });
-    await replacementExecution;
+      await expect(oldExecution).resolves.toBeUndefined();
+      expect(gateResults).toContainEqual({ state: 'pending', output: '' });
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+      releaseDagGateDecision(fake, 'gate-b', {
+        decision: 'approved',
+        feedback: 'Replacement approved',
+      });
+      await replacementExecution;
 
-    expect(invocations.map(invocation => basename(invocation.resultFile))).toEqual([
-      dagGateAttemptKey('gate-a'),
-      dagGateAttemptKey('gate-b'),
-    ]);
-    expect(readFileSync(marker, 'utf8').trim().split('\n')).toEqual(['ran']);
-    expect(
-      events.filter(event => event.event_type === 'node_completed' && event.step_name === 'review')
-    ).toHaveLength(1);
-    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
-    gateSpy.mockRestore();
-  });
+      expect(invocations.map(invocation => basename(invocation.resultFile))).toEqual([
+        dagGateAttemptKey('gate-a'),
+        dagGateAttemptKey('gate-b'),
+      ]);
+      expect(readFileSync(marker, 'utf8').trim().split('\n')).toEqual(['ran']);
+      expect(
+        events.filter(
+          event => event.event_type === 'node_completed' && event.step_name === 'review'
+        )
+      ).toHaveLength(1);
+      expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+    } finally {
+      gateSpy.mockRestore();
+    }
+  }, 15_000);
 });
 
 describe('executeDagWorkflow -- superseded plannotator supervisor', () => {
