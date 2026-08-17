@@ -155,9 +155,14 @@ async function seedRunWithStatus(
   }
 }
 
+function openQueryDatabase(): Database {
+  const db = new Database(join(isolatedHome, 'archon.db'), { readonly: true });
+  db.run('PRAGMA busy_timeout = 5000');
+  return db;
+}
+
 function queryRunStatus(runId: string): string | null {
-  const dbPath = join(isolatedHome, 'archon.db');
-  const db = new Database(dbPath);
+  const db = openQueryDatabase();
   try {
     const row = db
       .query('SELECT status FROM remote_agent_workflow_runs WHERE id = ?')
@@ -169,8 +174,7 @@ function queryRunStatus(runId: string): string | null {
 }
 
 function queryEventCount(runId: string): number {
-  const dbPath = join(isolatedHome, 'archon.db');
-  const db = new Database(dbPath);
+  const db = openQueryDatabase();
   try {
     const row = db
       .query('SELECT COUNT(*) as cnt FROM remote_agent_workflow_events WHERE workflow_run_id = ?')
@@ -200,7 +204,7 @@ function seedNodeEvent(
 }
 
 function queryNodeEventCount(runId: string, eventType: string, nodeId: string): number {
-  const db = new Database(join(isolatedHome, 'archon.db'));
+  const db = openQueryDatabase();
   try {
     const row = db
       .query(
