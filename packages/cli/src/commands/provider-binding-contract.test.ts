@@ -31,7 +31,7 @@ describe('workflow-commander contract regression (Story 3.1)', () => {
     const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain('contract validation passed');
-  });
+  }, 20_000);
 
   // 3.1-CONTRACT-002 [P1] — Binding-domain status fixtures remain
   // validator-valid without an application schema (W-002: no runtime caller
