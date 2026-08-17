@@ -133,6 +133,13 @@ describe('SqliteAdapter', () => {
     }
   });
 
+  test('finalizes prepared statements before closing', async () => {
+    db = createTestDb();
+    await db.query('SELECT 1');
+
+    await expect(db.close()).resolves.toBeUndefined();
+  });
+
   describe('INSERT with RETURNING', () => {
     test('returns inserted row via native RETURNING', async () => {
       db = createTestDb();

@@ -44,7 +44,7 @@ const competingDb = new SqliteAdapter(sqliteFixturePath);
 afterAll(async () => {
   await competingDb.close();
   await db.close();
-  rmSync(sqliteFixtureDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  rmSync(sqliteFixtureDir, { recursive: true, force: true });
 });
 
 mock.module('./connection', () => ({

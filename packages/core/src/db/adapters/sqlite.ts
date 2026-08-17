@@ -1,7 +1,7 @@
 /**
  * SQLite adapter using bun:sqlite
  */
-import { Database, type SQLQueryBindings } from 'bun:sqlite';
+import { Database, type SQLQueryBindings, type Statement } from 'bun:sqlite';
 import { existsSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import type { IDatabase, QueryResult, SqlDialect } from './types';
@@ -69,8 +69,7 @@ export class SqliteAdapter implements IDatabase {
       const sqliteParams = reorderedParams as SQLQueryBindings[];
 
       if (isSelect) {
-        const stmt = this.db.prepare(convertedSql);
-        const rows = stmt.all(...sqliteParams) as T[];
+        const rows = this.withStatement(convertedSql, stmt => stmt.all(...sqliteParams)) as T[];
         return { rows, rowCount: rows.length };
       } else {
         const upperSql = sql.toUpperCase();
@@ -80,8 +79,7 @@ export class SqliteAdapter implements IDatabase {
         // RETURNING results, and its lastInsertRowid is unreliable when
         // ON CONFLICT DO UPDATE fires.
         if (upperSql.includes('RETURNING') && upperSql.includes('INSERT')) {
-          const stmt = this.db.prepare(convertedSql);
-          const rows = stmt.all(...sqliteParams) as T[];
+          const rows = this.withStatement(convertedSql, stmt => stmt.all(...sqliteParams)) as T[];
           return { rows, rowCount: rows.length };
         }
 
@@ -95,8 +93,7 @@ export class SqliteAdapter implements IDatabase {
         }
 
         // Standard INSERT/UPDATE/DELETE without RETURNING
-        const stmt = this.db.prepare(convertedSql);
-        const result = stmt.run(...sqliteParams);
+        const result = this.withStatement(convertedSql, stmt => stmt.run(...sqliteParams));
         return { rows: [], rowCount: result.changes };
       }
     } catch (error) {
@@ -135,7 +132,19 @@ export class SqliteAdapter implements IDatabase {
   }
 
   async close(): Promise<void> {
-    this.db.close();
+    this.db.close(true);
+  }
+
+  private withStatement<T>(
+    sql: string,
+    execute: (stmt: Statement<unknown, SQLQueryBindings[]>) => T
+  ): T {
+    const stmt = this.db.prepare(sql);
+    try {
+      return execute(stmt);
+    } finally {
+      stmt.finalize();
+    }
   }
 
   /**
@@ -183,9 +192,10 @@ export class SqliteAdapter implements IDatabase {
 
   /** True when core Archon tables already exist — i.e. this is not a fresh database. */
   private hasAnyArchonTable(): boolean {
-    const row = this.db
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-      .get('remote_agent_codebases');
+    const row = this.withStatement(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      stmt => stmt.get('remote_agent_codebases')
+    );
     return row !== null && row !== undefined;
   }
 
@@ -212,9 +222,10 @@ export class SqliteAdapter implements IDatabase {
       return;
     }
     try {
-      const existing = this.db
-        .prepare('SELECT app_version FROM remote_agent_schema_version WHERE id = 1')
-        .get() as { app_version: string } | null;
+      const existing = this.withStatement(
+        'SELECT app_version FROM remote_agent_schema_version WHERE id = 1',
+        stmt => stmt.get()
+      ) as { app_version: string } | null;
 
       if (!existing) {
         this.db.run(
@@ -252,7 +263,9 @@ export class SqliteAdapter implements IDatabase {
     // Better Auth's own tables are PostgreSQL-only — web auth is never enabled
     // on SQLite — so only the role column is backfilled here.
     try {
-      const userCols = this.db.prepare("PRAGMA table_info('remote_agent_users')").all() as {
+      const userCols = this.withStatement("PRAGMA table_info('remote_agent_users')", stmt =>
+        stmt.all()
+      ) as {
         name: string;
       }[];
       const userColNames = new Set(userCols.map(c => c.name));
@@ -266,7 +279,9 @@ export class SqliteAdapter implements IDatabase {
 
     // Codebases columns
     try {
-      const codebaseCols = this.db.prepare("PRAGMA table_info('remote_agent_codebases')").all() as {
+      const codebaseCols = this.withStatement("PRAGMA table_info('remote_agent_codebases')", stmt =>
+        stmt.all()
+      ) as {
         name: string;
       }[];
       const codebaseColNames = new Set(codebaseCols.map(c => c.name));
@@ -286,7 +301,9 @@ export class SqliteAdapter implements IDatabase {
 
     // Conversations columns
     try {
-      const cols = this.db.prepare("PRAGMA table_info('remote_agent_conversations')").all() as {
+      const cols = this.withStatement("PRAGMA table_info('remote_agent_conversations')", stmt =>
+        stmt.all()
+      ) as {
         name: string;
       }[];
       const colNames = new Set(cols.map(c => c.name));
@@ -319,7 +336,9 @@ export class SqliteAdapter implements IDatabase {
 
     // Workflow runs columns
     try {
-      const wfCols = this.db.prepare("PRAGMA table_info('remote_agent_workflow_runs')").all() as {
+      const wfCols = this.withStatement("PRAGMA table_info('remote_agent_workflow_runs')", stmt =>
+        stmt.all()
+      ) as {
         name: string;
       }[];
       const wfColNames = new Set(wfCols.map(c => c.name));
@@ -367,7 +386,9 @@ export class SqliteAdapter implements IDatabase {
 
     // Sessions columns
     try {
-      const sessCols = this.db.prepare("PRAGMA table_info('remote_agent_sessions')").all() as {
+      const sessCols = this.withStatement("PRAGMA table_info('remote_agent_sessions')", stmt =>
+        stmt.all()
+      ) as {
         name: string;
       }[];
       const sessColNames = new Set(sessCols.map(c => c.name));
@@ -382,7 +403,9 @@ export class SqliteAdapter implements IDatabase {
 
     // Messages columns
     try {
-      const cols = this.db.prepare("PRAGMA table_info('remote_agent_messages')").all() as {
+      const cols = this.withStatement("PRAGMA table_info('remote_agent_messages')", stmt =>
+        stmt.all()
+      ) as {
         name: string;
       }[];
       const colNames = new Set(cols.map(c => c.name));
@@ -398,9 +421,10 @@ export class SqliteAdapter implements IDatabase {
 
     // Isolation environments columns
     try {
-      const cols = this.db
-        .prepare("PRAGMA table_info('remote_agent_isolation_environments')")
-        .all() as {
+      const cols = this.withStatement(
+        "PRAGMA table_info('remote_agent_isolation_environments')",
+        stmt => stmt.all()
+      ) as {
         name: string;
       }[];
       const colNames = new Set(cols.map(c => c.name));
@@ -422,7 +446,9 @@ export class SqliteAdapter implements IDatabase {
     // shipped with Phase 3 (#1948), so pre-existing installs need this ALTER —
     // CREATE TABLE IF NOT EXISTS in createSchema() is a no-op for them.
     try {
-      const cols = this.db.prepare("PRAGMA table_info('remote_agent_user_ai_prefs')").all() as {
+      const cols = this.withStatement("PRAGMA table_info('remote_agent_user_ai_prefs')", stmt =>
+        stmt.all()
+      ) as {
         name: string;
       }[];
       const colNames = new Set(cols.map(c => c.name));
@@ -436,9 +462,10 @@ export class SqliteAdapter implements IDatabase {
 
     // Workflow provider binding columns added after the table first shipped.
     try {
-      const cols = this.db
-        .prepare("PRAGMA table_info('remote_agent_workflow_provider_bindings')")
-        .all() as {
+      const cols = this.withStatement(
+        "PRAGMA table_info('remote_agent_workflow_provider_bindings')",
+        stmt => stmt.all()
+      ) as {
         name: string;
       }[];
       const colNames = new Set(cols.map(c => c.name));
@@ -460,7 +487,9 @@ export class SqliteAdapter implements IDatabase {
     // Lifecycle ordering: SQLite timestamps have one-second precision. A trigger
     // assigns a durable, monotonically increasing value for each inserted event.
     try {
-      const cols = this.db.prepare("PRAGMA table_info('remote_agent_workflow_events')").all() as {
+      const cols = this.withStatement("PRAGMA table_info('remote_agent_workflow_events')", stmt =>
+        stmt.all()
+      ) as {
         name: string;
       }[];
       if (!new Set(cols.map(c => c.name)).has('event_order')) {
