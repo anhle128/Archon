@@ -1,0 +1,4 @@
+interface:
+  display_name: "Test Windows"
+  short_description: "Run and improve native Windows validation"
+  default_prompt: "Use $test-windows to reproduce and fix Windows-only test failures."

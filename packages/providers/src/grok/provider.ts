@@ -203,9 +203,6 @@ function scheduleKill(proc: GrokProcess): ReturnType<typeof setTimeout> {
   const timer = setTimeout(() => {
     proc.kill('SIGKILL');
   }, TERMINATION_GRACE_MS);
-  if (typeof timer === 'object' && 'unref' in timer && typeof timer.unref === 'function') {
-    timer.unref();
-  }
   return timer;
 }
 

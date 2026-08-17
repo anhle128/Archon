@@ -2,8 +2,8 @@
  * Unit and subprocess tests for the plannotator_gate supervisor loop.
  * Uses an in-memory store and deterministic fake binaries.
  */
-import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { afterAll, afterEach, describe, expect, mock, spyOn, test } from 'bun:test';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ApprovalContext, WorkflowRun } from './schemas/workflow-run';
@@ -13,6 +13,12 @@ import {
   type AnnotateChildHandle,
   type PlannotatorGateSupervisorDeps,
 } from './plannotator-gate-supervisor';
+import {
+  cleanupPortableTestExecutables,
+  writePortableShellExecutable,
+} from './plannotator-test-utils';
+
+afterAll(() => cleanupPortableTestExecutables('supervisor'));
 
 // ---------------------------------------------------------------------------
 // In-memory store (CAS-aware; models gate resolve + phase-merge safety)
@@ -269,14 +275,24 @@ function makeChild(exit: {
   delayMs?: number;
 }): AnnotateChildHandle & { killed: boolean; waitStarted: Promise<void> } {
   let killed = false;
+  let cancelDelay: (() => void) | undefined;
   const waitGate = deferred<void>();
   const handle: AnnotateChildHandle & { killed: boolean; waitStarted: Promise<void> } = {
     killed: false,
     waitStarted: waitGate.promise,
     wait: async () => {
       waitGate.resolve();
-      if (exit.delayMs && exit.delayMs > 0) {
-        await Bun.sleep(exit.delayMs);
+      if (!killed && exit.delayMs && exit.delayMs > 0) {
+        await new Promise<void>(resolve => {
+          const timer = setTimeout(() => {
+            cancelDelay = undefined;
+            resolve();
+          }, exit.delayMs);
+          cancelDelay = () => {
+            clearTimeout(timer);
+            resolve();
+          };
+        });
       }
       if (killed) {
         return { exitCode: 1, stdout: '', stderr: '', resultFilePayload: undefined };
@@ -293,6 +309,8 @@ function makeChild(exit: {
     kill: () => {
       killed = true;
       handle.killed = true;
+      cancelDelay?.();
+      cancelDelay = undefined;
     },
   };
   return handle;
@@ -430,7 +448,7 @@ describe('runPlannotatorGateSupervisor', () => {
     expect(spawnAnnotate).toHaveBeenCalledTimes(1);
     expect(spawnAnnotate).toHaveBeenCalledWith(
       '/tmp/proj/artifacts/plan.html',
-      '/tmp/proj/artifacts/plannotator-gates/gate-gate-a-attempt-1.json'
+      join('/tmp/proj/artifacts', 'plannotator-gates', 'gate-gate-a-attempt-1.json')
     );
     const completed = store.events.find(e => e.event_type === 'node_completed');
     expect(completed?.data?.node_output).toBe('LGTM');
@@ -492,8 +510,8 @@ describe('runPlannotatorGateSupervisor', () => {
     expect(spawnAnnotate).toHaveBeenCalledTimes(2);
     expect(paths).toEqual(['/tmp/proj/artifacts/plan.html', '/tmp/proj/artifacts/plan-v2.html']);
     expect(resultPaths).toEqual([
-      '/tmp/proj/artifacts/plannotator-gates/gate-gate-a-attempt-1.json',
-      '/tmp/proj/artifacts/plannotator-gates/gate-gate-a-attempt-2.json',
+      join('/tmp/proj/artifacts', 'plannotator-gates', 'gate-gate-a-attempt-1.json'),
+      join('/tmp/proj/artifacts', 'plannotator-gates', 'gate-gate-a-attempt-2.json'),
     ]);
     expect(runReworkAgent).toHaveBeenCalledTimes(1);
     const approval = store.run.metadata.approval as ApprovalContext;
@@ -606,7 +624,14 @@ describe('runPlannotatorGateSupervisor', () => {
     await Bun.sleep(25);
     store.run.status = 'cancelled';
 
-    await expect(supervisor).rejects.toThrow(/cancel/i);
+    let error: unknown;
+    try {
+      await supervisor;
+    } catch (caught) {
+      error = caught;
+    }
+    if (!(error instanceof Error)) throw new Error('Expected the supervisor to reject.');
+    expect(error.message).toMatch(/cancel/i);
     expect(child.killed).toBe(true);
   });
 
@@ -982,13 +1007,13 @@ describe('default annotate subprocess protocol', () => {
   } {
     const dir = mkdtempSync(join(tmpdir(), 'plannotator-protocol-'));
     dirs.push(dir);
-    const binary = join(dir, 'plannotator');
     const artifactsDir = join(dir, 'artifacts');
-    writeFileSync(
-      binary,
-      `#!/bin/sh\nprintf '%s\\n' '${readyPayload}' > "$PLANNOTATOR_READY_FILE"\n${script}\n`
+    const binary = writePortableShellExecutable(
+      dir,
+      'plannotator',
+      `printf '%s\\n' '${readyPayload}' > "$PLANNOTATOR_READY_FILE"\n${script}`,
+      'supervisor'
     );
-    chmodSync(binary, 0o700);
     process.env.PLANNOTATOR_BIN = binary;
     const store = new FakeGateStore(`run-${dirs.length}`);
     return {

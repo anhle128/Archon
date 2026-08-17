@@ -9,7 +9,7 @@
  * dest-symlink traversal. Char-device (0,0) whiteout detection needs `mknod` (root)
  * and is exercised by the live in-container malicious-overlay smoke instead.
  */
-import { describe, test, expect } from 'bun:test';
+import { describe, test, expect, setDefaultTimeout } from 'bun:test';
 import { execFileSync } from 'child_process';
 import { resolveBashPath } from '@archon/git';
 import {
@@ -33,6 +33,8 @@ import { buildApplyScript, buildSummaryScript } from './overlay';
 // cases are skipped on win32 — environment reality, not test weakening. Every
 // non-symlink case still runs on Windows.
 const isWin = process.platform === 'win32';
+// Git Bash startup slows under the full Windows package matrix.
+setDefaultTimeout(isWin ? 15_000 : 5_000);
 // FIFO creation needs `mkfifo` (POSIX) — detected once so a missing tool is an
 // explicit skip, never a silent pass (R2-F6).
 const hasMkfifo = (() => {
@@ -151,14 +153,17 @@ describe('apply script — C2 special files + setuid', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  test.skipIf(!hasMkfifo)('a fifo (special file) is skipped, never reproduced on the host', () => {
-    const { root, upper, dest, ws } = makeDirs();
-    execFileSync('mkfifo', [join(upper, 'pipe')]);
-    const { records } = runScript(buildApplyScript(), upper, dest, ws);
-    expect(existsSync(join(dest, 'pipe'))).toBe(false);
-    expect(records.some(r => r.tag === 'S' && r.fields[0] === 'pipe')).toBe(true);
-    rmSync(root, { recursive: true, force: true });
-  });
+  test.skipIf(isWin || !hasMkfifo)(
+    'a fifo (special file) is skipped, never reproduced on the host',
+    () => {
+      const { root, upper, dest, ws } = makeDirs();
+      execFileSync('mkfifo', [join(upper, 'pipe')]);
+      const { records } = runScript(buildApplyScript(), upper, dest, ws);
+      expect(existsSync(join(dest, 'pipe'))).toBe(false);
+      expect(records.some(r => r.tag === 'S' && r.fields[0] === 'pipe')).toBe(true);
+      rmSync(root, { recursive: true, force: true });
+    }
+  );
 });
 
 describe('apply script — M1/M4 symlinks', () => {

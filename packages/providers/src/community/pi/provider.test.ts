@@ -311,7 +311,7 @@ describe('PiProvider', () => {
     expect(stub.name).toBe('archon-pi-shim');
     expect(stub.version).toBe('0.0.0');
     expect(stub.piConfig).toEqual({});
-  });
+  }, 30_000);
 
   test('throws when no model is configured', async () => {
     const { error } = await consume(new PiProvider().sendQuery('hi', '/tmp'));

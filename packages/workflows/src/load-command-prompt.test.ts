@@ -73,7 +73,11 @@ describe('loadCommandPrompt — home-scope resolution', () => {
     const sourceDir = mkdtempSync(join(tmpdir(), 'archon-command-source-'));
     try {
       writeFileSync(join(sourceDir, 'linked.md'), 'Linked body');
-      await fsSymlink(join(sourceDir, 'linked.md'), join(archonHome, 'commands', 'linked.md'));
+      if (process.platform === 'win32') {
+        await fsSymlink(sourceDir, join(archonHome, 'commands', 'linked-dir'), 'junction');
+      } else {
+        await fsSymlink(join(sourceDir, 'linked.md'), join(archonHome, 'commands', 'linked.md'));
+      }
 
       const result = await loadCommandPrompt(makeDeps(false), repoRoot, 'linked');
 

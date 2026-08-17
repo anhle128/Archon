@@ -69,8 +69,7 @@ export class SqliteAdapter implements IDatabase {
       const sqliteParams = reorderedParams as SQLQueryBindings[];
 
       if (isSelect) {
-        const stmt = this.db.prepare(convertedSql);
-        const rows = stmt.all(...sqliteParams) as T[];
+        const rows = this.queryRows<T>(convertedSql, sqliteParams);
         return { rows, rowCount: rows.length };
       } else {
         const upperSql = sql.toUpperCase();
@@ -80,8 +79,7 @@ export class SqliteAdapter implements IDatabase {
         // RETURNING results, and its lastInsertRowid is unreliable when
         // ON CONFLICT DO UPDATE fires.
         if (upperSql.includes('RETURNING') && upperSql.includes('INSERT')) {
-          const stmt = this.db.prepare(convertedSql);
-          const rows = stmt.all(...sqliteParams) as T[];
+          const rows = this.queryRows<T>(convertedSql, sqliteParams);
           return { rows, rowCount: rows.length };
         }
 
@@ -96,8 +94,12 @@ export class SqliteAdapter implements IDatabase {
 
         // Standard INSERT/UPDATE/DELETE without RETURNING
         const stmt = this.db.prepare(convertedSql);
-        const result = stmt.run(...sqliteParams);
-        return { rows: [], rowCount: result.changes };
+        try {
+          const result = stmt.run(...sqliteParams);
+          return { rows: [], rowCount: result.changes };
+        } finally {
+          stmt.finalize();
+        }
       }
     } catch (error) {
       const err = error as Error;
@@ -135,7 +137,16 @@ export class SqliteAdapter implements IDatabase {
   }
 
   async close(): Promise<void> {
-    this.db.close();
+    this.db.close(true);
+  }
+
+  private queryRows<T>(sql: string, params: SQLQueryBindings[] = []): T[] {
+    const stmt = this.db.prepare(sql);
+    try {
+      return stmt.all(...params) as T[];
+    } finally {
+      stmt.finalize();
+    }
   }
 
   /**
@@ -183,10 +194,11 @@ export class SqliteAdapter implements IDatabase {
 
   /** True when core Archon tables already exist — i.e. this is not a fresh database. */
   private hasAnyArchonTable(): boolean {
-    const row = this.db
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-      .get('remote_agent_codebases');
-    return row !== null && row !== undefined;
+    const row = this.queryRows<{ name: string }>(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      ['remote_agent_codebases']
+    )[0];
+    return row !== undefined;
   }
 
   /**
@@ -212,9 +224,9 @@ export class SqliteAdapter implements IDatabase {
       return;
     }
     try {
-      const existing = this.db
-        .prepare('SELECT app_version FROM remote_agent_schema_version WHERE id = 1')
-        .get() as { app_version: string } | null;
+      const existing = this.queryRows<{ app_version: string }>(
+        'SELECT app_version FROM remote_agent_schema_version WHERE id = 1'
+      )[0];
 
       if (!existing) {
         this.db.run(
@@ -252,9 +264,7 @@ export class SqliteAdapter implements IDatabase {
     // Better Auth's own tables are PostgreSQL-only — web auth is never enabled
     // on SQLite — so only the role column is backfilled here.
     try {
-      const userCols = this.db.prepare("PRAGMA table_info('remote_agent_users')").all() as {
-        name: string;
-      }[];
+      const userCols = this.queryRows<{ name: string }>("PRAGMA table_info('remote_agent_users')");
       const userColNames = new Set(userCols.map(c => c.name));
       if (!userColNames.has('role')) {
         this.db.run("ALTER TABLE remote_agent_users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'");
@@ -266,9 +276,9 @@ export class SqliteAdapter implements IDatabase {
 
     // Codebases columns
     try {
-      const codebaseCols = this.db.prepare("PRAGMA table_info('remote_agent_codebases')").all() as {
-        name: string;
-      }[];
+      const codebaseCols = this.queryRows<{ name: string }>(
+        "PRAGMA table_info('remote_agent_codebases')"
+      );
       const codebaseColNames = new Set(codebaseCols.map(c => c.name));
 
       if (!codebaseColNames.has('default_branch')) {
@@ -286,9 +296,9 @@ export class SqliteAdapter implements IDatabase {
 
     // Conversations columns
     try {
-      const cols = this.db.prepare("PRAGMA table_info('remote_agent_conversations')").all() as {
-        name: string;
-      }[];
+      const cols = this.queryRows<{ name: string }>(
+        "PRAGMA table_info('remote_agent_conversations')"
+      );
       const colNames = new Set(cols.map(c => c.name));
 
       if (!colNames.has('title')) {
@@ -319,9 +329,9 @@ export class SqliteAdapter implements IDatabase {
 
     // Workflow runs columns
     try {
-      const wfCols = this.db.prepare("PRAGMA table_info('remote_agent_workflow_runs')").all() as {
-        name: string;
-      }[];
+      const wfCols = this.queryRows<{ name: string }>(
+        "PRAGMA table_info('remote_agent_workflow_runs')"
+      );
       const wfColNames = new Set(wfCols.map(c => c.name));
 
       if (!wfColNames.has('parent_conversation_id')) {
@@ -367,9 +377,9 @@ export class SqliteAdapter implements IDatabase {
 
     // Sessions columns
     try {
-      const sessCols = this.db.prepare("PRAGMA table_info('remote_agent_sessions')").all() as {
-        name: string;
-      }[];
+      const sessCols = this.queryRows<{ name: string }>(
+        "PRAGMA table_info('remote_agent_sessions')"
+      );
       const sessColNames = new Set(sessCols.map(c => c.name));
 
       if (!sessColNames.has('ended_reason')) {
@@ -382,9 +392,7 @@ export class SqliteAdapter implements IDatabase {
 
     // Messages columns
     try {
-      const cols = this.db.prepare("PRAGMA table_info('remote_agent_messages')").all() as {
-        name: string;
-      }[];
+      const cols = this.queryRows<{ name: string }>("PRAGMA table_info('remote_agent_messages')");
       const colNames = new Set(cols.map(c => c.name));
       if (!colNames.has('user_id')) {
         this.db.run(
@@ -398,11 +406,9 @@ export class SqliteAdapter implements IDatabase {
 
     // Isolation environments columns
     try {
-      const cols = this.db
-        .prepare("PRAGMA table_info('remote_agent_isolation_environments')")
-        .all() as {
-        name: string;
-      }[];
+      const cols = this.queryRows<{ name: string }>(
+        "PRAGMA table_info('remote_agent_isolation_environments')"
+      );
       const colNames = new Set(cols.map(c => c.name));
       if (!colNames.has('created_by_user_id')) {
         this.db.run(
@@ -422,9 +428,9 @@ export class SqliteAdapter implements IDatabase {
     // shipped with Phase 3 (#1948), so pre-existing installs need this ALTER —
     // CREATE TABLE IF NOT EXISTS in createSchema() is a no-op for them.
     try {
-      const cols = this.db.prepare("PRAGMA table_info('remote_agent_user_ai_prefs')").all() as {
-        name: string;
-      }[];
+      const cols = this.queryRows<{ name: string }>(
+        "PRAGMA table_info('remote_agent_user_ai_prefs')"
+      );
       const colNames = new Set(cols.map(c => c.name));
       if (!colNames.has('default_model')) {
         this.db.run('ALTER TABLE remote_agent_user_ai_prefs ADD COLUMN default_model TEXT');
@@ -436,11 +442,9 @@ export class SqliteAdapter implements IDatabase {
 
     // Workflow provider binding columns added after the table first shipped.
     try {
-      const cols = this.db
-        .prepare("PRAGMA table_info('remote_agent_workflow_provider_bindings')")
-        .all() as {
-        name: string;
-      }[];
+      const cols = this.queryRows<{ name: string }>(
+        "PRAGMA table_info('remote_agent_workflow_provider_bindings')"
+      );
       const colNames = new Set(cols.map(c => c.name));
       if (cols.length > 0 && !colNames.has('signing_secret')) {
         this.db.run(
@@ -460,9 +464,9 @@ export class SqliteAdapter implements IDatabase {
     // Lifecycle ordering: SQLite timestamps have one-second precision. A trigger
     // assigns a durable, monotonically increasing value for each inserted event.
     try {
-      const cols = this.db.prepare("PRAGMA table_info('remote_agent_workflow_events')").all() as {
-        name: string;
-      }[];
+      const cols = this.queryRows<{ name: string }>(
+        "PRAGMA table_info('remote_agent_workflow_events')"
+      );
       if (!new Set(cols.map(c => c.name)).has('event_order')) {
         this.db.run('ALTER TABLE remote_agent_workflow_events ADD COLUMN event_order INTEGER');
       }

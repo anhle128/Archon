@@ -19,6 +19,7 @@ const CONTRACTS_ROOT = join(
 );
 const BINDINGS_DIR = join(CONTRACTS_ROOT, 'examples/providers/archon/bindings');
 const VALIDATOR = join(CONTRACTS_ROOT, 'validate_contracts.py');
+const PYTHON = process.platform === 'win32' ? 'python' : 'python3';
 
 describe('workflow-commander contract regression (Story 3.1)', () => {
   // 3.1-CONTRACT-003 [P0] — Canonical validator passes and contracts remain
@@ -26,7 +27,7 @@ describe('workflow-commander contract regression (Story 3.1)', () => {
   // coverage — the story text says it "should already pass"; this test keeps
   // it enforced as this story's own contribution proceeds.
   test('validate_contracts.py passes unchanged (regression gate, not a new obligation)', async () => {
-    const proc = Bun.spawn(['python3', VALIDATOR], { stdout: 'pipe', stderr: 'pipe' });
+    const proc = Bun.spawn([PYTHON, VALIDATOR], { stdout: 'pipe', stderr: 'pipe' });
     const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain('contract validation passed');

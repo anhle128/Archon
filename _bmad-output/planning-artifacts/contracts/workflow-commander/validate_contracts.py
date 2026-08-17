@@ -592,7 +592,7 @@ def discover_example_json_files(package: Path) -> set[str]:
     examples = package / 'examples'
     if not examples.exists():
         return set()
-    return {str(path.relative_to(package)) for path in examples.rglob('*.json')}
+    return {path.relative_to(package).as_posix() for path in examples.rglob('*.json')}
 
 
 def validate_known_json_files(package: Path, errors: list[str]) -> None:

@@ -25,6 +25,7 @@ const CONTRACTS_ROOT = join(
 );
 const VALIDATOR = join(CONTRACTS_ROOT, 'validate_contracts.py');
 const COMMANDS_DIR = join(CONTRACTS_ROOT, 'examples/providers/archon/commands');
+const PYTHON = process.platform === 'win32' ? 'python' : 'python3';
 
 // ---------------------------------------------------------------------------
 // Mock scaffolding — mirrors workflow.test.ts's top-of-file mocks. Declared
@@ -395,7 +396,7 @@ describe('3.3B-CONTRACT-038 [P1] workflow.ts consumes the shared envelope module
 
 describe('3.3B-CONTRACT-039 [P0] canonical validator passes unchanged (R-001, RC-27)', () => {
   test('validate_contracts.py passes and no contract file was edited by this story', async () => {
-    const proc = Bun.spawn(['python3', VALIDATOR], { stdout: 'pipe', stderr: 'pipe' });
+    const proc = Bun.spawn([PYTHON, VALIDATOR], { stdout: 'pipe', stderr: 'pipe' });
     const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain('contract validation passed');
@@ -629,7 +630,7 @@ describe('3.3C-CONTRACT-002 [P1] fixture delta documentation (AC #1, W-3.3C-001)
 
 describe('3.3C-CONTRACT-003 [P1] canonical validator still passes (regression)', () => {
   test('validate_contracts.py passes and no contract file was edited by this story', async () => {
-    const proc = Bun.spawn(['python3', VALIDATOR], { stdout: 'pipe', stderr: 'pipe' });
+    const proc = Bun.spawn([PYTHON, VALIDATOR], { stdout: 'pipe', stderr: 'pipe' });
     const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain('contract validation passed');
@@ -654,7 +655,7 @@ async function validateRuntimeEnvelope(envelope: Record<string, unknown>): Promi
   const { writeFileSync, unlinkSync } = await import('node:fs');
   writeFileSync(tmpFile, JSON.stringify(envelope));
   try {
-    const proc = Bun.spawn(['python3', RUNTIME_VALIDATOR, tmpFile], {
+    const proc = Bun.spawn([PYTHON, RUNTIME_VALIDATOR, tmpFile], {
       stdout: 'pipe',
       stderr: 'pipe',
     });
@@ -978,7 +979,7 @@ describe('3.3D-CONTRACT-002 [P1] fixture delta documentation (AC #1, #4)', () =>
 
 describe('3.3D-CONTRACT-003 [P0] canonical validator still passes (regression)', () => {
   test('validate_contracts.py passes and no contract file was edited by this story', async () => {
-    const proc = Bun.spawn(['python3', VALIDATOR], { stdout: 'pipe', stderr: 'pipe' });
+    const proc = Bun.spawn([PYTHON, VALIDATOR], { stdout: 'pipe', stderr: 'pipe' });
     const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain('contract validation passed');
