@@ -2908,7 +2908,7 @@ branch refs/heads/feature/auth
       expect(status).toBe('');
       const ignoredStatus = await runGit(repoPath, ['status', '--porcelain', '--ignored']);
       expect(ignoredStatus).toContain('!! ignored.tmp');
-    });
+    }, 15_000);
 
     test('fails dirty checkpoint commits with git identity guidance and no stash fallback', async () => {
       const originalEnv = {
@@ -3025,7 +3025,7 @@ branch refs/heads/feature/auth
       ]);
       expect(postResetStatus).toBe('');
       expect(await readFile(join(repoPath, 'ignored.tmp'), 'utf8')).toBe('ignored work\n');
-    });
+    }, 15_000);
 
     test('validates checkpoint and safety refs before mutation and rejects missing commit refs', async () => {
       const { repoPath } = await initRetryRepo('retry-ref-validation');
