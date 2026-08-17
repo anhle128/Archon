@@ -4,8 +4,9 @@ description: |
   Triggers: "speckit feature", "spec-driven", "sdd pipeline", "full speckit", "speckit full",
             "specify plan implement", "speckit end-to-end", "feature with speckit",
             "speckit pipeline", "sdd feature".
-  Does: Specify → clarify (with Plannotator live review gate) → red-team (with Plannotator
-        live review gate) → plan → tasks → analyze → tasks-to-ralph → ralph.sh → sync-back →
+  Does: Specify → clarify (with Plannotator live review when questions exist) → red-team
+        (with Plannotator live review gate) → plan → tasks → analyze → tasks-to-ralph →
+        ralph.sh → sync-back →
         converge gate → human review before retry → final Ralph pass on exhaustion →
         BMAD sprint status update → PR creation.
   NOT for: Quick one-file fixes, bug fixes, PR reviews.
@@ -55,6 +56,37 @@ nodes:
     model: gpt-5.6-sol
     context: fresh
 
+  - id: clarify-file-check
+    bash: |
+      set -euo pipefail
+      source .specify/scripts/bash/common.sh
+
+      repo_root=$(get_repo_root)
+      feature_dir=$(read_feature_json_feature_directory "$repo_root")
+      if [ -z "$feature_dir" ]; then
+        echo "clarify-file-check: .specify/feature.json has no valid feature_directory" >&2
+        exit 1
+      fi
+      if [[ "$feature_dir" != /* ]]; then
+        feature_dir="$repo_root/$feature_dir"
+      fi
+      if [ ! -d "$feature_dir" ]; then
+        echo "clarify-file-check: feature directory does not exist: $feature_dir" >&2
+        exit 1
+      fi
+
+      questions_file="$feature_dir/clarification-questions.md"
+      if [ -f "$questions_file" ]; then
+        printf 'HAS_QUESTIONS\n'
+      elif [ -e "$questions_file" ]; then
+        echo "clarify-file-check: expected a regular file: $questions_file" >&2
+        exit 1
+      else
+        printf 'NO_QUESTIONS\n'
+      fi
+    depends_on:
+      - clarify
+
   - id: clarify-respond
     prompt: |
       ## Persona
@@ -87,7 +119,8 @@ nodes:
          STOP and report BLOCKED — do NOT fabricate questions.
       4. trigger clarification-answer-review skill
     depends_on:
-      - clarify
+      - clarify-file-check
+    when: "$clarify-file-check.output == 'HAS_QUESTIONS'"
     effort: high
     provider: grok
     model: "grok-4.6"
@@ -208,7 +241,11 @@ nodes:
       Read .specify/feature.json to resolve <feature_directory>, then run:
       $speckit.red-team.run <feature_directory> --yes
     depends_on:
+      - clarify-file-check
+      - clarify-respond
+      - clarify-gate
       - clarify-apply
+    trigger_rule: none_failed_min_one_success
     effort: high
     provider: claude
     model: "claude-opus-4-8[1M]"

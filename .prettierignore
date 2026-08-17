@@ -18,6 +18,7 @@ coverage/
 sessions/
 api_sessions/
 workspace/
+.gitnexus/
 
 # Lock files (auto-generated)
 package-lock.json
