@@ -95,3 +95,17 @@ export function buildAnnotateArgv(documentPath: string, resultFilePath: string):
 export function resolvePlannotatorBinary(): string {
   return process.env.PLANNOTATOR_BIN ?? 'plannotator';
 }
+
+/**
+ * Build a direct spawn command, including the Windows command-shim launcher.
+ */
+export function buildPlannotatorSpawnArgv(
+  binaryPath: string,
+  args: string[],
+  platform: typeof process.platform = process.platform
+): string[] {
+  if (platform === 'win32' && /\.(?:cmd|bat)$/i.test(binaryPath)) {
+    return ['cmd.exe', '/d', '/s', '/c', binaryPath, ...args];
+  }
+  return [binaryPath, ...args];
+}

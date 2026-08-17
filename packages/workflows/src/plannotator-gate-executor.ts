@@ -18,7 +18,11 @@ import {
   shouldContinueStreamingForStatus,
   substituteNodeOutputRefs,
 } from './dag-executor';
-import { parseDocumentPathFromNodeOutput, resolvePlannotatorBinary } from './plannotator-gate';
+import {
+  buildPlannotatorSpawnArgv,
+  parseDocumentPathFromNodeOutput,
+  resolvePlannotatorBinary,
+} from './plannotator-gate';
 import { runPlannotatorGateSupervisor } from './plannotator-gate-supervisor';
 import type { ExecutionContext, SendQueryOptions } from '@archon/providers/types';
 import { safeSendMessage, substituteWorkflowVariables } from './executor-shared';
@@ -123,7 +127,7 @@ export async function preflightPlannotatorBinary(): Promise<string> {
     );
   }
   const resolved = which ?? bin;
-  const proc = Bun.spawn([resolved, 'annotate', '--help'], {
+  const proc = Bun.spawn(buildPlannotatorSpawnArgv(resolved, ['annotate', '--help']), {
     stdout: 'pipe',
     stderr: 'pipe',
   });

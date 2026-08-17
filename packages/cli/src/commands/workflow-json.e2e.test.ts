@@ -126,13 +126,18 @@ function parseSoleJsonLine(stdout: string): Record<string, unknown> {
   return JSON.parse(lines[0] as string) as Record<string, unknown>;
 }
 
+function openWriteDatabase(): Database {
+  const db = new Database(join(isolatedHome, 'archon.db'));
+  db.run('PRAGMA busy_timeout = 5000');
+  return db;
+}
+
 async function seedFailedRun(
   runId: string,
   workingPath: string,
   workflowName: string = 'test-workflow'
 ): Promise<void> {
-  const dbPath = join(isolatedHome, 'archon.db');
-  const db = new Database(dbPath);
+  const db = openWriteDatabase();
   try {
     db.run('PRAGMA foreign_keys = OFF');
     db.run(
@@ -154,8 +159,7 @@ async function seedRunWithStatus(
   workingPath: string,
   status: string
 ): Promise<void> {
-  const dbPath = join(isolatedHome, 'archon.db');
-  const db = new Database(dbPath);
+  const db = openWriteDatabase();
   try {
     db.run('PRAGMA foreign_keys = OFF');
     db.run(
@@ -172,27 +176,35 @@ async function seedRunWithStatus(
   }
 }
 
+function isSqliteBusyError(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'SQLITE_BUSY';
+}
+
 function queryRunStatus(runId: string): string | null {
-  const dbPath = join(isolatedHome, 'archon.db');
-  const db = new Database(dbPath);
+  const db = new Database(join(isolatedHome, 'archon.db'), { readonly: true });
   try {
     const row = db
       .query('SELECT status FROM remote_agent_workflow_runs WHERE id = ?')
       .get(runId) as { status: string } | undefined;
     return row?.status ?? null;
+  } catch (error) {
+    if (isSqliteBusyError(error)) return null;
+    throw error;
   } finally {
     db.close();
   }
 }
 
 function queryEventCount(runId: string): number {
-  const dbPath = join(isolatedHome, 'archon.db');
-  const db = new Database(dbPath);
+  const db = new Database(join(isolatedHome, 'archon.db'), { readonly: true });
   try {
     const row = db
       .query('SELECT COUNT(*) as cnt FROM remote_agent_workflow_events WHERE workflow_run_id = ?')
       .get(runId) as { cnt: number } | undefined;
     return row?.cnt ?? 0;
+  } catch (error) {
+    if (isSqliteBusyError(error)) return 0;
+    throw error;
   } finally {
     db.close();
   }
@@ -204,7 +216,7 @@ function seedNodeEvent(
   nodeId: string,
   data: Record<string, unknown>
 ): void {
-  const db = new Database(join(isolatedHome, 'archon.db'));
+  const db = openWriteDatabase();
   try {
     db.run(
       `INSERT INTO remote_agent_workflow_events (workflow_run_id, event_type, step_name, data)
@@ -217,7 +229,7 @@ function seedNodeEvent(
 }
 
 function queryNodeEventCount(runId: string, eventType: string, nodeId: string): number {
-  const db = new Database(join(isolatedHome, 'archon.db'));
+  const db = new Database(join(isolatedHome, 'archon.db'), { readonly: true });
   try {
     const row = db
       .query(
@@ -226,6 +238,9 @@ function queryNodeEventCount(runId: string, eventType: string, nodeId: string): 
       )
       .get(runId, eventType, nodeId) as { cnt: number } | undefined;
     return row?.cnt ?? 0;
+  } catch (error) {
+    if (isSqliteBusyError(error)) return 0;
+    throw error;
   } finally {
     db.close();
   }
@@ -1851,9 +1866,8 @@ describe('R1-F30 — durable side-effect proofs (Story 3.3d)', () => {
     const filePath = join(isolatedRepo, 'not-a-directory.txt');
     writeFileSync(filePath, 'this is a file, not a directory');
 
-    const dbPath = join(isolatedHome, 'archon.db');
     await runCli(['workflow', 'list', '--json']);
-    const db = new Database(dbPath);
+    const db = openWriteDatabase();
     try {
       db.run('PRAGMA foreign_keys = OFF');
       db.run(

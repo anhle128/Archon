@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import {
   buildAnnotateArgv,
+  buildPlannotatorSpawnArgv,
   parseDocumentPathFromNodeOutput,
   parsePlannotatorGateDecisionJson,
   resolvePlannotatorBinary,
@@ -132,6 +133,21 @@ describe('buildAnnotateArgv', () => {
       '--persist-session',
       '--result-file',
       '/tmp/my results/result.json',
+    ]);
+  });
+});
+
+describe('buildPlannotatorSpawnArgv', () => {
+  test('runs Windows command shims through cmd.exe', () => {
+    expect(
+      buildPlannotatorSpawnArgv('C:\\tools\\plannotator.CMD', ['annotate', '--help'], 'win32')
+    ).toEqual(['cmd.exe', '/d', '/s', '/c', 'C:\\tools\\plannotator.CMD', 'annotate', '--help']);
+  });
+
+  test('runs native executables directly', () => {
+    expect(buildPlannotatorSpawnArgv('/usr/bin/plannotator', ['annotate'], 'linux')).toEqual([
+      '/usr/bin/plannotator',
+      'annotate',
     ]);
   });
 });

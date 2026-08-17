@@ -548,6 +548,38 @@ describe('runPlannotatorGateSupervisor', () => {
     expect(completed).toHaveLength(1);
   });
 
+  test('external approve waits for asynchronous child shutdown', async () => {
+    const store = new FakeGateStore('run-async-shutdown');
+    const child = makeChild({ exitCode: 0, delayMs: 60_000 });
+    const originalKill = child.kill;
+    const killStarted = deferred<void>();
+    const releaseKill = deferred<void>();
+    child.kill = async (): Promise<void> => {
+      killStarted.resolve();
+      await releaseKill.promise;
+      await originalKill();
+    };
+
+    let settled = false;
+    const supervisor = runPlannotatorGateSupervisor(
+      baseDeps(store, {
+        captureResponse: true,
+        spawnAnnotate: async () => child,
+        pollIntervalMs: 10,
+      })
+    ).finally(() => {
+      settled = true;
+    });
+
+    await child.waitStarted;
+    store.externalApprove('from-cli');
+    await killStarted.promise;
+    expect(settled).toBe(false);
+
+    releaseKill.resolve();
+    await expect(supervisor).resolves.toEqual({ kind: 'approved', output: 'from-cli' });
+  });
+
   test('invalid rework path throws and leaves run paused', async () => {
     const store = new FakeGateStore('run-bad-rework');
     const child = makeChild({

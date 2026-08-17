@@ -43,7 +43,7 @@ import {
 const fakeRootEnv = 'ARCHON_TEST_PLANNOTATOR_ROOT';
 const originalFakeRoot = process.env[fakeRootEnv];
 
-setDefaultTimeout(process.platform === 'win32' ? 15_000 : 5_000);
+setDefaultTimeout(20_000);
 
 afterAll(async () => {
   if (originalFakeRoot === undefined) delete process.env[fakeRootEnv];

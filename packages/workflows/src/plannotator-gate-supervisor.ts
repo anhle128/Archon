@@ -13,19 +13,21 @@
  * claim returns superseded so only the winning executor continues `runLayers`.
  */
 import { createLogger } from '@archon/paths';
-import { closeSync, openSync, readFileSync, rmSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { readFileSync, rmSync } from 'node:fs';
+import { mkdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { ApprovalContext, WorkflowRun } from './schemas/workflow-run';
 import type { IWorkflowStore } from './store';
 import {
   buildAnnotateArgv,
+  buildPlannotatorSpawnArgv,
   parseDocumentPathFromNodeOutput,
   parsePlannotatorGateDecisionJson,
   resolvePlannotatorBinary,
 } from './plannotator-gate';
 
 const log = createLogger('workflow.plannotator-gate');
+const CHILD_SHUTDOWN_TIMEOUT_MS = 10_000;
 
 export interface AnnotateChildHandle {
   reviewUrl?: Promise<string>;
@@ -37,7 +39,7 @@ export interface AnnotateChildHandle {
     resultFileError?: string;
     resultFileCleanupError?: string;
   }>;
-  kill: () => void;
+  kill: () => void | Promise<void>;
 }
 
 export interface PlannotatorGateSupervisorDeps {
@@ -102,11 +104,31 @@ export async function runPlannotatorGateSupervisor(
     resolved: null,
   });
 
-  const dropChild = (): void => {
-    killChild(child);
+  const dropChild = async (): Promise<void> => {
+    const activeChild = child;
+    const activeDone = childDone;
     child = null;
     childDone = null;
     childResult = undefined;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const results = await Promise.race([
+        Promise.allSettled([killChild(activeChild), activeDone ?? Promise.resolve()]),
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => {
+            reject(
+              new Error(
+                `plannotator annotate child did not stop within ${CHILD_SHUTDOWN_TIMEOUT_MS}ms`
+              )
+            );
+          }, CHILD_SHUTDOWN_TIMEOUT_MS);
+        }),
+      ]);
+      const failed = results.find(result => result.status === 'rejected');
+      if (failed?.status === 'rejected') throw failed.reason;
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
   };
 
   try {
@@ -114,7 +136,7 @@ export async function runPlannotatorGateSupervisor(
       const early = await checkResolved(deps);
       const earlyResult = await finishGateOutcome(deps, early);
       if (earlyResult) {
-        dropChild();
+        await dropChild();
         return earlyResult;
       }
 
@@ -129,7 +151,7 @@ export async function runPlannotatorGateSupervisor(
         const open = await setPhase(deps, documentPath, 'opening');
         const openResult = await finishGateOutcome(deps, open);
         if (openResult) {
-          dropChild();
+          await dropChild();
           return openResult;
         }
         attempt += 1;
@@ -153,7 +175,7 @@ export async function runPlannotatorGateSupervisor(
             const duringOpening = await checkResolved(deps);
             const duringOpeningResult = await finishGateOutcome(deps, duringOpening);
             if (duringOpeningResult) {
-              dropChild();
+              await dropChild();
               return duringOpeningResult;
             }
             throw err;
@@ -163,7 +185,7 @@ export async function runPlannotatorGateSupervisor(
         const waiting = await setPhase(deps, documentPath, 'waiting_decision', reviewUrl);
         const waitingResult = await finishGateOutcome(deps, waiting);
         if (waitingResult) {
-          dropChild();
+          await dropChild();
           return waitingResult;
         }
         if (reviewUrl !== undefined) {
@@ -194,13 +216,13 @@ export async function runPlannotatorGateSupervisor(
         const mid = await checkResolved(deps);
         const midResult = await finishGateOutcome(deps, mid);
         if (midResult) {
-          dropChild();
+          await dropChild();
           return midResult;
         }
         if (childResult === undefined) continue;
 
         const exited = childResult;
-        dropChild();
+        await dropChild();
 
         if (exited.exitCode !== 0) {
           throw processProtocolError(
@@ -294,7 +316,7 @@ export async function runPlannotatorGateSupervisor(
       await sleep(pollMs);
     }
   } catch (err) {
-    dropChild();
+    await dropChild();
     throw err;
   }
 }
@@ -405,11 +427,6 @@ async function recordApproval(
   return resolved ? 'approved' : checkResolved(deps);
 }
 
-function quoteWindowsBatchArgument(value: string): string {
-  if (/["\r\n]/.test(value)) throw new Error('Plannotator argument is not safe for Windows batch');
-  return `"${value.replaceAll('%', '%%')}"`;
-}
-
 async function defaultSpawnAnnotate(
   documentPath: string,
   resultFilePath: string,
@@ -419,133 +436,37 @@ async function defaultSpawnAnnotate(
   const readyFilePath = `${resultFilePath}.ready`;
   const stdoutFilePath = `${resultFilePath}.stdout`;
   const stderrFilePath = `${resultFilePath}.stderr`;
-  const exitFilePath = `${resultFilePath}.exit`;
-  const exitTempFilePath = `${exitFilePath}.tmp`;
-  const launcherPath = `${resultFilePath}.launcher.cmd`;
   const isWindows = process.platform === 'win32';
-  const cleanupPaths = [
-    resultFilePath,
-    readyFilePath,
-    stdoutFilePath,
-    stderrFilePath,
-    exitFilePath,
-    exitTempFilePath,
-    launcherPath,
-  ];
+  const cleanupPaths = [resultFilePath, readyFilePath, stdoutFilePath, stderrFilePath];
   for (const path of cleanupPaths) rmSync(path, { force: true });
-  const binary = resolvePlannotatorBinary();
+  const configuredBinary = resolvePlannotatorBinary();
+  const binary = Bun.which(configuredBinary) ?? configuredBinary;
   const annotateArgs = buildAnnotateArgv(documentPath, resultFilePath);
-  let resolveKilled = (_exitCode: number): void => undefined;
-  const killed = new Promise<number>(resolve => {
-    resolveKilled = resolve;
+  const proc = Bun.spawn(buildPlannotatorSpawnArgv(binary, annotateArgs), {
+    cwd,
+    env: { ...process.env, PLANNOTATOR_READY_FILE: readyFilePath },
+    stdin: 'ignore',
+    stdout: Bun.file(stdoutFilePath),
+    stderr: Bun.file(stderrFilePath),
+    windowsHide: true,
   });
-  let proc: Bun.Subprocess<'ignore', number, number> | undefined;
-  let windowsPid: number | undefined;
-  let stdoutFd: number | undefined;
-  let stderrFd: number | undefined;
-  let exited: Promise<number>;
+  proc.unref();
   let processFinished = false;
-  if (isWindows) {
-    await writeFile(
-      launcherPath,
-      `@echo off\r\nsetlocal\r\ncall ${[binary, ...annotateArgs].map(quoteWindowsBatchArgument).join(' ')} 1>"%ARCHON_PLANNOTATOR_STDOUT_FILE%" 2>"%ARCHON_PLANNOTATOR_STDERR_FILE%"\r\nset "ARCHON_PLANNOTATOR_CODE=%errorlevel%"\r\n> "%ARCHON_PLANNOTATOR_EXIT_FILE%.tmp" <nul set /p "=%ARCHON_PLANNOTATOR_CODE%"\r\nmove /y "%ARCHON_PLANNOTATOR_EXIT_FILE%.tmp" "%ARCHON_PLANNOTATOR_EXIT_FILE%" >nul\r\nexit /b %ARCHON_PLANNOTATOR_CODE%\r\n`
-    );
-    const launch = Bun.spawnSync(
-      [
-        'powershell.exe',
-        '-NoLogo',
-        '-NoProfile',
-        '-NonInteractive',
-        '-Command',
-        '$process = Start-Process -FilePath $env:ARCHON_PLANNOTATOR_LAUNCHER -WorkingDirectory $env:ARCHON_PLANNOTATOR_CWD -PassThru -WindowStyle Hidden; [Console]::Out.Write($process.Id)',
-      ],
-      {
-        env: {
-          ...process.env,
-          PLANNOTATOR_READY_FILE: readyFilePath,
-          ARCHON_PLANNOTATOR_LAUNCHER: launcherPath,
-          ARCHON_PLANNOTATOR_CWD: cwd,
-          ARCHON_PLANNOTATOR_EXIT_FILE: exitFilePath,
-          ARCHON_PLANNOTATOR_STDOUT_FILE: stdoutFilePath,
-          ARCHON_PLANNOTATOR_STDERR_FILE: stderrFilePath,
-        },
-        stdout: 'pipe',
-        stderr: 'pipe',
-      }
-    );
-    if (launch.exitCode !== 0) {
-      throw new Error(
-        `Could not start Plannotator: ${new TextDecoder().decode(launch.stderr).trim()}`
-      );
-    }
-    windowsPid = Number(new TextDecoder().decode(launch.stdout).trim());
-    if (!Number.isInteger(windowsPid) || windowsPid <= 0) {
-      throw new Error('Could not start Plannotator: Windows launcher did not return a PID');
-    }
-    const exitObserver = Bun.spawn(
-      [
-        'powershell.exe',
-        '-NoLogo',
-        '-NoProfile',
-        '-NonInteractive',
-        '-Command',
-        '$launcher = Get-Process -Id ([int]$env:ARCHON_PLANNOTATOR_LAUNCHER_PID) -ErrorAction SilentlyContinue; while (-not (Test-Path -LiteralPath $env:ARCHON_PLANNOTATOR_EXIT_FILE)) { if ($null -eq $launcher -or $launcher.HasExited) { Write-Error "Plannotator launcher exited without an exit file"; exit 1 }; Start-Sleep -Milliseconds 20 }; $exitCode = (Get-Content -LiteralPath $env:ARCHON_PLANNOTATOR_EXIT_FILE -Raw).Trim(); if ($null -ne $launcher -and -not $launcher.HasExited) { $launcher.WaitForExit() }; [Console]::Out.Write($exitCode)',
-      ],
-      {
-        env: {
-          ...process.env,
-          ARCHON_PLANNOTATOR_EXIT_FILE: exitFilePath,
-          ARCHON_PLANNOTATOR_LAUNCHER_PID: String(windowsPid),
-        },
-        stdin: 'ignore',
-        stdout: 'pipe',
-        stderr: 'pipe',
-      }
-    );
-    const observedExit = Promise.all([
-      new Response(exitObserver.stdout).text(),
-      new Response(exitObserver.stderr).text(),
-    ]).then(([output, error]) => {
+  const exited = proc.exited.then(
+    exitCode => {
       processFinished = true;
-      const exitCode = Number(output.trim());
-      if (!Number.isInteger(exitCode)) {
-        throw new Error(`Could not wait for Plannotator: ${error.trim() || 'invalid exit code'}`);
-      }
       return exitCode;
-    });
-    exited = Promise.race([observedExit, killed]);
-  } else {
-    stdoutFd = openSync(stdoutFilePath, 'w');
-    stderrFd = openSync(stderrFilePath, 'w');
-    try {
-      proc = Bun.spawn([binary, ...annotateArgs], {
-        cwd,
-        env: { ...process.env, PLANNOTATOR_READY_FILE: readyFilePath },
-        stdin: 'ignore',
-        stdout: stdoutFd,
-        stderr: stderrFd,
-      });
-    } catch (error) {
-      closeSync(stdoutFd);
-      closeSync(stderrFd);
+    },
+    error => {
+      processFinished = true;
       throw error;
     }
-    exited = proc.exited;
-  }
+  );
   const reviewUrl = waitForReviewUrl(readyFilePath, exited);
   return {
     reviewUrl,
     wait: async (): Promise<Exit> => {
-      let exitCode: number;
-      try {
-        exitCode = await exited;
-      } catch (error) {
-        if (stdoutFd !== undefined) closeSync(stdoutFd);
-        if (stderrFd !== undefined) closeSync(stderrFd);
-        throw error;
-      }
-      if (stdoutFd !== undefined) closeSync(stdoutFd);
-      if (stderrFd !== undefined) closeSync(stderrFd);
+      const exitCode = await exited;
       const stdout = readFileSync(stdoutFilePath, 'utf8');
       const stderr = readFileSync(stderrFilePath, 'utf8');
       let resultFilePayload: string | undefined;
@@ -578,18 +499,23 @@ async function defaultSpawnAnnotate(
         resultFileCleanupError,
       };
     },
-    kill: (): void => {
-      try {
-        if (isWindows) {
-          if (processFinished || windowsPid === undefined) return;
-          Bun.spawnSync(['taskkill.exe', '/PID', String(windowsPid), '/T', '/F'], {
+    kill: async (): Promise<void> => {
+      if (isWindows) {
+        if (processFinished) return;
+        try {
+          const taskkill = Bun.spawn(['taskkill.exe', '/PID', String(proc.pid), '/T', '/F'], {
             stdout: 'ignore',
             stderr: 'ignore',
+            timeout: 5_000,
+            windowsHide: true,
           });
-          resolveKilled(143);
-        } else {
-          proc?.kill();
+          if ((await taskkill.exited) === 0) return;
+        } catch {
+          /* fall back to the direct process handle */
         }
+      }
+      try {
+        proc.kill();
       } catch {
         /* already exited */
       }
@@ -685,13 +611,9 @@ function processProtocolError(
   return new Error(`${message}${stderr ? `: ${stderr}` : ''}`);
 }
 
-function killChild(child: AnnotateChildHandle | null): void {
+async function killChild(child: AnnotateChildHandle | null): Promise<void> {
   if (!child) return;
-  try {
-    child.kill();
-  } catch {
-    /* ignore */
-  }
+  await child.kill();
 }
 
 function sleep(ms: number): Promise<void> {
