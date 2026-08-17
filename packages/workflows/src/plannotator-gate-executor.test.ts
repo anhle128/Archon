@@ -1,4 +1,13 @@
-import { describe, expect, test, beforeEach, afterEach, afterAll, mock } from 'bun:test';
+import {
+  describe,
+  expect,
+  test,
+  beforeEach,
+  afterEach,
+  afterAll,
+  mock,
+  setDefaultTimeout,
+} from 'bun:test';
 import {
   chmodSync,
   existsSync,
@@ -33,14 +42,13 @@ import {
 
 const fakeRootEnv = 'ARCHON_TEST_PLANNOTATOR_ROOT';
 const originalFakeRoot = process.env[fakeRootEnv];
-let windowsFakeBinDir: string | undefined;
-let windowsFakeBin: string | undefined;
 
-afterAll(() => {
+setDefaultTimeout(process.platform === 'win32' ? 15_000 : 5_000);
+
+afterAll(async () => {
   if (originalFakeRoot === undefined) delete process.env[fakeRootEnv];
   else process.env[fakeRootEnv] = originalFakeRoot;
-  if (windowsFakeBinDir) rmSync(windowsFakeBinDir, { recursive: true, force: true });
-  cleanupPortableTestExecutables('executor');
+  await cleanupPortableTestExecutables('executor');
 });
 
 function makeRun(approval: Record<string, unknown>): WorkflowRun {
@@ -214,14 +222,7 @@ if (decision.payload !== undefined) {
 }
 process.exit(decision.exitCode ?? 0);
 `;
-  let bin: string;
-  if (process.platform === 'win32') {
-    windowsFakeBinDir ??= mkdtempSync(join(tmpdir(), 'archon-plannotator-fixture-'));
-    windowsFakeBin ??= writePortableBunExecutable(windowsFakeBinDir, 'plannotator', source);
-    bin = windowsFakeBin;
-  } else {
-    bin = writePortableBunExecutable(root, 'plannotator', source);
-  }
+  const bin = writePortableBunExecutable(root, 'plannotator', source);
   return { bin, controlDir, invocationLog };
 }
 

@@ -2816,6 +2816,7 @@ branch refs/heads/feature/auth
       const repoPath = join(testDir, name);
       await realMkdir(repoPath, { recursive: true });
       await runGit(repoPath, ['init']);
+      await runGit(repoPath, ['config', 'core.autocrlf', 'false']);
       await runGit(repoPath, ['config', 'user.name', 'Archon Test']);
       await runGit(repoPath, ['config', 'user.email', 'archon-test@example.com']);
       await writeFile(join(repoPath, 'tracked.txt'), 'initial\n');

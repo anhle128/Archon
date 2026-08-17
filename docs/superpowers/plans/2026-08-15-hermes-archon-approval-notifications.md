@@ -1,5 +1,7 @@
 # Hermes Archon Approval Notifications Implementation Plan
 
+> **Superseded:** The fixed-platform and fixed-channel Hermes tasks in this plan are superseded by `2026-08-17-hermes-sethome-approval-delivery.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make the existing Hermes generic webhook route accept Archon event names and deliver the approved approval-gate message to one fixed project channel without an LLM.

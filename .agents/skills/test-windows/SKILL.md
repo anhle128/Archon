@@ -47,8 +47,10 @@ Do not copy failure logs into this skill.
 - Keep tests that mutate the same process-wide environment variable in separate Bun invocations.
 - Do not call `unref()` on a timer that is required to settle a pending promise.
 - Finalize SQLite statements before immediate test-directory cleanup.
-- Use native Windows fixture executables when a test must control or terminate a child process.
+- Use native Windows command wrappers when a test must control or terminate a child process.
 - Do not install a Unix signal handler in a Windows fixture when the test relies on native hard termination.
+- Await bounded cleanup retries when Windows still holds a finished fixture path.
+- For interactive subprocesses, use an atomic exit sidecar and an attached Windows waiter when Bun does not report the process exit.
 - Increase a timeout only when the same real integration operation passes alone and fails under CI-level process contention.
 
 ## Setup Failures

@@ -1,4 +1,5 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -22,19 +23,12 @@ export function writePortableBunExecutable(
   }
 
   const sourcePath = join(directory, `${name}.ts`);
-  const executable = join(directory, `${name}.exe`);
+  const executable = join(directory, `${name}.cmd`);
   writeFileSync(sourcePath, source);
-  const result = Bun.spawnSync([
-    process.execPath,
-    'build',
-    '--compile',
-    sourcePath,
-    '--outfile',
+  writeFileSync(
     executable,
-  ]);
-  if (result.exitCode !== 0) {
-    throw new Error(`Failed to compile ${name}: ${new TextDecoder().decode(result.stderr)}`);
-  }
+    `@echo off\r\n"${process.execPath}" "${sourcePath}" %*\r\nexit /b %errorlevel%\r\n`
+  );
   return executable;
 }
 
@@ -91,9 +85,23 @@ process.exit(await child.exited);
   return wrapper.executable;
 }
 
-export function cleanupPortableTestExecutables(scope: ShellFixtureScope): void {
+export async function cleanupPortableTestExecutables(scope: ShellFixtureScope): Promise<void> {
   const wrapper = windowsShellWrappers.get(scope);
   if (!wrapper) return;
-  rmSync(wrapper.directory, { recursive: true, force: true });
-  windowsShellWrappers.delete(scope);
+  for (let attempt = 0; attempt < 50; attempt++) {
+    try {
+      await rm(wrapper.directory, { recursive: true, force: true });
+      windowsShellWrappers.delete(scope);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (
+        attempt === 49 ||
+        (code !== 'EBUSY' && code !== 'EPERM' && code !== 'EACCES' && code !== 'ENOTEMPTY')
+      ) {
+        throw error;
+      }
+      await Bun.sleep(100);
+    }
+  }
 }

@@ -1042,6 +1042,20 @@ describe('default annotate subprocess protocol', () => {
     await expect(runPlannotatorGateSupervisor(deps)).rejects.toThrow(/HTTP or HTTPS/i);
   });
 
+  test('waits for a partial ready-file write to finish', async () => {
+    const { deps } = setup(
+      `sleep 0.2
+printf '%s\\n' '{"url":"http://minis-mac-mini.taildae6a9.ts.net:19432"}' > "$PLANNOTATOR_READY_FILE"
+printf '%s' '{"decision":"approved"}' > "$7"`,
+      ''
+    );
+
+    await expect(runPlannotatorGateSupervisor(deps)).resolves.toEqual({
+      kind: 'approved',
+      output: '',
+    });
+  });
+
   test('rejects a credential-bearing review URL from the ready file', async () => {
     const { store, deps } = setup(
       `printf '%s' '{"decision":"approved"}' > "$7"`,

@@ -13,7 +13,8 @@
  * claim returns superseded so only the winning executor continues `runLayers`.
  */
 import { createLogger } from '@archon/paths';
-import { mkdir, readFile, rm } from 'node:fs/promises';
+import { closeSync, openSync, readFileSync, rmSync } from 'node:fs';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { ApprovalContext, WorkflowRun } from './schemas/workflow-run';
 import type { IWorkflowStore } from './store';
@@ -52,7 +53,7 @@ export interface PlannotatorGateSupervisorDeps {
   store: IWorkflowStore;
   /** Spawn rework AI; must return path string (contract B) on success */
   runReworkAgent: (args: { documentPath: string; annotations: string }) => Promise<string>;
-  /** Injectable for tests; default uses Bun.spawn + resolvePlannotatorBinary */
+  /** Injectable for tests; default spawns resolvePlannotatorBinary */
   spawnAnnotate?: (documentPath: string, resultFilePath: string) => Promise<AnnotateChildHandle>;
   pollIntervalMs?: number;
 }
@@ -404,6 +405,11 @@ async function recordApproval(
   return resolved ? 'approved' : checkResolved(deps);
 }
 
+function quoteWindowsBatchArgument(value: string): string {
+  if (/["\r\n]/.test(value)) throw new Error('Plannotator argument is not safe for Windows batch');
+  return `"${value.replaceAll('%', '%%')}"`;
+}
+
 async function defaultSpawnAnnotate(
   documentPath: string,
   resultFilePath: string,
@@ -411,29 +417,142 @@ async function defaultSpawnAnnotate(
 ): Promise<AnnotateChildHandle> {
   await mkdir(dirname(resultFilePath), { recursive: true });
   const readyFilePath = `${resultFilePath}.ready`;
-  await Promise.all([rm(resultFilePath, { force: true }), rm(readyFilePath, { force: true })]);
-  const proc = Bun.spawn(
-    [resolvePlannotatorBinary(), ...buildAnnotateArgv(documentPath, resultFilePath)],
-    {
-      cwd,
-      env: { ...process.env, PLANNOTATOR_READY_FILE: readyFilePath },
-      stdout: 'pipe',
-      stderr: 'pipe',
+  const stdoutFilePath = `${resultFilePath}.stdout`;
+  const stderrFilePath = `${resultFilePath}.stderr`;
+  const exitFilePath = `${resultFilePath}.exit`;
+  const exitTempFilePath = `${exitFilePath}.tmp`;
+  const launcherPath = `${resultFilePath}.launcher.cmd`;
+  const isWindows = process.platform === 'win32';
+  const cleanupPaths = [
+    resultFilePath,
+    readyFilePath,
+    stdoutFilePath,
+    stderrFilePath,
+    exitFilePath,
+    exitTempFilePath,
+    launcherPath,
+  ];
+  for (const path of cleanupPaths) rmSync(path, { force: true });
+  const binary = resolvePlannotatorBinary();
+  const annotateArgs = buildAnnotateArgv(documentPath, resultFilePath);
+  let resolveKilled = (_exitCode: number): void => undefined;
+  const killed = new Promise<number>(resolve => {
+    resolveKilled = resolve;
+  });
+  let proc: Bun.Subprocess<'ignore', number, number> | undefined;
+  let windowsPid: number | undefined;
+  let stdoutFd: number | undefined;
+  let stderrFd: number | undefined;
+  let exited: Promise<number>;
+  let processFinished = false;
+  if (isWindows) {
+    await writeFile(
+      launcherPath,
+      `@echo off\r\nsetlocal\r\ncall ${[binary, ...annotateArgs].map(quoteWindowsBatchArgument).join(' ')} 1>"%ARCHON_PLANNOTATOR_STDOUT_FILE%" 2>"%ARCHON_PLANNOTATOR_STDERR_FILE%"\r\nset "ARCHON_PLANNOTATOR_CODE=%errorlevel%"\r\n> "%ARCHON_PLANNOTATOR_EXIT_FILE%.tmp" <nul set /p "=%ARCHON_PLANNOTATOR_CODE%"\r\nmove /y "%ARCHON_PLANNOTATOR_EXIT_FILE%.tmp" "%ARCHON_PLANNOTATOR_EXIT_FILE%" >nul\r\nexit /b %ARCHON_PLANNOTATOR_CODE%\r\n`
+    );
+    const launch = Bun.spawnSync(
+      [
+        'powershell.exe',
+        '-NoLogo',
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        '$process = Start-Process -FilePath $env:ARCHON_PLANNOTATOR_LAUNCHER -WorkingDirectory $env:ARCHON_PLANNOTATOR_CWD -PassThru -WindowStyle Hidden; [Console]::Out.Write($process.Id)',
+      ],
+      {
+        env: {
+          ...process.env,
+          PLANNOTATOR_READY_FILE: readyFilePath,
+          ARCHON_PLANNOTATOR_LAUNCHER: launcherPath,
+          ARCHON_PLANNOTATOR_CWD: cwd,
+          ARCHON_PLANNOTATOR_EXIT_FILE: exitFilePath,
+          ARCHON_PLANNOTATOR_STDOUT_FILE: stdoutFilePath,
+          ARCHON_PLANNOTATOR_STDERR_FILE: stderrFilePath,
+        },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }
+    );
+    if (launch.exitCode !== 0) {
+      throw new Error(
+        `Could not start Plannotator: ${new TextDecoder().decode(launch.stderr).trim()}`
+      );
     }
-  );
-  const reviewUrl = waitForReviewUrl(readyFilePath, proc.exited);
+    windowsPid = Number(new TextDecoder().decode(launch.stdout).trim());
+    if (!Number.isInteger(windowsPid) || windowsPid <= 0) {
+      throw new Error('Could not start Plannotator: Windows launcher did not return a PID');
+    }
+    const exitObserver = Bun.spawn(
+      [
+        'powershell.exe',
+        '-NoLogo',
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        '$launcher = Get-Process -Id ([int]$env:ARCHON_PLANNOTATOR_LAUNCHER_PID) -ErrorAction SilentlyContinue; while (-not (Test-Path -LiteralPath $env:ARCHON_PLANNOTATOR_EXIT_FILE)) { if ($null -eq $launcher -or $launcher.HasExited) { Write-Error "Plannotator launcher exited without an exit file"; exit 1 }; Start-Sleep -Milliseconds 20 }; $exitCode = (Get-Content -LiteralPath $env:ARCHON_PLANNOTATOR_EXIT_FILE -Raw).Trim(); if ($null -ne $launcher -and -not $launcher.HasExited) { $launcher.WaitForExit() }; [Console]::Out.Write($exitCode)',
+      ],
+      {
+        env: {
+          ...process.env,
+          ARCHON_PLANNOTATOR_EXIT_FILE: exitFilePath,
+          ARCHON_PLANNOTATOR_LAUNCHER_PID: String(windowsPid),
+        },
+        stdin: 'ignore',
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }
+    );
+    const observedExit = Promise.all([
+      new Response(exitObserver.stdout).text(),
+      new Response(exitObserver.stderr).text(),
+    ]).then(([output, error]) => {
+      processFinished = true;
+      const exitCode = Number(output.trim());
+      if (!Number.isInteger(exitCode)) {
+        throw new Error(`Could not wait for Plannotator: ${error.trim() || 'invalid exit code'}`);
+      }
+      return exitCode;
+    });
+    exited = Promise.race([observedExit, killed]);
+  } else {
+    stdoutFd = openSync(stdoutFilePath, 'w');
+    stderrFd = openSync(stderrFilePath, 'w');
+    try {
+      proc = Bun.spawn([binary, ...annotateArgs], {
+        cwd,
+        env: { ...process.env, PLANNOTATOR_READY_FILE: readyFilePath },
+        stdin: 'ignore',
+        stdout: stdoutFd,
+        stderr: stderrFd,
+      });
+    } catch (error) {
+      closeSync(stdoutFd);
+      closeSync(stderrFd);
+      throw error;
+    }
+    exited = proc.exited;
+  }
+  const reviewUrl = waitForReviewUrl(readyFilePath, exited);
   return {
     reviewUrl,
     wait: async (): Promise<Exit> => {
-      const stdoutPromise = proc.stdout ? new Response(proc.stdout).text() : Promise.resolve('');
-      const stderrPromise = proc.stderr ? new Response(proc.stderr).text() : Promise.resolve('');
-      const exitCode = await proc.exited;
-      const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
+      let exitCode: number;
+      try {
+        exitCode = await exited;
+      } catch (error) {
+        if (stdoutFd !== undefined) closeSync(stdoutFd);
+        if (stderrFd !== undefined) closeSync(stderrFd);
+        throw error;
+      }
+      if (stdoutFd !== undefined) closeSync(stdoutFd);
+      if (stderrFd !== undefined) closeSync(stderrFd);
+      const stdout = readFileSync(stdoutFilePath, 'utf8');
+      const stderr = readFileSync(stderrFilePath, 'utf8');
       let resultFilePayload: string | undefined;
       let resultFileError: string | undefined;
       let resultFileCleanupError: string | undefined;
       try {
-        resultFilePayload = await readFile(resultFilePath, 'utf8');
+        resultFilePayload = readFileSync(resultFilePath, 'utf8');
       } catch (err) {
         if (!isMissingFileError(err)) {
           resultFileError = err instanceof Error ? err.message : String(err);
@@ -441,9 +560,9 @@ async function defaultSpawnAnnotate(
       } finally {
         const cleanupErrors: string[] = [];
         await reviewUrl.catch(() => undefined);
-        for (const path of [resultFilePath, readyFilePath]) {
+        for (const path of cleanupPaths) {
           try {
-            await rm(path, { force: true });
+            rmSync(path, { force: true });
           } catch (err) {
             cleanupErrors.push(err instanceof Error ? err.message : String(err));
           }
@@ -461,7 +580,16 @@ async function defaultSpawnAnnotate(
     },
     kill: (): void => {
       try {
-        proc.kill();
+        if (isWindows) {
+          if (processFinished || windowsPid === undefined) return;
+          Bun.spawnSync(['taskkill.exe', '/PID', String(windowsPid), '/T', '/F'], {
+            stdout: 'ignore',
+            stderr: 'ignore',
+          });
+          resolveKilled(143);
+        } else {
+          proc?.kill();
+        }
       } catch {
         /* already exited */
       }
@@ -480,10 +608,16 @@ async function waitForReviewUrl(readyFilePath: string, exited: Promise<number>):
     }
   );
   const deadline = Date.now() + 30_000;
+  let invalidJsonAttempts = 0;
   while (true) {
     try {
       return parseReviewUrl(await readFile(readyFilePath, 'utf8'));
     } catch (err) {
+      if (err instanceof InvalidReadyFileJsonError && invalidJsonAttempts < 10) {
+        invalidJsonAttempts++;
+        await sleep(50);
+        continue;
+      }
       if (!isMissingFileError(err)) throw err;
     }
     if (processExited) {
@@ -496,12 +630,14 @@ async function waitForReviewUrl(readyFilePath: string, exited: Promise<number>):
   }
 }
 
+class InvalidReadyFileJsonError extends Error {}
+
 function parseReviewUrl(payload: string): string {
   let parsed: unknown;
   try {
     parsed = JSON.parse(payload.trim());
   } catch {
-    throw new Error('plannotator ready file is not valid JSON');
+    throw new InvalidReadyFileJsonError('plannotator ready file is not valid JSON');
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
     throw new Error('plannotator ready file must contain a JSON object');
