@@ -13,7 +13,7 @@
  * claim returns superseded so only the winning executor continues `runLayers`.
  */
 import { createLogger } from '@archon/paths';
-import { closeSync, openSync, readFileSync, rmSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { mkdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { ApprovalContext, WorkflowRun } from './schemas/workflow-run';
@@ -442,23 +442,15 @@ async function defaultSpawnAnnotate(
   const configuredBinary = resolvePlannotatorBinary();
   const binary = Bun.which(configuredBinary) ?? configuredBinary;
   const annotateArgs = buildAnnotateArgv(documentPath, resultFilePath);
-  const stdoutFd = openSync(stdoutFilePath, 'w');
-  const stderrFd = openSync(stderrFilePath, 'w');
-  let proc: Bun.Subprocess<'ignore', number, number>;
-  try {
-    proc = Bun.spawn(buildPlannotatorSpawnArgv(binary, annotateArgs), {
-      cwd,
-      env: { ...process.env, PLANNOTATOR_READY_FILE: readyFilePath },
-      stdin: 'ignore',
-      stdout: stdoutFd,
-      stderr: stderrFd,
-      windowsHide: true,
-    });
-  } catch (error) {
-    closeSync(stdoutFd);
-    closeSync(stderrFd);
-    throw error;
-  }
+  const proc = Bun.spawn(buildPlannotatorSpawnArgv(binary, annotateArgs), {
+    cwd,
+    env: { ...process.env, PLANNOTATOR_READY_FILE: readyFilePath },
+    stdin: 'ignore',
+    stdout: Bun.file(stdoutFilePath),
+    stderr: Bun.file(stderrFilePath),
+    windowsHide: true,
+  });
+  proc.unref();
   let processFinished = false;
   const exited = proc.exited.then(
     exitCode => {
@@ -474,16 +466,7 @@ async function defaultSpawnAnnotate(
   return {
     reviewUrl,
     wait: async (): Promise<Exit> => {
-      let exitCode: number;
-      try {
-        exitCode = await exited;
-      } catch (error) {
-        closeSync(stdoutFd);
-        closeSync(stderrFd);
-        throw error;
-      }
-      closeSync(stdoutFd);
-      closeSync(stderrFd);
+      const exitCode = await exited;
       const stdout = readFileSync(stdoutFilePath, 'utf8');
       const stderr = readFileSync(stderrFilePath, 'utf8');
       let resultFilePayload: string | undefined;
