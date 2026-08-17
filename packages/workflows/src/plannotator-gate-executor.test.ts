@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeEach, afterEach, mock } from 'bun:test';
+import { describe, expect, test, beforeEach, afterEach, mock, setDefaultTimeout } from 'bun:test';
 import {
   chmodSync,
   existsSync,
@@ -12,6 +12,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { resolveBashPath } from '@archon/git';
 import {
   buildReworkPrompt,
   executePlannotatorGateNode,
@@ -25,6 +26,8 @@ import type { IWorkflowStore, WorkflowEventData } from './store';
 import type { SendQueryOptions } from '@archon/providers/types';
 import { clearRegistry, registerBuiltinProviders } from '@archon/providers';
 import { projectLatestEffectiveNodeStates } from './retry-state';
+
+setDefaultTimeout(20_000);
 
 function makeRun(approval: Record<string, unknown>): WorkflowRun {
   return {
@@ -153,12 +156,11 @@ interface FakePlannotator {
 
 function createFakePlannotator(root: string): FakePlannotator {
   const controlDir = join(root, 'controls');
-  const bin = join(root, 'plannotator');
+  const bin = join(root, process.platform === 'win32' ? 'plannotator.cmd' : 'plannotator');
+  const script = join(root, 'plannotator.js');
   const invocationLog = join(root, 'invocations.jsonl');
   mkdirSync(controlDir, { recursive: true });
-  writeFileSync(
-    bin,
-    `#!/usr/bin/env bun
+  const source = `
 import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
@@ -201,9 +203,17 @@ if (decision.payload !== undefined) {
   renameSync(temporary, resultFile);
 }
 process.exit(decision.exitCode ?? 0);
-`
-  );
-  chmodSync(bin, 0o755);
+`;
+  if (process.platform === 'win32') {
+    writeFileSync(script, source);
+    writeFileSync(
+      bin,
+      `@echo off\r\n"${process.execPath.replaceAll('"', '""')}" "${script.replaceAll('"', '""')}" %*\r\n`
+    );
+  } else {
+    writeFileSync(bin, `#!/usr/bin/env bun\n${source}`);
+    chmodSync(bin, 0o755);
+  }
   return { bin, controlDir, invocationLog };
 }
 
@@ -232,7 +242,7 @@ function releaseDecision(
 }
 
 async function waitForInvocations(fake: FakePlannotator, count: number): Promise<unknown[][]> {
-  for (let attempt = 0; attempt < 600; attempt++) {
+  for (let attempt = 0; attempt < 2_000; attempt++) {
     if (existsSync(fake.invocationLog)) {
       const invocations = readFileSync(fake.invocationLog, 'utf8')
         .trim()
@@ -438,9 +448,18 @@ describe('preflightPlannotatorBinary', () => {
   function fakeBinary(body: string): string {
     const dir = mkdtempSync(join(tmpdir(), 'plannotator-preflight-'));
     dirs.push(dir);
-    const binary = join(dir, 'plannotator');
-    writeFileSync(binary, `#!/bin/sh\n${body}\n`);
-    chmodSync(binary, 0o700);
+    const binary = join(dir, process.platform === 'win32' ? 'plannotator.cmd' : 'plannotator');
+    if (process.platform === 'win32') {
+      const script = join(dir, 'plannotator.sh');
+      writeFileSync(script, `#!/bin/sh\n${body}\n`);
+      writeFileSync(
+        binary,
+        `@echo off\r\n"${resolveBashPath().replaceAll('"', '""')}" "${script.replaceAll('"', '""')}" %*\r\n`
+      );
+    } else {
+      writeFileSync(binary, `#!/bin/sh\n${body}\n`);
+      chmodSync(binary, 0o700);
+    }
     return binary;
   }
 

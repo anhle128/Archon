@@ -6,6 +6,7 @@ import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { resolveBashPath } from '@archon/git';
 import type { ApprovalContext, WorkflowRun } from './schemas/workflow-run';
 import type { IWorkflowStore } from './store';
 import {
@@ -982,13 +983,20 @@ describe('default annotate subprocess protocol', () => {
   } {
     const dir = mkdtempSync(join(tmpdir(), 'plannotator-protocol-'));
     dirs.push(dir);
-    const binary = join(dir, 'plannotator');
+    const binary = join(dir, process.platform === 'win32' ? 'plannotator.cmd' : 'plannotator');
     const artifactsDir = join(dir, 'artifacts');
-    writeFileSync(
-      binary,
-      `#!/bin/sh\nprintf '%s\\n' '${readyPayload}' > "$PLANNOTATOR_READY_FILE"\n${script}\n`
-    );
-    chmodSync(binary, 0o700);
+    const source = `#!/bin/sh\nprintf '%s\\n' '${readyPayload}' > "$PLANNOTATOR_READY_FILE"\n${script}\n`;
+    if (process.platform === 'win32') {
+      const scriptPath = join(dir, 'plannotator.sh');
+      writeFileSync(scriptPath, source);
+      writeFileSync(
+        binary,
+        `@echo off\r\n"${resolveBashPath().replaceAll('"', '""')}" "${scriptPath.replaceAll('"', '""')}" %*\r\n`
+      );
+    } else {
+      writeFileSync(binary, source);
+      chmodSync(binary, 0o700);
+    }
     process.env.PLANNOTATOR_BIN = binary;
     const store = new FakeGateStore(`run-${dirs.length}`);
     return {

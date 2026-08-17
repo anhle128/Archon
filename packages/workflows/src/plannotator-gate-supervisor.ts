@@ -19,6 +19,7 @@ import type { ApprovalContext, WorkflowRun } from './schemas/workflow-run';
 import type { IWorkflowStore } from './store';
 import {
   buildAnnotateArgv,
+  buildPlannotatorSpawnArgv,
   parseDocumentPathFromNodeOutput,
   parsePlannotatorGateDecisionJson,
   resolvePlannotatorBinary,
@@ -412,8 +413,10 @@ async function defaultSpawnAnnotate(
   await mkdir(dirname(resultFilePath), { recursive: true });
   const readyFilePath = `${resultFilePath}.ready`;
   await Promise.all([rm(resultFilePath, { force: true }), rm(readyFilePath, { force: true })]);
+  const configuredBinary = resolvePlannotatorBinary();
+  const binary = Bun.which(configuredBinary) ?? configuredBinary;
   const proc = Bun.spawn(
-    [resolvePlannotatorBinary(), ...buildAnnotateArgv(documentPath, resultFilePath)],
+    buildPlannotatorSpawnArgv(binary, buildAnnotateArgv(documentPath, resultFilePath)),
     {
       cwd,
       env: { ...process.env, PLANNOTATOR_READY_FILE: readyFilePath },

@@ -18023,6 +18023,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
   it('INTERACTIVE: blocked create-story loop pauses and reruns authoring on approval', async () => {
     let aiCalls = 0;
     let authorCalls = 0;
+    const storyFile = join(testDir, 'blocked.md').replaceAll('\\', '/');
     mockSendQueryDag.mockImplementation(function* () {
       aiCalls++;
       const prompt = String(mockSendQueryDag.mock.calls[aiCalls - 1]?.[0] ?? '');
@@ -18034,7 +18035,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
               status: 'blocked',
               story_name: 'Blocked story',
               story_key: '3-9-blocked-story',
-              story_file: join(testDir, 'blocked.md'),
+              story_file: storyFile,
               sprint_status: 'backlog',
               validation_summary: 'Needs canonical decision',
               risk_profile: ['decision coverage'],
@@ -18043,7 +18044,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
               status: 'draft',
               story_name: 'Blocked story',
               story_key: '3-9-blocked-story',
-              story_file: join(testDir, 'blocked.md'),
+              story_file: storyFile,
               sprint_status: 'in-progress',
               validation_summary: 'Ready for validation',
               risk_profile: ['decision coverage'],
@@ -18165,7 +18166,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
     expect(resumedAuthorPrompt).toContain('Canonical source updated.');
     expect(authorCalls).toBe(2);
     const validatePrompt = mockSendQueryDag.mock.calls[2]?.[0] as string;
-    expect(validatePrompt).toContain(join(testDir, 'blocked.md'));
+    expect(validatePrompt).toContain(storyFile);
     const completedEvents = (
       resumedStore.createWorkflowEvent as Mock<
         (e: {
@@ -18185,6 +18186,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
   it('INTERACTIVE: successful create-story loop signal completes without first-run pause', async () => {
     let aiCalls = 0;
     let authorCalls = 0;
+    const storyFile = join(testDir, 'ready.md').replaceAll('\\', '/');
     mockSendQueryDag.mockImplementation(function* () {
       aiCalls++;
       const prompt = String(mockSendQueryDag.mock.calls[aiCalls - 1]?.[0] ?? '');
@@ -18195,7 +18197,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
             status: 'draft',
             story_name: 'Ready story',
             story_key: '3-10-ready-story',
-            story_file: join(testDir, 'ready.md'),
+            story_file: storyFile,
             sprint_status: 'in-progress',
             validation_summary: 'Ready for validation',
             risk_profile: ['decision coverage'],
@@ -18271,7 +18273,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
         .mock.calls.length
     ).toBe(0);
     const validatePrompt = mockSendQueryDag.mock.calls[1]?.[0] as string;
-    expect(validatePrompt).toContain(join(testDir, 'ready.md'));
+    expect(validatePrompt).toContain(storyFile);
   });
 
   it('INTERACTIVE resume: $LOOP_PREV is NOT preserved across the pause/resume boundary (v1 known limitation)', async () => {
@@ -20892,12 +20894,11 @@ interface DagFakePlannotator {
 
 function createDagFakePlannotator(root: string): DagFakePlannotator {
   const controlDir = join(root, 'controls');
-  const bin = join(root, 'plannotator');
+  const bin = join(root, process.platform === 'win32' ? 'plannotator.cmd' : 'plannotator');
+  const script = join(root, 'plannotator.js');
   const invocationLog = join(root, 'plannotator-invocations.jsonl');
   mkdirSync(controlDir, { recursive: true });
-  writeFileSync(
-    bin,
-    `#!/usr/bin/env bun
+  const source = `
 import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
@@ -20938,9 +20939,17 @@ if (decision.payload !== undefined) {
   renameSync(temporary, resultFile);
 }
 process.exit(decision.exitCode ?? 0);
-`
-  );
-  chmodSync(bin, 0o755);
+`;
+  if (process.platform === 'win32') {
+    writeFileSync(script, source);
+    writeFileSync(
+      bin,
+      `@echo off\r\n"${process.execPath.replaceAll('"', '""')}" "${script.replaceAll('"', '""')}" %*\r\n`
+    );
+  } else {
+    writeFileSync(bin, `#!/usr/bin/env bun\n${source}`);
+    chmodSync(bin, 0o755);
+  }
   return { bin, controlDir, invocationLog };
 }
 
@@ -21619,6 +21628,7 @@ describe('executeDagWorkflow -- superseded plannotator supervisor', () => {
   let executeGateSpy: ReturnType<typeof spyOn>;
 
   beforeEach(async () => {
+    mockSendQueryDag.mockClear();
     testDir = join(tmpdir(), `dag-plannotator-superseded-${String(Date.now())}`);
     await mkdir(testDir, { recursive: true });
     executeGateSpy = spyOn(plannotatorGateExecutor, 'executePlannotatorGateNode').mockResolvedValue(
