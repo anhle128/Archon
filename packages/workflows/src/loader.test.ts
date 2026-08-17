@@ -2988,10 +2988,29 @@ nodes:
       expect(nodes.has('speckit-converge-explain')).toBe(false);
 
       const clarifyGate = nodes.get('clarify-gate');
+      const clarifyFileCheck = nodes.get('clarify-file-check');
+      const clarifyRespond = nodes.get('clarify-respond');
+      const redTeam = nodes.get('red-team');
       const redTeamGate = nodes.get('red-team-gate');
       const reviewGate = nodes.get('speckit-converge-review-gate');
       const ralph = nodes.get('ralph-tasks-to-ralph');
+      expect(clarifyFileCheck?.depends_on).toEqual(['clarify']);
+      expect(clarifyFileCheck && isBashNode(clarifyFileCheck)).toBe(true);
+      if (!clarifyFileCheck || !isBashNode(clarifyFileCheck)) {
+        throw new Error('default Speckit clarification file check missing');
+      }
+      expect(clarifyFileCheck.bash).toContain('read_feature_json_feature_directory');
+      expect(clarifyFileCheck.bash).toContain("printf 'HAS_QUESTIONS\\n'");
+      expect(clarifyFileCheck.bash).toContain("printf 'NO_QUESTIONS\\n'");
+      expect(clarifyRespond).toMatchObject({
+        depends_on: ['clarify-file-check'],
+        when: "$clarify-file-check.output == 'HAS_QUESTIONS'",
+      });
       expect(clarifyGate?.depends_on).toEqual(['clarify-respond']);
+      expect(redTeam).toMatchObject({
+        depends_on: ['clarify-file-check', 'clarify-respond', 'clarify-gate', 'clarify-apply'],
+        trigger_rule: 'none_failed_min_one_success',
+      });
       expect(redTeamGate?.depends_on).toEqual(['red-team-respond']);
       expect(reviewGate?.when).toBeUndefined();
       expect(reviewGate?.depends_on).toBeUndefined();
