@@ -91,6 +91,7 @@ Archon does not receive or store the final Slack, Telegram, Discord, or other pl
 The webhook adapter recognizes `deliver: all` before it parses a normal platform name.
 It selects configured platforms that have a home channel and delegates each send to the existing `_deliver_cross_platform()` method without an explicit `chat_id`.
 That method continues to own adapter lookup and home-channel resolution.
+When `/sethome` records a thread or topic, the shared cross-platform delivery path passes that `home.thread_id` as delivery metadata.
 
 The webhook adapter tracks the delivery coroutine in its existing `_background_tasks` set.
 It catches and logs task failures so they do not become unhandled asynchronous exceptions.
