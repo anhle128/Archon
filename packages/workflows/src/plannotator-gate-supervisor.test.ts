@@ -271,13 +271,14 @@ function makeChild(exit: {
 }): AnnotateChildHandle & { killed: boolean; waitStarted: Promise<void> } {
   let killed = false;
   const waitGate = deferred<void>();
+  const killGate = deferred<void>();
   const handle: AnnotateChildHandle & { killed: boolean; waitStarted: Promise<void> } = {
     killed: false,
     waitStarted: waitGate.promise,
     wait: async () => {
       waitGate.resolve();
       if (exit.delayMs && exit.delayMs > 0) {
-        await Bun.sleep(exit.delayMs);
+        await Promise.race([Bun.sleep(exit.delayMs), killGate.promise]);
       }
       if (killed) {
         return { exitCode: 1, stdout: '', stderr: '', resultFilePayload: undefined };
@@ -294,6 +295,7 @@ function makeChild(exit: {
     kill: () => {
       killed = true;
       handle.killed = true;
+      killGate.resolve();
     },
   };
   return handle;
@@ -529,6 +531,38 @@ describe('runPlannotatorGateSupervisor', () => {
     expect(store.run.status).toBe('running');
     const completed = store.events.filter(e => e.event_type === 'node_completed');
     expect(completed).toHaveLength(1);
+  });
+
+  test('external approve waits for asynchronous child shutdown', async () => {
+    const store = new FakeGateStore('run-async-shutdown');
+    const child = makeChild({ exitCode: 0, delayMs: 60_000 });
+    const originalKill = child.kill;
+    const killStarted = deferred<void>();
+    const releaseKill = deferred<void>();
+    child.kill = async (): Promise<void> => {
+      killStarted.resolve();
+      await releaseKill.promise;
+      await originalKill();
+    };
+
+    let settled = false;
+    const supervisor = runPlannotatorGateSupervisor(
+      baseDeps(store, {
+        captureResponse: true,
+        spawnAnnotate: async () => child,
+        pollIntervalMs: 10,
+      })
+    ).finally(() => {
+      settled = true;
+    });
+
+    await child.waitStarted;
+    store.externalApprove('from-cli');
+    await killStarted.promise;
+    expect(settled).toBe(false);
+
+    releaseKill.resolve();
+    await expect(supervisor).resolves.toEqual({ kind: 'approved', output: 'from-cli' });
   });
 
   test('invalid rework path throws and leaves run paused', async () => {

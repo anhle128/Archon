@@ -26,6 +26,7 @@ import {
 } from './plannotator-gate';
 
 const log = createLogger('workflow.plannotator-gate');
+const CHILD_SHUTDOWN_TIMEOUT_MS = 10_000;
 
 export interface AnnotateChildHandle {
   reviewUrl?: Promise<string>;
@@ -37,7 +38,7 @@ export interface AnnotateChildHandle {
     resultFileError?: string;
     resultFileCleanupError?: string;
   }>;
-  kill: () => void;
+  kill: () => void | Promise<void>;
 }
 
 export interface PlannotatorGateSupervisorDeps {
@@ -102,11 +103,31 @@ export async function runPlannotatorGateSupervisor(
     resolved: null,
   });
 
-  const dropChild = (): void => {
-    killChild(child);
+  const dropChild = async (): Promise<void> => {
+    const activeChild = child;
+    const activeDone = childDone;
     child = null;
     childDone = null;
     childResult = undefined;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const results = await Promise.race([
+        Promise.allSettled([killChild(activeChild), activeDone ?? Promise.resolve()]),
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => {
+            reject(
+              new Error(
+                `plannotator annotate child did not stop within ${CHILD_SHUTDOWN_TIMEOUT_MS}ms`
+              )
+            );
+          }, CHILD_SHUTDOWN_TIMEOUT_MS);
+        }),
+      ]);
+      const failed = results.find(result => result.status === 'rejected');
+      if (failed?.status === 'rejected') throw failed.reason;
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
   };
 
   try {
@@ -114,7 +135,7 @@ export async function runPlannotatorGateSupervisor(
       const early = await checkResolved(deps);
       const earlyResult = await finishGateOutcome(deps, early);
       if (earlyResult) {
-        dropChild();
+        await dropChild();
         return earlyResult;
       }
 
@@ -129,7 +150,7 @@ export async function runPlannotatorGateSupervisor(
         const open = await setPhase(deps, documentPath, 'opening');
         const openResult = await finishGateOutcome(deps, open);
         if (openResult) {
-          dropChild();
+          await dropChild();
           return openResult;
         }
         attempt += 1;
@@ -153,7 +174,7 @@ export async function runPlannotatorGateSupervisor(
             const duringOpening = await checkResolved(deps);
             const duringOpeningResult = await finishGateOutcome(deps, duringOpening);
             if (duringOpeningResult) {
-              dropChild();
+              await dropChild();
               return duringOpeningResult;
             }
             throw err;
@@ -163,7 +184,7 @@ export async function runPlannotatorGateSupervisor(
         const waiting = await setPhase(deps, documentPath, 'waiting_decision', reviewUrl);
         const waitingResult = await finishGateOutcome(deps, waiting);
         if (waitingResult) {
-          dropChild();
+          await dropChild();
           return waitingResult;
         }
         if (reviewUrl !== undefined) {
@@ -194,13 +215,13 @@ export async function runPlannotatorGateSupervisor(
         const mid = await checkResolved(deps);
         const midResult = await finishGateOutcome(deps, mid);
         if (midResult) {
-          dropChild();
+          await dropChild();
           return midResult;
         }
         if (childResult === undefined) continue;
 
         const exited = childResult;
-        dropChild();
+        await dropChild();
 
         if (exited.exitCode !== 0) {
           throw processProtocolError(
@@ -294,7 +315,7 @@ export async function runPlannotatorGateSupervisor(
       await sleep(pollMs);
     }
   } catch (err) {
-    dropChild();
+    await dropChild();
     throw err;
   }
 }
@@ -462,7 +483,7 @@ async function defaultSpawnAnnotate(
         resultFileCleanupError,
       };
     },
-    kill: (): void => {
+    kill: async (): Promise<void> => {
       const killOuterProcess = (): void => {
         try {
           proc.kill();
@@ -478,21 +499,14 @@ async function defaultSpawnAnnotate(
             timeout: 5_000,
             windowsHide: true,
           });
-          void taskkill.exited.then(
-            exitCode => {
-              if (exitCode !== 0) killOuterProcess();
-            },
-            () => {
-              killOuterProcess();
-            }
-          );
-          taskkill.unref();
-          return;
+          const exitCode = await taskkill.exited;
+          if (exitCode !== 0) killOuterProcess();
         } catch {
-          /* fall back to the outer process */
+          killOuterProcess();
         }
+      } else {
+        killOuterProcess();
       }
-      killOuterProcess();
     },
   };
 }
@@ -579,13 +593,9 @@ function processProtocolError(
   return new Error(`${message}${stderr ? `: ${stderr}` : ''}`);
 }
 
-function killChild(child: AnnotateChildHandle | null): void {
+async function killChild(child: AnnotateChildHandle | null): Promise<void> {
   if (!child) return;
-  try {
-    child.kill();
-  } catch {
-    /* ignore */
-  }
+  await child.kill();
 }
 
 function sleep(ms: number): Promise<void> {

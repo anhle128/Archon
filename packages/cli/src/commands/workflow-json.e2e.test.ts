@@ -109,13 +109,18 @@ function parseSoleJsonLine(stdout: string): Record<string, unknown> {
   return JSON.parse(lines[0] as string) as Record<string, unknown>;
 }
 
+function openWriteDatabase(): Database {
+  const db = new Database(join(isolatedHome, 'archon.db'));
+  db.run('PRAGMA busy_timeout = 5000');
+  return db;
+}
+
 async function seedFailedRun(
   runId: string,
   workingPath: string,
   workflowName: string = 'test-workflow'
 ): Promise<void> {
-  const dbPath = join(isolatedHome, 'archon.db');
-  const db = new Database(dbPath);
+  const db = openWriteDatabase();
   try {
     db.run('PRAGMA foreign_keys = OFF');
     db.run(
@@ -137,8 +142,7 @@ async function seedRunWithStatus(
   workingPath: string,
   status: string
 ): Promise<void> {
-  const dbPath = join(isolatedHome, 'archon.db');
-  const db = new Database(dbPath);
+  const db = openWriteDatabase();
   try {
     db.run('PRAGMA foreign_keys = OFF');
     db.run(
@@ -195,7 +199,7 @@ function seedNodeEvent(
   nodeId: string,
   data: Record<string, unknown>
 ): void {
-  const db = new Database(join(isolatedHome, 'archon.db'));
+  const db = openWriteDatabase();
   try {
     db.run(
       `INSERT INTO remote_agent_workflow_events (workflow_run_id, event_type, step_name, data)
@@ -1845,9 +1849,8 @@ describe('R1-F30 — durable side-effect proofs (Story 3.3d)', () => {
     const filePath = join(isolatedRepo, 'not-a-directory.txt');
     writeFileSync(filePath, 'this is a file, not a directory');
 
-    const dbPath = join(isolatedHome, 'archon.db');
     await runCli(['workflow', 'list', '--json']);
-    const db = new Database(dbPath);
+    const db = openWriteDatabase();
     try {
       db.run('PRAGMA foreign_keys = OFF');
       db.run(
