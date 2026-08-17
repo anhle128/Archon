@@ -463,22 +463,36 @@ async function defaultSpawnAnnotate(
       };
     },
     kill: (): void => {
+      const killOuterProcess = (): void => {
+        try {
+          proc.kill();
+        } catch {
+          /* already exited */
+        }
+      };
       if (process.platform === 'win32') {
         try {
-          const result = Bun.spawnSync(['taskkill.exe', '/PID', String(proc.pid), '/T', '/F'], {
+          const taskkill = Bun.spawn(['taskkill.exe', '/PID', String(proc.pid), '/T', '/F'], {
             stdout: 'ignore',
             stderr: 'ignore',
+            timeout: 5_000,
+            windowsHide: true,
           });
-          if (result.exitCode === 0) return;
+          void taskkill.exited.then(
+            exitCode => {
+              if (exitCode !== 0) killOuterProcess();
+            },
+            () => {
+              killOuterProcess();
+            }
+          );
+          taskkill.unref();
+          return;
         } catch {
           /* fall back to the outer process */
         }
       }
-      try {
-        proc.kill();
-      } catch {
-        /* already exited */
-      }
+      killOuterProcess();
     },
   };
 }
@@ -498,7 +512,9 @@ async function waitForReviewUrl(readyFilePath: string, exited: Promise<number>):
     try {
       return parseReviewUrl(await readFile(readyFilePath, 'utf8'));
     } catch (err) {
-      if (!isMissingFileError(err)) throw err;
+      const incompleteJson =
+        err instanceof Error && err.message === 'plannotator ready file is not valid JSON';
+      if (!isMissingFileError(err) && !(incompleteJson && !processExited)) throw err;
     }
     if (processExited) {
       throw new Error('plannotator annotate exited before publishing its review URL');

@@ -975,7 +975,9 @@ describe('default annotate subprocess protocol', () => {
 
   function setup(
     script: string,
-    readyPayload = '{"url":"http://minis-mac-mini.taildae6a9.ts.net:19432","isRemote":true,"port":19432}'
+    readyPayload:
+      | string
+      | null = '{"url":"http://minis-mac-mini.taildae6a9.ts.net:19432","isRemote":true,"port":19432}'
   ): {
     store: FakeGateStore;
     deps: PlannotatorGateSupervisorDeps;
@@ -985,7 +987,9 @@ describe('default annotate subprocess protocol', () => {
     dirs.push(dir);
     const binary = join(dir, process.platform === 'win32' ? 'plannotator.cmd' : 'plannotator');
     const artifactsDir = join(dir, 'artifacts');
-    const source = `#!/bin/sh\nprintf '%s\\n' '${readyPayload}' > "$PLANNOTATOR_READY_FILE"\n${script}\n`;
+    const publishReady =
+      readyPayload === null ? '' : `printf '%s\\n' '${readyPayload}' > "$PLANNOTATOR_READY_FILE"\n`;
+    const source = `#!/bin/sh\n${publishReady}${script}\n`;
     if (process.platform === 'win32') {
       const scriptPath = join(dir, 'plannotator.sh');
       writeFileSync(scriptPath, source);
@@ -1077,6 +1081,23 @@ exit 12`);
     expect(error?.message).toMatch(/exit.*12/i);
     expect(error?.message.length).toBeLessThan(4300);
   }, 5000);
+
+  test('waits for a partially written ready file to become valid JSON', async () => {
+    const { deps } = setup(
+      `
+printf '%s' '{"url":' > "$PLANNOTATOR_READY_FILE"
+sleep 0.2
+printf '%s' '{"url":"http://minis-mac-mini.taildae6a9.ts.net:19432"}' > "$PLANNOTATOR_READY_FILE"
+printf '%s' '{"decision":"approved"}' > "$7.tmp"
+mv "$7.tmp" "$7"`,
+      null
+    );
+
+    await expect(runPlannotatorGateSupervisor(deps)).resolves.toEqual({
+      kind: 'approved',
+      output: '',
+    });
+  });
 
   test('removes a stale attempt result before spawn', async () => {
     const { deps, artifactsDir } = setup(`
