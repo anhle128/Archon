@@ -1,4 +1,4 @@
-name: archon-ck-feature
+name: ck-feature
 description: |
   Use when: User wants to build a feature end-to-end with the Claude Kit (ck)
   pipeline running fully unattended in a worktree.

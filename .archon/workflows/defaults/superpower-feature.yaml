@@ -1,0 +1,267 @@
+name: superpower-feature
+description: |
+  Use when: Manual Superpowers brainstorming is complete and the user wants the feature built.
+  Triggers: "superpower feature", "superpowers feature", "superpower plan implement", "grok plan codex fix".
+  Does: Grok 4.6 writes the implementation plan, Codex reviews and repairs the plan in place, Grok implements the plan, then Codex reviews the final code and repairs defects directly.
+  NOT for: Brainstorming itself, quick one-file fixes, bug-only work, or review-only work.
+  Input: The approved brainstorm result, product notes, design spec path, or requirements from the manual Superpowers brainstorming step.
+provider: grok
+model: "grok-4.6"
+effort: high
+tags:
+  - Superpowers
+  - Feature
+  - TDD
+
+nodes:
+  - id: setup
+    description: Prepare Superpowers workflow artifacts.
+    bash: |
+      set -euo pipefail
+      mkdir -p "$ARTIFACTS_DIR/superpowers" docs/superpowers/plans
+      git rev-parse HEAD > "$ARTIFACTS_DIR/superpowers/base-sha.txt"
+      {
+        echo "Archon Superpowers feature workflow"
+        echo "Base SHA: $(cat "$ARTIFACTS_DIR/superpowers/base-sha.txt")"
+        echo "Brainstorming is manual and must already be complete."
+      } > "$ARTIFACTS_DIR/superpowers/setup.md"
+
+  - id: write-plan
+    description: Write the Superpowers implementation plan with Grok 4.6.
+    provider: grok
+    model: "grok-4.6"
+    effort: xhigh
+    context: fresh
+    depends_on:
+      - setup
+    prompt: |
+      User input:
+      $ARGUMENTS
+
+      Use the Superpowers writing-plans method.
+      Read the repository instructions before you plan.
+      If the user input names a file or directory, read it before you plan.
+
+      Write one complete implementation plan.
+      Save it as docs/superpowers/plans/YYYY-MM-DD-<feature>.md.
+      Use the current local date for YYYY-MM-DD.
+      Use a short slug for <feature>.
+
+      The plan must be executable by another agent.
+      Include exact files to change, interfaces to add or change, tests to write, and commands to run.
+      Include TDD red, green, and refactor steps for code changes.
+      Include all known requirements from the approved brainstorm.
+      Include acceptance criteria and validation commands.
+      Do not leave placeholders.
+      If a product decision is missing, add an Open Questions section and choose a safe provisional default.
+      Keep each full Markdown sentence on its own physical line.
+
+      Return only JSON.
+    output_format:
+      type: object
+      required:
+        - plan_path
+        - task_count
+        - summary
+        - open_questions_count
+        - validation_commands
+      properties:
+        plan_path:
+          type: string
+        task_count:
+          type: number
+        summary:
+          type: string
+        open_questions_count:
+          type: number
+        validation_commands:
+          type: string
+
+  - id: review-fix-plan
+    description: Review and repair the plan directly with Codex.
+    provider: codex
+    model: gpt-5.5
+    effort: xhigh
+    context: fresh
+    depends_on:
+      - write-plan
+    prompt: |
+      Review and repair the Superpowers implementation plan directly.
+      Do not implement code in this step.
+
+      Plan path:
+      $write-plan.output.plan_path
+
+      Original user input:
+      $ARGUMENTS
+
+      Read the plan, repository instructions, and the source files that the plan mentions.
+      Check the plan against the approved brainstorm input, repository facts, Superpowers writing-plans rules, and TDD.
+      Fix every concrete issue in the plan file itself.
+      Make the plan complete enough for Grok to implement without more questions.
+      Add missing exact file paths, tests, commands, acceptance criteria, and implementation order.
+      Remove vague work, placeholders, and tasks that do not match the request.
+      If a decision cannot be inferred, keep an Open Questions section with a safe provisional default.
+      Keep each full Markdown sentence on its own physical line.
+
+      Write your review notes to $ARTIFACTS_DIR/superpowers/plan-review.md.
+      Return only JSON.
+    output_format:
+      type: object
+      required:
+        - plan_path
+        - verdict
+        - fixes_count
+        - open_questions_count
+        - review_report
+        - summary
+      properties:
+        plan_path:
+          type: string
+        verdict:
+          type: string
+          enum:
+            - clean
+            - fixed-with-changes
+            - needs-human-decision
+        fixes_count:
+          type: number
+        open_questions_count:
+          type: number
+        review_report:
+          type: string
+        summary:
+          type: string
+
+  - id: implement
+    description: Implement the repaired Superpowers plan with Grok 4.6.
+    provider: grok
+    model: "grok-4.6"
+    effort: xhigh
+    context: fresh
+    idle_timeout: 3600000
+    depends_on:
+      - review-fix-plan
+    prompt: |
+      Implement the repaired Superpowers plan.
+
+      Plan path:
+      $review-fix-plan.output.plan_path
+
+      Use the Superpowers executing-plans method.
+      Use subagent-driven-development if that skill is available.
+      Use test-driven-development for code changes.
+      Treat the current Archon workspace as the isolated workspace unless repository instructions say otherwise.
+      Do not start a new brainstorm.
+      Do not create a pull request.
+
+      Read the plan, repository instructions, and all files needed for the first task before you edit.
+      Follow the plan task order unless repo facts prove a smaller correct order.
+      For each code task, write or update a failing test first, make it pass, then refactor.
+      Keep changes scoped to the plan.
+      Run the validation commands from the plan and the smallest useful targeted tests.
+      If generated files must be updated, use the repository generation command.
+
+      Write an implementation report to $ARTIFACTS_DIR/superpowers/implementation-report.md.
+      The report must include changed files, tests run, failures, skipped items, and any risks.
+      Return a short implementation summary.
+
+  - id: codex-final-fix
+    description: Review the final code and fix defects directly with Codex.
+    provider: codex
+    model: gpt-5.5
+    effort: xhigh
+    context: fresh
+    idle_timeout: 3600000
+    depends_on:
+      - implement
+    prompt: |
+      Do the final Superpowers code review and fix all defects directly.
+      Do not hand fixes back to Grok.
+      Do not create a pull request.
+
+      Plan path:
+      $review-fix-plan.output.plan_path
+
+      Base SHA file:
+      $ARTIFACTS_DIR/superpowers/base-sha.txt
+
+      Implementation report:
+      $ARTIFACTS_DIR/superpowers/implementation-report.md
+
+      Read the plan, repository instructions, implementation report, and the diff from the recorded base SHA to HEAD.
+      Use the Superpowers requesting-code-review, receiving-code-review, and verification-before-completion methods if those skills are available.
+      Review for missed requirements, incorrect behavior, weak tests, regressions, unsafe changes, lint errors, and validation gaps.
+      Fix every Critical or Important finding directly.
+      If a finding is invalid, explain why in the review report.
+      If a finding needs a product decision that cannot be inferred, leave it as a remaining finding.
+      Run fresh targeted validation after each repair batch.
+      Run the best available final validation command from the plan or repository scripts.
+
+      Write the review report to $ARTIFACTS_DIR/superpowers/final-review.md.
+      Write the fix report to $ARTIFACTS_DIR/superpowers/final-fixes.md.
+      Return PASS only when no Critical or Important findings remain and fresh validation evidence exists.
+      Return only JSON.
+    output_format:
+      type: object
+      required:
+        - gate
+        - fixes_count
+        - remaining_findings_count
+        - review_report
+        - fix_report
+        - validation_summary
+        - summary
+      properties:
+        gate:
+          type: string
+          enum:
+            - PASS
+            - FAIL
+        fixes_count:
+          type: number
+        remaining_findings_count:
+          type: number
+        review_report:
+          type: string
+        fix_report:
+          type: string
+        validation_summary:
+          type: string
+        summary:
+          type: string
+
+  - id: stop-on-final-review-failure
+    description: Stop if Codex could not repair all important final findings.
+    depends_on:
+      - codex-final-fix
+    when: "$codex-final-fix.output.gate == 'FAIL'"
+    cancel: |
+      Codex final review found remaining Critical or Important issues.
+      See $codex-final-fix.output.review_report and $codex-final-fix.output.fix_report.
+      Summary: $codex-final-fix.output.summary
+
+  - id: final-summary
+    description: Summarize the completed Superpowers feature workflow.
+    provider: codex
+    model: gpt-5.5
+    effort: medium
+    context: fresh
+    depends_on:
+      - codex-final-fix
+    when: "$codex-final-fix.output.gate == 'PASS'"
+    prompt: |
+      Summarize the completed Superpowers feature workflow.
+
+      Plan path:
+      $review-fix-plan.output.plan_path
+
+      Review report:
+      $codex-final-fix.output.review_report
+
+      Fix report:
+      $codex-final-fix.output.fix_report
+
+      Include the plan path, final review result, validation summary, and any remaining low-risk notes.
+      Do not create a pull request.
+      Return a concise final summary.

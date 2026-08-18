@@ -1,0 +1,4 @@
+interface:
+  display_name: "Archon CLI"
+  short_description: "Operate Archon safely from the CLI"
+  default_prompt: "Use $archon-cli to run and manage an Archon workflow from the command line."
