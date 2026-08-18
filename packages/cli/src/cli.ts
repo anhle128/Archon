@@ -77,6 +77,7 @@ import {
   providerBindingDisableCommand,
   providerBindingUnsupportedCommand,
 } from './commands/provider-binding';
+import { providerBindingTestCommand } from './commands/provider-binding-test';
 import { continueCommand } from './commands/continue';
 import { chatCommand } from './commands/chat';
 import { setupCommand } from './commands/setup';
@@ -99,6 +100,7 @@ import {
   aiDefaultCommand,
 } from './commands/ai';
 import { telemetryStatusCommand, telemetryResetCommand } from './commands/telemetry';
+import { writeStdout } from './utils/stdout';
 import { closeDatabase } from '@archon/core';
 import type { WorkflowProviderCommand } from './commands/workflow-provider-command-envelope';
 import {
@@ -318,6 +320,9 @@ Commands:
   telemetry reset            Rotate the anonymous install UUID
   validate workflows [name]  Validate workflow definitions and their references
   validate commands [name]   Validate command files
+  provider-binding create    Create a provider binding (--transform-file, --receiver-headers-file)
+  provider-binding update    Update a provider binding (--transform-file, --receiver-headers-file)
+  provider-binding test      Dry-run a binding transform (--transform-file, --envelope-file, --json)
   version, --version, -V     Show version info (also -v when used alone)
   help                       Show this help message
 
@@ -425,6 +430,9 @@ function normalizeProviderBindingArgs(args: string[]): string[] {
     '--route',
     '--event-types',
     '--correlation-id',
+    '--transform-file',
+    '--receiver-headers-file',
+    '--envelope-file',
   ]);
   const normalized: string[] = [];
 
@@ -445,13 +453,18 @@ function normalizeProviderBindingArgs(args: string[]): string[] {
 async function main(): Promise<number> {
   const args = normalizeProviderBindingArgs(process.argv.slice(2));
   const rawWorkflowProviderOptions = scanRawWorkflowProviderOptions(args);
+  const providerBindingIndex = args.indexOf('provider-binding');
+  const isSideEffectFreeBindingTest =
+    providerBindingIndex >= 0 && args[providerBindingIndex + 1] === 'test';
 
   // Anonymous once-per-invocation startup event (self-gates on opt-out).
+  // The provider-binding dry-run is explicitly side-effect-free, including
+  // telemetry and first-run notice state.
   // Emitted before any early return so EVERY invocation — including bare
   // `archon`, `--help`, and `--version` — is counted, matching the
   // "once per CLI invocation" contract. Each early-return path below flushes
   // via shutdownTelemetry(); the main command path flushes in its finally.
-  captureArchonStarted({ surface: 'cli' });
+  if (!isSideEffectFreeBindingTest) captureArchonStarted({ surface: 'cli' });
 
   // Handle no arguments - show help and exit successfully
   if (args.length === 0) {
@@ -519,6 +532,9 @@ async function main(): Promise<number> {
         route: { type: 'string' },
         'event-types': { type: 'string' },
         'correlation-id': { type: 'string' },
+        'transform-file': { type: 'string' },
+        'receiver-headers-file': { type: 'string' },
+        'envelope-file': { type: 'string' },
         full: { type: 'boolean' },
         'dry-run': { type: 'boolean' },
         stubs: { type: 'string' },
@@ -1467,6 +1483,9 @@ async function main(): Promise<number> {
           route: values.route as string | undefined,
           eventTypes: values['event-types'] as string | undefined,
           correlationId: values['correlation-id'] as string | undefined,
+          transformFile: values['transform-file'] as string | undefined,
+          receiverHeadersFile: values['receiver-headers-file'] as string | undefined,
+          envelopeFile: values['envelope-file'] as string | undefined,
         };
         switch (subcommand) {
           case 'create':
@@ -1479,6 +1498,11 @@ async function main(): Promise<number> {
             return await providerBindingRotateCommand(bindingArgs, bindingOpts);
           case 'disable':
             return await providerBindingDisableCommand(bindingArgs, bindingOpts);
+          case 'test':
+            return await providerBindingTestCommand(bindingArgs, {
+              ...bindingOpts,
+              log: (line: string): Promise<void> => writeStdout(`${line}\n`),
+            });
           default:
             if (jsonFlag) {
               return await providerBindingUnsupportedCommand(subcommand, bindingArgs, bindingOpts);
@@ -1488,7 +1512,7 @@ async function main(): Promise<number> {
             } else {
               console.error(`Unknown provider-binding subcommand: ${subcommand}`);
             }
-            console.error('Available: create, update, status, rotate, disable');
+            console.error('Available: create, update, status, rotate, disable, test');
             return 1;
         }
       }

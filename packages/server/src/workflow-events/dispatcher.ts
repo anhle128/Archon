@@ -6,6 +6,12 @@ import {
   updateOutboxAfterAttempt,
 } from '@archon/core/db/workflow-event-outbox';
 import { getBindingByIdWithSecret } from '@archon/core/db/provider-bindings';
+import {
+  buildDeliveryHeaderEvidence,
+  mergeDeliveryHeaders,
+  UNSAFE_DELIVERY_HEADERS,
+  validateDeliveryHeaders,
+} from '@archon/core/events/delivery-headers';
 import { createWorkflowStore } from '@archon/core/workflows';
 import type { WorkflowEventOutboxRow, WorkflowEventOutboxStatus } from '@archon/core/schemas';
 import { signHermesV2 } from './hermes-signer';
@@ -126,9 +132,33 @@ export class WorkflowEventDispatcher {
       return;
     }
 
-    const binding = await getBindingByIdWithSecret(row.binding_id);
+    const terminalUnsafeHeaders = async (): Promise<void> => {
+      log.warn(
+        { bindingId: row.binding_id, outboxEventId: row.id },
+        'workflow_events.unsafe_delivery_headers'
+      );
+      await updateOutboxAfterAttempt(row.id, {
+        status: 'terminal-failure',
+        attempt_count: row.attempt_count,
+        last_attempt_at: this.now(),
+        next_attempt_at: null,
+        last_error: UNSAFE_DELIVERY_HEADERS,
+      });
+    };
+
+    let binding: Awaited<ReturnType<typeof getBindingByIdWithSecret>>;
+    try {
+      binding = await getBindingByIdWithSecret(row.binding_id);
+    } catch (error) {
+      if (error instanceof Error && error.message === 'BINDING_CORRUPT_ROW: delivery_headers') {
+        await terminalUnsafeHeaders();
+        return;
+      }
+      throw error;
+    }
+
     const secret = binding?.signing_secret?.trim();
-    if (!secret) {
+    if (!binding || !secret) {
       await updateOutboxAfterAttempt(row.id, {
         status: 'terminal-failure',
         attempt_count: row.attempt_count,
@@ -139,6 +169,14 @@ export class WorkflowEventDispatcher {
       return;
     }
 
+    const receiverHeaders = binding.delivery_headers ?? {};
+    try {
+      validateDeliveryHeaders(receiverHeaders);
+    } catch {
+      await terminalUnsafeHeaders();
+      return;
+    }
+
     const startedAt = this.now();
     const attemptNumber = row.attempt_count + 1;
     const { timestamp, signature } = signHermesV2(
@@ -146,19 +184,21 @@ export class WorkflowEventDispatcher {
       Math.floor(startedAt.getTime() / 1000),
       row.event_body
     );
-    const headers = {
+    const archonHeaders = {
       'Content-Type': 'application/json',
       'X-Webhook-Signature-V2': signature,
       'X-Webhook-Timestamp': timestamp,
       'X-Request-ID': row.idempotency_key,
     };
+    const requestHeaders = mergeDeliveryHeaders(archonHeaders, receiverHeaders);
+    const evidenceHeaders = buildDeliveryHeaderEvidence(archonHeaders, receiverHeaders);
 
     let attemptId: string;
     try {
       const attempt = await insertPendingAttempt(row.id, attemptNumber, {
         url: row.event_route,
         method: 'POST',
-        headers,
+        headers: evidenceHeaders,
         body: row.event_body,
         startedAt,
       });
@@ -168,7 +208,10 @@ export class WorkflowEventDispatcher {
       return;
     }
 
-    const result = await this.post(row.event_route, headers, row.event_body);
+    const result = redactAttemptResult(
+      await this.post(row.event_route, requestHeaders, row.event_body),
+      receiverHeaders
+    );
     const completedAt = this.now();
     const durationMs = Math.max(0, completedAt.getTime() - startedAt.getTime());
     const attempt = await completeAttempt({
@@ -217,6 +260,9 @@ export class WorkflowEventDispatcher {
         headers,
         body,
         signal: controller.signal,
+        // Never forward receiver credentials across redirects. Callers can
+        // configure the final endpoint explicitly after verifying it.
+        redirect: 'manual',
       });
       const responseBody = await response.text();
       return {
@@ -290,4 +336,44 @@ function attemptError(result: AttemptResult): string {
   return result.responseStatus === undefined || result.responseStatus === null
     ? 'unknown'
     : `http-${String(result.responseStatus)}`;
+}
+
+function redactReceiverHeaderValues(
+  value: string,
+  receiverHeaders: Record<string, string>
+): string {
+  const secrets = [
+    ...new Set(Object.values(receiverHeaders).filter(secret => secret.length > 0)),
+  ].sort((left, right) => right.length - left.length);
+  let redacted = value;
+  for (const secret of secrets) {
+    redacted = redacted.replaceAll(secret, '[REDACTED]');
+  }
+  return redacted;
+}
+
+function redactAttemptResult(
+  result: AttemptResult,
+  receiverHeaders: Record<string, string>
+): AttemptResult {
+  return {
+    ...result,
+    responseHeaders:
+      result.responseHeaders === undefined || result.responseHeaders === null
+        ? result.responseHeaders
+        : Object.fromEntries(
+            Object.entries(result.responseHeaders).map(([name, value]) => [
+              name,
+              redactReceiverHeaderValues(value, receiverHeaders),
+            ])
+          ),
+    responseBody:
+      result.responseBody === undefined || result.responseBody === null
+        ? result.responseBody
+        : redactReceiverHeaderValues(result.responseBody, receiverHeaders),
+    transportError:
+      result.transportError === undefined || result.transportError === null
+        ? result.transportError
+        : redactReceiverHeaderValues(result.transportError, receiverHeaders),
+  };
 }

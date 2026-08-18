@@ -18,6 +18,11 @@ import {
   buildWorkflowEventEnvelope,
   type ExternalWorkflowEventType,
 } from '../events/workflow-event-envelope';
+import {
+  transformWorkflowEventBody,
+  isProviderBindingTransformError,
+  normalizeProviderBindingTransform,
+} from '../events/provider-binding-transform';
 import { externalWorkflowEventTypeSchema } from '../schemas/workflow-event';
 import { getAgentProvider } from '@archon/providers';
 import { loadConfig as loadMergedConfig } from '../config/config-loader';
@@ -296,18 +301,61 @@ async function enqueueExternalWorkflowEvent(input: ExternalWorkflowEventInput): 
       binding: resolution.binding,
       payload: enrichedPayload,
     });
-    await workflowEventOutboxDb.enqueueExternalWorkflowEvent({
-      event_id: envelope.eventId,
-      idempotency_key: envelope.idempotencyKey,
-      event_type: envelope.eventType,
-      workflow_run_id: run.id,
-      codebase_id: resolution.codebase.id,
-      binding_id: resolution.binding.id,
-      event_route: resolution.route,
-      event_body: JSON.stringify(envelope),
-      status: 'pending',
-      next_attempt_at: input.occurred_at,
-    });
+    const transformStartedAt = Date.now();
+    try {
+      const transform =
+        resolution.binding.transform === undefined || resolution.binding.transform === null
+          ? null
+          : normalizeProviderBindingTransform(resolution.binding.transform);
+      const transformed = await transformWorkflowEventBody(envelope, transform);
+      getLog().debug(
+        {
+          bindingId: resolution.binding.id,
+          eventType: envelope.eventType,
+          engine: transformed.engine,
+          durationMs: transformed.durationMs,
+          outputBytes: transformed.outputBytes,
+        },
+        'workflow_event_outbox_transform_completed'
+      );
+      await workflowEventOutboxDb.enqueueExternalWorkflowEvent({
+        event_id: envelope.eventId,
+        idempotency_key: envelope.idempotencyKey,
+        event_type: envelope.eventType,
+        workflow_run_id: run.id,
+        codebase_id: resolution.codebase.id,
+        binding_id: resolution.binding.id,
+        event_route: resolution.route,
+        event_body: transformed.body,
+        status: 'pending',
+        next_attempt_at: input.occurred_at,
+      });
+    } catch (error) {
+      if (!isProviderBindingTransformError(error)) throw error;
+      getLog().warn(
+        {
+          bindingId: resolution.binding.id,
+          eventType: envelope.eventType,
+          engine: resolution.binding.transform == null ? 'identity' : 'jsonata',
+          durationMs: Math.max(0, Date.now() - transformStartedAt),
+          errorCode: error.code,
+        },
+        'workflow_event_outbox_transform_failed'
+      );
+      await workflowEventOutboxDb.enqueueExternalWorkflowEvent({
+        event_id: envelope.eventId,
+        idempotency_key: envelope.idempotencyKey,
+        event_type: envelope.eventType,
+        workflow_run_id: run.id,
+        codebase_id: resolution.codebase.id,
+        binding_id: resolution.binding.id,
+        event_body: JSON.stringify(envelope),
+        status: 'not-routable',
+        not_routable_reason: 'transform-failed',
+        last_error: error.code,
+        next_attempt_at: null,
+      });
+    }
   } catch (err) {
     getLog().error(
       { err: err as Error, eventType: input.event_type, runId: input.workflow_run_id },

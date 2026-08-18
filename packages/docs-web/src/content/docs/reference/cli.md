@@ -561,6 +561,53 @@ Checks: file exists, non-empty, valid name.
 
 Exit code: 0 = all valid, 1 = errors found.
 
+### `provider-binding`
+
+Manage workflow provider bindings that deliver signed workflow events to an HTTP receiver.
+Bindings may attach an optional outbound JSONata transform and private receiver authentication headers.
+
+Create or update a binding with optional transform and receiver-header file inputs:
+
+```bash
+archon provider-binding create --provider archon --name <name> --project-ref <project-ref> --route <event-route> [--transform-file <path>] [--receiver-headers-file <path>] --json
+archon provider-binding update --provider archon --name <name> --project-ref <project-ref> --route <event-route> [--transform-file <path>] [--receiver-headers-file <path>] --json
+```
+
+Dry-run a transform against a sample canonical envelope without writing the database or sending HTTP:
+
+```bash
+archon provider-binding test --transform-file <path> --envelope-file <path> --json
+```
+
+Related subcommands: `status`, `rotate`, and `disable` retain their existing binding-lifecycle roles and do not accept transform or receiver-header files.
+
+Omitted update flags preserve the currently stored values.
+JSON `null` in `--transform-file` clears the transform to SQL `NULL`.
+JSON `null` in `--receiver-headers-file` clears receiver headers to `{}`.
+
+The transform input is only `workflow-event-envelope.v1`.
+Transform execution happens once before outbox persistence.
+Retries sign and send the stored bytes.
+Transform failures create non-routable `transform-failed` evidence and do not fail the workflow run.
+
+Transform defaults and hard caps are: 32,768 expression bytes; 50/200 ms timeout; 128/512 stack; 10,000/100,000 sequence; 65,536/262,144 output bytes.
+Allowed JSONata functions are exactly: `string`, `length`, `substring`, `substringBefore`, `substringAfter`, `uppercase`, `lowercase`, `trim`, `contains`, `split`, `join`, `number`, `floor`, `ceil`, `round`, `abs`, `sqrt`, `power`, `boolean`, `not`, `count`, `sum`, `min`, `max`, `average`, `keys`, `lookup`, `append`, `exists`, `merge`, `reverse`, `distinct`.
+Rejected constructs include aliases, dynamic calls, partials, function application, lambdas, transform expressions, regular expressions, `$eval`, `$now`, `$millis`, and `$random`.
+Top-level transform output must be an object or array.
+
+Receiver header limits are: 16 headers, 128 name bytes, 8,192 value bytes, and 32,768 aggregate value bytes.
+Reserved headers are exactly: `Content-Type`, `X-Webhook-Signature-V2`, `X-Webhook-Timestamp`, `X-Request-ID`, `Host`, `Content-Length`, `Connection`, `Keep-Alive`, `Proxy-Authenticate`, `Proxy-Authorization`, `Proxy-Connection`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`.
+Receiver values are private; request-attempt evidence stores `[REDACTED]`.
+Archon's HMAC headers remain active.
+
+Protect secret files on POSIX with `umask 077` or `chmod 0600 <file>`, then remove the secret file after a successful command.
+
+Provider-neutral JSONata example:
+
+```json
+{ "eventType": eventType, "runId": workflowRunRef.runId }
+```
+
 ### `complete <branch> [branch2 ...]`
 
 Remove a branch's worktree, local branch, and remote branch, and mark its isolation environment as destroyed.

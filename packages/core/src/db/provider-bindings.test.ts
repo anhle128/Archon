@@ -48,6 +48,8 @@ function bindingRow(overrides: Record<string, unknown> = {}): Record<string, unk
     codebase_id: 'cb-1',
     event_route: 'https://hermes.example/events/workflow-engine',
     event_types: '["workflow.approval.requested"]',
+    transform: null,
+    delivery_headers: '{}',
     state: 'active',
     binding_version: 1,
     created_at: '2026-07-11T11:48:27.000Z',
@@ -477,6 +479,218 @@ describe('provider-bindings db layer (Story 3.1)', () => {
       for (const id of ids) {
         expect(id).toMatch(/^wpb_/);
       }
+    });
+  });
+
+  describe('binding persistence, patch semantics, and privacy (Task 7)', () => {
+    test('create normalizes and stores transform JSON plus private header JSON before returning a public row', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          bindingRow({
+            transform: JSON.stringify({
+              engine: 'jsonata',
+              expression: '{ "ok": true }',
+              timeoutMs: 50,
+              stackDepth: 128,
+              maxSequenceSize: 10_000,
+              maxOutputBytes: 65_536,
+            }),
+            delivery_headers: JSON.stringify({ Authorization: 'Bearer secret' }),
+          }),
+        ])
+      );
+      const result = await createBinding({
+        provider: 'archon',
+        name: 'workflow-engine-primary',
+        codebaseId: 'cb-1',
+        eventRoute: 'https://example.invalid/events',
+        transform: { engine: 'jsonata', expression: '{ "ok": true }' } as never,
+        deliveryHeaders: { Authorization: 'Bearer secret' },
+      });
+      const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(params[7]).toBe(
+        JSON.stringify({
+          engine: 'jsonata',
+          expression: '{ "ok": true }',
+          timeoutMs: 50,
+          stackDepth: 128,
+          maxSequenceSize: 10_000,
+          maxOutputBytes: 65_536,
+        })
+      );
+      expect(params[8]).toBe(JSON.stringify({ Authorization: 'Bearer secret' }));
+      expect(result.transform?.engine).toBe('jsonata');
+      expect('delivery_headers' in result).toBe(false);
+    });
+
+    test('public get strips private fields and private reads return delivery headers', async () => {
+      const stored = bindingRow({
+        delivery_headers: JSON.stringify({ Authorization: 'Bearer secret' }),
+        signing_secret: 'signing-value',
+      });
+      mockQuery.mockResolvedValueOnce(createQueryResult([stored], 1));
+      const publicResult = await getBinding('archon', 'workflow-engine-primary');
+      expect('delivery_headers' in (publicResult ?? {})).toBe(false);
+      expect('signing_secret' in (publicResult ?? {})).toBe(false);
+
+      mockQuery.mockResolvedValueOnce(createQueryResult([stored], 1));
+      const privateResult = await getBindingByIdWithSecret('wpb-1');
+      expect(privateResult?.delivery_headers).toEqual({ Authorization: 'Bearer secret' });
+      expect(privateResult?.signing_secret).toBe('signing-value');
+    });
+
+    test('update omission preserves both columns and null clears both columns', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
+      await updateBinding({
+        provider: 'archon',
+        name: 'workflow-engine-primary',
+        codebaseId: 'cb-1',
+        eventRoute: 'https://example.invalid/events/v2',
+      });
+      const [, omitted] = mockQuery.mock.calls[1] as [string, unknown[]];
+      expect(omitted.slice(4, 8)).toEqual([0, null, 0, null]);
+
+      mockQuery.mockReset();
+      mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
+      await updateBinding({
+        provider: 'archon',
+        name: 'workflow-engine-primary',
+        codebaseId: 'cb-1',
+        eventRoute: 'https://example.invalid/events/v2',
+        transform: null,
+        deliveryHeaders: null,
+      });
+      const [sql, cleared] = mockQuery.mock.calls[1] as [string, unknown[]];
+      expect(sql).toContain('transform = CASE WHEN $5 = 1');
+      expect(sql).toContain('delivery_headers = CASE WHEN $7 = 1');
+      expect(cleared.slice(4, 8)).toEqual([1, null, 1, '{}']);
+    });
+
+    test('update normalizes a supplied transform and rejects invalid config before a transaction', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
+      await updateBinding({
+        provider: 'archon',
+        name: 'workflow-engine-primary',
+        codebaseId: 'cb-1',
+        eventRoute: 'https://example.invalid/events/v2',
+        transform: { engine: 'jsonata', expression: '{ "ok": true }' } as never,
+      });
+      const [, params] = mockQuery.mock.calls[1] as [string, unknown[]];
+      expect(JSON.parse(params[5] as string)).toEqual({
+        engine: 'jsonata',
+        expression: '{ "ok": true }',
+        timeoutMs: 50,
+        stackDepth: 128,
+        maxSequenceSize: 10_000,
+        maxOutputBytes: 65_536,
+      });
+
+      mockWithTransaction.mockClear();
+      mockQuery.mockClear();
+      await expect(
+        updateBinding({
+          provider: 'archon',
+          name: 'workflow-engine-primary',
+          codebaseId: 'cb-1',
+          eventRoute: 'https://example.invalid/events/v2',
+          transform: { engine: 'jsonata', expression: '$eval("secret")' } as never,
+        })
+      ).rejects.toThrow(/TRANSFORM_FUNCTION_DISALLOWED/);
+      expect(mockWithTransaction).not.toHaveBeenCalled();
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    test('invalid supplied config fails before a transaction or query starts', async () => {
+      await expect(
+        createBinding({
+          provider: 'archon',
+          name: 'workflow-engine-primary',
+          codebaseId: 'cb-1',
+          eventRoute: 'https://example.invalid/events',
+          transform: { engine: 'jsonata', expression: '$now()' } as never,
+        })
+      ).rejects.toThrow(/TRANSFORM_FUNCTION_DISALLOWED/);
+      await expect(
+        createBinding({
+          provider: 'archon',
+          name: 'workflow-engine-primary',
+          codebaseId: 'cb-1',
+          eventRoute: 'https://example.invalid/events',
+          deliveryHeaders: { 'Content-Type': 'text/plain' },
+        })
+      ).rejects.toThrow(/unsafe-delivery-headers/);
+      expect(mockWithTransaction).not.toHaveBeenCalled();
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    test('rotate and disable preserve transform and delivery headers without assigning them', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow({ state: 'rotated' })], 1));
+      await rotateBinding('archon', 'workflow-engine-primary', 'rotated-secret');
+      expect(mockQuery.mock.calls[1]?.[0] as string).not.toMatch(/transform|delivery_headers/);
+
+      mockQuery.mockReset();
+      mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow({ state: 'disabled' })], 1));
+      await disableBinding('archon', 'workflow-engine-primary');
+      expect(mockQuery.mock.calls[1]?.[0] as string).not.toMatch(/transform|delivery_headers/);
+    });
+
+    test('corrupt private and transform fields are isolated to their consuming paths', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([bindingRow({ delivery_headers: '{not-json' })], 1)
+      );
+      await expect(getBinding('archon', 'workflow-engine-primary')).resolves.toMatchObject({
+        id: 'wpb-1',
+      });
+
+      for (const delivery_headers of ['{not-json', { Authorization: 123 }]) {
+        mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow({ delivery_headers })], 1));
+        await expect(getBindingByIdWithSecret('wpb-1')).rejects.toThrow(
+          /^BINDING_CORRUPT_ROW: delivery_headers$/
+        );
+      }
+
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([bindingRow({ transform: '{not-json', signing_secret: 'secret' })], 1)
+      );
+      const routing = await getBindingByCodebase('archon', 'cb-1');
+      expect(routing[0]?.transform).toBe('{not-json');
+    });
+
+    test('rotate and disable remain available when the stored transform is corrupt', async () => {
+      const corrupt = bindingRow({ transform: '{not-json' });
+      mockQuery.mockResolvedValueOnce(createQueryResult([corrupt], 1));
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult(
+          [bindingRow({ transform: '{not-json', state: 'rotated', binding_version: 2 })],
+          1
+        )
+      );
+      await expect(rotateBinding('archon', 'workflow-engine-primary')).resolves.toMatchObject({
+        state: 'rotated',
+        activeVersion: 2,
+      });
+
+      mockQuery.mockReset();
+      mockQuery.mockResolvedValueOnce(createQueryResult([corrupt], 1));
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([bindingRow({ transform: '{not-json', state: 'disabled' })], 1)
+      );
+      await expect(disableBinding('archon', 'workflow-engine-primary')).resolves.toMatchObject({
+        state: 'disabled',
+      });
     });
   });
 });

@@ -103,7 +103,12 @@ export class SqliteAdapter implements IDatabase {
       }
     } catch (error) {
       const err = error as Error;
-      getLog().error({ err, sql: convertedSql, params }, 'db.sqlite_query_failed');
+      // Query parameters can contain credentials (for example provider-binding
+      // receiver headers). Record shape only; never persist parameter values.
+      getLog().error(
+        { err, sql: convertedSql, paramCount: params?.length ?? 0 },
+        'db.sqlite_query_failed'
+      );
       throw error;
     }
   }
@@ -454,6 +459,16 @@ export class SqliteAdapter implements IDatabase {
       if (cols.length > 0 && !colNames.has('event_types')) {
         this.db.run(
           "ALTER TABLE remote_agent_workflow_provider_bindings ADD COLUMN event_types TEXT NOT NULL DEFAULT '[]'"
+        );
+      }
+      if (cols.length > 0 && !colNames.has('transform')) {
+        this.db.run(
+          'ALTER TABLE remote_agent_workflow_provider_bindings ADD COLUMN transform TEXT'
+        );
+      }
+      if (cols.length > 0 && !colNames.has('delivery_headers')) {
+        this.db.run(
+          "ALTER TABLE remote_agent_workflow_provider_bindings ADD COLUMN delivery_headers TEXT NOT NULL DEFAULT '{}'"
         );
       }
     } catch (e: unknown) {
@@ -842,6 +857,8 @@ export class SqliteAdapter implements IDatabase {
         event_route TEXT NOT NULL,
         event_types TEXT NOT NULL DEFAULT '[]',
         signing_secret TEXT,
+        transform TEXT,
+        delivery_headers TEXT NOT NULL DEFAULT '{}',
         state TEXT NOT NULL DEFAULT 'active',
         binding_version INTEGER NOT NULL DEFAULT 1,
         created_at TEXT DEFAULT (datetime('now')),

@@ -22,11 +22,27 @@ describe('provider binding bundled schema marker (Story 3.1)', () => {
   test('getSchemaSQL() (source-build disk read) contains the new table', () => {
     const sql = getSchemaSQL();
     expect(sql).toContain('CREATE TABLE IF NOT EXISTS remote_agent_workflow_provider_bindings');
+    expect(sql).toContain('transform        TEXT');
+    expect(sql).toContain("delivery_headers TEXT NOT NULL DEFAULT '{}'");
+    expect(sql).toContain(
+      'ALTER TABLE remote_agent_workflow_provider_bindings\n  ADD COLUMN IF NOT EXISTS transform TEXT;'
+    );
+    expect(sql).toContain(
+      "ALTER TABLE remote_agent_workflow_provider_bindings\n  ADD COLUMN IF NOT EXISTS delivery_headers TEXT NOT NULL DEFAULT '{}';"
+    );
   });
 
   test('BUNDLED_SCHEMA_SQL (binary-build embedded copy) contains the new table — regenerate via `bun run generate:bundled-schema`', () => {
     expect(BUNDLED_SCHEMA_SQL).toContain(
       'CREATE TABLE IF NOT EXISTS remote_agent_workflow_provider_bindings'
+    );
+    expect(BUNDLED_SCHEMA_SQL).toContain('transform        TEXT');
+    expect(BUNDLED_SCHEMA_SQL).toContain("delivery_headers TEXT NOT NULL DEFAULT '{}'");
+    expect(BUNDLED_SCHEMA_SQL).toContain(
+      'ALTER TABLE remote_agent_workflow_provider_bindings\n  ADD COLUMN IF NOT EXISTS transform TEXT;'
+    );
+    expect(BUNDLED_SCHEMA_SQL).toContain(
+      "ALTER TABLE remote_agent_workflow_provider_bindings\n  ADD COLUMN IF NOT EXISTS delivery_headers TEXT NOT NULL DEFAULT '{}';"
     );
   });
 });
