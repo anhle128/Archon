@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -35,11 +35,21 @@ interface CliResult {
   exitCode: number;
 }
 
-async function runCli(args: string[], cwd: string = REPO_ROOT): Promise<CliResult> {
+async function runCli(
+  args: string[],
+  cwd: string = REPO_ROOT,
+  env?: Record<string, string>
+): Promise<CliResult> {
+  const mergedEnv: Record<string, string | undefined> = { ...process.env, ...env };
+  // Avoid Bun's FORCE_COLOR/NO_COLOR conflict warning leaking into stderr and
+  // breaking --json purity assertions in this subprocess harness.
+  delete mergedEnv.FORCE_COLOR;
+  mergedEnv.NO_COLOR = '1';
   const proc = Bun.spawn(['bun', CLI_ENTRY, ...args], {
     cwd,
     stdout: 'pipe',
     stderr: 'pipe',
+    env: mergedEnv,
   });
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(proc.stdout).text(),
@@ -188,6 +198,80 @@ describe('provider-binding CLI E2E — real subprocess (Story 3.1)', () => {
       }
     });
   }
+
+  test('provider-binding test dry-run emits success without creating archon.db', async () => {
+    const archonHome = mkdtempSync(join(tmpdir(), 'archon-home-binding-test-'));
+    const cwd = mkdtempSync(join(tmpdir(), 'archon-binding-test-cwd-'));
+    const transformFile = join(cwd, 'transform.json');
+    const envelopeFile = join(cwd, 'envelope.json');
+    writeFileSync(
+      transformFile,
+      JSON.stringify({ engine: 'jsonata', expression: '{ "eventType": eventType }' })
+    );
+    writeFileSync(
+      envelopeFile,
+      JSON.stringify({
+        schemaVersion: 'workflow-event-envelope.v1',
+        provider: 'archon',
+        eventId: 'evt-test',
+        eventType: 'workflow.run.started',
+        occurredAt: '2026-08-18T00:00:00.000Z',
+        bindingRef: {
+          provider: 'archon',
+          name: 'workflow-engine-primary',
+          bindingId: 'wpb_archon::workflow_engine_primary',
+          projectRef: 'project:cb-1',
+        },
+        workflowRunRef: {
+          provider: 'archon',
+          runId: 'run-1',
+          workflowName: 'bmad-dev-story',
+          projectRef: 'project:cb-1',
+        },
+        projectRef: {
+          id: 'cb-1',
+          codebaseRef: 'workflow-engine',
+          repositoryPath: '/workspace/workflow-engine',
+          defaultBranch: 'dev',
+        },
+        idempotencyKey: 'archon:workflow-engine-primary:evt-test',
+        payload: { state: 'running', startedAt: '2026-08-18T00:00:00.000Z' },
+      })
+    );
+    try {
+      const { stdout, stderr, exitCode } = await runCli(
+        [
+          'provider-binding',
+          'test',
+          '--transform-file',
+          transformFile,
+          '--envelope-file',
+          envelopeFile,
+          '--json',
+        ],
+        cwd,
+        { ARCHON_HOME: archonHome, DO_NOT_TRACK: '1' }
+      );
+      const lines = stdout.trim().split('\n').filter(Boolean);
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0] as string)).toMatchObject({
+        command: 'binding.test',
+        success: true,
+        result: {
+          operation: 'test',
+          engine: 'jsonata',
+          transformedBody: '{"eventType":"workflow.run.started"}',
+          outputBytes: 36,
+        },
+      });
+      expect(exitCode).toBe(0);
+      expect(stderr).toBe('');
+      expect(existsSync(join(archonHome, 'archon.db'))).toBe(false);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(archonHome, { recursive: true, force: true });
+    }
+  });
 
   test('unsupported provider-binding subcommand fails closed outside a git repo', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'archon-provider-binding-no-git-'));

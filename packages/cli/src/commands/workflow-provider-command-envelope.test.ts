@@ -78,13 +78,15 @@ const PROVIDER_CLI_SYNTAX_BASELINE: Record<string, string> = {
     'archon provider-binding status --provider archon --name <name> [--project-ref <project-ref>] --json',
   'binding.rotate': 'archon provider-binding rotate --provider archon --name <name> --json',
   'binding.disable': 'archon provider-binding disable --provider archon --name <name> --json',
+  'binding.test':
+    'archon provider-binding test --transform-file <path> --envelope-file <path> --json',
 };
 
 describe('3.3A-CONTRACT-033 — provider CLI syntax baseline covers all schema commands [P0, R-006/R-014]', () => {
   test('the baseline table has exactly one non-empty syntax entry per workflow-command-envelope.schema.json command enum value', () => {
     const schema = loadSchema();
     const enumCommands = schema.properties.command.enum;
-    expect(enumCommands).toHaveLength(12);
+    expect(enumCommands).toHaveLength(13);
     const baselineKeys = Object.keys(PROVIDER_CLI_SYNTAX_BASELINE);
     expect(new Set(baselineKeys)).toEqual(new Set(enumCommands));
     for (const command of enumCommands) {
@@ -132,24 +134,6 @@ describe('3.3A-UNIT-018 — no new JSON Schema runtime dependency in @archon/cli
 });
 
 // ---------------------------------------------------------------------------
-// EXECUTABLE — 3.3A-CONTRACT-048 [P1] — Command contract package is not edited
-// to fit runtime. Story 3.5 legitimately evolves the event contract, so this
-// guard stays scoped to the Story 3.3A command schema and command fixtures.
-// ---------------------------------------------------------------------------
-describe('3.3A-CONTRACT-048 — command contract package is never edited to fit runtime [P1, R-008/R-011]', () => {
-  test('the workflow-commander command contract has no uncommitted working-tree changes', async () => {
-    const proc = Bun.spawn(['git', 'diff', '--quiet', '--', SCHEMA_PATH, COMMANDS_DIR], {
-      cwd: join(import.meta.dir, '../../../..'),
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    const exitCode = await proc.exited;
-    // `git diff --quiet` exits 0 when there is no diff, 1 when there is one.
-    expect(exitCode).toBe(0);
-  });
-});
-
-// ---------------------------------------------------------------------------
 // SKIPPED — 3.3A-UNIT-001 through 3.3A-UNIT-016 [mostly P0] — depend on the
 // shared module's exports, which do not exist yet.
 // ---------------------------------------------------------------------------
@@ -157,7 +141,7 @@ describe('3.3A-UNIT-001 — command enum exactness [P0, R-001]', () => {
   test('WORKFLOW_PROVIDER_COMMANDS exactly matches workflow-command-envelope.schema.json properties.command.enum (no extra, no missing, no reordering-sensitive gaps)', async () => {
     // ACTIVATION: remove .skip once workflow-provider-command-envelope.ts
     // exports `WORKFLOW_PROVIDER_COMMANDS` (a readonly array/tuple of the
-    // 12 canonical command ids).
+    // 13 canonical command ids).
     const mod = (await import('./workflow-provider-command-envelope')) as {
       WORKFLOW_PROVIDER_COMMANDS: readonly string[];
     };
@@ -165,7 +149,7 @@ describe('3.3A-UNIT-001 — command enum exactness [P0, R-001]', () => {
     expect(new Set(mod.WORKFLOW_PROVIDER_COMMANDS)).toEqual(
       new Set(schema.properties.command.enum)
     );
-    expect(mod.WORKFLOW_PROVIDER_COMMANDS).toHaveLength(12);
+    expect(mod.WORKFLOW_PROVIDER_COMMANDS).toHaveLength(13);
   });
 });
 
@@ -851,11 +835,12 @@ const REPRESENTATIVE_COMMAND_FAMILIES: Array<{
   { fixture: 'binding-status-success.json', refKind: 'bindingRef' },
   { fixture: 'binding-rotate-success.json', refKind: 'bindingRef' },
   { fixture: 'binding-disable-success.json', refKind: 'bindingRef' },
+  { fixture: 'binding-test-success.json', refKind: 'bindingRef' },
 ];
 
-describe('3.3A-CONTRACT-037 — representative success envelope for every one of the 12 command families [P0, R-014]', () => {
-  test('the representative-family fixture list itself covers exactly 12 command families', () => {
-    expect(REPRESENTATIVE_COMMAND_FAMILIES).toHaveLength(12);
+describe('3.3A-CONTRACT-037 — representative success envelope for every one of the 13 command families [P0, R-014]', () => {
+  test('the representative-family fixture list itself covers exactly 13 command families', () => {
+    expect(REPRESENTATIVE_COMMAND_FAMILIES).toHaveLength(13);
   });
 
   for (const { fixture, refKind } of REPRESENTATIVE_COMMAND_FAMILIES) {

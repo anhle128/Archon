@@ -77,6 +77,7 @@ import {
   providerBindingDisableCommand,
   providerBindingUnsupportedCommand,
 } from './commands/provider-binding';
+import { providerBindingTestCommand } from './commands/provider-binding-test';
 import { continueCommand } from './commands/continue';
 import { chatCommand } from './commands/chat';
 import { setupCommand } from './commands/setup';
@@ -318,6 +319,9 @@ Commands:
   telemetry reset            Rotate the anonymous install UUID
   validate workflows [name]  Validate workflow definitions and their references
   validate commands [name]   Validate command files
+  provider-binding create    Create a provider binding (--transform-file, --receiver-headers-file)
+  provider-binding update    Update a provider binding (--transform-file, --receiver-headers-file)
+  provider-binding test      Dry-run a binding transform (--transform-file, --envelope-file, --json)
   version, --version, -V     Show version info (also -v when used alone)
   help                       Show this help message
 
@@ -427,6 +431,7 @@ function normalizeProviderBindingArgs(args: string[]): string[] {
     '--correlation-id',
     '--transform-file',
     '--receiver-headers-file',
+    '--envelope-file',
   ]);
   const normalized: string[] = [];
 
@@ -523,6 +528,7 @@ async function main(): Promise<number> {
         'correlation-id': { type: 'string' },
         'transform-file': { type: 'string' },
         'receiver-headers-file': { type: 'string' },
+        'envelope-file': { type: 'string' },
         full: { type: 'boolean' },
         'dry-run': { type: 'boolean' },
         stubs: { type: 'string' },
@@ -1473,6 +1479,7 @@ async function main(): Promise<number> {
           correlationId: values['correlation-id'] as string | undefined,
           transformFile: values['transform-file'] as string | undefined,
           receiverHeadersFile: values['receiver-headers-file'] as string | undefined,
+          envelopeFile: values['envelope-file'] as string | undefined,
         };
         switch (subcommand) {
           case 'create':
@@ -1485,6 +1492,8 @@ async function main(): Promise<number> {
             return await providerBindingRotateCommand(bindingArgs, bindingOpts);
           case 'disable':
             return await providerBindingDisableCommand(bindingArgs, bindingOpts);
+          case 'test':
+            return await providerBindingTestCommand(bindingArgs, bindingOpts);
           default:
             if (jsonFlag) {
               return await providerBindingUnsupportedCommand(subcommand, bindingArgs, bindingOpts);
@@ -1494,7 +1503,7 @@ async function main(): Promise<number> {
             } else {
               console.error(`Unknown provider-binding subcommand: ${subcommand}`);
             }
-            console.error('Available: create, update, status, rotate, disable');
+            console.error('Available: create, update, status, rotate, disable, test');
             return 1;
         }
       }
