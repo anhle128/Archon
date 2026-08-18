@@ -3,94 +3,102 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task.
 > Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add an optional per-binding JSONata outbound transform and private receiver headers so Archon can persist a receiver-shaped JSON body and send extra auth headers without changing `workflow-event-envelope.v1` or exposing secrets.
+**Goal:** Add an optional per-binding JSONata outbound transform and private receiver headers so Archon persists receiver-shaped JSON exactly once and delivers it without changing `workflow-event-envelope.v1` or exposing secrets.
 
-**Architecture:** Keep `workflow-event-envelope.v1` as the only transform input.
-Normalize and AST-validate the JSONata config before any binding write, evaluate the expression exactly once after envelope construction, and persist the exact serialized string as `event_body`.
-Store private receiver headers in a separate binding column, merge them after Archon-owned HMAC headers, and persist only redacted header evidence on delivery attempts.
+**Architecture:** Keep the canonical workflow event envelope as the only transform input.
+Normalize and AST-validate JSONata before binding writes, evaluate once after envelope construction, and persist the exact serialized result in the outbox.
+Store private receiver headers separately from the public transform, validate them at write and send time, merge them after Archon-owned HMAC headers, and persist only redacted request-header evidence.
 
-**Tech Stack:** Bun, strict TypeScript, Zod through `@hono/zod-openapi`, `jsonata@2.2.2`, SQLite, PostgreSQL, and Bun Test.
+**Tech Stack:** Bun, strict TypeScript, Zod from `@hono/zod-openapi`, `jsonata@2.2.2`, SQLite, PostgreSQL, Bun Test, and the existing workflow-command JSON contract validator.
 
 **Spec:** `docs/superpowers/specs/2026-08-18-provider-binding-json-transform-design.md`
 
 ## Global Constraints
 
-- Use the approved design as the source of truth and do not add receiver-specific fields, schemas, names, or routing rules.
-- Keep `workflow-event-envelope.v1` unchanged at runtime and in insertion order.
-- Add `jsonata` version `2.2.2` only to `@archon/core` through Bun so the root lockfile records the exact resolution.
-- Store the transform in `transform` and the private header map in `delivery_headers`.
-- Persist the normalized transform object, including resolved defaults.
-- Validate transform and headers before create or update mutates the database.
-- Apply the transform once at enqueue time, never at delivery time.
-- Persist the exact `transformWorkflowEventBody` string as `event_body`.
-- Keep HMAC input as `timestamp + "." + row.event_body` and never rebuild that body.
-- Catch classified transform errors separately from the existing best-effort enqueue guard.
-- Persist transform failures as `status = "not-routable"`, `not_routable_reason = "transform-failed"`, `last_error = <safe code>`, `event_body = JSON.stringify(canonicalEnvelope)`, and `next_attempt_at = null`.
-- Never fail the workflow run because a transform or outbox write failed.
-- Keep receiver header values out of public binding reads, command output, logs, errors, and delivery-attempt evidence.
-- Use file flags only for transform, envelope, and receiver-header inputs.
-- Do not echo file paths or file contents in success or error envelopes.
-- Database changes are additive in both dialects.
-- Every new `ADD COLUMN ... NOT NULL` must include a `DEFAULT`.
-- Never edit `packages/core/src/db/bundled-schema.generated.ts` by hand.
-- Regenerate the bundled schema with `bun run generate:bundled-schema`.
-- Derive TypeScript types with `z.infer<typeof schema>` except the sanctioned recursive-schema pattern, which this feature does not need.
-- Import `z` from `@hono/zod-openapi` in core schema files.
+- Use the approved design as the source of truth.
+- Do not add receiver-specific fields, receiver-specific schemas, routing rules, a transform registry, a second engine, XML, form encoding, a web UI, or delivery-time transformation.
+- Keep `workflow-event-envelope.v1` unchanged at runtime, including the builder's top-level key insertion order.
+- Add exactly `jsonata@2.2.2` to `@archon/core` with Bun and commit the resulting root `bun.lock` change.
+- Store normalized transform JSON in nullable `transform` and private receiver-header JSON in `delivery_headers TEXT NOT NULL DEFAULT '{}'`.
+- Validate and normalize supplied transform and header values before `createBinding()` or `updateBinding()` starts a transaction.
+- Preserve omitted update values and use a JSON `null` file to clear the selected value.
+- Apply a transform once at enqueue time and never at delivery time.
+- Persist the exact string returned by `transformWorkflowEventBody()` as `event_body`.
+- Keep HMAC input exactly `timestamp + "." + row.event_body` and never parse, rebuild, or reserialize `row.event_body` in the dispatcher.
+- Persist classified transform failures as `status = "not-routable"`, `not_routable_reason = "transform-failed"`, `last_error = <safe transform code>`, `event_body = JSON.stringify(canonicalEnvelope)`, and `next_attempt_at = null`.
+- Keep workflow execution non-throwing when transformation or outbox persistence fails.
+- Keep receiver header values out of public binding projections, CLI output, logs, errors, artifacts, and delivery-attempt evidence.
+- Use file flags for transform, sample-envelope, and receiver-header JSON.
+- Never echo an input file path or file content in a success or error envelope.
+- Keep database changes additive in both dialects.
+- Include a `DEFAULT` on every new `ADD COLUMN ... NOT NULL` statement.
+- Generate `packages/core/src/db/bundled-schema.generated.ts` only with `bun run generate:bundled-schema`.
+- Derive data-shape types with `z.infer<typeof schema>`.
+- Import `z` from `@hono/zod-openapi` in core schema code.
 - Use `z.record(z.string(), valueSchema)` for record schemas.
 - Do not add `any`.
-- Visit JSONata AST nodes as `Record<string, unknown>` and do not use JSONata's incomplete `ExprNode` `any` fields.
-- Reject both AST `type` values `regex` and `regexp` because JSONata 2.2.2 runtime nodes use `regex` while the published types say `regexp`.
-- Map JSONata `timeout` to `timeoutMs`, `stack` to `stackDepth`, and `sequence` to `maxSequenceSize`.
+- Traverse JSONata AST values as `Record<string, unknown>` and arrays instead of using the incomplete `ExprNode` fields typed as `any`.
+- Reject both JSONata AST types `regex` and `regexp`.
+- Pass `{ timeout: timeoutMs, stack: stackDepth, sequence: maxSequenceSize }` to JSONata 2.2.2.
 - Classify JSONata `D1012` as `TRANSFORM_TIMEOUT`, `D1011` as `TRANSFORM_STACK_LIMIT`, and `D2015` as `TRANSFORM_SEQUENCE_LIMIT`.
-- Put the dry-run command in `packages/cli/src/commands/provider-binding-test.ts` so that command cannot import `@archon/core/db/*`.
-- Add `@archon/core` export `"./events/*": "./src/events/*.ts"`.
-- Map CLI transform errors to category `provider_contract`, except `TRANSFORM_TIMEOUT` which uses `timeout`.
-- Do not add a web UI, plugin registry, second engine, XML, form encoding, or delivery-time transform.
+- Put the side-effect-free command in `packages/cli/src/commands/provider-binding-test.ts` and do not import `@archon/core/db/*` from that file.
+- Export the core event modules through `"./events/*": "./src/events/*.ts"`.
+- Map `TRANSFORM_TIMEOUT` to CLI category `timeout` and exit code `69`.
+- Map every other `TRANSFORM_*` code to CLI category `provider_contract` and exit code `64`.
+- Mark transform failures non-retryable because the same input and limits will deterministically fail again.
+- Map unreadable or non-JSON input files and invalid canonical envelopes to `MALFORMED_REQUEST` with safe field errors.
 - Do not change workflow event-type filtering or Archon's HMAC header names or format.
 - Never run `bun test` from the repository root.
-- Run package tests from their package directory.
-- Keep every new or substantially edited Markdown sentence on its own physical line.
+- Run mock-heavy Bun test files in separate invocations to avoid `mock.module()` cache pollution.
+- Keep every full Markdown sentence on its own physical line.
 - Never add an agent name as a commit co-author.
 
 ## File Map
 
-- Create `packages/core/src/schemas/provider-binding-transform.ts` for the discriminated transform schema, UTF-8 expression check, and `normalizeProviderBindingTransform()`.
-- Create `packages/core/src/schemas/provider-binding-transform.test.ts` for config parse, default, and cap tests.
-- Create `packages/core/src/events/provider-binding-transform.ts` for `ProviderBindingTransformError`, AST policy, result validation, and `transformWorkflowEventBody()`.
-- Create `packages/core/src/events/provider-binding-transform.test.ts` for AST, evaluation, identity, and result tests.
-- Create `packages/core/src/events/delivery-headers.ts` for header validation, merge, and redacted evidence.
-- Create `packages/core/src/events/delivery-headers.test.ts` for reserved names, token grammar, and privacy tests.
+- Create `packages/core/src/schemas/provider-binding-transform.ts` for the discriminated transform schemas and derived type.
+- Create `packages/core/src/schemas/provider-binding-transform.test.ts` for schema defaults and numeric bounds.
+- Create `packages/core/src/events/provider-binding-transform.ts` for normalization, safe errors, JSONata compilation, AST policy, evaluation, result validation, and serialization.
+- Create `packages/core/src/events/provider-binding-transform.test.ts` for byte limits, AST policy, evaluator guardrails, result rules, and identity behavior.
+- Create `packages/core/src/events/delivery-headers.ts` for the private header schema, safe validation, merge, and redacted evidence.
+- Create `packages/core/src/events/delivery-headers.test.ts` for token grammar, limits, reserved names, and privacy behavior.
 - Create `packages/cli/src/commands/provider-binding-test.ts` for the side-effect-free `binding.test` command.
+- Create `packages/cli/src/commands/provider-binding-test.test.ts` for dry-run unit, error, privacy, and dependency-boundary tests.
 - Create `_bmad-output/planning-artifacts/contracts/workflow-commander/examples/providers/archon/commands/binding-test-success.json` for the additive command fixture.
-- Modify `packages/core/package.json` to depend on `jsonata@2.2.2` and to run the new test files.
-- Modify `packages/core/src/schemas/index.ts` to export the transform schema and type.
-- Modify `packages/core/src/schemas/workflow-provider-binding.ts` to add optional public `transform`.
-- Modify `packages/core/src/schemas/workflow-provider-binding.test.ts` to cover public transform parsing and private-field stripping.
-- Modify `packages/core/src/events/workflow-event-envelope.ts` to replace the hand-written envelope interface with a Zod schema.
-- Modify `packages/core/src/events/workflow-event-envelope.test.ts` to lock identity serialization and dry-run envelope validation.
-- Modify `packages/core/src/db/provider-bindings.ts` to persist, patch, and privately read the two new columns.
-- Modify `packages/core/src/db/provider-bindings.test.ts` for create, update, rotate, disable, and privacy tests.
-- Modify `migrations/000_combined.sql` to add the two additive columns and `ALTER TABLE` statements.
-- Modify `packages/core/src/db/adapters/sqlite.ts` for the fresh schema and `migrateColumns()`.
-- Modify `packages/core/src/db/adapters/sqlite.test.ts` for fresh, upgrade, default, and parity coverage.
-- Modify `packages/core/src/db/adapters/postgres.test.ts` to assert the new SQL markers.
-- Modify `packages/core/src/db/provider-bindings-bundled-schema.test.ts` to assert the new columns.
-- Generate `packages/core/src/db/bundled-schema.generated.ts` with `bun run generate:bundled-schema`.
+- Modify `packages/core/package.json` for `jsonata@2.2.2`, the `./events/*` export, and isolated new test invocations.
+- Modify `bun.lock` only through `bun add jsonata@2.2.2 --filter @archon/core`.
+- Modify `packages/core/src/schemas/index.ts` to export the transform schemas and type.
+- Modify `packages/core/src/schemas/workflow-provider-binding.ts` to expose optional public `transform` while continuing to strip private fields.
+- Modify `packages/core/src/schemas/workflow-provider-binding.test.ts` for the new public projection.
+- Modify `packages/core/src/events/workflow-event-envelope.ts` to replace the parallel hand-written envelope interface with a strict Zod schema and derived type.
+- Modify `packages/core/src/events/workflow-event-envelope.test.ts` for event-specific payload validation, strict canonical shape, and identity serialization.
+- Modify `migrations/000_combined.sql` to add `transform` and `delivery_headers` to the PostgreSQL fresh and upgrade schema.
+- Modify `packages/core/src/db/adapters/sqlite.ts` to add the same fresh columns and idempotent upgrade checks.
+- Modify `packages/core/src/db/adapters/sqlite.test.ts` for fresh shape, nullability, defaults, upgrade preservation, and parity count.
+- Modify `packages/core/src/db/adapters/postgres.test.ts` to check the real combined SQL in the existing provider-binding convergence test.
+- Modify `packages/core/src/db/provider-bindings-bundled-schema.test.ts` to check both disk and bundled SQL.
+- Generate `packages/core/src/db/bundled-schema.generated.ts` with the existing generator.
+- Modify `packages/core/src/db/provider-bindings.ts` to normalize, validate, persist, patch, publicly project, and privately read the two columns.
+- Modify `packages/core/src/db/provider-bindings.test.ts` for create, update, private reads, public privacy, rotate, disable, and corruption behavior.
+- Modify `packages/core/src/db/workflow-event-outbox.ts` to accept and insert initial `last_error` evidence.
+- Modify `packages/core/src/db/workflow-event-outbox.test.ts` to lock initial `last_error` persistence.
 - Modify `packages/core/src/workflows/store-adapter.ts` to transform once and persist `transform-failed` evidence.
-- Modify `packages/core/src/workflows/store-adapter.test.ts` for identity, transformed body, filter-before-transform, and failure tests.
-- Modify `packages/server/src/workflow-events/dispatcher.ts` to validate headers, merge after HMAC headers, and persist redacted evidence.
-- Modify `packages/server/src/workflow-events/dispatcher.test.ts` for stored-body HMAC, header merge, and redaction.
-- Modify `packages/cli/src/cli.ts` to parse the new file flags and dispatch `provider-binding test`.
-- Modify `packages/cli/src/commands/provider-binding.ts` to read the file flags and pass patch values.
-- Modify `packages/cli/src/commands/workflow-provider-command-envelope.ts` to add `binding.test`.
-- Modify `packages/cli/src/commands/provider-binding.test.ts`, `provider-binding.e2e.test.ts`, and `workflow-provider-command-envelope.test.ts`.
-- Modify `_bmad-output/planning-artifacts/contracts/workflow-commander/schemas/workflow-command-envelope.schema.json` to add `binding.test`.
+- Modify `packages/core/src/workflows/store-adapter.test.ts` to prove call order, call count, exact bodies, safe errors, and safe logs.
+- Modify `packages/server/src/workflow-events/dispatcher.ts` to validate private headers, merge them after HMAC headers, redact attempt evidence, and terminally reject corrupt headers.
+- Modify `packages/server/src/workflow-events/dispatcher.test.ts` for stored-body retry HMAC, header merge, parser failures, validation failures, and redaction.
+- Modify `packages/cli/src/commands/provider-binding.ts` to load and validate create/update file inputs with safe patch semantics.
+- Modify `packages/cli/src/commands/provider-binding.test.ts` for create/update file behavior and secret-free errors.
+- Modify `packages/cli/src/commands/provider-binding.e2e.test.ts` for argument parsing and the no-git dry run.
+- Modify `packages/cli/src/cli.ts` to register the file flags, dispatch `provider-binding test`, and update built-in usage.
+- Modify `packages/cli/package.json` to run `provider-binding-test.test.ts` in its own Bun process.
+- Modify `packages/cli/src/commands/workflow-provider-command-envelope.ts` to add `binding.test` to the shared command sets.
+- Modify `packages/cli/src/commands/workflow-provider-command-envelope.test.ts` to keep the source tuple, JSON Schema enum, and syntax baseline aligned.
+- Modify `_bmad-output/planning-artifacts/contracts/workflow-commander/schemas/workflow-command-envelope.schema.json` to add `binding.test` to both binding command enums.
 - Modify `_bmad-output/planning-artifacts/contracts/workflow-commander/validate_contracts.py` to require the new success fixture.
-- Modify `packages/docs-web/src/content/docs/reference/cli.md` and the CLI usage text.
+- Modify `packages/docs-web/src/content/docs/reference/cli.md` to document configuration, limits, privacy, failure evidence, and the dry run.
 
 ---
 
-### Task 1: Transform Config Schema And Normalization
+### Task 1: Transform Configuration Schema
 
 **Files:**
 
@@ -98,12 +106,11 @@ Store private receiver headers in a separate binding column, merge them after Ar
 - Create: `packages/core/src/schemas/provider-binding-transform.test.ts`
 - Modify: `packages/core/src/schemas/index.ts`
 - Modify: `packages/core/package.json`
-- Modify: `bun.lock`
 
 **Interfaces:**
 
-- Consumes: `@hono/zod-openapi` `z`.
-- Produces: `jsonataProviderBindingTransformSchema`, `providerBindingTransformSchema`, `ProviderBindingTransform`, `JSONATA_EXPRESSION_MAX_BYTES = 32768`, `normalizeProviderBindingTransform(value: unknown): ProviderBindingTransform`.
+- Consumes: `z` from `@hono/zod-openapi`.
+- Produces: `JSONATA_EXPRESSION_MAX_BYTES`, `jsonataProviderBindingTransformSchema`, `providerBindingTransformSchema`, and `ProviderBindingTransform`.
 
 - [ ] **Step 1: Write the failing schema tests**
 
@@ -111,15 +118,19 @@ Create `packages/core/src/schemas/provider-binding-transform.test.ts`:
 
 ```ts
 import { describe, expect, test } from 'bun:test';
-import { normalizeProviderBindingTransform } from './provider-binding-transform';
+import {
+  jsonataProviderBindingTransformSchema,
+  providerBindingTransformSchema,
+} from './provider-binding-transform';
 
-describe('normalizeProviderBindingTransform', () => {
-  test('parses a valid JSONata config and applies every default', () => {
-    const result = normalizeProviderBindingTransform({
-      engine: 'jsonata',
-      expression: '{ "eventType": eventType }',
-    });
-    expect(result).toEqual({
+describe('providerBindingTransformSchema', () => {
+  test('applies every JSONata default', () => {
+    expect(
+      providerBindingTransformSchema.parse({
+        engine: 'jsonata',
+        expression: '{ "eventType": eventType }',
+      })
+    ).toEqual({
       engine: 'jsonata',
       expression: '{ "eventType": eventType }',
       timeoutMs: 50,
@@ -129,60 +140,37 @@ describe('normalizeProviderBindingTransform', () => {
     });
   });
 
-  test('rejects each value above its hard cap', () => {
-    const base = { engine: 'jsonata', expression: '{ "ok": true }' };
-    expect(() => normalizeProviderBindingTransform({ ...base, timeoutMs: 201 })).toThrow(
-      /TRANSFORM_CONFIG_INVALID/
-    );
-    expect(() => normalizeProviderBindingTransform({ ...base, stackDepth: 513 })).toThrow(
-      /TRANSFORM_CONFIG_INVALID/
-    );
-    expect(() => normalizeProviderBindingTransform({ ...base, maxSequenceSize: 100_001 })).toThrow(
-      /TRANSFORM_CONFIG_INVALID/
-    );
-    expect(() => normalizeProviderBindingTransform({ ...base, maxOutputBytes: 262_145 })).toThrow(
-      /TRANSFORM_CONFIG_INVALID/
-    );
-  });
-
-  test('rejects an empty expression and an oversized UTF-8 expression', () => {
-    expect(() =>
-      normalizeProviderBindingTransform({ engine: 'jsonata', expression: '' })
-    ).toThrow(/TRANSFORM_CONFIG_INVALID/);
-    expect(() =>
-      normalizeProviderBindingTransform({
-        engine: 'jsonata',
-        expression: 'é'.repeat(16_385),
-      })
-    ).toThrow(/TRANSFORM_CONFIG_INVALID/);
-  });
-
-  test('rejects an unknown engine', () => {
-    expect(() =>
-      normalizeProviderBindingTransform({ engine: 'jq', expression: '.' })
-    ).toThrow(/TRANSFORM_CONFIG_INVALID/);
+  test('rejects empty expressions, unknown engines, non-positive limits, and every hard-cap overflow', () => {
+    const base = { engine: 'jsonata' as const, expression: '{ "ok": true }' };
+    expect(() => providerBindingTransformSchema.parse({ ...base, expression: '' })).toThrow();
+    expect(() => providerBindingTransformSchema.parse({ engine: 'jq', expression: '.' })).toThrow();
+    for (const patch of [
+      { timeoutMs: 0 },
+      { timeoutMs: 201 },
+      { stackDepth: 0 },
+      { stackDepth: 513 },
+      { maxSequenceSize: 0 },
+      { maxSequenceSize: 100_001 },
+      { maxOutputBytes: 0 },
+      { maxOutputBytes: 262_145 },
+    ]) {
+      expect(() => jsonataProviderBindingTransformSchema.parse({ ...base, ...patch })).toThrow();
+    }
   });
 });
 ```
 
-- [ ] **Step 2: Run the tests and verify they fail**
+- [ ] **Step 2: Run the test and verify it fails for the missing module**
 
-Run:
+Run from `packages/core`:
 
 ```bash
-cd packages/core
 bun test src/schemas/provider-binding-transform.test.ts
 ```
 
-Expected: FAIL because `./provider-binding-transform` does not exist.
+Expected: FAIL with `Cannot find module './provider-binding-transform'`.
 
-- [ ] **Step 3: Add the dependency and write the schema module**
-
-From the repository root:
-
-```bash
-bun add jsonata@2.2.2 --filter @archon/core
-```
+- [ ] **Step 3: Create the schema and export it**
 
 Create `packages/core/src/schemas/provider-binding-transform.ts`:
 
@@ -205,73 +193,65 @@ export const providerBindingTransformSchema = z.discriminatedUnion('engine', [
 ]);
 
 export type ProviderBindingTransform = z.infer<typeof providerBindingTransformSchema>;
-
-function utf8Bytes(value: string): number {
-  return new TextEncoder().encode(value).length;
-}
-
-export function normalizeProviderBindingTransform(value: unknown): ProviderBindingTransform {
-  const parsed = providerBindingTransformSchema.safeParse(value);
-  if (!parsed.success) {
-    throw new Error('TRANSFORM_CONFIG_INVALID');
-  }
-  if (utf8Bytes(parsed.data.expression) > JSONATA_EXPRESSION_MAX_BYTES) {
-    throw new Error('TRANSFORM_CONFIG_INVALID');
-  }
-  return parsed.data;
-}
 ```
 
-Export the schema, type, constant, and function from `packages/core/src/schemas/index.ts` under a `ProviderBindingTransform` comment block.
+Add this block to `packages/core/src/schemas/index.ts` after the workflow-provider-binding exports:
 
-In `packages/core/package.json`, append `&& bun test src/schemas/provider-binding-transform.test.ts` to the existing `src/schemas/workflow-provider-binding.test.ts` test invocation.
+```ts
+// ProviderBindingTransform
+export {
+  JSONATA_EXPRESSION_MAX_BYTES,
+  jsonataProviderBindingTransformSchema,
+  providerBindingTransformSchema,
+} from './provider-binding-transform';
+export type { ProviderBindingTransform } from './provider-binding-transform';
+```
 
-- [ ] **Step 4: Run the tests and verify they pass**
+Append a separate `&& bun test src/schemas/provider-binding-transform.test.ts` segment to the `test` script in `packages/core/package.json`.
 
-Run:
+- [ ] **Step 4: Run the schema tests**
+
+Run from `packages/core`:
 
 ```bash
-cd packages/core
 bun test src/schemas/provider-binding-transform.test.ts
+bun x tsc --noEmit
 ```
 
-Expected: PASS.
+Expected: both commands exit `0`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add packages/core/package.json bun.lock packages/core/src/schemas/provider-binding-transform.ts packages/core/src/schemas/provider-binding-transform.test.ts packages/core/src/schemas/index.ts
-git commit -m "$(cat <<'EOF'
-feat(core): add provider-binding JSONata transform schema
-
-EOF
-)"
+git add packages/core/src/schemas/provider-binding-transform.ts packages/core/src/schemas/provider-binding-transform.test.ts packages/core/src/schemas/index.ts packages/core/package.json
+git commit -m "feat(core): add provider-binding transform schema"
 ```
 
 ---
 
-### Task 2: Compile-Time JSONata AST Policy
+### Task 2: JSONata Normalization, Safe Errors, And AST Policy
 
 **Files:**
 
 - Create: `packages/core/src/events/provider-binding-transform.ts`
 - Create: `packages/core/src/events/provider-binding-transform.test.ts`
 - Modify: `packages/core/package.json`
+- Modify: `bun.lock`
 
 **Interfaces:**
 
-- Consumes: `ProviderBindingTransform` and `normalizeProviderBindingTransform()` from Task 1.
-- Produces: `TRANSFORM_ERROR_CODES`, `TransformErrorCode`, `ProviderBindingTransformError`, `isProviderBindingTransformError(err: unknown): err is ProviderBindingTransformError`, `validateProviderBindingTransform(transform: ProviderBindingTransform): void`.
+- Consumes: `ProviderBindingTransform`, `providerBindingTransformSchema`, and `JSONATA_EXPRESSION_MAX_BYTES` from Task 1.
+- Produces: `TRANSFORM_ERROR_CODES`, `TransformErrorCode`, `ProviderBindingTransformError`, `isProviderBindingTransformError()`, `normalizeProviderBindingTransform()`, `compileProviderBindingTransform()`, and `validateProviderBindingTransform()`.
 
-- [ ] **Step 1: Write the failing AST tests**
+- [ ] **Step 1: Write failing normalization and AST tests**
 
-Create `packages/core/src/events/provider-binding-transform.test.ts`:
+Create `packages/core/src/events/provider-binding-transform.test.ts` with this first red slice:
 
 ```ts
 import { describe, expect, test } from 'bun:test';
-import { normalizeProviderBindingTransform } from '../schemas/provider-binding-transform';
 import {
   ProviderBindingTransformError,
+  normalizeProviderBindingTransform,
   validateProviderBindingTransform,
 } from './provider-binding-transform';
 
@@ -279,93 +259,114 @@ function transform(expression: string) {
   return normalizeProviderBindingTransform({ engine: 'jsonata', expression });
 }
 
-describe('validateProviderBindingTransform', () => {
-  test('accepts object construction and canonical envelope field selection', () => {
+describe('provider-binding JSONata policy', () => {
+  test('normalizes defaults and rejects an oversized UTF-8 expression with a safe error', () => {
+    expect(transform('{ "ok": true }')).toMatchObject({
+      timeoutMs: 50,
+      stackDepth: 128,
+      maxSequenceSize: 10_000,
+      maxOutputBytes: 65_536,
+    });
+    try {
+      normalizeProviderBindingTransform({
+        engine: 'jsonata',
+        expression: 'é'.repeat(16_385),
+      });
+      throw new Error('expected normalization failure');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ProviderBindingTransformError);
+      expect((error as ProviderBindingTransformError).code).toBe('TRANSFORM_CONFIG_INVALID');
+      expect((error as Error).message).toBe('TRANSFORM_CONFIG_INVALID');
+      expect((error as Error).message).not.toContain('é');
+    }
+  });
+
+  test('accepts canonical field selection and approved direct functions', () => {
     expect(() =>
       validateProviderBindingTransform(
-        transform('{ "eventType": eventType, "runId": workflowRunRef.runId }')
+        transform('{ "eventType": $uppercase(eventType), "runId": workflowRunRef.runId }')
       )
     ).not.toThrow();
   });
 
-  test('rejects $eval, $now, $millis, and $random by AST node', () => {
-    for (const expression of ['$eval("1")', '$now()', '$millis()', '$random()']) {
-      expect(() => validateProviderBindingTransform(transform(expression))).toThrow(
-        ProviderBindingTransformError
-      );
+  test('rejects disallowed, unknown, dynamic, and aliased calls without source leakage', () => {
+    for (const expression of [
+      '$eval("1")',
+      '$now()',
+      '$millis()',
+      '$random()',
+      '$pad("x", 8)',
+      '($f := $now; $f())',
+      '($f := $uppercase; $f("x"))',
+    ]) {
       try {
         validateProviderBindingTransform(transform(expression));
-      } catch (err) {
-        expect(err).toBeInstanceOf(ProviderBindingTransformError);
-        expect((err as ProviderBindingTransformError).code).toBe('TRANSFORM_FUNCTION_DISALLOWED');
-        expect((err as Error).message).toBe('TRANSFORM_FUNCTION_DISALLOWED');
-        expect((err as Error).message).not.toContain(expression);
+        throw new Error('expected policy failure');
+      } catch (error) {
+        expect(error).toBeInstanceOf(ProviderBindingTransformError);
+        expect((error as ProviderBindingTransformError).code).toBe(
+          'TRANSFORM_FUNCTION_DISALLOWED'
+        );
+        expect((error as Error).message).not.toContain(expression);
       }
     }
   });
 
-  test('rejects an aliased disallowed function call', () => {
-    expect(() =>
-      validateProviderBindingTransform(transform('($f := $now; $f())'))
-    ).toThrow(/TRANSFORM_FUNCTION_DISALLOWED/);
+  test('rejects partials, apply, lambdas, transform expressions, and regex AST nodes', () => {
+    for (const expression of [
+      '$string(?)',
+      '"x" ~> $uppercase()',
+      'function($x){$x}',
+      'payload ~> |foo|{bar: 1}|',
+      '$contains(eventType, /run/)',
+    ]) {
+      expect(() => validateProviderBindingTransform(transform(expression))).toThrow(
+        /TRANSFORM_AST_DISALLOWED/
+      );
+    }
   });
 
-  test('rejects an unknown direct function call', () => {
-    expect(() =>
-      validateProviderBindingTransform(transform('$pad("x", 8)'))
-    ).toThrow(/TRANSFORM_FUNCTION_DISALLOWED/);
-  });
-
-  test('rejects partial application, function application, lambdas, transform expressions, and regex nodes', () => {
-    expect(() =>
-      validateProviderBindingTransform(transform('$string(?)'))
-    ).toThrow(/TRANSFORM_AST_DISALLOWED/);
-    expect(() =>
-      validateProviderBindingTransform(transform('"x" ~> $uppercase()'))
-    ).toThrow(/TRANSFORM_AST_DISALLOWED/);
-    expect(() =>
-      validateProviderBindingTransform(transform('function($x){$x}'))
-    ).toThrow(/TRANSFORM_AST_DISALLOWED/);
-    expect(() =>
-      validateProviderBindingTransform(transform('payload ~> |foo|{bar: 1}|'))
-    ).toThrow(/TRANSFORM_AST_DISALLOWED/);
-    expect(() =>
-      validateProviderBindingTransform(transform('$contains(eventType, /run/)'))
-    ).toThrow(/TRANSFORM_AST_DISALLOWED/);
-  });
-
-  test('rejects an uncompilable expression without leaking token text', () => {
+  test('classifies syntax failures without token text', () => {
     try {
       validateProviderBindingTransform(transform('{'));
       throw new Error('expected compile failure');
-    } catch (err) {
-      expect(err).toBeInstanceOf(ProviderBindingTransformError);
-      expect((err as ProviderBindingTransformError).code).toBe('TRANSFORM_COMPILE_FAILED');
-      expect((err as Error).message).toBe('TRANSFORM_COMPILE_FAILED');
-      expect((err as Error).message).not.toContain('{');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ProviderBindingTransformError);
+      expect((error as ProviderBindingTransformError).code).toBe('TRANSFORM_COMPILE_FAILED');
+      expect((error as Error).message).toBe('TRANSFORM_COMPILE_FAILED');
+      expect((error as Error).message).not.toContain('{');
     }
   });
 });
 ```
 
-- [ ] **Step 2: Run the tests and verify they fail**
+- [ ] **Step 2: Run the test and verify the missing module failure**
 
-Run:
+Run from `packages/core`:
 
 ```bash
-cd packages/core
 bun test src/events/provider-binding-transform.test.ts
 ```
 
-Expected: FAIL because `./provider-binding-transform` does not exist.
+Expected: FAIL with `Cannot find module './provider-binding-transform'`.
 
-- [ ] **Step 3: Write the error type, compiler, and AST visitor**
+- [ ] **Step 3: Add JSONata and implement normalization plus AST validation**
 
-Create `packages/core/src/events/provider-binding-transform.ts`:
+Run once from the repository root:
+
+```bash
+bun add jsonata@2.2.2 --filter @archon/core
+```
+
+Create `packages/core/src/events/provider-binding-transform.ts` with these declarations and policy helpers:
 
 ```ts
 import jsonata from 'jsonata';
-import type { ProviderBindingTransform } from '../schemas/provider-binding-transform';
+import {
+  JSONATA_EXPRESSION_MAX_BYTES,
+  providerBindingTransformSchema,
+  type ProviderBindingTransform,
+} from '../schemas/provider-binding-transform';
 
 export const TRANSFORM_ERROR_CODES = [
   'TRANSFORM_CONFIG_INVALID',
@@ -393,12 +394,27 @@ export class ProviderBindingTransformError extends Error {
 }
 
 export function isProviderBindingTransformError(
-  err: unknown
-): err is ProviderBindingTransformError {
-  return err instanceof ProviderBindingTransformError;
+  error: unknown
+): error is ProviderBindingTransformError {
+  return error instanceof ProviderBindingTransformError;
 }
 
-const ALLOWED_FUNCTIONS = new Set([
+function utf8Bytes(value: string): number {
+  return new TextEncoder().encode(value).length;
+}
+
+export function normalizeProviderBindingTransform(value: unknown): ProviderBindingTransform {
+  const parsed = providerBindingTransformSchema.safeParse(value);
+  if (
+    !parsed.success ||
+    utf8Bytes(parsed.data.expression) > JSONATA_EXPRESSION_MAX_BYTES
+  ) {
+    throw new ProviderBindingTransformError('TRANSFORM_CONFIG_INVALID');
+  }
+  return parsed.data;
+}
+
+const ALLOWED_FUNCTIONS = new Set<string>([
   'string',
   'length',
   'substring',
@@ -433,48 +449,51 @@ const ALLOWED_FUNCTIONS = new Set([
   'distinct',
 ]);
 
+const DISALLOWED_AST_TYPES = new Set<string>([
+  'partial',
+  'lambda',
+  'transform',
+  'apply',
+  'regex',
+  'regexp',
+]);
+
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function walkAst(node: unknown, seen: WeakSet<object>): void {
-  if (!isRecord(node) && !Array.isArray(node)) return;
-  if (isRecord(node)) {
-    if (seen.has(node)) return;
-    seen.add(node);
-    const type = node.type;
-    if (type === 'function') {
-      const procedure = node.procedure;
-      if (
-        !isRecord(procedure) ||
-        procedure.type !== 'variable' ||
-        typeof procedure.value !== 'string' ||
-        !ALLOWED_FUNCTIONS.has(procedure.value)
-      ) {
-        throw new ProviderBindingTransformError('TRANSFORM_FUNCTION_DISALLOWED');
-      }
-    }
-    if (
-      type === 'partial' ||
-      type === 'lambda' ||
-      type === 'transform' ||
-      type === 'apply' ||
-      type === 'regex' ||
-      type === 'regexp'
-    ) {
-      throw new ProviderBindingTransformError('TRANSFORM_AST_DISALLOWED');
-    }
-    for (const value of Object.values(node)) {
-      walkAst(value, seen);
-    }
+function visitAst(value: unknown, seen: WeakSet<object>): void {
+  if (Array.isArray(value)) {
+    if (seen.has(value)) return;
+    seen.add(value);
+    for (const item of value) visitAst(item, seen);
     return;
   }
-  for (const value of node) {
-    walkAst(value, seen);
+  if (!isRecord(value)) return;
+  if (seen.has(value)) return;
+  seen.add(value);
+
+  const type = value.type;
+  if (typeof type === 'string' && DISALLOWED_AST_TYPES.has(type)) {
+    throw new ProviderBindingTransformError('TRANSFORM_AST_DISALLOWED');
   }
+  if (type === 'function') {
+    const procedure = value.procedure;
+    if (
+      !isRecord(procedure) ||
+      procedure.type !== 'variable' ||
+      typeof procedure.value !== 'string' ||
+      !ALLOWED_FUNCTIONS.has(procedure.value)
+    ) {
+      throw new ProviderBindingTransformError('TRANSFORM_FUNCTION_DISALLOWED');
+    }
+  }
+  for (const nested of Object.values(value)) visitAst(nested, seen);
 }
 
-export function compileProviderBindingTransform(transform: ProviderBindingTransform): jsonata.Expression {
+export function compileProviderBindingTransform(
+  transform: ProviderBindingTransform
+): jsonata.Expression {
   let compiled: jsonata.Expression;
   try {
     compiled = jsonata(transform.expression, {
@@ -485,7 +504,7 @@ export function compileProviderBindingTransform(transform: ProviderBindingTransf
   } catch {
     throw new ProviderBindingTransformError('TRANSFORM_COMPILE_FAILED');
   }
-  walkAst(compiled.ast(), new WeakSet<object>());
+  visitAst(compiled.ast(), new WeakSet<object>());
   return compiled;
 }
 
@@ -494,33 +513,29 @@ export function validateProviderBindingTransform(transform: ProviderBindingTrans
 }
 ```
 
-In `packages/core/package.json`, append `&& bun test src/events/provider-binding-transform.test.ts` after the existing `src/events/workflow-event-envelope.test.ts` invocation.
+Add a separate `&& bun test src/events/provider-binding-transform.test.ts` segment immediately after the existing workflow-envelope test segment in `packages/core/package.json`.
 
-- [ ] **Step 4: Run the tests and verify they pass**
+- [ ] **Step 4: Run the AST tests and type check**
 
-Run:
+Run from `packages/core`:
 
 ```bash
-cd packages/core
 bun test src/events/provider-binding-transform.test.ts
+bun x tsc --noEmit
 ```
 
-Expected: PASS.
+Expected: both commands exit `0`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add packages/core/src/events/provider-binding-transform.ts packages/core/src/events/provider-binding-transform.test.ts packages/core/package.json
-git commit -m "$(cat <<'EOF'
-feat(core): validate provider-binding JSONata AST policy
-
-EOF
-)"
+git add packages/core/package.json bun.lock packages/core/src/events/provider-binding-transform.ts packages/core/src/events/provider-binding-transform.test.ts
+git commit -m "feat(core): validate provider-binding JSONata policy"
 ```
 
 ---
 
-### Task 3: Evaluate, Result Validation, And Identity Path
+### Task 3: Transform Evaluation, JSON Result Validation, And Identity Bytes
 
 **Files:**
 
@@ -531,29 +546,19 @@ EOF
 **Interfaces:**
 
 - Consumes: `compileProviderBindingTransform()` from Task 2 and `WorkflowEventEnvelope` from `packages/core/src/events/workflow-event-envelope.ts`.
-- Produces:
+- Produces: `TransformBodyResult`, `assertJsonTransformResult()`, and `transformWorkflowEventBody()`.
+
+- [ ] **Step 1: Add failing evaluator and result-validation tests**
+
+Append these imports and tests to `packages/core/src/events/provider-binding-transform.test.ts`:
 
 ```ts
-export interface TransformBodyResult {
-  body: string;
-  outputBytes: number;
-  engine: 'identity' | 'jsonata';
-  durationMs: number;
-}
-
-export async function transformWorkflowEventBody(
-  envelope: WorkflowEventEnvelope,
-  transform: ProviderBindingTransform | null
-): Promise<TransformBodyResult>;
-```
-
-- [ ] **Step 1: Write the failing evaluation tests**
-
-Append to `packages/core/src/events/provider-binding-transform.test.ts`:
-
-```ts
+import { spyOn } from 'bun:test';
 import { buildWorkflowEventEnvelope } from './workflow-event-envelope';
-import { transformWorkflowEventBody } from './provider-binding-transform';
+import {
+  assertJsonTransformResult,
+  transformWorkflowEventBody,
+} from './provider-binding-transform';
 
 const envelope = buildWorkflowEventEnvelope({
   eventId: 'evt-1',
@@ -571,54 +576,30 @@ const envelope = buildWorkflowEventEnvelope({
 });
 
 describe('transformWorkflowEventBody', () => {
-  test('returns current JSON.stringify(envelope) bytes for identity behavior', async () => {
+  test('preserves the exact current identity serialization', async () => {
     const result = await transformWorkflowEventBody(envelope, null);
-    expect(result.engine).toBe('identity');
-    expect(result.body).toBe(JSON.stringify(envelope));
-    expect(result.outputBytes).toBe(new TextEncoder().encode(result.body).length);
+    expect(result).toEqual({
+      body: JSON.stringify(envelope),
+      outputBytes: new TextEncoder().encode(JSON.stringify(envelope)).length,
+      engine: 'identity',
+      durationMs: expect.any(Number),
+    });
   });
 
-  test('returns exact serialized JSON and its byte length', async () => {
+  test('returns exact JSONata serialization and UTF-8 byte length', async () => {
     const result = await transformWorkflowEventBody(
       envelope,
-      transform('{ "eventType": eventType, "ok": true }')
+      transform('{ "eventType": eventType, "value": "é" }')
     );
-    expect(result.engine).toBe('jsonata');
-    expect(result.body).toBe('{"eventType":"workflow.run.started","ok":true}');
+    expect(result.body).toBe('{"eventType":"workflow.run.started","value":"é"}');
     expect(result.outputBytes).toBe(new TextEncoder().encode(result.body).length);
+    expect(result.engine).toBe('jsonata');
   });
 
-  test('rejects a scalar top-level result', async () => {
-    await expect(transformWorkflowEventBody(envelope, transform('eventType'))).rejects.toThrow(
-      /TRANSFORM_RESULT_INVALID/
-    );
-  });
-
-  test('rejects undefined, functions, symbols, bigints, non-finite numbers, sparse arrays, cycles, and non-plain objects', async () => {
-    const { assertJsonTransformResult } = await import('./provider-binding-transform');
-    expect(() => assertJsonTransformResult(undefined)).toThrow(/TRANSFORM_RESULT_INVALID/);
-    expect(() => assertJsonTransformResult(() => 'x')).toThrow(/TRANSFORM_RESULT_INVALID/);
-    expect(() => assertJsonTransformResult(Symbol('x'))).toThrow(/TRANSFORM_RESULT_INVALID/);
-    expect(() => assertJsonTransformResult(1n)).toThrow(/TRANSFORM_RESULT_INVALID/);
-    expect(() => assertJsonTransformResult(Number.NaN)).toThrow(/TRANSFORM_RESULT_INVALID/);
-    expect(() => assertJsonTransformResult(Number.POSITIVE_INFINITY)).toThrow(
-      /TRANSFORM_RESULT_INVALID/
-    );
-    expect(() => assertJsonTransformResult(Number.NEGATIVE_INFINITY)).toThrow(
-      /TRANSFORM_RESULT_INVALID/
-    );
-    const sparse: unknown[] = [];
-    sparse[1] = 'x';
-    expect(() => assertJsonTransformResult(sparse)).toThrow(/TRANSFORM_RESULT_INVALID/);
-    const cyclic: Record<string, unknown> = {};
-    cyclic.self = cyclic;
-    expect(() => assertJsonTransformResult(cyclic)).toThrow(/TRANSFORM_RESULT_INVALID/);
-    expect(() => assertJsonTransformResult(new Date('2026-07-25T00:00:00.000Z'))).toThrow(
-      /TRANSFORM_RESULT_INVALID/
-    );
-  });
-
-  test('rejects output above the configured UTF-8 limit', async () => {
+  test('rejects scalar top-level output and UTF-8 output over the configured limit', async () => {
+    await expect(transformWorkflowEventBody(envelope, transform('eventType'))).rejects.toMatchObject({
+      code: 'TRANSFORM_RESULT_INVALID',
+    });
     await expect(
       transformWorkflowEventBody(
         envelope,
@@ -628,10 +609,34 @@ describe('transformWorkflowEventBody', () => {
           maxOutputBytes: 5,
         })
       )
-    ).rejects.toThrow(/TRANSFORM_OUTPUT_TOO_LARGE/);
+    ).rejects.toMatchObject({ code: 'TRANSFORM_OUTPUT_TOO_LARGE' });
   });
 
-  test('enforces timeout, stack, and sequence limits with deterministic fixtures', async () => {
+  test('rejects every non-JSON result shape and accepts repeated non-cyclic references', () => {
+    for (const invalid of [
+      undefined,
+      () => 'x',
+      Symbol('x'),
+      1n,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      new Date('2026-07-25T00:00:00.000Z'),
+    ]) {
+      expect(() => assertJsonTransformResult(invalid)).toThrow(/TRANSFORM_RESULT_INVALID/);
+    }
+    const sparse: unknown[] = [];
+    sparse[1] = 'x';
+    expect(() => assertJsonTransformResult(sparse)).toThrow(/TRANSFORM_RESULT_INVALID/);
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    expect(() => assertJsonTransformResult(cyclic)).toThrow(/TRANSFORM_RESULT_INVALID/);
+    const shared = { value: 'ok' };
+    expect(() => assertJsonTransformResult({ left: shared, right: shared })).not.toThrow();
+    expect(() => assertJsonTransformResult(Object.assign(Object.create(null), { ok: true }))).not.toThrow();
+  });
+
+  test('maps deterministic sequence, stack, and timeout guardrail failures', async () => {
     await expect(
       transformWorkflowEventBody(
         envelope,
@@ -654,42 +659,45 @@ describe('transformWorkflowEventBody', () => {
       )
     ).rejects.toMatchObject({ code: 'TRANSFORM_STACK_LIMIT' });
 
-    await expect(
-      transformWorkflowEventBody(
-        envelope,
-        normalizeProviderBindingTransform({
-          engine: 'jsonata',
-          expression: '{ "n": [1..4000].$string($length($string($))) }',
-          timeoutMs: 1,
-          maxSequenceSize: 100_000,
-        })
-      )
-    ).rejects.toMatchObject({ code: 'TRANSFORM_TIMEOUT' });
+    let now = 0;
+    const dateNow = spyOn(Date, 'now').mockImplementation(() => {
+      now += 10;
+      return now;
+    });
+    try {
+      await expect(
+        transformWorkflowEventBody(
+          envelope,
+          normalizeProviderBindingTransform({
+            engine: 'jsonata',
+            expression: '{ "n": [1..20] }',
+            timeoutMs: 1,
+            maxSequenceSize: 100,
+          })
+        )
+      ).rejects.toMatchObject({ code: 'TRANSFORM_TIMEOUT' });
+    } finally {
+      dateNow.mockRestore();
+    }
   });
 });
 ```
 
-If the stack or timeout fixture does not trip JSONata on the local machine, keep the fixture and add a direct classifier assertion with `{ code: 'D1011' }` or `{ code: 'D1012' }`.
-Do not weaken the sequence fixture.
+- [ ] **Step 2: Run the evaluator test and verify the missing exports fail**
 
-- [ ] **Step 2: Run the tests and verify they fail**
-
-Run:
+Run from `packages/core`:
 
 ```bash
-cd packages/core
 bun test src/events/provider-binding-transform.test.ts
 ```
 
-Expected: FAIL because `transformWorkflowEventBody` and `assertJsonTransformResult` are not exported.
+Expected: FAIL because `assertJsonTransformResult` and `transformWorkflowEventBody` are not exported.
 
-- [ ] **Step 3: Implement evaluation and JSON-result validation**
+- [ ] **Step 3: Implement result validation, safe classification, and serialization**
 
-Add these exports to `packages/core/src/events/provider-binding-transform.ts`:
+Add `import type { WorkflowEventEnvelope } from './workflow-event-envelope';` and the following code to `packages/core/src/events/provider-binding-transform.ts`:
 
 ```ts
-import type { WorkflowEventEnvelope } from './workflow-event-envelope';
-
 export interface TransformBodyResult {
   body: string;
   outputBytes: number;
@@ -697,44 +705,61 @@ export interface TransformBodyResult {
   durationMs: number;
 }
 
-export function assertJsonTransformResult(value: unknown, seen = new WeakSet<object>()): void {
-  if (value === undefined || typeof value === 'function' || typeof value === 'symbol' || typeof value === 'bigint') {
+export function assertJsonTransformResult(
+  value: unknown,
+  activePath = new WeakSet<object>()
+): void {
+  if (
+    value === undefined ||
+    typeof value === 'function' ||
+    typeof value === 'symbol' ||
+    typeof value === 'bigint'
+  ) {
     throw new ProviderBindingTransformError('TRANSFORM_RESULT_INVALID');
   }
   if (typeof value === 'number' && !Number.isFinite(value)) {
     throw new ProviderBindingTransformError('TRANSFORM_RESULT_INVALID');
   }
-  if (value === null || typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number') {
+  if (
+    value === null ||
+    typeof value === 'string' ||
+    typeof value === 'boolean' ||
+    typeof value === 'number'
+  ) {
     return;
   }
-  if (typeof value !== 'object') {
+  if (typeof value !== 'object' || activePath.has(value)) {
     throw new ProviderBindingTransformError('TRANSFORM_RESULT_INVALID');
   }
-  if (seen.has(value)) {
-    throw new ProviderBindingTransformError('TRANSFORM_RESULT_INVALID');
-  }
-  seen.add(value);
-  if (Array.isArray(value)) {
-    for (let index = 0; index < value.length; index += 1) {
-      if (!Object.prototype.hasOwnProperty.call(value, index)) {
-        throw new ProviderBindingTransformError('TRANSFORM_RESULT_INVALID');
+
+  activePath.add(value);
+  try {
+    if (Array.isArray(value)) {
+      for (let index = 0; index < value.length; index += 1) {
+        if (!Object.prototype.hasOwnProperty.call(value, index)) {
+          throw new ProviderBindingTransformError('TRANSFORM_RESULT_INVALID');
+        }
+        assertJsonTransformResult(value[index], activePath);
       }
-      assertJsonTransformResult(value[index], seen);
+      return;
     }
-    return;
-  }
-  const proto = Object.getPrototypeOf(value);
-  if (proto !== Object.prototype && proto !== null) {
-    throw new ProviderBindingTransformError('TRANSFORM_RESULT_INVALID');
-  }
-  for (const nested of Object.values(value as Record<string, unknown>)) {
-    assertJsonTransformResult(nested, seen);
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new ProviderBindingTransformError('TRANSFORM_RESULT_INVALID');
+    }
+    for (const nested of Object.values(value as Record<string, unknown>)) {
+      assertJsonTransformResult(nested, activePath);
+    }
+  } finally {
+    activePath.delete(value);
   }
 }
 
-function classifyJsonataError(err: unknown): TransformErrorCode {
+function classifyJsonataError(error: unknown): TransformErrorCode {
   const code =
-    typeof err === 'object' && err !== null && 'code' in err ? String((err as { code: unknown }).code) : '';
+    typeof error === 'object' && error !== null && 'code' in error
+      ? String((error as { code: unknown }).code)
+      : '';
   if (code === 'D1012') return 'TRANSFORM_TIMEOUT';
   if (code === 'D1011') return 'TRANSFORM_STACK_LIMIT';
   if (code === 'D2015') return 'TRANSFORM_SEQUENCE_LIMIT';
@@ -750,9 +775,9 @@ export async function transformWorkflowEventBody(
     const body = JSON.stringify(envelope);
     return {
       body,
-      outputBytes: new TextEncoder().encode(body).length,
+      outputBytes: utf8Bytes(body),
       engine: 'identity',
-      durationMs: Date.now() - startedAt,
+      durationMs: Math.max(0, Date.now() - startedAt),
     };
   }
 
@@ -760,17 +785,22 @@ export async function transformWorkflowEventBody(
   let raw: unknown;
   try {
     raw = await compiled.evaluate(envelope);
-  } catch (err) {
-    if (isProviderBindingTransformError(err)) throw err;
-    throw new ProviderBindingTransformError(classifyJsonataError(err));
+  } catch (error) {
+    throw new ProviderBindingTransformError(classifyJsonataError(error));
   }
-
   if (raw === null || typeof raw !== 'object') {
     throw new ProviderBindingTransformError('TRANSFORM_RESULT_INVALID');
   }
-  assertJsonTransformResult(raw);
-  const body = JSON.stringify(raw);
-  const outputBytes = new TextEncoder().encode(body).length;
+
+  let body: string;
+  try {
+    assertJsonTransformResult(raw);
+    body = JSON.stringify(raw);
+  } catch (error) {
+    if (isProviderBindingTransformError(error)) throw error;
+    throw new ProviderBindingTransformError('TRANSFORM_RESULT_INVALID');
+  }
+  const outputBytes = utf8Bytes(body);
   if (outputBytes > transform.maxOutputBytes) {
     throw new ProviderBindingTransformError('TRANSFORM_OUTPUT_TOO_LARGE');
   }
@@ -778,38 +808,34 @@ export async function transformWorkflowEventBody(
     body,
     outputBytes,
     engine: 'jsonata',
-    durationMs: Date.now() - startedAt,
+    durationMs: Math.max(0, Date.now() - startedAt),
   };
 }
 ```
 
-Add `"./events/*": "./src/events/*.ts"` to `packages/core/package.json` `exports`.
+Add `"./events/*": "./src/events/*.ts"` to `packages/core/package.json` next to the existing schema wildcard export.
 
-- [ ] **Step 4: Run the tests and verify they pass**
+- [ ] **Step 4: Run the transform tests and type check**
 
-Run:
+Run from `packages/core`:
 
 ```bash
-cd packages/core
-bun test src/events/provider-binding-transform.test.ts src/events/workflow-event-envelope.test.ts
+bun test src/events/provider-binding-transform.test.ts
+bun x tsc --noEmit
 ```
 
-Expected: PASS.
+Expected: both commands exit `0`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add packages/core/src/events/provider-binding-transform.ts packages/core/src/events/provider-binding-transform.test.ts packages/core/package.json
-git commit -m "$(cat <<'EOF'
-feat(core): evaluate provider-binding outbound JSON transforms
-
-EOF
-)"
+git commit -m "feat(core): evaluate outbound JSONata transforms"
 ```
 
 ---
 
-### Task 4: Canonical Envelope Zod Schema
+### Task 4: Strict Canonical Envelope Zod Schema
 
 **Files:**
 
@@ -818,20 +844,18 @@ EOF
 
 **Interfaces:**
 
-- Consumes: `externalWorkflowEventTypeSchema` and the existing per-event payload schemas.
-- Produces: `workflowEventEnvelopeSchema` and `export type WorkflowEventEnvelope = z.infer<typeof workflowEventEnvelopeSchema>`.
-- Preserves: `buildWorkflowEventEnvelope()` key insertion order and the current identity `JSON.stringify` bytes.
+- Consumes: `externalWorkflowEventTypeSchema` and the existing `workflowEventPayloadSchemas` map.
+- Produces: `workflowEventEnvelopeSchema` and `WorkflowEventEnvelope = z.infer<typeof workflowEventEnvelopeSchema>`.
+- Preserves: `buildWorkflowEventEnvelope()` output keys, insertion order, and identity bytes.
 
-- [ ] **Step 1: Write the failing envelope schema tests**
+- [ ] **Step 1: Add failing canonical-envelope tests**
 
-Append to `packages/core/src/events/workflow-event-envelope.test.ts`:
+Append these tests to `packages/core/src/events/workflow-event-envelope.test.ts` and import `workflowEventEnvelopeSchema`:
 
 ```ts
-import { workflowEventEnvelopeSchema } from './workflow-event-envelope';
-
 test('workflowEventEnvelopeSchema selects the payload schema from eventType', () => {
   const envelope = buildWorkflowEventEnvelope({
-    eventId: 'evt-1',
+    eventId: 'evt-schema',
     eventType: 'workflow.run.started',
     occurredAt: '2026-07-25T00:00:00.000Z',
     run,
@@ -841,14 +865,30 @@ test('workflowEventEnvelopeSchema selects the payload schema from eventType', ()
   });
   expect(workflowEventEnvelopeSchema.parse(envelope).eventType).toBe('workflow.run.started');
   expect(() =>
+    workflowEventEnvelopeSchema.parse({ ...envelope, eventType: 'workflow.run.completed' })
+  ).toThrow();
+});
+
+test('workflowEventEnvelopeSchema rejects non-canonical top-level and ref keys', () => {
+  const envelope = buildWorkflowEventEnvelope({
+    eventId: 'evt-strict',
+    eventType: 'workflow.run.started',
+    occurredAt: '2026-07-25T00:00:00.000Z',
+    run,
+    codebase: baseCodebase,
+    binding,
+    payload: payloads['workflow.run.started'],
+  });
+  expect(() => workflowEventEnvelopeSchema.parse({ ...envelope, extra: true })).toThrow();
+  expect(() =>
     workflowEventEnvelopeSchema.parse({
       ...envelope,
-      eventType: 'workflow.run.completed',
+      bindingRef: { ...envelope.bindingRef, secret: 'must-not-pass' },
     })
   ).toThrow();
 });
 
-test('identity serialized body matches the current literal output', () => {
+test('identity serialization remains byte-identical to the current literal shape', () => {
   const envelope = buildWorkflowEventEnvelope({
     eventId: 'evt-identity',
     eventType: 'workflow.run.started',
@@ -859,82 +899,78 @@ test('identity serialized body matches the current literal output', () => {
     payload: payloads['workflow.run.started'],
   });
   expect(JSON.stringify(envelope)).toBe(
-    JSON.stringify({
-      schemaVersion: 'workflow-event-envelope.v1',
-      provider: 'archon',
-      eventId: 'evt-identity',
-      eventType: 'workflow.run.started',
-      occurredAt: '2026-07-25T00:00:00.000Z',
-      bindingRef: {
-        provider: 'archon',
-        name: 'workflow-engine-primary',
-        bindingId: 'wpb_archon::workflow_engine_primary',
-        projectRef: 'project:cb-1',
-      },
-      workflowRunRef: {
-        provider: 'archon',
-        runId: 'run-1',
-        workflowName: 'bmad-dev-story',
-        projectRef: 'project:cb-1',
-      },
-      projectRef: {
-        id: 'cb-1',
-        codebaseRef: 'workflow-engine',
-        repositoryPath: '/workspace/workflow-engine',
-        defaultBranch: 'dev',
-      },
-      idempotencyKey: 'archon:workflow-engine-primary:evt-identity',
-      payload: { state: 'running', startedAt: '2026-07-25T00:00:00.000Z' },
-    })
+    '{"schemaVersion":"workflow-event-envelope.v1","provider":"archon","eventId":"evt-identity","eventType":"workflow.run.started","occurredAt":"2026-07-25T00:00:00.000Z","bindingRef":{"provider":"archon","name":"workflow-engine-primary","bindingId":"wpb_archon::workflow_engine_primary","projectRef":"project:cb-1"},"workflowRunRef":{"provider":"archon","runId":"run-1","workflowName":"bmad-dev-story","projectRef":"project:cb-1"},"projectRef":{"id":"cb-1","codebaseRef":"workflow-engine","repositoryPath":"/workspace/workflow-engine","defaultBranch":"dev"},"idempotencyKey":"archon:workflow-engine-primary:evt-identity","payload":{"state":"running","startedAt":"2026-07-25T00:00:00.000Z"}}'
   );
 });
 ```
 
-- [ ] **Step 2: Run the tests and verify they fail**
+- [ ] **Step 2: Run the envelope test and verify the missing export fails**
 
-Run:
+Run from `packages/core`:
 
 ```bash
-cd packages/core
 bun test src/events/workflow-event-envelope.test.ts
 ```
 
 Expected: FAIL because `workflowEventEnvelopeSchema` is not exported.
 
-- [ ] **Step 3: Replace the hand-written interface with the Zod schema**
+- [ ] **Step 3: Remove the parallel envelope interface and insert the schema after its dependencies**
 
-In `packages/core/src/events/workflow-event-envelope.ts`, keep the payload map and builder.
-Replace `export interface WorkflowEventEnvelope { ... }` with:
+Change the workflow-event import in `packages/core/src/events/workflow-event-envelope.ts` to import both the schema value and type:
 
 ```ts
+import {
+  externalWorkflowEventTypeSchema,
+  type ExternalWorkflowEventType,
+} from '../schemas/workflow-event';
+```
+
+Delete only `export interface WorkflowEventEnvelope { ... }` from its current location.
+Insert the following schema block immediately after the complete `workflowEventPayloadSchemas` declaration and before `buildWorkflowEventEnvelope()`.
+This location is required because the schema uses `nonEmptyStringSchema`, `dateTimeSchema`, and `workflowEventPayloadSchemas`, all of which are `const` values that must already be initialized.
+
+```ts
+const bindingRefSchema = z
+  .object({
+    provider: nonEmptyStringSchema,
+    name: nonEmptyStringSchema,
+    bindingId: nonEmptyStringSchema,
+    projectRef: nonEmptyStringSchema,
+  })
+  .strict();
+
+const workflowRunRefSchema = z
+  .object({
+    provider: nonEmptyStringSchema,
+    runId: nonEmptyStringSchema,
+    workflowName: nonEmptyStringSchema,
+    projectRef: nonEmptyStringSchema,
+  })
+  .strict();
+
+const projectRefSchema = z
+  .object({
+    id: nonEmptyStringSchema,
+    codebaseRef: nonEmptyStringSchema,
+    repositoryPath: nonEmptyStringSchema,
+    defaultBranch: nonEmptyStringSchema.optional(),
+  })
+  .strict();
+
 export const workflowEventEnvelopeSchema = z
   .object({
     schemaVersion: z.literal('workflow-event-envelope.v1'),
-    provider: z.string().min(1),
-    eventId: z.string().min(1),
+    provider: nonEmptyStringSchema,
+    eventId: nonEmptyStringSchema,
     eventType: externalWorkflowEventTypeSchema,
     occurredAt: dateTimeSchema,
-    bindingRef: z.object({
-      provider: z.string().min(1),
-      name: z.string().min(1),
-      bindingId: z.string().min(1),
-      projectRef: z.string().min(1),
-    }),
-    workflowRunRef: z.object({
-      provider: z.string().min(1),
-      runId: z.string().min(1),
-      workflowName: z.string().min(1),
-      projectRef: z.string().min(1),
-    }),
-    projectRef: z.object({
-      id: z.string().min(1),
-      codebaseRef: z.string().min(1),
-      repositoryPath: z.string().min(1),
-      defaultBranch: z.string().min(1).optional(),
-    }),
-    idempotencyKey: z.string().min(1),
+    bindingRef: bindingRefSchema,
+    workflowRunRef: workflowRunRefSchema,
+    projectRef: projectRefSchema,
+    idempotencyKey: nonEmptyStringSchema,
     payload: z.record(z.string(), z.unknown()),
   })
+  .strict()
   .superRefine((value, ctx) => {
     const parsed = workflowEventPayloadSchemas[value.eventType].safeParse(value.payload);
     if (parsed.success) return;
@@ -950,34 +986,31 @@ export const workflowEventEnvelopeSchema = z
 export type WorkflowEventEnvelope = z.infer<typeof workflowEventEnvelopeSchema>;
 ```
 
-Keep `buildWorkflowEventEnvelope()` returning the same keys in the same insertion order.
-Do not construct the builder result through `workflowEventEnvelopeSchema.parse()` if that would change key order.
+Keep `BuildWorkflowEventEnvelopeInput` and `buildWorkflowEventEnvelope()` unchanged.
+Do not construct builder output by calling `.parse()`, because the builder already validates the payload and must preserve its existing insertion order.
 
-- [ ] **Step 4: Run the tests and verify they pass**
+- [ ] **Step 4: Run envelope and transform tests separately**
 
-Run:
+Run from `packages/core`:
 
 ```bash
-cd packages/core
-bun test src/events/workflow-event-envelope.test.ts src/events/provider-binding-transform.test.ts
+bun test src/events/workflow-event-envelope.test.ts
+bun test src/events/provider-binding-transform.test.ts
+bun x tsc --noEmit
 ```
 
-Expected: PASS.
+Expected: all commands exit `0`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add packages/core/src/events/workflow-event-envelope.ts packages/core/src/events/workflow-event-envelope.test.ts
-git commit -m "$(cat <<'EOF'
-feat(core): derive workflow-event-envelope.v1 from Zod
-
-EOF
-)"
+git commit -m "feat(core): validate the canonical workflow event envelope"
 ```
 
 ---
 
-### Task 5: Receiver Header Validation
+### Task 5: Private Receiver Header Validation And Redacted Evidence
 
 **Files:**
 
@@ -987,23 +1020,7 @@ EOF
 
 **Interfaces:**
 
-- Consumes: no binding or outbox types.
-- Produces:
-
-```ts
-export type DeliveryHeaders = Record<string, string>;
-export const UNSAFE_DELIVERY_HEADERS = 'unsafe-delivery-headers';
-export function normalizeDeliveryHeaders(value: unknown): DeliveryHeaders;
-export function validateDeliveryHeaders(headers: DeliveryHeaders): void;
-export function mergeDeliveryHeaders(
-  archonHeaders: Record<string, string>,
-  receiverHeaders: DeliveryHeaders
-): Record<string, string>;
-export function buildDeliveryHeaderEvidence(
-  archonHeaders: Record<string, string>,
-  receiverHeaders: DeliveryHeaders
-): Record<string, string>;
-```
+- Produces: `deliveryHeadersSchema`, `DeliveryHeaders`, `UNSAFE_DELIVERY_HEADERS`, `normalizeDeliveryHeaders()`, `validateDeliveryHeaders()`, `mergeDeliveryHeaders()`, and `buildDeliveryHeaderEvidence()`.
 
 - [ ] **Step 1: Write the failing header tests**
 
@@ -1026,112 +1043,209 @@ const archonHeaders = {
 };
 
 describe('delivery headers', () => {
-  test('accepts a valid private header map', () => {
+  test('accepts a valid string record', () => {
     expect(normalizeDeliveryHeaders({ Authorization: 'Bearer secret' })).toEqual({
       Authorization: 'Bearer secret',
     });
   });
 
-  test('rejects reserved names without case sensitivity', () => {
-    expect(() => validateDeliveryHeaders({ 'content-type': 'text/plain' })).toThrow(
-      /unsafe-delivery-headers/
-    );
-    expect(() => validateDeliveryHeaders({ Host: 'example.com' })).toThrow(
-      /unsafe-delivery-headers/
-    );
+  test('rejects non-string values with a constant non-secret error', () => {
+    try {
+      normalizeDeliveryHeaders({ Authorization: { secret: 'Bearer secret' } });
+      throw new Error('expected validation failure');
+    } catch (error) {
+      expect((error as Error).message).toBe('unsafe-delivery-headers');
+      expect((error as Error).message).not.toContain('Bearer secret');
+    }
   });
 
-  test('rejects invalid names and CR or LF values', () => {
-    expect(() => validateDeliveryHeaders({ 'Bad Name': 'x' })).toThrow(/unsafe-delivery-headers/);
-    expect(() => validateDeliveryHeaders({ Authorization: 'Bearer\r\nsecret' })).toThrow(
-      /unsafe-delivery-headers/
-    );
+  test('rejects every reserved name case-insensitively', () => {
+    for (const name of [
+      'content-type',
+      'X-WEBHOOK-SIGNATURE-V2',
+      'x-webhook-timestamp',
+      'x-request-id',
+      'Host',
+      'Content-Length',
+      'Connection',
+      'Keep-Alive',
+      'Proxy-Authenticate',
+      'Proxy-Authorization',
+      'Proxy-Connection',
+      'TE',
+      'Trailer',
+      'Transfer-Encoding',
+      'Upgrade',
+    ]) {
+      expect(() => validateDeliveryHeaders({ [name]: 'x' })).toThrow(
+        /unsafe-delivery-headers/
+      );
+    }
   });
 
-  test('rejects more than 16 headers and oversize names or values', () => {
-    const many: Record<string, string> = {};
-    for (let index = 0; index < 17; index += 1) many[`X-H${index}`] = 'v';
-    expect(() => validateDeliveryHeaders(many)).toThrow(/unsafe-delivery-headers/);
-    expect(() => validateDeliveryHeaders({ ['X'.repeat(129)]: 'v' })).toThrow(
-      /unsafe-delivery-headers/
-    );
-    expect(() => validateDeliveryHeaders({ Authorization: 'x'.repeat(8193) })).toThrow(
-      /unsafe-delivery-headers/
-    );
+  test('rejects invalid names, line breaks, count, per-field bytes, and aggregate value bytes', () => {
+    expect(() => validateDeliveryHeaders({ 'Bad Name': 'x' })).toThrow();
+    expect(() => validateDeliveryHeaders({ 'Bad\rName': 'x' })).toThrow();
+    expect(() => validateDeliveryHeaders({ Authorization: 'Bearer\nsecret' })).toThrow();
+    expect(() =>
+      validateDeliveryHeaders(
+        Object.fromEntries(Array.from({ length: 17 }, (_, index) => [`X-H${index}`, 'v']))
+      )
+    ).toThrow();
+    expect(() => validateDeliveryHeaders({ ['é'.repeat(65)]: 'v' })).toThrow();
+    expect(() => validateDeliveryHeaders({ Authorization: 'é'.repeat(4_097) })).toThrow();
+    expect(() =>
+      validateDeliveryHeaders({
+        'X-A': 'x'.repeat(8_192),
+        'X-B': 'x'.repeat(8_192),
+        'X-C': 'x'.repeat(8_192),
+        'X-D': 'x'.repeat(8_192),
+        'X-E': 'x',
+      })
+    ).toThrow();
   });
 
-  test('merges receiver headers after Archon-owned headers without replacement', () => {
-    const merged = mergeDeliveryHeaders(archonHeaders, {
+  test('merges valid receiver headers and redacts only their evidence values', () => {
+    expect(mergeDeliveryHeaders(archonHeaders, { Authorization: 'Bearer secret' })).toEqual({
+      ...archonHeaders,
       Authorization: 'Bearer secret',
-      'content-type': 'text/plain',
     });
-    expect(merged['Content-Type']).toBe('application/json');
-    expect(merged.Authorization).toBe('Bearer secret');
-  });
-
-  test('redacts receiver values in attempt evidence and keeps Archon values', () => {
     expect(
       buildDeliveryHeaderEvidence(archonHeaders, { Authorization: 'Bearer secret' })
     ).toEqual({
       ...archonHeaders,
       Authorization: '[REDACTED]',
     });
+    expect(() =>
+      mergeDeliveryHeaders(archonHeaders, { 'content-type': 'text/plain' })
+    ).toThrow(/unsafe-delivery-headers/);
   });
 });
 ```
 
-- [ ] **Step 2: Run the tests and verify they fail**
+- [ ] **Step 2: Run the test and verify the missing module failure**
 
-Run:
+Run from `packages/core`:
 
 ```bash
-cd packages/core
 bun test src/events/delivery-headers.test.ts
 ```
 
-Expected: FAIL because `./delivery-headers` does not exist.
+Expected: FAIL with `Cannot find module './delivery-headers'`.
 
-- [ ] **Step 3: Implement validation, merge, and evidence helpers**
+- [ ] **Step 3: Implement the safe header module**
 
-Create `packages/core/src/events/delivery-headers.ts` with these exact rules from the design:
+Create `packages/core/src/events/delivery-headers.ts`:
 
-- Header names must match `^[!#$%&'*+.^_`|~0-9A-Za-z-]+$`.
-- Names and values must not contain `\r` or `\n`.
-- Compare names without case.
-- Reject reserved names: `Content-Type`, `X-Webhook-Signature-V2`, `X-Webhook-Timestamp`, `X-Request-ID`, `Host`, `Content-Length`, `Connection`, `Keep-Alive`, `Proxy-Authenticate`, `Proxy-Authorization`, `Proxy-Connection`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`.
-- Cap count at 16, name at 128 UTF-8 bytes, value at 8,192 UTF-8 bytes, and all values at 32,768 UTF-8 bytes.
-- `normalizeDeliveryHeaders()` parses `z.record(z.string(), z.string())`, then calls `validateDeliveryHeaders()`.
-- `mergeDeliveryHeaders()` copies Archon headers first, then adds receiver headers whose lower-case names are not already present.
-- `buildDeliveryHeaderEvidence()` copies Archon headers verbatim and sets every receiver name to `[REDACTED]`.
-- Throw `new Error('unsafe-delivery-headers')` and never put a header name or value in the error message.
+```ts
+import { z } from '@hono/zod-openapi';
 
-In `packages/core/package.json`, append `&& bun test src/events/delivery-headers.test.ts` to the events test invocation.
+export const deliveryHeadersSchema = z.record(z.string(), z.string());
+export type DeliveryHeaders = z.infer<typeof deliveryHeadersSchema>;
 
-- [ ] **Step 4: Run the tests and verify they pass**
+export const UNSAFE_DELIVERY_HEADERS = 'unsafe-delivery-headers';
+const HEADER_TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+const RESERVED = new Set(
+  [
+    'Content-Type',
+    'X-Webhook-Signature-V2',
+    'X-Webhook-Timestamp',
+    'X-Request-ID',
+    'Host',
+    'Content-Length',
+    'Connection',
+    'Keep-Alive',
+    'Proxy-Authenticate',
+    'Proxy-Authorization',
+    'Proxy-Connection',
+    'TE',
+    'Trailer',
+    'Transfer-Encoding',
+    'Upgrade',
+  ].map(name => name.toLowerCase())
+);
 
-Run:
+function fail(): never {
+  throw new Error(UNSAFE_DELIVERY_HEADERS);
+}
 
-```bash
-cd packages/core
-bun test src/events/delivery-headers.test.ts
+function utf8Bytes(value: string): number {
+  return new TextEncoder().encode(value).length;
+}
+
+export function validateDeliveryHeaders(headers: DeliveryHeaders): void {
+  const entries = Object.entries(headers);
+  if (entries.length > 16) fail();
+  let totalValueBytes = 0;
+  for (const [name, value] of entries) {
+    const lowerName = name.toLowerCase();
+    if (
+      !HEADER_TOKEN.test(name) ||
+      name.includes('\r') ||
+      name.includes('\n') ||
+      value.includes('\r') ||
+      value.includes('\n') ||
+      RESERVED.has(lowerName) ||
+      utf8Bytes(name) > 128 ||
+      utf8Bytes(value) > 8_192
+    ) {
+      fail();
+    }
+    totalValueBytes += utf8Bytes(value);
+  }
+  if (totalValueBytes > 32_768) fail();
+}
+
+export function normalizeDeliveryHeaders(value: unknown): DeliveryHeaders {
+  const parsed = deliveryHeadersSchema.safeParse(value);
+  if (!parsed.success) fail();
+  validateDeliveryHeaders(parsed.data);
+  return parsed.data;
+}
+
+export function mergeDeliveryHeaders(
+  archonHeaders: Record<string, string>,
+  receiverHeaders: DeliveryHeaders
+): Record<string, string> {
+  validateDeliveryHeaders(receiverHeaders);
+  return { ...archonHeaders, ...receiverHeaders };
+}
+
+export function buildDeliveryHeaderEvidence(
+  archonHeaders: Record<string, string>,
+  receiverHeaders: DeliveryHeaders
+): Record<string, string> {
+  validateDeliveryHeaders(receiverHeaders);
+  return {
+    ...archonHeaders,
+    ...Object.fromEntries(Object.keys(receiverHeaders).map(name => [name, '[REDACTED]'])),
+  };
+}
 ```
 
-Expected: PASS.
+Append a separate `&& bun test src/events/delivery-headers.test.ts` segment after the transform test segment in `packages/core/package.json`.
+
+- [ ] **Step 4: Run header tests and type check**
+
+Run from `packages/core`:
+
+```bash
+bun test src/events/delivery-headers.test.ts
+bun x tsc --noEmit
+```
+
+Expected: both commands exit `0`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add packages/core/src/events/delivery-headers.ts packages/core/src/events/delivery-headers.test.ts packages/core/package.json
-git commit -m "$(cat <<'EOF'
-feat(core): validate private provider-binding delivery headers
-
-EOF
-)"
+git commit -m "feat(core): validate private delivery headers"
 ```
 
 ---
 
-### Task 6: Additive Binding Columns
+### Task 6: Additive Binding Columns In Both Dialects
 
 **Files:**
 
@@ -1144,22 +1258,29 @@ EOF
 
 **Interfaces:**
 
-- Consumes: the existing `remote_agent_workflow_provider_bindings` table.
-- Produces: nullable `transform TEXT` and `delivery_headers TEXT NOT NULL DEFAULT '{}'`.
+- Produces: nullable `transform TEXT` and non-null `delivery_headers TEXT NOT NULL DEFAULT '{}'` on `remote_agent_workflow_provider_bindings`.
 
-- [ ] **Step 1: Write the failing schema tests**
+- [ ] **Step 1: Add failing fresh, upgrade, PostgreSQL, bundled, and parity tests**
 
-In `packages/core/src/db/adapters/sqlite.test.ts`, inside `describe('remote_agent_workflow_provider_bindings (Story 3.1)')`, add:
+Inside `describe('remote_agent_workflow_provider_bindings (Story 3.1)')` in `packages/core/src/db/adapters/sqlite.test.ts`, add:
 
 ```ts
-test('fresh schema has transform and delivery_headers', async () => {
+test('fresh schema has transform and delivery_headers with matching nullability and default', async () => {
   db = createTestDb();
-  const cols = raw_pragma(currentDbPath, 'remote_agent_workflow_provider_bindings');
-  expect(cols).toContain('transform');
-  expect(cols).toContain('delivery_headers');
+  const result = await db.query<{
+    name: string;
+    notnull: number;
+    dflt_value: string | null;
+  }>("PRAGMA table_info('remote_agent_workflow_provider_bindings')");
+  const columns = new Map(result.rows.map(column => [column.name, column]));
+  expect(columns.get('transform')).toMatchObject({ notnull: 0, dflt_value: null });
+  expect(columns.get('delivery_headers')).toMatchObject({
+    notnull: 1,
+    dflt_value: "'{}'",
+  });
 });
 
-test('upgrade: adds transform and delivery_headers with empty-object default', async () => {
+test('upgrade adds transform and delivery_headers without changing an existing row', async () => {
   const dbPath = join(
     import.meta.dir,
     `.test-sqlite-binding-transform-${Date.now()}-${Math.random().toString(36).slice(2)}.db`
@@ -1183,59 +1304,66 @@ test('upgrade: adds transform and delivery_headers with empty-object default', a
     );
     INSERT INTO remote_agent_workflow_provider_bindings
       (id, provider, name, codebase_id, event_route)
-    VALUES ('wpb-legacy', 'archon', 'legacy', 'cb-legacy', 'https://hermes.example/events');
+    VALUES ('wpb-legacy', 'archon', 'legacy', 'cb-legacy', 'https://example.invalid/events');
   `);
   raw.close();
 
   db = new SqliteAdapter(dbPath);
-  const cols = raw_pragma(dbPath, 'remote_agent_workflow_provider_bindings');
-  expect(cols).toContain('transform');
-  expect(cols).toContain('delivery_headers');
-  const rows = await db.query<{ transform: string | null; delivery_headers: string }>(
-    'SELECT transform, delivery_headers FROM remote_agent_workflow_provider_bindings WHERE id = $1',
+  const rows = await db.query<{
+    name: string;
+    transform: string | null;
+    delivery_headers: string;
+  }>(
+    'SELECT name, transform, delivery_headers FROM remote_agent_workflow_provider_bindings WHERE id = $1',
     ['wpb-legacy']
   );
-  expect(rows.rows[0]?.transform).toBeNull();
-  expect(rows.rows[0]?.delivery_headers).toBe('{}');
+  expect(rows.rows[0]).toEqual({
+    name: 'legacy',
+    transform: null,
+    delivery_headers: '{}',
+  });
 });
 ```
 
-In the same file, raise `MIN_NON_AUTH_COLUMNS` from `136` to `138`.
+Raise `MIN_NON_AUTH_COLUMNS` from `136` to `138` in the same file.
 
-In `packages/core/src/db/provider-bindings-bundled-schema.test.ts` and the Postgres outbox marker test, assert these exact SQL fragments:
+Add these assertions to the existing real-SQL provider-binding convergence test in `packages/core/src/db/adapters/postgres.test.ts`:
 
 ```ts
-expect(sql).toContain('transform        TEXT');
-expect(sql).toContain("delivery_headers TEXT NOT NULL DEFAULT '{}'");
-expect(sql).toContain(
+expect(realCombinedSql).toContain('transform        TEXT');
+expect(realCombinedSql).toContain("delivery_headers TEXT NOT NULL DEFAULT '{}'");
+expect(realCombinedSql).toContain(
   'ALTER TABLE remote_agent_workflow_provider_bindings\n  ADD COLUMN IF NOT EXISTS transform TEXT;'
 );
-expect(sql).toContain(
+expect(realCombinedSql).toContain(
   "ALTER TABLE remote_agent_workflow_provider_bindings\n  ADD COLUMN IF NOT EXISTS delivery_headers TEXT NOT NULL DEFAULT '{}';"
 );
 ```
 
-- [ ] **Step 2: Run the tests and verify they fail**
+Add the same four assertions for both `getSchemaSQL()` and `BUNDLED_SCHEMA_SQL` in `packages/core/src/db/provider-bindings-bundled-schema.test.ts`.
 
-Run:
+- [ ] **Step 2: Run each mock-sensitive test file separately and verify red**
+
+Run from `packages/core`:
 
 ```bash
-cd packages/core
-bun test src/db/adapters/sqlite.test.ts src/db/adapters/postgres.test.ts src/db/provider-bindings-bundled-schema.test.ts
+bun test src/db/adapters/sqlite.test.ts
+bun test src/db/adapters/postgres.test.ts
+bun test src/db/provider-bindings-bundled-schema.test.ts
 ```
 
-Expected: FAIL because the columns and SQL markers do not exist.
+Expected: each relevant new assertion fails because the columns are absent.
 
-- [ ] **Step 3: Add the columns in both dialects and regenerate the bundled schema**
+- [ ] **Step 3: Add fresh and upgrade schema definitions**
 
-In `migrations/000_combined.sql`, add the columns to the `CREATE TABLE` body after `signing_secret`:
+In `migrations/000_combined.sql`, add these columns after `signing_secret` in the provider-binding `CREATE TABLE` body:
 
 ```sql
   transform        TEXT,
   delivery_headers TEXT NOT NULL DEFAULT '{}',
 ```
 
-Add these upgrade statements after the existing `event_types` `ALTER TABLE`:
+After the existing `event_types` provider-binding `ALTER TABLE`, add:
 
 ```sql
 ALTER TABLE remote_agent_workflow_provider_bindings
@@ -1245,9 +1373,14 @@ ALTER TABLE remote_agent_workflow_provider_bindings
   ADD COLUMN IF NOT EXISTS delivery_headers TEXT NOT NULL DEFAULT '{}';
 ```
 
-In `packages/core/src/db/adapters/sqlite.ts` `createSchema()`, add the same logical columns and defaults to the binding `CREATE TABLE`.
+In the provider-binding `CREATE TABLE` inside `SqliteAdapter.createSchema()` in `packages/core/src/db/adapters/sqlite.ts`, add:
 
-In `migrateColumns()`, after the `event_types` add, add:
+```sql
+        transform TEXT,
+        delivery_headers TEXT NOT NULL DEFAULT '{}',
+```
+
+In the existing provider-binding block of `SqliteAdapter.migrateColumns()`, after the `event_types` check, add:
 
 ```ts
 if (cols.length > 0 && !colNames.has('transform')) {
@@ -1260,43 +1393,40 @@ if (cols.length > 0 && !colNames.has('delivery_headers')) {
 }
 ```
 
-From the repository root:
+Regenerate from the repository root:
 
 ```bash
 bun run generate:bundled-schema
 ```
 
-- [ ] **Step 4: Run the tests and verify they pass**
+- [ ] **Step 4: Run schema tests and the generator check**
 
-Run:
+Run from `packages/core`:
 
 ```bash
-cd packages/core
-bun test src/db/adapters/sqlite.test.ts src/db/adapters/postgres.test.ts src/db/provider-bindings-bundled-schema.test.ts
+bun test src/db/adapters/sqlite.test.ts
+bun test src/db/adapters/postgres.test.ts
+bun test src/db/provider-bindings-bundled-schema.test.ts
 ```
 
-Then from the repository root:
+Run from the repository root:
 
 ```bash
 bun run check:bundled-schema
 ```
 
-Expected: PASS.
+Expected: every command exits `0`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add migrations/000_combined.sql packages/core/src/db/adapters/sqlite.ts packages/core/src/db/adapters/sqlite.test.ts packages/core/src/db/adapters/postgres.test.ts packages/core/src/db/provider-bindings-bundled-schema.test.ts packages/core/src/db/bundled-schema.generated.ts
-git commit -m "$(cat <<'EOF'
-feat(core): add provider-binding transform and delivery header columns
-
-EOF
-)"
+git commit -m "feat(core): add provider-binding delivery config columns"
 ```
 
 ---
 
-### Task 7: Binding Persistence Lifecycle
+### Task 7: Binding Persistence, Patch Semantics, And Privacy
 
 **Files:**
 
@@ -1307,57 +1437,51 @@ EOF
 
 **Interfaces:**
 
-- Consumes: `normalizeProviderBindingTransform()`, `validateProviderBindingTransform()`, `normalizeDeliveryHeaders()`, and `DeliveryHeaders`.
-- Produces:
+- Consumes: transform schema and functions from Tasks 1 through 3 plus delivery-header schema and functions from Task 5.
+- Produces: a public binding with optional normalized `transform` and a private Zod-derived `WorkflowProviderBindingWithSecret` with `signing_secret` and `delivery_headers`.
+- Preserves: the current required create/update fields and current rotate/disable behavior.
+
+- [ ] **Step 1: Add failing public, private, write, patch, lifecycle, and corruption tests**
+
+Update the full-row fixture and expected key list in `packages/core/src/schemas/workflow-provider-binding.test.ts` to include `transform: null`.
+Add this privacy test:
 
 ```ts
-export type WorkflowProviderBindingWithSecret = WorkflowProviderBinding & {
-  signing_secret?: string | null;
-  delivery_headers: DeliveryHeaders;
-};
-
-export async function createBinding(input: {
-  provider: string;
-  name: string;
-  codebaseId: string;
-  eventRoute: string;
-  eventTypes?: readonly ExternalWorkflowEventType[];
-  signingSecret?: string | null;
-  transform?: ProviderBindingTransform | null;
-  deliveryHeaders?: DeliveryHeaders | null;
-}): Promise<WorkflowProviderBinding>;
-
-export async function updateBinding(input: {
-  provider: string;
-  name: string;
-  codebaseId: string;
-  eventRoute: string;
-  eventTypes?: readonly ExternalWorkflowEventType[];
-  signingSecret?: string | null;
-  transform?: ProviderBindingTransform | null;
-  deliveryHeaders?: DeliveryHeaders | null;
-}): Promise<WorkflowProviderBinding>;
+test('public projection parses transform and strips both private columns', () => {
+  const parsed = workflowProviderBindingSchema.parse({
+    id: 'wpb-1',
+    provider: 'archon',
+    name: 'workflow-engine-primary',
+    codebase_id: 'cb-1',
+    event_route: 'https://example.invalid/events',
+    event_types: [],
+    transform: {
+      engine: 'jsonata',
+      expression: '{ "ok": true }',
+      timeoutMs: 50,
+      stackDepth: 128,
+      maxSequenceSize: 10_000,
+      maxOutputBytes: 65_536,
+    },
+    delivery_headers: { Authorization: 'Bearer secret' },
+    signing_secret: 'signing-value',
+    state: 'active',
+    binding_version: 1,
+    created_at: '2026-07-11T11:48:27.000Z',
+    updated_at: '2026-07-11T11:48:27.000Z',
+  });
+  expect(parsed.transform?.engine).toBe('jsonata');
+  expect('delivery_headers' in parsed).toBe(false);
+  expect('signing_secret' in parsed).toBe(false);
+});
 ```
 
-`undefined` preserves a stored column.
-`null` clears `transform` to SQL `NULL` and `delivery_headers` to `'{}'`.
-
-- [ ] **Step 1: Write the failing persistence tests**
-
-In `packages/core/src/schemas/workflow-provider-binding.test.ts`, add tests that:
-
-- parse a public row with a normalized `transform` object
-- strip both `signing_secret` and `delivery_headers` from the public schema
-
-In `packages/core/src/db/provider-bindings.test.ts`, extend `bindingRow()` so existing rows can include `transform: null` and `delivery_headers: '{}'`.
-Add tests that assert:
+Extend `bindingRow()` in `packages/core/src/db/provider-bindings.test.ts` with `transform: null` and `delivery_headers: '{}'`.
+Add tests with these exact assertions:
 
 ```ts
-test('create stores normalized transform JSON and private receiver header JSON', async () => {
-  // insert params contain JSON.stringify(normalizedTransform) and JSON.stringify({ Authorization: 'Bearer secret' })
-});
-
-test('public getBinding does not expose receiver header values', async () => {
+test('create normalizes and stores transform JSON plus private header JSON before returning a public row', async () => {
+  mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
   mockQuery.mockResolvedValueOnce(
     createQueryResult([
       bindingRow({
@@ -1366,142 +1490,389 @@ test('public getBinding does not expose receiver header values', async () => {
           expression: '{ "ok": true }',
           timeoutMs: 50,
           stackDepth: 128,
-          maxSequenceSize: 10000,
-          maxOutputBytes: 65536,
+          maxSequenceSize: 10_000,
+          maxOutputBytes: 65_536,
         }),
         delivery_headers: JSON.stringify({ Authorization: 'Bearer secret' }),
-        signing_secret: 'local-test-value',
       }),
-    ], 1)
+    ])
   );
-  const result = await getBinding('archon', 'workflow-engine-primary');
-  expect(result?.transform?.engine).toBe('jsonata');
-  expect('delivery_headers' in (result ?? {})).toBe(false);
-  expect('signing_secret' in (result ?? {})).toBe(false);
-});
-
-test('private reads return receiver headers for delivery', async () => {
-  const result = await getBindingByIdWithSecret('wpb-1');
-  expect(result?.delivery_headers).toEqual({ Authorization: 'Bearer secret' });
-});
-
-test('update omission preserves both configurations', async () => {
-  await updateBinding({
+  const result = await createBinding({
     provider: 'archon',
     name: 'workflow-engine-primary',
     codebaseId: 'cb-1',
-    eventRoute: 'https://hermes.example/events/v2',
+    eventRoute: 'https://example.invalid/events',
+    transform: { engine: 'jsonata', expression: '{ "ok": true }' } as never,
+    deliveryHeaders: { Authorization: 'Bearer secret' },
   });
-  const [, params] = mockQuery.mock.calls[1] as [string, unknown[]];
-  expect(params).toContain(0); // transform_supplied
-  expect(params).toContain(0); // delivery_headers_supplied
+  const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+  expect(params[7]).toBe(
+    JSON.stringify({
+      engine: 'jsonata',
+      expression: '{ "ok": true }',
+      timeoutMs: 50,
+      stackDepth: 128,
+      maxSequenceSize: 10_000,
+      maxOutputBytes: 65_536,
+    })
+  );
+  expect(params[8]).toBe(JSON.stringify({ Authorization: 'Bearer secret' }));
+  expect(result.transform?.engine).toBe('jsonata');
+  expect('delivery_headers' in result).toBe(false);
 });
 
-test('update with null clears the selected configuration', async () => {
+test('public get strips private fields and private reads return delivery headers', async () => {
+  const stored = bindingRow({
+    delivery_headers: JSON.stringify({ Authorization: 'Bearer secret' }),
+    signing_secret: 'signing-value',
+  });
+  mockQuery.mockResolvedValueOnce(createQueryResult([stored], 1));
+  const publicResult = await getBinding('archon', 'workflow-engine-primary');
+  expect('delivery_headers' in (publicResult ?? {})).toBe(false);
+  expect('signing_secret' in (publicResult ?? {})).toBe(false);
+
+  mockQuery.mockResolvedValueOnce(createQueryResult([stored], 1));
+  const privateResult = await getBindingByIdWithSecret('wpb-1');
+  expect(privateResult?.delivery_headers).toEqual({ Authorization: 'Bearer secret' });
+  expect(privateResult?.signing_secret).toBe('signing-value');
+});
+
+test('update omission preserves both columns and null clears both columns', async () => {
+  mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
+  mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+  mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
   await updateBinding({
     provider: 'archon',
     name: 'workflow-engine-primary',
     codebaseId: 'cb-1',
-    eventRoute: 'https://hermes.example/events/v2',
+    eventRoute: 'https://example.invalid/events/v2',
+  });
+  const [, omitted] = mockQuery.mock.calls[1] as [string, unknown[]];
+  expect(omitted.slice(4, 8)).toEqual([0, null, 0, null]);
+
+  mockQuery.mockReset();
+  mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
+  mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+  mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
+  await updateBinding({
+    provider: 'archon',
+    name: 'workflow-engine-primary',
+    codebaseId: 'cb-1',
+    eventRoute: 'https://example.invalid/events/v2',
     transform: null,
     deliveryHeaders: null,
   });
-  const [sql, params] = mockQuery.mock.calls[1] as [string, unknown[]];
-  expect(sql).toContain('CASE WHEN');
-  expect(params).toContain(null); // cleared transform
-  expect(params).toContain('{}'); // cleared headers
+  const [sql, cleared] = mockQuery.mock.calls[1] as [string, unknown[]];
+  expect(sql).toContain('transform = CASE WHEN $5 = 1');
+  expect(sql).toContain('delivery_headers = CASE WHEN $7 = 1');
+  expect(cleared.slice(4, 8)).toEqual([1, null, 1, '{}']);
 });
 
-test('invalid transform or header fails before a database mutation', async () => {
+test('invalid supplied config fails before a transaction or query starts', async () => {
   await expect(
     createBinding({
       provider: 'archon',
       name: 'workflow-engine-primary',
       codebaseId: 'cb-1',
-      eventRoute: 'https://hermes.example/events',
-      transform: normalizeProviderBindingTransform({
-        engine: 'jsonata',
-        expression: '$now()',
-      }),
+      eventRoute: 'https://example.invalid/events',
+      transform: { engine: 'jsonata', expression: '$now()' } as never,
     })
   ).rejects.toThrow(/TRANSFORM_FUNCTION_DISALLOWED/);
+  await expect(
+    createBinding({
+      provider: 'archon',
+      name: 'workflow-engine-primary',
+      codebaseId: 'cb-1',
+      eventRoute: 'https://example.invalid/events',
+      deliveryHeaders: { 'Content-Type': 'text/plain' },
+    })
+  ).rejects.toThrow(/unsafe-delivery-headers/);
+  expect(mockWithTransaction).not.toHaveBeenCalled();
   expect(mockQuery).not.toHaveBeenCalled();
 });
 
-test('rotate and disable SQL do not write transform or delivery_headers', async () => {
+test('rotate and disable preserve transform and delivery headers without assigning them', async () => {
+  mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
+  mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+  mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow({ state: 'rotated' })], 1));
   await rotateBinding('archon', 'workflow-engine-primary', 'rotated-secret');
+  expect((mockQuery.mock.calls[1]?.[0] as string)).not.toMatch(/transform|delivery_headers/);
+
+  mockQuery.mockReset();
+  mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
+  mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+  mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow({ state: 'disabled' })], 1));
   await disableBinding('archon', 'workflow-engine-primary');
-  const sql = mockQuery.mock.calls.map(call => (call as [string, unknown[]])[0]).join('\n');
-  expect(sql).not.toMatch(/SET[\s\S]*transform\s*=/);
-  expect(sql).not.toMatch(/SET[\s\S]*delivery_headers\s*=/);
+  expect((mockQuery.mock.calls[1]?.[0] as string)).not.toMatch(/transform|delivery_headers/);
 });
 
-test('corrupt JSON produces a classified binding corruption error without raw values', async () => {
-  mockQuery.mockResolvedValueOnce(
-    createQueryResult([bindingRow({ transform: '{not-json', delivery_headers: '{not-json' })], 1)
-  );
-  await expect(getBinding('archon', 'workflow-engine-primary')).rejects.toThrow(/BINDING_CORRUPT_ROW/);
-  await expect(getBinding('archon', 'workflow-engine-primary')).rejects.not.toThrow(/not-json/);
+test('corrupt transform or delivery-header JSON reports only the corrupt field', async () => {
+  for (const override of [
+    { transform: '{not-json' },
+    { delivery_headers: '{not-json' },
+  ]) {
+    mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow(override)], 1));
+    try {
+      await getBinding('archon', 'workflow-engine-primary');
+      throw new Error('expected corrupt-row failure');
+    } catch (error) {
+      expect((error as Error).message).toMatch(/^BINDING_CORRUPT_ROW: (transform|delivery_headers)$/);
+      expect((error as Error).message).not.toContain('not-json');
+    }
+  }
 });
 ```
 
-- [ ] **Step 2: Run the tests and verify they fail**
+- [ ] **Step 2: Run schema and DB tests separately and verify red**
 
-Run:
+Run from `packages/core`:
 
 ```bash
-cd packages/core
-bun test src/schemas/workflow-provider-binding.test.ts src/db/provider-bindings.test.ts
+bun test src/schemas/workflow-provider-binding.test.ts
+bun test src/db/provider-bindings.test.ts
 ```
 
-Expected: FAIL because the public schema and persistence layer do not yet know the new fields.
+Expected: FAIL because transform is absent from the public schema and the DB layer does not parse or persist the new columns.
 
-- [ ] **Step 3: Persist and project the new columns**
+- [ ] **Step 3: Implement public projection and private row parsing**
 
-Add optional public `transform` to `workflowProviderBindingSchema`:
+Add this property to `workflowProviderBindingSchema` in `packages/core/src/schemas/workflow-provider-binding.ts`:
 
 ```ts
 transform: providerBindingTransformSchema.nullable().optional(),
 ```
 
-In `provider-bindings.ts`:
+Import `providerBindingTransformSchema` from `./provider-binding-transform`.
 
-- Extend the private schema with `signing_secret` and `delivery_headers: z.record(z.string(), z.string())`.
-- Parse `transform` and `delivery_headers` JSON text in `normalizeBindingRow()`.
-- On JSON parse failure, throw `new Error('BINDING_CORRUPT_ROW: transform')` or `new Error('BINDING_CORRUPT_ROW: delivery_headers')` without the raw text.
-- Default missing `delivery_headers` to `{}` after a successful parse.
-- Before `createBinding()` or `updateBinding()` opens a transaction, if a transform object is supplied call `validateProviderBindingTransform()`, and if headers are supplied call `normalizeDeliveryHeaders()`.
-- Insert `transform` and `delivery_headers` in `createBinding()`.
-- Omitted create values store SQL `NULL` and `'{}'`.
-- Replace only the new-column assignments in `updateBinding()` with the design's `CASE WHEN transform_supplied = 1` / `delivery_headers_supplied = 1` SQL.
-- Keep the existing `COALESCE` behavior for `event_types` and `signing_secret`.
-- Leave rotate and disable SQL unchanged so those columns are preserved without a read/rewrite.
+In `packages/core/src/db/provider-bindings.ts`, import `z`, the transform type/functions, and delivery-header schema/type/functions.
+Derive the private type from its schema:
 
-- [ ] **Step 4: Run the tests and verify they pass**
+```ts
+const workflowProviderBindingWithSecretSchema = workflowProviderBindingSchema.extend({
+  signing_secret: workflowProviderBindingSchema.shape.event_route.nullable().optional(),
+  delivery_headers: deliveryHeadersSchema.default({}),
+});
 
-Run:
-
-```bash
-cd packages/core
-bun test src/schemas/workflow-provider-binding.test.ts src/db/provider-bindings.test.ts
+export type WorkflowProviderBindingWithSecret = z.infer<
+  typeof workflowProviderBindingWithSecretSchema
+>;
 ```
 
-Expected: PASS.
+Replace `normalizeBindingRow()` with independent parsing for all JSON columns:
 
-- [ ] **Step 5: Commit**
+```ts
+function normalizeBindingRow(row: unknown): unknown {
+  if (typeof row !== 'object' || row === null || Array.isArray(row)) return row;
+  const normalized: Record<string, unknown> = { ...row };
+  if (typeof normalized.event_types === 'string') {
+    try {
+      normalized.event_types = JSON.parse(normalized.event_types) as unknown;
+    } catch {
+      // Leave the invalid value for the public schema to classify by field path.
+    }
+  }
+  for (const column of ['transform', 'delivery_headers'] as const) {
+    if (typeof normalized[column] !== 'string') continue;
+    try {
+      normalized[column] = JSON.parse(normalized[column]) as unknown;
+    } catch {
+      throw new Error(`BINDING_CORRUPT_ROW: ${column}`);
+    }
+  }
+  return normalized;
+}
+```
+
+Make `parseBindingRowWithSecret()` fail closed with safe issue paths instead of falling back to a public parse and casting:
+
+```ts
+function parseBindingRowWithSecret(row: unknown): WorkflowProviderBindingWithSecret {
+  const parsed = workflowProviderBindingWithSecretSchema.safeParse(normalizeBindingRow(row));
+  if (parsed.success) return parsed.data;
+  const fields = parsed.error.issues.map(issue => issue.path.join('.') || '<root>').join(',');
+  throw new Error(`BINDING_CORRUPT_ROW: ${fields}`);
+}
+```
+
+- [ ] **Step 4: Normalize before transactions and implement explicit patch flags**
+
+Extend `createBinding()` and `updateBinding()` inputs with:
+
+```ts
+transform?: ProviderBindingTransform | null;
+deliveryHeaders?: DeliveryHeaders | null;
+```
+
+At the start of each function, before `getDialect()`, `getDatabase()`, or `withTransaction()`, prepare supplied values:
+
+```ts
+const normalizedTransform =
+  input.transform === undefined || input.transform === null
+    ? input.transform
+    : normalizeProviderBindingTransform(input.transform);
+if (normalizedTransform) validateProviderBindingTransform(normalizedTransform);
+
+const normalizedHeaders =
+  input.deliveryHeaders === undefined || input.deliveryHeaders === null
+    ? input.deliveryHeaders
+    : normalizeDeliveryHeaders(input.deliveryHeaders);
+```
+
+Add `transform` and `delivery_headers` to the create insert after `signing_secret`.
+Use `normalizedTransform ? JSON.stringify(normalizedTransform) : null` and `JSON.stringify(normalizedHeaders ?? {})` as parameters `$8` and `$9`.
+
+Use this exact update assignment and parameter order:
+
+```sql
+transform = CASE WHEN $5 = 1 THEN $6 ELSE transform END,
+delivery_headers = CASE WHEN $7 = 1 THEN $8 ELSE delivery_headers END,
+```
+
+```ts
+const transformSupplied = input.transform !== undefined;
+const deliveryHeadersSupplied = input.deliveryHeaders !== undefined;
+const updateParams = [
+  input.codebaseId,
+  input.eventRoute,
+  input.eventTypes === undefined ? null : JSON.stringify(input.eventTypes),
+  input.signingSecret ?? null,
+  transformSupplied ? 1 : 0,
+  transformSupplied && normalizedTransform !== null
+    ? JSON.stringify(normalizedTransform)
+    : null,
+  deliveryHeadersSupplied ? 1 : 0,
+  deliveryHeadersSupplied ? JSON.stringify(normalizedHeaders ?? {}) : null,
+  input.provider,
+  input.name,
+  existing.binding_version,
+  existing.state,
+];
+```
+
+Update the `WHERE` placeholders to `$9`, `$10`, `$11`, and `$12`.
+Leave the existing `COALESCE` assignments for `event_types` and `signing_secret` unchanged.
+Leave rotate and disable SQL unchanged.
+
+- [ ] **Step 5: Run binding tests and type check**
+
+Run from `packages/core`:
+
+```bash
+bun test src/schemas/workflow-provider-binding.test.ts
+bun test src/db/provider-bindings.test.ts
+bun x tsc --noEmit
+```
+
+Expected: every command exits `0`.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add packages/core/src/schemas/workflow-provider-binding.ts packages/core/src/schemas/workflow-provider-binding.test.ts packages/core/src/db/provider-bindings.ts packages/core/src/db/provider-bindings.test.ts
-git commit -m "$(cat <<'EOF'
-feat(core): persist provider-binding transforms and private headers
-
-EOF
-)"
+git commit -m "feat(core): persist provider-binding delivery config"
 ```
 
 ---
 
-### Task 8: Enqueue-Time Transform And Transform-Failed Evidence
+### Task 8: Initial Outbox Error Evidence
+
+**Files:**
+
+- Modify: `packages/core/src/db/workflow-event-outbox.ts`
+- Modify: `packages/core/src/db/workflow-event-outbox.test.ts`
+
+**Interfaces:**
+
+- Produces: `InsertExternalWorkflowEventInput.last_error?: string | null` and insert-time persistence of that field.
+
+- [ ] **Step 1: Add a failing initial-error test**
+
+Add this test to `packages/core/src/db/workflow-event-outbox.test.ts`:
+
+```ts
+test('insertExternalWorkflowEvent persists an initial safe last_error', async () => {
+  mockQuery.mockResolvedValueOnce(
+    createQueryResult([
+      outboxRow({
+        status: 'not-routable',
+        not_routable_reason: 'transform-failed',
+        last_error: 'TRANSFORM_RESULT_INVALID',
+        next_attempt_at: null,
+      }),
+    ])
+  );
+  await insertExternalWorkflowEvent(
+    (sql, params) => mockQuery(sql, params) as ReturnType<typeof mockQuery>,
+    {
+      event_id: 'evt-1',
+      idempotency_key: 'archon:workflow-engine-primary:evt-1',
+      event_type: 'workflow.run.completed',
+      workflow_run_id: 'run-1',
+      event_body: '{"canonical":true}',
+      status: 'not-routable',
+      not_routable_reason: 'transform-failed',
+      last_error: 'TRANSFORM_RESULT_INVALID',
+      next_attempt_at: null,
+    }
+  );
+  const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+  expect(sql).toContain('not_routable_reason, last_error, next_attempt_at');
+  expect(params).toContain('TRANSFORM_RESULT_INVALID');
+});
+```
+
+- [ ] **Step 2: Run the test and verify the type or SQL assertion fails**
+
+Run from `packages/core`:
+
+```bash
+bun test src/db/workflow-event-outbox.test.ts
+```
+
+Expected: FAIL because `last_error` is not an accepted insert field and is absent from the insert SQL.
+
+- [ ] **Step 3: Add `last_error` to the insert contract and SQL**
+
+Add this field to `InsertExternalWorkflowEventInput`:
+
+```ts
+last_error?: string | null;
+```
+
+Change the insert column tail, placeholders, and parameters to:
+
+```sql
+binding_id, event_route, event_body, status, not_routable_reason, last_error, next_attempt_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+```
+
+```ts
+data.not_routable_reason ?? null,
+data.last_error ?? null,
+toDbTimestamp(data.next_attempt_at),
+```
+
+- [ ] **Step 4: Run the isolated outbox DB test and type check**
+
+Run from `packages/core`:
+
+```bash
+bun test src/db/workflow-event-outbox.test.ts
+bun x tsc --noEmit
+```
+
+Expected: both commands exit `0`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/core/src/db/workflow-event-outbox.ts packages/core/src/db/workflow-event-outbox.test.ts
+git commit -m "feat(core): persist initial outbox error evidence"
+```
+
+---
+
+### Task 9: Enqueue-Time Transform And Durable Failure Evidence
 
 **Files:**
 
@@ -1510,90 +1881,132 @@ EOF
 
 **Interfaces:**
 
-- Consumes: `buildWorkflowEventEnvelope()`, `transformWorkflowEventBody()`, `isProviderBindingTransformError()`, and `resolution.binding.transform`.
-- Produces: a pending outbox row whose `event_body` is the exact transformed string, or a `not-routable` row with `not_routable_reason = "transform-failed"`.
+- Consumes: `transformWorkflowEventBody()`, `isProviderBindingTransformError()`, the canonical envelope builder, and `resolution.binding.transform`.
+- Produces: one pending transformed outbox row or one non-routable transform-failure row.
 
-- [ ] **Step 1: Write the failing enqueue tests**
+- [ ] **Step 1: Add a controllable transform mock before importing the store adapter**
 
-In `packages/core/src/workflows/store-adapter.test.ts`, add tests that use the existing `bindingRow()` helper plus an optional `transform` object.
+In `packages/core/src/workflows/store-adapter.test.ts`, before the dynamic import of `./store-adapter`, add:
 
 ```ts
-test('enqueueExternalWorkflowEvent persists the exact current body when the binding has no transform', async () => {
-  // existing routable fixture
-  const [insert] = mockEnqueueExternalWorkflowEvent.mock.calls[0] as [Record<string, unknown>];
-  const envelope = JSON.parse(insert.event_body as string);
-  expect(insert.event_body).toBe(JSON.stringify(envelope));
-});
+class TestTransformError extends Error {
+  readonly code: string;
 
-test('enqueueExternalWorkflowEvent evaluates a transform once and persists the exact string', async () => {
+  constructor(code: string) {
+    super(code);
+    this.code = code;
+  }
+}
+
+const mockTransformWorkflowEventBody = mock(
+  async (envelope: Record<string, unknown>, transform: unknown) => ({
+    body: JSON.stringify(envelope),
+    outputBytes: new TextEncoder().encode(JSON.stringify(envelope)).length,
+    engine: transform ? ('jsonata' as const) : ('identity' as const),
+    durationMs: 1,
+  })
+);
+mock.module('../events/provider-binding-transform', () => ({
+  transformWorkflowEventBody: mockTransformWorkflowEventBody,
+  isProviderBindingTransformError: (error: unknown): boolean => error instanceof TestTransformError,
+}));
+
+const mockLogDebug = mock(() => {});
+const mockLogWarn = mock(() => {});
+const mockLogError = mock(() => {});
+mock.module('@archon/paths', () => ({
+  createLogger: mock(() => ({
+    info: mock(() => {}),
+    warn: mockLogWarn,
+    error: mockLogError,
+    debug: mockLogDebug,
+    trace: mock(() => {}),
+    fatal: mock(() => {}),
+  })),
+}));
+```
+
+In the existing `beforeEach()`, reset those mocks and restore the identity implementation shown above.
+Extend the local `bindingRow()` with `transform: null` and `delivery_headers: {}`.
+
+- [ ] **Step 2: Add failing ordering, exact-body, failure, and log tests**
+
+Add these tests to `packages/core/src/workflows/store-adapter.test.ts`:
+
+```ts
+test('routable events call the transform once and persist its exact body', async () => {
+  mockGetWorkflowRun.mockResolvedValueOnce(workflowRunRow());
+  const configuredTransform = {
+    engine: 'jsonata',
+    expression: '{ "eventType": eventType }',
+    timeoutMs: 50,
+    stackDepth: 128,
+    maxSequenceSize: 10_000,
+    maxOutputBytes: 65_536,
+  };
   mockResolveEventRoute.mockResolvedValueOnce({
     routable: true,
     codebase: codebaseRow(),
-    binding: bindingRow({
-      transform: {
-        engine: 'jsonata',
-        expression: '{ "eventType": eventType }',
-        timeoutMs: 50,
-        stackDepth: 128,
-        maxSequenceSize: 10000,
-        maxOutputBytes: 65536,
-      },
-    }),
-    route: 'https://hermes.example/events',
+    binding: bindingRow({ transform: configuredTransform }),
+    route: 'https://example.invalid/events',
     secret: 'test-secret',
   });
-  // enqueue workflow.run.completed
+  mockTransformWorkflowEventBody.mockResolvedValueOnce({
+    body: '{"eventType":"workflow.run.completed"}',
+    outputBytes: 38,
+    engine: 'jsonata',
+    durationMs: 2,
+  });
+  const store = createWorkflowStore();
+  await store.enqueueExternalWorkflowEvent({
+    workflow_run_id: 'run-1',
+    event_type: 'workflow.run.completed',
+    occurred_at: '2026-08-18T00:00:00.000Z',
+    payload: { state: 'completed', result: { outcome: 'accepted' } },
+  });
+  expect(mockTransformWorkflowEventBody).toHaveBeenCalledTimes(1);
+  expect(mockTransformWorkflowEventBody.mock.calls[0]?.[1]).toEqual(configuredTransform);
   const [insert] = mockEnqueueExternalWorkflowEvent.mock.calls[0] as [Record<string, unknown>];
   expect(insert.event_body).toBe('{"eventType":"workflow.run.completed"}');
   expect(insert.status).toBe('pending');
 });
 
-test('enqueueExternalWorkflowEvent filters events before transformation', async () => {
+test('event filtering happens before envelope transformation', async () => {
+  mockGetWorkflowRun.mockResolvedValueOnce(workflowRunRow());
   mockResolveEventRoute.mockResolvedValueOnce({
     routable: true,
     codebase: codebaseRow(),
     binding: bindingRow({
       event_types: ['workflow.approval.requested'],
-      transform: {
-        engine: 'jsonata',
-        expression: '$now()',
-        timeoutMs: 50,
-        stackDepth: 128,
-        maxSequenceSize: 10000,
-        maxOutputBytes: 65536,
-      },
+      transform: { engine: 'jsonata', expression: '$now()' },
     }),
-    route: 'https://hermes.example/events',
+    route: 'https://example.invalid/events',
     secret: 'test-secret',
   });
-  await store.enqueueExternalWorkflowEvent({
+  await createWorkflowStore().enqueueExternalWorkflowEvent({
     workflow_run_id: 'run-1',
     event_type: 'workflow.run.started',
     occurred_at: '2026-08-18T00:00:00.000Z',
     payload: { state: 'running', startedAt: '2026-08-18T00:00:00.000Z' },
   });
+  expect(mockTransformWorkflowEventBody).not.toHaveBeenCalled();
   expect(mockEnqueueExternalWorkflowEvent).not.toHaveBeenCalled();
 });
 
-test('enqueueExternalWorkflowEvent records transform-failed evidence without rejecting the workflow', async () => {
+test('classified failure stores canonical evidence and does not reject the workflow', async () => {
+  mockGetWorkflowRun.mockResolvedValueOnce(workflowRunRow());
   mockResolveEventRoute.mockResolvedValueOnce({
     routable: true,
     codebase: codebaseRow(),
-    binding: bindingRow({
-      transform: {
-        engine: 'jsonata',
-        expression: 'eventType',
-        timeoutMs: 50,
-        stackDepth: 128,
-        maxSequenceSize: 10000,
-        maxOutputBytes: 65536,
-      },
-    }),
-    route: 'https://hermes.example/events',
+    binding: bindingRow({ transform: { engine: 'jsonata', expression: 'eventType' } }),
+    route: 'https://example.invalid/events',
     secret: 'test-secret',
   });
+  mockTransformWorkflowEventBody.mockRejectedValueOnce(
+    new TestTransformError('TRANSFORM_RESULT_INVALID')
+  );
   await expect(
-    store.enqueueExternalWorkflowEvent({
+    createWorkflowStore().enqueueExternalWorkflowEvent({
       workflow_run_id: 'run-1',
       event_type: 'workflow.run.started',
       occurred_at: '2026-08-18T00:00:00.000Z',
@@ -1607,33 +2020,46 @@ test('enqueueExternalWorkflowEvent records transform-failed evidence without rej
     last_error: 'TRANSFORM_RESULT_INVALID',
     next_attempt_at: null,
   });
-  const body = JSON.parse(insert.event_body as string) as { schemaVersion: string; eventType: string };
-  expect(body.schemaVersion).toBe('workflow-event-envelope.v1');
-  expect(body.eventType).toBe('workflow.run.started');
+  expect(JSON.parse(insert.event_body as string)).toMatchObject({
+    schemaVersion: 'workflow-event-envelope.v1',
+    eventType: 'workflow.run.started',
+  });
+  const [fields] = mockLogWarn.mock.calls.find(
+    call => call[1] === 'workflow_event_outbox_transform_failed'
+  ) as [Record<string, unknown>, string];
+  expect(fields).toEqual({
+    bindingId: 'binding-1',
+    eventType: 'workflow.run.started',
+    engine: 'jsonata',
+    durationMs: expect.any(Number),
+    errorCode: 'TRANSFORM_RESULT_INVALID',
+  });
+  expect(JSON.stringify(fields)).not.toMatch(/expression|envelope|err/);
 });
 ```
 
-Add a logger spy test that the transform failure log object contains only `bindingId`, `eventType`, `engine`, `durationMs`, and `errorCode`, and that it does not contain `err`, the expression, or the envelope.
+- [ ] **Step 3: Run the store test and verify red**
 
-- [ ] **Step 2: Run the tests and verify they fail**
-
-Run:
+Run from `packages/core`:
 
 ```bash
-cd packages/core
 bun test src/workflows/store-adapter.test.ts
 ```
 
-Expected: FAIL because enqueue still always does `JSON.stringify(envelope)` and has no `transform-failed` path.
+Expected: FAIL because the transform function is never called and no `transform-failed` path exists.
 
-- [ ] **Step 3: Transform once after envelope construction**
+- [ ] **Step 4: Transform once after the existing filter and canonical builder**
 
-In `enqueueExternalWorkflowEvent()`, after the existing event-type filter and `buildWorkflowEventEnvelope()` call, replace the pending insert body with:
+Import the two transform functions in `packages/core/src/workflows/store-adapter.ts`.
+Replace only the current routable insert block after `buildWorkflowEventEnvelope()` with:
 
 ```ts
 const transformStartedAt = Date.now();
 try {
-  const transformed = await transformWorkflowEventBody(envelope, resolution.binding.transform ?? null);
+  const transformed = await transformWorkflowEventBody(
+    envelope,
+    resolution.binding.transform ?? null
+  );
   getLog().debug(
     {
       bindingId: resolution.binding.id,
@@ -1656,15 +2082,15 @@ try {
     status: 'pending',
     next_attempt_at: input.occurred_at,
   });
-} catch (err) {
-  if (!isProviderBindingTransformError(err)) throw err;
+} catch (error) {
+  if (!isProviderBindingTransformError(error)) throw error;
   getLog().warn(
     {
       bindingId: resolution.binding.id,
       eventType: envelope.eventType,
       engine: resolution.binding.transform?.engine ?? 'identity',
-      durationMs: Date.now() - transformStartedAt,
-      errorCode: err.code,
+      durationMs: Math.max(0, Date.now() - transformStartedAt),
+      errorCode: error.code,
     },
     'workflow_event_outbox_transform_failed'
   );
@@ -1678,41 +2104,37 @@ try {
     event_body: JSON.stringify(envelope),
     status: 'not-routable',
     not_routable_reason: 'transform-failed',
-    last_error: err.code,
+    last_error: error.code,
     next_attempt_at: null,
   });
 }
 ```
 
-If `transformWorkflowEventBody()` throws after some duration, include that duration when the result exists.
-On classified failure before a result is returned, omit `outputBytes` and do not attach `err`.
-Leave the outer best-effort `catch` in place so unexpected throws still cannot fail the workflow.
+Keep the function's existing outer best-effort `catch` unchanged so unexpected errors and swallowed outbox-write failures remain non-fatal to workflow execution.
 
-- [ ] **Step 4: Run the tests and verify they pass**
+- [ ] **Step 5: Run orchestration and real transform tests separately**
 
-Run:
+Run from `packages/core`:
 
 ```bash
-cd packages/core
-bun test src/workflows/store-adapter.test.ts src/events/workflow-event-envelope.test.ts
+bun test src/workflows/store-adapter.test.ts
+bun test src/events/provider-binding-transform.test.ts
+bun test src/events/workflow-event-envelope.test.ts
+bun x tsc --noEmit
 ```
 
-Expected: PASS.
+Expected: every command exits `0`.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add packages/core/src/workflows/store-adapter.ts packages/core/src/workflows/store-adapter.test.ts
-git commit -m "$(cat <<'EOF'
-feat(core): transform workflow events once before outbox persist
-
-EOF
-)"
+git commit -m "feat(core): transform workflow events before outbox persistence"
 ```
 
 ---
 
-### Task 9: Dispatcher Header Merge, Redaction, And Stored-Body HMAC
+### Task 10: Dispatcher Header Merge, Redaction, And Stored-Body Retry HMAC
 
 **Files:**
 
@@ -1721,129 +2143,194 @@ EOF
 
 **Interfaces:**
 
-- Consumes: `getBindingByIdWithSecret()`, `validateDeliveryHeaders()`, `mergeDeliveryHeaders()`, `buildDeliveryHeaderEvidence()`, and `row.event_body`.
-- Produces: HTTP headers that include validated receiver headers, attempt evidence with `[REDACTED]` receiver values, and `last_error = "unsafe-delivery-headers"` when stored headers are corrupt.
+- Consumes: private binding reads, delivery-header helpers, and `row.event_body`.
+- Produces: validated request headers, redacted attempt evidence, byte-identical retry bodies, and terminal `unsafe-delivery-headers` outcomes.
 
-- [ ] **Step 1: Write the failing dispatcher tests**
+- [ ] **Step 1: Expose logger spies and add failing dispatcher tests**
 
-In `packages/server/src/workflow-events/dispatcher.test.ts`, keep the existing stored-body HMAC test and add:
+In `packages/server/src/workflow-events/dispatcher.test.ts`, replace the anonymous logger mocks with named `mockLogWarn` and reset it in `beforeEach()`.
+Make the default private binding mock return `{ signing_secret: 'test-secret', delivery_headers: {} }`.
+Add these tests:
 
 ```ts
-test('HMAC uses the stored transformed body and retries send the same bytes', async () => {
-  const body = '{"eventType":"workflow.run.completed"}';
-  const row = outboxRow({ event_body: body });
-  mockClaimDueOutboxEvents.mockResolvedValueOnce([row]);
-  const fetchImpl = mock(async () => new Response('', { status: 204 }));
+test('initial delivery and retry sign and send the same stored transformed body', async () => {
+  const body = '{"receiver":"shape"}';
+  mockClaimDueOutboxEvents
+    .mockResolvedValueOnce([outboxRow({ event_body: body, attempt_count: 0 })])
+    .mockResolvedValueOnce([outboxRow({ event_body: body, attempt_count: 1 })]);
+  const fetchImpl = mock(async () => new Response('retry', { status: 500 }));
   const dispatcher = new WorkflowEventDispatcher({
     now: () => fixedNow,
     fetchImpl,
     enqueueDeliveryFailed: mockStoreEnqueueExternalWorkflowEvent,
   });
   await dispatcher.drainNow();
-  const [, request] = fetchImpl.mock.calls[0] as [string, RequestInit];
-  expect(request.body).toBe(body);
-  const headers = request.headers as Record<string, string>;
-  const expectedSignature = createHmac('sha256', 'test-secret')
-    .update(`${Math.floor(fixedNow.getTime() / 1000)}.${body}`)
-    .digest('hex');
-  expect(headers['X-Webhook-Signature-V2']).toBe(expectedSignature);
+  await dispatcher.drainNow();
+  expect(fetchImpl).toHaveBeenCalledTimes(2);
+  for (const [, request] of fetchImpl.mock.calls as Array<[string, RequestInit]>) {
+    const headers = request.headers as Record<string, string>;
+    expect(request.body).toBe(body);
+    expect(headers['X-Webhook-Signature-V2']).toBe(
+      createHmac('sha256', 'test-secret')
+        .update(`${Math.floor(fixedNow.getTime() / 1000)}.${body}`)
+        .digest('hex')
+    );
+  }
 });
 
-test('valid receiver headers reach HTTP and are redacted in attempt evidence', async () => {
+test('valid receiver headers reach HTTP and attempt evidence redacts their values', async () => {
   mockGetBindingByIdWithSecret.mockResolvedValueOnce({
     signing_secret: 'test-secret',
     delivery_headers: { Authorization: 'Bearer secret' },
   });
   mockClaimDueOutboxEvents.mockResolvedValueOnce([outboxRow()]);
   const fetchImpl = mock(async () => new Response('', { status: 204 }));
-  const dispatcher = new WorkflowEventDispatcher({
-    now: () => fixedNow,
-    fetchImpl,
-    enqueueDeliveryFailed: mockStoreEnqueueExternalWorkflowEvent,
-  });
-  await dispatcher.drainNow();
+  await new WorkflowEventDispatcher({ now: () => fixedNow, fetchImpl }).drainNow();
   const [, request] = fetchImpl.mock.calls[0] as [string, RequestInit];
   expect((request.headers as Record<string, string>).Authorization).toBe('Bearer secret');
-  const attemptHeaders = (mockInsertPendingAttempt.mock.calls[0] as [string, number, { headers: Record<string, string> }])[2]
-    .headers;
-  expect(attemptHeaders.Authorization).toBe('[REDACTED]');
-  expect(attemptHeaders['Content-Type']).toBe('application/json');
+  const pendingRequest = mockInsertPendingAttempt.mock.calls[0]?.[2] as {
+    headers: Record<string, string>;
+  };
+  expect(pendingRequest.headers.Authorization).toBe('[REDACTED]');
+  expect(pendingRequest.headers['Content-Type']).toBe('application/json');
+  expect(JSON.stringify(pendingRequest.headers)).not.toContain('Bearer secret');
 });
 
-test('corrupt stored headers prevent HTTP and mark terminal-failure', async () => {
+test('unsafe parsed headers block HTTP and persist a safe terminal outcome', async () => {
   mockGetBindingByIdWithSecret.mockResolvedValueOnce({
     signing_secret: 'test-secret',
     delivery_headers: { 'Content-Type': 'text/plain' },
   });
   mockClaimDueOutboxEvents.mockResolvedValueOnce([outboxRow()]);
   const fetchImpl = mock(async () => new Response('', { status: 204 }));
-  const dispatcher = new WorkflowEventDispatcher({ now: () => fixedNow, fetchImpl });
-  await dispatcher.drainNow();
+  await new WorkflowEventDispatcher({ now: () => fixedNow, fetchImpl }).drainNow();
   expect(fetchImpl).not.toHaveBeenCalled();
   expect(mockInsertPendingAttempt).not.toHaveBeenCalled();
   expect(mockUpdateOutboxAfterAttempt.mock.calls[0]?.[1]).toMatchObject({
     status: 'terminal-failure',
-    last_error: 'unsafe-delivery-headers',
+    attempt_count: 0,
     next_attempt_at: null,
+    last_error: 'unsafe-delivery-headers',
+  });
+  const [fields] = mockLogWarn.mock.calls.find(
+    call => call[1] === 'workflow_events.unsafe_delivery_headers'
+  ) as [Record<string, unknown>, string];
+  expect(fields).toEqual({ bindingId: 'wpb-1', outboxEventId: 'outbox-1' });
+  expect(JSON.stringify(fields)).not.toMatch(/Authorization|Bearer|secret|Content-Type/);
+});
+
+test('corrupt delivery_headers JSON from the private parser has the same safe terminal outcome', async () => {
+  mockGetBindingByIdWithSecret.mockRejectedValueOnce(
+    new Error('BINDING_CORRUPT_ROW: delivery_headers')
+  );
+  mockClaimDueOutboxEvents.mockResolvedValueOnce([outboxRow()]);
+  const fetchImpl = mock(async () => new Response('', { status: 204 }));
+  await new WorkflowEventDispatcher({ now: () => fixedNow, fetchImpl }).drainNow();
+  expect(fetchImpl).not.toHaveBeenCalled();
+  expect(mockUpdateOutboxAfterAttempt.mock.calls[0]?.[1]).toMatchObject({
+    status: 'terminal-failure',
+    last_error: 'unsafe-delivery-headers',
   });
 });
 ```
 
-Add an assertion that the unsafe-header log object contains `bindingId` and `outboxEventId` and does not contain `Authorization`, `Bearer`, or `secret`.
+- [ ] **Step 2: Run the dispatcher test and verify red**
 
-- [ ] **Step 2: Run the tests and verify they fail**
-
-Run:
+Run from `packages/server`:
 
 ```bash
-cd packages/server
 bun test src/workflow-events/dispatcher.test.ts
 ```
 
-Expected: FAIL because the dispatcher never reads `delivery_headers`.
+Expected: FAIL because private receiver headers are neither validated nor read.
 
-- [ ] **Step 3: Merge headers after HMAC headers and persist evidence separately**
+- [ ] **Step 3: Validate before attempt insertion and keep request/evidence maps separate**
 
-In `WorkflowEventDispatcher.deliver()`:
+Import `buildDeliveryHeaderEvidence`, `mergeDeliveryHeaders`, `UNSAFE_DELIVERY_HEADERS`, and `validateDeliveryHeaders` from `@archon/core/events/delivery-headers`.
 
-1. Keep the current missing-route and missing-secret terminal-failure paths.
-2. After the secret check, read `binding.delivery_headers ?? {}`.
-3. Call `validateDeliveryHeaders()`.
-4. On failure, log `{ bindingId: row.binding_id, outboxEventId: row.id }` as `workflow_events.unsafe_delivery_headers` and set `terminal-failure` / `unsafe-delivery-headers` without calling `fetch` or `insertPendingAttempt`.
-5. Build the current Archon header map first.
-6. Create `requestHeaders = mergeDeliveryHeaders(archonHeaders, receiverHeaders)`.
-7. Create `evidenceHeaders = buildDeliveryHeaderEvidence(archonHeaders, receiverHeaders)`.
-8. Sign `row.event_body` exactly as today.
-9. Pass `evidenceHeaders` to `insertPendingAttempt`.
-10. POST `row.event_body` with `requestHeaders`.
+In `deliver()`, define this local helper after the missing-route branch and before the private binding lookup:
 
-Do not parse or reserialize `row.event_body`.
-
-- [ ] **Step 4: Run the tests and verify they pass**
-
-Run:
-
-```bash
-cd packages/server
-bun test src/workflow-events/
+```ts
+const terminalUnsafeHeaders = async (): Promise<void> => {
+  log.warn(
+    { bindingId: row.binding_id, outboxEventId: row.id },
+    'workflow_events.unsafe_delivery_headers'
+  );
+  await updateOutboxAfterAttempt(row.id, {
+    status: 'terminal-failure',
+    attempt_count: row.attempt_count,
+    last_attempt_at: this.now(),
+    next_attempt_at: null,
+    last_error: UNSAFE_DELIVERY_HEADERS,
+  });
+};
 ```
 
-Expected: PASS.
+Replace the current private binding lookup with this exact fail-closed branch:
+
+```ts
+let binding: Awaited<ReturnType<typeof getBindingByIdWithSecret>>;
+try {
+  binding = await getBindingByIdWithSecret(row.binding_id);
+} catch (error) {
+  if (
+    error instanceof Error &&
+    error.message === 'BINDING_CORRUPT_ROW: delivery_headers'
+  ) {
+    await terminalUnsafeHeaders();
+    return;
+  }
+  throw error;
+}
+```
+
+This exact-message branch converts only corrupt private header JSON to the safe terminal outcome.
+Rethrow every other private-binding lookup error so the existing drain failure behavior remains unchanged.
+
+After the current missing-secret check and before computing `startedAt`, validate `binding.delivery_headers ?? {}` with this branch:
+
+```ts
+const receiverHeaders = binding.delivery_headers ?? {};
+try {
+  validateDeliveryHeaders(receiverHeaders);
+} catch {
+  await terminalUnsafeHeaders();
+  return;
+}
+```
+
+Keep signature generation over `row.event_body` unchanged.
+Rename the current `headers` object to `archonHeaders`, then create separate maps:
+
+```ts
+const requestHeaders = mergeDeliveryHeaders(archonHeaders, receiverHeaders);
+const evidenceHeaders = buildDeliveryHeaderEvidence(archonHeaders, receiverHeaders);
+```
+
+Pass `evidenceHeaders` to `insertPendingAttempt()`.
+Pass `requestHeaders` and the unchanged `row.event_body` to `post()`.
+
+- [ ] **Step 4: Run dispatcher tests and server type check**
+
+Run from `packages/server`:
+
+```bash
+bun test src/workflow-events/dispatcher.test.ts
+bun x tsc --noEmit
+```
+
+Expected: both commands exit `0`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add packages/server/src/workflow-events/dispatcher.ts packages/server/src/workflow-events/dispatcher.test.ts
-git commit -m "$(cat <<'EOF'
-feat(server): merge private delivery headers without exposing secrets
-
-EOF
-)"
+git commit -m "feat(server): deliver private receiver headers safely"
 ```
 
 ---
 
-### Task 10: CLI Create And Update File Flags
+### Task 11: CLI Create And Update File Inputs
 
 **Files:**
 
@@ -1854,110 +2341,485 @@ EOF
 
 **Interfaces:**
 
-- Consumes: `--transform-file` and `--receiver-headers-file` JSON files.
-- Produces: `BindingArgs.transformFile?: string`, `BindingArgs.receiverHeadersFile?: string`, and create/update calls that pass `transform` / `deliveryHeaders` as `undefined` or `null` or a parsed object.
+- Consumes: `--transform-file <path>` and `--receiver-headers-file <path>`.
+- Produces: `transformFile?: string`, `receiverHeadersFile?: string`, safe file errors, and correct create/update `undefined` versus `null` behavior.
 
-- [ ] **Step 1: Write the failing CLI tests**
+- [ ] **Step 1: Add failing unit tests for file semantics and privacy**
 
-In `packages/cli/src/commands/provider-binding.test.ts`, add tests that write temp JSON files and call the command functions with `transformFile` / `receiverHeadersFile`.
+Add `mkdtempSync`, `writeFileSync`, and `rmSync` imports to `packages/cli/src/commands/provider-binding.test.ts`.
+Add this helper and tests:
 
-Required cases:
+```ts
+function withJsonFiles(
+  transform: unknown,
+  headers: unknown
+): { dir: string; transformFile: string; headersFile: string } {
+  const dir = mkdtempSync(join(tmpdir(), 'archon-binding-files-'));
+  const transformFile = join(dir, 'transform.json');
+  const headersFile = join(dir, 'headers.json');
+  writeFileSync(transformFile, JSON.stringify(transform));
+  writeFileSync(headersFile, JSON.stringify(headers));
+  return { dir, transformFile, headersFile };
+}
 
-- create with a valid transform file and a valid headers file calls `createBinding()` with the normalized object and header map
-- omitted update flags call `updateBinding()` without `transform` or `deliveryHeaders`
-- a file containing JSON `null` calls `updateBinding()` with `transform: null` or `deliveryHeaders: null`
-- invalid transform JSON or `$now()` fails before `createBinding` / `updateBinding`
-- the error envelope does not contain the file path, the expression, or `Bearer secret`
+test('create reads, normalizes, validates, and passes both files without echoing secrets', async () => {
+  const files = withJsonFiles(
+    { engine: 'jsonata', expression: '{ "ok": true }' },
+    { Authorization: 'Bearer secret' }
+  );
+  try {
+    mockCreateBinding.mockClear();
+    const logs: string[] = [];
+    await providerBindingCreateCommand(
+      {
+        provider: 'archon',
+        name: 'workflow-engine-primary',
+        projectRef: 'workflow-engine',
+        route: 'https://example.invalid/events',
+        transformFile: files.transformFile,
+        receiverHeadersFile: files.headersFile,
+      },
+      { json: true, log: line => logs.push(line) }
+    );
+    expect(mockCreateBinding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transform: expect.objectContaining({
+          engine: 'jsonata',
+          timeoutMs: 50,
+          stackDepth: 128,
+          maxSequenceSize: 10_000,
+          maxOutputBytes: 65_536,
+        }),
+        deliveryHeaders: { Authorization: 'Bearer secret' },
+      })
+    );
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).not.toContain(files.transformFile);
+    expect(logs[0]).not.toContain(files.headersFile);
+    expect(logs[0]).not.toContain('Bearer secret');
+  } finally {
+    rmSync(files.dir, { recursive: true, force: true });
+  }
+});
 
-In `packages/cli/src/commands/provider-binding.e2e.test.ts`, add a no-git-repo test that `--transform-file` and `--receiver-headers-file` parse as string options and that a missing value does not swallow `--json`.
+test('update omission preserves fields while JSON null supplies explicit clears', async () => {
+  mockUpdateBinding.mockClear();
+  await providerBindingUpdateCommand(
+    {
+      provider: 'archon',
+      name: 'workflow-engine-primary',
+      projectRef: 'workflow-engine',
+      route: 'https://example.invalid/events',
+    },
+    { json: true, log: () => {} }
+  );
+  expect(mockUpdateBinding.mock.calls[0]?.[0]).not.toHaveProperty('transform');
+  expect(mockUpdateBinding.mock.calls[0]?.[0]).not.toHaveProperty('deliveryHeaders');
 
-- [ ] **Step 2: Run the tests and verify they fail**
+  const files = withJsonFiles(null, null);
+  try {
+    await providerBindingUpdateCommand(
+      {
+        provider: 'archon',
+        name: 'workflow-engine-primary',
+        projectRef: 'workflow-engine',
+        route: 'https://example.invalid/events',
+        transformFile: files.transformFile,
+        receiverHeadersFile: files.headersFile,
+      },
+      { json: true, log: () => {} }
+    );
+    expect(mockUpdateBinding.mock.calls[1]?.[0]).toMatchObject({
+      transform: null,
+      deliveryHeaders: null,
+    });
+  } finally {
+    rmSync(files.dir, { recursive: true, force: true });
+  }
+});
 
-Run:
-
-```bash
-cd packages/cli
-bun test src/commands/provider-binding.test.ts src/commands/provider-binding.e2e.test.ts
+test('invalid JSON, a disallowed transform, and unsafe headers fail before any DB call', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'archon-binding-files-'));
+  const invalidJson = join(dir, 'invalid.json');
+  const disallowed = join(dir, 'disallowed.json');
+  const unsafe = join(dir, 'unsafe.json');
+  writeFileSync(invalidJson, '{');
+  writeFileSync(disallowed, JSON.stringify({ engine: 'jsonata', expression: '$now()' }));
+  writeFileSync(unsafe, JSON.stringify({ Authorization: 'Bearer\nsecret' }));
+  try {
+    for (const args of [
+      { transformFile: invalidJson },
+      { transformFile: disallowed },
+      { receiverHeadersFile: unsafe },
+    ]) {
+      mockCreateBinding.mockClear();
+      const logs: string[] = [];
+      const exitCode = await providerBindingCreateCommand(
+        {
+          provider: 'archon',
+          name: 'workflow-engine-primary',
+          projectRef: 'workflow-engine',
+          route: 'https://example.invalid/events',
+          ...args,
+        },
+        { json: true, log: line => logs.push(line) }
+      );
+      expect(exitCode).not.toBe(0);
+      expect(mockCreateBinding).not.toHaveBeenCalled();
+      expect(logs).toHaveLength(1);
+      expect(logs[0]).not.toContain(dir);
+      expect(logs[0]).not.toMatch(/\$now|Bearer|secret/);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 ```
 
-Expected: FAIL because the flags and file readers do not exist.
+- [ ] **Step 2: Add failing subprocess parsing cases**
 
-- [ ] **Step 3: Parse the file flags and apply create/update semantics**
+In `packages/cli/src/commands/provider-binding.e2e.test.ts`, add one table-driven test that invokes malformed create commands from a non-git temp directory with each new flag before `--json`.
+Assert one JSON line, a nonzero exit, and empty stderr.
+Include cases where `--transform-file` or `--receiver-headers-file` has no value so the normalization shim must insert an empty string instead of consuming `--json`.
 
-In `packages/cli/src/cli.ts`:
+Use this exact case table:
 
-- Add `--transform-file` and `--receiver-headers-file` to `normalizeProviderBindingArgs()` and `parseArgs()`.
-- Pass both values into `bindingArgs`.
-- Keep `provider-binding` in `noGitCommands`.
-
-In `packages/cli/src/commands/provider-binding.ts`:
-
-- Extend `BindingArgs` with the two optional file paths.
-- Read files only when the flag is present.
-- Parse JSON and treat JSON `null` as a supplied clear.
-- On create, omitted or JSON `null` becomes `undefined` so the db layer stores no configuration.
-- On update, omitted stays `undefined` and JSON `null` becomes `null`.
-- Classify unread or invalid JSON as `MALFORMED_REQUEST` with `fieldErrors` `{ path: '/transform', code: 'unreadable' | 'invalid' }` or `{ path: '/deliveryHeaders', code: 'unreadable' | 'invalid' }`.
-- Do not put the path, expression, or header values in `details`.
-- Call `createBinding()` / `updateBinding()` only after both files parse.
-- Leave status, rotate, and disable output shapes unchanged.
-
-- [ ] **Step 4: Run the tests and verify they pass**
-
-Run:
-
-```bash
-cd packages/cli
-bun test src/commands/provider-binding.test.ts src/commands/provider-binding.e2e.test.ts
+```ts
+for (const flag of ['--transform-file', '--receiver-headers-file'] as const) {
+  test(`${flag} is parsed as a string option and a missing value never swallows --json`, async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'archon-provider-binding-no-git-'));
+    try {
+      const result = await runCli(['provider-binding', 'create', flag, '--json'], cwd);
+      expect(result.stdout.trim().split('\n').filter(Boolean)).toHaveLength(1);
+      expect(JSON.parse(result.stdout.trim())).toMatchObject({ success: false });
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toBe('');
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+}
 ```
 
-Expected: PASS.
+- [ ] **Step 3: Run the mock-heavy unit and subprocess files separately and verify red**
 
-- [ ] **Step 5: Commit**
+Run from `packages/cli`:
+
+```bash
+bun test src/commands/provider-binding.test.ts
+bun test src/commands/provider-binding.e2e.test.ts
+```
+
+Expected: the unit test fails on missing `BindingArgs` fields and the subprocess test fails because the flags are not registered.
+
+- [ ] **Step 4: Implement safe file loading before project resolution**
+
+In `packages/cli/src/commands/provider-binding.ts`, extend `BindingArgs` with:
+
+```ts
+transformFile?: string;
+receiverHeadersFile?: string;
+```
+
+Import `readFile` from `node:fs/promises`, the transform type/functions from `@archon/core/events/provider-binding-transform`, and the delivery-header type/function from `@archon/core/events/delivery-headers`.
+
+Add a local safe error and loader that never stores the path or contents on the error:
+
+```ts
+class BindingFileInputError extends Error {
+  readonly path: '/transform' | '/deliveryHeaders';
+  readonly reason: 'unreadable' | 'invalid';
+
+  constructor(path: '/transform' | '/deliveryHeaders', reason: 'unreadable' | 'invalid') {
+    super('MALFORMED_REQUEST');
+    this.path = path;
+    this.reason = reason;
+  }
+}
+
+async function readJsonFile(path: string, field: BindingFileInputError['path']): Promise<unknown> {
+  let source: string;
+  try {
+    source = await readFile(path, 'utf8');
+  } catch {
+    throw new BindingFileInputError(field, 'unreadable');
+  }
+  try {
+    return JSON.parse(source) as unknown;
+  } catch {
+    throw new BindingFileInputError(field, 'invalid');
+  }
+}
+
+async function loadBindingFiles(args: BindingArgs): Promise<{
+  transform: ProviderBindingTransform | null | undefined;
+  deliveryHeaders: DeliveryHeaders | null | undefined;
+}> {
+  let transform: ProviderBindingTransform | null | undefined;
+  if (args.transformFile !== undefined) {
+    const value = await readJsonFile(args.transformFile, '/transform');
+    if (value === null) {
+      transform = null;
+    } else {
+      transform = normalizeProviderBindingTransform(value);
+      validateProviderBindingTransform(transform);
+    }
+  }
+  let deliveryHeaders: DeliveryHeaders | null | undefined;
+  if (args.receiverHeadersFile !== undefined) {
+    const value = await readJsonFile(args.receiverHeadersFile, '/deliveryHeaders');
+    if (value === null) {
+      deliveryHeaders = null;
+    } else {
+      try {
+        deliveryHeaders = normalizeDeliveryHeaders(value);
+      } catch {
+        throw new BindingFileInputError('/deliveryHeaders', 'invalid');
+      }
+    }
+  }
+  return { transform, deliveryHeaders };
+}
+```
+
+Teach `classifyError()` to recognize `ProviderBindingTransformError` before the generic timeout branch.
+Return the exact transform code, category `timeout` only for `TRANSFORM_TIMEOUT`, `retryable: false`, and exit `69` or `64` as defined in Global Constraints.
+
+In create and update, call `loadBindingFiles()` after basic required-field validation but before `resolveProjectRef()`.
+Catch `BindingFileInputError` and emit `MALFORMED_REQUEST` with `fieldErrors: [{ path: error.path, code: error.reason }]`.
+This conversion is required for delivery-header validation because `normalizeDeliveryHeaders()` intentionally throws only the constant private error `unsafe-delivery-headers`; the CLI must expose that failure as a safe malformed file field, not as `INTERNAL_ERROR`.
+Catch other errors with the existing classified envelope path.
+
+For create, add only non-null values:
+
+```ts
+...(files.transform ? { transform: files.transform } : {}),
+...(files.deliveryHeaders ? { deliveryHeaders: files.deliveryHeaders } : {}),
+```
+
+For update, preserve omitted fields and include explicit nulls:
+
+```ts
+...(files.transform !== undefined ? { transform: files.transform } : {}),
+...(files.deliveryHeaders !== undefined
+  ? { deliveryHeaders: files.deliveryHeaders }
+  : {}),
+```
+
+In `packages/cli/src/cli.ts`, add both flags to `normalizeProviderBindingArgs()`'s `stringOptions`, add both as `type: 'string'` options in `parseArgs()`, and pass them into `bindingArgs`.
+
+- [ ] **Step 5: Run CLI unit tests, E2E tests, and type check separately**
+
+Run from `packages/cli`:
+
+```bash
+bun test src/commands/provider-binding.test.ts
+bun test src/commands/provider-binding.e2e.test.ts
+bun x tsc --noEmit
+```
+
+Expected: every command exits `0`.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add packages/cli/src/cli.ts packages/cli/src/commands/provider-binding.ts packages/cli/src/commands/provider-binding.test.ts packages/cli/src/commands/provider-binding.e2e.test.ts
-git commit -m "$(cat <<'EOF'
-feat(cli): accept provider-binding transform and header files
-
-EOF
-)"
+git commit -m "feat(cli): accept provider-binding delivery config files"
 ```
 
 ---
 
-### Task 11: Dry-Run Command, Contract, And Docs
+### Task 12: Side-Effect-Free `provider-binding test` Command
 
 **Files:**
 
 - Create: `packages/cli/src/commands/provider-binding-test.ts`
+- Create: `packages/cli/src/commands/provider-binding-test.test.ts`
 - Create: `_bmad-output/planning-artifacts/contracts/workflow-commander/examples/providers/archon/commands/binding-test-success.json`
-- Modify: `packages/cli/src/cli.ts`
 - Modify: `packages/cli/src/commands/workflow-provider-command-envelope.ts`
 - Modify: `packages/cli/src/commands/workflow-provider-command-envelope.test.ts`
-- Modify: `packages/cli/src/commands/provider-binding.test.ts`
-- Modify: `packages/cli/src/commands/provider-binding.e2e.test.ts`
+- Modify: `packages/cli/src/cli.ts`
+- Modify: `packages/cli/package.json`
 - Modify: `_bmad-output/planning-artifacts/contracts/workflow-commander/schemas/workflow-command-envelope.schema.json`
 - Modify: `_bmad-output/planning-artifacts/contracts/workflow-commander/validate_contracts.py`
-- Modify: `packages/docs-web/src/content/docs/reference/cli.md`
 
 **Interfaces:**
 
-- Consumes: `--transform-file`, `--envelope-file`, `normalizeProviderBindingTransform()`, `workflowEventEnvelopeSchema`, and `transformWorkflowEventBody()`.
-- Produces: command identifier `binding.test` and result `{ operation: "test", engine: "jsonata", transformedBody: string, outputBytes: number }`.
+- Consumes: `--transform-file`, `--envelope-file`, the canonical envelope schema, transform normalization, and enqueue-identical evaluation.
+- Produces: additive `binding.test` command contract and success result `{ operation: 'test', engine: 'jsonata', transformedBody: string, outputBytes: number }`.
 
-- [ ] **Step 1: Write the failing dry-run and contract tests**
+- [ ] **Step 1: Write the failing side-effect-free command tests**
 
-Add `binding.test` to `PROVIDER_CLI_SYNTAX_BASELINE` as:
+Create `packages/cli/src/commands/provider-binding-test.test.ts`:
+
+```ts
+import { describe, expect, spyOn, test } from 'bun:test';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { providerBindingTestCommand } from './provider-binding-test';
+
+function sampleEnvelope(): Record<string, unknown> {
+  return {
+    schemaVersion: 'workflow-event-envelope.v1',
+    provider: 'archon',
+    eventId: 'evt-test',
+    eventType: 'workflow.run.started',
+    occurredAt: '2026-08-18T00:00:00.000Z',
+    bindingRef: {
+      provider: 'archon',
+      name: 'workflow-engine-primary',
+      bindingId: 'wpb_archon::workflow_engine_primary',
+      projectRef: 'project:cb-1',
+    },
+    workflowRunRef: {
+      provider: 'archon',
+      runId: 'run-1',
+      workflowName: 'bmad-dev-story',
+      projectRef: 'project:cb-1',
+    },
+    projectRef: {
+      id: 'cb-1',
+      codebaseRef: 'workflow-engine',
+      repositoryPath: '/workspace/workflow-engine',
+      defaultBranch: 'dev',
+    },
+    idempotencyKey: 'archon:workflow-engine-primary:evt-test',
+    payload: { state: 'running', startedAt: '2026-08-18T00:00:00.000Z' },
+  };
+}
+
+test('returns the exact transformed string, byte length, and sample bindingRef', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'archon-binding-test-'));
+  const transformFile = join(dir, 'transform.json');
+  const envelopeFile = join(dir, 'envelope.json');
+  writeFileSync(
+    transformFile,
+    JSON.stringify({ engine: 'jsonata', expression: '{ "eventType": eventType }' })
+  );
+  writeFileSync(envelopeFile, JSON.stringify(sampleEnvelope()));
+  try {
+    const logs: string[] = [];
+    const exitCode = await providerBindingTestCommand(
+      { transformFile, envelopeFile, correlationId: 'corr-test' },
+      { json: true, log: line => logs.push(line) }
+    );
+    expect(exitCode).toBe(0);
+    expect(logs).toHaveLength(1);
+    expect(JSON.parse(logs[0] as string)).toMatchObject({
+      command: 'binding.test',
+      success: true,
+      correlationId: 'corr-test',
+      bindingRef: (sampleEnvelope().bindingRef as Record<string, unknown>),
+      result: {
+        operation: 'test',
+        engine: 'jsonata',
+        transformedBody: '{"eventType":"workflow.run.started"}',
+        outputBytes: 36,
+      },
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('uses safe errors for null config, invalid envelope, and scalar output', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'archon-binding-test-'));
+  const transformFile = join(dir, 'transform.json');
+  const envelopeFile = join(dir, 'envelope.json');
+  try {
+    for (const testCase of [
+      { transform: null, envelope: sampleEnvelope(), code: 'TRANSFORM_CONFIG_INVALID' },
+      { transform: { engine: 'jsonata', expression: '{}' }, envelope: {}, code: 'MALFORMED_REQUEST' },
+      { transform: { engine: 'jsonata', expression: 'eventType' }, envelope: sampleEnvelope(), code: 'TRANSFORM_RESULT_INVALID' },
+    ]) {
+      writeFileSync(transformFile, JSON.stringify(testCase.transform));
+      writeFileSync(envelopeFile, JSON.stringify(testCase.envelope));
+      const logs: string[] = [];
+      const exitCode = await providerBindingTestCommand(
+        { transformFile, envelopeFile },
+        { json: true, log: line => logs.push(line) }
+      );
+      expect(exitCode).not.toBe(0);
+      expect(JSON.parse(logs[0] as string)).toMatchObject({
+        success: false,
+        error: { code: testCase.code },
+      });
+      expect(logs[0]).not.toContain(dir);
+      expect(logs[0]).not.toContain('workflow-event-envelope.v1');
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('maps a deterministic evaluator timeout to exit 69 without input leakage', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'archon-binding-test-'));
+  const transformFile = join(dir, 'transform.json');
+  const envelopeFile = join(dir, 'envelope.json');
+  writeFileSync(
+    transformFile,
+    JSON.stringify({
+      engine: 'jsonata',
+      expression: '{ "n": [1..20] }',
+      timeoutMs: 1,
+      maxSequenceSize: 100,
+    })
+  );
+  writeFileSync(envelopeFile, JSON.stringify(sampleEnvelope()));
+  let now = 0;
+  const dateNow = spyOn(Date, 'now').mockImplementation(() => {
+    now += 10;
+    return now;
+  });
+  try {
+    const logs: string[] = [];
+    const exitCode = await providerBindingTestCommand(
+      { transformFile, envelopeFile },
+      { json: true, log: line => logs.push(line) }
+    );
+    expect(exitCode).toBe(69);
+    expect(logs).toHaveLength(1);
+    expect(JSON.parse(logs[0] as string)).toMatchObject({
+      success: false,
+      error: {
+        code: 'TRANSFORM_TIMEOUT',
+        category: 'timeout',
+        retryable: false,
+      },
+      execution: { exitCode: 69, timedOut: true },
+    });
+    expect(logs[0]).not.toContain(dir);
+    expect(logs[0]).not.toContain('[1..20]');
+  } finally {
+    dateNow.mockRestore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('source has no DB, outbox, or HTTP dependency', () => {
+  const source = readFileSync(join(import.meta.dir, 'provider-binding-test.ts'), 'utf8');
+  expect(source).not.toContain('@archon/core/db');
+  expect(source).not.toContain('createBinding');
+  expect(source).not.toContain('enqueueExternalWorkflowEvent');
+  expect(source).not.toMatch(/\bfetch\s*\(/);
+});
+```
+
+In `packages/cli/src/commands/workflow-provider-command-envelope.test.ts`, add this syntax entry to `PROVIDER_CLI_SYNTAX_BASELINE`:
 
 ```ts
 'binding.test':
   'archon provider-binding test --transform-file <path> --envelope-file <path> --json',
 ```
 
-Change the schema-enum length assertion from `12` to `13`.
+Change all three command-family length assertions currently set to `12` to `13`.
+Update the corresponding test names and comments from “12 command families” to “13 command families”.
+Add `{ fixture: 'binding-test-success.json', refKind: 'bindingRef' }` to `REPRESENTATIVE_COMMAND_FAMILIES` after the `binding-disable-success.json` entry.
+Delete the complete `3.3A-CONTRACT-048 — command contract package is never edited to fit runtime` test block that runs `git diff --quiet`.
+That historical story guard rejects every authorized contract evolution while files are uncommitted; the source/schema equality tests, exact fixture reproduction, fixture inventory, and canonical Python validator provide deterministic semantic protection for this approved additive change.
 
-Create `binding-test-success.json`:
+Create `_bmad-output/planning-artifacts/contracts/workflow-commander/examples/providers/archon/commands/binding-test-success.json`:
 
 ```json
 {
@@ -1985,167 +2847,435 @@ Create `binding-test-success.json`:
 }
 ```
 
-Add `binding-test-success.json` to `REQUIRED_COMMAND_EXAMPLES` in `validate_contracts.py`.
+Add `'binding-test-success.json'` to `REQUIRED_COMMAND_EXAMPLES` in `_bmad-output/planning-artifacts/contracts/workflow-commander/validate_contracts.py`.
 
-Add command-unit tests that:
+- [ ] **Step 2: Run the command and contract tests and verify both red reasons**
 
-- accept a valid transform file and envelope file and return the exact transformed string and UTF-8 byte length
-- use `binding.test` and the sample envelope `bindingRef`
-- reject a null transform file, an invalid envelope, and a scalar transform result with a stable transform error code
-- do not import or call `createBinding`, `enqueueExternalWorkflowEvent`, or `fetch`
-- do not contain the file path, expression, or envelope dump in the error envelope
-
-Add an e2e test in a temp directory that is not a git repo:
+Run from `packages/cli`:
 
 ```bash
-bun packages/cli/src/cli.ts provider-binding test --transform-file ... --envelope-file ... --json
+bun test src/commands/provider-binding-test.test.ts
+bun test src/commands/workflow-provider-command-envelope.test.ts
 ```
 
-Add a source test that `packages/cli/src/commands/provider-binding-test.ts` does not contain `@archon/core/db`.
-
-- [ ] **Step 2: Run the tests and verify they fail**
-
-Run:
+Run from the repository root:
 
 ```bash
-cd packages/cli
-bun test src/commands/workflow-provider-command-envelope.test.ts src/commands/provider-binding.test.ts src/commands/provider-binding.e2e.test.ts src/commands/provider-binding-contract.test.ts
+python3 _bmad-output/planning-artifacts/contracts/workflow-commander/validate_contracts.py
 ```
 
-Expected: FAIL because `binding.test` is absent from the command enum and there is no dry-run command.
+Expected: the new command test fails with `Cannot find module './provider-binding-test'`, and the contract checks fail because the source and schema enums do not yet contain the required `binding.test` fixture command.
 
-- [ ] **Step 3: Implement the dry-run command and document it**
+- [ ] **Step 3: Extend the typed command set and implement the complete DB-free command**
 
-Add `'binding.test'` to `WORKFLOW_PROVIDER_COMMANDS` and `BINDING_COMMANDS`.
+Append `'binding.test'` after `'binding.disable'` in both `WORKFLOW_PROVIDER_COMMANDS` and `BINDING_COMMANDS` in `packages/cli/src/commands/workflow-provider-command-envelope.ts`.
+Do this before creating the new command module so the shared `EnvelopeMeta.command` type and binding success-envelope branch accept `binding.test` during this task's type check.
 
-Add `'binding.test'` to both command enums in `workflow-command-envelope.schema.json`.
+Append `"binding.test"` after `"binding.disable"` in both command enums in `_bmad-output/planning-artifacts/contracts/workflow-commander/schemas/workflow-command-envelope.schema.json`:
 
-Create `packages/cli/src/commands/provider-binding-test.ts` that:
+- `properties.command.enum`.
+- The binding-success `allOf[].if.properties.command.enum`.
 
-- requires `--transform-file` and `--envelope-file`
-- reads and parses JSON without logging the path
-- rejects JSON `null` for the transform file
-- parses the transform with `normalizeProviderBindingTransform()`
-- parses the envelope with `workflowEventEnvelopeSchema`
-- calls `transformWorkflowEventBody(envelope, transform)`
-- emits a success envelope whose `bindingRef` comes from the sample envelope
-- maps `ProviderBindingTransformError.code` into the existing error-envelope `error.code`
-- also maps a plain `Error` whose message is a `TRANSFORM_*` code, because `normalizeProviderBindingTransform()` throws that message before the evaluator runs
-- uses category `timeout` only for `TRANSFORM_TIMEOUT` and `provider_contract` for the other transform codes
+Do not change the result schema because its existing binding-success result shape is intentionally open and the new fixture locks the additive dry-run fields.
+
+Create `packages/cli/src/commands/provider-binding-test.ts` with the following implementation:
+
+```ts
+import { readFile } from 'node:fs/promises';
+import {
+  workflowEventEnvelopeSchema,
+  type WorkflowEventEnvelope,
+} from '@archon/core/events/workflow-event-envelope';
+import {
+  ProviderBindingTransformError,
+  normalizeProviderBindingTransform,
+  transformWorkflowEventBody,
+  type TransformErrorCode,
+} from '@archon/core/events/provider-binding-transform';
+import {
+  buildErrorEnvelope,
+  buildSuccessEnvelope,
+  resolveCorrelationId,
+  resolveIssuedAt,
+  safeStringify,
+  type EnvelopeMeta,
+  type ErrorCategory,
+} from './workflow-provider-command-envelope.js';
+
+interface ProviderBindingTestArgs {
+  transformFile?: string;
+  envelopeFile?: string;
+  correlationId?: string;
+}
+
+interface ProviderBindingTestOptions {
+  json: boolean;
+  log: (line: string) => void;
+}
+
+type InputPath = '/transform' | '/envelope';
+type InputReason = 'required' | 'unreadable' | 'invalid';
+
+class BindingTestInputError extends Error {
+  readonly path: InputPath;
+  readonly reason: InputReason;
+
+  constructor(path: InputPath, reason: InputReason) {
+    super('MALFORMED_REQUEST');
+    this.path = path;
+    this.reason = reason;
+  }
+}
+
+function emitError(
+  meta: EnvelopeMeta,
+  opts: ProviderBindingTestOptions,
+  startedAt: number,
+  error: {
+    code: string;
+    category: ErrorCategory;
+    exitCode: number;
+    fieldErrors?: Array<{ path: InputPath; code: InputReason }>;
+  }
+): number {
+  const details: Record<string, unknown> = { requestAccepted: false };
+  if (error.fieldErrors !== undefined) details.fieldErrors = error.fieldErrors;
+  opts.log(
+    safeStringify(
+      buildErrorEnvelope(
+        meta,
+        {
+          code: error.code,
+          category: error.category,
+          retryable: false,
+          details,
+          exitCode: error.exitCode,
+        },
+        startedAt
+      )
+    )
+  );
+  return error.exitCode;
+}
+
+async function readRequiredJson(path: string, field: InputPath): Promise<unknown> {
+  let source: string;
+  try {
+    source = await readFile(path, 'utf8');
+  } catch {
+    throw new BindingTestInputError(field, 'unreadable');
+  }
+  try {
+    return JSON.parse(source) as unknown;
+  } catch {
+    throw new BindingTestInputError(field, 'invalid');
+  }
+}
+
+function classifyTransformError(code: TransformErrorCode): {
+  category: ErrorCategory;
+  exitCode: number;
+} {
+  return code === 'TRANSFORM_TIMEOUT'
+    ? { category: 'timeout', exitCode: 69 }
+    : { category: 'provider_contract', exitCode: 64 };
+}
+
+export async function providerBindingTestCommand(
+  args: ProviderBindingTestArgs,
+  opts: ProviderBindingTestOptions
+): Promise<number> {
+  const startedAt = Date.now();
+  const meta: EnvelopeMeta = {
+    command: 'binding.test',
+    provider: 'archon',
+    correlationId: resolveCorrelationId(args.correlationId),
+    issuedAt: resolveIssuedAt(),
+  };
+  const missing = [
+    ...(args.transformFile === undefined || args.transformFile.trim() === ''
+      ? [{ path: '/transform' as const, code: 'required' as const }]
+      : []),
+    ...(args.envelopeFile === undefined || args.envelopeFile.trim() === ''
+      ? [{ path: '/envelope' as const, code: 'required' as const }]
+      : []),
+  ];
+  if (missing.length > 0) {
+    return emitError(meta, opts, startedAt, {
+      code: 'MALFORMED_REQUEST',
+      category: 'provider_contract',
+      exitCode: 64,
+      fieldErrors: missing,
+    });
+  }
+
+  let rawTransform: unknown;
+  let rawEnvelope: unknown;
+  try {
+    // The required-field branch above proves both optional arguments are non-blank strings.
+    rawTransform = await readRequiredJson(args.transformFile as string, '/transform');
+    rawEnvelope = await readRequiredJson(args.envelopeFile as string, '/envelope');
+  } catch (error) {
+    if (!(error instanceof BindingTestInputError)) {
+      return emitError(meta, opts, startedAt, {
+        code: 'INTERNAL_ERROR',
+        category: 'implementation_defect',
+        exitCode: 70,
+      });
+    }
+    return emitError(meta, opts, startedAt, {
+      code: 'MALFORMED_REQUEST',
+      category: 'provider_contract',
+      exitCode: 64,
+      fieldErrors: [{ path: error.path, code: error.reason }],
+    });
+  }
+
+  const envelopeResult = workflowEventEnvelopeSchema.safeParse(rawEnvelope);
+  if (!envelopeResult.success) {
+    return emitError(meta, opts, startedAt, {
+      code: 'MALFORMED_REQUEST',
+      category: 'provider_contract',
+      exitCode: 64,
+      fieldErrors: [{ path: '/envelope', code: 'invalid' }],
+    });
+  }
+  const envelope: WorkflowEventEnvelope = envelopeResult.data;
+
+  try {
+    const transform = normalizeProviderBindingTransform(rawTransform);
+    const transformed = await transformWorkflowEventBody(envelope, transform);
+    opts.log(
+      safeStringify(
+        buildSuccessEnvelope(
+          { ...meta, provider: envelope.provider },
+          { bindingRef: envelope.bindingRef },
+          {
+            operation: 'test',
+            engine: 'jsonata',
+            transformedBody: transformed.body,
+            outputBytes: transformed.outputBytes,
+          }
+        )
+      )
+    );
+    return 0;
+  } catch (error) {
+    if (!(error instanceof ProviderBindingTransformError)) {
+      return emitError(meta, opts, startedAt, {
+        code: 'INTERNAL_ERROR',
+        category: 'implementation_defect',
+        exitCode: 70,
+      });
+    }
+    const classified = classifyTransformError(error.code);
+    return emitError(meta, opts, startedAt, {
+      code: error.code,
+      category: classified.category,
+      exitCode: classified.exitCode,
+    });
+  }
+}
+```
+
+This implementation maps absent or blank file flags to `required`, read failures to `unreadable`, JSON failures and canonical-envelope failures to `invalid`, and all three malformed input cases to exit `64`.
+It maps null or schema-invalid transforms to `TRANSFORM_CONFIG_INVALID`, `TRANSFORM_TIMEOUT` to category `timeout` and exit `69`, and every other stable transform code to category `provider_contract` and exit `64`.
+Every classified error is non-retryable and carries `details: { requestAccepted: false }` plus only safe field errors where applicable.
+The implementation never logs a caught raw error and emits exactly one envelope line on every return path.
+
+- [ ] **Step 4: Wire the CLI and prove no DB initialization in the subprocess test**
 
 In `packages/cli/src/cli.ts`:
 
-- add `--envelope-file` to the string-option set
-- dispatch `case 'test'` to `providerBindingTestCommand`
-- add `test` to the human-readable available-subcommand list
-- add a `provider-binding` section to `printUsage()`
+- Import `providerBindingTestCommand` from `./commands/provider-binding-test`.
+- Add `--envelope-file` to the provider-binding string normalization set and to `parseArgs()`.
+- Pass `transformFile`, `receiverHeadersFile`, and `envelopeFile` in `bindingArgs`.
+- Dispatch `case 'test'` to `providerBindingTestCommand(bindingArgs, bindingOpts)`.
+- Change the available subcommand text to `create, update, status, rotate, disable, test`.
+- Add provider-binding create, update, and test syntax to `printUsage()`.
+- Keep `provider-binding` in `noGitCommands`.
 
-In `packages/docs-web/src/content/docs/reference/cli.md`, add a `provider-binding` section after `validate commands` that documents:
+Extend the `runCli()` helper in `packages/cli/src/commands/provider-binding.e2e.test.ts` with an optional environment override.
+Add a real dry-run test that sets `ARCHON_HOME` to a new temp directory and `DO_NOT_TRACK=1`, runs from a different non-git temp directory, parses the one success envelope, and asserts `join(archonHome, 'archon.db')` does not exist after exit.
 
-- `create` / `update` `--transform-file` and `--receiver-headers-file`
-- omitted update flags preserve configuration
-- JSON `null` clears transform to SQL `NULL` and headers to `{}`
-- `archon provider-binding test --transform-file <path> --envelope-file <path> --json`
-- defaults and hard caps from the design table
-- the allowed function list and rejected constructs
-- transform-failed outbox evidence
-- private receiver headers, the reserved-name list, and that HMAC headers stay active
-- the POSIX `0600` temporary-file pattern and that the file should be removed after success
-- a generic JSONata example that uses only canonical envelope fields, such as `{ "eventType": eventType, "runId": workflowRunRef.runId }`
+Add `&& bun test src/commands/provider-binding-test.test.ts` as its own process in `packages/cli/package.json`.
+
+- [ ] **Step 5: Run command, subprocess, and type tests separately**
+
+Run from `packages/cli`:
+
+```bash
+bun test src/commands/provider-binding-test.test.ts
+bun test src/commands/provider-binding.e2e.test.ts
+bun test src/commands/workflow-provider-command-envelope.test.ts
+bun x tsc --noEmit
+```
+
+Run from the repository root:
+
+```bash
+python3 _bmad-output/planning-artifacts/contracts/workflow-commander/validate_contracts.py
+```
+
+Expected: every command exits `0`.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add packages/cli/src/commands/provider-binding-test.ts packages/cli/src/commands/provider-binding-test.test.ts packages/cli/src/commands/provider-binding.e2e.test.ts packages/cli/src/commands/workflow-provider-command-envelope.ts packages/cli/src/commands/workflow-provider-command-envelope.test.ts packages/cli/src/cli.ts packages/cli/package.json _bmad-output/planning-artifacts/contracts/workflow-commander/schemas/workflow-command-envelope.schema.json _bmad-output/planning-artifacts/contracts/workflow-commander/validate_contracts.py _bmad-output/planning-artifacts/contracts/workflow-commander/examples/providers/archon/commands/binding-test-success.json
+git commit -m "feat(cli): add provider-binding transform dry run"
+```
+
+---
+
+### Task 13: Operator Documentation And Final Contract Verification
+
+**Files:**
+
+- Modify: `packages/docs-web/src/content/docs/reference/cli.md`
+
+**Interfaces:**
+
+- Consumes: the implemented binding transform, private-header, enqueue, delivery, and dry-run behavior from Tasks 1–12.
+- Produces: complete operator documentation without a receiver-specific contract.
+
+- [ ] **Step 1: Document the full operator contract**
+
+Add a `### provider-binding` section immediately after `### validate commands [name]` in `packages/docs-web/src/content/docs/reference/cli.md`.
+Use one physical line per full Markdown sentence.
+Include all of the following exact content:
+
+- Create and update syntax with `--transform-file` and `--receiver-headers-file`.
+- Dry-run syntax `archon provider-binding test --transform-file <path> --envelope-file <path> --json`.
+- Omitted update flags preserve values.
+- JSON `null` clears transform to SQL `NULL` and headers to `{}`.
+- The transform input is only `workflow-event-envelope.v1`.
+- Transform execution happens once before outbox persistence.
+- Retries sign and send the stored bytes.
+- Transform failures create non-routable `transform-failed` evidence and do not fail the workflow run.
+- Defaults and caps: 32,768 expression bytes; 50/200 ms timeout; 128/512 stack; 10,000/100,000 sequence; 65,536/262,144 output bytes.
+- The exact allowed function list from the approved design.
+- Rejected aliases, dynamic calls, partials, function application, lambdas, transform expressions, regular expressions, `$eval`, `$now`, `$millis`, and `$random`.
+- Top-level output must be an object or array.
+- Header limits: 16 headers, 128 name bytes, 8,192 value bytes, and 32,768 aggregate value bytes.
+- The exact reserved header list from the approved design.
+- Receiver values are private and request-attempt evidence stores `[REDACTED]`.
+- Archon's HMAC headers remain active.
+- POSIX example `umask 077` or `chmod 0600 <file>`, followed by removing the secret file after a successful command.
+- A provider-neutral JSONata example `{ "eventType": eventType, "runId": workflowRunRef.runId }`.
 
 Do not document a receiver-specific body schema.
 
-Keep every new documentation sentence on its own physical line.
+- [ ] **Step 2: Run contract, CLI, docs, and type validation**
 
-- [ ] **Step 4: Run the tests and the full validation suite**
-
-Run:
+Run from `packages/cli`:
 
 ```bash
-cd packages/cli
-bun test src/commands/workflow-provider-command-envelope.test.ts src/commands/provider-binding.test.ts src/commands/provider-binding.e2e.test.ts src/commands/provider-binding-contract.test.ts
+bun test src/commands/workflow-provider-command-envelope.test.ts
+bun test src/commands/provider-binding-contract.test.ts
+bun test src/commands/provider-binding-test.test.ts
+bun x tsc --noEmit
 ```
 
+Run from the repository root:
+
 ```bash
-cd packages/core
-bun test src/schemas/provider-binding-transform.test.ts src/schemas/workflow-provider-binding.test.ts src/events/provider-binding-transform.test.ts src/events/delivery-headers.test.ts src/events/workflow-event-envelope.test.ts src/db/provider-bindings.test.ts src/db/adapters/sqlite.test.ts src/db/provider-bindings-bundled-schema.test.ts src/workflows/store-adapter.test.ts
+python3 _bmad-output/planning-artifacts/contracts/workflow-commander/validate_contracts.py
+bun run format:check
 ```
 
-```bash
-cd packages/server
-bun test src/workflow-events/dispatcher.test.ts
-```
+Expected: every command exits `0`.
 
-From the repository root:
+- [ ] **Step 3: Commit**
 
 ```bash
-bun run validate
-```
-
-Expected: every command exits 0.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add packages/cli/src/cli.ts packages/cli/src/commands/provider-binding-test.ts packages/cli/src/commands/workflow-provider-command-envelope.ts packages/cli/src/commands/workflow-provider-command-envelope.test.ts packages/cli/src/commands/provider-binding.test.ts packages/cli/src/commands/provider-binding.e2e.test.ts _bmad-output/planning-artifacts/contracts/workflow-commander/schemas/workflow-command-envelope.schema.json _bmad-output/planning-artifacts/contracts/workflow-commander/validate_contracts.py _bmad-output/planning-artifacts/contracts/workflow-commander/examples/providers/archon/commands/binding-test-success.json packages/docs-web/src/content/docs/reference/cli.md
-git commit -m "$(cat <<'EOF'
-feat(cli): add provider-binding transform dry-run command
-
-EOF
-)"
+git add packages/docs-web/src/content/docs/reference/cli.md
+git commit -m "docs(cli): explain provider-binding transforms"
 ```
 
 ---
 
 ## Acceptance Criteria
 
-- [ ] A binding with no transform persists `JSON.stringify(canonicalEnvelope)` and the dispatcher HMAC-signs that exact string.
-- [ ] A valid JSONata transform is compiled and AST-checked before create or update writes.
-- [ ] Enqueue evaluates the transform once against the canonical envelope and persists the exact returned string as `event_body`.
-- [ ] Event-type filtering still happens before envelope construction and produces no outbox row.
-- [ ] A transform error persists `not-routable` / `transform-failed` with a safe error code and the canonical envelope body, and it does not fail the workflow run.
-- [ ] Invalid or reserved receiver headers are rejected on write and, if stored data is corrupt, block HTTP with `unsafe-delivery-headers`.
-- [ ] Public binding reads, status output, command errors, logs, and delivery-attempt evidence never contain receiver header values.
-- [ ] Update omission preserves transform and headers; JSON `null` files clear the selected configuration.
-- [ ] Rotate and disable preserve both configurations without rewriting them.
-- [ ] `archon provider-binding test` works outside a git repo, does not open the database, and returns the exact transformed string plus UTF-8 byte length.
-- [ ] SQLite fresh and upgrade paths, PostgreSQL additive SQL, dialect parity, and `bun run check:bundled-schema` all pass.
-- [ ] Existing binding command identifiers and envelopes remain valid, with `binding.test` added additively.
+- [ ] A binding with no transform persists the exact current `JSON.stringify(canonicalEnvelope)` bytes.
+- [ ] A supplied transform is normalized, compiled, and AST-checked before create or update starts a transaction.
+- [ ] The database stores every resolved transform default.
+- [ ] Enqueue calls the transform once with only the canonical envelope and persists the returned string without reconstruction.
+- [ ] Event-type filtering happens before envelope construction and transformation and creates no outbox row for a filtered event.
+- [ ] A classified transform failure persists one non-routable row with reason `transform-failed`, the safe code in `last_error`, the canonical envelope body, and no next attempt.
+- [ ] Transform or outbox failures never reject workflow execution.
+- [ ] The canonical envelope schema rejects unrelated top-level and ref fields and selects the payload schema from `eventType`.
+- [ ] The canonical builder's shape, key order, and identity serialization remain unchanged.
+- [ ] Transform results reject scalar top-level values, non-JSON values, sparse arrays, cycles, non-plain objects, and oversized UTF-8 output.
+- [ ] Shared non-cyclic object references are accepted.
+- [ ] Timeout, stack, and sequence evaluator guardrails map to the approved stable codes.
+- [ ] Invalid or reserved receiver headers fail before binding writes.
+- [ ] Syntactically corrupt, structurally corrupt, or unsafe stored delivery headers prevent HTTP and terminally set `unsafe-delivery-headers`.
+- [ ] Receiver headers cannot replace Archon-owned HMAC, request ID, content, host, length, or hop-by-hop headers.
+- [ ] Initial delivery and retries HMAC-sign and send the exact stored `row.event_body` bytes.
+- [ ] Delivery-attempt request evidence keeps Archon values and stores `[REDACTED]` for every receiver header value.
+- [ ] Public create, update, get, and CLI status results contain no signing secret or receiver header map.
+- [ ] Private binding reads return the receiver headers needed by the dispatcher.
+- [ ] Omitted update files preserve transform and headers.
+- [ ] JSON `null` update files clear transform to SQL `NULL` and headers to `{}`.
+- [ ] Rotate and disable SQL do not assign or rewrite transform or delivery-header columns.
+- [ ] `provider-binding test` works outside a Git repository, creates no Archon database, performs no outbox write or HTTP request, and emits one command envelope.
+- [ ] The dry run returns the exact enqueue-identical transformed string and UTF-8 byte length.
+- [ ] CLI failures contain no input file path, transform source, envelope dump, or receiver secret.
+- [ ] `binding.test` is additive in the source command tuple, both JSON Schema enums, syntax baseline, required fixture list, and validator.
+- [ ] Fresh SQLite, upgraded SQLite, PostgreSQL source SQL, dialect parity, and bundled schema checks all pass.
+- [ ] Existing provider-binding command identifiers, success fixtures, and result shapes remain compatible.
+- [ ] Operator docs cover syntax, defaults, caps, allowed functions, rejected constructs, clearing, failure evidence, reserved headers, redaction, HMAC coexistence, and restricted secret files without prescribing a receiver schema.
 
-## Validation Commands
+## Final Validation Commands
+
+Run focused tests from their package directories so mock-heavy files remain isolated.
+
+From `packages/core`:
 
 ```bash
-bun add jsonata@2.2.2 --filter @archon/core
-bun run generate:bundled-schema
-bun run check:bundled-schema
+bun test src/schemas/provider-binding-transform.test.ts
+bun test src/schemas/workflow-provider-binding.test.ts
+bun test src/events/provider-binding-transform.test.ts
+bun test src/events/delivery-headers.test.ts
+bun test src/events/workflow-event-envelope.test.ts
+bun test src/db/provider-bindings.test.ts
+bun test src/db/workflow-event-outbox.test.ts
+bun test src/db/adapters/sqlite.test.ts
+bun test src/db/adapters/postgres.test.ts
+bun test src/db/provider-bindings-bundled-schema.test.ts
+bun test src/workflows/store-adapter.test.ts
+bun x tsc --noEmit
 ```
 
-```bash
-cd packages/core
-bun test src/schemas/provider-binding-transform.test.ts src/schemas/workflow-provider-binding.test.ts src/events/provider-binding-transform.test.ts src/events/delivery-headers.test.ts src/events/workflow-event-envelope.test.ts src/db/provider-bindings.test.ts src/db/adapters/sqlite.test.ts src/db/adapters/postgres.test.ts src/db/provider-bindings-bundled-schema.test.ts src/workflows/store-adapter.test.ts
-```
+From `packages/server`:
 
 ```bash
-cd packages/server
 bun test src/workflow-events/dispatcher.test.ts
+bun x tsc --noEmit
 ```
 
-```bash
-cd packages/cli
-bun test src/commands/provider-binding.test.ts src/commands/provider-binding.e2e.test.ts src/commands/provider-binding-contract.test.ts src/commands/workflow-provider-command-envelope.test.ts
-```
+From `packages/cli`:
 
 ```bash
+bun test src/commands/provider-binding.test.ts
+bun test src/commands/provider-binding-test.test.ts
+bun test src/commands/provider-binding.e2e.test.ts
+bun test src/commands/provider-binding-contract.test.ts src/commands/workflow-provider-command-envelope.test.ts
+bun x tsc --noEmit
+```
+
+From the repository root:
+
+```bash
+bun run check:bundled-schema
+python3 _bmad-output/planning-artifacts/contracts/workflow-commander/validate_contracts.py
 bun run validate
 ```
 
+Expected: every command exits `0` with no lint warnings, type errors, test failures, schema drift, bundled-schema drift, or formatting drift.
+
 ## Open Questions
 
-There are no remaining product decisions in the approved design.
-
-Implementation defaults already chosen above, and not open for reinterpretation during execution:
-
-- Reject both JSONata AST types `regex` and `regexp`.
-- Keep the dry-run command in a DB-free CLI module.
-- Export `@archon/core/events/*` instead of adding a plugin registry.
-- Map CLI transform failures to `provider_contract` except `TRANSFORM_TIMEOUT`.
+There are no open questions.
+The approved design and repository behavior determine every implementation choice in this plan.
