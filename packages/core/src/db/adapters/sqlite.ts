@@ -456,6 +456,16 @@ export class SqliteAdapter implements IDatabase {
           "ALTER TABLE remote_agent_workflow_provider_bindings ADD COLUMN event_types TEXT NOT NULL DEFAULT '[]'"
         );
       }
+      if (cols.length > 0 && !colNames.has('transform')) {
+        this.db.run(
+          'ALTER TABLE remote_agent_workflow_provider_bindings ADD COLUMN transform TEXT'
+        );
+      }
+      if (cols.length > 0 && !colNames.has('delivery_headers')) {
+        this.db.run(
+          "ALTER TABLE remote_agent_workflow_provider_bindings ADD COLUMN delivery_headers TEXT NOT NULL DEFAULT '{}'"
+        );
+      }
     } catch (e: unknown) {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_provider_binding_columns_failed');
       allApplied = false;
@@ -842,6 +852,8 @@ export class SqliteAdapter implements IDatabase {
         event_route TEXT NOT NULL,
         event_types TEXT NOT NULL DEFAULT '[]',
         signing_secret TEXT,
+        transform TEXT,
+        delivery_headers TEXT NOT NULL DEFAULT '{}',
         state TEXT NOT NULL DEFAULT 'active',
         binding_version INTEGER NOT NULL DEFAULT 1,
         created_at TEXT DEFAULT (datetime('now')),

@@ -671,6 +671,8 @@ CREATE TABLE IF NOT EXISTS remote_agent_workflow_provider_bindings (
   event_route     TEXT NOT NULL,
   event_types     TEXT NOT NULL DEFAULT '[]',
   signing_secret  TEXT,
+  transform        TEXT,
+  delivery_headers TEXT NOT NULL DEFAULT '{}',
   state           TEXT NOT NULL DEFAULT 'active',
   binding_version INTEGER NOT NULL DEFAULT 1,
   created_at      TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -702,6 +704,12 @@ ALTER TABLE remote_agent_workflow_provider_bindings
 
 ALTER TABLE remote_agent_workflow_provider_bindings
   ADD COLUMN IF NOT EXISTS event_types TEXT NOT NULL DEFAULT '[]';
+
+ALTER TABLE remote_agent_workflow_provider_bindings
+  ADD COLUMN IF NOT EXISTS transform TEXT;
+
+ALTER TABLE remote_agent_workflow_provider_bindings
+  ADD COLUMN IF NOT EXISTS delivery_headers TEXT NOT NULL DEFAULT '{}';
 
 -- ============================================================================
 -- Table 12: Workflow Event Outbox
