@@ -2961,7 +2961,7 @@ nodes:
         '.archon',
         'workflows',
         'defaults',
-        'archon-speckit-feature.yaml'
+        'speckit-feature.yaml'
       );
       const result = parseWorkflow(await readFile(workflowPath, 'utf8'), basename(workflowPath));
 

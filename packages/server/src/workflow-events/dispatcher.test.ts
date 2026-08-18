@@ -351,6 +351,85 @@ describe('WorkflowEventDispatcher', () => {
     expect(pendingRequest.headers.Authorization).toBe('[REDACTED]');
     expect(pendingRequest.headers['Content-Type']).toBe('application/json');
     expect(JSON.stringify(pendingRequest.headers)).not.toContain('Bearer secret');
+    expect((fetchImpl.mock.calls[0]?.[1] as RequestInit).redirect).toBe('manual');
+  });
+
+  test('does not follow a cross-origin redirect with receiver credentials', async () => {
+    let redirectedRequestReceived = false;
+    const target = Bun.serve({
+      port: 0,
+      fetch() {
+        redirectedRequestReceived = true;
+        return new Response('', { status: 204 });
+      },
+    });
+    const redirector = Bun.serve({
+      port: 0,
+      fetch() {
+        return new Response('', {
+          status: 302,
+          headers: { Location: String(target.url) },
+        });
+      },
+    });
+    try {
+      mockGetBindingByIdWithSecret.mockResolvedValueOnce({
+        signing_secret: 'test-secret',
+        delivery_headers: { 'X-Api-Key': 'redirect-secret' },
+      });
+      mockClaimDueOutboxEvents.mockResolvedValueOnce([
+        outboxRow({ event_route: String(redirector.url) }),
+      ]);
+
+      await new WorkflowEventDispatcher({ now: () => fixedNow }).drainNow();
+
+      expect(redirectedRequestReceived).toBe(false);
+      expect(mockCompleteAttempt.mock.calls[0]?.[0]).toMatchObject({
+        outcome: 'failed',
+        responseStatus: 302,
+      });
+    } finally {
+      redirector.stop(true);
+      target.stop(true);
+    }
+  });
+
+  test('redacts reflected receiver credentials from response and transport evidence', async () => {
+    mockGetBindingByIdWithSecret.mockResolvedValue({
+      signing_secret: 'test-secret',
+      delivery_headers: { Authorization: 'Bearer reflected-secret' },
+    });
+    mockClaimDueOutboxEvents.mockResolvedValueOnce([outboxRow()]);
+    const reflectedResponse = mock(
+      async () =>
+        new Response('echo Bearer reflected-secret', {
+          status: 500,
+          headers: { 'X-Echo': 'Bearer reflected-secret' },
+        })
+    );
+    await new WorkflowEventDispatcher({
+      now: () => fixedNow,
+      fetchImpl: reflectedResponse,
+    }).drainNow();
+    const responseEvidence = mockCompleteAttempt.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(responseEvidence).toMatchObject({
+      responseHeaders: { 'x-echo': '[REDACTED]' },
+      responseBody: 'echo [REDACTED]',
+    });
+    expect(JSON.stringify(responseEvidence)).not.toContain('Bearer reflected-secret');
+
+    mockCompleteAttempt.mockClear();
+    mockClaimDueOutboxEvents.mockResolvedValueOnce([outboxRow()]);
+    const reflectedError = mock(async () => {
+      throw new Error('invalid header Bearer reflected-secret');
+    });
+    await new WorkflowEventDispatcher({
+      now: () => fixedNow,
+      fetchImpl: reflectedError,
+    }).drainNow();
+    const transportEvidence = mockCompleteAttempt.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(transportEvidence.transportError).toBe('invalid header [REDACTED]');
+    expect(JSON.stringify(transportEvidence)).not.toContain('Bearer reflected-secret');
   });
 
   test('unsafe parsed headers block HTTP and persist a safe terminal outcome', async () => {

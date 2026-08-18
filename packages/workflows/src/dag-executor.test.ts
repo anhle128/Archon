@@ -21148,7 +21148,7 @@ describe('executeDagWorkflow -- production Plannotator gate integration', () => 
       '.archon',
       'workflows',
       'defaults',
-      'archon-speckit-feature.yaml'
+      'speckit-feature.yaml'
     );
     const parsed = parseWorkflow(await readFile(workflowPath, 'utf8'), basename(workflowPath));
     if (!parsed.workflow)

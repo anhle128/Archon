@@ -919,6 +919,35 @@ describe('provider-binding CLI command (Story 3.1)', () => {
       } finally {
         rmSync(files.dir, { recursive: true, force: true });
       }
+
+      const configured = withJsonFiles(
+        { engine: 'jsonata', expression: '{ "updated": eventType }' },
+        null
+      );
+      try {
+        await providerBindingUpdateCommand(
+          {
+            provider: 'archon',
+            name: 'workflow-engine-primary',
+            projectRef: 'workflow-engine',
+            route: 'https://example.invalid/events',
+            transformFile: configured.transformFile,
+          },
+          { json: true, log: () => {} }
+        );
+        expect(mockUpdateBinding.mock.calls[2]?.[0]).toMatchObject({
+          transform: {
+            engine: 'jsonata',
+            expression: '{ "updated": eventType }',
+            timeoutMs: 50,
+            stackDepth: 128,
+            maxSequenceSize: 10_000,
+            maxOutputBytes: 65_536,
+          },
+        });
+      } finally {
+        rmSync(configured.dir, { recursive: true, force: true });
+      }
     });
 
     test('invalid JSON, a disallowed transform, and unsafe headers fail before any DB call', async () => {

@@ -163,10 +163,12 @@ const mockTransformWorkflowEventBody = mock(
 // Spread the real module so provider-bindings (pulled in via binding-router)
 // still sees normalize/validate exports; only enqueue-path transform is mocked.
 const transformActual = await import('../events/provider-binding-transform');
+const isActualProviderBindingTransformError = transformActual.isProviderBindingTransformError;
 mock.module('../events/provider-binding-transform', () => ({
   ...transformActual,
   transformWorkflowEventBody: mockTransformWorkflowEventBody,
-  isProviderBindingTransformError: (error: unknown): boolean => error instanceof TestTransformError,
+  isProviderBindingTransformError: (error: unknown): boolean =>
+    error instanceof TestTransformError || isActualProviderBindingTransformError(error),
 }));
 
 const mockLogDebug = mock(() => {});
@@ -650,6 +652,36 @@ describe('createWorkflowStore', () => {
         },
       },
     });
+  });
+
+  test('corrupt persisted transform config produces durable safe failure evidence', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(workflowRunRow());
+    mockResolveEventRoute.mockResolvedValueOnce({
+      routable: true,
+      codebase: codebaseRow(),
+      binding: bindingRow({ transform: '{not-json' }),
+      route: 'https://example.invalid/events',
+      secret: 'test-secret',
+    });
+
+    await expect(
+      createWorkflowStore().enqueueExternalWorkflowEvent({
+        workflow_run_id: 'run-1',
+        event_type: 'workflow.run.started',
+        occurred_at: '2026-08-18T00:00:00.000Z',
+        payload: { state: 'running', startedAt: '2026-08-18T00:00:00.000Z' },
+      })
+    ).resolves.toBeUndefined();
+
+    expect(mockTransformWorkflowEventBody).not.toHaveBeenCalled();
+    const [insert] = mockEnqueueExternalWorkflowEvent.mock.calls[0] as [Record<string, unknown>];
+    expect(insert).toMatchObject({
+      status: 'not-routable',
+      not_routable_reason: 'transform-failed',
+      last_error: 'TRANSFORM_CONFIG_INVALID',
+      next_attempt_at: null,
+    });
+    expect(JSON.stringify(insert)).not.toContain('{not-json');
   });
 
   test('createWorkflowEvent replaces configured URL path and encodes approval route parts', async () => {

@@ -21,6 +21,7 @@ import {
 import {
   transformWorkflowEventBody,
   isProviderBindingTransformError,
+  normalizeProviderBindingTransform,
 } from '../events/provider-binding-transform';
 import { externalWorkflowEventTypeSchema } from '../schemas/workflow-event';
 import { getAgentProvider } from '@archon/providers';
@@ -302,10 +303,11 @@ async function enqueueExternalWorkflowEvent(input: ExternalWorkflowEventInput): 
     });
     const transformStartedAt = Date.now();
     try {
-      const transformed = await transformWorkflowEventBody(
-        envelope,
-        resolution.binding.transform ?? null
-      );
+      const transform =
+        resolution.binding.transform === undefined || resolution.binding.transform === null
+          ? null
+          : normalizeProviderBindingTransform(resolution.binding.transform);
+      const transformed = await transformWorkflowEventBody(envelope, transform);
       getLog().debug(
         {
           bindingId: resolution.binding.id,
@@ -334,7 +336,7 @@ async function enqueueExternalWorkflowEvent(input: ExternalWorkflowEventInput): 
         {
           bindingId: resolution.binding.id,
           eventType: envelope.eventType,
-          engine: resolution.binding.transform?.engine ?? 'identity',
+          engine: resolution.binding.transform == null ? 'identity' : 'jsonata',
           durationMs: Math.max(0, Date.now() - transformStartedAt),
           errorCode: error.code,
         },

@@ -100,6 +100,7 @@ import {
   aiDefaultCommand,
 } from './commands/ai';
 import { telemetryStatusCommand, telemetryResetCommand } from './commands/telemetry';
+import { writeStdout } from './utils/stdout';
 import { closeDatabase } from '@archon/core';
 import type { WorkflowProviderCommand } from './commands/workflow-provider-command-envelope';
 import {
@@ -452,13 +453,18 @@ function normalizeProviderBindingArgs(args: string[]): string[] {
 async function main(): Promise<number> {
   const args = normalizeProviderBindingArgs(process.argv.slice(2));
   const rawWorkflowProviderOptions = scanRawWorkflowProviderOptions(args);
+  const providerBindingIndex = args.indexOf('provider-binding');
+  const isSideEffectFreeBindingTest =
+    providerBindingIndex >= 0 && args[providerBindingIndex + 1] === 'test';
 
   // Anonymous once-per-invocation startup event (self-gates on opt-out).
+  // The provider-binding dry-run is explicitly side-effect-free, including
+  // telemetry and first-run notice state.
   // Emitted before any early return so EVERY invocation — including bare
   // `archon`, `--help`, and `--version` — is counted, matching the
   // "once per CLI invocation" contract. Each early-return path below flushes
   // via shutdownTelemetry(); the main command path flushes in its finally.
-  captureArchonStarted({ surface: 'cli' });
+  if (!isSideEffectFreeBindingTest) captureArchonStarted({ surface: 'cli' });
 
   // Handle no arguments - show help and exit successfully
   if (args.length === 0) {
@@ -1493,7 +1499,10 @@ async function main(): Promise<number> {
           case 'disable':
             return await providerBindingDisableCommand(bindingArgs, bindingOpts);
           case 'test':
-            return await providerBindingTestCommand(bindingArgs, bindingOpts);
+            return await providerBindingTestCommand(bindingArgs, {
+              ...bindingOpts,
+              log: (line: string): Promise<void> => writeStdout(`${line}\n`),
+            });
           default:
             if (jsonFlag) {
               return await providerBindingUnsupportedCommand(subcommand, bindingArgs, bindingOpts);

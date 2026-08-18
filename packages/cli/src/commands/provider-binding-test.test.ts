@@ -68,6 +68,30 @@ test('returns the exact transformed string, byte length, and sample bindingRef',
   }
 });
 
+test('rejects missing and blank required file flags with safe field errors', async () => {
+  for (const args of [{}, { transformFile: '  ', envelopeFile: '\t' }]) {
+    const logs: string[] = [];
+    const exitCode = await providerBindingTestCommand(args, {
+      json: true,
+      log: line => logs.push(line),
+    });
+    expect(exitCode).toBe(64);
+    expect(logs).toHaveLength(1);
+    expect(JSON.parse(logs[0] as string)).toMatchObject({
+      success: false,
+      error: {
+        code: 'MALFORMED_REQUEST',
+        details: {
+          fieldErrors: [
+            { path: '/transform', code: 'required' },
+            { path: '/envelope', code: 'required' },
+          ],
+        },
+      },
+    });
+  }
+});
+
 test('uses safe errors for null config, invalid envelope, and scalar output', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'archon-binding-test-'));
   const transformFile = join(dir, 'transform.json');

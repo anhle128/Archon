@@ -29,14 +29,35 @@ const LEGACY_CONTRACT_BINDING_IDS = new Map<string, string>([
   [JSON.stringify(['archon', 'workflow-engine-primary']), 'wpb_archon::workflow_engine_primary'],
 ]);
 
-const workflowProviderBindingWithSecretSchema = workflowProviderBindingSchema.extend({
-  signing_secret: workflowProviderBindingSchema.shape.event_route.nullable().optional(),
-  delivery_headers: deliveryHeadersSchema.default({}),
-});
+const workflowProviderBindingForRoutingSchema = workflowProviderBindingSchema
+  .omit({ transform: true })
+  .extend({
+    signing_secret: workflowProviderBindingSchema.shape.event_route.nullable().optional(),
+    // Persisted transform validation belongs to the transform boundary so a
+    // corrupt config can create durable transform-failed evidence.
+    transform: z.unknown().nullable().optional(),
+  });
 
+const workflowProviderBindingWithSecretSchema = workflowProviderBindingSchema
+  .omit({ transform: true })
+  .extend({
+    signing_secret: workflowProviderBindingSchema.shape.event_route.nullable().optional(),
+    delivery_headers: deliveryHeadersSchema.default({}),
+  });
+
+export type WorkflowProviderBindingForRouting = z.infer<
+  typeof workflowProviderBindingForRoutingSchema
+>;
 export type WorkflowProviderBindingWithSecret = z.infer<
   typeof workflowProviderBindingWithSecretSchema
 >;
+
+const PUBLIC_COLUMNS =
+  'id, provider, name, codebase_id, event_route, event_types, transform, state, binding_version, created_at, updated_at';
+const LIFECYCLE_COLUMNS =
+  'id, provider, name, codebase_id, event_route, event_types, state, binding_version, created_at, updated_at';
+const ROUTING_COLUMNS = `${LIFECYCLE_COLUMNS}, signing_secret, transform`;
+const DELIVERY_COLUMNS = `${LIFECYCLE_COLUMNS}, signing_secret, delivery_headers`;
 
 function hexEncode(value: string): string {
   return Array.from(new TextEncoder().encode(value), byte =>
@@ -44,7 +65,7 @@ function hexEncode(value: string): string {
   ).join('');
 }
 
-function normalizeBindingRow(row: unknown): unknown {
+function normalizeEventTypes(row: unknown): unknown {
   if (typeof row !== 'object' || row === null || Array.isArray(row)) return row;
   const normalized: Record<string, unknown> = { ...row };
   if (typeof normalized.event_types === 'string') {
@@ -54,41 +75,96 @@ function normalizeBindingRow(row: unknown): unknown {
       // Leave the invalid value for the public schema to classify by field path.
     }
   }
-  for (const column of ['transform', 'delivery_headers'] as const) {
-    if (typeof normalized[column] !== 'string') continue;
-    try {
-      normalized[column] = JSON.parse(normalized[column]) as unknown;
-    } catch {
-      throw new Error(`BINDING_CORRUPT_ROW: ${column}`);
-    }
-  }
   return normalized;
 }
 
-function parseBindingRow(row: unknown): WorkflowProviderBinding {
-  const parsed = workflowProviderBindingSchema.safeParse(normalizeBindingRow(row));
+function parseJsonColumn(
+  row: Record<string, unknown>,
+  column: 'transform' | 'delivery_headers',
+  failOnInvalid: boolean
+): void {
+  if (typeof row[column] !== 'string') return;
+  try {
+    row[column] = JSON.parse(row[column]) as unknown;
+  } catch {
+    if (failOnInvalid) throw new Error(`BINDING_CORRUPT_ROW: ${column}`);
+  }
+}
+
+function parseBindingRow(row: unknown, includeTransform = true): WorkflowProviderBinding {
+  const normalized = normalizeEventTypes(row);
+  if (typeof normalized === 'object' && normalized !== null) {
+    if (includeTransform) {
+      parseJsonColumn(normalized as Record<string, unknown>, 'transform', true);
+    } else {
+      delete (normalized as Record<string, unknown>).transform;
+    }
+  }
+  const parsed = workflowProviderBindingSchema.safeParse(normalized);
   if (parsed.success) {
     return parsed.data;
   }
 
   const stateIssue = parsed.error.issues.find(issue => issue.path.join('.') === 'state');
   if (stateIssue) {
-    const state =
-      row && typeof row === 'object' && 'state' in row
-        ? String((row as { state: unknown }).state)
-        : 'unknown';
-    throw new Error(`BINDING_CORRUPT_STATE: ${state}`);
+    throwCorruptState(row);
   }
 
   const fields = parsed.error.issues.map(issue => issue.path.join('.') || '<root>').join(',');
   throw new Error(`BINDING_CORRUPT_ROW: ${fields}`);
 }
 
-function parseBindingRowWithSecret(row: unknown): WorkflowProviderBindingWithSecret {
-  const parsed = workflowProviderBindingWithSecretSchema.safeParse(normalizeBindingRow(row));
+function throwCorruptState(row: unknown): never {
+  const state =
+    row && typeof row === 'object' && 'state' in row
+      ? String((row as { state: unknown }).state)
+      : 'unknown';
+  throw new Error(`BINDING_CORRUPT_STATE: ${state}`);
+}
+
+function parseBindingRowForRouting(row: unknown): WorkflowProviderBindingForRouting {
+  const normalized = normalizeEventTypes(row);
+  if (typeof normalized === 'object' && normalized !== null) {
+    parseJsonColumn(normalized as Record<string, unknown>, 'transform', false);
+  }
+  const parsed = workflowProviderBindingForRoutingSchema.safeParse(normalized);
   if (parsed.success) return parsed.data;
   const fields = parsed.error.issues.map(issue => issue.path.join('.') || '<root>').join(',');
   throw new Error(`BINDING_CORRUPT_ROW: ${fields}`);
+}
+
+function parseBindingRowWithSecret(row: unknown): WorkflowProviderBindingWithSecret {
+  const normalized = normalizeEventTypes(row);
+  if (typeof normalized === 'object' && normalized !== null) {
+    parseJsonColumn(normalized as Record<string, unknown>, 'delivery_headers', true);
+  }
+  const parsed = workflowProviderBindingWithSecretSchema.safeParse(normalized);
+  if (parsed.success) return parsed.data;
+  if (parsed.error.issues.some(issue => issue.path[0] === 'delivery_headers')) {
+    throw new Error('BINDING_CORRUPT_ROW: delivery_headers');
+  }
+  const fields = parsed.error.issues.map(issue => issue.path.join('.') || '<root>').join(',');
+  throw new Error(`BINDING_CORRUPT_ROW: ${fields}`);
+}
+
+function parseLifecycleState(row: unknown): { state: WorkflowProviderBinding['state'] } {
+  const parsed = workflowProviderBindingSchema.pick({ state: true }).safeParse(row);
+  if (parsed.success) return parsed.data;
+  return throwCorruptState(row);
+}
+
+function parseLifecycleVersionedState(row: unknown): {
+  state: WorkflowProviderBinding['state'];
+  binding_version: number;
+} {
+  const parsed = workflowProviderBindingSchema
+    .pick({ state: true, binding_version: true })
+    .safeParse(row);
+  if (parsed.success) return parsed.data;
+  if (parsed.error.issues.some(issue => issue.path[0] === 'state')) {
+    return throwCorruptState(row);
+  }
+  throw new Error('BINDING_CORRUPT_ROW: binding_version');
 }
 
 export function deriveBindingId(provider: string, name: string): string {
@@ -146,7 +222,7 @@ export async function createBinding(input: {
     }
 
     const selectResult = await query<WorkflowProviderBinding>(
-      'SELECT * FROM remote_agent_workflow_provider_bindings WHERE provider = $1 AND name = $2',
+      `SELECT ${PUBLIC_COLUMNS} FROM remote_agent_workflow_provider_bindings WHERE provider = $1 AND name = $2`,
       [input.provider, input.name]
     );
     const row = selectResult.rows[0];
@@ -163,7 +239,7 @@ export async function getBinding(
   name: string
 ): Promise<WorkflowProviderBinding | null> {
   const result = await pool.query<WorkflowProviderBinding>(
-    'SELECT * FROM remote_agent_workflow_provider_bindings WHERE provider = $1 AND name = $2',
+    `SELECT ${PUBLIC_COLUMNS} FROM remote_agent_workflow_provider_bindings WHERE provider = $1 AND name = $2`,
     [provider, name]
   );
   const row = result.rows[0];
@@ -174,19 +250,19 @@ export async function getBinding(
 export async function getBindingByCodebase(
   provider: string,
   codebaseId: string
-): Promise<WorkflowProviderBindingWithSecret[]> {
-  const result = await pool.query<WorkflowProviderBindingWithSecret>(
-    'SELECT * FROM remote_agent_workflow_provider_bindings WHERE provider = $1 AND codebase_id = $2',
+): Promise<WorkflowProviderBindingForRouting[]> {
+  const result = await pool.query<WorkflowProviderBindingForRouting>(
+    `SELECT ${ROUTING_COLUMNS} FROM remote_agent_workflow_provider_bindings WHERE provider = $1 AND codebase_id = $2`,
     [provider, codebaseId]
   );
-  return result.rows.map(parseBindingRowWithSecret);
+  return result.rows.map(parseBindingRowForRouting);
 }
 
 export async function getBindingByIdWithSecret(
   id: string
 ): Promise<WorkflowProviderBindingWithSecret | null> {
   const result = await pool.query<WorkflowProviderBindingWithSecret>(
-    'SELECT * FROM remote_agent_workflow_provider_bindings WHERE id = $1',
+    `SELECT ${DELIVERY_COLUMNS} FROM remote_agent_workflow_provider_bindings WHERE id = $1`,
     [id]
   );
   const row = result.rows[0];
@@ -219,15 +295,15 @@ export async function updateBinding(input: {
 
   return await db.withTransaction(async query => {
     const lockClause = db.dialect === 'postgres' ? ' FOR UPDATE' : '';
-    const existingResult = await query<WorkflowProviderBinding>(
-      `SELECT * FROM remote_agent_workflow_provider_bindings WHERE provider = $1 AND name = $2${lockClause}`,
+    const existingResult = await query<Pick<WorkflowProviderBinding, 'binding_version' | 'state'>>(
+      `SELECT binding_version, state FROM remote_agent_workflow_provider_bindings WHERE provider = $1 AND name = $2${lockClause}`,
       [input.provider, input.name]
     );
     const existingRow = existingResult.rows[0];
     if (!existingRow) {
       throw new Error('BINDING_NOT_FOUND');
     }
-    const existing = parseBindingRow(existingRow);
+    const existing = parseLifecycleVersionedState(existingRow);
     if (existing.state === 'disabled') {
       throw new Error('BINDING_DISABLED');
     }
@@ -269,7 +345,7 @@ export async function updateBinding(input: {
     }
 
     const selectResult = await query<WorkflowProviderBinding>(
-      'SELECT * FROM remote_agent_workflow_provider_bindings WHERE provider = $1 AND name = $2',
+      `SELECT ${LIFECYCLE_COLUMNS} FROM remote_agent_workflow_provider_bindings WHERE provider = $1 AND name = $2`,
       [input.provider, input.name]
     );
     const row = selectResult.rows[0];
@@ -277,7 +353,7 @@ export async function updateBinding(input: {
       throw new Error('BINDING_VANISHED_AFTER_UPDATE');
     }
     getLog().debug({ provider: input.provider, name: input.name }, 'db.binding_update_completed');
-    return parseBindingRow(row);
+    return parseBindingRow(row, false);
   });
 }
 
@@ -291,15 +367,15 @@ export async function rotateBinding(
 
   return await db.withTransaction(async query => {
     const lockClause = db.dialect === 'postgres' ? ' FOR UPDATE' : '';
-    const existingResult = await query<WorkflowProviderBinding>(
-      `SELECT * FROM remote_agent_workflow_provider_bindings WHERE provider = $1 AND name = $2${lockClause}`,
+    const existingResult = await query<Pick<WorkflowProviderBinding, 'binding_version' | 'state'>>(
+      `SELECT binding_version, state FROM remote_agent_workflow_provider_bindings WHERE provider = $1 AND name = $2${lockClause}`,
       [provider, name]
     );
     const existingRow = existingResult.rows[0];
     if (!existingRow) {
       throw new Error('BINDING_NOT_FOUND');
     }
-    const existing = parseBindingRow(existingRow);
+    const existing = parseLifecycleVersionedState(existingRow);
     if (existing.state === 'disabled') {
       throw new Error('BINDING_DISABLED');
     }
@@ -320,7 +396,7 @@ export async function rotateBinding(
     }
 
     const selectResult = await query<WorkflowProviderBinding>(
-      'SELECT * FROM remote_agent_workflow_provider_bindings WHERE provider = $1 AND name = $2',
+      `SELECT ${LIFECYCLE_COLUMNS} FROM remote_agent_workflow_provider_bindings WHERE provider = $1 AND name = $2`,
       [provider, name]
     );
     const row = selectResult.rows[0];
@@ -331,7 +407,7 @@ export async function rotateBinding(
       { provider, name, previousVersion: existing.binding_version },
       'db.binding_rotate_completed'
     );
-    const parsedRow = parseBindingRow(row);
+    const parsedRow = parseBindingRow(row, false);
     return {
       ...parsedRow,
       previousVersion: existing.binding_version,
@@ -349,15 +425,15 @@ export async function disableBinding(
 
   return await db.withTransaction(async query => {
     const lockClause = db.dialect === 'postgres' ? ' FOR UPDATE' : '';
-    const preSelect = await query<WorkflowProviderBinding>(
-      `SELECT * FROM remote_agent_workflow_provider_bindings WHERE provider = $1 AND name = $2${lockClause}`,
+    const preSelect = await query<Pick<WorkflowProviderBinding, 'state'>>(
+      `SELECT state FROM remote_agent_workflow_provider_bindings WHERE provider = $1 AND name = $2${lockClause}`,
       [provider, name]
     );
     const existingRow = preSelect.rows[0];
     if (!existingRow) {
       throw new Error('BINDING_NOT_FOUND');
     }
-    const existing = parseBindingRow(existingRow);
+    const existing = parseLifecycleState(existingRow);
     const previousState = existing.state;
 
     const updateResult = await query(
@@ -372,7 +448,7 @@ export async function disableBinding(
     }
 
     const selectResult = await query<WorkflowProviderBinding>(
-      'SELECT * FROM remote_agent_workflow_provider_bindings WHERE provider = $1 AND name = $2',
+      `SELECT ${LIFECYCLE_COLUMNS} FROM remote_agent_workflow_provider_bindings WHERE provider = $1 AND name = $2`,
       [provider, name]
     );
     const row = selectResult.rows[0];
@@ -380,6 +456,6 @@ export async function disableBinding(
       throw new Error('BINDING_VANISHED_AFTER_DISABLE');
     }
     getLog().debug({ provider, name, previousState }, 'db.binding_disable_completed');
-    return { ...parseBindingRow(row), previousState };
+    return { ...parseBindingRow(row, false), previousState };
   });
 }

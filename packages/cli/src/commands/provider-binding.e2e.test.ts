@@ -199,9 +199,17 @@ describe('provider-binding CLI E2E — real subprocess (Story 3.1)', () => {
     });
   }
 
-  test('provider-binding test dry-run emits success without creating archon.db', async () => {
+  test('provider-binding test dry-run emits success without DB, telemetry state, or HTTP', async () => {
     const archonHome = mkdtempSync(join(tmpdir(), 'archon-home-binding-test-'));
     const cwd = mkdtempSync(join(tmpdir(), 'archon-binding-test-cwd-'));
+    let telemetryRequests = 0;
+    const telemetryServer = Bun.serve({
+      port: 0,
+      fetch() {
+        telemetryRequests += 1;
+        return new Response('', { status: 200 });
+      },
+    });
     const transformFile = join(cwd, 'transform.json');
     const envelopeFile = join(cwd, 'envelope.json');
     writeFileSync(
@@ -250,7 +258,14 @@ describe('provider-binding CLI E2E — real subprocess (Story 3.1)', () => {
           '--json',
         ],
         cwd,
-        { ARCHON_HOME: archonHome, DO_NOT_TRACK: '1' }
+        {
+          ARCHON_HOME: archonHome,
+          ARCHON_TELEMETRY_DISABLED: '0',
+          DO_NOT_TRACK: '0',
+          CI: 'false',
+          POSTHOG_API_KEY: 'phc_dry_run_test',
+          POSTHOG_HOST: String(telemetryServer.url),
+        }
       );
       const lines = stdout.trim().split('\n').filter(Boolean);
       expect(lines).toHaveLength(1);
@@ -267,6 +282,85 @@ describe('provider-binding CLI E2E — real subprocess (Story 3.1)', () => {
       expect(exitCode).toBe(0);
       expect(stderr).toBe('');
       expect(existsSync(join(archonHome, 'archon.db'))).toBe(false);
+      expect(existsSync(join(archonHome, 'telemetry-id'))).toBe(false);
+      expect(telemetryRequests).toBe(0);
+    } finally {
+      telemetryServer.stop(true);
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(archonHome, { recursive: true, force: true });
+    }
+  });
+
+  test('provider-binding test writes a complete JSON envelope larger than the pipe buffer', async () => {
+    const archonHome = mkdtempSync(join(tmpdir(), 'archon-home-binding-large-'));
+    const cwd = mkdtempSync(join(tmpdir(), 'archon-binding-large-cwd-'));
+    const transformFile = join(cwd, 'transform.json');
+    const envelopeFile = join(cwd, 'envelope.json');
+    const largeValue = 'x'.repeat(100_000);
+    writeFileSync(
+      transformFile,
+      JSON.stringify({
+        engine: 'jsonata',
+        expression: '{ "large": payload.large }',
+        maxOutputBytes: 262_144,
+      })
+    );
+    writeFileSync(
+      envelopeFile,
+      JSON.stringify({
+        schemaVersion: 'workflow-event-envelope.v1',
+        provider: 'archon',
+        eventId: 'evt-large',
+        eventType: 'workflow.run.started',
+        occurredAt: '2026-08-18T00:00:00.000Z',
+        bindingRef: {
+          provider: 'archon',
+          name: 'workflow-engine-primary',
+          bindingId: 'wpb_archon::workflow_engine_primary',
+          projectRef: 'project:cb-1',
+        },
+        workflowRunRef: {
+          provider: 'archon',
+          runId: 'run-1',
+          workflowName: 'bmad-dev-story',
+          projectRef: 'project:cb-1',
+        },
+        projectRef: {
+          id: 'cb-1',
+          codebaseRef: 'workflow-engine',
+          repositoryPath: '/workspace/workflow-engine',
+        },
+        idempotencyKey: 'archon:workflow-engine-primary:evt-large',
+        payload: {
+          state: 'running',
+          startedAt: '2026-08-18T00:00:00.000Z',
+          large: largeValue,
+        },
+      })
+    );
+    try {
+      const result = await runCli(
+        [
+          'provider-binding',
+          'test',
+          '--transform-file',
+          transformFile,
+          '--envelope-file',
+          envelopeFile,
+          '--json',
+        ],
+        cwd,
+        { ARCHON_HOME: archonHome, DO_NOT_TRACK: '1' }
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      const output = JSON.parse(result.stdout) as {
+        result: { transformedBody: string; outputBytes: number };
+      };
+      expect((JSON.parse(output.result.transformedBody) as { large: string }).large).toBe(
+        largeValue
+      );
+      expect(output.result.outputBytes).toBeGreaterThan(100_000);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
       rmSync(archonHome, { recursive: true, force: true });

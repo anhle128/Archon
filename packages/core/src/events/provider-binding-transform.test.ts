@@ -51,6 +51,7 @@ describe('provider-binding JSONata policy', () => {
       '$pad("x", 8)',
       '($f := $now; $f())',
       '($f := $uppercase; $f("x"))',
+      '($uppercase := $eval; {"x": $uppercase("1+1")})',
     ]) {
       try {
         validateProviderBindingTransform(transform(expression));
@@ -61,6 +62,15 @@ describe('provider-binding JSONata policy', () => {
         expect((error as Error).message).not.toContain(expression);
       }
     }
+  });
+
+  test('enforces the expression byte cap on already-typed persisted values', () => {
+    expect(() =>
+      validateProviderBindingTransform({
+        ...transform('{ "ok": true }'),
+        expression: 'x'.repeat(32_769),
+      })
+    ).toThrow(/TRANSFORM_CONFIG_INVALID/);
   });
 
   test('rejects partials, apply, lambdas, transform expressions, and regex AST nodes', () => {

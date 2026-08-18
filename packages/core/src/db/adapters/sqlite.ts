@@ -103,7 +103,12 @@ export class SqliteAdapter implements IDatabase {
       }
     } catch (error) {
       const err = error as Error;
-      getLog().error({ err, sql: convertedSql, params }, 'db.sqlite_query_failed');
+      // Query parameters can contain credentials (for example provider-binding
+      // receiver headers). Record shape only; never persist parameter values.
+      getLog().error(
+        { err, sql: convertedSql, paramCount: params?.length ?? 0 },
+        'db.sqlite_query_failed'
+      );
       throw error;
     }
   }

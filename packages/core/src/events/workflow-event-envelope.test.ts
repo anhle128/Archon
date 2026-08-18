@@ -249,6 +249,27 @@ test('workflowEventEnvelopeSchema selects the payload schema from eventType', ()
   ).toThrow();
 });
 
+test('workflowEventEnvelopeSchema normalizes payload ordering like the live builder', () => {
+  const live = buildWorkflowEventEnvelope({
+    eventId: 'evt-order',
+    eventType: 'workflow.run.started',
+    occurredAt: '2026-07-25T00:00:00.000Z',
+    run,
+    codebase: baseCodebase,
+    binding,
+    payload: payloads['workflow.run.started'],
+  });
+  const parsed = workflowEventEnvelopeSchema.parse({
+    ...live,
+    payload: {
+      startedAt: '2026-07-25T00:00:00.000Z',
+      state: 'running',
+    },
+  });
+
+  expect(JSON.stringify(parsed.payload)).toBe(JSON.stringify(live.payload));
+});
+
 test('workflowEventEnvelopeSchema rejects non-canonical top-level and ref keys', () => {
   const envelope = buildWorkflowEventEnvelope({
     eventId: 'evt-strict',

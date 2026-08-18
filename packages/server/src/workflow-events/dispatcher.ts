@@ -208,7 +208,10 @@ export class WorkflowEventDispatcher {
       return;
     }
 
-    const result = await this.post(row.event_route, requestHeaders, row.event_body);
+    const result = redactAttemptResult(
+      await this.post(row.event_route, requestHeaders, row.event_body),
+      receiverHeaders
+    );
     const completedAt = this.now();
     const durationMs = Math.max(0, completedAt.getTime() - startedAt.getTime());
     const attempt = await completeAttempt({
@@ -257,6 +260,9 @@ export class WorkflowEventDispatcher {
         headers,
         body,
         signal: controller.signal,
+        // Never forward receiver credentials across redirects. Callers can
+        // configure the final endpoint explicitly after verifying it.
+        redirect: 'manual',
       });
       const responseBody = await response.text();
       return {
@@ -330,4 +336,44 @@ function attemptError(result: AttemptResult): string {
   return result.responseStatus === undefined || result.responseStatus === null
     ? 'unknown'
     : `http-${String(result.responseStatus)}`;
+}
+
+function redactReceiverHeaderValues(
+  value: string,
+  receiverHeaders: Record<string, string>
+): string {
+  const secrets = [
+    ...new Set(Object.values(receiverHeaders).filter(secret => secret.length > 0)),
+  ].sort((left, right) => right.length - left.length);
+  let redacted = value;
+  for (const secret of secrets) {
+    redacted = redacted.replaceAll(secret, '[REDACTED]');
+  }
+  return redacted;
+}
+
+function redactAttemptResult(
+  result: AttemptResult,
+  receiverHeaders: Record<string, string>
+): AttemptResult {
+  return {
+    ...result,
+    responseHeaders:
+      result.responseHeaders === undefined || result.responseHeaders === null
+        ? result.responseHeaders
+        : Object.fromEntries(
+            Object.entries(result.responseHeaders).map(([name, value]) => [
+              name,
+              redactReceiverHeaderValues(value, receiverHeaders),
+            ])
+          ),
+    responseBody:
+      result.responseBody === undefined || result.responseBody === null
+        ? result.responseBody
+        : redactReceiverHeaderValues(result.responseBody, receiverHeaders),
+    transportError:
+      result.transportError === undefined || result.transportError === null
+        ? result.transportError
+        : redactReceiverHeaderValues(result.transportError, receiverHeaders),
+  };
 }

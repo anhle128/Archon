@@ -27,7 +27,7 @@ interface ProviderBindingTestArgs {
 
 interface ProviderBindingTestOptions {
   json: boolean;
-  log: (line: string) => void;
+  log: (line: string) => void | Promise<void>;
 }
 
 type InputPath = '/transform' | '/envelope';
@@ -44,7 +44,7 @@ class BindingTestInputError extends Error {
   }
 }
 
-function emitError(
+async function emitError(
   meta: EnvelopeMeta,
   opts: ProviderBindingTestOptions,
   startedAt: number,
@@ -54,10 +54,10 @@ function emitError(
     exitCode: number;
     fieldErrors?: { path: InputPath; code: InputReason }[];
   }
-): number {
+): Promise<number> {
   const details: Record<string, unknown> = { requestAccepted: false };
   if (error.fieldErrors !== undefined) details.fieldErrors = error.fieldErrors;
-  opts.log(
+  await opts.log(
     safeStringify(
       buildErrorEnvelope(
         meta,
@@ -118,7 +118,7 @@ export async function providerBindingTestCommand(
       ? args.envelopeFile
       : undefined;
   if (transformFile === undefined || envelopeFile === undefined) {
-    return emitError(meta, opts, startedAt, {
+    return await emitError(meta, opts, startedAt, {
       code: 'MALFORMED_REQUEST',
       category: 'provider_contract',
       exitCode: 64,
@@ -140,13 +140,13 @@ export async function providerBindingTestCommand(
     rawEnvelope = await readRequiredJson(envelopeFile, '/envelope');
   } catch (error) {
     if (!(error instanceof BindingTestInputError)) {
-      return emitError(meta, opts, startedAt, {
+      return await emitError(meta, opts, startedAt, {
         code: 'INTERNAL_ERROR',
         category: 'implementation_defect',
         exitCode: 70,
       });
     }
-    return emitError(meta, opts, startedAt, {
+    return await emitError(meta, opts, startedAt, {
       code: 'MALFORMED_REQUEST',
       category: 'provider_contract',
       exitCode: 64,
@@ -156,7 +156,7 @@ export async function providerBindingTestCommand(
 
   const envelopeResult = workflowEventEnvelopeSchema.safeParse(rawEnvelope);
   if (!envelopeResult.success) {
-    return emitError(meta, opts, startedAt, {
+    return await emitError(meta, opts, startedAt, {
       code: 'MALFORMED_REQUEST',
       category: 'provider_contract',
       exitCode: 64,
@@ -168,7 +168,7 @@ export async function providerBindingTestCommand(
   try {
     const transform = normalizeProviderBindingTransform(rawTransform);
     const transformed = await transformWorkflowEventBody(envelope, transform);
-    opts.log(
+    await opts.log(
       safeStringify(
         buildSuccessEnvelope(
           { ...meta, provider: envelope.provider },
@@ -185,14 +185,14 @@ export async function providerBindingTestCommand(
     return 0;
   } catch (error) {
     if (!(error instanceof ProviderBindingTransformError)) {
-      return emitError(meta, opts, startedAt, {
+      return await emitError(meta, opts, startedAt, {
         code: 'INTERNAL_ERROR',
         category: 'implementation_defect',
         exitCode: 70,
       });
     }
     const classified = classifyTransformError(error.code);
-    return emitError(meta, opts, startedAt, {
+    return await emitError(meta, opts, startedAt, {
       code: error.code,
       category: classified.category,
       exitCode: classified.exitCode,

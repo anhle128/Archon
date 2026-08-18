@@ -56,6 +56,17 @@ describe('delivery headers', () => {
     expect(() => validateDeliveryHeaders({ 'Bad Name': 'x' })).toThrow();
     expect(() => validateDeliveryHeaders({ 'Bad\rName': 'x' })).toThrow();
     expect(() => validateDeliveryHeaders({ Authorization: 'Bearer\nsecret' })).toThrow();
+    for (const value of [
+      'Bearer\0secret',
+      'Bearer\u000Bsecret',
+      'Bearer\u001Fsecret',
+      'x\u007Fy',
+    ]) {
+      expect(() => validateDeliveryHeaders({ Authorization: value })).toThrow(
+        /unsafe-delivery-headers/
+      );
+    }
+    expect(() => validateDeliveryHeaders({ Authorization: 'Bearer\tsecret' })).not.toThrow();
     expect(() =>
       validateDeliveryHeaders(
         Object.fromEntries(Array.from({ length: 17 }, (_, index) => [`X-H${index}`, 'v']))

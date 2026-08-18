@@ -5,6 +5,8 @@ export type DeliveryHeaders = z.infer<typeof deliveryHeadersSchema>;
 
 export const UNSAFE_DELIVERY_HEADERS = 'unsafe-delivery-headers';
 const HEADER_TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+// RFC 9110 field values may contain HTAB, but other C0 controls and DEL are
+// unsafe to hand to HTTP clients and can leak through transport errors.
 const RESERVED = new Set(
   [
     'Content-Type',
@@ -33,6 +35,14 @@ function utf8Bytes(value: string): number {
   return new TextEncoder().encode(value).length;
 }
 
+function hasUnsafeHeaderValueControl(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codePoint = value.charCodeAt(index);
+    if (codePoint <= 8 || (codePoint >= 10 && codePoint <= 31) || codePoint === 127) return true;
+  }
+  return false;
+}
+
 export function validateDeliveryHeaders(headers: DeliveryHeaders): void {
   const entries = Object.entries(headers);
   if (entries.length > 16) fail();
@@ -43,8 +53,7 @@ export function validateDeliveryHeaders(headers: DeliveryHeaders): void {
       !HEADER_TOKEN.test(name) ||
       name.includes('\r') ||
       name.includes('\n') ||
-      value.includes('\r') ||
-      value.includes('\n') ||
+      hasUnsafeHeaderValueControl(value) ||
       RESERVED.has(lowerName) ||
       utf8Bytes(name) > 128 ||
       utf8Bytes(value) > 8_192

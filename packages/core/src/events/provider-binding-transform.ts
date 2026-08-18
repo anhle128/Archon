@@ -123,12 +123,31 @@ function visitAst(value: unknown, seen: WeakSet<object>): void {
       throw new ProviderBindingTransformError('TRANSFORM_FUNCTION_DISALLOWED');
     }
   }
+  // JSONata variables are lexically scoped. Rebinding an allowlisted function
+  // name would otherwise let a disallowed function be called through a name
+  // that passes the call-site allowlist check.
+  if (type === 'bind') {
+    const lhs = value.lhs;
+    if (
+      isRecord(lhs) &&
+      lhs.type === 'variable' &&
+      typeof lhs.value === 'string' &&
+      ALLOWED_FUNCTIONS.has(lhs.value)
+    ) {
+      throw new ProviderBindingTransformError('TRANSFORM_FUNCTION_DISALLOWED');
+    }
+  }
   for (const nested of Object.values(value)) visitAst(nested, seen);
 }
 
 export function compileProviderBindingTransform(
   transform: ProviderBindingTransform
 ): jsonata.Expression {
+  // Enforce the persisted-value boundary here as well as in normalization.
+  // Database rows can predate validation or be corrupted independently.
+  if (utf8Bytes(transform.expression) > JSONATA_EXPRESSION_MAX_BYTES) {
+    throw new ProviderBindingTransformError('TRANSFORM_CONFIG_INVALID');
+  }
   let compiled: jsonata.Expression;
   try {
     compiled = jsonata(transform.expression, {

@@ -169,7 +169,14 @@ export const workflowEventEnvelopeSchema = z
         message: issue.message,
       });
     }
-  });
+  })
+  .transform(value => ({
+    ...value,
+    // Use the event-specific parsed payload, not merely its validation result.
+    // This keeps dry-run parsing byte-for-byte aligned with the live builder's
+    // Zod-defined property ordering and normalization.
+    payload: workflowEventPayloadSchemas[value.eventType].parse(value.payload),
+  }));
 
 export type WorkflowEventEnvelope = z.infer<typeof workflowEventEnvelopeSchema>;
 

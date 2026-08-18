@@ -571,6 +571,42 @@ describe('provider-bindings db layer (Story 3.1)', () => {
       expect(cleared.slice(4, 8)).toEqual([1, null, 1, '{}']);
     });
 
+    test('update normalizes a supplied transform and rejects invalid config before a transaction', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow()], 1));
+      await updateBinding({
+        provider: 'archon',
+        name: 'workflow-engine-primary',
+        codebaseId: 'cb-1',
+        eventRoute: 'https://example.invalid/events/v2',
+        transform: { engine: 'jsonata', expression: '{ "ok": true }' } as never,
+      });
+      const [, params] = mockQuery.mock.calls[1] as [string, unknown[]];
+      expect(JSON.parse(params[5] as string)).toEqual({
+        engine: 'jsonata',
+        expression: '{ "ok": true }',
+        timeoutMs: 50,
+        stackDepth: 128,
+        maxSequenceSize: 10_000,
+        maxOutputBytes: 65_536,
+      });
+
+      mockWithTransaction.mockClear();
+      mockQuery.mockClear();
+      await expect(
+        updateBinding({
+          provider: 'archon',
+          name: 'workflow-engine-primary',
+          codebaseId: 'cb-1',
+          eventRoute: 'https://example.invalid/events/v2',
+          transform: { engine: 'jsonata', expression: '$eval("secret")' } as never,
+        })
+      ).rejects.toThrow(/TRANSFORM_FUNCTION_DISALLOWED/);
+      expect(mockWithTransaction).not.toHaveBeenCalled();
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
     test('invalid supplied config fails before a transaction or query starts', async () => {
       await expect(
         createBinding({
@@ -609,19 +645,52 @@ describe('provider-bindings db layer (Story 3.1)', () => {
       expect(mockQuery.mock.calls[1]?.[0] as string).not.toMatch(/transform|delivery_headers/);
     });
 
-    test('corrupt transform or delivery-header JSON reports only the corrupt field', async () => {
-      for (const override of [{ transform: '{not-json' }, { delivery_headers: '{not-json' }]) {
-        mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow(override)], 1));
-        try {
-          await getBinding('archon', 'workflow-engine-primary');
-          throw new Error('expected corrupt-row failure');
-        } catch (error) {
-          expect((error as Error).message).toMatch(
-            /^BINDING_CORRUPT_ROW: (transform|delivery_headers)$/
-          );
-          expect((error as Error).message).not.toContain('not-json');
-        }
+    test('corrupt private and transform fields are isolated to their consuming paths', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([bindingRow({ delivery_headers: '{not-json' })], 1)
+      );
+      await expect(getBinding('archon', 'workflow-engine-primary')).resolves.toMatchObject({
+        id: 'wpb-1',
+      });
+
+      for (const delivery_headers of ['{not-json', { Authorization: 123 }]) {
+        mockQuery.mockResolvedValueOnce(createQueryResult([bindingRow({ delivery_headers })], 1));
+        await expect(getBindingByIdWithSecret('wpb-1')).rejects.toThrow(
+          /^BINDING_CORRUPT_ROW: delivery_headers$/
+        );
       }
+
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([bindingRow({ transform: '{not-json', signing_secret: 'secret' })], 1)
+      );
+      const routing = await getBindingByCodebase('archon', 'cb-1');
+      expect(routing[0]?.transform).toBe('{not-json');
+    });
+
+    test('rotate and disable remain available when the stored transform is corrupt', async () => {
+      const corrupt = bindingRow({ transform: '{not-json' });
+      mockQuery.mockResolvedValueOnce(createQueryResult([corrupt], 1));
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult(
+          [bindingRow({ transform: '{not-json', state: 'rotated', binding_version: 2 })],
+          1
+        )
+      );
+      await expect(rotateBinding('archon', 'workflow-engine-primary')).resolves.toMatchObject({
+        state: 'rotated',
+        activeVersion: 2,
+      });
+
+      mockQuery.mockReset();
+      mockQuery.mockResolvedValueOnce(createQueryResult([corrupt], 1));
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([bindingRow({ transform: '{not-json', state: 'disabled' })], 1)
+      );
+      await expect(disableBinding('archon', 'workflow-engine-primary')).resolves.toMatchObject({
+        state: 'disabled',
+      });
     });
   });
 });
