@@ -1,0 +1,6 @@
+interface:
+  display_name: "Archon HTTP"
+  short_description: "Use internal Archon over Tailscale"
+  default_prompt: "Use $archon-http to operate the internal Archon instance over Tailscale."
+policy:
+  allow_implicit_invocation: false
