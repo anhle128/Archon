@@ -143,6 +143,50 @@ mock.module('../db/workflow-node-sessions', () => ({
   deleteWorkflowNodeSessions: mock(() => Promise.resolve()),
 }));
 
+class TestTransformError extends Error {
+  readonly code: string;
+
+  constructor(code: string) {
+    super(code);
+    this.code = code;
+  }
+}
+
+const mockTransformWorkflowEventBody = mock(
+  async (envelope: Record<string, unknown>, transform: unknown) => ({
+    body: JSON.stringify(envelope),
+    outputBytes: new TextEncoder().encode(JSON.stringify(envelope)).length,
+    engine: transform ? ('jsonata' as const) : ('identity' as const),
+    durationMs: 1,
+  })
+);
+// Spread the real module so provider-bindings (pulled in via binding-router)
+// still sees normalize/validate exports; only enqueue-path transform is mocked.
+const transformActual = await import('../events/provider-binding-transform');
+mock.module('../events/provider-binding-transform', () => ({
+  ...transformActual,
+  transformWorkflowEventBody: mockTransformWorkflowEventBody,
+  isProviderBindingTransformError: (error: unknown): boolean => error instanceof TestTransformError,
+}));
+
+const mockLogDebug = mock(() => {});
+const mockLogWarn = mock(() => {});
+const mockLogError = mock(() => {});
+// Spread the real module: a createLogger-only stub omits BUNDLED_IS_BINARY and
+// breaks transitive imports (db/bundled-schema) during store-adapter load.
+const pathsActual = await import('@archon/paths');
+mock.module('@archon/paths', () => ({
+  ...pathsActual,
+  createLogger: mock(() => ({
+    info: mock(() => {}),
+    warn: mockLogWarn,
+    error: mockLogError,
+    debug: mockLogDebug,
+    trace: mock(() => {}),
+    fatal: mock(() => {}),
+  })),
+}));
+
 const { createWorkflowStore, createWorkflowDeps } = await import('./store-adapter');
 
 const originalArchonPublicUrl = process.env.ARCHON_PUBLIC_URL;
@@ -177,6 +221,8 @@ function bindingRow(overrides: Record<string, unknown> = {}): Record<string, unk
     event_types: [],
     signing_secret: 'test-secret',
     state: 'active',
+    transform: null,
+    delivery_headers: {},
     ...overrides,
   };
 }
@@ -201,6 +247,18 @@ describe('createWorkflowStore', () => {
         reason: 'missing-codebase',
       })
     );
+    mockTransformWorkflowEventBody.mockReset();
+    mockTransformWorkflowEventBody.mockImplementation(
+      async (envelope: Record<string, unknown>, transform: unknown) => ({
+        body: JSON.stringify(envelope),
+        outputBytes: new TextEncoder().encode(JSON.stringify(envelope)).length,
+        engine: transform ? ('jsonata' as const) : ('identity' as const),
+        durationMs: 1,
+      })
+    );
+    mockLogDebug.mockReset();
+    mockLogWarn.mockReset();
+    mockLogError.mockReset();
   });
 
   afterEach(() => {
@@ -450,6 +508,111 @@ describe('createWorkflowStore', () => {
     });
 
     expect(mockEnqueueExternalWorkflowEvent).toHaveBeenCalledTimes(1);
+  });
+
+  test('routable events call the transform once and persist its exact body', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(workflowRunRow());
+    const configuredTransform = {
+      engine: 'jsonata',
+      expression: '{ "eventType": eventType }',
+      timeoutMs: 50,
+      stackDepth: 128,
+      maxSequenceSize: 10_000,
+      maxOutputBytes: 65_536,
+    };
+    mockResolveEventRoute.mockResolvedValueOnce({
+      routable: true,
+      codebase: codebaseRow(),
+      binding: bindingRow({ transform: configuredTransform }),
+      route: 'https://example.invalid/events',
+      secret: 'test-secret',
+    });
+    mockTransformWorkflowEventBody.mockResolvedValueOnce({
+      body: '{"eventType":"workflow.run.completed"}',
+      outputBytes: 38,
+      engine: 'jsonata',
+      durationMs: 2,
+    });
+    const store = createWorkflowStore();
+    await store.enqueueExternalWorkflowEvent({
+      workflow_run_id: 'run-1',
+      event_type: 'workflow.run.completed',
+      occurred_at: '2026-08-18T00:00:00.000Z',
+      payload: { state: 'completed', result: { outcome: 'accepted' } },
+    });
+    expect(mockTransformWorkflowEventBody).toHaveBeenCalledTimes(1);
+    expect(mockTransformWorkflowEventBody.mock.calls[0]?.[1]).toEqual(configuredTransform);
+    const [insert] = mockEnqueueExternalWorkflowEvent.mock.calls[0] as [Record<string, unknown>];
+    expect(insert.event_body).toBe('{"eventType":"workflow.run.completed"}');
+    expect(insert.status).toBe('pending');
+  });
+
+  test('event filtering happens before envelope transformation', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(workflowRunRow());
+    mockResolveEventRoute.mockResolvedValueOnce({
+      routable: true,
+      codebase: codebaseRow(),
+      binding: bindingRow({
+        event_types: ['workflow.approval.requested'],
+        transform: { engine: 'jsonata', expression: '$now()' },
+      }),
+      route: 'https://example.invalid/events',
+      secret: 'test-secret',
+    });
+    await createWorkflowStore().enqueueExternalWorkflowEvent({
+      workflow_run_id: 'run-1',
+      event_type: 'workflow.run.started',
+      occurred_at: '2026-08-18T00:00:00.000Z',
+      payload: { state: 'running', startedAt: '2026-08-18T00:00:00.000Z' },
+    });
+    expect(mockTransformWorkflowEventBody).not.toHaveBeenCalled();
+    expect(mockEnqueueExternalWorkflowEvent).not.toHaveBeenCalled();
+  });
+
+  test('classified failure stores canonical evidence and does not reject the workflow', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(workflowRunRow());
+    mockResolveEventRoute.mockResolvedValueOnce({
+      routable: true,
+      codebase: codebaseRow(),
+      binding: bindingRow({ transform: { engine: 'jsonata', expression: 'eventType' } }),
+      route: 'https://example.invalid/events',
+      secret: 'test-secret',
+    });
+    mockTransformWorkflowEventBody.mockRejectedValueOnce(
+      new TestTransformError('TRANSFORM_RESULT_INVALID')
+    );
+    await expect(
+      createWorkflowStore().enqueueExternalWorkflowEvent({
+        workflow_run_id: 'run-1',
+        event_type: 'workflow.run.started',
+        occurred_at: '2026-08-18T00:00:00.000Z',
+        payload: { state: 'running', startedAt: '2026-08-18T00:00:00.000Z' },
+      })
+    ).resolves.toBeUndefined();
+    const [insert] = mockEnqueueExternalWorkflowEvent.mock.calls[0] as [Record<string, unknown>];
+    expect(insert).toMatchObject({
+      status: 'not-routable',
+      not_routable_reason: 'transform-failed',
+      last_error: 'TRANSFORM_RESULT_INVALID',
+      next_attempt_at: null,
+    });
+    expect(JSON.parse(insert.event_body as string)).toMatchObject({
+      schemaVersion: 'workflow-event-envelope.v1',
+      eventType: 'workflow.run.started',
+    });
+    const [fields] = mockLogWarn.mock.calls.find(
+      call => call[1] === 'workflow_event_outbox_transform_failed'
+    ) as [Record<string, unknown>, string];
+    expect(fields).toEqual({
+      bindingId: 'binding-1',
+      eventType: 'workflow.run.started',
+      engine: 'jsonata',
+      durationMs: expect.any(Number),
+      errorCode: 'TRANSFORM_RESULT_INVALID',
+    });
+    // Plan regex `/expression|envelope|err/` false-positives on `errorCode`;
+    // assert the unsafe keys themselves are absent from the safe log fields.
+    expect(JSON.stringify(fields)).not.toMatch(/"(expression|envelope|err)":/);
   });
 
   test('createWorkflowEvent enriches standard approval callbacks with user prompt and run URL', async () => {
