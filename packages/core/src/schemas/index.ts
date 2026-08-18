@@ -78,6 +78,14 @@ export {
 } from './workflow-provider-binding';
 export type { WorkflowProviderBinding } from './workflow-provider-binding';
 
+// ProviderBindingTransform
+export {
+  JSONATA_EXPRESSION_MAX_BYTES,
+  jsonataProviderBindingTransformSchema,
+  providerBindingTransformSchema,
+} from './provider-binding-transform';
+export type { ProviderBindingTransform } from './provider-binding-transform';
+
 // WorkflowEventOutbox
 export {
   workflowEventOutboxRowSchema,
