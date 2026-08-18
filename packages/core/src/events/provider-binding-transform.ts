@@ -4,6 +4,7 @@ import {
   providerBindingTransformSchema,
   type ProviderBindingTransform,
 } from '../schemas/provider-binding-transform';
+import type { WorkflowEventEnvelope } from './workflow-event-envelope';
 
 export const TRANSFORM_ERROR_CODES = [
   'TRANSFORM_CONFIG_INVALID',
@@ -144,4 +145,115 @@ export function compileProviderBindingTransform(
 
 export function validateProviderBindingTransform(transform: ProviderBindingTransform): void {
   compileProviderBindingTransform(transform);
+}
+
+export interface TransformBodyResult {
+  body: string;
+  outputBytes: number;
+  engine: 'identity' | 'jsonata';
+  durationMs: number;
+}
+
+export function assertJsonTransformResult(value: unknown, activePath = new WeakSet()): void {
+  if (
+    value === undefined ||
+    typeof value === 'function' ||
+    typeof value === 'symbol' ||
+    typeof value === 'bigint'
+  ) {
+    throw new ProviderBindingTransformError('TRANSFORM_RESULT_INVALID');
+  }
+  if (typeof value === 'number' && !Number.isFinite(value)) {
+    throw new ProviderBindingTransformError('TRANSFORM_RESULT_INVALID');
+  }
+  if (
+    value === null ||
+    typeof value === 'string' ||
+    typeof value === 'boolean' ||
+    typeof value === 'number'
+  ) {
+    return;
+  }
+  if (typeof value !== 'object' || activePath.has(value)) {
+    throw new ProviderBindingTransformError('TRANSFORM_RESULT_INVALID');
+  }
+
+  activePath.add(value);
+  try {
+    if (Array.isArray(value)) {
+      for (let index = 0; index < value.length; index += 1) {
+        if (!Object.prototype.hasOwnProperty.call(value, index)) {
+          throw new ProviderBindingTransformError('TRANSFORM_RESULT_INVALID');
+        }
+        assertJsonTransformResult(value[index], activePath);
+      }
+      return;
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new ProviderBindingTransformError('TRANSFORM_RESULT_INVALID');
+    }
+    for (const nested of Object.values(value as Record<string, unknown>)) {
+      assertJsonTransformResult(nested, activePath);
+    }
+  } finally {
+    activePath.delete(value);
+  }
+}
+
+function classifyJsonataError(error: unknown): TransformErrorCode {
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? String((error as { code: unknown }).code)
+      : '';
+  if (code === 'D1012') return 'TRANSFORM_TIMEOUT';
+  if (code === 'D1011') return 'TRANSFORM_STACK_LIMIT';
+  if (code === 'D2015') return 'TRANSFORM_SEQUENCE_LIMIT';
+  return 'TRANSFORM_EVALUATION_FAILED';
+}
+
+export async function transformWorkflowEventBody(
+  envelope: WorkflowEventEnvelope,
+  transform: ProviderBindingTransform | null
+): Promise<TransformBodyResult> {
+  const startedAt = Date.now();
+  if (transform === null) {
+    const body = JSON.stringify(envelope);
+    return {
+      body,
+      outputBytes: utf8Bytes(body),
+      engine: 'identity',
+      durationMs: Math.max(0, Date.now() - startedAt),
+    };
+  }
+
+  const compiled = compileProviderBindingTransform(transform);
+  let raw: unknown;
+  try {
+    raw = await compiled.evaluate(envelope);
+  } catch (error) {
+    throw new ProviderBindingTransformError(classifyJsonataError(error));
+  }
+  if (raw === null || typeof raw !== 'object') {
+    throw new ProviderBindingTransformError('TRANSFORM_RESULT_INVALID');
+  }
+
+  let body: string;
+  try {
+    assertJsonTransformResult(raw);
+    body = JSON.stringify(raw);
+  } catch (error) {
+    if (isProviderBindingTransformError(error)) throw error;
+    throw new ProviderBindingTransformError('TRANSFORM_RESULT_INVALID');
+  }
+  const outputBytes = utf8Bytes(body);
+  if (outputBytes > transform.maxOutputBytes) {
+    throw new ProviderBindingTransformError('TRANSFORM_OUTPUT_TOO_LARGE');
+  }
+  return {
+    body,
+    outputBytes,
+    engine: 'jsonata',
+    durationMs: Math.max(0, Date.now() - startedAt),
+  };
 }

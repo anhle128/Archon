@@ -1,7 +1,10 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
+import { buildWorkflowEventEnvelope } from './workflow-event-envelope';
 import {
   ProviderBindingTransformError,
+  assertJsonTransformResult,
   normalizeProviderBindingTransform,
+  transformWorkflowEventBody,
   validateProviderBindingTransform,
 } from './provider-binding-transform';
 
@@ -83,6 +86,132 @@ describe('provider-binding JSONata policy', () => {
       expect((error as ProviderBindingTransformError).code).toBe('TRANSFORM_COMPILE_FAILED');
       expect((error as Error).message).toBe('TRANSFORM_COMPILE_FAILED');
       expect((error as Error).message).not.toContain('{');
+    }
+  });
+});
+
+const envelope = buildWorkflowEventEnvelope({
+  eventId: 'evt-1',
+  eventType: 'workflow.run.started',
+  occurredAt: '2026-07-25T00:00:00.000Z',
+  run: { id: 'run-1', workflow_name: 'bmad-dev-story' },
+  codebase: {
+    id: 'cb-1',
+    name: 'workflow-engine',
+    default_cwd: '/workspace/workflow-engine',
+    default_branch: 'dev',
+  },
+  binding: { provider: 'archon', name: 'workflow-engine-primary' },
+  payload: { state: 'running', startedAt: '2026-07-25T00:00:00.000Z' },
+});
+
+describe('transformWorkflowEventBody', () => {
+  test('preserves the exact current identity serialization', async () => {
+    const result = await transformWorkflowEventBody(envelope, null);
+    expect(result).toEqual({
+      body: JSON.stringify(envelope),
+      outputBytes: new TextEncoder().encode(JSON.stringify(envelope)).length,
+      engine: 'identity',
+      durationMs: expect.any(Number),
+    });
+  });
+
+  test('returns exact JSONata serialization and UTF-8 byte length', async () => {
+    const result = await transformWorkflowEventBody(
+      envelope,
+      transform('{ "eventType": eventType, "value": "é" }')
+    );
+    expect(result.body).toBe('{"eventType":"workflow.run.started","value":"é"}');
+    expect(result.outputBytes).toBe(new TextEncoder().encode(result.body).length);
+    expect(result.engine).toBe('jsonata');
+  });
+
+  test('rejects scalar top-level output and UTF-8 output over the configured limit', async () => {
+    await expect(
+      transformWorkflowEventBody(envelope, transform('eventType'))
+    ).rejects.toMatchObject({
+      code: 'TRANSFORM_RESULT_INVALID',
+    });
+    await expect(
+      transformWorkflowEventBody(
+        envelope,
+        normalizeProviderBindingTransform({
+          engine: 'jsonata',
+          expression: '{ "v": "éé" }',
+          maxOutputBytes: 5,
+        })
+      )
+    ).rejects.toMatchObject({ code: 'TRANSFORM_OUTPUT_TOO_LARGE' });
+  });
+
+  test('rejects every non-JSON result shape and accepts repeated non-cyclic references', () => {
+    for (const invalid of [
+      undefined,
+      () => 'x',
+      Symbol('x'),
+      1n,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      new Date('2026-07-25T00:00:00.000Z'),
+    ]) {
+      expect(() => assertJsonTransformResult(invalid)).toThrow(/TRANSFORM_RESULT_INVALID/);
+    }
+    const sparse: unknown[] = [];
+    sparse[1] = 'x';
+    expect(() => assertJsonTransformResult(sparse)).toThrow(/TRANSFORM_RESULT_INVALID/);
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    expect(() => assertJsonTransformResult(cyclic)).toThrow(/TRANSFORM_RESULT_INVALID/);
+    const shared = { value: 'ok' };
+    expect(() => assertJsonTransformResult({ left: shared, right: shared })).not.toThrow();
+    expect(() =>
+      assertJsonTransformResult(Object.assign(Object.create(null), { ok: true }))
+    ).not.toThrow();
+  });
+
+  test('maps deterministic sequence, stack, and timeout guardrail failures', async () => {
+    await expect(
+      transformWorkflowEventBody(
+        envelope,
+        normalizeProviderBindingTransform({
+          engine: 'jsonata',
+          expression: '{ "n": [1..20] }',
+          maxSequenceSize: 10,
+        })
+      )
+    ).rejects.toMatchObject({ code: 'TRANSFORM_SEQUENCE_LIMIT' });
+
+    await expect(
+      transformWorkflowEventBody(
+        envelope,
+        normalizeProviderBindingTransform({
+          engine: 'jsonata',
+          expression: '{ "v": $string($string($string($string("x")))) }',
+          stackDepth: 2,
+        })
+      )
+    ).rejects.toMatchObject({ code: 'TRANSFORM_STACK_LIMIT' });
+
+    let now = 0;
+    const dateNow = spyOn(Date, 'now').mockImplementation(() => {
+      now += 10;
+      return now;
+    });
+    try {
+      await expect(
+        transformWorkflowEventBody(
+          envelope,
+          normalizeProviderBindingTransform({
+            engine: 'jsonata',
+            expression: '{ "n": [1..20] }',
+            timeoutMs: 1,
+            maxSequenceSize: 100,
+          })
+        )
+      ).rejects.toMatchObject({ code: 'TRANSFORM_TIMEOUT' });
+    } finally {
+      dateNow.mockRestore();
     }
   });
 });
