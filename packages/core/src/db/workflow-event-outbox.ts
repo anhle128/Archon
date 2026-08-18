@@ -38,6 +38,7 @@ export interface InsertExternalWorkflowEventInput {
   event_route?: string | null;
   status?: WorkflowEventOutboxStatus;
   not_routable_reason?: string | null;
+  last_error?: string | null;
   next_attempt_at?: Date | string | null;
 }
 
@@ -89,8 +90,8 @@ export async function insertExternalWorkflowEvent(
   const result = await query(
     `INSERT INTO remote_agent_workflow_event_outbox
        (id, event_id, idempotency_key, event_type, provider, workflow_run_id, codebase_id,
-        binding_id, event_route, event_body, status, not_routable_reason, next_attempt_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        binding_id, event_route, event_body, status, not_routable_reason, last_error, next_attempt_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
      RETURNING *`,
     [
       dialect.generateUuid(),
@@ -105,6 +106,7 @@ export async function insertExternalWorkflowEvent(
       data.event_body,
       data.status ?? 'pending',
       data.not_routable_reason ?? null,
+      data.last_error ?? null,
       toDbTimestamp(data.next_attempt_at),
     ]
   );

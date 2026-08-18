@@ -104,6 +104,36 @@ describe('workflow-event-outbox db layer', () => {
     expect(params).toContain('{"eventId":"evt-1"}');
   });
 
+  test('insertExternalWorkflowEvent persists an initial safe last_error', async () => {
+    mockQuery.mockResolvedValueOnce(
+      createQueryResult([
+        outboxRow({
+          status: 'not-routable',
+          not_routable_reason: 'transform-failed',
+          last_error: 'TRANSFORM_RESULT_INVALID',
+          next_attempt_at: null,
+        }),
+      ])
+    );
+    await insertExternalWorkflowEvent(
+      (sql, params) => mockQuery(sql, params) as ReturnType<typeof mockQuery>,
+      {
+        event_id: 'evt-1',
+        idempotency_key: 'archon:workflow-engine-primary:evt-1',
+        event_type: 'workflow.run.completed',
+        workflow_run_id: 'run-1',
+        event_body: '{"canonical":true}',
+        status: 'not-routable',
+        not_routable_reason: 'transform-failed',
+        last_error: 'TRANSFORM_RESULT_INVALID',
+        next_attempt_at: null,
+      }
+    );
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('not_routable_reason, last_error, next_attempt_at');
+    expect(params).toContain('TRANSFORM_RESULT_INVALID');
+  });
+
   test('enqueueExternalWorkflowEvent logs and swallows insert failures', async () => {
     mockQuery.mockRejectedValueOnce(new Error('db down'));
 
