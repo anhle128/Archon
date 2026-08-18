@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   buildWorkflowEventEnvelope,
+  workflowEventEnvelopeSchema,
   type ExternalWorkflowEventType,
 } from './workflow-event-envelope';
 
@@ -230,4 +231,54 @@ describe('buildWorkflowEventEnvelope', () => {
       ).toThrow();
     }
   });
+});
+
+test('workflowEventEnvelopeSchema selects the payload schema from eventType', () => {
+  const envelope = buildWorkflowEventEnvelope({
+    eventId: 'evt-schema',
+    eventType: 'workflow.run.started',
+    occurredAt: '2026-07-25T00:00:00.000Z',
+    run,
+    codebase: baseCodebase,
+    binding,
+    payload: payloads['workflow.run.started'],
+  });
+  expect(workflowEventEnvelopeSchema.parse(envelope).eventType).toBe('workflow.run.started');
+  expect(() =>
+    workflowEventEnvelopeSchema.parse({ ...envelope, eventType: 'workflow.run.completed' })
+  ).toThrow();
+});
+
+test('workflowEventEnvelopeSchema rejects non-canonical top-level and ref keys', () => {
+  const envelope = buildWorkflowEventEnvelope({
+    eventId: 'evt-strict',
+    eventType: 'workflow.run.started',
+    occurredAt: '2026-07-25T00:00:00.000Z',
+    run,
+    codebase: baseCodebase,
+    binding,
+    payload: payloads['workflow.run.started'],
+  });
+  expect(() => workflowEventEnvelopeSchema.parse({ ...envelope, extra: true })).toThrow();
+  expect(() =>
+    workflowEventEnvelopeSchema.parse({
+      ...envelope,
+      bindingRef: { ...envelope.bindingRef, secret: 'must-not-pass' },
+    })
+  ).toThrow();
+});
+
+test('identity serialization remains byte-identical to the current literal shape', () => {
+  const envelope = buildWorkflowEventEnvelope({
+    eventId: 'evt-identity',
+    eventType: 'workflow.run.started',
+    occurredAt: '2026-07-25T00:00:00.000Z',
+    run,
+    codebase: baseCodebase,
+    binding,
+    payload: payloads['workflow.run.started'],
+  });
+  expect(JSON.stringify(envelope)).toBe(
+    '{"schemaVersion":"workflow-event-envelope.v1","provider":"archon","eventId":"evt-identity","eventType":"workflow.run.started","occurredAt":"2026-07-25T00:00:00.000Z","bindingRef":{"provider":"archon","name":"workflow-engine-primary","bindingId":"wpb_archon::workflow_engine_primary","projectRef":"project:cb-1"},"workflowRunRef":{"provider":"archon","runId":"run-1","workflowName":"bmad-dev-story","projectRef":"project:cb-1"},"projectRef":{"id":"cb-1","codebaseRef":"workflow-engine","repositoryPath":"/workspace/workflow-engine","defaultBranch":"dev"},"idempotencyKey":"archon:workflow-engine-primary:evt-identity","payload":{"state":"running","startedAt":"2026-07-25T00:00:00.000Z"}}'
+  );
 });

@@ -1,5 +1,8 @@
 import { deriveBindingId } from '../db/provider-bindings';
-import type { ExternalWorkflowEventType } from '../schemas/workflow-event';
+import {
+  externalWorkflowEventTypeSchema,
+  type ExternalWorkflowEventType,
+} from '../schemas/workflow-event';
 import { z } from '@hono/zod-openapi';
 
 export type { ExternalWorkflowEventType } from '../schemas/workflow-event';
@@ -28,34 +31,6 @@ export interface BuildWorkflowEventEnvelopeInput {
   run: WorkflowEventEnvelopeRun;
   codebase: WorkflowEventEnvelopeCodebase;
   binding: WorkflowEventEnvelopeBinding;
-  payload: Record<string, unknown>;
-}
-
-export interface WorkflowEventEnvelope {
-  schemaVersion: 'workflow-event-envelope.v1';
-  provider: string;
-  eventId: string;
-  eventType: ExternalWorkflowEventType;
-  occurredAt: string;
-  bindingRef: {
-    provider: string;
-    name: string;
-    bindingId: string;
-    projectRef: string;
-  };
-  workflowRunRef: {
-    provider: string;
-    runId: string;
-    workflowName: string;
-    projectRef: string;
-  };
-  projectRef: {
-    id: string;
-    codebaseRef: string;
-    repositoryPath: string;
-    defaultBranch?: string;
-  };
-  idempotencyKey: string;
   payload: Record<string, unknown>;
 }
 
@@ -142,6 +117,61 @@ const workflowEventPayloadSchemas = {
     })
     .passthrough(),
 } satisfies Record<ExternalWorkflowEventType, z.ZodType<Record<string, unknown>>>;
+
+const bindingRefSchema = z
+  .object({
+    provider: nonEmptyStringSchema,
+    name: nonEmptyStringSchema,
+    bindingId: nonEmptyStringSchema,
+    projectRef: nonEmptyStringSchema,
+  })
+  .strict();
+
+const workflowRunRefSchema = z
+  .object({
+    provider: nonEmptyStringSchema,
+    runId: nonEmptyStringSchema,
+    workflowName: nonEmptyStringSchema,
+    projectRef: nonEmptyStringSchema,
+  })
+  .strict();
+
+const projectRefSchema = z
+  .object({
+    id: nonEmptyStringSchema,
+    codebaseRef: nonEmptyStringSchema,
+    repositoryPath: nonEmptyStringSchema,
+    defaultBranch: nonEmptyStringSchema.optional(),
+  })
+  .strict();
+
+export const workflowEventEnvelopeSchema = z
+  .object({
+    schemaVersion: z.literal('workflow-event-envelope.v1'),
+    provider: nonEmptyStringSchema,
+    eventId: nonEmptyStringSchema,
+    eventType: externalWorkflowEventTypeSchema,
+    occurredAt: dateTimeSchema,
+    bindingRef: bindingRefSchema,
+    workflowRunRef: workflowRunRefSchema,
+    projectRef: projectRefSchema,
+    idempotencyKey: nonEmptyStringSchema,
+    payload: z.record(z.string(), z.unknown()),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const parsed = workflowEventPayloadSchemas[value.eventType].safeParse(value.payload);
+    if (parsed.success) return;
+    for (const issue of parsed.error.issues) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['payload', ...issue.path],
+        message: issue.message,
+      });
+    }
+  });
+
+export type WorkflowEventEnvelope = z.infer<typeof workflowEventEnvelopeSchema>;
 
 export function buildWorkflowEventEnvelope(
   input: BuildWorkflowEventEnvelopeInput
