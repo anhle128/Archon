@@ -1,9 +1,20 @@
+import { z } from '@hono/zod-openapi';
 import { pool, getDialect, getDatabase } from './connection';
 import {
   workflowProviderBindingSchema,
   type WorkflowProviderBinding,
 } from '../schemas/workflow-provider-binding';
 import type { ExternalWorkflowEventType } from '../schemas/workflow-event';
+import {
+  normalizeProviderBindingTransform,
+  validateProviderBindingTransform,
+} from '../events/provider-binding-transform';
+import type { ProviderBindingTransform } from '../schemas/provider-binding-transform';
+import {
+  deliveryHeadersSchema,
+  normalizeDeliveryHeaders,
+  type DeliveryHeaders,
+} from '../events/delivery-headers';
 import { createLogger } from '@archon/paths';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -20,11 +31,12 @@ const LEGACY_CONTRACT_BINDING_IDS = new Map<string, string>([
 
 const workflowProviderBindingWithSecretSchema = workflowProviderBindingSchema.extend({
   signing_secret: workflowProviderBindingSchema.shape.event_route.nullable().optional(),
+  delivery_headers: deliveryHeadersSchema.default({}),
 });
 
-export type WorkflowProviderBindingWithSecret = WorkflowProviderBinding & {
-  signing_secret?: string | null;
-};
+export type WorkflowProviderBindingWithSecret = z.infer<
+  typeof workflowProviderBindingWithSecretSchema
+>;
 
 function hexEncode(value: string): string {
   return Array.from(new TextEncoder().encode(value), byte =>
@@ -33,14 +45,24 @@ function hexEncode(value: string): string {
 }
 
 function normalizeBindingRow(row: unknown): unknown {
-  if (typeof row !== 'object' || row === null || !('event_types' in row)) return row;
-  const eventTypes = (row as { event_types?: unknown }).event_types;
-  if (typeof eventTypes !== 'string') return row;
-  try {
-    return { ...row, event_types: JSON.parse(eventTypes) as unknown };
-  } catch {
-    return row;
+  if (typeof row !== 'object' || row === null || Array.isArray(row)) return row;
+  const normalized: Record<string, unknown> = { ...row };
+  if (typeof normalized.event_types === 'string') {
+    try {
+      normalized.event_types = JSON.parse(normalized.event_types) as unknown;
+    } catch {
+      // Leave the invalid value for the public schema to classify by field path.
+    }
   }
+  for (const column of ['transform', 'delivery_headers'] as const) {
+    if (typeof normalized[column] !== 'string') continue;
+    try {
+      normalized[column] = JSON.parse(normalized[column]) as unknown;
+    } catch {
+      throw new Error(`BINDING_CORRUPT_ROW: ${column}`);
+    }
+  }
+  return normalized;
 }
 
 function parseBindingRow(row: unknown): WorkflowProviderBinding {
@@ -64,10 +86,9 @@ function parseBindingRow(row: unknown): WorkflowProviderBinding {
 
 function parseBindingRowWithSecret(row: unknown): WorkflowProviderBindingWithSecret {
   const parsed = workflowProviderBindingWithSecretSchema.safeParse(normalizeBindingRow(row));
-  if (parsed.success) {
-    return parsed.data;
-  }
-  return parseBindingRow(row) as WorkflowProviderBindingWithSecret;
+  if (parsed.success) return parsed.data;
+  const fields = parsed.error.issues.map(issue => issue.path.join('.') || '<root>').join(',');
+  throw new Error(`BINDING_CORRUPT_ROW: ${fields}`);
 }
 
 export function deriveBindingId(provider: string, name: string): string {
@@ -83,7 +104,20 @@ export async function createBinding(input: {
   eventRoute: string;
   eventTypes?: readonly ExternalWorkflowEventType[];
   signingSecret?: string | null;
+  transform?: ProviderBindingTransform | null;
+  deliveryHeaders?: DeliveryHeaders | null;
 }): Promise<WorkflowProviderBinding> {
+  const normalizedTransform =
+    input.transform === undefined || input.transform === null
+      ? input.transform
+      : normalizeProviderBindingTransform(input.transform);
+  if (normalizedTransform) validateProviderBindingTransform(normalizedTransform);
+
+  const normalizedHeaders =
+    input.deliveryHeaders === undefined || input.deliveryHeaders === null
+      ? input.deliveryHeaders
+      : normalizeDeliveryHeaders(input.deliveryHeaders);
+
   const dialect = getDialect();
   const db = getDatabase();
   const id = dialect.generateUuid();
@@ -91,8 +125,8 @@ export async function createBinding(input: {
   return await db.withTransaction(async query => {
     const result = await query<WorkflowProviderBinding>(
       `INSERT INTO remote_agent_workflow_provider_bindings
-         (id, provider, name, codebase_id, event_route, event_types, signing_secret, state, binding_version)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', 1)
+         (id, provider, name, codebase_id, event_route, event_types, signing_secret, transform, delivery_headers, state, binding_version)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active', 1)
        ON CONFLICT (provider, name) DO NOTHING`,
       [
         id,
@@ -102,6 +136,8 @@ export async function createBinding(input: {
         input.eventRoute,
         JSON.stringify(input.eventTypes ?? []),
         input.signingSecret ?? null,
+        normalizedTransform ? JSON.stringify(normalizedTransform) : null,
+        JSON.stringify(normalizedHeaders ?? {}),
       ]
     );
 
@@ -164,7 +200,20 @@ export async function updateBinding(input: {
   eventRoute: string;
   eventTypes?: readonly ExternalWorkflowEventType[];
   signingSecret?: string | null;
+  transform?: ProviderBindingTransform | null;
+  deliveryHeaders?: DeliveryHeaders | null;
 }): Promise<WorkflowProviderBinding> {
+  const normalizedTransform =
+    input.transform === undefined || input.transform === null
+      ? input.transform
+      : normalizeProviderBindingTransform(input.transform);
+  if (normalizedTransform) validateProviderBindingTransform(normalizedTransform);
+
+  const normalizedHeaders =
+    input.deliveryHeaders === undefined || input.deliveryHeaders === null
+      ? input.deliveryHeaders
+      : normalizeDeliveryHeaders(input.deliveryHeaders);
+
   const dialect = getDialect();
   const db = getDatabase();
 
@@ -183,24 +232,36 @@ export async function updateBinding(input: {
       throw new Error('BINDING_DISABLED');
     }
 
+    const transformSupplied = input.transform !== undefined;
+    const deliveryHeadersSupplied = input.deliveryHeaders !== undefined;
+    const updateParams = [
+      input.codebaseId,
+      input.eventRoute,
+      input.eventTypes === undefined ? null : JSON.stringify(input.eventTypes),
+      input.signingSecret ?? null,
+      transformSupplied ? 1 : 0,
+      transformSupplied && normalizedTransform !== null
+        ? JSON.stringify(normalizedTransform)
+        : null,
+      deliveryHeadersSupplied ? 1 : 0,
+      deliveryHeadersSupplied ? JSON.stringify(normalizedHeaders ?? {}) : null,
+      input.provider,
+      input.name,
+      existing.binding_version,
+      existing.state,
+    ];
+
     const updateResult = await query(
       `UPDATE remote_agent_workflow_provider_bindings
        SET codebase_id = $1,
            event_route = $2,
            event_types = COALESCE($3, event_types),
            signing_secret = COALESCE($4, signing_secret),
+           transform = CASE WHEN $5 = 1 THEN $6 ELSE transform END,
+           delivery_headers = CASE WHEN $7 = 1 THEN $8 ELSE delivery_headers END,
            updated_at = ${dialect.now()}
-       WHERE provider = $5 AND name = $6 AND binding_version = $7 AND state = $8`,
-      [
-        input.codebaseId,
-        input.eventRoute,
-        input.eventTypes === undefined ? null : JSON.stringify(input.eventTypes),
-        input.signingSecret ?? null,
-        input.provider,
-        input.name,
-        existing.binding_version,
-        existing.state,
-      ]
+       WHERE provider = $9 AND name = $10 AND binding_version = $11 AND state = $12`,
+      updateParams
     );
 
     if (updateResult.rowCount === 0) {
