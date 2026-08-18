@@ -85,6 +85,10 @@ async function runCli(args: string[], cwd: string = isolatedRepo): Promise<CliRe
     ARCHON_HOME: isolatedHome,
   };
   delete childEnv.DATABASE_URL;
+  // Avoid Bun's FORCE_COLOR/NO_COLOR conflict warning leaking into stderr and
+  // breaking --json envelope purity assertions under agent/CI environments.
+  delete childEnv.FORCE_COLOR;
+  childEnv.NO_COLOR = '1';
   const proc = Bun.spawn(['bun', CLI_ENTRY, ...args], {
     cwd,
     stdout: 'pipe',
