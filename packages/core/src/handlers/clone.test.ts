@@ -341,6 +341,14 @@ describe('cloneRepository', () => {
         args => args[0] === 'git' && args[1]?.[0] === 'clone'
       );
       expect(cloneCall?.[1]?.[1]).toContain('ghp_testtoken123@github.com');
+      expect(spyExecFileAsync).toHaveBeenCalledWith('git', [
+        '-C',
+        '/home/test/.archon/workspaces/owner/private-repo/source',
+        'remote',
+        'set-url',
+        'origin',
+        'https://github.com/owner/private-repo',
+      ]);
     });
 
     test('does NOT inject GH_TOKEN into non-github URLs when no forge token set', async () => {
@@ -636,12 +644,47 @@ describe('cloneRepository', () => {
       expect(result.codebaseId).toBe('found-via-git-suffix');
     });
 
-    test('throws when directory exists but no matching codebase is found', async () => {
-      mockFindCodebaseByRepoUrl.mockResolvedValue(null);
+    test('registers an orphaned clone when its origin matches', async () => {
+      mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+      spyExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+        if (args.includes('get-url')) {
+          return Promise.resolve({
+            stdout: 'https://token@github.com/owner/repo.git\n',
+            stderr: '',
+          });
+        }
+        return Promise.resolve({ stdout: '', stderr: '' });
+      });
+
+      const result = await cloneRepository('https://github.com/owner/repo');
+
+      expect(result.alreadyExisted).toBe(false);
+      expect(result.codebaseId).toBe('codebase-uuid-1');
+      expect(spyExecFileAsync).toHaveBeenCalledWith('git', [
+        '-C',
+        '/home/test/.archon/workspaces/owner/repo/source',
+        'remote',
+        'set-url',
+        'origin',
+        'https://github.com/owner/repo',
+      ]);
+    });
+
+    test('rejects an orphaned clone when its origin does not match', async () => {
+      spyExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+        if (args.includes('get-url')) {
+          return Promise.resolve({
+            stdout: 'https://github.com:8443/owner/repo.git\n',
+            stderr: '',
+          });
+        }
+        return Promise.resolve({ stdout: '', stderr: '' });
+      });
 
       await expect(cloneRepository('https://github.com/owner/repo')).rejects.toThrow(
-        'Directory already exists'
+        'does not match the requested repository'
       );
+      expect(mockCreateCodebase).not.toHaveBeenCalled();
     });
   });
 

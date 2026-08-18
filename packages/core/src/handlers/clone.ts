@@ -300,6 +300,18 @@ function normalizeRepoUrl(rawUrl: string): {
   return { workingUrl, ownerName, repoName, targetPath };
 }
 
+function repoIdentity(rawUrl: string): string {
+  const { workingUrl } = normalizeRepoUrl(rawUrl);
+  const parsed = safeParseUrl(workingUrl);
+  if (parsed) {
+    return `${parsed.host.toLowerCase()}${parsed.pathname.replace(/\/+$/, '').replace(/\.git$/, '')}`;
+  }
+  const slashIndex = workingUrl.indexOf('/');
+  const host = slashIndex === -1 ? workingUrl : workingUrl.slice(0, slashIndex);
+  const path = slashIndex === -1 ? '' : workingUrl.slice(slashIndex);
+  return `${host.toLowerCase()}${path.replace(/\.git$/, '')}`;
+}
+
 /**
  * Clone a repository from a URL and register it in the database.
  * Local paths (starting with /, ~, or .) are delegated to registerRepository
@@ -344,10 +356,29 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
       };
     }
 
-    // Directory exists but no codebase found
-    throw new Error(
-      `Directory already exists: ${targetPath}\n\nNo matching codebase found in database. Remove the directory and re-clone.`
-    );
+    let originUrl: string;
+    try {
+      const { stdout } = await execFileAsync('git', [
+        '-C',
+        targetPath,
+        'remote',
+        'get-url',
+        'origin',
+      ]);
+      originUrl = stdout.trim();
+    } catch {
+      throw new Error(
+        `Directory already exists: ${targetPath}\n\nThe existing directory has no readable origin remote.`
+      );
+    }
+    if (!originUrl || repoIdentity(originUrl) !== repoIdentity(workingUrl)) {
+      throw new Error(
+        `Directory already exists: ${targetPath}\n\nIts origin does not match the requested repository.`
+      );
+    }
+
+    await execFileAsync('git', ['-C', targetPath, 'remote', 'set-url', 'origin', workingUrl]);
+    return registerRepoAtPath(targetPath, `${ownerName}/${repoName}`, workingUrl);
   }
 
   // Create project structure (source/, worktrees/, artifacts/, logs/)
@@ -389,6 +420,10 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
   } catch (error) {
     const safeErr = sanitizeError(error as Error);
     throw new Error(`Failed to clone repository: ${safeErr.message}`);
+  }
+
+  if (forgeToken) {
+    await execFileAsync('git', ['-C', targetPath, 'remote', 'set-url', 'origin', workingUrl]);
   }
 
   // Add to git safe.directory

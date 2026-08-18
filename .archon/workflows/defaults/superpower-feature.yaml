@@ -2,7 +2,7 @@ name: superpower-feature
 description: |
   Use when: Manual Superpowers brainstorming is complete and the user wants the feature built.
   Triggers: "superpower feature", "superpowers feature", "superpower plan implement", "grok plan codex fix".
-  Does: Grok 4.6 writes the implementation plan, Codex reviews and repairs the plan in place, Grok implements the plan, then Codex reviews the final code and repairs defects directly.
+  Does: Grok 4.6 writes the implementation plan, Codex reviews and repairs the plan in place, Grok implements the plan, Codex reviews the final code and repairs defects directly, then Codex creates a pull request.
   NOT for: Brainstorming itself, quick one-file fixes, bug-only work, or review-only work.
   Input: The approved brainstorm result, product notes, design spec path, or requirements from the manual Superpowers brainstorming step.
 provider: grok
@@ -136,8 +136,8 @@ nodes:
   - id: implement
     description: Implement the repaired Superpowers plan with Grok 4.6.
     provider: grok
-    model: "grok-4.6"
-    effort: xhigh
+    model: "grok-4.5"
+    effort: high
     context: fresh
     idle_timeout: 3600000
     depends_on:
@@ -241,6 +241,19 @@ nodes:
       See $codex-final-fix.output.review_report and $codex-final-fix.output.fix_report.
       Summary: $codex-final-fix.output.summary
 
+  - id: create-pull-request
+    description: Create the pull request after the final review passes.
+    command: archon-create-pr
+    provider: codex
+    model: gpt-5.5
+    effort: medium
+    context: fresh
+    idle_timeout: 900000
+    depends_on:
+      - codex-final-fix
+    when: "$codex-final-fix.output.gate == 'PASS'"
+    output_type: pull-request
+
   - id: final-summary
     description: Summarize the completed Superpowers feature workflow.
     provider: codex
@@ -248,7 +261,7 @@ nodes:
     effort: medium
     context: fresh
     depends_on:
-      - codex-final-fix
+      - create-pull-request
     when: "$codex-final-fix.output.gate == 'PASS'"
     prompt: |
       Summarize the completed Superpowers feature workflow.
@@ -262,6 +275,8 @@ nodes:
       Fix report:
       $codex-final-fix.output.fix_report
 
-      Include the plan path, final review result, validation summary, and any remaining low-risk notes.
-      Do not create a pull request.
+      Pull request:
+      $create-pull-request.output
+
+      Include the plan path, final review result, validation summary, pull request, and any remaining low-risk notes.
       Return a concise final summary.
