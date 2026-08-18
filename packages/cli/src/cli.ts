@@ -425,6 +425,8 @@ function normalizeProviderBindingArgs(args: string[]): string[] {
     '--route',
     '--event-types',
     '--correlation-id',
+    '--transform-file',
+    '--receiver-headers-file',
   ]);
   const normalized: string[] = [];
 
@@ -519,6 +521,8 @@ async function main(): Promise<number> {
         route: { type: 'string' },
         'event-types': { type: 'string' },
         'correlation-id': { type: 'string' },
+        'transform-file': { type: 'string' },
+        'receiver-headers-file': { type: 'string' },
         full: { type: 'boolean' },
         'dry-run': { type: 'boolean' },
         stubs: { type: 'string' },
@@ -1467,6 +1471,8 @@ async function main(): Promise<number> {
           route: values.route as string | undefined,
           eventTypes: values['event-types'] as string | undefined,
           correlationId: values['correlation-id'] as string | undefined,
+          transformFile: values['transform-file'] as string | undefined,
+          receiverHeadersFile: values['receiver-headers-file'] as string | undefined,
         };
         switch (subcommand) {
           case 'create':

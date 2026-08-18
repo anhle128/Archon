@@ -174,6 +174,21 @@ describe('provider-binding CLI E2E — real subprocess (Story 3.1)', () => {
     }
   });
 
+  for (const flag of ['--transform-file', '--receiver-headers-file'] as const) {
+    test(`${flag} is parsed as a string option and a missing value never swallows --json`, async () => {
+      const cwd = mkdtempSync(join(tmpdir(), 'archon-provider-binding-no-git-'));
+      try {
+        const result = await runCli(['provider-binding', 'create', flag, '--json'], cwd);
+        expect(result.stdout.trim().split('\n').filter(Boolean)).toHaveLength(1);
+        expect(JSON.parse(result.stdout.trim())).toMatchObject({ success: false });
+        expect(result.exitCode).not.toBe(0);
+        expect(result.stderr).toBe('');
+      } finally {
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    });
+  }
+
   test('unsupported provider-binding subcommand fails closed outside a git repo', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'archon-provider-binding-no-git-'));
     try {

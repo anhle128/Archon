@@ -1,5 +1,6 @@
 import { describe, test, expect, mock } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const CONTRACTS_DIR = join(
@@ -828,6 +829,133 @@ describe('provider-binding CLI command (Story 3.1)', () => {
       const module = await import('./provider-binding');
       expect(module).not.toHaveProperty('providerBindingRemoveCommand');
       expect(module).not.toHaveProperty('providerBindingDeleteCommand');
+    });
+  });
+
+  describe('delivery config file inputs', () => {
+    function withJsonFiles(
+      transform: unknown,
+      headers: unknown
+    ): { dir: string; transformFile: string; headersFile: string } {
+      const dir = mkdtempSync(join(tmpdir(), 'archon-binding-files-'));
+      const transformFile = join(dir, 'transform.json');
+      const headersFile = join(dir, 'headers.json');
+      writeFileSync(transformFile, JSON.stringify(transform));
+      writeFileSync(headersFile, JSON.stringify(headers));
+      return { dir, transformFile, headersFile };
+    }
+
+    test('create reads, normalizes, validates, and passes both files without echoing secrets', async () => {
+      const files = withJsonFiles(
+        { engine: 'jsonata', expression: '{ "ok": true }' },
+        { Authorization: 'Bearer secret' }
+      );
+      try {
+        mockCreateBinding.mockClear();
+        const logs: string[] = [];
+        await providerBindingCreateCommand(
+          {
+            provider: 'archon',
+            name: 'workflow-engine-primary',
+            projectRef: 'workflow-engine',
+            route: 'https://example.invalid/events',
+            transformFile: files.transformFile,
+            receiverHeadersFile: files.headersFile,
+          },
+          { json: true, log: line => logs.push(line) }
+        );
+        expect(mockCreateBinding).toHaveBeenCalledWith(
+          expect.objectContaining({
+            transform: expect.objectContaining({
+              engine: 'jsonata',
+              timeoutMs: 50,
+              stackDepth: 128,
+              maxSequenceSize: 10_000,
+              maxOutputBytes: 65_536,
+            }),
+            deliveryHeaders: { Authorization: 'Bearer secret' },
+          })
+        );
+        expect(logs).toHaveLength(1);
+        expect(logs[0]).not.toContain(files.transformFile);
+        expect(logs[0]).not.toContain(files.headersFile);
+        expect(logs[0]).not.toContain('Bearer secret');
+      } finally {
+        rmSync(files.dir, { recursive: true, force: true });
+      }
+    });
+
+    test('update omission preserves fields while JSON null supplies explicit clears', async () => {
+      mockUpdateBinding.mockClear();
+      await providerBindingUpdateCommand(
+        {
+          provider: 'archon',
+          name: 'workflow-engine-primary',
+          projectRef: 'workflow-engine',
+          route: 'https://example.invalid/events',
+        },
+        { json: true, log: () => {} }
+      );
+      expect(mockUpdateBinding.mock.calls[0]?.[0]).not.toHaveProperty('transform');
+      expect(mockUpdateBinding.mock.calls[0]?.[0]).not.toHaveProperty('deliveryHeaders');
+
+      const files = withJsonFiles(null, null);
+      try {
+        await providerBindingUpdateCommand(
+          {
+            provider: 'archon',
+            name: 'workflow-engine-primary',
+            projectRef: 'workflow-engine',
+            route: 'https://example.invalid/events',
+            transformFile: files.transformFile,
+            receiverHeadersFile: files.headersFile,
+          },
+          { json: true, log: () => {} }
+        );
+        expect(mockUpdateBinding.mock.calls[1]?.[0]).toMatchObject({
+          transform: null,
+          deliveryHeaders: null,
+        });
+      } finally {
+        rmSync(files.dir, { recursive: true, force: true });
+      }
+    });
+
+    test('invalid JSON, a disallowed transform, and unsafe headers fail before any DB call', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'archon-binding-files-'));
+      const invalidJson = join(dir, 'invalid.json');
+      const disallowed = join(dir, 'disallowed.json');
+      const unsafe = join(dir, 'unsafe.json');
+      writeFileSync(invalidJson, '{');
+      writeFileSync(disallowed, JSON.stringify({ engine: 'jsonata', expression: '$now()' }));
+      writeFileSync(unsafe, JSON.stringify({ Authorization: 'Bearer\nsecret' }));
+      try {
+        for (const args of [
+          { transformFile: invalidJson },
+          { transformFile: disallowed },
+          { receiverHeadersFile: unsafe },
+        ]) {
+          mockCreateBinding.mockClear();
+          const logs: string[] = [];
+          const exitCode = await providerBindingCreateCommand(
+            {
+              provider: 'archon',
+              name: 'workflow-engine-primary',
+              projectRef: 'workflow-engine',
+              route: 'https://example.invalid/events',
+              ...args,
+            },
+            { json: true, log: line => logs.push(line) }
+          );
+          expect(exitCode).not.toBe(0);
+          expect(mockCreateBinding).not.toHaveBeenCalled();
+          expect(logs).toHaveLength(1);
+          expect(logs[0]).not.toContain(dir);
+          expect(logs[0]).not.toMatch(/\$now|Bearer|secret/);
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
   });
 });
