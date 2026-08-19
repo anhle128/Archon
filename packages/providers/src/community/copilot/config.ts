@@ -3,6 +3,23 @@ import type { CopilotProviderDefaults } from '../../types';
 export type { CopilotProviderDefaults };
 
 /**
+ * The reasoning-depth rungs Copilot's SDK accepts, weakest → strongest.
+ *
+ * Copilot's SDK does not export its `ReasoningEffort` union, so the type is
+ * hand-mirrored on `CopilotProviderDefaults` — which makes this the one provider
+ * where a pin matters most and is easiest to lose. `satisfies` binds the list to
+ * that type, and `provider.ts` imports this array rather than restating it
+ * (same shape as `CODEX_EFFORTS` in ../../codex/config.ts), so the config key and
+ * the node-level `effort:` path can never disagree about what Copilot accepts.
+ */
+export const COPILOT_EFFORTS = [
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+] as const satisfies readonly NonNullable<CopilotProviderDefaults['modelReasoningEffort']>[];
+
+/**
  * Parse raw `assistants.copilot` config into a typed `CopilotProviderDefaults`.
  *
  * Provider-owned effort values are preserved verbatim; the SDK/API validates

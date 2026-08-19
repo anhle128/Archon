@@ -6,14 +6,17 @@
  *   - `@<name>` custom alias → looked up in profile, errors if unknown
  *   - bare literal (anything else) → returned unchanged for SDK pass-through
  *
- * No side effects, no logger, no I/O. The `ResolvedAiProfile` is built once by
+ * No side effects, no logger, no I/O — apart from the provider registry lookup
+ * the effort helpers below need, which is the same static-capability read the
+ * loader and DAG executor already do. The `ResolvedAiProfile` is built once by
  * `buildAiProfile()` from layered config (tier defaults → global tiers → repo
  * tiers → global aliases → repo aliases) and then handed to `resolveModelSpec()`
  * per call.
  */
 
+import { getProviderCapabilities, isRegisteredProvider } from '@archon/providers';
 import tierDefaults from './defaults/tier-defaults.json';
-import type { ThinkingConfig } from './schemas/dag-node';
+import { EFFORT_LEVELS, type ThinkingConfig } from './schemas/dag-node';
 
 /** Reserved tier names — cannot be used as custom alias names */
 export const TIER_NAMES = ['small', 'medium', 'large'] as const;
@@ -229,4 +232,54 @@ export function resolveModelSpec(profile: ResolvedAiProfile, ref: string): Resol
 /** Type guard — narrows ResolvedModelSpec to its `{ literal }` variant. */
 export function isLiteralSpec(spec: ResolvedModelSpec): spec is { literal: string } {
   return 'literal' in spec;
+}
+
+/**
+ * The reasoning-depth vocabulary a provider accepts, or `null` when it has no
+ * reasoning control at all (OpenCode configures reasoning in `opencode.json`,
+ * not per request).
+ *
+ * The returned ladder supplies known suggestions for an effort-capable provider.
+ * Provider-owned future values remain valid and pass through unchanged.
+ */
+export function validEffortsForProvider(provider: string): readonly string[] | null {
+  if (!isRegisteredProvider(provider)) return null;
+  return getProviderCapabilities(provider).effortControl ? EFFORT_LEVELS : null;
+}
+
+/**
+ * True if `effort` is acceptable for `provider`. Providers WITHOUT a reasoning
+ * control accept any value (we don't block what we can't validate; it's a no-op
+ * for them, not an error).
+ */
+export function isEffortValidForProvider(provider: string, effort: string): boolean {
+  const valid = validEffortsForProvider(provider);
+  return valid === null || effort.length > 0;
+}
+
+/** Why a tier/alias preset's `effort` cannot be applied to the resolved provider. */
+export type PresetEffortRejection =
+  | { ok: false; reason: 'unsupported'; valid: null }
+  | { ok: false; reason: 'unknown'; valid: readonly string[] };
+
+/**
+ * Decide whether a tier/alias preset's `effort` can be applied to the resolved
+ * provider — the one gate the DAG executor and the chat orchestrator must agree
+ * on, or the same tier means different reasoning depths in a workflow and in
+ * chat.
+ *
+ * Classifies rather than logs: the two callers keep their own `dag.*` /
+ * `orchestrator.*` event namespaces, which is the only thing that differed
+ * between them.
+ */
+export function resolvePresetEffort(
+  provider: string,
+  effort: string
+): { ok: true } | PresetEffortRejection {
+  const valid = validEffortsForProvider(provider);
+  // The provider has no reasoning control at all (OpenCode configures it in
+  // opencode.json, not per request).
+  if (valid === null) return { ok: false, reason: 'unsupported', valid: null };
+  if (effort.length === 0) return { ok: false, reason: 'unknown', valid };
+  return { ok: true };
 }

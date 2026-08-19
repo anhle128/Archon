@@ -963,9 +963,12 @@ const runWorkflowRoute = createRoute({
   tags: ['Workflows'],
   summary: 'Run a workflow via the orchestrator (JSON or multipart with file uploads)',
   description:
-    'Accepts `application/json` with `{ conversationId, message }` or ' +
-    '`multipart/form-data` with `conversationId`, `message`, and optional file ' +
-    'attachments (max 5 files, 10 MB each).',
+    'Accepts `application/json` with `{ conversationId, message, inputs? }` or ' +
+    '`multipart/form-data` with `conversationId`, `message`, an optional `inputs` field ' +
+    'holding the same map JSON-encoded, and optional file attachments (max 5 files, ' +
+    "10 MB each). `inputs` supplies values for the workflow's declared `inputs:` " +
+    '(#2554); it is validated against the declaration before any worktree, clone, or AI ' +
+    'cost, so a missing required input or an undeclared key is refused up front.',
   request: {
     params: z.object({ name: z.string() }),
   },
@@ -1743,6 +1746,33 @@ export function registerApiRoutes(
     detail?: string
   ): Response {
     return c.json({ error: message, ...(detail ? { detail } : {}) }, status);
+  }
+
+  /**
+   * Validate a run request's declared-inputs map (#2554): a flat object whose every
+   * value is a string, which is exactly the shape `readSubrunMetadata` will accept back
+   * off the run row. Refuse anything else here rather than let it be persisted into a
+   * shape the engine silently reads as absent.
+   *
+   * An empty object resolves to `undefined` so a caller sending `{}` is treated as
+   * having supplied nothing, taking every declared default.
+   */
+  function parseRunInputsField(
+    raw: unknown
+  ): { ok: true; inputs?: Record<string, string> } | { ok: false; error: string } {
+    if (raw === undefined || raw === null) return { ok: true };
+    if (typeof raw !== 'object' || Array.isArray(raw)) {
+      return { ok: false, error: 'inputs must be an object mapping input names to strings' };
+    }
+    const entries = Object.entries(raw as Record<string, unknown>);
+    const badKey = entries.find(([, value]) => typeof value !== 'string')?.[0];
+    if (badKey !== undefined) {
+      return { ok: false, error: `inputs value for '${badKey}' must be a string` };
+    }
+    return {
+      ok: true,
+      inputs: entries.length > 0 ? (raw as Record<string, string>) : undefined,
+    };
   }
 
   /**
@@ -3595,7 +3625,11 @@ export function registerApiRoutes(
 
       return c.json({
         workflows: result.workflows.map(ws => ({
-          workflow: ws.workflow,
+          // Display shows what the AUTHOR wrote. Composition collapses workflow-level
+          // node config onto the nodes and removes it (#1764), so the declared values are
+          // layered back over the definition for this listing only — the console reads
+          // `workflow.provider` to label a card, and execution never reads this response.
+          workflow: { ...ws.workflow, ...ws.declared },
           source: ws.source,
           // Keys the engine dropped from this YAML (#2213) — the console is the
           // surface most authors edit workflows on, so it has to carry them.
@@ -3632,6 +3666,7 @@ export function registerApiRoutes(
 
     let message: string;
     let conversationId: string;
+    let workflowInputs: Record<string, string> | undefined;
     let savedFiles: AttachedFile[] = [];
     let uploadDir = '';
 
@@ -3657,6 +3692,26 @@ export function registerApiRoutes(
       message = rawMessage;
       conversationId = rawConv;
 
+      // Declared inputs (#2554). A form field can only be a string, so the map travels
+      // JSON-encoded. A malformed field is refused rather than ignored — silently
+      // dropping it would start the run without the values the caller thought it sent.
+      const rawInputs = body.inputs;
+      if (rawInputs !== undefined) {
+        if (typeof rawInputs !== 'string') {
+          return apiError(c, 400, 'inputs must be a JSON-encoded object of string values');
+        }
+        let decoded: unknown;
+        try {
+          decoded = JSON.parse(rawInputs);
+        } catch (parseErr: unknown) {
+          getLog().warn({ err: parseErr, workflowName }, 'run_workflow.inputs_parse_failed');
+          return apiError(c, 400, 'inputs must be a JSON-encoded object of string values');
+        }
+        const parsed = parseRunInputsField(decoded);
+        if (!parsed.ok) return apiError(c, 400, parsed.error);
+        workflowInputs = parsed.inputs;
+      }
+
       const rawFiles = body.files;
       const fileList: (string | File)[] = Array.isArray(rawFiles)
         ? rawFiles
@@ -3678,7 +3733,7 @@ export function registerApiRoutes(
         );
       }
     } else {
-      let body: { conversationId?: unknown; message?: unknown };
+      let body: { conversationId?: unknown; message?: unknown; inputs?: unknown };
       try {
         body = await c.req.json();
       } catch (parseErr: unknown) {
@@ -3691,6 +3746,9 @@ export function registerApiRoutes(
       if (typeof body.message !== 'string' || !body.message) {
         return apiError(c, 400, 'message must be a non-empty string');
       }
+      const parsed = parseRunInputsField(body.inputs);
+      if (!parsed.ok) return apiError(c, 400, parsed.error);
+      workflowInputs = parsed.inputs;
       conversationId = body.conversationId;
       message = body.message;
     }
@@ -3739,9 +3797,15 @@ export function registerApiRoutes(
         }
       }
 
+      // Declared inputs ride the context, never `fullMessage` — encoding them into the
+      // command string would make a supplied value indistinguishable from $ARGUMENTS
+      // and would amount to inventing a chat grammar as a side effect (#2554/#2555).
       const fullMessage = `/workflow run ${workflowName} ${message}`;
-      const extraContext: Omit<HandleMessageContext, 'isolationHints'> =
-        savedFiles.length > 0 ? { userId, attachedFiles: savedFiles } : { userId };
+      const extraContext: Omit<HandleMessageContext, 'isolationHints'> = {
+        userId,
+        ...(savedFiles.length > 0 ? { attachedFiles: savedFiles } : {}),
+        ...(workflowInputs ? { workflowInputs } : {}),
+      };
       const filesToCleanup = savedFiles.length > 0 ? { files: savedFiles, uploadDir } : undefined;
       const result = await dispatchToOrchestrator(
         conversationId,
@@ -4235,7 +4299,7 @@ export function registerApiRoutes(
         success: true,
         message: autoResumed
           ? `Workflow approved: ${run.workflow_name}. Resuming workflow.`
-          : `Workflow approved: ${run.workflow_name}. Run \`archon workflow resume ${runId}\` from the CLI to continue, or send a new message in the originating conversation.`,
+          : `Workflow approved: ${run.workflow_name}. Run \`archon workflow resume ${runId}\` from the CLI to continue, or resume it from the originating conversation.`,
       });
     } catch (error) {
       getLog().error({ err: error, runId }, 'api.workflow_run_approve_failed');

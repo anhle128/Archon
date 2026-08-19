@@ -4119,6 +4119,107 @@ nodes:
     expect(prompts.some(p => p.includes('$INPUTS.style'))).toBe(false);
   });
 
+  it("BRANCHES on the child's $INPUTS.<name> in a when: condition (#2453 defect 1)", async () => {
+    // Reading an input in a prompt already worked; branching on one did not — the
+    // ref parsed as a node called `INPUTS` and failed the node.
+    await writeWorkflow(
+      'child-when-inputs',
+      `
+name: child-when-inputs
+description: branches on a declared input
+inputs:
+  mode:
+    default: slow
+nodes:
+  - id: fast-path
+    prompt: "ran the FAST path"
+    when: "$INPUTS.mode == 'fast'"
+  - id: slow-path
+    prompt: "ran the SLOW path"
+    when: "$INPUTS.mode != 'fast'"
+`
+    );
+    await writeWorkflow(
+      'parent-when-inputs',
+      `
+name: parent-when-inputs
+description: supplies the branch selector
+nodes:
+  - id: sub
+    workflow: child-when-inputs
+    with:
+      mode: fast
+`
+    );
+
+    const store = new InMemoryStore();
+    const { deps, prompts } = makeRecordingDeps(store);
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('parent-when-inputs'),
+      'goal',
+      'conv-db'
+    );
+
+    expect(result.success).toBe(true);
+    expect(prompts.some(p => p.includes('ran the FAST path'))).toBe(true);
+    expect(prompts.some(p => p.includes('ran the SLOW path'))).toBe(false);
+  });
+
+  it('FAILS the node when a when: references an input the run does not carry', async () => {
+    await writeWorkflow(
+      'child-when-unknown-input',
+      `
+name: child-when-unknown-input
+description: branches on a misspelled input
+inputs:
+  mode:
+    default: slow
+nodes:
+  - id: gated
+    prompt: "should never run"
+    when: "$INPUTS.mdoe == 'fast'"
+`
+    );
+    await writeWorkflow(
+      'parent-when-unknown-input',
+      `
+name: parent-when-unknown-input
+description: supplies the declared input
+nodes:
+  - id: sub
+    workflow: child-when-unknown-input
+    with:
+      mode: fast
+`
+    );
+
+    const store = new InMemoryStore();
+    const { deps, prompts } = makeRecordingDeps(store);
+    const platform = makePlatform();
+    const result = await executeWorkflow(
+      deps,
+      platform,
+      'conv-plat',
+      cwd,
+      await discover('parent-when-unknown-input'),
+      'goal',
+      'conv-db'
+    );
+
+    // Loud, not a silent skip: the typo fails the node rather than resolving to ''.
+    expect(result.success).toBe(false);
+    expect(prompts.some(p => p.includes('should never run'))).toBe(false);
+    const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
+      .map(call => String(call[1]))
+      .join('\n');
+    expect(sent).toContain("Unknown input '$INPUTS.mdoe'");
+    expect(sent).toContain('Did you mean $INPUTS.mode?');
+  });
+
   it('reconstitutes $INPUTS from the child run row on a COLD resume (no parent in the loop)', async () => {
     // The child is resumed directly from its own persisted row — the parent never
     // re-resolves `with:` (its refs may be long out of scope), so a post-gate node
@@ -4187,6 +4288,216 @@ nodes:
     );
 
     expect((await store.getWorkflowRun(child!.id))?.status).toBe('completed');
+    expect(prompts.some(p => p.includes('resumed in terse style'))).toBe(true);
+  });
+
+  // -------------------------------------------------------------------------
+  // Direct top-level invocation supplying its own inputs (#2554)
+  // -------------------------------------------------------------------------
+
+  it('delivers directly-supplied inputs to BOTH the AI and shell surfaces of a top-level run', async () => {
+    // No parent anywhere: the values come from `opts.inputs` (the CLI's --input / the
+    // run route's `inputs` map) and must reach the same two surfaces a child's do.
+    await writeWorkflow(
+      'direct-inputs',
+      `
+name: direct-inputs
+description: runs on its own with a required input
+inputs:
+  diff:
+    required: true
+  style:
+    default: strict
+nodes:
+  - id: shell
+    bash: echo "diff=$INPUTS_DIFF style=$INPUTS_STYLE"
+  - id: ai
+    prompt: "review $INPUTS.diff in $INPUTS.style style"
+    depends_on: [shell]
+`
+    );
+
+    const store = new InMemoryStore();
+    const { deps, prompts } = makeRecordingDeps(store);
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('direct-inputs'),
+      'goal',
+      'conv-db',
+      { inputs: { diff: 'D1', style: 'terse' } }
+    );
+
+    expect(result.success).toBe(true);
+    // Shell surface: env vars, never $INPUTS text spliced into shell source.
+    const shellOut = store.events.find(
+      e => e.event_type === 'node_completed' && e.step_name === 'shell'
+    );
+    expect(String(shellOut?.data?.node_output)).toContain('diff=D1 style=terse');
+    // AI surface: substituted text, literal token never reaches the model.
+    expect(prompts.some(p => p.includes('review D1 in terse style'))).toBe(true);
+    expect(prompts.some(p => p.includes('$INPUTS.diff'))).toBe(false);
+  });
+
+  it('persists ONLY the supplied values on a top-level run, letting defaults stay derived', async () => {
+    await writeWorkflow(
+      'direct-persist',
+      `
+name: direct-persist
+description: one supplied input, one defaulted
+inputs:
+  diff:
+    required: true
+  style:
+    default: strict
+nodes:
+  - id: emit
+    bash: echo "style=$INPUTS_STYLE"
+`
+    );
+
+    const store = new InMemoryStore();
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('direct-persist'),
+      'goal',
+      'conv-db',
+      { inputs: { diff: 'D1' } }
+    );
+
+    expect(result.success).toBe(true);
+    const run = [...store.runs.values()].find(r => r.workflow_name === 'direct-persist');
+    // `style` is NOT on the row — freezing a derived default would make the row lie
+    // about what the invocation supplied, and pin a stale default across a resume.
+    expect(run?.metadata?.inputs).toEqual({ diff: 'D1' });
+    // …yet the default still reaches the node, layered under the persisted map.
+    const emitted = store.events.find(e => e.event_type === 'node_completed');
+    expect(String(emitted?.data?.node_output)).toContain('style=strict');
+  });
+
+  it('a supplied value overrides the declared default on a top-level run', async () => {
+    await writeWorkflow(
+      'direct-override',
+      `
+name: direct-override
+description: supplied value beats the declared default
+inputs:
+  style:
+    default: strict
+nodes:
+  - id: emit
+    bash: echo "style=$INPUTS_STYLE"
+`
+    );
+
+    const store = new InMemoryStore();
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('direct-override'),
+      'goal',
+      'conv-db',
+      { inputs: { style: 'terse' } }
+    );
+
+    expect(result.success).toBe(true);
+    const emitted = store.events.find(e => e.event_type === 'node_completed');
+    expect(String(emitted?.data?.node_output)).toContain('style=terse');
+  });
+
+  it('writes no inputs key for a bare top-level run, preserving pre-#2554 behaviour', async () => {
+    await writeWorkflow(
+      'direct-bare',
+      `
+name: direct-bare
+description: defaulted input, nothing supplied
+inputs:
+  style:
+    default: strict
+nodes:
+  - id: emit
+    bash: echo "style=$INPUTS_STYLE"
+`
+    );
+
+    const store = new InMemoryStore();
+    await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('direct-bare'),
+      'goal',
+      'conv-db'
+    );
+
+    const run = [...store.runs.values()].find(r => r.workflow_name === 'direct-bare');
+    expect(run?.metadata?.inputs).toBeUndefined();
+  });
+
+  it('reconstitutes directly-supplied inputs on a COLD resume of a top-level run', async () => {
+    // The invocation channel is gone by resume time — the CLI process exited, the HTTP
+    // request completed. Only the run row can carry the values forward.
+    await writeWorkflow(
+      'direct-cold',
+      `
+name: direct-cold
+description: gated top-level run reading an input AFTER the gate
+interactive: true
+inputs:
+  style:
+    default: strict
+nodes:
+  - id: gate
+    approval:
+      message: "hold"
+  - id: after-gate
+    prompt: "resumed in $INPUTS.style style"
+    depends_on: [gate]
+`
+    );
+
+    const store = new InMemoryStore();
+    const { deps, prompts } = makeRecordingDeps(store);
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('direct-cold'),
+      'goal',
+      'conv-db',
+      { inputs: { style: 'terse' } }
+    );
+
+    const run = [...store.runs.values()].find(r => r.workflow_name === 'direct-cold');
+    expect(run?.status).toBe('paused');
+    expect(run?.metadata?.inputs).toEqual({ style: 'terse' });
+
+    // Cold path: approve, hydrate from the persisted row alone, re-drive — and pass NO
+    // `inputs` this time, exactly as a resume does.
+    store.approveGate(run!.id);
+    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(run!.id))!);
+    expect(hydrated).not.toBeNull();
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('direct-cold'),
+      run!.user_message,
+      'conv-db',
+      { ...hydrated! }
+    );
+
+    expect((await store.getWorkflowRun(run!.id))?.status).toBe('completed');
     expect(prompts.some(p => p.includes('resumed in terse style'))).toBe(true);
   });
 });

@@ -33,10 +33,16 @@ import { loadMcpConfig } from '../../mcp/config';
 import { resolveSkillDirectories } from '../../shared/skills';
 import { augmentPromptForJsonSchema } from '../../shared/structured-output';
 import { COPILOT_CAPABILITIES } from './capabilities';
-import { parseCopilotConfig, type CopilotProviderDefaults } from './config';
+import { COPILOT_EFFORTS, parseCopilotConfig, type CopilotProviderDefaults } from './config';
+import { clampEffort } from '../../shared/effort';
 import { resolveCopilotBinaryPath } from './binary-resolver';
 import { bridgeSession } from './event-bridge';
 
+// `ReasoningEffort` is defined in the SDK but not re-exported from its barrel
+// (as of @github/copilot-sdk@0.2.2), so the vocabulary is mirrored in ./config
+// and pinned there against `CopilotProviderDefaults`. Derive the type from that
+// one array rather than restating the union here.
+type CopilotReasoningEffort = (typeof COPILOT_EFFORTS)[number];
 /**
  * Auth env vars, split by intent.
  *
@@ -104,10 +110,15 @@ function resolveGenericGitHubToken(env: Record<string, string>): string | undefi
 
 // ─── Reasoning ──────────────────────────────────────────────────────────────
 
-function normalizeReasoning(value: unknown): SessionConfig['reasoningEffort'] | undefined {
-  if (value === 'max') return 'xhigh';
-  if (value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh') return value;
-  return undefined;
+function normalizeReasoning(value: unknown): CopilotReasoningEffort | undefined {
+  const clamped = clampEffort(value, COPILOT_EFFORTS);
+  // Copilot's SDK lacks both ends of the ladder, so it clamps more often than
+  // any other provider — the one that most needs the adjustment to be visible.
+  // Matches `claude.effort_clamped` / `codex.effort_clamped`.
+  if (clamped !== undefined && clamped !== value) {
+    getLog().debug({ declared: value, applied: clamped }, 'copilot.effort_clamped');
+  }
+  return clamped;
 }
 
 /**

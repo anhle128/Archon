@@ -54,14 +54,16 @@ import { resolveWorkflowName } from '@archon/workflows/router';
 import { executeWorkflow, hydrateResumableRun } from '@archon/workflows/executor';
 import {
   assertWorkflowRequirementsMet,
-  assertWorkflowInputsSatisfiable,
+  resolveTopLevelInputs,
 } from '@archon/workflows/utils/workflow-requirements';
+import { parseInputAssignments } from '@archon/workflows/workflow-inputs';
 import { dryRunWorkflow, formatDryRunTrace, loadDryRunStubs } from '@archon/workflows/dry-run';
 import {
   getWorkflowEventEmitter,
   type WorkflowEmitterEvent,
 } from '@archon/workflows/event-emitter';
 import type {
+  DeclaredWorkflowConfig,
   WorkflowDefinition,
   WorkflowLoadResult,
   WorkflowSource,
@@ -258,6 +260,14 @@ export interface WorkflowRunOptions {
   execCode?: boolean;
   /** Stop at the first approval gate instead of auto-approving it. */
   pauseAtGates?: boolean;
+  /**
+   * Raw `--input name=value` assignments (#2554), one per occurrence of the flag.
+   * Parsed and validated against the workflow's declared `inputs:` at the invocation
+   * gate — before the `--detach` fork and before any worktree, clone, or AI cost.
+   * Kept as raw strings here so the grammar has exactly one parser
+   * (`parseInputAssignments` in `@archon/workflows`).
+   */
+  inputs?: string[];
 }
 
 /**
@@ -878,17 +888,20 @@ async function assertCliWorkflowRequirementsMet(workflow: WorkflowDefinition): P
  * of falling back to a stale conversation default.
  */
 function resolveTitleAssistantType(
-  workflow: WorkflowDefinition,
+  declared: DeclaredWorkflowConfig | undefined,
   defaultAssistant: string | undefined,
   conversationAssistant: string | undefined
 ): string {
-  // Per CLAUDE.md, provider is resolved via an explicit chain:
-  // node.provider ?? workflow.provider ?? config.assistant. Model never
-  // influences provider selection — vendor SDKs add new model names faster
-  // than we can keep a mapping in sync.
+  // Reads what the AUTHOR declared, not the expanded definition: expansion collapses
+  // workflow-level config onto the nodes and removes it (#1764), so the expanded object
+  // has no `provider` and every Codex workflow would be labelled with the fallback.
+  //
+  // The top-level file's own `provider:` is the right answer even though a composition
+  // can span providers — no single label is fully true then, and the file the user
+  // invoked is the honest one. Model never influences provider selection: vendor SDKs
+  // add model names faster than a mapping could track.
   const fallbackAssistant = defaultAssistant ?? conversationAssistant ?? 'claude';
-  if (workflow.provider) return workflow.provider;
-  return fallbackAssistant;
+  return declared?.provider ?? fallbackAssistant;
 }
 
 /**
@@ -1102,7 +1115,10 @@ interface WorkflowJsonEntry {
   description: string;
   provider?: string;
   model?: string;
-  modelReasoningEffort?: string;
+  /** Reasoning depth — the one spelling, on every provider that has one (#2556).
+   *  A workflow written with the deprecated `modelReasoningEffort:` reports its
+   *  value here, since the loader translates the two into one field. */
+  effort?: string;
   webSearchMode?: string;
   /** Keys the workflow's YAML declares that the engine drops (#2213). */
   parseWarnings?: string[];
@@ -1116,19 +1132,24 @@ export async function workflowListCommand(cwd: string, json?: boolean): Promise<
 
   if (json) {
     const output = {
-      workflows: workflowEntries.map(({ workflow: w, parseWarnings }) => {
-        const entry: WorkflowJsonEntry = {
-          name: w.name,
-          description: w.description,
-        };
-        if (w.provider !== undefined) entry.provider = w.provider;
-        if (w.model !== undefined) entry.model = w.model;
-        if (w.modelReasoningEffort !== undefined)
-          entry.modelReasoningEffort = w.modelReasoningEffort;
-        if (w.webSearchMode !== undefined) entry.webSearchMode = w.webSearchMode;
-        if (parseWarnings && parseWarnings.length > 0) entry.parseWarnings = [...parseWarnings];
-        return entry;
-      }),
+      // `declared` rather than the expanded workflow: composition collapses these fields
+      // onto the nodes and removes them (#1764), so the listing reports what the author
+      // wrote. `webSearchMode` is the one that stays on the definition — it has no
+      // per-node form to collapse onto.
+      workflows: workflowEntries.map(
+        ({ workflow: w, parseWarnings, declared }): WorkflowJsonEntry => {
+          const entry: WorkflowJsonEntry = {
+            name: w.name,
+            description: w.description,
+          };
+          if (declared?.provider !== undefined) entry.provider = declared.provider;
+          if (declared?.model !== undefined) entry.model = declared.model;
+          if (declared?.effort !== undefined) entry.effort = declared.effort;
+          if (w.webSearchMode !== undefined) entry.webSearchMode = w.webSearchMode;
+          if (parseWarnings && parseWarnings.length > 0) entry.parseWarnings = [...parseWarnings];
+          return entry;
+        }
+      ),
       errors: errors.map(e => ({
         filename: e.filename,
         error: e.error,
@@ -1150,11 +1171,11 @@ export async function workflowListCommand(cwd: string, json?: boolean): Promise<
   if (workflowEntries.length > 0) {
     console.log(`\nFound ${workflowEntries.length} workflow(s):\n`);
 
-    for (const { workflow, parseWarnings } of workflowEntries) {
+    for (const { workflow, parseWarnings, declared } of workflowEntries) {
       console.log(`  ${workflow.name}`);
       console.log(`    ${workflow.description}`);
-      if (workflow.provider) {
-        console.log(`    Provider: ${workflow.provider}`);
+      if (declared?.provider) {
+        console.log(`    Provider: ${declared.provider}`);
       }
       for (const warning of parseWarnings ?? []) {
         console.log(`    Warning: ${warning}`);
@@ -1355,19 +1376,44 @@ async function workflowRunCommandInner(
       throw new Error(`--dry-run cannot be combined with ${incompatibleFlag}.`);
     }
 
+    // The IDENTICAL invocation gate a real run passes through below (#2610): parse
+    // `--input name=value`, validate against the declared `inputs:` contract, and fail
+    // with the same errors (undeclared key, missing required) before any trace output.
+    // Only the supplied entries travel; the simulator derives declared defaults itself,
+    // mirroring the executor's `defaultRunInputs` merge at run start.
+    const dryRunInputs = resolveTopLevelInputs(
+      workflow,
+      options.inputs ? parseInputAssignments(options.inputs) : undefined
+    );
+
     const stubsPath = options.stubsPath
       ? isAbsolute(options.stubsPath)
         ? options.stubsPath
         : join(effectiveDiscoveryCwd, options.stubsPath)
       : undefined;
     const stubs = await loadDryRunStubs(stubsPath);
+    // The install's config + AI profile are what make the per-node provider/model report
+    // match a real run — tier keywords and `@alias` refs resolve through the same profile
+    // the executor builds.
+    //
+    // NOT wrapped in a catch: `loadConfig` returns defaults when there is no config file,
+    // so a throw means a malformed or unreadable one. Reporting against fabricated
+    // defaults would hand the user a clean-looking trace of a run that cannot happen —
+    // the same fail-fast reasoning the container-policy load below spells out.
+    const dryRunConfig = await loadConfig(effectiveDiscoveryCwd);
     const result = await dryRunWorkflow({
       workflow,
       userMessage,
       cwd: effectiveDiscoveryCwd,
       stubs,
+      ...(dryRunInputs ? { inputs: dryRunInputs } : {}),
       execCode: options.execCode,
       pauseAtGates: options.pauseAtGates,
+      config: dryRunConfig,
+      aiProfile: buildAiProfile(dryRunConfig.assistant, {
+        repoTiers: dryRunConfig.tiers,
+        repoAliases: dryRunConfig.aliases,
+      }),
     });
     if (options.json) {
       await writeJsonLine(result);
@@ -1411,6 +1457,13 @@ async function workflowRunCommandInner(
       '--resume and --branch are mutually exclusive.\n' +
         '  --resume reuses the existing worktree from the failed run.\n' +
         '  Remove --branch when using --resume.'
+    );
+  }
+  if (options.resume && options.inputs !== undefined && options.inputs.length > 0) {
+    throw new Error(
+      '--resume and --input are mutually exclusive.\n' +
+        "  A resume replays the original invocation's inputs, recorded on the run.\n" +
+        '  Drop --input to resume, or start a fresh run to supply different values.'
     );
   }
 
@@ -1479,10 +1532,21 @@ async function workflowRunCommandInner(
   assertNoWorktreeOptionsForFolder(options.folder === true, options);
   assertWorkflowNotWorktreePinnedForFolder(options.folder === true, pinnedEnabled, workflow.name);
 
-  // Signature gate (#2470): a workflow declaring `required` inputs is a reusable block —
-  // only a caller's `with:` can satisfy them, so a bare top-level run fails here, before
-  // the --detach fork and any worktree/clone/AI cost. It still lists/loads normally.
-  assertWorkflowInputsSatisfiable(workflow);
+  // Signature gate (#2470, #2554): resolve this invocation's declared inputs from the
+  // `--input name=value` flags against the workflow's `inputs:` block, here — before the
+  // --detach fork and any worktree/clone/AI cost — so a bad name, a missing required
+  // input, or a malformed assignment costs nothing.
+  //
+  // Skipped on --resume: the resumable run is not resolved until later in this function,
+  // and its inputs were validated when its row was created. Re-gating with nothing
+  // supplied would make every resume of a required-input run impossible.
+  let resolvedInputs: Record<string, string> | undefined;
+  if (!options.resume) {
+    resolvedInputs = resolveTopLevelInputs(
+      workflow,
+      options.inputs ? parseInputAssignments(options.inputs) : undefined
+    );
+  }
 
   // Capability gate: hard-fail before the --detach fork and any worktree/clone/
   // AI cost if the workflow declares `requires: [github]` and the acting CLI
@@ -2093,7 +2157,7 @@ async function workflowRunCommandInner(
 
     try {
       const titleAssistantType = resolveTitleAssistantType(
-        workflow,
+        workflowEntry?.declared,
         workflowConfig?.assistant,
         conversation.ai_assistant_type
       );
@@ -2320,6 +2384,8 @@ async function workflowRunCommandInner(
           execContext,
           container: containerRunCtx,
           resolveChildIsolation,
+          // Fresh run only: a resume (`prepared`) replays the inputs already on its row.
+          inputs: resolvedInputs,
         };
     result = await executeWorkflow(
       deps,
@@ -4154,7 +4220,8 @@ export async function workflowApproveCommand(
     return 0;
   }
 
-  // Preserve the standard approve fail-fast behavior before printing success.
+  // CLI auto-resumes after approval, as chat does since #2565. `--json` (handled
+  // above) is the one surface that records the decision without continuing.
   if (!result.workingPath) {
     throw new Error(
       `Workflow run '${resolvedId}' has no working path recorded.\n` +

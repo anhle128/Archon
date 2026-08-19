@@ -39,11 +39,11 @@ per-node YAML field for that provider; a ❌ means the field is accepted but ign
 | Capability | `claude` | `codex` | `grok` | `opencode` | `pi` | `copilot` | `qodercli` | `omp` |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Session resume | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| MCP servers (`mcp:`) | ✅ | ✅ | ❌ | ✅ | ❌ | ✅ | ✅ | ❌ |
+| MCP servers (`mcp:`) | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ |
 | Hooks (`hooks:`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Skills (`skills:`) | ✅ | ✅¹ | ✅² | ✅ | ✅ | ✅ | ❌ | ✅ |
-| Inline sub-agents (`agents:`) | ✅ | ❌ | ✅ | ✅⁴ | ❌ | ✅ | ❌ | ❌ |
-| Tool restrictions (`allowed_tools`/`denied_tools`) | ✅ | ❌ | ✅³ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Skills (`skills:`) | ✅ | ❌ | ✅ | ❌ | ✅ | ✅ | ❌ | ✅ |
+| Inline sub-agents (`agents:`) | ✅ | ❌ | ✅ | ✅² | ❌ | ✅ | ❌ | ❌ |
+| Tool restrictions (`allowed_tools`/`denied_tools`) | ✅ | ❌ | ✅¹ | ✅ | ✅ | ✅ | ✅ | ❌ |
 | Structured output (`output_format`) | **enforced** | **enforced** | **enforced** | **enforced** | best-effort | best-effort | best-effort | best-effort |
 | Env injection (`env:`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Cost control (`maxBudgetUsd`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
@@ -57,10 +57,8 @@ per-node YAML field for that provider; a ❌ means the field is accepted but ign
 
 ## Caveats
 
-- ¹ `codex` — Skills (`skills:`) — Filesystem auto-discovery from `.agents/skills/` — per-node `skills:` lists are informational; use `provider: claude` for node-scoped skills.
-- ² `grok` — Skills (`skills:`) — Filesystem auto-discovery from `.agents/skills/` — per-node `skills:` lists are informational; use `provider: claude` for node-scoped skills.
-- ³ `grok` — Tool restrictions (`allowed_tools`/`denied_tools`) — Uses Grok native tool ids. An empty `allowed_tools: []` fails fast because the CLI interprets an empty allowlist as unset (full access).
-- ⁴ `opencode` — Inline sub-agents (`agents:`) — Config-file-based agent selection (named agents from `opencode.json`) with per-call model/tools overrides — not inline sub-agent definitions.
+- ¹ `grok` — Tool restrictions (`allowed_tools`/`denied_tools`) — Uses Grok native tool ids. An empty `allowed_tools: []` fails fast because the CLI interprets an empty allowlist as unset (full access).
+- ² `opencode` — Inline sub-agents (`agents:`) — Config-file-based agent selection (named agents from `opencode.json`) with per-call model/tools overrides — not inline sub-agent definitions.
 
 ## Legend
 

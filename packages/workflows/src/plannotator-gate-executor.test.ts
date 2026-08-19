@@ -308,6 +308,8 @@ function integrationArgs(
     config,
     workflowProvider: 'claude',
     workflowModel: undefined,
+    workflowLevelOptions: {},
+    warnedProviderConflicts: new Set(),
     stateDir: join(cwd, 'state'),
     baseBranch: 'main',
     docsDir: 'docs/',

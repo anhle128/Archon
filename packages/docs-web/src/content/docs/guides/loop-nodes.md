@@ -61,10 +61,28 @@ A loop node iterates its prompt until one of these conditions is met:
 1. **LLM completion signal** — the AI outputs `<promise>SIGNAL</promise>` where
    SIGNAL matches the `until` value
 2. **Deterministic bash check** — an `until_bash` script exits with code 0
-3. **Max iterations reached** — the node fails with a clear error
+3. **Structured field** — the iteration's validated `output_format` payload has the
+   `until_field` property set to `true`
+4. **Max iterations reached** — the node fails with a clear error
+
+A loop must declare **at least one** of `until` / `until_bash` / `until_field` — none
+is required on its own. They are OR'd: whichever fires first ends the loop, and the
+cheap channels are checked before `until_bash`, which is skipped once another one
+fired (it cannot change the outcome, and skipping it avoids an extra run of a
+side-effecting script).
 
 Each iteration is a full AI agent invocation with tool access. Between iterations,
 the executor checks for workflow cancellation.
+
+### Choosing a completion channel
+
+| Your completion condition | Declare |
+|---|---|
+| Externally checkable — tests pass, a file exists, a state field flipped | `until_bash` **only**. No prose is matched, so a sentinel the model happens to emit while reasoning about the criteria cannot end the loop early. |
+| A judgment the model makes, no human in the loop | `output_format` + `until_field`. The decision becomes a schema-validated boolean instead of a string match — the model cannot end the loop by mentioning a word. |
+| A judgment the model makes, shown to a human at a gate | `until` (with `interactive`). The iteration's output is a message a person reads and replies to, so prose is the right medium — declaring `output_format` would replace it with JSON. |
+
+Declaring more than one is fine and means "whichever fires first ends it".
 
 ## Configuration Fields
 
@@ -75,10 +93,15 @@ the executor checks for workflow cancellation.
     # command: <name>       # Alternative to `prompt`: package-local or shared command name,
     #                       # loaded once per run and reused for every iteration.
     #                       # Never combine with `prompt` — the loader rejects both together.
-    until: COMPLETE         # Required. Completion signal string.
+    until: COMPLETE         # Prose completion signal.
     max_iterations: 10      # Required. Hard limit — node fails if exceeded.
     fresh_context: true     # Optional. Default: false.
-    until_bash: "..."       # Optional. Bash script checked after each iteration.
+    until_bash: "..."       # Bash script checked after each iteration; exit 0 = complete.
+    until_field: done       # Property in this node's `output_format` whose validated
+                            # value `true` ends the loop.
+                            #
+                            # At least ONE completion channel is required — any of
+                            # until / until_bash / until_field. None is required alone.
     interactive: true       # Optional. Default: false. Pause after each non-completing
                             # iteration for user input via /workflow approve.
     gate_message: "..."     # Required when interactive: true. Message shown to the
@@ -129,12 +152,20 @@ owning workflow's `commands/` directory for packaged workflows or in
 `.archon/commands/` for legacy workflows, the same way it does for `command:`
 nodes.
 
-The file is **read once per run** — loaded when the loop node starts and
-reused for every iteration, including across interactive-gate pauses: the
-loaded text is persisted with the pause, so editing or deleting the file while
-a run sits paused neither changes nor breaks the resumed loop's prompt. A
-missing, empty, or unreadable target fails the node immediately with an
-actionable error — no iterations execute.
+For an ordinary workflow, the file is **read once per run** when the loop node
+starts. For a workflow composed through `include:`, Archon resolves and compiles
+the command body during load-time composition so its node references and declared
+inputs are proven before the child joins the parent's flat DAG. A matching file
+that is unreadable fails closed; Archon never falls through to a lower-precedence
+command with the same name. A missing, empty, unreadable, or non-hermetic included
+command fails before a fresh AI turn.
+
+For any interactive loop — whether authored with `prompt` or `command` — Archon
+persists the resolved prompt template at the gate. A resumed run prefers that
+snapshot, so editing inline YAML or a command source while the run is paused does
+not change its prompt; deleting a command source does not break that resume either.
+Source edits affect fresh runs, which still require successful command resolution
+or compilation.
 
 Once loaded, the text behaves identically to an inline `prompt`: all the
 variable substitution above applies unchanged (including `$LOOP_PREV_OUTPUT`
@@ -172,11 +203,17 @@ The completion signal string. The executor checks each iteration's output for:
 The `<promise>` tags are automatically stripped from output sent to the user
 and to downstream nodes.
 
+**Optional, like every completion channel.** Omit `until` entirely whenever another
+channel decides completion — the executor then never matches prose at all, so the
+signal cannot false-positive on a model that mentions its own exit criterion. What
+the loader requires is that *at least one* channel is declared; a loop with none is
+rejected at load.
+
 ### `max_iterations`
 
-Hard safety limit. If the loop reaches this count without a completion signal,
-the node **fails** (not succeeds). This prevents runaway loops from burning
-tokens indefinitely.
+Hard safety limit. If the loop reaches this count without meeting any declared
+completion channel, the node **fails** (not succeeds). This prevents runaway loops
+from burning tokens indefinitely.
 
 Choose based on the work scope:
 - Simple refinement loops: 3–5
@@ -194,18 +231,48 @@ Controls session continuity between iterations:
 
 The first iteration is always fresh regardless of this setting.
 
+A structured-output re-ask (see [`until_field`](#until_field)) does **not** disturb
+threading. It runs in its own throwaway session so an invalid turn is not carried
+forward as context, and that session is discarded — the next iteration still resumes
+the conversation the loop was already threading. The repaired answer still reaches it
+through `$LOOP_PREV_OUTPUT`.
+
 ### `until_bash`
 
-Optional bash script executed after each iteration. If it exits with code 0,
-the loop completes — even if the AI didn't output the completion signal.
+Bash script executed after each iteration. If it exits with code 0, the loop
+completes — even if the AI didn't output the completion signal. Optional when
+`until` is set; **on its own it is the whole completion channel**, which is the
+preferred shape whenever the condition is externally checkable:
 
 ```yaml
 loop:
   prompt: "Fix the failing tests"
-  until: ALL_PASS
   max_iterations: 5
-  until_bash: "bun run test"  # Loop ends when tests pass
+  until_bash: "bun run test"  # Loop ends when tests pass. No `until:` — nothing to
+                              # false-positive on, and no dead field to invent.
 ```
+
+`until_bash` runs only on iterations that no other completion channel already
+ended, so a loop declaring more than one never pays for a redundant check.
+
+:::caution[If your `until_bash` accumulates state]
+The skip means the script does not run on an iteration another channel already
+completed, so a check that *mutates* state each time it runs — a counter, an append,
+a cursor — advances once fewer than it would have. The completion verdict is unaffected either way (the
+channels are OR'd), and a non-interactive loop ends on that same iteration, so
+nothing observable differs.
+
+The one case where the timing does shift: an **interactive** loop whose first run
+completes on another channel still gates rather than finishing (unless
+`signal_completes: true`). If you
+then approve *with text*, another iteration runs — and its `until_bash` sees state
+one increment behind where it would have been. A state-accumulating check therefore
+reaches its threshold one iteration later. Approving with no text finalizes from the
+already-computed output and does not diverge at all.
+
+Prefer a `until_bash` that only *reads* state — `test`, `grep`, a test suite — and
+let a `bash:` node inside the loop own any mutation.
+:::
 
 This is useful for deterministic completion criteria: test suites, lint checks,
 build success. The bash script supports the same variable substitution as
@@ -214,6 +281,76 @@ values are shell-escaped when substituted into `until_bash`. The same
 double-quoting footgun that applies to `bash:` nodes applies here — see
 [Shell Quoting in `bash:` vs `script:`](/reference/variables#shell-quoting-in-bash-vs-script)
 for the unquoted idiom to use.
+
+### `until_field`
+
+Names a property in this node's [`output_format`](/guides/authoring-workflows/) schema.
+The loop ends on the first iteration whose **validated** payload has that property
+set to exactly `true`.
+
+```yaml
+- id: triage
+  output_format:
+    type: object
+    properties:
+      done: { type: boolean }
+      remaining: { type: integer }
+    required: [done]
+  loop:
+    prompt: |
+      Work the next item in the backlog. Report whether the backlog is now empty.
+    max_iterations: 20
+    until_field: done
+```
+
+Use this when completion is a **judgment the model makes** and there is nothing on
+disk to test. It replaces a prose sentinel with a schema-validated boolean, so the
+model cannot end the loop by mentioning a word while reasoning about its criteria.
+
+Four rules are checked at load time, so a mistake fails the workflow rather than
+looping silently:
+
+1. the node must declare `output_format`;
+2. the property must appear in `output_format.properties`;
+3. it must be listed in `output_format.required` — an optional property the model
+   omits would read as "not complete" and burn `max_iterations`;
+4. if it declares a `type`, that type must be `boolean`.
+
+Termination is strict identity: `true` ends the loop, and nothing else does — not
+`"true"`, not `1`. A payload that fails schema validation is a failure, not a
+quiet "not done yet" (see below).
+
+**The loop's output becomes the validated JSON.** With `output_format` declared,
+`$loopId.output` is the payload rather than the prose, `$loopId.output.<field>` gets
+the same strict field access every other producer enforces, and `$LOOP_PREV_OUTPUT`
+carries the same value.
+
+**Per-provider behavior is the same as any other node.** On a provider with
+*enforced* structured output (Claude, Codex, OpenCode) the schema constrains
+decoding. On a *best-effort* provider (Pi, Copilot) the schema is appended to the
+prompt, and a payload that fails validation is re-asked up to three times **within
+the same iteration** — a reask does not consume a loop iteration. If those are
+exhausted, the node **fails** with the validation errors; it is never treated as an
+incomplete iteration. See
+[provider capabilities](/reference/provider-capabilities/).
+
+`until_field` is **not supported on `loop_group`**, and deliberately so: a group's
+body node can already declare `output_format` and be read by a deterministic check,
+which is the existing way to express the same thing.
+
+```yaml
+# loop_group equivalent — no new field needed
+loop_group:
+  max_iterations: 10
+  until_bash: '[ "$decide.output.done" = "true" ]'
+  nodes:
+    - id: decide
+      output_format:
+        type: object
+        properties: { done: { type: boolean } }
+        required: [done]
+      prompt: Is the backlog empty?
+```
 
 ## Patterns
 
@@ -313,8 +450,23 @@ Combine LLM work with a deterministic completion check:
 ```
 
 The loop ends either when the AI signals completion or when the bash check
-succeeds — whichever comes first. This prevents the AI from falsely claiming
-completion when tests still fail.
+succeeds — whichever comes first.
+
+**No channel vetoes another.** They are OR'd, so an AI that emits `TESTS_PASS`
+while tests still fail ends the loop anyway — the bash check never gets to disagree. If the tests
+are the real exit criterion, say so by dropping `until` and the sentence that
+teaches the model to emit it:
+
+```yaml
+- id: fix-tests
+  loop:
+    prompt: Run the test suite. Read the failures. Fix them one at a time.
+    max_iterations: 8
+    until_bash: "bun run test"
+    fresh_context: false
+```
+
+Now the only way out is a passing suite.
 
 ## Node Features
 
@@ -361,10 +513,12 @@ The same rule applies on every approve surface: chat `/workflow approve`, the CL
 endpoint (omit `comment`), the web console ("Accept & complete" with an empty comment
 field), and the `manage_run` chat tool (no `message`, or `accept: true`).
 
-> **Known limitation:** approving via a plain natural-language chat message (not the
-> slash command) always counts as feedback and iterates. To finalize, use
-> `/workflow approve <id>` with no comment, the CLI/web/`manage_run` surfaces above,
-> or `signal_completes`.
+A plain chat message at a loop gate is not itself an approve — the same rule now holds
+at [approval gates](/guides/approval-nodes/#asking-the-chat-agent). Say what you want and
+the agent resolves the gate for you, passing your words through as the feedback; ask a
+question and nothing is resolved. Because your words travel as the approve comment, that
+route iterates. To finalize, use `/workflow approve <id>` with no comment, the CLI/web
+surfaces above, `manage_run` with `accept: true`, or `signal_completes`.
 
 ### `signal_completes` — autonomous completion
 
@@ -427,7 +581,6 @@ nodes:
 - `mcp` — per-node MCP server configs are not loaded for loop nodes
 - `skills` — skill preloading is not applied to loop iterations
 - `allowed_tools` / `denied_tools` — tool restrictions are not enforced on loop iterations
-- `output_format` — structured JSON output is not supported for loop nodes
 
 These fields (except `retry`) are silently discarded at parse time with a
 loader warning — the workflow still loads but the fields have no effect.
@@ -538,7 +691,8 @@ than silently degrading).
 `loop_group` shares the same iteration-control fields as `loop`:
 [`until`](#until), [`max_iterations`](#max_iterations),
 [`fresh_context`](#fresh_context), [`until_bash`](#until_bash),
-[`interactive`](#interactive-and-gate_message), and `gate_message`. The
+[`interactive`](#interactive-and-gate_message), and `gate_message` — including the
+at-least-one-of `until` / `until_bash` rule and the short-circuit between them. The
 difference is the body: `loop` takes a single `prompt`; `loop_group` takes a
 `nodes` array.
 
@@ -564,6 +718,10 @@ Two distinct cases:
 
 ### What is NOT supported on loop_group nodes (v1)
 
+- `until_field` / `output_format` — the group never calls the provider itself, so it
+  has no payload of its own to read. Express the same thing with a body node that
+  declares `output_format` plus `until_bash` reading `$node.output.field` — see
+  [`until_field`](#until_field).
 - `retry` (the loop manages its own iteration) — rejected at parse time.
 - `persist_session` for body AI nodes across iterations — body sessions reset
   per iteration (governed by `fresh_context`).
