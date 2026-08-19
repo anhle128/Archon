@@ -184,7 +184,7 @@ Discovers flat, one-level grouped, and exact `<pack>/<workflow>/` packaged layou
 | `--cwd <path>` | Target directory (required for most use cases) |
 | `--json` | Output machine-readable JSON instead of formatted text |
 
-With `--json`, outputs `{ "workflows": [...], "errors": [...] }`. Optional fields (`provider`, `model`, `modelReasoningEffort`, `webSearchMode`, `parseWarnings`) are omitted when not set on a workflow. Each `parseWarnings` entry is a full warning message naming a key the engine dropped, the node it was found on, and what to write instead — see [Unknown keys](/guides/authoring-workflows/#unknown-keys-are-reported-not-rejected).
+With `--json`, outputs `{ "workflows": [...], "errors": [...] }`. Optional fields (`provider`, `model`, `effort`, `webSearchMode`, `parseWarnings`) are omitted when not set on a workflow. A workflow written with the deprecated `modelReasoningEffort:` reports its value as `effort`, which is what it is translated to at load — unless it also declares `effort:`, which wins. Each `parseWarnings` entry is a full warning message naming a key the engine dropped or deprecated, the workflow or node where it was found, and what to write instead — see [Unknown keys](/guides/authoring-workflows/#unknown-keys-are-reported-not-rejected).
 
 ### `workflow run <name> [message]`
 
@@ -196,6 +196,10 @@ archon workflow run assist --cwd /path/to/repo "What does this function do?"
 
 # With isolation
 archon workflow run plan --cwd /path/to/repo --branch feature-x "Add caching"
+
+# Supplying a workflow's declared inputs (one flag per input)
+archon workflow run review-block --cwd /path/to/repo \
+  --input diff="$(git diff)" --input style=terse "focus on the auth changes"
 ```
 
 Progress events (node start/complete/fail/skip, approval gates) are written to stderr during execution.
@@ -215,6 +219,7 @@ Note that a real `run` emits a JSON payload **only** under `--detach`. Without i
 | `--no-worktree` | Opt out of isolation -- run directly in live checkout |
 | `--folder` | Register the current non-git directory as a folder project (first use) and run in place -- no worktree. Rejects `--branch`/`--from`/`--base`. |
 | `--container` | Run a **folder project** inside an overlay-isolated Docker container instead of in place (writes land in an overlay, not the live root, until an approval-gated write-back). Folder-only; a repo project errors. Requires the runner image (`bun run build:runner-image`). Pauses `docker stop` the container; `--resume`/`approve`/`reject` rediscover and restart it. See the [Container isolation guide](/guides/container-isolation/) and [configuration](/reference/configuration/#container-isolation-folder-projects). |
+| `--input <name>=<value>` | Supply one value for the workflow's declared `inputs:`. **Repeat the flag per input.** Splits on the first `=`, so the value may itself contain `=`; `--input name=` supplies an empty string. Omitted inputs take their declared `default:`. A missing **required** input or an **undeclared** name is refused before any worktree, clone, or AI cost, through the same contract a composing `with:` map goes through. Works with `--dry-run` (inputs resolve exactly as in a real run). Rejected with `--resume` (a resume replays the inputs recorded on the run). See [Running a workflow that declares inputs](/guides/authoring-workflows/#running-a-workflow-that-declares-inputs). |
 | `--resume` | Resume from last failed run at the working path (skips completed nodes) |
 | `--quiet`, `-q` | Suppress all progress output to stderr |
 | `--verbose`, `-v` | Also show tool-level events (tool name and duration) |
@@ -246,13 +251,27 @@ archon workflow run triage --cwd /path/to/repo \
 
 The stub file must contain one YAML mapping. Each value is either a string or an object. Object stubs are preserved as structured output, so downstream `$classify.output.severity` references behave like live structured producers. A reachable AI, bash, or script node without a stub fails the simulation and appears in `missingStubs`; stubs for unknown or unreachable nodes appear in `unusedStubs`. Whole-output references retain their normal lenient behavior, while invalid strict `$node.output.field` references fail the consuming node exactly as they do in a real run. See [Node Output References](/reference/variables/#node-output-references).
 
-By default, bash and script nodes are never executed.
-`--exec-code` is an explicit opt-in for trusted local workflow code and is the only dry-run mode that can cause code-level side effects.
-Approval and `plannotator_gate` nodes auto-complete unless `--pause-at-gates` is set.
-Runtime `workflow:` sub-runs are reported as unsupported instead of being launched.
-Dry-run is incompatible with lifecycle and isolation flags such as `--branch`, `--no-worktree`, `--folder`, `--container`, `--resume`, and `--detach`.
+A workflow's declared `inputs:` resolve exactly as in a real run.
+Omitted inputs take their declared `default:`, and `--input name=value` binds a value that is visible in the trace's resolved text.
+A missing required input or an undeclared name fails at the invocation gate with the same error as a real run, before any trace output.
+With `--exec-code`, bash and script nodes receive run-level inputs as the same `INPUTS_<UPPER_SNAKE>` environment variables that a real run receives.
+A composed block's own inputs for named scripts are a real-run-only channel.
 
-The ordered trace records each node as completed, stubbed, skipped, failed, or paused, including its reason, resolved text, safe output, and final outcome. This validates deterministic engine wiring; it does not validate model reasoning. It adds no workflow-YAML language surface and follows the [workflow language constitution](/reference/workflow-language-constitution/): YAML coordinates, code computes, and agents judge.
+By default, bash and script nodes are never executed. `--exec-code` is an explicit opt-in for trusted local workflow code and is the only dry-run mode that can cause code-level side effects. Executed nodes receive `$ARTIFACTS_DIR` and `$STATE_DIR` under an ephemeral per-simulation directory in `~/.archon/temp/` (honoring `ARCHON_HOME`), created before the first executed node and removed when the simulation ends — a dry run writes nothing inside the repository, and a simulation that executes nothing creates no directory at all. Approval nodes auto-complete unless `--pause-at-gates` is set. Runtime `workflow:` sub-runs are reported as unsupported instead of being launched. Dry-run is incompatible with lifecycle and isolation flags such as `--branch`, `--no-worktree`, `--folder`, `--container`, `--resume`, and `--detach`.
+
+The ordered trace records each node as completed, stubbed, skipped, failed, or paused, including its reason, resolved text, safe output, and final outcome.
+
+Every node that takes an AI turn also reports **which provider and model it will run on, and where each value came from** — the same resolution the executor performs, not a second implementation of it. This is how you answer "what will this node actually run on" for a workflow that composes others, since a composed workflow runs with the configuration its own file declares:
+
+```text
+STUBBED   review__scope (prompt)
+  runs on: codex (node) / gpt-5.6-sol (node) [from review-block]
+  effort: high (node)
+```
+
+The origin in parentheses is one of `node`, `model ref` (a tier keyword or `@alias`), `workflow`, `assistant config`, or `default assistant`. `[from <name>]` names the workflow file a composed node was authored in. A node whose declared `provider:` disagrees with the provider its `model:` ref resolves to also reports the warning a real run would emit. `--json` carries the same values under each trace entry's `resolution` object.
+
+This validates deterministic engine wiring; it does not validate model reasoning. It adds no workflow-YAML language surface and follows the [workflow language constitution](/reference/workflow-language-constitution/): YAML coordinates, code computes, and agents judge.
 
 **Default (no flags):**
 - Creates worktree with auto-generated branch (`archon/task-<workflow>-<timestamp>`)
@@ -560,6 +579,53 @@ archon validate commands my-command       # Validate a single command
 Checks: file exists, non-empty, valid name.
 
 Exit code: 0 = all valid, 1 = errors found.
+
+### `provider-binding`
+
+Manage workflow provider bindings that deliver signed workflow events to an HTTP receiver.
+Bindings may attach an optional outbound JSONata transform and private receiver authentication headers.
+
+Create or update a binding with optional transform and receiver-header file inputs:
+
+```bash
+archon provider-binding create --provider archon --name <name> --project-ref <project-ref> --route <event-route> [--transform-file <path>] [--receiver-headers-file <path>] --json
+archon provider-binding update --provider archon --name <name> --project-ref <project-ref> --route <event-route> [--transform-file <path>] [--receiver-headers-file <path>] --json
+```
+
+Dry-run a transform against a sample canonical envelope without writing the database or sending HTTP:
+
+```bash
+archon provider-binding test --transform-file <path> --envelope-file <path> --json
+```
+
+Related subcommands: `status`, `rotate`, and `disable` retain their existing binding-lifecycle roles and do not accept transform or receiver-header files.
+
+Omitted update flags preserve the currently stored values.
+JSON `null` in `--transform-file` clears the transform to SQL `NULL`.
+JSON `null` in `--receiver-headers-file` clears receiver headers to `{}`.
+
+The transform input is only `workflow-event-envelope.v1`.
+Transform execution happens once before outbox persistence.
+Retries sign and send the stored bytes.
+Transform failures create non-routable `transform-failed` evidence and do not fail the workflow run.
+
+Transform defaults and hard caps are: 32,768 expression bytes; 50/200 ms timeout; 128/512 stack; 10,000/100,000 sequence; 65,536/262,144 output bytes.
+Allowed JSONata functions are exactly: `string`, `length`, `substring`, `substringBefore`, `substringAfter`, `uppercase`, `lowercase`, `trim`, `contains`, `split`, `join`, `number`, `floor`, `ceil`, `round`, `abs`, `sqrt`, `power`, `boolean`, `not`, `count`, `sum`, `min`, `max`, `average`, `keys`, `lookup`, `append`, `exists`, `merge`, `reverse`, `distinct`.
+Rejected constructs include aliases, dynamic calls, partials, function application, lambdas, transform expressions, regular expressions, `$eval`, `$now`, `$millis`, and `$random`.
+Top-level transform output must be an object or array.
+
+Receiver header limits are: 16 headers, 128 name bytes, 8,192 value bytes, and 32,768 aggregate value bytes.
+Reserved headers are exactly: `Content-Type`, `X-Webhook-Signature-V2`, `X-Webhook-Timestamp`, `X-Request-ID`, `Host`, `Content-Length`, `Connection`, `Keep-Alive`, `Proxy-Authenticate`, `Proxy-Authorization`, `Proxy-Connection`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`.
+Receiver values are private; request-attempt evidence stores `[REDACTED]`.
+Archon's HMAC headers remain active.
+
+Protect secret files on POSIX with `umask 077` or `chmod 0600 <file>`, then remove the secret file after a successful command.
+
+Provider-neutral JSONata example:
+
+```json
+{ "eventType": eventType, "runId": workflowRunRef.runId }
+```
 
 ### `complete <branch> [branch2 ...]`
 

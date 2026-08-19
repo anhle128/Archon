@@ -17,7 +17,10 @@ import type { NestedKeySpec } from './dag-node';
 // Shared enum schemas
 // ---------------------------------------------------------------------------
 
-/** Legacy workflow spelling retained as a raw-string compatibility fallback. */
+/**
+ * Deprecated Codex spelling retained as a raw-string compatibility fallback.
+ * The loader translates it to the provider-owned `effort` value.
+ */
 export const modelReasoningEffortSchema = z
   .string()
   .min(1, "'modelReasoningEffort' must be a non-empty string");
@@ -322,12 +325,30 @@ export type WorkflowExecutionResult =
  */
 export type WorkflowSource = 'bundled' | 'global' | 'project';
 
+/**
+ * The workflow-level configuration an author WROTE, captured before composition
+ * collapsed it onto the workflow's own nodes and removed the workflow-level layer
+ * (#1764). This is not a second representation of a live value — the collapsed
+ * definition no longer holds these fields at all.
+ *
+ * Read it for display and for labelling a run; never for execution. Execution reads
+ * `WorkflowWithSource.workflow`, whose nodes each carry their own resolved values.
+ * Deliberately narrow: the fields a person is shown, not the whole travelling set.
+ */
+export interface DeclaredWorkflowConfig {
+  readonly provider?: string;
+  readonly model?: string;
+  readonly effort?: string;
+}
+
 /** A workflow definition paired with its discovery source. */
 export interface WorkflowWithSource {
   readonly workflow: WorkflowDefinition;
   readonly source: WorkflowSource;
   /** Warnings from YAML parsing (e.g. unknown keys) — never hard-fails. */
   readonly parseWarnings?: readonly string[];
+  /** What the author declared at workflow level, for display. @see DeclaredWorkflowConfig */
+  readonly declared?: DeclaredWorkflowConfig;
 }
 
 /**

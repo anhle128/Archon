@@ -100,6 +100,31 @@ describe('validateContent', () => {
     expect(flagged).toEqual(['a', 'b', 'g', 'g', 'g', 'l', 's']);
   });
 
+  test('a hyphenated node id resolves as an upstream ref', () => {
+    const issues = validateContent(
+      wf([
+        { id: 'check-reproduction', variant: 'prompt', base: {}, data: { prompt: 'reproduce' } },
+        {
+          id: 'use',
+          variant: 'prompt',
+          base: { depends_on: ['check-reproduction'] },
+          data: { prompt: 'read $check-reproduction.output' },
+        },
+      ])
+    );
+    expect(issues.filter(i => i.rule === 'content.var.unknown')).toEqual([]);
+  });
+
+  test('`$id.outputs` is a ref, matching the engine (which has no word boundary)', () => {
+    // The engine's OUTPUT_REF_SOURCE ends at `.output` with no `\b`, so at run
+    // time `$ghost.outputs` substitutes `$ghost.output` and leaves the `s`.
+    // The builder must therefore flag it too, not treat it as ordinary prose.
+    const issues = validateContent(
+      wf([{ id: 'use', variant: 'prompt', base: {}, data: { prompt: 'read $ghost.outputs' } }])
+    );
+    expect(issues.some(i => i.rule === 'content.var.unknown')).toBe(true);
+  });
+
   test('upstream refs in non-prompt bodies pass', () => {
     const issues = validateContent(
       wf([
@@ -145,11 +170,56 @@ describe('validateContent', () => {
     expect(issues.filter(i => i.rule === 'content.var.unknown')).toEqual([]);
   });
 
-  test('cancel nodes have no scannable body', () => {
+  test('a cancel body is scanned — the engine rejects a dangling ref there', () => {
+    // `loader.ts` pushes `{ field: 'cancel', text: node.cancel }` into its ref scan, and
+    // the executor substitutes it, so a dangling ref fails the workflow at load. The
+    // builder used to stay silent about it, which is the gap this closes.
     const issues = validateContent(
       wf([{ id: 'c', variant: 'cancel', base: {}, data: { reason: 'stop: $ghost.output' } }])
     );
+    expect(issues.some(i => i.rule === 'content.var.unknown')).toBe(true);
+  });
+
+  test('an upstream ref in a cancel body passes', () => {
+    const issues = validateContent(
+      wf([
+        { id: 'check', variant: 'prompt', base: {}, data: { prompt: 'check' } },
+        {
+          id: 'c',
+          variant: 'cancel',
+          base: { depends_on: ['check'] },
+          data: { reason: 'stop: $check.output' },
+        },
+      ])
+    );
     expect(issues.filter(i => i.rule === 'content.var.unknown')).toEqual([]);
+  });
+
+  test("a loop's until_bash and an approval's on_reject prompt are scanned", () => {
+    const issues = validateContent(
+      wf([
+        {
+          id: 'l',
+          variant: 'loop',
+          base: {},
+          data: {
+            prompt: 'iterate',
+            max_iterations: 3,
+            fresh_context: false,
+            until_bash: 'test "$ghost.output" = ok',
+          },
+        },
+        {
+          id: 'a',
+          variant: 'approval',
+          base: {},
+          data: { message: 'ok?', on_reject: { prompt: 'revise $ghost.output' } },
+        },
+      ])
+    );
+    const flagged = issues.filter(i => i.rule === 'content.var.unknown').map(i => i.path.nodeId);
+    expect(flagged).toContain('l');
+    expect(flagged).toContain('a');
   });
 
   test('valid when expression passes; malformed when errors', () => {
@@ -177,5 +247,58 @@ describe('validateContent', () => {
       ])
     );
     expect(bad.some(i => i.rule === 'content.when.parse')).toBe(true);
+  });
+});
+
+describe('validateContent — base-field AI text is scanned too (#1764/#2476)', () => {
+  test('a non-upstream ref in systemPrompt warns', () => {
+    // The engine hard-rejects this at load, so the builder must not be silent about it
+    // while the author is still editing.
+    const issues = validateContent(
+      wf([
+        { id: 'classify', variant: 'prompt', base: {}, data: { prompt: 'classify it' } },
+        {
+          id: 'use',
+          variant: 'prompt',
+          base: { systemPrompt: 'Context: $classify.output' },
+          data: { prompt: 'go' },
+        },
+      ])
+    );
+    expect(issues.some(i => i.rule === 'content.var.unknown')).toBe(true);
+  });
+
+  test('a non-upstream ref in an agent prompt or description warns', () => {
+    const issues = validateContent(
+      wf([
+        { id: 'classify', variant: 'prompt', base: {}, data: { prompt: 'classify it' } },
+        {
+          id: 'use',
+          variant: 'prompt',
+          base: {
+            agents: {
+              helper: { description: 'reads $classify.output', prompt: 'act on it' },
+            },
+          },
+          data: { prompt: 'go' },
+        },
+      ])
+    );
+    expect(issues.some(i => i.rule === 'content.var.unknown')).toBe(true);
+  });
+
+  test('an upstream ref in systemPrompt passes', () => {
+    const issues = validateContent(
+      wf([
+        { id: 'classify', variant: 'prompt', base: {}, data: { prompt: 'classify it' } },
+        {
+          id: 'use',
+          variant: 'prompt',
+          base: { depends_on: ['classify'], systemPrompt: 'Context: $classify.output' },
+          data: { prompt: 'go' },
+        },
+      ])
+    );
+    expect(issues.filter(i => i.rule === 'content.var.unknown')).toEqual([]);
   });
 });

@@ -114,6 +114,7 @@ REQUIRED_COMMAND_EXAMPLES = [
     'binding-status-success.json',
     'binding-rotate-success.json',
     'binding-disable-success.json',
+    'binding-test-success.json',
     'error-malformed-request.json',
     'error-timeout.json',
     'error-schema-mismatch.json',

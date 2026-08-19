@@ -17,6 +17,7 @@ import {
   resolveNodeProviderAndModel,
   shouldContinueStreamingForStatus,
   substituteNodeOutputRefs,
+  type WorkflowLevelOptions,
 } from './dag-executor';
 import {
   buildPlannotatorSpawnArgv,
@@ -48,7 +49,8 @@ export interface ExecutePlannotatorGateArgs {
   workflowModel: string | undefined;
   aiProfile?: ResolvedAiProfile;
   workflowPreset?: ModelAliasPreset;
-  workflowTier?: string;
+  workflowLevelOptions: WorkflowLevelOptions;
+  warnedProviderConflicts: Set<string>;
   stateDir: string;
   baseBranch: string;
   docsDir: string;
@@ -279,10 +281,11 @@ async function runEmbeddedGateAiCall(
     args.conversationId,
     args.workflowRun.id,
     cwd,
-    {},
+    args.workflowLevelOptions,
     args.aiProfile,
     args.workflowPreset,
-    args.workflowTier,
+    text => text,
+    args.warnedProviderConflicts,
     execContext
   );
   const abortController = new AbortController();

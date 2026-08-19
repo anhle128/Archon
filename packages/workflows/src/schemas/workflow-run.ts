@@ -391,13 +391,12 @@ export interface ApprovalContext {
    */
   signaledTokens?: { input: number; output: number } | null;
   /**
-   * Interactive-loop only. Read-once snapshot of a command-backed loop's
-   * (`loop.command`) loaded prompt body, persisted at gate pause so the resumed
-   * invocation reuses the exact text the run started with — a command file
-   * edited or deleted while the run sat paused cannot change or break the
-   * running loop's prompt. Null for prompt-based loops (explicit-null pause
-   * convention, same as `sessionId`). Absent on runs paused by builds that
-   * predate this field — the resume path then falls back to re-reading the file.
+   * Interactive-loop only. Read-once snapshot of the resolved loop prompt
+   * template, whether authored as `loop.prompt` or loaded from `loop.command`,
+   * persisted at gate pause so the resumed invocation reuses the exact text the
+   * run started with. This also takes precedence over an included loop command's
+   * load-time compiled prompt/error after rediscovery. Absent on runs paused by builds
+   * that predate this field; those resume from the current prompt or command source.
    */
   commandSnapshot?: string | null;
 }
@@ -422,8 +421,9 @@ export interface LoopGateRunMetadata {
 /**
  * True when the run's current approval gate has already been resolved
  * (approved, or rejected with a staged on_reject rework) and the run is
- * paused only while awaiting resume. Guards double-approve/reject and the
- * natural-language approval routing.
+ * paused only while awaiting resume. Guards double-approve/reject, and keeps a
+ * resolved gate out of the chat agent's prompt context (#2565) — it is waiting
+ * on the machine, not on a human.
  */
 export function isGateResolved(approval: ApprovalContext): boolean {
   return approval.resolved === 'approved' || approval.resolved === 'rejected';
@@ -464,6 +464,20 @@ export function isRunBlockedOnChild(
     approval.type === 'child_workflow' &&
     approval.childRunId === childRunId
   );
+}
+
+/**
+ * True when `run` executed inside an isolation container.
+ *
+ * Such a run can only be resumed where the docker backend is reachable and the
+ * container can be rewired — the CLI. `executeWorkflow` enforces this: a resume
+ * without a container context fails the run with a CLI pointer rather than
+ * silently running host-side and dropping the write-back. Callers that offer to
+ * continue a run consult this FIRST so they never promise a continuation the
+ * executor will refuse (#2565). Reads defensively from possibly-absent metadata.
+ */
+export function isContainerRun(run: { metadata?: Record<string, unknown> }): boolean {
+  return run.metadata?.isolation === 'container';
 }
 
 // ---------------------------------------------------------------------------

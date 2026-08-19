@@ -11,6 +11,7 @@ export const WORKFLOW_PROVIDER_COMMANDS = [
   'binding.status',
   'binding.rotate',
   'binding.disable',
+  'binding.test',
 ] as const;
 
 export type WorkflowProviderCommand = (typeof WORKFLOW_PROVIDER_COMMANDS)[number];
@@ -43,6 +44,7 @@ const BINDING_COMMANDS = new Set<string>([
   'binding.status',
   'binding.rotate',
   'binding.disable',
+  'binding.test',
 ]);
 
 const VALID_COMMANDS = new Set<string>(WORKFLOW_PROVIDER_COMMANDS);

@@ -8,10 +8,21 @@ import {
 } from '@archon/core/db/provider-bindings';
 import { getCodebaseById } from '@archon/core/db/codebases';
 import {
+  normalizeDeliveryHeaders,
+  type DeliveryHeaders,
+} from '@archon/core/events/delivery-headers';
+import {
+  isProviderBindingTransformError,
+  normalizeProviderBindingTransform,
+  validateProviderBindingTransform,
+} from '@archon/core/events/provider-binding-transform';
+import type { ProviderBindingTransform } from '@archon/core/schemas/provider-binding-transform';
+import {
   externalWorkflowEventTypeSchema,
   type ExternalWorkflowEventType,
 } from '@archon/core/schemas/workflow-event';
 import { createLogger } from '@archon/paths';
+import { readFile } from 'node:fs/promises';
 import {
   safeStringify,
   resolveCorrelationId,
@@ -55,6 +66,63 @@ interface BindingArgs {
   eventTypes?: string;
   correlationId?: string;
   signingSecret?: string;
+  transformFile?: string;
+  receiverHeadersFile?: string;
+}
+
+class BindingFileInputError extends Error {
+  readonly path: '/transform' | '/deliveryHeaders';
+  readonly reason: 'unreadable' | 'invalid';
+
+  constructor(path: '/transform' | '/deliveryHeaders', reason: 'unreadable' | 'invalid') {
+    super('MALFORMED_REQUEST');
+    this.path = path;
+    this.reason = reason;
+  }
+}
+
+async function readJsonFile(path: string, field: BindingFileInputError['path']): Promise<unknown> {
+  let source: string;
+  try {
+    source = await readFile(path, 'utf8');
+  } catch {
+    throw new BindingFileInputError(field, 'unreadable');
+  }
+  try {
+    return JSON.parse(source) as unknown;
+  } catch {
+    throw new BindingFileInputError(field, 'invalid');
+  }
+}
+
+async function loadBindingFiles(args: BindingArgs): Promise<{
+  transform: ProviderBindingTransform | null | undefined;
+  deliveryHeaders: DeliveryHeaders | null | undefined;
+}> {
+  let transform: ProviderBindingTransform | null | undefined;
+  if (args.transformFile !== undefined) {
+    const value = await readJsonFile(args.transformFile, '/transform');
+    if (value === null) {
+      transform = null;
+    } else {
+      transform = normalizeProviderBindingTransform(value);
+      validateProviderBindingTransform(transform);
+    }
+  }
+  let deliveryHeaders: DeliveryHeaders | null | undefined;
+  if (args.receiverHeadersFile !== undefined) {
+    const value = await readJsonFile(args.receiverHeadersFile, '/deliveryHeaders');
+    if (value === null) {
+      deliveryHeaders = null;
+    } else {
+      try {
+        deliveryHeaders = normalizeDeliveryHeaders(value);
+      } catch {
+        throw new BindingFileInputError('/deliveryHeaders', 'invalid');
+      }
+    }
+  }
+  return { transform, deliveryHeaders };
 }
 
 interface ValidatedArgs {
@@ -164,6 +232,14 @@ function classifyError(err: unknown): {
       category: 'unexpected_state',
       retryable: true,
       exitCode: 78,
+    };
+  }
+  if (isProviderBindingTransformError(err)) {
+    return {
+      code: err.code,
+      category: err.code === 'TRANSFORM_TIMEOUT' ? 'timeout' : 'provider_contract',
+      retryable: false,
+      exitCode: err.code === 'TRANSFORM_TIMEOUT' ? 69 : 64,
     };
   }
   if (errCode === 'ETIMEDOUT' || msg.includes('statement timeout') || msg.includes('timeout')) {
@@ -352,6 +428,41 @@ export async function providerBindingCreateCommand(
     );
     if (!validated) return EXIT_USAGE;
 
+    let files: {
+      transform: ProviderBindingTransform | null | undefined;
+      deliveryHeaders: DeliveryHeaders | null | undefined;
+    };
+    try {
+      files = await loadBindingFiles(args);
+    } catch (error) {
+      if (error instanceof BindingFileInputError) {
+        emitEnvelope(
+          buildErrorEnvelope(
+            deps,
+            {
+              code: 'MALFORMED_REQUEST',
+              category: 'provider_contract',
+              retryable: false,
+              details: {
+                fieldErrors: [{ path: error.path, code: error.reason }],
+                requestAccepted: false,
+              },
+              exitCode: 64,
+            },
+            startTime
+          ),
+          opts
+        );
+        return EXIT_USAGE;
+      }
+      const classified = classifyError(error);
+      emitEnvelope(
+        buildErrorEnvelope(deps, { ...classified, details: { requestAccepted: false } }, startTime),
+        opts
+      );
+      return classified.exitCode;
+    }
+
     const resolved = await resolveProjectRef(validated.projectRef, deps, opts, startTime);
     if (typeof resolved === 'number') return resolved;
 
@@ -363,6 +474,8 @@ export async function providerBindingCreateCommand(
         eventRoute: validated.route,
         eventTypes: validated.eventTypes,
         signingSecret: validated.signingSecret,
+        ...(files.transform ? { transform: files.transform } : {}),
+        ...(files.deliveryHeaders ? { deliveryHeaders: files.deliveryHeaders } : {}),
       });
 
       emitEnvelope(
@@ -415,6 +528,41 @@ export async function providerBindingUpdateCommand(
     );
     if (!validated) return EXIT_USAGE;
 
+    let files: {
+      transform: ProviderBindingTransform | null | undefined;
+      deliveryHeaders: DeliveryHeaders | null | undefined;
+    };
+    try {
+      files = await loadBindingFiles(args);
+    } catch (error) {
+      if (error instanceof BindingFileInputError) {
+        emitEnvelope(
+          buildErrorEnvelope(
+            deps,
+            {
+              code: 'MALFORMED_REQUEST',
+              category: 'provider_contract',
+              retryable: false,
+              details: {
+                fieldErrors: [{ path: error.path, code: error.reason }],
+                requestAccepted: false,
+              },
+              exitCode: 64,
+            },
+            startTime
+          ),
+          opts
+        );
+        return EXIT_USAGE;
+      }
+      const classified = classifyError(error);
+      emitEnvelope(
+        buildErrorEnvelope(deps, { ...classified, details: { requestAccepted: false } }, startTime),
+        opts
+      );
+      return classified.exitCode;
+    }
+
     const resolved = await resolveProjectRef(validated.projectRef, deps, opts, startTime);
     if (typeof resolved === 'number') return resolved;
 
@@ -426,6 +574,8 @@ export async function providerBindingUpdateCommand(
         eventRoute: validated.route,
         eventTypes: validated.eventTypes,
         signingSecret: validated.signingSecret,
+        ...(files.transform !== undefined ? { transform: files.transform } : {}),
+        ...(files.deliveryHeaders !== undefined ? { deliveryHeaders: files.deliveryHeaders } : {}),
       });
 
       emitEnvelope(

@@ -5,8 +5,12 @@ const mockClaimDueOutboxEvents = mock(async () => []);
 const mockInsertPendingAttempt = mock(async () => attemptRow());
 const mockCompleteAttempt = mock(async () => attemptRow({ outcome: 'succeeded' }));
 const mockUpdateOutboxAfterAttempt = mock(async () => outboxRow({ status: 'delivered' }));
-const mockGetBindingByIdWithSecret = mock(async () => ({ signing_secret: 'test-secret' }));
+const mockGetBindingByIdWithSecret = mock(async () => ({
+  signing_secret: 'test-secret',
+  delivery_headers: {},
+}));
 const mockStoreEnqueueExternalWorkflowEvent = mock(async () => {});
+const mockLogWarn = mock(() => {});
 
 mock.module('@archon/core/db/workflow-event-outbox', () => ({
   claimDueOutboxEvents: mockClaimDueOutboxEvents,
@@ -28,7 +32,7 @@ mock.module('@archon/core/workflows', () => ({
 mock.module('@archon/paths', () => ({
   createLogger: mock(() => ({
     info: mock(() => {}),
-    warn: mock(() => {}),
+    warn: mockLogWarn,
     error: mock(() => {}),
     debug: mock(() => {}),
     trace: mock(() => {}),
@@ -36,7 +40,7 @@ mock.module('@archon/paths', () => ({
   })),
 }));
 
-import { WorkflowEventDispatcher } from './dispatcher';
+const { WorkflowEventDispatcher } = await import('./dispatcher');
 
 const fixedNow = new Date('2026-07-25T00:00:00.000Z');
 
@@ -97,14 +101,17 @@ describe('WorkflowEventDispatcher', () => {
     mockUpdateOutboxAfterAttempt.mockReset();
     mockGetBindingByIdWithSecret.mockReset();
     mockStoreEnqueueExternalWorkflowEvent.mockReset();
+    mockLogWarn.mockReset();
     mockClaimDueOutboxEvents.mockImplementation(async () => []);
     mockInsertPendingAttempt.mockImplementation(async () => attemptRow());
     mockCompleteAttempt.mockImplementation(async () => attemptRow({ outcome: 'succeeded' }));
     mockUpdateOutboxAfterAttempt.mockImplementation(async () => outboxRow({ status: 'delivered' }));
     mockGetBindingByIdWithSecret.mockImplementation(async () => ({
       signing_secret: 'test-secret',
+      delivery_headers: {},
     }));
     mockStoreEnqueueExternalWorkflowEvent.mockImplementation(async () => {});
+    mockLogWarn.mockImplementation(() => {});
   });
 
   test('posts the stored body with Hermes V2 headers and marks delivery succeeded', async () => {
@@ -301,5 +308,164 @@ describe('WorkflowEventDispatcher', () => {
     } finally {
       server.stop(true);
     }
+  });
+
+  test('initial delivery and retry sign and send the same stored transformed body', async () => {
+    const body = '{"receiver":"shape"}';
+    mockClaimDueOutboxEvents
+      .mockResolvedValueOnce([outboxRow({ event_body: body, attempt_count: 0 })])
+      .mockResolvedValueOnce([outboxRow({ event_body: body, attempt_count: 1 })]);
+    const fetchImpl = mock(async () => new Response('retry', { status: 500 }));
+    const dispatcher = new WorkflowEventDispatcher({
+      now: () => fixedNow,
+      fetchImpl,
+      enqueueDeliveryFailed: mockStoreEnqueueExternalWorkflowEvent,
+    });
+    await dispatcher.drainNow();
+    await dispatcher.drainNow();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    for (const [, request] of fetchImpl.mock.calls as Array<[string, RequestInit]>) {
+      const headers = request.headers as Record<string, string>;
+      expect(request.body).toBe(body);
+      expect(headers['X-Webhook-Signature-V2']).toBe(
+        createHmac('sha256', 'test-secret')
+          .update(`${Math.floor(fixedNow.getTime() / 1000)}.${body}`)
+          .digest('hex')
+      );
+    }
+  });
+
+  test('valid receiver headers reach HTTP and attempt evidence redacts their values', async () => {
+    mockGetBindingByIdWithSecret.mockResolvedValueOnce({
+      signing_secret: 'test-secret',
+      delivery_headers: { Authorization: 'Bearer secret' },
+    });
+    mockClaimDueOutboxEvents.mockResolvedValueOnce([outboxRow()]);
+    const fetchImpl = mock(async () => new Response('', { status: 204 }));
+    await new WorkflowEventDispatcher({ now: () => fixedNow, fetchImpl }).drainNow();
+    const [, request] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect((request.headers as Record<string, string>).Authorization).toBe('Bearer secret');
+    const pendingRequest = mockInsertPendingAttempt.mock.calls[0]?.[2] as {
+      headers: Record<string, string>;
+    };
+    expect(pendingRequest.headers.Authorization).toBe('[REDACTED]');
+    expect(pendingRequest.headers['Content-Type']).toBe('application/json');
+    expect(JSON.stringify(pendingRequest.headers)).not.toContain('Bearer secret');
+    expect((fetchImpl.mock.calls[0]?.[1] as RequestInit).redirect).toBe('manual');
+  });
+
+  test('does not follow a cross-origin redirect with receiver credentials', async () => {
+    let redirectedRequestReceived = false;
+    const target = Bun.serve({
+      port: 0,
+      fetch() {
+        redirectedRequestReceived = true;
+        return new Response('', { status: 204 });
+      },
+    });
+    const redirector = Bun.serve({
+      port: 0,
+      fetch() {
+        return new Response('', {
+          status: 302,
+          headers: { Location: String(target.url) },
+        });
+      },
+    });
+    try {
+      mockGetBindingByIdWithSecret.mockResolvedValueOnce({
+        signing_secret: 'test-secret',
+        delivery_headers: { 'X-Api-Key': 'redirect-secret' },
+      });
+      mockClaimDueOutboxEvents.mockResolvedValueOnce([
+        outboxRow({ event_route: String(redirector.url) }),
+      ]);
+
+      await new WorkflowEventDispatcher({ now: () => fixedNow }).drainNow();
+
+      expect(redirectedRequestReceived).toBe(false);
+      expect(mockCompleteAttempt.mock.calls[0]?.[0]).toMatchObject({
+        outcome: 'failed',
+        responseStatus: 302,
+      });
+    } finally {
+      redirector.stop(true);
+      target.stop(true);
+    }
+  });
+
+  test('redacts reflected receiver credentials from response and transport evidence', async () => {
+    mockGetBindingByIdWithSecret.mockResolvedValue({
+      signing_secret: 'test-secret',
+      delivery_headers: { Authorization: 'Bearer reflected-secret' },
+    });
+    mockClaimDueOutboxEvents.mockResolvedValueOnce([outboxRow()]);
+    const reflectedResponse = mock(
+      async () =>
+        new Response('echo Bearer reflected-secret', {
+          status: 500,
+          headers: { 'X-Echo': 'Bearer reflected-secret' },
+        })
+    );
+    await new WorkflowEventDispatcher({
+      now: () => fixedNow,
+      fetchImpl: reflectedResponse,
+    }).drainNow();
+    const responseEvidence = mockCompleteAttempt.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(responseEvidence).toMatchObject({
+      responseHeaders: { 'x-echo': '[REDACTED]' },
+      responseBody: 'echo [REDACTED]',
+    });
+    expect(JSON.stringify(responseEvidence)).not.toContain('Bearer reflected-secret');
+
+    mockCompleteAttempt.mockClear();
+    mockClaimDueOutboxEvents.mockResolvedValueOnce([outboxRow()]);
+    const reflectedError = mock(async () => {
+      throw new Error('invalid header Bearer reflected-secret');
+    });
+    await new WorkflowEventDispatcher({
+      now: () => fixedNow,
+      fetchImpl: reflectedError,
+    }).drainNow();
+    const transportEvidence = mockCompleteAttempt.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(transportEvidence.transportError).toBe('invalid header [REDACTED]');
+    expect(JSON.stringify(transportEvidence)).not.toContain('Bearer reflected-secret');
+  });
+
+  test('unsafe parsed headers block HTTP and persist a safe terminal outcome', async () => {
+    mockGetBindingByIdWithSecret.mockResolvedValueOnce({
+      signing_secret: 'test-secret',
+      delivery_headers: { 'Content-Type': 'text/plain' },
+    });
+    mockClaimDueOutboxEvents.mockResolvedValueOnce([outboxRow()]);
+    const fetchImpl = mock(async () => new Response('', { status: 204 }));
+    await new WorkflowEventDispatcher({ now: () => fixedNow, fetchImpl }).drainNow();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(mockInsertPendingAttempt).not.toHaveBeenCalled();
+    expect(mockUpdateOutboxAfterAttempt.mock.calls[0]?.[1]).toMatchObject({
+      status: 'terminal-failure',
+      attempt_count: 0,
+      next_attempt_at: null,
+      last_error: 'unsafe-delivery-headers',
+    });
+    const [fields] = mockLogWarn.mock.calls.find(
+      call => call[1] === 'workflow_events.unsafe_delivery_headers'
+    ) as [Record<string, unknown>, string];
+    expect(fields).toEqual({ bindingId: 'wpb-1', outboxEventId: 'outbox-1' });
+    expect(JSON.stringify(fields)).not.toMatch(/Authorization|Bearer|secret|Content-Type/);
+  });
+
+  test('corrupt delivery_headers JSON from the private parser has the same safe terminal outcome', async () => {
+    mockGetBindingByIdWithSecret.mockRejectedValueOnce(
+      new Error('BINDING_CORRUPT_ROW: delivery_headers')
+    );
+    mockClaimDueOutboxEvents.mockResolvedValueOnce([outboxRow()]);
+    const fetchImpl = mock(async () => new Response('', { status: 204 }));
+    await new WorkflowEventDispatcher({ now: () => fixedNow, fetchImpl }).drainNow();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(mockUpdateOutboxAfterAttempt.mock.calls[0]?.[1]).toMatchObject({
+      status: 'terminal-failure',
+      last_error: 'unsafe-delivery-headers',
+    });
   });
 });

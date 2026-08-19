@@ -693,6 +693,14 @@ describe('PostgreSQL schema convergence — remote_agent_workflow_provider_bindi
       'CREATE TABLE IF NOT EXISTS remote_agent_workflow_provider_bindings'
     );
     expect(realCombinedSql).toContain('UNIQUE (provider, name)');
+    expect(realCombinedSql).toContain('transform        TEXT');
+    expect(realCombinedSql).toContain("delivery_headers TEXT NOT NULL DEFAULT '{}'");
+    expect(realCombinedSql).toContain(
+      'ALTER TABLE remote_agent_workflow_provider_bindings\n  ADD COLUMN IF NOT EXISTS transform TEXT;'
+    );
+    expect(realCombinedSql).toContain(
+      "ALTER TABLE remote_agent_workflow_provider_bindings\n  ADD COLUMN IF NOT EXISTS delivery_headers TEXT NOT NULL DEFAULT '{}';"
+    );
   });
 
   // 3.1-INT-011 [P1] — Schema failure rolls back where transactional and

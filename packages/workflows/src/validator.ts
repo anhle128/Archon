@@ -24,7 +24,13 @@ import { execFileAsync } from '@archon/git';
 import { BUNDLED_COMMANDS, BUNDLED_WORKFLOWS, isBinaryBuild } from './defaults/bundled-defaults';
 import { isValidCommandName } from './command-validation';
 import { levenshtein, findSimilar } from './utils/fuzzy-match';
-import { getProviderCapabilities, isRegisteredProvider, skillSearchRoots } from '@archon/providers';
+import {
+  claudeSkillSearchRoots,
+  findInstalledSkillNames,
+  getProviderCapabilities,
+  isRegisteredProvider,
+  skillSearchRoots,
+} from '@archon/providers';
 
 /** Lazy-initialized logger */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -46,7 +52,7 @@ import type { WorkflowDefinition, DagNode, WorkflowSource } from './schemas';
 import type { ScriptRuntime } from './script-discovery';
 import { discoverScriptsForCwd } from './script-discovery';
 import { isInlineScript } from './executor-shared';
-import { buildAiProfile, resolveModelSpec } from './model-validation';
+import { buildAiProfile, isLiteralSpec, resolveModelSpec } from './model-validation';
 import { getPackagedResourceDirectory, parsePackagedResourceReference } from './packaged-workflow';
 import type { RawAliasesConfig, RawTiersConfig, ResolvedAiProfile } from './model-validation';
 
@@ -101,6 +107,8 @@ export interface ValidationConfig {
   assistant?: string;
   aliases?: RawAliasesConfig;
   tiers?: RawTiersConfig;
+  claudeSettingSources?: ('project' | 'user')[];
+  claudeConfigDir?: string;
 }
 
 // Levenshtein distance and fuzzy matching now live in ./utils/fuzzy-match so lean
@@ -326,6 +334,24 @@ function resolveProvider(
   return workflowProvider ?? defaultProvider;
 }
 
+function resolveValidationProvider(
+  node: DagNode,
+  workflowProvider: string | undefined,
+  defaultProvider: string | undefined,
+  aiProfile: ResolvedAiProfile | undefined
+): string | undefined {
+  let provider = resolveProvider(node, workflowProvider, defaultProvider);
+  if (!aiProfile || !('model' in node) || !node.model) return provider;
+
+  try {
+    const modelSpec = resolveModelSpec(aiProfile, node.model);
+    if (!isLiteralSpec(modelSpec)) provider = modelSpec.provider;
+  } catch {
+    // validateModelRef reports the actionable model error separately.
+  }
+  return provider;
+}
+
 /**
  * Bundled workflow definitions, parsed once and cached (#2470). Used only by the
  * bundled-set-only `workflow:` target check below — a bundled workflow's sub-run target
@@ -404,6 +430,18 @@ export async function validateWorkflowResources(
   }
   if (workflow.model) validateModelRef(workflow.model);
 
+  let effectiveWorkflowProvider = workflow.provider ?? defaultProvider;
+  if (workflow.model && aiProfile) {
+    try {
+      const workflowModelSpec = resolveModelSpec(aiProfile, workflow.model);
+      if (!isLiteralSpec(workflowModelSpec)) {
+        effectiveWorkflowProvider = workflowModelSpec.provider;
+      }
+    } catch {
+      // validateModelRef reports the actionable model error separately.
+    }
+  }
+
   // Flatten top-level nodes plus every loop_group body (recursing into nested
   // loop_groups) so resource checks (commands, mcp, skills, scripts) validate
   // body nodes too. ID-uniqueness/cycle checks are the loader's job; the validator
@@ -426,7 +464,14 @@ export async function validateWorkflowResources(
     // parseWorkflow, not this resource pass). Kept so a future raw caller can't crash here.
     if (isIncludeNode(node)) continue;
 
-    const provider = resolveProvider(node, workflow.provider, defaultProvider);
+    const provider = resolveValidationProvider(
+      node,
+      effectiveWorkflowProvider,
+      defaultProvider,
+      aiProfile
+    );
+    const providerCaps =
+      provider && isRegisteredProvider(provider) ? getProviderCapabilities(provider) : undefined;
 
     if (requiresPortableModelRefs && 'model' in node && node.model?.startsWith('@')) {
       issues.push({
@@ -577,64 +622,114 @@ export async function validateWorkflowResources(
       }
 
       // Warn if using MCP with a provider that doesn't support it
-      if (provider && isRegisteredProvider(provider)) {
-        const caps = getProviderCapabilities(provider);
-        if (!caps.mcp) {
-          issues.push({
-            level: 'warning',
-            nodeId: node.id,
-            field: 'mcp',
-            message: `MCP servers are not supported by provider '${provider}' — this will be ignored`,
-            hint: 'Remove the mcp field or switch to a provider that supports MCP',
-          });
-        }
+      if (providerCaps?.mcp === false) {
+        issues.push({
+          level: 'warning',
+          nodeId: node.id,
+          field: 'mcp',
+          message: `MCP servers are not supported by provider '${provider}' — this will be ignored`,
+          hint: 'Remove the mcp field or switch to a provider that supports MCP',
+        });
       }
     }
 
     // --- Skills nodes: check skill directories exist ---
     if ('skills' in node && Array.isArray(node.skills)) {
-      const searchRoots = skillSearchRoots(cwd);
-      for (const skillName of node.skills) {
-        let found = false;
-        for (const root of searchRoots) {
-          const skillPath = join(root, skillName, 'SKILL.md');
-          if (await fileExists(skillPath)) {
-            found = true;
-            break;
+      // Only validate filesystem names when the provider actually consumes the
+      // YAML list. In particular, Codex's native roots/metadata rules do not
+      // match Archon's shared four-root resolver, so accepting a `.claude`
+      // match here would falsely imply that Codex can invoke it.
+      if (providerCaps?.skills !== false) {
+        const settingSources =
+          'settingSources' in node && node.settingSources !== undefined
+            ? node.settingSources
+            : (config?.claudeSettingSources ?? ['project', 'user']);
+        const searchRoots =
+          provider === 'claude'
+            ? claudeSkillSearchRoots(cwd, {
+                ...(config?.claudeConfigDir ? { userConfigDir: config.claudeConfigDir } : {}),
+                includeProject: settingSources.includes('project'),
+                includeUser: settingSources.includes('user'),
+              })
+            : skillSearchRoots(cwd);
+        for (const skillName of node.skills) {
+          let found = false;
+          for (const root of searchRoots) {
+            const skillPath = join(root, skillName, 'SKILL.md');
+            if (await fileExists(skillPath)) {
+              found = true;
+              break;
+            }
           }
-        }
 
-        if (!found) {
-          issues.push({
-            level: 'warning',
-            nodeId: node.id,
-            field: 'skills',
-            message: `Skill '${skillName}' not found in .agents/skills/ or .claude/skills/ (project or user scope)`,
-            hint: `Install with: npx skills add <repo> — or create manually at .agents/skills/${skillName}/SKILL.md`,
-          });
+          if (!found) {
+            // Mirror the provider's rule (claude/provider.ts): a Claude skill
+            // that exists under some other root is installed but unreachable, so
+            // it is an error. A name that exists nowhere on disk may be one of
+            // Claude's built-in or `plugin:skill` entries, which no filesystem
+            // root contains — warn there rather than failing a workflow that runs.
+            // Same helper the provider preflight uses, over the same roots, so
+            // validation and execution always agree on which case this is.
+            const installedButUnusable =
+              provider === 'claude' &&
+              findInstalledSkillNames(
+                [
+                  ...searchRoots,
+                  ...skillSearchRoots(cwd),
+                  ...claudeSkillSearchRoots(cwd, {
+                    ...(config?.claudeConfigDir ? { userConfigDir: config.claudeConfigDir } : {}),
+                    includeProject: true,
+                    includeUser: true,
+                  }),
+                ],
+                [skillName]
+              ).length > 0;
+
+            if (installedButUnusable) {
+              issues.push({
+                level: 'error',
+                nodeId: node.id,
+                field: 'skills',
+                message: `Claude skill '${skillName}' not found in an enabled .claude/skills/ directory, though it is installed elsewhere`,
+                hint: `Claude reads .claude/skills/ only (never .agents/skills/), and only from scopes settingSources enables. Ensure .claude/skills/${skillName}/SKILL.md exists in an enabled scope`,
+              });
+            } else {
+              issues.push({
+                level: 'warning',
+                nodeId: node.id,
+                field: 'skills',
+                message:
+                  provider === 'claude'
+                    ? `Claude skill '${skillName}' not found on disk — expected for built-in and plugin-qualified skills, which Claude resolves itself`
+                    : `Skill '${skillName}' not found in .agents/skills/ or .claude/skills/ (project or user scope)`,
+                hint:
+                  provider === 'claude'
+                    ? `If this is not a built-in or plugin:skill name, check the spelling or create .claude/skills/${skillName}/SKILL.md`
+                    : `Install with: npx skills add <repo> — or create manually at .agents/skills/${skillName}/SKILL.md`,
+              });
+            }
+          }
         }
       }
 
       // Warn if using skills with a provider that doesn't support them
-      if (provider && isRegisteredProvider(provider)) {
-        const caps = getProviderCapabilities(provider);
-        if (!caps.skills) {
-          issues.push({
-            level: 'warning',
-            nodeId: node.id,
-            field: 'skills',
-            message: `Skills are not supported by provider '${provider}' — this will be ignored`,
-            hint: 'Remove the skills field or switch to a provider that supports skills',
-          });
-        }
+      if (providerCaps?.skills === false && node.skills.length > 0) {
+        issues.push({
+          level: 'warning',
+          nodeId: node.id,
+          field: 'skills',
+          message: `The skills field is not supported by provider '${provider}' — this will be ignored`,
+          hint:
+            provider === 'codex'
+              ? 'Invoke an installed Codex skill explicitly in the command or prompt with $skill-name'
+              : 'Remove the skills field or switch to a provider that supports skills',
+        });
       }
     }
 
     // --- Capability-driven warnings for hooks and tool restrictions ---
-    if (provider && isRegisteredProvider(provider)) {
-      const caps = getProviderCapabilities(provider);
-
-      if ('hooks' in node && node.hooks && !caps.hooks) {
+    if (providerCaps) {
+      if ('hooks' in node && node.hooks && !providerCaps.hooks) {
         issues.push({
           level: 'warning',
           nodeId: node.id,
@@ -644,7 +739,7 @@ export async function validateWorkflowResources(
         });
       }
 
-      if ('agents' in node && node.agents && !caps.agents) {
+      if ('agents' in node && node.agents && !providerCaps.agents) {
         issues.push({
           level: 'warning',
           nodeId: node.id,
@@ -654,7 +749,7 @@ export async function validateWorkflowResources(
         });
       }
 
-      if (!caps.toolRestrictions) {
+      if (!providerCaps.toolRestrictions) {
         if (
           ('allowed_tools' in node && node.allowed_tools !== undefined) ||
           ('denied_tools' in node && node.denied_tools !== undefined)
@@ -667,7 +762,10 @@ export async function validateWorkflowResources(
             hint: 'Remove tool restriction fields or switch to a provider that supports them',
           });
         }
-      } else if (caps.knownToolNames !== undefined && caps.knownToolNames.length > 0) {
+      } else if (
+        providerCaps.knownToolNames !== undefined &&
+        providerCaps.knownToolNames.length > 0
+      ) {
         // Warn on tool names outside the provider's audited built-in vocabulary
         // (#2084): the SDK matches names as opaque strings, so a misspelled or
         // stale name (e.g. `Task` after the Claude SDK renamed it to `Agent`)
@@ -679,7 +777,7 @@ export async function validateWorkflowResources(
         // This compatibility/fail-open behavior is intentionally limited to
         // providers that declare no audited vocabulary at all, and is covered by
         // validator.test.ts: "no warning when provider declares no tool vocabulary (pi)".
-        const known = caps.knownToolNames;
+        const known = providerCaps.knownToolNames;
         const toolLists = [
           ['allowed_tools', 'allowed_tools' in node ? node.allowed_tools : undefined],
           ['denied_tools', 'denied_tools' in node ? node.denied_tools : undefined],
@@ -692,7 +790,7 @@ export async function validateWorkflowResources(
             // are dynamic per-install — never flag them.
             if (base === '' || base.startsWith('mcp__') || known.includes(base)) continue;
 
-            const renamed = caps.renamedTools?.[base];
+            const renamed = providerCaps.renamedTools?.[base];
             if (renamed !== undefined) {
               issues.push({
                 level: 'warning',

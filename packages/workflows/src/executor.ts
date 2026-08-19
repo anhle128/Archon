@@ -55,9 +55,10 @@ import {
   type SendMessageContext,
 } from './executor-shared';
 import { resolveGithubTokenOverrides } from './utils/github-token-policy';
-import { buildAiProfile, isLiteralSpec, resolveModelSpec } from './model-validation';
-import type { ModelAliasPreset, ResolvedAiProfile } from './model-validation';
+import { buildAiProfile } from './model-validation';
+import type { ResolvedAiProfile } from './model-validation';
 import type { WorkflowRetryContext } from './store';
+import { assistantModelDefaults, resolveWorkflowModelScope } from './node-model-resolution';
 
 /** The per-user prefs layer as returned by `WorkflowDeps.getUserAiPrefs`. */
 type UserAiPrefsLayer = Awaited<ReturnType<NonNullable<WorkflowDeps['getUserAiPrefs']>>>;
@@ -548,6 +549,23 @@ export type ExecuteWorkflowOptions = ResumePayload & {
    * fallback). Threaded into the child-spawn closure.
    */
   resolveChildIsolation?: ChildIsolationResolver;
+  /**
+   * Declared inputs supplied by a DIRECT top-level invocation (#2554) — the CLI's
+   * `--input name=value`, the run route's `inputs` map, or the console's run form.
+   * Stamped onto the fresh run row's `metadata.inputs`, the same key a `workflow:`
+   * parent writes for its child, so every existing delivery path (`$INPUTS.<name>` on
+   * AI/prompt surfaces, `INPUTS_<UPPER_SNAKE>` for bash/script) works unchanged and the
+   * values survive a cold resume.
+   *
+   * ALREADY RESOLVED by the invocation gate (`resolveTopLevelInputs`), which validates
+   * against the workflow's declared `inputs:` before any worktree, clone, or AI cost —
+   * like `baseOverride` and `parseWarnings`, this is a caller-resolved value. The
+   * executor does not re-validate: it would run after the cost the gate exists to
+   * prevent, and its message would be shaped for the wrong surface.
+   *
+   * Ignored on a resume: the row already carries the inputs validated at creation.
+   */
+  inputs?: Readonly<Record<string, string>>;
 };
 
 /**
@@ -1159,6 +1177,7 @@ export async function executeWorkflow(
     execContext = { kind: 'host' },
     container: containerCtx,
     resolveChildIsolation,
+    inputs: suppliedInputs,
   } = opts;
 
   // Guard: a container run MUST be resumed with its container rewired (the CLI does
@@ -1285,44 +1304,52 @@ export async function executeWorkflow(
     });
   }
 
-  // Resolve provider and model once (used by all nodes). Literal model strings
-  // keep the existing workflow/provider/config chain; tier and @alias refs use
-  // the resolved preset provider/model so bundled workflows are portable.
-  let resolvedProvider: string = workflow.provider ?? config.assistant;
-  let resolvedModel: string | undefined;
-  let workflowPreset: ModelAliasPreset | undefined;
-  let providerSource = workflow.provider ? 'workflow definition' : 'config';
-  if (workflow.model) {
-    const workflowModelSpec = resolveModelSpec(aiProfile, workflow.model);
-    if (isLiteralSpec(workflowModelSpec)) {
-      resolvedModel = workflowModelSpec.literal;
-    } else {
-      workflowPreset = workflowModelSpec;
-      if (workflow.provider && workflow.provider !== workflowModelSpec.provider) {
-        getLog().warn(
-          {
-            workflowName: workflow.name,
-            configuredProvider: workflow.provider,
-            resolvedProvider: workflowModelSpec.provider,
-            modelRef: workflow.model,
-          },
-          'workflow.model_provider_conflict'
-        );
-        const delivered = await safeSendMessage(
-          platform,
-          conversationId,
-          `Warning: Workflow '${workflow.name}' sets provider '${workflow.provider}' but model '${workflow.model}' resolves to provider '${workflowModelSpec.provider}' — using '${workflowModelSpec.provider}'.`
-        );
-        if (!delivered) {
-          getLog().error(
-            { workflowName: workflow.name, conversationId },
-            'workflow.model_provider_conflict_warning_delivery_failed'
-          );
-        }
-      }
-      resolvedProvider = workflowModelSpec.provider;
-      resolvedModel = workflowModelSpec.model;
-      providerSource = `model preset '${workflow.model}'`;
+  // Resolve the workflow-level provider/model fallbacks once (used by all nodes) through
+  // the SAME pure function the dry run reports from, so `--dry-run` cannot disagree with
+  // what the run does. Everything the pure function must not do — warn the user, throw —
+  // stays here, mirroring how `resolveNodeProviderAndModel` wraps `resolveNodeModel` one
+  // level down.
+  //
+  // Note that a workflow which came through discovery carries NO workflow-level provider
+  // or model: composition collapses them onto its own nodes and removes the layer (#1764),
+  // so this normally resolves to `config.assistant`. It still has to behave correctly for
+  // a programmatic caller that hands over an unexpanded definition.
+  const scope = resolveWorkflowModelScope(
+    workflow,
+    config.assistant,
+    assistantModelDefaults(config),
+    aiProfile
+  );
+  const resolvedProvider = scope.provider;
+  const resolvedModel = scope.model;
+  const workflowPreset = scope.preset;
+  const providerSource =
+    scope.providerOrigin === 'model ref'
+      ? `model preset '${workflow.model ?? ''}'`
+      : scope.providerOrigin === 'workflow'
+        ? 'workflow definition'
+        : 'config';
+
+  if (workflow.provider && workflowPreset && workflow.provider !== workflowPreset.provider) {
+    getLog().warn(
+      {
+        workflowName: workflow.name,
+        configuredProvider: workflow.provider,
+        resolvedProvider: workflowPreset.provider,
+        modelRef: workflow.model,
+      },
+      'workflow.model_provider_conflict'
+    );
+    const delivered = await safeSendMessage(
+      platform,
+      conversationId,
+      `Warning: Workflow '${workflow.name}' sets provider '${workflow.provider}' but model '${workflow.model ?? ''}' resolves to provider '${workflowPreset.provider}' — using '${workflowPreset.provider}'.`
+    );
+    if (!delivered) {
+      getLog().error(
+        { workflowName: workflow.name, conversationId },
+        'workflow.model_provider_conflict_warning_delivery_failed'
+      );
     }
   }
 
@@ -1334,8 +1361,6 @@ export async function executeWorkflow(
           .join(', ')}`
     );
   }
-  const assistantDefaults = config.assistants[resolvedProvider];
-  resolvedModel ??= assistantDefaults?.model as string | undefined;
 
   getLog().info(
     {
@@ -1384,6 +1409,13 @@ export async function executeWorkflow(
           ...(issueContext ? { github_context: issueContext } : {}),
           ...(execContext.kind === 'container' ? { isolation: 'container' } : {}),
           ...(containerCtx ? { isolation_env_id: containerCtx.envId } : {}),
+          // Declared inputs supplied by a direct top-level invocation (#2554), already
+          // validated by the invocation gate. Written here — inside `if (!workflowRun)` —
+          // so a resume, which arrives with `preCreatedRun` set and never enters this
+          // branch, can never re-stamp or clobber what the original invocation supplied.
+          ...(suppliedInputs && Object.keys(suppliedInputs).length > 0
+            ? { [SUBRUN_METADATA_KEYS.inputs]: { ...suppliedInputs } }
+            : {}),
         },
         parent_conversation_id: parentConversationId,
         user_id: userId,

@@ -4213,7 +4213,7 @@ describe('executeDagWorkflow -- skills options', () => {
     expect(nodeConfig?.allowed_tools).toEqual(['Read', 'Grep']);
   });
 
-  it('does not warn about skills on Codex DAG node — Codex auto-discovers skills from .agents/skills/', async () => {
+  it('warns that Codex ignores the YAML skills list', async () => {
     mockGetAgentProviderDag.mockReturnValue({
       sendQuery: mockSendQueryDag,
       getType: () => 'codex',
@@ -4246,11 +4246,12 @@ describe('executeDagWorkflow -- skills options', () => {
       { ...minimalConfig, assistant: 'codex' }
     );
 
-    // No warning about skills should be sent — Codex supports skills via filesystem auto-discovery
+    // Codex workflow nodes suppress the ambient catalog. Authors invoke installed
+    // native skills explicitly in the command/prompt with `$skill-name` instead.
     const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
     const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
     const warning = messages.find(m => m.includes('skills') && m.includes('codex'));
-    expect(warning).toBeUndefined();
+    expect(warning).toBeDefined();
   });
 
   it('passes agents to sendQuery nodeConfig when node has inline agents', async () => {
@@ -4379,7 +4380,7 @@ nodes:
     expect(result.error!.error).toContain('skills');
   });
 
-  it('rejects empty skills array', () => {
+  it('accepts empty skills array', () => {
     const yaml = `
 name: empty-skills
 description: test
@@ -4389,8 +4390,8 @@ nodes:
     skills: []
 `;
     const result = parseWorkflow(yaml, 'empty.yaml');
-    expect(result.error).not.toBeNull();
-    expect(result.error!.error).toContain('skills');
+    expect(result.error).toBeNull();
+    expect(result.workflow?.nodes[0].skills).toEqual([]);
   });
 
   it('ignores skills on bash nodes with warning', () => {
@@ -21148,7 +21149,7 @@ describe('executeDagWorkflow -- production Plannotator gate integration', () => 
       '.archon',
       'workflows',
       'defaults',
-      'archon-speckit-feature.yaml'
+      'speckit-feature.yaml'
     );
     const parsed = parseWorkflow(await readFile(workflowPath, 'utf8'), basename(workflowPath));
     if (!parsed.workflow)

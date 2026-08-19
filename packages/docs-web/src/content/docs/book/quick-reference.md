@@ -112,8 +112,8 @@ archon workflow run my-workflow "auth refresh-tokens"
 | `provider` | No | string | Registered provider identifier (e.g. `claude`, `codex`). Default: `claude` |
 | `model` | No | string | Model for all nodes (`sonnet`, `opus`, `haiku`, or full model ID) |
 | `effort` | No | non-empty string | Provider-specific reasoning value, preserved exactly |
-| `modelReasoningEffort` | No | non-empty string | Legacy workflow fallback for `effort`, preserved for compatibility |
-| `webSearchMode` | No | string | Codex only: `disabled` \| `cached` \| `live` |
+| `modelReasoningEffort` | No | non-empty string | **Deprecated** legacy fallback that is translated into `effort` at load; `effort` wins when both are set |
+| `webSearchMode` | No | string | Codex only, no per-node form. Gates Codex's built-in search tool, not network access: `disabled` \| `cached` \| `live` |
 
 ### Node Options (DAG)
 
@@ -130,8 +130,8 @@ All nodes share these base fields:
 | `loop_group` | One of | object | Multi-node sub-DAG repeated per iteration (see Loop Group Options below) |
 | `approval` | One of | object | Pause for human review; see [Approval Nodes](/guides/approval-nodes/) |
 | `cancel` | One of | string | Reason string; terminates the run with `cancelled` status (not `failed`). Usually gated with `when:` |
-| `include` | One of | string | Name of another workflow whose nodes are inlined at discovery as a namespaced sub-DAG; see [Reusing a Shared Sub-DAG](/guides/authoring-workflows/#reusing-a-shared-sub-dag-with-include) |
-| `workflow` | One of | string | Name of another workflow run at execution time as a separate governed CHILD run (own run record, gates, artifacts, cost); see [Composing a Governed Sub-Run](/guides/authoring-workflows/#composing-a-governed-sub-run-with-workflow) |
+| `include` | One of | string | Name of another workflow whose nodes are inlined at discovery as a namespaced sub-DAG; see [Composing Another Workflow](/guides/authoring-workflows/#composing-another-workflow-with-include) |
+| `workflow` | One of | string | Name of another workflow run at execution time as a separate governed CHILD run (own run record, gates, artifacts, cost); see [Launching a Separate Governed Run](/guides/authoring-workflows/#launching-a-separate-governed-run-with-workflow) |
 | `depends_on` | No | string[] | Node IDs that must complete before this node runs |
 | `when` | No | string | Condition expression; node is skipped if false |
 | `trigger_rule` | No | string | Join semantics when multiple upstreams exist (see Trigger Rules) |
@@ -145,7 +145,7 @@ All nodes share these base fields:
 | `retry` | No | object | Retry configuration for transient failures (see Retry Options). **Hard error on loop nodes** |
 | `hooks` | No | object | SDK hook callbacks (Claude only; see Hook Schema) |
 | `mcp` | No | string | Path to MCP server config JSON file (Claude only) |
-| `skills` | No | string[] | Skill names to preload into this node's context (Claude only) |
+| `skills` | No | string[] | Declared skill names for this node; Claude omission/`[]` selects none |
 | `agents` | No | object | Inline sub-agent definitions keyed by kebab-case ID. Claude only |
 
 **Script-specific fields** (required when `script:` is set):
@@ -161,8 +161,9 @@ All nodes share these base fields:
 | Field | Required | Type | Description |
 |-------|----------|------|-------------|
 | `input` | No | string | Data string forwarded as the child's `$ARGUMENTS`. Substituted like a `prompt:` body (`$nodeId.output`, workflow variables) |
+| `with` | No | object | Named string values forwarded as the child's `$INPUTS`. Keys must be valid input identifiers. Mutually exclusive with `input` |
 | `isolation` | No | `'inherit' \| 'worktree'` | Which checkout the child runs in. Default (and `'inherit'`) shares the parent's. `'worktree'` gives the child its own worktree + branch — opt-in only, never inferred, and it fails the node rather than falling back to the shared checkout when a worktree can't be created (folder projects, surfaces with no resolver) |
-| `fan_out` | No | object | Run one child per item of a runtime list: `items` (a `$node.output` ref or literal JSON array), `max_parallel` (default `5`, bounds concurrency not total), `join` (default `all_done`), `as` (reserved, rejected at load). Every child runs to its own terminal state; none cancels another |
+| `fan_out` | No | object | Run one child per item of a runtime list: `items` (a `$node.output` ref or literal JSON array), `max_parallel` (default `5`, bounds concurrency not total), `join` (default `all_done`), `as` (names the item as `$INPUTS.<as>` and must not collide with `with`). Every child runs to its own terminal state; none cancels another |
 
 `retry` is rejected on `workflow:` nodes, and `workflow:` is rejected inside a `loop_group` body. The child's terminal output threads back as `$nodeId.output`; a child approval gate pauses the whole tree — approve the **child** by run id and the parent auto-resumes. A child gate is the exception: it works for a 1:1 sub-run, but a child that pauses inside a `fan_out:` expansion **fails the node** instead — a parent has one approval slot and cannot hand it to N children, so gate before or after the fan-out node rather than inside a child of it.
 
@@ -194,10 +195,11 @@ Defined under `loop:` inside a node:
 |-------|----------|------|-------------|
 | `prompt` | One of `prompt`/`command` | string | Inline AI instructions executed each iteration |
 | `command` | One of `prompt`/`command` | string | Package-local or shared command whose body is the iteration prompt — exactly one of `prompt` or `command` |
-| `until` | Yes | string | Completion signal string — loop ends when AI output contains this |
+| `until` | One channel required | string | Completion signal string — loop ends when AI output contains this. Omit it for a deterministic or structured loop: with no signal declared, nothing matches prose |
 | `max_iterations` | Yes | number | Maximum iterations before the node fails |
 | `fresh_context` | No | boolean | Start a new session each iteration (default: false) |
-| `until_bash` | No | string | Shell script run after each iteration; exit 0 signals completion |
+| `until_bash` | One channel required | string | Shell script run after each iteration; exit 0 signals completion. Skipped once a cheaper channel already fired |
+| `until_field` | One channel required | string | **`loop:` only.** Names a boolean in the node's `output_format`; the loop ends when its validated value is `true` |
 | `interactive` | No | boolean | Pause at a human gate after each iteration for input via `/workflow approve` |
 | `gate_message` | No | string | Message shown at the interactive gate (required when `interactive: true`) |
 | `signal_completes` | No | boolean | Interactive loops only: a detected completion signal completes the node immediately (even on iteration 1) instead of gating (default: false) |
@@ -220,10 +222,10 @@ per iteration (see [Cross-Node Loops](/guides/loop-nodes/#cross-node-loops-with-
 | Field | Required | Type | Description |
 |-------|----------|------|-------------|
 | `nodes` | Yes | node[] | Sub-DAG body re-run in full each iteration. Any node type, including nested `loop_group`. `depends_on` is body-scoped; body ids must not shadow outer ids |
-| `until` | Yes | string | Completion signal — checked in the body's terminal-node output |
+| `until` | One channel required | string | Completion signal — checked in the body's terminal-node output. Omit it for a deterministic group |
 | `max_iterations` | Yes | number | Maximum iterations before the node fails |
 | `fresh_context` | No | boolean | `true` starts fresh body AI sessions each iteration (default: false — sessions continue) |
-| `until_bash` | No | string | Shell script run after each iteration; exit 0 signals completion |
+| `until_bash` | One channel required | string | Shell script run after each iteration; exit 0 signals completion. Skipped once a cheaper channel already fired |
 | `interactive` | No | boolean | Pause at a human gate after each non-completing iteration |
 | `gate_message` | No | string | Message shown at the interactive gate |
 | `signal_completes` | No | boolean | Interactive loops only: a detected completion signal completes the group immediately (even on iteration 1) instead of gating (default: false) |

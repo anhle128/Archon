@@ -46,7 +46,8 @@
         "binding.update",
         "binding.status",
         "binding.rotate",
-        "binding.disable"
+        "binding.disable",
+        "binding.test"
       ]
     },
     "correlationId": {
@@ -139,7 +140,8 @@
               "binding.update",
               "binding.status",
               "binding.rotate",
-              "binding.disable"
+              "binding.disable",
+              "binding.test"
             ]
           }
         }

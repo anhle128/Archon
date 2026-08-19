@@ -1,18 +1,33 @@
 /** Side-effect-free workflow DAG simulation with caller-supplied node outputs. */
 import { z } from '@hono/zod-openapi';
 import { execFileAsync, resolveBashPath } from '@archon/git';
+import { createLogger, getArchonTempPath } from '@archon/paths';
+import { randomUUID } from 'node:crypto';
+import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { buildTopologicalLayers, checkTriggerRule, substituteNodeOutputRefs } from './dag-executor';
 import { evaluateCondition } from './condition-evaluator';
 import { declaredFieldsFromSchema } from './output-ref';
 import { discoverScriptsForCwd } from './script-discovery';
 import {
+  describeUnmetCompletion,
   detectCompletionSignal,
   isInlineScript,
   loadCommandPrompt,
   substituteWorkflowVariables,
 } from './executor-shared';
 import {
+  resolveNodeModel,
+  resolveWorkflowModelScope,
+  assistantModelDefaults,
+  type NodeModelResolution,
+  type WorkflowModelScope,
+} from './node-model-resolution';
+import type { ResolvedAiProfile } from './model-validation';
+import type { WorkflowConfig } from './deps';
+import { defaultRunInputs } from './workflow-inputs';
+import {
+  inputEnvKey,
   isApprovalNode,
   isBashNode,
   isCancelNode,
@@ -28,6 +43,13 @@ import {
   type NodeOutput,
   type WorkflowDefinition,
 } from './schemas';
+
+/** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
+let cachedLog: ReturnType<typeof createLogger> | undefined;
+function getLog(): ReturnType<typeof createLogger> {
+  cachedLog ??= createLogger('workflow.dry-run');
+  return cachedLog;
+}
 
 export const dryRunStubValueSchema = z.union([z.string(), z.record(z.string(), z.unknown())]);
 export const dryRunStubsSchema = z.record(z.string(), dryRunStubValueSchema);
@@ -49,12 +71,43 @@ const dryRunNodeTypeSchema = z.enum([
   'workflow',
 ]);
 
+/**
+ * Where a node's provider/model will come from at run time.
+ *
+ * The reason this is reported rather than required per node: after composition collapses a
+ * workflow's config onto its own nodes (#1764), the honest answer to "what will this node
+ * run on" is a chain, and making every node restate provider+model to make it visible
+ * would be ~54 redundant lines in a 27-node workflow. Legibility instead of redundancy.
+ */
+const dryRunResolutionSchema = z.object({
+  provider: z.string(),
+  model: z.string().optional(),
+  effort: z.string().optional(),
+  /** Where each value came from — 'node', 'model ref', 'workflow', 'assistant config', … */
+  providerFrom: z.string(),
+  modelFrom: z.string(),
+  effortFrom: z.string(),
+  /** The workflow file this node was authored in, when it arrived through `include:`. */
+  authoredIn: z.string().optional(),
+  /**
+   * Set when the node names one provider while its `model:` ref resolves to another. A
+   * real run warns the user about this and uses the resolved provider; a dry run that
+   * silently omitted it would report the outcome without the reason for it.
+   */
+  providerConflict: z
+    .object({ declared: z.string(), resolved: z.string(), modelRef: z.string() })
+    .optional(),
+});
+export type DryRunResolution = z.infer<typeof dryRunResolutionSchema>;
+
 const dryRunTraceBaseSchema = z.object({
   nodeId: z.string(),
   nodeType: dryRunNodeTypeSchema,
   resolvedText: z.string().optional(),
   output: z.string().optional(),
   iteration: z.number().int().positive().optional(),
+  /** Present for nodes that take an AI turn; absent for bash/script/approval/cancel. */
+  resolution: dryRunResolutionSchema.optional(),
 });
 
 export const dryRunTraceEntrySchema = z.discriminatedUnion('state', [
@@ -157,12 +210,30 @@ interface DryRunContext {
   userMessage: string;
   cwd: string;
   stubs: DryRunStubs;
+  /**
+   * The run's EFFECTIVE `$INPUTS` map — declared defaults layered under caller-supplied
+   * values, the same merge a real run performs at executor.ts (`defaultRunInputs`).
+   * Undefined when the workflow declares no inputs and the caller supplied none.
+   */
+  inputs?: Record<string, string>;
+  /**
+   * Per-simulation `$ARTIFACTS_DIR` / `$STATE_DIR`, under a uniquely named root in
+   * `<archonHome>/temp/` — NEVER inside the simulated repository, which holds source
+   * only (#2619). Created lazily before the first `--exec-code` execution (#2617) and
+   * removed when the simulation ends; a pure-stub dry run creates nothing.
+   */
+  artifactsDir: string;
+  stateDir: string;
   execCode: boolean;
   pauseAtGates: boolean;
   trace: DryRunTraceEntry[];
   consumedStubs: Set<string>;
   missingStubs: Set<string>;
   halted?: 'paused' | 'cancelled';
+  /** Workflow-level provider/model fallbacks, for the per-node resolution report. */
+  scope: WorkflowModelScope;
+  assistantModels: Readonly<Record<string, string | undefined>>;
+  aiProfile?: ResolvedAiProfile;
 }
 
 async function loadDryRunCommand(cwd: string, command: string): Promise<string> {
@@ -191,23 +262,58 @@ function resolveText(
   loopPrevOutput = '',
   escapeNodeOutputs = shellSafe
 ): string {
-  const artifactsDir = join(ctx.cwd, '.archon', 'dry-run', 'artifacts');
-  const stateDir = join(ctx.cwd, '.archon', 'dry-run', 'state');
   const docsDir = join(ctx.cwd, 'docs');
   const substituted = substituteWorkflowVariables(
     text,
     'dry-run',
     ctx.userMessage,
-    artifactsDir,
+    ctx.artifactsDir,
     'dry-run-base',
     docsDir,
     undefined,
     undefined,
     undefined,
     loopPrevOutput,
-    { shellSafe, stateDir }
+    { shellSafe, stateDir: ctx.stateDir, ...(ctx.inputs ? { inputs: ctx.inputs } : {}) }
   ).prompt;
   return substituteNodeOutputRefs(substituted, outputs, escapeNodeOutputs);
+}
+
+/**
+ * Report which provider and model an AI-turn node will run on, and where each value came
+ * from. Non-AI nodes (bash / script / approval / cancel / include / workflow) make no
+ * provider call, so they carry no resolution.
+ *
+ * Uses the executor's own resolver, never a copy of the chain: a second implementation
+ * would drift, and a drifted report is worse than no report.
+ */
+function resolutionFor(node: DagNode, ctx: DryRunContext): DryRunResolution | undefined {
+  const type = nodeType(node);
+  if (type !== 'command' && type !== 'prompt' && type !== 'loop' && type !== 'loop_group') {
+    return undefined;
+  }
+  const resolved: NodeModelResolution = resolveNodeModel(
+    node,
+    ctx.scope,
+    ctx.assistantModels,
+    ctx.aiProfile
+  );
+  return {
+    provider: resolved.provider,
+    ...(resolved.model !== undefined ? { model: resolved.model } : {}),
+    ...(resolved.effort !== undefined ? { effort: resolved.effort } : {}),
+    providerFrom: resolved.providerOrigin,
+    modelFrom: resolved.modelOrigin,
+    effortFrom: resolved.effortOrigin,
+    ...(resolved.authoredIn !== undefined ? { authoredIn: resolved.authoredIn } : {}),
+    ...(resolved.providerConflict ? { providerConflict: resolved.providerConflict } : {}),
+  };
+}
+
+/** Spread helper: `{ resolution }` for an AI-turn node, `{}` otherwise. */
+function withResolution(node: DagNode, ctx: DryRunContext): { resolution?: DryRunResolution } {
+  const resolution = resolutionFor(node, ctx);
+  return resolution ? { resolution } : {};
 }
 
 function recordSkipped(
@@ -243,6 +349,9 @@ function recordFailed(
     reason,
     ...(resolvedText !== undefined ? { resolvedText } : {}),
     ...(iteration ? { iteration } : {}),
+    // A node that failed for want of a stub is exactly the one an author is inspecting,
+    // so it keeps its resolution report.
+    ...withResolution(node, ctx),
   });
 }
 
@@ -284,15 +393,29 @@ async function executeCodeNode(
     } else {
       return { error: `Node '${node.id}' is not executable code` };
     }
+    // Run-level inputs ride the env bag as `INPUTS_<UPPER_SNAKE>`, never text
+    // substitution — the run-inputs half of a real run's `inputEnvVars`
+    // (dag-executor.ts). Composed include-block inputs for named scripts are a
+    // real-run-only channel the dry run does not deliver.
+    const inputEnv: Record<string, string> = {};
+    for (const [name, value] of Object.entries(ctx.inputs ?? {})) {
+      inputEnv[inputEnvKey(name)] = value;
+    }
+    // The executor pre-creates the artifacts dir it advertises; the simulator honors
+    // the same contract (#2617). Idempotent, and only reached when code executes, so
+    // a pure-stub dry run creates no directory.
+    await mkdir(ctx.artifactsDir, { recursive: true });
+    await mkdir(ctx.stateDir, { recursive: true });
     const result = await execFileAsync(command, args, {
       cwd: ctx.cwd,
       timeout: node.timeout ?? 300_000,
       env: {
         ...process.env,
+        ...inputEnv,
         USER_MESSAGE: ctx.userMessage,
         ARGUMENTS: ctx.userMessage,
-        ARTIFACTS_DIR: join(ctx.cwd, '.archon', 'dry-run', 'artifacts'),
-        STATE_DIR: join(ctx.cwd, '.archon', 'dry-run', 'state'),
+        ARTIFACTS_DIR: ctx.artifactsDir,
+        STATE_DIR: ctx.stateDir,
       },
     });
     return { output: result.stdout.replace(/\n$/, '') };
@@ -306,6 +429,83 @@ function stubFor(node: DagNode, ctx: DryRunContext): DryRunStubValue | undefined
   const stub = ctx.stubs[node.id];
   if (stub !== undefined) ctx.consumedStubs.add(node.id);
   return stub;
+}
+
+/** The completion channels a simulated loop may declare. */
+interface LoopChannels {
+  until?: string;
+  until_bash?: string;
+  until_field?: string;
+}
+
+/** What the dry run can conclude about one simulated iteration. */
+type SimulatedCompletion =
+  | { kind: 'field' }
+  | { kind: 'signal' }
+  | { kind: 'assumed' }
+  | { kind: 'incomplete' };
+
+/**
+ * Would this iteration's output end the loop, as far as a dry run can tell?
+ *
+ * Two of the three channels are decidable from a stub and one is not:
+ *  - `until_field` IS evaluable — a stub object is hydrated onto
+ *    `NodeOutput.structuredOutput`, so the engine's own `=== true` rule can be
+ *    applied exactly. Guessing here would be strictly worse than deciding.
+ *  - `until` IS evaluable — run the same detector the executor runs.
+ *  - `until_bash` is NOT: the simulator executes nothing.
+ *
+ * So: an evaluable channel that fires wins. If none fires but an unevaluable one is
+ * declared, assume completion — reporting a max-iterations failure the real run
+ * would not produce is the worse lie, and the trace reason names the channel that
+ * went unevaluated. If none fires and there is nothing unevaluable to hide behind,
+ * the iteration genuinely did not complete.
+ *
+ * Note the reach of that middle rule (#2563): it fires whenever `until_bash` is
+ * declared, INCLUDING alongside an `until:` whose sentinel the stub did not carry.
+ * That combination previously simulated as a max-iterations failure, and a shipped
+ * default uses it (`archon-adversarial-dev.yaml` declares both). Assuming completion
+ * is the honest answer — the real run's `until_bash` may well have fired — but it
+ * does mean a dry run cannot prove a prose stub trips `until:` on a loop that also
+ * declares `until_bash`. Drop `until_bash` from the workflow, or stub the sentinel,
+ * if that is what you are trying to check.
+ */
+function loopIterationCompletes(
+  control: LoopChannels,
+  hydrated: { output: string; structuredOutput?: unknown }
+): SimulatedCompletion {
+  if (control.until_field !== undefined) {
+    const payload = hydrated.structuredOutput;
+    if (
+      payload !== null &&
+      typeof payload === 'object' &&
+      (payload as Record<string, unknown>)[control.until_field] === true
+    ) {
+      return { kind: 'field' };
+    }
+  }
+  if (control.until !== undefined && detectCompletionSignal(hydrated.output, control.until)) {
+    return { kind: 'signal' };
+  }
+  if (control.until_bash !== undefined) return { kind: 'assumed' };
+  return { kind: 'incomplete' };
+}
+
+/** Trace reason for a simulated loop completion — see {@link loopIterationCompletes}. */
+function completionReason(
+  completion: SimulatedCompletion,
+  control: LoopChannels,
+  iterations: number
+): string {
+  const n = String(iterations);
+  switch (completion.kind) {
+    case 'field':
+      return `'${control.until_field ?? ''}' is true after ${n} iteration(s)`;
+    case 'signal':
+      return `completion signal after ${n} iteration(s)`;
+    default:
+      return `assumed complete after ${n} iteration(s) — 'until_bash' is not executed in a dry run`;
+  }
 }
 
 async function simulateLoop(
@@ -335,16 +535,18 @@ async function simulateLoop(
     }
     const hydrated = completedOutput(node, stub);
     previous = hydrated.output;
-    if (detectCompletionSignal(previous, node.loop.until)) {
+    const completion = loopIterationCompletes(node.loop, hydrated);
+    if (completion.kind !== 'incomplete') {
       outputs.set(node.id, hydrated);
       ctx.trace.push({
         nodeId: node.id,
         nodeType: 'loop',
         state: 'stubbed',
-        reason: `completion signal after ${String(current)} iteration(s)`,
+        reason: completionReason(completion, node.loop, current),
         resolvedText,
         output: previous,
         ...(iteration ? { iteration } : {}),
+        ...withResolution(node, ctx),
       });
       return;
     }
@@ -353,7 +555,7 @@ async function simulateLoop(
     node,
     outputs,
     ctx,
-    `Loop exceeded max iterations (${String(node.loop.max_iterations)}) without completion signal '${node.loop.until}'`,
+    `Loop exceeded max iterations (${String(node.loop.max_iterations)}) ${describeUnmetCompletion(node.loop)}`,
     resolvedText,
     iteration
   );
@@ -389,15 +591,17 @@ async function simulateLoopGroup(
       return;
     }
     if (ctx.halted) return;
-    if (detectCompletionSignal(lastOutput, node.loop_group.until)) {
+    const groupCompletion = loopIterationCompletes(node.loop_group, { output: lastOutput });
+    if (groupCompletion.kind !== 'incomplete') {
       outputs.set(node.id, { state: 'completed', output: lastOutput });
       ctx.trace.push({
         nodeId: node.id,
         nodeType: 'loop_group',
         state: 'completed',
-        reason: `completion signal after ${String(current)} iteration(s)`,
+        reason: completionReason(groupCompletion, node.loop_group, current),
         output: lastOutput,
         ...(iteration ? { iteration } : {}),
+        ...withResolution(node, ctx),
       });
       return;
     }
@@ -406,7 +610,7 @@ async function simulateLoopGroup(
     node,
     outputs,
     ctx,
-    `Loop group exceeded max iterations (${String(node.loop_group.max_iterations)}) without completion signal '${node.loop_group.until}'`,
+    `Loop group exceeded max iterations (${String(node.loop_group.max_iterations)}) ${describeUnmetCompletion(node.loop_group)}`,
     undefined,
     iteration
   );
@@ -424,7 +628,9 @@ async function simulateNode(
   }
   if (node.when) {
     try {
-      const condition = evaluateCondition(node.when, outputs);
+      // `ctx.inputs` mirrors the executor's `resolveRunInputs` (#2610): a `when:`
+      // referencing `$INPUTS.<name>` branches on the same effective map a real run reads.
+      const condition = evaluateCondition(node.when, outputs, undefined, ctx.inputs);
       if (!condition.parsed) {
         recordSkipped(node, outputs, ctx, 'when_condition_parse_error', iteration);
         return;
@@ -546,6 +752,7 @@ async function simulateNode(
         resolvedText,
         output: hydrated.output,
         ...(iteration ? { iteration } : {}),
+        ...withResolution(node, ctx),
       });
       return;
     }
@@ -600,22 +807,67 @@ export async function dryRunWorkflow(options: {
   userMessage: string;
   cwd: string;
   stubs?: DryRunStubs;
+  /**
+   * Caller-SUPPLIED input values, already validated against the workflow's declared
+   * `inputs:` at the invocation gate (`resolveTopLevelInputs`) — the same contract a
+   * real run enforces before any cost. Declared defaults are derived here, not by the
+   * caller, mirroring the executor's split (`defaultRunInputs` at run start), so the
+   * effective `$INPUTS` map cannot diverge between simulation and execution (#2610).
+   */
+  inputs?: Record<string, string>;
   execCode?: boolean;
   pauseAtGates?: boolean;
+  /**
+   * The install's resolved config and AI profile. Supplying them is what makes the
+   * per-node provider/model report match what a real run would do; without them the
+   * report falls back to the bare default assistant with no tier or alias resolution.
+   */
+  config?: WorkflowConfig;
+  aiProfile?: ResolvedAiProfile;
 }): Promise<DryRunResult> {
+  const assistantModels = options.config ? assistantModelDefaults(options.config) : {};
+  // Same layering as the executor: declared defaults under caller-supplied values
+  // (supplied wins). A workflow with no `inputs:` block keeps passthrough semantics.
+  const declaredDefaults = defaultRunInputs(options.workflow.inputs);
+  const inputs =
+    declaredDefaults || options.inputs ? { ...declaredDefaults, ...options.inputs } : undefined;
+  const tempRoot = join(getArchonTempPath(), `dry-run-${randomUUID()}`);
   const ctx: DryRunContext = {
     workflow: options.workflow,
     userMessage: options.userMessage,
     cwd: options.cwd,
     stubs: options.stubs ?? {},
+    ...(inputs ? { inputs } : {}),
+    artifactsDir: join(tempRoot, 'artifacts'),
+    stateDir: join(tempRoot, 'state'),
     execCode: options.execCode ?? false,
     pauseAtGates: options.pauseAtGates ?? false,
     trace: [],
     consumedStubs: new Set<string>(),
     missingStubs: new Set<string>(),
+    scope: resolveWorkflowModelScope(
+      options.workflow,
+      options.config?.assistant ?? 'claude',
+      assistantModels,
+      options.aiProfile
+    ),
+    assistantModels,
+    ...(options.aiProfile ? { aiProfile: options.aiProfile } : {}),
   };
   const outputs = new Map<string, NodeOutput>();
-  await simulateNodes(options.workflow.nodes, outputs, ctx);
+  try {
+    await simulateNodes(options.workflow.nodes, outputs, ctx);
+  } finally {
+    // Simulations are throwaway: whatever exec'd nodes wrote is discarded with the
+    // per-run root (`force: true` makes the nothing-executed case a no-op). A cleanup
+    // failure must not fail a finished simulation, so it is logged, not thrown.
+    await rm(tempRoot, { recursive: true, force: true }).catch((error: unknown) => {
+      getLog().warn(
+        { tempRoot, error: error instanceof Error ? error.message : String(error) },
+        'dry_run.temp_cleanup_failed'
+      );
+    });
+  }
 
   const dependencies = new Set(options.workflow.nodes.flatMap(node => node.depends_on ?? []));
   const summary = options.workflow.nodes
@@ -651,6 +903,21 @@ export function formatDryRunTrace(result: DryRunResult): string {
     lines.push(
       `${entry.state.toUpperCase().padEnd(9)} ${entry.nodeId} (${entry.nodeType})${iteration}${suffix}`
     );
+    if (entry.resolution) {
+      const r = entry.resolution;
+      const authored = r.authoredIn ? ` [from ${r.authoredIn}]` : '';
+      const model = r.model ?? '(provider default)';
+      lines.push(
+        `  runs on: ${r.provider} (${r.providerFrom}) / ${model} (${r.modelFrom})${authored}`
+      );
+      if (r.effort) lines.push(`  effort: ${r.effort} (${r.effortFrom})`);
+      if (r.providerConflict) {
+        const c = r.providerConflict;
+        lines.push(
+          `  warning: declares provider '${c.declared}' but model '${c.modelRef}' resolves to '${c.resolved}' — using '${c.resolved}'`
+        );
+      }
+    }
     if (entry.resolvedText) lines.push(`  resolved: ${entry.resolvedText}`);
     if (entry.output !== undefined) lines.push(`  output: ${entry.output}`);
   }

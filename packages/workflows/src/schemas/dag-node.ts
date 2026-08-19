@@ -10,9 +10,22 @@
  * so a flat schema with superRefine is cleaner than a z.union() with implicit discriminants.
  */
 import { z } from '@hono/zod-openapi';
+import { EFFORT_LADDER } from '@archon/providers/effort';
 import { stepRetryConfigSchema } from './retry';
-import { loopNodeConfigSchema, loopControlSchema, type LoopControl } from './loop';
 import { routeLoopConfigSchema, safeNodeIdSchema } from './route-loop';
+// Runtime import, but cycle-free: output-ref's only edge back into schemas is a
+// type-only `NodeOutput`, which is erased. Reused rather than reimplemented so
+// `loop.until_field` and the strict `$node.output.field` access agree on what
+// counts as a declared property — a second definition could drift into accepting
+// a name that consumers then reject.
+import { declaredFieldsFromSchema } from '../output-ref';
+import {
+  BASE_COMPLETION_CHANNELS,
+  addMissingChannelIssue,
+  loopNodeConfigSchema,
+  loopControlSchema,
+  type LoopControl,
+} from './loop';
 import { workflowNodeHooksSchema } from './hooks';
 import { isValidCommandName } from '../command-validation';
 
@@ -46,6 +59,9 @@ export const TRIGGER_RULES: readonly TriggerRule[] = triggerRuleSchema.options;
 export const effortLevelSchema = z.string().min(1, "'effort' must be a non-empty string");
 
 export type EffortLevel = z.infer<typeof effortLevelSchema>;
+
+/** Known effort values used for suggestions; the schema also accepts future provider values. */
+export const EFFORT_LEVELS: readonly string[] = EFFORT_LADDER;
 
 /**
  * Claude Agent SDK beta header list. Non-empty array of non-empty strings —
@@ -143,8 +159,11 @@ export type AgentDefinition = z.infer<typeof agentDefinitionSchema>;
  * machine's `config.yaml`. Highest-precedence layer: node YAML `pi:` > config
  * `nodes.<id>` > assistant-level `assistants.pi.*`. Structurally identical to the
  * providers-side `PiNodeOverride` (@archon/providers/pi/config) — hand-mirrored
- * because @archon/workflows cannot import runtime values from @archon/providers
- * (only the contract subpath @archon/providers/types).
+ * because that module is not reachable from here. The constraint is SDK-free,
+ * not type-only: @archon/workflows may import runtime values from a leaf subpath
+ * with no SDK dependencies (@archon/providers/types, @archon/providers/effort —
+ * see EFFORT_LADDER at the top of this file), but `pi/config` pulls in the Pi
+ * SDK, so this shape stays mirrored.
  *
  * Pi-only, like Claude's `hooks`/`mcp`/`skills`/`agents`. Other providers ignore
  * it; non-AI node types warn it's ignored (see BASH_NODE_AI_FIELDS).
@@ -190,10 +209,7 @@ export const dagNodeBaseSchema = z.object({
   retry: stepRetryConfigSchema.optional(),
   hooks: workflowNodeHooksSchema.optional(),
   mcp: z.string().min(1, "'mcp' must be a non-empty string path").optional(),
-  skills: z
-    .array(z.string().min(1, 'each skill must be a non-empty string'))
-    .nonempty("'skills' must be a non-empty array")
-    .optional(),
+  skills: z.array(z.string().min(1, 'each skill must be a non-empty string')).optional(),
   agents: z
     .record(z.string(), agentDefinitionSchema)
     // Validate agent-id keys in a superRefine rather than via a regex on the
@@ -381,12 +397,24 @@ export type LoopGroupNodeConfig = LoopControl & {
   /** Sub-DAG body re-executed in full each iteration. At least one node required. */
   nodes: DagNode[];
 };
-export const loopGroupNodeConfigSchema: z.ZodType<LoopGroupNodeConfig> = loopControlSchema.extend({
-  /** Sub-DAG body re-executed in full each iteration. At least one node required. */
-  get nodes(): z.ZodArray<typeof dagNodeSchema> {
-    return z.array(dagNodeSchema).min(1, "'loop_group.nodes' must have at least one node");
-  },
-});
+export const loopGroupNodeConfigSchema: z.ZodType<LoopGroupNodeConfig> = loopControlSchema
+  .extend({
+    /** Sub-DAG body re-executed in full each iteration. At least one node required. */
+    get nodes(): z.ZodArray<typeof dagNodeSchema> {
+      return z.array(dagNodeSchema).min(1, "'loop_group.nodes' must have at least one node");
+    },
+  })
+  // A group has TWO completion channels; `loop:` has three (`until_field` is
+  // loop-only — see its field docs). The rule therefore lives on each variant
+  // rather than on the shared control schema. Adding `.superRefine` keeps `.shape`
+  // readable in zod v4, which `loopGroupShape` below depends on.
+  .superRefine((data, ctx) => {
+    addMissingChannelIssue(
+      ctx,
+      [data.until, data.until_bash].filter(v => v !== undefined),
+      BASE_COMPLETION_CHANNELS
+    );
+  });
 
 /**
  * Loop-group node schema — extends base with `loop_group` config (iteration control + body).
@@ -754,10 +782,14 @@ export const SCRIPT_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS;
  * the workflow level. `pi` is excluded because the portable per-node Pi posture
  * (#2133) IS threaded into each iteration's sendQuery — the loop is the very
  * node whose extension posture users need to scope (plannotator planning-mode
- * leak, #2073).
+ * leak, #2073). `output_format` is excluded for the same class of reason (#2563):
+ * a `loop:` node makes its own sendQuery, so the schema reaches the provider, each
+ * iteration's payload is validated against it, and `loop.until_field` can terminate
+ * on a declared boolean. It stays listed for `loop_group`, which never calls
+ * sendQuery — its body nodes carry their own.
  */
 export const LOOP_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS.filter(
-  f => f !== 'model' && f !== 'provider' && f !== 'pi' && f !== 'effort'
+  f => f !== 'model' && f !== 'provider' && f !== 'pi' && f !== 'effort' && f !== 'output_format'
 );
 
 /**
@@ -1005,22 +1037,53 @@ export const dagNodeSchema = dagNodeFlatSchema
     // injected — never a silent shared-checkout fallback. On every OTHER node type
     // `isolation:` is meaningless (only a `workflow:` node spawns a child run) and
     // would be silently dropped — reject it fail-fast, mirroring the `with:` guard.
-    if (!hasWorkflow && data.isolation !== undefined) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "'isolation' is only supported on workflow (sub-run) nodes.",
-        path: ['isolation'],
-      });
-    }
-    // Dynamic fan-out (slice 2, PR-C) is meaningful ONLY on a `workflow:` node — it
-    // multiplies a child sub-run. On any other node type it would be silently dropped,
-    // so reject it fail-fast (mirrors the `isolation` guard above).
-    if (!hasWorkflow && data.fan_out !== undefined) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "'fan_out' is only supported on workflow (sub-run) nodes.",
-        path: ['fan_out'],
-      });
+    //
+    // On an `include:` node specifically these options are not merely meaningless, they
+    // express a LAUNCH intent composition cannot honour (#1764): an author who writes
+    // `isolation: worktree` on an include believes the block got its own checkout, and it
+    // did not. So the message names the option, why composition cannot honour it, and the
+    // keyword that can — rather than the generic "only on workflow nodes" line.
+    const LAUNCH_ONLY_ON_INCLUDE: readonly (readonly [keyof typeof data, string])[] = [
+      [
+        'isolation',
+        'a composed block runs inside the run that composed it, so it has no checkout of its own to isolate',
+      ],
+      [
+        'fan_out',
+        'composition inlines a fixed set of nodes at load time, so there is nothing to multiply per item',
+      ],
+      [
+        'input',
+        "a composed block reads named values as $INPUTS.<name>, supplied through 'with:' — there is no separate $ARGUMENTS for it",
+      ],
+    ];
+    if (hasInclude) {
+      for (const [field, why] of LAUNCH_ONLY_ON_INCLUDE) {
+        if (data[field] === undefined) continue;
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `'${field}' is not supported on an include node: ${why}. Use a 'workflow:' node instead when you want a separate governed run.`,
+          path: [field],
+        });
+      }
+    } else if (!hasWorkflow) {
+      if (data.isolation !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "'isolation' is only supported on workflow (sub-run) nodes.",
+          path: ['isolation'],
+        });
+      }
+      // Dynamic fan-out (slice 2, PR-C) is meaningful ONLY on a `workflow:` node — it
+      // multiplies a child sub-run. On any other node type it would be silently dropped,
+      // so reject it fail-fast (mirrors the `isolation` guard above).
+      if (data.fan_out !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "'fan_out' is only supported on workflow (sub-run) nodes.",
+          path: ['fan_out'],
+        });
+      }
     }
     // `first_success` racing is REJECTED, not deferred — the earlier deferral is dead. A
     // winner aborting and cancelling its losers is one child's outcome ending its siblings',
@@ -1131,6 +1194,65 @@ export const dagNodeSchema = dagNodeFlatSchema
           message: "'timeout' must be a positive number (ms)",
           path: ['timeout'],
         });
+      }
+    }
+
+    // `loop.until_field` <-> `output_format` (#2563). These live here rather than on
+    // loopNodeConfigSchema because only this level can see BOTH the loop config and
+    // the node's `output_format`.
+    //
+    // All four rules are load-time reads of data the author already wrote, and each
+    // converts a silent non-termination into a load error. Without `required`, a
+    // schema-valid payload may omit the property, and "absent" would mean "not
+    // complete" — a model that never emits it would burn max_iterations and then
+    // fail reporting the wrong cause. Without the boolean constraint,
+    // `until_field: status` over a string invites truthiness semantics the engine
+    // deliberately does not have (it terminates on `=== true`, nothing else).
+    const untilField = data.loop?.until_field;
+    if (hasLoop && untilField !== undefined) {
+      const schema = data.output_format;
+      if (schema === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `'loop.until_field' names '${untilField}' but this node declares no 'output_format' — the field must be a declared property of the node's schema`,
+          path: ['loop', 'until_field'],
+        });
+      } else {
+        const declared = declaredFieldsFromSchema(schema);
+        if (!declared?.includes(untilField)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `'loop.until_field' names '${untilField}', which is not declared in this node's output_format properties${declared && declared.length > 0 ? ` (declared: ${declared.join(', ')})` : ''}`,
+            path: ['loop', 'until_field'],
+          });
+        } else {
+          const required = schema.required;
+          if (!Array.isArray(required) || !required.includes(untilField)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `'loop.until_field' names '${untilField}', which must also be listed in output_format.required — an optional field the model omits would silently read as "not complete" and burn max_iterations`,
+              path: ['loop', 'until_field'],
+            });
+          }
+          // `output_format` is free-form JSON Schema (`z.record`), so `type` is
+          // genuinely unknown here — it may be a string, an array of strings
+          // (`type: [boolean, 'null']`), or absent. Only a declared STRING type
+          // other than 'boolean' is a violation; anything else is left to ajv.
+          const properties = schema.properties as Record<string, unknown> | undefined;
+          const property = properties?.[untilField];
+          const rawType =
+            property !== null && typeof property === 'object'
+              ? (property as { type?: unknown }).type
+              : undefined;
+          const declaredType = typeof rawType === 'string' ? rawType : undefined;
+          if (declaredType !== undefined && declaredType !== 'boolean') {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `'loop.until_field' names '${untilField}', declared as type '${declaredType}' — it must be 'boolean'; the loop terminates on the value being exactly true`,
+              path: ['loop', 'until_field'],
+            });
+          }
+        }
       }
     }
 
@@ -1344,6 +1466,11 @@ export const dagNodeSchema = dagNodeFlatSchema
       ...base,
       ...(data.pi !== undefined ? { pi: data.pi } : {}),
       ...(data.effort !== undefined ? { effort: data.effort } : {}),
+      // Kept for the same reason as `pi`: a loop: node runs its own sendQuery, so
+      // the schema reaches the provider and each iteration's payload is validated
+      // against it (#2563). `loop.until_field` then terminates on a declared
+      // boolean, and the node's output becomes the validated JSON.
+      ...(data.output_format !== undefined ? { output_format: data.output_format } : {}),
       loop: data.loop,
     } as LoopNode;
   })
@@ -1356,6 +1483,17 @@ export const dagNodeSchema = dagNodeFlatSchema
 /** Type guard: check if a DAG node is a command (named command file) node */
 export function isCommandNode(node: DagNode): node is CommandNode {
   return 'command' in node && typeof node.command === 'string';
+}
+
+/**
+ * Type guard: check if a DAG node is an inline-prompt node.
+ *
+ * Every other member of the union declares `prompt?: never`, so the presence of a
+ * string `prompt` identifies this variant on its own (a loop's prompt lives at
+ * `loop.prompt`, not here).
+ */
+export function isPromptNode(node: DagNode): node is PromptNode {
+  return 'prompt' in node && typeof node.prompt === 'string';
 }
 
 /** Type guard: check if a DAG node is a bash (shell script) node */

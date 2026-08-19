@@ -10,6 +10,7 @@ describe('workflowProviderBindingSchema (Story 3.1)', () => {
       codebase_id: 'cb-1',
       event_route: 'https://hermes.example/events/workflow-engine',
       event_types: ['workflow.approval.requested'],
+      transform: null,
       state: 'active',
       binding_version: 1,
       created_at: '2026-07-11T11:48:27.000Z',
@@ -26,6 +27,7 @@ describe('workflowProviderBindingSchema (Story 3.1)', () => {
         'codebase_id',
         'event_route',
         'event_types',
+        'transform',
         'state',
         'binding_version',
         'created_at',
@@ -139,6 +141,34 @@ describe('workflowProviderBindingSchema (Story 3.1)', () => {
       updated_at: '2026-07-11T11:48:27.000Z',
     });
 
+    expect('signing_secret' in parsed).toBe(false);
+  });
+
+  test('public projection parses transform and strips both private columns', () => {
+    const parsed = workflowProviderBindingSchema.parse({
+      id: 'wpb-1',
+      provider: 'archon',
+      name: 'workflow-engine-primary',
+      codebase_id: 'cb-1',
+      event_route: 'https://example.invalid/events',
+      event_types: [],
+      transform: {
+        engine: 'jsonata',
+        expression: '{ "ok": true }',
+        timeoutMs: 50,
+        stackDepth: 128,
+        maxSequenceSize: 10_000,
+        maxOutputBytes: 65_536,
+      },
+      delivery_headers: { Authorization: 'Bearer secret' },
+      signing_secret: 'signing-value',
+      state: 'active',
+      binding_version: 1,
+      created_at: '2026-07-11T11:48:27.000Z',
+      updated_at: '2026-07-11T11:48:27.000Z',
+    });
+    expect(parsed.transform?.engine).toBe('jsonata');
+    expect('delivery_headers' in parsed).toBe(false);
     expect('signing_secret' in parsed).toBe(false);
   });
 });

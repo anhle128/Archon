@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "workflow-command-envelope.v1",
+  "intendedProducer": "Archon",
+  "intendedConsumer": "Hermes",
+  "owningSubproject": "archon",
+  "provider": "archon",
+  "command": "binding.test",
+  "correlationId": "corr_binding_test_success",
+  "issuedAt": "2026-08-18T00:00:00.000Z",
+  "success": true,
+  "bindingRef": {
+    "provider": "archon",
+    "name": "workflow-engine-primary",
+    "bindingId": "wpb_archon::workflow_engine_primary",
+    "projectRef": "project:cb-1"
+  },
+  "result": {
+    "operation": "test",
+    "engine": "jsonata",
+    "transformedBody": "{\"eventType\":\"workflow.run.started\"}",
+    "outputBytes": 36
+  }
+}

@@ -407,6 +407,78 @@ describe('SqliteAdapter', () => {
       );
       expect(probe).toEqual([{ n: 0 }]);
     });
+
+    /**
+     * Same failure shape, three more columns. `hidden` and `deleted_at` on
+     * conversations and `parent_conversation_id` on workflow_runs are added by
+     * migrateColumns(), so a database created before they existed does not have
+     * them — yet createSchema(), which runs FIRST, was indexing all three. The
+     * adapter constructor threw "no such column: parent_conversation_id" and the
+     * database could not be opened at all. The indexes now live in
+     * migrateColumns() next to their ALTER TABLE.
+     */
+    test('opens a database that predates hidden / deleted_at / parent_conversation_id', () => {
+      const dbPath = join(
+        import.meta.dir,
+        `.test-sqlite-preidx-${Date.now()}-${Math.random().toString(36).slice(2)}.db`
+      );
+      currentDbPath = dbPath;
+
+      const raw = new Database(dbPath);
+      raw.exec(`
+        CREATE TABLE remote_agent_codebases (
+          id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+          name TEXT NOT NULL,
+          default_cwd TEXT NOT NULL,
+          created_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE remote_agent_conversations (
+          id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+          platform_type TEXT NOT NULL,
+          platform_conversation_id TEXT NOT NULL,
+          codebase_id TEXT,
+          cwd TEXT,
+          isolation_env_id TEXT,
+          last_activity_at TEXT,
+          created_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE remote_agent_workflow_runs (
+          id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+          workflow_name TEXT NOT NULL,
+          conversation_id TEXT,
+          codebase_id TEXT,
+          status TEXT DEFAULT 'pending',
+          user_message TEXT,
+          metadata TEXT DEFAULT '{}',
+          last_activity_at TEXT,
+          created_at TEXT DEFAULT (datetime('now'))
+        );
+      `);
+      raw.close();
+
+      db = new SqliteAdapter(dbPath);
+
+      const conversationCols = raw_pragma(dbPath, 'remote_agent_conversations');
+      expect(conversationCols).toContain('hidden');
+      expect(conversationCols).toContain('deleted_at');
+
+      const workflowRunCols = raw_pragma(dbPath, 'remote_agent_workflow_runs');
+      expect(workflowRunCols).toContain('parent_conversation_id');
+
+      // The upgrade must also land the indexes, not merely survive.
+      const indexes = raw_indexes(dbPath);
+      expect(indexes).toContain('idx_conversations_hidden');
+      expect(indexes).toContain('idx_conversations_codebase');
+      expect(indexes).toContain('idx_workflow_runs_parent_conv');
+
+      const probe = raw_query(
+        dbPath,
+        'SELECT COUNT(*) AS n FROM remote_agent_workflow_runs WHERE parent_conversation_id IS NOT NULL'
+      );
+      expect(probe).toEqual([{ n: 0 }]);
+    });
   });
 
   describe('provider-key vendor-id migration (#1955)', () => {
@@ -711,6 +783,71 @@ describe('SqliteAdapter', () => {
         ['wpb-legacy']
       );
       expect(rows.rows[0]?.event_types).toBe('[]');
+    });
+
+    test('fresh schema has transform and delivery_headers with matching nullability and default', async () => {
+      db = createTestDb();
+      // PRAGMA via SqliteAdapter.query returns empty rows (non-SELECT path); read
+      // table_info through bun:sqlite like the other binding upgrade fixtures.
+      const raw = new Database(currentDbPath, { readonly: true });
+      let columns: Map<string, { name: string; notnull: number; dflt_value: string | null }>;
+      try {
+        const rows = raw
+          .prepare("PRAGMA table_info('remote_agent_workflow_provider_bindings')")
+          .all() as { name: string; notnull: number; dflt_value: string | null }[];
+        columns = new Map(rows.map(column => [column.name, column]));
+      } finally {
+        raw.close();
+      }
+      expect(columns.get('transform')).toMatchObject({ notnull: 0, dflt_value: null });
+      expect(columns.get('delivery_headers')).toMatchObject({
+        notnull: 1,
+        dflt_value: "'{}'",
+      });
+    });
+
+    test('upgrade adds transform and delivery_headers without changing an existing row', async () => {
+      const dbPath = join(
+        import.meta.dir,
+        `.test-sqlite-binding-transform-${Date.now()}-${Math.random().toString(36).slice(2)}.db`
+      );
+      currentDbPath = dbPath;
+      const raw = new Database(dbPath);
+      raw.exec(`
+    CREATE TABLE remote_agent_workflow_provider_bindings (
+      id TEXT PRIMARY KEY,
+      provider TEXT NOT NULL,
+      name TEXT NOT NULL,
+      codebase_id TEXT NOT NULL,
+      event_route TEXT NOT NULL,
+      event_types TEXT NOT NULL DEFAULT '[]',
+      signing_secret TEXT,
+      state TEXT NOT NULL DEFAULT 'active',
+      binding_version INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT,
+      updated_at TEXT,
+      UNIQUE (provider, name)
+    );
+    INSERT INTO remote_agent_workflow_provider_bindings
+      (id, provider, name, codebase_id, event_route)
+    VALUES ('wpb-legacy', 'archon', 'legacy', 'cb-legacy', 'https://example.invalid/events');
+  `);
+      raw.close();
+
+      db = new SqliteAdapter(dbPath);
+      const rows = await db.query<{
+        name: string;
+        transform: string | null;
+        delivery_headers: string;
+      }>(
+        'SELECT name, transform, delivery_headers FROM remote_agent_workflow_provider_bindings WHERE id = $1',
+        ['wpb-legacy']
+      );
+      expect(rows.rows[0]).toEqual({
+        name: 'legacy',
+        transform: null,
+        delivery_headers: '{}',
+      });
     });
 
     // ---------------------------------------------------------------------------
@@ -1026,7 +1163,7 @@ describe('SqliteAdapter', () => {
      * suite stayed green. Adjust when the schema legitimately changes size —
      * the failure names the count, so the intended value is never a guess.
      */
-    const MIN_NON_AUTH_COLUMNS = 136;
+    const MIN_NON_AUTH_COLUMNS = 138;
 
     /**
      * Archon table names declared by the Postgres migration. Body-independent

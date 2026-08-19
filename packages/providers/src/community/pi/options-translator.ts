@@ -2,6 +2,7 @@ import type { ThinkingLevel } from '@earendil-works/pi-ai';
 import type { BashSpawnContext, BashSpawnHook } from '@earendil-works/pi-coding-agent';
 
 import type { NodeConfig } from '../../types';
+import { clampEffort, type AssertNever } from '../../shared/effort';
 
 type PiTool = ReturnType<
   typeof import('@earendil-works/pi-coding-agent').createCodingTools
@@ -57,7 +58,7 @@ function getPiToolFactories(): PiToolFactoryApi {
 // ─── Thinking level ────────────────────────────────────────────────────────
 
 /**
- * Pi's ThinkingLevel = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'.
+ * Pi's ThinkingLevel contains all six shared rungs, including `max`.
  * The legacy `thinking` surface maps its shorthands into Pi's vocabulary:
  *  - 'off'    → undefined (no explicit thinkingLevel; Pi's implicit off)
  *  - 'max'    → 'xhigh'  (Archon's EffortLevel doesn't have xhigh)
@@ -66,19 +67,24 @@ function getPiToolFactories(): PiToolFactoryApi {
  * Raw `effort` bypasses this normalizer and is asserted only at the SDK
  * boundary so backend-specific future values are not rewritten or dropped.
  */
-const PI_NATIVE_LEVELS: ReadonlySet<ThinkingLevel> = new Set<ThinkingLevel>([
+const PI_NATIVE_LEVELS = [
   'minimal',
   'low',
   'medium',
   'high',
   'xhigh',
-]);
+  'max',
+] as const satisfies readonly ThinkingLevel[];
+
+/** Compile-time proof that PI_NATIVE_LEVELS covers Pi's whole vocabulary — a
+ *  rung the SDK gains (or one dropped here) becomes a type error, not a silent
+ *  downgrade. */
+export type PiLevelsAreComplete = AssertNever<
+  Exclude<ThinkingLevel, (typeof PI_NATIVE_LEVELS)[number]>
+>;
 
 function normalizeToThinkingLevel(v: unknown): ThinkingLevel | undefined {
-  if (typeof v !== 'string') return undefined;
-  if (v === 'max') return 'xhigh';
-  if (PI_NATIVE_LEVELS.has(v as ThinkingLevel)) return v as ThinkingLevel;
-  return undefined;
+  return clampEffort(v, PI_NATIVE_LEVELS);
 }
 
 export interface ResolvedThinkingLevel {

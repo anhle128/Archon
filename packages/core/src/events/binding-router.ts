@@ -1,5 +1,5 @@
 import type { Codebase } from '../schemas/codebase';
-import type { WorkflowProviderBindingWithSecret } from '../db/provider-bindings';
+import type { WorkflowProviderBindingForRouting } from '../db/provider-bindings';
 import { getCodebase } from '../db/codebases';
 import { getBindingByCodebase } from '../db/provider-bindings';
 
@@ -16,14 +16,14 @@ export type EventRouteResolution =
   | {
       routable: true;
       codebase: Codebase;
-      binding: WorkflowProviderBindingWithSecret;
+      binding: WorkflowProviderBindingForRouting;
       route: string;
       secret: string;
     }
   | {
       routable: false;
       codebase: Codebase | null;
-      binding: WorkflowProviderBindingWithSecret | null;
+      binding: WorkflowProviderBindingForRouting | null;
       reason: NotRoutableReason;
     };
 
