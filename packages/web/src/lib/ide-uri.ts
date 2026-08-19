@@ -20,12 +20,15 @@
  */
 export function ideUri(path: string, env?: { is_wsl?: boolean; wsl_distro?: string }): string {
   const normalised = path.replace(/\\/g, '/');
+  let uri: string;
 
   if (env?.is_wsl && env.wsl_distro) {
     // vscode-remote URIs need a leading slash before the absolute Linux path
     const withLeadingSlash = normalised.startsWith('/') ? normalised : `/${normalised}`;
-    return `vscode://vscode-remote/wsl+${encodeURIComponent(env.wsl_distro)}${withLeadingSlash}`;
+    uri = `vscode://vscode-remote/wsl+${encodeURIComponent(env.wsl_distro)}${withLeadingSlash}`;
+  } else {
+    uri = `vscode://file/${normalised}`;
   }
 
-  return `vscode://file/${normalised}`;
+  return `${uri}?windowId=_blank`;
 }

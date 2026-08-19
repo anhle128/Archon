@@ -37,7 +37,19 @@ Then run the complete Windows CI sequence.
 6. Run the normal host validation after Windows passes.
 Use `bun run test`, never `bun test` from the repository root.
 
-7. Add a short lesson here only when a new root cause applies to more than one test.
+7. Before the final response, remove the managed Windows checkout and test logs, even when a test failed.
+Delete only `C:\dev\archon-windows` and `C:\dev\archon-windows-logs` after you have read the required logs.
+If the VM is not running, start it for cleanup and restore its previous power state afterward.
+Use the configured VM name and fail loudly when cleanup cannot remove either managed path.
+
+   ```bash
+   windows_vm_name="${ARCHON_WINDOWS_VM:-Windows 11}"
+   windows_cleanup_command='$paths = @("C:\dev\archon-windows", "C:\dev\archon-windows-logs"); foreach ($path in $paths) { if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop } }'
+   windows_cleanup_encoded="$(printf '%s' "$windows_cleanup_command" | iconv -f UTF-8 -t UTF-16LE | base64)"
+   /usr/local/bin/prlctl exec "$windows_vm_name" --current-user powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand "$windows_cleanup_encoded"
+   ```
+
+8. Add a short lesson here only when a new root cause applies to more than one test.
 Do not copy failure logs into this skill.
 
 ## Durable Windows Lessons

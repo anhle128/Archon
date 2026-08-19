@@ -4,12 +4,12 @@ import { ideUri } from './ide-uri';
 describe('ideUri', () => {
   describe('default (non-WSL) form', () => {
     test('emits vscode://file/<path> when env is undefined', () => {
-      expect(ideUri('/home/user/project')).toBe('vscode://file//home/user/project');
+      expect(ideUri('/home/user/project')).toBe('vscode://file//home/user/project?windowId=_blank');
     });
 
     test('emits vscode://file/<path> when env.is_wsl is false', () => {
       expect(ideUri('/home/user/project', { is_wsl: false })).toBe(
-        'vscode://file//home/user/project'
+        'vscode://file//home/user/project?windowId=_blank'
       );
     });
 
@@ -17,19 +17,21 @@ describe('ideUri', () => {
       // Without a distro name we can't construct the WSL form — better to emit
       // the plain URI than to guess a distro that may not exist locally.
       expect(ideUri('/home/user/project', { is_wsl: true })).toBe(
-        'vscode://file//home/user/project'
+        'vscode://file//home/user/project?windowId=_blank'
       );
     });
 
     test('normalises Windows-style backslashes', () => {
-      expect(ideUri('C:\\Users\\me\\project')).toBe('vscode://file/C:/Users/me/project');
+      expect(ideUri('C:\\Users\\me\\project')).toBe(
+        'vscode://file/C:/Users/me/project?windowId=_blank'
+      );
     });
   });
 
   describe('WSL2 form', () => {
     test('emits vscode://vscode-remote/wsl+<distro>/<path>', () => {
       expect(ideUri('/home/user/project', { is_wsl: true, wsl_distro: 'Ubuntu' })).toBe(
-        'vscode://vscode-remote/wsl+Ubuntu/home/user/project'
+        'vscode://vscode-remote/wsl+Ubuntu/home/user/project?windowId=_blank'
       );
     });
 
@@ -41,13 +43,13 @@ describe('ideUri', () => {
 
     test('adds leading slash when path is relative-ish (defensive)', () => {
       const uri = ideUri('home/user/project', { is_wsl: true, wsl_distro: 'Ubuntu' });
-      expect(uri).toBe('vscode://vscode-remote/wsl+Ubuntu/home/user/project');
+      expect(uri).toBe('vscode://vscode-remote/wsl+Ubuntu/home/user/project?windowId=_blank');
     });
 
     test('encodes distro names that contain non-URL-safe characters', () => {
       // Hypothetical: WSL distro names with spaces / special chars
       const uri = ideUri('/home/user/x', { is_wsl: true, wsl_distro: 'My Distro' });
-      expect(uri).toBe('vscode://vscode-remote/wsl+My%20Distro/home/user/x');
+      expect(uri).toBe('vscode://vscode-remote/wsl+My%20Distro/home/user/x?windowId=_blank');
     });
   });
 });

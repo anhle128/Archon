@@ -22,11 +22,9 @@ export function useIsDocker(): boolean {
   return data?.is_docker ?? true;
 }
 
-const VSCODE_NEW_WINDOW_QUERY = 'windowId=_blank';
-
 /** Build a VS Code protocol URI that opens a path without replacing the active window. */
 export function buildIdeUri(workingPath: string): string {
-  return `${ideUri(workingPath)}?${VSCODE_NEW_WINDOW_QUERY}`;
+  return ideUri(workingPath);
 }
 
 /** Server-environment hints needed to build a working vscode:// URI. */
