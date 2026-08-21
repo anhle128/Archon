@@ -187,6 +187,15 @@ export const workflowRunActionResponseSchema = z
   .object({ success: z.boolean(), message: z.string() })
   .openapi('WorkflowRunActionResponse');
 
+/** POST /api/workflows/runs/:runId/callback/test response. */
+export const testWorkflowRunCallbackResponseSchema = z
+  .object({
+    accepted: z.literal(true),
+    runId: z.string(),
+    eventType: z.literal('workflow.run.completed'),
+  })
+  .openapi('TestWorkflowRunCallbackResponse');
+
 /** POST /api/workflows/runs/:runId/nodes/:nodeId/retry path params. */
 export const retryWorkflowNodeParamsSchema = z
   .object({
