@@ -1681,6 +1681,71 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/workflows/runs/{runId}/callback/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Queue a test callback for an existing workflow run */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    runId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Test callback accepted */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TestWorkflowRunCallbackResponse"];
+                    };
+                };
+                /** @description Bad request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Server error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/workflows/runs/{runId}/resume": {
         parameters: {
             query?: never;
@@ -4013,6 +4078,13 @@ export interface components {
         CancelWorkflowRunResponse: {
             success: boolean;
             message: string;
+        };
+        TestWorkflowRunCallbackResponse: {
+            /** @enum {boolean} */
+            accepted: true;
+            runId: string;
+            /** @enum {string} */
+            eventType: "workflow.run.completed";
         };
         WorkflowRunActionResponse: {
             success: boolean;
