@@ -16,19 +16,19 @@ Always read/write these paths via the env vars — do NOT hardcode `prd.json` or
 
 ## PRD Schema (v3 — batch per iteration)
 
-The PRD groups tasks into **batches** (`userStories[]`).
+The PRD groups tasks into **batches** (`userStories[]`). 
 
 ```json
 {
   "userStories": [
     {
       "title": "Phase 1: Setup",
-      "completed": false,
+      "completed": false,                       
       "tasks": [
-        { "id": "T001", "passes": false, ... },
+        { "id": "T001", "passes": false, ... }, 
         { "id": "T002", "passes": false, ... }
       ],
-      "tasksIds": ["T001", "T002"]
+      "tasksIds": ["T001", "T002"]           
     }
   ]
 }
@@ -51,7 +51,7 @@ The PRD groups tasks into **batches** (`userStories[]`).
    3. If a check fails: fix it, re-run. Do NOT leave broken code in working tree.
    4. Set the task's `passes: true` in `$RALPH_PRD_FILE`.
    5. **Do NOT commit per task and do NOT append progress per task.** Keep changes staged/unstaged in the working tree and accumulate task notes mentally (or in a scratch buffer) until the end of the iteration.
-9. **After flipping each task**, check whether _every_ `tasks[].passes` in the active batch is now `true`. If yes, set the batch's `completed: true` in `$RALPH_PRD_FILE`.
+9. **After flipping each task**, check whether *every* `tasks[].passes` in the active batch is now `true`. If yes, set the batch's `completed: true` in `$RALPH_PRD_FILE`.
 10. **Stay inside the active batch** — do NOT cross batch boundaries within a single iteration. (Exception: if step 9 just flipped `completed:true` AND budget remains, you MAY proceed to the next `completed:false` batch — but commit the just-finished batch FIRST per step 14 before starting the next.)
 11. If budget is tight (response getting long, context filling), STOP after the current task — leaving `completed:false` is fine. The next iteration will resume from your first `passes:false` task automatically.
 12. **At the end of the iteration — append ONE progress entry covering the whole batch of work done this iter** to `$RALPH_PROGRESS_FILE` (see format below). The entry lists every task you flipped `passes:true` this iter, plus aggregated learnings.
@@ -74,7 +74,6 @@ Some tasks in a batch carry the `[P]` marker (parallel-safe, originating from sp
 ### Detection
 
 Walking `tasks[]` in array order, when you hit a `passes:false` task whose description contains `[P]`, look ahead at the next contiguous tasks. The **run-group** = the maximal contiguous run of `passes:false` tasks where every task's description contains `[P]`. The run-group ends at:
-
 - the first `passes:false` task whose description lacks `[P]`, OR
 - a task already `passes:true` (treat as boundary), OR
 - the end of the batch.
@@ -126,7 +125,6 @@ Plan reference: <spec dir>/tasks.md (read-only)
 ### Safety Rails (when in doubt → fall back to sequential)
 
 Run sequentially even if tasks carry `[P]` when:
-
 - Task descriptions reveal **shared file ownership** (e.g. two tasks both edit `package.json`, same module's barrel `index.ts`, same migration file). Sub-agents must own disjoint files.
 - A task touches **shared infrastructure** (root config, `tsconfig.json`, schema files, DI module wiring) — concurrent edits will collide.
 - The current Codebase Patterns section in `$RALPH_PROGRESS_FILE` flags this area as serial-only.
@@ -142,7 +140,6 @@ If no task in the batch carries `[P]` (older PRDs or batches with hard sequencin
 
 APPEND to `$RALPH_PROGRESS_FILE` (never replace, always append) — exactly
 **one entry per iteration**, listing every task you flipped this iter:
-
 ```
 ## [Date/Time] - [Batch Title] (iter [N])
 **Tasks completed this iter:** T### (Title), T### (Title), ...
@@ -162,7 +159,7 @@ APPEND to `$RALPH_PROGRESS_FILE` (never replace, always append) — exactly
 
 Replace `[N]` with the iteration number if you can infer it (e.g. by
 counting prior `## ` entries). If unsure, use the date/time only. Don't
-split this into per-task entries — the progress log is _iteration-grain_,
+split this into per-task entries — the progress log is *iteration-grain*,
 matching the commit log (one commit ↔ one progress entry).
 
 The learnings section is critical - it helps future iterations avoid repeating mistakes and understand the codebase better.
@@ -194,14 +191,12 @@ Before committing, check if any edited files have learnings worth preserving in 
    - Configuration or environment requirements
 
 **Examples of good LESSONS.md additions:**
-
 - "When modifying X, also update Y to keep them in sync"
 - "This module uses pattern Z for all API calls"
 - "Tests require the dev server running on PORT 3000"
 - "Field names must match the template exactly"
 
 **Do NOT add:**
-
 - Story-specific implementation details
 - Temporary debugging notes
 - Information already in `$RALPH_PROGRESS_FILE`

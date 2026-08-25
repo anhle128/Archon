@@ -57,6 +57,47 @@ grok() {
 
 export -f _fake_pi_runner omp pi grok
 
+assert_tasks_to_prd_uses_repo_feature_directory() (
+  fixture_root="$(mktemp -d)"
+  trap 'rm -rf "$fixture_root"' EXIT
+
+  feature_dir="$fixture_root/specs/1-1-list-gigo-without-external-detection"
+  extension_dir="$fixture_root/.specify/extensions/ralph-loop"
+  mkdir -p "$feature_dir" "$extension_dir/scripts/bash"
+  git -C "$fixture_root" init -q -b feature/test
+  git -C "$fixture_root" config user.email test@example.com
+  git -C "$fixture_root" config user.name Test
+  git -C "$fixture_root" commit -q --allow-empty -m fixture
+  cp "$REPO_ROOT/scripts/bash/tasks-to-prd.sh" "$extension_dir/scripts/bash/"
+
+  cat > "$fixture_root/.specify/feature.json" <<'EOF'
+{
+  "feature_directory": "specs/1-1-list-gigo-without-external-detection"
+}
+EOF
+  cat > "$feature_dir/tasks.md" <<'EOF'
+# Tasks: Feature-directory fixture
+
+## Phase 1: Setup
+
+- [ ] T001 Create the fixture
+EOF
+
+  (
+    cd "$extension_dir"
+    bash scripts/bash/tasks-to-prd.sh >/dev/null
+  )
+
+  [ -f "$feature_dir/prd.json" ]
+  [ -f "$feature_dir/progress.txt" ]
+  [ ! -e "$extension_dir/prd.json" ]
+  [ ! -e "$extension_dir/progress.txt" ]
+  jq -e '.specDirectory == "specs/1-1-list-gigo-without-external-detection"' \
+    "$feature_dir/prd.json" >/dev/null
+  jq -e '.ralph_prd_file == "specs/1-1-list-gigo-without-external-detection/prd.json"' \
+    "$fixture_root/.specify/feature.json" >/dev/null
+)
+
 assert_runner() {
   local tool="$1" expected_session="${2:-runner-t (/tmp)}" expected_action="${3:-}" output
   output=$(RALPH_I_UNDERSTAND_DANGEROUS=1 \
@@ -74,6 +115,7 @@ for file in "$REPO_ROOT"/scripts/bash/*.sh; do
   bash -n "$file"
 done
 
+assert_tasks_to_prd_uses_repo_feature_directory
 assert_runner omp
 assert_runner pi
 assert_runner grok 'grok-tes (gpt-5.5)' 'terminal: "pwd"'

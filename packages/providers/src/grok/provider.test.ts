@@ -22,7 +22,7 @@ function processFor(stdout: string[], stderr = '', exitCode = 0): GrokProcess {
 }
 
 async function collect(
-  provider: GrokProvider,
+  provider: ompProvider,
   options: Parameters<GrokProvider['sendQuery']>
 ): Promise<unknown[]> {
   const chunks: unknown[] = [];

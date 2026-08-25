@@ -41,9 +41,9 @@ nodes:
       don't guess, spawn sub-agents for help
     depends_on:
       - setup
-    effort: high
-    provider: grok
-    model: "grok-4.6"
+    effort: xhigh
+    provider: omp
+    model: "xai-oauth/grok-4.6"
     context: fresh
 
   - id: clarify
@@ -121,9 +121,9 @@ nodes:
     depends_on:
       - clarify-file-check
     when: "$clarify-file-check.output == 'HAS_QUESTIONS'"
-    effort: high
-    provider: grok
-    model: "grok-4.6"
+    effort: xhigh
+    provider: omp
+    model: "xai-oauth/grok-4.6"
     context: fresh
     allowed_tools:
       - Read
@@ -304,7 +304,7 @@ nodes:
       5. trigger red-team-answer-review skill
     depends_on:
       - red-team
-    provider: grok
+    provider: omp
     effort: high
     model: grok-4.6
     context: fresh
@@ -420,9 +420,9 @@ nodes:
       /speckit-plan create detail plan <feature_directory>
     depends_on:
       - red-team-apply
-    effort: high
-    provider: grok
-    model: "grok-4.6"
+    effort: xhigh
+    provider: omp
+    model: "xai-oauth/grok-4.6"
     context: fresh
 
   - id: tasks
@@ -567,9 +567,9 @@ nodes:
          the findings file, then STOP.
     depends_on:
       - analyze
-    effort: high
-    provider: grok
-    model: "grok-4.6"
+    effort: xhigh
+    provider: omp
+    model: "xai-oauth/grok-4.6"
     context: fresh
     allowed_tools:
       - Read

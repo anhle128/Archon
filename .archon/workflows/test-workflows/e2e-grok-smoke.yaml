@@ -2,7 +2,7 @@
 # Verifies: provider selection, streaming protocol, and native structured output
 name: e2e-grok-smoke
 description: "E2E smoke test for Grok Build. Runs a simple prompt and a structured output node."
-provider: grok
+provider: omp
 effort: high
 
 nodes:

@@ -13,6 +13,8 @@
 
 set -euo pipefail
 
+cd "$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
+
 FEATURE="${1:-}"
 if [ -z "$FEATURE" ]; then
   if [ -f .specify/feature.json ]; then
