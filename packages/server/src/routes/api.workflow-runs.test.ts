@@ -365,6 +365,10 @@ const mockExecuteWorkflow = mock(async () => ({
   workflowRunId: 'run-web-retry',
 }));
 const mockCreateWorkflowDeps = mock(() => ({}));
+const mockEnqueueExternalWorkflowEvent = mock(async () => {});
+const mockCreateWorkflowStore = mock(() => ({
+  enqueueExternalWorkflowEvent: mockEnqueueExternalWorkflowEvent,
+}));
 
 mock.module('@archon/workflows/executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
@@ -372,6 +376,7 @@ mock.module('@archon/workflows/executor', () => ({
 
 mock.module('@archon/core/workflows/store-adapter', () => ({
   createWorkflowDeps: mockCreateWorkflowDeps,
+  createWorkflowStore: mockCreateWorkflowStore,
 }));
 
 mock.module('@archon/core/utils/commands', () => ({
@@ -862,6 +867,55 @@ describe('POST /api/workflows/:name/run', () => {
     });
     expect(response.status).toBe(400);
     expect(mockHandleMessage).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: POST /api/workflows/runs/:runId/callback/test
+// ---------------------------------------------------------------------------
+
+describe('POST /api/workflows/runs/:runId/callback/test', () => {
+  beforeEach(() => {
+    mockGetWorkflowRun.mockReset();
+    mockCreateWorkflowStore.mockClear();
+    mockEnqueueExternalWorkflowEvent.mockReset();
+  });
+
+  test('queues a completed event through the callback outbox', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(MOCK_COMPLETED_RUN);
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-2/callback/test', {
+      method: 'POST',
+    });
+
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({
+      accepted: true,
+      runId: 'run-uuid-2',
+      eventType: 'workflow.run.completed',
+    });
+    expect(mockEnqueueExternalWorkflowEvent).toHaveBeenCalledWith({
+      workflow_run_id: 'run-uuid-2',
+      event_type: 'workflow.run.completed',
+      occurred_at: expect.any(String),
+      payload: {
+        state: 'completed',
+        result: { outcome: 'manual-test', completedAt: expect.any(String) },
+      },
+    });
+  });
+
+  test('returns 404 without touching the outbox when the run does not exist', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(null);
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/missing/callback/test', {
+      method: 'POST',
+    });
+
+    expect(response.status).toBe(404);
+    expect(mockEnqueueExternalWorkflowEvent).not.toHaveBeenCalled();
   });
 });
 

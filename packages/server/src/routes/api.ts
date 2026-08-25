@@ -403,6 +403,7 @@ import {
   workflowRunByWorkerResponseSchema,
   cancelWorkflowRunResponseSchema,
   workflowRunActionResponseSchema,
+  testWorkflowRunCallbackResponseSchema,
   retryWorkflowNodeParamsSchema,
   retryWorkflowNodeBodySchema,
   retryWorkflowNodePreviewResponseSchema,
@@ -1065,6 +1066,23 @@ const cancelWorkflowRunRoute = createRoute({
     200: {
       content: { 'application/json': { schema: cancelWorkflowRunResponseSchema } },
       description: 'Cancelled',
+    },
+    400: jsonError('Bad request'),
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const testWorkflowRunCallbackRoute = createRoute({
+  method: 'post',
+  path: '/api/workflows/runs/{runId}/callback/test',
+  tags: ['Workflows'],
+  summary: 'Queue a test callback for an existing workflow run',
+  request: { params: z.object({ runId: z.string().min(1) }) },
+  responses: {
+    202: {
+      content: { 'application/json': { schema: testWorkflowRunCallbackResponseSchema } },
+      description: 'Test callback accepted',
     },
     400: jsonError('Bad request'),
     404: jsonError('Not found'),
@@ -3880,6 +3898,35 @@ export function registerApiRoutes(
     } catch (error) {
       getLog().error({ err: error }, 'cancel_workflow_run_api_failed');
       return apiError(c, 500, 'Failed to cancel workflow run');
+    }
+  });
+
+  // POST /api/workflows/runs/:runId/callback/test - Exercise the real callback outbox.
+  registerOpenApiRoute(testWorkflowRunCallbackRoute, async c => {
+    const runId = c.req.param('runId') ?? '';
+    try {
+      const run = await workflowDb.getWorkflowRun(runId);
+      if (!run) return apiError(c, 404, 'Workflow run not found');
+      if (!run.codebase_id) return apiError(c, 400, 'Workflow run has no codebase');
+
+      const occurredAt = new Date().toISOString();
+      const { createWorkflowStore } = await import('@archon/core/workflows/store-adapter');
+      await createWorkflowStore().enqueueExternalWorkflowEvent({
+        workflow_run_id: runId,
+        event_type: 'workflow.run.completed',
+        occurred_at: occurredAt,
+        payload: {
+          state: 'completed',
+          result: { outcome: 'manual-test', completedAt: occurredAt },
+        },
+      });
+      return c.json(
+        { accepted: true as const, runId, eventType: 'workflow.run.completed' as const },
+        202
+      );
+    } catch (error) {
+      getLog().error({ err: error, runId }, 'test_workflow_callback_failed');
+      return apiError(c, 500, 'Failed to queue test callback');
     }
   });
 
