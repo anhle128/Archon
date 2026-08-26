@@ -304,9 +304,9 @@ nodes:
       5. trigger red-team-answer-review skill
     depends_on:
       - red-team
+    effort: xhigh
     provider: omp
-    effort: high
-    model: grok-4.6
+    model: "xai-oauth/grok-4.6"
     context: fresh
     allowed_tools:
       - Read
