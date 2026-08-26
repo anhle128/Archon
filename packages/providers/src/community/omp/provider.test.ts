@@ -417,6 +417,24 @@ describe('OmpProvider', () => {
     });
   });
 
+  test('completes successfully when OMP emits maintenance events after agent_end', async () => {
+    const proc = makeProcess([
+      [
+        ...successfulLines('trail-session'),
+        JSON.stringify({ type: 'notice', message: 'Todo completion reminder' }),
+        JSON.stringify({ type: 'custom_message', customType: 'advisor' }),
+      ].join('\n'),
+    ]);
+    const chunks = await collect(new OmpProvider({ spawn: makeSpawner(proc, []) }));
+    expect(chunks.at(-1)).toMatchObject({
+      type: 'result',
+      sessionId: 'trail-session',
+      stopReason: 'stop',
+    });
+    expect(chunks.at(-1)).not.toHaveProperty('isError');
+    expect(proc.signals).not.toContain('SIGTERM');
+  });
+
   test('warns before spawn for object-form thinking and falls back to effort', async () => {
     const calls: { command: string[]; options: OmpSpawnOptions }[] = [];
     const proc = makeProcess([successfulLines().join('\n')]);
