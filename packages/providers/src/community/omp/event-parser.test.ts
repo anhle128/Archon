@@ -234,6 +234,17 @@ describe('OmpEventParser', () => {
     });
   });
 
+  test('succeeds when a finished assistant turn has no agent_end', () => {
+    const parser = new OmpEventParser(false);
+    for (const line of OMP_SUCCESS_LINES.slice(0, -1)) parser.consumeLine(line);
+    const result = parser.buildResult(undefined);
+    expect(result).toMatchObject({
+      sessionId: 'omp-session-1',
+      stopReason: 'stop',
+    });
+    expect(result).not.toHaveProperty('isError');
+  });
+
   test('fails an unfinished later assistant turn without emitting its tail', () => {
     const parser = new OmpEventParser(false);
     parser.consumeLine(JSON.stringify({ type: 'session', id: 'session-partial' }));

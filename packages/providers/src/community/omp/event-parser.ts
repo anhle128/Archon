@@ -75,19 +75,20 @@ export class OmpEventParser {
 
   buildResult(resumed: boolean | undefined): ResultChunk {
     const observedResult = this.buildObservedResult(resumed);
+    // OMP can dispose a finished turn without emitting agent_end on stdout.
     if (
       !this.sessionId ||
-      !this.sawAgentEnd ||
       !this.sawAssistantMessage ||
-      this.activeAssistantMessage
+      this.activeAssistantMessage ||
+      this.activeTools.size > 0
     ) {
       const missing = !this.sessionId
         ? 'session header'
-        : !this.sawAgentEnd
-          ? 'agent_end event'
+        : !this.sawAssistantMessage
+          ? 'assistant message'
           : this.activeAssistantMessage
             ? 'completed assistant message'
-            : 'assistant message';
+            : 'completed tool call';
       return {
         ...observedResult,
         isError: true,
