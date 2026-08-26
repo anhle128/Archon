@@ -19,6 +19,16 @@ function stringField(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
+function isFollowUpTurnEvent(type: string): boolean {
+  return (
+    type === 'message_start' ||
+    type === 'message_update' ||
+    type === 'message_end' ||
+    type === 'tool_execution_start' ||
+    type === 'tool_execution_end'
+  );
+}
+
 function numberField(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
@@ -133,9 +143,14 @@ export class OmpEventParser {
   }
 
   private consumeEvent(event: JsonObject): MessageChunk[] {
-    if (this.sawAgentEnd) throw new Error('OMP CLI emitted an event after agent_end.');
     const type = stringField(event.type);
     if (!type) throw new Error('OMP CLI emitted a record without a non-empty string event type.');
+    // agent_end ends a turn, not the stream. OMP may then emit maintenance
+    // events or start another turn (todo reminder, advisor, compaction).
+    if (this.sawAgentEnd) {
+      if (!isFollowUpTurnEvent(type)) return [];
+      this.sawAgentEnd = false;
+    }
     switch (type) {
       case 'session': {
         const sessionId = stringField(event.id);

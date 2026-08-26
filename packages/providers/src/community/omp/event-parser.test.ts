@@ -340,7 +340,7 @@ describe('OmpEventParser', () => {
     expect(parser.buildResult(undefined)).not.toHaveProperty('structuredOutput');
   });
 
-  test('rejects invalid assistant terminals, outstanding tools, and events after agent_end', () => {
+  test('rejects invalid assistant terminals and outstanding tools at agent_end', () => {
     const parser = new OmpEventParser(false);
     parser.consumeLine(JSON.stringify({ type: 'session', id: 'session-terminal' }));
     expect(() =>
@@ -350,9 +350,6 @@ describe('OmpEventParser', () => {
     ).toThrow('usage');
     parser.consumeLine(JSON.stringify({ type: 'message_end', message: completeMessage('done') }));
     parser.consumeLine(JSON.stringify({ type: 'agent_end' }));
-    expect(() => parser.consumeLine(JSON.stringify({ type: 'notice', message: 'late' }))).toThrow(
-      'agent_end'
-    );
 
     const withTool = new OmpEventParser(false);
     withTool.consumeLine(JSON.stringify({ type: 'session', id: 'session-open-tool' }));
@@ -367,6 +364,45 @@ describe('OmpEventParser', () => {
     expect(() => withTool.consumeLine(JSON.stringify({ type: 'agent_end' }))).toThrow(
       'outstanding tool'
     );
+  });
+
+  test('treats agent_end as turn end and ignores trailing maintenance events', () => {
+    const parser = new OmpEventParser(false);
+    for (const line of OMP_SUCCESS_LINES) parser.consumeLine(line);
+    expect(
+      parser.consumeLine(JSON.stringify({ type: 'notice', message: 'Todo completion reminder' }))
+    ).toEqual([]);
+    expect(
+      parser.consumeLine(JSON.stringify({ type: 'custom_message', customType: 'advisor' }))
+    ).toEqual([]);
+    expect(parser.consumeLine(JSON.stringify({ type: 'agent_end', messages: [] }))).toEqual([]);
+    const result = parser.buildResult(undefined);
+    expect(result).toMatchObject({
+      sessionId: 'omp-session-1',
+      stopReason: 'stop',
+    });
+    expect(result).not.toHaveProperty('isError');
+  });
+
+  test('parses a follow-up assistant turn after agent_end', () => {
+    const parser = new OmpEventParser(false);
+    for (const line of OMP_SUCCESS_LINES) parser.consumeLine(line);
+    const chunks = [
+      JSON.stringify({ type: 'message_start', message: { role: 'assistant', content: [] } }),
+      JSON.stringify({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'Again' },
+      }),
+      JSON.stringify({ type: 'message_end', message: completeMessage('Again') }),
+      JSON.stringify({ type: 'agent_end' }),
+    ].flatMap(line => parser.consumeLine(line));
+    expect(chunks).toEqual([{ type: 'assistant', content: 'Again' }]);
+    const result = parser.buildResult(undefined);
+    expect(result).toMatchObject({
+      sessionId: 'omp-session-1',
+      stopReason: 'stop',
+    });
+    expect(result).not.toHaveProperty('isError');
   });
 });
 
