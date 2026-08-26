@@ -380,6 +380,17 @@ describe('OmpProvider', () => {
     });
   });
 
+  test('completes successfully when OMP exits 0 after a finished turn without agent_end', async () => {
+    const proc = makeProcess([successfulLines('no-end-session').slice(0, -1).join('\n')]);
+    const chunks = await collect(new OmpProvider({ spawn: makeSpawner(proc, []) }));
+    expect(chunks.at(-1)).toMatchObject({
+      type: 'result',
+      sessionId: 'no-end-session',
+      stopReason: 'stop',
+    });
+    expect(chunks.at(-1)).not.toHaveProperty('isError');
+  });
+
   test('maps malformed JSON to a protocol error and kills the child', async () => {
     const proc = makeRunningProcess('SIGTERM');
     const chunksPromise = collect(new OmpProvider({ spawn: makeSpawner(proc, []) }));
