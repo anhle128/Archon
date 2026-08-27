@@ -29,12 +29,13 @@ mock.module('@archon/paths', () => ({
 }));
 
 // Bootstrap provider registry (needed by isRegisteredProvider checks at load time)
-import { registerBuiltinProviders, clearRegistry } from '@archon/providers';
+import { registerBuiltinProviders, registerOmpProvider, clearRegistry } from '@archon/providers';
 clearRegistry();
 registerBuiltinProviders();
+registerOmpProvider();
 
 import { discoverWorkflows, discoverWorkflowsWithConfig } from './workflow-discovery';
-import { isBashNode, isCancelNode, isLoopNode } from './schemas';
+import { isBashNode, isCancelNode, isLoopNode, isPlannotatorGateNode } from './schemas';
 import { parseWorkflow } from './loader';
 import { COMPILED_LOOP_COMMAND, type LoopWithCompiledCommand } from './compiled-command';
 import { workflowDefinitionSchema } from './schemas/workflow';
@@ -3713,6 +3714,101 @@ nodes:
       expect(nodes.get('create-pull-request')?.depends_on).toEqual(['update-bmad-sprint-status']);
       expect(nodes.has('speckit-converge-exhausted')).toBe(false);
     });
+
+    it('loads the native Ralph Speckit workflow with fail-fast preflights', async () => {
+      const workflowPath = join(
+        import.meta.dir,
+        '..',
+        '..',
+        '..',
+        '.archon',
+        'workflows',
+        'defaults',
+        'speckit-ralph-native-feature.yaml'
+      );
+      const result = parseWorkflow(await readFile(workflowPath, 'utf8'), basename(workflowPath));
+
+      expect(result.error).toBeNull();
+      expect(result.warnings).toEqual([]);
+      expect(result.workflow?.name).toBe('speckit-ralph-native-feature');
+      expect(result.workflow?.description).toContain('speckit ralph native');
+      expect(result.workflow).toMatchObject({
+        provider: 'codex',
+        model: 'gpt-5.5',
+        effort: 'xhigh',
+      });
+
+      const nodes = new Map(result.workflow?.nodes.map(node => [node.id, node]));
+      const requiredStages = [
+        'ralph-tasks-to-ralph',
+        'ralph-native-preflight',
+        'ralph-loop-run',
+        'ralph-sync-back',
+        'speckit-converge',
+        'speckit-converge-review-gate',
+        'speckit-final-ralph-tasks-to-ralph',
+        'speckit-final-ralph-native-preflight',
+        'speckit-final-ralph-loop-run',
+        'speckit-final-ralph-sync-back',
+        'update-bmad-sprint-status',
+        'create-pull-request',
+      ];
+      for (const nodeId of requiredStages) expect(nodes.has(nodeId)).toBe(true);
+
+      const paths = [
+        {
+          preflightId: 'ralph-native-preflight',
+          conversionId: 'ralph-tasks-to-ralph',
+          loopId: 'ralph-loop-run',
+          syncId: 'ralph-sync-back',
+        },
+        {
+          preflightId: 'speckit-final-ralph-native-preflight',
+          conversionId: 'speckit-final-ralph-tasks-to-ralph',
+          loopId: 'speckit-final-ralph-loop-run',
+          syncId: 'speckit-final-ralph-sync-back',
+        },
+      ];
+
+      for (const path of paths) {
+        const preflight = nodes.get(path.preflightId);
+        const loop = nodes.get(path.loopId);
+
+        expect(preflight && isBashNode(preflight)).toBe(true);
+        if (!preflight || !isBashNode(preflight)) throw new Error('native Ralph preflight missing');
+        expect(preflight.depends_on).toEqual([path.conversionId]);
+        expect(preflight.bash).toContain('ralph_prd_file');
+        expect(preflight.bash).toContain('ralph_progress_file');
+        expect(preflight.bash).toContain('Invalid Ralph PRD');
+
+        expect(loop && isLoopNode(loop)).toBe(true);
+        if (!loop || !isLoopNode(loop)) throw new Error('native Ralph loop missing');
+        expect(loop.depends_on).toEqual([path.preflightId]);
+        expect(loop.effort).toBe('xhigh');
+        expect(loop.loop).toMatchObject({
+          command: 'archon-speckit-ralph-iteration',
+          fresh_context: true,
+          max_iterations: 100,
+        });
+        expect(loop.loop.until).toBeUndefined();
+        expect(loop.loop.until_bash).toContain('select(.completed==false)');
+        expect(loop.loop.until_bash).toContain('select(.passes==false)');
+        expect(nodes.get(path.syncId)?.depends_on).toEqual([path.loopId]);
+      }
+
+      for (const gateId of ['clarify-gate', 'red-team-gate', 'speckit-converge-review-gate']) {
+        const gate = nodes.get(gateId);
+        expect(gate && isPlannotatorGateNode(gate)).toBe(true);
+        if (!gate || !isPlannotatorGateNode(gate)) {
+          throw new Error(`native Ralph Plannotator gate missing: ${gateId}`);
+        }
+        expect(gate.plannotator_gate.rework).toMatchObject({
+          provider: 'codex',
+          model: 'gpt-5.5',
+          effort: 'xhigh',
+        });
+      }
+    });
   });
 
   describe('retry config parsing', () => {
@@ -5976,12 +6072,13 @@ nodes:
       } finally {
         clearRegistry();
         registerBuiltinProviders();
+        registerOmpProvider();
       }
     });
 
     it('rejects persist_session: true on a provider without sessionResume', async () => {
       // Register an ephemeral provider with sessionResume: false to drive the capability gate.
-      // No unregister API exists; restore via clearRegistry + registerBuiltinProviders in finally.
+      // No unregister API exists; restore the providers used by the default workflows in finally.
       const { registerProvider } = await import('@archon/providers');
       registerProvider({
         id: 'no-resume-test',
@@ -6039,6 +6136,7 @@ nodes:
       } finally {
         clearRegistry();
         registerBuiltinProviders();
+        registerOmpProvider();
       }
     });
   });

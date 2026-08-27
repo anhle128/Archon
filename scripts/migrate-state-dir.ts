@@ -45,7 +45,7 @@ import {
   getProjectStoragePaths,
   type ProjectStorageKey,
 } from '@archon/paths';
-import { getDatabaseType, getSqliteDbPath } from '@archon/core/db/connection';
+import { closeDatabase, getDatabaseType, getSqliteDbPath } from '@archon/core/db/connection';
 import * as codebaseDb from '@archon/core/db/codebases';
 
 /**
@@ -343,7 +343,9 @@ async function main(): Promise<void> {
   console.log(`  rmdir "${legacyDir}"`);
 }
 
-main().catch((error: unknown) => {
-  console.error(`Migration failed: ${(error as Error).message}`);
-  process.exit(1);
-});
+main()
+  .finally(closeDatabase)
+  .catch((error: unknown) => {
+    console.error(`Migration failed: ${(error as Error).message}`);
+    process.exit(1);
+  });

@@ -61,6 +61,7 @@ mock.module('@archon/paths', () => ({
 // --- Bootstrap provider registry (after path mocks, before dag-executor import) ---
 import {
   registerBuiltinProviders,
+  registerOmpProvider,
   registerOpencodeProvider,
   registerPiProvider,
   registerQoderCliProvider,
@@ -68,6 +69,7 @@ import {
 } from '@archon/providers';
 clearRegistry();
 registerBuiltinProviders();
+registerOmpProvider();
 registerOpencodeProvider();
 // Pi is a community provider (best-effort structured output) — register it so the
 // reask-loop tests can resolve `getProviderCapabilities('pi')` to 'best-effort'.
@@ -99,7 +101,7 @@ import type {
   WorkflowRun,
   WorkflowDefinition,
 } from './schemas';
-import { dagNodeSchema } from './schemas';
+import { dagNodeSchema, isBashNode, isLoopNode } from './schemas';
 import { discoverWorkflows } from './workflow-discovery';
 import { parseWorkflow } from './loader';
 import { expandWorkflowIncludes } from './include-expander';
@@ -5699,6 +5701,182 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
   // ─── Loop Node Tests ─────────────────────────────────────────────────────
 
   describe('loop node execution', () => {
+    async function createNativeRalphFixture(maxIterations = 100): Promise<{
+      workflow: WorkflowDefinition;
+      prdPath: string;
+      progressPath: string;
+      syncMarkerPath: string;
+    }> {
+      await git.execFileAsync('git', ['init', '--quiet'], { cwd: testDir });
+
+      const sourceRoot = join(import.meta.dir, '..', '..', '..');
+      const workflowPath = join(
+        sourceRoot,
+        '.archon',
+        'workflows',
+        'defaults',
+        'speckit-ralph-native-feature.yaml'
+      );
+      const commandPath = join(
+        sourceRoot,
+        '.archon',
+        'commands',
+        'defaults',
+        'archon-speckit-ralph-iteration.md'
+      );
+      const result = parseWorkflow(await readFile(workflowPath, 'utf8'), basename(workflowPath));
+      if (result.error || !result.workflow) {
+        throw new Error(result.error ?? 'native Ralph workflow did not load');
+      }
+
+      const preflight = result.workflow.nodes.find(node => node.id === 'ralph-native-preflight');
+      const loop = result.workflow.nodes.find(node => node.id === 'ralph-loop-run');
+      if (!preflight || !isBashNode(preflight)) throw new Error('native Ralph preflight missing');
+      if (!loop || !isLoopNode(loop)) throw new Error('native Ralph loop missing');
+
+      const commandsDir = join(testDir, '.archon', 'commands');
+      const extensionDir = join(testDir, '.specify', 'extensions', 'ralph-loop');
+      const ralphDir = join(testDir, '.specify', 'ralph');
+      await mkdir(commandsDir, { recursive: true });
+      await mkdir(extensionDir, { recursive: true });
+      await mkdir(ralphDir, { recursive: true });
+      await writeFile(
+        join(commandsDir, 'archon-speckit-ralph-iteration.md'),
+        await readFile(commandPath, 'utf8')
+      );
+      await writeFile(join(extensionDir, 'AGENTS.md'), '# Ralph iteration rules\n');
+
+      const prdPath = join(ralphDir, 'prd.json');
+      const progressPath = join(ralphDir, 'progress.txt');
+      await writeFile(
+        prdPath,
+        JSON.stringify({
+          userStories: [{ id: 'US-001', completed: false, tasks: [{ id: 'T001', passes: false }] }],
+        })
+      );
+      await writeFile(progressPath, 'Ralph progress\n');
+      await writeFile(
+        join(testDir, '.specify', 'feature.json'),
+        JSON.stringify({
+          ralph_prd_file: '.specify/ralph/prd.json',
+          ralph_progress_file: '.specify/ralph/progress.txt',
+        })
+      );
+
+      const syncMarkerPath = join(testDir, '.ralph-native-sync-ran');
+      return {
+        workflow: {
+          name: 'native-ralph-executor-fixture',
+          provider: result.workflow.provider,
+          model: result.workflow.model,
+          effort: result.workflow.effort,
+          nodes: [
+            { ...preflight, depends_on: [] },
+            {
+              ...loop,
+              depends_on: [preflight.id],
+              loop: { ...loop.loop, max_iterations: maxIterations },
+            },
+            {
+              id: 'native-ralph-sync',
+              bash: "printf 'ran\\n' > .ralph-native-sync-ran",
+              depends_on: [loop.id],
+            },
+          ],
+        },
+        prdPath,
+        progressPath,
+        syncMarkerPath,
+      };
+    }
+
+    async function executeNativeRalphFixture(
+      workflow: WorkflowDefinition,
+      store: IWorkflowStore
+    ): Promise<void> {
+      await executeDagWorkflow(
+        createMockDeps(store),
+        createMockPlatform(),
+        'conv-native-ralph',
+        testDir,
+        workflow,
+        makeWorkflowRun('native-ralph-run'),
+        workflow.provider ?? 'codex',
+        workflow.model,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+    }
+
+    it('fails the native Ralph preflight before an agent iteration when an input is missing', async () => {
+      const fixture = await createNativeRalphFixture();
+      await rm(fixture.progressPath);
+      const store = createMockStore();
+
+      await executeNativeRalphFixture(fixture.workflow, store);
+
+      expect(mockSendQueryDag).not.toHaveBeenCalled();
+      expect(store.failWorkflowRun).toHaveBeenCalled();
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+      expect(existsSync(fixture.syncMarkerPath)).toBe(false);
+      const iterationEvents = store.createWorkflowEvent.mock.calls.filter(
+        call => call[0].event_type === 'loop_iteration_started'
+      );
+      expect(iterationEvents).toHaveLength(0);
+    });
+
+    it('completes the native Ralph loop from the PRD and runs the downstream node', async () => {
+      const fixture = await createNativeRalphFixture();
+      const store = createMockStore();
+      mockSendQueryDag.mockImplementation(function* () {
+        writeFileSync(
+          fixture.prdPath,
+          JSON.stringify({
+            userStories: [{ id: 'US-001', completed: true, tasks: [{ id: 'T001', passes: true }] }],
+          })
+        );
+        yield { type: 'assistant', content: 'Ralph batch complete' };
+        yield { type: 'result', sessionId: 'native-ralph-complete' };
+      });
+
+      await executeNativeRalphFixture(fixture.workflow, store);
+
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+      expect(mockGetAgentProviderDag.mock.calls[0][0]).toBe('codex');
+      const options = mockSendQueryDag.mock.calls[0][3] as SendQueryOptions;
+      expect(options.model).toBe('gpt-5.5');
+      expect(options.nodeConfig?.effort).toBe('xhigh');
+      expect(store.completeWorkflowRun).toHaveBeenCalled();
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(existsSync(fixture.syncMarkerPath)).toBe(true);
+      const eventTypes = store.createWorkflowEvent.mock.calls.map(call => call[0].event_type);
+      expect(eventTypes.filter(type => type === 'loop_iteration_started')).toHaveLength(1);
+      expect(eventTypes.filter(type => type === 'loop_iteration_completed')).toHaveLength(1);
+    });
+
+    it('fails the native Ralph loop on exhaustion and does not run the downstream node', async () => {
+      const fixture = await createNativeRalphFixture(2);
+      const store = createMockStore();
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'Ralph batch incomplete' };
+        yield { type: 'result', sessionId: 'native-ralph-incomplete' };
+      });
+
+      await executeNativeRalphFixture(fixture.workflow, store);
+
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(2);
+      expect(store.failWorkflowRun).toHaveBeenCalled();
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+      expect(existsSync(fixture.syncMarkerPath)).toBe(false);
+      const eventTypes = store.createWorkflowEvent.mock.calls.map(call => call[0].event_type);
+      expect(eventTypes.filter(type => type === 'loop_iteration_started')).toHaveLength(2);
+      expect(eventTypes.filter(type => type === 'loop_iteration_completed')).toHaveLength(2);
+    });
+
     it('emits a loop tool_completed duration at tool_result, excluding later assistant time', async () => {
       const store = createMockStore();
       const mockDeps = createMockDeps(store);
