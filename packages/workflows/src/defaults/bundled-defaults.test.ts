@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import {
@@ -182,8 +183,9 @@ describe('bundled-defaults', () => {
 
     it('archon-create-pr should resolve a related issue and put Closes in the PR body', () => {
       const content = BUNDLED_COMMANDS['archon-create-pr'];
-      expect(content).toContain('gh issue view "$ISSUE_NUM" --repo "$PR_REPO"');
-      expect(content).toContain('gh issue list --repo "$PR_REPO"');
+      expect(content).toContain('if .pull_request then empty else .number end');
+      expect(content).toContain('^[0-9]+-[0-9]+-');
+      expect(content).toContain('gh issue list --repo "$PR_REPO" --state open --search "$BRANCH"');
       expect(content).toContain('Closes #${ISSUE_NUM}');
       expect(content).toContain('gh pr edit "$PR_NUMBER" --repo "$PR_REPO" --body-file');
       expect(content).toContain('repository default branch');
@@ -210,6 +212,41 @@ describe('bundled-defaults', () => {
       expect(contents).not.toContain('gh pr create --draft --base "$BASE_BRANCH"');
       expect(contents).not.toContain('gh pr create --fill --base $BASE_BRANCH');
       expect(contents).not.toContain('gh pr create --fill --base "$BASE_BRANCH"');
+    });
+  });
+
+  describe('candidate_issue_num_from_branch', () => {
+    function candidateFromBranch(branch: string): string {
+      const content = BUNDLED_COMMANDS['archon-create-pr'];
+      const start = content.indexOf('# BEGIN candidate_issue_num_from_branch');
+      const end = content.indexOf('# END candidate_issue_num_from_branch');
+      if (start < 0 || end < 0 || end <= start) {
+        throw new Error('candidate_issue_num_from_branch markers missing');
+      }
+      const fn = content.slice(start, end);
+      const result = spawnSync(
+        'bash',
+        ['-c', `${fn}\ncandidate_issue_num_from_branch "$1"`, '_', branch],
+        { encoding: 'utf8' }
+      );
+      if (result.status !== 0) {
+        throw new Error(result.stderr || `bash exited ${result.status}`);
+      }
+      return result.stdout;
+    }
+
+    it('does not treat a 3-1 story key as issue 1', () => {
+      expect(candidateFromBranch('3-1-record-adapter-readiness-and-refuse-unsupported-work')).toBe(
+        ''
+      );
+    });
+
+    it('reads issue-112 from the branch', () => {
+      expect(candidateFromBranch('issue-112')).toBe('112');
+    });
+
+    it('reads fix/112-slug from the branch', () => {
+      expect(candidateFromBranch('fix/112-slug')).toBe('112');
     });
   });
 

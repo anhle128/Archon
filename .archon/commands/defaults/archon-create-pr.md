@@ -31,33 +31,58 @@ fi
 
 ### Resolve ISSUE_NUM
 
-Try sources in this order. Stop at the first number that `gh issue view` confirms on `$PR_REPO`:
+A candidate is valid only when REST `GET /repos/$PR_REPO/issues/$N` returns JSON **without** a `pull_request` field. `gh issue view` also returns pull requests (shared number space) — that is not proof. Branch `3-1-record-adapter-readiness-and-refuse-unsupported-work` is a story key, not issue `3` or `1`.
 
-1. `$ARGUMENTS` — `#123`, `issue 123`, `owner/repo#123`, or a GitHub issue URL
-2. Branch name — `issue-123`, `fix/issue-123`, `feat/123-slug`, `#123`. Do not take an arbitrary digit run (Node versions, years)
+```bash
+issue_num_if_issue() {
+  gh api "repos/${PR_REPO}/issues/${1}" --jq 'if .pull_request then empty else .number end'
+}
+```
+
+Try sources in this order. Stop at the first number `issue_num_if_issue` prints:
+
+1. `$ARGUMENTS` — `#123`, `issue 123`, `owner/repo#123`, or a GitHub **issues** URL (`/issues/123`, not `/pull/123`)
+2. Branch name — only these tokens:
+   - `issue-123`, `issue/123`, `#123`
+   - `fix/123-slug` (or `feat` / `feature` / `bug` / `bugfix` / `hotfix` / `chore`)
+   - `123-slug` at the start **only when the second segment does not start with a digit**
 3. Commits on this branch — `Closes #N` / `Fixes #N` / `Resolves #N` in `git log origin/$BASE_BRANCH..HEAD`
-4. Workflow artifacts under `$ARTIFACTS_DIR` — the same closing-keyword or issue-URL forms
-5. Open-issue search on `$PR_REPO` — query from the intended PR title, first commit subject, and implementation summary. Use a match only when one open issue is clearly the same work
+4. Workflow artifacts under `$ARTIFACTS_DIR` — the same closing-keyword or `/issues/N` URL forms
+5. Open-issue search by **branch slug**: use the issue only when exactly one open issue title contains the full branch name
 
 ```bash
-# Explicit issue tokens on the branch (issue-123 / #123 / type/123-slug)
-ISSUE_NUM=$(printf '%s' "$BRANCH" | grep -oE 'issue[-/][0-9]+|#[0-9]+' | grep -oE '[0-9]+' | tail -1)
-if [ -z "$ISSUE_NUM" ]; then
-  ISSUE_NUM=$(printf '%s' "$BRANCH" | grep -oE '^(fix|feat|feature|bug|bugfix|hotfix|chore)/[0-9]+' | grep -oE '[0-9]+')
-fi
+# BEGIN candidate_issue_num_from_branch
+candidate_issue_num_from_branch() {
+  local branch="$1"
+  local n=""
+  n=$(printf '%s' "$branch" | grep -oE 'issue[-/][0-9]+|#[0-9]+' | grep -oE '[0-9]+' | tail -1)
+  if [ -z "$n" ]; then
+    n=$(printf '%s' "$branch" | grep -oE '^(fix|feat|feature|bug|bugfix|hotfix|chore)/[0-9]+' | grep -oE '[0-9]+')
+  fi
+  if [ -z "$n" ]; then
+    if printf '%s' "$branch" | grep -qE '^[0-9]+-[0-9]+-'; then
+      n=""
+    else
+      n=$(printf '%s' "$branch" | grep -oE '^[0-9]+')
+    fi
+  fi
+  printf '%s' "$n"
+}
+# END candidate_issue_num_from_branch
 
+ISSUE_NUM=$(candidate_issue_num_from_branch "$BRANCH")
 if [ -n "$ISSUE_NUM" ]; then
-  gh issue view "$ISSUE_NUM" --repo "$PR_REPO" --json number,title,state,url
+  ISSUE_NUM=$(issue_num_if_issue "$ISSUE_NUM")
+fi
+
+if [ -z "$ISSUE_NUM" ]; then
+  gh issue list --repo "$PR_REPO" --state open --search "$BRANCH" --json number,title,url
 fi
 ```
 
-If those sources are empty, search:
+Never take `grep -oE '[0-9]+' | tail -1` from the branch. Never write `Closes #N` for a pull request number.
 
-```bash
-gh issue list --repo "$PR_REPO" --state open --limit 20 --json number,title,url
-```
-
-**Completion:** `ISSUE_NUM` is a confirmed issue number, or you searched and recorded that none exists. Do not invent a number.
+**Completion:** `ISSUE_NUM` is a confirmed issue (not a PR), or you searched and recorded that none exists. Do not invent a number.
 
 ### Existing PR for this issue
 
