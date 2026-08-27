@@ -180,6 +180,16 @@ describe('bundled-defaults', () => {
       expect(content).toContain('--head "$PR_HEAD"');
     });
 
+    it('archon-create-pr should resolve a related issue and put Closes in the PR body', () => {
+      const content = BUNDLED_COMMANDS['archon-create-pr'];
+      expect(content).toContain('gh issue view "$ISSUE_NUM" --repo "$PR_REPO"');
+      expect(content).toContain('gh issue list --repo "$PR_REPO"');
+      expect(content).toContain('Closes #${ISSUE_NUM}');
+      expect(content).toContain('gh pr edit "$PR_NUMBER" --repo "$PR_REPO" --body-file');
+      expect(content).toContain('repository default branch');
+      expect(content).not.toContain('--fill');
+    });
+
     it('archon-finalize-pr should target the configured PR remote repository', () => {
       const content = BUNDLED_COMMANDS['archon-finalize-pr'];
       expect(content).toContain('**PR target remote**: $PR_REMOTE');
