@@ -100,11 +100,21 @@ async function collect(proc: Bun.Subprocess<'ignore', 'pipe', 'pipe'>): Promise<
   return { exitCode, stdout, stderr };
 }
 
+function subprocessEnv(ctx: Sandbox, extraEnv: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    ARCHON_HOME: ctx.archonHome,
+    DATABASE_URL: '',
+    LOG_LEVEL: 'silent',
+  };
+  return { ...env, ...extraEnv };
+}
+
 /** Run with raw argv — no implicit `--cwd`, for argument-parsing cases. */
 async function runRaw(ctx: Sandbox, ...args: string[]): Promise<RunResult> {
   return collect(
     Bun.spawn(['bun', 'run', SCRIPT, ...args], {
-      env: { ...process.env, ARCHON_HOME: ctx.archonHome, LOG_LEVEL: 'silent' },
+      env: subprocessEnv(ctx),
       cwd: ctx.repo,
       stdout: 'pipe',
       stderr: 'pipe',
@@ -130,7 +140,7 @@ async function runWithEnv(
 ): Promise<RunResult> {
   return collect(
     Bun.spawn(['bun', 'run', SCRIPT, '--cwd', cwd, ...args], {
-      env: { ...process.env, ARCHON_HOME: ctx.archonHome, LOG_LEVEL: 'silent', ...extraEnv },
+      env: subprocessEnv(ctx, extraEnv),
       stdout: 'pipe',
       stderr: 'pipe',
     })
@@ -438,16 +448,21 @@ describe('migrate-state-dir', () => {
 
         const src = [
           "const db = await import('@archon/core/db/codebases');",
-          'await db.createCodebase({',
+          "const connection = await import('@archon/core/db/connection');",
+          'try {',
+          '  await db.createCodebase({',
           `  name: ${JSON.stringify(PROJECT_NAME)},`,
           `  repository_url: ${JSON.stringify(`https://github.com/${PROJECT_NAME}`)},`,
           `  default_cwd: ${JSON.stringify(ctx.repo)},`,
           "  default_branch: 'main',",
-          '});',
+          '  });',
+          '} finally {',
+          '  await connection.closeDatabase();',
+          '}',
         ].join('\n');
         const proc = Bun.spawn(['bun', '-e', src], {
           cwd: REPO_ROOT,
-          env: { ...process.env, ARCHON_HOME: ctx.archonHome, LOG_LEVEL: 'silent' },
+          env: subprocessEnv(ctx),
           stdout: 'pipe',
           stderr: 'pipe',
         });
