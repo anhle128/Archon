@@ -3809,6 +3809,59 @@ nodes:
         });
       }
     });
+
+    it('loads the Ralph-only test workflow with native fail-fast preflight', async () => {
+      const workflowPath = join(
+        import.meta.dir,
+        '..',
+        '..',
+        '..',
+        '.archon',
+        'workflows',
+        'defaults',
+        'speckit-ralph-test.yaml'
+      );
+      const result = parseWorkflow(await readFile(workflowPath, 'utf8'), basename(workflowPath));
+
+      expect(result.error).toBeNull();
+      expect(result.warnings).toEqual([]);
+      expect(result.workflow?.name).toBe('speckit-ralph-test');
+      expect(result.workflow?.description).toContain('test ralph');
+      expect(result.workflow).toMatchObject({
+        provider: 'codex',
+        model: 'gpt-5.5',
+        effort: 'xhigh',
+      });
+      expect(result.workflow?.interactive).toBeUndefined();
+
+      const nodes = new Map(result.workflow?.nodes.map(node => [node.id, node]));
+      expect([...nodes.keys()]).toEqual(['ralph-native-preflight', 'ralph-loop-run']);
+      expect(nodes.has('ralph-tasks-to-ralph')).toBe(false);
+      expect(nodes.has('ralph-sync-back')).toBe(false);
+
+      const preflight = nodes.get('ralph-native-preflight');
+      const loop = nodes.get('ralph-loop-run');
+
+      expect(preflight && isBashNode(preflight)).toBe(true);
+      if (!preflight || !isBashNode(preflight)) throw new Error('Ralph-only preflight missing');
+      expect(preflight.depends_on ?? []).toEqual([]);
+      expect(preflight.bash).toContain('ralph_prd_file');
+      expect(preflight.bash).toContain('ralph_progress_file');
+      expect(preflight.bash).toContain('Invalid Ralph PRD');
+
+      expect(loop && isLoopNode(loop)).toBe(true);
+      if (!loop || !isLoopNode(loop)) throw new Error('Ralph-only loop missing');
+      expect(loop.depends_on).toEqual(['ralph-native-preflight']);
+      expect(loop.effort).toBe('xhigh');
+      expect(loop.loop).toMatchObject({
+        command: 'archon-speckit-ralph-iteration',
+        fresh_context: true,
+        max_iterations: 100,
+      });
+      expect(loop.loop.until).toBeUndefined();
+      expect(loop.loop.until_bash).toContain('select(.completed==false)');
+      expect(loop.loop.until_bash).toContain('select(.passes==false)');
+    });
   });
 
   describe('retry config parsing', () => {
