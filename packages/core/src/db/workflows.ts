@@ -110,7 +110,7 @@ async function cleanupRetryRefsForRun(run: {
 const ORPHAN_RESUME_STALE_DAYS = 1;
 
 /**
- * SQL fragment matching a run that may be resumed: failed/paused, or a stale
+ * SQL fragment matching a run that may be resumed: failed/paused/cancelled, or a stale
  * 'running' orphan (no activity for ORPHAN_RESUME_STALE_DAYS). `dayParamIndex`
  * is the 1-based placeholder position at which the caller MUST bind
  * ORPHAN_RESUME_STALE_DAYS. Shared by findResumableRun and resumeWorkflowRun so
@@ -119,7 +119,7 @@ const ORPHAN_RESUME_STALE_DAYS = 1;
  */
 function resumableStatusClause(dialect: SqlDialect, dayParamIndex: number): string {
   const staleOrphan = `last_activity_at IS NULL OR last_activity_at < ${dialect.nowMinusDays(dayParamIndex)}`;
-  return `(status IN ('failed', 'paused') OR (status = 'running' AND (${staleOrphan})))`;
+  return `(status IN ('failed', 'paused', 'cancelled') OR (status = 'running' AND (${staleOrphan})))`;
 }
 
 /**
@@ -867,7 +867,7 @@ export async function findResumableRun(
 }
 
 /**
- * Find a resumable (failed/paused) run for a workflow scoped to (parent conversation, codebase).
+ * Find a resumable (failed/paused/cancelled) run for a workflow scoped to (parent conversation, codebase).
  * Used by the orchestrator (all platforms) to detect approved runs that need foreground resume
  * on the prior run's worktree. Codebase scope prevents cross-project resume on persistent
  * chat conversation IDs (Telegram chat_id, Slack thread, etc.).
@@ -892,8 +892,8 @@ export async function findResumableRunByParentConversation(
        WHERE workflow_name = $1
          AND parent_conversation_id = $2
          AND codebase_id = $3
-         AND status IN ('failed', 'paused')
-       ORDER BY CASE WHEN status = 'paused' THEN 0 ELSE 1 END, started_at DESC
+         AND status IN ('failed', 'paused', 'cancelled')
+       ORDER BY CASE WHEN status = 'paused' THEN 0 WHEN status = 'failed' THEN 1 ELSE 2 END, started_at DESC
        LIMIT 1`,
       [workflowName, parentConversationId, codebaseId]
     );

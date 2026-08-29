@@ -29,6 +29,7 @@ export const TERMINAL_WORKFLOW_STATUSES: readonly WorkflowRunStatus[] = [
 export const RESUMABLE_WORKFLOW_STATUSES: readonly WorkflowRunStatus[] = [
   'failed',
   'paused',
+  'cancelled',
 ] as const;
 
 /** Statuses that allow a user to retry one failed DAG node. */

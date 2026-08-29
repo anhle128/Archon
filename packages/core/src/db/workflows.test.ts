@@ -1080,7 +1080,7 @@ describe('workflows database', () => {
 
       expect(result).toEqual(failedRun);
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(query).toContain("status IN ('failed', 'paused')");
+      expect(query).toContain("status IN ('failed', 'paused', 'cancelled')");
       expect(query).toContain('working_path = $2');
       expect(query).not.toContain('conversation_id');
       expect(query).toContain('ORDER BY started_at DESC');
@@ -1160,11 +1160,13 @@ describe('workflows database', () => {
       await findResumableRunByParentConversation('piv', 'conv-1', 'cb');
 
       const [query] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(query).toContain("status IN ('failed', 'paused')");
+      expect(query).toContain("status IN ('failed', 'paused', 'cancelled')");
       // Status is the primary sort key: an open gate auto-resumes, while a
       // failed candidate is gated behind an explicit user prompt. Ordering by
       // started_at alone lets a newer failure shadow an older waiting gate.
-      expect(query).toContain("ORDER BY CASE WHEN status = 'paused' THEN 0 ELSE 1 END");
+      expect(query).toContain(
+        "ORDER BY CASE WHEN status = 'paused' THEN 0 WHEN status = 'failed' THEN 1 ELSE 2 END"
+      );
       // Recency still breaks ties within a status.
       expect(query).toContain('started_at DESC');
     });
@@ -1505,8 +1507,8 @@ describe('workflows database', () => {
 
     test('guards the UPDATE with the resumable-status CAS predicate', async () => {
       // The flip to 'running' must only match a row that is still resumable —
-      // failed/paused, or a stale 'running' orphan — so two concurrent resumers
-      // can't both win and double-claim the worktree.
+      // failed/paused/cancelled, or a stale 'running' orphan — so two concurrent
+      // resumers can't both win and double-claim the worktree.
       mockQuery.mockResolvedValueOnce(createQueryResult([{ metadata: {} }]));
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       mockQuery.mockResolvedValueOnce(
@@ -1516,7 +1518,7 @@ describe('workflows database', () => {
       await resumeWorkflowRun('workflow-run-123');
 
       const [updateQuery, updateParams] = mockQuery.mock.calls[1] as [string, unknown[]];
-      expect(updateQuery).toContain("status IN ('failed', 'paused')");
+      expect(updateQuery).toContain("status IN ('failed', 'paused', 'cancelled')");
       expect(updateQuery).toContain("status = 'running' AND");
       // The stale-orphan arm references $2 — it MUST be bound to the day count.
       expect(updateQuery).toContain('$2');

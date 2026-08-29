@@ -866,12 +866,16 @@ describe('resumeWorkflow', () => {
     mockGetWorkflowRun.mockClear();
   });
 
-  test('returns run when status is resumable', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'failed' }));
+  test.each(['failed', 'paused', 'cancelled'] as const)(
+    'returns run when status is %s',
+    async status => {
+      mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status }));
 
-    const run = await resumeWorkflow('run-1');
-    expect(run.id).toBe('run-1');
-  });
+      const run = await resumeWorkflow('run-1');
+      expect(run.id).toBe('run-1');
+      expect(run.status).toBe(status);
+    }
+  );
 
   test('throws on non-resumable status', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'completed' }));
