@@ -2123,6 +2123,40 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
     expect(platformConvId).toBe('web-plat-abc');
     expect(dispatchedMessage).toBe('/workflow resume run-uuid-4');
   });
+
+  test('returns 200 and dispatches resume for a cancelled run with a web parent', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce({
+      ...MOCK_FAILED_RUN,
+      id: 'run-cancelled-web',
+      status: 'cancelled' as const,
+      completed_at: NOW,
+      parent_conversation_id: 'parent-conv-uuid',
+      user_message: 'Run the deploy',
+    });
+    mockGetConversationById.mockResolvedValueOnce({
+      id: 'parent-conv-uuid',
+      platform_conversation_id: 'web-plat-abc',
+      platform_type: 'web',
+    });
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-cancelled-web/resume', {
+      method: 'POST',
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { success: boolean; message: string };
+    expect(body.success).toBe(true);
+    expect(body.message).toContain('Resuming workflow');
+
+    const [, platformConvId, dispatchedMessage] = mockHandleMessage.mock.calls[0] as [
+      unknown,
+      string,
+      string,
+    ];
+    expect(platformConvId).toBe('web-plat-abc');
+    expect(dispatchedMessage).toBe('/workflow resume run-cancelled-web');
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -205,7 +205,7 @@ export async function resumeWorkflow(runId: string): Promise<WorkflowRun> {
   const run = await getRunOrThrow(runId, 'operations.workflow_resume_lookup_failed');
   if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) {
     throw new Error(
-      `Cannot resume run with status '${run.status}'. Only failed or paused runs can be resumed.`
+      `Cannot resume run with status '${run.status}'. Only failed, paused, or cancelled runs can be resumed.`
     );
   }
   return run;
