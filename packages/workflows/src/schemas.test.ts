@@ -899,8 +899,8 @@ describe('dagNodeSchema — per-node Pi posture (pi:)', () => {
   });
 
   test('preserves pi posture and exact raw effort on a loop node', () => {
-    // Loops drop model/provider in the transform, but pi and raw effort MUST survive
-    // because the loop itself owns the per-iteration sendQuery call.
+    // pi and raw effort MUST survive because the loop itself owns the
+    // per-iteration sendQuery call.
     const result = dagNodeSchema.safeParse({
       id: 'implement',
       loop: { prompt: 'do work', until: 'DONE', max_iterations: 5 },
@@ -915,6 +915,23 @@ describe('dagNodeSchema — per-node Pi posture (pi:)', () => {
         extensionFlags: { plan: false },
       });
       expect(result.data.effort).toBe('  future-loop  ');
+    }
+  });
+
+  test('loop node keeps node-level provider/model', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'iterate',
+      provider: 'codex',
+      model: 'gpt-5.5',
+      effort: 'high',
+      loop: { prompt: 'work', until: 'DONE', max_iterations: 3 },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const node = result.data as Record<string, unknown>;
+      expect(node.provider).toBe('codex');
+      expect(node.model).toBe('gpt-5.5');
+      expect(node.effort).toBe('high');
     }
   });
 

@@ -53,6 +53,28 @@ function isRouteOutcome(value: unknown): value is RouteLoopOutcome {
   return ROUTE_OUTCOMES.some(outcome => outcome === value);
 }
 
+/**
+ * Wire discriminants for node types the visual builder renders read-only.
+ * These have no round-trip-safe inspector editing, so their full wire payload
+ * must be preserved verbatim rather than rebuilt from a fixed field allowlist.
+ * resolveNodeDisplay collapses several (loop_group, script, include, workflow)
+ * to the `prompt` display type, so detection keys on the wire field, not nodeType.
+ */
+const READ_ONLY_WIRE_KEYS = [
+  'loop',
+  'loop_group',
+  'approval',
+  'script',
+  'include',
+  'workflow',
+  'plannotator_gate',
+  'cancel',
+] as const;
+
+function isReadOnlyWireNode(data: Record<string, unknown>): boolean {
+  return READ_ONLY_WIRE_KEYS.some(key => data[key] !== undefined);
+}
+
 function routeLoopEdgeLabel(
   outcome: RouteLoopOutcome
 ): Pick<Edge, 'label' | 'labelStyle' | 'labelBgStyle' | 'labelBgPadding' | 'labelBgBorderRadius'> {
@@ -91,7 +113,7 @@ export function reactFlowToDagNodes(rfNodes: DagFlowNode[], rfEdges: Edge[]): Da
       trigger_rule: node.data.trigger_rule || undefined,
     };
 
-    if (node.data.nodeType === 'plannotator_gate' || node.data.nodeType === 'cancel') {
+    if (isReadOnlyWireNode(node.data as Record<string, unknown>)) {
       const wireNode: Record<string, unknown> = { ...node.data };
       delete wireNode.label;
       delete wireNode.nodeType;

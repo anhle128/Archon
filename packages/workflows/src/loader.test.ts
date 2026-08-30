@@ -3827,11 +3827,8 @@ nodes:
       expect(result.warnings).toEqual([]);
       expect(result.workflow?.name).toBe('speckit-ralph-test');
       expect(result.workflow?.description).toContain('test ralph');
-      expect(result.workflow).toMatchObject({
-        provider: 'codex',
-        model: 'gpt-5.5',
-        effort: 'xhigh',
-      });
+      expect(result.workflow?.provider).toBeUndefined();
+      expect(result.workflow?.model).toBeUndefined();
       expect(result.workflow?.interactive).toBeUndefined();
 
       const nodes = new Map(result.workflow?.nodes.map(node => [node.id, node]));
@@ -3853,6 +3850,8 @@ nodes:
       if (!loop || !isLoopNode(loop)) throw new Error('Ralph-only loop missing');
       expect(loop.depends_on).toEqual(['ralph-native-preflight']);
       expect(loop.effort).toBe('xhigh');
+      expect(loop.provider).toBe('omp');
+      expect(loop.model).toBe('cursor/cursor-grok-4.5');
       expect(loop.loop).toMatchObject({
         command: 'archon-speckit-ralph-iteration',
         fresh_context: true,

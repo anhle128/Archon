@@ -1457,13 +1457,17 @@ export const dagNodeSchema = dagNodeFlatSchema
       return { ...base, ...aiOnly, loop_group: data.loop_group } as LoopGroupNode;
     }
     // loop — guaranteed by superRefine to be defined at this point.
-    // Unlike the rest of aiOnly (dropped for loops — model/provider inherit from
-    // the workflow level), `pi` posture and raw `effort` are kept because this loop
-    // performs the per-iteration sendQuery. Both are excluded from LOOP_NODE_AI_FIELDS
-    // so the loader does not warn that they are ignored.
+    // `model`/`provider` (like `pi` posture, raw `effort`, and `output_format`) are
+    // kept because this loop performs its own per-iteration sendQuery, so the node
+    // must carry the provider/model that sendQuery resolves against. All five are
+    // excluded from LOOP_NODE_AI_FIELDS so the loader does not warn that they are
+    // ignored. The REMAINING aiOnly fields stay in LOOP_NODE_AI_FIELDS and are
+    // deliberately NOT spread here — the loader keeps warning they are ignored.
     if (!data.loop) throw new Error('unreachable: loop must be defined after superRefine');
     return {
       ...base,
+      ...(data.model !== undefined ? { model: data.model } : {}),
+      ...(data.provider !== undefined ? { provider: data.provider } : {}),
       ...(data.pi !== undefined ? { pi: data.pi } : {}),
       ...(data.effort !== undefined ? { effort: data.effort } : {}),
       // Kept for the same reason as `pi`: a loop: node runs its own sendQuery, so
