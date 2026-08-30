@@ -275,7 +275,7 @@ describe('OmpEventParser', () => {
     ).toThrow('unfinished');
   });
 
-  test('rejects unpaired tools and tool errors without a result', () => {
+  test('tolerates an orphan tool end but rejects malformed and mismatched tool events', () => {
     const parser = new OmpEventParser(false);
     parser.consumeLine(JSON.stringify({ type: 'session', id: 'session-tools' }));
     expect(() =>
@@ -283,7 +283,8 @@ describe('OmpEventParser', () => {
         JSON.stringify({ type: 'tool_execution_start', toolName: 'read', args: {} })
       )
     ).toThrow('toolCallId');
-    expect(() =>
+    // A superseded/duplicate end whose start is not open is swallowed, not fatal.
+    expect(
       parser.consumeLine(
         JSON.stringify({
           type: 'tool_execution_end',
@@ -292,7 +293,7 @@ describe('OmpEventParser', () => {
           result: {},
         })
       )
-    ).toThrow('unmatched');
+    ).toEqual([]);
     parser.consumeLine(
       JSON.stringify({
         type: 'tool_execution_start',
@@ -413,6 +414,48 @@ describe('OmpEventParser', () => {
       sessionId: 'omp-session-1',
       stopReason: 'stop',
     });
+    expect(result).not.toHaveProperty('isError');
+  });
+
+  test('continues after an orphan tool_execution_end instead of aborting the run', () => {
+    // Regression: a tool_execution_end can arrive whose start is not open (its id
+    // was already closed, or its start was never seen). The parser used to throw
+    // 'unmatched tool_execution_end', which made the provider raise
+    // omp_protocol_error and SIGTERM the CLI, failing the node. It must stay
+    // non-fatal so the turn completes.
+    const parser = new OmpEventParser(false);
+    parser.consumeLine(JSON.stringify({ type: 'session', id: 'omp-session-1' }));
+    parser.consumeLine(
+      JSON.stringify({ type: 'tool_execution_start', toolCallId: 't1', toolName: 'read', args: {} })
+    );
+    expect(
+      parser.consumeLine(
+        JSON.stringify({
+          type: 'tool_execution_end',
+          toolCallId: 't1',
+          toolName: 'read',
+          result: { content: [{ type: 'text', text: 'ok' }] },
+        })
+      )
+    ).toEqual([
+      { type: 'tool_result', toolName: 'read', toolOutput: expect.any(String), toolCallId: 't1' },
+    ]);
+    // Superseding synthetic end for the already-closed call — previously fatal.
+    expect(
+      parser.consumeLine(
+        JSON.stringify({
+          type: 'tool_execution_end',
+          toolCallId: 't1',
+          toolName: 'read',
+          isError: true,
+          result: { content: [{ type: 'text', text: 'Tool execution was aborted.' }] },
+        })
+      )
+    ).toEqual([]);
+    parser.consumeLine(JSON.stringify({ type: 'message_end', message: completeMessage('done') }));
+    parser.consumeLine(JSON.stringify({ type: 'agent_end' }));
+    const result = parser.buildResult(undefined);
+    expect(result).toMatchObject({ sessionId: 'omp-session-1', stopReason: 'stop' });
     expect(result).not.toHaveProperty('isError');
   });
 });

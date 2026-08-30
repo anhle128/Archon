@@ -295,7 +295,12 @@ export class OmpEventParser {
     const toolCallId = stringField(event.toolCallId);
     if (!toolCallId) throw new Error('OMP CLI tool_execution_end is missing toolCallId.');
     const startedToolName = this.activeTools.get(toolCallId);
-    if (!startedToolName) throw new Error('OMP CLI emitted an unmatched tool_execution_end.');
+    if (!startedToolName) {
+      // No active tool call matches this orphan end. Ignore it so later valid
+      // events continue. Every other tool-lifecycle check stays strict.
+      log.warn({ toolCallId, toolName }, 'omp.unmatched_tool_end');
+      return chunks;
+    }
     if (startedToolName !== toolName)
       throw new Error('OMP CLI emitted a mismatched tool_execution_end.');
     if (!Object.hasOwn(event, 'result'))
