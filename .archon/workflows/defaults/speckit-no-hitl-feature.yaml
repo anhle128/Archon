@@ -39,9 +39,13 @@ nodes:
       don't guess, spawn sub-agents for help
     depends_on:
       - setup
-    effort: xhigh
-    provider: omp
-    model: "xai-oauth/grok-4.6"
+    effort: high
+    provider: claude
+    model: "claude-opus-4-8[1M]"
+    # effort: xhigh
+    # provider: omp
+    # model: "anthropic/claude-opus-4-8"
+    # model: "xai-oauth/grok-4.6"
     context: fresh
 
   - id: clarify
@@ -200,9 +204,12 @@ nodes:
       /speckit-plan create detail plan <feature_directory>
     depends_on:
       - red-team-apply
-    effort: xhigh
-    provider: omp
-    model: "xai-oauth/grok-4.6"
+    effort: high
+    provider: claude
+    model: "claude-opus-4-8[1M]"
+    # effort: xhigh
+    # provider: omp
+    # model: "xai-oauth/grok-4.6"
     context: fresh
 
   - id: tasks
