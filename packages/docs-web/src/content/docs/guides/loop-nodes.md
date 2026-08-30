@@ -220,6 +220,23 @@ Choose based on the work scope:
 - Multi-story implementation: 10–15
 - Long-running autonomous agents: 15–20
 
+### Loop progress display (`current/expected`)
+
+A loop node's graph card normally shows `current/max iterations`. To show the real
+expected total instead — `current/expected (max N)` — have an **upstream node** print a
+single discriminated JSON object on stdout:
+
+```json
+{ "type": "loop_progress", "targetNodeId": "<loop node id>", "expectedIterations": 20 }
+```
+
+The engine parses ONLY the bounded `targetNodeId` + `expectedIterations` fields from
+that node's output (never the raw stdout), attaches them to its `node_completed` event,
+and the UI shows the named loop as `current/expected (max N)`. It is display only —
+never affecting control flow, completion, or `max_iterations` — and a missing,
+malformed, or non-positive value is ignored. No new loop field is required: it rides
+the existing typed node-output → event path (a `bash:` preflight is the usual emitter).
+
 ### `fresh_context`
 
 Controls session continuity between iterations:

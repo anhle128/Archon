@@ -229,6 +229,33 @@ function enrichDagNodesWithRouteDecisions(
   return Array.from(nodeMap.values());
 }
 
+function enrichDagNodesWithLoopProgress(
+  nodes: DagNodeState[],
+  events: WorkflowEventResponse[]
+): DagNodeState[] {
+  const nodeMap = new Map(nodes.map(node => [node.nodeId, node]));
+  for (const e of events) {
+    if (e.event_type !== 'node_completed') continue;
+    const lp = e.data.loop_progress as
+      | { targetNodeId?: unknown; expectedIterations?: unknown }
+      | undefined;
+    if (
+      !lp ||
+      typeof lp.targetNodeId !== 'string' ||
+      lp.targetNodeId.trim().length === 0 ||
+      typeof lp.expectedIterations !== 'number' ||
+      !Number.isSafeInteger(lp.expectedIterations) ||
+      lp.expectedIterations <= 0
+    ) {
+      continue;
+    }
+    const target = nodeMap.get(lp.targetNodeId);
+    if (!target) continue;
+    nodeMap.set(lp.targetNodeId, { ...target, expectedIterations: lp.expectedIterations });
+  }
+  return Array.from(nodeMap.values());
+}
+
 export function buildWorkflowDagNodeStates(
   nodeStates: WorkflowRunNodeState[] | undefined,
   events: WorkflowEventResponse[]
@@ -236,8 +263,8 @@ export function buildWorkflowDagNodeStates(
   const baseNodes = nodeStates
     ? nodeStates.map(toDagNodeState)
     : buildDagNodeStatesFromEvents(events);
-  return enrichDagNodesWithLoopIterations(
-    enrichDagNodesWithRouteDecisions(baseNodes, events),
+  return enrichDagNodesWithLoopProgress(
+    enrichDagNodesWithLoopIterations(enrichDagNodesWithRouteDecisions(baseNodes, events), events),
     events
   );
 }

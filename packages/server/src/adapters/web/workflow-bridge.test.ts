@@ -277,3 +277,34 @@ describe('mapWorkflowEvent — container_lifecycle (Phase B)', () => {
     expect(payload).not.toHaveProperty('containerId');
   });
 });
+
+describe('mapWorkflowEvent — node_completed loopProgress (loop display total)', () => {
+  test('projects loopProgress onto the node_completed SSE (dag_node) event', () => {
+    const completed: WorkflowEmitterEvent = {
+      type: 'node_completed',
+      runId: 'run-1',
+      nodeId: 'ralph-native-preflight',
+      nodeName: 'ralph-native-preflight',
+      duration: 12,
+      loopProgress: { targetNodeId: 'ralph-loop-run', expectedIterations: 20 },
+    };
+    expect(JSON.parse(mapWorkflowEvent(completed) ?? '{}')).toMatchObject({
+      type: 'dag_node',
+      status: 'completed',
+      nodeId: 'ralph-native-preflight',
+      loopProgress: { targetNodeId: 'ralph-loop-run', expectedIterations: 20 },
+    });
+  });
+
+  test('omits loopProgress when the completed node has none', () => {
+    const completed: WorkflowEmitterEvent = {
+      type: 'node_completed',
+      runId: 'run-1',
+      nodeId: 'plain',
+      nodeName: 'plain',
+      duration: 5,
+    };
+    const payload = JSON.parse(mapWorkflowEvent(completed) ?? '{}') as Record<string, unknown>;
+    expect(payload.loopProgress).toBeUndefined();
+  });
+});

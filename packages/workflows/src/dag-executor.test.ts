@@ -5877,6 +5877,151 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(eventTypes.filter(type => type === 'loop_iteration_completed')).toHaveLength(2);
     });
 
+    it('parses a loop_progress payload from a bash node onto its node_completed event', async () => {
+      const fixture = await createNativeRalphFixture();
+      const workflow = structuredClone(fixture.workflow);
+      const preflightNode = workflow.nodes[0];
+      if (!('bash' in preflightNode)) throw new Error('expected a bash preflight node');
+      // Preflight prints the discriminated loop-progress payload as its stdout.
+      preflightNode.bash = `${preflightNode.bash}\nprintf '{"type":"loop_progress","targetNodeId":"ralph-loop-run","expectedIterations":3}\\n'`;
+
+      const store = createMockStore();
+      mockSendQueryDag.mockImplementation(function* () {
+        writeFileSync(
+          fixture.prdPath,
+          JSON.stringify({
+            userStories: [{ id: 'US-001', completed: true, tasks: [{ id: 'T001', passes: true }] }],
+          })
+        );
+        yield { type: 'assistant', content: 'Ralph batch complete' };
+        yield { type: 'result', sessionId: 'exp-iter' };
+      });
+
+      await executeNativeRalphFixture(workflow, store);
+
+      const withProgress = store.createWorkflowEvent.mock.calls
+        .map(call => call[0])
+        .filter(
+          e =>
+            e.event_type === 'node_completed' &&
+            (e.data as Record<string, unknown>).loop_progress !== undefined
+        );
+      expect(withProgress).toHaveLength(1);
+      expect((withProgress[0].data as Record<string, unknown>).loop_progress).toEqual({
+        targetNodeId: 'ralph-loop-run',
+        expectedIterations: 3,
+      });
+    });
+
+    it('ignores a non-positive loop_progress payload (no projection, run succeeds)', async () => {
+      const fixture = await createNativeRalphFixture();
+      const workflow = structuredClone(fixture.workflow);
+      const preflightNode = workflow.nodes[0];
+      if (!('bash' in preflightNode)) throw new Error('expected a bash preflight node');
+      preflightNode.bash = `${preflightNode.bash}\nprintf '{"type":"loop_progress","targetNodeId":"ralph-loop-run","expectedIterations":0}\\n'`;
+
+      const store = createMockStore();
+      mockSendQueryDag.mockImplementation(function* () {
+        writeFileSync(
+          fixture.prdPath,
+          JSON.stringify({
+            userStories: [{ id: 'US-001', completed: true, tasks: [{ id: 'T001', passes: true }] }],
+          })
+        );
+        yield { type: 'assistant', content: 'Ralph batch complete' };
+        yield { type: 'result', sessionId: 'exp-zero' };
+      });
+
+      await executeNativeRalphFixture(workflow, store);
+
+      const withProgress = store.createWorkflowEvent.mock.calls
+        .map(call => call[0])
+        .filter(
+          e =>
+            e.event_type === 'node_completed' &&
+            (e.data as Record<string, unknown>).loop_progress !== undefined
+        );
+      expect(withProgress).toHaveLength(0);
+      expect(store.completeWorkflowRun).toHaveBeenCalled();
+    });
+
+    it('skips the speckit-ralph-test loop when the PRD has no pending userStories', async () => {
+      const sourceRoot = join(import.meta.dir, '..', '..', '..');
+      await git.execFileAsync('git', ['init', '--quiet'], { cwd: testDir });
+      const wfPath = join(
+        sourceRoot,
+        '.archon',
+        'workflows',
+        'defaults',
+        'speckit-ralph-test.yaml'
+      );
+      const cmdPath = join(
+        sourceRoot,
+        '.archon',
+        'commands',
+        'defaults',
+        'archon-speckit-ralph-iteration.md'
+      );
+      const parsed = parseWorkflow(await readFile(wfPath, 'utf8'), basename(wfPath));
+      if (parsed.error || !parsed.workflow) {
+        throw new Error(parsed.error ?? 'speckit-ralph-test did not load');
+      }
+
+      const commandsDir = join(testDir, '.archon', 'commands');
+      const extensionDir = join(testDir, '.specify', 'extensions', 'ralph-loop');
+      const ralphDir = join(testDir, '.specify', 'ralph');
+      await mkdir(commandsDir, { recursive: true });
+      await mkdir(extensionDir, { recursive: true });
+      await mkdir(ralphDir, { recursive: true });
+      await writeFile(
+        join(commandsDir, 'archon-speckit-ralph-iteration.md'),
+        await readFile(cmdPath, 'utf8')
+      );
+      await writeFile(join(extensionDir, 'AGENTS.md'), '# Ralph iteration rules\n');
+      // Every userStory already complete → preflight emits hasPending:false → the
+      // loop's `when` gate skips it (no iterations), and the run still completes.
+      await writeFile(
+        join(ralphDir, 'prd.json'),
+        JSON.stringify({
+          userStories: [{ id: 'US-001', completed: true, tasks: [{ id: 'T001', passes: true }] }],
+        })
+      );
+      await writeFile(join(ralphDir, 'progress.txt'), 'done\n');
+      await writeFile(
+        join(testDir, '.specify', 'feature.json'),
+        JSON.stringify({
+          ralph_prd_file: '.specify/ralph/prd.json',
+          ralph_progress_file: '.specify/ralph/progress.txt',
+        })
+      );
+
+      const store = createMockStore();
+      await executeDagWorkflow(
+        createMockDeps(store),
+        createMockPlatform(),
+        'conv-ralph-skip',
+        testDir,
+        parsed.workflow,
+        makeWorkflowRun('ralph-skip-run'),
+        parsed.workflow.provider ?? 'codex',
+        parsed.workflow.model,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      expect(mockSendQueryDag).not.toHaveBeenCalled();
+      const started = store.createWorkflowEvent.mock.calls
+        .map(call => call[0])
+        .filter(e => e.event_type === 'loop_iteration_started');
+      expect(started).toHaveLength(0);
+      expect(store.completeWorkflowRun).toHaveBeenCalled();
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    });
+
     it('emits a loop tool_completed duration at tool_result, excluding later assistant time', async () => {
       const store = createMockStore();
       const mockDeps = createMockDeps(store);

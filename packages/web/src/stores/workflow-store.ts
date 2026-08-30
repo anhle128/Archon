@@ -289,6 +289,20 @@ export const useWorkflowStore = create<WorkflowStoreState>()(
                 dagNodes.push(nodeState);
               }
 
+              // A node's loop-progress projection sets the TARGET loop node's
+              // display total (shown as current/expected). Enrich only if the
+              // target node already exists; the REST snapshot is the durable source.
+              const lp = event.loopProgress;
+              if (lp) {
+                const targetIdx = dagNodes.findIndex(n => n.nodeId === lp.targetNodeId);
+                if (targetIdx >= 0) {
+                  dagNodes[targetIdx] = {
+                    ...dagNodes[targetIdx],
+                    expectedIterations: lp.expectedIterations,
+                  };
+                }
+              }
+
               return { ...wf, dagNodes };
             }),
           undefined,

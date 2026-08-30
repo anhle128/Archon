@@ -189,6 +189,9 @@ export interface DagNodeEvent extends BaseSSEEvent {
   modelReasoningEffort?: RuntimeModelReasoningEffort;
   effort?: RuntimeEffortLevel;
   thinking?: RuntimeThinkingMetadata;
+  /** Bounded display-only loop-progress projection (on node_completed): sets the
+   *  target loop node's expected iteration total. Never affects control flow. */
+  loopProgress?: { targetNodeId: string; expectedIterations: number };
 }
 
 // Workflow tool activity (tool_started / tool_completed from executor)
@@ -396,6 +399,7 @@ export interface DagNodeState {
   thinking?: RuntimeThinkingMetadata;
   currentIteration?: number;
   maxIterations?: number;
+  expectedIterations?: number;
   iterations?: LoopIterationInfo[];
   tasks?: DagTaskInfo[];
   hooks?: DagHookInfo[];

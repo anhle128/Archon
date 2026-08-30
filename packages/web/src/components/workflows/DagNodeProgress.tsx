@@ -117,7 +117,9 @@ function DagNodeItem({
           <span className="truncate flex-1">{node.name}</span>
           {node.currentIteration !== undefined && node.maxIterations !== undefined && (
             <span className="text-xs text-text-secondary shrink-0">
-              {node.currentIteration}/{node.maxIterations}
+              {node.expectedIterations !== undefined
+                ? `${node.currentIteration}/${node.expectedIterations} (max ${node.maxIterations})`
+                : `${node.currentIteration}/${node.maxIterations}`}
             </span>
           )}
           {node.duration !== undefined && (

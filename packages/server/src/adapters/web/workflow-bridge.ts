@@ -118,6 +118,9 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
           : {}),
         ...(event.type === 'node_started' && event.effort ? { effort: event.effort } : {}),
         ...(event.type === 'node_started' && event.thinking ? { thinking: event.thinking } : {}),
+        ...(event.type === 'node_completed' && event.loopProgress
+          ? { loopProgress: event.loopProgress }
+          : {}),
         timestamp: Date.now(),
       });
 

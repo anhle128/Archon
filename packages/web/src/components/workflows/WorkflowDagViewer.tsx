@@ -92,6 +92,7 @@ export function WorkflowDagViewer({
           selected: node.id === selectedNodeId,
           currentIteration: live?.currentIteration,
           maxIterations: live?.maxIterations,
+          expectedIterations: live?.expectedIterations,
           routeDecision: live?.routeDecision,
           provider: live?.provider,
           model: live?.model,

@@ -46,6 +46,19 @@ interface WorkflowFailedEvent {
   error: string;
 }
 
+/**
+ * Bounded, display-only loop-progress projection carried on `node_completed`.
+ * A node (typically a preflight `bash:`) may print a single discriminated JSON
+ * object `{ "type": "loop_progress", "targetNodeId": "<loop id>", "expectedIterations": N }`
+ * on stdout; the executor parses ONLY these two bounded fields (never the raw
+ * output) and the UI shows the target loop as `current/expected (max N)`. It
+ * never affects control flow, completion, or `max_iterations`.
+ */
+export interface LoopProgress {
+  targetNodeId: string;
+  expectedIterations: number;
+}
+
 interface LoopIterationStartedEvent {
   type: 'loop_iteration_started';
   runId: string;
@@ -102,6 +115,8 @@ interface NodeCompletedEvent {
   costUsd?: number;
   stopReason?: string;
   numTurns?: number;
+  /** Bounded display-only loop-progress projection parsed from this node's output. */
+  loopProgress?: LoopProgress;
 }
 
 interface NodeFailedEvent {

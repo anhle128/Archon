@@ -38,8 +38,15 @@ nodes:
           all(.tasks[]; .passes | type == "boolean")
         )
       ' "$RLN_PRD" >/dev/null || { echo "Invalid Ralph PRD: $RLN_PRD" >&2; exit 1; }
+      RLN_PENDING=$(jq '[.userStories[] | select(.completed == false)] | length' "$RLN_PRD")
+      case "$RLN_PENDING" in ''|*[!0-9]*) echo "Could not count pending userStories in $RLN_PRD" >&2; exit 1 ;; esac
+      if [ "$RLN_PENDING" -gt 0 ]; then RLN_HAS=true; else RLN_HAS=false; fi
+      printf '{"type":"loop_progress","targetNodeId":"ralph-loop-run","expectedIterations":%d,"hasPending":%s}\n' "$RLN_PENDING" "$RLN_HAS"
 
   - id: ralph-loop-run
+    provider: omp
+    model: cursor/cursor-grok-4.5
+    effort: medium
     loop:
       command: archon-speckit-ralph-iteration
       fresh_context: true
@@ -57,4 +64,5 @@ nodes:
         jq -e '[.userStories[].tasks[]? | select(.passes==false)] | length == 0' "$RLN_PRD" >/dev/null 2>&1
     depends_on:
       - ralph-native-preflight
+    when: "$ralph-native-preflight.output.hasPending == 'true'"
     effort: xhigh

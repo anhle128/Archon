@@ -53,6 +53,24 @@ describe('buildWorkflowDagNodeStates', () => {
     });
   });
 
+  test('enriches the target loop node from node_completed loop_progress (REST replay)', () => {
+    const nodes = buildWorkflowDagNodeStates(
+      [
+        { nodeId: 'preflight', name: 'Preflight', status: 'completed', retryEpoch: 0 },
+        { nodeId: 'loop-node', name: 'Loop', status: 'running', retryEpoch: 0 },
+      ],
+      [
+        workflowEvent({
+          id: 'e1',
+          event_type: 'node_completed',
+          step_name: 'preflight',
+          data: { loop_progress: { targetNodeId: 'loop-node', expectedIterations: 20 } },
+        }),
+      ]
+    );
+    expect(nodes.find(n => n.nodeId === 'loop-node')?.expectedIterations).toBe(20);
+  });
+
   test('projects node_routed events as completed route-loop decisions', () => {
     const routeDecision = {
       sources: ['review'],

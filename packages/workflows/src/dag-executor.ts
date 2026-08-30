@@ -86,7 +86,7 @@ import { applyRouteLoopTransition } from './route-loop-state';
 import { formatToolCall } from './utils/tool-formatter';
 import { createLogger, captureWorkflowCompleted } from '@archon/paths';
 import type { WorkflowErrorClass, WorkflowNodeType } from '@archon/paths';
-import { getWorkflowEventEmitter } from './event-emitter';
+import { getWorkflowEventEmitter, type LoopProgress } from './event-emitter';
 import { evaluateCondition } from './condition-evaluator';
 import {
   declaredFieldsFromSchema,
@@ -1011,6 +1011,39 @@ export function substituteNodeOutputRefs(
       return escapedForBash ? shellQuoteOrFile(json, nodeId, field, outputFileDir) : json;
     }
   );
+}
+
+/**
+ * Parse a bounded, display-only loop-progress projection from a node's stdout.
+ * A node may print exactly one discriminated JSON object
+ * `{ "type": "loop_progress", "targetNodeId": string, "expectedIterations": <positive int> }`
+ * (extra fields such as `hasPending` are ignored). ONLY the two bounded fields are
+ * read — never the raw output — and a malformed or non-positive value returns
+ * undefined. Never affects control flow. See {@link LoopProgress}.
+ */
+function parseLoopProgress(output: string): LoopProgress | undefined {
+  const trimmed = output.trim();
+  if (!trimmed.startsWith('{') || !trimmed.includes('loop_progress')) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return undefined;
+  const obj = parsed as Record<string, unknown>;
+  if (obj.type !== 'loop_progress') return undefined;
+  const { targetNodeId, expectedIterations } = obj;
+  if (
+    typeof targetNodeId !== 'string' ||
+    targetNodeId.trim().length === 0 ||
+    typeof expectedIterations !== 'number' ||
+    !Number.isSafeInteger(expectedIterations) ||
+    expectedIterations <= 0
+  ) {
+    return undefined;
+  }
+  return { targetNodeId, expectedIterations };
 }
 
 /**
@@ -3264,6 +3297,7 @@ async function executeBashNode(
     await logNodeComplete(logDir, workflowRun.id, node.id, '<bash>', { durationMs: duration });
 
     const persistedOutput = formatPersistedBashOutput(output);
+    const loopProgress = parseLoopProgress(output);
 
     deps.store
       .createWorkflowEvent({
@@ -3281,6 +3315,7 @@ async function executeBashNode(
               }
             : {}),
           ...iterationData,
+          ...(loopProgress ? { loop_progress: loopProgress } : {}),
         }),
       })
       .catch((err: Error) => {
@@ -3296,6 +3331,7 @@ async function executeBashNode(
       nodeId: node.id,
       nodeName: node.id,
       duration,
+      ...(loopProgress ? { loopProgress } : {}),
     });
 
     return { state: 'completed', output };
@@ -4960,7 +4996,11 @@ async function executeLoopNode(
         workflow_run_id: workflowRun.id,
         event_type: 'loop_iteration_started',
         step_name: stepName,
-        data: { iteration: i, maxIterations: loop.max_iterations, nodeId: node.id },
+        data: {
+          iteration: i,
+          maxIterations: loop.max_iterations,
+          nodeId: node.id,
+        },
       })
       .catch((err: Error) => {
         logEventStoreError(err, i);
@@ -5855,7 +5895,12 @@ async function executeLoopNode(
         workflow_run_id: workflowRun.id,
         event_type: 'loop_iteration_completed',
         step_name: stepName,
-        data: { iteration: i, duration, completionDetected, nodeId: node.id },
+        data: {
+          iteration: i,
+          duration,
+          completionDetected,
+          nodeId: node.id,
+        },
       })
       .catch((err: Error) => {
         logEventStoreError(err, i);

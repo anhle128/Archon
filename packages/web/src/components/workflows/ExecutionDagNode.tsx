@@ -13,6 +13,7 @@ export interface ExecutionNodeData extends DagNodeData, RuntimeNodeMetadata {
   selected?: boolean;
   currentIteration?: number;
   maxIterations?: number;
+  expectedIterations?: number;
   routeDecision?: RouteLoopDecisionData | Record<string, unknown>;
 }
 
@@ -107,7 +108,9 @@ function ExecutionDagNodeRender({ data }: NodeProps<ExecutionFlowNode>): React.R
       </div>
       {data.currentIteration !== undefined && data.maxIterations !== undefined && (
         <div className="text-[10px] text-text-tertiary mt-0.5">
-          {data.currentIteration}/{data.maxIterations} iterations
+          {data.expectedIterations !== undefined
+            ? `${data.currentIteration}/${data.expectedIterations} (max ${data.maxIterations})`
+            : `${data.currentIteration}/${data.maxIterations} iterations`}
         </div>
       )}
       {runtimeMetadata && (

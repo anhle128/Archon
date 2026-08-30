@@ -537,6 +537,41 @@ describe('handleLoopIteration', () => {
     expect(node.iterations![0].duration).toBe(1500);
   });
 
+  test('handleDagNode sets expectedIterations on the target loop node from loopProgress', () => {
+    useWorkflowStore.getState().handleWorkflowStatus(statusEvent({ runId: 'run-lp' }));
+    useWorkflowStore
+      .getState()
+      .handleDagNode(dagNodeEvent({ runId: 'run-lp', nodeId: 'loop-node', name: 'Loop' }));
+    // Preflight completes carrying the projection targeting the loop node.
+    useWorkflowStore.getState().handleDagNode(
+      dagNodeEvent({
+        runId: 'run-lp',
+        nodeId: 'preflight',
+        name: 'Preflight',
+        status: 'completed',
+        loopProgress: { targetNodeId: 'loop-node', expectedIterations: 20 },
+      })
+    );
+    const wf = useWorkflowStore.getState().workflows.get('run-lp')!;
+    const loop = wf.dagNodes.find(n => n.nodeId === 'loop-node')!;
+    expect(loop.expectedIterations).toBe(20);
+  });
+
+  test('handleDagNode ignores loopProgress when the target node is absent (no placeholder)', () => {
+    useWorkflowStore.getState().handleWorkflowStatus(statusEvent({ runId: 'run-lp2' }));
+    useWorkflowStore.getState().handleDagNode(
+      dagNodeEvent({
+        runId: 'run-lp2',
+        nodeId: 'preflight',
+        name: 'Preflight',
+        status: 'completed',
+        loopProgress: { targetNodeId: 'ghost-loop', expectedIterations: 20 },
+      })
+    );
+    const wf = useWorkflowStore.getState().workflows.get('run-lp2')!;
+    expect(wf.dagNodes.find(n => n.nodeId === 'ghost-loop')).toBeUndefined();
+  });
+
   test('preserves prior maxIterations when total: 0 (completed/failed events)', () => {
     useWorkflowStore.getState().handleWorkflowStatus(statusEvent({ runId: 'run-li4' }));
     useWorkflowStore
