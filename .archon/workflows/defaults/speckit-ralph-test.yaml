@@ -10,9 +10,6 @@ description: |
   NOT for: The non-native ralph.sh loop.
   Prereq: An active Speckit feature with `.specify/feature.json` and an
           already-valid Ralph PRD plus progress file (no conversion this run).
-provider: codex
-model: gpt-5.5
-effort: xhigh
 
 nodes:
   - id: ralph-native-preflight
