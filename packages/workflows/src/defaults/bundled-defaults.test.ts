@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, writeFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import {
   isBinaryBuild,
@@ -185,11 +185,34 @@ describe('bundled-defaults', () => {
       const content = BUNDLED_COMMANDS['archon-create-pr'];
       expect(content).toContain('if .pull_request then empty else .number end');
       expect(content).toContain('^[0-9]+-[0-9]+-');
-      expect(content).toContain('gh issue list --repo "$PR_REPO" --state open --search "$BRANCH"');
+      expect(content).toContain('--search "$ARGUMENTS"');
       expect(content).toContain('Closes #${ISSUE_NUM}');
       expect(content).toContain('gh pr edit "$PR_NUMBER" --repo "$PR_REPO" --body-file');
       expect(content).toContain('repository default branch');
       expect(content).not.toContain('--fill');
+    });
+
+    it('archon-create-pr source 1b should search open issues by full $ARGUMENTS text via --jq', () => {
+      const content = BUNDLED_COMMANDS['archon-create-pr'];
+      // Must search open issues using the full $ARGUMENTS, not just parse for #N
+      expect(content).toContain('--search "$ARGUMENTS"');
+      // Uses gh --jq (gojq), not python3
+      expect(content).toContain('--jq');
+      expect(content).toContain('env.ARGS_TEXT');
+      // No python3 command invocation (mentions in comments are fine)
+      expect(content).not.toMatch(/python3\s+-c/);
+      // Exact title match wins immediately
+      expect(content).toMatch(/exact.*title|title.*exact/i);
+      // Unique containment fallback via gojq length check
+      expect(content).toContain('$partial | length');
+      // $ARGUMENTS passed via env, not string interpolation
+      expect(content).toContain('ARGS_TEXT="$ARGUMENTS"');
+    });
+
+    it('archon-create-pr should scan artifacts for tracker references', () => {
+      const content = BUNDLED_COMMANDS['archon-create-pr'];
+      expect(content).toContain('[Gg]it[Hh]ub[[:space:]]+issue[[:space:]]+[0-9]+');
+      expect(content).toMatch(/Source 4[\s\S]*?ARTIFACTS_DIR/);
     });
 
     it('archon-finalize-pr should target the configured PR remote repository', () => {
@@ -247,6 +270,104 @@ describe('bundled-defaults', () => {
 
     it('reads fix/112-slug from the branch', () => {
       expect(candidateFromBranch('fix/112-slug')).toBe('112');
+    });
+
+    it('does not extract issue numbers from opaque thread branch names', () => {
+      expect(candidateFromBranch('archon/thread-0d443474')).toBe('');
+    });
+  });
+
+  describe('source 1b $ARGUMENTS title search (executable)', () => {
+    // Extract the --jq filter from source 1b and run it against fixture data
+    // via jq (same gojq syntax). This tests the actual matching logic without
+    // needing a real GitHub API or python3.
+    function runTitleMatch(
+      argsText: string,
+      issues: Array<{ number: number; title: string }>
+    ): string {
+      const content = BUNDLED_COMMANDS['archon-create-pr'];
+      // Find the source 1b --jq specifically, not the issue_num_if_issue one
+      const source1bMarker = '# --- Source 1b:';
+      const source1bStart = content.indexOf(source1bMarker);
+      if (source1bStart < 0) throw new Error('Source 1b marker missing');
+      const jqMarker = "--jq '";
+      const jqStart = content.indexOf(jqMarker, source1bStart);
+      if (jqStart < 0) throw new Error('--jq marker missing in source 1b');
+      const filterStart = jqStart + jqMarker.length;
+      const filterEnd = content.indexOf("' 2>/dev/null)", filterStart);
+      if (filterEnd < 0) throw new Error('--jq filter end marker missing');
+      const jqFilter = content.slice(filterStart, filterEnd).trim();
+
+      const jsonIssues = JSON.stringify(issues);
+      // Write filter to a temp file to avoid shell quoting issues with multiline gojq.
+      // jq reads JSON from stdin and filter from the file via -f.
+      const tmpFilter = `/tmp/jq-filter-${process.pid}.jq`;
+      writeFileSync(tmpFilter, jqFilter);
+      try {
+        const result = spawnSync(
+          'bash',
+          [
+            '-c',
+            `printf '%s' "$1" | ARGS_TEXT="$2" jq -r -f "$3"`,
+            '_',
+            jsonIssues,
+            argsText,
+            tmpFilter,
+          ],
+          { encoding: 'utf8', timeout: 10_000 }
+        );
+        if (result.status !== 0) {
+          throw new Error(`jq filter failed (exit ${result.status}): ${result.stderr}`);
+        }
+        return result.stdout.trim();
+      } finally {
+        unlinkSync(tmpFilter);
+      }
+    }
+
+    it('resolves exact title match for speckit story message', () => {
+      const args =
+        '[RM-02][Epic 3] 3-6-implement-the-characterized-external-control-paths: Implement the characterized external control paths';
+      const issues = [
+        { number: 119, title: args },
+        {
+          number: 120,
+          title: '[RM-02][Epic 3] 3-8-list-native-sessions-when-the-matrix-allows-it',
+        },
+      ];
+      expect(runTitleMatch(args, issues)).toBe('119');
+    });
+
+    it('resolves unique containment when $ARGUMENTS is a substring of the title', () => {
+      const args = 'implement the characterized external control paths';
+      const issues = [
+        {
+          number: 119,
+          title:
+            '[RM-02][Epic 3] 3-6-implement-the-characterized-external-control-paths: Implement the characterized external control paths',
+        },
+      ];
+      expect(runTitleMatch(args, issues)).toBe('119');
+    });
+
+    it('returns empty when multiple issues partially match (ambiguity)', () => {
+      const args = 'implement';
+      const issues = [
+        { number: 119, title: 'Implement the characterized external control paths' },
+        { number: 120, title: 'Implement native session listing' },
+      ];
+      expect(runTitleMatch(args, issues)).toBe('');
+    });
+
+    it('returns empty when no issues match', () => {
+      const args = 'completely unrelated feature request';
+      const issues = [
+        {
+          number: 119,
+          title: '[RM-02][Epic 3] 3-6-implement-the-characterized-external-control-paths',
+        },
+      ];
+      expect(runTitleMatch(args, issues)).toBe('');
     });
   });
 

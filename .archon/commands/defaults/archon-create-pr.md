@@ -41,14 +41,15 @@ issue_num_if_issue() {
 
 Try sources in this order. Stop at the first number `issue_num_if_issue` prints:
 
-1. `$ARGUMENTS` — `#123`, `issue 123`, `owner/repo#123`, or a GitHub **issues** URL (`/issues/123`, not `/pull/123`)
+1. `$ARGUMENTS` — two sub-steps:
+   - **1a. Explicit syntax**: `#123`, `issue 123`, `owner/repo#123`, or a GitHub **issues** URL (`/issues/123`, not `/pull/123`)
+   - **1b. Title search**: when no explicit syntax found, search open issues using the full `$ARGUMENTS` text. Exact title match wins immediately. Otherwise, use the issue only when exactly one open issue title contains the full `$ARGUMENTS` string (or vice versa). Multiple partial matches = no match.
 2. Branch name — only these tokens:
    - `issue-123`, `issue/123`, `#123`
    - `fix/123-slug` (or `feat` / `feature` / `bug` / `bugfix` / `hotfix` / `chore`)
    - `123-slug` at the start **only when the second segment does not start with a digit**
 3. Commits on this branch — `Closes #N` / `Fixes #N` / `Resolves #N` in `git log origin/$BASE_BRANCH..HEAD`
-4. Workflow artifacts under `$ARTIFACTS_DIR` — the same closing-keyword or `/issues/N` URL forms
-5. Open-issue search by **branch slug**: use the issue only when exactly one open issue title contains the full branch name
+4. Workflow artifacts under `$ARTIFACTS_DIR` — closing keywords (`Closes #N` / `Fixes #N` / `Resolves #N`), `/issues/N` URLs, and tracker references (`GitHub issue N`, `issue N`). Every candidate must pass `issue_num_if_issue`.
 
 ```bash
 # BEGIN candidate_issue_num_from_branch
@@ -70,13 +71,57 @@ candidate_issue_num_from_branch() {
 }
 # END candidate_issue_num_from_branch
 
-ISSUE_NUM=$(candidate_issue_num_from_branch "$BRANCH")
-if [ -n "$ISSUE_NUM" ]; then
-  ISSUE_NUM=$(issue_num_if_issue "$ISSUE_NUM")
+# --- Source 1a: Parse $ARGUMENTS for explicit issue syntax ---
+ISSUE_NUM=""
+ARGS_CANDIDATE=$(printf '%s' "$ARGUMENTS" | grep -oE '#[0-9]+|/issues/[0-9]+|[Ii]ssue[[:space:]]+[0-9]+' | grep -oE '[0-9]+' | head -1)
+if [ -n "$ARGS_CANDIDATE" ]; then
+  ISSUE_NUM=$(issue_num_if_issue "$ARGS_CANDIDATE")
 fi
 
+# --- Source 1b: Search open issues by full $ARGUMENTS text ---
+# Uses gh --jq (gojq) so no python3 dependency. Exact title match wins;
+# otherwise unique containment (case-insensitive, bidirectional).
+if [ -z "$ISSUE_NUM" ] && [ -n "$ARGUMENTS" ]; then
+  MATCH_NUMBER=$(ARGS_TEXT="$ARGUMENTS" gh issue list \
+    --repo "$PR_REPO" --state open --search "$ARGUMENTS" \
+    --json number,title --limit 10 \
+    --jq '
+      env.ARGS_TEXT as $args |
+      ($args | ascii_downcase) as $al |
+      [.[] | select(.title == $args)] as $exact |
+      if ($exact | length) > 0 then $exact[0].number
+      else
+        [.[] | .title as $t | ($t | ascii_downcase) as $tl |
+          select(($tl | contains($al)) or ($al | contains($tl)))
+        ] as $partial |
+        if ($partial | length) == 1 then $partial[0].number else empty end
+      end
+    ' 2>/dev/null)
+  if [ -n "$MATCH_NUMBER" ]; then
+    ISSUE_NUM=$(issue_num_if_issue "$MATCH_NUMBER")
+  fi
+fi
+
+# --- Source 2: Branch name parsing ---
 if [ -z "$ISSUE_NUM" ]; then
-  gh issue list --repo "$PR_REPO" --state open --search "$BRANCH" --json number,title,url
+  ISSUE_NUM=$(candidate_issue_num_from_branch "$BRANCH")
+  if [ -n "$ISSUE_NUM" ]; then
+    ISSUE_NUM=$(issue_num_if_issue "$ISSUE_NUM")
+  fi
+fi
+
+# --- Source 3: Commit messages (handled by agent per prose above) ---
+
+# --- Source 4: Workflow artifacts ---
+if [ -z "$ISSUE_NUM" ] && [ -d "$ARTIFACTS_DIR" ]; then
+  ARTIFACT_CANDIDATE=$(grep -rhoE \
+    '(Closes|Fixes|Resolves)[[:space:]]+#[0-9]+|/issues/[0-9]+|[Gg]it[Hh]ub[[:space:]]+issue[[:space:]]+[0-9]+|issue[[:space:]]+[0-9]+' \
+    "$ARTIFACTS_DIR" 2>/dev/null \
+    | grep -oE '[0-9]+' \
+    | head -1)
+  if [ -n "$ARTIFACT_CANDIDATE" ]; then
+    ISSUE_NUM=$(issue_num_if_issue "$ARTIFACT_CANDIDATE")
+  fi
 fi
 ```
 
