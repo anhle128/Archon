@@ -2,7 +2,19 @@
 
 ## Commands
 
-Validate a workflow by name from the target repo:
+Author bundled defaults from the Archon product checkout (the repo with `scripts/generate-bundled-defaults.ts`), not from the consumer repo that will run the workflow.
+
+After creating or editing `.archon/workflows/defaults/<name>.yaml` or `.archon/commands/defaults/<name>.md`:
+
+```bash
+git add .archon/workflows/defaults/<workflow-name>.yaml
+bun run generate:bundled
+bun run cli validate workflows <workflow-name>
+```
+
+`generate:bundled` refuses untracked files under `defaults/`. Never hand-edit `packages/workflows/src/defaults/bundled-defaults.generated.ts`.
+
+Validate a workflow by name from the target repo (Archon repo for bundled defaults; the consumer repo only for a project-local file):
 
 ```bash
 bun run cli validate workflows <workflow-name>
@@ -36,7 +48,9 @@ Use `--json` on list and status commands when machine-readable output is needed.
 
 ## Validation Checklist
 
-- The file is under `.archon/workflows/` or a supported global workflow directory.
+- The file is in the correct scope: Archon `.archon/workflows/defaults/` for reusable/default workflows; a consumer `.archon/workflows/` only for an explicit project override; `~/.archon/workflows/` only for an explicit global workflow.
+- A reusable workflow was not written into another repo's `.archon/workflows/`.
+- Bundled defaults were `git add`ed, then `bun run generate:bundled` was run from the Archon repo.
 - The filename ends with `.yaml` or `.yml`.
 - The root has `name`, `description`, and non-empty `nodes`.
 - The workflow uses `nodes`, not `steps`.
@@ -145,11 +159,13 @@ Use `value=$node.output.field` and then quote the shell variable.
 
 After editing, report:
 
-- Workflow file path.
+- Workflow file path, and why that location (bundled default vs project override vs global).
 - Command files or scripts created.
+- Whether `generate:bundled` ran (required for `defaults/`).
 - Provider and model choices.
 - Human approval points.
 - Validation command run and result.
 - Any validation that could not run and why.
 
 Do not claim the workflow is valid unless local validation passed.
+Do not treat `deprecated_workflow_defaults_found` as an instruction to delete this product repo's `.archon/workflows/defaults/` folder.

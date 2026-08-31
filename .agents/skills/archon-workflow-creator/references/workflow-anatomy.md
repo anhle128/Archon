@@ -12,8 +12,35 @@
 
 ## Discovery and Files
 
+Authoring location is not the same as the chat cwd.
+
+### Where to write
+
+| Kind | Path (Archon product checkout unless noted) | When |
+| ---- | ------------------------------------------- | ---- |
+| Bundled default (default) | `.archon/workflows/defaults/<name>.yaml` | Reusable, shipped, or the user did not ask for a project-only file |
+| Bundled command | `.archon/commands/defaults/<name>.md` | Prompt is long, shared, or independently testable |
+| Packaged workflow | `.archon/workflows/<pack>/<workflow>/` | Needs co-located commands/scripts |
+| Project override | `<other-repo>/.archon/workflows/<name>.yaml` | User explicitly wants a file that lives only in that repo |
+| Global | `~/.archon/workflows/<name>.yaml` | User explicitly wants a home-scoped workflow |
+
+The Archon product checkout is the repo that contains this skill and `scripts/generate-bundled-defaults.ts`. Write bundled defaults there even when the conversation started in another repo (for example a service that will *run* the workflow).
+
+After adding or editing files under `.archon/workflows/defaults/` or `.archon/commands/defaults/`:
+
+1. `git add` those files. `bun run generate:bundled` refuses untracked files under `defaults/`.
+2. From the Archon repo root, run `bun run generate:bundled`.
+3. Do not hand-edit `packages/workflows/src/defaults/bundled-defaults.generated.ts`.
+4. Validate with `bun run cli validate workflows <name>` from the Archon repo.
+
+Do not create `<consumer-repo>/.archon/workflows/defaults/`. Discovery warns `deprecated_workflow_defaults_found` and hints `rm -rf` for leftover files there. That warning is not an instruction to delete this product repo's `defaults/` folder.
+
+A project file with the same filename as a bundled default overrides the bundled one. Do not reuse a bundled filename unless the user asked for an override.
+
+### Runtime discovery
+
 Archon workflows are YAML files discovered from three scopes.
-Bundled defaults load first, global workflows load from `~/.archon/workflows/`, and project workflows load from `<repo>/.archon/workflows/`.
+Bundled defaults load first (embedded in a binary; in source mode they load from this product's `.archon/workflows/defaults/` plus packaged folders), global workflows load from `~/.archon/workflows/`, and project workflows load from `<run-cwd>/.archon/workflows/`.
 Higher scopes override lower scopes when filenames match.
 Workflow discovery descends at most one subdirectory.
 Use `.yaml` or `.yml`.
@@ -194,11 +221,13 @@ Reserve `@custom` aliases for project workflows where `.archon/config.yaml` owns
 
 ## Authoring Sequence
 
-1. Name the workflow and write router-quality description text.
-2. Choose root provider and model defaults.
-3. Sketch the DAG as node IDs and dependencies before writing prompts.
-4. Add deterministic setup, checks, and assertions as bash or script nodes.
-5. Add AI nodes only where reasoning, code editing, or synthesis is needed.
-6. Add `output_format` to every AI node whose fields feed conditions or later nodes.
-7. Add human gates only where user decision is required.
-8. Validate after every substantial change.
+1. Decide write location (bundled default vs explicit project override vs global). Do not skip this.
+2. Name the workflow and write router-quality description text. If it must run in another checkout, say so in the description.
+3. Choose root provider and model defaults.
+4. Sketch the DAG as node IDs and dependencies before writing prompts.
+5. Add deterministic setup, checks, and assertions as bash or script nodes.
+6. Add AI nodes only where reasoning, code editing, or synthesis is needed.
+7. Add `output_format` to every AI node whose fields feed conditions or later nodes.
+8. Add human gates only where user decision is required.
+9. If the file is under `defaults/`, `git add` it, then `bun run generate:bundled`.
+10. Validate after every substantial change.

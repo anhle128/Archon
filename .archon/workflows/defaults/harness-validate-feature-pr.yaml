@@ -1,0 +1,629 @@
+name: harness-validate-feature-pr
+description: |
+  Use when: User wants to validate or review a harness-service feature PR on the
+            feature checkout only — confirm claimed HTTP/SSE and/or TUI behavior
+            works, without proving a bug on develop/base.
+  Triggers: "validate feature PR", "validate feature pr #123", "verify feature PR",
+            "review feature PR", "feature PR validation", "test feature PR",
+            "harness validate feature pr".
+  Does: Fetches PR info -> allocates an HTTP port -> prepares isolated GIGO_HOME
+        (SQLite + runner token) -> code review of the PR checkout ->
+        classifies HTTP/SSE vs TUI vs both vs review-only and emits typed
+        http_requests -> one supervised bash node launches the daemon, runs
+        baseline plus those validated requests, and trap-cleans the daemon in
+        the same shell (and/or pager PTY) -> cleanup leftover ports/sessions ->
+        verdict report + gh pr comment.
+  NOT for: Bugfix PRs that need bug-on-base then fix-on-feature proof
+            (use harness-validate-pr when that workflow exists).
+            Archon-the-product validation (use archon-validate-pr /
+            archon-validate-feature-pr). cargo test --workspace, browser E2E,
+            fixing the PR, general exploration.
+            --branch / --from hard-error: worktree.enabled is false so callers
+            must run from the PR checkout.
+worktree:
+  enabled: false
+mutates_checkout: false
+requires: [github]
+
+nodes:
+  - id: fetch-pr
+    bash: |
+      set -euo pipefail
+
+      # Repo: an explicit GitHub PR URL in the trigger message wins; otherwise
+      # the configured PR target remote — Archon substitutes the remote name
+      # (github.prRemote, default origin) into the gh call below before this
+      # script runs; same contract as the bundled archon-validate-pr.
+      PR_REPO=""
+      PR_URL=$(printf '%s\n' "$ARGUMENTS" | grep -oE 'https://github.com/[^/]+/[^/]+/pull/[0-9]+' | head -1 || true)
+      if [ -n "$PR_URL" ]; then
+        PR_REPO=$(printf '%s\n' "$PR_URL" | sed -E 's|https://github.com/([^/]+/[^/]+)/pull/[0-9]+|\1|')
+      fi
+      if [ -z "$PR_REPO" ]; then
+        PR_REPO=$(gh repo view "$(git remote get-url "$PR_REMOTE")" --json nameWithOwner -q .nameWithOwner)
+      fi
+      if [ -z "$PR_REPO" ]; then
+        echo "ERROR: could not resolve the PR target repository" >&2
+        exit 1
+      fi
+
+      # Extract PR number from arguments
+      PR_NUMBER=$(printf '%s\n' "$ARGUMENTS" | grep -oE '/pull/[0-9]+' | grep -oE '[0-9]+' | head -1 || true)
+      # Fallback: extract first number if no URL path found (e.g., "validate PR 42")
+      if [ -z "$PR_NUMBER" ]; then
+        PR_NUMBER=$(printf '%s\n' "$ARGUMENTS" | grep -oE '[0-9]+' | head -1 || true)
+      fi
+      if [ -z "$PR_NUMBER" ]; then
+        # Try getting PR from current branch
+        HEAD_BRANCH=$(git branch --show-current)
+        ORIGIN_REPO=$(gh repo view "$(git remote get-url origin)" --json nameWithOwner -q .nameWithOwner)
+        ORIGIN_OWNER=${ORIGIN_REPO%%/*}
+        if [ "$ORIGIN_REPO" = "$PR_REPO" ]; then
+          PR_HEAD="$HEAD_BRANCH"
+        else
+          PR_HEAD="${ORIGIN_OWNER}:$HEAD_BRANCH"
+        fi
+        PR_NUMBER=$(gh pr list --repo "$PR_REPO" --head "$PR_HEAD" --state open --json number -q '.[0].number' || true)
+      fi
+      # gh -q '.[0].number' prints "null" for an empty list — treat as absent.
+      if [ "$PR_NUMBER" = "null" ]; then
+        PR_NUMBER=""
+      fi
+
+      if [ -z "$PR_NUMBER" ]; then
+        echo "ERROR: No PR number found in arguments: $ARGUMENTS" >&2
+        exit 1
+      fi
+
+      echo "$PR_NUMBER" > "$ARTIFACTS_DIR/.pr-number"
+      echo "$PR_REPO" > "$ARTIFACTS_DIR/.pr-repo"
+
+      # Fetch full PR details
+      gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json number,title,body,url,headRefName,baseRefName,files,additions,deletions,changedFiles,state,author,labels,isDraft
+
+  - id: find-port
+    bash: |
+      set -euo pipefail
+      HTTP_PORT=""
+      if command -v python3 >/dev/null 2>&1; then
+        HTTP_PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
+      elif command -v bun >/dev/null 2>&1; then
+        HTTP_PORT=$(bun -e "const s = Bun.serve({port: 0, fetch: () => new Response('')}); console.log(s.port); s.stop()")
+      else
+        echo "ERROR: need python3 or bun to allocate an HTTP port" >&2
+        exit 1
+      fi
+      echo "$HTTP_PORT" > "$ARTIFACTS_DIR/.http-port"
+      echo "HTTP_PORT=$HTTP_PORT"
+
+  - id: resolve-paths
+    bash: |
+      set -euo pipefail
+      CANONICAL_REPO=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null | sed 's|/\.git$||')
+      WORKTREE_PATH=$(pwd)
+      FEATURE_BRANCH=$(git branch --show-current)
+
+      PR_NUMBER=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-number")
+      PR_REPO=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-repo")
+      PR_HEAD=$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json headRefName -q '.headRefName')
+      PR_BASE=$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json baseRefName -q '.baseRefName')
+      PR_HEAD_SHA=$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json headRefOid -q .headRefOid)
+      LOCAL_SHA=$(git rev-parse HEAD)
+
+      echo "$CANONICAL_REPO" > "$ARTIFACTS_DIR/.canonical-repo"
+      echo "$WORKTREE_PATH" > "$ARTIFACTS_DIR/.worktree-path"
+      echo "$FEATURE_BRANCH" > "$ARTIFACTS_DIR/.feature-branch"
+      echo "$PR_HEAD" > "$ARTIFACTS_DIR/.pr-head"
+      echo "$PR_BASE" > "$ARTIFACTS_DIR/.pr-base"
+      echo "$PR_HEAD_SHA" > "$ARTIFACTS_DIR/.pr-head-sha"
+      echo "$LOCAL_SHA" > "$ARTIFACTS_DIR/.local-head-sha"
+      if [ "$PR_HEAD_SHA" != "$LOCAL_SHA" ]; then
+        echo "ERROR: checkout SHA mismatch: local HEAD ($LOCAL_SHA) != PR head ($PR_HEAD_SHA)" >&2
+        echo "This workflow validates the PR checkout only. Re-run from the PR checkout branch at the PR head commit." >&2
+        exit 1
+      fi
+
+      echo "CANONICAL_REPO=$CANONICAL_REPO"
+      echo "WORKTREE_PATH=$WORKTREE_PATH"
+      echo "FEATURE_BRANCH=$FEATURE_BRANCH"
+      echo "PR_HEAD=$PR_HEAD"
+      echo "PR_BASE=$PR_BASE"
+    depends_on: [fetch-pr]
+
+  - id: prepare-sqlite
+    bash: |
+      set -euo pipefail
+      HTTP_PORT=$(tr -d '\n' < "$ARTIFACTS_DIR/.http-port")
+      GIGO_REAL="$ARTIFACTS_DIR/gigo-home"
+      mkdir -p "$GIGO_REAL"
+      # macOS/BSD Unix-socket sun_path caps near 104 bytes. The daemon's private
+      # journal socket is $GIGO_HOME/run/harness-journal.sock, and $ARTIFACTS_DIR
+      # is deep, so GIGO_HOME must be reachable by a SHORT path or bootstrap dies
+      # with "cannot bind private journal listener". A /tmp symlink keeps the real
+      # data under artifacts while giving the daemon a short path.
+      GIGO_HOME="/tmp/g-$(printf '%s' "$WORKFLOW_ID" | cut -c1-8)"
+      rm -f "$GIGO_HOME"
+      ln -s "$GIGO_REAL" "$GIGO_HOME"
+      printf '[http]\nlisten = "127.0.0.1:%s"\n' "$HTTP_PORT" > "$GIGO_HOME/config.toml"
+      if command -v openssl >/dev/null 2>&1; then
+        openssl rand -hex 32 > "$ARTIFACTS_DIR/.runner-token"
+      else
+        python3 -c 'import secrets; print(secrets.token_hex(32))' > "$ARTIFACTS_DIR/.runner-token"
+      fi
+      chmod 0600 "$ARTIFACTS_DIR/.runner-token"
+      echo "$GIGO_HOME" > "$ARTIFACTS_DIR/.gigo-home"
+      echo "$GIGO_HOME" > "$ARTIFACTS_DIR/.gigo-home-link"
+      echo "GIGO_HOME=$GIGO_HOME -> $GIGO_REAL"
+      echo "Prepared isolated GIGO_HOME (short /tmp symlink); chat.db must be created by daemon migrate, not copied from ~/.gigo"
+    depends_on: [find-port]
+
+  - id: classify-testability
+    prompt: |
+      You are a PR testability classifier for a harness-service FEATURE pull request.
+      Decide whether claimed new behavior needs live HTTP/SSE (`gigo-daemon`), live TUI
+      (`xai-grok-pager` via pty-scenario), both, or code-review only.
+
+      ## PR Details
+
+      $fetch-pr.output
+
+      ## Rules
+
+      - **http_sse: yes** when any changed path is under `crates/apps/daemon/` or
+        `crates/harness/` (including `crates/harness/contracts/` and
+        `crates/harness/sqlite/`). Also yes when a backend change alters SSE frames,
+        session JSON, `/v1` routes, or SQLite migrations even if the file sits next
+        to those trees.
+      - **tui: yes** when any changed path is under `crates/codegen/xai-grok-pager/`,
+        `crates/codegen/xai-grok-pager-bin/`, `crates/codegen/xai-grok-pager-render/`,
+        `crates/codegen/xai-grok-pager-minimal/`,
+        `crates/codegen/xai-grok-pager-pty-harness/`, `crates/codegen/xai-grok-shell/`,
+        or `crates/codegen/xai-grok-markdown/`.
+      - Both may be `yes` on mixed PRs.
+      - Both `no` for docs, `.claude/`, `brain/`, `specs/`, `tasks/`, README, and
+        other non-runtime files.
+
+      ## Typed HTTP requests (required wire — not prose)
+
+      Emit `http_requests`: an array of objects the supervised `runtime-http` bash
+      node will validate and execute. This is the only HTTP plan. Do NOT write a
+      prose test plan for HTTP. Do NOT write steps to reproduce a bug on develop/base.
+
+      Each item:
+      - method: GET | POST | DELETE
+      - path: must start with /v1/. Use placeholders {session_id} or
+        {conversation_id} (filled from baseline POST /v1/sessions), {last_id}
+        (id returned by an earlier request in this array), {id}, {elicitation_id}.
+      - body: JSON object as a string; empty string for GET
+      - expect_status: integer HTTP status the live daemon should return
+      - expect_statuses: optional integer array; if non-empty, live status must
+        be one of those values. Otherwise live status must equal expect_status.
+        Never treat "any 2xx-5xx" as success.
+      - invariant: REQUIRED body check. Empty / "status" is invalid. "json"
+        means the body must parse as JSON; any other string must appear in the
+        response body. 4xx/5xx cases MUST use a distinctive error substring
+        (reaching an error handler is not proof of the claim).
+      - claim: which PR claim this exercises
+
+      Rules:
+      - If `http_sse` is `no`, emit `http_requests: []`.
+      - If `http_sse` is `yes`, emit at least one NON-baseline request with
+        expect_status in 2xx that exercises the claimed happy path (registry
+        list, harness check, session get, as the diff warrants). Do NOT emit
+        /health, /ready, POST /v1/sessions, or GET .../stream — bash already
+        proves those. "Baseline is enough" is invalid.
+      - 4xx/5xx are extra edge cases only, and only with a body invariant.
+        Reconnect/cancel 400/503 without a matching body invariant does NOT
+        exercise registry/lifecycle/reconnect.
+      - Typical allowlisted prefixes: /v1/sessions, /v1/harnesses,
+        /v1/harnesses/candidates, /v1/harnesses/{id}/check,
+        /v1/sessions/{session_id}/reconnect, /v1/sessions/{session_id}/cancel,
+        /v1/sessions/{session_id}/events, /v1/sessions/{session_id}/recovery,
+        DELETE /v1/sessions/{session_id}, POST /v1/projects,
+        GET /v1/projects/{last_id}.
+      - Happy path plus one or two obvious edge cases from the PR body.
+      - Never include secrets or GIGO_RUNNER_LISTENER_TOKEN.
+
+      TUI: emit only `tui: yes` or `tui: no`. Do NOT emit a TUI plan, TUI
+      steps, or TUI prose. `runtime-tui` inspects the PR/checkout and plans
+      its own tui-test actions in that same node. Prose between nodes is a
+      wire format — an AI consumer is not an exception.
+    depends_on: [fetch-pr]
+    allowed_tools: []
+    context: fresh
+    output_format:
+      type: object
+      properties:
+        http_sse:
+          type: string
+          enum: [yes, no]
+        tui:
+          type: string
+          enum: [yes, no]
+        reasoning:
+          type: string
+        http_requests:
+          type: array
+          items:
+            type: object
+            properties:
+              method:
+                type: string
+                enum: [GET, POST, DELETE]
+              path:
+                type: string
+              body:
+                type: string
+              expect_status:
+                type: integer
+              expect_statuses:
+                type: array
+                items:
+                  type: integer
+              invariant:
+                type: string
+              claim:
+                type: string
+            required: [method, path, body, expect_status, invariant, claim]
+      required: [http_sse, tui, reasoning, http_requests]
+
+  - id: code-review
+    command: harness-validate-feature-pr-code-review
+    depends_on: [fetch-pr, resolve-paths]
+    context: fresh
+
+  - id: runtime-http
+    bash: |
+      set -uo pipefail
+      export CARGO_TARGET_DIR="$ARTIFACTS_DIR/cargo-target"
+      export RUST_MIN_STACK=16777216
+      cd "$(tr -d '\n' < "$ARTIFACTS_DIR/.worktree-path")"
+
+      RT="$ARTIFACTS_DIR/runtime-http.md"
+      GIGO_HOME="$(tr -d '\n' < "$ARTIFACTS_DIR/.gigo-home")"
+      HTTP_PORT="$(tr -d '\n' < "$ARTIFACTS_DIR/.http-port")"
+      export GIGO_HOME HTTP_PORT ARTIFACTS_DIR
+      export GIGO_RUNNER_LISTENER_TOKEN="$(tr -d '\n' < "$ARTIFACTS_DIR/.runner-token")"
+      STATUS="HTTP_FAILED"
+      HEALTH=""; READY=""; MIG=""; SESS=""; SSE=""; PLAN=""
+      DPID=""
+      PLAN_REQUESTS=$classify-testability.output.http_requests
+      export PLAN_REQUESTS
+
+      cleanup_daemon() {
+        if [ -n "${DPID:-}" ]; then
+          kill "$DPID" 2>/dev/null || true
+          pkill -P "$DPID" 2>/dev/null || true
+          sleep 1
+          kill -9 "$DPID" 2>/dev/null || true
+        fi
+        if [ -n "${HTTP_PORT:-}" ]; then
+          lsof -ti:"$HTTP_PORT" 2>/dev/null | xargs kill -9 2>/dev/null || true
+          fuser -k "$HTTP_PORT/tcp" 2>/dev/null || true
+        fi
+      }
+      trap cleanup_daemon EXIT INT TERM HUP
+
+      finish() {
+        {
+          echo "# HTTP/SSE Runtime (one supervised bash lifetime)"
+          echo
+          echo "**Status**: $STATUS"
+          echo
+          echo "- GIGO_HOME: $GIGO_HOME"
+          echo "- HTTP_PORT: $HTTP_PORT"
+          echo "- health: ${HEALTH:-n/a}"
+          echo "- ready: ${READY:-n/a}"
+          echo "- migrations: ${MIG:-n/a}"
+          echo "- POST /v1/sessions: ${SESS:-n/a}"
+          echo "- GET .../stream: ${SSE:-n/a}"
+          echo "- feature plan: ${PLAN:-n/a}"
+          echo
+          if [ -f "$ARTIFACTS_DIR/http-plan-results.md" ]; then
+            cat "$ARTIFACTS_DIR/http-plan-results.md"
+          fi
+        } > "$RT"
+        echo "$STATUS" > "$ARTIFACTS_DIR/.http-status"
+        echo "HTTP_STATUS=$STATUS"
+        exit 0
+      }
+
+      cargo build -p gigo-daemon --bin gigo-daemon > "$ARTIFACTS_DIR/.daemon-build.log" 2>&1 || { STATUS="MIGRATE_OR_STORE_FAILED"; finish; }
+      DAEMON="$CARGO_TARGET_DIR/debug/gigo-daemon"
+
+      "$DAEMON" > "$ARTIFACTS_DIR/.e2e-daemon.log" 2>&1 &
+      DPID=$!
+      echo "$DPID" > "$ARTIFACTS_DIR/.e2e-daemon-pid"
+
+      ok=0
+      for i in $(seq 1 30); do
+        HEALTH=$(curl -sS -m2 "http://127.0.0.1:$HTTP_PORT/health" 2>/dev/null || true)
+        READY=$(curl -sS -m2 "http://127.0.0.1:$HTTP_PORT/ready" 2>/dev/null || true)
+        [ "$HEALTH" = '{"status":"ok"}' ] && [ "$READY" = '{"status":"ready"}' ] && { ok=1; break; }
+        kill -0 "$DPID" 2>/dev/null || break
+        sleep 2
+      done
+      if [ "$ok" != 1 ]; then
+        tail -80 "$ARTIFACTS_DIR/.e2e-daemon.log" > "$ARTIFACTS_DIR/daemon-last80.txt" 2>/dev/null || true
+        if grep -q "cannot bind private journal listener" "$ARTIFACTS_DIR/.e2e-daemon.log" 2>/dev/null; then STATUS="HARNESS_ENV_FAILED"; else STATUS="MIGRATE_OR_STORE_FAILED"; fi
+        finish
+      fi
+
+      MIG=$(python3 - << 'PY'
+      import os, sqlite3, sys
+      home=open(os.environ["ARTIFACTS_DIR"]+"/.gigo-home",encoding="utf-8").read().strip()
+      db=os.path.join(home,"chat.db")
+      if not os.path.isfile(db): print("MISSING chat.db"); sys.exit(2)
+      con=sqlite3.connect(db); cur=con.cursor()
+      present={r[0] for r in cur.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+      checks=[("harness_conversation_schema_history",9),("harness_operational_schema_history",2),("harness_admission_schema_history",1)]
+      ok=True; parts=[]
+      for name,mn in checks:
+          if name not in present: parts.append(name+" MISSING"); ok=False; continue
+          v=cur.execute("SELECT MAX(version) FROM "+name).fetchone()[0]
+          parts.append(name+"="+str(v)+"(>="+str(mn)+")")
+          if v is None or int(v)<mn: ok=False
+      j="harness_journal_schema_migrations"
+      if j in present:
+          n=cur.execute("SELECT COUNT(*) FROM "+j).fetchone()[0]; parts.append(j+"="+str(n))
+          if n<1: ok=False
+      else: parts.append(j+" MISSING"); ok=False
+      print("; ".join(parts)); sys.exit(0 if ok else 2)
+      PY
+      )
+      if [ $? -ne 0 ]; then STATUS="MIGRATIONS_INCOMPLETE"; finish; fi
+      printf '%s\n' "$MIG" > "$ARTIFACTS_DIR/sqlite-migrations.txt"
+
+      SESS=$(curl -sS -m5 -o "$ARTIFACTS_DIR/session.json" -w '%{http_code}' -H 'Content-Type: application/json' -d '{"harness_id":"gigo"}' "http://127.0.0.1:$HTTP_PORT/v1/sessions" 2>/dev/null || true)
+      CID=$(python3 -c 'import json,os;print((json.load(open(os.environ["ARTIFACTS_DIR"]+"/session.json")).get("conversation") or {}).get("id",""))' 2>/dev/null || true)
+      export CID
+      if [ -z "$CID" ]; then STATUS="HTTP_FAILED"; finish; fi
+      curl -sS -N -m22 -D "$ARTIFACTS_DIR/sse-headers.txt" -o "$ARTIFACTS_DIR/sse-body.txt" -H 'Accept: text/event-stream' "http://127.0.0.1:$HTTP_PORT/v1/sessions/$CID/stream" 2>/dev/null || true
+      if grep -qi 'text/event-stream' "$ARTIFACTS_DIR/sse-headers.txt" 2>/dev/null && grep -qE ': keepalive|^data:|^event:' "$ARTIFACTS_DIR/sse-body.txt" 2>/dev/null; then
+        SSE="200 text/event-stream keepalive"
+      else
+        SSE="stream check failed"; STATUS="HTTP_FAILED"; finish
+      fi
+
+      PLAN=$(python3 - << 'PY'
+      import json, os, re, subprocess
+      art = os.environ["ARTIFACTS_DIR"]
+      port = os.environ["HTTP_PORT"]
+      cid = os.environ.get("CID") or ""
+      raw = os.environ.get("PLAN_REQUESTS") or "[]"
+      METHOD_OK = {"GET", "POST", "DELETE"}
+      PATH_RE = re.compile(r"^/v1/(sessions|harnesses|projects)(/[A-Za-z0-9._:~-]+)*$")
+      MAX_N = 20
+
+      def fail(msg, rows=None):
+          lines = ["## Feature requests", "", msg, ""]
+          if rows:
+              lines += ["| # | Method | Path | HTTP | Result |",
+                        "|---|--------|------|------|--------|"]
+              for n, m, p, c, r in rows:
+                  lines.append("| %s | %s | %s | %s | %s |" % (n, m, p, c, r))
+          open(os.path.join(art, "http-plan-results.md"), "w").write("\n".join(lines) + "\n")
+          print("HTTP_PLAN_FAILED")
+          raise SystemExit(0)
+
+      try:
+          reqs = json.loads(raw)
+      except json.JSONDecodeError:
+          fail("PLAN_PARSE_FAILED")
+      if not isinstance(reqs, list):
+          fail("PLAN_NOT_ARRAY")
+      if len(reqs) > MAX_N:
+          fail("PLAN_TOO_MANY (max %d)" % MAX_N)
+      open(os.path.join(art, "http-requests.json"), "w").write(json.dumps(reqs))
+
+      def is_baseline(method, path):
+          if path in ("/health", "/ready"):
+              return True
+          if method == "POST" and path.rstrip("/") == "/v1/sessions":
+              return True
+          if method == "GET" and path.endswith("/stream"):
+              return True
+          return False
+
+      last_id = cid
+      rows = []
+      feature_ok = 0
+      feature_n = 0
+      happy_n = 0
+      any_fail = False
+
+      def subst(path):
+          p = path.replace("{session_id}", cid).replace("{conversation_id}", cid)
+          if last_id:
+              p = p.replace("{last_id}", last_id)
+              p = p.replace("{elicitation_id}", last_id)
+              p = p.replace("{id}", last_id)
+          return p
+
+      def invariant_ok(inv, body):
+          inv = (inv or "").strip()
+          if inv in ("", "status"):
+              return True
+          if inv == "json":
+              try:
+                  json.loads(body)
+                  return True
+              except Exception:
+                  return False
+          return inv.encode("utf-8") in body if isinstance(body, (bytes, bytearray)) else inv in body
+
+      for i, item in enumerate(reqs, 1):
+          if not isinstance(item, dict):
+              rows.append((i, "?", "?", "", "rejected: not an object"))
+              any_fail = True
+              continue
+          method = str(item.get("method") or "").upper().strip()
+          raw_path = str(item.get("path") or "").strip()
+          path = subst(raw_path)
+          body = item.get("body")
+          if body is None:
+              body = ""
+          elif not isinstance(body, str):
+              body = json.dumps(body)
+          claim = str(item.get("claim") or "")
+          inv = str(item.get("invariant") or "")
+          expect = item.get("expect_status")
+          try:
+              expect = int(expect)
+          except Exception:
+              expect = None
+          allowed = item.get("expect_statuses")
+          if isinstance(allowed, list) and allowed:
+              try:
+                  allowed = [int(x) for x in allowed]
+              except Exception:
+                  allowed = None
+          elif expect is not None:
+              allowed = [expect]
+          else:
+              allowed = None
+          if method not in METHOD_OK:
+              rows.append((i, method, path, "", "rejected: method (%s)" % claim))
+              any_fail = True
+              continue
+          if len(path) > 256 or len(body) > 4096:
+              rows.append((i, method, path, "", "rejected: too large (%s)" % claim))
+              any_fail = True
+              continue
+          if ".." in path or any(ch in path for ch in " \t\n'\";|&$()") or chr(96) in path:
+              rows.append((i, method, path, "", "rejected: unsafe path (%s)" % claim))
+              any_fail = True
+              continue
+          if not PATH_RE.match(path):
+              rows.append((i, method, path, "", "rejected: not allowlisted (%s)" % claim))
+              any_fail = True
+              continue
+          if allowed is None or any(s < 100 or s > 599 for s in allowed):
+              rows.append((i, method, path, "", "rejected: expect_status (%s)" % claim))
+              any_fail = True
+              continue
+          if (inv or "").strip() in ("", "status"):
+              rows.append((i, method, path, "", "rejected: body invariant required (%s)" % claim))
+              any_fail = True
+              continue
+          if is_baseline(method, path):
+              rows.append((i, method, path, "skipped", "baseline (already proven) (%s)" % claim))
+              continue
+          feature_n += 1
+          url = "http://127.0.0.1:%s%s" % (port, path)
+          out_body = os.path.join(art, "plan-%d.body" % i)
+          cmd = ["curl", "-sS", "-m", "15", "-o", out_body, "-w", "%{http_code}", "-X", method]
+          if method in ("POST", "DELETE") or body:
+              cmd += ["-H", "Content-Type: application/json", "-d", body or "{}"]
+          cmd.append(url)
+          try:
+              code = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL).strip()
+          except Exception:
+              code = "000"
+          blob = b""
+          try:
+              blob = open(out_body, "rb").read(800)
+          except Exception:
+              pass
+          text = blob.decode("utf-8", "replace")
+          status_ok = code.isdigit() and int(code) in allowed
+          inv_ok = invariant_ok(inv, text)
+          if status_ok and inv_ok:
+              feature_ok += 1
+              if 200 <= int(code) <= 299:
+                  happy_n += 1
+              result = "pass (%s)" % claim
+              try:
+                  data = json.loads(text)
+                  if isinstance(data, dict):
+                      if isinstance(data.get("id"), str) and data["id"]:
+                          last_id = data["id"]
+                      for nest in ("harness", "project", "conversation"):
+                          n = data.get(nest)
+                          if isinstance(n, dict) and isinstance(n.get("id"), str) and n["id"]:
+                              last_id = n["id"]
+              except Exception:
+                  pass
+          else:
+              any_fail = True
+              why = []
+              if not status_ok:
+                  why.append("status %s not in %s" % (code, allowed))
+              if not inv_ok:
+                  why.append("invariant %r missed" % inv)
+              result = "fail %s (%s)" % ("; ".join(why), claim)
+          rows.append((i, method, path, code, result))
+
+      lines = ["## Feature requests", "",
+               "| # | Method | Path | HTTP | Result |",
+               "|---|--------|------|------|--------|"]
+      for n, m, p, c, r in rows:
+          lines.append("| %s | %s | %s | %s | %s |" % (n, m, p, c, r))
+      lines.append("")
+      lines.append("feature_exercised=%d/%d happy_2xx=%d" % (feature_ok, feature_n, happy_n))
+      open(os.path.join(art, "http-plan-results.md"), "w").write("\n".join(lines) + "\n")
+      if (not any_fail) and feature_n >= 1 and feature_ok == feature_n and happy_n >= 1:
+          print("HTTP_PLAN_EXERCISED")
+      else:
+          print("HTTP_PLAN_FAILED")
+      PY
+      )
+      if [ "$PLAN" = "HTTP_PLAN_EXERCISED" ]; then
+        STATUS="DB_MIGRATED + HTTP_SSE_EXERCISED + HTTP_PLAN_EXERCISED"
+      else
+        STATUS="DB_MIGRATED + HTTP_SSE_EXERCISED + HTTP_PLAN_FAILED"
+      fi
+      finish
+    depends_on: [classify-testability, find-port, resolve-paths, prepare-sqlite, code-review]
+    when: "$classify-testability.output.http_sse == 'yes'"
+    timeout: 1800000
+
+  - id: runtime-tui
+    command: harness-validate-feature-pr-runtime-tui
+    depends_on: [fetch-pr, classify-testability, find-port, resolve-paths, prepare-sqlite, code-review]
+    when: "$classify-testability.output.tui == 'yes'"
+    context: fresh
+    idle_timeout: 1800000
+    skills: [tui-test]
+
+  - id: cleanup-processes
+    bash: |
+      set +e
+      echo "=== Cleaning harness-validate-feature-pr processes ==="
+
+      for f in "$ARTIFACTS_DIR"/.e2e-*-pid; do
+        [ -f "$f" ] || continue
+        PID=$(tr -d '\n' < "$f")
+        if [ -n "$PID" ]; then
+          kill "$PID" 2>/dev/null || taskkill //F //T //PID "$PID" 2>/dev/null || true
+        fi
+      done
+
+      HTTP_PORT=$(tr -d '\n' < "$ARTIFACTS_DIR/.http-port" 2>/dev/null || true)
+      if [ -n "$HTTP_PORT" ]; then
+        fuser -k "$HTTP_PORT/tcp" 2>/dev/null || true
+        lsof -ti:"$HTTP_PORT" 2>/dev/null | xargs kill -9 2>/dev/null || true
+        netstat -ano 2>/dev/null | grep ":$HTTP_PORT " | grep LISTENING | awk '{print $5}' | sort -u | while read pid; do
+          taskkill //F //T //PID "$pid" 2>/dev/null || true
+        done
+      fi
+
+      TUI_SESSION=$(cat "$ARTIFACTS_DIR/.tui-session" 2>/dev/null | tr -d '\n' || true)
+      if [ -z "$TUI_SESSION" ]; then
+        TUI_SESSION="$WORKFLOW_ID"
+      fi
+      tui-test --session "$TUI_SESSION" close 2>/dev/null || true
+
+      GIGO_LINK=$(cat "$ARTIFACTS_DIR/.gigo-home-link" 2>/dev/null || true)
+      [ -n "$GIGO_LINK" ] && [ -L "$GIGO_LINK" ] && rm -f "$GIGO_LINK"
+      sleep 1
+      echo "Process cleanup complete"
+      exit 0
+    depends_on: [runtime-http, runtime-tui]
+    trigger_rule: all_done
+
+  - id: final-report
+    command: harness-validate-feature-pr-report
+    depends_on: [code-review, runtime-http, runtime-tui, classify-testability, cleanup-processes]
+    trigger_rule: all_done
+    context: fresh
