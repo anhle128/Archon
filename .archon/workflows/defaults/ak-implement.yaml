@@ -1,0 +1,307 @@
+name: ak-implement
+description: |
+  Use when: User already has an implementation plan and wants it executed
+  unattended in a worktree (no /ak:plan).
+  Triggers: "ak implement", "implement plan", "ralph implement plan",
+            "run existing plan", "implement from plans/".
+  Does: resolve existing plan ($ARGUMENTS path, else newest plans/*/) ->
+        convert plan into a Ralph PRD (prd.md + prd.json) ->
+        autonomous story-by-story implementation via archon-ralph-dag ->
+        independent plan-coverage audit that implements any missing plan work
+        (do NOT trust ralph-implement) -> create PR.
+  Input: Optional path to a plan directory or plan.md. If omitted, uses the
+        newest plans/*/ directory that contains plan.md.
+  NOT for: creating a plan from scratch (use ck-feature), quick one-file fixes,
+        bug fixes, or PR reviews.
+
+# Default provider. build-ralph-prd / verify-and-complete override to codex.
+# ralph-implement runs archon-ralph-dag as authored (its own per-node providers).
+provider: claude
+
+nodes:
+  # ───────────────────────────────────────────────────────────────────
+  # STEP 1 / 5 — Setup
+  # ───────────────────────────────────────────────────────────────────
+  - id: setup
+    bash: |
+      set -euo pipefail
+      echo "=== AK IMPLEMENT (EXISTING PLAN) ==="
+      echo "ARGUMENTS=${ARGUMENTS:-}"
+      echo "PROJECT_ROOT=$(pwd)"
+      echo "HEAD=$(git rev-parse --short HEAD 2>/dev/null || echo 'no-git')"
+      echo "ARTIFACTS_DIR=$ARTIFACTS_DIR"
+      git fetch --all --prune 2>/dev/null || true
+      mkdir -p plans
+      echo ""
+      echo "Pipeline: resolve existing plan  ->  plan->Ralph PRD  ->  archon-ralph-dag  ->  verify+complete gaps  ->  draft PR"
+      echo "Starting Step 1 of 5: resolve plan..."
+
+  # ───────────────────────────────────────────────────────────────────
+  # STEP 2 / 5 — Resolve existing plan directory
+  # Prefer $ARGUMENTS when it points at a plan.md or a plan directory.
+  # Otherwise pick the newest plans/*/ that contains plan.md.
+  # Diagnostics -> stderr; stdout is ONLY the absolute plan dir path.
+  # ───────────────────────────────────────────────────────────────────
+  - id: resolve-plan
+    bash: |
+      set -euo pipefail
+
+      resolve_candidate() {
+        local raw="$1"
+        raw="${raw#"${raw%%[![:space:]]*}"}"
+        raw="${raw%"${raw##*[![:space:]]}"}"
+        [ -n "$raw" ] || return 1
+
+        if [ -f "$raw" ]; then
+          local base
+          base="$(basename "$raw")"
+          if [ "$base" = "plan.md" ]; then
+            cd "$(dirname "$raw")" && pwd
+            return 0
+          fi
+          echo "ERROR: file argument must be a plan.md, got: $raw" >&2
+          return 1
+        fi
+
+        if [ -d "$raw" ]; then
+          if [ -f "$raw/plan.md" ]; then
+            cd "$raw" && pwd
+            return 0
+          fi
+          echo "ERROR: directory has no plan.md: $raw" >&2
+          return 1
+        fi
+
+        echo "ERROR: plan path does not exist: $raw" >&2
+        return 1
+      }
+
+      ABS_PLAN_DIR=""
+      if [ -n "${ARGUMENTS:-}" ]; then
+        ABS_PLAN_DIR="$(resolve_candidate "$ARGUMENTS")"
+      else
+        PLAN_DIR="$(ls -dt plans/*/ 2>/dev/null | head -1 || true)"
+        if [ -n "$PLAN_DIR" ] && [ -f "${PLAN_DIR}plan.md" ]; then
+          ABS_PLAN_DIR="$(cd "$PLAN_DIR" && pwd)"
+        fi
+      fi
+
+      if [ -z "$ABS_PLAN_DIR" ] || [ ! -f "$ABS_PLAN_DIR/plan.md" ]; then
+        echo "ERROR: no plan directory with plan.md found." >&2
+        echo "Pass a plan dir / plan.md path as \$ARGUMENTS, or create plans/<slug>/plan.md." >&2
+        exit 1
+      fi
+
+      echo "Resolved plan dir: $ABS_PLAN_DIR" >&2
+      ls -la "$ABS_PLAN_DIR" >&2
+      printf '%s' "$ABS_PLAN_DIR"
+    depends_on: [setup]
+    always_run: true
+
+  # ───────────────────────────────────────────────────────────────────
+  # STEP 3 / 5 — Convert existing plan into a Ralph PRD
+  # Reads the WHOLE plan dir (plan.md + every phase-*.md) and writes
+  # .archon/ralph/<slug>/{prd.md,prd.json} for archon-ralph-dag.
+  # ───────────────────────────────────────────────────────────────────
+  - id: build-ralph-prd
+    prompt: |
+      ## Persona
+
+      You are a SHARP SOLUTION ARCHITECT who lives by KISS and YAGNI. You do not
+      invent work that isn't in the plan, and you do not drop work that is.
+
+      ## Headless mode — NO human is available
+
+      Resolve every decision yourself from the plan plus the actual codebase.
+      Do not stop to ask.
+
+      ## Task
+
+      An existing implementation plan lives at:
+
+        $resolve-plan.output
+
+      Convert that ENTIRE plan into a Ralph PRD so the archon-ralph-dag loop can
+      implement it one story per iteration. Do NOT implement the feature itself —
+      only produce the PRD files.
+
+      1. Read `plan.md` and EVERY `phase-*.md` in that directory. The phase files
+         carry the real implementation detail — do not rely on plan.md alone.
+         If `verification-report.md` exists, fold in its fixes too.
+      2. Derive a kebab-case `<slug>` (max 50 chars) from the plan's feature name.
+      3. Create the Ralph directory: `mkdir -p .archon/ralph/<slug>`.
+      4. Break the plan into right-sized Ralph user stories — each completable in a
+         single fresh-context iteration (roughly one phase or one coherent unit of
+         work per story). Map the plan's TDD structure (tests-before / implement /
+         tests-after / regression gate) into concrete, pass/fail acceptance
+         criteria. Order stories by dependency (lower priority runs first) and set
+         `dependsOn` to only lower-priority story ids. No cycles, no forward refs.
+      5. Write `.archon/ralph/<slug>/prd.md` — a self-contained context document
+         (overview / problem / solution, goals + success metrics, non-goals,
+         technical context with real file:line references drawn from the plan, and
+         a story-overview table). A fresh-context agent re-reads this each iteration.
+      6. Write `.archon/ralph/<slug>/prd.json` using EXACTLY this schema
+         (story-level `passes`, all `false` at start):
+
+         ```json
+         {
+           "feature": "<feature name>",
+           "userStories": [
+             {
+               "id": "US-001",
+               "title": "<short title>",
+               "description": "As a..., I want..., so that...",
+               "acceptanceCriteria": ["<verifiable criterion>", "..."],
+               "technicalNotes": "<real files, patterns, and phase refs to follow>",
+               "dependsOn": [],
+               "priority": 1,
+               "passes": false,
+               "notes": ""
+             }
+           ]
+         }
+         ```
+
+      7. Verify both files exist and prd.json is valid JSON whose `userStories` is a
+         non-empty array with every story `passes: false`.
+
+      Report the ABSOLUTE path of the Ralph directory as `prd_dir` (resolve it with
+      `realpath` so it is stable regardless of cwd).
+    depends_on: [resolve-plan]
+    provider: codex
+    effort: xhigh
+    model: gpt-5.5
+    context: fresh
+    output_format:
+      type: object
+      properties:
+        prd_dir:
+          type: string
+        slug:
+          type: string
+        feature:
+          type: string
+        story_count:
+          type: number
+      required: [prd_dir, slug, story_count]
+
+  # ───────────────────────────────────────────────────────────────────
+  # STEP 4 / 5 — Implement via archon-ralph-dag (sub-run)
+  # Governed child run in this SAME worktree (isolation: inherit).
+  # Ready Ralph PRD => detect-input -> "ready" (generation skipped).
+  # Loops one story per iteration (fresh context, validate + commit).
+  # Next node audits original-plan coverage; PR creation is a later node.
+  # ───────────────────────────────────────────────────────────────────
+  - id: ralph-implement
+    workflow: archon-ralph-dag
+    input: '$build-ralph-prd.output.prd_dir'
+    isolation: inherit
+    depends_on: [build-ralph-prd]
+
+  # ───────────────────────────────────────────────────────────────────
+  # STEP 5a / 5 — Verify ORIGINAL plan coverage; implement any gaps
+  # Do NOT trust ralph-implement or prd.json passes flags. Audit the
+  # original plan against the real codebase and finish missing work.
+  # ───────────────────────────────────────────────────────────────────
+  - id: verify-and-complete
+    prompt: |
+      ## Persona
+
+      You are a skeptical staff engineer doing a delivery audit. Ralph claimed the
+      work is done. You do NOT trust that claim. Your job is to prove every task in
+      the ORIGINAL plan is actually implemented in the codebase — and to finish
+      anything that is missing.
+
+      ## Headless mode — NO human is available
+
+      Resolve every decision yourself. Do not stop to ask.
+
+      ## Inputs
+
+      - Original plan directory: `$resolve-plan.output`
+      - Ralph PRD directory: `$build-ralph-prd.output.prd_dir`
+      - Ralph sub-run output (untrusted): `$ralph-implement.output`
+
+      ## Mandatory procedure
+
+      1. Read `plan.md` and EVERY `phase-*.md` under `$resolve-plan.output`.
+         Build a complete checklist of concrete deliverables / acceptance
+         criteria / tasks from the plan (not from prd.json).
+      2. Optionally read `$build-ralph-prd.output.prd_dir/prd.json` and
+         `progress.txt` as hints only. Treat every `passes: true` as a claim to
+         verify, never as proof.
+      3. For EACH plan checklist item, inspect the real codebase and tests.
+         Mark it `done`, `partial`, or `missing` with file:line evidence.
+      4. If ANY item is `partial` or `missing`, IMPLEMENT the remaining work now:
+         - Prefer the smallest durable change that fully satisfies the plan item
+         - Follow repo patterns; keep KISS / YAGNI
+         - Add/update tests when the plan requires them
+         - Run the project's relevant typecheck / lint / tests for the touched area
+         - Commit only the files you changed (never `git add -A` / `git add .`)
+           with a clear message like `fix: complete plan gaps — <short summary>`
+         - Never commit scratch/review/PR-body artifacts or anything under
+           `$ARTIFACTS_DIR` / `.archon/artifacts` / `.archon/logs` / `.archon/state`
+      5. Re-check the checklist after your fixes until every plan item is `done`,
+         or document a hard blocker that is truly outside the repo (missing secret,
+         external service, product decision). Blockers must be rare and evidenced.
+      6. Write `$resolve-plan.output/implementation-audit.md` with this structure:
+
+         ```markdown
+         # Implementation Audit
+         - Plan: <relative plan dir>
+         - Auditor: codex gpt-5.5
+         - Verdict: <complete | gaps-fixed | blocked>
+         - Summary: <2-4 sentences>
+
+         ## Checklist
+         | ID | Plan item | Status | Evidence |
+         |----|-----------|--------|----------|
+         | P-001 | ... | done/partial/missing | file:line |
+
+         ## Gaps Fixed This Node
+         (what you implemented; or "None")
+
+         ## Remaining Blockers
+         (or "None")
+         ```
+
+      7. End with `AUDIT_DONE` and a one-line verdict.
+
+      ## Hard rules
+
+      - Source of truth = the ORIGINAL plan files, not Ralph story status.
+      - Do not rewrite the plan. Implement missing product/code work.
+      - Do not expand scope beyond the plan.
+      - If Ralph already did everything correctly, prove it with evidence and
+        write the audit report with Verdict `complete`.
+    depends_on: [ralph-implement]
+    provider: codex
+    effort: xhigh
+    model: gpt-5.5
+    context: fresh
+    output_format:
+      type: object
+      properties:
+        verdict:
+          type: string
+          enum: [complete, gaps-fixed, blocked]
+        audit_path:
+          type: string
+        gaps_fixed:
+          type: number
+        blockers:
+          type: number
+      required: [verdict, audit_path]
+
+  # ───────────────────────────────────────────────────────────────────
+  # STEP 5b / 5 — Create PR
+  # ───────────────────────────────────────────────────────────────────
+  - id: create-pull-request
+    command: archon-create-pr
+    provider: codex
+    effort: medium
+    depends_on: [verify-and-complete]
+    context: fresh
+    model: gpt-5.5
+    idle_timeout: 900000
+    output_type: pull-request
