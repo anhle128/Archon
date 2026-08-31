@@ -24,9 +24,9 @@ nodes:
   - id: sync
     prompt: |
       trigger skill sync-upstream-commit $ARGUMENTS
-    effort: xhigh
-    provider: codex
-    model: gpt-5.6-terra
+    effort: high
+    provider: omp
+    model: cursor/cursor-grok-4.5
     context: fresh
     idle_timeout: 14400000
 
