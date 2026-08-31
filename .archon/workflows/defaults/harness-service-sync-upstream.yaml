@@ -251,7 +251,7 @@ nodes:
 
       Body: GitHub issue URL, `Closes #<issue>`, upstream commit URL, parent
       SHA, intentional omissions, and validation evidence. Do not push.
-      Do not run `gh pr create`.
+      Do not create or push a pull request.
 
       ## Completion
 
