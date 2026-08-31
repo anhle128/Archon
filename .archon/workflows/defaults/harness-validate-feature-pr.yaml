@@ -6,7 +6,8 @@ description: |
   Triggers: "validate feature PR", "validate feature pr #123", "verify feature PR",
             "review feature PR", "feature PR validation", "test feature PR",
             "harness validate feature pr".
-  Does: Fetches PR info -> allocates an HTTP port -> prepares isolated GIGO_HOME
+  Does: Fetches PR info -> checks out the PR head in an engine-owned isolated
+        worktree -> allocates an HTTP port -> prepares isolated GIGO_HOME
         (SQLite + runner token) -> code review of the PR checkout ->
         classifies HTTP/SSE vs TUI vs both vs review-only and emits typed
         http_requests -> one supervised bash node launches the daemon, runs
@@ -18,11 +19,12 @@ description: |
             Archon-the-product validation (use archon-validate-pr /
             archon-validate-feature-pr). cargo test --workspace, browser E2E,
             fixing the PR, general exploration.
-            --branch / --from hard-error: worktree.enabled is false so callers
-            must run from the PR checkout.
+            Runs in an engine-owned worktree checked out at the PR head, so it
+            works from any trigger without a manual pre-checkout; --no-worktree
+            hard-errors.
 worktree:
-  enabled: false
-mutates_checkout: false
+  enabled: true
+mutates_checkout: true
 requires: [github]
 
 nodes:
@@ -101,31 +103,38 @@ nodes:
       set -euo pipefail
       CANONICAL_REPO=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null | sed 's|/\.git$||')
       WORKTREE_PATH=$(pwd)
-      FEATURE_BRANCH=$(git branch --show-current)
 
       PR_NUMBER=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-number")
       PR_REPO=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-repo")
       PR_HEAD=$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json headRefName -q '.headRefName')
       PR_BASE=$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json baseRefName -q '.baseRefName')
       PR_HEAD_SHA=$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json headRefOid -q .headRefOid)
+
+      # This run executes inside an engine-owned isolated worktree (worktree
+      # enabled), so moving it onto the PR head mutates only that throwaway
+      # checkout, never the shared canonical repo. Fetch the PR head commit
+      # (pull/N/head works for same-repo and fork PRs) and detach onto it so
+      # every later node (bash and AI) validates the PR code with no manual
+      # pre-checkout.
+      git fetch "$PR_REMOTE" "pull/$PR_NUMBER/head"
+      git checkout --detach "$PR_HEAD_SHA"
       LOCAL_SHA=$(git rev-parse HEAD)
 
       echo "$CANONICAL_REPO" > "$ARTIFACTS_DIR/.canonical-repo"
       echo "$WORKTREE_PATH" > "$ARTIFACTS_DIR/.worktree-path"
-      echo "$FEATURE_BRANCH" > "$ARTIFACTS_DIR/.feature-branch"
+      echo "$PR_HEAD" > "$ARTIFACTS_DIR/.feature-branch"
       echo "$PR_HEAD" > "$ARTIFACTS_DIR/.pr-head"
       echo "$PR_BASE" > "$ARTIFACTS_DIR/.pr-base"
       echo "$PR_HEAD_SHA" > "$ARTIFACTS_DIR/.pr-head-sha"
       echo "$LOCAL_SHA" > "$ARTIFACTS_DIR/.local-head-sha"
       if [ "$PR_HEAD_SHA" != "$LOCAL_SHA" ]; then
-        echo "ERROR: checkout SHA mismatch: local HEAD ($LOCAL_SHA) != PR head ($PR_HEAD_SHA)" >&2
-        echo "This workflow validates the PR checkout only. Re-run from the PR checkout branch at the PR head commit." >&2
+        echo "ERROR: failed to check out PR head: HEAD ($LOCAL_SHA) != PR head ($PR_HEAD_SHA)" >&2
         exit 1
       fi
 
       echo "CANONICAL_REPO=$CANONICAL_REPO"
       echo "WORKTREE_PATH=$WORKTREE_PATH"
-      echo "FEATURE_BRANCH=$FEATURE_BRANCH"
+      echo "FEATURE_BRANCH=$PR_HEAD (detached at $PR_HEAD_SHA)"
       echo "PR_HEAD=$PR_HEAD"
       echo "PR_BASE=$PR_BASE"
     depends_on: [fetch-pr]
@@ -264,7 +273,7 @@ nodes:
                 type: string
               claim:
                 type: string
-            required: [method, path, body, expect_status, invariant, claim]
+            required: [method, path, body, expect_status, expect_statuses, invariant, claim]
       required: [http_sse, tui, reasoning, http_requests]
 
   - id: code-review
