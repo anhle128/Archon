@@ -532,13 +532,15 @@ describe('bundled-defaults', () => {
     });
   });
 
-  describe('resolve-plan directory discovery', () => {
-    // Regression: the no-argument branch must pick the newest plans/*/ that
-    // actually CONTAINS plan.md, not blindly take the newest directory and
-    // fail when it lacks one. A resolver that ran `ls -dt … | head -1` before
-    // testing for plan.md failed whenever a newer plan-less directory (e.g.
-    // plans/reports/) sat ahead of a valid older plan. Exercises the SHIPPED
-    // bundled bash end-to-end.
+  describe('resolve-plan (plan path + co-located PRD dir)', () => {
+    // Exercises the SHIPPED bundled resolve-plan bash end-to-end. It consumes
+    // $resolve-plan-source.output.plan_path (a local dir or .md file) and emits
+    // JSON {plan_path, prd_dir}. Co-location: a directory plan → prd_dir is that
+    // dir; a canonical `.../plan.md` → normalized to its DIRECTORY (plan_path =
+    // dir, prd_dir = dir); any other `.md` → sibling <dirname(dirname)>/ralph/<name>/.
+    // NEVER .archon/ralph/.
+    type ResolveJson = { plan_path: string; prd_dir: string };
+
     function resolvePlanBash(): string {
       const wf = Bun.YAML.parse(BUNDLED_WORKFLOWS['ak-implement']) as {
         nodes: Array<{ id: string; bash?: string }>;
@@ -548,62 +550,89 @@ describe('bundled-defaults', () => {
       return node.bash;
     }
 
-    function runResolve(setup: (root: string) => void): {
-      status: number | null;
-      stdout: string;
-    } {
+    function runResolve(
+      planInput: string,
+      setup: (root: string) => void
+    ): { status: number | null; json: ResolveJson | null } {
       const root = mkdtempSync(join(tmpdir(), 'resolve-plan-'));
       try {
         setup(root);
-        const result = spawnSync('bash', ['-c', resolvePlanBash()], {
-          cwd: root,
-          encoding: 'utf8',
-          env: { ...process.env, ARGUMENTS: '' },
-        });
-        return { status: result.status, stdout: (result.stdout ?? '').trim() };
+        // resolve-plan reads $resolve-plan-source.output.plan_path (substituted by
+        // the executor at runtime). Inject the test path in its place.
+        const bash = resolvePlanBash().replace(
+          '$resolve-plan-source.output.plan_path',
+          () => planInput
+        );
+        const result = spawnSync('bash', ['-c', bash], { cwd: root, encoding: 'utf8' });
+        let json: ResolveJson | null = null;
+        try {
+          json = JSON.parse((result.stdout ?? '').trim()) as ResolveJson;
+        } catch {
+          json = null;
+        }
+        return { status: result.status, json };
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
     }
 
-    it('selects the newest plans/*/ containing plan.md over a newer plan-less dir', () => {
-      const res = runResolve(root => {
-        mkdirSync(join(root, 'plans/old-valid'), { recursive: true });
-        writeFileSync(join(root, 'plans/old-valid/plan.md'), '# plan\n');
-        mkdirSync(join(root, 'plans/newer-noplan'), { recursive: true });
-        // Force old-valid OLDER so `ls -dt` lists newer-noplan first — the exact
-        // ordering the buggy head-1 resolver mishandled.
-        const old = new Date('2025-01-01T00:00:00Z');
-        const newer = new Date('2025-06-01T00:00:00Z');
-        utimesSync(join(root, 'plans/old-valid'), old, old);
-        utimesSync(join(root, 'plans/old-valid/plan.md'), old, old);
-        utimesSync(join(root, 'plans/newer-noplan'), newer, newer);
+    it('directory plan → prd_dir is the plan directory itself', () => {
+      const res = runResolve('plans/my-feature', root => {
+        mkdirSync(join(root, 'plans/my-feature'), { recursive: true });
+        writeFileSync(join(root, 'plans/my-feature/plan.md'), '# plan\n');
       });
       expect(res.status).toBe(0);
-      expect(res.stdout.endsWith('/plans/old-valid')).toBe(true);
+      expect(res.json?.plan_path.endsWith('/plans/my-feature')).toBe(true);
+      expect(res.json?.prd_dir).toBe(res.json?.plan_path);
     });
 
-    it('exits 1 when no plans/*/ contains plan.md', () => {
-      const res = runResolve(root => {
-        mkdirSync(join(root, 'plans/newest-noplan'), { recursive: true });
-        mkdirSync(join(root, 'plans/older-noplan'), { recursive: true });
+    it('canonical <slug>/plan.md → normalized to its directory (not plans/ralph/plan)', () => {
+      const res = runResolve('plans/260901-datetime/plan.md', root => {
+        mkdirSync(join(root, 'plans/260901-datetime'), { recursive: true });
+        writeFileSync(join(root, 'plans/260901-datetime/plan.md'), '# plan\n');
+        writeFileSync(join(root, 'plans/260901-datetime/phase-01.md'), '# phase\n');
       });
+      expect(res.status).toBe(0);
+      expect(res.json?.plan_path.endsWith('/plans/260901-datetime')).toBe(true);
+      expect(res.json?.prd_dir).toBe(res.json?.plan_path);
+    });
+
+    it('file plan under docs/superpowers/plans → PRD in docs/superpowers/ralph/<name>', () => {
+      const res = runResolve('docs/superpowers/plans/test-feedback-loop.md', root => {
+        mkdirSync(join(root, 'docs/superpowers/plans'), { recursive: true });
+        writeFileSync(join(root, 'docs/superpowers/plans/test-feedback-loop.md'), '# plan\n');
+      });
+      expect(res.status).toBe(0);
+      expect(res.json?.plan_path.endsWith('/docs/superpowers/plans/test-feedback-loop.md')).toBe(
+        true
+      );
+      expect(res.json?.prd_dir.endsWith('/docs/superpowers/ralph/test-feedback-loop')).toBe(true);
+    });
+
+    it('file plan under plans/architectures → PRD in plans/ralph/<name>', () => {
+      const res = runResolve('plans/architectures/3-8-list-sessions.md', root => {
+        mkdirSync(join(root, 'plans/architectures'), { recursive: true });
+        writeFileSync(join(root, 'plans/architectures/3-8-list-sessions.md'), '# plan\n');
+      });
+      expect(res.status).toBe(0);
+      expect(res.json?.prd_dir.endsWith('/plans/ralph/3-8-list-sessions')).toBe(true);
+    });
+
+    it('exits 1 when the resolved plan path is empty', () => {
+      const res = runResolve('', () => {});
       expect(res.status).toBe(1);
     });
 
-    it('handles plan directory names containing spaces', () => {
-      const res = runResolve(root => {
-        mkdirSync(join(root, 'plans/my valid plan'), { recursive: true });
-        writeFileSync(join(root, 'plans/my valid plan/plan.md'), '# plan\n');
-        mkdirSync(join(root, 'plans/newer noplan'), { recursive: true });
-        const old = new Date('2025-01-01T00:00:00Z');
-        const newer = new Date('2025-06-01T00:00:00Z');
-        utimesSync(join(root, 'plans/my valid plan'), old, old);
-        utimesSync(join(root, 'plans/my valid plan/plan.md'), old, old);
-        utimesSync(join(root, 'plans/newer noplan'), newer, newer);
+    it('exits 1 when the plan path does not exist', () => {
+      const res = runResolve('plans/nope', () => {});
+      expect(res.status).toBe(1);
+    });
+
+    it('exits 1 when a file plan is not .md', () => {
+      const res = runResolve('notes.txt', root => {
+        writeFileSync(join(root, 'notes.txt'), 'x\n');
       });
-      expect(res.status).toBe(0);
-      expect(res.stdout.endsWith('/plans/my valid plan')).toBe(true);
+      expect(res.status).toBe(1);
     });
   });
 });

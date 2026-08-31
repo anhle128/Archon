@@ -1,46 +1,40 @@
-# Ralph loop on Rust repos — project-aware validation (pivot from fork)
+# ak-implement: accept a GitHub issue as input; resolve + co-locate the plan
 
-## Context
+## Directive
 
-Codex adversarial review of the fork plan, then user challenged the whole approach as
-over-engineered. Investigation confirmed: the system already validates project-aware by delegation
-(`speckit-ralph-native-feature.yaml:618` → `archon-speckit-ralph-iteration` → repo AGENTS.md "run
-whatever the project requires"), and the project owns publish policy (`cargo clean` before PR at
-`speckit-ralph-native-feature.yaml:815-827`), which the fork's hardcoded "NEVER cargo clean" would
-override. Decision (user-approved): **project-aware loop, NO fork.**
+`ak-implement`'s real input is often a GitHub issue URL (e.g. `.../issues/178`). It did NOT know where
+the plan file was (resolve-plan treated $ARGUMENTS as a filesystem path → the URL failed). Issue #178's
+body links the canonical plan `plans/<slug>/plan.md`. Make the workflow resolve the plan from the issue,
+then co-locate the PRD with the plan.
 
 ## Checklist
 
-- [x] Delete forked YAMLs `archon-ralph-rust-dag.yaml` + `ak-implement-rust.yaml` (never entered bundle).
-- [x] Make `archon-ralph-dag.yaml` loop project-aware: - Add "Toolchain detection (do this once)" block at Phase 2 start (Cargo.toml→cargo,
-      package.json→bun/npm, go.mod→go, pyproject→python; prefer story acceptanceCriteria; follow the
-      project's own build/publish policy, do NOT override). - §2.3/§3.1/§3.2/§3.3, PHASE_2/3 checkpoints, VALIDATED, edge cases → project-aware wording (drop
-      hardcoded `bun run …`). - event-emit `bun run cli …` → `archon … || true`.
-- [x] Keep F3 fix (resolve-plan discovery, spaces-safe) + its 3 regression tests in ak-implement.yaml.
-- [x] Regenerate bundle; `check:bundled` up to date (67 commands, 37 workflows).
-- [x] `workflow list` → errorCount:0; archon-ralph-dag present; 0 fork entries.
-- [x] Rewrite `ARCHON_RALPH_RUST_DAG_PLAN.md` to the project-aware decision + record fork rejection.
-
-## Rejected
-
-- The cargo-hardcoded fork (`archon-ralph-rust-dag` + `ak-implement-rust`). Swapped one hardcode for
-  another, duplicated 789+310 lines, and would override project-owned publish policy.
-- F1 (mutually-exclusive detect branch) and F2 (final-cargo-gate, child-no-PR) were fork-specific and are
-  moot. If `ak-implement` hardening is wanted for all stacks, do it on the shared workflow separately.
+- [x] Add AI node `resolve-plan-source`: detect a GitHub issue (URL or #N), resolve repo (URL owner/repo,
+      else current origin), `gh issue view`, extract the canonical plan path its body links; pass a local
+      path through unchanged. Output `{plan_path}`. (AI interprets; bash validates — per the repo's
+      "Natural Language Is Not a Wire Format" rule.)
+- [x] Rewrite `resolve-plan` to consume `$resolve-plan-source.output.plan_path`, with the normalization:
+      canonical `<dir>/plan.md` → its DIRECTORY (avoids the `plans/ralph/plan` bug); directory → itself;
+      other `.md` → sibling `<dirname(dirname)>/ralph/<name>/`. mkdir + emit JSON `{plan_path, prd_dir}`.
+- [x] Update description + STEP comments for the issue input.
+- [x] Rewrite regression tests (token-injected source path); add the `plan.md`→directory normalization
+      test. 7 resolve-plan tests total.
+- [x] Regenerate bundle; `check:bundled` up to date (67 commands, 38 workflows).
+- [x] `workflow list` → errorCount:0; ak-implement (resolve-plan-source → resolve-plan) loads.
 
 ## Validation
 
-- [x] `bun run check:bundled` → up to date.
-- [x] `bun run cli workflow list` → `errorCount:0`; `archon-ralph-dag` loads; no `*-rust-dag` /
-      `ak-implement-rust`.
-- [x] `grep -n 'bun run' archon-ralph-dag.yaml` → 1 line (JS example inside Toolchain detection note).
-- [x] `bun test bundled-defaults.test.ts` → pass (incl. 3 resolve-plan regression tests).
+- [x] `bun run validate` → exit 0.
+- [x] `bundled-defaults.test.ts` → 39 pass (7 resolve-plan, incl. plan.md-normalization), against the
+      shipped bundled bash.
 
-## Files changed
+## Files
 
-- `.archon/workflows/defaults/archon-ralph-dag.yaml` — loop validation made project-aware.
-- `.archon/workflows/defaults/ak-implement.yaml` — resolve-plan discovery fix (spaces-safe) [F3].
+- `.archon/workflows/defaults/ak-implement.yaml` — new `resolve-plan-source` AI node; `resolve-plan`
+  consumes it + `plan.md`→dir normalization; description/comments updated.
+- `.archon/workflows/defaults/archon-ralph-dag-project-aware.yaml` — project-aware loop;
+  location-agnostic detect-input/validate-prd (from the prior step).
+- `.archon/workflows/defaults/archon-ralph-dag.yaml` — untouched original.
 - `packages/workflows/src/defaults/bundled-defaults.generated.ts` — regenerated.
-- `packages/workflows/src/defaults/bundled-defaults.test.ts` — 3 resolve-plan regression tests.
-- `ARCHON_RALPH_RUST_DAG_PLAN.md` — rewritten to the project-aware decision.
-- Deleted: `archon-ralph-rust-dag.yaml`, `ak-implement-rust.yaml`.
+- `packages/workflows/src/defaults/bundled-defaults.test.ts` — 7 resolve-plan regression tests.
+- `ARCHON_RALPH_RUST_DAG_PLAN.md` — rewritten to final state.

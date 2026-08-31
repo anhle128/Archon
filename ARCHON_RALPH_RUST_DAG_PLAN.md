@@ -1,84 +1,63 @@
-# Ralph loop on Rust repos — project-aware validation (NO fork)
+# Ralph loop: project-aware validation + issue/plan-aware, co-located PRD
 
-## Quyết định (đã đổi hướng)
+Improvements to the `ak-implement` pipeline. The shared `archon-ralph-dag.yaml` stays untouched
+(bun-hardcoded original) — zero blast radius.
 
-Bản kế hoạch cũ định **fork** `archon-ralph-dag` → `archon-ralph-rust-dag` và hardcode lệnh cargo
-xuyên suốt loop. **Đã bỏ.** Lý do (kiểm chứng trong repo):
+## 1. Project-aware validation — separate workflow file
 
-- **Hệ thống ĐÃ validate project-aware bằng delegation.** Loop native
-  (`speckit-ralph-native-feature.yaml:618`) chạy `loop.command: archon-speckit-ralph-iteration`, uỷ
-  quyền validate cho `<repo>/.specify/extensions/ralph-loop/AGENTS.md`. Quy tắc của repo
-  (`agentic-os-plan/harness-service/.specify/extensions/ralph-loop/AGENTS.md:50`): _"Run quality checks
-  (typecheck, lint, test — whatever the project requires)."_ → KHÔNG hardcode bun; agent đọc repo và
-  chạy cargo.
-- **Fork chỉ đổi một hardcode (bun) lấy một hardcode khác (cargo)** trong bản copy 789 dòng — đúng thứ
-  phức tạp cần tránh.
-- **Xung đột policy publish.** `speckit-ralph-native-feature.yaml:815-827` chạy `cargo clean` trước PR
-  cho repo Rust (policy do PROJECT sở hữu). Fork lại hardcode "NEVER cargo clean" cho tốc độ loop → một
-  fork "Rust-global" của Archon sẽ ĐÈ policy của project. Validation/publish policy phải do project giữ.
-- **Redundant.** Loop đã có bước `### 3.4 Verify Acceptance Criteria`, và acceptance criteria của PRD
-  (do `ak-implement` → `build-ralph-prd` sinh từ plan) đã mang lệnh validate thật (cargo, với plan Rust).
-  Các dòng `bun run …` hardcode chỉ là gate generic thừa.
+- **`archon-ralph-dag.yaml`** — original, untouched.
+- **`archon-ralph-dag-project-aware.yaml`** — new; the loop's VALIDATE steps run the PROJECT's own
+  checks (Toolchain detection: Cargo.toml→cargo, package.json→bun/npm, go.mod→go, pyproject→python;
+  prefer the story's acceptanceCriteria) and respect the project's own build/publish policy. Its
+  `detect-input` accepts ANY directory holding prd.json+prd.md (not just `.archon/ralph/`); `validate-prd`
+  trusts detect-input's prd_dir (no global `.archon/ralph` scan).
+- **`ak-implement.yaml`** `ralph-implement` → `archon-ralph-dag-project-aware`.
+- Rejected the cargo-hardcoded fork (`archon-ralph-rust-dag` + `ak-implement-rust`).
 
-**Hướng đã chọn: làm loop validate project-aware, KHÔNG fork.** `ak-implement` + loop project-aware chạy
-đúng cho Rust và JS bằng MỘT workflow.
+## 2. Input: a GitHub issue OR a local plan path; PRD co-located with the plan
 
-## Đã làm
+`ak-implement`'s `$ARGUMENTS` is commonly a GitHub issue (e.g.
+`https://github.com/…/x10.gigo.harness-service/issues/178`) whose body links the canonical plan
+(`**Plan (canonical, files-first):** [`plans/<slug>/plan.md`](…)`). The pipeline resolves the plan
+location and writes the Ralph PRD NEXT TO the plan (never `.archon/ralph/`).
 
-### 1. `archon-ralph-dag.yaml` — loop validate project-aware (shared)
+- **`resolve-plan-source`** (AI, prompt + `gh`, output `{plan_path}`): if `$ARGUMENTS` is a GitHub issue
+  (URL or `#N`), resolve the repo (URL's owner/repo, else current repo's origin), `gh issue view` it, and
+  extract the canonical plan path its body links — returns a LOCAL path (never the URL). If `$ARGUMENTS`
+  is already a local dir / `.md` file, passes it through. (AI, per "Natural Language Is Not a Wire
+  Format": the agent interprets the issue; bash validates the returned path.)
+- **`resolve-plan`** (bash, deterministic) consumes `$resolve-plan-source.output.plan_path`, then:
+  - Directory plan → `prd_dir = <that directory>`.
+  - Canonical `<dir>/plan.md` → NORMALIZED to `<dir>` (so the whole plan dir — plan.md + phase-\*.md — is
+    read, and the PRD co-locates in `<dir>`). Prevents the `plans/ralph/plan` mistake.
+  - Any other `<dir>/<name>.md` → `prd_dir = <dirname(dirname)>/ralph/<name>` (parent dir name → `ralph`):
+    - `docs/superpowers/plans/foo.md` → `docs/superpowers/ralph/foo/`
+    - `plans/architectures/bar.md` → `plans/ralph/bar/`
+  - `mkdir -p prd_dir`; emits JSON `{plan_path, prd_dir}` (diagnostics → stderr).
+- **`build-ralph-prd`** reads `$resolve-plan.output.plan_path` (dir → plan.md + phase-\*.md; file → the
+  file), writes prd.md/prd.json ONLY into `$resolve-plan.output.prd_dir`.
+- **`verify-and-complete`** reads the plan via `.plan_path`; audit written into
+  `$build-ralph-prd.output.prd_dir`.
 
-- Thêm khối **"Toolchain detection (do this once)"** ở đầu `## Phase 2: IMPLEMENT`: dò toolchain từ
-  CLAUDE.md/AGENTS.md + manifest (`Cargo.toml`→cargo, `package.json`→bun/npm, `go.mod`→go,
-  `pyproject.toml`→python), ưu tiên lệnh nêu trong `acceptanceCriteria`/`technicalNotes`, và **theo
-  policy build/publish của project (vd clean-before-PR) — KHÔNG override**.
-- `### 2.3` "Verify Types After Each File" → "Verify Build After Each File": chạy build/type check của
-  project (theo Toolchain detection), thay `bun run type-check`.
-- `### 3.1` Static Analysis: chạy lint+typecheck của project, thay `bun run type-check && bun run lint`
-  và khối `bun run lint:fix`.
-- `### 3.2` Tests: chạy test suite của project, thay `bun run test`.
-- `### 3.3` Format Check: chạy format check + formatter của project, thay `bun run format:check` /
-  `bun run format`.
-- `PHASE_2_CHECKPOINT` / `PHASE_3_CHECKPOINT` bullets + success-criteria `VALIDATED` + các edge
-  ("Validation fails", "Dependency setup fails") → dùng ngôn ngữ project-aware, bỏ nhắc bun cụ thể.
-- Hai event-emit `bun run cli workflow event emit … || true` → `archon workflow event emit … || true`
-  (chạy khi có `archon` trên PATH, no-op nếu không; `bun run cli` cũ chỉ chạy trong repo Archon).
-- `validate-prd` giữ nguyên: khối cài dep JS đã có guard theo lockfile (`bun.lock`/`package-lock`/…),
-  no-op trên repo Rust — không cần đổi.
-
-### 2. Bug `resolve-plan` trong `ak-implement.yaml` (Codex F3) — đã sửa + test
-
-- Nguồn cũ `ls -dt plans/*/ | head -1` RỒI mới test `plan.md` → một dir mới hơn không có `plan.md` che
-  mất plan hợp lệ cũ hơn. Sửa: `while IFS= read -r … done < <(ls -dt plans/*/ …)` chọn dir đầu tiên chứa
-  `plan.md` (spaces-safe), fail chỉ khi duyệt hết.
-- Regression test trong `packages/workflows/src/defaults/bundled-defaults.test.ts` (3 test: chọn qua dir
-  mới-hơn-không-plan, exit 1 khi không có, tên dir có dấu cách) chạy bash SHIP thật qua `Bun.YAML.parse`.
-
-### 3. Đã bỏ (fork bị loại)
-
-- XOÁ `archon-ralph-rust-dag.yaml` và `ak-implement-rust.yaml` (chưa từng vào bundle vì untracked).
-- Các sửa F1 (nhánh loại trừ generate/validate) và F2 (final-cargo-gate, child-no-PR) là fork-specific →
-  moot với hướng project-aware. Nếu muốn siết `ak-implement` (PR gate, mutually-exclusive detect) cho MỌI
-  stack thì làm riêng trên workflow shared, ngoài phạm vi lần đổi hướng này.
-
-## `ak-implement` chạy Rust thế nào (không cần gì thêm)
-
-`ak-implement <plan-dir>` (từ cwd = repo Rust): `build-ralph-prd` đọc plan → PRD với acceptance criteria
-cargo → `ralph-implement` (`archon-ralph-dag`) loop project-aware tự dò `Cargo.toml` và chạy
-cargo check/clippy/test/fmt → `verify-and-complete` audit → PR. Policy clean-before-PR (nếu có) do project
-giữ, loop không đè.
+Confirmed a schemaless bash node emitting JSON resolves `$node.output.field` (output-ref.ts path 3), so
+the deterministic bash resolver can hand structured `{plan_path, prd_dir}` downstream.
 
 ## Verification (repo Archon)
 
-1. `bun run check:bundled` → up to date (67 commands, 37 workflows).
-2. `bun run cli workflow list` → `errorCount:0`; có `archon-ralph-dag`; KHÔNG có `*-rust-dag` /
-   `ak-implement-rust`.
-3. `grep -n 'bun run' .archon/workflows/defaults/archon-ralph-dag.yaml` → chỉ còn 1 dòng: ví dụ JS trong
-   khối Toolchain detection (không phải hardcode).
-4. `bun test packages/workflows/src/defaults/bundled-defaults.test.ts` → pass (gồm 3 test resolve-plan).
+1. `bun run validate` → exit 0.
+2. `bun run check:bundled` → up to date (67 commands, 38 workflows).
+3. `bun run cli workflow list` → `errorCount:0`; `archon-ralph-dag` (original) and
+   `archon-ralph-dag-project-aware`; `ak-implement` (with `resolve-plan-source` → `resolve-plan` chain)
+   loads.
+4. `bun test packages/workflows/src/defaults/bundled-defaults.test.ts` → 39 pass, incl. 7 resolve-plan
+   tests: directory plan; canonical `<slug>/plan.md` → directory (NOT `plans/ralph/plan`); file →
+   `docs/superpowers/ralph/<name>`; file → `plans/ralph/<name>`; empty → exit 1; missing → exit 1; non-.md
+   → exit 1 (run against the SHIPPED bundled bash with the source token injected).
 
 ## Assumptions
 
-- Agent trong loop tự dò đúng toolchain từ manifest/CLAUDE.md/AGENTS.md. Repo Rust có `Cargo.toml` ở root
-  hoặc crate → cargo. Nếu mơ hồ, ưu tiên lệnh trong `acceptanceCriteria` của story (do plan cấp).
-- `archon` trên PATH cho event-emit (nếu không, `|| true` no-op — không regress).
-- Toolchain Rust có `clippy`+`rustfmt`; nếu thiếu, agent báo blocker ở progress.txt (edge-case sẵn có).
+- Issue-driven runs: the issue body links a plan path under `plans/…`, `specs/…`, or
+  `docs/superpowers/plans/…`. `gh` is authed in the run environment.
+- Directory plans hold `plan.md` (+ optional phase files); a file plan is any other `.md`.
+- Loop agent detects the toolchain from manifest/CLAUDE.md/AGENTS.md and prefers the story's
+  acceptance-criteria commands.

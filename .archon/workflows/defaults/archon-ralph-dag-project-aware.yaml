@@ -1,13 +1,18 @@
-name: archon-ralph-dag
+name: archon-ralph-dag-project-aware
 description: |
-  Use when: User wants to run a Ralph implementation loop.
-  Triggers: "ralph", "run ralph", "ralph dag", "run ralph dag".
+  Use when: User wants a Ralph implementation loop whose per-iteration validation
+            adapts to the target repo's own toolchain (cargo / bun / go / uv …),
+            instead of the bun-hardcoded archon-ralph-dag.
+  Triggers: "ralph project aware", "ralph dag project aware", "project-aware ralph".
 
   DAG workflow that:
   1. Detects input: existing prd.json, existing prd.md (needs stories), or raw idea
   2. Generates prd.md + prd.json if needed (explores codebase, breaks into stories)
   3. Validates PRD files, reads project context, installs dependencies
-  4. Runs Ralph loop (fresh context per iteration) implementing one story per iteration
+  4. Runs Ralph loop (fresh context per iteration) implementing one story per
+     iteration, validating with the PROJECT's OWN checks — detected from
+     CLAUDE.md/AGENTS.md + manifest (Cargo.toml→cargo, package.json→bun/npm,
+     go.mod→go, pyproject.toml→python); the project owns build/publish policy
   5. Creates PR and reports completion
 
   Accepts: An idea description, a path to an existing prd.md, or a directory with prd.md + prd.json
@@ -38,11 +43,14 @@ nodes:
 
       Look at the user input above. It's one of three things:
 
-      **Case A — Ralph directory path** (contains `.archon/ralph/`):
-      Extract the directory. Check if both `prd.json` and `prd.md` exist there (try locally first, then in the main repo root if in a worktree).
+      **Case A — Directory path** (ANY folder that already holds a Ralph PRD — e.g.
+      `plans/<slug>/`, `specs/<slug>/`, `docs/superpowers/ralph/<name>/`, or a legacy
+      `.archon/ralph/<slug>/`): check that BOTH `prd.json` and `prd.md` exist there
+      (try locally first, then relative to the main repo root if in a worktree). This
+      is the normal path when invoked by ak-implement (it passes a ready PRD dir).
 
       **Case B — File path** (ends in `.md`):
-      This is an external PRD file. Find it:
+      An external PRD file. Find it:
       1. Try the path as-is (relative to cwd)
       2. Try it as an absolute path
       3. If in a worktree, try it relative to the **main repo root** from Step 1
@@ -51,30 +59,27 @@ nodes:
       **Case C — Free text**:
       Not a file path — it's a feature idea.
 
-      ## Step 3: Auto-discover existing ralph PRDs
+      ## Step 3: Take action based on classification
 
-      If the input didn't point to a specific path, check if `.archon/ralph/` contains any `prd.json` files:
-      ```bash
-      find .archon/ralph -name "prd.json" -type f 2>/dev/null
-      ```
-
-      ## Step 4: Take action based on classification
-
-      **If Case A and both files exist** → output `ready` (no further action needed)
+      **If Case A and both files exist** → output `ready` with `prd_dir` = that
+      directory (absolute or repo-relative). No further action.
 
       **If Case B (external PRD found)**:
-      1. Derive a kebab-case slug from the PRD filename or title (e.g., `workflow-lifecycle-overhaul`)
-      2. Create the ralph directory: `mkdir -p .archon/ralph/{slug}`
-      3. Copy the PRD content to `.archon/ralph/{slug}/prd.md`
-      4. Output `external_prd` with the new prd_dir
+      1. Derive a kebab-case slug from the PRD filename or title.
+      2. Create a ralph directory next to the file —
+         `<dirname(dirname(file))>/ralph/<slug>` (fallback `.archon/ralph/<slug>` when
+         the file sits at the repo root); `mkdir -p` it.
+      3. Copy the PRD content to `<prd_dir>/prd.md`.
+      4. Output `external_prd` with the new prd_dir.
 
-      **If Case C or auto-discovered ralph dir has prd.md but no prd.json** → output `needs_generation`
+      **If Case C, or a Case-A directory that has prd.md but no prd.json** → output
+      `needs_generation` with `prd_dir` = that directory (or the derived one).
 
       ## Output
 
       Your final output MUST be exactly one JSON object:
       ```json
-      {"input_type": "ready|external_prd|needs_generation", "prd_dir": ".archon/ralph/{slug}"}
+      {"input_type": "ready|external_prd|needs_generation", "prd_dir": "<dir path>"}
       ```
     output_format:
       type: object
@@ -114,17 +119,10 @@ nodes:
       # ── 1. Find PRD directory (passed from detect-input) ──────
       PRD_DIR=$detect-input.output.prd_dir
 
-      # If detect-input didn't know the PRD dir (generated from scratch), discover it
+      # detect-input already resolved prd_dir (any co-located location). Trust it;
+      # fail clearly if missing/incomplete — do NOT guess (no global .archon/ralph scan).
       if [ -z "$PRD_DIR" ] || [ ! -f "$PRD_DIR/prd.json" ]; then
-        FOUND=$(find .archon/ralph -name "prd.json" -type f 2>/dev/null | head -1)
-        if [ -n "$FOUND" ]; then
-          PRD_DIR=$(dirname "$FOUND")
-        fi
-      fi
-
-      if [ -z "$PRD_DIR" ] || [ ! -f "$PRD_DIR/prd.json" ]; then
-        echo "ERROR: No prd.json found after generation step."
-        echo "Check the generate-prd node output for errors."
+        echo "ERROR: no prd.json in detect-input's prd_dir ('$PRD_DIR')." >&2
         exit 1
       fi
 
@@ -279,7 +277,7 @@ nodes:
 
         After announcing the selected story, emit the story started event:
         ```bash
-        bun run cli workflow event emit --run-id $WORKFLOW_ID --type ralph_story_started --data '{"story_id":"{story-id}","title":"{story-title}"}' || true
+        archon workflow event emit --run-id $WORKFLOW_ID --type ralph_story_started --data '{"story_id":"{story-id}","title":"{story-title}"}' || true
         ```
 
         **PHASE_1_CHECKPOINT:**
@@ -290,6 +288,17 @@ nodes:
         ---
 
         ## Phase 2: IMPLEMENT — Code the Story
+
+        **Toolchain detection (do this once, reused by §2.3 and §3):** this loop is
+        project-agnostic — NEVER assume a specific toolchain. Detect the project's
+        own commands from CLAUDE.md / AGENTS.md and the manifest present:
+        - Rust (`Cargo.toml`) → `cargo check` / `cargo clippy` / `cargo test` / `cargo fmt --all -- --check`
+        - JS/TS (`package.json`) → the repo's `bun run` / `npm run` scripts (type-check, lint, test, format)
+        - Go (`go.mod`) → `go build` / `go vet` / `go test ./...` / `gofmt -l`
+        - Python (`pyproject.toml`) → the repo's configured typecheck / lint / test / format
+        Prefer the exact commands the story's `acceptanceCriteria` / `technicalNotes`
+        name. Follow the project's own build/publish policy (e.g. a clean-before-PR
+        step) — do NOT override it with loop-specific rules.
 
         ### 2.1 Explore Before Coding
 
@@ -316,22 +325,20 @@ nodes:
         - Touch files unrelated to this story
         - Over-engineer — do the simplest thing that satisfies the criteria
 
-        ### 2.3 Verify Types After Each File
+        ### 2.3 Verify Build After Each File
 
-        After modifying each file, run:
-        ```bash
-        bun run type-check
-        ```
+        After modifying each file, run the project's fast build/type check (see
+        Toolchain detection), scoped to what you changed where supported.
 
-        **If types fail:**
+        **If it fails:**
         1. Read the error carefully
-        2. Fix the type issue in your code
-        3. Re-run type-check
-        4. Do NOT proceed to the next file until types pass
+        2. Fix the issue in your code
+        3. Re-run the check
+        4. Do NOT proceed to the next file until it passes
 
         **PHASE_2_CHECKPOINT:**
         - [ ] Only the selected story was implemented
-        - [ ] Types compile after each file change
+        - [ ] Project builds after each file change
         - [ ] Tests written/updated as needed
         - [ ] No unrelated changes
 
@@ -341,23 +348,16 @@ nodes:
 
         ### 3.1 Static Analysis
 
-        ```bash
-        bun run type-check && bun run lint
-        ```
+        Run the project's static analysis — lint + typecheck (see Toolchain
+        detection). Must pass with zero errors and zero warnings.
 
-        **Must pass with zero errors and zero warnings.**
-
-        **If lint fails:**
-        1. Run `bun run lint:fix` for auto-fixable issues
-        2. Manually fix remaining issues
-        3. Re-run lint
-        4. Proceed only when clean
+        **If it fails:** fix the reported issues (use the project's autofix only if
+        it has one), then re-run until clean.
 
         ### 3.2 Tests
 
-        ```bash
-        bun run test
-        ```
+        Run the project's test suite (see Toolchain detection). Scope to the area
+        you changed when the toolchain supports it.
 
         **All tests must pass.**
 
@@ -371,14 +371,8 @@ nodes:
 
         ### 3.3 Format Check
 
-        ```bash
-        bun run format:check
-        ```
-
-        **If formatting fails:**
-        ```bash
-        bun run format
-        ```
+        Run the project's format check (see Toolchain detection). If it reports
+        problems, run the project's formatter to fix them, then re-check.
 
         ### 3.4 Verify Acceptance Criteria
 
@@ -389,10 +383,10 @@ nodes:
         If a criterion is NOT met, go back to Phase 2 and fix it.
 
         **PHASE_3_CHECKPOINT:**
-        - [ ] Type-check passes
-        - [ ] Lint passes (0 errors, 0 warnings)
+        - [ ] Project build/typecheck passes
+        - [ ] Project lint passes (0 errors, 0 warnings)
         - [ ] All tests pass
-        - [ ] Format is clean
+        - [ ] Formatting is clean
         - [ ] Every acceptance criterion verified
 
         ---
@@ -463,7 +457,7 @@ nodes:
 
         After updating prd.json, emit the story completed event:
         ```bash
-        bun run cli workflow event emit --run-id $WORKFLOW_ID --type ralph_story_completed --data '{"story_id":"{story-id}","title":"{story-title}"}' || true
+        archon workflow event emit --run-id $WORKFLOW_ID --type ralph_story_completed --data '{"story_id":"{story-id}","title":"{story-title}"}' || true
         ```
 
         ### 5.2 Update progress.txt
@@ -562,7 +556,7 @@ nodes:
         ## Handling Edge Cases
 
         ### Validation fails repeatedly
-        - If type-check or tests fail 3+ times on the same error, step back
+        - If the project's checks or tests fail 3+ times on the same error, step back
         - Re-read the acceptance criteria — you may be misunderstanding the requirement
         - Check if the story is too large (needs breaking down)
         - Note the blocker in progress.txt and end the iteration
@@ -578,10 +572,10 @@ nodes:
         - Run only the test files related to your changes if the full suite has pre-existing issues
         - Document pre-existing failures in progress.txt
 
-        ### Dependency install fails
-        - Check if `bun.lock` or equivalent exists
-        - Try `bun install` without `--frozen-lockfile`
-        - Note the issue in progress.txt
+        ### Dependency setup fails
+        - JS installs deps from a lockfile; most other toolchains (cargo, go, …)
+          fetch automatically on first build — there may be no separate install step
+        - If fetch/install fails, check network / registry access and note it in progress.txt
 
         ### Git state is dirty at iteration start
         - This shouldn't happen (fresh worktree), but if it does:
@@ -648,7 +642,7 @@ nodes:
         ## Success Criteria
 
         - **ONE_STORY**: Exactly one story implemented per iteration
-        - **VALIDATED**: Type-check + lint + tests + format all pass before commit
+        - **VALIDATED**: the project's own checks (build/typecheck + lint + tests + format) all pass before commit
         - **COMMITTED**: Changes committed with clear message
         - **TRACKED**: prd.json and progress.txt updated accurately
         - **PATTERNS_SHARED**: Discovered patterns added to progress.txt for future iterations

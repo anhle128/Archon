@@ -4,18 +4,20 @@ description: |
   unattended in a worktree (no /ak:plan).
   Triggers: "ak implement", "implement plan", "ralph implement plan",
             "run existing plan", "implement from plans/".
-  Does: resolve existing plan ($ARGUMENTS path, else newest plans/*/) ->
-        convert plan into a Ralph PRD (prd.md + prd.json) ->
-        autonomous story-by-story implementation via archon-ralph-dag ->
+  Does: resolve the plan source from $ARGUMENTS — a GitHub issue (URL or #N) whose
+        body links the plan, or a local plan dir / .md file ->
+        convert plan into a Ralph PRD (prd.md + prd.json) CO-LOCATED with it ->
+        autonomous story-by-story implementation via archon-ralph-dag-project-aware ->
         independent plan-coverage audit that implements any missing plan work
         (do NOT trust ralph-implement) -> create PR.
-  Input: Optional path to a plan directory or plan.md. If omitted, uses the
-        newest plans/*/ directory that contains plan.md.
+  Input: REQUIRED. A GitHub issue URL / #N whose body links a plan path, OR a plan
+        directory (plans/<slug>/, specs/<slug>/) or a .md plan file
+        (e.g. docs/superpowers/plans/<name>.md).
   NOT for: creating a plan from scratch (use ck-feature), quick one-file fixes,
         bug fixes, or PR reviews.
 
 # Default provider. build-ralph-prd / verify-and-complete override to codex.
-# ralph-implement runs archon-ralph-dag as authored (its own per-node providers).
+# ralph-implement runs archon-ralph-dag-project-aware as authored (its own per-node providers).
 provider: claude
 
 nodes:
@@ -33,78 +35,115 @@ nodes:
       git fetch --all --prune 2>/dev/null || true
       mkdir -p plans
       echo ""
-      echo "Pipeline: resolve existing plan  ->  plan->Ralph PRD  ->  archon-ralph-dag  ->  verify+complete gaps  ->  draft PR"
+      echo "Pipeline: resolve plan  ->  plan->Ralph PRD (co-located)  ->  archon-ralph-dag-project-aware  ->  verify+complete gaps  ->  draft PR"
       echo "Starting Step 1 of 5: resolve plan..."
 
   # ───────────────────────────────────────────────────────────────────
-  # STEP 2 / 5 — Resolve existing plan directory
-  # Prefer $ARGUMENTS when it points at a plan.md or a plan directory.
-  # Otherwise pick the newest plans/*/ that contains plan.md.
-  # Diagnostics -> stderr; stdout is ONLY the absolute plan dir path.
+  # STEP 1b / 5 — Resolve the plan SOURCE to a local path
+  # $ARGUMENTS may be a GitHub issue (URL or #N) whose body links the plan, OR a
+  # local plan path already. This AI step returns the LOCAL plan path (never a URL).
+  # ───────────────────────────────────────────────────────────────────
+  - id: resolve-plan-source
+    prompt: |
+      ## Task — resolve the plan SOURCE to a local path
+
+      `$ARGUMENTS` is the ak-implement input. Output the LOCAL path of the plan to
+      implement as `plan_path`. Do NOT read or summarize the plan contents here —
+      only resolve the path.
+
+      Classify `$ARGUMENTS`:
+
+      1. **A GitHub issue reference** — a github.com issues URL
+         (`https://github.com/<owner>/<repo>/issues/<N>`), or `#<N>`, or `issue <N>`:
+         - Repo: use the URL's `<owner>/<repo>` for a full URL; otherwise the current
+           repo (`gh repo view --json nameWithOwner -q .nameWithOwner`).
+         - Read it: `gh issue view <N> --repo <owner>/<repo> --json title,body`.
+         - From the body, extract the CANONICAL plan path it links — prefer a line
+           labelled like "Plan (canonical, files-first)" — one of:
+           `plans/<...>/plan.md`, `plans/<...>.md`, `specs/<...>/...`,
+           `docs/superpowers/plans/<...>.md`, or a plan directory. Return that path
+           EXACTLY as written in the issue (repo-relative) — never the issue URL.
+         - If the issue links no such plan path, STOP and fail (do not guess one).
+      2. **A local path already** (a directory or a `.md` file) → return it unchanged.
+
+      Output `plan_path` (the local path string, no backticks or markdown).
+    depends_on: [setup]
+    allowed_tools: [Bash, Read]
+    context: fresh
+    output_format:
+      type: object
+      properties:
+        plan_path:
+          type: string
+      required: [plan_path]
+
+  # ───────────────────────────────────────────────────────────────────
+  # STEP 2 / 5 — Resolve + co-locate from the resolved plan source
+  # Input: $resolve-plan-source.output.plan_path (a local dir or .md file).
+  # A canonical `.../plan.md` file is normalized to its DIRECTORY (so the whole
+  # plan dir — plan.md + phase-*.md — is read, and the PRD co-locates in it).
+  # Any other `.md` file -> sibling <dirname(dirname)>/ralph/<name>/.
+  # Diagnostics -> stderr; stdout is ONLY JSON {"plan_path","prd_dir"}.
   # ───────────────────────────────────────────────────────────────────
   - id: resolve-plan
     bash: |
       set -euo pipefail
 
-      resolve_candidate() {
-        local raw="$1"
-        raw="${raw#"${raw%%[![:space:]]*}"}"
-        raw="${raw%"${raw##*[![:space:]]}"}"
-        [ -n "$raw" ] || return 1
+      RAW="$resolve-plan-source.output.plan_path"
+      # trim surrounding whitespace and any stray backticks a markdown link carried
+      RAW="${RAW#"${RAW%%[![:space:]]*}"}"
+      RAW="${RAW%"${RAW##*[![:space:]]}"}"
+      RAW="${RAW#\`}"; RAW="${RAW%\`}"
 
-        if [ -f "$raw" ]; then
-          local base
-          base="$(basename "$raw")"
-          if [ "$base" = "plan.md" ]; then
-            cd "$(dirname "$raw")" && pwd
-            return 0
-          fi
-          echo "ERROR: file argument must be a plan.md, got: $raw" >&2
-          return 1
-        fi
-
-        if [ -d "$raw" ]; then
-          if [ -f "$raw/plan.md" ]; then
-            cd "$raw" && pwd
-            return 0
-          fi
-          echo "ERROR: directory has no plan.md: $raw" >&2
-          return 1
-        fi
-
-        echo "ERROR: plan path does not exist: $raw" >&2
-        return 1
-      }
-
-      ABS_PLAN_DIR=""
-      if [ -n "${ARGUMENTS:-}" ]; then
-        ABS_PLAN_DIR="$(resolve_candidate "$ARGUMENTS")"
-      else
-        while IFS= read -r PLAN_DIR; do
-          [ -n "$PLAN_DIR" ] || continue
-          if [ -f "${PLAN_DIR}plan.md" ]; then
-            ABS_PLAN_DIR="$(cd "$PLAN_DIR" && pwd)"
-            break
-          fi
-        done < <(ls -dt plans/*/ 2>/dev/null || true)
-      fi
-
-      if [ -z "$ABS_PLAN_DIR" ] || [ ! -f "$ABS_PLAN_DIR/plan.md" ]; then
-        echo "ERROR: no plan directory with plan.md found." >&2
-        echo "Pass a plan dir / plan.md path as \$ARGUMENTS, or create plans/<slug>/plan.md." >&2
+      if [ -z "$RAW" ]; then
+        echo "ERROR: no plan path resolved from the input." >&2
         exit 1
       fi
 
-      echo "Resolved plan dir: $ABS_PLAN_DIR" >&2
-      ls -la "$ABS_PLAN_DIR" >&2
-      printf '%s' "$ABS_PLAN_DIR"
-    depends_on: [setup]
+      if [ -d "$RAW" ]; then
+        # Directory plan (plans/<slug>/, specs/<slug>/, …) — PRD co-locates in it.
+        PLAN_PATH="$(cd "$RAW" && pwd)"
+        PRD_DIR="$PLAN_PATH"
+      elif [ -f "$RAW" ]; then
+        BASE="$(basename "$RAW")"
+        DIR_ABS="$(cd "$(dirname "$RAW")" && pwd)"
+        if [ "$BASE" = "plan.md" ]; then
+          # Canonical plan.md -> the plan IS its directory (plan.md + phase-*.md);
+          # PRD co-locates in that directory.
+          PLAN_PATH="$DIR_ABS"
+          PRD_DIR="$DIR_ABS"
+        else
+          case "$RAW" in
+            *.md) : ;;
+            *) echo "ERROR: a file plan must be a .md file, got: $RAW" >&2; exit 1 ;;
+          esac
+          # Single-file plan -> sibling ralph/<name>/: replace the file's parent dir
+          # name with 'ralph' and append the basename.
+          #   docs/superpowers/plans/foo.md -> docs/superpowers/ralph/foo/
+          #   plans/architectures/bar.md    -> plans/ralph/bar/
+          PLAN_PATH="$DIR_ABS/$BASE"
+          PRD_DIR="$(dirname "$DIR_ABS")/ralph/${BASE%.md}"
+        fi
+      else
+        echo "ERROR: resolved plan path does not exist: $RAW" >&2
+        exit 1
+      fi
+
+      mkdir -p "$PRD_DIR"
+      PRD_DIR="$(cd "$PRD_DIR" && pwd)"
+
+      echo "Resolved plan: $PLAN_PATH" >&2
+      echo "PRD dir (co-located): $PRD_DIR" >&2
+      if [ -d "$PLAN_PATH" ]; then ls -la "$PLAN_PATH" >&2; fi
+      # stdout = ONLY this JSON object (consumed as $resolve-plan.output.{plan_path,prd_dir}).
+      printf '{"plan_path":"%s","prd_dir":"%s"}' "$PLAN_PATH" "$PRD_DIR"
+    depends_on: [resolve-plan-source]
     always_run: true
 
   # ───────────────────────────────────────────────────────────────────
-  # STEP 3 / 5 — Convert existing plan into a Ralph PRD
-  # Reads the WHOLE plan dir (plan.md + every phase-*.md) and writes
-  # .archon/ralph/<slug>/{prd.md,prd.json} for archon-ralph-dag.
+  # STEP 3 / 5 — Convert the plan into a Ralph PRD, CO-LOCATED with the plan
+  # Dir plan -> prd.{md,json} written in that dir. File plan -> written in a
+  # sibling <dirname(dirname(file))>/ralph/<name>/ dir. NEVER .archon/ralph/.
   # ───────────────────────────────────────────────────────────────────
   - id: build-ralph-prd
     prompt: |
@@ -120,30 +159,37 @@ nodes:
 
       ## Task
 
-      An existing implementation plan lives at:
+      The plan to implement is at:
 
-        $resolve-plan.output
+        $resolve-plan.output.plan_path
 
-      Convert that ENTIRE plan into a Ralph PRD so the archon-ralph-dag loop can
-      implement it one story per iteration. Do NOT implement the feature itself —
-      only produce the PRD files.
+      It is EITHER a directory (holds `plan.md` + optional `phase-*.md`) OR a single
+      `.md` plan file. The Ralph PRD directory has ALREADY been chosen and created
+      for you (co-located with the plan):
 
-      1. Read `plan.md` and EVERY `phase-*.md` in that directory. The phase files
-         carry the real implementation detail — do not rely on plan.md alone.
-         If `verification-report.md` exists, fold in its fixes too.
-      2. Derive a kebab-case `<slug>` (max 50 chars) from the plan's feature name.
-      3. Create the Ralph directory: `mkdir -p .archon/ralph/<slug>`.
-      4. Break the plan into right-sized Ralph user stories — each completable in a
+        $resolve-plan.output.prd_dir
+
+      Convert that ENTIRE plan into a Ralph PRD so the archon-ralph-dag-project-aware
+      loop can implement it one story per iteration. Do NOT implement the feature
+      itself — only produce the PRD files. Write ONLY inside
+      `$resolve-plan.output.prd_dir` (never `.archon/ralph/`).
+
+      1. Read the plan at `$resolve-plan.output.plan_path`:
+         - If it is a directory: read `plan.md` and EVERY `phase-*.md` in it (the
+           phase files carry the real detail — do not rely on plan.md alone). If
+           `verification-report.md` exists, fold in its fixes too.
+         - If it is a single `.md` file: read that file.
+      2. Break the plan into right-sized Ralph user stories — each completable in a
          single fresh-context iteration (roughly one phase or one coherent unit of
          work per story). Map the plan's TDD structure (tests-before / implement /
          tests-after / regression gate) into concrete, pass/fail acceptance
          criteria. Order stories by dependency (lower priority runs first) and set
          `dependsOn` to only lower-priority story ids. No cycles, no forward refs.
-      5. Write `.archon/ralph/<slug>/prd.md` — a self-contained context document
-         (overview / problem / solution, goals + success metrics, non-goals,
-         technical context with real file:line references drawn from the plan, and
-         a story-overview table). A fresh-context agent re-reads this each iteration.
-      6. Write `.archon/ralph/<slug>/prd.json` using EXACTLY this schema
+      3. Write `$resolve-plan.output.prd_dir/prd.md` — a self-contained context
+         document (overview / problem / solution, goals + success metrics, non-goals,
+         technical context with real file:line references drawn from the plan, and a
+         story-overview table). A fresh-context agent re-reads this each iteration.
+      4. Write `$resolve-plan.output.prd_dir/prd.json` using EXACTLY this schema
          (story-level `passes`, all `false` at start):
 
          ```json
@@ -165,11 +211,10 @@ nodes:
          }
          ```
 
-      7. Verify both files exist and prd.json is valid JSON whose `userStories` is a
+      5. Verify both files exist and prd.json is valid JSON whose `userStories` is a
          non-empty array with every story `passes: false`.
 
-      Report the ABSOLUTE path of the Ralph directory as `prd_dir` (resolve it with
-      `realpath` so it is stable regardless of cwd).
+      Report `$resolve-plan.output.prd_dir` as `prd_dir`.
     depends_on: [resolve-plan]
     provider: codex
     effort: xhigh
@@ -189,14 +234,14 @@ nodes:
       required: [prd_dir, slug, story_count]
 
   # ───────────────────────────────────────────────────────────────────
-  # STEP 4 / 5 — Implement via archon-ralph-dag (sub-run)
+  # STEP 4 / 5 — Implement via archon-ralph-dag-project-aware (sub-run)
   # Governed child run in this SAME worktree (isolation: inherit).
   # Ready Ralph PRD => detect-input -> "ready" (generation skipped).
   # Loops one story per iteration (fresh context, validate + commit).
   # Next node audits original-plan coverage; PR creation is a later node.
   # ───────────────────────────────────────────────────────────────────
   - id: ralph-implement
-    workflow: archon-ralph-dag
+    workflow: archon-ralph-dag-project-aware
     input: '$build-ralph-prd.output.prd_dir'
     isolation: inherit
     depends_on: [build-ralph-prd]
@@ -221,13 +266,14 @@ nodes:
 
       ## Inputs
 
-      - Original plan directory: `$resolve-plan.output`
+      - Original plan (directory or .md file): `$resolve-plan.output.plan_path`
       - Ralph PRD directory: `$build-ralph-prd.output.prd_dir`
       - Ralph sub-run output (untrusted): `$ralph-implement.output`
 
       ## Mandatory procedure
 
-      1. Read `plan.md` and EVERY `phase-*.md` under `$resolve-plan.output`.
+      1. Read the plan at `$resolve-plan.output.plan_path` (if a directory: `plan.md`
+         and EVERY `phase-*.md`; if a single `.md` file: that file).
          Build a complete checklist of concrete deliverables / acceptance
          criteria / tasks from the plan (not from prd.json).
       2. Optionally read `$build-ralph-prd.output.prd_dir/prd.json` and
@@ -247,7 +293,7 @@ nodes:
       5. Re-check the checklist after your fixes until every plan item is `done`,
          or document a hard blocker that is truly outside the repo (missing secret,
          external service, product decision). Blockers must be rare and evidenced.
-      6. Write `$resolve-plan.output/implementation-audit.md` with this structure:
+      6. Write `$build-ralph-prd.output.prd_dir/implementation-audit.md` with this structure:
 
          ```markdown
          # Implementation Audit
