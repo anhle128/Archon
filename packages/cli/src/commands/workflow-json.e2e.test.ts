@@ -1541,18 +1541,37 @@ describe('workflow resume/retry/cancel --json CLI dispatch E2E — real subproce
     expect(stderr).toBe('');
   });
 
-  // 3.3D-CLI-027 [P0] R1-F23 — resume UNEXPECTED_STATE for cancelled run
-  test('3.3D-CLI-027: `workflow resume <cancelled-run> --json` emits UNEXPECTED_STATE envelope, exit 78', async () => {
+  // 3.3D-CLI-027 [P0] — resume SUCCESS for a cancelled run.
+  // Cancelled runs are resumable; in JSON mode `workflow resume` validates
+  // eligibility without inline execution, so a cancelled run resumes like a
+  // paused one (validated, not executed).
+  test('3.3D-CLI-027: `workflow resume <cancelled-run> --json` emits success envelope with resumable:true, executed:false', async () => {
     const runId = 'ffffffff-0000-1111-2222-333333333333';
     await seedRunWithStatus(runId, isolatedRepo, 'cancelled');
 
-    const { stdout, stderr, exitCode } = await runCli(['workflow', 'resume', runId, '--json']);
+    const { stdout, stderr, exitCode } = await runCli([
+      'workflow',
+      'resume',
+      runId,
+      '--json',
+      '--correlation-id',
+      'corr-cli-027-resume-cancelled',
+    ]);
 
     const envelope = parseSoleJsonLine(stdout);
-    expect(envelope.success).toBe(false);
-    const error = envelope.error as Record<string, unknown> | undefined;
-    expect(error?.code).toBe('UNEXPECTED_STATE');
-    expect(exitCode).toBe(78);
+    expect(envelope.schemaVersion).toBe('workflow-command-envelope.v1');
+    expect(envelope.command).toBe('workflow.resume');
+    expect(envelope.success).toBe(true);
+    expect(envelope.correlationId).toBe('corr-cli-027-resume-cancelled');
+
+    const result = envelope.result as Record<string, unknown> | undefined;
+    expect(result?.operation).toBe('resume');
+    expect(result?.resumable).toBe(true);
+    expect(result?.executed).toBe(false);
+    expect(result?.validated).toBe(true);
+    expect(result?.state).toBe('cancelled');
+
+    expect(exitCode).toBe(0);
     expect(stderr).toBe('');
   });
 
