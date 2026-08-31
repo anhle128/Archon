@@ -2,7 +2,7 @@
 title: Archon Source Control Tab
 status: final
 created: '2026-08-30'
-updated: '2026-08-30'
+updated: '2026-09-01'
 source: Distilled from spec-archon-source-control (SPEC.md + brownfield/viewer-rules/architecture-diagrams/roadmap) and brainstorm-intent. Self-contained for isolated Archon implementation per the cross-project handoff contract.
 companions:
   - addendum.md
@@ -41,7 +41,7 @@ The Source Control tab answers that question in the UI. For the run being viewed
 Internal tooling with a single operator role, so one light journey suffices.
 
 > **UJ-1. An operator checks what a run changed, from the run screen.**
-> Kevin is watching a running (or just-finished) workflow on the Archon run screen. He opens the **Source Control** tab. The **Changes** region lists the run's uncommitted files, each badged `M`, `A`, or `D`; below it, the **commit history** lists the run's commits. He clicks a modified file and sees a two-pane diff (red before / green after); he clicks a newly added file and reads its full content. He clicks an older commit in the history and sees that commit's files and diffs. Everything is read from the run's remote checkout; he never SSHed or cloned. When he suspects the file changed again on the server, he presses **Reload**. **Edge case:** if the run's checkout has already been cleaned up, the tab shows a clear "no worktree / not available" state instead of an error.
+> Kevin is watching a running (or just-finished) workflow on the Archon run screen. He opens the **Source Control** tab. The **Changes** region lists the run's uncommitted files, each badged `M`, `A`, or `D`; below it, the **commit-history graph** shows the run's commits as branch/merge lanes. He clicks a modified file and sees a two-pane diff (red before / green after); he clicks a newly added file and reads its full content. He clicks an older commit in the history and sees that commit's files and diffs. Everything is read from the run's remote checkout; he never SSHed or cloned. When he suspects the file changed again on the server, he presses **Reload**. **Edge case:** if the run's checkout has already been cleaned up, the tab shows a clear "no worktree / not available" state instead of an error.
 
 ## 3. Glossary
 
@@ -50,7 +50,7 @@ Internal tooling with a single operator role, so one light journey suffices.
 - **Run checkout** — the on-disk directory a run executed in, recorded on the run row as `working_path`. Usually an isolated git worktree; may also be an in-place or `--no-worktree` git repo checkout.
 - **`working_path`** — the absolute path of the Run checkout, persisted on the run and exposed at `GET /api/workflows/runs/{runId}`.
 - **Changes region** — the list of the run's _uncommitted_ changed files (the "Now" scope).
-- **Commit history** — the list of commits on the run's own branch.
+- **Commit history** — the branch/merge lane graph of commits on the run's own branch.
 - **M / A / D** — the only file-state badges: `M` modified, `A` added, `D` deleted.
 - **Viewer** — the single shared file view the tab opens for any listed file.
 - **Empty state** — the "no worktree / not available" view shown when there is no readable Run checkout.
@@ -60,13 +60,13 @@ Internal tooling with a single operator role, so one light journey suffices.
 
 ### 4.1 Source Control tab and layout
 
-**Description:** A fourth tab, **Source Control**, on the workflow-run screen, shaped like VS Code's Source Control panel: a **Changes region** (uncommitted) above a **commit history** region, both scoped to the Run being viewed. Refresh is manual. Realizes UJ-1.
+**Description:** A fourth tab, **Source Control**, on the workflow-run screen, shaped like VS Code's Source Control panel: a **Changes region** (uncommitted) above a **commit-history graph** region (branch/merge lane topology, like VS Code / GitLens), both scoped to the Run being viewed. Refresh is manual. Realizes UJ-1.
 
 **Functional Requirements:**
 
 #### FR-1: Source Control tab with two regions
 
-An operator viewing a run can open a **Source Control** tab that shows, for that run, the **Changes region** above the **commit history**.
+An operator viewing a run can open a **Source Control** tab that shows, for that run, the **Changes region** above the **commit-history graph**.
 
 **Consequences (testable):**
 
@@ -130,7 +130,7 @@ The operator can open any changed file — large text or binary — without the 
 
 ### 4.4 History navigation
 
-**Description:** The operator can click any commit in the history and inspect its files and diffs, read from the run's own branch — including commits not present on the base branch. Realizes UJ-1.
+**Description:** The operator can click any commit in the history and inspect its files and diffs, read from the run's own branch — including commits not present on the base branch. The history is rendered as a **branch/merge commit-topology graph** (lanes assigned by topology — not one-per-branch), one row per commit. Realizes UJ-1.
 
 **Functional Requirements:**
 
@@ -142,10 +142,11 @@ The operator selects any commit in the history and sees its `M`/`A`/`D` files an
 
 - A commit on the run branch not yet merged into the base branch still shows its files and diffs.
 - The commit view uses the same Viewer and the `parent → commit` direction.
+- The history renders as a **lane graph** (branch/merge topology), one row per commit; this requires each commit's **parent OIDs** (`parents[]`) added to the existing log record (message / author / time). The lane-layout is a flagged build spike (see architecture).
 
 ### 4.5 Access and safety
 
-**Description:** All reads are resolved on the server from `runId`, confined to that run's checkout, and strictly read-only. The client never supplies a filesystem path.
+**Description:** All reads are resolved on the server from `runId`, confined to that run's checkout, and strictly read-only. The client never supplies the checkout root or an absolute/filesystem path; it may pass a server-returned repo-relative path, which the server validates against the run's tree.
 
 **Functional Requirements:**
 
@@ -155,7 +156,7 @@ The system serves Source Control data by resolving the run's checkout server-sid
 
 **Consequences (testable):**
 
-- The UI sends only `runId` + a file/commit reference — never a path.
+- The UI sends `runId` + a server-returned reference (a repo-relative path chosen from the changes/commit list, or a commit ref) — never the checkout root or an absolute/filesystem path.
 - The server resolves `working_path` from the run, realpaths it, and rejects any `..`.
 - No endpoint mutates the checkout (no write, commit, or path-injection surface).
 
@@ -260,10 +261,11 @@ At run end, the server writes a Durable snapshot (changed files with status, per
 ## Cross-Cutting NFRs
 
 - **Performance / latency:** Source Control fetches on click with explicit loading feedback; no hard SLA, but it must not regress the run screen (SM-C1). Large files stream; the tab never blocks the run screen. Reads are on-demand only (manual Reload; no polling).
-- **Security:** server resolves the checkout path from `runId` (never from the client), realpaths it, and rejects `..`; git is invoked with server-controlled args, never a shell string; strictly read-only. Mechanism (APIs, package boundaries) in `addendum.md`. (FR-7)
+- **Security:** server resolves the checkout root from `runId` (never client-supplied); the client may pass a server-returned repo-relative path, which the server realpaths and validates under the checkout, rejecting `..`; git is invoked with server-controlled args, never a shell string; strictly read-only. Mechanism (APIs, package boundaries) in `addendum.md`. (FR-7)
 - **Reliability:** a vanished or missing checkout degrades to the Empty state, never a crash (FR-8); a terminal run status does not imply the checkout is gone — existence is checked at read time.
 - **Compatibility:** honors Archon package boundaries and coding rules — OpenAPI-registered routes (with the raw-route exception the artifacts route uses for wildcard/non-JSON responses), web consumes generated types only, no SDK leakage across package boundaries. Specifics in `addendum.md`.
 - **Observability:** `[ASSUMPTION]` server-side reads emit named structured logs in the existing `{domain}.{action}_{state}` style and never log file contents, paths beyond what policy allows, or secrets.
+- **Accessibility:** the diff must not rely on color alone — each changed line carries a `+`/`-` gutter marker as the non-color cue (WCAG 1.4.1; the red/green tint is secondary); `M`/`A`/`D` badges are letter-carried; the Changes list, commit-history graph, and viewer are keyboard-operable; WCAG-AA contrast is verified for load-bearing tokens (diff markers ≥ 4.5:1, commit-graph lanes ≥ 3:1 non-text). The layout must reflow/zoom without loss (tested at 320px / 400%); the specific stack/unified behavior is a build `[ASSUMPTION]`. UX contract: `../ux-designs/ux-Archon-2026-08-31/EXPERIENCE.md` (Accessibility Floor).
 
 ## Constraints and Guardrails
 

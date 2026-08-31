@@ -6,12 +6,12 @@ Downstream-technical content that does not belong in the PRD narrative. Inlined 
 
 - **Live checkout is the source of truth.** Read via `git -C <working_path>` (status / log / show / diff) against the run's own checkout. The checkout shares the repo object store, so the run branch's commits are readable there.
 - **Do not read the base checkout.** `default_cwd` sits on the base branch (`dev`); the run branch is invisible there unless merged. Read from the Run checkout, not base.
-- **Read by `working_path`, uniformly.** Every run backed by a host git checkout — isolated worktree, in-place, or `--no-worktree` repo — is read the same way, by `working_path`. There is no worktree-vs-non-worktree branching and no isolation-env gate: presence is decided by directory existence + "is it a git checkout" at read time.
+- **Read by `working_path`, uniformly — after the D5 container gate.** First, the **D5 container gate** runs: a run whose isolation-env `provider === 'container'` routes to the Empty state **before any git read** (the host `working_path` is stale for container runs). Every _non-container_ run backed by a host git checkout — isolated worktree, in-place, or `--no-worktree` repo — is then read the same way, by `working_path`; among those there is no worktree-vs-non-worktree branching, and presence is decided by directory existence + "is it a git checkout" at read time (never by run status).
 - **Events are provenance only.** The workflow event stream is NOT authoritative for what changed (shell / `sed` / scripts / subprocesses / renames / deletes mutate files without a structured path event). Use events, if at all, only as a hint layer (which node/log line may relate to a file) — never as the change list.
 
 ## Path pinning
 
-- Resolve the checkout **server-side** from `runId`: read `working_path` + `codebase_id` from `GET /api/workflows/runs/{runId}`. Never accept a path from the client (path-traversal guard); reject any `..`.
+- Resolve the checkout **server-side** from `runId`: read `working_path` + `codebase_id` from `GET /api/workflows/runs/{runId}`. Never accept the checkout root or an absolute/filesystem path from the client; accept only a server-returned repo-relative path, realpath-validated under `working_path` (path-traversal guard); reject any `..`.
 - **realpath** the path: runtime showed the same logical tree referenced under two different absolute root strings (`/Users/agent/.archon/...` and `/Volumes/WD_BLACK/archon/...`); the cause (symlink / mount / relocation) is unconfirmed. Realpath and tolerate the divergence; a stale `working_path` breaks reads.
 - `working_path` is written to the run cwd by `executeWorkflow`; it is NOT null for folder / `--no-worktree` runs. A **null** `working_path` is a missing/legacy state → Empty state.
 - Submodules are initialized `--recursive` into an isolated worktree on create.
@@ -22,17 +22,19 @@ Model on the existing artifact route: `GET /api/artifacts/:runId/*` + `resolveRu
 
 Minimal endpoints (all resolve `working_path` from `runId`, realpath, reject `..`, run through `execFileAsync` / `@archon/git` with server-controlled args):
 
-| Endpoint    | Purpose                           | Git                                                                                                                                   |
-| ----------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| status      | Now changed files (`M`/`A`/`D`)   | `git status --porcelain` projected to M/A/D                                                                                           |
-| log         | commit history for the run branch | `git log`                                                                                                                             |
-| show / diff | file content / diff               | `M`: `parent..commit` (history) and `HEAD..worktree` (Now); `A`: new-file content; `D`: removed-file content (from `parent` / `HEAD`) |
+| Endpoint    | Purpose                                   | Git                                                                                                                                                                                                                                                                 |
+| ----------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| status      | Now changed files (`M`/`A`/`D`)           | `git status --porcelain` projected to M/A/D                                                                                                                                                                                                                         |
+| log         | commit history (graph) for the run branch | `git log` — record **adds `parents[]`** (format includes `%H %P` alongside author / date / subject, NUL-delimited); parents drive the branch/merge lanes                                                                                                            |
+| show / diff | file content / diff                       | `M`: `git diff` hunks (`parent..commit` history, `HEAD..worktree` Now); `A`/`D`: content via `git --literal-pathspecs ls-tree -z <oid> -- <path>` (exactly one entry) + `git cat-file blob <blobOid>` (`D` uses the parent OID). No `<oid>:<path>` revision syntax. |
 
 Follow Archon route rules: `registerOpenApiRoute(createRoute(...), handler)`; use the raw `app.get(...)` exception only for wildcard/non-JSON responses (the artifacts-route precedent), with the explanatory comment. `@archon/web` consumes OpenAPI-generated types only (no import from `@archon/workflows`).
 
+Read-containment: validate a full commit OID from `log` (hex + reachable); live raw reads realpath-contain under `working_path`; do NOT reject `:` / leading `-` / glob metachars in filenames (valid — FR-5) — use `--literal-pathspecs` + `--`/argv; reject NUL / absolute / encoded-`..`. Tests: symlink escape, encoded traversal, invalid ref, unreachable OID refused; colon / leading-dash / glob-metachar filename success.
+
 ## Viewer and diff rules
 
-- **Two regions, one list widget, one viewer.** Changes (uncommitted) on top, commit history below; both feed the same list + same Viewer; only the read scope differs.
+- **Two regions, one list widget, one viewer.** Changes (uncommitted) on top, commit history below (rendered as a branch/merge **lane graph**; the renderer is **spike-selected** — reuse `@xyflow/react` or a bespoke SVG, either with no new dep — see architecture); both feed the same list + same Viewer; only the read scope differs.
 - **Three states only: `M` / `A` / `D`.** Untracked-new files use the `A` mechanism. Projection of other git statuses: rename → `D` (old path) + `A` (new path); copy → `A`; type-change → `M`; unmerged → `M`.
 
 | Status       | Viewer                            | Coloring                    |
@@ -54,7 +56,7 @@ Follow Archon route rules: `registerOpenApiRoute(createRoute(...), handler)`; us
 
 ## Durable snapshot (FR-9, fast-follow)
 
-- **Mechanic:** at run-end the server writes a git-snapshot — name-status (`M`/`A`/`D`), per-file unified diff, `A`/`D` file content, and `git log` — as an artifact under the run row's `output_root` (written once at run start; persists after checkout teardown).
+- **Mechanic:** at run-end the server writes a git-snapshot — name-status (`M`/`A`/`D`), per-file unified diff, `A`/`D` file content, and the commit `log` (records **include `parents[]`** for lanes, plus author / date / subject) — as an artifact under the run row's `output_root` (written once at run start; persists after checkout teardown).
 - **Read order:** live checkout is primary while it exists; the snapshot is the fallback once the checkout is reaped.
 - **Undecided at build:** the wire format (a JSON manifest). The trigger is **run-end** (decided). The manifest must serve the same read API (status/log/show/diff) as the live path.
 
@@ -100,7 +102,7 @@ flowchart TB
 
 ```mermaid
 flowchart TD
-  ui["UI: runId + file/commit ref\n(never a path)"] --> api["New read-only git API"]
+  ui["UI: runId + file/commit ref\n(repo-relative, server-returned)"] --> api["New read-only git API"]
   api --> lookup["GET run -> working_path + codebase_id"]
   lookup --> ctr{"container-backend run?"}
   ctr -- yes --> gone["Empty state: no worktree / not available"]

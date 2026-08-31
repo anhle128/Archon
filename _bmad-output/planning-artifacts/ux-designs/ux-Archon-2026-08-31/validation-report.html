@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Validation Report — Archon Source Control tab</title>
+<style>
+  :root{--bg:#0f1115;--card:#171a21;--fg:#e6e8ee;--mut:#9aa3b2;--line:#262b36;--ok:#2f9e44;--warn:#e8990c;--info:#3b82f6;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;padding:32px}
+  main{max-width:920px;margin:0 auto}
+  h1{font-size:24px;margin:0 0 4px} h2{font-size:18px;margin:26px 0 10px;border-bottom:1px solid var(--line);padding-bottom:6px} h3{margin:16px 0 6px;font-size:15px}
+  .meta{color:var(--mut);font-size:13px;margin-bottom:16px}
+  code{background:#0b0d12;border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:13px}
+  ul{margin:8px 0;padding-left:20px} li{margin:5px 0}
+  table{width:100%;border-collapse:collapse;margin:8px 0;font-size:14px}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--mut);font-weight:600}
+  .verdict{display:inline-block;font-weight:700;color:#fff;background:var(--ok);border-radius:6px;padding:2px 10px;font-size:13px}
+  .pill{font-size:12px;font-weight:700;border-radius:5px;padding:1px 7px}
+  .s{background:var(--ok);color:#fff}.a{background:var(--warn);color:#111}.d{background:var(--info);color:#fff}
+  .banner{background:linear-gradient(90deg,#123 0,#1a2536 100%);border:1px solid var(--line);border-radius:10px;padding:14px 18px;margin:14px 0}
+  .note{color:var(--mut)} .res{color:var(--ok);font-weight:600} .adr{color:var(--warn);font-weight:600} .def{color:var(--info);font-weight:600}
+  .z{color:var(--ok);font-weight:700}
+  .legend span{margin-right:14px;font-size:13px}
+</style>
+</head>
+<body>
+<main>
+  <h1>Validation Report — Archon Source Control tab</h1>
+  <div class="meta">DESIGN.md · EXPERIENCE.md · run 2026-09-01 · lenses: rubric walker + accessibility (parallel)</div>
+
+  <div class="banner">
+    <span class="verdict">PASS</span>
+    <p style="margin:10px 0 0"><b>Zero critical, zero high</b> across both lenses. Review findings were updated in-spine in three honest buckets — <b>not</b> a blanket "all resolved". Reviewer suggestions taken as floors/assumptions are <b>not</b> user-confirmed decisions.</p>
+    <p class="legend" style="margin:8px 0 0"><span class="res">■ Resolved</span><span class="adr">■ Addressed (floor/req, detail deferred)</span><span class="def">■ Deferred assumption</span></p>
+    <p class="note" style="margin:8px 0 0">Scope: validates the <b>UX spine pair only</b>. The commit-topology graph is a user-added normative requirement that still needs <code>bmad-correct-course</code> (PRD + architecture + epics + addendum) and a rerun of <code>bmad-check-implementation-readiness</code> — independent of this UX PASS.</p>
+  </div>
+
+  <h2>Category verdicts — rubric</h2>
+  <table>
+    <tr><th>Category</th><th>Verdict</th></tr>
+    <tr><td>Flow coverage</td><td><span class="pill s">strong</span></td></tr>
+    <tr><td>Token completeness</td><td><span class="pill s">strong</span> <span class="note">— only <code>[OPEN]</code> diff-green, bound at build</span></td></tr>
+    <tr><td>Component coverage</td><td><span class="pill s">strong</span> <span class="note">— 7/7 both spines</span></td></tr>
+    <tr><td>State coverage</td><td><span class="pill a">adequate</span> <span class="note">— <i>Initial region load</i> added as assumption</span></td></tr>
+    <tr><td>Visual reference coverage</td><td><span class="pill s">resolved</span> <span class="note">— wireframe + import linked; spines-win</span></td></tr>
+    <tr><td>Bloat &amp; overspecification</td><td><span class="pill s">strong</span></td></tr>
+    <tr><td>Inheritance discipline</td><td><span class="pill s">strong</span></td></tr>
+    <tr><td>Shape fit</td><td><span class="pill s">strong</span> <span class="note">— DESIGN <code>name</code>+<code>description</code> added</span></td></tr>
+  </table>
+
+  <h2>Accessibility criteria</h2>
+  <table>
+    <tr><th>WCAG</th><th>Status</th></tr>
+    <tr><td>1.4.1 Use of Color</td><td><span class="pill s">PASS</span> <span class="note">— markers are the locked cue</span></td></tr>
+    <tr><td>1.4.3 Contrast</td><td><span class="pill a">req stated</span> <span class="note">— markers ≥ 4.5:1; verify at build</span></td></tr>
+    <tr><td>1.4.10 / 1.4.4 Reflow / Resize</td><td><span class="pill a">floor stated</span> <span class="note">— breakpoint deferred [ASSUMPTION]</span></td></tr>
+    <tr><td>1.4.11 Non-text Contrast</td><td><span class="pill d">→ spike</span> <span class="note">— lanes ≥ 3:1</span></td></tr>
+    <tr><td>2.1.1 Keyboard</td><td><span class="pill s">PASS</span> <span class="note">— bindings [OPEN]</span></td></tr>
+    <tr><td>2.4.3 Focus Order</td><td><span class="pill a">floor invariant</span> <span class="note">— reviewer-suggested, not user-confirmed</span></td></tr>
+    <tr><td>4.1.2 Name/Role/Value</td><td><span class="pill s">PASS</span></td></tr>
+  </table>
+
+  <h2>Findings by severity</h2>
+  <p><span class="z">Critical (0)</span> · <span class="z">High (0)</span></p>
+
+  <h3>Medium (3)</h3>
+  <ul>
+    <li><b>[Rubric §5] Visual reference unlinked</b> — <span class="res">Resolved.</span> EXPERIENCE IA → Composition reference links <code>wireframes/…</code> + <code>imports/…</code>, states spines win.</li>
+    <li><b>[A11Y-1 / 1.4.3] No contrast target for <code>+</code>/<code>-</code> markers</b> — <span class="res">Resolved as a build-acceptance requirement</span> (≥ 4.5:1); verification deferred to build; badge/path now "must be verified", not "met".</li>
+    <li><b>[A11Y-2 / 1.4.10] No reflow/zoom statement</b> — <span class="adr">Addressed: floor stated</span> (stack single-column). <span class="def">Exact breakpoint deferred [ASSUMPTION].</span></li>
+  </ul>
+
+  <h3>Low (6)</h3>
+  <ul>
+    <li><b>[A11Y-3 / 1.4.11] Lane graphic contrast</b> — <span class="adr">Addressed:</span> ≥ 3:1 attached to the deferred renderer spike.</li>
+    <li><b>[A11Y-4 / 2.4.3] Focus handling</b> — <span class="adr">Addressed as a reviewer-suggested floor</span> (transfer focus only when replacement removes the focused element; else retain + announce concise metadata, never the diff body). Not user-confirmed; bindings [OPEN].</li>
+    <li><b>[A11Y-5 / 2.1.1] Resize-handle keyboard</b> — <span class="res">Resolved</span> (focusable + arrow-key resize + name/role).</li>
+    <li><b>[Rubric §4] Initial region-load state</b> — <span class="def">Deferred [ASSUMPTION]</span> — per-region skeleton proposed; sources specify only the viewer skeleton.</li>
+    <li><b>[Rubric §8] DESIGN frontmatter <code>name</code>/<code>description</code></b> — <span class="res">Resolved</span>.</li>
+    <li><b>[Rubric §6] Tint/marker caveat repeated ~4×</b> — <span class="note">noted, left (each load-bearing at its location).</span></li>
+  </ul>
+
+  <h2>Reviewer files</h2>
+  <ul>
+    <li><code>review-rubric.md</code></li>
+    <li><code>review-accessibility.md</code></li>
+  </ul>
+</main>
+</body>
+</html>
