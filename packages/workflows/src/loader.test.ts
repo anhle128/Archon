@@ -3785,6 +3785,8 @@ nodes:
         if (!loop || !isLoopNode(loop)) throw new Error('native Ralph loop missing');
         expect(loop.depends_on).toEqual([path.preflightId]);
         expect(loop.effort).toBe('xhigh');
+        expect(loop.provider).toBe('omp');
+        expect(loop.model).toBe('cursor/cursor-grok-4.5');
         expect(loop.loop).toMatchObject({
           command: 'archon-speckit-ralph-iteration',
           fresh_context: true,

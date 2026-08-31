@@ -12,4 +12,7 @@ description: |
 
 nodes:
   - id: resolve
+    effort: xhigh
+    provider: omp
+    model: "cursor/cursor-grok-4.6"
     command: archon-resolve-merge-conflicts

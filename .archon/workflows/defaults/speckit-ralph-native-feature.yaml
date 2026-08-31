@@ -634,6 +634,8 @@ nodes:
     depends_on:
       - ralph-native-preflight
     effort: xhigh
+    provider: omp
+    model: cursor/cursor-grok-4.5
 
   - id: ralph-sync-back
     prompt: |
@@ -797,6 +799,8 @@ nodes:
         jq -e '[.userStories[].tasks[]? | select(.passes==false)] | length == 0' "$RLN_PRD" >/dev/null 2>&1
     depends_on: [speckit-final-ralph-native-preflight]
     effort: xhigh
+    provider: omp
+    model: cursor/cursor-grok-4.5
 
   - id: speckit-final-ralph-sync-back
     prompt: |

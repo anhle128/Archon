@@ -5846,9 +5846,11 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       await executeNativeRalphFixture(fixture.workflow, store);
 
       expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
-      expect(mockGetAgentProviderDag.mock.calls[0][0]).toBe('codex');
+      // The native Ralph loop node declares its own provider/model, so the loop's
+      // per-iteration sendQuery runs as that — not the workflow-level default.
+      expect(mockGetAgentProviderDag.mock.calls[0][0]).toBe('omp');
       const options = mockSendQueryDag.mock.calls[0][3] as SendQueryOptions;
-      expect(options.model).toBe('gpt-5.5');
+      expect(options.model).toBe('cursor/cursor-grok-4.5');
       expect(options.nodeConfig?.effort).toBe('xhigh');
       expect(store.completeWorkflowRun).toHaveBeenCalled();
       expect(store.failWorkflowRun).not.toHaveBeenCalled();
