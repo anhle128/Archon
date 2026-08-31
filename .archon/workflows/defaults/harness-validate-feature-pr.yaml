@@ -264,7 +264,7 @@ nodes:
                 type: string
               claim:
                 type: string
-            required: [method, path, body, expect_status, invariant, claim]
+            required: [method, path, body, expect_status, expect_statuses, invariant, claim]
       required: [http_sse, tui, reasoning, http_requests]
 
   - id: code-review
