@@ -80,10 +80,13 @@ nodes:
       if [ -n "${ARGUMENTS:-}" ]; then
         ABS_PLAN_DIR="$(resolve_candidate "$ARGUMENTS")"
       else
-        PLAN_DIR="$(ls -dt plans/*/ 2>/dev/null | head -1 || true)"
-        if [ -n "$PLAN_DIR" ] && [ -f "${PLAN_DIR}plan.md" ]; then
-          ABS_PLAN_DIR="$(cd "$PLAN_DIR" && pwd)"
-        fi
+        while IFS= read -r PLAN_DIR; do
+          [ -n "$PLAN_DIR" ] || continue
+          if [ -f "${PLAN_DIR}plan.md" ]; then
+            ABS_PLAN_DIR="$(cd "$PLAN_DIR" && pwd)"
+            break
+          fi
+        done < <(ls -dt plans/*/ 2>/dev/null || true)
       fi
 
       if [ -z "$ABS_PLAN_DIR" ] || [ ! -f "$ABS_PLAN_DIR/plan.md" ]; then

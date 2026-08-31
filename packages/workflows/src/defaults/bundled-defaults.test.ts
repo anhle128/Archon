@@ -1,6 +1,17 @@
 import { describe, it, expect } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, writeFileSync, unlinkSync } from 'fs';
+import {
+  existsSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+  unlinkSync,
+  mkdtempSync,
+  mkdirSync,
+  utimesSync,
+  rmSync,
+} from 'fs';
+import { tmpdir } from 'os';
 import { join } from 'path';
 import {
   isBinaryBuild,
@@ -518,6 +529,81 @@ describe('bundled-defaults', () => {
 
     it('every gh pr create/list/edit/ready in bundled workflows pins --repo', () => {
       assertPinned(BUNDLED_WORKFLOWS);
+    });
+  });
+
+  describe('resolve-plan directory discovery', () => {
+    // Regression: the no-argument branch must pick the newest plans/*/ that
+    // actually CONTAINS plan.md, not blindly take the newest directory and
+    // fail when it lacks one. A resolver that ran `ls -dt … | head -1` before
+    // testing for plan.md failed whenever a newer plan-less directory (e.g.
+    // plans/reports/) sat ahead of a valid older plan. Exercises the SHIPPED
+    // bundled bash end-to-end.
+    function resolvePlanBash(): string {
+      const wf = Bun.YAML.parse(BUNDLED_WORKFLOWS['ak-implement']) as {
+        nodes: Array<{ id: string; bash?: string }>;
+      };
+      const node = wf.nodes.find(n => n.id === 'resolve-plan');
+      if (!node?.bash) throw new Error('resolve-plan bash node missing from ak-implement');
+      return node.bash;
+    }
+
+    function runResolve(setup: (root: string) => void): {
+      status: number | null;
+      stdout: string;
+    } {
+      const root = mkdtempSync(join(tmpdir(), 'resolve-plan-'));
+      try {
+        setup(root);
+        const result = spawnSync('bash', ['-c', resolvePlanBash()], {
+          cwd: root,
+          encoding: 'utf8',
+          env: { ...process.env, ARGUMENTS: '' },
+        });
+        return { status: result.status, stdout: (result.stdout ?? '').trim() };
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+
+    it('selects the newest plans/*/ containing plan.md over a newer plan-less dir', () => {
+      const res = runResolve(root => {
+        mkdirSync(join(root, 'plans/old-valid'), { recursive: true });
+        writeFileSync(join(root, 'plans/old-valid/plan.md'), '# plan\n');
+        mkdirSync(join(root, 'plans/newer-noplan'), { recursive: true });
+        // Force old-valid OLDER so `ls -dt` lists newer-noplan first — the exact
+        // ordering the buggy head-1 resolver mishandled.
+        const old = new Date('2025-01-01T00:00:00Z');
+        const newer = new Date('2025-06-01T00:00:00Z');
+        utimesSync(join(root, 'plans/old-valid'), old, old);
+        utimesSync(join(root, 'plans/old-valid/plan.md'), old, old);
+        utimesSync(join(root, 'plans/newer-noplan'), newer, newer);
+      });
+      expect(res.status).toBe(0);
+      expect(res.stdout.endsWith('/plans/old-valid')).toBe(true);
+    });
+
+    it('exits 1 when no plans/*/ contains plan.md', () => {
+      const res = runResolve(root => {
+        mkdirSync(join(root, 'plans/newest-noplan'), { recursive: true });
+        mkdirSync(join(root, 'plans/older-noplan'), { recursive: true });
+      });
+      expect(res.status).toBe(1);
+    });
+
+    it('handles plan directory names containing spaces', () => {
+      const res = runResolve(root => {
+        mkdirSync(join(root, 'plans/my valid plan'), { recursive: true });
+        writeFileSync(join(root, 'plans/my valid plan/plan.md'), '# plan\n');
+        mkdirSync(join(root, 'plans/newer noplan'), { recursive: true });
+        const old = new Date('2025-01-01T00:00:00Z');
+        const newer = new Date('2025-06-01T00:00:00Z');
+        utimesSync(join(root, 'plans/my valid plan'), old, old);
+        utimesSync(join(root, 'plans/my valid plan/plan.md'), old, old);
+        utimesSync(join(root, 'plans/newer noplan'), newer, newer);
+      });
+      expect(res.status).toBe(0);
+      expect(res.stdout.endsWith('/plans/my valid plan')).toBe(true);
     });
   });
 });

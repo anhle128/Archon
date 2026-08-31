@@ -1,63 +1,46 @@
-# Loop node "current/expected (max N)" display
+# Ralph loop on Rust repos — project-aware validation (pivot from fork)
 
-## Goal
+## Context
 
-The workflow graph loop node showed `1/100 iterations` (current/`max_iterations`).
-Show the real expected total instead: `1/20 (max 100)`, where `20` = pending
-(incomplete) `userStories` in the Ralph `prd.json`. Falls back to `current/max
-iterations` when no total is known.
+Codex adversarial review of the fork plan, then user challenged the whole approach as
+over-engineered. Investigation confirmed: the system already validates project-aware by delegation
+(`speckit-ralph-native-feature.yaml:618` → `archon-speckit-ralph-iteration` → repo AGENTS.md "run
+whatever the project requires"), and the project owns publish policy (`cargo clean` before PR at
+`speckit-ralph-native-feature.yaml:815-827`), which the fork's hardcoded "NEVER cargo clean" would
+override. Decision (user-approved): **project-aware loop, NO fork.**
 
-## Final design (constitution-compliant — no new YAML field)
+## Checklist
 
-The first design added a `loop.expected_iterations` YAML field. That failed the
-Workflow Language Constitution admissibility test (Q1: "does the engine need it to
-govern the run?" — a display value does not). Reverted in favour of a **typed
-inter-node projection**, which rides the _sanctioned_ "typed data between nodes"
-surface, not the policed YAML surface:
+- [x] Delete forked YAMLs `archon-ralph-rust-dag.yaml` + `ak-implement-rust.yaml` (never entered bundle).
+- [x] Make `archon-ralph-dag.yaml` loop project-aware: - Add "Toolchain detection (do this once)" block at Phase 2 start (Cargo.toml→cargo,
+      package.json→bun/npm, go.mod→go, pyproject→python; prefer story acceptanceCriteria; follow the
+      project's own build/publish policy, do NOT override). - §2.3/§3.1/§3.2/§3.3, PHASE_2/3 checkpoints, VALIDATED, edge cases → project-aware wording (drop
+      hardcoded `bun run …`). - event-emit `bun run cli …` → `archon … || true`.
+- [x] Keep F3 fix (resolve-plan discovery, spaces-safe) + its 3 regression tests in ak-implement.yaml.
+- [x] Regenerate bundle; `check:bundled` up to date (67 commands, 37 workflows).
+- [x] `workflow list` → errorCount:0; archon-ralph-dag present; 0 fork entries.
+- [x] Rewrite `ARCHON_RALPH_RUST_DAG_PLAN.md` to the project-aware decision + record fork rejection.
 
-1. An upstream node (the Ralph `bash:` preflight) prints ONE discriminated JSON object
-   on stdout: `{ "type": "loop_progress", "targetNodeId": "<loop id>",
-"expectedIterations": N, "hasPending": <bool> }`.
-2. The executor parses ONLY the bounded `{ targetNodeId, expectedIterations }` (never
-   raw stdout; `Number.isSafeInteger` + positive + nonblank target) and attaches it as
-   `loop_progress` to the node's `node_completed` persisted event data AND the emitter
-   `NodeCompletedEvent.loopProgress`.
-3. Web sets the TARGET loop node's `expectedIterations`:
-   - REST replay: `enrichDagNodesWithLoopProgress` over persisted `node_completed` data.
-   - Live SSE: `workflow-bridge` projects `loopProgress` onto the `dag_node` event;
-     `handleDagNode` applies it to an EXISTING target node (no placeholder).
-4. Renderer (`ExecutionDagNode` / `DagNodeProgress`) shows `current/expected (max N)`
-   from `node.expectedIterations`, else `current/max iterations`.
-5. Ralph `speckit-ralph-test.yaml`: preflight emits the payload; loop gated by
-   `when: "$ralph-native-preflight.output.hasPending == 'true'"` (zero-pending → loop
-   skipped, no error). No `expected_iterations` field. Ambient `provider: omp` / model
-   edits on the loop node preserved untouched.
+## Rejected
 
-Display-only throughout: never affects control flow, completion, or `max_iterations`.
+- The cargo-hardcoded fork (`archon-ralph-rust-dag` + `ak-implement-rust`). Swapped one hardcode for
+  another, duplicated 789+310 lines, and would override project-owned publish policy.
+- F1 (mutually-exclusive detect branch) and F2 (final-cargo-gate, child-no-PR) were fork-specific and are
+  moot. If `ak-implement` hardening is wanted for all stacks, do it on the shared workflow separately.
 
-## Status — all done
+## Validation
 
-- [x] Revert the `loop.expected_iterations` YAML-field path (schema, executor
-      resolution, loop-event field, loader scan, include-expander rewrite, builder
-      variant/round-trip/content, quick-reference row, constitution row, field docs).
-- [x] Engine projection: `LoopProgress` type + `parseLoopProgress` (hardened) +
-      `node_completed` persisted `loop_progress` + emitter `loopProgress`.
-- [x] Web projection: bridge `dag_node.loopProgress`, `DagNodeEvent.loopProgress`,
-      store `handleDagNode`, REST `enrichDagNodesWithLoopProgress` (hardened), renderer
-      reuse of `DagNodeState.expectedIterations`.
-- [x] YAML payload + `when` gate; `generate:bundled`; web OpenAPI types regenerated
-      (field removed from generated types).
-- [x] Docs: loop-nodes "Loop progress display" projection section (replaces the field
-      docs); constitution row removed (no YAML feature added).
-- [x] Tests: bridge (projection + omit), store (`handleDagNode` apply + absent-target
-      no-placeholder), REST replay enrich, executor (parse payload onto `node_completed` + ignore non-positive), zero-pending skip, renderer literal `1/20 (max 100)` +
-      `1/100 iterations` fallback.
+- [x] `bun run check:bundled` → up to date.
+- [x] `bun run cli workflow list` → `errorCount:0`; `archon-ralph-dag` loads; no `*-rust-dag` /
+      `ak-implement-rust`.
+- [x] `grep -n 'bun run' archon-ralph-dag.yaml` → 1 line (JS example inside Toolchain detection note).
+- [x] `bun test bundled-defaults.test.ts` → pass (incl. 3 resolve-plan regression tests).
 
-## Verification
+## Files changed
 
-- type-check `@archon/workflows`, `@archon/web`, `@archon/server`: pass.
-- tests: dag-executor + loader/include/event/condition + web store/execution/round-trip/
-  content/renderer/dagnode + server bridge: 0 fail (run after final edits).
-- `check:bundled` up to date; changed files Prettier + ESLint clean.
-
-To see it: run THIS repo (`bun run dev`), not the `:3090` `opensources/Archon` checkout.
+- `.archon/workflows/defaults/archon-ralph-dag.yaml` — loop validation made project-aware.
+- `.archon/workflows/defaults/ak-implement.yaml` — resolve-plan discovery fix (spaces-safe) [F3].
+- `packages/workflows/src/defaults/bundled-defaults.generated.ts` — regenerated.
+- `packages/workflows/src/defaults/bundled-defaults.test.ts` — 3 resolve-plan regression tests.
+- `ARCHON_RALPH_RUST_DAG_PLAN.md` — rewritten to the project-aware decision.
+- Deleted: `archon-ralph-rust-dag.yaml`, `ak-implement-rust.yaml`.
