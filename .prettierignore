@@ -51,3 +51,8 @@ CHANGELOG.md
 CONTRIBUTING.md
 *.yml
 *.yaml
+
+# Generated bmad-output artifacts (rendered HTML exports, working scratch, memory logs)
+_bmad-output/**/*.html
+_bmad-output/**/.working/
+_bmad-output/**/*.memlog.md
