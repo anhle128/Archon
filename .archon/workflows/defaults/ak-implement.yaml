@@ -143,7 +143,7 @@ nodes:
     depends_on: [resolve-plan-source]
     always_run: true
 
-   - id: verify-and-fix-plan
+  - id: verify-and-fix-plan
     prompt: |
       Review and revise the complete plan at `$resolve-plan.output.plan_path`.
       Treat the current plan as an unverified draft.
