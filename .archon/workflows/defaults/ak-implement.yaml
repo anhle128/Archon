@@ -92,7 +92,7 @@ nodes:
     bash: |
       set -euo pipefail
 
-      RAW="$resolve-plan-source.output.plan_path"
+      RAW=$resolve-plan-source.output.plan_path
       # trim surrounding whitespace and any stray backticks a markdown link carried
       RAW="${RAW#"${RAW%%[![:space:]]*}"}"
       RAW="${RAW%"${RAW##*[![:space:]]}"}"

@@ -24,6 +24,8 @@ import {
   formatPackagedResourceReference,
   parsePackagedResourceReference,
 } from '../packaged-workflow';
+import { substituteNodeOutputRefs } from '../dag-executor';
+import type { NodeOutput } from '../schemas';
 
 // Resolve the on-disk defaults directories relative to this test file so the
 // tests work regardless of cwd. From packages/workflows/src/defaults go up
@@ -479,6 +481,32 @@ describe('bundled-defaults', () => {
         expect(content.includes('nodes:')).toBe(true);
       }
     });
+
+    it('no bundled bash node quote-wraps a $node.output reference (the executor already shell-quotes them)', () => {
+      // A bash/until_bash node that writes "$x.output.field" or '$x.output.field'
+      // is double-quoted at runtime: substituteNodeOutputRefs(escapedForBash=true)
+      // injects an already single-quoted value, so the author's quotes become
+      // literal characters inside the string and break every downstream path check.
+      // Output refs in shell bodies MUST be spliced bare: VAR=$x.output.field.
+      const quotedBefore = /(["'])\$[A-Za-z_][A-Za-z0-9_-]*\.output/;
+      const quotedAfter = /\$[A-Za-z_][A-Za-z0-9_-]*\.output(?:\.[A-Za-z_][A-Za-z0-9_]*)?["']/;
+      const offenders: string[] = [];
+      for (const [name, yaml] of Object.entries(BUNDLED_WORKFLOWS)) {
+        const wf = Bun.YAML.parse(yaml) as { nodes?: Array<Record<string, unknown>> };
+        for (const node of wf.nodes ?? []) {
+          for (const key of ['bash', 'until_bash'] as const) {
+            const body = node[key];
+            if (typeof body !== 'string') continue;
+            body.split('\n').forEach((line, i) => {
+              if (quotedBefore.test(line) || quotedAfter.test(line)) {
+                offenders.push(`${name}:${String(node.id)}:${key}:${i + 1}: ${line.trim()}`);
+              }
+            });
+          }
+        }
+      }
+      expect(offenders).toEqual([]);
+    });
   });
 
   describe('fork-safe PR creation (#2226)', () => {
@@ -557,12 +585,20 @@ describe('bundled-defaults', () => {
       const root = mkdtempSync(join(tmpdir(), 'resolve-plan-'));
       try {
         setup(root);
-        // resolve-plan reads $resolve-plan-source.output.plan_path (substituted by
-        // the executor at runtime). Inject the test path in its place.
-        const bash = resolvePlanBash().replace(
-          '$resolve-plan-source.output.plan_path',
-          () => planInput
-        );
+        // resolve-plan reads $resolve-plan-source.output.plan_path. Substitute it
+        // through the SAME path the executor uses for bash nodes —
+        // substituteNodeOutputRefs(..., escapedForBash=true) — so the injected value
+        // is shell-quoted EXACTLY as at runtime. Splicing the raw path in (the prior
+        // version of this helper) hid the failure mode where the node wrapped the ref
+        // in its own quotes: the executor's single-quotes then land inside the string
+        // and every path check fails with "resolved plan path does not exist".
+        const nodeOutputs = new Map<string, NodeOutput>([
+          [
+            'resolve-plan-source',
+            { state: 'completed', output: JSON.stringify({ plan_path: planInput }) },
+          ],
+        ]);
+        const bash = substituteNodeOutputRefs(resolvePlanBash(), nodeOutputs, true);
         const result = spawnSync('bash', ['-c', bash], { cwd: root, encoding: 'utf8' });
         let json: ResolveJson | null = null;
         try {
