@@ -106,6 +106,15 @@ tui-test --session "$SESSION" expect text "panicked" --not --timeout 5000
 
 Any non-zero baseline command in this single-shell run → TUI_FAILED (record every exit code). The baseline alone does not validate the PR's claimed TUI changes.
 
+**Probe discipline (prevents spurious `TUI_FAILED`):** the three baseline commands above
+are the ONLY non-claim checks. Do **not** add guessed chrome probes — welcome placeholder
+(e.g. `Type a message...`), footer/key hints (`Quit`, `Shift+Tab`), or window headers
+(`Dashboard`) — as `wait`/`expect`: this checkout's exact rendered copy varies, so a guessed
+needle returns exit 1 even when the feature works and forces `TUI_FAILED`. Every `wait`/`expect`
+you record MUST be a PR-claim needle. After a `--restart` for a second fixture, use the
+**claim-specific needle itself** as the readiness `wait` (it also proves the behavior); if you
+need a generic settle use `wait idle`, never a guessed literal string.
+
 7. **Feature-specific coverage (required), same shell.** Execute the assertions this node derived in
    step 1: `type`/key presses/`mouse click --on-text` plus `wait`/`expect` on the text
    that behavior renders. Record every command + exit code in `runtime-tui.md`.
