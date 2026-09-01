@@ -635,7 +635,7 @@ nodes:
       - ralph-native-preflight
     effort: xhigh
     provider: omp
-    model: cursor/cursor-grok-4.5
+    model: xai-oauth/grok-4.5
 
   - id: ralph-sync-back
     prompt: |

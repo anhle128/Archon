@@ -8,15 +8,16 @@ description: |
         body links the plan, or a local plan dir / .md file ->
         convert plan into a Ralph PRD (prd.md + prd.json) CO-LOCATED with it ->
         autonomous story-by-story implementation via archon-ralph-dag-project-aware ->
-        independent plan-coverage audit that implements any missing plan work
-        (do NOT trust ralph-implement) -> create PR.
+        audit-only plan-coverage gate (verify-audit); on FAIL a fix-gaps pass
+        loops back to the gate (max 3); on exhaustion one final fix pass -> create PR.
+        Never trusts ralph-implement.
   Input: REQUIRED. A GitHub issue URL / #N whose body links a plan path, OR a plan
         directory (plans/<slug>/, specs/<slug>/) or a .md plan file
         (e.g. docs/superpowers/plans/<name>.md).
   NOT for: creating a plan from scratch (use ck-feature), quick one-file fixes,
         bug fixes, or PR reviews.
 
-# Default provider. build-ralph-prd / verify-and-complete override to codex.
+# Default provider. build-ralph-prd / verify-audit / fix-gaps / fix-gaps-final override to codex.
 # ralph-implement runs archon-ralph-dag-project-aware as authored (its own per-node providers).
 provider: omp
 
@@ -35,7 +36,7 @@ nodes:
       git fetch --all --prune 2>/dev/null || true
       mkdir -p plans
       echo ""
-      echo "Pipeline: resolve plan  ->  plan->Ralph PRD (co-located)  ->  archon-ralph-dag-project-aware  ->  verify+complete gaps  ->  draft PR"
+      echo "Pipeline: resolve plan  ->  plan->Ralph PRD (co-located)  ->  archon-ralph-dag-project-aware  ->  verify-audit gate <-> fix-gaps loop  ->  PR"
       echo "Starting Step 1 of 5: resolve plan..."
 
   # ───────────────────────────────────────────────────────────────────
@@ -143,7 +144,7 @@ nodes:
     depends_on: [resolve-plan-source]
     always_run: true
 
-   - id: verify-and-fix-plan
+  - id: verify-and-fix-plan
     prompt: |
       Review and revise the complete plan at `$resolve-plan.output.plan_path`.
       Treat the current plan as an unverified draft.
@@ -313,18 +314,19 @@ nodes:
     depends_on: [build-ralph-prd]
 
   # ───────────────────────────────────────────────────────────────────
-  # STEP 5a / 5 — Verify ORIGINAL plan coverage; implement any gaps
-  # Do NOT trust ralph-implement or prd.json passes flags. Audit the
-  # original plan against the real codebase and finish missing work.
+  # STEP 5a / 5 — Verify/fix loop: audit-only gate + route_loop
+  # verify-audit AUDITS ONLY -> PASS/FAIL. verify-gate (route_loop): FAIL -> fix-gaps
+  # (loops back to the gate, max 3); PASS -> plan-verified; exhausted -> fix-gaps-final.
+  # Never trust ralph-implement or prd.json passes flags; audit the plan vs the codebase.
   # ───────────────────────────────────────────────────────────────────
-  - id: verify-and-complete
+  - id: verify-audit
     prompt: |
       ## Persona
 
       You are a skeptical staff engineer doing a delivery audit. Ralph claimed the
-      work is done. You do NOT trust that claim. Your job is to prove every task in
-      the ORIGINAL plan is actually implemented in the codebase — and to finish
-      anything that is missing.
+      work is done. You do NOT trust that claim. Prove, with evidence, whether every
+      task in the ORIGINAL plan is actually implemented in the codebase. You AUDIT
+      ONLY — you do NOT implement, fix, or commit anything in this node.
 
       ## Headless mode — NO human is available
 
@@ -339,33 +341,21 @@ nodes:
       ## Mandatory procedure
 
       1. Read the plan at `$resolve-plan.output.plan_path` (if a directory: `plan.md`
-         and EVERY `phase-*.md`; if a single `.md` file: that file).
-         Build a complete checklist of concrete deliverables / acceptance
-         criteria / tasks from the plan (not from prd.json).
-      2. Optionally read `$build-ralph-prd.output.prd_dir/prd.json` and
-         `progress.txt` as hints only. Treat every `passes: true` as a claim to
-         verify, never as proof.
-      3. For EACH plan checklist item, inspect the real codebase and tests.
-         Mark it `done`, `partial`, or `missing` with file:line evidence.
-      4. If ANY item is `partial` or `missing`, IMPLEMENT the remaining work now:
-         - Prefer the smallest durable change that fully satisfies the plan item
-         - Follow repo patterns; keep KISS / YAGNI
-         - Add/update tests when the plan requires them
-         - Run the project's relevant typecheck / lint / tests for the touched area
-         - Commit only the files you changed (never `git add -A` / `git add .`)
-           with a clear message like `fix: complete plan gaps — <short summary>`
-         - Never commit scratch/review/PR-body artifacts or anything under
-           `$ARTIFACTS_DIR` / `.archon/artifacts` / `.archon/logs` / `.archon/state`
-      5. Re-check the checklist after your fixes until every plan item is `done`,
-         or document a hard blocker that is truly outside the repo (missing secret,
-         external service, product decision). Blockers must be rare and evidenced.
-      6. Write `$build-ralph-prd.output.prd_dir/implementation-audit.md` with this structure:
+         and EVERY `phase-*.md`; if a single `.md` file: that file). Build a complete
+         checklist of concrete deliverables / acceptance criteria / tasks from the
+         plan (not from prd.json).
+      2. Optionally read `$build-ralph-prd.output.prd_dir/prd.json` and `progress.txt`
+         as hints only. Treat every `passes: true` as a claim to verify, never proof.
+      3. For EACH plan checklist item, inspect the real codebase and tests. Mark it
+         `done`, `partial`, or `missing` with file:line evidence.
+      4. Do NOT implement anything. This node only judges.
+      5. Write `$build-ralph-prd.output.prd_dir/implementation-audit.md` with:
 
          ```markdown
          # Implementation Audit
          - Plan: <relative plan dir>
          - Auditor: codex gpt-5.5
-         - Verdict: <complete | gaps-fixed | blocked>
+         - Verdict: <complete | gaps-remain>
          - Summary: <2-4 sentences>
 
          ## Checklist
@@ -373,49 +363,151 @@ nodes:
          |----|-----------|--------|----------|
          | P-001 | ... | done/partial/missing | file:line |
 
-         ## Gaps Fixed This Node
-         (what you implemented; or "None")
-
-         ## Remaining Blockers
-         (or "None")
+         ## Remaining Gaps
+         (partial/missing items; or "None")
          ```
 
+      6. Decide the gate: `PASS` when every checklist item is `done`; `FAIL` when any
+         item is `partial` or `missing`. Set `gaps_count` = count of partial+missing.
+         Set `audit_path` = absolute path of the implementation-audit.md you wrote.
       7. End with `AUDIT_DONE` and a one-line verdict.
 
       ## Hard rules
 
       - Source of truth = the ORIGINAL plan files, not Ralph story status.
-      - Do not rewrite the plan. Implement missing product/code work.
-      - Do not expand scope beyond the plan.
-      - If Ralph already did everything correctly, prove it with evidence and
-        write the audit report with Verdict `complete`.
-    depends_on: [ralph-implement]
+      - Do NOT implement, fix, or commit in this node — a separate fix node does that.
+      - Do not rewrite the plan or expand scope.
+      - If a gap cannot be decided from evidence, prefer `FAIL` (a fix pass is cheaper
+        than shipping an unverified gap).
+    depends_on: [ralph-implement, fix-gaps]
+    trigger_rule: one_success
     provider: omp
     effort: xhigh
-    model: openai-codex/gpt-5.5 
+    model: openai-codex/gpt-5.5
     context: fresh
     output_format:
       type: object
       properties:
-        verdict:
+        gate:
           type: string
-          enum: [complete, gaps-fixed, blocked]
+          enum: [PASS, FAIL]
+        gaps_count:
+          type: number
         audit_path:
           type: string
-        gaps_fixed:
-          type: number
-        blockers:
-          type: number
-      required: [verdict, audit_path]
+      required: [gate, audit_path]
+
+  - id: verify-gate
+    depends_on: [verify-audit]
+    route_loop:
+      condition: "$verify-audit.output.gate == 'PASS'"
+      max_iterations: 3
+      routes:
+        positive: plan-verified
+        negative: fix-gaps
+        exhausted: fix-gaps-final
+
+  - id: fix-gaps
+    prompt: |
+      ## Persona
+
+      You are a senior engineer closing delivery gaps. A skeptical audit just found the
+      implementation does NOT yet satisfy the ORIGINAL plan. Implement the smallest
+      durable changes that make every flagged gap `done`.
+
+      ## Headless mode — NO human is available
+
+      Resolve every decision yourself. Do not stop to ask.
+
+      ## Inputs
+
+      - Latest audit report (authoritative gap list):
+        `$build-ralph-prd.output.prd_dir/implementation-audit.md`
+      - Original plan (directory or .md file): `$resolve-plan.output.plan_path`
+      - Ralph PRD directory: `$build-ralph-prd.output.prd_dir`
+
+      ## Mandatory procedure
+
+      1. Read the audit at `$build-ralph-prd.output.prd_dir/implementation-audit.md`.
+         Take every item marked `partial` or `missing` as the work to do.
+      2. Re-read the relevant plan parts at `$resolve-plan.output.plan_path` (directory:
+         `plan.md` + every `phase-*.md`; single file: that file) so each fix matches the
+         plan's intent.
+      3. For EACH `partial`/`missing` item, IMPLEMENT the remaining work now:
+         - Prefer the smallest durable change that fully satisfies the plan item.
+         - Follow repo patterns; keep KISS / YAGNI; do not expand scope beyond the plan.
+         - Add/update tests when the plan requires them.
+         - Run the project's relevant typecheck / lint / tests for the touched area.
+         - Commit only the files you changed (never `git add -A` / `git add .`) with a
+           clear message like `fix: complete plan gaps — <short summary>`.
+         - Never commit scratch/review/PR-body artifacts or anything under
+           `$ARTIFACTS_DIR` / `.archon/artifacts` / `.archon/logs` / `.archon/state`.
+      4. Do NOT re-audit or write the audit report — the verify-audit node re-runs after
+         you and re-checks the plan.
+      5. End with `FIX_DONE` and a one-line summary of what you implemented.
+    provider: omp
+    effort: xhigh
+    model: openai-codex/gpt-5.5
+    context: fresh
+
+  - id: plan-verified
+    depends_on: [verify-gate]
+    bash: |
+      echo "Plan fully implemented — audit clean; proceeding to PR."
+
+  - id: fix-gaps-final
+    prompt: |
+      ## Persona
+
+      You are a senior engineer on the FINAL fix pass. The verify/fix loop exhausted its
+      retry budget with gaps still open. Implement every remaining gap now. NO further
+      audit or fix pass runs after you — the PR is created immediately after this node.
+
+      ## Headless mode — NO human is available
+
+      Resolve every decision yourself. Do not stop to ask.
+
+      ## Inputs
+
+      - Latest audit report (authoritative gap list):
+        `$build-ralph-prd.output.prd_dir/implementation-audit.md`
+      - Original plan (directory or .md file): `$resolve-plan.output.plan_path`
+      - Ralph PRD directory: `$build-ralph-prd.output.prd_dir`
+
+      ## Mandatory procedure
+
+      1. Read the audit at `$build-ralph-prd.output.prd_dir/implementation-audit.md` and
+         take every `partial`/`missing` item as the work to do.
+      2. Re-read the relevant plan parts at `$resolve-plan.output.plan_path` (directory:
+         `plan.md` + every `phase-*.md`; single file: that file).
+      3. For EACH `partial`/`missing` item, IMPLEMENT the remaining work now:
+         - Smallest durable change that fully satisfies the plan item; repo patterns;
+           KISS / YAGNI; no scope expansion.
+         - Add/update tests when the plan requires them.
+         - Run the project's relevant typecheck / lint / tests for the touched area.
+         - Commit only the files you changed (never `git add -A` / `git add .`) with a
+           message like `fix: complete plan gaps (final pass) — <short summary>`.
+         - Never commit scratch/review/PR-body artifacts or anything under
+           `$ARTIFACTS_DIR` / `.archon/artifacts` / `.archon/logs` / `.archon/state`.
+      4. Do NOT write the audit report. After this node the PR is created directly.
+      5. If any gap is a genuine hard blocker outside the repo (missing secret, external
+         service, product decision), document it in one line so the PR body surfaces it.
+      6. End with `FINAL_FIX_DONE` and a one-line summary.
+    depends_on: [verify-gate]
+    provider: omp
+    effort: xhigh
+    model: openai-codex/gpt-5.5
+    context: fresh
 
   # ───────────────────────────────────────────────────────────────────
-  # STEP 5b / 5 — Create PR
+  # STEP 5b / 5 — Create PR (after either exit path: plan-verified or fix-gaps-final)
   # ───────────────────────────────────────────────────────────────────
   - id: create-pull-request
     command: archon-create-pr
     provider: codex
     effort: medium
-    depends_on: [verify-and-complete]
+    depends_on: [plan-verified, fix-gaps-final]
+    trigger_rule: one_success
     context: fresh
     model: gpt-5.5
     idle_timeout: 900000
