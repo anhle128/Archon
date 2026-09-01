@@ -18,7 +18,7 @@ description: |
 
 # Default provider. build-ralph-prd / verify-and-complete override to codex.
 # ralph-implement runs archon-ralph-dag-project-aware as authored (its own per-node providers).
-provider: claude
+provider: omp
 
 nodes:
   # ───────────────────────────────────────────────────────────────────
@@ -68,6 +68,9 @@ nodes:
 
       Output `plan_path` (the local path string, no backticks or markdown).
     depends_on: [setup]
+    effort: medium
+    provider: claude
+    model: "sonnet"
     allowed_tools: [Bash, Read]
     context: fresh
     output_format:
@@ -216,9 +219,9 @@ nodes:
 
       Report `$resolve-plan.output.prd_dir` as `prd_dir`.
     depends_on: [resolve-plan]
-    provider: codex
+    provider: omp
     effort: xhigh
-    model: gpt-5.5
+    model: openai-codex/gpt-5.5 
     context: fresh
     output_format:
       type: object
@@ -324,9 +327,9 @@ nodes:
       - If Ralph already did everything correctly, prove it with evidence and
         write the audit report with Verdict `complete`.
     depends_on: [ralph-implement]
-    provider: codex
+    provider: omp
     effort: xhigh
-    model: gpt-5.5
+    model: openai-codex/gpt-5.5 
     context: fresh
     output_format:
       type: object

@@ -17,7 +17,7 @@ description: |
 
   Accepts: An idea description, a path to an existing prd.md, or a directory with prd.md + prd.json
 
-provider: claude
+provider: omp
 
 nodes:
   # ═══════════════════════════════════════════════════════════════
@@ -26,7 +26,6 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: detect-input
-    model: small
     prompt: |
       # Detect Ralph Input
 
@@ -81,6 +80,9 @@ nodes:
       ```json
       {"input_type": "ready|external_prd|needs_generation", "prd_dir": "<dir path>"}
       ```
+    provider: claude
+    effort: high
+    model: sonnet
     output_format:
       type: object
       properties:
@@ -187,7 +189,9 @@ nodes:
   - id: implement
     depends_on: [validate-prd]
     idle_timeout: 600000
-    model: large
+    provider: omp
+    effort: high
+    model: xai-oauth/grok-4.5
     loop:
       prompt: |
         # Ralph Agent — Autonomous Story Implementation
@@ -687,6 +691,9 @@ nodes:
 
   - id: report
     depends_on: [verify-pr-base]
+    provider: claude
+    effort: medium
+    model: sonnet
     prompt: |
       # Completion Report
 
