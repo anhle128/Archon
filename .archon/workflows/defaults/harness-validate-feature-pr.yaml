@@ -109,15 +109,27 @@ nodes:
       PR_HEAD=$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json headRefName -q '.headRefName')
       PR_BASE=$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json baseRefName -q '.baseRefName')
       PR_HEAD_SHA=$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json headRefOid -q .headRefOid)
+      PR_HEAD_SHA=$(printf '%s' "$PR_HEAD_SHA" | tr -d '[:space:]')
 
       # This run executes inside an engine-owned isolated worktree (worktree
       # enabled), so moving it onto the PR head mutates only that throwaway
-      # checkout, never the shared canonical repo. Fetch the PR head commit
-      # (pull/N/head works for same-repo and fork PRs) and detach onto it so
-      # every later node (bash and AI) validates the PR code with no manual
-      # pre-checkout.
-      git fetch "$PR_REMOTE" "pull/$PR_NUMBER/head"
-      git checkout --detach "$PR_HEAD_SHA"
+      # checkout, never the shared canonical repo.
+      #
+      # Fetch from the GitHub repo the PR actually lives in ($PR_REPO), not
+      # only $PR_REMOTE. Mini/web runs start at ambient develop; $PR_REMOTE is
+      # the trigger checkout remote and may not have refs/pull/*/head (or may
+      # be a different GitHub repo than the PR). pull/N/head works for
+      # same-repo and fork PRs on the PR's repository.
+      PR_GIT_URL=$(gh repo view "$PR_REPO" --json sshUrl -q .sshUrl)
+      if [ -z "$PR_GIT_URL" ] || [ "$PR_GIT_URL" = "null" ]; then
+        PR_GIT_URL=$(gh repo view "$PR_REPO" --json url -q .url)
+      fi
+      echo "Fetching PR #$PR_NUMBER head $PR_HEAD_SHA from $PR_REPO ($PR_GIT_URL)"
+      git fetch --force "$PR_GIT_URL" "pull/${PR_NUMBER}/head:refs/archon/pr-head"
+      if ! git cat-file -e "${PR_HEAD_SHA}^{commit}" 2>/dev/null; then
+        git fetch --force "$PR_GIT_URL" "$PR_HEAD_SHA" || git fetch --force "$PR_REMOTE" "$PR_HEAD_SHA"
+      fi
+      git checkout --force --detach "$PR_HEAD_SHA"
       LOCAL_SHA=$(git rev-parse HEAD)
 
       echo "$CANONICAL_REPO" > "$ARTIFACTS_DIR/.canonical-repo"
@@ -205,9 +217,10 @@ nodes:
         (id returned by an earlier request in this array), {id}, {elicitation_id}.
       - body: JSON object as a string; empty string for GET
       - expect_status: integer HTTP status the live daemon should return
-      - expect_statuses: optional integer array; if non-empty, live status must
-        be one of those values. Otherwise live status must equal expect_status.
-        Never treat "any 2xx-5xx" as success.
+      - expect_statuses: REQUIRED integer array (Codex structured output).
+        If non-empty, live status must be one of those values. If you only
+        have a single expected status, emit [expect_status]. Never treat
+        "any 2xx-5xx" as success.
       - invariant: REQUIRED body check. Empty / "status" is invalid. "json"
         means the body must parse as JSON; any other string must appear in the
         response body. 4xx/5xx cases MUST use a distinctive error substring

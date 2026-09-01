@@ -12,6 +12,11 @@ Synthesize code review and live smoke on **this checkout only**. Do not require 
 - `http_sse`: $classify-testability.output.http_sse
 - `tui`: $classify-testability.output.tui
 
+If either interpolated field is empty, `classify-testability` did not emit
+structured output (schema rejection, skipped node, or failed node). Treat that
+as **CLASSIFY_FAILED**: do not APPROVE; verdict **NEEDS_DISCUSSION** and say
+the classifier output was missing. Do not invent `http_sse`/`tui`/`http_requests`.
+
 ---
 
 ## Phase 1: Gather artifacts
