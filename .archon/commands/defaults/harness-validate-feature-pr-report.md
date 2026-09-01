@@ -29,6 +29,7 @@ cat "$ARTIFACTS_DIR/http-plan-results.md" 2>/dev/null || true
 cat "$ARTIFACTS_DIR/runtime-tui.md" 2>/dev/null || echo "TUI RUNTIME NOT AVAILABLE (expected when tui==no)"
 cat "$ARTIFACTS_DIR/.http-status" 2>/dev/null || true
 cat "$ARTIFACTS_DIR/sqlite-migrations.txt" 2>/dev/null || true
+cat "$ARTIFACTS_DIR/sync-manifest-check.md" 2>/dev/null || echo "SYNC_MANIFEST_NA"
 ```
 
 Missing `runtime-http.md` means `http_sse == no` or the node was skipped. When `http_sse == yes`, APPROVE requires `.http-status` / `runtime-http.md` to contain **both** `HTTP_SSE_EXERCISED` and `HTTP_PLAN_EXERCISED`. `HTTP_PLAN_EXERCISED` means every feature case matched `expect_status` (or `expect_statuses`) **and** a body `invariant`, including at least one live 2xx. Any 2xx–5xx that does not match the declared status, or a 4xx/5xx without a body invariant, is `HTTP_PLAN_FAILED` — reaching an error handler is not proof. Baseline without the plan token **cannot APPROVE**. Missing `runtime-tui.md` means `tui == no`. Do not invent runtime results.
@@ -67,6 +68,7 @@ HTTP/SSE `exercised` means that claim's row in the Feature requests table is `pa
 | If `tui == yes`: tui-test passed baseline AND the feature-specific assertions `runtime-tui` derived from the PR/checkout in that same node (NOT-COVERED empty). `TUI_FAILED` or `TUI_TOOLING_FAILED` means the required TUI evidence is missing — verdict cannot be APPROVE | Yes, mandatory |
 | No CRITICAL/HIGH correctness issues | Yes |
 | AGENTS.md focused-test policy not violated | Yes |
+| If the PR changed an `upstream-sync/commits/*.json`: `sync-manifest-check.md` first line is NOT `SYNC_MANIFEST_INCONSISTENT` (deterministic bookkeeping gate). `SYNC_MANIFEST_INCONSISTENT` **cannot APPROVE**; `SYNC_MANIFEST_CONSISTENT`/`SYNC_MANIFEST_NA` do not block | Yes, mandatory |
 
 **Forbidden as APPROVE requirements:** “Bug confirmed on develop/base”, “Fix addresses root cause”, any main-vs-feature table.
 
@@ -74,14 +76,14 @@ If `http_sse == yes` but HTTP status is `MIGRATE_OR_STORE_FAILED` or `MIGRATIONS
 
 If both classifier flags are `no` and review has no CRITICAL/HIGH and claims are YES: **APPROVE** (review-only).
 
-Otherwise — including `http_sse == yes` without both `HTTP_SSE_EXERCISED` and `HTTP_PLAN_EXERCISED` in `.http-status`, and `tui == yes` with `TUI_FAILED` or `TUI_TOOLING_FAILED`: **REQUEST_CHANGES** or **NEEDS_DISCUSSION**. Never APPROVE.
+Otherwise — including `http_sse == yes` without both `HTTP_SSE_EXERCISED` and `HTTP_PLAN_EXERCISED` in `.http-status`, `tui == yes` with `TUI_FAILED` or `TUI_TOOLING_FAILED`, and `sync-manifest-check.md` whose first line is `SYNC_MANIFEST_INCONSISTENT`: **REQUEST_CHANGES** or **NEEDS_DISCUSSION**. Never APPROVE. When the token is `SYNC_MANIFEST_INCONSISTENT` the verdict is **REQUEST_CHANGES** and the report Notes MUST quote the offending numbers from `sync-manifest-check.md`.
 
 ---
 
 ## Phase 4: Write `$ARTIFACTS_DIR/validation-report.md`
 
 ```markdown
-# Harness Feature PR Validation Report
+## Harness Feature PR Validation Report
 
 **PR**: #{number} — {title}
 **URL**: {url}
@@ -112,28 +114,28 @@ Otherwise — including `http_sse == yes` without both `HTTP_SSE_EXERCISED` and 
 ## Verdict rationale
 
 {2-4 sentences: claimed feature present and exercised on this checkout, or why not.}
+
+_Validated by harness-validate-feature-pr workflow_
 ```
 
 ---
 
-## Phase 5: Always comment on the PR
+## Phase 5: Write the report; do NOT post
 
-Always `gh pr comment`, even for review-only or REQUEST_CHANGES.
+Do **not** run `gh pr comment` in this node. A deterministic `post-report` bash node
+verifies the sync-manifest gate and posts. Your only job here is to WRITE
+`$ARTIFACTS_DIR/validation-report.md` so that:
 
-Header **exactly**: `## Harness Feature PR Validation Report`
+- its first line is exactly `## Harness Feature PR Validation Report`,
+- it ends with the exact footer `_Validated by harness-validate-feature-pr workflow_`,
+- it contains one line `**Verdict**: APPROVE` / `REQUEST_CHANGES` / `NEEDS_DISCUSSION`.
 
-Footer **exactly**: `_Validated by harness-validate-feature-pr workflow_`
-
-```bash
-gh pr comment "$PR_NUMBER" --repo "$PR_REPO" --body-file "$ARTIFACTS_DIR/validation-report.md"
-```
-
-If the body file lacks the header/footer, prepend/append them before posting. Do not mention dual-branch bugfix success tokens or a main-vs-feature review split.
+Do not mention dual-branch bugfix success tokens or a main-vs-feature review split.
 
 ---
 
 ## Success Criteria
 
 - **VERDICT_WRITTEN**: `$ARTIFACTS_DIR/validation-report.md`
-- **PR_COMMENTED**: `gh pr comment` succeeded
+- **REPORT_WRITTEN**: `validation-report.md` has the exact header line, the footer, and one `**Verdict**:` line; the `post-report` node posts it after the sync-gate check
 - Verdict uses only feature-checkout evidence

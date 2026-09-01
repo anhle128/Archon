@@ -190,6 +190,23 @@ nodes:
     depends_on: [validate-prd]
     idle_timeout: 600000
     model: large
+    output_format:
+      type: object
+      properties:
+        done:
+          type: boolean
+          description: true ONLY when every story in prd.json has passes:true AND the PR has been created; false on every other iteration.
+        mode:
+          type: string
+          description: this iteration's mode — "implement" | "unblock" | "blocked".
+        story_id:
+          type: string
+          description: the story worked this iteration, if any.
+        note:
+          type: string
+          description: short carry-forward for the next iteration — blocker fingerprint, attempt count, or next step.
+      required:
+        - done
     loop:
       prompt: |
         # Ralph Agent — Autonomous Story Implementation
@@ -208,6 +225,9 @@ nodes:
         $validate-prd.output
 
         **User message**: $USER_MESSAGE
+
+        **Previous iteration summary** (empty on the first iteration): $LOOP_PREV_OUTPUT
+        Use it together with progress.txt to recover the prior mode, selected story, and blocker fingerprint/attempt before acting.
 
         ---
 
@@ -254,12 +274,12 @@ nodes:
 
         **If ALL stories have `passes: true`** → Skip to Phase 6 (Completion).
 
-        **If no eligible stories exist** (all remaining are blocked):
-        ```
-        BLOCKED: No eligible stories. Remaining stories and their blockers:
-        - {story-id}: blocked by {dep-id} (passes: false)
-        ```
-        End normally. The loop will terminate on max_iterations.
+        **If no eligible stories exist** (every not-passing story is gated by a
+        dependency that itself won't pass) → this is a blocker to RESOLVE, not a
+        stopping point. Do NOT end idle. Run the **UNBLOCK PROTOCOL** (below):
+        usually a dependency was left `passes: false` though its code is done, or a
+        `dependsOn` is wrong/circular. Fix the real state, then continue — the loop
+        never idles on a blocker, it removes the blocker and keeps going.
 
         ### 1.2 Announce Selection
 
@@ -316,6 +336,12 @@ nodes:
         - Touch files unrelated to this story
         - Over-engineer — do the simplest thing that satisfies the criteria
 
+        **Blocked exception:** these DON'T rules (and "don't fix unrelated code" in
+        Phase 3) govern NORMAL implementation. When genuinely blocked (see UNBLOCK
+        PROTOCOL), you MAY apply the minimal proven fix that clears the blocker —
+        only as a separate `chore(unblock):` commit, and NEVER by editing or
+        weakening the acceptance criteria.
+
         ### 2.3 Verify Types After Each File
 
         After modifying each file, run:
@@ -365,7 +391,7 @@ nodes:
         1. Read the failure output
         2. Determine: bug in your implementation or pre-existing failure?
         3. If your bug → fix the implementation (not the test)
-        4. If pre-existing → note it but don't fix unrelated tests
+        4. If pre-existing → note it; don't fix unrelated tests UNLESS it blocks this story's acceptance gate (then use the UNBLOCK PROTOCOL)
         5. Re-run tests
         6. Repeat until green
 
@@ -539,14 +565,11 @@ nodes:
 
         3. **Create a draft PR** by resolving `PR_REPO` from `$PR_REMOTE`, computing `PR_HEAD`, and running `gh pr create --repo "$PR_REPO" --draft --base "$BASE_BRANCH" --head "$PR_HEAD" --title "feat: {PRD feature name}"` with the filled-in template as the body. Use a HEREDOC for the body.
 
-        4. **Output completion signal:**
-           ```
-           <promise>COMPLETE</promise>
-           ```
+        4. **Signal completion via your structured output.** This iteration's final output MUST be the JSON object declared by this node's `output_format`. Set `done: true` (with `mode: "implement"`, the finished `story_id`, and a short `note`) — valid ONLY here, after the PR is created with every story passing.
 
         ### 6.3 If Stories Remain
 
-        Report status and end normally:
+        Report status, then end the iteration. Your final output MUST be the JSON object declared by `output_format` with `done: false` (`mode` = "implement" | "unblock" | "blocked", `story_id` = the story you worked, `note` = fingerprint/attempt or next step). Human-readable summary:
         ```
         ── Iteration Complete ──────────────────────────────
         Story completed: {story-id} — {story-title}
@@ -562,10 +585,8 @@ nodes:
         ## Handling Edge Cases
 
         ### Validation fails repeatedly
-        - If type-check or tests fail 3+ times on the same error, step back
-        - Re-read the acceptance criteria — you may be misunderstanding the requirement
-        - Check if the story is too large (needs breaking down)
-        - Note the blocker in progress.txt and end the iteration
+        - If type-check or tests fail 3+ times on the SAME root cause, stop repeating the same attempt — you are blocked. Enter the **UNBLOCK PROTOCOL** below.
+        - Re-read the acceptance criteria first — confirm you are running the AC's EXACT command correctly (you may be misreading the requirement).
 
         ### Story is too large for one iteration
         - Implement the minimum viable subset that satisfies the most critical acceptance criteria
@@ -573,10 +594,9 @@ nodes:
         - If you can't meet all criteria, leave `passes: false` and note what's done in progress.txt
         - The next iteration will pick it up and continue
 
-        ### Pre-existing test failures
-        - If tests were failing BEFORE your changes, note them but don't fix unrelated code
-        - Run only the test files related to your changes if the full suite has pre-existing issues
-        - Document pre-existing failures in progress.txt
+        ### Pre-existing test/lint failures
+        - During normal implementation, note pre-existing failures but don't fix unrelated code; run only the test files related to your change if the full suite has pre-existing issues.
+        - BUT if a pre-existing failure BLOCKS this story's acceptance gate, it is a blocker — do not route around it: use the **UNBLOCK PROTOCOL** (fix the proven cause, then continue).
 
         ### Dependency install fails
         - Check if `bun.lock` or equivalent exists
@@ -590,10 +610,41 @@ nodes:
         - Never discard changes silently
 
         ### Blocked stories — all remaining have unmet dependencies
-        - Report the dependency chain in your output
-        - Check if a dependency was incorrectly left as `passes: false`
-        - If a dependency should be `passes: true` (the code exists and works), fix prd.json
-        - Otherwise, end the iteration — the loop will exhaust max_iterations
+        - This is a blocker to RESOLVE, not a stopping point — enter the **UNBLOCK PROTOCOL**.
+        - Report the dependency chain; check whether a dependency was incorrectly left `passes: false`.
+        - If a dependency's code genuinely satisfies its own gate, re-run THAT gate to confirm, then set its `passes: true` in prd.json. If a `dependsOn` is wrong/circular, correct it. Then continue.
+
+        ---
+
+        ## UNBLOCK PROTOCOL — Resolve blockers, NEVER stall
+
+        This loop has no "give up and wait" state. A story that cannot reach
+        `passes: true` under the current constraints is a **blocker to remove**, not
+        a reason to end the run or burn iterations. When blocked, resolve it IN THIS
+        ITERATION, then end normally so the next fresh iteration continues on the
+        now-unblocked story.
+
+        **You are blocked** if any holds for the selected story:
+        - The same acceptance gate failed with the same root cause across 2+ recorded attempts (see the Blocker Ledger in progress.txt).
+        - A gate/AC fails on a cause OUTSIDE this story's own changes (e.g. a pre-existing lint/test failure in a sibling file, or a package-wide gate hitting existing debt).
+        - Every not-passing story is gated by a dependency that won't pass.
+
+        **Hard limits — never cross these to get green:**
+        - NEVER edit, narrow, or weaken a story's `acceptanceCriteria` or any requirement to make it pass. The gate is fixed; you do not grade your own homework.
+        - NEVER blanket-expand scope or `git add -A`. No "while I'm here" changes.
+        - NEVER set `passes: true` unless the story's EXACT, unmodified acceptance gate passes.
+
+        **Resolve it (the only sanctioned action) — order matters:**
+        1. **Capture the blocking failures WITH your story present.** Run the exact acceptance gate and record each failure's FINGERPRINT — file:line + rule/message (not just "it failed").
+        2. **Stash ALL story work, including new files** — `git stash push --include-untracked -m "ralph-unblock:<story-id>"`; confirm `git status --porcelain` prints NOTHING (a truly clean base). Remember this stash ref.
+        3. **Re-run the SAME gate on the clean base** and record its fingerprints.
+        4. **Qualify the blocker — this is the crucial test.** A failure is an UNBLOCK case ONLY if the SAME fingerprint appears in BOTH runs AND its culprit file is OUTSIDE this story's target/diff. A failure that appears only with your changes, or lives in a file this story edits/creates, is YOURS → `git stash pop` your ref and fix it in Phase 2. (A gate failing on the base merely because the story isn't implemented yet is NOT a blocker — most ACs fail on base for exactly that reason.)
+        5. **Fix ONLY the qualified pre-existing culprit — story still stashed.** Edit just those exact lines (smallest change; do not refactor or weaken the gate — keep `-D warnings`, etc.). Stage those paths BY NAME (never `git add -A`/`.`/`-u`) and commit `chore(unblock): fix pre-existing <thing> blocking <gate>` — a commit containing ZERO story changes. Do NOT revert it later.
+        6. **Confirm on the base, then restore.** Re-run the gate on the base — the qualified fingerprints must be gone. Then `git stash pop` the ref from step 2 and re-run the EXACT acceptance gate with your story present; set `passes: true` only when it is green on its own terms.
+        7. **Record it** in the Blocker Ledger (progress.txt) so future fresh iterations see the proof and the action instead of repeating the attempt.
+
+        **If a minimal proven fix cannot clear the gate** — the blocker needs access or a decision you genuinely cannot obtain (missing credentials, an external service, a contradictory requirement only a human can reconcile) — record it fully in the Blocker Ledger and end the iteration honestly WITHOUT faking `passes`. Do not spin on it; `max_iterations` remains only a runaway safety cap, not the normal path.
+
 
         ---
 
@@ -643,6 +694,14 @@ nodes:
         ---
         ```
 
+        ### Blocker Ledger (in progress.txt)
+
+        Append one line per blocked encounter so fresh iterations don't repeat a failed attempt:
+
+        ```
+        BLOCKER {story-id} | gate=<exact command> | cause=<root cause + proof> | action=<fix applied, or why still blocked> | {date}
+        ```
+
         ---
 
         ## Success Criteria
@@ -652,8 +711,8 @@ nodes:
         - **COMMITTED**: Changes committed with clear message
         - **TRACKED**: prd.json and progress.txt updated accurately
         - **PATTERNS_SHARED**: Discovered patterns added to progress.txt for future iterations
-        - **NO_SCOPE_CREEP**: No unrelated changes, no refactoring, no "improvements"
-      until: COMPLETE
+        - **NO_SCOPE_CREEP**: No unrelated changes, no refactoring, no "improvements" — the ONLY exception is a proven, minimal, separately-committed `chore(unblock):` fix per the UNBLOCK PROTOCOL; never an acceptance-criteria edit
+      until_field: done
       max_iterations: 15
       fresh_context: true
 
