@@ -151,6 +151,55 @@ nodes:
       echo "PR_BASE=$PR_BASE"
     depends_on: [fetch-pr]
 
+  - id: check-sync-manifest
+    bash: |
+      set -uo pipefail
+      # Deterministic bookkeeping gate for upstream-sync coverage manifests
+      # (upstream-sync/commits/<sha>.json). The AI code-review node has
+      # non-deterministically missed arithmetic errors here, so the verdict must
+      # not hinge on it. Writes $ARTIFACTS_DIR/sync-manifest-check.md whose FIRST
+      # line is SYNC_MANIFEST_CONSISTENT | SYNC_MANIFEST_INCONSISTENT |
+      # SYNC_MANIFEST_NA. Always exits 0 (final-report reads the token and blocks
+      # APPROVE on INCONSISTENT); fails closed (INCONSISTENT) on parse errors.
+      OUT="$ARTIFACTS_DIR/sync-manifest-check.md"
+      cd "$(tr -d '\n' < "$ARTIFACTS_DIR/.worktree-path")"
+      PR_NUMBER=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-number")
+      PR_REPO=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-repo")
+      MANIFESTS=$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json files -q '.files[].path' \
+        | grep -E '^upstream-sync/commits/.*\.json$' || true)
+      if [ -z "$MANIFESTS" ]; then
+        printf 'SYNC_MANIFEST_NA\n\nPR changed no upstream-sync/commits/*.json manifest.\n' > "$OUT"
+        cat "$OUT"; exit 0
+      fi
+      SHAPE_JQ='if (.coverage|type)=="object" and (.coverage|has("upstreamChangedPaths") and has("portedPaths") and has("omittedPaths") and has("alreadyPresentPaths")) and ([.coverage.upstreamChangedPaths,.coverage.portedPaths,.coverage.omittedPaths,.coverage.alreadyPresentPaths]|all(type=="number")) and ((.changes|type)=="array") then "OK" else "NA" end'
+      CHECK_JQ='.coverage as $c | ([.changes[].disposition]|group_by(.)|map({(.[0]):length})|add // {}) as $d | [ (if $c.upstreamChangedPaths==($c.portedPaths+$c.omittedPaths+$c.alreadyPresentPaths) then empty else "upstreamChangedPaths=\($c.upstreamChangedPaths) but portedPaths+omittedPaths+alreadyPresentPaths=\($c.portedPaths+$c.omittedPaths+$c.alreadyPresentPaths)" end), (if $c.upstreamChangedPaths==(.changes|length) then empty else "upstreamChangedPaths=\($c.upstreamChangedPaths) but len(changes)=\(.changes|length)" end), (if $c.portedPaths==($d.ported // 0) then empty else "coverage.portedPaths=\($c.portedPaths) but changes ported=\($d.ported // 0)" end), (if $c.omittedPaths==($d.omitted // 0) then empty else "coverage.omittedPaths=\($c.omittedPaths) but changes omitted=\($d.omitted // 0)" end), (if $c.alreadyPresentPaths==($d["already-present"] // 0) then empty else "coverage.alreadyPresentPaths=\($c.alreadyPresentPaths) but changes already-present=\($d["already-present"] // 0)" end) ] | if length==0 then "CONSISTENT" else join("; ") end'
+      STATUS=NA
+      DETAIL=""
+      printf '%s\n' "$MANIFESTS" > "$ARTIFACTS_DIR/.sync-manifest-list"
+      while IFS= read -r m; do
+        [ -z "$m" ] && continue
+        if [ ! -f "$m" ]; then
+          DETAIL="${DETAIL}- ${m}: listed in PR but absent from checkout"$'\n'; STATUS=INCONSISTENT; continue
+        fi
+        shape=$(jq -r "$SHAPE_JQ" "$m" 2>/dev/null) || shape=ERR
+        if [ "$shape" = "ERR" ]; then
+          DETAIL="${DETAIL}- ${m}: JSON parse error"$'\n'; STATUS=INCONSISTENT; continue
+        fi
+        if [ "$shape" = "NA" ]; then
+          DETAIL="${DETAIL}- ${m}: no coverage(number keys)/changes array - cannot verify"$'\n'; continue
+        fi
+        res=$(jq -r "$CHECK_JQ" "$m" 2>/dev/null) || res="jq evaluation error"
+        if [ "$res" = "CONSISTENT" ]; then
+          DETAIL="${DETAIL}- ${m}: consistent"$'\n'; [ "$STATUS" != "INCONSISTENT" ] && STATUS=CONSISTENT
+        else
+          DETAIL="${DETAIL}- ${m}: ${res}"$'\n'; STATUS=INCONSISTENT
+        fi
+      done < "$ARTIFACTS_DIR/.sync-manifest-list"
+      printf 'SYNC_MANIFEST_%s\n\n%s' "$STATUS" "$DETAIL" > "$OUT"
+      cat "$OUT"
+      exit 0
+    depends_on: [fetch-pr, resolve-paths]
+
   - id: prepare-sqlite
     bash: |
       set -euo pipefail
@@ -646,6 +695,6 @@ nodes:
 
   - id: final-report
     command: harness-validate-feature-pr-report
-    depends_on: [code-review, runtime-http, runtime-tui, classify-testability, cleanup-processes]
+    depends_on: [code-review, runtime-http, runtime-tui, classify-testability, check-sync-manifest, cleanup-processes]
     trigger_rule: all_done
     context: fresh

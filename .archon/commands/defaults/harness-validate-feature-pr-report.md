@@ -29,6 +29,7 @@ cat "$ARTIFACTS_DIR/http-plan-results.md" 2>/dev/null || true
 cat "$ARTIFACTS_DIR/runtime-tui.md" 2>/dev/null || echo "TUI RUNTIME NOT AVAILABLE (expected when tui==no)"
 cat "$ARTIFACTS_DIR/.http-status" 2>/dev/null || true
 cat "$ARTIFACTS_DIR/sqlite-migrations.txt" 2>/dev/null || true
+cat "$ARTIFACTS_DIR/sync-manifest-check.md" 2>/dev/null || echo "SYNC_MANIFEST_NA"
 ```
 
 Missing `runtime-http.md` means `http_sse == no` or the node was skipped. When `http_sse == yes`, APPROVE requires `.http-status` / `runtime-http.md` to contain **both** `HTTP_SSE_EXERCISED` and `HTTP_PLAN_EXERCISED`. `HTTP_PLAN_EXERCISED` means every feature case matched `expect_status` (or `expect_statuses`) **and** a body `invariant`, including at least one live 2xx. Any 2xx–5xx that does not match the declared status, or a 4xx/5xx without a body invariant, is `HTTP_PLAN_FAILED` — reaching an error handler is not proof. Baseline without the plan token **cannot APPROVE**. Missing `runtime-tui.md` means `tui == no`. Do not invent runtime results.
@@ -67,6 +68,7 @@ HTTP/SSE `exercised` means that claim's row in the Feature requests table is `pa
 | If `tui == yes`: tui-test passed baseline AND the feature-specific assertions `runtime-tui` derived from the PR/checkout in that same node (NOT-COVERED empty). `TUI_FAILED` or `TUI_TOOLING_FAILED` means the required TUI evidence is missing — verdict cannot be APPROVE | Yes, mandatory |
 | No CRITICAL/HIGH correctness issues | Yes |
 | AGENTS.md focused-test policy not violated | Yes |
+| If the PR changed an `upstream-sync/commits/*.json`: `sync-manifest-check.md` first line is NOT `SYNC_MANIFEST_INCONSISTENT` (deterministic bookkeeping gate). `SYNC_MANIFEST_INCONSISTENT` **cannot APPROVE**; `SYNC_MANIFEST_CONSISTENT`/`SYNC_MANIFEST_NA` do not block | Yes, mandatory |
 
 **Forbidden as APPROVE requirements:** “Bug confirmed on develop/base”, “Fix addresses root cause”, any main-vs-feature table.
 
@@ -74,7 +76,7 @@ If `http_sse == yes` but HTTP status is `MIGRATE_OR_STORE_FAILED` or `MIGRATIONS
 
 If both classifier flags are `no` and review has no CRITICAL/HIGH and claims are YES: **APPROVE** (review-only).
 
-Otherwise — including `http_sse == yes` without both `HTTP_SSE_EXERCISED` and `HTTP_PLAN_EXERCISED` in `.http-status`, and `tui == yes` with `TUI_FAILED` or `TUI_TOOLING_FAILED`: **REQUEST_CHANGES** or **NEEDS_DISCUSSION**. Never APPROVE.
+Otherwise — including `http_sse == yes` without both `HTTP_SSE_EXERCISED` and `HTTP_PLAN_EXERCISED` in `.http-status`, `tui == yes` with `TUI_FAILED` or `TUI_TOOLING_FAILED`, and `sync-manifest-check.md` whose first line is `SYNC_MANIFEST_INCONSISTENT`: **REQUEST_CHANGES** or **NEEDS_DISCUSSION**. Never APPROVE. When the token is `SYNC_MANIFEST_INCONSISTENT` the verdict is **REQUEST_CHANGES** and the report Notes MUST quote the offending numbers from `sync-manifest-check.md`.
 
 ---
 
