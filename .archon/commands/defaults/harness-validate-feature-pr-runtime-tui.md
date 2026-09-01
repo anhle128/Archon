@@ -50,6 +50,12 @@ from `pwd` (paths under `crates/codegen/xai-grok-pager*`, `xai-grok-shell`,
 behavior. Write that derived list into `runtime-tui.md` **before** running it.
 Do not invent a develop/base comparison.
 
+**Needle rule:** every `wait`/`expect` text needle MUST begin with an alphanumeric
+character — never `-`. `tui-test` parses a leading `-` as a CLI option (`unexpected
+argument '-X'` → exit 2, a usage error that fails the assertion even when the text is
+on screen). Choose a distinguishing substring that starts with a letter/digit (e.g.
+`TAIL:END` not `-TAIL:END`), or shift the marker so the match does not start at `-`.
+
 2. Build the pager:
 
 ```bash
@@ -60,7 +66,21 @@ cargo build -p xai-grok-pager-bin --bin xai-grok-pager
 4. Run `.claude/skills/tui-test/scripts/ensure_cli.sh` **check-only** (never download). If the
    check fails, write `runtime-tui.md` status `TUI_TOOLING_FAILED` and stop. The report treats
    missing tui-test evidence as non-approvable — never fall back silently.
-5. Launch a named session (blocked-backend baseline env from the in-crate e2e recipe):
+
+### Single shell lifetime (required)
+
+Run steps 5–8 (launch → baseline → feature assertions → dump → close) in **ONE bash tool
+call / one shell lifetime.** `tui-test` keeps the PTY in a per-session daemon, and that
+daemon is reaped when a bash call's process tree is torn down — so launching the session
+in one bash call and asserting in a later call returns exit `3` ("no session") and forces
+a spurious `TUI_FAILED`. This mirrors the supervised single-shell `runtime-http` node.
+Do **not** split the run/assert/close across bash calls, and do **not** add a same-shell
+"retry" after a split failure — plan the full command sequence first (including any
+`--restart` for a second fixture and any scripted mock backend, launched in the background
+with a `trap '…' EXIT` that stops it), write it into `runtime-tui.md`, then run it as one
+script. Steps 1–4 (inspect / build / CLI check) hold no session and may run in earlier calls.
+
+5. In the same single shell, launch a named session (blocked-backend baseline env from the in-crate e2e recipe):
 
 ```bash
 SESSION="hvfpr-$WORKFLOW_ID"
@@ -76,7 +96,7 @@ tui-test --session "$SESSION" run --restart --cols 120 --rows 50 \
   -- "$CARGO_TARGET_DIR/debug/xai-grok-pager" --no-leader
 ```
 
-6. Baseline (each exit code decides; `wait` timeout = exit 1):
+6. Baseline, in the same shell (each exit code decides; `wait` timeout = exit 1):
 
 ```bash
 tui-test --session "$SESSION" wait text "Quit" --timeout 30000
@@ -84,9 +104,18 @@ tui-test --session "$SESSION" expect text "Quit" --no-strict --timeout 5000
 tui-test --session "$SESSION" expect text "panicked" --not --timeout 5000
 ```
 
-Any non-zero → TUI_FAILED. The baseline alone does not validate the PR's claimed TUI changes.
+Any non-zero baseline command in this single-shell run → TUI_FAILED (record every exit code). The baseline alone does not validate the PR's claimed TUI changes.
 
-7. **Feature-specific coverage (required).** Execute the assertions this node derived in
+**Probe discipline (prevents spurious `TUI_FAILED`):** the three baseline commands above
+are the ONLY non-claim checks. Do **not** add guessed chrome probes — welcome placeholder
+(e.g. `Type a message...`), footer/key hints (`Quit`, `Shift+Tab`), or window headers
+(`Dashboard`) — as `wait`/`expect`: this checkout's exact rendered copy varies, so a guessed
+needle returns exit 1 even when the feature works and forces `TUI_FAILED`. Every `wait`/`expect`
+you record MUST be a PR-claim needle. After a `--restart` for a second fixture, use the
+**claim-specific needle itself** as the readiness `wait` (it also proves the behavior); if you
+need a generic settle use `wait idle`, never a guessed literal string.
+
+7. **Feature-specific coverage (required), same shell.** Execute the assertions this node derived in
    step 1: `type`/key presses/`mouse click --on-text` plus `wait`/`expect` on the text
    that behavior renders. Record every command + exit code in `runtime-tui.md`.
    - If an interaction needs backend responses, do NOT use the dead backend: start a scripted
@@ -98,7 +127,7 @@ Any non-zero → TUI_FAILED. The baseline alone does not validate the PR's claim
      COVERED with the reason; `TUI_EXERCISED` requires the NOT-COVERED set to be empty
      (otherwise TUI_FAILED).
 
-8. Dump chrome and close:
+8. In the same shell, dump chrome and close:
 
 ```bash
 .claude/skills/tui-test/scripts/dump_session.sh "$SESSION" "$ARTIFACTS_DIR/tui-test" after || true
