@@ -160,13 +160,17 @@ nodes:
       # not hinge on it. Writes $ARTIFACTS_DIR/sync-manifest-check.md whose FIRST
       # line is SYNC_MANIFEST_CONSISTENT | SYNC_MANIFEST_INCONSISTENT |
       # SYNC_MANIFEST_NA. Always exits 0 (final-report reads the token and blocks
-      # APPROVE on INCONSISTENT); fails closed (INCONSISTENT) on parse errors.
+      # APPROVE on INCONSISTENT); fails closed (INCONSISTENT) on parse errors or a
+      # changed manifest missing coverage/changes. NA only when NO such manifest changed.
       OUT="$ARTIFACTS_DIR/sync-manifest-check.md"
       cd "$(tr -d '\n' < "$ARTIFACTS_DIR/.worktree-path")"
       PR_NUMBER=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-number")
       PR_REPO=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-repo")
-      MANIFESTS=$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json files -q '.files[].path' \
-        | grep -E '^upstream-sync/commits/.*\.json$' || true)
+      FILES=$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json files -q '.files[].path') || {
+        printf 'SYNC_MANIFEST_INCONSISTENT\n\ngh pr view failed - cannot enumerate PR changed files (fail-closed).\n' > "$OUT"
+        cat "$OUT"; exit 0
+      }
+      MANIFESTS=$(printf '%s\n' "$FILES" | grep -E '^upstream-sync/commits/.*\.json$' || true)
       if [ -z "$MANIFESTS" ]; then
         printf 'SYNC_MANIFEST_NA\n\nPR changed no upstream-sync/commits/*.json manifest.\n' > "$OUT"
         cat "$OUT"; exit 0
@@ -186,7 +190,7 @@ nodes:
           DETAIL="${DETAIL}- ${m}: JSON parse error"$'\n'; STATUS=INCONSISTENT; continue
         fi
         if [ "$shape" = "NA" ]; then
-          DETAIL="${DETAIL}- ${m}: no coverage(number keys)/changes array - cannot verify"$'\n'; continue
+          DETAIL="${DETAIL}- ${m}: malformed - changed manifest missing coverage(number keys) or changes array (fail-closed)"$'\n'; STATUS=INCONSISTENT; continue
         fi
         res=$(jq -r "$CHECK_JQ" "$m" 2>/dev/null) || res="jq evaluation error"
         if [ "$res" = "CONSISTENT" ]; then
@@ -698,3 +702,43 @@ nodes:
     depends_on: [code-review, runtime-http, runtime-tui, classify-testability, check-sync-manifest, cleanup-processes]
     trigger_rule: all_done
     context: fresh
+
+  - id: post-report
+    bash: |
+      set -uo pipefail
+      # Deterministic poster + final sync-gate enforcement. final-report only WRITES
+      # validation-report.md; this is the SOLE place that runs `gh pr comment`, so an
+      # APPROVE can never be published when the deterministic sync-manifest gate is not
+      # CONSISTENT/NA (e.g. an instruction miss in the AI report node). Fails closed.
+      PR_NUMBER=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-number")
+      PR_REPO=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-repo")
+      REPORT="$ARTIFACTS_DIR/validation-report.md"
+      HEADER="## Harness Feature PR Validation Report"
+      FOOTER="_Validated by harness-validate-feature-pr workflow_"
+      if [ ! -s "$REPORT" ]; then
+        echo "ERROR: $REPORT missing or empty; cannot post a verdict" >&2
+        exit 1
+      fi
+      TOKEN=$(head -1 "$ARTIFACTS_DIR/sync-manifest-check.md" 2>/dev/null | tr -d '\r\n')
+      [ -z "$TOKEN" ] && TOKEN="SYNC_MANIFEST_MISSING"
+      # APPROVE is allowed ONLY when the gate is CONSISTENT or NA (no manifest changed).
+      if grep -qiE '^\*\*Verdict\*\*:[[:space:]]*APPROVE' "$REPORT" \
+         && [ "$TOKEN" != "SYNC_MANIFEST_CONSISTENT" ] && [ "$TOKEN" != "SYNC_MANIFEST_NA" ]; then
+        TMP=$(mktemp)
+        awk 'BEGIN{d=0} /^\*\*Verdict\*\*:/ && !d {print "**Verdict**: REQUEST_CHANGES"; d=1; next} {print}' "$REPORT" > "$TMP"
+        {
+          printf '\n> **Automated sync-gate override:** the deterministic sync-manifest check reported `%s`, so an APPROVE was downgraded to REQUEST_CHANGES. `sync-manifest-check.md`:\n\n```\n' "$TOKEN"
+          cat "$ARTIFACTS_DIR/sync-manifest-check.md" 2>/dev/null || echo "(sync-manifest-check.md missing)"
+          printf '\n```\n'
+        } >> "$TMP"
+        mv "$TMP" "$REPORT"
+        echo "SYNC-GATE OVERRIDE: APPROVE -> REQUEST_CHANGES (token=$TOKEN)"
+      fi
+      # Guarantee the exact header/footer the harness expects.
+      if [ "$(head -1 "$REPORT")" != "$HEADER" ]; then
+        TMP=$(mktemp); { printf '%s\n\n' "$HEADER"; cat "$REPORT"; } > "$TMP"; mv "$TMP" "$REPORT"
+      fi
+      grep -qF "$FOOTER" "$REPORT" || printf '\n%s\n' "$FOOTER" >> "$REPORT"
+      gh pr comment "$PR_NUMBER" --repo "$PR_REPO" --body-file "$REPORT"
+    depends_on: [final-report, check-sync-manifest]
+    trigger_rule: all_done

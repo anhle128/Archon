@@ -50,6 +50,12 @@ from `pwd` (paths under `crates/codegen/xai-grok-pager*`, `xai-grok-shell`,
 behavior. Write that derived list into `runtime-tui.md` **before** running it.
 Do not invent a develop/base comparison.
 
+**Needle rule:** every `wait`/`expect` text needle MUST begin with an alphanumeric
+character — never `-`. `tui-test` parses a leading `-` as a CLI option (`unexpected
+argument '-X'` → exit 2, a usage error that fails the assertion even when the text is
+on screen). Choose a distinguishing substring that starts with a letter/digit (e.g.
+`TAIL:END` not `-TAIL:END`), or shift the marker so the match does not start at `-`.
+
 2. Build the pager:
 
 ```bash

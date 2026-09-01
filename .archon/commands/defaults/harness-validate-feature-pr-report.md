@@ -83,7 +83,7 @@ Otherwise — including `http_sse == yes` without both `HTTP_SSE_EXERCISED` and 
 ## Phase 4: Write `$ARTIFACTS_DIR/validation-report.md`
 
 ```markdown
-# Harness Feature PR Validation Report
+## Harness Feature PR Validation Report
 
 **PR**: #{number} — {title}
 **URL**: {url}
@@ -114,28 +114,28 @@ Otherwise — including `http_sse == yes` without both `HTTP_SSE_EXERCISED` and 
 ## Verdict rationale
 
 {2-4 sentences: claimed feature present and exercised on this checkout, or why not.}
+
+_Validated by harness-validate-feature-pr workflow_
 ```
 
 ---
 
-## Phase 5: Always comment on the PR
+## Phase 5: Write the report; do NOT post
 
-Always `gh pr comment`, even for review-only or REQUEST_CHANGES.
+Do **not** run `gh pr comment` in this node. A deterministic `post-report` bash node
+verifies the sync-manifest gate and posts. Your only job here is to WRITE
+`$ARTIFACTS_DIR/validation-report.md` so that:
 
-Header **exactly**: `## Harness Feature PR Validation Report`
+- its first line is exactly `## Harness Feature PR Validation Report`,
+- it ends with the exact footer `_Validated by harness-validate-feature-pr workflow_`,
+- it contains one line `**Verdict**: APPROVE` / `REQUEST_CHANGES` / `NEEDS_DISCUSSION`.
 
-Footer **exactly**: `_Validated by harness-validate-feature-pr workflow_`
-
-```bash
-gh pr comment "$PR_NUMBER" --repo "$PR_REPO" --body-file "$ARTIFACTS_DIR/validation-report.md"
-```
-
-If the body file lacks the header/footer, prepend/append them before posting. Do not mention dual-branch bugfix success tokens or a main-vs-feature review split.
+Do not mention dual-branch bugfix success tokens or a main-vs-feature review split.
 
 ---
 
 ## Success Criteria
 
 - **VERDICT_WRITTEN**: `$ARTIFACTS_DIR/validation-report.md`
-- **PR_COMMENTED**: `gh pr comment` succeeded
+- **REPORT_WRITTEN**: `validation-report.md` has the exact header line, the footer, and one `**Verdict**:` line; the `post-report` node posts it after the sync-gate check
 - Verdict uses only feature-checkout evidence
