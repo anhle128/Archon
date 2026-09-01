@@ -738,7 +738,13 @@ nodes:
       if [ "$(head -1 "$REPORT")" != "$HEADER" ]; then
         TMP=$(mktemp); { printf '%s\n\n' "$HEADER"; cat "$REPORT"; } > "$TMP"; mv "$TMP" "$REPORT"
       fi
-      grep -qF "$FOOTER" "$REPORT" || printf '\n%s\n' "$FOOTER" >> "$REPORT"
+      # Exactly one footer, as the very last line: the override note above may have
+      # appended content after the report's original trailing footer.
+      TMP=$(mktemp); grep -vxF "$FOOTER" "$REPORT" > "$TMP"; mv "$TMP" "$REPORT"
+      printf '\n%s\n' "$FOOTER" >> "$REPORT"
+      if [ "$(tail -1 "$REPORT")" != "$FOOTER" ]; then
+        echo "ERROR: report footer is not the last line" >&2; exit 1
+      fi
       gh pr comment "$PR_NUMBER" --repo "$PR_REPO" --body-file "$REPORT"
     depends_on: [final-report, check-sync-manifest]
     trigger_rule: all_done
