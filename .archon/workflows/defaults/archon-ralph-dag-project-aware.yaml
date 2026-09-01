@@ -652,7 +652,7 @@ nodes:
         - **PATTERNS_SHARED**: Discovered patterns added to progress.txt for future iterations
         - **NO_SCOPE_CREEP**: No unrelated changes, no refactoring, no "improvements"
       until: COMPLETE
-      max_iterations: 15
+      max_iterations: 35
       fresh_context: true
 
   - id: verify-pr-base
