@@ -234,6 +234,7 @@ nodes:
     model: sonnet
     context: fresh
 
+    skills: [speckit-clarifybatch]
   - id: red-team
     prompt: |
       Read .specify/feature.json to resolve <feature_directory>, then run:
@@ -248,6 +249,7 @@ nodes:
     provider: claude
     model: "claude-opus-4-8[1M]"
     context: fresh
+    skills: [speckit-red-team-run]
     denied_tools:
       - Bash
 
@@ -408,6 +410,7 @@ nodes:
     model: sonnet
     context: fresh
 
+    skills: [speckit-red-team-apply]
   - id: plan
     prompt: |
       Read .specify/feature.json to resolve <feature_directory>, then run:
@@ -576,6 +579,7 @@ nodes:
     model: sonnet
     context: fresh
 
+    skills: [speckit-analyzebatch]
   - id: ralph-tasks-to-ralph
     prompt: |
       Read .specify/feature.json to resolve <feature_directory>, then run:
