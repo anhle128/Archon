@@ -88,66 +88,73 @@ nodes:
         validation_commands:
           type: string
 
-  - id: review-fix-plan
-    description: Review and repair the plan directly with Codex.
-    provider: codex
-    model: gpt-5.6-sol
-    effort: xhigh
-    context: fresh
-    depends_on:
-      - write-plan
+  - id: verify-and-fix-plan
     prompt: |
-      Review and repair the Superpowers implementation plan directly.
-      Do not implement code in this step.
+      Review and revise the complete plan at `$write-plan.output.plan_path`.
+      Treat the current plan as an unverified draft.
+      Do not trust its claims, assumptions, scope, file references, technical decisions, or conclusions.
 
-      Plan path:
-      $write-plan.output.plan_path
+      Independently inspect the repository, documentation, code, tests, configuration, and existing behavior.
+      Use repository evidence to verify every material part of the plan.
 
-      Original user input:
-      $ARGUMENTS
+      Determine:
 
-      Read the plan, repository instructions, and the source files that the plan mentions.
-      Check the plan against the approved brainstorm input, repository facts, Superpowers writing-plans rules, and TDD.
-      Fix every concrete issue in the plan file itself.
-      Make the plan complete enough for Ralph to implement without more questions.
-      Add missing exact file paths, tests, commands, acceptance criteria, and implementation order.
-      Remove vague work, placeholders, and tasks that do not match the request.
-      If a decision cannot be inferred, keep an Open Questions section with a safe provisional default.
-      Keep each full Markdown sentence on its own physical line.
+      - What goal the plan is trying to achieve.
+      - Whether that goal matches the actual project need.
+      - Whether the proposed solution fully meets that goal.
+      - Whether the scope is correct and complete.
+      - Whether any requirements, decisions, or steps conflict.
+      - Whether the plan conflicts with existing behavior, contracts, architecture, conventions, or repository rules.
+      - Whether the design is correct, simple, maintainable, secure, scalable, and reliable.
+      - Whether the named files, components, dependencies, and code paths are accurate.
+      - Whether the implementation order is practical and complete.
+      - Whether compatibility, migration, rollout, failure handling, and operational concerns are covered.
+      - Whether the test and validation strategy can prove the result.
+      - Whether the acceptance criteria are complete, measurable, and tied to the goal.
+      - Whether the plan contains unsupported assumptions, gaps, unnecessary work, duplication, or premature abstractions.
 
-      Write your review notes to $ARTIFACTS_DIR/superpowers/plan-review.md.
-      Return only JSON. plan_path must be the repo-relative Superpowers plan file.
-    output_format:
-      type: object
-      required:
-        - plan_path
-        - verdict
-        - fixes_count
-        - open_questions_count
-        - review_report
-        - summary
-      properties:
-        plan_path:
-          type: string
-        verdict:
-          type: string
-          enum:
-            - clean
-            - fixed-with-changes
-            - needs-human-decision
-        fixes_count:
-          type: number
-        open_questions_count:
-          type: number
-        review_report:
-          type: string
-        summary:
-          type: string
+      Trace the affected behavior end to end.
+      Check direct and indirect effects outside the files named by the plan.
+      Look for important cases that the plan author may have missed.
+
+      Fix every verified problem directly in the plan.
+      Add missing details that an implementing engineer needs.
+      Remove incorrect, conflicting, redundant, or unnecessary content.
+      Keep the solution focused and proportional to the goal.
+
+      Do not implement production code.
+      Your task is to make the plan ready for implementation.
+
+      After revising the plan, review it again from these perspectives:
+
+      1. Product goal and user outcome.
+      2. Architecture and technical correctness.
+      3. Public and internal contracts.
+      4. Security, reliability, and data integrity.
+      5. Performance and scalability.
+      6. Implementation completeness.
+      7. Testing and verification.
+      8. Operations, compatibility, migration, and rollback.
+      9. Simplicity and long-term maintainability.
+
+      Finish with a concise report that states:
+
+      - Your interpretation of the goal.
+      - The evidence you inspected.
+      - The important problems you found.
+      - The changes you made.
+      - Any remaining risks, assumptions, or unresolved questions.
+      - Whether the plan is ready to implement.
+    depends_on: [write-plan]
+    provider: codex
+    effort: xhigh
+    model: gpt-5.6-sol
+    context: fresh
 
   - id: build-ralph-prd
     description: Convert the Superpowers plan into a co-located Ralph PRD.
     depends_on:
-      - review-fix-plan
+      - verify-and-fix-plan
     provider: omp
     effort: xhigh
     model: openai-codex/gpt-5.5
@@ -322,7 +329,7 @@ nodes:
       callees, and shared helpers in source. Do not fail this node only because
       GitNexus is unavailable.
 
-      ## Pass A — completeness (speckit-converge)
+      ## Pass A — completeness
 
       This is not a git diff tool. Assess present code vs the plan.
 
@@ -343,7 +350,7 @@ nodes:
          requirement missing/partial), MEDIUM (secondary / unclear unrequested),
          LOW (polish).
 
-      ## Pass B — hidden problems (no-mistakes review)
+      ## Pass B — hidden problems
 
       Completeness is not enough. Do a full review pass. Do not stop after the
       first finding. Do NOT run the project test suite here.

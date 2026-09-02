@@ -79,7 +79,7 @@ nodes:
   # STEP 3b / 5 — Independent Codex gpt-5.6-sol verify + fix (replaces ck:plan's
   # human review gates) and answers the planner's open questions.
   # ───────────────────────────────────────────────────────────────────
-  - id: verify-fix
+  - id: verify-and-fix-plan
     prompt: |
       Review and revise the complete plan at `$resolve-plan.output`.
       Treat the current plan as an unverified draft.
