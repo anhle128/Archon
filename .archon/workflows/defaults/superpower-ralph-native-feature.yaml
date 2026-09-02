@@ -1,0 +1,565 @@
+name: superpower-ralph-native-feature
+description: |
+  Use when: Manual Superpowers brainstorming is complete and the user wants the
+            feature built with an in-parent Ralph loop plus Codex converge.
+  Triggers: "superpower ralph native", "superpowers ralph", "ralph native superpowers",
+            "superpower ralph feature".
+  Does: Grok writes a Superpowers implementation plan, Codex repairs the plan,
+        convert to a co-located Ralph PRD, run an in-parent project-aware Ralph
+        loop (no workflow: child; iteration command is a no-PR adapted fork),
+        Codex converge appends missing tasks to the Superpowers plan, Plannotator
+        HITL, sync new stories into prd.json, Ralph again (max 3). On exhaustion,
+        sync + one final Ralph pass without HITL, then create a PR.
+  NOT for: Brainstorming itself, speckit, ak-implement (existing plan),
+        Codex writing the missing code, or review-only work.
+  Input: The approved brainstorm result, product notes, design spec path, or
+        requirements from the manual Superpowers brainstorming step.
+provider: omp
+interactive: true
+tags:
+  - Superpowers
+  - Feature
+  - Ralph
+  - TDD
+
+nodes:
+  - id: setup
+    description: Prepare Superpowers Ralph workflow artifacts.
+    bash: |
+      set -euo pipefail
+      mkdir -p "$ARTIFACTS_DIR/superpowers" docs/superpowers/plans
+      git rev-parse HEAD > "$ARTIFACTS_DIR/superpowers/base-sha.txt"
+      {
+        echo "Archon Superpowers Ralph native feature workflow"
+        echo "Base SHA: $(cat "$ARTIFACTS_DIR/superpowers/base-sha.txt")"
+        echo "Brainstorming is manual and must already be complete."
+      } > "$ARTIFACTS_DIR/superpowers/setup.md"
+
+  - id: write-plan
+    description: Write the Superpowers implementation plan with Grok 4.6.
+    provider: omp
+    model: "xai-oauth/grok-4.6"
+    effort: xhigh
+    context: fresh
+    depends_on:
+      - setup
+    prompt: |
+      User input:
+      $ARGUMENTS
+
+      Use the Superpowers writing-plans method.
+      Read the repository instructions before you plan.
+      If the user input names a file or directory, read it before you plan.
+
+      Write one complete implementation plan.
+      Save it as docs/superpowers/plans/YYYY-MM-DD-<feature>.md.
+      Use the current local date for YYYY-MM-DD.
+      Use a short slug for <feature>.
+      Return plan_path as that repo-relative path (no backticks).
+
+      The plan must be executable by another agent.
+      Include exact files to change, interfaces to add or change, tests to write, and commands to run.
+      Include TDD red, green, and refactor steps for code changes.
+      Include all known requirements from the approved brainstorm.
+      Include acceptance criteria and validation commands.
+      Do not leave placeholders.
+      If a product decision is missing, add an Open Questions section and choose a safe provisional default.
+      Keep each full Markdown sentence on its own physical line.
+
+      Return only JSON.
+    output_format:
+      type: object
+      required:
+        - plan_path
+        - task_count
+        - summary
+        - open_questions_count
+        - validation_commands
+      properties:
+        plan_path:
+          type: string
+        task_count:
+          type: number
+        summary:
+          type: string
+        open_questions_count:
+          type: number
+        validation_commands:
+          type: string
+
+  - id: review-fix-plan
+    description: Review and repair the plan directly with Codex.
+    provider: codex
+    model: gpt-5.6-sol
+    effort: xhigh
+    context: fresh
+    depends_on:
+      - write-plan
+    prompt: |
+      Review and repair the Superpowers implementation plan directly.
+      Do not implement code in this step.
+
+      Plan path:
+      $write-plan.output.plan_path
+
+      Original user input:
+      $ARGUMENTS
+
+      Read the plan, repository instructions, and the source files that the plan mentions.
+      Check the plan against the approved brainstorm input, repository facts, Superpowers writing-plans rules, and TDD.
+      Fix every concrete issue in the plan file itself.
+      Make the plan complete enough for Ralph to implement without more questions.
+      Add missing exact file paths, tests, commands, acceptance criteria, and implementation order.
+      Remove vague work, placeholders, and tasks that do not match the request.
+      If a decision cannot be inferred, keep an Open Questions section with a safe provisional default.
+      Keep each full Markdown sentence on its own physical line.
+
+      Write your review notes to $ARTIFACTS_DIR/superpowers/plan-review.md.
+      Return only JSON. plan_path must be the repo-relative Superpowers plan file.
+    output_format:
+      type: object
+      required:
+        - plan_path
+        - verdict
+        - fixes_count
+        - open_questions_count
+        - review_report
+        - summary
+      properties:
+        plan_path:
+          type: string
+        verdict:
+          type: string
+          enum:
+            - clean
+            - fixed-with-changes
+            - needs-human-decision
+        fixes_count:
+          type: number
+        open_questions_count:
+          type: number
+        review_report:
+          type: string
+        summary:
+          type: string
+
+  - id: build-ralph-prd
+    description: Convert the Superpowers plan into a co-located Ralph PRD.
+    depends_on:
+      - review-fix-plan
+    provider: omp
+    effort: xhigh
+    model: openai-codex/gpt-5.5
+    context: fresh
+    prompt: |
+      ## Persona
+
+      You are a SHARP SOLUTION ARCHITECT who lives by KISS and YAGNI. You do not
+      invent work that isn't in the plan, and you do not drop work that is.
+
+      ## Headless mode — NO human is available
+
+      Resolve every decision yourself from the plan plus the actual codebase.
+      Do not stop to ask.
+
+      ## Task
+
+      The Superpowers plan to implement is the file:
+
+        $review-fix-plan.output.plan_path
+
+      Convert that ENTIRE plan into a Ralph PRD so an in-parent project-aware
+      Ralph loop can implement it one story per iteration. Do NOT implement the
+      feature itself — only produce the PRD files.
+
+      1. Read the plan file. Confirm it exists.
+      2. Derive `<name>` as the plan filename without `.md`
+         (e.g. `docs/superpowers/plans/2026-09-02-foo.md` → `2026-09-02-foo`).
+      3. Create the Ralph directory next to the plans folder:
+         `docs/superpowers/ralph/<name>/` via `mkdir -p`. Never `.archon/ralph/`.
+      4. Break the plan into right-sized Ralph user stories — each completable in a
+         single fresh-context iteration. Map the plan's TDD structure into concrete,
+         pass/fail acceptance criteria. Order stories by dependency (lower priority
+         runs first) and set `dependsOn` to only lower-priority story ids. No cycles,
+         no forward refs.
+      5. Write `docs/superpowers/ralph/<name>/prd.md` — a self-contained context
+         document (overview / problem / solution, goals + success metrics, non-goals,
+         technical context with real file:line references drawn from the plan, and a
+         story-overview table).
+      6. Write `docs/superpowers/ralph/<name>/prd.json` using EXACTLY this schema
+         (story-level `passes`, all `false` at start):
+
+         ```json
+         {
+           "feature": "<feature name>",
+           "userStories": [
+             {
+               "id": "US-001",
+               "title": "<short title>",
+               "description": "As a..., I want..., so that...",
+               "acceptanceCriteria": ["<verifiable criterion>", "..."],
+               "technicalNotes": "<real files, patterns, and plan refs to follow>",
+               "dependsOn": [],
+               "priority": 1,
+               "passes": false,
+               "notes": ""
+             }
+           ]
+         }
+         ```
+
+      7. Verify both files exist and prd.json is valid JSON whose `userStories` is a
+         non-empty array with every story `passes: false`.
+      8. Resolve `prd_dir` with `realpath` so it is an absolute path.
+
+      Return only JSON.
+    output_format:
+      type: object
+      properties:
+        prd_dir:
+          type: string
+        slug:
+          type: string
+        feature:
+          type: string
+        story_count:
+          type: number
+      required: [prd_dir, slug, story_count]
+
+  - id: validate-prd
+    description: Record PRD dir and confirm prd.json is ready for Ralph.
+    depends_on:
+      - build-ralph-prd
+      - sync-plan-to-ralph
+    trigger_rule: one_success
+    bash: |
+      set -euo pipefail
+      PRD_DIR=$build-ralph-prd.output.prd_dir
+      if [ -z "$PRD_DIR" ] || [ ! -f "$PRD_DIR/prd.json" ]; then
+        echo "ERROR: no prd.json in build-ralph-prd prd_dir ('$PRD_DIR')." >&2
+        exit 1
+      fi
+      if [ ! -f "$PRD_DIR/prd.md" ]; then
+        echo "ERROR: prd.md not found in $PRD_DIR" >&2
+        exit 1
+      fi
+      mkdir -p "$ARTIFACTS_DIR/superpowers"
+      printf '%s\n' "$PRD_DIR" > "$ARTIFACTS_DIR/superpowers/prd-dir.txt"
+      echo "PRD_DIR=$PRD_DIR"
+      echo "BRANCH=$(git branch --show-current)"
+      TOTAL=$(jq '.userStories | length' "$PRD_DIR/prd.json")
+      DONE=$(jq '[.userStories[] | select(.passes == true)] | length' "$PRD_DIR/prd.json")
+      echo "STORIES_TOTAL=$TOTAL"
+      echo "STORIES_DONE=$DONE"
+      echo "STORIES_REMAINING=$((TOTAL - DONE))"
+
+  - id: ralph-loop-run
+    description: In-parent project-aware Ralph loop (no PR).
+    depends_on:
+      - validate-prd
+    idle_timeout: 3600000
+    provider: omp
+    effort: high
+    model: xai-oauth/grok-4.5
+    output_format:
+      type: object
+      properties:
+        done:
+          type: boolean
+          description: true ONLY when every story in prd.json has passes true; false otherwise.
+        mode:
+          type: string
+        story_id:
+          type: string
+        note:
+          type: string
+      required:
+        - done
+    loop:
+      command: archon-ralph-project-aware-iteration
+      fresh_context: true
+      max_iterations: 35
+      until_bash: |
+        set -euo pipefail
+        PRD_FILE="$ARTIFACTS_DIR/superpowers/prd-dir.txt"
+        [ -f "$PRD_FILE" ] || exit 1
+        PRD_DIR=$(cat "$PRD_FILE")
+        [ -n "$PRD_DIR" ] && [ -f "$PRD_DIR/prd.json" ] || exit 1
+        jq -e '.userStories | type == "array" and length > 0 and all(.[]; .passes == true)' "$PRD_DIR/prd.json" >/dev/null
+
+  - id: converge-review
+    description: Audit the Superpowers plan vs the codebase; append missing tasks to the plan.
+    depends_on:
+      - ralph-loop-run
+    provider: codex
+    effort: xhigh
+    model: gpt-5.6-sol
+    context: fresh
+    prompt: |
+      ## Persona
+
+      You are a skeptical staff engineer doing a delivery audit. Ralph claimed the
+      work is done. You do NOT trust that claim. Prove whether every task in the
+      ORIGINAL Superpowers plan is implemented. If gaps remain, ADD TASKS to that
+      plan file. Do not implement production code.
+
+      ## Headless mode — NO human is available
+
+      Resolve every decision yourself. Do not stop to ask.
+
+      ## Inputs
+
+      - Superpowers plan: `$review-fix-plan.output.plan_path`
+      - Ralph PRD directory: `$build-ralph-prd.output.prd_dir`
+      - Ralph loop output (untrusted): `$ralph-loop-run.output`
+
+      ## Mandatory procedure
+
+      1. Read the plan at `$review-fix-plan.output.plan_path`. Build a complete
+         checklist of concrete deliverables / acceptance criteria / tasks from the
+         plan (not from prd.json).
+      2. Optionally read `$build-ralph-prd.output.prd_dir/prd.json` and `progress.txt`
+         as hints only. Treat every `passes: true` as a claim to verify, never proof.
+      3. For EACH plan checklist item, inspect the real codebase and tests. Mark it
+         `done`, `partial`, or `missing` with file:line evidence.
+      4. Do NOT implement production code in this node.
+      5. If every item is `done`: leave the plan file's task list unchanged.
+         `gate` = `PASS`, `tasks_added` = 0.
+      6. If any item is `partial` or `missing`: APPEND new implementation tasks to
+         the Superpowers plan file itself (the markdown at
+         `$review-fix-plan.output.plan_path`). New tasks must be concrete enough for
+         Ralph: exact files, tests, commands, acceptance criteria, TDD order.
+         Do not edit prd.json here. `gate` = `FAIL`, `tasks_added` = count of tasks
+         you appended.
+      7. Write `$ARTIFACTS_DIR/superpowers/converge-audit.md` with the checklist.
+      8. Return only JSON. `plan_path` is the repo-relative Superpowers plan file
+         (same path you edited or left unchanged).
+
+      Prefer FAIL when a gap cannot be decided from evidence.
+    output_format:
+      type: object
+      properties:
+        gate:
+          type: string
+          enum: [PASS, FAIL]
+        tasks_added:
+          type: number
+        plan_path:
+          type: string
+        summary:
+          type: string
+      required: [gate, tasks_added, plan_path, summary]
+
+  - id: converge-gate
+    depends_on: [converge-review]
+    route_loop:
+      condition: "$converge-review.output.gate == 'PASS'"
+      max_iterations: 3
+      routes:
+        positive: create-pull-request
+        negative: converge-review-gate
+        exhausted: final-sync-plan-to-ralph
+
+  - id: converge-review-gate
+    plannotator_gate:
+      document: "$converge-review.output.plan_path"
+      message: |
+        Codex converge added $converge-review.output.tasks_added task(s) to the
+        Superpowers plan.
+
+        Plan: $converge-review.output.plan_path
+        Summary: $converge-review.output.summary
+
+        Review the newly added tasks in the plan Markdown.
+        - **Owner only:** Approve or Send Annotations.
+        - Teammates may Close without ending the session (`--persist-session`).
+        - After Approve: new tasks are synced into the Ralph PRD and Ralph runs again.
+
+        Crash recovery: `archon workflow review-open <run-id>` (then `resume` if needed).
+      capture_response: true
+      rework:
+        provider: codex
+        model: gpt-5.5
+        effort: xhigh
+        prompt: |
+          You are handling human Plannotator annotations on Superpowers plan tasks
+          added by converge-review.
+
+          Markdown path under review: $REVIEW_DOCUMENT
+          Annotations:
+          $REVIEW_ANNOTATIONS
+
+          Converge context: tasks_added=$converge-review.output.tasks_added
+          Canonical plan: $converge-review.output.plan_path
+
+          ## Instructions
+          1. Confirm `$REVIEW_DOCUMENT` is the Superpowers plan markdown.
+          2. Apply each actionable annotation directly to the new or related tasks.
+          3. Preserve unrelated, pre-existing, and completed plan content.
+          4. Treat a pure approval or acknowledgement as a no-op.
+          5. Do not implement production code. Do not edit prd.json.
+          6. Do not generate HTML and do not start another Plannotator session.
+          7. Print only the absolute path to the updated plan markdown.
+             Do not add a Markdown fence or commentary.
+
+  - id: sync-plan-to-ralph
+    description: Append new plan tasks as passes-false Ralph stories; keep completed stories.
+    depends_on:
+      - converge-review-gate
+    provider: omp
+    effort: xhigh
+    model: openai-codex/gpt-5.5
+    context: fresh
+    prompt: |
+      ## Task
+
+      Plannotator approved an updated Superpowers plan. Sync NEW tasks into the
+      existing Ralph PRD without resetting completed stories.
+
+      Plan file: `$converge-review.output.plan_path`
+      PRD directory: `$build-ralph-prd.output.prd_dir`
+
+      1. Read the plan and `$build-ralph-prd.output.prd_dir/prd.json`.
+      2. Keep every existing story with `passes: true` unchanged (same id).
+      3. For each new or still-open plan task that is not already a `passes: true`
+         story, add or update a Ralph story with `passes: false`, concrete
+         acceptance criteria, technicalNotes, dependsOn (only lower-priority
+         existing or new ids), and the next free `US-00N` id for brand-new stories.
+      4. Do not delete passing stories. Do not implement code.
+      5. Write updated `prd.json` and refresh the story-overview table in `prd.md`.
+      6. Verify prd.json is valid JSON with a non-empty userStories array.
+
+      Return only JSON.
+    output_format:
+      type: object
+      properties:
+        prd_dir:
+          type: string
+        stories_added:
+          type: number
+        summary:
+          type: string
+      required: [prd_dir, stories_added, summary]
+
+  - id: final-sync-plan-to-ralph
+    description: Exhaustion path — sync plan tasks into the PRD with no HITL.
+    depends_on:
+      - converge-gate
+    provider: omp
+    effort: xhigh
+    model: openai-codex/gpt-5.5
+    context: fresh
+    prompt: |
+      ## Task
+
+      The converge/Plannotator retry budget is exhausted. Sync remaining Superpowers
+      plan tasks into the existing Ralph PRD with no human review, then stop.
+      Do not implement production code.
+
+      Plan file: `$converge-review.output.plan_path`
+      PRD directory: `$build-ralph-prd.output.prd_dir`
+
+      1. Read the plan and `$build-ralph-prd.output.prd_dir/prd.json`.
+      2. Keep every existing story with `passes: true` unchanged (same id).
+      3. For each new or still-open plan task that is not already a `passes: true`
+         story, add or update a Ralph story with `passes: false`, concrete
+         acceptance criteria, technicalNotes, dependsOn (only lower-priority
+         ids), and the next free `US-00N` id for brand-new stories.
+      4. Do not delete passing stories.
+      5. Write updated `prd.json` and refresh the story-overview table in `prd.md`.
+      6. Verify prd.json is valid JSON with a non-empty userStories array.
+
+      Return only JSON.
+    output_format:
+      type: object
+      properties:
+        prd_dir:
+          type: string
+        stories_added:
+          type: number
+        summary:
+          type: string
+      required: [prd_dir, stories_added, summary]
+
+  - id: final-validate-prd
+    description: Record PRD dir before the final Ralph pass.
+    depends_on:
+      - final-sync-plan-to-ralph
+    bash: |
+      set -euo pipefail
+      PRD_DIR=$build-ralph-prd.output.prd_dir
+      if [ -z "$PRD_DIR" ] || [ ! -f "$PRD_DIR/prd.json" ]; then
+        echo "ERROR: no prd.json in build-ralph-prd prd_dir ('$PRD_DIR')." >&2
+        exit 1
+      fi
+      if [ ! -f "$PRD_DIR/prd.md" ]; then
+        echo "ERROR: prd.md not found in $PRD_DIR" >&2
+        exit 1
+      fi
+      mkdir -p "$ARTIFACTS_DIR/superpowers"
+      printf '%s\n' "$PRD_DIR" > "$ARTIFACTS_DIR/superpowers/prd-dir.txt"
+      echo "PRD_DIR=$PRD_DIR"
+      echo "BRANCH=$(git branch --show-current)"
+      TOTAL=$(jq '.userStories | length' "$PRD_DIR/prd.json")
+      DONE=$(jq '[.userStories[] | select(.passes == true)] | length' "$PRD_DIR/prd.json")
+      echo "STORIES_TOTAL=$TOTAL"
+      echo "STORIES_DONE=$DONE"
+      echo "STORIES_REMAINING=$((TOTAL - DONE))"
+
+  - id: final-ralph-loop-run
+    description: Final in-parent Ralph pass with no HITL.
+    depends_on:
+      - final-validate-prd
+    idle_timeout: 3600000
+    provider: omp
+    effort: high
+    model: xai-oauth/grok-4.5
+    output_format:
+      type: object
+      properties:
+        done:
+          type: boolean
+          description: true ONLY when every story in prd.json has passes true; false otherwise.
+        mode:
+          type: string
+        story_id:
+          type: string
+        note:
+          type: string
+      required:
+        - done
+    loop:
+      command: archon-ralph-project-aware-iteration
+      fresh_context: true
+      max_iterations: 35
+      until_bash: |
+        set -euo pipefail
+        PRD_FILE="$ARTIFACTS_DIR/superpowers/prd-dir.txt"
+        [ -f "$PRD_FILE" ] || exit 1
+        PRD_DIR=$(cat "$PRD_FILE")
+        [ -n "$PRD_DIR" ] && [ -f "$PRD_DIR/prd.json" ] || exit 1
+        jq -e '.userStories | type == "array" and length > 0 and all(.[]; .passes == true)' "$PRD_DIR/prd.json" >/dev/null
+
+  - id: create-pull-request
+    description: Create the pull request after converge PASS.
+    command: archon-create-pr
+    provider: codex
+    model: gpt-5.5
+    effort: medium
+    context: fresh
+    idle_timeout: 900000
+    depends_on:
+      - converge-gate
+    output_type: pull-request
+
+  - id: create-pull-request-final
+    description: Create the pull request after the exhausted final Ralph pass.
+    command: archon-create-pr
+    provider: codex
+    model: gpt-5.5
+    effort: medium
+    context: fresh
+    idle_timeout: 900000
+    depends_on:
+      - final-ralph-loop-run
+    output_type: pull-request
