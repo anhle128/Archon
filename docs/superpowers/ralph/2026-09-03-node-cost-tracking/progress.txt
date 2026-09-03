@@ -1,0 +1,47 @@
+## Codebase Patterns
+
+### Provider usage contract is additive and package-local
+- **Where**: `packages/providers/src/types.ts`, `packages/providers/src/usage-breakdown.ts`
+- **Pattern**: Add `usageBreakdown?: UsageBreakdown` beside retained `modelUsage`; validate entries in providers only (no workflow/core imports). Missing measures stay `undefined`; known zeros survive; forbidden estimate/context fields are rejected by key name without logging payloads.
+- **Example**: `normalizeUsageBreakdown(entries)` returns `{ breakdown, rejected: [{ index, issue }] }`.
+
+### Observability span model never guesses from multi-model usage
+- **Where**: `packages/providers/src/observability.ts` `resolveModel`
+- **Pattern**: Prefer terminal `resolvedModel.id`, then effective `options.model`, then `assistantConfig.model`, else absent. Do not read `modelUsage` / `usageBreakdown` keys for the span model attribute.
+- **Example**: Multi-model result without `resolvedModel` leaves generation model undefined.
+
+### Providers package test isolation
+- **Where**: `packages/providers/package.json` `scripts.test`
+- **Pattern**: Each new test file gets its own `bun test <file>` invocation chained with `&&` to avoid `mock.module` pollution.
+- **Example**: `bun test src/usage-breakdown.test.ts && bun test src/observability.test.ts`
+
+---
+
+## 2026-09-04 — US-001: Provider usage contract and normalizer
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/types.ts` — added `ModelSource`, `ModelUsageEntry`, `UsageBreakdown`, and `usageBreakdown?` on result chunks; retained `modelUsage`
+- `packages/providers/src/index.ts` — re-exported new contract types
+- `packages/providers/src/usage-breakdown.ts` — provider-local normalizer with absence-preserving validation
+- `packages/providers/src/usage-breakdown.test.ts` — contract matrix coverage
+- `packages/providers/src/observability.ts` — resolvedModel → options.model → assistant config precedence; no multi-model guess
+- `packages/providers/src/observability.test.ts` — precedence and multi-model tests
+- `packages/providers/package.json` — isolated `usage-breakdown` test invocation
+
+**Acceptance criteria verified**:
+- [x] types.ts defines ModelSource, ModelUsageEntry, UsageBreakdown, and usageBreakdown?: UsageBreakdown while retaining modelUsage
+- [x] index.ts re-exports ModelSource, ModelUsageEntry, UsageBreakdown
+- [x] usage-breakdown.ts validates provider/model/modelSource consistency, safe integer tokens, positive requests, finite non-negative costUsd, reasoning bounds, at least one numeric measure
+- [x] normalizer preserves known zeros and missing fields as undefined
+- [x] mixed runtime array retains valid entries in order, rejects by index/issue, does not log raw payloads
+- [x] observability resolves span model from resolvedModel → options.model → assistant model → absent; never first multi-model usage key
+- [x] tests cover slash ids, unknown models, zero cost, absent fields, unsafe integers, NaN/infinity/negative, zero requests, reasoning bounds, forbidden estimates, modelUsage compatibility, observability precedence
+- [x] full `packages/providers` `bun run test` green
+
+**Learnings**:
+- Keep `modelUsage` without a `@deprecated` JSDoc tag in this codebase style; a plain compatibility note is enough and avoids unfinished-deprecation lint pressure.
+- Issue codes must never embed raw payload values — use `forbidden_field:${key}` only.
+- Story gate for shared MessageChunk changes is the full providers package test script, not only the new file.
+
+---
