@@ -940,6 +940,62 @@ export class SqliteAdapter implements IDatabase {
 
       CREATE INDEX IF NOT EXISTS idx_workflow_event_delivery_attempts_outbox
         ON remote_agent_workflow_event_delivery_attempts(outbox_event_id);
+
+      -- Usage ledger (normalized child of node_usage_recorded events)
+      CREATE TABLE IF NOT EXISTS remote_agent_usage_ledger (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        workflow_event_id TEXT NOT NULL REFERENCES remote_agent_workflow_events(id) ON DELETE CASCADE,
+        entry_index INTEGER NOT NULL CHECK (entry_index >= 0),
+        agent_provider TEXT NOT NULL CHECK (agent_provider <> ''),
+        provider TEXT NOT NULL CHECK (provider <> ''),
+        model TEXT,
+        model_source TEXT NOT NULL CHECK (model_source IN ('reported', 'requested', 'unknown')),
+        kind TEXT CHECK (kind IS NULL OR kind IN ('advisor', 'subagent')),
+        tokens_input INTEGER CHECK (tokens_input IS NULL OR tokens_input >= 0),
+        tokens_output INTEGER CHECK (tokens_output IS NULL OR tokens_output >= 0),
+        tokens_reasoning INTEGER CHECK (tokens_reasoning IS NULL OR tokens_reasoning >= 0),
+        tokens_cache_read INTEGER CHECK (tokens_cache_read IS NULL OR tokens_cache_read >= 0),
+        tokens_cache_write INTEGER CHECK (tokens_cache_write IS NULL OR tokens_cache_write >= 0),
+        requests INTEGER CHECK (requests IS NULL OR requests > 0),
+        cost_usd REAL CHECK (cost_usd IS NULL OR cost_usd >= 0),
+        cost_estimated_usd REAL CHECK (cost_estimated_usd IS NULL OR cost_estimated_usd >= 0),
+        pricing_source TEXT CHECK (pricing_source IS NULL OR pricing_source IN ('config', 'catalog')),
+        UNIQUE (workflow_event_id, entry_index),
+        CHECK (
+          tokens_input IS NOT NULL
+          OR tokens_output IS NOT NULL
+          OR tokens_reasoning IS NOT NULL
+          OR tokens_cache_read IS NOT NULL
+          OR tokens_cache_write IS NOT NULL
+          OR requests IS NOT NULL
+          OR cost_usd IS NOT NULL
+          OR cost_estimated_usd IS NOT NULL
+        ),
+        CHECK (NOT (cost_usd IS NOT NULL AND cost_estimated_usd IS NOT NULL)),
+        CHECK (
+          (cost_estimated_usd IS NULL AND pricing_source IS NULL)
+          OR (cost_estimated_usd IS NOT NULL AND pricing_source IS NOT NULL)
+        ),
+        CHECK (
+          (model_source = 'unknown' AND model IS NULL)
+          OR (model_source IN ('reported', 'requested') AND model IS NOT NULL AND model <> '')
+        ),
+        CHECK (
+          tokens_reasoning IS NULL
+          OR tokens_output IS NULL
+          OR tokens_reasoning <= tokens_output
+        )
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_usage_ledger_agent_provider
+        ON remote_agent_usage_ledger(agent_provider);
+      CREATE INDEX IF NOT EXISTS idx_usage_ledger_provider_model
+        ON remote_agent_usage_ledger(provider, model);
+      CREATE INDEX IF NOT EXISTS idx_workflow_events_usage_created_at
+        ON remote_agent_workflow_events(created_at)
+        WHERE event_type = 'node_usage_recorded';
+      CREATE INDEX IF NOT EXISTS idx_workflow_runs_codebase_id
+        ON remote_agent_workflow_runs(codebase_id);
     `);
     getLog().info('db.sqlite_schema_initialized');
   }

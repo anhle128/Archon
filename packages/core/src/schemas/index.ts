@@ -102,3 +102,17 @@ export type {
   WorkflowEventDeliveryAttemptOutcome,
   WorkflowEventDeliveryAttemptRow,
 } from './workflow-event-delivery-attempt';
+
+// UsageLedger
+export {
+  usageLedgerKindSchema,
+  usageLedgerModelSourceSchema,
+  usageLedgerPricingSourceSchema,
+  usageLedgerRowSchema,
+} from './usage-ledger';
+export type {
+  UsageLedgerKind,
+  UsageLedgerModelSource,
+  UsageLedgerPricingSource,
+  UsageLedgerRow,
+} from './usage-ledger';
