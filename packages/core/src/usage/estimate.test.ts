@@ -26,9 +26,11 @@ function entry(overrides: Partial<ModelUsageEntry> = {}): ModelUsageEntry {
 
 function lookups(partial: {
   config?: Array<{ provider: string; model: string; rates: PricingRates }>;
+  blocked?: Array<{ provider: string; model: string }>;
   catalog?: Array<{ provider: string; model: string; rates: PricingRates }>;
 }): PricingLookups {
   const configByProviderModel = new Map<string, Map<string, PricingRates>>();
+  const configBlockedByProviderModel = new Map<string, Set<string>>();
   const catalogByProviderModel = new Map<string, Map<string, PricingRates>>();
   for (const row of partial.config ?? []) {
     let byModel = configByProviderModel.get(row.provider);
@@ -38,6 +40,14 @@ function lookups(partial: {
     }
     byModel.set(row.model, row.rates);
   }
+  for (const row of partial.blocked ?? []) {
+    let models = configBlockedByProviderModel.get(row.provider);
+    if (!models) {
+      models = new Set();
+      configBlockedByProviderModel.set(row.provider, models);
+    }
+    models.add(row.model);
+  }
   for (const row of partial.catalog ?? []) {
     let byModel = catalogByProviderModel.get(row.provider);
     if (!byModel) {
@@ -46,7 +56,7 @@ function lookups(partial: {
     }
     byModel.set(row.model, row.rates);
   }
-  return { configByProviderModel, catalogByProviderModel };
+  return { configByProviderModel, configBlockedByProviderModel, catalogByProviderModel };
 }
 
 describe('buildConfigPricingIndex', () => {
@@ -58,11 +68,12 @@ describe('buildConfigPricingIndex', () => {
       ],
     };
     const index = buildConfigPricingIndex(pricing);
-    expect(index.get('openai')?.get('gpt-5.4')).toEqual({ input: 2.5, output: 15 });
-    expect(index.get('openrouter')?.get('org/model-v1')).toEqual({ input: 1, output: 2 });
+    expect(index.rates.get('openai')?.get('gpt-5.4')).toEqual({ input: 2.5, output: 15 });
+    expect(index.rates.get('openrouter')?.get('org/model-v1')).toEqual({ input: 1, output: 2 });
+    expect(index.blocked.size).toBe(0);
   });
 
-  test('rejects duplicate provider/model pairs without using either entry', () => {
+  test('rejects duplicate provider/model pairs without using either entry and blocks them', () => {
     const pricing: PricingConfig = {
       models: [
         { provider: 'openai', model: 'gpt-5.4', input: 1, output: 2 },
@@ -71,11 +82,12 @@ describe('buildConfigPricingIndex', () => {
       ],
     };
     const index = buildConfigPricingIndex(pricing);
-    expect(index.get('openai')?.get('gpt-5.4')).toBeUndefined();
-    expect(index.get('anthropic')?.get('claude-sonnet')).toEqual({ input: 3, output: 15 });
+    expect(index.rates.get('openai')?.get('gpt-5.4')).toBeUndefined();
+    expect(index.blocked.get('openai')?.has('gpt-5.4')).toBe(true);
+    expect(index.rates.get('anthropic')?.get('claude-sonnet')).toEqual({ input: 3, output: 15 });
   });
 
-  test('skips invalid rate objects and keeps valid siblings', () => {
+  test('skips invalid rate objects, blocks identifiable pairs, keeps valid siblings', () => {
     const pricing = {
       models: [
         { provider: 'openai', model: 'ok', input: 1, output: 2 },
@@ -89,14 +101,18 @@ describe('buildConfigPricingIndex', () => {
       ],
     } as PricingConfig;
     const index = buildConfigPricingIndex(pricing);
-    expect([...index.get('openai')!.keys()]).toEqual(['ok']);
-    expect(index.get('openai')?.get('ok')).toEqual({ input: 1, output: 2 });
+    expect([...index.rates.get('openai')!.keys()]).toEqual(['ok']);
+    expect(index.rates.get('openai')?.get('ok')).toEqual({ input: 1, output: 2 });
+    expect(index.blocked.get('openai')?.has('bad-neg')).toBe(true);
+    expect(index.blocked.get('openai')?.has('bad-empty')).toBe(true);
+    expect(index.blocked.get('openai')?.has('nan')).toBe(true);
+    expect(index.blocked.get('openai')?.has('inf')).toBe(true);
   });
 
   test('returns empty index for missing or non-array models', () => {
-    expect(buildConfigPricingIndex(undefined).size).toBe(0);
-    expect(buildConfigPricingIndex({}).size).toBe(0);
-    expect(buildConfigPricingIndex({ models: null as unknown as [] }).size).toBe(0);
+    expect(buildConfigPricingIndex(undefined).rates.size).toBe(0);
+    expect(buildConfigPricingIndex({}).rates.size).toBe(0);
+    expect(buildConfigPricingIndex({ models: null as unknown as [] }).rates.size).toBe(0);
   });
 });
 
@@ -190,6 +206,12 @@ describe('estimateTokensUsd', () => {
     expect(
       estimateTokensUsd({ inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0 }, rates)
     ).toBe(1);
+  });
+
+  test('zero token count may omit that category rate', () => {
+    // inputTokens=0 with no input rate; output charged alone
+    expect(estimateTokensUsd({ inputTokens: 0, outputTokens: 1_000_000 }, { output: 2 })).toBe(2);
+    expect(estimateTokensUsd({ inputTokens: 1_000_000, outputTokens: 0 }, { input: 3 })).toBe(3);
   });
 
   test('never charges reasoning separately from output', () => {
@@ -379,6 +401,108 @@ describe('materializeUsageCost', () => {
       materializeUsageCost(
         entry({ cacheReadTokens: 100, inputTokens: 10, outputTokens: 10 }),
         onlyIo
+      )
+    ).toEqual({
+      cost_usd: null,
+      cost_estimated_usd: null,
+      pricing_source: null,
+    });
+  });
+
+  test('invalid config pair blocks catalog fallback for the same identity', () => {
+    const blockedLookups = lookups({
+      blocked: [{ provider: 'openai', model: 'gpt-5.4' }],
+      catalog: [
+        {
+          provider: 'openai',
+          model: 'gpt-5.4',
+          rates: { input: 99, output: 99 },
+        },
+      ],
+    });
+    expect(
+      materializeUsageCost(
+        entry({
+          provider: 'openai',
+          model: 'gpt-5.4',
+          inputTokens: 1_000_000,
+          outputTokens: 1_000_000,
+        }),
+        blockedLookups
+      )
+    ).toEqual({
+      cost_usd: null,
+      cost_estimated_usd: null,
+      pricing_source: null,
+    });
+  });
+
+  test('duplicate config pair blocks catalog fallback for the same identity', async () => {
+    const loaded = await loadPricingLookups({
+      globalConfig: {
+        pricing: {
+          models: [
+            { provider: 'openai', model: 'gpt-5.4', input: 1, output: 2 },
+            { provider: 'openai', model: 'gpt-5.4', input: 9, output: 9 },
+          ],
+        },
+      },
+      catalog: [
+        {
+          ref: 'openai/gpt-5.4',
+          provider: 'openai',
+          id: 'gpt-5.4',
+          name: 'GPT',
+          reasoning: false,
+          cost: { input: 99, output: 99, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128000,
+        },
+      ],
+    });
+    expect(loaded.configByProviderModel.get('openai')?.get('gpt-5.4')).toBeUndefined();
+    expect(loaded.configBlockedByProviderModel.get('openai')?.has('gpt-5.4')).toBe(true);
+    expect(
+      materializeUsageCost(
+        entry({
+          provider: 'openai',
+          model: 'gpt-5.4',
+          inputTokens: 1_000_000,
+          outputTokens: 1_000_000,
+        }),
+        loaded
+      ).cost_estimated_usd
+    ).toBeNull();
+  });
+
+  test('invalid config rate object blocks catalog fallback for that pair', async () => {
+    const loaded = await loadPricingLookups({
+      globalConfig: {
+        pricing: {
+          models: [{ provider: 'openai', model: 'gpt-5.4', input: -1, output: 2 }],
+        },
+      },
+      catalog: [
+        {
+          ref: 'openai/gpt-5.4',
+          provider: 'openai',
+          id: 'gpt-5.4',
+          name: 'GPT',
+          reasoning: false,
+          cost: { input: 99, output: 99, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128000,
+        },
+      ],
+    });
+    expect(loaded.configBlockedByProviderModel.get('openai')?.has('gpt-5.4')).toBe(true);
+    expect(
+      materializeUsageCost(
+        entry({
+          provider: 'openai',
+          model: 'gpt-5.4',
+          inputTokens: 1_000_000,
+          outputTokens: 1_000_000,
+        }),
+        loaded
       )
     ).toEqual({
       cost_usd: null,

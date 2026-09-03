@@ -48,7 +48,19 @@ export interface PricingRateTier {
  */
 export interface PricingLookups {
   configByProviderModel: ReadonlyMap<string, ReadonlyMap<string, PricingRates>>;
+  /**
+   * Exact `(provider, model)` pairs that appeared in global pricing but were
+   * rejected (invalid rates or duplicates). Catalog fallback must not price
+   * these pairs — the operator attempted config and it failed closed.
+   */
+  configBlockedByProviderModel: ReadonlyMap<string, ReadonlySet<string>>;
   catalogByProviderModel: ReadonlyMap<string, ReadonlyMap<string, PricingRates>>;
+}
+
+/** Result of parsing global `pricing.models` at use time. */
+export interface ConfigPricingIndex {
+  rates: Map<string, Map<string, PricingRates>>;
+  blocked: Map<string, Set<string>>;
 }
 
 /** Ledger cost columns produced for one usage observation. */
@@ -60,6 +72,7 @@ export interface MaterializedUsageCost {
 
 const EMPTY_LOOKUPS: PricingLookups = {
   configByProviderModel: new Map(),
+  configBlockedByProviderModel: new Map(),
   catalogByProviderModel: new Map(),
 };
 
@@ -103,6 +116,33 @@ function getNestedRate(
   model: string
 ): PricingRates | undefined {
   return root.get(provider)?.get(model);
+}
+
+function isConfigPairBlocked(
+  blocked: ReadonlyMap<string, ReadonlySet<string>>,
+  provider: string,
+  model: string
+): boolean {
+  return blocked.get(provider)?.has(model) === true;
+}
+
+function blockPair(blocked: Map<string, Set<string>>, provider: string, model: string): void {
+  let models = blocked.get(provider);
+  if (!models) {
+    models = new Set();
+    blocked.set(provider, models);
+  }
+  models.add(model);
+}
+
+function tryReadPricingIdentity(
+  raw: Record<string, unknown>
+): { provider: string; model: string } | null {
+  if (typeof raw.provider !== 'string' || typeof raw.model !== 'string') return null;
+  const provider = raw.provider.trim();
+  const model = raw.model.trim();
+  if (provider.length === 0 || model.length === 0) return null;
+  return { provider, model };
 }
 
 /**
@@ -166,28 +206,38 @@ function parsePricingModelRate(raw: unknown, index: number): PricingModelRate | 
 
 /**
  * Build the exact-match config rate index from a global pricing block.
- * Duplicate `(provider, model)` pairs are rejected (neither entry is used).
- * Invalid entries are skipped with a structured warning.
+ * Duplicate `(provider, model)` pairs and identifiable invalid entries are
+ * recorded in `blocked` so catalog fallback cannot price them. Invalid entries
+ * without a recoverable identity are skipped with a warning only.
  */
 export function buildConfigPricingIndex(
   pricing: PricingConfig | undefined | null
-): Map<string, Map<string, PricingRates>> {
-  const root = new Map<string, Map<string, PricingRates>>();
-  if (!pricing || typeof pricing !== 'object') return root;
+): ConfigPricingIndex {
+  const rates = new Map<string, Map<string, PricingRates>>();
+  const blocked = new Map<string, Set<string>>();
+  if (!pricing || typeof pricing !== 'object') return { rates, blocked };
 
   const models = pricing.models;
-  if (models === undefined) return root;
+  if (models === undefined) return { rates, blocked };
   if (!Array.isArray(models)) {
     getLog().warn({ issue: 'models_not_array' }, 'usage.pricing_config_invalid');
-    return root;
+    return { rates, blocked };
   }
 
   const seen = new Map<string, Map<string, number>>();
   const duplicates = new Set<string>();
 
   for (let index = 0; index < models.length; index++) {
-    const parsed = parsePricingModelRate(models[index], index);
-    if (!parsed) continue;
+    const raw = models[index];
+    const parsed = parsePricingModelRate(raw, index);
+    if (!parsed) {
+      // Identifiable invalid identity still blocks catalog for that pair.
+      if (isPlainObject(raw)) {
+        const identity = tryReadPricingIdentity(raw);
+        if (identity) blockPair(blocked, identity.provider, identity.model);
+      }
+      continue;
+    }
 
     let byModel = seen.get(parsed.provider);
     if (!byModel) {
@@ -204,25 +254,27 @@ export function buildConfigPricingIndex(
     }
     byModel.set(parsed.model, index);
 
-    const rates: PricingRates = {};
+    const entryRates: PricingRates = {};
     for (const field of RATE_FIELDS) {
-      if (parsed[field] !== undefined) rates[field] = parsed[field];
+      if (parsed[field] !== undefined) entryRates[field] = parsed[field];
     }
-    setNestedRate(root, parsed.provider, parsed.model, rates);
+    setNestedRate(rates, parsed.provider, parsed.model, entryRates);
   }
 
-  // Drop both sides of any duplicate pair so estimation never picks one.
+  // Drop both sides of any duplicate pair and block catalog fallback.
   for (const key of duplicates) {
     const sep = key.indexOf('\0');
     const provider = key.slice(0, sep);
     const model = key.slice(sep + 1);
-    const byModel = root.get(provider);
-    if (!byModel) continue;
-    byModel.delete(model);
-    if (byModel.size === 0) root.delete(provider);
+    const byModel = rates.get(provider);
+    if (byModel) {
+      byModel.delete(model);
+      if (byModel.size === 0) rates.delete(provider);
+    }
+    blockPair(blocked, provider, model);
   }
 
-  return root;
+  return { rates, blocked };
 }
 
 function catalogCostToRates(cost: PiModelInfo['cost']): PricingRates {
@@ -278,12 +330,15 @@ export async function loadPricingLookups(options?: {
   catalog?: readonly PiModelInfo[] | null;
 }): Promise<PricingLookups> {
   let configByProviderModel: Map<string, Map<string, PricingRates>> = new Map();
+  let configBlockedByProviderModel: Map<string, Set<string>> = new Map();
   let catalogByProviderModel: Map<string, Map<string, PricingRates>> = new Map();
 
   try {
     const global =
       options?.globalConfig !== undefined ? options.globalConfig : await loadGlobalConfig();
-    configByProviderModel = buildConfigPricingIndex(global.pricing);
+    const index = buildConfigPricingIndex(global.pricing);
+    configByProviderModel = index.rates;
+    configBlockedByProviderModel = index.blocked;
   } catch (err) {
     getLog().warn({ err: err as Error }, 'usage.pricing_config_load_failed');
   }
@@ -301,7 +356,7 @@ export async function loadPricingLookups(options?: {
     getLog().warn({ err: err as Error }, 'usage.pricing_catalog_index_failed');
   }
 
-  return { configByProviderModel, catalogByProviderModel };
+  return { configByProviderModel, configBlockedByProviderModel, catalogByProviderModel };
 }
 
 /**
@@ -365,33 +420,26 @@ export function estimateTokensUsd(
   const active = selectRatesForAggregate(rates, aggregate);
 
   // Positive reported categories must have a rate; missing → whole estimate null.
+  // Zero-count categories may omit the rate (contribute nothing).
   if (missingPositiveRate(entry.inputTokens, active.input)) return null;
   if (missingPositiveRate(entry.outputTokens, active.output)) return null;
   if (missingPositiveRate(entry.cacheReadTokens, active.cacheRead)) return null;
   if (missingPositiveRate(entry.cacheWriteTokens, active.cacheWrite)) return null;
 
-  // Input + output are always present here; rates must exist (including explicit 0).
-  if (active.input === undefined || active.output === undefined) return null;
-
   let total = 0;
-  total += (active.input / 1_000_000) * entry.inputTokens;
-  total += (active.output / 1_000_000) * entry.outputTokens;
+  if (active.input !== undefined) {
+    total += (active.input / 1_000_000) * entry.inputTokens;
+  }
+  if (active.output !== undefined) {
+    total += (active.output / 1_000_000) * entry.outputTokens;
+  }
 
   // Cache rates apply only to dimensions the provider reported.
-  if (entry.cacheReadTokens !== undefined) {
-    if (active.cacheRead === undefined) {
-      // Zero cache-read with no rate is fine (nothing to charge).
-      if (entry.cacheReadTokens > 0) return null;
-    } else {
-      total += (active.cacheRead / 1_000_000) * entry.cacheReadTokens;
-    }
+  if (entry.cacheReadTokens !== undefined && active.cacheRead !== undefined) {
+    total += (active.cacheRead / 1_000_000) * entry.cacheReadTokens;
   }
-  if (entry.cacheWriteTokens !== undefined) {
-    if (active.cacheWrite === undefined) {
-      if (entry.cacheWriteTokens > 0) return null;
-    } else {
-      total += (active.cacheWrite / 1_000_000) * entry.cacheWriteTokens;
-    }
+  if (entry.cacheWriteTokens !== undefined && active.cacheWrite !== undefined) {
+    total += (active.cacheWrite / 1_000_000) * entry.cacheWriteTokens;
   }
 
   if (!Number.isFinite(total) || total < 0) {
@@ -426,6 +474,12 @@ export function materializeUsageCost(
 
   const provider = entry.provider;
   const model = entry.model;
+
+  // Operator authored an exact config pair that was rejected (invalid/duplicate):
+  // leave unpriced — do not fall through to catalog for the same identity.
+  if (isConfigPairBlocked(lookups.configBlockedByProviderModel, provider, model)) {
+    return NO_COST;
+  }
 
   // 2. Exact global-config pair.
   const configRates = getNestedRate(lookups.configByProviderModel, provider, model);

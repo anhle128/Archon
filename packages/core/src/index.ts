@@ -137,6 +137,7 @@ export {
   loadPricingLookups,
   materializeUsageCost,
   selectRatesForAggregate,
+  type ConfigPricingIndex,
   type MaterializedUsageCost,
   type PricingLookups,
   type PricingRates,
