@@ -1,5 +1,18 @@
 ## Codebase Patterns
 
+
+### Workflow usage event is internal snake_case + boundary-validated
+- **Where**: `packages/workflows/src/schemas/usage-breakdown.ts`, `packages/workflows/src/store.ts`
+- **Pattern**: `node_usage_recorded` is WORKFLOW_EVENT_TYPES-only (never INTERNAL_EVENT_TYPE_MAP / DASHBOARD_SOURCE_EVENT_TYPES). CamelCase Zod mirrors provider contract with ExactMatch→false AssertTrue compile check; persisted payload is snake_case via `buildNodeUsageRecordedEventData`. `validateProviderUsageAtBoundary` keeps valid entries in order, logs index/issue only, returns null when none remain (no event write). step_name stays on the event row (namespaced for loop_group bodies), not inside data.
+- **Example**: `validateProviderUsageAtBoundary(entries) → { breakdown, rejected } | null`
+
+
+### OMP hidden usage is post-exit and fail-soft
+- **Where**: `packages/providers/src/community/omp/session-usage.ts`, `provider.ts`
+- **Pattern**: Snapshot before resume/fork spawn; after exit resolve destination session artifact dir; parse only advisor/subagent JSONL via verified open + bounds; never change isError on transcript failures.
+- **Example**: `maybeEnrichResult(result, { env, cwd, noSession, snapshot })`
+
+
 ### Provider usage contract is additive and package-local
 - **Where**: `packages/providers/src/types.ts`, `packages/providers/src/usage-breakdown.ts`
 - **Pattern**: Add `usageBreakdown?: UsageBreakdown` beside retained `modelUsage`; validate entries in providers only (no workflow/core imports). Missing measures stay `undefined`; known zeros survive; forbidden estimate/context fields are rejected by key name without logging payloads.
@@ -143,5 +156,62 @@
 - dag-executor uses `msg.cost`, not `tokens.cost` — OpenCode top-level cost must be the multi-message sum.
 - OpenCode fixture `cache: 1` was a legacy shape; real SDK is `{ read, write }`.
 - api.generated.d.ts is auto-generated and blocked from direct edit; schema + inline console type updated; regen deferred until server generate:types.
+
+---
+
+## 2026-09-04 — US-004: Enrich OMP transcript usage safely
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/omp/event-parser.ts` — primary per-message_end usageBreakdown + shared messageUsageToEntry
+- `packages/providers/src/community/omp/event-parser.test.ts` — multi-message usageBreakdown expectations
+- `packages/providers/src/community/omp/session-usage.ts` — session layout resolver, resume/fork snapshots, bounded safe transcript enrichment
+- `packages/providers/src/community/omp/session-usage.test.ts` — fresh/resume/fork/nested/bounds/path/malformed coverage
+- `packages/providers/src/community/omp/provider.ts` — pre-spawn snapshot + post-exit fail-soft enrichment
+- `packages/providers/package.json` — isolated session-usage test invocation
+
+**Acceptance criteria verified**:
+- [x] Primary stream emits one observation per assistant message_end with provider/model/tokens/cache/reasoning/cost/requests while keeping legacy totals and last resolvedModel
+- [x] session-usage resolves main/artifact/advisor/task/nested advisor layouts without assuming sibling-only advisors
+- [x] Session dir resolution prefers PI_CODING_AGENT_SESSION_DIR then derived PI_CODING_AGENT_DIR/default path; unproven layout omits with warn
+- [x] Resume/fork snapshot by relative path/byte length/prefix digest; append-only parse; mid-record and prefix mismatch omit unsafe files
+- [x] Reader safety rejects symlinks/escapes/wrong headers/cwd/malformed/oversized; never returns prompt/response content
+- [x] Advisor kind advisor, task kind subagent; enrichment after exit on success/error without changing status
+- [x] Tests cover fresh, resume, fork, nested, copied history, bounds, malformed, path safety, no-session, normalizer rejection
+
+**Learnings**:
+- Bun createReadStream({fd}) is unreliable for verified-handle streaming; read bounded bytes from the open handle instead.
+- Snapshot must validate session headers and fail the whole snapshot if any candidate cannot be snapshotted, otherwise resume treats history as new.
+- Hidden transcript rows must pass normalizeModelUsageEntry before merge so negative/unsafe JSONL cannot corrupt totals.
+
+### OMP hidden usage is post-exit and fail-soft
+- **Where**: `packages/providers/src/community/omp/session-usage.ts`, `provider.ts`
+- **Pattern**: Snapshot before resume/fork spawn; after exit resolve destination session artifact dir, parse only advisor/subagent JSONL with verified open + bounds; never change isError/status on transcript failures.
+- **Example**: `maybeEnrichResult(result, { env, cwd, noSession, snapshot })`
+
+---
+
+## 2026-09-04 — US-005: Add usage event schemas and event type
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/store.ts` — add `node_usage_recorded` to WORKFLOW_EVENT_TYPES only
+- `packages/workflows/src/schemas/usage-breakdown.ts` — camelCase entry schemas, snake_case event payload, boundary validation, provider contract compile-time check
+- `packages/workflows/src/schemas/index.ts` — re-export usage schemas/helpers/types
+- `packages/workflows/src/schemas.test.ts` — schema + boundary + persistence coverage
+
+**Acceptance criteria verified**:
+- [x] WORKFLOW_EVENT_TYPES includes node_usage_recorded; not added to external outbox map or dashboard source types
+- [x] usage-breakdown.ts strict Zod schemas from @hono/zod-openapi; re-exported from schemas/index.ts
+- [x] Types via z.infer + compile-time structural check against @archon/providers/types (ExactMatch false-on-mismatch)
+- [x] Boundary validation retains valid entries in order, logs rejected index/issue without raw values, null when none remain
+- [x] Persisted event JSON uses schema_version, agent_provider, usage_breakdown, retry_epoch, iteration, reask_attempt, terminal_error, error_subtype (snake_case)
+- [x] step_name documented as actual persisted step name (normal / loop-group namespaced / direct loop); lives on event row not payload
+- [x] No usage breakdown on node_completed or run metadata; metadata schema unchanged
+
+**Learnings**:
+- Compile-time ExactMatch must return `false` on mismatch, not `never` — `never extends true` is true in TypeScript so never-based asserts silently accept drift.
+- `.strict()` Zod objects surface forbidden fields as `unrecognized_keys`; map the first key name only into `forbidden_field:${key}` issue codes.
+- US-005 stops at schemas/event type; recorder port, ledger SQL, and executor write sites are later stories.
 
 ---

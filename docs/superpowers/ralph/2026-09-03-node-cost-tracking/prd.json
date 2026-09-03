@@ -80,8 +80,8 @@
         "US-001"
       ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 4. Files: packages/providers/src/community/omp/event-parser.ts, event-parser.test.ts, session-usage.ts, session-usage.test.ts, provider.ts, package.json. OMP primary + hidden transcript tests green."
     },
     {
       "id": "US-005",
@@ -101,8 +101,8 @@
         "US-001"
       ],
       "priority": 5,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 5. Files: packages/workflows/src/store.ts, schemas/usage-breakdown.ts, schemas/index.ts, schemas.test.ts. Boundary validation + snake_case event payload + compile-time provider contract check."
     },
     {
       "id": "US-006",
