@@ -100,6 +100,7 @@ import {
   aiDefaultCommand,
 } from './commands/ai';
 import { telemetryStatusCommand, telemetryResetCommand } from './commands/telemetry';
+import { usageCommand } from './commands/usage';
 import { writeStdout } from './utils/stdout';
 import { closeDatabase } from '@archon/core';
 import type { WorkflowProviderCommand } from './commands/workflow-provider-command-envelope';
@@ -319,6 +320,7 @@ Commands:
   telemetry status           Show anonymous telemetry state (enabled, reason, ID, host)
   telemetry reset            Rotate the anonymous install UUID
   validate workflows [name]  Validate workflow definitions and their references
+  usage                       Installation-wide workflow usage/cost report (--since/--until, --json)
   validate commands [name]   Validate command files
   provider-binding create    Create a provider binding (--transform-file, --receiver-headers-file)
   provider-binding update    Update a provider binding (--transform-file, --receiver-headers-file)
@@ -537,6 +539,13 @@ async function main(): Promise<number> {
         'receiver-headers-file': { type: 'string' },
         'envelope-file': { type: 'string' },
         full: { type: 'boolean' },
+        since: { type: 'string' },
+        until: { type: 'string' },
+        by: { type: 'string' },
+        'codebase-id': { type: 'string' },
+        agent: { type: 'string' },
+        model: { type: 'string' },
+        kind: { type: 'string' },
         'dry-run': { type: 'boolean' },
         stubs: { type: 'string' },
         'exec-code': { type: 'boolean' },
@@ -619,13 +628,14 @@ async function main(): Promise<number> {
     'auth',
     'ai',
     'provider-binding',
+    'usage',
   ];
   const requiresGitRepo = !noGitCommands.includes(command ?? '');
 
   try {
     // setup/doctor/telemetry default to warn to avoid Pino info JSON interleaving with their human-readable output; lazy loggers pick up this level at first creation
     const isInteractiveCommand =
-      command === 'setup' || command === 'doctor' || command === 'telemetry';
+      command === 'setup' || command === 'doctor' || command === 'telemetry' || command === 'usage';
     const suppressByDefault = isInteractiveCommand && !values.verbose && !isVerboseBoot();
     // --json must keep stdout to EXACTLY the machine-readable payload. Pino's
     // default destination is stdout, so even one warn/error line would precede
@@ -1579,6 +1589,50 @@ async function main(): Promise<number> {
 
       case 'doctor': {
         return await doctorCommand(undefined, Boolean(values.full));
+      }
+
+      case 'usage': {
+        // Top-level parse is strict:false; reject typos and worktree-only --from/--to.
+        const USAGE_ALLOWED_FLAGS = new Set([
+          '--since',
+          '--until',
+          '--by',
+          '--codebase-id',
+          '--agent',
+          '--provider',
+          '--model',
+          '--kind',
+          '--run-id',
+          '--node',
+          '--json',
+          '--cwd',
+          '--help',
+          '-h',
+          '--quiet',
+          '-q',
+          '--verbose',
+          '-v',
+        ]);
+        const unsupported = findUnsupportedFlag(args, USAGE_ALLOWED_FLAGS);
+        if (unsupported) {
+          console.error(
+            `Error: unsupported flag for usage: ${unsupported}. Supported: --since --until --by --codebase-id --agent --provider --model --kind --run-id --node --json`
+          );
+          return 1;
+        }
+        return await usageCommand({
+          since: values.since as string | undefined,
+          until: values.until as string | undefined,
+          by: values.by as string | undefined,
+          codebaseId: values['codebase-id'] as string | undefined,
+          agent: values.agent as string | undefined,
+          provider: values.provider as string | undefined,
+          model: values.model as string | undefined,
+          kind: values.kind as string | undefined,
+          runId: values['run-id'] as string | undefined,
+          node: values.node as string | undefined,
+          json: jsonFlag,
+        });
       }
 
       case 'auth': {

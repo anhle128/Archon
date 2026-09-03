@@ -684,6 +684,59 @@ archon skill install /path/to/project
 
 Two skills are installed: **`archon`**, which teaches the assistant how to work with Archon workflows, commands, and project conventions; and **`manage-run`**, a focused skill for inspecting and controlling workflow runs via the `archon` CLI. Each skill is written to both `.claude/skills/<skill>/` (Claude Code) and `.agents/skills/<skill>/` (Codex's canonical project-level skill path). Both are also installed automatically during `archon setup`.
 
+### `usage`
+
+Installation-wide workflow usage and cost report. Does **not** require a git
+repository. Reuses the same core query as `GET /api/usage` (defaults, filters,
+range bounds, grouping, ledger coverage) — no separate SQL path.
+
+**Date range is half-open UTC `[since, until)`.** Both flags must be present or
+both absent. With neither dates nor `--run-id`, the report defaults to the
+current UTC calendar month. With `--run-id` alone (no dates), the entire run is
+included. Cross-run ranges cannot exceed 366 days. `--node` requires `--run-id`
+and matches the exact persisted step name.
+
+Use `--since` / `--until` (not `--from` / `--to`). `--from` remains the
+worktree branch-selection flag and is rejected on `usage`.
+
+| Flag | Maps to | Notes |
+|------|---------|-------|
+| `--since <RFC3339>` | `from` | Inclusive range start (UTC) |
+| `--until <RFC3339>` | `to` | Exclusive range end (UTC) |
+| `--by <dim>` | `groupBy` | `agent` \| `provider` (default) \| `model` \| `project` \| `run` \| `day` \| `node` |
+| `--codebase-id <uuid>` | `codebaseId` | Project filter |
+| `--agent <id>` | `agentProvider` | Archon agent provider id |
+| `--provider <id>` | `provider` | Upstream model provider |
+| `--model <id>` | `model` | Model id |
+| `--kind <k>` | `kind` | `unclassified` \| `advisor` \| `subagent` |
+| `--run-id <id>` | `runId` | Direct run only (no child rollup) |
+| `--node <step>` | `nodeId` | Exact step name; requires `--run-id` |
+| `--json` | — | Exact camelCase report on stdout; logs suppressed |
+
+Unsupported flags fail clearly (top-level parse is `strict: false`).
+
+Human output:
+
+- Reported USD as `$…`, estimates as `≈$…`
+- Exact known zero as `$0.00` / `≈$0.00`; absent as `n/a`
+- Two decimals at or above one cent; up to six decimals below one cent
+- Positive values below `0.000001` as `<$0.000001` / `≈<$0.000001` (never rounded to zero)
+- Coverage warning when `unledgeredEventCount > 0`
+
+```bash
+# Current UTC month by provider
+archon usage
+
+# Half-open day window, group by model
+archon usage --since 2026-09-01T00:00:00.000Z --until 2026-09-02T00:00:00.000Z --by model
+
+# One run, per node, machine-readable
+archon usage --run-id <run-id> --by node --json
+
+# Filter advisor spend for a project
+archon usage --codebase-id <uuid> --kind advisor --agent claude
+```
+
 ### `version`
 
 Show version, build type, and database info.

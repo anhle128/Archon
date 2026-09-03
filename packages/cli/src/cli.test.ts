@@ -408,6 +408,7 @@ describe('CLI git repo check', () => {
       'auth',
       'ai',
       'provider-binding',
+      'usage',
     ];
 
     // Helper that mirrors the CLI's logic
@@ -427,6 +428,10 @@ describe('CLI git repo check', () => {
       it('provider-binding command should not require git repo', () => {
         expect(requiresGitRepo('provider-binding')).toBe(false);
       });
+
+      it('usage command should not require git repo', () => {
+        expect(requiresGitRepo('usage')).toBe(false);
+      });
     });
 
     describe('commands that require git repo', () => {
@@ -444,6 +449,63 @@ describe('CLI git repo check', () => {
 
       it('unknown commands should require git repo', () => {
         expect(requiresGitRepo('unknown')).toBe(true);
+      });
+    });
+
+    describe('usage flag allowlist', () => {
+      // Mirrors USAGE_ALLOWED_FLAGS in cli.ts case 'usage' — top-level parse is
+      // strict:false so unsupported flags must be rejected per-command.
+      const USAGE_ALLOWED_FLAGS = new Set([
+        '--since',
+        '--until',
+        '--by',
+        '--codebase-id',
+        '--agent',
+        '--provider',
+        '--model',
+        '--kind',
+        '--run-id',
+        '--node',
+        '--json',
+        '--cwd',
+        '--help',
+        '-h',
+        '--quiet',
+        '-q',
+        '--verbose',
+        '-v',
+      ]);
+
+      const findUnsupportedFlag = (args: string[]): string | undefined => {
+        const end = args.indexOf('--');
+        const scanArgs = end === -1 ? args : args.slice(0, end);
+        for (const arg of scanArgs) {
+          if (!arg.startsWith('-')) continue;
+          const name = arg.startsWith('--') ? arg.split('=')[0]! : arg;
+          if (!USAGE_ALLOWED_FLAGS.has(name)) return name;
+        }
+        return undefined;
+      };
+
+      it('accepts supported usage flags including --since/--until', () => {
+        expect(
+          findUnsupportedFlag([
+            'usage',
+            '--since',
+            '2026-09-01T00:00:00.000Z',
+            '--until',
+            '2026-09-02T00:00:00.000Z',
+            '--by',
+            'provider',
+            '--json',
+          ])
+        ).toBeUndefined();
+      });
+
+      it('rejects worktree --from/--to and typos instead of silently ignoring', () => {
+        expect(findUnsupportedFlag(['usage', '--from', 'main'])).toBe('--from');
+        expect(findUnsupportedFlag(['usage', '--to', '2026-09-02T00:00:00.000Z'])).toBe('--to');
+        expect(findUnsupportedFlag(['usage', '--groupe-by', 'day'])).toBe('--groupe-by');
       });
     });
   });
