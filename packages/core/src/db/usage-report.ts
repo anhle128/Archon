@@ -337,13 +337,13 @@ const METRIC_SELECT = `
   SUM(l.cost_usd) AS reported_usd_sum,
   SUM(l.cost_estimated_usd) AS estimated_usd_sum,
   COUNT(*) AS record_count,
-  SUM(CASE WHEN l.tokens_input IS NULL THEN 1 ELSE 0 END) AS missing_tokens_input,
-  SUM(CASE WHEN l.tokens_output IS NULL THEN 1 ELSE 0 END) AS missing_tokens_output,
-  SUM(CASE WHEN l.tokens_reasoning IS NULL THEN 1 ELSE 0 END) AS missing_tokens_reasoning,
-  SUM(CASE WHEN l.tokens_cache_read IS NULL THEN 1 ELSE 0 END) AS missing_tokens_cache_read,
-  SUM(CASE WHEN l.tokens_cache_write IS NULL THEN 1 ELSE 0 END) AS missing_tokens_cache_write,
-  SUM(CASE WHEN l.requests IS NULL THEN 1 ELSE 0 END) AS missing_requests,
-  SUM(CASE WHEN l.cost_usd IS NULL AND l.cost_estimated_usd IS NULL THEN 1 ELSE 0 END) AS rows_missing_usd
+  COALESCE(SUM(CASE WHEN l.tokens_input IS NULL THEN 1 ELSE 0 END), 0) AS missing_tokens_input,
+  COALESCE(SUM(CASE WHEN l.tokens_output IS NULL THEN 1 ELSE 0 END), 0) AS missing_tokens_output,
+  COALESCE(SUM(CASE WHEN l.tokens_reasoning IS NULL THEN 1 ELSE 0 END), 0) AS missing_tokens_reasoning,
+  COALESCE(SUM(CASE WHEN l.tokens_cache_read IS NULL THEN 1 ELSE 0 END), 0) AS missing_tokens_cache_read,
+  COALESCE(SUM(CASE WHEN l.tokens_cache_write IS NULL THEN 1 ELSE 0 END), 0) AS missing_tokens_cache_write,
+  COALESCE(SUM(CASE WHEN l.requests IS NULL THEN 1 ELSE 0 END), 0) AS missing_requests,
+  COALESCE(SUM(CASE WHEN l.cost_usd IS NULL AND l.cost_estimated_usd IS NULL THEN 1 ELSE 0 END), 0) AS rows_missing_usd
 `.trim();
 
 const LEDGER_FROM = `
