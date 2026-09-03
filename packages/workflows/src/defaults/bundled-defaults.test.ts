@@ -546,6 +546,15 @@ describe('bundled-defaults', () => {
           if (!GUARDED.test(line)) continue;
           // Prose references to a failed command (hook texts) are not invocations.
           if (line.includes('gh pr create failed')) continue;
+          // Docs/hard-rule prose mentioning `gh pr …` in backticks is not an invocation.
+          if (
+            /`gh pr (create|list|edit|ready)`/.test(line) &&
+            !/(?:^|[;&|($\s])gh pr (create|list|edit|ready)\b/.test(
+              line.replace(/`gh pr (?:create|list|edit|ready)`/g, '')
+            )
+          ) {
+            continue;
+          }
           expect(`${name}: ${line.trim()}`).toContain('--repo');
         }
       }
