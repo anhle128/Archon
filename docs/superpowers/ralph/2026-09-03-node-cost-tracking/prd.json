@@ -122,8 +122,8 @@
         "US-005"
       ],
       "priority": 6,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 6. Files: migrations/000_combined.sql, packages/core/src/db/adapters/sqlite.ts, sqlite.test.ts, packages/core/src/schemas/usage-ledger.ts, usage-ledger.test.ts, schemas/index.ts, bundled-schema.generated.ts, AGENTS.md, packages/core/package.json. MIN_NON_AUTH_COLUMNS=155; SQLite ledger/cascade/constraint + parity tests green."
     },
     {
       "id": "US-007",

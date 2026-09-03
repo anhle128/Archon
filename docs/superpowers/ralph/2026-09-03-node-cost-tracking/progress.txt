@@ -1,5 +1,10 @@
 ## Codebase Patterns
 
+### Usage ledger is event-owned and constraint-dense
+- **Where**: `migrations/000_combined.sql`, `packages/core/src/db/adapters/sqlite.ts`, `packages/core/src/schemas/usage-ledger.ts`
+- **Pattern**: 17-column child of workflow_events with cascade delete; no duplicated run/node/workflow identity columns; CHECK enforces measure presence, cost mutual exclusion, pricing_source↔estimate coupling, model_source/model nullability, reasoning≤output; indexes live in PG trailing section and SQLite createSchema for brand-new tables.
+- **Example**: `UNIQUE(workflow_event_id, entry_index)` + `ON DELETE CASCADE`
+
 
 ### Workflow usage event is internal snake_case + boundary-validated
 - **Where**: `packages/workflows/src/schemas/usage-breakdown.ts`, `packages/workflows/src/store.ts`
@@ -213,5 +218,34 @@
 - Compile-time ExactMatch must return `false` on mismatch, not `never` — `never extends true` is true in TypeScript so never-based asserts silently accept drift.
 - `.strict()` Zod objects surface forbidden fields as `unrecognized_keys`; map the first key name only into `forbidden_field:${key}` issue codes.
 - US-005 stops at schemas/event type; recorder port, ledger SQL, and executor write sites are later stories.
+
+---
+
+## 2026-09-04 — US-006: Add ledger schema and dialect parity
+
+**Status**: PASSED
+**Files changed**:
+- `migrations/000_combined.sql` — remote_agent_usage_ledger (17 cols + CHECKs/UNIQUE/FK), usage/agent/provider/model/run codebase indexes + comments; header inventory = 20 app + 4 auth
+- `packages/core/src/db/adapters/sqlite.ts` — mirrored table/constraints/indexes in createSchema
+- `packages/core/src/db/adapters/sqlite.test.ts` — cascade/constraint/index/upgrade/idempotence coverage; MIN_NON_AUTH_COLUMNS=155
+- `packages/core/src/schemas/usage-ledger.ts` + `usage-ledger.test.ts` — application row contract
+- `packages/core/src/schemas/index.ts` — exports
+- `packages/core/src/db/bundled-schema.generated.ts` — regenerated via bun run generate:bundled-schema
+- `AGENTS.md` — complete 20 application + 4 auth inventory including previously omitted tables
+- `packages/core/package.json` — isolated usage-ledger.test.ts invocation
+
+**Acceptance criteria verified**:
+- [x] Postgres ledger child of workflow events with exactly 17 planned columns and no duplicated identity/timestamp columns
+- [x] UNIQUE(event, entry_index), cascade FK, measure/cost/pricing/model/request constraints
+- [x] Indexes/comments in trailing section: agent_provider, provider/model, usage-event created_at partial, workflow_runs(codebase_id)
+- [x] SQLite mirrors table/constraints/indexes; parity tests green with floor 155
+- [x] usage-ledger.ts exported from schemas/index.ts
+- [x] Migration header + AGENTS.md enumerate 20 app tables + 4 auth including checkpoint/schema-version/event-delivery/bindings/outbox/ledger
+- [x] Bundled schema regenerated only by generate:bundled-schema; fresh/reverse/cascade/constraint/idempotence/statement-order coverage
+
+**Learnings**:
+- Brand-new tables may create indexes inside SQLite createSchema (all columns exist on CREATE); PG still puts indexes/comments only after every ADD COLUMN.
+- MIN_NON_AUTH_COLUMNS is compared-count floor (138+17=155), not table count.
+- Constraint rejection tests log SQLite CHECK/UNIQUE/FK errors at error level — expected noise while asserts pass.
 
 ---
