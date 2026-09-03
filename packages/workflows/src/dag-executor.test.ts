@@ -5848,9 +5848,12 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
       // The native Ralph loop node declares its own provider/model, so the loop's
       // per-iteration sendQuery runs as that — not the workflow-level default.
+      const loopNode = fixture.workflow.nodes.find(node => node.id === 'ralph-loop-run');
+      expect(loopNode?.provider).toBe('omp');
+      expect(loopNode?.model).toBe('xai-oauth/grok-4.5');
       expect(mockGetAgentProviderDag.mock.calls[0][0]).toBe('omp');
       const options = mockSendQueryDag.mock.calls[0][3] as SendQueryOptions;
-      expect(options.model).toBe('cursor/cursor-grok-4.5');
+      expect(options.model).toBe(loopNode?.model);
       expect(options.nodeConfig?.effort).toBe('xhigh');
       expect(store.completeWorkflowRun).toHaveBeenCalled();
       expect(store.failWorkflowRun).not.toHaveBeenCalled();
@@ -15411,7 +15414,8 @@ describe('bundled opus nodes -- provider annotation invariant (#1610)', () => {
     for (const file of files) {
       const src = await readFileFs(join(defaultsDir, file), 'utf-8');
       const result = parseWorkflow(src, file);
-      if (!('workflow' in result)) continue; // skip load errors
+      // ParseResult always has a `workflow` key; failed loads set it to null.
+      if (result.error || !result.workflow) continue;
 
       const wf = result.workflow;
       if (!('nodes' in wf) || !wf.nodes) continue; // skip non-DAG workflows
