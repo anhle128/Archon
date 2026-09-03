@@ -1,5 +1,16 @@
 ## Codebase Patterns
 
+### Global pricing is exact-match nested maps, ledger-only
+- **Where**: `packages/core/src/usage/estimate.ts`, `packages/core/src/config/config-types.ts`
+- **Pattern**: `pricing` lives only on `GlobalConfig` (not Repo/Merged/Safe). Lookups are nested `Map<provider, Map<model, rates>>` — never `${provider}/${model}`. Precedence: reported `costUsd` (incl. 0) → exact config pair → exact Pi catalog provider/id → none. Invalid/duplicate config pairs are blocked so catalog cannot price them. Require input+output token counts; positive category without rate → whole estimate null; zero-count categories may omit that rate; tiers use Pi `aggregate > inputTokensAbove` rule. Resolve lookups before any DB transaction.
+- **Example**: `materializeUsageCost(entry, lookups) → { cost_usd, cost_estimated_usd, pricing_source }`
+
+### updateGlobalConfig preserves unknown GlobalConfig keys via spread
+- **Where**: `packages/core/src/config/config-loader.ts` `updateGlobalConfig`
+- **Pattern**: `{ ...current }` then copy only known mutation fields. Omit `pricing` from the updates type so API/settings cannot write it; operator-authored `pricing` survives assistants/tiers patches because it is never deleted.
+- **Example**: `updates: Partial<Omit<GlobalConfig, 'tiers' | 'aliases' | 'pricing'>> & { tiers?, aliases? }`
+
+
 ### Usage ledger is event-owned and constraint-dense
 - **Where**: `migrations/000_combined.sql`, `packages/core/src/db/adapters/sqlite.ts`, `packages/core/src/schemas/usage-ledger.ts`
 - **Pattern**: 17-column child of workflow_events with cascade delete; no duplicated run/node/workflow identity columns; CHECK enforces measure presence, cost mutual exclusion, pricing_source↔estimate coupling, model_source/model nullability, reasoning≤output; indexes live in PG trailing section and SQLite createSchema for brand-new tables.
@@ -247,5 +258,35 @@
 - Brand-new tables may create indexes inside SQLite createSchema (all columns exist on CREATE); PG still puts indexes/comments only after every ADD COLUMN.
 - MIN_NON_AUTH_COLUMNS is compared-count floor (138+17=155), not table count.
 - Constraint rejection tests log SQLite CHECK/UNIQUE/FK errors at error level — expected noise while asserts pass.
+
+---
+
+## 2026-09-04 — US-007: Implement global pricing estimates
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/config/config-types.ts` — PricingModelRate / PricingConfig; GlobalConfig.pricing only
+- `packages/core/src/config/config-loader.ts` — omit pricing from updateGlobalConfig updates type
+- `packages/core/src/config/config-loader.test.ts` — pricing preserve + SafeConfig/MergedConfig absence
+- `packages/core/src/usage/estimate.ts` — exact config/catalog materialization, blocked pairs, tier selection
+- `packages/core/src/usage/estimate.test.ts` — AC matrix + invalid/duplicate catalog-block coverage
+- `packages/core/src/index.ts` — export estimator API
+- `packages/core/package.json` — isolated estimate.test invocation
+
+**Acceptance criteria verified**:
+- [x] GlobalConfig accepts pricing.models with provider/model/optional finite non-negative rates, ≥1 rate, duplicates rejected at estimation time
+- [x] pricing not on RepoConfig/MergedConfig/SafeConfig/mutation endpoints/settings UI; updateGlobalConfig preserves operator pricing
+- [x] estimate.ts stores reported costUsd including zero in cost_usd and suppresses estimation
+- [x] Precedence exact config pair → exact Pi catalog provider/id → none; no unknown/bare/prefix/substring/case/fuzzy/concat identity
+- [x] Invalid/duplicate config pairs leave observation unpriced (no catalog fallback)
+- [x] Requires input+output token counts; cache rates only on reported dims; positive missing rate → null whole estimate; zero-count may omit rate; request-only unpriced; no separate reasoning charge
+- [x] Pi tiers: highest threshold strictly below aggregate input+cacheRead+cacheWrite; multi-call approximate documented
+- [x] Estimates + pricing_source only for ledger materialization API; never in provider results/event JSON/cost_usd
+
+**Learnings**:
+- Pi `calculateCost` uses `inputTokens > tier.inputTokensAbove` (strictly greater), matching “threshold strictly below aggregate.”
+- Nested provider→model maps avoid slash-in-model identity bugs; never key by concatenated ref.
+- Rejected config pairs must be retained as blocked markers — dropping them would incorrectly allow catalog fallback.
+- Zero token counts may omit that category's rate; only positive reported categories require a matched rate.
 
 ---

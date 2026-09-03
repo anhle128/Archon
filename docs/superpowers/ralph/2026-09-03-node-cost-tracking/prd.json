@@ -144,8 +144,8 @@
         "US-006"
       ],
       "priority": 7,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 7. Files: packages/core/src/config/config-types.ts, config-loader.ts, config-loader.test.ts, packages/core/src/usage/estimate.ts, estimate.test.ts, packages/core/src/index.ts, packages/core/package.json. estimate + config-loader tests green; lint/typecheck/format clean."
     },
     {
       "id": "US-008",
