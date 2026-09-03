@@ -378,6 +378,8 @@ import * as envVarDb from '@archon/core/db/env-vars';
 import * as isolationEnvDb from '@archon/core/db/isolation-environments';
 import * as workflowDb from '@archon/core/db/workflows';
 import * as workflowEventDb from '@archon/core/db/workflow-events';
+import { queryUsageReport, UsageReportQueryError } from '@archon/core/db/usage-report';
+import type { UsageReport } from '@archon/core/schemas/usage-report';
 import * as messageDb from '@archon/core/db/messages';
 import * as userDb from '@archon/core/db/users';
 import {
@@ -418,6 +420,7 @@ import {
   resetWorkflowNodeSessionsResponseSchema,
   listArtifactsResponseSchema,
 } from './schemas/workflow.schemas';
+import { usageQuerySchema, usageReportResponseSchema } from './schemas/usage.schemas';
 import {
   conversationListResponseSchema,
   listConversationsQuerySchema,
@@ -1289,6 +1292,32 @@ const getWorkflowRunRoute = createRoute({
       description: 'Workflow run detail',
     },
     404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const getUsageRoute = createRoute({
+  method: 'get',
+  path: '/api/usage',
+  tags: ['Usage'],
+  summary: 'Query workflow usage and cost aggregates',
+  description:
+    'Returns direct-run ledger aggregates for the installation. Half-open UTC ' +
+    'range [from, to). With neither dates nor runId, defaults to the current UTC ' +
+    'calendar month; with runId and no dates, queries the entire direct run. ' +
+    'Cross-run ranges cannot exceed 366 days. At most 500 groups (overflow is a ' +
+    '400 narrowing error, never silent truncation). Coverage is ledger-integrity ' +
+    'only under date/project/run/node filters — it cannot detect provider passes ' +
+    'that never emitted a usage event (`historicalBackfill` is always false). ' +
+    'Child runs appear as their own direct-use rows; parents never include copied ' +
+    'child charges. Uses the installation API auth gate (single-tenant visibility).',
+  request: { query: usageQuerySchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: usageReportResponseSchema } },
+      description: 'Usage report',
+    },
+    400: jsonError('Invalid filters, date range, or group overflow'),
     500: jsonError('Server error'),
   },
 });
@@ -4571,6 +4600,21 @@ export function registerApiRoutes(
         parentPlatformId = parentConv?.platform_conversation_id;
       }
 
+      // Direct-run usage only (groupBy node). Fail soft — never 500 the detail.
+      let usage: UsageReport | null = null;
+      try {
+        usage = await queryUsageReport({ runId, groupBy: 'node' });
+      } catch (usageError) {
+        getLog().error(
+          {
+            err: usageError instanceof Error ? usageError : new Error(String(usageError)),
+            runId,
+          },
+          'get_workflow_run_usage_failed'
+        );
+        usage = null;
+      }
+
       return c.json({
         run: {
           ...toApiWorkflowRun(run),
@@ -4583,10 +4627,70 @@ export function registerApiRoutes(
           run.status,
           projectApiWorkflowNodeStates(events)
         ),
+        usage,
       });
     } catch (error) {
       getLog().error({ err: error }, 'get_workflow_run_failed');
       return apiError(c, 500, 'Failed to get workflow run');
+    }
+  });
+
+  // GET /api/usage - Installation usage/cost report (direct runs only)
+  registerOpenApiRoute(getUsageRoute, async c => {
+    try {
+      const from = c.req.query('from') ?? undefined;
+      const to = c.req.query('to') ?? undefined;
+      const codebaseId = c.req.query('codebaseId') ?? undefined;
+      const agentProvider = c.req.query('agentProvider') ?? undefined;
+      const provider = c.req.query('provider') ?? undefined;
+      const model = c.req.query('model') ?? undefined;
+      const kindRaw = c.req.query('kind') ?? undefined;
+      const runId = c.req.query('runId') ?? undefined;
+      const nodeId = c.req.query('nodeId') ?? undefined;
+      const groupByRaw = c.req.query('groupBy') ?? undefined;
+
+      // OpenAPI already enum-checked kind/groupBy when present; pass through for core.
+      const kind =
+        kindRaw === 'unclassified' || kindRaw === 'advisor' || kindRaw === 'subagent'
+          ? kindRaw
+          : undefined;
+      const groupBy =
+        groupByRaw === 'agent' ||
+        groupByRaw === 'provider' ||
+        groupByRaw === 'model' ||
+        groupByRaw === 'project' ||
+        groupByRaw === 'run' ||
+        groupByRaw === 'day' ||
+        groupByRaw === 'node'
+          ? groupByRaw
+          : undefined;
+
+      const report = await queryUsageReport({
+        from,
+        to,
+        codebaseId,
+        agentProvider,
+        provider,
+        model,
+        kind,
+        runId,
+        nodeId,
+        groupBy,
+      });
+      return c.json(report);
+    } catch (error) {
+      if (error instanceof UsageReportQueryError) {
+        if (error.code === 'validation' || error.code === 'overflow') {
+          return apiError(c, 400, error.message);
+        }
+        getLog().error({ err: error, code: error.code }, 'usage.query_failed');
+        return apiError(c, 500, error.message);
+      }
+      getLog().error(
+        { err: error instanceof Error ? error : new Error(String(error)) },
+        'usage.query_failed'
+      );
+      return apiError(c, 500, 'Failed to query usage');
     }
   });
 
