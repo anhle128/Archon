@@ -268,4 +268,94 @@ describe('Langfuse provider observability', () => {
     expect((redacted as { message: string }).message).not.toContain('alice:secret');
     expect((redacted as { message: string }).message.endsWith('[TRUNCATED]')).toBe(true);
   });
+
+  test('prefers terminal resolvedModel over options.model and assistant config', async () => {
+    const chunks: MessageChunk[] = [
+      {
+        type: 'result',
+        tokens: { input: 1, output: 1 },
+        resolvedModel: { id: 'reported-model' },
+      },
+    ];
+    const { runtime, roots } = makeRuntime();
+    const provider = instrumentProvider(makeProvider(chunks), async () => runtime);
+
+    await collect(
+      provider.sendQuery('prompt', '/workspace', undefined, {
+        model: 'requested-model',
+        assistantConfig: { model: 'configured-model' },
+      })
+    );
+
+    const generation = roots[0]?.children.find(child => child.type === 'generation');
+    expect(generation?.attributes.model).toBe('requested-model');
+    expect(generation?.updates).toContainEqual(
+      expect.objectContaining({ model: 'reported-model' })
+    );
+  });
+
+  test('falls back from options.model to configured assistant model then absent', async () => {
+    const chunks: MessageChunk[] = [{ type: 'result', tokens: { input: 2, output: 1 } }];
+    const { runtime, roots } = makeRuntime();
+    const provider = instrumentProvider(makeProvider(chunks), async () => runtime);
+
+    await collect(
+      provider.sendQuery('prompt', '/workspace', undefined, {
+        assistantConfig: { model: 'configured-model' },
+      })
+    );
+
+    const generation = roots[0]?.children.find(child => child.type === 'generation');
+    expect(generation?.attributes.model).toBe('configured-model');
+    expect(generation?.updates).toContainEqual(
+      expect.objectContaining({ model: 'configured-model' })
+    );
+
+    const bare = makeRuntime();
+    const bareProvider = instrumentProvider(makeProvider(chunks), async () => bare.runtime);
+    await collect(bareProvider.sendQuery('prompt', '/workspace'));
+    const bareGeneration = bare.roots[0]?.children.find(child => child.type === 'generation');
+    expect(bareGeneration?.attributes.model).toBeUndefined();
+    expect(bareGeneration?.updates.some(update => 'model' in update && update.model)).toBe(false);
+  });
+
+  test('never selects the first element of a multi-model usage array', async () => {
+    const chunks: MessageChunk[] = [
+      {
+        type: 'result',
+        tokens: { input: 9, output: 3 },
+        modelUsage: {
+          'first-model-in-map': { inputTokens: 1, outputTokens: 1 },
+          'second-model-in-map': { inputTokens: 8, outputTokens: 2 },
+        },
+        usageBreakdown: [
+          {
+            provider: 'anthropic',
+            model: 'first-model-in-map',
+            modelSource: 'reported',
+            inputTokens: 1,
+            outputTokens: 1,
+          },
+          {
+            provider: 'anthropic',
+            model: 'second-model-in-map',
+            modelSource: 'reported',
+            inputTokens: 8,
+            outputTokens: 2,
+          },
+        ],
+      },
+    ];
+    const { runtime, roots } = makeRuntime();
+    const provider = instrumentProvider(makeProvider(chunks), async () => runtime);
+
+    await collect(provider.sendQuery('prompt', '/workspace'));
+
+    const generation = roots[0]?.children.find(child => child.type === 'generation');
+    expect(generation?.attributes.model).toBeUndefined();
+    for (const update of generation?.updates ?? []) {
+      expect(update.model).not.toBe('first-model-in-map');
+      expect(update.model).not.toBe('second-model-in-map');
+    }
+  });
 });
