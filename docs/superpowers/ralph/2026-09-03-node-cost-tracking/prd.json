@@ -1,0 +1,275 @@
+{
+  "feature": "Workflow Node Usage and Cost Tracking",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Provider usage contract and normalizer",
+      "description": "As a provider implementer, I want an additive normalized usage contract, so that workflow accounting can consume truthful usage without breaking legacy providers.",
+      "acceptanceCriteria": [
+        "packages/providers/src/types.ts defines ModelSource, ModelUsageEntry, UsageBreakdown, and adds usageBreakdown?: UsageBreakdown to the result chunk variant while retaining modelUsage?: Record<string, unknown>.",
+        "packages/providers/src/index.ts re-exports ModelSource, ModelUsageEntry, and UsageBreakdown with the existing public contract types.",
+        "packages/providers/src/usage-breakdown.ts validates provider/model/modelSource consistency, safe integer token fields, positive requests, finite non-negative costUsd, reasoning <= output when both exist, and at least one numeric measure.",
+        "The normalizer preserves known zero values and missing fields as undefined, never converting absence to zero or fabricating estimated fields.",
+        "A mixed runtime usage array retains valid entries in order, rejects invalid entries by index/schema issue, and does not log raw provider payload values.",
+        "packages/providers/src/observability.ts resolves span model from terminal resolvedModel, effective options.model, configured assistant model, then absent; it never chooses the first element of a multi-model usage array.",
+        "Provider package tests cover slash-containing model ids, unknown models, zero cost, absent fields, unsafe integers, NaN/infinity/negative values, zero requests, reasoning bounds, forbidden estimates, deprecated modelUsage compatibility, and observability precedence."
+      ],
+      "technicalNotes": "Follow plan sections Provider usage contract and Model attribution: docs/superpowers/plans/2026-09-03-node-cost-tracking.md:167-265 and implementation Task 1: 940-960. Keep providers package-local; do not import workflow/core code.",
+      "dependsOn": [],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Normalize SDK-native providers",
+      "description": "As an operator, I want Claude, Codex, and Grok workflow usage normalized from their SDK data, so that provider-reported observations are queryable without guessed attribution.",
+      "acceptanceCriteria": [
+        "Claude maps every SDK modelUsage entry to provider anthropic, reported model id, input/output/cache-read/cache-write token fields, and costUSD; it omits requests and preserves SDK failure classification and retry behavior.",
+        "Claude carries usage from usage-bearing provider retry attempts into the final terminal result and yields accumulated usage on final typed error results when available, without synthesizing usage when the SDK throws or closes without usage.",
+        "Codex terminal-result construction paths map provider openai, the effective requested model or unknown, inputTokens as max(input_tokens - cached_input_tokens, 0), cacheReadTokens, outputTokens, reasoningTokens, and no requests or USD.",
+        "Codex keeps legacy TokenUsage.input as the SDK total input value and records no usage entry for failed or incomplete turns without turn.completed.usage.",
+        "Grok receives effective requested model context, maps provider xai, handles exactly one valid model with aggregate tokens/USD/requests, handles multiple models with requests-only per model plus one unknown aggregate row, and never apportions aggregate tokens or USD across model names.",
+        "Grok preserves existing raw modelUsage while new accounting consumes usageBreakdown.",
+        "Provider tests cover one/multiple/no model cases, cache fields, zero USD, usage-bearing final errors, retry accumulation, cached-input subtraction, cache greater than input, reasoning-as-output-subset semantics, incomplete turns, malformed modelCalls, and no fabricated Qoder-style rows."
+      ],
+      "technicalNotes": "Modify packages/providers/src/claude/provider.ts, packages/providers/src/codex/provider.ts, packages/providers/src/grok/event-parser.ts, and packages/providers/src/grok/provider.ts per docs/superpowers/plans/2026-09-03-node-cost-tracking.md:268-332 and Task 2 at docs/superpowers/plans/2026-09-03-node-cost-tracking.md:962-980. Depends on US-001 contract types.",
+      "dependsOn": ["US-001"],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Normalize community SDK providers and Pi catalog",
+      "description": "As an operator, I want Pi, OpenCode, and Copilot usage mapped consistently, so that community provider calls and catalog-based estimates remain truthful.",
+      "acceptanceCriteria": [
+        "Pi inspects every assistant message in the current agent_end.messages array, emits one observation per assistant message, prefers responseModel as reported then model as requested then unknown, sets requests: 1, and includes input/output/cache-read/cache-write/reasoning/cost.total when present.",
+        "Pi sums every assistant message into legacy TokenUsage/cost totals while retaining last-assistant-message semantics for stop reason, error, structured-output completion, and resolvedModel.",
+        "OpenCode tracks latest assistant info by assistant message id, replaces repeated message.updated events for the same id, emits one observation per distinct assistant message at session.idle, marks multi-agent child observations as kind: subagent, and fixes reasoning double-counting.",
+        "Copilot captures every assistant.usage event, maps provider github-copilot and reported model, preserves optional token/cache/reasoning fields, sets requests: 1, ignores multiplier cost for USD, and uses kind: subagent only for explicit non-empty parentToolCallId linkage.",
+        "Copilot does not classify usage from free-form initiator text, and Qoder remains unchanged unless its actual result contract gains authoritative usage.",
+        "packages/providers/src/community/pi/model-catalog.ts exposes cache-read/cache-write rates and optional request-wide tiers from the pinned SDK, with additive provider route schema/test updates for the model-catalog response.",
+        "Tests prove multiple Pi assistant messages, response-model override, error/no-assistant cases, OpenCode repeated updates and multi-agent cases, Copilot multiple usage events and parent-tool attribution present/absent, multiplier ignored, optional fields, and no reasoning double charge."
+      ],
+      "technicalNotes": "Modify packages/providers/src/community/pi/event-bridge.ts, pi/model-catalog.ts, opencode/session.ts, opencode/multi-agent.ts, opencode/tokens.ts, copilot/event-bridge.ts, provider route schemas/tests per docs/superpowers/plans/2026-09-03-node-cost-tracking.md:287-300, docs/superpowers/plans/2026-09-03-node-cost-tracking.md:344-376, docs/superpowers/plans/2026-09-03-node-cost-tracking.md:680-682, and Task 2 at docs/superpowers/plans/2026-09-03-node-cost-tracking.md:962-980.",
+      "dependsOn": ["US-001"],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Enrich OMP transcript usage safely",
+      "description": "As an operator, I want OMP primary, advisor, and task-subagent usage captured safely, so that hidden delegated work is counted without double-counting copied history or reading unsafe transcripts.",
+      "acceptanceCriteria": [
+        "OMP primary stream parsing emits one observation per assistant message_end with reported provider/model, token/cache/reasoning fields, cost.total, and requests: 1 while keeping existing legacy totals and last resolvedModel behavior.",
+        "packages/providers/src/community/omp/session-usage.ts resolves supported session layouts for main transcripts, main artifact directories, top-level advisor transcripts, recursive task-agent transcripts, and nested advisor transcripts without assuming all advisor files are siblings.",
+        "Session-directory resolution checks exact PI_CODING_AGENT_SESSION_DIR first, then the supported PI_CODING_AGENT_DIR/default derivation, and warns once with omitted hidden usage when layout cannot be proven.",
+        "Resume and fork enrichment snapshots candidate files before spawning by relative path, byte length, and prefix digest; after exit it parses only appended bytes for matching copied prefixes, parses complete genuinely new files, rejects mid-record snapshots, and omits unsafe files rather than double-count history.",
+        "Reader safety rejects symlinks, path escapes, wrong session header/cwd, unsupported layouts, malformed JSONL, excessive files/bytes/line, and missing files; it streams JSONL and never persists prompt, response, tool, or transcript content.",
+        "Advisor observations use kind: advisor and task-agent observations use kind: subagent; enrichment applies after process exit on success, protocol error, or non-zero exit when usage is available, without changing the provider result success/error status.",
+        "Tests cover fresh sessions, resume, fork, nested advisor/task files, copied history, changed prefixes, wrong headers/cwd, no-session, bounds, malformed files, path safety, warning/fail-soft behavior, and absence of prompt/response content in returned usage or logs."
+      ],
+      "technicalNotes": "Modify packages/providers/src/community/omp/event-parser.ts and provider.ts; create packages/providers/src/community/omp/session-usage.ts. Follow docs/superpowers/plans/2026-09-03-node-cost-tracking.md:334-343, docs/superpowers/plans/2026-09-03-node-cost-tracking.md:384-443, Task 3 at docs/superpowers/plans/2026-09-03-node-cost-tracking.md:981-996, and OMP test matrix at docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1150-1159.",
+      "dependsOn": ["US-001"],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Add usage event schemas and event type",
+      "description": "As a workflow engine maintainer, I want strict internal usage event schemas, so that raw observed usage is recorded consistently before normalization into SQL.",
+      "acceptanceCriteria": [
+        "packages/workflows/src/store.ts adds node_usage_recorded to WORKFLOW_EVENT_TYPES and does not add it to external event outbox mappings or dashboard source event types.",
+        "packages/workflows/src/schemas/usage-breakdown.ts defines strict Zod schemas imported from @hono/zod-openapi and re-exports them from packages/workflows/src/schemas/index.ts.",
+        "Workflow usage schema types are derived with z.infer and include a compile-time structural check against the provider contract imported from @archon/providers/types.",
+        "Provider-result runtime boundary validation retains valid entries independently in order, logs rejected index/schema issues without raw values, and writes no usage event when no valid entries remain.",
+        "Persisted event JSON uses schema_version, agent_provider, usage_breakdown, retry_epoch, iteration, reask_attempt, terminal_error, and error_subtype with snake_case fields.",
+        "The event step_name is the actual persisted step name for normal nodes, loop-group body namespaced nodes, and direct loop nodes.",
+        "No usage breakdown is added to node_completed or run metadata, and existing node_completed cost/token fields, run metadata totals, loop accounting, and budget behavior remain compatible."
+      ],
+      "technicalNotes": "Follow persisted event design in docs/superpowers/plans/2026-09-03-node-cost-tracking.md:444-501 and implementation Task 4 at docs/superpowers/plans/2026-09-03-node-cost-tracking.md:997-1017. The web event primitive system mapping is implemented later in US-013.",
+      "dependsOn": ["US-001"],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Add ledger schema and dialect parity",
+      "description": "As an operator, I want an additive normalized usage ledger in both database dialects, so that usage reporting is durable, queryable, and upgrade-safe.",
+      "acceptanceCriteria": [
+        "migrations/000_combined.sql adds remote_agent_usage_ledger as a child of workflow events with exactly the 17 planned columns and no duplicated run/node/workflow/codebase/user/source/timestamp columns.",
+        "The ledger enforces unique (workflow_event_id, entry_index), event FK cascade delete, at least one measure, reported/estimated USD mutual exclusion, pricing_source exactly with estimates, model_source/model nullability agreement, non-negative numeric values, and positive requests when present.",
+        "PostgreSQL indexes and column comments are placed in the final Indexes and column comments section, including ledger agent_provider, provider/model, usage-event created_at index or proven dialect-equivalent, and workflow_runs(codebase_id).",
+        "packages/core/src/db/adapters/sqlite.ts mirrors the table, constraints, and indexes as closely as SQLite supports, with parity tests proving matching non-auth application tables and columns.",
+        "packages/core/src/schemas/usage-ledger.ts exists, is exported from packages/core/src/schemas/index.ts, and validates the application-side ledger row contract.",
+        "The migration header and AGENTS.md database inventory enumerate all 20 application tables plus the four PostgreSQL-only Better Auth tables, including previously omitted checkpoint/schema-version/event-delivery tables.",
+        "Generated bundled schema is refreshed only by bun run generate:bundled-schema, and tests cover fresh schema, reverse parity, cascade delete, every SQL constraint, idempotence, statement order, and the actual post-change MIN_NON_AUTH_COLUMNS floor."
+      ],
+      "technicalNotes": "Follow ledger schema design in docs/superpowers/plans/2026-09-03-node-cost-tracking.md:547-600 and Task 4 at docs/superpowers/plans/2026-09-03-node-cost-tracking.md:997-1017. Respect additive-only schema rules: no drops, renames, or retypes.",
+      "dependsOn": ["US-005"],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "Implement global pricing estimates",
+      "description": "As an operator, I want optional global exact-match model pricing estimates, so that unpriced token usage can be estimated without pretending to be provider-reported billing.",
+      "acceptanceCriteria": [
+        "GlobalConfig accepts pricing.models entries with provider, model, optional finite non-negative input/output/cacheRead/cacheWrite rates, at least one rate per entry, and duplicate provider/model pairs rejected at estimation time.",
+        "pricing is not added to RepoConfig, MergedConfig, SafeConfig, configuration mutation endpoints, or the web settings UI; existing config update operations preserve an operator-authored pricing block unchanged.",
+        "packages/core/src/usage/estimate.ts stores provider-reported costUsd, including zero, in cost_usd and suppresses estimation.",
+        "Estimator precedence is exact global-config provider/model pair, then exact Pi catalog provider/id pair, then no estimate; it never uses unknown models, bare model names, prefix, substring, case-folded, fuzzy, or concatenated identity matching.",
+        "Estimation requires both input and output token counts, applies cache rates only to reported cache dimensions, leaves the entire estimate null when a positive reported category lacks a matched rate, keeps request-only observations unpriced, and never charges reasoning separately from output.",
+        "Pi catalog tier thresholds apply the highest tier whose threshold is strictly below aggregate inputTokens + cacheReadTokens + cacheWriteTokens, with aggregate multi-call estimates documented as approximate.",
+        "Materialized estimates and pricing_source are stored only in ledger rows; estimates never appear in provider results, workflow event JSON, legacy run totals, cost_usd, or maxBudgetUsd behavior."
+      ],
+      "technicalNotes": "Modify packages/core/src/config/config-types.ts, config-loader tests, packages/core/src/usage/estimate.ts, and use Pi catalog additions from US-003. Follow docs/superpowers/plans/2026-09-03-node-cost-tracking.md:638-711 and persistence/pricing tests at docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1176-1195.",
+      "dependsOn": ["US-003", "US-006"],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-008",
+      "title": "Implement recorder port and atomic writes",
+      "description": "As a workflow engine maintainer, I want a narrow usage recorder port and atomic event/ledger writes, so that accounting failures never mutate lifecycle state or hide original node outcomes.",
+      "acceptanceCriteria": [
+        "packages/workflows/src/usage.ts defines IWorkflowUsageRecorder.recordWorkflowUsage(input: RecordWorkflowUsageInput): Promise<void> and RecordWorkflowUsageInput carries run id, actual step name, selected agent provider id, validated usage array, retry epoch, optional loop iteration, reask attempt, and terminal error metadata.",
+        "WorkflowDeps in packages/workflows/src/deps.ts requires usageRecorder and re-exports recorder/input types through @archon/workflows/deps; IWorkflowStore and createWorkflowStore remain unchanged.",
+        "packages/core/src/workflows/usage-recorder.ts is wired only through createWorkflowDeps(), and every structural WorkflowDeps implementation and test helper is updated.",
+        "insertWorkflowEvent() accepts an optional caller-generated event id, returns the inserted id, and exposes duplicate-id-ignore behavior only for the usage-recorder fallback path.",
+        "recordWorkflowUsage validates complete input, converts camelCase entries to versioned snake_case event payload, resolves estimates and event id before opening a transaction, inserts one node_usage_recorded event plus one ledger row per usage_breakdown index, and commits atomically.",
+        "If validation fails, the recorder logs a structured warning and writes nothing; if the transaction fails, it rolls back both sinks then attempts one duplicate-safe event-only fallback with the same id and no estimated fields.",
+        "Recorder normal and fallback paths do not enqueue external workflow events, do not fail or mutate workflow lifecycle state, and never mask the original node result or exception."
+      ],
+      "technicalNotes": "Implement files named in docs/superpowers/plans/2026-09-03-node-cost-tracking.md:502-530 and docs/superpowers/plans/2026-09-03-node-cost-tracking.md:602-636, plus Task 5 at docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1018-1043. Use core pricing from US-007 and ledger/event schemas from US-005/US-006.",
+      "dependsOn": ["US-005", "US-006", "US-007"],
+      "priority": 8,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-009",
+      "title": "Implement usage report query",
+      "description": "As an operator, I want a single core usage report query, so that REST, CLI, and web surfaces share identical filtering, grouping, totals, and coverage semantics.",
+      "acceptanceCriteria": [
+        "packages/core/src/schemas/usage-report.ts defines camelCase usageReportSchema and inferred UsageReport type; core exports it and a usageDb namespace from packages/core/src/db/index.ts and packages/core/src/index.ts.",
+        "The core query supports from/to, codebaseId, agentProvider, provider, model, kind, runId, nodeId, and groupBy agent/provider/model/project/run/day/node with explicit optional dimension fields rather than opaque keys.",
+        "Date defaults and bounds match the plan: neither dates nor runId means current UTC month, runId without dates means entire direct run, dates require from < to, cross-run ranges cannot exceed 366 days, groupBy=node requires runId, and nodeId requires runId.",
+        "The query fetches 501 groups to detect overflow and returns a narrowing error instead of silently truncating beyond the 500-group limit.",
+        "Totals and groups include nullable sums for input/output/reasoning/cache-read/cache-write/requests, nullable reportedUsd and estimatedUsd, recordCount, missing-record counts for every token/request metric, rowsMissingUsd, and no combined effective USD total.",
+        "Coverage reports usageEventCount, ledgeredEventCount, unledgeredEventCount, hasRecordedUsage, historicalBackfill:false, and filterScope:date-project-run-node, evaluated only with date/project/run/node filters.",
+        "SQL joins ledger to workflow event to workflow run to codebase, uses event created_at as accounting timestamp, parameterizes all filter values, selects dynamic group/order fragments only through exhaustive enum switches, converts PostgreSQL bigint/count strings safely, rejects unsafe/non-finite/negative aggregates, and orders dimensions deterministically with nulls first across dialects."
+      ],
+      "technicalNotes": "Follow query semantics and report shape in docs/superpowers/plans/2026-09-03-node-cost-tracking.md:713-830 and Task 5 at docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1018-1043. Test matrix anchors: docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1196-1212.",
+      "dependsOn": ["US-006", "US-008"],
+      "priority": 9,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-010",
+      "title": "Record every workflow AI pass",
+      "description": "As an operator, I want every usage-bearing workflow AI pass recorded once, so that failed attempts, reasks, loop iterations, resumes, and retry epochs are not lost or replaced.",
+      "acceptanceCriteria": [
+        "packages/workflows/src/dag-executor.ts captures the last valid terminal usageBreakdown separately inside each standard runStreamPass and records exactly once for that pass when usage exists.",
+        "Standard-path recording happens in a non-throwing pass-exit/finally path before structured-output reask decisions and before error results escape, with current reask attempt, retry epoch, terminal error flag, and error subtype.",
+        "The separate direct-loop streaming path records every usage-bearing iteration and reask with loop iteration metadata and retry epoch.",
+        "Loop-group AI body nodes use the standard path and existing namespaced step name; no group-level duplicate is written.",
+        "No usage row/event is written for bash, script, command, gate, route, cancel, workflow wrapper, or other non-AI nodes unless they directly invoke an AI provider through the traced paths.",
+        "Child workflow runs record only their own direct usage; parents do not copy child usage into the new accounting path.",
+        "An exception or abort with no terminal usage result remains unrecorded, and usage-recorder rejection or failure never changes the node outcome.",
+        "Tests prove one append per usage-bearing pass across AI success, SDK error result with usage, generator throw without usage, multiple cumulative terminal results in one pass, structured-output reasks, outer retries, direct-loop iterations/reasks, loop-group namespaced ids, pause/resume, manual retry-node epochs, child runs, and non-AI nodes."
+      ],
+      "technicalNotes": "Modify packages/workflows/src/dag-executor.ts, dag-executor.test.ts, subrun.test.ts, and WorkflowDeps fixtures per docs/superpowers/plans/2026-09-03-node-cost-tracking.md:532-546 and Task 6 at docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1045-1060. Depends on recorder from US-008.",
+      "dependsOn": ["US-001", "US-008"],
+      "priority": 10,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-011",
+      "title": "Add REST usage and run detail contracts",
+      "description": "As an API consumer, I want usage reports and direct-run usage in run detail, so that clients can query cost data without reimplementing accounting logic.",
+      "acceptanceCriteria": [
+        "packages/server/src/routes/schemas/usage.schemas.ts defines HTTP query schemas and OpenAPI-labelled response wrapper by reusing the core usage report schema, importing z from @hono/zod-openapi and deriving types with z.infer.",
+        "GET /api/usage is registered with registerOpenApiRoute(createRoute(...), handler) and uses the installation's existing API authentication.",
+        "The route validates filters, date pairs, half-open UTC ranges, current-month and run defaults, 366-day cap, fixed group definitions, node/run requirements, group overflow, kind=unclassified SQL null mapping, and deterministic grouping semantics.",
+        "packages/server/src/routes/schemas/workflow.schemas.ts extends workflowRunDetailSchema with usage: usageReportSchema nullable.",
+        "GET /api/workflows/runs/{runId} queries the entire direct run with groupBy: node, returns scope.runId with from/to null and includesChildRollup false, and does not walk parent_run_id or include child runs.",
+        "If usage querying fails, run detail logs the error and returns the rest of the response with usage: null; old runs with no usage events return a valid empty summary with hasRecordedUsage: false.",
+        "Route tests cover filters, dates, limits, grouping, old-run emptiness, run-detail degradation, OpenAPI shape, and package.json isolation for new mock.module route tests."
+      ],
+      "technicalNotes": "Modify packages/server/src/routes/api.ts, packages/server/src/routes/schemas/usage.schemas.ts, workflow.schemas.ts, api.workflow-runs.test.ts, api.usage.test.ts, and package.json per docs/superpowers/plans/2026-09-03-node-cost-tracking.md:713-847 and Task 7 at docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1062-1078.",
+      "dependsOn": ["US-009"],
+      "priority": 11,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-012",
+      "title": "Add the archon usage CLI",
+      "description": "As an operator, I want a top-level archon usage command, so that I can inspect cost and token usage outside Git and in machine-readable JSON.",
+      "acceptanceCriteria": [
+        "packages/cli/src/commands/usage.ts implements top-level archon usage and packages/cli/src/cli.ts wires it without requiring Git validation.",
+        "usage is added to noGitCommands and packages/cli/src/cli.test.ts mirrors that contract.",
+        "Supported flags are --since, --until, --by, --codebase-id, --agent, --provider, --model, --kind, --run-id, --node, and --json; --from and --to are not accepted by usage and --from remains worktree-only.",
+        "Because top-level parsing is strict:false, the usage command rejects unsupported flags clearly instead of silently ignoring typos.",
+        "The CLI reuses the core usage query defaults, filters, range bounds, node/run requirement, grouping semantics, and coverage behavior without duplicating SQL.",
+        "Human output distinguishes reported USD, estimated USD, exact known zero, absent values, positive sub-cent values, and positive values below one millionth using the planned formatting rules; it prints a coverage warning when unledgeredEventCount > 0.",
+        "--json writes exactly the API-equivalent camelCase usage report to stdout through existing stdout helpers with logs kept off stdout, and tests assert exact machine-readable output.",
+        "packages/docs-web/src/content/docs/reference/cli.md documents examples and the half-open UTC range."
+      ],
+      "technicalNotes": "Follow CLI design in docs/superpowers/plans/2026-09-03-node-cost-tracking.md:849-883, Task 8 at docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1080-1095, and CLI/web tests at docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1213-1220. Use --since/--until to avoid --from collision noted at docs/superpowers/plans/2026-09-03-node-cost-tracking.md:87-89.",
+      "dependsOn": ["US-009"],
+      "priority": 12,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-013",
+      "title": "Add console Cost page and run-detail usage",
+      "description": "As an operator using the console, I want one Cost page and per-run/per-node usage views, so that I can answer cost questions without reconstructing costs from event streams.",
+      "acceptanceCriteria": [
+        "ConsoleApp.tsx adds /console/cost and ProjectRail.tsx adds one installation-level navigation item; no duplicate project-scoped Cost route is created.",
+        "CostPage.tsx, skills/usage.ts, and UsageBreakdownTable.tsx are created, the usage skill is exported, and web code uses generated API types through established re-exports without importing workflows or core packages.",
+        "Usage cache keys include every filter and grouping value, default to current UTC month, provide date/project/agent/provider/model/kind filters, grouping including run, run-detail links for run groups with non-null codebaseId, explicit Refresh, and no SSE subscription.",
+        "UTC date-only From and Through controls send UTC midnight from and UTC midnight after through as the API exclusive to, and reject ranges over 366 days before fetching.",
+        "The Cost page and shared table show reported USD, estimated USD, unpriced row count, token/request coverage, ledger coverage, missing values, known zero, positive sub-cent values, and empty state vs no usage recorded distinctly; they never combine reported and estimated USD into one authoritative total.",
+        "Run-detail fetching preserves the new usage value from generated schema and passes direct-run usage into RunDetailHeader, RunStream, and NodeDivider as needed; header labels direct reported/estimated USD separately and labels legacy totals explicitly when no new usage is recorded.",
+        "usage:null renders a visible usage-report-unavailable warning, hasRecordedUsage:false renders not recorded, neither is treated as zero, failed nodes can display recorded usage, and node rows aggregate all attempts/iterations for the exact persisted step name.",
+        "node_usage_recorded maps to kind: system in the event primitive and tests prove the event is hidden without the System toggle and never dumps raw JSON; UI uses existing design tokens only and regenerated OpenAPI types are committed."
+      ],
+      "technicalNotes": "Create/modify files named in docs/superpowers/plans/2026-09-03-node-cost-tracking.md:885-936 and Task 9 at docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1097-1112. Generated API types depend on REST schema from US-011.",
+      "dependsOn": ["US-011"],
+      "priority": 13,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-014",
+      "title": "Document and complete final verification",
+      "description": "As a maintainer, I want documentation, generated artifacts, and validation completed after implementation, so that the feature is shippable, reversible, and operationally clear.",
+      "acceptanceCriteria": [
+        "packages/docs-web/src/content/docs/reference/configuration.md documents global-only pricing, exact provider/model pairs and rates, estimate limitations, restart semantics for cached config/catalog edits, and absence of a file watcher.",
+        "Provider capability/setup documentation is updated wherever usage limitations changed, including missing SDK data, direct workflow scope, no backfill, OMP fail-soft behavior, and conservative coverage semantics.",
+        "CLI documentation remains consistent with archon usage flags and UTC half-open range semantics, and CHANGELOG.md is not modified for this feature plan.",
+        "Generated artifacts required by prior stories are current: bundled schema from bun run generate:bundled-schema and web OpenAPI types from bun --filter @archon/web generate:types with the server running.",
+        "The post-implementation Constitution Check is re-run and still passes the plan's type-safety, package-boundary, single-tenant, workflow-language, fail-fast, additive-schema, KISS/YAGNI, reproducibility, security, and reversibility constraints.",
+        "Focused package validation passes with isolated package scripts for providers, workflows, core, server, cli, web, web build, and docs-web build; bun test is not run from the repository root.",
+        "bun run validate passes, and bun run check:schema-upgrades passes against reachable PostgreSQL or is explicitly reported unavailable with environment detail.",
+        "Rollout evidence includes at least one controlled workflow for each available provider, comparison of provider-reported totals with ledger data, structured-log review for invalid usage/OMP omissions/ledger fallback warnings, and unledgeredEventCount zero for controlled runs."
+      ],
+      "technicalNotes": "Follow documentation/final verification Task 10 at docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1114-1128, compatibility/rollout/rollback at docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1228-1276, global acceptance at docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1278-1301, validation commands at docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1303-1345, and final review at docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1347-1395.",
+      "dependsOn": ["US-002", "US-003", "US-004", "US-010", "US-011", "US-012", "US-013"],
+      "priority": 14,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
