@@ -296,3 +296,32 @@
 - Zero token counts may omit that category's rate; only positive reported categories require a matched rate.
 
 ---
+
+## 2026-09-04 — US-008: Implement recorder port and atomic writes
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/usage.ts` — IWorkflowUsageRecorder + RecordWorkflowUsageInput
+- `packages/workflows/src/deps.ts` — required usageRecorder + re-exports
+- `packages/core/src/db/workflow-events.ts` — optional caller id, return id, ignoreDuplicateId fallback option
+- `packages/core/src/db/usage-ledger.ts` — insertUsageLedgerRow(s) for 17-column ledger writes
+- `packages/core/src/workflows/usage-recorder.ts` — validate → estimate pre-tx → atomic event+ledger → event-only fallback
+- `packages/core/src/workflows/store-adapter.ts` — wire createWorkflowUsageRecorder in createWorkflowDeps
+- WorkflowDeps test helpers (dag-executor/script-node/subrun/executor/executor-preamble) + store-adapter tests
+- Isolated core tests: usage-ledger.test.ts, usage-recorder.test.ts, workflow-events insert option coverage
+
+**Acceptance criteria verified**:
+- [x] usage.ts defines IWorkflowUsageRecorder.recordWorkflowUsage + RecordWorkflowUsageInput fields
+- [x] WorkflowDeps requires usageRecorder; types re-exported via @archon/workflows/deps; IWorkflowStore/createWorkflowStore unchanged
+- [x] usage-recorder wired only through createWorkflowDeps; structural helpers updated
+- [x] insertWorkflowEvent accepts optional caller id, returns inserted id, ignoreDuplicateId only for fallback
+- [x] recordWorkflowUsage validates, snake_case payload, resolves estimates+id pre-tx, atomic event + ledger rows
+- [x] validation fail → warn + write nothing; tx fail → rollback then one duplicate-safe event-only fallback without estimates
+- [x] normal/fallback paths never enqueue external events, never throw/mutate lifecycle, never mask node outcomes
+
+**Learnings**:
+- Package export is `@archon/workflows/schemas/*` (file path), not a bare `@archon/workflows/schemas` index.
+- store-adapter tests mock config-loader incompletely; stub `./usage-recorder` so createWorkflowDeps does not pull estimate→loadGlobalConfig through the incomplete mock.
+- usage-recorder tests must stay process-isolated from store-adapter because of mock.module on connection/estimate.
+
+---
