@@ -277,8 +277,8 @@
         "US-011"
       ],
       "priority": 13,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration after US-012. Files: ConsoleApp.tsx, ProjectRail.tsx, CostPage.tsx, skills/usage.ts(+test), UsageBreakdownTable.tsx(+test), store/keys.ts, runs.ts, RunDetailPage/Header/Stream/NodeDivider, event.ts(+test), format.ts(+test), api.generated.d.ts. packages/web bun test + lint/typecheck/format green."
     },
     {
       "id": "US-014",

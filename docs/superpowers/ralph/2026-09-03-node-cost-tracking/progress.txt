@@ -1,6 +1,13 @@
 ## Codebase Patterns
 
 
+### Console Cost page uses generated usage types only
+- **Where**: `packages/web/src/experiments/console/skills/usage.ts`, `routes/CostPage.tsx`, `components/UsageBreakdownTable.tsx`
+- **Pattern**: Types from `api.generated` via skill re-exports; never import `@archon/core`/`workflows`. UTC date-only From/Through map to half-open API range. Cache key encodes every filter. Reported vs estimated USD never combined. `node_usage_recorded` → `kind: 'system'`.
+- **Example**: `K.usage({ from, to, groupBy: 'run', codebaseId })` + `UsageBreakdownTable report={report}`
+
+
+
 ### archon usage CLI maps since/until and rejects foreign flags
 - **Where**: `packages/cli/src/commands/usage.ts`, `packages/cli/src/cli.ts`
 - **Pattern**: Top-level `usage` is in `noGitCommands`. CLI `--since`/`--until` map to core `from`/`to`; never accept `--from`/`--to` (worktree-owned). With `strict:false` parse, `findUnsupportedFlag` rejects typos. Human USD: `$` reported / `≈$` estimated / `$0.00` exact zero / `n/a` absent / up to 6 decimals under a cent / `<$0.000001` floor. `--json` uses `writeJsonLine` only. Inject `queryFn` in tests — no `mock.module`. Empty-ledger missing-count SUMs need `COALESCE(...,0)` in METRIC_SELECT.
@@ -455,5 +462,40 @@
 - Empty SQLite aggregate SELECT still returns one row; SUM(CASE…) is NULL when COUNT(*)=0 — COALESCE missing counts to 0 or CLI fails on fresh DBs.
 - CLI date flags must be --since/--until because --from is worktree branch selection.
 - Inject queryFn rather than mock.module for usage command tests.
+
+---
+## 2026-09-04 — US-013: Add console Cost page and run-detail usage
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/lib/api.generated.d.ts` — regenerated OpenAPI types including UsageReport + run detail usage
+- `packages/web/src/experiments/console/skills/usage.ts` (+test) — GET /api/usage skill, cache keys, UTC date helpers
+- `packages/web/src/experiments/console/components/UsageBreakdownTable.tsx` (+test) — shared table; reported/estimated separate; unavailable vs not-recorded
+- `packages/web/src/experiments/console/routes/CostPage.tsx` — /console/cost filters, grouping, Refresh, no SSE
+- `packages/web/src/experiments/console/ConsoleApp.tsx` — cost route
+- `packages/web/src/experiments/console/components/ProjectRail.tsx` — installation Cost nav item
+- `packages/web/src/experiments/console/store/keys.ts` — K.usage(query)
+- `packages/web/src/experiments/console/skills/runs.ts` — getRun retains usage
+- `packages/web/src/experiments/console/routes/RunDetailPage.tsx` — pass usage; unavailable warning
+- `packages/web/src/experiments/console/components/RunDetailHeader.tsx` — direct reported/estimated, legacy total label, not-recorded
+- `packages/web/src/experiments/console/components/RunStream.tsx` + `NodeDivider.tsx` — per-step ledger usage + expandable breakdown (failed nodes included)
+- `packages/web/src/experiments/console/primitives/event.ts` (+test) — node_usage_recorded → kind system
+- `packages/web/src/experiments/console/lib/format.ts` (+test) — formatUsdAmount CLI-parity rules
+- `packages/web/src/experiments/console/skills/index.ts` — export usage skill
+
+**Acceptance criteria verified**:
+- [x] ConsoleApp /console/cost + ProjectRail installation nav; no project-scoped duplicate
+- [x] CostPage, skills/usage.ts, UsageBreakdownTable created and exported; generated API types only
+- [x] Cache keys include every filter/group; UTC month default; filters + Refresh; no SSE
+- [x] UTC From/Through → midnight from + midnight after through; reject >366 days
+- [x] Reported/estimated/unpriced/coverage/missing/zero/sub-cent distinct; no combined USD total
+- [x] Run detail preserves usage; header labels direct vs legacy; NodeDivider aggregates by step name
+- [x] usage:null warning; hasRecordedUsage false = not recorded; failed nodes can show usage
+- [x] node_usage_recorded → system (hidden without System toggle; no raw JSON); tokens only; OpenAPI regen committed
+
+**Learnings**:
+- openapi-typescript may fold `.nullable()` onto the named UsageReport schema itself when reused; NonNullable<> + runtime null checks keep the web type honest.
+- generate:types against an old server on :3090 misses new routes — start this worktree's server on a free PORT for regen.
+- Console component tests stay pure (bun:test, no DOM); state helpers + formatUsdAmount cover the AC matrix.
 
 ---
