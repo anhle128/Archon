@@ -1001,6 +1001,30 @@ assistants:
       expect(written).toContain('opus'); // tiers preserved via the {...current} spread
       expect(written).toContain('haiku');
     });
+
+    test('preserves operator-authored pricing block on unrelated updates', async () => {
+      mockFsReadFile.mockResolvedValue(`
+defaultAssistant: claude
+pricing:
+  models:
+    - provider: openai
+      model: gpt-5.4
+      input: 2.5
+      output: 15
+      cacheRead: 0.25
+assistants:
+  claude:
+    model: sonnet
+`);
+      await updateGlobalConfig({ assistants: { claude: { model: 'haiku' } } });
+      const written = mockFsWriteFile.mock.calls[0]?.[1] as string;
+      expect(written).toContain('pricing');
+      expect(written).toContain('gpt-5.4');
+      expect(written).toContain('2.5');
+      expect(written).toContain('haiku');
+      // Ensure pricing was not stripped by the assistants-only mutation.
+      expect(written).toMatch(/pricing:[\s\S]*models:/);
+    });
   });
 
   describe('toSafeConfig', () => {
@@ -1009,6 +1033,21 @@ assistants:
       const config = await loadConfig();
       const safe = toSafeConfig(config);
       expect(safe).not.toHaveProperty('paths');
+    });
+
+    test('does not expose pricing on SafeConfig', async () => {
+      mockFsReadFile.mockResolvedValue(`
+pricing:
+  models:
+    - provider: openai
+      model: gpt-5.4
+      input: 1
+      output: 2
+`);
+      const config = await loadConfig();
+      expect(config).not.toHaveProperty('pricing');
+      const safe = toSafeConfig(config);
+      expect(safe).not.toHaveProperty('pricing');
     });
 
     test('strips entire commands object from MergedConfig', async () => {

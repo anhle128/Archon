@@ -109,6 +109,34 @@ export interface ContainerConfig {
   enabled?: boolean;
 }
 
+/**
+ * One operator-authored model pricing entry (USD per 1M tokens).
+ * Global-only financial policy — never repo-controlled.
+ * Rates are optional finite non-negative numbers; at least one is required.
+ * `provider` and `model` stay separate fields because either may contain `/`.
+ */
+export interface PricingModelRate {
+  provider: string;
+  model: string;
+  /** USD per 1M input tokens. */
+  input?: number;
+  /** USD per 1M output tokens (reasoning is already inside output). */
+  output?: number;
+  /** USD per 1M cache-read tokens. */
+  cacheRead?: number;
+  /** USD per 1M cache-write tokens. */
+  cacheWrite?: number;
+}
+
+/**
+ * Operator-only pricing block for `~/.archon/config.yaml`.
+ * Loaded via `loadGlobalConfig()` at the accounting boundary; never merged into
+ * RepoConfig / MergedConfig / SafeConfig or exposed on config mutation APIs.
+ */
+export interface PricingConfig {
+  models?: PricingModelRate[];
+}
+
 export interface GlobalConfig {
   /**
    * Bot display name (shown in messages)
@@ -182,6 +210,14 @@ export interface GlobalConfig {
    * overrides these per-field.
    */
   container?: ContainerConfig;
+
+  /**
+   * Operator-only model pricing estimates (USD per 1M tokens).
+   * Global config only — not repo-mergeable, not returned by SafeConfig, and
+   * not writable through configuration mutation endpoints. Validated at use
+   * time by the usage estimator.
+   */
+  pricing?: PricingConfig;
 }
 
 /**

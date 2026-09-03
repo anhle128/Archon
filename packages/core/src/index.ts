@@ -128,6 +128,22 @@ export {
 } from './config/config-loader';
 
 // =============================================================================
+// Usage accounting (pricing estimates)
+// =============================================================================
+export {
+  buildCatalogPricingIndex,
+  buildConfigPricingIndex,
+  estimateTokensUsd,
+  loadPricingLookups,
+  materializeUsageCost,
+  selectRatesForAggregate,
+  type MaterializedUsageCost,
+  type PricingLookups,
+  type PricingRates,
+  type PricingRateTier,
+} from './usage/estimate';
+
+// =============================================================================
 // Services
 // =============================================================================
 export {
