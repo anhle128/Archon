@@ -77,7 +77,7 @@ describe('WorkflowNodeRetryAction', () => {
   test('renders a retry action for an eligible failed node', () => {
     const markup = renderRetryAction({ node: failedNode() });
 
-    expect(markup).toContain('Failed node: Build');
+    expect(markup).toContain('Node: Build');
     expect(markup).toContain('Retry selected node and descendants');
     expect(markup).toContain('Retry');
   });
@@ -85,8 +85,18 @@ describe('WorkflowNodeRetryAction', () => {
   test('renders a retry action for a failed node in a cancelled run', () => {
     const markup = renderRetryAction({ node: failedNode(), runStatus: 'cancelled' });
 
-    expect(markup).toContain('Failed node: Build');
+    expect(markup).toContain('Node: Build');
     expect(markup).toContain('Retry');
+  });
+
+  test('renders a retry action for a completed node in a completed run', () => {
+    const markup = renderRetryAction({
+      node: failedNode({ status: 'completed', error: undefined }),
+      runStatus: 'completed',
+    });
+
+    expect(markup).toContain('Node: Build');
+    expect(markup).toContain('Retry selected node and descendants');
   });
 
   test('guides route-loop controllers toward a source dependency instead of direct retry', () => {
@@ -95,7 +105,7 @@ describe('WorkflowNodeRetryAction', () => {
     expect(markup).toContain('Retry the route source node');
     expect(markup).toContain('controller dependencies');
     expect(markup).toContain('review');
-    expect(markup).not.toContain('Failed node: Review Router');
+    expect(markup).not.toContain('Node: Review Router');
     expect(markup).not.toContain('Retry selected node and descendants');
     expect(markup).not.toContain('<button');
   });
@@ -115,7 +125,7 @@ describe('WorkflowNodeRetryAction', () => {
   test('hides route-loop guidance outside retryable runs', () => {
     const markup = renderRetryAction({
       node: routeLoopNode(),
-      runStatus: 'completed',
+      runStatus: 'running',
     });
 
     expect(markup).toBe('');

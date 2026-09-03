@@ -36,7 +36,6 @@ export type WorkflowRetryErrorCode =
   | 'run_not_found'
   | 'run_not_retryable'
   | 'node_not_found'
-  | 'node_not_failed'
   | 'node_not_retryable'
   | 'cas_miss'
   | 'path_in_use'
@@ -208,12 +207,14 @@ async function validateWorkflowNodeRetryTarget(
 
   const events = await workflowEventDb.listWorkflowEvents(input.runId);
   const latestNodeState = projectLatestEffectiveNodeStates(events).get(input.nodeId);
+  const latestState = latestNodeState?.state;
   const interruptedRunningTarget =
-    RETRYABLE_WORKFLOW_STATUSES.includes(run.status) && latestNodeState?.state === 'running';
-  if (latestNodeState?.state !== 'failed' && !interruptedRunningTarget) {
+    RETRYABLE_WORKFLOW_STATUSES.includes(run.status) && latestState === 'running';
+  const eligibleFinalState = latestState === 'failed' || latestState === 'completed';
+  if (!eligibleFinalState && !interruptedRunningTarget) {
     throw new WorkflowRetryError(
-      'node_not_failed',
-      `Cannot retry node '${input.nodeId}' because its latest effective status is '${latestNodeState?.state ?? 'unknown'}'`
+      'node_not_retryable',
+      `Cannot retry node '${input.nodeId}' because its latest effective status is '${latestState ?? 'unknown'}'`
     );
   }
 
@@ -305,7 +306,7 @@ export async function getWorkflowNodeRetryPreview(
   if (!RETRYABLE_WORKFLOW_STATUSES.includes(run.status)) {
     throw new WorkflowRetryError(
       'run_not_retryable',
-      `Cannot retry workflow run ${input.runId} with status '${run.status}'. Only failed or cancelled runs can be retried.`
+      `Cannot retry workflow run ${input.runId} with status '${run.status}'. Only failed, cancelled, or completed runs can be retried.`
     );
   }
 
@@ -339,7 +340,7 @@ export async function prepareWorkflowNodeRetry(
   if (!RETRYABLE_WORKFLOW_STATUSES.includes(run.status)) {
     throw new WorkflowRetryError(
       'run_not_retryable',
-      `Cannot retry workflow run ${input.runId} with status '${run.status}'. Only failed or cancelled runs can be retried.`
+      `Cannot retry workflow run ${input.runId} with status '${run.status}'. Only failed, cancelled, or completed runs can be retried.`
     );
   }
 

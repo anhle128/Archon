@@ -139,7 +139,7 @@ No constitution violations are required. The feature is broad because the accept
 ### Phase 4 - Shared Retry Operation
 
 1. Add `prepareWorkflowNodeRetry()` in `packages/core/src/operations/workflow-retry.ts`.
-2. Validate run existence, status `failed`, target existence, latest effective node status `failed`, requester authorization, web/CLI surface eligibility, and working-path identity before mutation.
+2. Validate run existence, retryable run status (`failed`, `cancelled`, or `completed`), target existence, retryable latest effective node status (`failed` or `completed`), requester authorization, web/CLI surface eligibility, and working-path identity before mutation.
 3. CAS `failed -> running` and increment `metadata.retry_epoch` exactly once at accepted setup start.
 4. Write `node_retry_requested`, prepare safety/checkpoint reset, write `node_retry_reset`, delete persisted node sessions for invalidated nodes/all providers in the run scope, and return filtered prior completed outputs.
 5. On setup failure after CAS, write `node_retry_failed`, restore status to `failed`, and do not dispatch.

@@ -26,7 +26,7 @@ bun run cli workflow retry-node <run-id> <node-id>
 ## Behavior
 
 1. Load the run.
-2. Require run status `failed`.
+2. Require run status `failed`, `cancelled`, or `completed`.
 3. Require `working_path` to be present.
 4. Resolve `working_path` to a canonical real path.
 5. Verify the path still identifies the intended repository or Archon-managed worktree using:
@@ -44,7 +44,7 @@ bun run cli workflow retry-node <run-id> <node-id>
 - Non-failed run: non-zero exit with current status.
 - Missing/invalid working path: non-zero exit before git mutation.
 - Path identity mismatch: non-zero exit before git mutation.
-- Target node missing or not failed: non-zero exit before git mutation.
+- Target node missing or not in a retryable state (`failed` or `completed`): non-zero exit before git mutation.
 - Setup/reset failure: non-zero exit after restoring run status to `failed`.
 
 ## Output

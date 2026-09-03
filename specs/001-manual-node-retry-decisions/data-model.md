@@ -18,7 +18,7 @@ State transitions:
 
 Validation rules:
 
-- Manual retry accepts only runs whose current status is `failed`.
+- Manual retry accepts only runs whose current status is `failed`, `cancelled`, or `completed`.
 - CAS miss means another actor already changed the run; do not mutate git or dispatch.
 - Web retry requires run ownership/admin authorization before transition.
 
@@ -77,7 +77,7 @@ Fields:
 Validation rules:
 
 - Target node must exist in current workflow definition.
-- Target latest effective status must be `failed`.
+- Target latest effective status must be `failed` or `completed`.
 - Downstream `skipped` nodes are not direct retry targets.
 - Independent siblings remain valid unless they depend on target.
 

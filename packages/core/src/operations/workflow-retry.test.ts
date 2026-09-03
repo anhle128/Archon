@@ -219,7 +219,7 @@ describe('workflow retry preparation operation', () => {
     expect(mockClaimWorkflowRunForNodeRetry).toHaveBeenCalledWith('run-1');
   });
 
-  test('rejects retry when the run is not retryable or the target node is not failed', async () => {
+  test('rejects retry when the run is not retryable or the target node is not in a retryable state', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makeRun({ status: 'running' }));
     await expect(prepareWorkflowNodeRetry(makeRequest())).rejects.toMatchObject({
       code: 'run_not_retryable',
@@ -227,11 +227,26 @@ describe('workflow retry preparation operation', () => {
 
     mockGetWorkflowRun.mockResolvedValueOnce(makeRun());
     mockListWorkflowEvents.mockResolvedValueOnce([
-      { event_type: 'node_completed', step_name: 'b', data: { node_output: 'B0' } },
+      { event_type: 'node_skipped', step_name: 'b', data: { reason: 'dependency_failed' } },
     ]);
     await expect(prepareWorkflowNodeRetry(makeRequest())).rejects.toMatchObject({
-      code: 'node_not_failed',
+      code: 'node_not_retryable',
     });
+  });
+
+  test('prepares retry for a completed node in a completed run', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makeRun({ status: 'completed' }));
+    mockListWorkflowEvents.mockResolvedValueOnce([
+      { event_type: 'node_completed', step_name: 'a', data: { node_output: 'A0' } },
+      { event_type: 'node_completed', step_name: 'b', data: { node_output: 'B0' } },
+      { event_type: 'node_completed', step_name: 'c', data: { node_output: 'C0' } },
+    ]);
+
+    const result = await prepareWorkflowNodeRetry(makeRequest());
+
+    expect(result.runId).toBe('run-1');
+    expect(result.invalidatedNodeIds).toEqual(['b', 'c']);
+    expect(mockClaimWorkflowRunForNodeRetry).toHaveBeenCalledWith('run-1');
   });
 
   test('guides route-loop controller retry toward a source dependency', async () => {

@@ -1818,7 +1818,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Preview checkout state before retrying one failed DAG node */
+        /** Preview checkout state before retrying one DAG node */
         get: {
             parameters: {
                 query?: never;
@@ -1913,7 +1913,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Retry one failed DAG node and its descendants for a failed or cancelled run */
+        /** Retry one DAG node and its descendants for a failed, cancelled, or completed run */
         post: {
             parameters: {
                 query?: never;

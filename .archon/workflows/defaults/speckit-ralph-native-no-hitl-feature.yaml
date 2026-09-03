@@ -394,17 +394,13 @@ nodes:
 
     skills: [speckit-analyzebatch]
   - id: ralph-tasks-to-ralph
-    prompt: |
-      Read .specify/feature.json to resolve <feature_directory>, then run:
-      /speckit.ralph-loop.tasks-to-ralph <feature_directory>
+    bash: |
+      set -euo pipefail
+      bash .specify/extensions/ralph-loop/scripts/bash/tasks-to-prd.sh
     depends_on:
       - analyze-apply
       - speckit-converge-review-gate
     trigger_rule: one_success
-    provider: codex
-    effort: xhigh
-    model: gpt-5.6-terra
-    context: fresh
 
   - id: ralph-native-preflight
     bash: |
@@ -564,14 +560,10 @@ nodes:
              Do not add a Markdown fence or commentary.
 
   - id: speckit-final-ralph-tasks-to-ralph
-    prompt: |
-      Read .specify/feature.json to resolve <feature_directory>, then run:
-      /speckit.ralph-loop.tasks-to-ralph <feature_directory>
+    bash: |
+      set -euo pipefail
+      bash .specify/extensions/ralph-loop/scripts/bash/tasks-to-prd.sh
     depends_on: [speckit-converge-gate]
-    provider: codex
-    effort: xhigh
-    model: gpt-5.6-terra
-    context: fresh
 
   - id: speckit-final-ralph-native-preflight
     bash: |

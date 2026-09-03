@@ -160,7 +160,7 @@ Click on a workflow run (from the dashboard or progress card) to open the execut
 - Step-by-step logs for each node
 - Artifacts produced by the workflow
 - Route-loop decisions, including selected target and redacted condition metadata
-- Actions to resume, retry eligible failed DAG nodes, cancel, or abandon the run
+- Actions to resume, retry eligible DAG nodes, cancel, or abandon the run
 
 ## Workflow Builder
 

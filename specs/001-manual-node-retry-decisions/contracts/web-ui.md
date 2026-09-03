@@ -4,9 +4,9 @@
 
 Show retry UI only when all conditions are true:
 
-- run status is `failed`
+- run status is `failed`, `cancelled`, or `completed`
 - run is web-retry-eligible
-- target node latest effective status is `failed`
+- target node latest effective status is `failed` or `completed`
 - target node is not merely downstream `skipped`
 - server has enough context to retry from Web, including parent web conversation
 

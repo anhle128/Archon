@@ -272,7 +272,7 @@ Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 | GET | `/api/workflows/runs/by-worker/{platformId}` | Look up a run by worker conversation ID |
 | POST | `/api/workflows/runs/{runId}/cancel` | Cancel a running workflow |
 | POST | `/api/workflows/runs/{runId}/resume` | Resume a failed or paused workflow |
-| POST | `/api/workflows/runs/{runId}/nodes/{nodeId}/retry` | Retry one failed DAG node in a failed/cancelled run |
+| POST | `/api/workflows/runs/{runId}/nodes/{nodeId}/retry` | Retry one DAG node in a failed/cancelled/completed run |
 | POST | `/api/workflows/runs/{runId}/abandon` | Abandon a run (running, paused, or failed); cascade-cancels non-terminal `workflow:` sub-run descendants |
 | POST | `/api/workflows/runs/{runId}/approve` | Approve a paused workflow (400 if paused blocked on a `workflow:` child — approve the child) |
 | POST | `/api/workflows/runs/{runId}/reject` | Reject a paused workflow (400 if paused blocked on a `workflow:` child — reject the child) |
@@ -335,7 +335,7 @@ Resumes the workflow from where it left off, skipping already-completed nodes. E
 curl -X POST http://localhost:3090/api/workflows/runs/{runId}/nodes/{nodeId}/retry
 ```
 
-Retries the selected failed node and its current DAG descendants in the same run. The run must be failed, the node's latest effective status must be `failed`, and Web retry only applies to web-created runs with a web parent conversation. CLI-created or non-web runs should use `archon workflow retry-node <run-id> <node-id>`.
+Retries the selected node and its current DAG descendants in the same run. The run must be failed, cancelled, or completed, the node's latest effective status must be `failed` or `completed`, and Web retry only applies to web-created runs with a web parent conversation. CLI-created or non-web runs should use `archon workflow retry-node <run-id> <node-id>`.
 Route-loop controller nodes are rejected as direct retry targets.
 Retry a source dependency listed in the controller's `depends_on` so the refreshed source output reaches the controller again.
 

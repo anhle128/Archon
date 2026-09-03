@@ -3691,12 +3691,23 @@ nodes:
         depends_on: ['analyze-apply', 'speckit-converge-review-gate'],
         trigger_rule: 'one_success',
       });
+      expect(ralph && isBashNode(ralph)).toBe(true);
+      if (!ralph || !isBashNode(ralph)) {
+        throw new Error('default Speckit conversion node must be a bash node');
+      }
+      expect(ralph.bash).toContain('tasks-to-prd.sh');
       expect(nodes.get('ralph-loop-run')?.depends_on).toEqual(['ralph-tasks-to-ralph']);
       expect(nodes.get('ralph-sync-back')?.depends_on).toEqual(['ralph-loop-run']);
       expect(nodes.get('speckit-converge')?.depends_on).toEqual(['ralph-sync-back']);
       expect(nodes.get('speckit-final-ralph-tasks-to-ralph')?.depends_on).toEqual([
         'speckit-converge-gate',
       ]);
+      const finalRalph = nodes.get('speckit-final-ralph-tasks-to-ralph');
+      expect(finalRalph && isBashNode(finalRalph)).toBe(true);
+      if (!finalRalph || !isBashNode(finalRalph)) {
+        throw new Error('default Speckit final conversion node must be a bash node');
+      }
+      expect(finalRalph.bash).toContain('tasks-to-prd.sh');
       expect(nodes.get('speckit-final-ralph-loop-run')?.depends_on).toEqual([
         'speckit-final-ralph-tasks-to-ralph',
       ]);
@@ -3780,6 +3791,14 @@ nodes:
         expect(preflight.bash).toContain('ralph_prd_file');
         expect(preflight.bash).toContain('ralph_progress_file');
         expect(preflight.bash).toContain('Invalid Ralph PRD');
+
+        const conversion = nodes.get(path.conversionId);
+        expect(conversion && isBashNode(conversion)).toBe(true);
+        if (!conversion || !isBashNode(conversion)) {
+          throw new Error('native Ralph conversion node must be a bash node');
+        }
+        expect(conversion.bash).toContain('tasks-to-prd.sh');
+        expect(conversion.bash).not.toContain('speckit.ralph-loop.tasks-to-ralph');
 
         expect(loop && isLoopNode(loop)).toBe(true);
         if (!loop || !isLoopNode(loop)) throw new Error('native Ralph loop missing');

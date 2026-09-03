@@ -34,14 +34,14 @@ export function buildCliRetryCommand(runId: string, nodeId: string): string {
   return `archon workflow retry-node ${runId} ${nodeId}`;
 }
 
-export function isRetryableFailedNode(node: RetryableNodeState): boolean {
-  if (node.status !== 'failed') return false;
+export function isRetryableNode(node: RetryableNodeState): boolean {
+  if (node.status !== 'failed' && node.status !== 'completed') return false;
   if (node.retryEpoch === undefined || node.latestRetryEpoch === undefined) return true;
   return node.retryEpoch === node.latestRetryEpoch;
 }
 
 function isRetryableRunStatus(status: WorkflowRunStatus): boolean {
-  return status === 'failed' || status === 'cancelled';
+  return status === 'failed' || status === 'cancelled' || status === 'completed';
 }
 
 export function getRouteLoopRetrySourceNodeId(node: RetryableNodeState): string | null {
@@ -81,7 +81,7 @@ export function getWorkflowNodeRetryActionState(
     };
   }
 
-  if (!isRetryableFailedNode(node)) return { kind: 'hidden' };
+  if (!isRetryableNode(node)) return { kind: 'hidden' };
 
   const ineligible = getWorkflowRetryRunIneligibility(run);
   if (ineligible === null) {

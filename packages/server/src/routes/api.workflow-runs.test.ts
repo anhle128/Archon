@@ -3623,7 +3623,7 @@ describe('POST /api/workflows/runs/:runId/nodes/:nodeId/retry', () => {
     expect(response.status).toBe(400);
     const body = (await response.json()) as { error: string };
     expect(body.error).toBe(
-      "Cannot retry workflow in 'running' status. Only failed or cancelled runs can be retried."
+      "Cannot retry workflow in 'running' status. Only failed, cancelled, or completed runs can be retried."
     );
   });
 

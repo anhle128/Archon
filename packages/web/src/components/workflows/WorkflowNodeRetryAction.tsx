@@ -140,7 +140,7 @@ export function WorkflowNodeRetryAction({
     <div className="border-b border-border bg-surface px-3 py-2">
       <div className="flex min-w-0 items-center justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-xs font-medium text-text-primary">Failed node: {node.name}</div>
+          <div className="text-xs font-medium text-text-primary">Node: {node.name}</div>
           <div className="text-xs text-text-secondary">Retry selected node and descendants</div>
         </div>
         <AlertDialog
@@ -162,7 +162,7 @@ export function WorkflowNodeRetryAction({
           </AlertDialogTrigger>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Retry failed node?</AlertDialogTitle>
+              <AlertDialogTitle>Retry node?</AlertDialogTitle>
               <AlertDialogDescription asChild>
                 <div className="space-y-2 text-sm text-text-secondary">
                   <p>
@@ -170,8 +170,8 @@ export function WorkflowNodeRetryAction({
                     point before rerunning this node and downstream dependent nodes.
                   </p>
                   <p>
-                    Dirty tracked changes from the failed attempt are committed to a retry safety
-                    ref first. Untracked and ignored files are not deleted.
+                    Dirty tracked changes from the previous run are committed to a retry safety ref
+                    first. Untracked and ignored files are not deleted.
                   </p>
                 </div>
               </AlertDialogDescription>
