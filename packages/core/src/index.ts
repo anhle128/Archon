@@ -54,7 +54,7 @@ export * as isolationEnvDb from './db/isolation-environments';
 export * as workflowDb from './db/workflows';
 export * as messageDb from './db/messages';
 export * as userDb from './db/users';
-export * as usageDb from './db/usage-ledger';
+export * as usageDb from './db/usage';
 
 // Re-export SessionNotFoundError for error handling
 export { SessionNotFoundError } from './db/sessions';

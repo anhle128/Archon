@@ -116,3 +116,25 @@ export type {
   UsageLedgerPricingSource,
   UsageLedgerRow,
 } from './usage-ledger';
+
+// UsageReport
+export {
+  usageDimensionsSchema,
+  usageGroupBySchema,
+  usageKindFilterSchema,
+  usageLedgerCoverageSchema,
+  usageMetricsSchema,
+  usageReportGroupSchema,
+  usageReportSchema,
+  usageReportScopeSchema,
+} from './usage-report';
+export type {
+  UsageDimensions,
+  UsageGroupBy,
+  UsageKindFilter,
+  UsageLedgerCoverage,
+  UsageMetrics,
+  UsageReport,
+  UsageReportGroup,
+  UsageReportScope,
+} from './usage-report';
