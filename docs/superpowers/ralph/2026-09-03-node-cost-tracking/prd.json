@@ -305,8 +305,8 @@
         "US-013"
       ],
       "priority": 14,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 14. Docs: configuration.md pricing, ai-assistants usage limits/OMP fail-soft, api.md GET /api/usage, cli usage consistency, database ledger inventory. Unblock: workflows Ralph model + null parse + gh-pr prose pins. Artifacts already current. validate green. schema-upgrades unavailable (no DATABASE_URL/PGHOST/docker). Rollout: claude run 07f24d4d4f1b907e405dc2be75ee0d99 unledgered=0 reported $0.05; codex/omp blocked by provider usage limits (omp.session_usage_omitted header_mismatch observed)."
     }
   ]
 }

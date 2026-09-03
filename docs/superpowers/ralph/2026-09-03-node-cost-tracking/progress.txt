@@ -499,3 +499,44 @@
 - Console component tests stay pure (bun:test, no DOM); state helpers + formatUsdAmount cover the AC matrix.
 
 ---
+
+## 2026-09-04 — US-014: Document and complete final verification
+
+**Status**: PASSED
+**Files changed**:
+- `packages/docs-web/src/content/docs/reference/configuration.md` — global-only pricing, exact pairs/rates, estimate limits, restart/no-watcher
+- `packages/docs-web/src/content/docs/getting-started/ai-assistants.md` — workflow usage scope, provider matrix, Qoder omit, OMP fail-soft enrichment
+- `packages/docs-web/src/content/docs/reference/cli.md` — usage listed among no-git commands
+- `packages/docs-web/src/content/docs/reference/api.md` — GET /api/usage + run-detail usage null semantics
+- `packages/docs-web/src/content/docs/reference/database.md` — 20 app tables + usage ledger inventory
+- `packages/workflows/src/{dag-executor,loader,defaults/bundled-defaults}.test.ts` — separate chore(unblock) for package gate
+
+**Acceptance criteria verified**:
+- [x] configuration.md documents global-only pricing, exact pairs/rates, estimate limits, restart semantics, no file watcher
+- [x] Provider setup docs cover missing SDK data, direct-workflow scope, no backfill, OMP fail-soft, conservative coverage
+- [x] CLI usage docs consistent; CHANGELOG.md unmodified
+- [x] bundled-schema + api.generated current (regen no-op / regen from worktree server on :3923)
+- [x] Post-implementation Constitution Check PASS (type-safety, package boundaries, single-tenant, no YAML language change, fail-soft cost path, additive ledger, KISS/YAGNI, reproducibility, security, application-only rollback)
+- [x] Focused package scripts green: providers, workflows, core, server, cli, web, web build, docs-web build (not root bun test)
+- [x] bun run validate green; check:schema-upgrades unavailable — no DATABASE_URL/PGHOST and Docker daemon unavailable on this host
+- [x] Rollout: controlled claude workflow run `07f24d4d4f1b907e405dc2be75ee0d99` → reported $0.05 / in 917 out 52 / unledgeredEventCount 0 / hasRecordedUsage true; no invalid-usage or ledger-fallback warnings. Codex and OMP probes hit provider usage limits (not install-available); OMP still emitted fail-soft `omp.session_usage_omitted` reason=header_mismatch
+
+**Learnings**:
+- generate:types hard-codes localhost:3090 — always point openapi-typescript at this worktree's server port or a stale server will strip UsageReport.
+- Native Ralph fixture asserts must read the live loop model from YAML (`xai-oauth/grok-4.5` vs final-loop `cursor/cursor-grok-4.5`).
+- ParseResult always has `workflow` key; failed loads set `workflow: null` — `'workflow' in result` is not a validity check.
+- `gh pr create` pin tests must ignore backtick prose hard-rules that forbid PR creation.
+
+### Post-implementation Constitution Check (US-014)
+- Type safety: PASS — Zod + z.infer contracts; no any for usage path
+- Package boundaries: PASS — providers→types only; core owns DB/pricing; server HTTP; web generated types
+- Single-tenant: PASS — installation-wide reporting, no tenant columns
+- Workflow language: PASS — no YAML field/runtime graph changes
+- Fail fast / explicit errors: PASS — invalid usage rejected at boundary; cost failures never mutate lifecycle
+- Additive schema: PASS — usage_ledger + indexes only; no rename/drop
+- KISS/YAGNI: PASS — no parent rollup/backfill/chat columns/YAML
+- Reproducibility: PASS — package-isolated tests + generators
+- Security: PASS — global-only pricing; whitelisted SQL groups; bounded OMP transcript reads
+- Reversibility: PASS — application rollback only; table/event retained
+
+---
