@@ -2550,6 +2550,79 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Query workflow usage and cost aggregates
+         * @description Returns direct-run ledger aggregates for the installation. Half-open UTC range [from, to). With neither dates nor runId, defaults to the current UTC calendar month; with runId and no dates, queries the entire direct run. Cross-run ranges cannot exceed 366 days. At most 500 groups (overflow is a 400 narrowing error, never silent truncation). Coverage is ledger-integrity only under date/project/run/node filters — it cannot detect provider passes that never emitted a usage event (`historicalBackfill` is always false). Child runs appear as their own direct-use rows; parents never include copied child charges. Uses the installation API auth gate (single-tenant visibility).
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description RFC 3339 inclusive range start (UTC). Must be paired with `to`. Half-open range is [from, to). */
+                    from?: string;
+                    /** @description RFC 3339 exclusive range end (UTC). Must be paired with `from`. Half-open range is [from, to). */
+                    to?: string;
+                    codebaseId?: string;
+                    agentProvider?: string;
+                    provider?: string;
+                    model?: string;
+                    /** @description `unclassified` maps to SQL NULL on the ledger row; `advisor` and `subagent` match those kinds. */
+                    kind?: "unclassified" | "advisor" | "subagent";
+                    runId?: string;
+                    /** @description Exact persisted step name (`e.step_name`). Requires `runId`. */
+                    nodeId?: string;
+                    /** @description Group dimensions: agent | provider (default) | model | project | run | day | node. `node` requires `runId`. */
+                    groupBy?: "agent" | "provider" | "model" | "project" | "run" | "day" | "node";
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Usage report */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UsageReport"];
+                    };
+                };
+                /** @description Invalid filters, date range, or group overflow */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Server error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/workflows/validate": {
         parameters: {
             query?: never;
@@ -4162,6 +4235,7 @@ export interface components {
             };
             events: components["schemas"]["WorkflowEvent"][];
             nodeStates: components["schemas"]["WorkflowNodeState"][];
+            usage: components["schemas"]["UsageReport"];
         };
         WorkflowEvent: {
             id: string;
@@ -4226,6 +4300,81 @@ export interface components {
                 type: "disabled";
             };
         };
+        UsageReport: {
+            scope: {
+                from: string | null;
+                to: string | null;
+                codebaseId?: string;
+                runId?: string;
+                /** @enum {boolean} */
+                includesChildRollup: false;
+            };
+            /** @enum {string} */
+            groupBy: "agent" | "provider" | "model" | "project" | "run" | "day" | "node";
+            totals: {
+                tokensInput: number | null;
+                tokensOutput: number | null;
+                tokensReasoning: number | null;
+                tokensCacheRead: number | null;
+                tokensCacheWrite: number | null;
+                requests: number | null;
+                reportedUsd: number | null;
+                estimatedUsd: number | null;
+                recordCount: number;
+                missingTokensInput: number;
+                missingTokensOutput: number;
+                missingTokensReasoning: number;
+                missingTokensCacheRead: number;
+                missingTokensCacheWrite: number;
+                missingRequests: number;
+                rowsMissingUsd: number;
+            };
+            groups: {
+                dimensions: {
+                    agentProvider?: string;
+                    provider?: string;
+                    model?: string | null;
+                    /** @enum {string} */
+                    modelSource?: "reported" | "requested" | "unknown";
+                    codebaseId?: string | null;
+                    codebaseName?: string | null;
+                    runId?: string;
+                    workflowName?: string;
+                    day?: string;
+                    nodeId?: string | null;
+                    /** @enum {string|null} */
+                    kind?: "advisor" | "subagent" | null;
+                };
+                metrics: {
+                    tokensInput: number | null;
+                    tokensOutput: number | null;
+                    tokensReasoning: number | null;
+                    tokensCacheRead: number | null;
+                    tokensCacheWrite: number | null;
+                    requests: number | null;
+                    reportedUsd: number | null;
+                    estimatedUsd: number | null;
+                    recordCount: number;
+                    missingTokensInput: number;
+                    missingTokensOutput: number;
+                    missingTokensReasoning: number;
+                    missingTokensCacheRead: number;
+                    missingTokensCacheWrite: number;
+                    missingRequests: number;
+                    rowsMissingUsd: number;
+                };
+            }[];
+            coverage: {
+                usageEventCount: number;
+                ledgeredEventCount: number;
+                unledgeredEventCount: number;
+                hasRecordedUsage: boolean;
+                /** @enum {boolean} */
+                historicalBackfill: false;
+                /** @enum {string} */
+                filterScope: "date-project-run-node";
+            };
+        } | null;
         ValidateWorkflowResponse: {
             valid: boolean;
             errors?: string[];
@@ -4354,11 +4503,22 @@ export interface components {
             id: string;
             name: string;
             reasoning: boolean;
-            cost: {
-                input: number;
-                output: number;
-            };
+            cost: components["schemas"]["PiModelCost"];
             contextWindow: number;
+        };
+        PiModelCost: {
+            input: number;
+            output: number;
+            cacheRead: number;
+            cacheWrite: number;
+            tiers?: components["schemas"]["PiModelCostTier"][];
+        };
+        PiModelCostTier: {
+            inputTokensAbove: number;
+            input: number;
+            output: number;
+            cacheRead: number;
+            cacheWrite: number;
         };
         OpencodeCredentialListResponse: {
             providers: components["schemas"]["OpencodeCredentialProvider"][];

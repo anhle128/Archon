@@ -3,6 +3,7 @@ import { toRun, type Run } from '../primitives/run';
 import { toRunEvent, type RunEvent } from '../primitives/event';
 import type { RunStatus } from '../lib/run-status';
 import type { components } from '@/lib/api.generated';
+import type { UsageReport } from './usage';
 
 export interface ListRunsOptions {
   codebaseId?: string;
@@ -60,16 +61,19 @@ export async function listGlobalCounts(): Promise<RunCounts> {
   return normalizeCounts(res.counts);
 }
 
-interface RunDetailResponse {
-  run: Parameters<typeof toRun>[0];
-  events: Parameters<typeof toRunEvent>[0][];
-}
+/** GET /api/workflows/runs/:id — retains generated `usage` (nullable report). */
+export type RunDetailResponse = components['schemas']['WorkflowRunDetail'];
 
-export async function getRun(id: string): Promise<{ run: Run; events: RunEvent[] }> {
+export async function getRun(
+  id: string
+): Promise<{ run: Run; events: RunEvent[]; usage: UsageReport | null }> {
   const res = await requestJson<RunDetailResponse>(`/api/workflows/runs/${encodeURIComponent(id)}`);
+  // Generated UsageReport schema may already be `T | null` from OpenAPI nullable naming.
+  const rawUsage = res.usage as UsageReport | null | undefined;
   return {
     run: toRun(res.run),
     events: res.events.map(toRunEvent),
+    usage: rawUsage === undefined ? null : rawUsage,
   };
 }
 

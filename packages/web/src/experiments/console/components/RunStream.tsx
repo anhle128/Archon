@@ -15,6 +15,7 @@ import type {
   ErrorEvent,
 } from '../primitives/event';
 import { StreamCard } from './StreamCard';
+import type { UsageReport, UsageReportGroup } from '../skills/usage';
 
 interface RunStreamProps {
   messages: Message[];
@@ -23,6 +24,8 @@ interface RunStreamProps {
   showSystem: boolean;
   /** `'all'` shows every node; otherwise restrict the stream to one node's entries. */
   selectedNodeId: string;
+  /** Direct-run usage grouped by node from GET detail (`null` = unavailable). */
+  usage: UsageReport | null;
 }
 
 /**
@@ -137,10 +140,24 @@ export function RunStream({
   showToolCalls,
   showSystem,
   selectedNodeId,
+  usage,
 }: RunStreamProps): ReactElement {
   // Single source for the folded nodes — consumed by both the timeline (one
   // divider per node) and the node-filter window so they can't drift.
   const nodeRuns = useMemo(() => foldNodeRuns(events), [events]);
+
+  // Cumulative usage per exact persisted step name (all attempts/iterations).
+  const usageByNode = useMemo(() => {
+    const map = new Map<string, UsageReportGroup>();
+    if (usage?.groupBy !== 'node') return map;
+
+    for (const g of usage.groups) {
+      const id = g.dimensions.nodeId;
+      if (id === null || id === undefined || id === '') continue;
+      map.set(id, g);
+    }
+    return map;
+  }, [usage]);
 
   const timeline = useMemo<TimelineEntry[]>(() => {
     const entries: TimelineEntry[] = [];
@@ -308,6 +325,7 @@ export function RunStream({
           return <ToolCallItem key={entry.key} call={entry.call} timestamp={entry.timestamp} />;
         }
         if (entry.kind === 'node') {
+          const nodeUsage = usageByNode.get(entry.node.nodeId);
           return (
             <NodeDivider
               key={entry.key}
@@ -317,14 +335,20 @@ export function RunStream({
               durationMs={entry.node.durationMs}
               timestamp={entry.node.startedAt}
               costUsd={entry.node.costUsd}
+              reportedUsd={nodeUsage?.metrics.reportedUsd}
+              estimatedUsd={nodeUsage?.metrics.estimatedUsd}
+              hasLedgerUsage={nodeUsage !== undefined}
               numTurns={entry.node.numTurns}
               stopReason={entry.node.stopReason}
               skipReason={entry.node.skipReason}
               skipExpr={entry.node.skipExpr}
               showDetail={entry.showDetail}
+              usageGroup={nodeUsage}
+              runUsage={usage}
             />
           );
         }
+
         if (entry.kind === 'system') {
           const ev = entry.event;
           const isError = ev.kind === 'error';

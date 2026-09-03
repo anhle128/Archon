@@ -1,5 +1,7 @@
 /** Centralized cache key constructors. Refactoring key shape = one file. */
 
+import { usageCacheKey, type UsageQuery } from '../skills/usage';
+
 /** A scope is either the literal 'all' or a project id. Encoded as a string. */
 export type Scope = string;
 export const ALL_SCOPE = 'all';
@@ -36,4 +38,6 @@ export const K = {
   providerConnections: 'provider-connections' as const,
   userAiPrefs: 'user-ai-prefs' as const,
   piModels: 'pi-models' as const,
+  /** Usage report key includes every filter + groupBy value. */
+  usage: (query: UsageQuery): string => usageCacheKey(query),
 } as const;

@@ -3,14 +3,23 @@ import { Link } from 'react-router';
 import { LiveDot } from './LiveDot';
 import { OriginBadge } from './OriginBadge';
 import type { Run } from '../primitives/run';
-import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
+import {
+  shortRunId,
+  formatElapsed,
+  elapsedSince,
+  formatCost,
+  formatUsdAmount,
+} from '../lib/format';
 import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
 import { statusLabel, statusTextClass } from '../lib/run-status';
+import type { UsageReport } from '../skills/usage';
 
 interface RunDetailHeaderProps {
   run: Run;
   projectName: string;
   projectId: string;
+  /** Direct-run usage from GET detail (`null` = query failed). */
+  usage: UsageReport | null;
 }
 
 function useLiveElapsed(run: Run): string {
@@ -31,6 +40,7 @@ export function RunDetailHeader({
   run,
   projectName,
   projectId,
+  usage,
 }: RunDetailHeaderProps): ReactElement {
   const elapsed = useLiveElapsed(run);
   const isPaused = run.status === 'paused';
@@ -112,16 +122,53 @@ export function RunDetailHeader({
       {/* Origin */}
       <OriginBadge origin={run.origin} />
 
-      {/* Cost + elapsed + IDE — right-aligned */}
+      {/* Cost + elapsed + IDE — right-aligned.
+          Direct ledger reported/estimated stay separate. usage:null is a warning,
+          hasRecordedUsage:false is not-recorded — neither is zero. Legacy run.costUsd
+          only appears with an explicit label when the new ledger has nothing. */}
       <div className="ml-auto flex items-center gap-3">
-        {typeof run.costUsd === 'number' ? (
+        {usage === null ? (
+          <span
+            className="font-mono text-[11px] text-warning"
+            title="Usage report query failed for this run"
+          >
+            usage unavailable
+          </span>
+        ) : usage.coverage.hasRecordedUsage ? (
+          <span
+            className="flex items-center gap-2 font-mono text-[12px] tabular-nums text-text-secondary"
+            title="Direct-run ledger only (no child rollup)"
+          >
+            <span title="Provider-reported USD">
+              {formatUsdAmount(usage.totals.reportedUsd, false)}
+            </span>
+            <span className="text-text-tertiary" aria-hidden>
+              /
+            </span>
+            <span title="Estimated USD">{formatUsdAmount(usage.totals.estimatedUsd, true)}</span>
+            <span className="text-[10px] uppercase tracking-[0.08em] text-text-tertiary">
+              direct
+            </span>
+          </span>
+        ) : typeof run.costUsd === 'number' ? (
           <span
             className="font-mono text-[12px] tabular-nums text-text-secondary"
-            title="Total agent cost"
+            title="Legacy run total — not from the usage ledger"
           >
             {formatCost(run.costUsd)}
+            <span className="ml-1 text-[10px] uppercase tracking-[0.08em] text-text-tertiary">
+              legacy total
+            </span>
           </span>
-        ) : null}
+        ) : (
+          <span
+            className="font-mono text-[11px] text-text-tertiary"
+            title="No usage events recorded for this run"
+          >
+            not recorded
+          </span>
+        )}
+
         <span className="font-mono text-[12px] tabular-nums text-text-tertiary">{elapsed}</span>
         {canOpenIde && run.workingPath !== null ? (
           <button
