@@ -1,5 +1,11 @@
 ## Codebase Patterns
 
+### Executor records usage once per AI pass in finally
+- **Where**: `packages/workflows/src/dag-executor.ts` `runStreamPass` + direct-loop attempts
+- **Pattern**: Capture last non-empty `msg.usageBreakdown` on result chunks (overwrite for cumulative results). In a non-throwing `finally`, call `deps.usageRecorder.recordWorkflowUsage` once with stepName (namespaced for loop_group), agentProvider from execution context, retryEpoch from run metadata, reaskAttempt, terminalError/errorSubtype from the owning result, and iteration only for direct loops. Never throw into node outcome.
+- **Example**: `await deps.usageRecorder.recordWorkflowUsage({ runId, stepName, agentProvider: provider, usageBreakdown, retryEpoch, iteration: null, reaskAttempt, terminalError, errorSubtype })`
+
+
 
 ### Usage report query is dialect-safe ledger aggregates
 - **Where**: `packages/core/src/db/usage-report.ts`, `packages/core/src/schemas/usage-report.ts`
@@ -356,5 +362,31 @@
 - Keep coverage param/clause building separate from ledger filters so agent/provider/model/kind never leak into integrity counts.
 - Identify Promise.all mock routes by SQL shape (GROUP BY vs usage_event_count vs totals), not call order.
 - Template literals without interpolation fail the quotes lint — use single-quoted strings with escaped inner quotes for SQL fragments.
+
+---
+
+## 2026-09-04 — US-010: Record every workflow AI pass
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/dag-executor.ts` — capture last valid usageBreakdown per standard runStreamPass and direct-loop attempt; record once in non-throwing finally with reask/retry/iteration/error metadata
+- `packages/workflows/src/dag-executor.test.ts` — usage recording matrix (success, SDK error, throw-without-usage, cumulative results, reasks, outer retry, loop iterations, loop-group namespaced step, retry epochs, non-AI, recorder rejection)
+- `packages/workflows/src/subrun.test.ts` — child AI usage records on child run id only; parent wrapper does not copy
+
+**Acceptance criteria verified**:
+- [x] runStreamPass captures last valid terminal usageBreakdown and records exactly once when usage exists
+- [x] Standard-path recording in non-throwing finally before reask decisions and before error results escape, with reask attempt, retry epoch, terminal error flag, error subtype
+- [x] Direct-loop streaming path records every usage-bearing iteration/reask with iteration metadata and retry epoch
+- [x] Loop-group AI body nodes use standard path + namespaced step name; no group-level duplicate
+- [x] No usage for bash/script/command/gate/route/cancel/workflow wrapper unless they hit traced AI paths
+- [x] Child runs record only their own direct usage; parents do not copy child usage
+- [x] Exception/abort with no terminal usage remains unrecorded; recorder rejection never changes node outcome
+- [x] Tests cover the AC matrix across success, SDK error with usage, generator throw, cumulative results, reasks, outer retries, loop iterations, loop-group namespaced ids, pause/resume epochs, child runs, non-AI nodes
+
+**Learnings**:
+- Record in `finally` of each pass/attempt so SDK error throws still persist usage before the outer failure path.
+- With try/catch/finally, `return await failLoopNode(...)` is required so the async finally completes under return-await lint.
+- Loop-group body iteration stays on lifecycle events only — usage records use `iteration: null` on the standard path; direct loops pass the loop index.
+- Full `packages/workflows` suite still has unrelated pre-existing flakes (native Ralph model env, bundled opus parse, Plannotator OOM) that fail in isolation without this change.
 
 ---

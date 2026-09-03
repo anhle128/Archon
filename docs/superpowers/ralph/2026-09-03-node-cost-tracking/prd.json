@@ -212,8 +212,8 @@
         "US-008"
       ],
       "priority": 10,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 10. Files: packages/workflows/src/dag-executor.ts, dag-executor.test.ts, subrun.test.ts. Standard + direct-loop recording with finally path; 12 usage matrix tests + child-only subrun assertion green."
     },
     {
       "id": "US-011",
