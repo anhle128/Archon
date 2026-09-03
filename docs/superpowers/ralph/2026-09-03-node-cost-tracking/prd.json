@@ -38,8 +38,8 @@
         "US-001"
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 2. Files: packages/providers/src/claude/provider.ts, claude/provider.test.ts, codex/provider.ts, codex/provider.test.ts, grok/event-parser.ts, grok/event-parser.test.ts, grok/provider.ts. Full packages/providers bun run test green."
     },
     {
       "id": "US-003",

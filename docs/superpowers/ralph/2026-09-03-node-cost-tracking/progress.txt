@@ -15,6 +15,22 @@
 - **Pattern**: Each new test file gets its own `bun test <file>` invocation chained with `&&` to avoid `mock.module` pollution.
 - **Example**: `bun test src/usage-breakdown.test.ts && bun test src/observability.test.ts`
 
+### Claude usage-bearing API failures yield terminal isError with accumulated usage
+- **Where**: `packages/providers/src/claude/provider.ts` sendQuery retry loop + `ClaudeApiResultError`
+- **Pattern**: Normalize `modelUsage` before API-failure throw; attach `usageBreakdown` on `ClaudeApiResultError`; accumulate across retries; on final typed API failure with usage, yield `isError` result and return (preserve throw when no usage). Merge prior retry usage into successful terminal results.
+- **Example**: rate_limit with modelUsage → 4 attempts → one result chunk with 4 breakdown rows
+
+### Grok multi-model usage never apportions aggregates
+- **Where**: `packages/providers/src/grok/event-parser.ts` `buildUsageBreakdown`
+- **Pattern**: One valid model gets aggregate tokens/USD/requests; multiple models get requests-only rows + one `model: null`/`unknown` aggregate row; no model uses requested model when known else unknown.
+- **Example**: two modelCalls keys + usage → two requests rows + one unknown aggregate
+
+### Codex cache subtraction keeps legacy total input
+- **Where**: `packages/providers/src/codex/provider.ts` `extractUsageFromCodexEvent`
+- **Pattern**: `TokenUsage.input` stays SDK `input_tokens`; breakdown `inputTokens = max(input - cached, 0)` with `cacheReadTokens = cached`; reasoning is subset of output; no requests/USD.
+- **Example**: 100/40 cached → legacy input 100, breakdown inputTokens 60
+
+
 ---
 
 ## 2026-09-04 — US-001: Provider usage contract and normalizer
@@ -43,5 +59,35 @@
 - Keep `modelUsage` without a `@deprecated` JSDoc tag in this codebase style; a plain compatibility note is enough and avoids unfinished-deprecation lint pressure.
 - Issue codes must never embed raw payload values — use `forbidden_field:${key}` only.
 - Story gate for shared MessageChunk changes is the full providers package test script, not only the new file.
+
+---
+
+## 2026-09-04 — US-002: Normalize SDK-native providers
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/claude/provider.ts` — map SDK modelUsage → usageBreakdown only (no new raw modelUsage producer); retry accumulation; usage-bearing final API error yield
+- `packages/providers/src/claude/provider.test.ts` — multi-model/cache/zero/retry/final-error/no-usage-throw coverage
+- `packages/providers/src/codex/provider.ts` — turn.completed breakdown with requested model + cache clamp + reasoning
+- `packages/providers/src/codex/provider.test.ts` — default result fixtures + cache/reasoning/incomplete coverage
+- `packages/providers/src/grok/event-parser.ts` — requested-model context + multi-model safe breakdown
+- `packages/providers/src/grok/event-parser.test.ts` — single/multi/none/malformed modelCalls coverage
+- `packages/providers/src/grok/provider.ts` — pass effective model into parser
+
+**Acceptance criteria verified**:
+- [x] Claude maps every SDK modelUsage entry to anthropic/reported/cache/cost fields; omits requests; keeps failure classification/retry
+- [x] Claude carries usage across retries into terminal success and yields accumulated usage on final typed errors; no synthesis without usage
+- [x] Codex maps openai + requested/unknown model, cache subtraction, reasoning subset, no requests/USD
+- [x] Codex keeps legacy TokenUsage.input as total input; no usage on incomplete/failed turns
+- [x] Grok uses requested model context; single/multi/no-model cases; never apportions aggregates
+- [x] Grok preserves raw modelUsage alongside usageBreakdown
+- [x] Provider tests cover the AC matrix; full packages/providers bun run test green
+- [x] lint --max-warnings 0 and format:check green
+
+**Learnings**:
+- Existing Codex `toEqual` result fixtures must include `usageBreakdown` once turn.completed always emits it.
+- Usage-bearing Claude API finals change from throw→isError yield only when accumulated usage exists; no-usage auth/rate-limit tests keep throw semantics.
+- Grok multi-model rows without positive `modelCalls` are skipped for requests-only emission; single-model still attaches aggregates even without requests.
+- Plan forbids new raw `modelUsage` producers; only Grok keeps its existing raw emission. Claude/Codex emit `usageBreakdown` only.
 
 ---
