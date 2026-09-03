@@ -111,6 +111,14 @@ mock.module('../config/config-loader', () => ({
   loadRepoConfig: mock(() => Promise.resolve(null)),
 }));
 
+// usage-recorder pulls estimate → loadGlobalConfig; keep this suite focused on
+// the store adapter by stubbing the recorder factory.
+mock.module('./usage-recorder', () => ({
+  createWorkflowUsageRecorder: mock(() => ({
+    recordWorkflowUsage: mock(() => Promise.resolve()),
+  })),
+}));
+
 // Per-user provider credentials mocks
 const mockIsPerUserProviderKeysEnabled = mock(() => false);
 mock.module('../credentials/config', () => ({
@@ -1016,11 +1024,13 @@ describe('createWorkflowStore', () => {
 });
 
 describe('createWorkflowDeps', () => {
-  test('returns WorkflowDeps with store, getAgentProvider, and loadConfig', () => {
+  test('returns WorkflowDeps with store, getAgentProvider, loadConfig, and usageRecorder', () => {
     const deps = createWorkflowDeps();
     expect(deps.store).toBeDefined();
     expect(typeof deps.getAgentProvider).toBe('function');
     expect(typeof deps.loadConfig).toBe('function');
+    expect(deps.usageRecorder).toBeDefined();
+    expect(typeof deps.usageRecorder.recordWorkflowUsage).toBe('function');
   });
 
   test('store from createWorkflowDeps has all IWorkflowStore methods', () => {

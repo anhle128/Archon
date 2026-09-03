@@ -360,6 +360,9 @@ function makeProvider() {
 function makeDeps(store: IWorkflowStore): WorkflowDeps {
   return {
     store,
+    usageRecorder: {
+      recordWorkflowUsage: mock(() => Promise.resolve()),
+    },
     getAgentProvider: mock(() => makeProvider()) as unknown as WorkflowDeps['getAgentProvider'],
     loadConfig: mock(
       (): Promise<WorkflowConfig> =>

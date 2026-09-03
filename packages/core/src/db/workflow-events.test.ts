@@ -28,6 +28,7 @@ mock.module('./connection', () => ({
 
 import {
   createWorkflowEvent,
+  insertWorkflowEvent,
   listWorkflowEvents,
   listRecentEvents,
   getEpochAwareCompletedDagNodeOutputs,
@@ -103,6 +104,55 @@ describe('workflow-events', () => {
         workflow_run_id: 'run-456',
         event_type: 'step_started',
       });
+    });
+  });
+
+  describe('insertWorkflowEvent', () => {
+    test('returns generated id and accepts caller-supplied id', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      const generated = await insertWorkflowEvent(mockQuery, {
+        workflow_run_id: 'run-456',
+        event_type: 'step_started',
+      });
+      expect(typeof generated).toBe('string');
+      expect(generated.length).toBeGreaterThan(0);
+
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      const callerId = await insertWorkflowEvent(mockQuery, {
+        id: 'evt-caller',
+        workflow_run_id: 'run-456',
+        event_type: 'node_usage_recorded',
+        step_name: 'planner',
+        data: { schema_version: 1 },
+      });
+      expect(callerId).toBe('evt-caller');
+      const [, params] = mockQuery.mock.calls[1] as [string, unknown[]];
+      expect(params[0]).toBe('evt-caller');
+      expect(params[2]).toBe('node_usage_recorded');
+    });
+
+    test('ignoreDuplicateId appends ON CONFLICT DO NOTHING only when requested', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      await insertWorkflowEvent(
+        mockQuery,
+        {
+          id: 'evt-dup',
+          workflow_run_id: 'run-456',
+          event_type: 'node_usage_recorded',
+        },
+        { ignoreDuplicateId: true }
+      );
+      const [sql] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(sql).toContain('ON CONFLICT (id) DO NOTHING');
+
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      await insertWorkflowEvent(mockQuery, {
+        id: 'evt-plain',
+        workflow_run_id: 'run-456',
+        event_type: 'step_started',
+      });
+      const [plainSql] = mockQuery.mock.calls[1] as [string, unknown[]];
+      expect(plainSql).not.toContain('ON CONFLICT');
     });
   });
 

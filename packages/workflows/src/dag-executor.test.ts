@@ -265,6 +265,9 @@ function createMockDeps(storeOverride?: IWorkflowStore): WorkflowDeps {
   const store = storeOverride ?? createMockStore();
   return {
     store,
+    usageRecorder: {
+      recordWorkflowUsage: mock(() => Promise.resolve()),
+    },
     getAgentProvider: mockGetAgentProviderDag,
     loadConfig: mock(() =>
       Promise.resolve({
