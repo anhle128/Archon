@@ -5,7 +5,7 @@ import {
   buildRetryWorkflowNodePath,
   getWorkflowNodeRetryActionState,
   getWorkflowRetryRunIneligibility,
-  isRetryableFailedNode,
+  isRetryableNode,
 } from './workflow-retry';
 import type { RetryableNodeState, WorkflowRetryRunContext } from './workflow-retry';
 
@@ -28,11 +28,12 @@ function failedNode(overrides: Partial<RetryableNodeState> = {}): RetryableNodeS
 }
 
 describe('workflow retry helpers', () => {
-  test('identifies failed DAG nodes that can show the retry action', () => {
-    expect(isRetryableFailedNode(failedNode())).toBe(true);
-    expect(isRetryableFailedNode(failedNode({ retryEpoch: 2, latestRetryEpoch: 2 }))).toBe(true);
-    expect(isRetryableFailedNode(failedNode({ retryEpoch: 1, latestRetryEpoch: 2 }))).toBe(false);
-    expect(isRetryableFailedNode(failedNode({ status: 'completed' }))).toBe(false);
+  test('identifies DAG nodes that can show the retry action', () => {
+    expect(isRetryableNode(failedNode())).toBe(true);
+    expect(isRetryableNode(failedNode({ retryEpoch: 2, latestRetryEpoch: 2 }))).toBe(true);
+    expect(isRetryableNode(failedNode({ retryEpoch: 1, latestRetryEpoch: 2 }))).toBe(false);
+    expect(isRetryableNode(failedNode({ status: 'completed' }))).toBe(true);
+    expect(isRetryableNode(failedNode({ status: 'running' }))).toBe(false);
   });
 
   test('marks web-created failed or cancelled workflow runs as eligible', () => {

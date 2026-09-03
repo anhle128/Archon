@@ -21489,9 +21489,14 @@ describe('executeDagWorkflow -- production Plannotator gate integration', () => 
     await mkdir(ralphDir, { recursive: true });
     await mkdir(commandsDir, { recursive: true });
     await mkdir(featureDir, { recursive: true });
+    await mkdir(join(ralphDir, 'scripts', 'bash'), { recursive: true });
     await writeFile(
       join(ralphDir, 'ralph.sh'),
       `#!/usr/bin/env bash\nprintf 'ralph\\n' >> '${marker}'\n`
+    );
+    await writeFile(
+      join(ralphDir, 'scripts', 'bash', 'tasks-to-prd.sh'),
+      `#!/usr/bin/env bash\nexit 0\n`
     );
     await writeFile(
       join(root, '.specify', 'feature.json'),
@@ -21820,7 +21825,6 @@ describe('executeDagWorkflow -- production Plannotator gate integration', () => 
       'speckit-converge',
       'speckit-converge-review-gate:prepare',
       'speckit-converge-review-gate',
-      'ralph-tasks-to-ralph',
       'update-bmad-sprint-status',
       'create-pull-request',
     ]);
@@ -21828,7 +21832,6 @@ describe('executeDagWorkflow -- production Plannotator gate integration', () => 
       'speckit-converge',
       'speckit-converge-review-gate:prepare',
       'speckit-converge-review-gate',
-      'ralph-tasks-to-ralph',
       'speckit-converge',
       'update-bmad-sprint-status',
       'create-pull-request',
@@ -21885,8 +21888,6 @@ describe('executeDagWorkflow -- production Plannotator gate integration', () => 
     await execution;
 
     expect(calls.filter(nodeId => nodeId === 'speckit-converge')).toHaveLength(maxIterations + 1);
-    expect(calls.filter(nodeId => nodeId === 'ralph-tasks-to-ralph')).toHaveLength(maxIterations);
-    expect(calls.filter(nodeId => nodeId === 'speckit-final-ralph-tasks-to-ralph')).toHaveLength(1);
     expect(calls.filter(nodeId => nodeId === 'speckit-final-ralph-sync-back')).toHaveLength(1);
     expect(calls.filter(nodeId => nodeId === 'update-bmad-sprint-status')).toHaveLength(1);
     expect(calls.filter(nodeId => nodeId === 'create-pull-request')).toHaveLength(1);

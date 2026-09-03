@@ -747,7 +747,9 @@ describe('workflows database', () => {
       expect(updateSql).toContain("SET status = 'running'");
       expect(updateSql).toContain('completed_at = NULL');
       expect(updateSql).toContain("jsonb_set(\n         COALESCE(metadata, '{}'::jsonb)");
-      expect(updateSql).toContain("WHERE id = $1 AND status IN ('failed', 'cancelled')");
+      expect(updateSql).toContain(
+        "WHERE id = $1 AND status IN ('failed', 'cancelled', 'completed')"
+      );
       expect(updateParams).toEqual(['workflow-run-123']);
       expect(mockQuery).toHaveBeenNthCalledWith(
         2,

@@ -3406,7 +3406,7 @@ export async function workflowRetryNodeCommand(
   }
   if (!RETRYABLE_WORKFLOW_STATUSES.includes(run.status)) {
     throw new Error(
-      `Cannot retry workflow run '${runId}' with status '${run.status}'. Only failed or cancelled runs can be retried.`
+      `Cannot retry workflow run '${runId}' with status '${run.status}'. Only failed, cancelled, or completed runs can be retried.`
     );
   }
 

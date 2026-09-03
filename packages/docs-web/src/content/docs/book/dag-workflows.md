@@ -345,10 +345,10 @@ nodes:
 
 ---
 
-## Retry a Failed Node
+## Retry a Node
 
-When a DAG run fails or is cancelled, you can retry the failed node instead of resuming the whole failed run.
-Node retry reuses the same workflow run, reruns the selected failed node and its current DAG descendants, and preserves successful upstream and sibling outputs.
+When a DAG run fails, is cancelled, or has completed, you can retry a single node instead of resuming the whole run.
+Node retry reuses the same workflow run, reruns the selected node and its current DAG descendants, and preserves successful upstream and sibling outputs.
 
 Use node retry when one node failed after earlier work succeeded:
 
@@ -356,20 +356,20 @@ Use node retry when one node failed after earlier work succeeded:
 archon workflow retry-node <run-id> <node-id>
 ```
 
-The Web UI shows a retry action for eligible failed nodes on web-created failed or cancelled runs.
+The Web UI shows a retry action for eligible nodes on web-created failed, cancelled, or completed runs.
 If the run was created from the CLI or another non-web surface, use the CLI command above from the run's repository or Archon-managed worktree.
 
 | Behavior | What happens |
 |----------|--------------|
-| Retry target | The target node must have a latest effective status of `failed`. Skipped downstream nodes are not retry targets. |
+| Retry target | The target node's latest effective status must be `failed` or `completed`. A completed node can be re-run to redo work an earlier attempt got wrong. Skipped and never-run nodes are not retry targets. |
 | Rerun scope | Archon invalidates the target node and all descendants in the current workflow DAG. Completed upstream nodes and independent siblings stay valid. |
 | Retry epochs | Each manual retry increments the run's retry epoch. Historical events, logs, and artifacts remain in the audit history; current node state is projected from the latest epoch. |
 | Checkout reset | For workflows that can mutate the checkout, Archon records Git-visible checkpoints before executable nodes and resets the checkout to the selected checkpoint before retry execution. |
-| Safety refs | Before the reset, dirty Git-visible changes from the failed attempt are saved to a local safety ref/commit under `refs/archon/retry-safety/`. |
+| Safety refs | Before the reset, dirty Git-visible changes from the previous attempt are saved to a local safety ref/commit under `refs/archon/retry-safety/`. |
 | Untracked files | Non-ignored untracked files are saved in checkpoint and safety commits. Ignored files are not added or cleaned. |
 | No-reset workflows | If `mutates_checkout: false` is set, Archon skips checkout checkpoint/reset setup and retries the node without resetting files. |
 
-`retry-node` is different from `resume`. `archon workflow resume <run-id>` resumes a failed run and skips completed nodes, while `retry-node` deliberately invalidates one failed node plus descendants so that branch can run again with a fresh retry epoch.
+`retry-node` is different from `resume`. `archon workflow resume <run-id>` resumes a failed run and skips completed nodes, while `retry-node` deliberately invalidates one node plus descendants so that branch can run again with a fresh retry epoch.
 
 Route-loop controller nodes cannot be retried directly.
 Retry a source dependency listed in the controller's `depends_on` so the fresh source output flows through the controller again.

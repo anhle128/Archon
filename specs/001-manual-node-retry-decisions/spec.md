@@ -116,9 +116,9 @@ As an operator, I can inspect old failed attempts, retry attempts, checkpoints, 
 
 ### Retry Eligibility And Scope
 
-- **FR-001**: System MUST expose manual retry only for DAG nodes whose latest effective node status is `failed`, including failed nodes whose ancestor also has latest effective status `failed`.
-- **FR-002**: System MUST expose manual retry only when the containing workflow run status is `failed`.
-- **FR-003**: System MUST NOT expose manual retry when the run status is `pending`, `running`, `paused`, `completed`, or `cancelled`.
+- **FR-001**: System MUST expose manual retry for DAG nodes whose latest effective node status is `failed` or `completed`, including nodes whose ancestor also has latest effective status `failed`. A `completed` node is a valid target so an operator can rerun work an earlier attempt produced incorrectly (for example a node that errored but was recorded as completed).
+- **FR-002**: System MUST expose manual retry when the containing workflow run status is `failed`, `cancelled`, or `completed`.
+- **FR-003**: System MUST NOT expose manual retry when the run status is `pending`, `running`, or `paused`.
 - **FR-004**: System MUST NOT expose a retry action on downstream `skipped` nodes; users retry the failed ancestor instead.
 - **FR-005**: System MUST reuse the existing `workflow_runs` row for manual retry and MUST NOT create a linked replacement run.
 - **FR-006**: System MUST compute invalidated nodes as the retry target plus all descendants in the current workflow DAG.
@@ -231,7 +231,7 @@ Retry node: <nodeId>
 - **FR-076**: The API route MUST be registered with `registerOpenApiRoute(createRoute({...}), handler)` and route schemas MUST live in `packages/server/src/routes/schemas/`.
 - **FR-077**: The OpenAPI path MUST use repository route syntax with `{runId}` and `{nodeId}` parameters.
 - **FR-078**: API retry MUST validate run existence, target node existence, latest effective node status, run status, web retry eligibility, and requester authorization before mutating state. Authorization MUST resolve the authenticated web requester using the existing API auth context; when a run has `user_id`, the requester MUST match that user or have `admin` role. Runs without `user_id` remain retryable only in unauthenticated solo/local mode. This check MUST occur before the status CAS, retry epoch increment, safety ref/commit, checkout reset, session deletion, or executor dispatch.
-- **FR-079**: API retry MUST use compare-and-swap from `failed` to `running` at the start of accepted retry setup; if the status changed, API MUST return an error rather than double-dispatching, and if setup/reset later fails the same run MUST be restored to `failed`.
+- **FR-079**: API retry MUST use compare-and-swap from a retryable run status (`failed`, `cancelled`, or `completed`) to `running` at the start of accepted retry setup; if the status changed, API MUST return an error rather than double-dispatching, and if setup/reset later fails the same run MUST be restored to `failed`.
 - **FR-080**: API retry MUST prepare retry state, safety ref/commit, checkout reset, invalidation metadata, session deletion, and checkpoint lookup before dispatching execution.
 - **FR-081**: API retry dispatch MUST be asynchronous like current web resume behavior.
 - **FR-082**: Because current foreground resume detection finds only failed/paused runs, implementation MUST provide a retry-specific execution handoff after the `failed -> running` CAS. It MUST NOT rely on existing `/workflow run` resume lookup to find a run already set to `running`.
@@ -252,7 +252,7 @@ Retry node: <nodeId>
 
 ### Web UI
 
-- **FR-094**: Web UI MUST show a retry button only on failed nodes whose containing run is failed and web-retry-eligible.
+- **FR-094**: Web UI MUST show a retry button only on nodes whose latest effective status is `failed` or `completed`, whose containing run is `failed`, `cancelled`, or `completed`, and which is web-retry-eligible.
 - **FR-095**: Web UI MUST NOT show retry on skipped downstream nodes.
 - **FR-096**: Web UI MUST require a confirmation dialog before retry.
 - **FR-097**: Confirmation copy MUST mention: tracked files reset to checkpoint, dirty changes are auto-committed to a safety ref first, untracked/ignored files are not deleted, and target/downstream nodes rerun.

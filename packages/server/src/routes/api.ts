@@ -1111,7 +1111,7 @@ const retryWorkflowNodePreviewRoute = createRoute({
   method: 'get',
   path: '/api/workflows/runs/{runId}/nodes/{nodeId}/retry/preview',
   tags: ['Workflows'],
-  summary: 'Preview checkout state before retrying one failed DAG node',
+  summary: 'Preview checkout state before retrying one DAG node',
   request: { params: retryWorkflowNodeParamsSchema },
   responses: {
     200: {
@@ -1131,7 +1131,7 @@ const retryWorkflowNodeRoute = createRoute({
   method: 'post',
   path: '/api/workflows/runs/{runId}/nodes/{nodeId}/retry',
   tags: ['Workflows'],
-  summary: 'Retry one failed DAG node and its descendants for a failed or cancelled run',
+  summary: 'Retry one DAG node and its descendants for a failed, cancelled, or completed run',
   request: {
     params: retryWorkflowNodeParamsSchema,
     body: {
@@ -2768,7 +2768,6 @@ export function registerApiRoutes(
         return 409;
       case 'run_not_retryable':
       case 'node_not_found':
-      case 'node_not_failed':
       case 'node_not_retryable':
       case 'checkpoint_unavailable':
       case 'git_reset_failed':
@@ -4003,7 +4002,7 @@ export function registerApiRoutes(
         return apiError(
           c,
           400,
-          `Cannot retry workflow in '${run.status}' status. Only failed or cancelled runs can be retried.`
+          `Cannot retry workflow in '${run.status}' status. Only failed, cancelled, or completed runs can be retried.`
         );
       }
 
@@ -4089,7 +4088,7 @@ export function registerApiRoutes(
         return apiError(
           c,
           400,
-          `Cannot retry workflow in '${run.status}' status. Only failed or cancelled runs can be retried.`
+          `Cannot retry workflow in '${run.status}' status. Only failed, cancelled, or completed runs can be retried.`
         );
       }
 
