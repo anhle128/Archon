@@ -20,7 +20,8 @@
 import { createLogger } from '@archon/paths';
 import type { AssistantMessageEvent, CopilotSession, SessionEvent } from '@github/copilot-sdk';
 
-import type { MessageChunk, TokenUsage } from '../../types';
+import type { MessageChunk, ModelUsageEntry, TokenUsage } from '../../types';
+import { toUsageBreakdown } from '../../usage-breakdown';
 import { tryParseStructuredOutput } from '../../shared/structured-output';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -107,20 +108,77 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
  * Coerce the SDK's `assistant.usage.data` shape into Archon's TokenUsage.
  * Returns undefined if neither input nor output token count is a number,
  * so callers don't emit a meaningless result chunk with {0, 0}.
+ * Reasoning is a subset of output and is never added twice.
  */
 export function normalizeCopilotUsage(raw?: {
   inputTokens?: number;
   outputTokens?: number;
+  reasoningTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
 }): TokenUsage | undefined {
   if (!raw) return undefined;
   const input = raw.inputTokens;
   const output = raw.outputTokens;
   if (typeof input !== 'number' && typeof output !== 'number') return undefined;
-  const usage: TokenUsage = {
+  return {
     input: typeof input === 'number' ? input : 0,
     output: typeof output === 'number' ? output : 0,
   };
-  return usage;
+}
+
+/**
+ * Map one Copilot `assistant.usage` payload to a normalized observation.
+ * Ignores `cost` (model multiplier, not USD). `kind: subagent` only when a
+ * non-empty parentToolCallId links the call; free-form initiator is ignored.
+ */
+export function mapCopilotUsageEntry(raw?: {
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  reasoningTokens?: number;
+  cost?: number;
+  parentToolCallId?: string;
+  initiator?: string;
+}): ModelUsageEntry | undefined {
+  if (!raw) return undefined;
+
+  const modelRaw = typeof raw.model === 'string' ? raw.model.trim() : '';
+  const entry: ModelUsageEntry = {
+    provider: 'github-copilot',
+    model: modelRaw.length > 0 ? modelRaw : null,
+    modelSource: modelRaw.length > 0 ? 'reported' : 'unknown',
+    requests: 1,
+  };
+
+  if (typeof raw.inputTokens === 'number') entry.inputTokens = raw.inputTokens;
+  if (typeof raw.outputTokens === 'number') entry.outputTokens = raw.outputTokens;
+  if (typeof raw.cacheReadTokens === 'number') entry.cacheReadTokens = raw.cacheReadTokens;
+  if (typeof raw.cacheWriteTokens === 'number') entry.cacheWriteTokens = raw.cacheWriteTokens;
+  if (typeof raw.reasoningTokens === 'number') entry.reasoningTokens = raw.reasoningTokens;
+
+  const parentToolCallId =
+    typeof raw.parentToolCallId === 'string' ? raw.parentToolCallId.trim() : '';
+  if (parentToolCallId.length > 0) entry.kind = 'subagent';
+
+  // data.cost is a multiplier — never USD.
+  void raw.cost;
+  void raw.initiator;
+
+  return entry;
+}
+
+function sumCopilotTokens(usages: readonly TokenUsage[]): TokenUsage | undefined {
+  if (usages.length === 0) return undefined;
+  return usages.reduce(
+    (acc, next) => ({
+      input: acc.input + next.input,
+      output: acc.output + next.output,
+    }),
+    { input: 0, output: 0 }
+  );
 }
 
 /**
@@ -143,8 +201,11 @@ export function normalizeCopilotUsage(raw?: {
 export interface EventMapperContext {
   /** Populated by tool.execution_start, read by tool.execution_complete. */
   toolCallIdToName: Map<string, string>;
-  /** Called when assistant.usage arrives; undefined for non-usage events. */
-  captureUsage: (usage: TokenUsage) => void;
+  /**
+   * Called for every assistant.usage event. Accumulates observations rather
+   * than overwriting so multi-call turns keep every row.
+   */
+  captureUsage: (usage: TokenUsage | undefined, entry: ModelUsageEntry | undefined) => void;
   /** Flagged on session.error; consumer decides whether to promote to isError on the terminal result. */
   markErrored: (errorMsg: string) => void;
 }
@@ -169,8 +230,9 @@ export function mapCopilotEvent(event: SessionEvent, ctx: EventMapperContext): M
       return [{ type: 'thinking', content }];
     }
     case 'assistant.usage': {
+      const entry = mapCopilotUsageEntry(event.data);
       const usage = normalizeCopilotUsage(event.data);
-      if (usage) ctx.captureUsage(usage);
+      if (entry || usage) ctx.captureUsage(usage, entry);
       return [];
     }
     case 'tool.execution_start': {
@@ -278,7 +340,8 @@ export async function* bridgeSession(
   const log = getLog();
   const queue = new AsyncQueue<BridgeQueueItem>();
   const toolCallIdToName = new Map<string, string>();
-  let capturedTokens: TokenUsage | undefined;
+  const capturedTokenEvents: TokenUsage[] = [];
+  const capturedUsageEntries: ModelUsageEntry[] = [];
   let errorMessage: string | undefined;
 
   // Structured-output buffer. Populated only when the caller supplied a
@@ -288,8 +351,9 @@ export async function* bridgeSession(
 
   const ctx: EventMapperContext = {
     toolCallIdToName,
-    captureUsage: (u: TokenUsage): void => {
-      capturedTokens = u;
+    captureUsage: (usage, entry): void => {
+      if (usage) capturedTokenEvents.push(usage);
+      if (entry) capturedUsageEntries.push(entry);
     },
     markErrored: (msg: string): void => {
       errorMessage = msg;
@@ -380,11 +444,15 @@ export async function* bridgeSession(
 
     // Terminal result chunk — always emit, even on error, so the executor
     // gets a session ID back (useful for resume).
+    const capturedTokens = sumCopilotTokens(capturedTokenEvents);
+    const usageBreakdown =
+      capturedUsageEntries.length > 0 ? toUsageBreakdown(capturedUsageEntries) : undefined;
     const result: MessageChunk = {
       type: 'result',
       sessionId: session.sessionId,
     };
     if (capturedTokens) result.tokens = capturedTokens;
+    if (usageBreakdown && usageBreakdown.length > 0) result.usageBreakdown = usageBreakdown;
     if (!sawAssistantContent && errorMessage) {
       result.isError = true;
       result.errors = [errorMessage];

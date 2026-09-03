@@ -1,6 +1,6 @@
 import { createLogger } from '@archon/paths';
 
-import type { MessageChunk, SendQueryOptions, TokenUsage } from '../../types';
+import type { MessageChunk, SendQueryOptions } from '../../types';
 import { getOrderedAgents, type NamedAgentConfig } from './agent-config';
 import { errorMessage } from './errors';
 import type { OpencodeClientLike } from './runtime';
@@ -10,7 +10,7 @@ import {
   promptSession,
   resolveSessionId,
 } from './session';
-import { normalizeTokens } from './tokens';
+import { normalizeTokens, sumTokenUsages, usageBreakdownFromAssistantInfos } from './tokens';
 
 interface ProviderModel {
   providerID: string;
@@ -22,8 +22,10 @@ interface AgentRunState {
   cwd: string;
   sessionId: string;
   chunks: MessageChunk[];
-  latestAssistantInfo?: Record<string, unknown>;
+  /** Latest assistant info by message id — repeated updates replace same entry. */
+  assistantInfoById: Map<string, Record<string, unknown>>;
   lastAssistantMessageId?: string;
+  lastAssistantInfo?: Record<string, unknown>;
   done: boolean;
 }
 
@@ -169,6 +171,7 @@ export async function* streamMultiAgentOpencodeSession(
           cwd,
           sessionId,
           chunks: [],
+          assistantInfoById: new Map(),
           done: false,
         };
         sessionToAgent.set(sessionId, state);
@@ -220,8 +223,9 @@ export async function* streamMultiAgentOpencodeSession(
         const sessionId = typeof info?.sessionID === 'string' ? info.sessionID : undefined;
         const state = sessionId ? sessionToAgent.get(sessionId) : undefined;
         if (!state || info?.role !== 'assistant') continue;
-        state.latestAssistantInfo = info;
-        if (typeof info.id === 'string') {
+        state.lastAssistantInfo = info;
+        if (typeof info.id === 'string' && info.id.length > 0) {
+          state.assistantInfoById.set(info.id, info);
           state.lastAssistantMessageId = info.id;
         }
         continue;
@@ -338,19 +342,18 @@ export async function* streamMultiAgentOpencodeSession(
             content: formatBufferedAssistantOutput(states),
           };
 
-          // Aggregate tokens
-          const tokens = states.reduce<TokenUsage | undefined>((acc, candidate) => {
-            const next = normalizeTokens(candidate.latestAssistantInfo);
-            if (!next) return acc;
-            if (!acc) return { ...next };
-            return {
-              input: acc.input + next.input,
-              output: acc.output + next.output,
-              total:
-                (acc.total ?? acc.input + acc.output) + (next.total ?? next.input + next.output),
-              cost: (acc.cost ?? 0) + (next.cost ?? 0),
-            };
-          }, undefined);
+          // Aggregate tokens + one observation per distinct assistant message.
+          // Child multi-agent observations are always kind: subagent.
+          const allAssistantInfos = states.flatMap(candidate => {
+            if (candidate.assistantInfoById.size > 0) {
+              return Array.from(candidate.assistantInfoById.values());
+            }
+            return candidate.lastAssistantInfo ? [candidate.lastAssistantInfo] : [];
+          });
+          const tokens = sumTokenUsages(allAssistantInfos.map(info => normalizeTokens(info)));
+          const usageBreakdown = usageBreakdownFromAssistantInfos(allAssistantInfos, {
+            kind: 'subagent',
+          });
 
           // Fetch structured outputs from all agents
           const structuredOutputs = await Promise.all(
@@ -373,6 +376,10 @@ export async function* streamMultiAgentOpencodeSession(
           yield {
             type: 'result',
             ...(tokens ? { tokens } : {}),
+            ...(usageBreakdown ? { usageBreakdown } : {}),
+            // Top-level cost is the sum across distinct assistant messages
+            // (matches tokens.cost). dag-executor accounts msg.cost only.
+            ...(tokens?.cost !== undefined ? { cost: tokens.cost } : {}),
             ...(structuredOutputs ? { structuredOutput: structuredOutputs } : {}),
           };
           getLog().info({ nodeId }, 'opencode.multi_agent_completed');

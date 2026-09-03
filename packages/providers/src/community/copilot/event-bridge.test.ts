@@ -7,31 +7,45 @@ mock.module('@archon/paths', () => ({
 
 import type { SessionEvent } from '@github/copilot-sdk';
 
-import type { MessageChunk, TokenUsage } from '../../types';
+import type { MessageChunk, ModelUsageEntry, TokenUsage } from '../../types';
 import {
   AsyncQueue,
   mapCopilotEvent,
+  mapCopilotUsageEntry,
   normalizeCopilotUsage,
   type EventMapperContext,
 } from './event-bridge';
 
 function makeCtx(): EventMapperContext & {
   capturedUsage: TokenUsage | undefined;
+  capturedEntries: ModelUsageEntry[];
   erroredWith: string | undefined;
 } {
   const toolCallIdToName = new Map<string, string>();
   let capturedUsage: TokenUsage | undefined;
+  const capturedEntries: ModelUsageEntry[] = [];
   let erroredWith: string | undefined;
   return {
     toolCallIdToName,
-    captureUsage: (u: TokenUsage): void => {
-      capturedUsage = u;
-    },
-    markErrored: (msg: string): void => {
-      erroredWith = msg;
+    captureUsage: (usage, entry): void => {
+      if (usage) {
+        capturedUsage = capturedUsage
+          ? {
+              input: capturedUsage.input + usage.input,
+              output: capturedUsage.output + usage.output,
+            }
+          : usage;
+      }
+      if (entry) capturedEntries.push(entry);
     },
     get capturedUsage() {
       return capturedUsage;
+    },
+    get capturedEntries() {
+      return capturedEntries;
+    },
+    markErrored: (msg: string): void => {
+      erroredWith = msg;
     },
     get erroredWith() {
       return erroredWith;
@@ -131,6 +145,46 @@ describe('normalizeCopilotUsage', () => {
   });
 });
 
+describe('mapCopilotUsageEntry', () => {
+  test('ignores multiplier cost and free-form initiator', () => {
+    expect(
+      mapCopilotUsageEntry({
+        model: 'gpt-5',
+        inputTokens: 2,
+        outputTokens: 3,
+        cost: 1.5,
+        initiator: 'sub-agent',
+      })
+    ).toEqual({
+      provider: 'github-copilot',
+      model: 'gpt-5',
+      modelSource: 'reported',
+      inputTokens: 2,
+      outputTokens: 3,
+      requests: 1,
+    });
+  });
+
+  test('preserves optional cache and reasoning fields', () => {
+    expect(
+      mapCopilotUsageEntry({
+        model: 'gpt-5',
+        cacheReadTokens: 4,
+        cacheWriteTokens: 5,
+        reasoningTokens: 6,
+      })
+    ).toEqual({
+      provider: 'github-copilot',
+      model: 'gpt-5',
+      modelSource: 'reported',
+      cacheReadTokens: 4,
+      cacheWriteTokens: 5,
+      reasoningTokens: 6,
+      requests: 1,
+    });
+  });
+});
+
 describe('mapCopilotEvent', () => {
   test('assistant.message_delta → assistant chunk with deltaContent', () => {
     const ctx = makeCtx();
@@ -167,6 +221,79 @@ describe('mapCopilotEvent', () => {
     );
     expect(out).toEqual([]);
     expect(ctx.capturedUsage).toEqual({ input: 7, output: 42 });
+    expect(ctx.capturedEntries).toEqual([
+      {
+        provider: 'github-copilot',
+        model: 'gpt-5',
+        modelSource: 'reported',
+        inputTokens: 7,
+        outputTokens: 42,
+        requests: 1,
+      },
+    ]);
+  });
+
+  test('assistant.usage accumulates multiple events and marks parent-linked subagent', () => {
+    const ctx = makeCtx();
+    mapCopilotEvent(
+      evt('assistant.usage', {
+        model: 'gpt-5',
+        inputTokens: 10,
+        outputTokens: 4,
+        reasoningTokens: 2,
+        cacheReadTokens: 3,
+        cost: 99,
+        initiator: 'sub-agent',
+      }),
+      ctx
+    );
+    mapCopilotEvent(
+      evt('assistant.usage', {
+        model: 'gpt-5-mini',
+        inputTokens: 5,
+        outputTokens: 1,
+        parentToolCallId: 'tool-1',
+        cost: 2,
+      }),
+      ctx
+    );
+    expect(ctx.capturedUsage).toEqual({ input: 15, output: 5 });
+    expect(ctx.capturedEntries).toEqual([
+      {
+        provider: 'github-copilot',
+        model: 'gpt-5',
+        modelSource: 'reported',
+        inputTokens: 10,
+        outputTokens: 4,
+        reasoningTokens: 2,
+        cacheReadTokens: 3,
+        requests: 1,
+      },
+      {
+        provider: 'github-copilot',
+        model: 'gpt-5-mini',
+        modelSource: 'reported',
+        inputTokens: 5,
+        outputTokens: 1,
+        requests: 1,
+        kind: 'subagent',
+      },
+    ]);
+  });
+
+  test('empty parentToolCallId does not classify as subagent', () => {
+    const ctx = makeCtx();
+    mapCopilotEvent(
+      evt('assistant.usage', {
+        model: 'gpt-5',
+        inputTokens: 1,
+        outputTokens: 1,
+        parentToolCallId: '   ',
+        initiator: 'sub-agent',
+      }),
+      ctx
+    );
+    expect(ctx.capturedEntries[0]?.kind).toBeUndefined();
   });
 
   test('tool.execution_start → tool chunk + records name by id', () => {

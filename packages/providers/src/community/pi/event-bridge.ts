@@ -2,7 +2,8 @@ import { createLogger } from '@archon/paths';
 import type { AgentSession, AgentSessionEvent } from '@earendil-works/pi-coding-agent';
 import type { AssistantMessage, Usage } from '@earendil-works/pi-ai';
 
-import type { MessageChunk, TokenUsage } from '../../types';
+import type { MessageChunk, ModelSource, ModelUsageEntry, TokenUsage } from '../../types';
+import { toUsageBreakdown } from '../../usage-breakdown';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -101,6 +102,7 @@ export function serializeToolResult(result: unknown): string {
 /**
  * Extract Archon TokenUsage from Pi's Usage struct.
  * Pi reports input/output/cacheRead/cacheWrite + cost breakdown.
+ * Reasoning is a subset of output and is not added again.
  */
 export function usageToTokens(usage: Usage): TokenUsage {
   return {
@@ -109,6 +111,65 @@ export function usageToTokens(usage: Usage): TokenUsage {
     total: usage.totalTokens,
     cost: usage.cost.total,
   };
+}
+
+function sumUsages(usages: readonly Usage[]): TokenUsage {
+  let input = 0;
+  let output = 0;
+  let total = 0;
+  let cost = 0;
+  for (const usage of usages) {
+    input += usage.input;
+    output += usage.output;
+    total += usage.totalTokens;
+    cost += usage.cost.total;
+  }
+  return { input, output, total, cost };
+}
+
+/**
+ * Map one Pi assistant message to a normalized usage observation.
+ * Prefer responseModel (reported), then model (requested), else unknown.
+ */
+export function assistantMessageToUsageEntry(message: AssistantMessage): ModelUsageEntry {
+  const responseModel =
+    typeof message.responseModel === 'string' ? message.responseModel.trim() : '';
+  const requestedModel = typeof message.model === 'string' ? message.model.trim() : '';
+
+  let model: string | null;
+  let modelSource: ModelSource;
+  if (responseModel.length > 0) {
+    model = responseModel;
+    modelSource = 'reported';
+  } else if (requestedModel.length > 0) {
+    model = requestedModel;
+    modelSource = 'requested';
+  } else {
+    model = null;
+    modelSource = 'unknown';
+  }
+
+  const provider =
+    typeof message.provider === 'string' && message.provider.trim().length > 0
+      ? message.provider.trim()
+      : 'unknown';
+
+  const usage = message.usage;
+  const entry: ModelUsageEntry = {
+    provider,
+    model,
+    modelSource,
+    inputTokens: usage.input,
+    outputTokens: usage.output,
+    cacheReadTokens: usage.cacheRead,
+    cacheWriteTokens: usage.cacheWrite,
+    requests: 1,
+    costUsd: usage.cost.total,
+  };
+  if (usage.reasoning !== undefined) {
+    entry.reasoningTokens = usage.reasoning;
+  }
+  return entry;
 }
 
 /**
@@ -145,12 +206,14 @@ function extractLastAssistantText(messages: readonly unknown[]): string | undefi
 }
 
 /**
- * Build the terminal `result` chunk from the final `agent_end` event. Pulls
- * usage/stopReason/error from the last assistant message in the returned
- * transcript. When the agent ended in error, surfaces it as `isError: true`.
+ * Build the terminal `result` chunk from the final `agent_end` event.
+ * Legacy tokens/cost sum every assistant message; stop reason, error,
+ * structured-output completion, and resolvedModel stay last-assistant-only.
+ * usageBreakdown emits one observation per assistant message.
  */
 export function buildResultChunk(messages: readonly unknown[]): MessageChunk {
-  const last = [...messages].reverse().find(isAssistantMessage);
+  const assistants = messages.filter(isAssistantMessage);
+  const last = assistants.at(-1);
   if (!last) {
     // agent_end fired with no assistant message in the transcript. This
     // shouldn't happen in healthy Pi runs — surface it as a loud error
@@ -160,13 +223,15 @@ export function buildResultChunk(messages: readonly unknown[]): MessageChunk {
     return { type: 'result', isError: true, errorSubtype: 'missing_assistant_message' };
   }
 
-  const tokens = usageToTokens(last.usage);
+  const tokens = sumUsages(assistants.map(message => message.usage));
+  const usageBreakdown = toUsageBreakdown(assistants.map(assistantMessageToUsageEntry));
   const isError = last.stopReason === 'error' || last.stopReason === 'aborted';
 
   const chunk: MessageChunk = {
     type: 'result',
     tokens,
     ...(tokens.cost !== undefined ? { cost: tokens.cost } : {}),
+    ...(usageBreakdown.length > 0 ? { usageBreakdown } : {}),
     ...(last.stopReason ? { stopReason: last.stopReason } : {}),
     ...(typeof last.responseModel === 'string' && last.responseModel.length > 0
       ? { resolvedModel: { id: last.responseModel } }

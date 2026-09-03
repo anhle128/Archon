@@ -10,7 +10,7 @@ import {
 } from './agent-config';
 import { errorMessage } from './errors';
 import type { OpencodeClientLike } from './runtime';
-import { normalizeTokens } from './tokens';
+import { normalizeTokens, sumTokenUsages, usageBreakdownFromAssistantInfos } from './tokens';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 
@@ -128,8 +128,10 @@ export async function* streamOpencodeSession(
   const streamController = new AbortController();
   const seenToolCalls = new Set<string>();
   const completedToolCalls = new Set<string>();
-  let latestAssistantInfo: Record<string, unknown> | undefined;
+  /** Latest assistant info by message id — repeated message.updated replaces same entry. */
+  const assistantInfoById = new Map<string, Record<string, unknown>>();
   let lastAssistantMessageId: string | undefined;
+  let lastAssistantInfo: Record<string, unknown> | undefined;
   let aborted = requestOptions?.abortSignal?.aborted === true;
   let resultYielded = false;
 
@@ -161,8 +163,9 @@ export async function* streamOpencodeSession(
       if (event.type === 'message.updated') {
         const info = isRecord(properties.info) ? properties.info : undefined;
         if (info?.role === 'assistant' && info.sessionID === sessionId) {
-          latestAssistantInfo = info;
-          if (typeof info.id === 'string') {
+          lastAssistantInfo = info;
+          if (typeof info.id === 'string' && info.id.length > 0) {
+            assistantInfoById.set(info.id, info);
             lastAssistantMessageId = info.id;
           }
         }
@@ -255,22 +258,30 @@ export async function* streamOpencodeSession(
           sessionId,
           lastAssistantMessageId
         );
-        const tokens = normalizeTokens(latestAssistantInfo);
+        const assistantInfos =
+          assistantInfoById.size > 0
+            ? Array.from(assistantInfoById.values())
+            : lastAssistantInfo
+              ? [lastAssistantInfo]
+              : [];
+        const tokens = sumTokenUsages(assistantInfos.map(info => normalizeTokens(info)));
+        const usageBreakdown = usageBreakdownFromAssistantInfos(assistantInfos);
+        const terminalInfo =
+          (lastAssistantMessageId ? assistantInfoById.get(lastAssistantMessageId) : undefined) ??
+          lastAssistantInfo;
 
         yield {
           type: 'result',
           sessionId,
           ...(tokens ? { tokens } : {}),
+          ...(usageBreakdown ? { usageBreakdown } : {}),
           ...(structuredOutput !== undefined ? { structuredOutput } : {}),
-          ...(typeof latestAssistantInfo?.cost === 'number'
-            ? { cost: latestAssistantInfo.cost }
-            : {}),
-          ...(typeof latestAssistantInfo?.finish === 'string'
-            ? { stopReason: latestAssistantInfo.finish }
-            : {}),
-          ...(typeof latestAssistantInfo?.modelID === 'string' &&
-          latestAssistantInfo.modelID.length > 0
-            ? { resolvedModel: { id: latestAssistantInfo.modelID } }
+          // Top-level cost is the sum across distinct assistant messages
+          // (matches tokens.cost). dag-executor accounts msg.cost only.
+          ...(tokens?.cost !== undefined ? { cost: tokens.cost } : {}),
+          ...(typeof terminalInfo?.finish === 'string' ? { stopReason: terminalInfo.finish } : {}),
+          ...(typeof terminalInfo?.modelID === 'string' && terminalInfo.modelID.length > 0
+            ? { resolvedModel: { id: terminalInfo.modelID } }
             : {}),
         };
         resultYielded = true;

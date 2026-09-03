@@ -390,7 +390,7 @@ describe('OpencodeProvider', () => {
             modelID: 'claude-sonnet',
             cost: 0.42,
             finish: 'stop',
-            tokens: { input: 11, output: 7, reasoning: 3, cache: 1 },
+            tokens: { input: 11, output: 7, reasoning: 3, cache: { read: 1, write: 0 } },
           },
         },
       },
@@ -409,12 +409,100 @@ describe('OpencodeProvider', () => {
       {
         type: 'result',
         sessionId: 'session-1',
-        tokens: { input: 11, output: 7, total: 21, cost: 0.42 },
+        tokens: { input: 11, output: 7, total: 18, cost: 0.42 },
         cost: 0.42,
         stopReason: 'stop',
         resolvedModel: { id: 'claude-sonnet' },
+        usageBreakdown: [
+          {
+            provider: 'anthropic',
+            model: 'claude-sonnet',
+            modelSource: 'reported',
+            inputTokens: 11,
+            outputTokens: 7,
+            reasoningTokens: 3,
+            cacheReadTokens: 1,
+            cacheWriteTokens: 0,
+            costUsd: 0.42,
+            requests: 1,
+          },
+        ],
       },
     ]);
+  });
+
+  test('repeated message.updated for same id keeps one observation; multiple ids accumulate', async () => {
+    scriptedEvents = [
+      {
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'message-1',
+            role: 'assistant',
+            sessionID: 'session-1',
+            providerID: 'anthropic',
+            modelID: 'claude-sonnet',
+            cost: 0.1,
+            finish: 'stop',
+            tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+          },
+        },
+      },
+      {
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'message-1',
+            role: 'assistant',
+            sessionID: 'session-1',
+            providerID: 'anthropic',
+            modelID: 'claude-sonnet',
+            cost: 0.2,
+            finish: 'stop',
+            tokens: { input: 10, output: 5, reasoning: 1, cache: { read: 2, write: 0 } },
+          },
+        },
+      },
+      {
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'message-2',
+            role: 'assistant',
+            sessionID: 'session-1',
+            providerID: 'anthropic',
+            modelID: 'claude-haiku',
+            cost: 0.05,
+            finish: 'stop',
+            tokens: { input: 3, output: 2, reasoning: 0, cache: { read: 0, write: 0 } },
+          },
+        },
+      },
+      {
+        type: 'session.idle',
+        properties: { sessionID: 'session-1' },
+      },
+    ];
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, { assistantConfig: TEST_MODEL })
+    );
+
+    expect(error).toBeUndefined();
+    const result = chunks.find(chunk => chunk.type === 'result');
+    expect(result).toMatchObject({
+      type: 'result',
+      tokens: { input: 13, output: 7, total: 20, cost: 0.25 },
+      cost: 0.25,
+      stopReason: 'stop',
+      resolvedModel: { id: 'claude-haiku' },
+    });
+    if (result?.type === 'result') {
+      expect(result.usageBreakdown).toHaveLength(2);
+      expect(result.usageBreakdown?.[0]?.model).toBe('claude-sonnet');
+      expect(result.usageBreakdown?.[0]?.costUsd).toBe(0.2);
+      expect(result.usageBreakdown?.[1]?.model).toBe('claude-haiku');
+    }
   });
 
   test('session resume handoff falls back to a fresh session with warning', async () => {
