@@ -50,7 +50,7 @@ archon workflow run plan --cwd /path/to/repo --branch feature-auth "Add OAuth su
 archon workflow run assist --cwd /path/to/repo --no-worktree "Quick question"
 ```
 
-**Note:** Workflow and isolation commands normally require running from within a git repository (running from subdirectories automatically resolves to the repo root). A non-git directory also works if it's a registered [folder project](/getting-started/concepts/#folder-projects-non-git-workspaces) — or on first use by passing `--folder`, which registers it and runs in place. The `version`, `help`, `chat`, `setup`, `serve`, and `doctor` commands work anywhere.
+**Note:** Workflow and isolation commands normally require running from within a git repository (running from subdirectories automatically resolves to the repo root). A non-git directory also works if it's a registered [folder project](/getting-started/concepts/#folder-projects-non-git-workspaces) — or on first use by passing `--folder`, which registers it and runs in place. The `version`, `help`, `chat`, `setup`, `serve`, `doctor`, `usage`, and `ai` commands work anywhere.
 
 ## Commands
 
