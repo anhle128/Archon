@@ -1265,7 +1265,6 @@ async function* streamClaudeMessages(
         ...(resultMsg.total_cost_usd !== undefined ? { cost: resultMsg.total_cost_usd } : {}),
         ...(resultMsg.stop_reason != null ? { stopReason: resultMsg.stop_reason } : {}),
         ...(resultMsg.num_turns !== undefined ? { numTurns: resultMsg.num_turns } : {}),
-        ...(resultMsg.modelUsage ? { modelUsage: resultMsg.modelUsage } : {}),
         ...(usageBreakdown ? { usageBreakdown } : {}),
         ...(resolvedModelId ? { resolvedModel: { id: resolvedModelId } } : {}),
       };

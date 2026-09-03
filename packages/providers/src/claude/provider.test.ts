@@ -3032,10 +3032,6 @@ describe('usageBreakdown normalization (US-002)', () => {
     for await (const chunk of client.sendQuery('test', '/workspace')) chunks.push(chunk);
     expect(chunks[0]).toMatchObject({
       type: 'result',
-      modelUsage: {
-        'claude-sonnet-4-6': expect.objectContaining({ inputTokens: 100 }),
-        'claude-haiku-4-5': expect.objectContaining({ inputTokens: 20 }),
-      },
       usageBreakdown: [
         {
           provider: 'anthropic',
@@ -3059,6 +3055,7 @@ describe('usageBreakdown normalization (US-002)', () => {
         },
       ],
     });
+    expect(chunks[0]).not.toHaveProperty('modelUsage');
     expect(chunks[0].usageBreakdown?.[0]).not.toHaveProperty('requests');
   });
 
