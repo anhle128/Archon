@@ -1,1413 +1,1314 @@
-# Node Cost Tracking Implementation Plan
+# Workflow Node Usage and Cost Tracking Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task.
-> Steps use checkbox (`- [ ]`) syntax for tracking.
+**Status:** independently reviewed and ready for implementation
 
-**Goal:** Persist per-model and per-provider usage for every workflow AI node, write the same numbers to run JSON and a queryable ledger, estimate missing USD without mixing it into authoritative cost, and surface the breakdown in API, CLI, run detail, and a console Cost page.
+**Reviewed:** 2026-09-03
 
-**Architecture:** Providers emit a typed `usageBreakdown` map on the `result` chunk, with authoritative `provider` and `model` on every entry and no estimated fields.
-The dag-executor accumulates that map next to `nodeCostUsd`, writes it to `node_completed.usage_breakdown` and run metadata `usage_by_model`, then hands the same map to `IWorkflowStore.replaceNodeUsageLedger()`.
-The store adapter is the only ledger writer: it estimates missing USD into separate ledger columns and replace-deletes by `(workflow_run_id, node_id)` inside one transaction.
+**Product design:** `docs/superpowers/specs/2026-09-03-node-cost-tracking-design.md`
 
-**Tech Stack:** Bun, strict TypeScript, Zod from `@hono/zod-openapi`, SQLite and PostgreSQL additive schema, existing Pi model catalog, Bun Test, React console experiment.
+The linked design remains the product-intent record, but its technical sections predate this repository review.
+Where it conflicts with this plan—especially map-shaped identities, node-completion persistence, replace-delete retry handling, parent usage copying, speculative chat columns, and CLI `--from`—this reviewed plan is authoritative.
 
-**Spec:** `docs/superpowers/specs/2026-09-03-node-cost-tracking-design.md`
+## Goal
 
-This plan supersedes the draft at `plans/260903-1917-node-cost-model-breakdown/` wherever they disagree.
-The approved design (JSON breakdown plus ledger, estimated pricing, usage API, Cost page) is the source of truth.
+Give an operator a trustworthy answer to “which workflow run, node, agent provider, upstream provider, and model consumed tokens or money?” without changing workflow execution semantics.
 
-## Global Constraints
+The implementation must capture every usage report the configured provider makes available for workflow AI execution, preserve failed and repeated attempts instead of replacing them, distinguish provider-reported USD from estimated USD, and expose direct-run usage through the REST API, CLI, run detail, and one console Cost page.
 
-- Scope v1 is workflow nodes only.
-- Ledger `source` defaults to `'workflow'`; `'chat'` is reserved and unused.
-- Provider output is authoritative usage only: `ModelUsageEntry` and JSON `usage_breakdown` MUST NOT contain `costEstimatedUsd`, `pricing_source`, engine `node_id`, or any estimated field.
-- Provider-reported `costUsd` is the only value allowed in `cost_usd`, JSON `usage_breakdown`, and run totals.
-- Estimated USD lives only in ledger column `cost_estimated_usd` with `pricing_source` `'catalog'` or `'config'`.
-- `kind` is omitted on ordinary provider entries.
-- `kind: 'advisor'` is set only when an OMP advisor transcript is the authoritative source.
-- OMP per-model merging happens in `packages/providers/src/community/omp/event-parser.ts`, not in the store adapter.
-- Pi and every other provider receive only `SendQueryOptions` they already receive.
-- Do not pass engine `node_id`, run id, or ledger identity into provider `sendQuery` or result mapping.
-- Namespacing (`<groupId>.<nodeId>`), estimation, and ledger persistence happen downstream of providers.
-- Never fabricate `$0`, never guess a model id (#2314), never persist non-finite numbers.
-- Old runs and cost-less providers render "not recorded" or tokens-only, never `$0.00`.
-- Cost-path failures (ledger write, transcript read, catalog lookup) log WARN and must not fail the node.
-- The engine never parses `"provider/model"` map keys.
-- `#2345` (usage lost across pause/resume gates) is out of scope and must not be worsened.
-- `#2333` loop-gate token semantics stay as-is.
-- `maxBudgetUsd` is untouched.
-- No historical backfill, no per-user billing, no chat-surface recording.
-- Database changes are additive in both dialects.
-- Every new `ADD COLUMN ... NOT NULL` has a `DEFAULT`.
-- New indexes and `COMMENT ON COLUMN` go in the trailing "Indexes and column comments" section of `migrations/000_combined.sql`.
-- Mirror the table into SQLite `createSchema()`.
-- Generate `packages/core/src/db/bundled-schema.generated.ts` only with `bun run generate:bundled-schema`.
-- Derive types with `z.infer<typeof schema>`.
-- Import `z` from `@hono/zod-openapi` in core, workflows, and server schema files.
-- Use `z.record(z.string(), valueSchema)` for record schemas.
-- `@archon/web` never imports `@archon/workflows`.
-- `@archon/workflows` imports provider types only from `@archon/providers/types`.
-- No `any`.
-- Never run `bun test` from the repository root.
-- Run mock-heavy files in their existing isolated `bun test` invocations.
-- When adding an `IWorkflowStore` method, update every mock factory that already stubs `getDagResumeSnapshot`.
-- Keep every full Markdown sentence on its own physical line in new or substantially edited Markdown.
-- Never add an agent name as a commit co-author.
-- Do not edit `CHANGELOG.md`.
+This is operational cost visibility, not an invoicing system.
 
-## File Map
+In this plan, “provider-reported” means a USD value supplied to Archon by the upstream SDK or CLI.
+Pi, OMP, OpenCode, or another tool may calculate that value from its own catalog; Archon does not assert that it equals an invoice.
+“Estimated” means Archon itself calculated the value from the operator config or Pi catalog.
 
-- Create `packages/providers/src/usage-breakdown.ts` for keying, sanitizing, and merging `UsageBreakdown` maps.
-- Create `packages/providers/src/usage-breakdown.test.ts` for merge, NaN drop, and key rules.
-- Modify `packages/providers/src/types.ts` to replace `modelUsage` with `usageBreakdown` and export `ModelUsageEntry` / `UsageBreakdown`.
-- Re-export `mergeUsageBreakdown` from `packages/providers/src/types.ts` so `@archon/workflows` can import it from `@archon/providers/types`.
-- Modify `packages/providers/src/observability.ts` to read `resolvedModel` then `usageBreakdown`.
-- Modify `packages/providers/src/claude/provider.ts` to map SDK `modelUsage` into `usageBreakdown` with `kind` omitted.
-- Modify `packages/providers/src/claude/provider.test.ts` for fallback/subagent two-entry fixtures.
-- Modify `packages/providers/src/community/omp/event-parser.ts` to accumulate per `${provider}/${model}`.
-- Modify colocated OMP event-parser tests for a two-model fixture.
-- Modify `packages/providers/src/community/pi/event-bridge.ts` after verifying Pi usage semantics.
-- Modify Pi event-bridge tests for multi-assistant-message usage.
-- Modify `packages/providers/src/grok/event-parser.ts` to emit a single typed entry and stop passing raw `modelUsage`.
-- Modify `packages/providers/src/codex/provider.ts` for a tokens-only entry keyed by requested/resolved model.
-- Modify `packages/providers/src/community/opencode/session.ts` and `multi-agent.ts` for OpenCode entries.
-- Modify `packages/providers/src/community/copilot/event-bridge.ts` for a tokens-only entry.
-- Leave Qoder emitting no `usageBreakdown`.
-- Create `packages/workflows/src/schemas/usage-breakdown.ts` and tests.
-- Modify `packages/workflows/src/schemas/index.ts` to re-export the schema and type.
-- Modify `packages/workflows/src/store.ts` to add `replaceNodeUsageLedger`.
-- Modify `packages/workflows/src/dag-executor.ts` to accumulate, persist JSON, and call the store.
-- Modify `packages/workflows/src/dag-executor.test.ts` and `packages/workflows/src/subrun.test.ts` for engine behavior.
-- Create `packages/core/src/schemas/usage-ledger.ts` for the ledger row and query shapes.
-- Create `packages/core/src/usage/estimate.ts` and tests for config-then-catalog estimation.
-- Create `packages/core/src/db/usage-ledger.ts` and tests for replace/query.
-- Modify `migrations/000_combined.sql` and `packages/core/src/db/adapters/sqlite.ts`.
-- Modify `packages/core/src/db/adapters/sqlite.test.ts` (`MIN_NON_AUTH_COLUMNS` becomes 157).
-- Modify `packages/core/src/config/config-types.ts` and `config-loader.ts` for optional `pricing.models`.
-- Modify `packages/core/src/workflows/store-adapter.ts` and its test required-method list.
-- Create `packages/server/src/routes/schemas/usage.schemas.ts`.
-- Modify `packages/server/src/routes/api.ts` to register `GET /api/usage`.
-- Create `packages/cli/src/commands/usage.ts` and tests.
-- Modify `packages/cli/src/cli.ts` and `packages/docs-web/src/content/docs/reference/cli.md`.
-- Modify console run primitives, `RunDetailHeader.tsx`, `NodeDivider.tsx`, and add `UsageBreakdownTable.tsx`.
-- Create `packages/web/src/experiments/console/routes/CostPage.tsx` and wire `ConsoleApp.tsx`.
-- Create `packages/providers/src/community/omp/advisor-usage.ts` and tests with fixture transcripts.
-- Modify `packages/providers/src/community/omp/provider.ts` to fold advisor entries after process exit.
-- Modify `packages/docs-web/src/content/docs/reference/configuration.md` for `pricing:`.
-- Generate bundled schema and web OpenAPI types with the repo generators.
+It must never invent usage, model attribution, request counts, or billed USD that an upstream SDK did not report.
 
----
+## User Outcome
 
-### Task 1: UsageBreakdown Contract And Merge Helper
+After this work:
 
-**Files:**
+- An operator can inspect a run and see cumulative direct usage for each node, including spend from failed attempts, structured-output reasks, loop iterations, resumes, and manual node retries.
+- An operator can query the current month or a bounded UTC range by agent, upstream provider, model, project, day, or node.
+- Provider-reported USD and catalog/config estimates are shown separately.
+- Missing model, token, request, or USD data is visible as missing, never rendered as zero.
+- Child workflow runs own their usage, so an installation-wide report counts each charge once.
+- Existing `cost_usd`, token totals, budget behavior, and historical runs continue to work.
 
-- Create: `packages/providers/src/usage-breakdown.ts`
-- Create: `packages/providers/src/usage-breakdown.test.ts`
-- Modify: `packages/providers/src/types.ts:230-283`
-- Modify: `packages/providers/src/observability.ts:133-147`
-- Modify: `packages/providers/package.json` test script (append `&& bun test src/usage-breakdown.test.ts` to an existing isolated invocation that does not `mock.module` `./types`)
+## Scope
 
-**Interfaces:**
+### In scope
 
-- Consumes: existing `TokenUsage` and `MessageChunk` result variant.
-- Produces:
+- Workflow AI executions made through `IAgentProvider.sendQuery()`.
+- Primary model usage and provider-visible subagent usage.
+- OMP primary, advisor, and task-subagent usage that can be read safely from transcripts.
+- An append-only workflow usage event and normalized ledger.
+- Provider-reported cost plus optional point-in-time estimates.
+- REST, CLI, run-detail, and console reporting.
+- SQLite and PostgreSQL parity, upgrade safety, and rollback behavior.
+
+### Non-goals
+
+- Direct-chat usage.
+- Per-user billing, quotas, chargeback, or invoice reconciliation.
+- Historical backfill.
+- New budget enforcement or changes to `maxBudgetUsd`.
+- Parent/child run-tree rollups.
+- Repricing historical rows when configuration or the bundled catalog changes.
+- New workflow YAML fields or expression-language behavior.
+- Adding speculative nullable `chat` columns or a `source` discriminator for a caller that does not exist.
+- Making Qoder report data its CLI does not expose.
+
+## Repository Evidence and Corrections to the Draft
+
+The prior draft was treated as unverified.
+
+The following evidence changes material parts of its design:
+
+1. `packages/providers/src/types.ts` currently exposes legacy `TokenUsage`, `cost`, `resolvedModel`, and raw `modelUsage` on the terminal result chunk.
+   `MessageChunk` is an extension contract used by built-in and community providers, so deleting `modelUsage` in this feature would be an unnecessary compatibility break.
+2. `packages/workflows/src/dag-executor.ts` has two distinct AI streaming paths: the standard AI-node `runStreamPass` path and the direct `loop` path.
+   Both have structured-output reasks, and the standard path can observe more than one cumulative result while background tasks drain.
+3. A completed node is not the accounting unit.
+   A node can spend money and fail, pause, reask, retry, or run another loop iteration before `node_completed` exists.
+4. `workflow retry-node` deliberately re-executes a node under a new retry epoch.
+   Delete-and-replace by `(run, node)` would erase real historical spend.
+5. Child `workflow:` nodes already have their own run rows through `parent_run_id`.
+   Copying child usage into a parent ledger or parent usage map would double-count installation-wide reporting.
+6. `remote_agent_workflow_events` is the existing append-only audit stream.
+   A dedicated usage event is a better JSON source than mutable run metadata and remains available for failed and paused work.
+7. `createWorkflowEvent()` is intentionally non-throwing, while `insertWorkflowEvent()` is the throwing primitive used inside transactions.
+   Usage needs a separate narrow recorder port whose core implementation builds an atomic event-plus-ledger operation on the latter, with the normal event path as a degradation fallback.
+8. Only `workflow_started`, `workflow_completed`, and `approval_requested` are mapped into the external workflow-event outbox in `packages/core/src/workflows/store-adapter.ts`.
+   Usage events must remain internal and must not create high-volume outbound callbacks.
+9. The dashboard poller explicitly filters to lifecycle events.
+   A usage event must not be added to `DASHBOARD_SOURCE_EVENT_TYPES`; the following node terminal event already causes the required refetch.
+10. `packages/web/src/experiments/console/primitives/event.ts` renders unknown workflow events as raw JSON text.
+    The new event therefore needs an explicit `system` mapping so it remains behind the existing System toggle.
+11. The CLI already assigns `--from` and `--from-branch` to worktree branch selection.
+    The usage command must use `--since` and `--until` rather than overload `--from`.
+12. `usage` is installation-wide and must be added to the CLI’s `noGitCommands` array and its mirrored contract test.
+13. The pinned Claude Agent SDK exposes per-model input, output, cache-read, cache-creation, and USD fields, but no per-model request count.
+14. The pinned Codex SDK exposes total input, cached input, output, and reasoning output.
+    Its API does not expose observed model, request count, or USD on `turn.completed`.
+15. The pinned Pi SDK defines reasoning as a subset of output, exposes cache read/write and cost, and reports `responseModel` separately from the requested `model`.
+    Its `agent_end.messages` collection is the new messages for the current invocation, so summing all assistant messages fixes the current last-message undercount without rereading session history.
+16. The pinned Copilot SDK emits one `assistant.usage` event per LLM API call with a required model and optional token/cache/reasoning fields.
+    Its `cost` field is a billing multiplier, not USD, and must not be stored as `costUsd`; the installed payload has no `agentId`, only free-form `initiator` and deprecated `parentToolCallId` attribution.
+17. OpenCode sends repeated `message.updated` notifications for an assistant message.
+    The current “latest assistant only” state loses tool-heavy calls; usage must be retained once per assistant message id and repeated updates must replace, not duplicate, that message.
+18. Grok exposes aggregate tokens/USD plus per-model `modelCalls`, not per-model tokens or USD.
+    Multi-model totals cannot be apportioned honestly.
+19. OMP primary `message_end` records contain provider, model, token/cache/reasoning, and USD usage.
+    Advisor transcripts are not merely siblings of the main transcript: task-agent transcripts and nested advisor transcripts live recursively under the main session artifact directory.
+20. OMP fork mode copies prior transcript artifacts.
+    Reading whole destination files after a fork would count historical usage again; resume/fork enrichment must be byte-delta based and verify the copied prefix before reading it.
+21. OMP is an arbitrary external binary, not a pinned package dependency.
+    Transcript enrichment must fail closed when its session layout or file prefix cannot be proven.
+22. The Pi model catalog wrapper currently drops cache rates and tier data even though the pinned SDK’s `ModelCost` includes `input`, `output`, `cacheRead`, `cacheWrite`, and request-wide tiers.
+23. Global and repository configuration are distinct.
+    Pricing is operator financial policy and belongs only in `~/.archon/config.yaml`; a repository must not be able to change installation reporting estimates.
+24. The current PostgreSQL migration contains 19 application tables plus four PostgreSQL-only Better Auth tables, although its header and `AGENTS.md` inventory omit some application tables.
+    This feature adds the twentieth application table and must correct the inventory rather than call it “table 21.”
+25. SQLite/PostgreSQL parity currently guards 138 compared non-auth columns.
+    The new normalized ledger below adds 17 columns, so the expected post-change floor is 155; the implementation must use the count produced by the parity test rather than blindly copying a number.
+
+## Constitution Check
+
+### Before implementation
+
+- **Type safety:** PASS.
+  The provider contract is additive, persistence and route schemas use Zod, types are derived with `z.infer`, records use explicit key schemas, and no `any` is required.
+- **Package boundaries:** PASS.
+  Workflows imports the contract only from `@archon/providers/types`; core owns database/config/pricing policy; server owns HTTP schemas; web consumes generated API types.
+- **Single-tenant model:** PASS.
+  Reporting is installation-wide with optional project filtering; no tenant columns or row scoping are added.
+- **Workflow language constitution:** PASS.
+  No YAML field or runtime graph behavior changes.
+- **Fail fast and explicit errors:** PASS.
+  Invalid provider data is rejected at the boundary and logged; absence stays absent.
+  Cost-observability failures do not mutate lifecycle state or fail already-completed AI work.
+- **Additive schema:** PASS.
+  One new table and indexes are added to both dialects; no rename, retype, or drop occurs.
+- **KISS/YAGNI:** PASS.
+  The plan removes speculative chat support, parent rollup, mutable duplicate metadata, opaque map keys, and replace semantics.
+- **Reproducibility:** PASS.
+  Catalog estimates use the locked Pi implementation plus the operator's current catalog and are materialized with provenance once; validation uses package-isolated tests and the repository generators.
+- **Security:** PASS with explicit OMP controls.
+  Pricing is not repository-controlled, SQL grouping is whitelisted, and transcript reads are bounded and path-checked.
+- **Reversibility:** PASS.
+  Old binaries ignore the additive table/event; rollback is application-only and never drops collected data.
+
+Re-run this check after implementation.
+
+## Locked Design
+
+### 1. Accounting unit and ownership
+
+The accounting unit is one completed provider stream pass, not one completed DAG node.
+
+A pass is one invocation of `IAgentProvider.sendQuery()` that yields at least one terminal result containing a non-empty valid usage breakdown.
+
+The provider contract requires the last terminal result for a `sendQuery()` invocation to be cumulative for that invocation.
+
+If a provider emits intermediate cumulative results while background tasks drain, the executor keeps only the latest result from that pass.
+
+Each standard structured-output reask is a new pass.
+
+Each direct-loop iteration/reask is a new pass.
+
+Each outer executor retry and each manual retry epoch creates new append-only records.
+
+Usage belongs to the run that directly invoked the provider.
+
+A child workflow run records its own AI usage; its parent does not copy that usage into the new event or ledger.
+
+The existing legacy parent totals remain unchanged and are explicitly presented as a different, legacy scope.
+
+### 2. Provider usage contract
+
+Add the following additive contract in `packages/providers/src/types.ts`:
 
 ```ts
+export type ModelSource = 'reported' | 'requested' | 'unknown';
+
 export interface ModelUsageEntry {
-  /** Archon agent id or upstream vendor id reported by the provider. Never parsed from the map key. */
+  /** Upstream model/catalog namespace: anthropic, openai, xai, github-copilot, etc. */
   provider: string;
-  /** Concrete model id reported by the provider. Never guessed. */
-  model: string;
-  input: number;
-  output: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  /** Provider-reported USD only. Never estimated. */
+  /** Concrete model id, or null when the upstream source did not identify one. */
+  model: string | null;
+  /** Whether model came from an upstream response, effective request, or neither. */
+  modelSource: ModelSource;
+  /** Provider-reported non-cached input when distinguishable; otherwise its input field. */
+  inputTokens?: number;
+  /** Provider-reported output, inclusive of reasoning where the SDK defines it that way. */
+  outputTokens?: number;
+  /** A subset of outputTokens, never added to output again. */
+  reasoningTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  /** Known upstream model-call count; omitted when the SDK reports only an aggregate turn. */
+  requests?: number;
+  /** Upstream SDK/CLI-supplied USD; never an Archon estimate or subscription multiplier. */
   costUsd?: number;
-  /** Assistant turns attributed to this model. */
-  calls: number;
-  /** Set only for authoritative OMP advisor transcripts. Omit on ordinary entries. */
-  kind?: 'advisor';
+  /** Present only when the upstream source identifies hidden delegated work. */
+  kind?: 'advisor' | 'subagent';
 }
 
-export type UsageBreakdown = Record<string, ModelUsageEntry>;
-
-export function usageBreakdownKey(provider: string, model: string): string;
-export function sanitizeUsageEntry(entry: ModelUsageEntry): ModelUsageEntry | undefined;
-export function mergeUsageBreakdown(into: UsageBreakdown, from: UsageBreakdown): UsageBreakdown;
+export type UsageBreakdown = readonly ModelUsageEntry[];
 ```
 
-- Result chunk field becomes `usageBreakdown?: UsageBreakdown`.
-- Delete `modelUsage?: Record<string, unknown>` from the result variant.
-- `usageBreakdownKey` returns `` `${provider}/${model}` ``.
-- `sanitizeUsageEntry` returns `undefined` when `provider` or `model` is empty, or when `input`, `output`, `calls`, or present optional numbers are non-finite.
-- `sanitizeUsageEntry` also returns `undefined` if the object contains `costEstimatedUsd` or `pricingSource` (those fields must never be produced by providers).
-- `mergeUsageBreakdown` sums `input`, `output`, `calls`, and present optional numeric fields.
-- On key collision, keep the first entry's `provider` and `model`.
-- `kind` stays `'advisor'` if either side has it; otherwise the merged entry omits `kind`.
-- Keep existing `tokens`, `cost`, and `resolvedModel` untouched.
-- Re-export the three helper functions from `packages/providers/src/types.ts` so workflows can import them from `@archon/providers/types`.
-
-- [ ] **Step 1: Write the failing merge tests.**
-
-Create `packages/providers/src/usage-breakdown.test.ts`:
-
-```ts
-import { describe, expect, test } from 'bun:test';
-import {
-  mergeUsageBreakdown,
-  sanitizeUsageEntry,
-  usageBreakdownKey,
-  type ModelUsageEntry,
-} from './usage-breakdown';
-
-const claude: ModelUsageEntry = {
-  provider: 'claude',
-  model: 'claude-sonnet-4-6',
-  input: 10,
-  output: 4,
-  costUsd: 0.02,
-  calls: 1,
-};
-
-describe('usageBreakdownKey', () => {
-  test('joins provider and model without parsing later', () => {
-    expect(usageBreakdownKey('omp', 'gpt-5.4')).toBe('omp/gpt-5.4');
-  });
-});
-
-describe('sanitizeUsageEntry', () => {
-  test('drops non-finite cost and empty model', () => {
-    expect(sanitizeUsageEntry({ ...claude, costUsd: Number.NaN })).toBeUndefined();
-    expect(sanitizeUsageEntry({ ...claude, model: '' })).toBeUndefined();
-  });
-
-  test('ordinary entries omit kind', () => {
-    expect(sanitizeUsageEntry(claude)?.kind).toBeUndefined();
-  });
-});
-
-describe('mergeUsageBreakdown', () => {
-  test('sums two models and the same key', () => {
-    const haiku: ModelUsageEntry = {
-      provider: 'claude',
-      model: 'claude-haiku-4-5',
-      input: 3,
-      output: 1,
-      calls: 1,
-    };
-    const first = mergeUsageBreakdown({}, {
-      [usageBreakdownKey(claude.provider, claude.model)]: claude,
-      [usageBreakdownKey(haiku.provider, haiku.model)]: haiku,
-    });
-    const second = mergeUsageBreakdown(first, {
-      [usageBreakdownKey(claude.provider, claude.model)]: {
-        ...claude,
-        input: 5,
-        output: 2,
-        calls: 1,
-        costUsd: 0.01,
-      },
-    });
-    expect(second['claude/claude-sonnet-4-6']).toMatchObject({
-      provider: 'claude',
-      model: 'claude-sonnet-4-6',
-      input: 15,
-      output: 6,
-      costUsd: 0.03,
-      calls: 2,
-    });
-    expect(second['claude/claude-sonnet-4-6']?.kind).toBeUndefined();
-    expect(second['claude/claude-haiku-4-5']?.input).toBe(3);
-  });
-});
-```
-
-- [ ] **Step 2: Run the test and confirm it fails.**
-
-Run from `packages/providers`:
-
-```bash
-bun test src/usage-breakdown.test.ts
-```
-
-Expected: FAIL with `Cannot find module './usage-breakdown'`.
-
-- [ ] **Step 3: Implement types, helper, and observability.**
-
-Add to `packages/providers/src/types.ts` immediately after `TokenUsage`:
-
-```ts
-export interface ModelUsageEntry {
-  provider: string;
-  model: string;
-  input: number;
-  output: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  costUsd?: number;
-  calls: number;
-  kind?: 'advisor';
-}
-
-export type UsageBreakdown = Record<string, ModelUsageEntry>;
-```
-
-Replace `modelUsage?: Record<string, unknown>` on the result variant with `usageBreakdown?: UsageBreakdown`.
-
-Create `packages/providers/src/usage-breakdown.ts` exporting the three functions above and re-exporting the types from `./types`.
-
-Re-export `usageBreakdownKey`, `sanitizeUsageEntry`, and `mergeUsageBreakdown` from `types.ts` (import the implementations from `./usage-breakdown` only if that does not create a cycle; if it would, keep the implementations in `types.ts` and have `usage-breakdown.ts` re-export them).
-Prefer implementations in `usage-breakdown.ts` and duplicate-export the functions at the bottom of `types.ts` using `export { ... } from './usage-breakdown'` only if `types.ts` remains free of SDK imports.
-
-If a cycle appears, put the function bodies in `types.ts` (allowed: no SDK, no runtime deps) and make `usage-breakdown.ts` a thin re-export for tests.
-
-In `observability.ts` `resolveModel`, replace the `chunk.modelUsage` branch with:
-
-```ts
-  if (chunk?.type === 'result' && chunk.resolvedModel?.id) return chunk.resolvedModel.id;
-  if (chunk?.type === 'result' && chunk.usageBreakdown) {
-    return Object.keys(chunk.usageBreakdown)[0];
-  }
-```
-
-Grep `packages/` for `modelUsage` and update every remaining TypeScript reference in this and later provider tasks.
-Do not leave a parallel `modelUsage` field.
-
-- [ ] **Step 4: Run tests.**
-
-```bash
-bun test src/usage-breakdown.test.ts
-bun test src/observability.test.ts
-```
-
-Expected: PASS.
-
-- [ ] **Step 5: Commit.**
-
-```bash
-git add packages/providers/src/types.ts packages/providers/src/usage-breakdown.ts packages/providers/src/usage-breakdown.test.ts packages/providers/src/observability.ts packages/providers/package.json
-git commit -m "feat(providers): add typed usageBreakdown contract"
-```
-
----
-
-### Task 2: Claude Per-Model Breakdown
-
-**Files:**
-
-- Modify: `packages/providers/src/claude/provider.ts:95-148,1186-1199`
-- Modify: `packages/providers/src/claude/provider.test.ts` (existing `modelUsage` fixtures around the `selectResolvedModelId` tests)
-
-**Interfaces:**
-
-- Consumes: SDK `SDKResultMessage.modelUsage` (`Record<string, ModelUsage>`).
-- Produces: `usageBreakdown` on the Claude result chunk.
-- Keep `selectResolvedModelId` and its WARN exactly as they are.
-- Do not set `kind` on Claude entries.
-- Do not pass `node.id` or any engine identity into this mapper.
-
-Map each SDK entry:
-
-```ts
-import { mergeUsageBreakdown, sanitizeUsageEntry, usageBreakdownKey } from '../usage-breakdown';
-import type { UsageBreakdown } from '../types';
-
-function claudeUsageBreakdown(
-  modelUsage: Record<string, ModelUsage> | undefined
-): UsageBreakdown | undefined {
-  if (!modelUsage) return undefined;
-  let breakdown: UsageBreakdown = {};
-  for (const [model, usage] of Object.entries(modelUsage)) {
-    const entry = sanitizeUsageEntry({
-      provider: 'claude',
-      model,
-      input: usage.inputTokens,
-      output: usage.outputTokens,
-      ...(Number.isFinite(usage.cacheReadInputTokens)
-        ? { cacheRead: usage.cacheReadInputTokens }
-        : {}),
-      ...(Number.isFinite(usage.cacheCreationInputTokens)
-        ? { cacheWrite: usage.cacheCreationInputTokens }
-        : {}),
-      ...(Number.isFinite(usage.costUSD) ? { costUsd: usage.costUSD } : {}),
-      calls: 1,
-    });
-    if (!entry) continue;
-    breakdown = mergeUsageBreakdown(breakdown, { [usageBreakdownKey('claude', model)]: entry });
-  }
-  return Object.keys(breakdown).length > 0 ? breakdown : undefined;
-}
-```
-
-Verify SDK field names against the imported `ModelUsage` type before coding.
-If the installed SDK uses different cache/cost names, map only fields that exist on that type.
-Do not invent cache fields.
-
-Spread `...(breakdown ? { usageBreakdown: breakdown } : {})` onto the existing result yield at `provider.ts:1186`.
-
-- [ ] **Step 1: Write the failing fallback fixture.**
-
-In `packages/providers/src/claude/provider.test.ts`, next to the existing multi-key `modelUsage` test, add:
-
-```ts
-    test('emits usageBreakdown for every modelUsage key including fallback', async () => {
-      mockQuery.mockImplementation(async function* () {
-        yield {
-          type: 'result',
-          session_id: 'sid-multi-model',
-          usage: { input_tokens: 500, output_tokens: 80 },
-          total_cost_usd: 0.12,
-          modelUsage: {
-            'claude-haiku-4-5-20251001': {
-              inputTokens: 400,
-              outputTokens: 20,
-              cacheReadInputTokens: 10,
-              cacheCreationInputTokens: 2,
-              costUSD: 0.02,
-            },
-            'claude-sonnet-4-6': {
-              inputTokens: 100,
-              outputTokens: 60,
-              costUSD: 0.1,
-            },
-          },
-        };
-      });
-      const chunks = [];
-      for await (const chunk of provider.sendQuery('hi', '/tmp', undefined, undefined)) {
-        chunks.push(chunk);
-      }
-      const result = chunks.find(c => c.type === 'result');
-      expect(result?.type).toBe('result');
-      if (result?.type !== 'result') throw new Error('missing result');
-      expect(result.usageBreakdown?.['claude/claude-sonnet-4-6']).toMatchObject({
-        provider: 'claude',
-        model: 'claude-sonnet-4-6',
-        input: 100,
-        output: 60,
-        costUsd: 0.1,
-        calls: 1,
-      });
-      expect(result.usageBreakdown?.['claude/claude-sonnet-4-6']?.kind).toBeUndefined();
-      expect(result.usageBreakdown?.['claude/claude-haiku-4-5-20251001']?.cacheRead).toBe(10);
-      expect(result.resolvedModel?.id).toBe('claude-sonnet-4-6');
-    });
-```
-
-- [ ] **Step 2: Run the test and confirm it fails.**
-
-```bash
-bun test src/claude/provider.test.ts
-```
-
-Expected: FAIL because `usageBreakdown` is missing.
-
-- [ ] **Step 3: Implement the mapping and yield it.**
-
-- [ ] **Step 4: Re-run the Claude provider tests.**
-
-Expected: PASS.
-
-- [ ] **Step 5: Commit.**
-
-```bash
-git commit -m "feat(providers): emit Claude usageBreakdown from SDK modelUsage"
-```
-
----
-
-### Task 3: OMP Per-Message Model Accumulation
-
-**Files:**
-
-- Modify: `packages/providers/src/community/omp/event-parser.ts:55-60,128-143,227-339`
-- Modify: the colocated OMP event-parser test file that already feeds `message_end` usage
-
-**Interfaces:**
+Add `usageBreakdown?: UsageBreakdown` to the `result` variant.
 
-- Consumes: `message.provider`, `message.model`, `message.usage.{input,output,totalTokens,cost.total}` and optional `usage.cacheRead` / `usage.cacheWrite` only if those keys are finite numbers on real fixtures.
-- Produces: parser-private `breakdown: UsageBreakdown` merged in `accumulateUsage`, copied onto `buildObservedResult`.
-- Keep the collapsed `this.tokens` total unchanged.
-- This is the only OMP merge site for primary (non-advisor) usage.
-- Do not merge OMP maps in `store-adapter` or `usage-ledger.ts`.
+Retain `modelUsage?: Record<string, unknown>` as deprecated compatibility data; do not remove it in this work.
 
-Do not guess cache field names.
-If a two-model fixture's `usage` object has no cache keys, omit cache fields.
-Do not set `kind` on these primary entries.
+Do not add new raw producers, but preserve an existing built-in emission while adding the normalized field; Grok currently emits raw `modelUsage`, so removing that runtime field is outside this additive change.
 
-- [ ] **Step 1: Write the failing two-model test.**
+Third-party implementations and consumers remain source-compatible.
 
-Feed two assistant `message_end` events, first `anthropic/claude-sonnet-4-6`, then `openai-codex/gpt-5.4`, and assert:
+The array is intentional:
 
-```ts
-expect(Object.keys(result.usageBreakdown ?? {})).toEqual([
-  'anthropic/claude-sonnet-4-6',
-  'openai-codex/gpt-5.4',
-]);
-expect(result.usageBreakdown?.['anthropic/claude-sonnet-4-6']?.kind).toBeUndefined();
-expect(result.tokens).toEqual({
-  input: 15,
-  output: 9,
-  total: 24,
-  cost: 0.03,
-});
-expect(result.cost).toBe(0.03);
-```
-
-Use the same `numberField` / `assertUsage` rules as production.
-Totals must match today's collapsed accumulation.
-
-- [ ] **Step 2: Run the OMP event-parser tests and confirm FAIL.**
-
-- [ ] **Step 3: Implement per-key accumulation.**
+- Model ids can contain `/`, so `${provider}/${model}` is not a safe identity key.
+- Multiple calls to the same model must remain distinct when the upstream source reports them distinctly; this improves tiered estimates.
+- Aggregate SDK reports remain one aggregate entry and are never split into fabricated calls.
+- Identity lives in fields, not in a string that downstream code must parse.
 
-In `accumulateUsage`, after updating `this.tokens`, if `provider` and `model` are non-empty, merge one sanitized entry with `calls: 1`.
-Store provider/model from `consumeMessageEnd` before calling `accumulateUsage`, or pass them in.
+Contract invariants:
 
-- [ ] **Step 4: Re-run OMP parser tests.**
+- `provider` is a trimmed, non-empty string.
+- `modelSource === 'unknown'` requires `model === null`.
+- `modelSource === 'reported'` or `'requested'` requires a non-empty `model`.
+- Every present token field is a non-negative safe integer; a present `requests` count is a positive safe integer.
+- `reasoningTokens` cannot exceed `outputTokens` when both are present.
+- `costUsd` is finite and non-negative; zero is valid and must not be dropped.
+- An entry has at least one numeric measure.
+- Missing measures remain `undefined`, not zero.
+- Estimated fields, run ids, node ids, prompts, and transcript text are forbidden in this provider contract.
 
-Expected: PASS.
+Create a small provider-internal normalizer in `packages/providers/src/usage-breakdown.ts` that validates individual entries without importing workflow or core code.
 
-- [ ] **Step 5: Commit.**
+It may concatenate observations and sum only where an upstream SDK itself reports an aggregate; it must not create opaque identity keys or turn absent values into zero.
 
-```bash
-git commit -m "feat(providers): accumulate OMP usageBreakdown per provider/model"
-```
+### 3. Model attribution and observability
 
----
+`agentProvider` is the Archon adapter selected by the workflow.
 
-### Task 4: Pi Usage Semantics And Breakdown
+It is trusted execution context attached once by the workflow recorder; it is not repeated in provider-supplied usage entries.
 
-**Files:**
+`provider` is the upstream model/catalog namespace, not necessarily the payment processor used by a hosted or subscription account.
 
-- Modify: `packages/providers/src/community/pi/event-bridge.ts:101-194`
-- Modify: colocated Pi event-bridge tests
+These axes must not be conflated.
 
-**Interfaces:**
+Examples:
 
-- Consumes: Pi `AssistantMessage.usage` and `responseModel` from the transcript already passed to `buildResultChunk(messages)`.
-- Produces: `usageBreakdown` on `buildResultChunk`.
-- Provider field is `'pi'` when the message has no upstream vendor string.
-- Model field is `responseModel` when it is a non-empty string.
-- If `responseModel` is missing, omit `usageBreakdown` entirely (tokens/cost on the result chunk stay).
-- Do not add parameters for engine `node_id`, run id, or step name.
-- Do not set `kind`.
+| Selected Archon adapter | Attached `agentProvider` | Entry `provider` source |
+| --- | --- | --- |
+| Claude | `claude` | `anthropic` |
+| Codex | `codex` | `openai` |
+| Grok | `grok` | `xai` |
+| Pi | `pi` | Pi assistant message `provider` |
+| OMP | `omp` | OMP assistant message `provider` |
+| OpenCode | `opencode` | OpenCode `providerID` |
+| Copilot | `copilot` | `github-copilot` |
 
-- [ ] **Step 1: Verify Pi usage semantics against `@earendil-works/pi-coding-agent@0.80.6`.**
+Update `packages/providers/src/observability.ts` to resolve a span model in this order:
 
-Read the installed type/docs for `AssistantMessage.usage` (prefer the package's `.d.ts` / README in `node_modules/@earendil-works/pi-coding-agent`).
-If `node_modules` is unreadable, fetch the `0.80.6` source for `AssistantMessage`.
+1. Terminal `resolvedModel`.
+2. Effective `options.model`.
+3. Configured assistant model.
+4. No model attribute.
 
-Decision rule:
+Never select the first element of a multi-model usage array.
 
-- If usage is per-message: sum every assistant message in the transcript and split entries by `responseModel`.
-- If usage is session-cumulative: keep the last assistant message for totals (today's behavior) and emit one breakdown entry from that last message.
-- If still ambiguous, default to per-message sum (the known last-message under-count is the defect being fixed).
+For Claude, preserve `resolvedModel` only when the SDK’s `modelUsage` has exactly one model.
 
-Record the decision in a short comment on `buildResultChunk` naming the file/version you read.
-Do not cite this plan id in the comment.
+When it has multiple models, emit all usage entries, warn, and omit `resolvedModel`; selecting the greatest-output model is still a guess about which model was “main.”
 
-- [ ] **Step 2: Write the failing multi-message fixture.**
+### 4. Provider mappings
 
-Two assistant messages, different `responseModel` values, per-message usage `{input:1,output:1,cost.total:0.01}` each.
-If Step 1 chose cumulative, the second message's usage should be the running total and the test expects one entry with that total.
+#### Claude
 
-- [ ] **Step 3: Run Pi event-bridge tests and confirm FAIL.**
+In `packages/providers/src/claude/provider.ts`, map every SDK `modelUsage` entry to one normalized observation:
 
-- [ ] **Step 4: Implement.**
+- `provider: 'anthropic'`
+- model key with `modelSource: 'reported'`
+- `inputTokens`, `outputTokens`, `cacheReadInputTokens`, `cacheCreationInputTokens`, and `costUSD`
+- omit `requests`; `webSearchRequests` is not a model-call count and `costUSD` already carries authoritative cost
 
-Include `cacheRead` / `cacheWrite` from Pi `Usage` when those fields are finite numbers on the typed `Usage` struct.
+Normalize usage before classifying an SDK result as an API failure.
 
-- [ ] **Step 5: Re-run tests and commit.**
+If Claude’s outer provider retry consumes a usage-bearing result, carry those observations into the eventual terminal result.
 
-```bash
-git commit -m "feat(providers): emit Pi usageBreakdown from assistant usage"
-```
+If the last attempt fails, yield an `isError` result containing the accumulated usage and the same typed classification details before returning, so the executor can persist usage and then fail the node.
 
----
+Do not weaken the existing typed auth/rate-limit/crash classification or retry policy.
 
-### Task 5: Remaining Providers
+If the SDK throws or closes without usage, do not synthesize an entry.
 
-**Files:**
+#### Pi
 
-- Modify: `packages/providers/src/grok/event-parser.ts:30-194` and `event-parser.test.ts`
-- Modify: `packages/providers/src/codex/provider.ts:324-333,793-798` and the Codex result-chunk tests
-- Modify: `packages/providers/src/community/opencode/session.ts` result yield (~257-275) and `multi-agent.ts` token fold (~342)
-- Modify: `packages/providers/src/community/copilot/event-bridge.ts` terminal result in `bridgeSession`
-- Qoder: no `usageBreakdown`
+In `packages/providers/src/community/pi/event-bridge.ts`, inspect every assistant message in the current `agent_end.messages` array.
 
-**Interfaces:**
+Produce one observation per assistant message:
 
-- Grok: one entry, `provider: 'grok'`, `model` from the first `modelUsage` key if it is a non-empty string, else omit `usageBreakdown`.
-- Tokens and `cost` stay as today.
-- `calls` is `modelCalls` when that nested field is a finite number, otherwise `1`.
-- Stop putting raw `modelUsage` on the result chunk.
-- Codex: tokens-only entry, `provider: 'codex'`, `model` from `requestOptions.model` when it is a non-empty string, else omit breakdown.
-- Do not invent `costUsd`.
-- OpenCode: `provider: 'opencode'`, `model` from `latestAssistantInfo.modelID` when non-empty, include `costUsd` from `normalizeTokens` cost when finite.
-- If multi-agent totals identify distinct `modelID`s, one entry per model; otherwise one entry.
-- Copilot: tokens-only, `provider: 'copilot'`, `model` from `requestOptions.model` when non-empty, else omit breakdown.
-- Qoder: assert the result chunk has no `usageBreakdown`.
-- No provider in this task sets `kind` or estimated fields.
+- `provider: message.provider`
+- non-empty `message.responseModel` with `modelSource: 'reported'`; otherwise non-empty `message.model` with `modelSource: 'requested'`; otherwise null/unknown
+- input/output/cache-read/cache-write/reasoning and `cost.total`
+- `requests: 1`
 
-- [ ] **Step 1: Write one failing test per provider listed above.**
+Reasoning is a subset of output.
 
-Grok uses the existing end-event fixture in `event-parser.test.ts` and asserts `usageBreakdown['grok/grok-build']` plus unchanged `cost: 0.25`.
-Codex asserts tokens without `costUsd`.
-OpenCode asserts `costUsd` from `info.cost`.
-Copilot asserts tokens-only.
-Qoder asserts `usageBreakdown` is undefined.
+Sum every assistant message into the legacy `TokenUsage`/cost result instead of using only the last message.
 
-- [ ] **Step 2: Run each provider test file and confirm FAIL.**
+Continue to use the last assistant message for stop reason, error, structured-output completion, and `resolvedModel` semantics.
 
-- [ ] **Step 3: Implement the mappings.**
+#### Codex
 
-- [ ] **Step 4: Re-run those tests.**
+In both Codex terminal-result construction paths in `packages/providers/src/codex/provider.ts`:
 
-Expected: PASS.
+- `provider: 'openai'`
+- effective requested model with `modelSource: 'requested'`, or `model: null`/`unknown` when no effective model is known
+- `inputTokens = max(input_tokens - cached_input_tokens, 0)`
+- `cacheReadTokens = cached_input_tokens`
+- `outputTokens = output_tokens`
+- `reasoningTokens = reasoning_output_tokens`
+- omit request count and USD
 
-- [ ] **Step 5: Commit.**
+Keep legacy `TokenUsage.input` unchanged for compatibility; it currently reflects Codex’s total input value.
 
-```bash
-git commit -m "feat(providers): emit usageBreakdown for Grok Codex OpenCode Copilot"
-```
+Treat reasoning as a subset of output.
 
----
+No usage entry is possible for a failed/incomplete Codex turn that provides no `turn.completed.usage`.
 
-### Task 6: Engine Zod Schema For Persistence
+#### Grok
 
-**Files:**
+In `packages/providers/src/grok/event-parser.ts`:
 
-- Create: `packages/workflows/src/schemas/usage-breakdown.ts`
-- Create: `packages/workflows/src/schemas/usage-breakdown.test.ts`
-- Modify: `packages/workflows/src/schemas/index.ts`
-- Modify: `packages/workflows/package.json` test script to include `src/schemas/usage-breakdown.test.ts` in the existing `src/schemas.test.ts` invocation
+- Use `provider: 'xai'`.
+- Pass the effective requested model from `packages/providers/src/grok/provider.ts` into the parser; the current parser has no model-request context.
+- If `modelUsage` names exactly one valid model, attach aggregate tokens/USD and its `modelCalls` to that reported model.
+- If it names multiple valid models, emit one requests-only observation per model and one `model: null`/`modelSource: 'unknown'` observation containing aggregate tokens/USD with no request count.
+- If it names no model, attach aggregate values to the effective requested model as `requested` when the provider knows it; otherwise use the unknown-model observation.
+- Do not divide aggregate tokens or USD across model names.
+- Preserve Grok’s existing raw `modelUsage` alongside normalized observations for compatibility; new code must consume `usageBreakdown`.
 
-**Interfaces:**
+#### OMP primary stream
 
-- Produces:
+In `packages/providers/src/community/omp/event-parser.ts`, produce one observation per assistant `message_end` using its reported provider/model and full usage object.
 
-```ts
-import { z } from '@hono/zod-openapi';
-import type { ModelUsageEntry, UsageBreakdown } from '@archon/providers/types';
+Include input, output, reasoning, cache read/write, `cost.total`, and `requests: 1`.
 
-export const modelUsageEntrySchema = z.object({
-  provider: z.string().min(1),
-  model: z.string().min(1),
-  input: z.number().finite(),
-  output: z.number().finite(),
-  cacheRead: z.number().finite().optional(),
-  cacheWrite: z.number().finite().optional(),
-  costUsd: z.number().finite().optional(),
-  calls: z.number().int().finite(),
-  kind: z.literal('advisor').optional(),
-});
+Continue accumulating the existing legacy totals and last `resolvedModel`.
 
-export const usageBreakdownSchema = z.record(z.string(), modelUsageEntrySchema);
+The final `usageBreakdown` for the stream contains every observed primary assistant call.
 
-export type ModelUsageEntryPersisted = z.infer<typeof modelUsageEntrySchema>;
-export type UsageBreakdownPersisted = z.infer<typeof usageBreakdownSchema>;
-```
+#### OpenCode
 
-`ModelUsageEntryPersisted` must be assignable to `ModelUsageEntry`.
-The schema MUST reject unknown keys such as `costEstimatedUsd` (use Zod's default object strip or `.strict()` if sibling schemas are strict; match `dag-node` object strictness).
-Do not add estimated fields to this schema.
+In `packages/providers/src/community/opencode/session.ts`, keep a map of latest assistant info by assistant message id rather than one `latestAssistantInfo` value.
 
-- [ ] **Step 1: Write failing schema tests** that parse a valid two-key map, reject empty provider, reject `NaN` cost, reject a missing `calls` field, and assert a parsed Claude entry has no `kind`.
+Repeated `message.updated` events replace the same map entry.
 
-- [ ] **Step 2: Run `bun test src/schemas/usage-breakdown.test.ts` from `packages/workflows` and confirm FAIL.**
+At `session.idle`, produce one observation per distinct assistant message using `providerID`, `modelID`, cost, and token/cache/reasoning fields.
 
-- [ ] **Step 3: Implement the schema file and re-export it from `schemas/index.ts`.**
+The single-session path omits `kind`.
 
-- [ ] **Step 4: Re-run the schema test.**
+In `packages/providers/src/community/opencode/multi-agent.ts`, maintain the same per-message map in each child state and mark those observations `kind: 'subagent'`.
 
-Expected: PASS.
+Sum all distinct messages into legacy totals.
 
-- [ ] **Step 5: Commit.**
+Fix `packages/providers/src/community/opencode/tokens.ts` so reasoning is not added to output a second time; the pinned SDK defines it as an output subset.
 
-```bash
-git commit -m "feat(workflows): add usageBreakdown persistence schema"
-```
+#### Copilot
 
----
+In `packages/providers/src/community/copilot/event-bridge.ts`, capture every `assistant.usage` event instead of overwriting the preceding event.
 
-### Task 7: AI-Node Accumulation And `node_completed` JSON
+Each observation uses:
 
-**Files:**
+- `provider: 'github-copilot'`
+- reported `data.model`
+- optional input/output/cache-read/cache-write/reasoning values
+- `requests: 1`
+- `kind: 'subagent'` only when non-empty `data.parentToolCallId` explicitly links the call to a parent tool invocation; otherwise omit it
 
-- Modify: `packages/workflows/src/dag-executor.ts:500-507,1970-2035,2270-2298,2656-2663,2900-2964`
-- Modify: `packages/workflows/src/dag-executor.test.ts` (extend the existing cost tests around `passes total_cost_usd` / result-chunk handling)
-- Modify every in-repo `IWorkflowStore` mock that lists `getDagResumeSnapshot` so it also has `replaceNodeUsageLedger: mock(() => Promise.resolve())` (no-op until Task 13)
+Ignore `data.cost` for USD because the SDK documents it as a model multiplier.
 
-**Interfaces:**
+Do not classify from the free-form `initiator` example text; the installed SDK does not define an enum contract for it.
 
-- Extend `NodeExecutionResult`:
+Sum usage events into legacy token totals without adding reasoning twice.
 
-```ts
-type NodeExecutionResult = NodeOutput & {
-  costUsd?: number;
-  tokens?: TokenUsage;
-  loopIterations?: number;
-  usageBreakdown?: UsageBreakdown;
-};
-```
+#### Qoder
 
-- Add `let nodeUsageBreakdown: UsageBreakdown | undefined` next to `nodeCostUsd`.
-- Reset it to `undefined` at the start of `runStreamPass` (same list as `nodeCostUsd = undefined`).
-- On `msg.type === 'result'`, if `msg.usageBreakdown` parses with `usageBreakdownSchema.safeParse`, merge it into a per-pass map.
-- If parse fails or any entry is non-finite, WARN `dag_node.usage_breakdown_ignored` and drop that chunk's map.
-- Also NaN-guard `msg.cost` the same way as tokens (`dag_node.usage_cost_non_finite_ignored`).
-- Across reasks, merge per-pass maps into `accumulatedUsageBreakdown` the same way `accumulatedCostUsd` sums, then assign back onto `nodeUsageBreakdown`.
-- Persist on `node_completed` data as `usage_breakdown` next to `cost_usd`, omitted when empty.
-- Return it on `NodeExecutionResult`.
-- Import `mergeUsageBreakdown` from `@archon/providers/types`.
+Leave `packages/providers/src/community/qodercli/provider.ts` unchanged unless its actual result contract gains authoritative usage.
 
-- [ ] **Step 1: Write failing tests in `dag-executor.test.ts`.**
+No row is better than fabricated zero usage.
 
-1. Two-model result persists both keys on `node_completed.data.usage_breakdown` and those objects have no `costEstimatedUsd`.
-2. Reask: first pass map `{claude/a: 1 call}` then second pass `{claude/b: 1 call}` persists both, and a failed first pass does not leak after `runStreamPass` reset (mirror existing reask tests).
-3. Non-finite `cost` is omitted and does not appear as `cost_usd`.
+### 5. OMP hidden-session enrichment
 
-Until Task 12, `replaceNodeUsageLedger` may be a no-op mock.
+Create `packages/providers/src/community/omp/session-usage.ts`, not an advisor-only helper.
 
-- [ ] **Step 2: Run `bun test src/dag-executor.test.ts` from `packages/workflows` and confirm the new tests FAIL.**
+It must capture both advisor and task-subagent usage.
 
-- [ ] **Step 3: Implement accumulation and JSON persist.**
+The resolver must support and test the layouts actually used by the supported OMP formats:
 
-Do not write ledger rows yet.
-Do not attach estimates to the JSON payload.
+- main transcript: `<sessionDir>/<timestamp>_<sessionId>.jsonl`
+- main artifact directory: the transcript path without `.jsonl`
+- top-level advisor transcripts inside that artifact directory
+- task-agent transcripts recursively inside the artifact directory
+- nested advisor transcripts next to their owning task-agent transcript according to OMP’s filename constructors
 
-- [ ] **Step 4: Re-run the new tests plus the existing `total_cost_usd` tests.**
+Do not assume all advisor files are siblings of the main transcript.
 
-Expected: PASS.
+Session-directory resolution order:
 
-- [ ] **Step 5: Commit.**
+1. Exact `PI_CODING_AGENT_SESSION_DIR` when provided to the spawned OMP environment.
+2. The supported `PI_CODING_AGENT_DIR`/default OMP session-root derivation mirrored in one documented resolver.
+3. If the layout cannot be proven, warn once and omit hidden usage.
 
-```bash
-git commit -m "feat(workflows): accumulate usageBreakdown on AI nodes"
-```
+Do not move OMP’s session directory; doing so would break resume compatibility.
 
----
+For a fresh persisted session, resolve the emitted session id after process exit and parse only files belonging to that session artifact directory.
 
-### Task 8: Loop And Loop-Group JSON Maps
+For `--resume` or `--fork`:
 
-**Files:**
+1. Before spawning OMP, resolve the source transcript/artifact directory.
+2. Snapshot each candidate file by relative path, byte length, and a digest of the existing prefix.
+3. After exit, resolve the destination transcript from the emitted session id.
+4. For a file whose destination prefix matches the snapshot, parse only appended bytes.
+5. Parse the complete contents of genuinely new files.
+6. If a copied file’s prefix, identity, or containment check fails, warn and omit that file rather than risk double-counting history.
+7. If the pre-spawn snapshot cannot be established, continue the OMP call but skip hidden-session enrichment for that invocation.
 
-- Modify: `packages/workflows/src/dag-executor.ts` loop totals (~4043, ~4210, ~4415, ~5062-5076, ~5938)
-- Modify: `packages/workflows/src/dag-executor.test.ts` existing loop / loop_group COST tests (~13957, ~18710)
+A snapshotted JSONL file must end at a newline record boundary.
+If it does not, omit that file because parsing only later bytes could reinterpret a partial historical record.
 
-**Interfaces:**
+For `--no-session`, do not search for transcripts.
 
-- Add `loopTotalUsageBreakdown` beside `loopTotalCostUsd`.
-- Merge each iteration's map with `mergeUsageBreakdown`.
-- Charge once at the same sites that add `loopTotalCostUsd`.
-- Single-node `loop:`: persist merged `usage_breakdown` on that node's `node_completed` (this node is the leaf).
-- `loop_group:`: do **not** persist `usage_breakdown` on the group aggregate `node_completed` row (follow the #2333 token note: body rows are authoritative; putting an aggregate map on the group row would double-count any consumer that sums `node_completed`).
-- The group `NodeExecutionResult` still returns the merged map so run-level JSON can include the group once (body results stay in the scoped iteration ctx and never enter `runCtx`).
+Reader safety requirements:
 
-- [ ] **Step 1: Write failing tests.**
+- Resolve real paths and reject symlinks or paths escaping the resolved session artifact root.
+- Open and read the verified file itself, re-checking file identity/size after open where the platform permits, so a path swap cannot redirect the reader after containment validation.
+- Validate the main session header id and cwd before trusting the artifact directory.
+- Search only the exact bounded session root and exact session id; never recursively scan the home directory.
+- Stream JSONL rather than loading whole transcripts.
+- Cap candidate files at 1,000, total bytes considered at 256 MiB, bytes read from any one file at 64 MiB, and a JSONL line at 8 MiB; define named constants and boundary tests.
+- If any bound is exceeded, omit all hidden-session enrichment for that invocation and warn rather than publish a silently partial advisor/subagent total; primary streamed usage remains valid.
+- Parse assistant messages only; never persist prompt, response, tool, or transcript content.
+- Malformed lines/files are logged with path-safe metadata and omitted.
+- Transcript read failures never change the provider result’s success/error status.
 
-1. Single-node loop, 3 iterations, same model, `calls === 3` and tokens/cost summed, one `node_completed` for the loop id.
-2. `loop_group` two-iteration COST test: group `node_completed.data.usage_breakdown` is undefined; body `node_completed` rows exist.
+Mark advisor observations `kind: 'advisor'` and task-agent observations `kind: 'subagent'`.
 
-- [ ] **Step 2: Run the loop cost tests and confirm FAIL.**
+Enrich the final result after process exit on success, protocol error, or non-zero exit when usage is available.
 
-- [ ] **Step 3: Implement merge sites.**
+Add hidden usage to the legacy aggregate tokens/cost so existing totals improve, but keep `numTurns` as the primary-stream count.
 
-- [ ] **Step 4: Re-run those tests.**
+### 6. Persisted usage event
 
-- [ ] **Step 5: Commit.**
+Add `node_usage_recorded` to `WORKFLOW_EVENT_TYPES` in `packages/workflows/src/store.ts`.
 
-```bash
-git commit -m "feat(workflows): merge loop usageBreakdown maps"
-```
+Create `packages/workflows/src/schemas/usage-breakdown.ts` with strict Zod schemas and re-export them from `packages/workflows/src/schemas/index.ts`.
 
----
+Import `z` from `@hono/zod-openapi`, derive types with `z.infer`, and add a compile-time structural check against the provider contract imported from `@archon/providers/types`.
 
-### Task 9: Sub-Run JSON Rollup And Run Metadata
+At the provider-result runtime boundary, validate entries independently, retain valid entries in order, and log only the rejected index/schema issues, not the raw value.
 
-**Files:**
+A malformed entry must not poison other authoritative observations in the same result; if none remain, do not write an event.
 
-- Modify: `packages/workflows/src/dag-executor.ts` `childOutcomeFromRun` (~622-646), `asCompleted` (~6504-6561), fan-out `writeCompleted` (~6982), `RunLayersContext` (~7635), `runLayers` cost fold (~8787), `completeWorkflowRun` (~10181-10188)
-- Modify: `packages/workflows/src/subrun.test.ts` D8 assertions (~538-552, ~2659-2670)
-- Modify: `packages/workflows/src/dag-executor.test.ts` `passes total_cost_usd` / omit-when-empty tests
+The persisted event is the authoritative per-run JSON sink for raw observed usage:
 
-**Interfaces:**
-
-- Extend `ChildWorkflowOutcome` with `usageBreakdown?: UsageBreakdown`.
-- Read child `metadata.usage_by_model` via `usageBreakdownSchema.safeParse`.
-- Merge child map into the parent `workflow:` node's JSON `usage_breakdown` (D8).
-- Fan-out parent JSON merges children the same way as `sumFanOutCost`.
-- Do not write parent ledger rows for children (Task 13).
-- `runLayers` merges `output.usageBreakdown` into `ctx.usageByModel`.
-- `completeWorkflowRun` metadata includes `usage_by_model` when the map is non-empty, omitted when empty (same style as `total_cost_usd`).
-- Resume: `getDagResumeSnapshot` still rebuilds tokens from events and does not need to rebuild `usage_by_model`.
-- Completed nodes are skipped, so their maps must not be merged again.
-- Add a resume test: half-complete run, completed node had a breakdown, resumed remaining node adds a second model, final `usage_by_model` is the merge of both and the first node's calls are not doubled.
-
-- [ ] **Step 1: Write failing tests** for sub-run merge, fan-out merge, omit-when-empty, resume no-double-count, and `usage_by_model ===` merge of top-level node maps (loop_group counted once via its return value, not via body events).
-
-- [ ] **Step 2: Run `bun test src/subrun.test.ts` and the new dag-executor tests; confirm FAIL.**
-
-- [ ] **Step 3: Implement rollup and metadata write.**
-
-- [ ] **Step 4: Re-run those tests.**
-
-- [ ] **Step 5: Commit.**
-
-```bash
-git commit -m "feat(workflows): persist run usage_by_model and sub-run rollup"
-```
-
----
-
-### Task 10: Ledger Table In Both Dialects
-
-**Files:**
-
-- Modify: `migrations/000_combined.sql` (CREATE TABLE in the tables section; indexes in the trailing indexes section)
-- Modify: `packages/core/src/db/adapters/sqlite.ts` `createSchema()`
-- Modify: `packages/core/src/db/adapters/sqlite.test.ts` (`MIN_NON_AUTH_COLUMNS` from 138 to 157)
-- Modify: the migration header table count comment
-- Modify: `packages/core/src/db/schema-version.ts` is not hand-bumped
-- Run: `bun run generate:bundled-schema`
-
-**Interfaces:**
-
-PostgreSQL and SQLite table `remote_agent_usage_ledger`:
-
-- `id` PK (text UUID, same default pattern as sibling tables)
-- `created_at` timestamp not null default now
-- `source` TEXT NOT NULL DEFAULT `'workflow'`
-- `workflow_run_id` TEXT NULL
-- `node_id` TEXT NULL
-- `workflow_name` TEXT NULL
-- `codebase_id` TEXT NULL
-- `user_id` TEXT NULL
-- `provider` TEXT NOT NULL
-- `model` TEXT NOT NULL
-- `kind` TEXT NULL
-- `tokens_input` INTEGER NOT NULL
-- `tokens_output` INTEGER NOT NULL
-- `cache_read` INTEGER NULL
-- `cache_write` INTEGER NULL
-- `calls` INTEGER NOT NULL
-- `cost_usd` REAL NULL
-- `cost_estimated_usd` REAL NULL
-- `pricing_source` TEXT NULL
-
-Indexes (trailing section only in the Postgres migration):
-
-- `(created_at)`
-- `(codebase_id, created_at)`
-- `(provider, created_at)`
-- `(workflow_run_id)`
-
-SQLite: matching `CREATE INDEX IF NOT EXISTS` next to other sqlite indexes inside `createSchema()`, not in a Postgres-only comment block.
-
-- [ ] **Step 1: Write/extend sqlite parity tests** so a missing new table fails.
-  Keep `POSTGRES_ONLY_COLUMNS` / `SQLITE_ONLY_COLUMNS` unchanged.
-  Bump `MIN_NON_AUTH_COLUMNS` to 157 (19 new columns).
-
-- [ ] **Step 2: Run `bun test src/db/adapters/sqlite.test.ts` from `packages/core` and confirm FAIL** on missing table / floor.
-
-- [ ] **Step 3: Add the table and indexes to both dialects, then run `bun run generate:bundled-schema`.**
-
-- [ ] **Step 4: Re-run sqlite tests and `bun run check:bundled-schema`.**
-
-If Postgres is reachable, also run `bun run check:schema-upgrades`.
-If it is not, record that as a remaining validation item; do not skip the sqlite parity tests.
-
-- [ ] **Step 5: Commit including the generated bundled schema.**
-
-```bash
-git commit -m "feat(core): add remote_agent_usage_ledger table"
-```
-
----
-
-### Task 11: Pricing Config And Estimate Module
-
-**Files:**
-
-- Modify: `packages/core/src/config/config-types.ts` `GlobalConfig`, `RepoConfig`, `MergedConfig`
-- Modify: `packages/core/src/config/config-loader.ts` to merge `pricing.models` (repo per-key overrides global)
-- Create: `packages/core/src/usage/estimate.ts`
-- Create: `packages/core/src/usage/estimate.test.ts`
-- Modify: `packages/docs-web/src/content/docs/reference/configuration.md` to document `pricing:`
-- Modify: `packages/core/package.json` test script to run `src/usage/estimate.test.ts` in a split that does not `mock.module` the Pi catalog
-
-**Interfaces:**
-
-```ts
-export interface PricingModelRate {
-  input: number;
-  output: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-}
-
-export interface PricingConfig {
-  models?: Record<string, PricingModelRate>;
-}
-
-export type PricingSource = 'config' | 'catalog';
-
-export interface UsageEstimate {
-  costEstimatedUsd: number;
-  pricingSource: PricingSource;
-}
-
-export function estimateUsageCost(input: {
-  provider: string;
-  model: string;
-  tokensInput: number;
-  tokensOutput: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  pricing: PricingConfig | undefined;
-  catalog: ReadonlyArray<{ id: string; ref: string; cost: { input: number; output: number } }>;
-}): UsageEstimate | undefined;
-```
-
-Resolution order:
-
-1. If the caller already has provider-reported `costUsd`, do not call this function.
-2. Exact key match on `pricing.models[model]`, then `pricing.models[provider + '/' + model]`.
-3. Exact catalog match on `id === model`, then `ref === provider + '/' + model`, then `ref === model`.
-4. Else `undefined`.
-
-Rates are USD per million tokens.
-`cost = (input * rate.input + output * rate.output + cacheRead * rate.cacheRead + cacheWrite * rate.cacheWrite) / 1_000_000` using `0` for missing cache tokens and omitting cache terms when the rate has no cache field.
-
-No fuzzy matching.
-This module must not be imported by `@archon/providers`.
-
-- [ ] **Step 1: Write failing estimate tests** for config hit, catalog hit, config-over-catalog, no match, and exact-ref match only.
-
-- [ ] **Step 2: Run `bun test src/usage/estimate.test.ts` from `packages/core` and confirm FAIL.**
-
-- [ ] **Step 3: Implement types, merge in `loadConfig`, and `estimateUsageCost`.**
-
-`listPiModels()` is async and SDK-backed.
-The estimate module must accept an already-loaded catalog array so unit tests never import the Pi SDK.
-
-- [ ] **Step 4: Re-run estimate tests and existing `config-loader.test.ts`.**
-
-- [ ] **Step 5: Commit.**
-
-```bash
-git commit -m "feat(core): add pricing overrides and usage estimate helper"
-```
-
----
-
-### Task 12: Ledger Replace/Query And Store Port
-
-**Files:**
-
-- Create: `packages/core/src/schemas/usage-ledger.ts`
-- Create: `packages/core/src/db/usage-ledger.ts`
-- Create: `packages/core/src/db/usage-ledger.test.ts`
-- Modify: `packages/core/src/schemas/index.ts`
-- Modify: `packages/workflows/src/store.ts`
-- Modify: `packages/core/src/workflows/store-adapter.ts`
-- Modify: `packages/core/src/workflows/store-adapter.test.ts` requiredMethods list
-- Grep `replaceNodeUsageLedger` / `getDagResumeSnapshot` mock factories and add the method everywhere
-
-**Interfaces:**
-
-```ts
-export interface ReplaceNodeUsageLedgerInput {
-  workflowRunId: string;
-  nodeId: string;
-  workflowName: string | null;
-  codebaseId: string | null;
-  userId: string | null;
-  breakdown: UsageBreakdown;
-}
-
-// IWorkflowStore
-replaceNodeUsageLedger(input: ReplaceNodeUsageLedgerInput): Promise<void>;
-```
-
-Store adapter contract matches `createWorkflowEvent`: catch all errors, log WARN `usage.ledger_write_failed`, never throw.
-
-Implementation:
-
-1. `usageBreakdownSchema.safeParse`; on failure WARN and return.
-2. `db.withTransaction`: `DELETE FROM remote_agent_usage_ledger WHERE workflow_run_id = $1 AND node_id = $2`.
-3. For each entry, copy `entry.provider` / `entry.model` (never parse the key).
-4. If `entry.costUsd` is a finite number, insert `cost_usd = entry.costUsd` and leave estimate null.
-5. Else call `estimateUsageCost` with merged config pricing plus `listPiModels()` (catch catalog errors, treat as empty catalog).
-6. Insert one row per entry with `source = 'workflow'`.
-
-Do not merge maps in the adapter.
-The engine passes the already-merged node map.
-
-Query helper for Task 14 (same file):
-
-```ts
-export interface UsageLedgerQuery {
-  from?: string;
-  to?: string;
-  codebaseId?: string;
-  provider?: string;
-  model?: string;
-  kind?: string;
-  runId?: string;
-  groupBy: 'provider' | 'model' | 'project' | 'day' | 'none';
-}
-
-export interface UsageLedgerGroup {
-  key: string;
-  provider?: string;
-  model?: string;
-  codebaseId?: string;
-  day?: string;
-  tokensInput: number;
-  tokensOutput: number;
-  calls: number;
-  costUsd: number | null;
-  costEstimatedUsd: number | null;
-  rowsMissingUsd: number;
+```json
+{
+  "schema_version": 1,
+  "agent_provider": "codex",
+  "usage_breakdown": [
+    {
+      "provider": "openai",
+      "model": "gpt-5.4",
+      "model_source": "requested",
+      "input_tokens": 100,
+      "output_tokens": 20,
+      "reasoning_tokens": 8,
+      "cache_read_tokens": 40
+    }
+  ],
+  "retry_epoch": 0,
+  "iteration": null,
+  "reask_attempt": 0,
+  "terminal_error": false,
+  "error_subtype": null
 }
 ```
 
-`costUsd` in a group is the sum of non-null `cost_usd` only.
-`costEstimatedUsd` is the sum of non-null `cost_estimated_usd` only.
-Never add those two sums together in this helper.
-`rowsMissingUsd` counts rows whose `cost_usd` and `cost_estimated_usd` are both null.
+Use snake_case in persisted event data and camelCase in TypeScript/API response objects.
 
-- [ ] **Step 1: Write failing tests** using the existing sqlite test DB helper:
+The event has the actual persisted `step_name`:
 
-1. Replace writes two entries then replace again with one entry; count for that node is 1.
-2. Provider-reported cost leaves `cost_estimated_usd` null.
-3. Tokens-only Codex-like entry plus a config price fills `cost_estimated_usd` and `pricing_source = 'config'`.
-4. Adapter swallows insert errors (mock `query` throw) and does not reject.
+- normal node: node id
+- loop-group body node: the existing namespaced `<groupId>.<nodeId>` id
+- direct loop: loop node id
 
-- [ ] **Step 2: Run the new tests and confirm FAIL.**
+Do not add the breakdown to `node_completed` or new run metadata.
 
-- [ ] **Step 3: Implement schema, db module, adapter method, and mock updates.**
+Those sinks only describe successful/latest state and cannot faithfully represent failed attempts or append-only spend.
 
-- [ ] **Step 4: Re-run those tests plus `store-adapter.test.ts`.**
+Keep the existing `node_completed.cost_usd`, token fields, run metadata totals, loop accounting, and budget behavior for compatibility.
 
-- [ ] **Step 5: Commit.**
+Built-in legacy aggregates may become more accurate where the provider currently keeps only the last reported call or double-counts reasoning, but the executor must not use the new ledger, estimates, or OMP transcript enrichment for `maxBudgetUsd` decisions.
+Claude remains the only built-in provider advertising `costControl`, and its existing SDK-enforced budget option/error path stays unchanged.
 
-```bash
-git commit -m "feat(core): replace usage ledger rows at node completion"
+Do not add `node_usage_recorded` to `INTERNAL_EVENT_TYPE_MAP` or `DASHBOARD_SOURCE_EVENT_TYPES`.
+
+Map it explicitly to a compact `system` event in `packages/web/src/experiments/console/primitives/event.ts` so raw usage JSON is not rendered by the unknown-event fallback.
+
+### 7. Usage-recorder port and executor write sites
+
+Do not add an unrelated accounting method to the already broad `IWorkflowStore`.
+
+Create a separate narrow port in `packages/workflows/src/usage.ts`:
+
+```ts
+export interface IWorkflowUsageRecorder {
+  recordWorkflowUsage(input: RecordWorkflowUsageInput): Promise<void>;
+}
 ```
 
----
+`RecordWorkflowUsageInput` carries run id, actual step name, the selected agent-provider id, validated usage array, retry epoch, optional loop iteration, reask attempt, and terminal error metadata.
 
-### Task 13: Engine Ledger Write Sites
+The executor obtains the agent-provider id from its resolved node execution context, never from a usage entry.
 
-**Files:**
+It does not carry pricing or ledger columns; core owns that policy.
 
-- Modify: `packages/workflows/src/dag-executor.ts` AI-node success path, `executeLoopNode` completion, loop-group completion/failure charge paths
-- Modify: `packages/workflows/src/dag-executor.test.ts`
-- Modify: `packages/workflows/src/subrun.test.ts`
+Add a required `usageRecorder: IWorkflowUsageRecorder` dependency to `WorkflowDeps` in `packages/workflows/src/deps.ts`.
 
-**Interfaces:**
+Re-export the recorder/input types from `deps.ts` so core continues to import workflow contracts through the existing `@archon/workflows/deps` package export; no new package-root import is needed.
 
-Call `deps.store.replaceNodeUsageLedger` with the **same map** just persisted to JSON (one source, two sinks).
+Create the core implementation in `packages/core/src/workflows/usage-recorder.ts` and wire it in the one canonical `createWorkflowDeps()` factory.
 
-Write sites:
+Leave `createWorkflowStore()` and `IWorkflowStore` unchanged.
 
-- `executeNodeInternal` success, when `usageBreakdown` is non-empty **and** `ctx.stepNamePrefix` is empty (not a loop-group body invocation).
-- `executeLoopNode` success/failure that already writes `loopTotalCostUsd`, using the merged loop map and `stepName` as `nodeId`.
-- `loop_group`: keep a `Map<string, UsageBreakdown>` keyed by namespaced body id (`stepNamePrefix + bodyNodeId`).
-  After each iteration, merge that iteration's body `NodeExecutionResult.usageBreakdown` into the cumulative map.
-  When the group completes **or** fails after charging, for each namespaced id with a non-empty cumulative map, call `replaceNodeUsageLedger` **once** with that cumulative map.
-  Do not call replace from `executeNodeInternal` for body iterations (that would keep only the last iteration).
-- Do not write ledger for `workflow:` parent nodes or fan-out parent nodes.
-  Children write under their own `workflow_run_id`.
+Update every structural `WorkflowDeps` implementation and test helper.
 
-`nodeId` is the executor persisted step name (`<groupId>.<nodeId>` for body nodes).
-Providers never see this `nodeId`.
+Use `rg` over `WorkflowDeps`, `createWorkflowDeps`, and explicit dependency object literals before considering this task complete.
 
-- [ ] **Step 1: Write failing tests.**
+In `packages/workflows/src/dag-executor.ts`:
 
-1. AI node completion mock store receives one replace call whose `breakdown` equals `node_completed.data.usage_breakdown`.
-2. Loop-group 3 iterations of body node `g.work` with 1 call each: after the group finishes, replace was called for `g.work` with `calls === 3` (not 1).
-3. Sub-run: child store replace uses child run id; parent `workflow:` node does not insert parent-run ledger rows.
-4. Resume of a completed node does not call replace again for that node.
-5. Simulated retry: two replaces for the same `(runId, nodeId)` leave one set of rows (assert via a memory store that implements delete-on-replace).
+- Capture the last valid terminal `usageBreakdown` separately inside each standard `runStreamPass`.
+- In a non-throwing `finally`/pass-exit path, call `deps.usageRecorder.recordWorkflowUsage` exactly once when that pass reported usage.
+- Record before the structured-output reask decision and before an error result escapes.
+- Include the current reask attempt, retry epoch, and error subtype.
+- Do the same in the separate direct-loop streaming path for every iteration/reask.
+- Let ordinary loop-group AI nodes use the standard path and existing namespaced step name; do not add a group-level duplicate.
+- Do not write a row for bash, script, command, gate, route, cancel, or `workflow:` wrapper nodes unless they directly invoke an AI provider through one of the two traced paths.
+- Do not copy child-run usage into the parent.
 
-Use an in-memory `replaceNodeUsageLedger` that records calls.
-A true SQL idempotency test lives in Task 12.
+An exception/abort with no terminal usage result remains unrecorded because no authoritative numbers exist.
 
-- [ ] **Step 2: Run those tests and confirm FAIL.**
+The method must never mask the original node result or exception.
 
-- [ ] **Step 3: Implement the write sites.**
+### 8. Ledger schema
 
-Wrap each call in `.catch` only if the store contract could still throw from a bad mock; production adapter already swallows.
+Add `remote_agent_usage_ledger` as a normalized child of the audit event.
 
-- [ ] **Step 4: Re-run engine tests.**
+Do not duplicate run id, node id, workflow name, codebase id, user id, source, or timestamp in the ledger; those are available through the referenced event and run and duplicating them creates consistency hazards.
 
-- [ ] **Step 5: Commit.**
+The table has exactly these 17 columns:
 
-```bash
-git commit -m "feat(workflows): write usage ledger from accumulated node maps"
+| Column | PostgreSQL | SQLite | Rules |
+| --- | --- | --- | --- |
+| `id` | UUID | TEXT | primary key |
+| `workflow_event_id` | UUID | TEXT | non-null FK to workflow events, cascade delete |
+| `entry_index` | INTEGER | INTEGER | non-negative position in event array |
+| `agent_provider` | TEXT | TEXT | non-empty |
+| `provider` | TEXT | TEXT | non-empty |
+| `model` | TEXT nullable | TEXT nullable | null only for unknown source |
+| `model_source` | TEXT | TEXT | reported/requested/unknown |
+| `kind` | TEXT nullable | TEXT nullable | advisor/subagent/null |
+| `tokens_input` | BIGINT nullable | INTEGER nullable | non-negative |
+| `tokens_output` | BIGINT nullable | INTEGER nullable | non-negative |
+| `tokens_reasoning` | BIGINT nullable | INTEGER nullable | non-negative, not above output when output exists |
+| `tokens_cache_read` | BIGINT nullable | INTEGER nullable | non-negative |
+| `tokens_cache_write` | BIGINT nullable | INTEGER nullable | non-negative |
+| `requests` | BIGINT nullable | INTEGER nullable | positive when present |
+| `cost_usd` | DOUBLE PRECISION nullable | REAL nullable | reported, non-negative |
+| `cost_estimated_usd` | DOUBLE PRECISION nullable | REAL nullable | estimated, non-negative |
+| `pricing_source` | TEXT nullable | TEXT nullable | config/catalog only with estimate |
+
+Constraints:
+
+- Unique `(workflow_event_id, entry_index)`.
+- At least one token, request, reported-cost, or estimated-cost measure is non-null.
+- Reported and estimated USD are mutually exclusive.
+- `pricing_source` is present exactly when `cost_estimated_usd` is present; the matched identity is already the row's exact `provider`/`model` pair and is not duplicated in another column.
+- `model_source` and model nullability agree.
+- Numeric values are non-negative, with requests positive when present; application validation also enforces safe integers and finite values.
+
+Indexes:
+
+- ledger `(workflow_event_id, entry_index)` through the unique constraint
+- ledger `(agent_provider)`
+- ledger `(provider, model)`
+- workflow events `(created_at)` partial to `event_type = 'node_usage_recorded'`, or the closest dialect-equivalent index proven by query-plan tests
+- workflow runs `(codebase_id)`, which is currently missing and is required for project reporting joins
+
+Place all PostgreSQL indexes and column comments in the final “Indexes and column comments” section after every additive column statement.
+
+Mirror the table and constraints in `packages/core/src/db/adapters/sqlite.ts`.
+
+Update the migration header and `AGENTS.md` table inventory to enumerate all 20 application tables plus the four PostgreSQL-only Better Auth tables after this change, including the previously omitted checkpoint/schema-version/event-delivery tables.
+
+Raise `MIN_NON_AUTH_COLUMNS` to the actual post-change compared count reported by the parity test; 138 existing plus 17 new columns predicts 155.
+
+Generate `packages/core/src/db/bundled-schema.generated.ts` only with `bun run generate:bundled-schema`.
+
+### 9. Atomic event and ledger write
+
+Create `packages/core/src/db/usage-ledger.ts` and `packages/core/src/schemas/usage-ledger.ts`.
+
+Re-export core schemas from `packages/core/src/schemas/index.ts` and a `usageDb` namespace from both `packages/core/src/db/index.ts` and `packages/core/src/index.ts` for server/CLI callers.
+
+Change `insertWorkflowEvent()` in `packages/core/src/db/workflow-events.ts` to accept an optional caller-generated event id and return the id it inserted.
+
+Existing callers may ignore the return value.
+
+The core recorder’s `recordWorkflowUsage()` implementation performs this sequence:
+
+1. Strictly validate the complete input and convert the camelCase provider entries to the versioned snake_case event payload.
+2. Resolve any estimates and generate one event id before opening a database transaction.
+3. Begin `getDatabase().withTransaction()`.
+4. Insert one `node_usage_recorded` event using `insertWorkflowEvent()` with that id.
+5. Insert one ledger row per `usage_breakdown` entry with the same array index.
+6. Commit.
+
+There is no delete or replace path.
+
+If validation fails, log a structured warning and write nothing.
+
+If the transaction fails, it rolls back both sinks.
+
+Then attempt one event-only fallback with the same pre-generated id and authoritative JSON payload.
+
+That preserves the run audit even though the normalized ledger is incomplete.
+It does not preserve an Archon-computed point-in-time estimate, which intentionally never enters event JSON.
+
+The fallback insert must use an explicit duplicate-id-ignore option limited to this recovery path, so an ambiguous commit response cannot create a second usage event when the original transaction actually committed.
+
+If fallback event creation also fails, retain the existing structured error log as the final degradation; never fail or mutate the workflow lifecycle.
+
+Do not enqueue an external workflow event for either path.
+
+### 10. Price estimation
+
+Add operator-only pricing to `GlobalConfig`:
+
+```yaml
+pricing:
+  models:
+    - provider: openai
+      model: gpt-5.4
+      input: 2.50
+      output: 15.00
+      cacheRead: 0.25
+      cacheWrite: 0
 ```
 
----
+Rates are USD per one million tokens.
 
-### Task 14: `GET /api/usage`
+`models` is a list so provider and model remain separate identity fields even when either contains `/`.
 
-**Files:**
+`provider` and `model` are trimmed non-empty strings, duplicate `(provider, model)` pairs are invalid, and the four rate fields are optional finite non-negative numbers with at least one required per model entry.
 
-- Create: `packages/server/src/routes/schemas/usage.schemas.ts`
-- Create: colocated server usage route tests (follow an existing `registerOpenApiRoute` test file under `packages/server/src/routes/`)
-- Modify: `packages/server/src/routes/api.ts`
-- Modify: `packages/server/src/routes/schemas/` index re-export if one exists
-- After the route exists, regenerate `packages/web/src/lib/api.generated.d.ts` with `bun --filter @archon/web generate:types` while the server is running on the worktree port
+Do not add `pricing` to `RepoConfig`, `MergedConfig`, `SafeConfig`, configuration mutation endpoints, or the web settings UI.
 
-**Interfaces:**
+Load it directly through cached `loadGlobalConfig()` at the core accounting boundary.
 
-Query (all optional except that `group_by` defaults to `'provider'`):
+Validate pricing entries at use time because config loading currently parses YAML into TypeScript types without a runtime schema.
 
-- `from`, `to` (ISO timestamps)
-- `codebase`
+An invalid rate logs a warning and leaves that observation unpriced; it does not fail a node or partially apply the invalid entry.
+
+Create `packages/core/src/usage/estimate.ts` with this precedence:
+
+1. If `costUsd` is present, including zero, store it in `cost_usd` and do not estimate.
+2. Exact global-config `(provider, model)` pair.
+3. Exact Pi catalog `provider` and `id` pair.
+4. No estimate.
+
+Never use a bare-model, prefix, substring, case-folded, or fuzzy match.
+
+Treat `costUsd` as upstream-supplied, not invoice-verified; the source SDK/CLI may itself have derived it from a catalog.
+
+Never estimate an unknown model.
+
+Extend `PiModelInfo.cost` in `packages/providers/src/community/pi/model-catalog.ts` to expose cache-read/cache-write rates and optional request-wide tiers from the pinned SDK.
+
+Update `packages/server/src/routes/schemas/provider.schemas.ts`, route tests, and generated web types for that additive model-catalog response.
+
+Apply the matched rate to input, output, cache-read, and cache-write tokens.
+
+Reasoning is already inside output and is not charged again.
+
+Require both input and output token counts before estimating a model call.
+
+Apply cache rates only to cache dimensions the provider reported; the contract's input field already remains the provider's unsplit input value when it cannot distinguish cache usage.
+
+If an observation has positive reported usage in any category whose matched pricing entry lacks a rate, leave the whole estimate null rather than publish a known-partial number.
+
+Missing token dimensions remain missing in report coverage and are never rewritten as zero.
+
+Request-only observations remain unpriced in v1.
+
+Apply the highest tier whose threshold is strictly below aggregate input `inputTokens + cacheReadTokens + cacheWriteTokens`, matching the pinned catalog’s `calculateCost()` rule.
+
+For SDKs that expose only a multi-call aggregate, the result remains explicitly approximate because per-request tier boundaries cannot be reconstructed.
+
+Store the materialized estimate and `pricing_source` in the ledger; the row's separate `provider` and `model` columns already identify the exact match.
+
+Never put estimates in provider results, workflow-event JSON, legacy run totals, or `cost_usd`.
+
+The Pi catalog implementation and built-in snapshot are pinned by the lockfile, while the operator's `~/.pi/agent/models.json` entries are merged by the existing registry; the merged catalog and Archon configuration are process-cached.
+
+Document that manual pricing or user Pi catalog edits take effect in a long-running server after restart; a CLI invocation starts a fresh process.
+Do not add a file watcher in this feature.
+
+Do not perform file reads or catalog construction inside the database transaction.
+
+### 11. Query semantics and REST API
+
+Add a core query operation and a camelCase `usageReportSchema`/`UsageReport` inferred with `z.infer` in `packages/core/src/schemas/usage-report.ts`.
+
+The core query and CLI use that inferred report contract.
+
+Register `GET /api/usage` with `registerOpenApiRoute(createRoute(...), handler)`.
+
+Put HTTP query schemas and the OpenAPI-labelled response wrapper in `packages/server/src/routes/schemas/usage.schemas.ts`, reuse the core report schema, and import `z` from `@hono/zod-openapi`.
+
+Do not create a parallel handwritten API response interface or make core/CLI import server code.
+
+Query parameters use the project’s camelCase API convention:
+
+- `from`, `to`: both present or both absent, RFC 3339 instants, interpreted as a half-open UTC range `[from, to)`
+- `codebaseId`
+- `agentProvider`
 - `provider`
 - `model`
-- `kind`
-- `run_id`
-- `group_by`: `'provider' | 'model' | 'project' | 'day' | 'none'`
+- `kind`: `unclassified`, `advisor`, or `subagent`; `unclassified` maps to SQL `NULL`
+- `runId`
+- `nodeId`: exact persisted step name; valid only with `runId`
+- `groupBy`: `agent`, `provider`, `model`, `project`, `run`, `day`, or `node`; default `provider`
 
-Response (`z.infer`, no parallel interface):
+Defaults and limits:
+
+- With neither dates nor `runId`, use the current UTC calendar month.
+- With `runId` and no dates, query the entire direct run.
+- When dates are present, require `from < to`.
+- Cross-run ranges cannot exceed 366 days.
+- `groupBy=node` requires `runId`.
+- `nodeId` requires `runId`.
+- Return at most 500 groups.
+- Fetch 501 to detect overflow and return a 400 narrowing error; never return a silently truncated accounting report.
+- Return groups in a deterministic ascending order by their dimension tuple (with SQL `NULL` values first) so API snapshots, CLI output, and pagination-free UI rendering are stable across dialects.
+
+Group dimensions are fixed:
+
+| `groupBy` | Dimensions |
+| --- | --- |
+| `agent` | `agentProvider` |
+| `provider` | `provider` |
+| `model` | `provider`, `model`, `modelSource` |
+| `project` | `codebaseId`, current codebase name; null means the run is no longer assigned |
+| `run` | `runId`, `workflowName`, `codebaseId` |
+| `day` | UTC `YYYY-MM-DD` |
+| `node` | `runId`, `nodeId`, `agentProvider`, `provider`, `model`, `modelSource`, `kind` |
+
+Use explicit optional dimension fields in the response, not opaque concatenated keys.
+
+The response has this stable top-level form:
 
 ```ts
 {
-  groups: UsageLedgerGroup[];
-  totals: {
-    tokensInput: number;
-    tokensOutput: number;
-    calls: number;
-    costUsd: number | null;
-    costEstimatedUsd: number | null;
-    rowsMissingUsd: number;
+  scope: {
+    from: string | null;
+    to: string | null;
+    codebaseId?: string;
+    runId?: string;
+    includesChildRollup: false;
   };
+  groupBy: 'agent' | 'provider' | 'model' | 'project' | 'run' | 'day' | 'node';
+  totals: UsageMetrics;
+  groups: Array<{ dimensions: UsageDimensions; metrics: UsageMetrics }>;
+  coverage: UsageLedgerCoverage;
 }
 ```
 
-Register with `registerOpenApiRoute`.
-Do not mix estimated and reported USD in `totals.costUsd`.
+For an unfiltered installation report, child runs appear as their own direct-use run rows; no parent contains a copied child charge.
 
-- [ ] **Step 1: Write failing tests** for filter + each `group_by`, and for `run_id`.
-  Mock the db query helper, do not open a real database.
+Each totals/group metric object contains:
 
-- [ ] **Step 2: Run the server test file and confirm FAIL.**
+- nullable sums for input, output, reasoning, cache-read, cache-write, and requests
+- nullable `reportedUsd`
+- nullable `estimatedUsd`
+- `recordCount`
+- missing-record counts for every token/request metric
+- `rowsMissingUsd`, meaning neither reported nor estimated USD exists
 
-- [ ] **Step 3: Implement schemas, handler, and OpenAPI registration.**
+Do not add reported and estimated USD into one “effective” number.
 
-- [ ] **Step 4: Re-run tests.**
-
-- [ ] **Step 5: Commit, including generated web types if the generator ran.**
-
-```bash
-git commit -m "feat(server): add GET /api/usage aggregates"
-```
-
-If `generate:types` cannot run because the server is not up, add a follow-up step in Task 16/17 that regenerates types before UI compile.
-
----
-
-### Task 15: `archon usage` CLI
-
-**Files:**
-
-- Create: `packages/cli/src/commands/usage.ts`
-- Create: `packages/cli/src/commands/usage.test.ts`
-- Modify: `packages/cli/src/cli.ts` (`printUsage` and `main` dispatch)
-- Modify: `packages/cli/package.json` test script: `&& bun test src/commands/usage.test.ts` as its own invocation
-- Modify: `packages/docs-web/src/content/docs/reference/cli.md`
-
-**Interfaces:**
-
-```text
-archon usage [--from <iso>] [--to <iso>] [--by provider|model|project] [--json]
-```
-
-`--by` maps to `group_by`.
-Default `--by provider`.
-`--json` prints the API/query helper result unchanged.
-Human mode prints one line per group: key, calls, tokens in/out, reported USD or `n/a`, estimated USD prefixed with `≈` when present, and `N rows missing USD` on the totals line.
-
-This command does **not** require a git repository.
-It reads the Archon database.
-
-- [ ] **Step 1: Write failing tests** for `--json` passthrough, default grouping, invalid `--by`, and human `≈` / `n/a` formatting.
-  Mock the core query helper.
-
-- [ ] **Step 2: Run `bun test src/commands/usage.test.ts` from `packages/cli` and confirm FAIL.**
-
-- [ ] **Step 3: Implement command, dispatch, help, and docs.**
-
-- [ ] **Step 4: Re-run the usage tests.**
-
-- [ ] **Step 5: Commit.**
-
-```bash
-git commit -m "feat(cli): add archon usage command"
-```
-
----
-
-### Task 16: Run Detail Breakdown UI
-
-**Files:**
-
-- Modify: `packages/web/src/experiments/console/primitives/event.ts` and `event.test.ts`
-- Modify: `packages/web/src/experiments/console/primitives/run.ts` and `run.test.ts`
-- Create: `packages/web/src/experiments/console/components/UsageBreakdownTable.tsx`
-- Create: `packages/web/src/experiments/console/components/UsageBreakdownTable.test.tsx` if the package already tests components with bun; otherwise test parsing in `event.test.ts` / `run.test.ts` and keep the table presentational
-- Modify: `packages/web/src/experiments/console/components/RunDetailHeader.tsx`
-- Modify: `packages/web/src/experiments/console/components/NodeDivider.tsx`
-- Modify: `packages/web/src/experiments/console/lib/format.ts` (`formatCostApprox`)
-- Modify: `packages/web/src/experiments/console/skills/` if run detail needs `GET /api/usage?run_id=`
-
-**Interfaces:**
-
-Parse `usage_breakdown` from node events and `usage_by_model` from run metadata with the same shape as the Zod schema (hand-rolled guards in the web primitive files; do not import `@archon/workflows`).
-
-`UsageBreakdownTable` columns: model (`provider/model` key), calls, tokens in, tokens out, cache (blank if absent), cost.
-
-Cost cell rules:
-
-- Provider-reported `costUsd` → `formatCost(costUsd)` with no `≈`.
-- Else if a ledger estimate is available for that key → `≈` + `formatCost(estimate)`.
-- Else → `n/a` (never `$0.00`).
-
-Advisor rows (`kind === 'advisor'`) render a text label `advisor` using existing brand tokens (`text-text-secondary`), no new colors.
-
-Run header: table under the existing cost figure.
-Node divider: collapsed by default, expandable, so the divider stays compact.
-
-To honor estimated `≈` without putting estimates in JSON, fetch `GET /api/usage?run_id=<id>&group_by=none` once per run detail load.
-If that request fails, show JSON-only costs and still never fabricate zeros.
-
-Brand tokens only (`packages/web/src/index.css`).
-
-- [ ] **Step 1: Write failing primitive tests** that read a two-model `usage_by_model` and an advisor node event.
-
-- [ ] **Step 2: Run the console primitive tests and confirm FAIL.**
-
-- [ ] **Step 3: Implement parsing, table, header, and divider.**
-
-- [ ] **Step 4: Re-run those tests.**
-
-- [ ] **Step 5: Commit.**
-
-```bash
-git commit -m "feat(web): show per-model cost breakdown on run detail"
-```
-
----
-
-### Task 17: Console Cost Page
-
-**Files:**
-
-- Create: `packages/web/src/experiments/console/routes/CostPage.tsx`
-- Create: `packages/web/src/experiments/console/skills/usage.ts`
-- Modify: `packages/web/src/experiments/console/ConsoleApp.tsx`
-- Modify: `packages/web/src/experiments/console/components/ProjectRail.tsx` (add a Cost control next to Settings, linking to `/console/cost` or `/console/p/:projectId/cost`)
-- Tests: skill/parser tests if other skills have them; otherwise a pure function extracting groups from the API payload
-
-**Interfaces:**
-
-Routes:
-
-- `/console/cost`
-- `/console/p/:projectId/cost` (sends `codebase=<projectId>`)
-
-Page shows aggregates from `GET /api/usage` for the current month (`from`/`to` UTC month bounds) with toggles for `group_by` provider, model, and project.
-
-Each group shows reported USD, estimated USD with `≈`, and the missing-USD count from totals.
-
-Group keys that include a `run` dimension are not required.
-Drill-down: if the API group represents a single run in a future revision, link to `/console/p/:projectId/r/:runId`.
-For v1, link the project group to `/console/p/:projectId`.
-
-- [ ] **Step 1: Write a failing skill test** that maps the API payload into view models distinguishing reported vs estimated vs missing.
-
-- [ ] **Step 2: Run it and confirm FAIL.**
-
-- [ ] **Step 3: Implement skill, page, routes, and rail link.**
-
-- [ ] **Step 4: Re-run the skill test.**
-
-- [ ] **Step 5: Commit.**
-
-```bash
-git commit -m "feat(web): add console Cost page"
-```
-
----
-
-### Task 18: OMP Advisor Transcript Capture
-
-**Files:**
-
-- Create: `packages/providers/src/community/omp/advisor-usage.ts`
-- Create: `packages/providers/src/community/omp/advisor-usage.test.ts`
-- Create fixture JSONL files under `packages/providers/src/community/omp/fixtures/`
-- Modify: `packages/providers/src/community/omp/provider.ts` after the process exits and `buildResult` runs
-- Modify: `packages/providers/package.json` test script to run `src/community/omp/advisor-usage.test.ts` in its own invocation
-
-**Interfaces:**
+Return ledger coverage:
 
 ```ts
-export async function loadOmpAdvisorUsage(input: {
-  sessionId: string | undefined;
-  persistSession: boolean | undefined;
-}): Promise<UsageBreakdown>;
+{
+  usageEventCount: number;
+  ledgeredEventCount: number;
+  unledgeredEventCount: number;
+  hasRecordedUsage: boolean;
+  historicalBackfill: false;
+  filterScope: 'date-project-run-node';
+}
 ```
 
-Advisor entries set `kind: 'advisor'`.
-Primary parser entries remain without `kind`.
-Merge advisor maps in the OMP provider after process exit using `mergeUsageBreakdown`, not in core.
+Coverage is evaluated using only date, project, run, and node filters because a fallback event has no normalized row on which agent/provider/model/kind filters can operate.
 
-- [ ] **Step 1: Verify on-disk layout against the installed `omp` binary before writing production paths.**
+This is ledger-integrity coverage only: it compares new usage events with normalized rows.
+It cannot detect a provider pass that emitted no event, including passes produced by an older writer or an SDK with no terminal usage object, and `historicalBackfill: false` makes that boundary machine-readable.
 
-Record the omp version (`omp --version` or package version).
-Read oh-my-pi `advisor/transcript-recorder.ts` for the installed version if the source is available.
-If the layout cannot be verified, default to: sibling `*.jsonl` files next to the session transcript named from the session id, excluding the main session file.
-Keep every path rule inside `loadOmpAdvisorUsage` with a docblock naming the oh-my-pi file it mirrors.
-Do not put layout knowledge in `event-parser.ts`.
+Document this conservative scope in the OpenAPI descriptions and UI tooltip.
 
-- [ ] **Step 2: Write failing fixture tests.**
+Use the event’s timestamp as the accounting timestamp and UTC-day source.
 
-1. Two advisor transcripts present → two `kind: 'advisor'` entries with summed input/output/cache/cost.total.
-2. Missing directory → empty map, no throw.
-3. Unreadable file → WARN `omp.advisor_transcript_unreadable`, omit that advisor.
-4. Malformed JSONL line → skip that line, keep other lines (mirror oh-my-pi tolerance).
-5. `persistSession === false` (`--no-session`) → empty map without reading disk.
+Join ledger → workflow event → workflow run → codebase.
 
-- [ ] **Step 3: Run `bun test src/community/omp/advisor-usage.test.ts` from `packages/providers` and confirm FAIL.**
+Convert PostgreSQL `SUM(BIGINT)` and `COUNT(*)` strings to safe JavaScript numbers at the boundary and reject values beyond `Number.MAX_SAFE_INTEGER` rather than round silently.
 
-- [ ] **Step 4: Implement the reader and merge into the OMP result `usageBreakdown` after process exit.**
+Validate USD aggregates as finite non-negative numbers and fail the report with a structured error rather than serialize `NaN`/infinity or corrupted negative totals.
 
-Never fail the node.
-Never write zero entries for missing advisors.
+Use dialect-specific timestamp parameter formatting and UTC day expressions.
 
-- [ ] **Step 5: Re-run advisor tests plus OMP provider tests.**
+All filter values are SQL parameters.
 
-- [ ] **Step 6: Commit.**
+All dynamic group/order SQL fragments come from an exhaustive enum switch; never interpolate request strings.
 
-```bash
-git commit -m "feat(providers): include OMP advisor usage from transcripts"
-```
+Use the installation’s existing API authentication.
 
-Optional parallel non-blocking work: file an upstream oh-my-pi issue asking for advisor/fallback usage on the JSON stream.
-Do not block this task on that issue.
+This remains single-tenant visibility: any authenticated install user sees installation usage, matching existing run visibility.
 
----
+### 12. Run-detail API
 
-### Task 19: Docs And Final Validation
+Extend `workflowRunDetailSchema` in `packages/server/src/routes/schemas/workflow.schemas.ts` with:
+
+- `usage`: the same usage response schema, nullable
+
+In the existing `GET /api/workflows/runs/{runId}` handler, query the entire direct run with `groupBy: 'node'`.
+
+The nested response keeps the common object-valued `scope`: its `runId` is the requested run, `from`/`to` are null, and `includesChildRollup` is false.
+Do not introduce a second string-valued `scope` discriminator.
+
+If usage querying fails, log the error and return `usage: null`; do not turn a previously working run-detail request into HTTP 500.
+
+Old runs with no usage events return a valid empty summary with `hasRecordedUsage: false`.
+
+Do not walk `parent_run_id` or include child runs.
+
+### 13. CLI
+
+Add top-level `archon usage` in `packages/cli/src/commands/usage.ts` and wire it through `packages/cli/src/cli.ts`.
+
+Supported flags:
+
+- `--since <RFC3339>`
+- `--until <RFC3339>`
+- `--by agent|provider|model|project|run|day|node`
+- `--codebase-id <uuid>`
+- `--agent <id>`
+- existing global `--provider <id>`
+- `--model <id>`
+- `--kind unclassified|advisor|subagent`
+- existing global `--run-id <id>`
+- existing global `--node <persisted-step-id>`; valid only with `--run-id`
+- `--json`
+
+Do not use `--from` or `--to`; `--from` already owns worktree branch selection, and matching `--since`/`--until` avoids an asymmetric collision.
+
+Add `usage` to `noGitCommands` and update the mirrored test in `packages/cli/src/cli.test.ts`.
+
+Because top-level parsing uses `strict: false`, add command-specific validation that rejects flags not supported by `usage` rather than silently ignoring typos.
+
+Reuse the core query operation, defaults, filters, range bounds, and node-group requirement; do not duplicate SQL.
+
+Human output shows reported USD as `$…`, estimates as `≈$…`, exact known zero as `$0.00`/`≈$0.00`, and absent values as `n/a`.
+
+Use two decimals at or above one cent, up to six decimals below one cent, and a `<$0.000001`/`≈<$0.000001` floor for smaller positive values; never round a positive cost into the zero representation.
+
+Print a coverage warning when `unledgeredEventCount > 0`.
+
+`--json` writes exactly the API-equivalent camelCase object to stdout through existing stdout helpers and keeps logs off stdout.
+
+Document examples and the half-open UTC range in `packages/docs-web/src/content/docs/reference/cli.md`.
+
+### 14. Console Cost page and run detail
+
+Add one route, `/console/cost`, in `ConsoleApp.tsx` and one installation-level navigation item in `ProjectRail.tsx`.
+
+Do not create a duplicate project-scoped Cost route; project is a filter on the one page.
+
+Create:
+
+- `packages/web/src/experiments/console/routes/CostPage.tsx`
+- `packages/web/src/experiments/console/skills/usage.ts`
+- `packages/web/src/experiments/console/components/UsageBreakdownTable.tsx`
+
+Export the usage skill from `packages/web/src/experiments/console/skills/index.ts`.
+
+Use types from `packages/web/src/lib/api.generated.d.ts` through the established API re-exports.
+
+Never import workflows/core packages into web.
+
+Add a normalized usage cache key containing every filter and grouping value.
+
+The Cost page defaults to the current UTC month and provides date, project, agent/provider/model/kind filters, grouping selection including run, run-detail links from run groups with a non-null `codebaseId`, and an explicit Refresh control.
+
+Use UTC date-only “From” and “Through” controls: send UTC midnight for From and UTC midnight after Through as the API's exclusive `to`, and reject a range over 366 days before fetching.
+
+A run whose project was deleted remains visible but has no link because the existing run-detail route requires `/console/p/:projectId/r/:runId`; do not invent a second run-detail route for this edge case.
+
+No SSE subscription is needed in v1.
+
+Show reported USD, estimated USD, unpriced row count, token/request coverage, and ledger coverage as separate values, using the same zero-versus-small-positive display rule as the CLI.
+
+The empty state distinguishes “no usage recorded” from a known zero cost.
+
+Update `packages/web/src/experiments/console/skills/runs.ts` to derive the run-detail response from the generated schema and retain its new `usage` value.
+
+Pass the direct-run usage summary into `RunDetailHeader`, `RunStream`, and `NodeDivider` as needed rather than reconstructing accounting from visible lifecycle events.
+
+The run header shows direct reported and estimated USD separately.
+
+If a non-null usage report has no recorded entries but the legacy run has a cost, show it with an explicit “legacy total” label rather than present it as the new direct ledger total.
+
+Treat `usage: null` as “usage report unavailable” with a visible warning; treat a non-null report with `hasRecordedUsage: false` as “not recorded.”
+Neither state is zero, and query failure must not be silently replaced by the legacy value.
+
+Node rows show cumulative usage across all recorded attempts/iterations for that actual step name and expand into the shared breakdown table.
+
+Failed nodes can show usage because the data comes from the dedicated event/ledger, not `node_completed`.
+
+Use existing design tokens only.
+
+Map `node_usage_recorded` to `kind: 'system'` in the event primitive and add a regression test proving it does not render raw JSON when the System toggle is off.
+
+Regenerate web OpenAPI types with the server running.
+
+## Implementation Sequence
+
+### Task 1: Add and test the provider contract
 
 **Files:**
 
-- Modify: `packages/docs-web/src/content/docs/reference/cli.md` if Task 15 did not finish the page
-- Modify: `packages/docs-web/src/content/docs/reference/configuration.md` for `pricing.models`
-- Modify: `AGENTS.md` table count only if that file's table list is still "20 Tables" in this worktree; add `remote_agent_usage_ledger` as table 21 with a one-line description
-- Do not edit `CHANGELOG.md`
+- Modify `packages/providers/src/types.ts`.
+- Modify `packages/providers/src/index.ts` to re-export `ModelSource`, `ModelUsageEntry`, and `UsageBreakdown` with the other public contract types.
+- Create `packages/providers/src/usage-breakdown.ts`.
+- Create `packages/providers/src/usage-breakdown.test.ts`.
+- Modify `packages/providers/src/observability.ts` and its tests.
+- Modify `packages/providers/package.json` so every new provider test file runs in an appropriate isolated invocation.
 
-- [ ] **Step 1: Add a short CLI section** covering `--from/--to/--by/--json`, `n/a`, `≈`, and that the command uses the DB (no git repo required).
+**Work:**
 
-- [ ] **Step 2: Document `pricing.models` exact-id matching, USD-per-million rates, and that estimates never enter `cost_usd` or JSON breakdowns.**
+- Add the types and additive result field.
+- Retain the deprecated raw field.
+- Implement finite/non-negative/absence-preserving normalization.
+- Test slash-containing model ids, unknown models, zero cost, absent fields, unsafe integers, reasoning bounds, and forbidden estimates.
+- Test that a mixed valid/invalid runtime array preserves only the valid entry without logging its raw payload.
+- Update observability precedence and multi-model tests.
 
-- [ ] **Step 3: Run validation.**
+**Exit condition:** every provider can emit the new array without a downstream or package-boundary change.
 
-```bash
-bun --filter @archon/providers test
-bun --filter @archon/workflows test
-bun --filter @archon/core test
-bun --filter @archon/server test
-bun --filter @archon/cli test
-bun --filter @archon/web test
-bun run generate:bundled-schema
-bun run check:bundled-schema
-bun run type-check
-bun run lint
-bun run validate
-```
+### Task 2: Normalize SDK-native usage
 
-If PostgreSQL is reachable:
+**Files:**
 
-```bash
-bun run check:schema-upgrades
-```
+- Modify Claude, Codex, Grok, Pi, Copilot, and OpenCode files named in the provider mappings, including `packages/providers/src/grok/provider.ts` for requested-model context.
+- Modify their colocated tests.
+- Modify `packages/providers/src/community/pi/model-catalog.ts` and tests.
+- Modify `packages/server/src/routes/schemas/provider.schemas.ts` and provider route tests for the additive catalog shape.
 
-Expected: all commands exit 0.
+**Work:**
 
-- [ ] **Step 4: Commit docs if they changed.**
+- Implement the exact mappings above.
+- Preserve terminal error and retry classification.
+- Correct Pi/Copilot/OpenCode last-only or overwrite undercounts.
+- Correct reasoning double-count behavior.
+- Prove legacy totals and new breakdown agree where both are fully observable.
 
-```bash
-git commit -m "docs: describe usage ledger reporting and pricing overrides"
-```
+**Exit condition:** fixture results contain truthful normalized observations for all SDK-supported providers and Qoder remains absent.
 
----
+### Task 3: Add OMP primary and hidden-session usage
 
-## Testing Strategy
+**Files:**
 
-| Test file | Cases | Validates |
-| --- | --- | --- |
-| `packages/providers/src/usage-breakdown.test.ts` | merge, NaN drop, key format, no kind on ordinary entries | contract helper |
-| `packages/providers/src/claude/provider.test.ts` | two SDK models, `kind` omitted | Claude mapping |
-| OMP event-parser tests | two models, unchanged totals, `kind` omitted | OMP accumulation |
-| Pi event-bridge tests | multi-message per Step 1 decision | Pi mapping |
-| Grok/Codex/OpenCode/Copilot/Qoder tests | single entry or absence | remaining providers |
-| `packages/providers/src/community/omp/advisor-usage.test.ts` | fixtures, WARN, `--no-session` | advisor capture |
-| `packages/workflows/src/schemas/usage-breakdown.test.ts` | parse/reject | persistence schema |
-| `packages/workflows/src/dag-executor.test.ts` | reask, loop, resume, ledger calls | engine JSON + writes |
-| `packages/workflows/src/subrun.test.ts` | child JSON rollup, no parent ledger | D8 |
-| `packages/core/src/usage/estimate.test.ts` | config/catalog/no-match | estimates |
-| `packages/core/src/db/usage-ledger.test.ts` | replace idempotency, reported vs estimated | ledger |
-| `packages/core/src/db/adapters/sqlite.test.ts` | parity + column floor 157 | schema |
-| server usage route tests | filters and group_by | API |
-| `packages/cli/src/commands/usage.test.ts` | `--json`, `≈`, `n/a` | CLI |
-| console primitive tests | parse breakdown, never zero | UI |
+- Modify `packages/providers/src/community/omp/event-parser.ts` and tests.
+- Create `packages/providers/src/community/omp/session-usage.ts` and tests/fixtures.
+- Modify `packages/providers/src/community/omp/provider.ts` and tests.
 
-### Edge Cases Checklist
+**Work:**
 
-- [ ] Empty `usageBreakdown` omitted from JSON and no ledger insert
-- [ ] Non-finite token/cost/breakdown dropped with WARN
-- [ ] Codex/Copilot tokens-only rows
-- [ ] Qoder no breakdown
-- [ ] Loop-group 3 iterations counted once in ledger
-- [ ] Sub-run children billed under child run id only
-- [ ] `workflow retry-node` replace semantics
-- [ ] Resume does not double-count completed nodes
-- [ ] Ledger write failure does not fail the node
-- [ ] Advisor missing transcripts omit entries
-- [ ] `--no-session` skips advisor files
-- [ ] Catalog/config miss leaves both USD columns null and increments `rowsMissingUsd`
-- [ ] Old runs without fields render "not recorded"
-- [ ] JSON payloads contain no `costEstimatedUsd`
+- Add primary per-message observations.
+- Implement exact session resolution, pre-spawn snapshot, prefix verification, delta parsing, recursive task/advisor classification, and bounds.
+- Enrich success and usage-bearing error results without changing error status.
+
+**Exit condition:** fresh, resume, fork, nested advisor, nested task, malformed, escaped-path, oversized, and no-session fixtures prove no historical double-count and fail-soft behavior.
+
+### Task 4: Add persistence schemas and additive database shape
+
+**Files:**
+
+- Create `packages/workflows/src/schemas/usage-breakdown.ts` and add its cases to `packages/workflows/src/schemas.test.ts` so the existing isolated schema invocation runs them.
+- Modify `packages/workflows/src/schemas/index.ts`.
+- Modify `packages/workflows/src/store.ts` only to add the internal `node_usage_recorded` event type.
+- Create `packages/core/src/schemas/usage-ledger.ts` and export it.
+- Modify `migrations/000_combined.sql`.
+- Modify `packages/core/src/db/adapters/sqlite.ts` and `sqlite.test.ts`.
+- Regenerate `packages/core/src/db/bundled-schema.generated.ts`.
+- Update the database inventory in `AGENTS.md`.
+
+**Work:**
+
+- Add strict event/ledger schemas and all SQL constraints/indexes.
+- Correct table inventory and the parity floor.
+- Add fresh-schema, reverse-parity, cascade, constraint, idempotence, and statement-order coverage.
+
+**Exit condition:** both dialects have the same 20 non-auth application tables/columns and an old schema upgrades additively.
+
+### Task 5: Implement pricing, atomic writes, and queries
+
+**Files:**
+
+- Create `packages/core/src/usage/estimate.ts` and tests.
+- Create `packages/core/src/db/usage-ledger.ts` and tests.
+- Create `packages/core/src/schemas/usage-report.ts` and export its inferred report type.
+- Modify `packages/core/src/config/config-types.ts` and config-loader tests.
+- Modify `packages/core/src/db/workflow-events.ts` and tests.
+- Modify `packages/core/src/db/index.ts`.
+- Modify `packages/core/src/index.ts`.
+- Modify `packages/core/package.json` to run the new DB/pricing test files in package-isolated invocations.
+- Create `packages/workflows/src/usage.ts` and modify `packages/workflows/src/deps.ts`.
+- Create `packages/core/src/workflows/usage-recorder.ts` and tests.
+- Modify `packages/core/src/workflows/store-adapter.ts` only to wire the recorder into `createWorkflowDeps()`; update its dependency-factory tests.
+
+**Work:**
+
+- Add global-only pricing types and use-time validation.
+- Implement exact config/catalog estimation and materialization.
+- Accept/return explicit event ids in the throwing insert primitive and add duplicate-safe fallback behavior.
+- Add the atomic event-plus-ledger transaction and fallback event.
+- Implement dialect-safe aggregate queries and coverage.
+- Update every `WorkflowDeps` test helper found by repository search.
+
+**Exit condition:** one recorder call either commits matching event/rows, or commits only the detectable fallback event, and never throws into workflow execution.
+
+### Task 6: Record every workflow AI pass
+
+**Files:**
+
+- Modify `packages/workflows/src/dag-executor.ts`.
+- Modify `packages/workflows/src/dag-executor.test.ts`.
+- Modify `packages/workflows/src/subrun.test.ts`.
+- Update other workflow test fixtures that construct `WorkflowDeps`.
+
+**Work:**
+
+- Add standard-path and direct-loop recording at the two actual provider consumption sites.
+- Pass actual namespaced ids and attempt metadata.
+- Do not add parent rollup or mutable usage metadata.
+
+**Exit condition:** tests prove one append per usage-bearing pass across success, error, reask, retry, loop, resume, and manual retry epoch.
+
+### Task 7: Add API and run-detail contracts
+
+**Files:**
+
+- Create `packages/server/src/routes/schemas/usage.schemas.ts`.
+- Modify `packages/server/src/routes/api.ts`.
+- Modify `packages/server/src/routes/schemas/workflow.schemas.ts`.
+- Modify `packages/server/src/routes/api.workflow-runs.test.ts` and create focused `packages/server/src/routes/api.usage.test.ts` coverage.
+- Modify `packages/server/package.json` to run the new route test in its own invocation, preserving `mock.module()` isolation.
+
+**Work:**
+
+- Register `GET /api/usage`.
+- Add all query validation, fixed group definitions, cap detection, coverage, and nullable sums.
+- Add direct usage to run detail with failure isolation.
+
+**Exit condition:** OpenAPI and route tests prove filters, dates, limits, grouping, old-run emptiness, and run-detail degradation.
+
+### Task 8: Add the CLI
+
+**Files:**
+
+- Create `packages/cli/src/commands/usage.ts` and tests.
+- Modify `packages/cli/src/cli.ts` and `cli.test.ts`.
+- Modify `packages/cli/package.json` to include the new command test in an isolated invocation.
+- Modify `packages/docs-web/src/content/docs/reference/cli.md`.
+
+**Work:**
+
+- Wire top-level parsing without Git validation or flag collisions.
+- Reuse the core query.
+- Add strict per-command flag validation and exact JSON stdout tests.
+
+**Exit condition:** human and JSON modes distinguish reported, estimated, zero, and missing values and match API semantics.
+
+### Task 9: Add console reporting
+
+**Files:**
+
+- Create the Cost page, usage skill, and shared breakdown table.
+- Modify `ConsoleApp.tsx`, `ProjectRail.tsx`, `store/keys.ts`, run skills, run page/header/stream/divider, and event primitive/tests.
+- Regenerate `packages/web/src/lib/api.generated.d.ts`.
+
+**Work:**
+
+- Build the single Cost route and filters.
+- Show direct run and per-node usage from the API.
+- Hide the audit event by default while retaining System visibility.
+- Add component tests for loading, request error, empty, partial, zero, sub-cent, estimated, reported, and coverage-warning states.
+
+**Exit condition:** the console answers the product questions without reconstructing costs client-side.
+
+### Task 10: Documentation and final verification
+
+**Files:**
+
+- Modify `packages/docs-web/src/content/docs/reference/configuration.md`.
+- Modify any provider capability/setup documentation whose usage limitations changed.
+- Do not modify `CHANGELOG.md` in this feature plan.
+
+**Work:**
+
+- Document global-only pricing, exact provider/model pairs and rates, estimate limitations, UTC range semantics, direct-run scope, no backfill, coverage warnings, and OMP fail-soft behavior.
+- Re-run the Constitution Check.
+- Run the full validation sequence below.
+
+**Exit condition:** documentation and generated artifacts match the implemented public contracts and every required validation passes.
+
+## Test Matrix
+
+### Provider contract
+
+- Missing values stay absent; known zero survives.
+- NaN, infinity, negative values, zero requests, unsafe integers, empty identities, model/source mismatch, and reasoning-over-output are rejected.
+- A model id containing `/` remains intact.
+- Deprecated `modelUsage` remains type-compatible.
+
+### Provider adapters
+
+- Claude: one model, multiple models, cache values, zero USD, usage-bearing final error, retry accumulation, no-usage throw.
+- Pi: multiple assistant messages in one `agent_end`, response-model override, cache/reasoning, error message, no assistant.
+- Codex: cached input subtraction, cache greater than input guard, reasoning subset, requested model, unknown model, incomplete turn.
+- Grok: one model, multiple model-call keys plus unknown aggregate, no model, zero cost, malformed modelCalls.
+- OMP stream: multiple primary messages/models, full token dimensions, protocol/non-zero result, no usage.
+- OpenCode: repeated updates for one id, several assistant ids, single and multi-agent, reasoning not double-counted.
+- Copilot: multiple usage events, deprecated parent-tool attribution present/absent, free-form initiator ignored, multiplier ignored, optional fields.
+- Qoder: no fabricated breakdown.
+
+### OMP transcript safety
+
+- Fresh session reads new advisor and task-agent files.
+- Resume reads only appended bytes and rejects a snapshot ending mid-record.
+- Forked copied history is not counted.
+- New nested files are counted once.
+- Changed prefix, wrong session header/cwd, symlink, path escape, unsupported layout, malformed JSONL, excessive files/bytes/line, and missing files warn and omit.
+- `PI_CODING_AGENT_SESSION_DIR`, supported default path, and `--no-session` behave as specified.
+- Prompt/response content never appears in the returned usage object or logs.
+
+### Workflow executor
+
+- Standard AI success records once.
+- SDK error result with usage records once before failure.
+- Generator throw without a terminal usage result records nothing.
+- Two cumulative terminal results in one pass record only the latest.
+- Each structured-output reask records independently.
+- Each outer retry records independently.
+- Each direct-loop iteration/reask records independently with iteration metadata.
+- Loop-group body nodes use their namespaced step id and have no group duplicate.
+- Pause/resume and retry-node append rather than replace.
+- Retry epochs are retained.
+- Child run records direct usage once and parent gets no new usage duplicate.
+- Non-AI nodes do not record.
+- Recorder rejection never changes the node outcome.
+
+### Persistence and pricing
+
+- Event and all rows commit together.
+- A ledger insert failure rolls back the event and rows, then writes one fallback event.
+- An ambiguous transaction result followed by fallback cannot create a duplicate usage event.
+- No delete runs during retry/resume.
+- Event deletion/run cascade deletes ledger children.
+- Every SQL constraint is exercised.
+- Provider-reported zero suppresses estimation.
+- Exact config provider/model pairs override exact catalog pairs, including ids containing `/`.
+- Duplicate config provider/model pairs and invalid rate objects are rejected for estimation without failing the workflow.
+- Unknown/fuzzy/bare model does not match.
+- A call missing input or output tokens is not estimated.
+- Missing positive-use category rate prevents partial estimate.
+- Reasoning is not double charged.
+- Tier threshold and non-finite multiplication behavior are tested.
+- Catalog/config failure yields null estimate and structured warning.
+- Existing config update operations preserve an operator-authored `pricing` block unchanged.
+- Coverage detects fallback usage events without rows.
+
+### Query/API
+
+- Both/neither date requirement, `from < to`, half-open boundary, current UTC month, entire-run default, 366-day cap, and UTC day grouping.
+- All filters and seven group modes.
+- `kind=unclassified` maps to SQL null.
+- Node grouping and the exact node filter require run id.
+- Group 501 returns 400 rather than partial data.
+- Group ordering is deterministic and treats null dimensions identically in SQLite and PostgreSQL.
+- Null sums and missing counts distinguish absent from zero.
+- PostgreSQL bigint results are converted safely.
+- Non-finite or negative USD aggregates fail explicitly.
+- SQL values are parameterized and group expressions are enum-selected.
+- Coverage is documented and tested as date/project/run/node scoped.
+- Coverage is labelled as event-to-ledger integrity only and cannot be read as a percentage of all historical provider calls.
+- Old run returns `hasRecordedUsage: false`.
+- Run-detail usage failure returns the rest of the detail with `usage: null`.
+
+### CLI/web
+
+- `archon usage` runs outside Git.
+- `--from` remains worktree-only and usage rejects it.
+- Unsupported flags fail clearly.
+- `--node` requires `--run-id` and filters the exact persisted step name.
+- JSON stdout is exact and machine-readable.
+- Human output distinguishes exact zero, positive sub-cent values, missing, reported, and estimated amounts.
+- Cost page filter cache keys do not collide.
+- Cost page date-only controls produce the documented inclusive UTC calendar-day selection over the API's half-open range.
+- Run header labels direct vs legacy scope.
+- Run detail distinguishes report-unavailable, not-recorded, known-zero, and legacy-only states.
+- Failed node usage renders.
+- New audit event is hidden without the System toggle and never dumps raw JSON.
+
+## Compatibility, Migration, Rollout, and Rollback
+
+### Compatibility
+
+- `usageBreakdown` is additive.
+- Deprecated `modelUsage` remains in the provider result contract for third-party providers.
+- Existing token/cost fields, run metadata, event payloads, and budget enforcement remain readable.
+- Pi, Copilot, OpenCode, and OMP legacy aggregate values can change where the mapped provider corrections include previously discarded calls, hidden OMP work, or remove reasoning double-counting; this is an accuracy correction, not a new control path.
+- Estimated cost and the new ledger never feed `maxBudgetUsd`; Claude's existing SDK-enforced budget behavior is unchanged.
+- New API fields/routes are additive.
+- Historical runs remain valid and return an explicit no-recorded-usage state.
+
+### Migration and mixed versions
+
+- The schema is applied idempotently on every connection in both adapters.
+- The new table/indexes are additive and safe for an older Archon binary to ignore.
+- Old writers do not emit usage events; reports cannot quantify those calls, advertise `historicalBackfill: false`, and never present their absence as zero.
+- New-writer ledger failures leave a detectable JSON event.
+- V1 has no automatic re-ledgering job or repair command; operators keep the fallback event, investigate the structured error, and deploy a forward fix while reports continue to show the integrity gap.
+- There is no backfill and no startup scan.
+- A briefly mismatched old web bundle may show an unknown usage event as raw JSON until the new bundle is deployed; the new bundle’s explicit system mapping resolves it.
+
+### Rollout
+
+1. Apply schema and generated bundled schema.
+2. Deploy provider/executor writers and query code together.
+3. Deploy generated API client and UI in the same release.
+4. Verify one controlled workflow for each available provider and compare provider-reported totals with the ledger.
+5. Check structured logs for invalid usage, OMP transcript omission, and ledger fallback warnings.
+6. Confirm `unledgeredEventCount` is zero for the controlled runs.
+
+No feature flag is required because absent usage is already a safe, explicit state and the write path cannot fail workflow execution.
+
+### Rollback
+
+Revert the application code only.
+
+Do not drop the table, indexes, event rows, or configuration key.
+
+Older code ignores them, preserving both additive-schema safety and collected audit data for a later forward fix.
+
+### Operational characteristics
+
+- Row growth is proportional to provider-reported observations, not tool events or streamed chunks.
+- Reporting is bounded by date range and group count and supported by event/run/provider indexes.
+- The accounting transaction contains only inserts; config/catalog work happens before it.
+- OMP disk reads are post-process, bounded, streamed, and fail-soft.
+- No prompt, response, credential, tool payload, or transcript content is added to the ledger.
+- Floating-point USD totals are operational estimates/provider reports, not decimal invoice accounting; the UI must not imply cent-perfect reconciliation.
 
 ## Acceptance Criteria
 
-- [ ] Agent node `node_completed` includes `usage_breakdown` keyed by `provider/model` with `provider` and `model` fields on each entry
-- [ ] JSON breakdown entries have no estimated fields
-- [ ] Ordinary provider entries omit `kind`; only OMP advisor transcripts set `kind: 'advisor'`
-- [ ] Run metadata includes `usage_by_model` equal to the merge of top-level node maps (loop_group once, sub-run D8 JSON rollup included)
-- [ ] `remote_agent_usage_ledger` has one cumulative row set per `(workflow_run_id, node_id)` for leaf AI nodes and loop-group body nodes
-- [ ] Provider-reported USD never mixes with estimates
-- [ ] Estimated USD is marked `≈` on Cost page, `archon usage`, and run detail when ledger estimates exist
-- [ ] Codex/Copilot show tokens without fake USD; Qoder shows no usage map
-- [ ] OMP fallback-chain models each appear; advisor cost is `kind: 'advisor'` or explicitly absent
-- [ ] `GET /api/usage` filters and groups as specified, including optional `run_id`
-- [ ] `archon usage --json` passes the aggregate payload through
-- [ ] Console Cost page shows monthly aggregates with missing-USD counts
-- [ ] `#2345` is not "fixed" and is not worsened
-- [ ] `bun run validate` is green
-- [ ] `bun run check:schema-upgrades` is green when Postgres is available
+The feature is complete only when all of the following are true:
+
+- [ ] Every provider with authoritative usage emits the normalized additive contract according to the mapping above.
+- [ ] No provider fabricates an unknown model, absent token category, request count, or USD value.
+- [ ] The last terminal result is cumulative per `sendQuery()` invocation, including usage-bearing internal retries.
+- [ ] Standard AI and direct-loop paths write exactly one append-only usage event per usage-bearing pass.
+- [ ] Failed attempts, reasks, loop iterations, resumes, and retry epochs remain queryable simultaneously.
+- [ ] Child usage is owned only by the child run in the new accounting path.
+- [ ] Event JSON and ledger rows originate from the same validated array and commit atomically in the normal path.
+- [ ] A failed ledger transaction produces a detectable event-only fallback and does not fail the workflow.
+- [ ] Reported and estimated USD are stored and displayed separately; a combined authoritative-looking total does not exist.
+- [ ] Global exact provider/model pricing and exact catalog fallback work without parsing concatenated identity keys; repository config cannot alter prices.
+- [ ] SQLite and PostgreSQL schemas, constraints, indexes, generated schema, and released-schema upgrades pass.
+- [ ] `GET /api/usage` implements the documented filters, groups, bounds, missing-value semantics, and conservative coverage.
+- [ ] Run detail returns direct usage without making usage-query failure fatal.
+- [ ] `archon usage` works outside Git, has no `--from` collision, and matches API semantics in JSON mode.
+- [ ] The console has one Cost page and per-run/per-node direct usage with explicit reported/estimated/missing/legacy labels.
+- [ ] OMP resume/fork tests prove copied history is not counted and unsafe layouts fail closed.
+- [ ] No new usage event is sent through the external outbox or high-frequency dashboard poller.
+- [ ] Historical runs and old writers render “not recorded,” not zero.
+- [ ] Documentation describes scope, estimates, UTC ranges, coverage, compatibility, and rollback.
+- [ ] The post-implementation Constitution Check and all validation commands pass.
 
 ## Validation Commands
+
+Install dependencies before inspecting locked SDK types or running validation:
+
+```bash
+bun install --frozen-lockfile
+```
+
+Run focused package scripts; never run `bun test` from the repository root:
 
 ```bash
 bun --filter @archon/providers test
@@ -1416,66 +1317,95 @@ bun --filter @archon/core test
 bun --filter @archon/server test
 bun --filter @archon/cli test
 bun --filter @archon/web test
+bun --filter @archon/web build
+bun --filter @archon/docs-web build
+```
+
+Regenerate tracked artifacts:
+
+```bash
 bun run generate:bundled-schema
-bun run check:bundled-schema
-bun run type-check
-bun run lint
+bun run dev:server
+# In another shell after the server is ready:
+bun --filter @archon/web generate:types
+```
+
+Run repository validation:
+
+```bash
 bun run validate
+```
+
+Because the PostgreSQL upgrade check is intentionally outside `validate`, run it against a reachable PostgreSQL instance:
+
+```bash
 bun run check:schema-upgrades
 ```
 
-Never run `bun test` from the repository root.
+The implementation is not ready for a pull request until every command above that applies to the environment passes and any unavailable live-PostgreSQL check is reported explicitly.
 
-## Open Questions
+## Final Design Review
 
-1. **Ledger columns vs map keys.**
-   The spec's `UsageBreakdown` values had no `provider`/`model`, but ledger columns require them and §5 forbids parsing the map key.
-   **Default:** required `provider` and `model` on every `ModelUsageEntry`; the map key is display-only.
+### 1. Product goal and user outcome
 
-2. **Pi usage semantics.**
-   **Default:** verify `@earendil-works/pi-coding-agent@0.80.6`; if still ambiguous, sum per assistant message.
+The design answers direct workflow cost questions at run, node, agent, provider, model, project, and time levels.
 
-3. **OMP advisor transcript layout.**
-   **Default:** verify against the installed omp version; if unverified, read sibling JSONL files beside the session transcript and fail soft.
+It preserves missingness and explains estimates, so the UI does not turn incomplete telemetry into false certainty.
 
-4. **Loop-group ledger vs repeated `node_completed`.**
-   Body nodes reuse `<groupId>.<nodeId>` every iteration, so per-completion delete+insert would keep only the last iteration.
-   **Default:** accumulate namespaced body maps and replace ledger rows once when the group finishes.
+### 2. Architecture and technical correctness
 
-5. **Run-detail `≈` vs estimates not in JSON.**
-   **Default:** `GET /api/usage?run_id=` supplies estimates to run detail; JSON remains provider-reported only.
+Providers normalize only what they observe; workflows attach execution context; core owns durability and pricing; server/CLI/web consume one query contract.
 
-6. **Cost page URL.**
-   **Default:** `/console/cost` and `/console/p/:projectId/cost`.
+The append-only pass model matches actual execution paths and avoids retry/loop loss.
 
-7. **`archon usage` git requirement.**
-   **Default:** no git repo required; the command reads the Archon DB.
+### 3. Public and internal contracts
 
-8. **Catalog cache rates.**
-   Pi catalog currently exposes `{input, output}` only.
-   **Default:** apply cache rates only when `pricing.models` provides them; catalog estimates ignore cache tokens.
+The provider and REST changes are additive.
 
-## Risks
+Persisted JSON is versioned, the ledger is normalized, and generated web types remain the browser contract.
 
-| Risk | Likelihood | Impact | Mitigation |
-| --- | --- | --- | --- |
-| Pi usage is cumulative and summing double-counts | Med | High | Verify SDK before changing; fixture decides |
-| OMP transcript layout drifts | Med | Med | One function, WARN+omit, no node failure |
-| Loop-group ledger double-count or last-iteration-only | High | High | Write once from cumulative body maps; 3-iteration test |
-| `IWorkflowStore` mock factories miss the new method and open a real DB | Med | High | Grep `getDagResumeSnapshot` factories in the same task |
-| Schema upgrade index placement | Med | High | Trailing index section + `check:schema-upgrades` |
-| Estimates leaking into `cost_usd` or JSON | Low | High | Separate ledger columns; schema/tests forbid estimated fields on entries |
+### 4. Security, reliability, and data integrity
 
-## Spec Coverage
+Atomic normal writes, event-only fallback, SQL whitelisting, strict validation, cascade ownership, global-only pricing, and bounded OMP reads cover the identified failure modes.
 
-| Spec section | Task |
-| --- | --- |
-| Provider contract | 1–5 |
-| Engine JSON flow | 7–9 |
-| Ledger table | 10, 12–13 |
-| Pricing | 11 |
-| API / CLI / run detail / Cost page | 14–17 |
-| OMP advisors | 18 |
-| Absence/error posture | 1, 7, 12, 16, 18 |
-| Non-goals | Global Constraints |
-| Pi + advisor open items | Open Questions 2–3, Tasks 4 and 18 |
+No lifecycle mutation depends on accounting success.
+
+### 5. Performance and scalability
+
+Writes are append-only and proportional to actual reported model observations.
+
+Queries are range/group bounded and use the workflow-event/run/provider indexes.
+
+No transcript or historical-run scan occurs during reporting.
+
+### 6. Implementation completeness
+
+Both provider consumption sites, every supported provider, workflow dependency test helpers, both database dialects, all reporting surfaces, generated artifacts, and documentation are named.
+
+### 7. Testing and verification
+
+The matrix covers attribution, missingness, failure, retry, loops, subruns, transcript safety, transaction rollback, dialect behavior, contracts, and UI states.
+
+### 8. Operations, compatibility, migration, and rollback
+
+The design is additive, has no backfill, exposes event/ledger divergence without claiming to measure old-writer calls, deploys UI/API together, and rolls back without dropping data.
+
+### 9. Simplicity and long-term maintainability
+
+One provider array, one event type, one child ledger table, one query operation, and one Cost page replace the draft’s mutable metadata, replace-delete logic, speculative chat schema, parent rollup, and opaque map keys.
+
+## Remaining Known Limits
+
+- Providers cannot report usage an SDK omits, especially failures without a terminal usage object.
+- Provider mappings are for the lockfile versions inspected here; dependency upgrades require re-running fixture/contract tests and deliberately mapping any new usage dimensions.
+- An aborted stream that does not yield a terminal usage result is not estimated from partial counters and remains unrecorded.
+- OMP is externally versioned; unknown or unsafe transcript layouts intentionally omit hidden usage and warn.
+- A different process appending to the same OMP session during one Archon invocation cannot be attributed perfectly; the supported case assumes one active writer per persisted session and the prefix checks fail closed on detectable interference.
+- Catalog estimates are point-in-time list-price equivalents, not proof of subscription or negotiated billing.
+- SDK aggregate usage can make request-tier estimates less precise than per-call observations.
+- Floating-point USD is appropriate for operational visibility but not billing-grade decimal reconciliation.
+- Coverage can detect event/ledger divergence only at date/project/run/node scope, not inside agent/provider/model/kind filters.
+- Coverage cannot count uninstrumented calls from old writers, providers without terminal usage, or aborted streams; the no-backfill label and missing-state UI prevent those gaps from appearing as zero but cannot quantify them.
+- An event-only fallback preserves raw usage but is excluded from aggregates and loses any materialized estimate until a future explicit reconciliation feature is implemented.
+
+These limits are explicit, testable, and do not block the v1 goal.
