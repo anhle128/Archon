@@ -5505,6 +5505,425 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
     expect(completedEvent?.[0].data).not.toHaveProperty('tokens');
   });
 
+  // ─── Per-pass usage recording (node cost tracking) ──────────────────────
+  describe('executeDagWorkflow -- usage recording per AI pass', () => {
+    const sampleEntry = (overrides?: Record<string, unknown>) => ({
+      provider: 'anthropic',
+      model: 'claude-test',
+      modelSource: 'reported' as const,
+      inputTokens: 10,
+      outputTokens: 4,
+      costUsd: 0.012,
+      ...overrides,
+    });
+
+    const runSimple = async (opts: {
+      store?: ReturnType<typeof createMockStore>;
+      deps?: WorkflowDeps;
+      runId?: string;
+      workflow?: WorkflowDefinition;
+      workflowRun?: WorkflowRun;
+      provider?: string;
+      config?: WorkflowConfig;
+    }) => {
+      const store = opts.store ?? createMockStore();
+      const mockDeps = opts.deps ?? createMockDeps(store);
+      const platform = createMockPlatform();
+      const workflowRun = opts.workflowRun ?? makeWorkflowRun(opts.runId ?? 'usage-run');
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-usage',
+        testDir,
+        opts.workflow ?? {
+          name: 'usage-wf',
+          nodes: [{ id: 'ai', prompt: 'do work' }],
+        },
+        workflowRun,
+        opts.provider ?? 'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        opts.config ?? minimalConfig
+      );
+      return { store, mockDeps, workflowRun };
+    };
+
+    const usageCalls = (deps: WorkflowDeps) =>
+      (deps.usageRecorder.recordWorkflowUsage as Mock).mock.calls.map(
+        (c: unknown[]) => c[0] as Record<string, unknown>
+      );
+
+    it('records once on standard AI success', async () => {
+      const breakdown = [sampleEntry()];
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'ok' };
+        yield { type: 'result', sessionId: 's1', usageBreakdown: breakdown };
+      });
+      const { mockDeps, workflowRun } = await runSimple({});
+      const calls = usageCalls(mockDeps);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        runId: workflowRun.id,
+        stepName: 'ai',
+        agentProvider: 'claude',
+        retryEpoch: 0,
+        reaskAttempt: 0,
+        terminalError: false,
+        errorSubtype: null,
+        iteration: null,
+      });
+      expect(calls[0].usageBreakdown).toEqual(breakdown);
+    });
+
+    it('records once before failing on SDK error result with usage', async () => {
+      const breakdown = [sampleEntry({ costUsd: 0.05 })];
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'result',
+          sessionId: 'err',
+          isError: true,
+          errorSubtype: 'error_during_execution',
+          usageBreakdown: breakdown,
+        };
+      });
+      const { mockDeps, store } = await runSimple({});
+      const calls = usageCalls(mockDeps);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        terminalError: true,
+        errorSubtype: 'error_during_execution',
+        reaskAttempt: 0,
+      });
+      expect(calls[0].usageBreakdown).toEqual(breakdown);
+      const failed = (store.createWorkflowEvent as Mock).mock.calls.find(
+        (c: unknown[]) => (c[0] as { event_type: string }).event_type === 'node_failed'
+      );
+      expect(failed).toBeDefined();
+    });
+
+    it('records nothing when the generator throws without a terminal usage result', async () => {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'partial' };
+        throw new Error('stream exploded');
+      });
+      const { mockDeps } = await runSimple({});
+      expect(usageCalls(mockDeps)).toHaveLength(0);
+    });
+
+    it('records only the latest usageBreakdown when one pass yields two cumulative results', async () => {
+      const first = [sampleEntry({ inputTokens: 1, costUsd: 0.001 })];
+      const latest = [sampleEntry({ inputTokens: 99, costUsd: 0.09 })];
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't1', taskType: 'local_agent', description: 'bg' }],
+        };
+        yield { type: 'result', sessionId: 's1', usageBreakdown: first };
+        yield { type: 'background_tasks', tasks: [] };
+        yield { type: 'assistant', content: 'done after bg' };
+        yield { type: 'result', sessionId: 's1', usageBreakdown: latest };
+      });
+      const { mockDeps } = await runSimple({});
+      const calls = usageCalls(mockDeps);
+      expect(calls).toHaveLength(1);
+      expect(calls[0].usageBreakdown).toEqual(latest);
+    });
+
+    it('records each structured-output reask independently', async () => {
+      const u1 = [sampleEntry({ costUsd: 0.01 })];
+      const u2 = [sampleEntry({ costUsd: 0.02 })];
+      mockSendQueryDag.mockImplementationOnce(function* () {
+        yield {
+          type: 'result',
+          sessionId: 's1',
+          structuredOutput: { other: 'x' },
+          usageBreakdown: u1,
+        };
+      });
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'result',
+          sessionId: 's2',
+          structuredOutput: { verdict: 'ok' },
+          usageBreakdown: u2,
+        };
+      });
+      const { mockDeps } = await runSimple({
+        provider: 'pi',
+        config: { ...minimalConfig, assistant: 'pi' },
+        workflow: {
+          name: 'reask-usage',
+          nodes: [
+            {
+              id: 'classify',
+              prompt: 'decide',
+              provider: 'pi',
+              output_format: {
+                type: 'object',
+                properties: { verdict: { type: 'string' } },
+                required: ['verdict'],
+              },
+              retry: { max_attempts: 0 },
+            },
+          ],
+        },
+      });
+      const calls = usageCalls(mockDeps);
+      expect(calls).toHaveLength(2);
+      expect(calls[0]).toMatchObject({
+        stepName: 'classify',
+        agentProvider: 'pi',
+        reaskAttempt: 0,
+        terminalError: false,
+      });
+      expect(calls[0].usageBreakdown).toEqual(u1);
+      expect(calls[1]).toMatchObject({ reaskAttempt: 1, terminalError: false });
+      expect(calls[1].usageBreakdown).toEqual(u2);
+    });
+
+    it('records each outer node-level retry independently', async () => {
+      let callCount = 0;
+      mockSendQueryDag.mockImplementation(function* () {
+        callCount++;
+        if (callCount === 1) {
+          throw new Error('Claude Code crash: process exited with code 1');
+        }
+        yield { type: 'assistant', content: 'recovered' };
+        yield {
+          type: 'result',
+          sessionId: 'retry-ok',
+          usageBreakdown: [sampleEntry({ costUsd: 0.03 })],
+        };
+      });
+      const { mockDeps } = await runSimple({
+        workflow: {
+          name: 'outer-retry-usage',
+          nodes: [
+            {
+              id: 'flaky',
+              prompt: 'try',
+              retry: { max_attempts: 2, delay_ms: 0, backoff: 'fixed' },
+            },
+          ],
+        },
+      });
+      // First attempt threw with no usage; second attempt recorded once.
+      const calls = usageCalls(mockDeps);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({ stepName: 'flaky', reaskAttempt: 0, terminalError: false });
+    });
+
+    it('records each direct-loop iteration/reask with iteration metadata', async () => {
+      let n = 0;
+      mockSendQueryDag.mockImplementation(function* () {
+        n++;
+        if (n === 1) {
+          yield {
+            type: 'assistant',
+            content: 'still going',
+          };
+          yield {
+            type: 'result',
+            sessionId: 'loop-1',
+            usageBreakdown: [sampleEntry({ costUsd: 0.01 })],
+          };
+          return;
+        }
+        yield {
+          type: 'assistant',
+          content: 'DONE',
+        };
+        yield {
+          type: 'result',
+          sessionId: 'loop-2',
+          usageBreakdown: [sampleEntry({ costUsd: 0.02 })],
+        };
+      });
+      const { mockDeps } = await runSimple({
+        workflow: {
+          name: 'loop-usage',
+          nodes: [
+            {
+              id: 'work',
+              loop: {
+                prompt: 'Do the work until DONE.',
+                until: 'DONE',
+                max_iterations: 5,
+              },
+            },
+          ],
+        },
+      });
+      const calls = usageCalls(mockDeps);
+      expect(calls).toHaveLength(2);
+      expect(calls[0]).toMatchObject({
+        stepName: 'work',
+        iteration: 1,
+        reaskAttempt: 0,
+        terminalError: false,
+      });
+      expect(calls[1]).toMatchObject({
+        stepName: 'work',
+        iteration: 2,
+        reaskAttempt: 0,
+        terminalError: false,
+      });
+    });
+
+    it('loop-group body nodes use namespaced stepName with no group-level duplicate', async () => {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'COMPLETE' };
+        yield {
+          type: 'result',
+          sessionId: 'lg',
+          usageBreakdown: [sampleEntry()],
+        };
+      });
+      const { mockDeps } = await runSimple({
+        workflow: {
+          name: 'lg-usage',
+          nodes: [
+            {
+              id: 'group',
+              loop_group: {
+                until: 'COMPLETE',
+                max_iterations: 2,
+                nodes: [{ id: 'body', prompt: 'emit COMPLETE' }],
+              },
+            },
+          ],
+        },
+      });
+      const calls = usageCalls(mockDeps);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        stepName: 'group.body',
+        // Loop-group body uses standard path — iteration is null on the usage record
+        // (group iteration lives on lifecycle events only).
+        iteration: null,
+        reaskAttempt: 0,
+      });
+      // No group-level stepName 'group' usage row.
+      expect(calls.every(c => c.stepName === 'group.body')).toBe(true);
+    });
+
+    it('pause/resume and retry_epoch append rather than replace', async () => {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'ok' };
+        yield {
+          type: 'result',
+          sessionId: 'epoch',
+          usageBreakdown: [sampleEntry({ costUsd: 0.07 })],
+        };
+      });
+      // First pass epoch 0
+      const store = createMockStore();
+      const mockDeps = createMockDeps(store);
+      await runSimple({
+        store,
+        deps: mockDeps,
+        runId: 'epoch-run',
+        workflowRun: makeWorkflowRun('epoch-run', { metadata: { retry_epoch: 0 } }),
+      });
+      // Second pass (manual retry-node style) epoch 2 — same recorder mock accumulates.
+      await runSimple({
+        store,
+        deps: mockDeps,
+        runId: 'epoch-run',
+        workflowRun: makeWorkflowRun('epoch-run', { metadata: { retry_epoch: 2 } }),
+      });
+      const calls = usageCalls(mockDeps);
+      expect(calls).toHaveLength(2);
+      expect(calls[0].retryEpoch).toBe(0);
+      expect(calls[1].retryEpoch).toBe(2);
+    });
+
+    it('does not record for bash/script/non-AI nodes', async () => {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'should not run' };
+        yield { type: 'result', sessionId: 'x', usageBreakdown: [sampleEntry()] };
+      });
+      const { mockDeps } = await runSimple({
+        workflow: {
+          name: 'non-ai',
+          nodes: [
+            { id: 'b', bash: 'echo hi' },
+            {
+              id: 's',
+              runtime: 'bun',
+              script: 'console.log("hi")',
+              depends_on: ['b'],
+            },
+          ],
+        },
+      });
+      expect(usageCalls(mockDeps)).toHaveLength(0);
+      expect(mockSendQueryDag.mock.calls.length).toBe(0);
+    });
+
+    it('recorder rejection never changes the node outcome', async () => {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'ok' };
+        yield {
+          type: 'result',
+          sessionId: 's',
+          usageBreakdown: [sampleEntry()],
+        };
+      });
+      const store = createMockStore();
+      const mockDeps = createMockDeps(store);
+      (mockDeps.usageRecorder.recordWorkflowUsage as Mock).mockImplementation(() =>
+        Promise.reject(new Error('recorder blew up'))
+      );
+      await runSimple({ store, deps: mockDeps });
+      const completed = (store.createWorkflowEvent as Mock).mock.calls.find(
+        (c: unknown[]) => (c[0] as { event_type: string }).event_type === 'node_completed'
+      );
+      expect(completed).toBeDefined();
+      expect(store.completeWorkflowRun).toHaveBeenCalled();
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    });
+
+    it('records loop SDK error usage with terminalError before fail', async () => {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'result',
+          isError: true,
+          errorSubtype: 'error_during_execution',
+          usageBreakdown: [sampleEntry({ costUsd: 0.04 })],
+        };
+      });
+      const { mockDeps, store } = await runSimple({
+        workflow: {
+          name: 'loop-err-usage',
+          nodes: [
+            {
+              id: 'work',
+              loop: {
+                prompt: 'go',
+                until: 'DONE',
+                max_iterations: 3,
+              },
+            },
+          ],
+        },
+      });
+      const calls = usageCalls(mockDeps);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        stepName: 'work',
+        iteration: 1,
+        terminalError: true,
+        errorSubtype: 'error_during_execution',
+      });
+      expect(store.failWorkflowRun).toHaveBeenCalled();
+    });
+  });
+
   // ─── Background Agent Task Gating (#2083) ───────────────────────────────
 
   describe('background task completion gating (#2083)', () => {
