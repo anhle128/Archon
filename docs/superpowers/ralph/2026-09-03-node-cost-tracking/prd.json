@@ -189,8 +189,8 @@
         "US-008"
       ],
       "priority": 9,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration after US-008. Files: packages/core/src/schemas/usage-report.ts, packages/core/src/schemas/usage-report.test.ts, packages/core/src/db/usage-report.ts, packages/core/src/db/usage-report.test.ts, packages/core/src/db/usage.ts, schemas/index.ts, db/index.ts, core/index.ts, package.json. Isolated usage-report tests green; type-check/lint/format clean."
     },
     {
       "id": "US-010",

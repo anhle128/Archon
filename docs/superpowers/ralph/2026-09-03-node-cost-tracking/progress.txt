@@ -1,6 +1,11 @@
 ## Codebase Patterns
 
 
+### Usage report query is dialect-safe ledger aggregates
+- **Where**: `packages/core/src/db/usage-report.ts`, `packages/core/src/schemas/usage-report.ts`
+- **Pattern**: CamelCase `usageReportSchema` via z.infer. `queryUsageReport` joins ledger→event→run→codebase; accounting time is `e.created_at`. Defaults: no dates/runId → current UTC month; runId alone → entire run (`from`/`to` null). Fetch LIMIT 501 and throw overflow (never silent truncate). Coverage uses only date/project/run/node filters. GROUP BY/ORDER BY only from exhaustive enum switch + NULLS FIRST. Convert PG bigint/count strings with MAX_SAFE_INTEGER rejection; keep null sums distinct from zero; no effective USD total.
+- **Example**: `usageDb.queryUsageReport({ runId, groupBy: 'node' })`
+
 ### Usage recorder is a narrow port with atomic event+ledger writes
 - **Where**: `packages/workflows/src/usage.ts`, `packages/core/src/workflows/usage-recorder.ts`, `packages/core/src/db/workflow-events.ts`
 - **Pattern**: Required `WorkflowDeps.usageRecorder` (not on IWorkflowStore). Validate + materialize estimates + generate event id BEFORE `withTransaction`. Insert `node_usage_recorded` + N ledger rows atomically. On tx failure: one event-only fallback with same id + `ignoreDuplicateId` (ON CONFLICT DO NOTHING). Never throw, never outbox, never put estimates in event JSON.
@@ -323,5 +328,33 @@
 - Package export is `@archon/workflows/schemas/*` (file path), not a bare `@archon/workflows/schemas` index.
 - store-adapter tests mock config-loader incompletely; stub `./usage-recorder` so createWorkflowDeps does not pull estimate→loadGlobalConfig through the incomplete mock.
 - usage-recorder tests must stay process-isolated from store-adapter because of mock.module on connection/estimate.
+
+---
+
+## 2026-09-04 — US-009: Implement usage report query
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/schemas/usage-report.ts` — camelCase usageReportSchema / UsageReport + metrics/dimensions/coverage
+- `packages/core/src/schemas/usage-report.test.ts` — schema contract tests
+- `packages/core/src/db/usage-report.ts` — queryUsageReport + UsageReportQueryError (validation/overflow/unsafe_aggregate)
+- `packages/core/src/db/usage-report.test.ts` — defaults, filters, seven group modes, overflow, aggregates, coverage scope
+- `packages/core/src/db/usage.ts` — combined write+query surface for usageDb namespace
+- `packages/core/src/db/index.ts`, `packages/core/src/index.ts`, `packages/core/src/schemas/index.ts` — exports
+- `packages/core/package.json` — isolated bun test invocations
+
+**Acceptance criteria verified**:
+- [x] usage-report.ts defines camelCase usageReportSchema and inferred UsageReport; exported from schemas + usageDb namespace
+- [x] Query supports from/to, codebaseId, agentProvider, provider, model, kind, runId, nodeId, groupBy modes with explicit dimension fields
+- [x] Date defaults/bounds: UTC month, entire-run, from<to, 366-day cross-run cap, node/groupBy=node require runId
+- [x] Fetches 501 groups and returns narrowing overflow error (no silent truncate)
+- [x] Totals/groups: nullable token/request/USD sums, missing counts, rowsMissingUsd, no effective USD
+- [x] Coverage: usage/ledgered/unledgered counts, hasRecordedUsage, historicalBackfill:false, filterScope date-project-run-node only
+- [x] SQL joins ledger→event→run→codebase, event created_at, parameterized filters, enum group/order, safe bigint conversion, nulls-first order
+
+**Learnings**:
+- Keep coverage param/clause building separate from ledger filters so agent/provider/model/kind never leak into integrity counts.
+- Identify Promise.all mock routes by SQL shape (GROUP BY vs usage_event_count vs totals), not call order.
+- Template literals without interpolation fail the quotes lint — use single-quoted strings with escaped inner quotes for SQL fragments.
 
 ---
