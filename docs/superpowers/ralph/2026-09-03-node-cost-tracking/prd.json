@@ -255,8 +255,8 @@
         "US-009"
       ],
       "priority": 12,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration after US-011. Files: packages/cli/src/commands/usage.ts, usage.test.ts, cli.ts, cli.test.ts, package.json, packages/docs-web/.../cli.md; plus COALESCE unblock in packages/core/src/db/usage-report.ts. Isolated usage tests green; empty-DB --json works; --from rejected."
     },
     {
       "id": "US-013",

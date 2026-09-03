@@ -1,6 +1,11 @@
 ## Codebase Patterns
 
 
+### archon usage CLI maps since/until and rejects foreign flags
+- **Where**: `packages/cli/src/commands/usage.ts`, `packages/cli/src/cli.ts`
+- **Pattern**: Top-level `usage` is in `noGitCommands`. CLI `--since`/`--until` map to core `from`/`to`; never accept `--from`/`--to` (worktree-owned). With `strict:false` parse, `findUnsupportedFlag` rejects typos. Human USD: `$` reported / `≈$` estimated / `$0.00` exact zero / `n/a` absent / up to 6 decimals under a cent / `<$0.000001` floor. `--json` uses `writeJsonLine` only. Inject `queryFn` in tests — no `mock.module`. Empty-ledger missing-count SUMs need `COALESCE(...,0)` in METRIC_SELECT.
+- **Example**: `usageCommand({ since, until, by: 'node', runId, json: true }, queryUsageReport)`
+
 ### REST usage reuses core report; run detail fails soft
 - **Where**: `packages/server/src/routes/schemas/usage.schemas.ts`, `packages/server/src/routes/api.ts`
 - **Pattern**: HTTP query + `.openapi('UsageReport')` wrapper over core `usageReportSchema`. `GET /api/usage` calls `queryUsageReport` and maps `UsageReportQueryError` validation/overflow → 400. Run detail always queries `{ runId, groupBy: 'node' }`; on any usage failure log and set `usage: null` without 500. Import `UsageReport` type from `@archon/core/schemas/usage-report`.
@@ -421,5 +426,34 @@
 - Import `UsageReport` type from `@archon/core/schemas/usage-report` — db/usage-report does not re-export the type.
 - Mock `@archon/core/db/usage-report` in workflow-runs tests before importing api, or GET detail hits real DB.
 - OpenAPI enum on query params rejects invalid kind/groupBy before the handler (extra 400 path beyond core validation).
+
+---
+
+## 2026-09-04 — US-012: Add the archon usage CLI
+
+**Status**: PASSED
+**Files changed**:
+- `packages/cli/src/commands/usage.ts` — top-level usage command; USD formatting; human + JSON report
+- `packages/cli/src/commands/usage.test.ts` — format matrix, flag→query map, JSON exactness, coverage warning, validation errors
+- `packages/cli/src/cli.ts` — wire `usage`, noGitCommands, parse flags, reject unsupported/`--from`/`--to`
+- `packages/cli/src/cli.test.ts` — noGit + usage allowlist mirror
+- `packages/cli/package.json` — isolated `usage.test.ts` invocation
+- `packages/docs-web/src/content/docs/reference/cli.md` — usage docs, half-open UTC range, flag table
+- `packages/core/src/db/usage-report.ts` — COALESCE empty missing-count SUMs (unblock empty installs)
+
+**Acceptance criteria verified**:
+- [x] packages/cli/src/commands/usage.ts implements top-level archon usage; cli.ts wires without Git validation
+- [x] usage in noGitCommands; cli.test.ts mirrors contract
+- [x] Supported flags --since/--until/--by/--codebase-id/--agent/--provider/--model/--kind/--run-id/--node/--json; --from/--to rejected
+- [x] Unsupported flags fail clearly under strict:false top-level parse
+- [x] Reuses core queryUsageReport defaults/filters/bounds/grouping/coverage (no SQL)
+- [x] Human output distinguishes reported/estimated/zero/absent/sub-cent/floor; coverage warning when unledgered>0
+- [x] --json writes exact camelCase report via writeJsonLine; tests assert machine-readable output
+- [x] cli.md documents examples and half-open UTC range
+
+**Learnings**:
+- Empty SQLite aggregate SELECT still returns one row; SUM(CASE…) is NULL when COUNT(*)=0 — COALESCE missing counts to 0 or CLI fails on fresh DBs.
+- CLI date flags must be --since/--until because --from is worktree branch selection.
+- Inject queryFn rather than mock.module for usage command tests.
 
 ---
