@@ -109,6 +109,30 @@ describe('OmpEventParser', () => {
       numTurns: 2,
       resolvedModel: { id: 'openai-codex/gpt-5.6-sol' },
       resumed: true,
+      usageBreakdown: [
+        {
+          provider: 'openai-codex',
+          model: 'gpt-5.6-sol',
+          modelSource: 'reported',
+          inputTokens: 10,
+          outputTokens: 5,
+          cacheReadTokens: 2,
+          cacheWriteTokens: 0,
+          requests: 1,
+          costUsd: 0.2,
+        },
+        {
+          provider: 'openai-codex',
+          model: 'gpt-5.6-sol',
+          modelSource: 'reported',
+          inputTokens: 8,
+          outputTokens: 2,
+          cacheReadTokens: 1,
+          cacheWriteTokens: 0,
+          requests: 1,
+          costUsd: 0.05,
+        },
+      ],
     });
   });
 

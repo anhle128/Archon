@@ -8,10 +8,16 @@ import type {
   SystemPromptInput,
 } from '../../types';
 import { augmentPromptForJsonSchema } from '../../shared/structured-output';
-import { OMP_CAPABILITIES } from './capabilities';
 import { resolveOmpBinaryPath } from './binary-resolver';
+import { OMP_CAPABILITIES } from './capabilities';
 import { parseOmpConfig, type OmpProviderDefaults } from './config';
 import { OmpEventParser } from './event-parser';
+import {
+  collectHiddenSessionUsage,
+  enrichResultWithHiddenUsage,
+  snapshotHiddenSessionFiles,
+  type SessionUsageSnapshot,
+} from './session-usage';
 
 const MAX_CAPTURE_CHARS = 1_000_000;
 const TERMINATION_GRACE_MS = 5_000;
@@ -245,6 +251,40 @@ function buildTransportErrorResult(
   };
 }
 
+async function maybeEnrichResult(
+  result: MessageChunk,
+  options: {
+    env: Record<string, string>;
+    cwd: string;
+    noSession: boolean;
+    snapshot: SessionUsageSnapshot | null | undefined;
+  }
+): Promise<MessageChunk> {
+  if (result.type !== 'result') return result;
+  const sessionId = result.sessionId;
+  if (!sessionId || options.noSession) return result;
+  try {
+    const hidden = await collectHiddenSessionUsage({
+      env: options.env,
+      cwd: options.cwd,
+      sessionId,
+      noSession: options.noSession,
+      snapshot: options.snapshot,
+    });
+    if (!hidden || hidden.entries.length === 0) return result;
+    return enrichResultWithHiddenUsage(result, hidden);
+  } catch (error: unknown) {
+    getLog().warn(
+      {
+        error: error instanceof Error ? error.message : String(error),
+        errorType: error instanceof Error ? error.constructor.name : typeof error,
+      },
+      'omp.session_usage_enrich_failed'
+    );
+    return result;
+  }
+}
+
 export class OmpProvider implements IAgentProvider {
   private readonly spawn: OmpSpawner;
 
@@ -304,6 +344,29 @@ export class OmpProvider implements IAgentProvider {
       },
       'omp.query_started'
     );
+
+    const noSession = requestOptions?.persistSession === false;
+    // Resume/fork need a pre-spawn snapshot so copied history is not double-counted.
+    // null = snapshot failed → skip hidden enrichment after exit; undefined = fresh run.
+    let snapshot: SessionUsageSnapshot | null | undefined;
+    if (!noSession && resumeSessionId) {
+      try {
+        snapshot = await snapshotHiddenSessionFiles({
+          env,
+          cwd,
+          resumeSessionId,
+        });
+      } catch (error: unknown) {
+        getLog().warn(
+          {
+            error: error instanceof Error ? error.message : String(error),
+            errorType: error instanceof Error ? error.constructor.name : typeof error,
+          },
+          'omp.session_usage_snapshot_failed'
+        );
+        snapshot = null;
+      }
+    }
 
     const parser = new OmpEventParser(wantsStructured);
     const proc = this.spawn(command, { cwd, env });
@@ -384,11 +447,14 @@ export class OmpProvider implements IAgentProvider {
       if (protocolError) {
         const message = protocolError.message;
         yield { type: 'system', content: message };
-        yield buildTransportErrorResult(
-          parser,
-          'omp_protocol_error',
-          message,
-          resumeSessionId !== undefined
+        yield await maybeEnrichResult(
+          buildTransportErrorResult(
+            parser,
+            'omp_protocol_error',
+            message,
+            resumeSessionId !== undefined
+          ),
+          { env, cwd, noSession, snapshot }
         );
         return;
       }
@@ -396,16 +462,22 @@ export class OmpProvider implements IAgentProvider {
       if (exitOutcome.value !== 0) {
         const message = buildExitErrorMessage(exitOutcome.value, stderrOutcome.value);
         yield { type: 'system', content: message };
-        yield buildTransportErrorResult(
-          parser,
-          'omp_exit_nonzero',
-          message,
-          resumeSessionId !== undefined
+        yield await maybeEnrichResult(
+          buildTransportErrorResult(
+            parser,
+            'omp_exit_nonzero',
+            message,
+            resumeSessionId !== undefined
+          ),
+          { env, cwd, noSession, snapshot }
         );
         return;
       }
 
-      yield parser.buildResult(resumeSessionId === undefined ? undefined : true);
+      yield await maybeEnrichResult(
+        parser.buildResult(resumeSessionId === undefined ? undefined : true),
+        { env, cwd, noSession, snapshot }
+      );
       getLog().info({ sessionId: parser.getSessionId() }, 'omp.query_completed');
     } finally {
       if (abortSignal) abortSignal.removeEventListener('abort', onAbort);
