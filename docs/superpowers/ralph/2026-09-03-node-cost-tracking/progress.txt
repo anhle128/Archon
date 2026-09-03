@@ -1,5 +1,11 @@
 ## Codebase Patterns
 
+
+### Usage recorder is a narrow port with atomic event+ledger writes
+- **Where**: `packages/workflows/src/usage.ts`, `packages/core/src/workflows/usage-recorder.ts`, `packages/core/src/db/workflow-events.ts`
+- **Pattern**: Required `WorkflowDeps.usageRecorder` (not on IWorkflowStore). Validate + materialize estimates + generate event id BEFORE `withTransaction`. Insert `node_usage_recorded` + N ledger rows atomically. On tx failure: one event-only fallback with same id + `ignoreDuplicateId` (ON CONFLICT DO NOTHING). Never throw, never outbox, never put estimates in event JSON.
+- **Example**: `insertWorkflowEvent(query, { id, event_type:'node_usage_recorded', ... }, { ignoreDuplicateId: true })`
+
 ### Global pricing is exact-match nested maps, ledger-only
 - **Where**: `packages/core/src/usage/estimate.ts`, `packages/core/src/config/config-types.ts`
 - **Pattern**: `pricing` lives only on `GlobalConfig` (not Repo/Merged/Safe). Lookups are nested `Map<provider, Map<model, rates>>` — never `${provider}/${model}`. Precedence: reported `costUsd` (incl. 0) → exact config pair → exact Pi catalog provider/id → none. Invalid/duplicate config pairs are blocked so catalog cannot price them. Require input+output token counts; positive category without rate → whole estimate null; zero-count categories may omit that rate; tiers use Pi `aggregate > inputTokensAbove` rule. Resolve lookups before any DB transaction.

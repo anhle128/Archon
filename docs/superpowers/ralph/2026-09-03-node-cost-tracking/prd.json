@@ -167,8 +167,8 @@
         "US-007"
       ],
       "priority": 8,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 8. Files: packages/workflows/src/usage.ts, deps.ts; packages/core/src/db/workflow-events.ts, usage-ledger.ts; packages/core/src/workflows/usage-recorder.ts, store-adapter.ts; test helpers. Core usage-recorder/ledger/workflow-events tests green; monorepo type-check/lint/format green."
     },
     {
       "id": "US-009",
