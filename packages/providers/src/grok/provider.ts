@@ -271,7 +271,7 @@ export class GrokProvider implements IAgentProvider {
       resumeSessionId,
     });
     const proc = this.spawn(buildSpawnCommand(binary, args), { cwd, env });
-    const parser = new GrokEventParser();
+    const parser = new GrokEventParser(model);
     const abortSignal = requestOptions?.abortSignal;
     let processExited = false;
     let killTimer: ReturnType<typeof setTimeout> | undefined;

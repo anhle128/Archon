@@ -2975,3 +2975,264 @@ describe('API error surfaced as text (#1797)', () => {
     expect(mockQuery).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('usageBreakdown normalization (US-002)', () => {
+  let client: ClaudeProvider;
+
+  beforeEach(() => {
+    client = new ClaudeProvider({ retryBaseDelayMs: 1 });
+    mockQuery.mockClear();
+    mockLogger.info.mockClear();
+    mockLogger.warn.mockClear();
+    mockLogger.error.mockClear();
+    mockLogger.debug.mockClear();
+  });
+
+  async function collect(gen: AsyncIterable<Record<string, unknown>>): Promise<{
+    chunks: Array<Record<string, unknown>>;
+    error?: Error;
+  }> {
+    const chunks: Array<Record<string, unknown>> = [];
+    try {
+      for await (const chunk of gen) chunks.push(chunk);
+    } catch (e) {
+      return { chunks, error: e as Error };
+    }
+    return { chunks };
+  }
+
+  test('maps every modelUsage entry with anthropic provider and cache/cost fields, omits requests', async () => {
+    mockQuery.mockImplementation(async function* () {
+      yield {
+        type: 'result',
+        session_id: 'sid-usage',
+        total_cost_usd: 0.12,
+        modelUsage: {
+          'claude-sonnet-4-6': {
+            inputTokens: 100,
+            outputTokens: 50,
+            cacheReadInputTokens: 10,
+            cacheCreationInputTokens: 4,
+            webSearchRequests: 3,
+            costUSD: 0.11,
+          },
+          'claude-haiku-4-5': {
+            inputTokens: 20,
+            outputTokens: 5,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            webSearchRequests: 0,
+            costUSD: 0.01,
+          },
+        },
+      };
+    });
+
+    const chunks = [];
+    for await (const chunk of client.sendQuery('test', '/workspace')) chunks.push(chunk);
+    expect(chunks[0]).toMatchObject({
+      type: 'result',
+      modelUsage: {
+        'claude-sonnet-4-6': expect.objectContaining({ inputTokens: 100 }),
+        'claude-haiku-4-5': expect.objectContaining({ inputTokens: 20 }),
+      },
+      usageBreakdown: [
+        {
+          provider: 'anthropic',
+          model: 'claude-sonnet-4-6',
+          modelSource: 'reported',
+          inputTokens: 100,
+          outputTokens: 50,
+          cacheReadTokens: 10,
+          cacheWriteTokens: 4,
+          costUsd: 0.11,
+        },
+        {
+          provider: 'anthropic',
+          model: 'claude-haiku-4-5',
+          modelSource: 'reported',
+          inputTokens: 20,
+          outputTokens: 5,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          costUsd: 0.01,
+        },
+      ],
+    });
+    expect(chunks[0].usageBreakdown?.[0]).not.toHaveProperty('requests');
+  });
+
+  test('preserves zero costUSD and yields no usage when modelUsage is absent', async () => {
+    mockQuery.mockImplementation(async function* () {
+      yield {
+        type: 'result',
+        session_id: 'sid-zero',
+        modelUsage: {
+          'claude-sonnet-4-6': {
+            inputTokens: 1,
+            outputTokens: 0,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            webSearchRequests: 0,
+            costUSD: 0,
+          },
+        },
+      };
+    });
+    const withZero = [];
+    for await (const chunk of client.sendQuery('test', '/workspace')) withZero.push(chunk);
+    expect(withZero[0].usageBreakdown?.[0]).toMatchObject({ costUsd: 0, outputTokens: 0 });
+
+    mockQuery.mockImplementation(async function* () {
+      yield { type: 'result', session_id: 'sid-none' };
+    });
+    const without = [];
+    for await (const chunk of client.sendQuery('test', '/workspace')) without.push(chunk);
+    expect(without[0]).not.toHaveProperty('usageBreakdown');
+  });
+
+  test('usage-bearing final typed API error yields isError result with usage', async () => {
+    mockQuery.mockImplementation(async function* () {
+      yield {
+        type: 'assistant',
+        message: {
+          model: '<synthetic>',
+          stop_reason: 'stop_sequence',
+          content: [{ type: 'text', text: 'rate limited' }],
+          usage: { input_tokens: 0, output_tokens: 0 },
+        },
+        error: 'rate_limit',
+        session_id: 'sid-rl',
+      };
+      yield {
+        type: 'result',
+        subtype: 'success',
+        is_error: true,
+        terminal_reason: 'api_error',
+        result: 'rate limited',
+        stop_reason: 'stop_sequence',
+        session_id: 'sid-rl',
+        total_cost_usd: 0.002,
+        modelUsage: {
+          'claude-sonnet-4-6': {
+            inputTokens: 40,
+            outputTokens: 2,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            webSearchRequests: 0,
+            costUSD: 0.002,
+          },
+        },
+      };
+    });
+
+    // Exhaust retries for rate_limit (retryable). Force max by low delay.
+    const { chunks, error } = await collect(client.sendQuery('test', '/workspace'));
+    expect(error).toBeUndefined();
+    const result = chunks.find(c => c.type === 'result');
+    expect(result).toMatchObject({
+      type: 'result',
+      isError: true,
+      errorSubtype: 'rate_limit',
+    });
+    // One observation per exhausted attempt (initial + MAX_SUBPROCESS_RETRIES).
+    expect(result?.usageBreakdown).toHaveLength(4);
+    expect(result?.usageBreakdown?.[0]).toMatchObject({
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      modelSource: 'reported',
+      inputTokens: 40,
+      outputTokens: 2,
+      costUsd: 0.002,
+    });
+    expect(mockQuery).toHaveBeenCalledTimes(4);
+  }, 5_000);
+
+  test('retry accumulation folds prior usage into the successful terminal result', async () => {
+    let call = 0;
+    mockQuery.mockImplementation(async function* () {
+      call += 1;
+      if (call === 1) {
+        yield {
+          type: 'assistant',
+          message: {
+            model: '<synthetic>',
+            stop_reason: 'stop_sequence',
+            content: [{ type: 'text', text: 'overloaded' }],
+            usage: { input_tokens: 0, output_tokens: 0 },
+          },
+          error: 'overloaded',
+          session_id: 'sid-acc',
+        };
+        yield {
+          type: 'result',
+          subtype: 'success',
+          is_error: true,
+          terminal_reason: 'api_error',
+          result: 'overloaded',
+          session_id: 'sid-acc',
+          modelUsage: {
+            'claude-sonnet-4-6': {
+              inputTokens: 10,
+              outputTokens: 1,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+              webSearchRequests: 0,
+              costUSD: 0.001,
+            },
+          },
+        };
+        return;
+      }
+      yield {
+        type: 'result',
+        session_id: 'sid-acc',
+        modelUsage: {
+          'claude-sonnet-4-6': {
+            inputTokens: 5,
+            outputTokens: 2,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            webSearchRequests: 0,
+            costUSD: 0.0005,
+          },
+        },
+      };
+    });
+
+    const chunks = [];
+    for await (const chunk of client.sendQuery('test', '/workspace')) chunks.push(chunk);
+    expect(chunks[0].usageBreakdown).toEqual([
+      {
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-6',
+        modelSource: 'reported',
+        inputTokens: 10,
+        outputTokens: 1,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        costUsd: 0.001,
+      },
+      {
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-6',
+        modelSource: 'reported',
+        inputTokens: 5,
+        outputTokens: 2,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        costUsd: 0.0005,
+      },
+    ]);
+    expect(chunks[0]).not.toHaveProperty('isError');
+  });
+
+  test('does not synthesize usage when SDK throws without usage', async () => {
+    mockQuery.mockImplementation(async function* () {
+      throw new Error('process exited with code 1');
+    });
+    const { chunks, error } = await collect(client.sendQuery('test', '/workspace'));
+    expect(error).toBeDefined();
+    expect(chunks.filter(c => c.type === 'result')).toHaveLength(0);
+  });
+});

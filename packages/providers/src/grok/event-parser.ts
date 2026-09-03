@@ -1,4 +1,5 @@
-import type { MessageChunk, TokenUsage } from '../types';
+import type { MessageChunk, ModelUsageEntry, TokenUsage, UsageBreakdown } from '../types';
+import { toUsageBreakdown } from '../usage-breakdown';
 
 const MAX_ERROR_PREVIEW_CHARS = 1000;
 type JsonObject = Record<string, unknown>;
@@ -39,7 +40,14 @@ export class GrokEventParser {
   private structuredOutput: unknown;
   private errorMessage: string | undefined;
   private structuredOutputError: string | undefined;
+  private readonly requestedModel: string | undefined;
 
+  constructor(requestedModel?: string) {
+    this.requestedModel =
+      typeof requestedModel === 'string' && requestedModel.trim() !== ''
+        ? requestedModel.trim()
+        : undefined;
+  }
   consumeLine(line: string): MessageChunk[] {
     let parsed: unknown;
     try {
@@ -121,6 +129,7 @@ export class GrokEventParser {
   }
 
   private observedResult(resumed: boolean | undefined): ResultChunk {
+    const usageBreakdown = this.buildUsageBreakdown();
     return {
       type: 'result',
       ...(this.sessionId ? { sessionId: this.sessionId } : {}),
@@ -129,9 +138,98 @@ export class GrokEventParser {
       ...(this.stopReason ? { stopReason: this.stopReason } : {}),
       ...(this.numTurns !== undefined ? { numTurns: this.numTurns } : {}),
       ...(this.modelUsage ? { modelUsage: this.modelUsage } : {}),
+      ...(usageBreakdown ? { usageBreakdown } : {}),
       ...(this.structuredOutput !== undefined ? { structuredOutput: this.structuredOutput } : {}),
       ...(resumed !== undefined ? { resumed } : {}),
     };
+  }
+
+  /**
+   * Build normalized observations from Grok aggregate usage + modelUsage keys.
+   * Never apportions aggregate tokens/USD across model names.
+   */
+  private buildUsageBreakdown(): UsageBreakdown | undefined {
+    const modelEntries = this.collectReportedModels();
+    const hasAggregate =
+      this.tokens !== undefined || (this.cost !== undefined && Number.isFinite(this.cost));
+    if (modelEntries.length === 0 && !hasAggregate) return undefined;
+
+    const entries: ModelUsageEntry[] = [];
+
+    if (modelEntries.length === 1) {
+      const only = modelEntries[0];
+      entries.push({
+        provider: 'xai',
+        model: only.model,
+        modelSource: 'reported',
+        ...(this.tokens
+          ? { inputTokens: this.tokens.input, outputTokens: this.tokens.output }
+          : {}),
+        ...(this.cost !== undefined ? { costUsd: this.cost } : {}),
+        ...(only.requests !== undefined ? { requests: only.requests } : {}),
+      });
+    } else if (modelEntries.length > 1) {
+      for (const entry of modelEntries) {
+        if (entry.requests === undefined) continue;
+        entries.push({
+          provider: 'xai',
+          model: entry.model,
+          modelSource: 'reported',
+          requests: entry.requests,
+        });
+      }
+      if (hasAggregate) {
+        entries.push({
+          provider: 'xai',
+          model: null,
+          modelSource: 'unknown',
+          ...(this.tokens
+            ? { inputTokens: this.tokens.input, outputTokens: this.tokens.output }
+            : {}),
+          ...(this.cost !== undefined ? { costUsd: this.cost } : {}),
+        });
+      }
+    } else if (this.requestedModel) {
+      entries.push({
+        provider: 'xai',
+        model: this.requestedModel,
+        modelSource: 'requested',
+        ...(this.tokens
+          ? { inputTokens: this.tokens.input, outputTokens: this.tokens.output }
+          : {}),
+        ...(this.cost !== undefined ? { costUsd: this.cost } : {}),
+      });
+    } else {
+      entries.push({
+        provider: 'xai',
+        model: null,
+        modelSource: 'unknown',
+        ...(this.tokens
+          ? { inputTokens: this.tokens.input, outputTokens: this.tokens.output }
+          : {}),
+        ...(this.cost !== undefined ? { costUsd: this.cost } : {}),
+      });
+    }
+
+    const breakdown = toUsageBreakdown(entries);
+    return breakdown.length > 0 ? breakdown : undefined;
+  }
+
+  private collectReportedModels(): { model: string; requests?: number }[] {
+    if (!this.modelUsage) return [];
+    const models: { model: string; requests?: number }[] = [];
+    for (const [rawModel, raw] of Object.entries(this.modelUsage)) {
+      const model = rawModel.trim();
+      if (!model) continue;
+      const obj = asObject(raw);
+      const modelCalls = obj ? finiteNumber(obj.modelCalls) : undefined;
+      const requests =
+        modelCalls !== undefined && Number.isSafeInteger(modelCalls) && modelCalls > 0
+          ? modelCalls
+          : undefined;
+      models.push({ model, ...(requests !== undefined ? { requests } : {}) });
+    }
+    return models;
   }
 
   private consumeToolCall(event: JsonObject): MessageChunk[] {
