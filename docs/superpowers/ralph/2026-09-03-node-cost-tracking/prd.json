@@ -59,8 +59,8 @@
         "US-001"
       ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 3. Files: packages/providers/src/community/pi/event-bridge.ts, event-bridge.test.ts, model-catalog.ts, index.ts; opencode/tokens.ts, tokens.test.ts, session.ts, multi-agent.ts, provider.test.ts; copilot/event-bridge.ts, event-bridge.test.ts; server provider.schemas.ts + api.providers.test.ts; web PiModelInfo fixtures. Full packages/providers bun run test green."
     },
     {
       "id": "US-004",

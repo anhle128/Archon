@@ -31,6 +31,22 @@
 - **Example**: 100/40 cached → legacy input 100, breakdown inputTokens 60
 
 
+### OpenCode cost must sum distinct assistant messages
+- **Where**: `packages/providers/src/community/opencode/session.ts`, `multi-agent.ts`, `tokens.ts`
+- **Pattern**: Map assistant info by message id (replace on repeat). At idle, sum `normalizeTokens` for legacy totals and emit one `usageBreakdown` row per id. Top-level `cost` MUST equal `tokens.cost` (sum), because dag-executor accounts only `msg.cost` and discards `tokens.cost`. Reasoning is an output subset — never add it into total again. Multi-agent rows set `kind: 'subagent'`.
+- **Example**: two ids cost 0.2 + 0.05 → `tokens.cost` and `cost` both 0.25
+
+### Copilot usage accumulates; multiplier is not USD
+- **Where**: `packages/providers/src/community/copilot/event-bridge.ts`
+- **Pattern**: Capture every `assistant.usage` into arrays; sum legacy TokenUsage; normalize each entry with `provider: github-copilot`, `requests: 1`, optional cache/reasoning. Ignore `data.cost` (multiplier). `kind: subagent` only for non-empty `parentToolCallId`; never from free-form `initiator`.
+- **Example**: two usage events → two breakdown rows; cost field omitted
+
+### Pi catalog cost includes cache + optional tiers
+- **Where**: `packages/providers/src/community/pi/model-catalog.ts`, `packages/server/src/routes/schemas/provider.schemas.ts`
+- **Pattern**: Expose `cacheRead`/`cacheWrite` always; map SDK `tiers` when present. Route schema requires the cache fields; tiers optional.
+- **Example**: `{ input, output, cacheRead, cacheWrite, tiers?: [{ inputTokensAbove, ... }] }`
+
+
 ---
 
 ## 2026-09-04 — US-001: Provider usage contract and normalizer
@@ -89,5 +105,43 @@
 - Usage-bearing Claude API finals change from throw→isError yield only when accumulated usage exists; no-usage auth/rate-limit tests keep throw semantics.
 - Grok multi-model rows without positive `modelCalls` are skipped for requests-only emission; single-model still attaches aggregates even without requests.
 - Plan forbids new raw `modelUsage` producers; only Grok keeps its existing raw emission. Claude/Codex emit `usageBreakdown` only.
+
+---
+
+## 2026-09-04 — US-003: Normalize community SDK providers and Pi catalog
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/pi/event-bridge.ts` — multi-message usageBreakdown + summed legacy tokens
+- `packages/providers/src/community/pi/event-bridge.test.ts` — multi-message/responseModel/error coverage
+- `packages/providers/src/community/pi/model-catalog.ts` — cache rates + optional tiers
+- `packages/providers/src/community/pi/index.ts` — export cost types
+- `packages/providers/src/community/opencode/tokens.ts` — reasoning subset fix + entry helpers
+- `packages/providers/src/community/opencode/tokens.test.ts` — unit coverage
+- `packages/providers/src/community/opencode/session.ts` — per-message-id map + summed cost
+- `packages/providers/src/community/opencode/multi-agent.ts` — subagent observations + summed cost
+- `packages/providers/src/community/opencode/provider.test.ts` — multi-id and total expectations
+- `packages/providers/src/community/copilot/event-bridge.ts` — accumulate usage events
+- `packages/providers/src/community/copilot/event-bridge.test.ts` — multi-event/parent-tool/multiplier tests
+- `packages/server/src/routes/schemas/provider.schemas.ts` — additive Pi cost schema
+- `packages/server/src/routes/api.providers.test.ts` — catalog schema tests
+- `packages/web/.../skills/providers.ts` + fixture tests — PiModelInfo cache fields
+- `packages/providers/package.json` — isolated tokens.test invocation
+
+**Acceptance criteria verified**:
+- [x] Pi one observation per assistant message; responseModel>model>unknown; requests 1; full usage fields
+- [x] Pi sums legacy tokens/cost; last-assistant stop/error/resolvedModel
+- [x] OpenCode per-id map; one observation each; multi-agent kind subagent; no reasoning double-count
+- [x] OpenCode top-level cost equals summed tokens.cost for dag-executor accounting
+- [x] Copilot accumulates usage events; github-copilot; optional fields; ignore multiplier; parentToolCallId only for subagent
+- [x] Qoder unchanged
+- [x] Pi catalog cache-read/write + tiers; route schema/tests updated
+- [x] Tests cover multi Pi messages, OpenCode repeated/multi-id, Copilot multi-event/parent/multiplier/optional, no reasoning double charge
+- [x] full packages/providers bun run test green; lint/typecheck/format clean on changed files
+
+**Learnings**:
+- dag-executor uses `msg.cost`, not `tokens.cost` — OpenCode top-level cost must be the multi-message sum.
+- OpenCode fixture `cache: 1` was a legacy shape; real SDK is `{ read, write }`.
+- api.generated.d.ts is auto-generated and blocked from direct edit; schema + inline console type updated; regen deferred until server generate:types.
 
 ---
