@@ -1,5 +1,11 @@
 ## Codebase Patterns
 
+
+### REST usage reuses core report; run detail fails soft
+- **Where**: `packages/server/src/routes/schemas/usage.schemas.ts`, `packages/server/src/routes/api.ts`
+- **Pattern**: HTTP query + `.openapi('UsageReport')` wrapper over core `usageReportSchema`. `GET /api/usage` calls `queryUsageReport` and maps `UsageReportQueryError` validation/overflow → 400. Run detail always queries `{ runId, groupBy: 'node' }`; on any usage failure log and set `usage: null` without 500. Import `UsageReport` type from `@archon/core/schemas/usage-report`.
+- **Example**: `usage = await queryUsageReport({ runId, groupBy: 'node' })` catch → `usage = null`
+
 ### Executor records usage once per AI pass in finally
 - **Where**: `packages/workflows/src/dag-executor.ts` `runStreamPass` + direct-loop attempts
 - **Pattern**: Capture last non-empty `msg.usageBreakdown` on result chunks (overwrite for cumulative results). In a non-throwing `finally`, call `deps.usageRecorder.recordWorkflowUsage` once with stepName (namespaced for loop_group), agentProvider from execution context, retryEpoch from run metadata, reaskAttempt, terminalError/errorSubtype from the owning result, and iteration only for direct loops. Never throw into node outcome.
@@ -388,5 +394,32 @@
 - With try/catch/finally, `return await failLoopNode(...)` is required so the async finally completes under return-await lint.
 - Loop-group body iteration stays on lifecycle events only — usage records use `iteration: null` on the standard path; direct loops pass the loop index.
 - Full `packages/workflows` suite still has unrelated pre-existing flakes (native Ralph model env, bundled opus parse, Plannotator OOM) that fail in isolation without this change.
+
+---
+
+## 2026-09-04 — US-011: Add REST usage and run detail contracts
+
+**Status**: PASSED
+**Files changed**:
+- `packages/server/src/routes/schemas/usage.schemas.ts` — HTTP query schema + OpenAPI-labelled usageReportResponseSchema reusing core contract
+- `packages/server/src/routes/schemas/workflow.schemas.ts` — workflowRunDetailSchema.usage nullable
+- `packages/server/src/routes/api.ts` — GET /api/usage via registerOpenApiRoute; run detail queries groupBy node and fails soft to usage:null
+- `packages/server/src/routes/api.usage.test.ts` — filters, validation/overflow 400, OpenAPI shape, kind/groupBy rejection
+- `packages/server/src/routes/api.workflow-runs.test.ts` — empty usage + degradation coverage; mock usage-report
+- `packages/server/package.json` — isolated api.usage.test.ts invocation
+
+**Acceptance criteria verified**:
+- [x] usage.schemas.ts reuses core report schema with z from @hono/zod-openapi and z.infer types
+- [x] GET /api/usage registered with registerOpenApiRoute; uses installation API auth gate
+- [x] Core query validates filters/dates/defaults/366-day/groups/overflow/kind unclassified; route maps validation/overflow → 400
+- [x] workflowRunDetailSchema.usage nullable usage report
+- [x] Run detail queries entire direct run groupBy node; scope runId from/to null includesChildRollup false; no child walk
+- [x] Usage query failure → usage:null; old runs empty hasRecordedUsage false
+- [x] Route tests + package.json isolation green
+
+**Learnings**:
+- Import `UsageReport` type from `@archon/core/schemas/usage-report` — db/usage-report does not re-export the type.
+- Mock `@archon/core/db/usage-report` in workflow-runs tests before importing api, or GET detail hits real DB.
+- OpenAPI enum on query params rejects invalid kind/groupBy before the handler (extra 400 path beyond core validation).
 
 ---

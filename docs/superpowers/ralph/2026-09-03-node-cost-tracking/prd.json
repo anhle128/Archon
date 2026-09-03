@@ -233,8 +233,8 @@
         "US-009"
       ],
       "priority": 11,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration after US-010. Files: packages/server/src/routes/schemas/usage.schemas.ts, workflow.schemas.ts, api.ts, api.usage.test.ts, api.workflow-runs.test.ts, package.json. bun test api.usage + api.workflow-runs green."
     },
     {
       "id": "US-012",
