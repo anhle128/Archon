@@ -815,7 +815,8 @@
         "US-038"
       ],
       "priority": 39,
-      "passes": false
+      "passes": true,
+      "notes": "Post-Convergence 3 validation only. No product code. Focused package tests/builds exit 0; generated artifacts current; bun run validate exit 0; check:schema-upgrades OK on PGHOST=127.0.0.1:5432 (archon-postgres-1). CHANGELOG untouched; US-024/US-031 left passes:true."
     }
   ]
 }
