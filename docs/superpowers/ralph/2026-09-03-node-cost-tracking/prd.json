@@ -427,7 +427,8 @@
         "US-019"
       ],
       "priority": 20,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration after US-019. Files: RunStream.tsx (collectUsageByNode + aggregateUsageMetrics), NodeDivider.tsx (usageGroups + usageAggregate), RunStream.test.tsx, UsageBreakdownTable.test.ts."
     },
     {
       "id": "US-021",

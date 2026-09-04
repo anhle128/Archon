@@ -1,6 +1,12 @@
 ## Codebase Patterns
 
 
+### Run-detail node usage is multi-group collection + aggregate
+- **Where**: `packages/web/src/experiments/console/components/RunStream.tsx` `collectUsageByNode` / `aggregateUsageMetrics`; `NodeDivider.tsx`
+- **Pattern**: Never `Map<nodeId, single group>` — bucket every exact API group under the step name, aggregate with SQL-SUM nullability (`sumNullableMetric`: all-null→null, zero stays zero, counters always sum). Pass `usageGroups` + `usageAggregate` to NodeDivider; expansion synthetic report keeps every row.
+- **Example**: anthropic primary + openai advisor same `nodeId` → header `$0.20 / ≈$0.05`, expand shows both rows
+
+
 ### Pricing duplicate identity is nested maps only
 - **Where**: `packages/core/src/usage/estimate.ts` `buildConfigPricingIndex`
 - **Pattern**: `seen` and `duplicates` are `Map<provider, Map|Set<model>>` via `blockPair` — never `${provider}\0${model}` (or `/`) concat + re-parse. Rate removal and catalog blocking iterate the same nested structure. Provider/model may legally contain `/` or `\0`.
@@ -673,5 +679,27 @@
 **Learnings**:
 - The residual bug after nested rate maps was only the temporary `duplicates: Set<string>` keyed by `${provider}\0${model}` then `indexOf('\0')` split — first-null-byte parse mutates the wrong pair when provider itself contains `\0`.
 - Collision proof: duplicate `('a\0b','c')` + neighbor `('a','b\0c')` share concatenated key `a\0b\0c`; old code blocked the neighbor.
+
+---
+
+## 2026-09-04 — US-020: Aggregate every node ledger group
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/components/RunStream.tsx` — `sumNullableMetric`, `aggregateUsageMetrics`, `collectUsageByNode`; wire multi-group to NodeDivider
+- `packages/web/src/experiments/console/components/NodeDivider.tsx` — `usageGroups` + `usageAggregate` props; expand retains every exact row
+- `packages/web/src/experiments/console/components/RunStream.test.tsx` — aggregation missingness + multi-group collection tests
+- `packages/web/src/experiments/console/components/UsageBreakdownTable.test.ts` — multi-row node expansion render coverage
+
+**Acceptance criteria verified**:
+- [x] Two API groups sharing one nodeId show cumulative reported/estimated for both
+- [x] Node expansion retains every exact breakdown row (no overwrite by node id)
+- [x] Aggregation preserves missingness (all-null null, zeros zero, present sum, counters sum)
+- [x] RunStream uses per-node collection + tested helper; passes collection and aggregate to NodeDivider
+- [x] Focused web tests pass (RunStream 8, UsageBreakdownTable 5)
+
+**Learnings**:
+- UsageBreakdownTable.test.ts is `.ts` not `.tsx` — use `createElement`, not JSX, for renderToStaticMarkup fixtures.
+- Header cost must use the aggregate, not the last overwritten group; expansion totals must match the same helper.
 
 ---
