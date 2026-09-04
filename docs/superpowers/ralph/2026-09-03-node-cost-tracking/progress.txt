@@ -1499,3 +1499,25 @@
 - Hard-rule prose that forbids `gh pr create` in backticks is not an invocation; classification fixtures must cover mixed backtick+real lines.
 
 ---
+
+## 2026-09-05 — US-049: Run post-Convergence 4 validation
+
+**Status**: PASSED
+**Files changed**:
+- `docs/superpowers/ralph/2026-09-03-node-cost-tracking/prd.json` — US-049 `passes: true` + notes
+- `docs/superpowers/ralph/2026-09-03-node-cost-tracking/progress.txt` — this entry
+
+**Acceptance criteria verified**:
+- [x] Focused package validation sequence (providers/workflows/core/server/cli/web tests + web/docs-web builds) without `bun test` from repo root
+- [x] Generated artifacts current (bundled-schema/defaults/skill/pi-vendor-map/capability-matrix); OpenAPI types regenerated from worktree server PORT=3293 — no diff
+- [x] `bun run validate` exit 0 after Convergence 4 (retry after one flaky CLI SQLITE_BUSY_RECOVERY on concurrent whole-run retry e2e)
+- [x] `bun run check:schema-upgrades` OK on PGHOST=127.0.0.1:5432 (archon-postgres-1, postgres:17); 9 baselines converge; expected kind_check divergence only
+- [x] Notes reference post-Convergence 4; CHANGELOG.md untouched; US-024/US-031/US-039 left `passes: true`
+
+**Learnings**:
+- `packages/web` `generate:types` hardcodes `localhost:3090` — regenerating against a foreign/stale server can wipe `/api/usage` from `api.generated.d.ts`; always point openapi-typescript at this worktree's `/api/openapi.json`
+- First `bun run validate` can flake on CLI `workflow-json.e2e` concurrent retry (`SQLITE_BUSY_RECOVERY`); solo re-run + full validate confirms green without product changes
+- Host `psql` may be under `/opt/homebrew/opt/libpq/bin`; `docker` under `/usr/local/bin` — put both on PATH for schema-upgrades
+
+---
+

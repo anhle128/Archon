@@ -1017,7 +1017,8 @@
         "US-048"
       ],
       "priority": 49,
-      "passes": false
+      "passes": true,
+      "notes": "Post-Convergence 4 validation 2026-09-05. Focused package tests+builds green (providers/workflows/core/server/cli/web/docs-web). Generated artifacts current (bundled-schema/defaults/skill/pi-vendor-map/capability-matrix). OpenAPI types regenerated against worktree server PORT=3293 \u2014 unchanged. bun run validate exit 0 (first attempt flaked on CLI workflow-json.e2e SQLITE_BUSY_RECOVERY concurrent retry; solo re-run + full validate green). check:schema-upgrades OK on PGHOST=127.0.0.1:5432 (archon-postgres-1 postgres:17); fresh 74 indexes; 9 baselines v0.2.13\u2026v0.9.0 converge; expected remote_agent_codebases_kind_check divergence only. CHANGELOG untouched; US-024/US-031/US-039 left passes:true."
     }
   ]
 }
