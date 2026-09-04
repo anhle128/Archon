@@ -424,7 +424,6 @@ describe('OpencodeProvider', () => {
             cacheReadTokens: 1,
             cacheWriteTokens: 0,
             costUsd: 0.42,
-            requests: 1,
           },
         ],
       },
@@ -501,7 +500,9 @@ describe('OpencodeProvider', () => {
       expect(result.usageBreakdown).toHaveLength(2);
       expect(result.usageBreakdown?.[0]?.model).toBe('claude-sonnet');
       expect(result.usageBreakdown?.[0]?.costUsd).toBe(0.2);
+      expect(result.usageBreakdown?.[0]).not.toHaveProperty('requests');
       expect(result.usageBreakdown?.[1]?.model).toBe('claude-haiku');
+      expect(result.usageBreakdown?.[1]).not.toHaveProperty('requests');
     }
   });
 

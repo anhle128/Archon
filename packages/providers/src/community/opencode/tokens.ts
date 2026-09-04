@@ -72,7 +72,7 @@ export function assistantInfoToUsageEntry(
   if (typeof cache?.read === 'number') entry.cacheReadTokens = cache.read;
   if (typeof cache?.write === 'number') entry.cacheWriteTokens = cache.write;
   if (typeof info.cost === 'number') entry.costUsd = info.cost;
-  entry.requests = 1;
+  // Never invent requests — OpenCode assistant info has no authoritative request count.
   if (options?.kind) entry.kind = options.kind;
 
   return entry;
