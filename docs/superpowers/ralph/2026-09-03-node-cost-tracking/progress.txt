@@ -752,7 +752,7 @@
 - [x] Two groupBy=node rows same node id different agent/provider/model/source/kind → labels distinguish every fixed dimension (agents differ: claude vs codex)
 - [x] Null/unknown/unclassified → explicit `unknown model source` and `unclassified kind`
 - [x] CLI --json remains byte-for-contract equal to core report object
-- [x] Focused tests pass (CLI usage 16, UsageBreakdownTable 13); project/run also include every fixed §11 dim
+- [x] Focused tests pass (CLI usage 16, UsageBreakdownTable 14 including rendered groupBy=model table); project/run also include every fixed §11 dim
 
 **Learnings**:
 - Keep label format parallel across CLI/web; never truncate runId in labels when runId is a fixed grouping dimension.
