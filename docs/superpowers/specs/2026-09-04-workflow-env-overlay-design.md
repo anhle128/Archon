@@ -25,6 +25,7 @@ Pricing / quality comparison across runs is a separate product and is out of thi
 7. **Persistence:** DB CRUD per workflow name.
    The applied patch is snapshotted onto the run at start.
 8. **Pricing / experiment tables / sweeps:** out of scope.
+9. **PATCH `patches` replaces the whole object** (UI always sends the full map). No deep-merge.
 
 ## Current state (evidence)
 
@@ -243,6 +244,7 @@ Behavioral:
 
 - CRUD: create, rename, replace patches, delete; unique `(workflow_name, name)`; PATCH/DELETE does not change existing run snapshots.
 - Fresh run with `envId`: patched fields win; omit `envId`: YAML byte-for-byte vs baseline.
+- 400 before AI: unknown node, forbidden field, `prompt` on non-prompt, `provider` on `bash:`.
 - Overlay `prompt`/`bash` that inserts a dangling `$node.output` ref → 400 `invalid_overlay_graph` before worktree. A schema-valid string is not sufficient.
 - Resume / retry-node / retry-run: re-apply snapshot; edited or deleted ENV row and request `envId` have no effect.
 - Include: `specify` hits the root node; include child requires `includeId__nodeId`.
