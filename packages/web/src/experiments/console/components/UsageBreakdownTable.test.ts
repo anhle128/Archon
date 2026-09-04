@@ -6,6 +6,7 @@ import {
   describeUsageState,
   eventOnlyUsageMessage,
   formatMissingMeasures,
+  groupLabel,
   UsageBreakdownTable,
 } from './UsageBreakdownTable';
 
@@ -123,6 +124,105 @@ describe('formatUsdAmount display rules (shared with Cost page)', () => {
   });
 });
 
+describe('groupLabel full grouping tuples', () => {
+  test('distinguishes groupBy=model rows that share provider/model but differ by modelSource', () => {
+    const reported = groupLabel(
+      {
+        dimensions: {
+          provider: 'anthropic',
+          model: 'claude-sonnet-4',
+          modelSource: 'reported',
+        },
+        metrics: emptyMetrics(),
+      },
+      'model'
+    );
+    const unknown = groupLabel(
+      {
+        dimensions: {
+          provider: 'anthropic',
+          model: 'claude-sonnet-4',
+          modelSource: 'unknown',
+        },
+        metrics: emptyMetrics(),
+      },
+      'model'
+    );
+
+    expect(reported).toContain('anthropic/claude-sonnet-4');
+    expect(reported).toContain('source reported');
+    expect(unknown).toContain('anthropic/claude-sonnet-4');
+    expect(unknown).toContain('unknown model source');
+    expect(reported).not.toBe(unknown);
+  });
+
+  test('distinguishes groupBy=node rows that share node id across every fixed dimension', () => {
+    const primary = groupLabel(
+      {
+        dimensions: {
+          runId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+          nodeId: 'implement',
+          agentProvider: 'claude',
+          provider: 'anthropic',
+          model: 'claude-sonnet-4',
+          modelSource: 'reported',
+          kind: null,
+        },
+        metrics: emptyMetrics(),
+      },
+      'node'
+    );
+    const advisor = groupLabel(
+      {
+        dimensions: {
+          runId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+          nodeId: 'implement',
+          agentProvider: 'claude',
+          provider: 'openai',
+          model: 'gpt-4.1-mini',
+          modelSource: 'requested',
+          kind: 'advisor',
+        },
+        metrics: emptyMetrics(),
+      },
+      'node'
+    );
+
+    expect(primary).toContain('implement');
+    expect(primary).toContain('run aaaaaaaa');
+    expect(primary).toContain('agent claude');
+    expect(primary).toContain('anthropic/claude-sonnet-4');
+    expect(primary).toContain('source reported');
+    expect(primary).toContain('unclassified kind');
+
+    expect(advisor).toContain('implement');
+    expect(advisor).toContain('openai/gpt-4.1-mini');
+    expect(advisor).toContain('source requested');
+    expect(advisor).toContain('kind advisor');
+    expect(primary).not.toBe(advisor);
+  });
+
+  test('uses explicit non-misleading labels for null/unknown/unclassified dimensions', () => {
+    const sparse = groupLabel(
+      {
+        dimensions: {
+          nodeId: null,
+          model: null,
+          kind: null,
+        },
+        metrics: emptyMetrics(),
+      },
+      'node'
+    );
+
+    expect(sparse).toContain('(unattributed)');
+    expect(sparse).toContain('(unknown run)');
+    expect(sparse).toContain('(unknown agent)');
+    expect(sparse).toContain('(unknown provider)/(unknown model)');
+    expect(sparse).toContain('unknown model source');
+    expect(sparse).toContain('unclassified kind');
+  });
+});
 describe('UsageBreakdownTable multi-row node expansion', () => {
   test('two groups sharing one nodeId both render with cumulative totals', () => {
     const multiNodeReport = report({
@@ -185,9 +285,14 @@ describe('UsageBreakdownTable multi-row node expansion', () => {
       )
     );
 
-    // Both exact rows retained (same node label twice is expected until US-022).
+    // Both exact rows retained with distinct full-tuple labels (US-022).
     expect(markup).toContain('Usage · implement');
-    expect((markup.match(/implement/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    expect(markup).toContain('anthropic/claude-sonnet-4');
+    expect(markup).toContain('source reported');
+    expect(markup).toContain('unclassified kind');
+    expect(markup).toContain('openai/gpt-4.1-mini');
+    expect(markup).toContain('source requested');
+    expect(markup).toContain('kind advisor');
     // Cumulative totals strip + totals row.
     expect(markup).toContain('$0.20');
     expect(markup).toContain('≈$0.05');

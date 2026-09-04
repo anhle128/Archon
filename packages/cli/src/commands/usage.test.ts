@@ -8,7 +8,7 @@
 import { describe, it, expect, spyOn, beforeEach, afterEach } from 'bun:test';
 import { UsageReportQueryError, type UsageReportQuery } from '@archon/core/db/usage-report';
 import type { UsageMetrics, UsageReport } from '@archon/core/schemas/usage-report';
-import { formatUsdAmount, usageCommand, type UsageQueryFn } from './usage';
+import { dimensionLabel, formatUsdAmount, usageCommand, type UsageQueryFn } from './usage';
 
 function emptyMetrics(overrides: Partial<UsageMetrics> = {}): UsageMetrics {
   return {
@@ -96,6 +96,110 @@ describe('formatUsdAmount', () => {
     expect(formatUsdAmount(0.001, false)).not.toBe('$0.00');
     expect(formatUsdAmount(0.001, false)).toBe('$0.001');
     expect(formatUsdAmount(1e-12, false)).toBe('<$0.000001');
+  });
+});
+
+describe('dimensionLabel full grouping tuples', () => {
+  it('distinguishes groupBy=model rows that share provider/model but differ by modelSource', () => {
+    const reported = dimensionLabel(
+      {
+        dimensions: {
+          provider: 'anthropic',
+          model: 'claude-sonnet-4',
+          modelSource: 'reported',
+        },
+        metrics: emptyMetrics(),
+      },
+      'model'
+    );
+    const unknown = dimensionLabel(
+      {
+        dimensions: {
+          provider: 'anthropic',
+          model: 'claude-sonnet-4',
+          modelSource: 'unknown',
+        },
+        metrics: emptyMetrics(),
+      },
+      'model'
+    );
+
+    expect(reported).toContain('anthropic/claude-sonnet-4');
+    expect(reported).toContain('source reported');
+    expect(unknown).toContain('anthropic/claude-sonnet-4');
+    expect(unknown).toContain('unknown model source');
+    expect(reported).not.toBe(unknown);
+  });
+
+  it('distinguishes groupBy=node rows that share node id across every fixed dimension', () => {
+    const primary = dimensionLabel(
+      {
+        dimensions: {
+          runId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+          nodeId: 'implement',
+          agentProvider: 'claude',
+          provider: 'anthropic',
+          model: 'claude-sonnet-4',
+          modelSource: 'reported',
+          kind: null,
+        },
+        metrics: emptyMetrics(),
+      },
+      'node'
+    );
+    const advisor = dimensionLabel(
+      {
+        dimensions: {
+          runId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+          nodeId: 'implement',
+          agentProvider: 'claude',
+          provider: 'openai',
+          model: 'gpt-4.1-mini',
+          modelSource: 'requested',
+          kind: 'advisor',
+        },
+        metrics: emptyMetrics(),
+      },
+      'node'
+    );
+
+    expect(primary).toContain('implement');
+    expect(primary).toContain('run aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
+    expect(primary).toContain('agent claude');
+    expect(primary).toContain('anthropic/claude-sonnet-4');
+    expect(primary).toContain('source reported');
+    expect(primary).toContain('unclassified kind');
+
+    expect(advisor).toContain('implement');
+    expect(advisor).toContain('openai/gpt-4.1-mini');
+    expect(advisor).toContain('source requested');
+    expect(advisor).toContain('kind advisor');
+    expect(primary).not.toBe(advisor);
+  });
+
+  it('uses explicit non-misleading labels for null/unknown/unclassified dimensions', () => {
+    const sparse = dimensionLabel(
+      {
+        dimensions: {
+          runId: undefined,
+          nodeId: null,
+          agentProvider: undefined,
+          provider: undefined,
+          model: null,
+          modelSource: undefined,
+          kind: null,
+        },
+        metrics: emptyMetrics(),
+      },
+      'node'
+    );
+
+    expect(sparse).toContain('(unknown node)');
+    expect(sparse).toContain('(unknown run)');
+    expect(sparse).toContain('(unknown agent)');
+    expect(sparse).toContain('(unknown provider)/(unknown model)');
+    expect(sparse).toContain('unknown model source');
+    expect(sparse).toContain('unclassified kind');
   });
 });
 
@@ -267,5 +371,39 @@ describe('usageCommand', () => {
       return sampleReport();
     });
     expect(received).toEqual({});
+  });
+
+  it('human mode prints distinct full-tuple labels without changing --json contract', async () => {
+    const report = sampleReport({
+      groupBy: 'model',
+      groups: [
+        {
+          dimensions: {
+            provider: 'anthropic',
+            model: 'claude-sonnet-4',
+            modelSource: 'reported',
+          },
+          metrics: emptyMetrics({ reportedUsd: 0.1, recordCount: 1 }),
+        },
+        {
+          dimensions: {
+            provider: 'anthropic',
+            model: 'claude-sonnet-4',
+            modelSource: 'unknown',
+          },
+          metrics: emptyMetrics({ estimatedUsd: 0.05, recordCount: 1 }),
+        },
+      ],
+    });
+
+    expect(await usageCommand({}, async () => report)).toBe(0);
+    const human = humanOut();
+    expect(human).toContain('anthropic/claude-sonnet-4 · source reported');
+    expect(human).toContain('anthropic/claude-sonnet-4 · unknown model source');
+
+    logSpy.mockClear();
+    stdoutSpy.mockClear();
+    expect(await usageCommand({ json: true }, async () => report)).toBe(0);
+    expect(JSON.parse(jsonOut())).toEqual(report);
   });
 });

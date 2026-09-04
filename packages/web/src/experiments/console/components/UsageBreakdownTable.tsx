@@ -57,7 +57,11 @@ function MetricsCells({ m }: { m: UsageMetrics }): ReactElement {
   );
 }
 
-function groupLabel(group: UsageReportGroup, groupBy: UsageGroupBy): string {
+/**
+ * Human label for one report group — includes every dimension fixed for `groupBy`
+ * so exact groups never collide in the UI solely because secondary dims were omitted.
+ */
+export function groupLabel(group: UsageReportGroup, groupBy: UsageGroupBy): string {
   const d = group.dimensions;
   switch (groupBy) {
     case 'agent':
@@ -65,9 +69,10 @@ function groupLabel(group: UsageReportGroup, groupBy: UsageGroupBy): string {
     case 'provider':
       return d.provider ?? '(unknown provider)';
     case 'model': {
-      const p = d.provider ?? '?';
+      // Fixed dims: provider, model, modelSource
+      const p = d.provider ?? '(unknown provider)';
       const m = d.model === null || d.model === undefined ? '(unknown model)' : d.model;
-      return `${p}/${m}`;
+      return `${p}/${m} · ${formatModelSourceLabel(d.modelSource)}`;
     }
     case 'project':
       return d.codebaseName ?? d.codebaseId ?? '(deleted project)';
@@ -78,9 +83,42 @@ function groupLabel(group: UsageReportGroup, groupBy: UsageGroupBy): string {
     }
     case 'day':
       return d.day ?? '(unknown day)';
-    case 'node':
-      return d.nodeId ?? '(unattributed)';
+    case 'node': {
+      // Fixed dims: runId, nodeId, agentProvider, provider, model, modelSource, kind
+      const nodeId = d.nodeId === null || d.nodeId === undefined ? '(unattributed)' : d.nodeId;
+      const runId =
+        d.runId !== undefined && d.runId !== ''
+          ? d.runId.replace(/-/g, '').slice(0, 8)
+          : '(unknown run)';
+      const agent = d.agentProvider ?? '(unknown agent)';
+      const provider = d.provider ?? '(unknown provider)';
+      const model = d.model === null || d.model === undefined ? '(unknown model)' : d.model;
+      return [
+        nodeId,
+        `run ${runId}`,
+        `agent ${agent}`,
+        `${provider}/${model}`,
+        formatModelSourceLabel(d.modelSource),
+        formatKindLabel(d.kind),
+      ].join(' · ');
+    }
   }
+}
+
+/** Explicit modelSource label — missing/unknown never look like a real source id. */
+function formatModelSourceLabel(modelSource: string | undefined): string {
+  if (modelSource === undefined || modelSource === 'unknown') {
+    return 'unknown model source';
+  }
+  return `source ${modelSource}`;
+}
+
+/** Explicit kind label — null/undefined map to unclassified (SQL NULL). */
+function formatKindLabel(kind: string | null | undefined): string {
+  if (kind === null || kind === undefined) {
+    return 'unclassified kind';
+  }
+  return `kind ${kind}`;
 }
 
 function runDetailHref(group: UsageReportGroup): string | null {

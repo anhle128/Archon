@@ -93,7 +93,8 @@ function formatMetricsLine(metrics: UsageMetrics): string {
   ].join('  ');
 }
 
-function dimensionLabel(group: UsageReportGroup, groupBy: UsageGroupBy): string {
+/** Human label for one report group — includes every dimension fixed for `groupBy`. */
+export function dimensionLabel(group: UsageReportGroup, groupBy: UsageGroupBy): string {
   const d = group.dimensions;
   switch (groupBy) {
     case 'agent':
@@ -101,9 +102,10 @@ function dimensionLabel(group: UsageReportGroup, groupBy: UsageGroupBy): string 
     case 'provider':
       return d.provider ?? '(unknown provider)';
     case 'model': {
+      // Fixed dims: provider, model, modelSource
+      const provider = d.provider ?? '(unknown provider)';
       const model = d.model === null || d.model === undefined ? '(unknown model)' : d.model;
-      const provider = d.provider ?? '?';
-      return `${provider}/${model}`;
+      return `${provider}/${model} · ${formatModelSourceLabel(d.modelSource)}`;
     }
     case 'project': {
       const name = d.codebaseName === null || d.codebaseName === undefined ? null : d.codebaseName;
@@ -120,13 +122,43 @@ function dimensionLabel(group: UsageReportGroup, groupBy: UsageGroupBy): string 
     }
     case 'day':
       return d.day ?? '(unknown day)';
-    case 'node':
-      return d.nodeId === null || d.nodeId === undefined ? '(unknown node)' : d.nodeId;
+    case 'node': {
+      // Fixed dims: runId, nodeId, agentProvider, provider, model, modelSource, kind
+      const nodeId = d.nodeId === null || d.nodeId === undefined ? '(unknown node)' : d.nodeId;
+      const runId = d.runId ?? '(unknown run)';
+      const agent = d.agentProvider ?? '(unknown agent)';
+      const provider = d.provider ?? '(unknown provider)';
+      const model = d.model === null || d.model === undefined ? '(unknown model)' : d.model;
+      return [
+        nodeId,
+        `run ${runId}`,
+        `agent ${agent}`,
+        `${provider}/${model}`,
+        formatModelSourceLabel(d.modelSource),
+        formatKindLabel(d.kind),
+      ].join(' · ');
+    }
     default: {
       const exhaustiveCheck: never = groupBy;
       return String(exhaustiveCheck);
     }
   }
+}
+
+/** Explicit modelSource label — missing/unknown never look like a real source id. */
+function formatModelSourceLabel(modelSource: string | undefined): string {
+  if (modelSource === undefined || modelSource === 'unknown') {
+    return 'unknown model source';
+  }
+  return `source ${modelSource}`;
+}
+
+/** Explicit kind label — null/undefined map to unclassified (SQL NULL). */
+function formatKindLabel(kind: string | null | undefined): string {
+  if (kind === null || kind === undefined) {
+    return 'unclassified kind';
+  }
+  return `kind ${kind}`;
 }
 
 function printHumanReport(report: UsageReport): void {
