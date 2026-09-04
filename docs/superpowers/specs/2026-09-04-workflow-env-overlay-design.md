@@ -1,9 +1,10 @@
 # Workflow ENV overlay (per-node allowlisted patch)
 
-**Status:** aligned with `plans/architectures/workflow-env-overlay-architecture.md` (2026-09-05)
+**Status:** approved design
 **Date:** 2026-09-04
 
-Architecture log: `plans/architectures/workflow-env-overlay.md`
+Stack is unchanged: Bun + TypeScript + SQLite/PostgreSQL + OpenAPI Hono + React console.
+No new runtime or library.
 
 ## Problem
 
@@ -13,7 +14,27 @@ Duplicating the YAML per experiment is the current workaround.
 
 The operator needs the same workflow definition, many runs, different per-node values, without a file per experiment.
 They also need to see effective provider, model, and thinking at Start so they can tell whether an ENV applied.
+
+Lens: one definition, many named ENVs, Start picks an ENV or none, historical runs stay frozen, Start UI and run detail agree with what the node will actually run.
+
 Pricing / quality comparison across runs is a separate product and is out of this spec.
+
+## Approaches considered
+
+1. **Allowlisted JSON patch (chosen).**
+   Apply returns a **patched clone** of the DAG, then existing model resolution runs on the clone.
+   Never mutate a cached discovered definition.
+   Field list and PATCH-replace stay as below.
+
+2. **Dotenv / dotted-key blob.**
+   Weak types, bad multiline `prompt`.
+   Rejected.
+
+3. **Resolver-only + `$INPUTS` for bodies.**
+   Cannot replace a whole `prompt`/`bash`.
+   Rejected.
+
+Hard-fail on unknown node ids was in an earlier draft and is superseded by skip-missing-ids.
 
 ## Decisions (user-confirmed)
 
@@ -21,21 +42,24 @@ Pricing / quality comparison across runs is a separate product and is out of thi
 2. **Identity B:** ENV rows are keyed by `workflow_name` on the install.
    The same name shares ENVs across projects and across bundled/global/project shadowing.
 3. **Surfaces v1:** Web UI + HTTP API only.
-   No CLI `--env`. No chat `/workflow run` env flag.
+   No CLI `--env`.
+   No chat `/workflow run` env flag.
 4. **Picker optional:** omitting ENV leaves the loaded YAML unchanged.
 5. **v1 patch fields:** `provider`, `model`, `effort`, `thinking`, `prompt`, `bash`.
 6. **No graph overlay:** never `id`, `depends_on`, `when`, `trigger_rule`, node type, `command`, `script`, `include`, `workflow`.
 7. **Persistence:** DB CRUD per workflow name.
    The run stores a **filtered applied** snapshot, not a live FK to the ENV row.
 8. **Pricing / experiment tables / sweeps:** out of scope.
-9. **PATCH `patches` replaces the whole object** (UI always sends the full map). No deep-merge.
+9. **PATCH `patches` replaces the whole object** (UI always sends the full map).
+   No deep-merge.
 10. **Missing node ids are skipped**, not failed.
     Snapshot the filtered map so resume cannot later apply a key that was skipped at start.
 11. **HTTP 400 on Start only for ENV identity** (`env_not_found`, `env_workflow_mismatch`).
     Graph / type errors fail on the dispatch path before isolation (SSE), not as HTTP 400.
 12. **Start visibility (Q4-C):** preview GET on the Start form, and stamp `resolved` onto the run when the run row is created (after isolation, before first `sendQuery`).
     Not a run-row-before-isolation lifecycle change.
-13. **Apply returns a patched clone.** Never mutate a cached discovered definition.
+13. **Apply returns a patched clone.**
+    Never mutate a cached discovered definition.
 14. **`resolved` is start/resume audit only (Q5-A).**
     Execution never reads `resolved` for `sendQuery`.
     Resume recomputes and updates the table from the live profile.
@@ -43,6 +67,72 @@ Pricing / quality comparison across runs is a separate product and is out of thi
     An ENV PATCH between preview GET and Start can diverge.
     Run-detail `resolved` after Start is the source of truth.
     No `updatedAt` / 409 on Start in v1.
+
+## Decision rationale
+
+Locked outcomes only.
+Rejected alternatives are the ones that would still be tempting during implementation.
+
+**Q1 — overlay gate vs HTTP 400.**
+Isolation is created in the orchestrator **before** `executeWorkflow`.
+`dispatchToOrchestrator` catches `handleMessage` errors inside the lock and still returns `{ accepted: true }`.
+Graph validation therefore cannot be a true HTTP 400 on the run route without loading YAML there.
+Two-phase freeze: HTTP loads ENV, 400 only on identity, freezes `{ envId, envName, patches }` onto dispatch context.
+Orchestrator, before isolation, applies that frozen candidate to the DAG it already loaded.
+No second DB read.
+No TOCTOU on the ENV row after freeze.
+Resume/retry never loads the live ENV row.
+
+Rejected: apply inside `executeWorkflow` after isolation (worktree already exists).
+Rejected: validate everything only on the HTTP route (needs cwd/YAML on POST, and still needs a second copy for resume).
+
+**Q2 — no folder on the request.**
+Start + ENV must apply against the same workflow file the run will execute.
+That file depends on project folder because a project YAML can shadow a bundled workflow of the same name.
+The run body does not include a folder path; the console conversation already has a project.
+HTTP binding is `envId` lookup + `workflow_name` match only.
+It does not load YAML.
+The orchestrator already has the project cwd and applies frozen patches to the DAG it actually loaded.
+`$node.output` / structure checks run on that DAG after apply.
+
+**Q3 — missing node ids.**
+If the ENV names a node the loaded workflow does not have, skip that key (warn log).
+Do not fail the run.
+Forbidden fields and wrong type on nodes that exist still fail.
+The snapshot stores the filtered applied map, not the original ENV map, so resume cannot later apply a skipped key if YAML gains that node.
+
+**Apply purity.**
+Bundled definitions are cached.
+In-place mutation would leak ENV A into a later no-ENV run.
+Apply returns a patched clone.
+
+**Q4 — see provider/model/thinking at Start.**
+`resolveNodeModel` does not return `thinking`.
+Thinking follows node → workflow → preset via `applyPresetOptions`.
+The run row is created **inside** `executeWorkflow`, after isolation, so there is no run to stamp before isolation without a lifecycle change.
+Lock: preview GET on the Start form (conversation project cwd), and write `resolved` when the run row is created (after isolation, before first `sendQuery`).
+Run detail shows that table as soon as the run appears, not per `node_started`.
+Extract one pure `resolveNodeExecutionMetadata` used by preview, snapshot, and `node_started` so thinking cannot drift.
+
+Rejected: create the run row before isolation just to hold the table.
+
+**Q5 — `resolved` is audit-only.**
+Resume re-applies patches then runs current `buildAiProfile` / `resolveNodeExecutionMetadata`.
+If the operator changes tiers or user prefs, a frozen `resolved` table would disagree with what resume actually runs.
+ENV-patched fields stay frozen because they live in the filtered patch map, not because `resolved` drives `sendQuery`.
+Unpatched `model: large` keeps meaning “current large tier”.
+
+Rejected: resume/retry uses snapshot `resolved` as the execution source (second resolution path, fights profile layering).
+
+**Q6 — preview vs Start TOCTOU.**
+ENV rows are install-global.
+Another user (or Manage) can PATCH the ENV between preview GET and Start POST.
+Preview is a hint.
+Run-detail `resolved` after Start is authoritative.
+No `updatedAt` / 409 on Start in v1.
+
+**Out of this feature.**
+CLI `--env`, pricing comparison, and legacy dashboard mobile stay separate intents.
 
 ## Current state (evidence)
 
@@ -57,6 +147,8 @@ Pricing / quality comparison across runs is a separate product and is out of thi
 - Bundled workflow definitions are cached; in-place mutation would leak one run’s ENV into a later no-ENV run.
 - Console start path is `DraftRunCard` → `startRun` (`packages/web/src/experiments/console/skills/startRun.ts`).
 - Schema changes are additive-only, mirrored in Postgres `migrations/000_combined.sql` and SQLite `createSchema()`.
+- Declared `inputs` already have an invocation gate before isolation.
+- `WorkflowDeps` injects DB/user ports into `@archon/workflows`.
 
 ## Design
 
@@ -65,14 +157,28 @@ Pricing / quality comparison across runs is a separate product and is out of thi
 ENV is invocation data, like `inputs:`.
 It is not a new workflow-YAML surface.
 
-Two-phase freeze:
+Package split:
+
+- Pure apply / validate / `resolveNodeExecutionMetadata` live in `@archon/workflows` (no DB).
+- ENV rows and HTTP CRUD live in `@archon/core` / `@archon/server`.
+
+Two-phase freeze on the existing dispatch path:
 
 1. **HTTP Start** loads the ENV row, checks `workflow_name`, freezes `{ envId, envName, patches }` onto dispatch context.
    No YAML load on `POST .../run`.
    No folder on the request.
+   Missing ENV or name mismatch → HTTP 400.
 2. **Orchestrator, before isolation** clones the DAG discovery already loaded, applies frozen patches to the clone, runs `validateDagStructure`.
+   Skip keys whose node id is absent (warn, do not fail).
+   Wrong field or wrong node type on a node that exists still fails.
+   Fail before worktree via existing SSE / dispatch errors, not HTTP 400.
+   No second DB read.
    Execution uses that clone.
+   Do not rediscover-and-mutate the cache.
+   Project YAML still shadows bundled by name.
 3. **When the run row is created** (after isolation, before first `sendQuery`), persist the filtered snapshot including `resolved`.
+   `resolved` is start-time audit only.
+   Execution never reads `resolved` for `sendQuery`; it uses the patched clone plus the live profile.
 
 `resolveNodeModel` does not grow a new origin.
 Extract `resolveNodeExecutionMetadata` (provider, model, effort, thinking — same thinking precedence as `applyPresetOptions`) and use it for preview, snapshot, and `node_started`.
@@ -101,10 +207,13 @@ Case-sensitive.
 
 Visibility is install-open.
 Any authenticated API user may CRUD.
+`created_by_user_id` is provenance, not ACL.
 
 No `codebase_id`.
 No `source`.
 Project YAML that shadows a bundled workflow of the same name shares the ENV list.
+
+The run snapshot is applied patches + `resolved` metadata, not a live FK and not the raw ENV document.
 
 ### 3. Patch shape
 
@@ -137,10 +246,12 @@ Do not fail the run.
 
 Empty `patches: {}` is legal.
 
+Top-level expanded DAG only.
+Do not recurse into `loop_group` bodies.
+
 ### 4. Validation
 
 Match patch keys against the **expanded top-level DAG only**.
-Do not recurse into `loop_group` bodies.
 
 **HTTP 400** (Start route, before dispatch):
 
@@ -148,6 +259,8 @@ Do not recurse into `loop_group` bodies.
 | --- | --- |
 | `envId` not found | `env_not_found` |
 | ENV `workflow_name` ≠ invoked workflow name | `env_workflow_mismatch` |
+
+Preview GET returns 400 if the conversation has no project.
 
 **Dispatch failure before isolation** (SSE / existing error path, not HTTP 400):
 
@@ -205,6 +318,8 @@ Child `workflow:` sub-runs do not inherit the parent overlay.
 All routes go through `registerOpenApiRoute`.
 `@archon/web` must not import `@archon/workflows`.
 
+v1 surfaces are Web, run POST, and preview GET.
+
 - `GET /api/workflows/:name/envs`
 - `POST /api/workflows/:name/envs` `{ name, patches }`
 - `PATCH /api/workflows/:name/envs/:envId` `{ name?, patches? }` — `patches` **replaces** the object
@@ -239,6 +354,8 @@ Out of v1: legacy start surfaces, resume ENV picker, CLI.
 - Type errors on nodes that exist: fail.
 - Logs: `workflow.env_overlay_applied` with `{ runId, envId, envName, appliedNodeIds, skippedNodeIds }` — no prompt/bash bodies.
 
+Do not log `prompt`/`bash` bodies.
+
 ## Testing
 
 - CRUD + unique `(workflow_name, name)`; PATCH/DELETE does not change existing run snapshots.
@@ -251,7 +368,7 @@ Out of v1: legacy start surfaces, resume ENV picker, CLI.
 - Include: `specify` hits root; include child needs `includeId__nodeId`.
 - `loop_group` body id: skipped (not a top-level id).
 - Cache: apply ENV A, then no-ENV on the same cached bundled definition → original nodes unchanged.
-- Preview GET table matches `metadata.envOverlay.resolved` on the resulting run, including thinking.
+- Preview GET table is a hint; `metadata.envOverlay.resolved` on the resulting run is authoritative, including thinking.
 - Console: `startRun` JSON + multipart carry `envId`.
 
 Schema / API seams: both dialects, `generate:bundled-schema`, parity, `migration-statement-order`, `check:schema-upgrades`, OpenAPI types.
@@ -265,6 +382,12 @@ Schema / API seams: both dialects, `generate:bundled-schema`, parity, `migration
 5. Console picker, Manage, Start preview table, run-detail `resolved` table
 
 1→2→3→4→5.
+
+## Spike
+
+None required for overlay apply/isolation (seams already observed).
+Optional small spike only if `applyPresetOptions` thinking precedence is unclear when extracting `resolveNodeExecutionMetadata`.
+Timebox by reading `dag-executor.ts` `applyPresetOptions` vs `resolveNodeModel`, then lock the helper contract.
 
 ## Non-goals
 
@@ -288,4 +411,3 @@ None for v1.
 YAML drift under identity B is handled by skip-missing-ids plus filtered snapshot.
 `resolved` is audit-only; unpatched `model: large` keeps current-tier meaning.
 Preview→Start ENV edit race is accepted; run-detail `resolved` is authoritative.
-
