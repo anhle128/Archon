@@ -224,8 +224,10 @@ export function buildConfigPricingIndex(
     return { rates, blocked };
   }
 
+  // Nested (provider → model) structures only — never concatenate identities
+  // (provider/model may contain '/' or the historical '\0' separator).
   const seen = new Map<string, Map<string, number>>();
-  const duplicates = new Set<string>();
+  const duplicates = new Map<string, Set<string>>();
 
   for (let index = 0; index < models.length; index++) {
     const raw = models[index];
@@ -245,7 +247,7 @@ export function buildConfigPricingIndex(
       seen.set(parsed.provider, byModel);
     }
     if (byModel.has(parsed.model)) {
-      duplicates.add(`${parsed.provider}\0${parsed.model}`);
+      blockPair(duplicates, parsed.provider, parsed.model);
       getLog().warn(
         { provider: parsed.provider, model: parsed.model, issue: 'duplicate_provider_model' },
         'usage.pricing_entry_duplicate'
@@ -262,16 +264,15 @@ export function buildConfigPricingIndex(
   }
 
   // Drop both sides of any duplicate pair and block catalog fallback.
-  for (const key of duplicates) {
-    const sep = key.indexOf('\0');
-    const provider = key.slice(0, sep);
-    const model = key.slice(sep + 1);
-    const byModel = rates.get(provider);
-    if (byModel) {
-      byModel.delete(model);
-      if (byModel.size === 0) rates.delete(provider);
+  for (const [provider, modelsForProvider] of duplicates) {
+    for (const model of modelsForProvider) {
+      const byModel = rates.get(provider);
+      if (byModel) {
+        byModel.delete(model);
+        if (byModel.size === 0) rates.delete(provider);
+      }
+      blockPair(blocked, provider, model);
     }
-    blockPair(blocked, provider, model);
   }
 
   return { rates, blocked };

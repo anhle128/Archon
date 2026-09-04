@@ -87,6 +87,86 @@ describe('buildConfigPricingIndex', () => {
     expect(index.rates.get('anthropic')?.get('claude-sonnet')).toEqual({ input: 3, output: 15 });
   });
 
+  test('null-byte and slash identities stay exact structured pairs under duplicate detection', () => {
+    // The pre-fix duplicate tracker joined provider/model with '\0' and later
+    // re-parsed on the first null byte. That collides these two distinct pairs:
+    //   ('a\0b', 'c')  vs  ('a', 'b\0c')
+    const pricing: PricingConfig = {
+      models: [
+        { provider: 'a\0b', model: 'c', input: 1, output: 2 },
+        { provider: 'a\0b', model: 'c', input: 9, output: 9 },
+        { provider: 'a', model: 'b\0c', input: 3, output: 4 },
+        { provider: 'open/router', model: 'org/model', input: 5, output: 6 },
+        { provider: 'open', model: 'router/org/model', input: 7, output: 8 },
+      ],
+    };
+    const index = buildConfigPricingIndex(pricing);
+
+    // Exact duplicate blocked and removed from rates
+    expect(index.rates.get('a\0b')?.get('c')).toBeUndefined();
+    expect(index.blocked.get('a\0b')?.has('c')).toBe(true);
+
+    // Neighbor that shares the old concatenated key remains independently priceable
+    expect(index.rates.get('a')?.get('b\0c')).toEqual({ input: 3, output: 4 });
+    expect(index.blocked.get('a')?.has('b\0c')).toBeFalsy();
+
+    // Slash-containing provider/model pairs never shadow each other
+    expect(index.rates.get('open/router')?.get('org/model')).toEqual({ input: 5, output: 6 });
+    expect(index.rates.get('open')?.get('router/org/model')).toEqual({ input: 7, output: 8 });
+    expect(index.blocked.size).toBe(1);
+  });
+
+  test('duplicate separator-containing pair still blocks catalog fallback for that exact pair only', () => {
+    const index = buildConfigPricingIndex({
+      models: [
+        { provider: 'prov\0x', model: 'mod/y', input: 1, output: 2 },
+        { provider: 'prov\0x', model: 'mod/y', input: 3, output: 4 },
+        { provider: 'prov', model: 'x\0mod/y', input: 5, output: 6 },
+      ],
+    });
+    const catalogByProviderModel = lookups({
+      catalog: [
+        { provider: 'prov\0x', model: 'mod/y', rates: { input: 10, output: 20 } },
+        { provider: 'prov', model: 'x\0mod/y', rates: { input: 10, output: 20 } },
+      ],
+    }).catalogByProviderModel;
+    const materializeLookups: PricingLookups = {
+      configByProviderModel: index.rates,
+      configBlockedByProviderModel: index.blocked,
+      catalogByProviderModel,
+    };
+
+    // Rejected exact pair: config blocked, no config rate, catalog must not price it
+    expect(
+      materializeUsageCost(
+        entry({
+          provider: 'prov\0x',
+          model: 'mod/y',
+          inputTokens: 1_000_000,
+          outputTokens: 1_000_000,
+        }),
+        materializeLookups
+      )
+    ).toEqual({ cost_usd: null, cost_estimated_usd: null, pricing_source: null });
+
+    // Neighbor remains priceable from config rates (not blocked)
+    expect(
+      materializeUsageCost(
+        entry({
+          provider: 'prov',
+          model: 'x\0mod/y',
+          inputTokens: 1_000_000,
+          outputTokens: 1_000_000,
+        }),
+        materializeLookups
+      )
+    ).toEqual({
+      cost_usd: null,
+      cost_estimated_usd: 11,
+      pricing_source: 'config',
+    });
+  });
+
   test('skips invalid rate objects, blocks identifiable pairs, keeps valid siblings', () => {
     const pricing = {
       models: [
