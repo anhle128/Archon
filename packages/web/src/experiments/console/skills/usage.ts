@@ -2,31 +2,90 @@
  * Installation usage/cost report skill.
  *
  * GET /api/usage — direct-run ledger aggregates only (no child rollups, no SSE).
- * Types come from generated OpenAPI schemas; never import @archon/core or workflows.
+ * Request/response types come from generated OpenAPI operation + schemas;
+ * never import @archon/core or workflows.
  */
 import { requestJson } from '../lib/http';
-import type { components } from '@/lib/api.generated';
+import type { components, paths } from '@/lib/api.generated';
+
+// ---------------------------------------------------------------------------
+// Generated operation / schema anchors
+// ---------------------------------------------------------------------------
+
+/** GET /api/usage operation (generated). */
+type UsageGetOperation = paths['/api/usage']['get'];
+
+/** Query-string contract for GET /api/usage. */
+type GeneratedUsageQuery = NonNullable<UsageGetOperation['parameters']['query']>;
+
+/** 200 response body for GET /api/usage (schema may already be `T | null`). */
+type GeneratedUsageResponse = UsageGetOperation['responses'][200]['content']['application/json'];
+
+/** Nullable direct-run usage on GET workflow run detail. */
+type GeneratedRunDetailUsage = components['schemas']['WorkflowRunDetail']['usage'];
 
 /** Named OpenAPI schema may be `T | null` because run-detail marks usage nullable. */
-export type UsageReport = NonNullable<components['schemas']['UsageReport']>;
+type GeneratedUsageReportSchema = components['schemas']['UsageReport'];
+
+// ---------------------------------------------------------------------------
+// Public aliases — derived only from generated contracts (no parallel unions)
+// ---------------------------------------------------------------------------
+
+/** GET /api/usage query filters (camelCase). */
+export type UsageQuery = GeneratedUsageQuery;
+
+/** Kind filter values accepted by GET /api/usage. */
+export type UsageKindFilter = NonNullable<UsageQuery['kind']>;
+
+/** Group-by dimensions accepted by GET /api/usage. */
+export type UsageGroupBy = NonNullable<UsageQuery['groupBy']>;
+
+/** Non-null usage report body (ledger aggregates). */
+export type UsageReport = NonNullable<GeneratedUsageReportSchema>;
 export type UsageReportGroup = UsageReport['groups'][number];
 export type UsageMetrics = UsageReport['totals'];
-export type UsageGroupBy = UsageReport['groupBy'];
-/** Kind filter values accepted by GET /api/usage. */
-export type UsageKindFilter = 'unclassified' | 'advisor' | 'subagent';
 
-export interface UsageQuery {
-  from?: string;
-  to?: string;
-  codebaseId?: string;
-  agentProvider?: string;
-  provider?: string;
-  model?: string;
-  kind?: UsageKindFilter;
-  runId?: string;
-  nodeId?: string;
-  groupBy?: UsageGroupBy;
-}
+// ---------------------------------------------------------------------------
+// Compile-time drift guards — fail type-check if OpenAPI and aliases diverge
+// ---------------------------------------------------------------------------
+
+// ExactMatch must return `false` (not `never`) on mismatch: `never extends true`
+// is true in TypeScript, so a never-based assert would silently accept drift.
+type ExactMatch<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+type AssertTrue<T extends true> = T;
+
+type UsageQueryTiedToOpenApi = AssertTrue<ExactMatch<UsageQuery, GeneratedUsageQuery>>;
+type UsageKindTiedToOpenApi = AssertTrue<
+  ExactMatch<UsageKindFilter, NonNullable<GeneratedUsageQuery['kind']>>
+>;
+type UsageGroupByTiedToOpenApi = AssertTrue<
+  ExactMatch<UsageGroupBy, NonNullable<GeneratedUsageQuery['groupBy']>>
+>;
+type UsageGroupByMatchesReport = AssertTrue<ExactMatch<UsageGroupBy, UsageReport['groupBy']>>;
+type UsageReportResponseTiedToOpenApi = AssertTrue<
+  ExactMatch<UsageReport | null, GeneratedUsageResponse>
+>;
+type RunDetailUsageTiedToOpenApi = AssertTrue<
+  ExactMatch<UsageReport | null, GeneratedRunDetailUsage>
+>;
+type UsageReportSchemaIsNullable = AssertTrue<
+  ExactMatch<GeneratedUsageReportSchema, UsageReport | null>
+>;
+
+/** Touch asserts so `noUnusedLocals` cannot drop them silently. */
+export type UsageOpenApiContractChecks = [
+  UsageQueryTiedToOpenApi,
+  UsageKindTiedToOpenApi,
+  UsageGroupByTiedToOpenApi,
+  UsageGroupByMatchesReport,
+  UsageReportResponseTiedToOpenApi,
+  RunDetailUsageTiedToOpenApi,
+  UsageReportSchemaIsNullable,
+];
+
+// ---------------------------------------------------------------------------
+// Runtime helpers (behavior unchanged)
+// ---------------------------------------------------------------------------
 
 /**
  * Cache-key fragment for every filter/group value the Cost page can set.
