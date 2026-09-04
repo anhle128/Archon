@@ -1,6 +1,9 @@
 ## Codebase Patterns
 
-
+### Usage range strings are RFC 3339 with offset only
+- **Where**: `packages/core/src/schemas/usage-report.ts` `usageInstantStringSchema`; `packages/core/src/db/usage-report.ts` `parseUsageInstant`; CLI `usage.ts`; server `usage.schemas.ts`
+- **Pattern**: External string bounds use `z.string().datetime({ offset: true })` — Z or numeric offset required. Never `new Date(string)` for validation. Internal `Date` args stay allowed. Web date-only uses UTC component round-trip (`Date.UTC` then re-read Y/M/D), not `Date.parse`.
+- **Example**: `2026-09-01T00:00:00Z` ok; `2026-09-01` / zone-less / `2026-02-29T…Z` rejected; web `2028-02-29` → `[2028-02-29T00:00:00.000Z, 2028-03-01T00:00:00.000Z)`
 
 ### Human group labels use full fixed dimension tuples
 - **Where**: `packages/cli/src/commands/usage.ts` `dimensionLabel`; `UsageBreakdownTable.tsx` `groupLabel`
@@ -758,5 +761,33 @@
 - Keep label format parallel across CLI/web; never truncate runId in labels when runId is a fixed grouping dimension.
 - Do not put labels into the JSON report — human formatting only.
 - Node fixture ACs that name agent as a differing dim must actually set different `agentProvider` values.
+
+---
+
+## 2026-09-04 — US-023: Enforce RFC3339 usage ranges
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/schemas/usage-report.ts` — `usageInstantStringSchema` (`z.string().datetime({ offset: true })`)
+- `packages/core/src/db/usage-report.ts` — exported `parseUsageInstant`; strings require RFC 3339 with Z/offset; Date callers retained
+- `packages/core/src/db/usage-report.test.ts` — rejection matrix + valid Z/offset/leap-day + Date callers
+- `packages/server/src/routes/schemas/usage.schemas.ts` — from/to use shared core instant schema
+- `packages/server/src/routes/api.usage.test.ts` — OpenAPI reject/accept matrix
+- `packages/cli/src/commands/usage.ts` — pre-validate `--since`/`--until` with shared schema
+- `packages/cli/src/commands/usage.test.ts` — flag rejection/accept before query
+- `packages/web/src/experiments/console/skills/usage.ts` — UTC date-only round-trip; no Date rollover
+- `packages/web/src/experiments/console/skills/usage.test.ts` — 2026-02-29/30 reject; 2028-02-29 accept
+
+**Acceptance criteria verified**:
+- [x] Core, API, and CLI reject date-only, locale, zone-less, invalid-offset, calendar-rollover; accept Z and explicit-offset
+- [x] Core remains authoritative strict instant validator; internal Date callers still supported
+- [x] Web From/Through reject nonexistent date-only (2026-02-29/30), accept leap day 2028-02-29, prove UTC component round-trip
+- [x] Valid web ranges still send UTC midnight From and exclusive midnight-after-Through; pair/order/366-day limits unchanged
+- [x] Focused tests: core usage-report 20, server api.usage 10, CLI usage 18, web usage skill 11
+
+**Learnings**:
+- Zod 4 `z.string().datetime({ offset: true })` already rejects calendar rollover and zone-less forms — reuse as the single external string contract rather than hand-rolling a second regex.
+- Web date-only controls are a separate surface: prove UTC Y/M/D round-trip before `Date.UTC`, never `Date.parse` on `YYYY-MM-DD` alone (rolls Feb 29 non-leap into March).
+- CLI should pre-validate with the shared schema so injected `queryFn` tests still see rejection without a live DB.
 
 ---

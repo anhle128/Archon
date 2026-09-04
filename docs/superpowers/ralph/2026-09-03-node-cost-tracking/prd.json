@@ -491,7 +491,8 @@
         "US-022"
       ],
       "priority": 23,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration after US-022. Files: packages/core/src/schemas/usage-report.ts (usageInstantStringSchema), packages/core/src/db/usage-report.ts (parseUsageInstant), usage-report.test.ts, server usage.schemas.ts + api.usage.test.ts, CLI usage.ts/test.ts, web skills/usage.ts/test.ts (UTC calendar round-trip)."
     },
     {
       "id": "US-024",
