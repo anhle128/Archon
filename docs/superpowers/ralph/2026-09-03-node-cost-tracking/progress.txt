@@ -823,3 +823,24 @@
 - Regenerating OpenAPI types is the only artifact that lagged after US-023 description wording; bundled schema was already current.
 
 ---
+
+## 2026-09-04 — US-025: Do not fabricate OpenCode request counts
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/opencode/tokens.ts` — removed unconditional `requests: 1`; only map fields present in OpenCode assistant info
+- `packages/providers/src/community/opencode/tokens.test.ts` — assert omitted requests, boundary null path, multi-agent subagent without inventing requests
+- `packages/providers/src/community/opencode/provider.test.ts` — drop fabricated requests expectation; multi-id path asserts absence
+
+**Acceptance criteria verified**:
+- [x] Concrete assistant observation preserves provider/model/token/cache/reasoning/USD and omits requests without upstream request-count
+- [x] Normalized boundary keeps requests undefined; `entry.requests ?? null` is null (ledger/report missingRequests path)
+- [x] Unconditional requests assignment removed; distinct-message + multi-agent kind:subagent still covered
+- [x] Legacy totals and reasoning-as-output-subset unchanged
+- [x] Focused tests: tokens.test.ts 6 pass, provider.test.ts 34 pass; providers type-check + eslint tokens.ts clean
+
+**Learnings**:
+- OpenCode has no authoritative request-count field on assistant message info — fabricating `requests: 1` from message existence violates truthfulness and under-reports missingRequests coverage.
+- Ledger already does `entry.requests ?? null`; provider omission is enough for null/missingRequests without core changes.
+
+---

@@ -531,8 +531,8 @@
         "US-024"
       ],
       "priority": 25,
-      "passes": false,
-      "notes": "Pending Ralph implementation from the Convergence 2 audit."
+      "passes": true,
+      "notes": "Implemented in iteration after US-024. Files: packages/providers/src/community/opencode/tokens.ts, tokens.test.ts, provider.test.ts. Removed fabricated requests:1; missing requests stay undefined through normalizeUsageBreakdown (ledger null / missingRequests path)."
     },
     {
       "id": "US-026",
