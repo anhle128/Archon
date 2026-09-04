@@ -2,6 +2,12 @@
 
 
 
+### OpenCode stream reject/close packages usage like session.error
+- **Where**: `packages/providers/src/community/opencode/{session,multi-agent}.ts` `abortableStream` / stream end paths
+- **Pattern**: Every event-stream termination after observations uses createSessionFailureError/createMultiAgentFailureError (same boundary as session.error). Premature close before session.idle never yields bare `{type:'result',sessionId}`. abortableStream must not `void nextPromise.finally` (rethrows → unhandled rejection); use then(onFulfilled,onRejected) for listener cleanup and try/catch around Promise.race so iterator rejections reach the session catch. managedFailure identity rethrows session.error packages without double-wrap.
+- **Example**: message.updated then iterator throw → one isError result with usageBreakdown once; stream ends after usage, no idle → isError + "ended before session.idle"
+
+
 ### Malformed pricing rejected before estimation
 - **Where**: `packages/core/src/usage/estimate.ts` `buildConfigPricingIndex` / `parseCatalogCost` / `estimateTokensUsd`
 - **Pattern**: Present malformed pricing (primitive/array/non-array models) → structured `usage.pricing_config_invalid` + empty index. Missing/`{}`/`models:[]` stay silent. Catalog/config rates and tier thresholds must be finite non-negative at index time; one bad component rejects the whole pair. estimateTokensUsd re-checks components before multiply so a negative rate cannot hide behind a positive sibling sum. Warnings: source+issue(+identity) only — never rates/config blobs.
@@ -1251,5 +1257,27 @@
 **Learnings**:
 - Post-Convergence 3 validation is a pure gate — no product commit when artifacts already match.
 - Schema-upgrade baselines remain 9 distinct versions; expected kind_check divergence still only on pre-v0.6.0 tags.
+
+---
+
+## 2026-09-05 — US-040: Preserve OpenCode usage across raw stream failures
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/opencode/session.ts` — package usage on iterator reject + premature close before session.idle; fix abortableStream rejection propagation
+- `packages/providers/src/community/opencode/multi-agent.ts` — same packaging for multi-agent reject/premature-close; observed children stay kind:subagent
+- `packages/providers/src/community/opencode/provider.test.ts` — stream reject, premature close, multi-agent, within-attempt replace, no-usage throw
+
+**Acceptance criteria verified**:
+- [x] Valid assistant message.updated then raw iterator reject without session.error → terminal isError retains observation once + original classification/message
+- [x] Single-agent stream ends after usage before session.idle → usage-bearing failure, never bare sessionId success
+- [x] Multi-agent reject and premature-close preserve observed child kind:subagent rows, synthesize none, still fail
+- [x] Explicit session.error, retry accumulation, clean idle, caller abort, no-usage failures remain green; abort does not double-terminal
+- [x] Internal retries append prior-attempt spend; repeated updates for one message id replace within attempt; pre-observation failures fabricate nothing
+- [x] `(cd packages/providers && bun test src/community/opencode/provider.test.ts tokens.test.ts)` → 53 pass
+
+**Learnings**:
+- `void nextPromise.finally(...)` on the abort race side-channel rethrows iterator rejections as unhandled rejections even when Promise.race correctly rejects the await — use `.then(ok, err)` cleanup instead
+- Premature close previously yielded bare `{type:'result', sessionId}` success — that path must throw through the same usage-bearing failure constructor as session.error
 
 ---

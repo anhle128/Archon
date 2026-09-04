@@ -835,7 +835,8 @@
         "US-039"
       ],
       "priority": 40,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration after US-039. Files: packages/providers/src/community/opencode/{session,multi-agent,provider.test}.ts. Stream reject + premature close package usage via createSessionFailureError/createMultiAgentFailureError; abortableStream propagates iterator rejections without unhandled void-finally rejections. Focused provider+tokens tests green (53)."
     },
     {
       "id": "US-041",
