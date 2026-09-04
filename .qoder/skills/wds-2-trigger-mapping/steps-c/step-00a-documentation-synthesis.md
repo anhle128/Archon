@@ -62,7 +62,6 @@ Output: **Documentation Synthesis Workshop**
 "I'll help you transform your existing documentation into an actionable Trigger Map.
 
 Here's how this works:
-
 - I'll analyze your documentation
 - We'll go through the same workshops as building from scratch
 - But I'll frame questions based on what your material suggests
@@ -79,7 +78,6 @@ Ask user to provide their documentation.
 Read through all provided documentation carefully.
 
 Create mental map of what is covered:
-
 - Vision/strategy statements (present/absent/vague?)
 - Business goals or objectives (SMART/vague/missing?)
 - User research findings (deep/shallow/none?)
@@ -113,13 +111,11 @@ Wait for user confirmation before proceeding.
 Display: "**Select an Option:** [C] Continue to Business Goals Extraction | [M] Return to Activity Menu"
 
 #### Menu Handling Logic:
-
 - IF C: Load and execute {nextStepFile}
 - IF M: Return to {activityWorkflowFile}
 - IF Any other comments or queries: help user respond then [Redisplay Menu Options]
 
 #### EXECUTION RULES:
-
 - ALWAYS halt and wait for user input after presenting menu
 - User can chat or ask questions - always respond and then redisplay menu options
 
@@ -132,7 +128,6 @@ ONLY WHEN user selects [C] will you load the next step file. Do NOT auto-proceed
 ## 🚨 SYSTEM SUCCESS/FAILURE METRICS
 
 ### ✅ SUCCESS:
-
 - Documentation received and thoroughly analyzed
 - Coverage map created identifying present, vague, and missing areas
 - Clear summary presented to user with strengths and gaps
@@ -141,7 +136,6 @@ ONLY WHEN user selects [C] will you load the next step file. Do NOT auto-proceed
 - Mental model of documentation quality established for subsequent steps
 
 ### ❌ SYSTEM FAILURE:
-
 - Skipping documentation analysis
 - Not identifying gaps in documentation
 - Generating Trigger Map content before analysis

@@ -58,7 +58,6 @@ Create the TERTIARY persona document with organic value discovery focus, benefit
 ### 1. Gather Input
 
 From trigger map data:
-
 - targetGroups.tertiary section (if exists)
 - Name, role, type, roleInFlywheel
 - 6 drivingForces (3 wants, 3 fears)
@@ -82,7 +81,6 @@ Use the comprehensive persona document template.
 **Tertiary-Specific Section:** Include "How [Persona Name] Discovers [Product] Value"
 
 Show:
-
 - The recognition path
 - Journey: Experience -> Recognition -> Appreciation -> Word of Mouth
 - Focus on benefits and organic discovery
@@ -99,13 +97,11 @@ Output: "Tertiary persona document created: 04-[Name]-the-[Role].md"
 Display: "**Select an Option:** [C] Continue to Key Insights Document | [M] Return to Activity Menu"
 
 #### Menu Handling Logic:
-
 - IF C: Load and execute {nextStepFile}
 - IF M: Return to {activityWorkflowFile}
 - IF Any other comments or queries: help user respond then [Redisplay Menu Options]
 
 #### EXECUTION RULES:
-
 - ALWAYS halt and wait for user input after presenting menu
 - User can chat or ask questions - always respond and then redisplay menu options
 
@@ -118,7 +114,6 @@ ONLY WHEN user selects [C] will you load the next step file. Tertiary persona do
 ## 🚨 SYSTEM SUCCESS/FAILURE METRICS
 
 ### ✅ SUCCESS:
-
 - All 13 sections from template included
 - 6 driving forces with Product Answers (3 wants, 3 fears)
 - Organic discovery section included
@@ -129,7 +124,6 @@ ONLY WHEN user selects [C] will you load the next step file. Tertiary persona do
 - Saved with correct filename
 
 ### ❌ SYSTEM FAILURE:
-
 - Missing required sections
 - Driving forces without Product Answers
 - Missing organic discovery section

@@ -65,7 +65,6 @@ flowchart LR
 ```
 
 **Rules:**
-
 - Use `base` theme
 - Set font to `Inter, system-ui, sans-serif`
 - Set fontSize to `14px`
@@ -105,13 +104,11 @@ Store diagram_config, node_ids, and diagram_structure.
 Display: "**Select an Option:** [C] Continue to Format Business Goals | [M] Return to Activity Menu"
 
 #### Menu Handling Logic:
-
 - IF C: Load and execute {nextStepFile}
 - IF M: Return to {activityWorkflowFile}
 - IF Any other comments or queries: help user respond then [Redisplay Menu Options]
 
 #### EXECUTION RULES:
-
 - ALWAYS halt and wait for user input after presenting menu
 - User can chat or ask questions - always respond and then redisplay menu options
 
@@ -124,7 +121,6 @@ ONLY WHEN user selects [C] will you load the next step file. Diagram structure m
 ## 🚨 SYSTEM SUCCESS/FAILURE METRICS
 
 ### ✅ SUCCESS:
-
 - Mermaid configuration uses base theme with Inter font at 14px
 - Flowchart direction is LR
 - Section comments properly structured
@@ -133,7 +129,6 @@ ONLY WHEN user selects [C] will you load the next step file. Diagram structure m
 - Configuration and structure stored
 
 ### ❌ SYSTEM FAILURE:
-
 - Wrong theme or font configuration
 - Wrong flowchart direction
 - Missing section comments

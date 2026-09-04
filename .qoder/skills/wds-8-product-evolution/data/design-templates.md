@@ -16,7 +16,6 @@ Templates for designing incremental updates in Phase 8 (Product Evolution).
 ### Screen/Feature: [Name]
 
 **Changes:**
-
 - [ ] Copy/messaging
 - [ ] Visual hierarchy
 - [ ] Component usage
@@ -25,7 +24,6 @@ Templates for designing incremental updates in Phase 8 (Product Evolution).
 - [ ] Data structure
 
 **Specific changes:**
-
 1. [Specific change 1]
 2. [Specific change 2]
 3. [Specific change 3]
@@ -35,7 +33,6 @@ Templates for designing incremental updates in Phase 8 (Product Evolution).
 ## What's Staying
 
 **Unchanged:**
-
 - ✓ Brand colors
 - ✓ Typography
 - ✓ Core layout structure
@@ -81,11 +78,9 @@ and interaction improvements only."
 ## Updated Screen Structure
 
 ### Before (v1.0)
-
 [Describe old structure]
 
 ### After (v2.0)
-
 [Describe new structure]
 
 ---
@@ -93,19 +88,15 @@ and interaction improvements only."
 ## Component Changes
 
 ### New Components
-
 - [Component name]: [Purpose]
 
 ### Modified Components
-
 - [Component name]: [What changed?]
 
 ### Removed Components
-
 - [Component name]: [Why removed?]
 
 ### Unchanged Components
-
 - [Component name]: [Still used as-is]
 
 ---
@@ -113,13 +104,11 @@ and interaction improvements only."
 ## Interaction Changes
 
 ### Before (v1.0)
-
 1. User does X
 2. System responds Y
 3. User sees Z
 
 ### After (v2.0)
-
 1. User does X
 2. **NEW:** System shows guidance
 3. System responds Y
@@ -131,11 +120,9 @@ and interaction improvements only."
 ## Copy Changes
 
 ### Before (v1.0)
-
 "[Old copy]"
 
 ### After (v2.0)
-
 "[New copy]"
 
 **Rationale:** [Why this change?]
@@ -145,13 +132,11 @@ and interaction improvements only."
 ## Visual Changes
 
 ### Before (v1.0)
-
 - Hierarchy: [Description]
 - Emphasis: [Description]
 - Spacing: [Description]
 
 ### After (v2.0)
-
 - Hierarchy: [What changed?]
 - Emphasis: [What changed?]
 - Spacing: [What changed?]
@@ -204,12 +189,10 @@ Needed because analytics show 40% drop-off due to confusion."
 ## Usage
 
 **Where used:**
-
 - Screen X: [Context]
 - Screen Y: [Context]
 
 **When shown:**
-
 - First time user sees Feature X
 - Can be dismissed
 - Doesn't show again after dismissal
@@ -230,13 +213,11 @@ Needed because analytics show 40% drop-off due to confusion."
 [What it looked like before]
 
 **User Experience:**
-
 - User sees: [Description]
 - User feels: [Description]
 - Problem: [What was wrong?]
 
 **Metrics:**
-
 - Usage: 15%
 - Drop-off: 40%
 - Satisfaction: 3.2/5
@@ -249,13 +230,11 @@ Needed because analytics show 40% drop-off due to confusion."
 [What it looks like after]
 
 **User Experience:**
-
 - User sees: [Description]
 - User feels: [Description]
 - Improvement: [What's better?]
 
 **Expected Metrics:**
-
 - Usage: 60% (target)
 - Drop-off: 10% (target)
 - Satisfaction: 4.5/5 (target)
@@ -316,7 +295,6 @@ how to use it."
 ## Failure Criteria
 
 If after 2 weeks:
-
 - [Metric 1] < [Threshold]: Rollback or iterate
 - [Metric 2] < [Threshold]: Rollback or iterate
 ```

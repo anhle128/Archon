@@ -55,7 +55,7 @@ Skip this step entirely if `{project-root}/_bmad/` does not exist.
 
 ## Install the Orchestrator Tool
 
-The orchestrator is what spawns fresh coding CLI sessions through the selected adapter(s) to invoke `bmad-dev-auto` (the upstream dev primitive) for the dev pass — then re-invokes it on the `done` spec for the follow-up review pass — and `bmad-loop-sweep`, watches their hook signals, and verifies their artifacts. Installing it is therefore part of setup, not an optional extra.
+The orchestrator is what spawns fresh coding CLI sessions through the selected adapter(s) to invoke `bmad-build-auto` (the upstream dev primitive; `bmad-dev-auto` on pre-rename releases) for the dev pass — then re-invokes it on the `done` spec for the follow-up review pass — and `bmad-loop-sweep`, watches their hook signals, and verifies their artifacts. Installing it is therefore part of setup, not an optional extra.
 
 > **Why from Git?** The BMAD installer copies only skill directories into a project — it does not carry sibling files, so the tool can't ride along in the skill folder. The canonical source is <https://github.com/bmad-code-org/bmad-loop>. (The reverse holds, though: the tool's wheel **bundles** the skills, so `bmad-loop init` lays them down into a project's skill trees on its own — see step 3.)
 
@@ -64,6 +64,7 @@ Unless the user explicitly asked to skip it (e.g. `skills only` / `--no-tool`), 
 1. **Check what's already on PATH:** run `bmad-loop --version`. A version printing here does **not** mean this project is set up — it only means _some_ `bmad-loop` is importable in the current environment. Before trusting it, run `uv tool list` and look for `bmad-loop`: if it's absent (the on-PATH copy comes from a source checkout or an unrelated virtualenv), warn the user that the active environment is shadowing a clean install and that the project would be relying on that checkout. Unless the user explicitly declines, install/upgrade from the canonical source below so the project doesn't depend on an incidental dev environment.
 
 2. **Install or upgrade from the Git repository** (the `[tui]` extra pulls in the Textual dashboard so `bmad-loop tui` works). `uv tool install` puts `bmad-loop` in uv's own managed environment, so there's no PEP 668 externally-managed conflict and no need for `--user`, an activated virtualenv, or `--break-system-packages`.
+
    - **Fresh install** (no uv-managed `bmad-loop`):
 
      ```bash
@@ -73,6 +74,7 @@ Unless the user explicitly asked to skip it (e.g. `skills only` / `--no-tool`), 
      Pin a release tag for reproducibility by appending `@v<X.Y.Z>` to the Git URL.
 
    - **Upgrade** (uv already manages `bmad-loop`):
+
      1. Record the current version first so you can report the delta: `bmad-loop --version`.
      2. Default — follow `main` (or the currently pinned tag):
 

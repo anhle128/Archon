@@ -82,14 +82,12 @@ fi
 ## Step-Specific Validation
 
 ### Create Story
-
 ```bash
 validation=$("$scripts" orchestrator-helper verify-step create {story_id} --state-file "$state_file")
 validation_passed=$(echo "$validation" | jq -r '.verified')
 ```
 
 ### Dev Story
-
 ```bash
 parsed=$("$scripts" orchestrator-helper parse-output "$output_file" dev)
 next_action=$(echo "$parsed" | jq -r '.next_action')
@@ -97,7 +95,6 @@ validation_passed=$([ "$next_action" = "proceed" ] && echo "true" || echo "false
 ```
 
 ### Automate
-
 ```bash
 parsed=$("$scripts" orchestrator-helper parse-output "$output_file" auto)
 # Non-blocking: log warning but continue
@@ -105,7 +102,6 @@ validation_passed="true"  # Always proceed (automate is non-blocking)
 ```
 
 ### Code Review
-
 ```bash
 # See code-review-loop.md for specific review cycle handling
 # Reviews have their own internal retry loop

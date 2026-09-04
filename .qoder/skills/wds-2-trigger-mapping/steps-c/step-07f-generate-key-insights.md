@@ -95,13 +95,11 @@ Output: "Key insights document created!"
 Display: "**Select an Option:** [C] Continue to Quality Check | [M] Return to Activity Menu"
 
 #### Menu Handling Logic:
-
 - IF C: Load and execute {nextStepFile}
 - IF M: Return to {activityWorkflowFile}
 - IF Any other comments or queries: help user respond then [Redisplay Menu Options]
 
 #### EXECUTION RULES:
-
 - ALWAYS halt and wait for user input after presenting menu
 - User can chat or ask questions - always respond and then redisplay menu options
 
@@ -114,7 +112,6 @@ ONLY WHEN user selects [C] will you load the next step file. Key Insights docume
 ## 🚨 SYSTEM SUCCESS/FAILURE METRICS
 
 ### ✅ SUCCESS:
-
 - All 9 sections generated
 - Insights derive from actual trigger map data (not generic)
 - Flywheel explanation clear
@@ -126,7 +123,6 @@ ONLY WHEN user selects [C] will you load the next step file. Key Insights docume
 - Document saved
 
 ### ❌ SYSTEM FAILURE:
-
 - Generic design advice not derived from data
 - Missing required sections
 - Not linking to specific persona data

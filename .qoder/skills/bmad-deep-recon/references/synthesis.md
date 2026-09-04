@@ -6,7 +6,7 @@ Assemble `research.md` in this order, shaped by `{workflow.audience}` and writte
 
 1. **Executive summary** — decision-first: what the evidence says to do, the two or three findings that drive that answer, and the biggest caveat. One page maximum, readable standalone. Written last, placed first.
 2. **Dimension sections** — already written during the loop; now reconciled: consistent terminology, no duplicated ground, verification statuses and any corrections from the pass applied to the text.
-3. **Cross-dimension insights** — what only the _combination_ shows (e.g. the market is growing but the regulatory dimension caps the reachable segment; the technically superior option loses on ecosystem health). This section is the harness earning its keep — if there are no cross-dimension insights, say so rather than manufacture them.
+3. **Cross-dimension insights** — what only the *combination* shows (e.g. the market is growing but the regulatory dimension caps the reachable segment; the technically superior option loses on ecosystem health). This section is the harness earning its keep — if there are no cross-dimension insights, say so rather than manufacture them.
 4. **Contrary evidence** — when the red-team pass ran and found material; the strongest surviving counter-arguments, cited.
 5. **Recommendations** — each bound to the decision and, where the project has them, to the downstream artifact that consumes it (per the pack's `Feeds` entries: brief section, PRD input, architecture constraint). Each recommendation names its confidence basis; a recommendation resting on low-confidence or disputed claims says so in the same sentence.
 6. **Open questions** — what the research could not answer, and what it would take to answer each.

@@ -200,7 +200,7 @@ export default config;
 import { runBurnIn } from '@seontechnologies/playwright-utils/burn-in';
 
 async function main() {
-  const shardArg = process.argv.find(arg => arg.startsWith('--shard='));
+  const shardArg = process.argv.find((arg) => arg.startsWith('--shard='));
 
   if (shardArg) {
     process.env.PW_SHARD = shardArg.split('=')[1];
@@ -232,7 +232,7 @@ jobs:
 
 ## Integration with CI Workflow
 
-When setting up CI with `*ci` workflow, recommend burn-in for:
+When setting up CI with the `/bmad-testarch-ci` workflow, recommend burn-in for:
 
 - Pull request validation
 - Pre-merge checks

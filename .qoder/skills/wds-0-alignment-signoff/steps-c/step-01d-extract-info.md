@@ -59,7 +59,6 @@ Extract key information from the user's provided communications and documents to
 Extract relevant information from the communications/documents:
 
 **What to extract**:
-
 - **Realizations mentioned** - What have stakeholders realized or observed?
 - **Requirements discussed** - What do they need or want?
 - **Concerns raised** - What questions or concerns have they expressed?
@@ -70,7 +69,6 @@ Extract relevant information from the communications/documents:
 ### 2. Map Extracted Information to Alignment Sections
 
 **Use extracted information**:
-
 - Inform The Realization section (what realizations or observations are mentioned)
 - Inform Why It Matters (who is experiencing issues and why it matters)
 - Inform Our Commitment (any budget/resource discussions)
@@ -80,7 +78,6 @@ Extract relevant information from the communications/documents:
 ### 3. Apply Extraction Guardrails
 
 **Don't**:
-
 - Copy entire communications or documents verbatim
 - Include personal or irrelevant details
 - Overwhelm with too much detail
@@ -92,13 +89,11 @@ Extract relevant information from the communications/documents:
 Display: "**Select an Option:** [C] Continue to step-01e-detect-starting-point"
 
 #### Menu Handling Logic:
-
 - IF C: Load, read entire file, then execute {nextStepFile}
 - IF M: Return to {workflowFile}
 - IF Any other comments or queries: help user respond then [Redisplay Menu Options]
 
 #### EXECUTION RULES:
-
 - ALWAYS halt and wait for user input after presenting menu
 - ONLY proceed to next step when user selects 'C'
 - User can chat or ask questions - always respond and then redisplay menu options
@@ -112,13 +107,11 @@ ONLY WHEN information has been extracted and confirmed with the user will you th
 ## 🚨 SYSTEM SUCCESS/FAILURE METRICS
 
 ### ✅ SUCCESS:
-
 - Relevant information is extracted and mapped to alignment sections
 - Extracted info is concise and actionable
 - User confirms the extraction is accurate
 
 ### ❌ SYSTEM FAILURE:
-
 - Copying communications verbatim
 - Including sensitive or irrelevant details
 - Skipping extraction and moving on without processing documents

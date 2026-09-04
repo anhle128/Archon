@@ -1,7 +1,6 @@
 # Orchestrator Rules Appendix
 
 ## Session Naming
-
 **See `tmux-commands.md` for complete session naming documentation.**
 
 Pattern: `sa-{project_slug}-{timestamp}-e{epic}-s{N}-{type}` where type = `create`, `dev`, `auto`, `review-{cycle}`
@@ -15,25 +14,20 @@ Pattern: `sa-{project_slug}-{timestamp}-e{epic}-s{N}-{type}` where type = `creat
 **create-story, dev-story, code-review, automate (`testarch-automate` or `qa-generate-e2e-tests`)** — All require the story ID as a positional argument.
 
 **WRONG:**
-
 ```bash
 Execute the BMAD create-story workflow.
 ```
-
 This causes create-story to create ALL stories in the epic, not just one.
 
 **CORRECT:**
-
 ```bash
 Execute the BMAD create-story workflow for story 5.3.
 ```
-
 This creates ONLY story 5.3.
 
 ### Validation After create-story
 
 **After create-story session completes:**
-
 1. Count story files BEFORE spawning session
 2. Count story files AFTER session completes
 3. Verify exactly ONE new file created
@@ -44,7 +38,6 @@ This creates ONLY story 5.3.
 ## State Updates
 
 After EVERY action:
-
 1. Update `currentStep` in state document
 2. Log action with timestamp
 3. Update story progress table
@@ -55,10 +48,10 @@ After EVERY action:
 
 ### Quick Reference
 
-| Category   | Marker Action | State       | When                               |
-| ---------- | ------------- | ----------- | ---------------------------------- |
-| CRITICAL   | **DELETE**    | PAUSED      | Cannot proceed (retries exhausted) |
-| PREFERENCE | Keep          | IN_PROGRESS | Could proceed either way           |
+| Category | Marker Action | State | When |
+|----------|---------------|-------|------|
+| CRITICAL | **DELETE** | PAUSED | Cannot proceed (retries exhausted) |
+| PREFERENCE | Keep | IN_PROGRESS | Could proceed either way |
 
 ### CRITICAL Escalation (Key Steps)
 
@@ -70,7 +63,6 @@ After EVERY action:
 ### Dev-Story Smart Retry
 
 Before escalating, check if story is blocking:
-
 - **Blocking:** Retry up to 3 times → then CRITICAL
 - **Not blocking:** Retry once → then PREFERENCE (can skip)
 

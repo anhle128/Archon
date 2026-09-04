@@ -1,7 +1,6 @@
 # Marker File Format
 
 **Location:** Resolved by `orchestrator-helper marker path` for the active runtime layout:
-
 - Claude: `.claude/.story-automator-active`
 - Codex: follows the active Codex skill root parent, usually `.agents/.story-automator-active` or `.codex/.story-automator-active`
 
@@ -30,16 +29,16 @@ If a runtime is explicitly selected but the installed story-automator skill is d
 
 ## Field Descriptions
 
-| Field              | Description                                   |
-| ------------------ | --------------------------------------------- |
-| `epic`             | Epic identifier (e.g., "5")                   |
-| `currentStory`     | Current story being processed (e.g., "5.3")   |
-| `storiesRemaining` | Count of stories left in queue                |
-| `stateFile`        | Path to orchestration state document          |
-| `startedAt`        | Orchestration start timestamp (ISO 8601)      |
-| `heartbeat`        | Last activity timestamp, updated periodically |
-| `pid`              | Process ID of orchestrator (crash detection)  |
-| `projectSlug`      | (v2.0) Project identifier for session naming  |
+| Field | Description |
+|-------|-------------|
+| `epic` | Epic identifier (e.g., "5") |
+| `currentStory` | Current story being processed (e.g., "5.3") |
+| `storiesRemaining` | Count of stories left in queue |
+| `stateFile` | Path to orchestration state document |
+| `startedAt` | Orchestration start timestamp (ISO 8601) |
+| `heartbeat` | Last activity timestamp, updated periodically |
+| `pid` | Process ID of orchestrator (crash detection) |
+| `projectSlug` | (v2.0) Project identifier for session naming |
 
 ---
 

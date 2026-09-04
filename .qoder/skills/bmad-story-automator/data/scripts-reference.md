@@ -4,19 +4,19 @@ All operations use the installed helper at `scripts/story-automator` (usually vi
 
 ## Core Commands
 
-| Script                                        | Purpose                                                          |
-| --------------------------------------------- | ---------------------------------------------------------------- |
-| `$scripts tmux-wrapper`                       | Session spawning, naming, lifecycle                              |
-| `$scripts monitor-session`                    | Batched polling (14+ API calls → 1)                              |
-| `$scripts tmux-status-check`                  | Context-efficient status checking (v2.4.0)                       |
-| `$scripts codex-status-check`                 | Codex-specific status with heartbeat (v2.4.0)                    |
-| `$scripts heartbeat-check`                    | CPU-based process heartbeat detection                            |
-| `$scripts orchestrator-helper`                | Sprint-status, parsing, markers                                  |
-| `$scripts orchestrator-helper verify-step`    | Shared success verifier checks per step                          |
-| `$scripts orchestrator-helper agents-build`   | Deterministic agents file generation                             |
+| Script | Purpose |
+|--------|---------|
+| `$scripts tmux-wrapper` | Session spawning, naming, lifecycle |
+| `$scripts monitor-session` | Batched polling (14+ API calls → 1) |
+| `$scripts tmux-status-check` | Context-efficient status checking (v2.4.0) |
+| `$scripts codex-status-check` | Codex-specific status with heartbeat (v2.4.0) |
+| `$scripts heartbeat-check` | CPU-based process heartbeat detection |
+| `$scripts orchestrator-helper` | Sprint-status, parsing, markers |
+| `$scripts orchestrator-helper verify-step` | Shared success verifier checks per step |
+| `$scripts orchestrator-helper agents-build` | Deterministic agents file generation |
 | `$scripts orchestrator-helper agents-resolve` | Agent lookup per story/task via state file or direct agents file |
-| `$scripts validate-story-creation`            | Legacy story file count validation                               |
-| `$scripts commit-story`                       | Deterministic git commit with JSON output                        |
+| `$scripts validate-story-creation` | Legacy story file count validation |
+| `$scripts commit-story` | Deterministic git commit with JSON output |
 
 ## Usage Pattern
 
@@ -49,7 +49,6 @@ Agent selection is driven by the agents file created during preflight:
 `_bmad-output/story-automator/agents/agents-{state_filename}.md`
 
 To resolve agents for a specific story/task:
-
 ```bash
 selection=$("$scripts" orchestrator-helper agents-resolve --state-file "$state_file" --story "{story_id}" --task "{task}")
 primary=$(echo "$selection" | jq -r '.primary')
@@ -58,7 +57,6 @@ model=$(echo "$selection" | jq -r '.model // ""')   # "" when no override; pass 
 ```
 
 Direct agents-file resolution is also supported when you already know the generated agents plan path:
-
 ```bash
 selection=$("$scripts" orchestrator-helper agents-resolve --agents-file "$agents_file" --story "{story_id}" --task "{task}")
 primary=$(echo "$selection" | jq -r '.primary')
@@ -68,18 +66,17 @@ model=$(echo "$selection" | jq -r '.model // ""')
 
 ## Step Types
 
-| Type     | Description               | Agent Support |
-| -------- | ------------------------- | ------------- |
-| `create` | Create story from epic    | Claude, Codex |
-| `dev`    | Implement story tasks     | Claude, Codex |
-| `auto`   | Test automation           | Claude, Codex |
+| Type | Description | Agent Support |
+|------|-------------|---------------|
+| `create` | Create story from epic | Claude, Codex |
+| `dev` | Implement story tasks | Claude, Codex |
+| `auto` | Test automation | Claude, Codex |
 | `review` | Code review with auto-fix | Claude, Codex |
-| `retro`  | Retrospective (YOLO mode) | Claude, Codex |
+| `retro` | Retrospective (YOLO mode) | Claude, Codex |
 
 ## Retrospective Commands (v1.5.0)
 
 **CRITICAL:** Retrospectives use a special step type that:
-
 - Resolves the retro agent from `agentConfig`
 - Returns full YOLO mode prompt with doc verification instructions
 - Uses epic_number instead of story_id
@@ -103,7 +100,6 @@ result=$("$scripts" monitor-session "$session" --json --agent "$retro_agent")
 ```
 
 The `build-cmd retro` command automatically includes:
-
 - The bmad-retrospective skill invocation prompt
 - Full YOLO mode instructions (no user input expected)
 - Key autonomous behaviors for menus/prompts

@@ -29,7 +29,6 @@ Read `~/.claude/wds/tools/memory/SKILL.md` and follow the `load` operation for t
 ### 3. If State Found
 
 Parse the state file for:
-
 - Context section
 - Next section — extract MODEL prefix if present
 - Plan / Milestones section
@@ -57,7 +56,6 @@ Resume where we left off, or start fresh?
 Wait for the user's response.
 
 **Model inference (if no MODEL prefix in Next):**
-
 - Any code, build, deploy, implement → Opus
 - High-stakes work (production, financial, compliance) → Opus
 - Long or complex multi-step tasks → Opus
@@ -66,13 +64,11 @@ Wait for the user's response.
 - Default to lightest model that fits.
 
 **If resume:**
-
 - Read the full state file
 - Jump straight to the Next Action — no scanning, no re-introduction
 - Treat context as already established
 
 **If fresh:**
-
 - Proceed with the normal activation sequence
 - Do not delete the state file
 

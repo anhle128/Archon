@@ -21,13 +21,13 @@
 
 ### Keyword Categories by Intent
 
-| Category          | Intent                       | Example (Mechanic)        |
-| ----------------- | ---------------------------- | ------------------------- |
-| **Service**       | Looking for specific service | "bilservice Öland"        |
-| **Location**      | Near-me searches             | "bilverkstad norra Öland" |
-| **Problem**       | Has a specific issue         | "AC reparation bil"       |
-| **Brand**         | Looking for the business     | "Källa Fordonservice"     |
-| **Informational** | Seeking knowledge            | "när byta bromsklossar"   |
+| Category | Intent | Example (Mechanic) |
+|----------|--------|---------------------|
+| **Service** | Looking for specific service | "bilservice Öland" |
+| **Location** | Near-me searches | "bilverkstad norra Öland" |
+| **Problem** | Has a specific issue | "AC reparation bil" |
+| **Brand** | Looking for the business | "Källa Fordonservice" |
+| **Informational** | Seeking knowledge | "när byta bromsklossar" |
 
 ### Keyword Localization
 
@@ -73,11 +73,11 @@ example.com/de/dienste/reifenservice  → German
 Create a table mapping every page to its target keywords:
 
 ```markdown
-| Page       | URL Slug    | Primary Keyword (SE) | Primary Keyword (EN) | Primary Keyword (DE) |
-| ---------- | ----------- | -------------------- | -------------------- | -------------------- |
-| Hem        | /           | bilverkstad Öland    | car repair Öland     | Autowerkstatt Öland  |
-| Service    | /service    | bilservice           | car service          | Autoservice          |
-| AC service | /ac-service | AC service bil       | car AC service       | Klimaanlage Auto     |
+| Page | URL Slug | Primary Keyword (SE) | Primary Keyword (EN) | Primary Keyword (DE) |
+|------|----------|---------------------|---------------------|---------------------|
+| Hem | / | bilverkstad Öland | car repair Öland | Autowerkstatt Öland |
+| Service | /service | bilservice | car service | Autoservice |
+| AC service | /ac-service | AC service bil | car AC service | Klimaanlage Auto |
 ```
 
 This map is referenced by Freya during page specification to ensure every page targets the right keywords.
@@ -136,7 +136,6 @@ Hem (hub)
 ### NAP Consistency (Name, Address, Phone)
 
 **The exact same business information must appear:**
-
 - On every page of the website (header/footer)
 - In Google Business Profile
 - In directory listings
@@ -152,7 +151,6 @@ Email: info@kallafordon.se
 ### Google Business Profile
 
 Ensure client has:
-
 - [ ] Claimed and verified Google Business Profile
 - [ ] Correct business hours
 - [ ] Correct business category (e.g., "Auto Repair Shop")
@@ -163,7 +161,6 @@ Ensure client has:
 ### Local Keywords
 
 Include location in key pages:
-
 - Page titles: "Bilverkstad i Löttorp på Öland"
 - Meta descriptions: "...norra Öland..."
 - H1 headings: "Bilservice på Öland"
@@ -193,7 +190,6 @@ Every page must declare its language variants:
 ### Per-Language Optimization
 
 Each language version needs **independently optimized**:
-
 - Page title
 - Meta description
 - H1 heading
@@ -220,7 +216,6 @@ Do NOT just translate the Swedish SEO — research what users in each language a
 
 ```markdown
 Alt Text:
-
 - SE: "Mekaniker utför AC-service på personbil i Källa Fordonservice verkstad"
 - EN: "Mechanic performing AC service on car at Källa Fordonservice workshop"
 - DE: "Mechaniker führt Klimaanlagen-Service am Auto in der Källa Fordonservice Werkstatt durch"
@@ -248,27 +243,27 @@ Alt Text:
 
 ### Keyword Placement (Natural)
 
-| Location           | Priority | Guideline                                       |
-| ------------------ | -------- | ----------------------------------------------- |
-| Page title tag     | High     | Include primary keyword                         |
-| H1 heading         | High     | Include primary keyword (can differ from title) |
-| Meta description   | High     | Include primary keyword + CTA                   |
-| First paragraph    | Medium   | Mention primary keyword early                   |
-| H2 headings        | Medium   | Include secondary keywords                      |
-| Body text          | Medium   | Natural mentions, no stuffing                   |
-| Image alt text     | Medium   | Describe image, keyword if relevant             |
-| URL slug           | Medium   | Short, keyword-rich                             |
-| Internal link text | Low      | Descriptive, keyword when natural               |
+| Location | Priority | Guideline |
+|----------|----------|-----------|
+| Page title tag | High | Include primary keyword |
+| H1 heading | High | Include primary keyword (can differ from title) |
+| Meta description | High | Include primary keyword + CTA |
+| First paragraph | Medium | Mention primary keyword early |
+| H2 headings | Medium | Include secondary keywords |
+| Body text | Medium | Natural mentions, no stuffing |
+| Image alt text | Medium | Describe image, keyword if relevant |
+| URL slug | Medium | Short, keyword-rich |
+| Internal link text | Low | Descriptive, keyword when natural |
 
 ### Content Length Guidelines
 
-| Page Type    | Minimum Words | Guideline                           |
-| ------------ | ------------- | ----------------------------------- |
-| Landing page | 300           | Focused, action-oriented            |
-| Service page | 400-600       | Describe service, benefits, process |
-| Article/blog | 600-1200      | In-depth, informational             |
-| About page   | 300-500       | Story, trust, credentials           |
-| Contact page | 150-300       | Clear, practical                    |
+| Page Type | Minimum Words | Guideline |
+|-----------|--------------|-----------|
+| Landing page | 300 | Focused, action-oriented |
+| Service page | 400-600 | Describe service, benefits, process |
+| Article/blog | 600-1200 | In-depth, informational |
+| About page | 300-500 | Story, trust, credentials |
+| Contact page | 150-300 | Clear, practical |
 
 ---
 
@@ -296,25 +291,25 @@ Alt Text:
 
 ### Common Schema Types
 
-| Schema Type                    | Use For                  |
-| ------------------------------ | ------------------------ |
-| `LocalBusiness` / `AutoRepair` | Business identity        |
-| `Service`                      | Individual service pages |
-| `FAQPage`                      | FAQ sections             |
-| `BreadcrumbList`               | Navigation breadcrumbs   |
-| `Article`                      | Blog/news articles       |
-| `Organization`                 | About/corporate pages    |
+| Schema Type | Use For |
+|------------|---------|
+| `LocalBusiness` / `AutoRepair` | Business identity |
+| `Service` | Individual service pages |
+| `FAQPage` | FAQ sections |
+| `BreadcrumbList` | Navigation breadcrumbs |
+| `Article` | Blog/news articles |
+| `Organization` | About/corporate pages |
 
 ### Plan During Project Brief
 
 Document which schema types each page needs:
 
 ```markdown
-| Page            | Schema Type   | Key Properties                  |
-| --------------- | ------------- | ------------------------------- |
-| Hem             | LocalBusiness | name, address, phone, hours     |
-| Service         | Service       | name, description, provider     |
-| Nyheter article | Article       | headline, datePublished, author |
+| Page | Schema Type | Key Properties |
+|------|-------------|----------------|
+| Hem | LocalBusiness | name, address, phone, hours |
+| Service | Service | name, description, provider |
+| Nyheter article | Article | headline, datePublished, author |
 ```
 
 ---
@@ -351,8 +346,8 @@ When completing step-05, produce this section for the content-language document:
 ### Page-Keyword Map
 
 | Page | URL Slug | Primary Keyword (SE) | Primary Keyword (EN) | Primary Keyword (DE) |
-| ---- | -------- | -------------------- | -------------------- | -------------------- |
-| ...  | ...      | ...                  | ...                  | ...                  |
+|------|----------|---------------------|---------------------|---------------------|
+| ... | ... | ... | ... | ... |
 
 ### URL Structure
 
@@ -368,11 +363,11 @@ Pattern: `example.com/{slug}` (SE), `example.com/en/{slug}` (EN), `example.com/d
 
 ### Structured Data Plan
 
-| Page          | Schema Type                      |
-| ------------- | -------------------------------- |
-| All pages     | LocalBusiness (in footer/header) |
-| Service pages | Service                          |
-| Articles      | Article                          |
+| Page | Schema Type |
+|------|-------------|
+| All pages | LocalBusiness (in footer/header) |
+| Service pages | Service |
+| Articles | Article |
 
 ### Keyword Usage Guidelines
 
@@ -393,4 +388,4 @@ Pattern: `example.com/{slug}` (SE), `example.com/en/{slug}` (EN), `example.com/d
 
 ---
 
-_SEO is a first-class citizen in WDS — planned at project brief, applied at page specification, verified at quality gate._
+*SEO is a first-class citizen in WDS — planned at project brief, applied at page specification, verified at quality gate.*

@@ -65,7 +65,6 @@ metrics:
 **See:** [data/monitoring-templates.md](../data/monitoring-templates.md) for Impact Report template
 
 Key sections:
-
 - Executive summary (SUCCESS | PARTIAL | FAILURE)
 - Metrics results (baseline → target → actual)
 - What worked / what didn't

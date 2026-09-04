@@ -24,7 +24,6 @@ Router workflow used within the page specification process (called from step 4c-
 ### Step 1: Text Detection (Priority)
 
 **FIRST:** Check for horizontal line pairs
-
 - 2 parallel lines = 1 line of text
 - Multiple pairs = multiple text lines
 - Single lines = decorative (borders, dividers)
@@ -81,11 +80,9 @@ Start
 ## AVAILABLE OBJECT TYPES
 
 ### Text Elements
-
 **[Heading / Text](templates/heading-text.md)** — Headings, paragraphs, labels, captions
 
 ### Interactive Elements
-
 - **[Button](templates/button.md)** — Primary, secondary, icon buttons
 - **[Text Input](templates/text-input.md)** — Single-line inputs, search, forms
 - **[Link](templates/link.md)** — Text, navigation, action links
@@ -93,19 +90,15 @@ Start
 - Additional: Textarea, Select, Checkbox, Radio, Toggle
 
 ### Container Elements
-
 Card, Modal/Dialog, Table, List
 
 ### Navigation Elements
-
 Navigation menu, Tabs, Breadcrumbs
 
 ### Status Elements
-
 Badge, Alert/Toast, Progress indicator
 
 ### Custom Components
-
 Unique to project — decomposed via Complexity Router
 
 ---
@@ -115,7 +108,6 @@ Unique to project — decomposed via Complexity Router
 **Trust-the-Agent:** Agent interprets with reasoning, user confirms.
 
 When interpreting, explain:
-
 - What visual cues you see (placement, color, shape)
 - What you think it does (purpose, behavior)
 - Why you chose this type
@@ -127,7 +119,6 @@ User can confirm, clarify, or correct.
 ## FILES REFERENCE
 
 **Router Files:**
-
 - [object-router.md](object-router.md) — Main routing logic
 - [COMPLEXITY-ROUTER.md](COMPLEXITY-ROUTER.md) — Complexity assessment
 - [ROUTER-FLOW-DIAGRAM.md](ROUTER-FLOW-DIAGRAM.md) — Visual flow

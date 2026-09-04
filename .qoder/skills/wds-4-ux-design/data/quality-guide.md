@@ -15,26 +15,20 @@ The Page Specification Quality Workflow ensures every WDS page specification mee
 ## When to Use Quality Workflow
 
 ### During Page Creation ✨
-
 Build specifications correctly from the start:
-
 - Creating a new page specification from a sketch
 - Converting rough notes into proper spec format
 - Building specs incrementally as design evolves
 
 ### After Page Updates 🔄
-
 Validate changes maintain standards:
-
 - Updated sketch with new elements
 - Content revisions
 - Added sections or components
 - Design iteration
 
 ### Quality Audits 🔍
-
 Check existing specifications:
-
 - Pre-handoff quality check
 - Sprint review preparation
 - Onboarding new team members
@@ -65,7 +59,6 @@ Step 8: Final Validation
 ```
 
 **Workflow Philosophy:**
-
 - **Diagnose, don't rewrite** - Identify issues and suggest specific fixes
 - **Report findings** - Generate clear, actionable reports for each section
 - **Recommend solutions** - Provide examples of correct patterns
@@ -76,11 +69,9 @@ Step 8: Final Validation
 ## How to Execute Workflow
 
 ### For AI Agents (Freya)
-
 Load and execute: `workflow.md`
 
 ### For Human Designers
-
 1. Open your page specification
 2. Follow the 8 steps sequentially
 3. Use the checklists in each step file
@@ -91,7 +82,6 @@ Load and execute: `workflow.md`
 ## What This Workflow Checks
 
 ### ✅ Step 1: Page Metadata
-
 - Platform declaration present
 - Page type specified
 - Primary viewport identified
@@ -100,7 +90,6 @@ Load and execute: `workflow.md`
 - Inherits from scenario platform strategy
 
 **Why This Matters:**
-
 - Establishes technical context before design decisions
 - Ensures platform-appropriate design patterns
 - Clarifies device priorities and constraints
@@ -109,14 +98,12 @@ Load and execute: `workflow.md`
 - 📖 **Reference:** [Page Specification Template](../templates/page-specification.template.md)
 
 **Audit Report Example:**
-
 ```markdown
 🔍 Page Metadata Audit
 
 **Status:** ⚠️ WARNING - Missing platform metadata
 
 **Issues Found:**
-
 1. ❌ No Page Metadata section (should be after page title)
    - Missing: Platform, Page Type, Viewport, Interaction Model
    - Should add: Complete Page Metadata section
@@ -128,7 +115,6 @@ Load and execute: `workflow.md`
 
 **Recommendation:**
 Add Page Metadata section with:
-
 - Platform (from Product Brief/Scenario)
 - Page Type (Full Page, Modal, etc.)
 - Primary Viewport (Mobile-first, Desktop-first, etc.)
@@ -139,35 +125,30 @@ Would you like me to add the Page Metadata section?
 ```
 
 ### ✅ Step 2: Navigation Structure
-
 - H3 and H1 headers with page numbers
 - "Next Step" links before and after sketch
 - Embedded sketch image
 - Correct relative paths
 
 **Why This Matters:**
-
 - Provides immediate context for where page fits in user journey
 - Embedded sketch gives visual reference without leaving document
 - Consistent navigation enables automated tooling and cross-linking
 - 📖 **Reference:** [step-01-navigation.md](step-01-navigation.md)
 
 ### ✅ Step 3: Page Overview
-
 - Page description (1-2 paragraphs)
 - User Situation section
 - Page Purpose section
 - Emotional context and pain points
 
 **Why This Matters:**
-
 - Captures strategic intent (WHY) before implementation details (HOW)
 - Connects design decisions to user needs and trigger map
 - Provides context for developers and stakeholders
 - 📖 **Reference:** [step-02-page-overview.md](step-02-page-overview.md)
 
 ### ✅ Step 4: Page Sections
-
 - "## Page Sections" header
 - Section Objects (H3) with Purpose
 - Component specs (H4) with Object IDs
@@ -176,7 +157,6 @@ Would you like me to add the Page Metadata section?
 - Behavior specifications
 
 **Why This Matters:**
-
 - OBJECT IDs enable traceability from spec → code → Figma
 - Component references ensure design system consistency
 - Content with language tags prevents "lorem ipsum" in production
@@ -185,7 +165,6 @@ Would you like me to add the Page Metadata section?
 - 📖 **Related:** [Page Specifications Deliverable](../../../docs/deliverables/page-specifications.md)
 
 ### ✅ Step 6: Object Registry
-
 - "## Object Registry" header
 - Introduction paragraph
 - Master Object List tables
@@ -193,7 +172,6 @@ Would you like me to add the Page Metadata section?
 - Proper table formatting
 
 **Why This Matters:**
-
 - Single source of truth for all page elements
 - Enables automated testing (test by OBJECT ID)
 - Facilitates content updates and translations
@@ -201,14 +179,12 @@ Would you like me to add the Page Metadata section?
 - 📖 **Reference:** [step-04-object-registry.md](step-04-object-registry.md)
 
 ### ✅ Step 5: Section Order & Structure
-
 - Sections appear in standard WDS order
 - Required sections are present
 - Optional sections are appropriately placed
 - No duplicate or redundant sections
 
 **Standard Section Order:**
-
 1. Navigation (H3 + Next Step + Sketch + Next Step + H1)
 2. Page description paragraph
 3. User Situation
@@ -219,7 +195,6 @@ Would you like me to add the Page Metadata section?
 8. Object Registry
 
 **Why This Matters:**
-
 - Consistent structure across all page specifications
 - Strategic context (WHY) before implementation (WHAT)
 - Easy navigation for developers and stakeholders
@@ -227,14 +202,12 @@ Would you like me to add the Page Metadata section?
 - 📖 **Reference:** [Page Specification Standards](../../../docs/deliverables/page-specifications.md)
 
 **Audit Report Example:**
-
 ```markdown
 🔍 Section Structure Audit
 
 **Status:** ⚠️ WARNING - Sections out of order
 
 **Issues Found:**
-
 1. ⚠️ "Reference Materials" appears after "Page Sections" (Line 250)
    - Should be: Before "Page Sections" (around Line 20)
    - Why: Strategic context should come before implementation details
@@ -247,7 +220,6 @@ Would you like me to reorder these sections?
 ```
 
 ### ✅ Step 7: Design System Separation
-
 - NO CSS classes, hex codes, or styling values in page specs
 - NO font sizes, padding, margins, or layout measurements
 - Component references link to Design System
@@ -255,7 +227,6 @@ Would you like me to reorder these sections?
 - Styling details documented in Design System, not page specs
 
 **Why This Matters:**
-
 - Page specs focus on WHAT/WHY (strategic), not HOW (implementation)
 - Prevents specifications from becoming outdated when styles change
 - Enables design system to be single source of truth for styling
@@ -265,7 +236,6 @@ Would you like me to reorder these sections?
 - 📖 **Related:** [Prepare for Figma Export](../../../docs/tools/prepare-for-figma-export.md)
 
 **Common Violations to Check:**
-
 - ❌ CSS class names in component descriptions (`.btn-primary`, `.hero-section`)
 - ❌ Color hex codes in content (`#2F1A0C`, `rgb(255, 100, 50)`)
 - ❌ Font sizes and weights (`18px Fredoka SemiBold`, `font-size: 2rem`)
@@ -275,14 +245,12 @@ Would you like me to reorder these sections?
 - ✅ Design System links (`See [Color Palette]`, `Uses [Typography System]`)
 
 **Audit Report Example:**
-
 ```markdown
 ## Design System Separation Audit
 
 **Status:** ❌ FAIL - CSS implementation details found in specification
 
 **Critical Issues:**
-
 1. ❌ CSS styling in Hero section (Lines 45-78)
    - Found: Font sizes, colors, padding values
    - Example: "18px Fredoka SemiBold, #2F1A0C, padding: 20px"
@@ -296,14 +264,12 @@ Would you like me to reorder these sections?
    - Action: Move to Design System Breakpoints documentation
 
 **Recommendation:**
-
 - Keep: OBJECT IDs, content, behavior, strategic rationale
 - Remove: All CSS classes, hex codes, measurements, styling
 - Add: Links to Design System components
 - Add: "Page-Specific Layout Notes" section for high-level responsive behavior
 
 **Next Steps:**
-
 1. Extract styling to Design System documentation
 2. Replace CSS details with component references
 3. Add Design System links for colors/typography
@@ -313,7 +279,6 @@ Would you like me to help extract these styles to the Design System?
 ```
 
 ### ✅ Step 7 (continued): Unnecessary Information Detection
-
 - NO implementation code snippets (HTML, CSS, JavaScript)
 - NO developer instructions or technical setup steps
 - NO version control information (commit messages, PR notes)
@@ -322,7 +287,6 @@ Would you like me to help extract these styles to the Design System?
 - NO outdated/deprecated information
 
 **Why This Matters:**
-
 - Keeps specifications focused on design intent
 - Prevents confusion between spec and implementation
 - Reduces maintenance burden (less to update)
@@ -330,7 +294,6 @@ Would you like me to help extract these styles to the Design System?
 - Separates concerns (design specs vs. developer docs)
 
 **Common Unnecessary Content:**
-
 - ❌ Code examples (`<div class="hero">`, `const handleClick = () => {}`)
 - ❌ Build instructions ("Run npm install", "Deploy to staging")
 - ❌ Git history ("Added in PR #123", "Fixed by John on 2024-01-15")
@@ -342,14 +305,12 @@ Would you like me to help extract these styles to the Design System?
 - ✅ User context and page purpose
 
 **Audit Report Example:**
-
 ```markdown
 🔍 Unnecessary Information Audit
 
 **Status:** ⚠️ WARNING - Non-specification content found
 
 **Issues Found:**
-
 1. ⚠️ HTML code snippets in component descriptions (Lines 85-92)
    - Found: `<button class="btn-primary">Click me</button>`
    - Why problematic: Implementation details, not design intent
@@ -374,7 +335,6 @@ Would you like me to clean up this unnecessary content?
 ```
 
 ### ✅ Step 8: Final Validation
-
 - Cross-reference all sections
 - Verify sketch coverage
 - Check for broken links
@@ -382,7 +342,6 @@ Would you like me to clean up this unnecessary content?
 - Generate quality report
 
 **Why This Matters:**
-
 - Catches inconsistencies before handoff
 - Ensures specification completeness
 - Provides confidence for developers
@@ -396,7 +355,6 @@ Would you like me to clean up this unnecessary content?
 This workflow ensures all WDS page specifications follow a consistent, high-quality pattern.
 
 **Key Pattern Elements:**
-
 - Clear navigation with scenario context
 - Embedded sketch images
 - Section Objects with Purpose statements
@@ -411,7 +369,6 @@ This workflow ensures all WDS page specifications follow a consistent, high-qual
 At the end of Step 5, you'll have:
 
 **Comprehensive Quality Report** including:
-
 - Pass/Fail status for each section
 - List of critical issues (must fix) with **specific line numbers**
 - List of warnings (should fix) with **examples of violations**
@@ -423,35 +380,32 @@ At the end of Step 5, you'll have:
 - Next actions for handoff
 
 **Report Format Example:**
-
 ```markdown
 ## Navigation Structure Audit
 
 **Status:** ❌ FAIL
 
 **Issues Found:**
-
 1. ❌ Missing H3 header before H1
    - Location: Line 1
    - Current: `# 1.1 Start Page`
    - Should be: `### 1.1 Start Page` (add H3 before H1)
+   
 2. ❌ Missing embedded sketch in navigation
    - Location: Between lines 3-5
    - Should add: `![Start Page Concept](sketches/...)`
-
+   
 **Recommendation:**
 Add H3 header and embed sketch between dual "Next Step" links.
 See: step-01-navigation.md for correct format.
 ```
 
 **Report Status Levels:**
-
 - ✅ **READY FOR HANDOFF** - Zero critical issues, ready for dev
 - ⚠️ **NEEDS REVISION** - 1-3 critical issues, fixable quickly
 - ❌ **INCOMPLETE** - 4+ critical issues, needs substantial work
 
 **Agent Behavior:**
-
 - **Report findings** - Don't automatically fix unless asked
 - **Provide line numbers** - Make issues easy to locate
 - **Show examples** - Include correct patterns for reference
@@ -465,19 +419,16 @@ See: step-01-navigation.md for correct format.
 When a page specification passes all quality checks and is ready for development handoff, the agent can offer to add a brief audit stamp at the bottom of the document.
 
 **When to Add:**
-
 - Page passes all quality checks (✅ READY FOR HANDOFF)
 - Designer confirms page is ready for development
 - Team wants handoff tracking in the document itself
 
 **When NOT to Add:**
-
 - Page still has critical issues
 - Specification is work-in-progress
 - Team prefers external audit tracking
 
 **Audit Stamp Format:**
-
 ```markdown
 ---
 
@@ -488,7 +439,6 @@ When a page specification passes all quality checks and is ready for development
 **Audited By:** Freya (WDS Page Audit Workflow v1.0)
 
 **Compliance:**
-
 - ✅ Navigation Structure (WDS Standard)
 - ✅ Page Overview (Strategic Context)
 - ✅ Section Order & Structure
@@ -500,7 +450,6 @@ When a page specification passes all quality checks and is ready for development
 ```
 
 **Design Log:**
-
 ```
 🎉 Audit Complete - All Checks Passed!
 
@@ -529,7 +478,6 @@ The audit stamp can be easily removed later if needed (it's always at the bottom
 **Scenario:** Designer uploads a new sketch and needs to create specification.
 
 **Process:**
-
 1. Run Step 1: Confirm page metadata from scenario
 2. Run Step 2: Generate navigation structure
 3. Run Step 3: Define page overview based on trigger map
@@ -548,7 +496,6 @@ The audit stamp can be easily removed later if needed (it's always at the bottom
 **Scenario:** Designer updates existing sketch with new elements.
 
 **Process:**
-
 1. Skip to Step 4: Check existing sections
 2. Add new sections/objects from updated sketch
 3. Run Step 6: Update Object Registry with new IDs
@@ -563,7 +510,6 @@ The audit stamp can be easily removed later if needed (it's always at the bottom
 **Scenario:** Team lead wants to verify spec quality before developer handoff.
 
 **Process:**
-
 1. Run entire workflow in "validation mode"
 2. Step 1-7: Check each section against checklists
 3. Step 8: Generate comprehensive quality report
@@ -579,7 +525,6 @@ The audit stamp can be easily removed later if needed (it's always at the bottom
 **Scenario:** Old specification doesn't follow WDS standards.
 
 **Process:**
-
 1. Run Step 1-4 in "validation mode" to identify gaps
 2. Fix missing navigation structure
 3. Add missing Object IDs to all interactive elements
@@ -593,28 +538,24 @@ The audit stamp can be easily removed later if needed (it's always at the bottom
 ## Benefits
 
 ### For Designers 🎨
-
 - Clear checklist to follow
 - Confidence nothing is missed
 - Professional, consistent output
 - Easy communication with developers
 
 ### For Developers 💻
-
 - Complete, trustworthy specifications
 - All interactive elements have Object IDs
 - Clear implementation order (top to bottom)
 - Easy to test (Object IDs as test targets)
 
 ### For Teams 👥
-
 - Shared quality standards
 - Consistent specification format
 - Easy onboarding for new members
 - Reduced back-and-forth during handoff
 
 ### For Project Management 📊
-
 - Clear completion criteria
 - Quality metrics tracking
 - Reduced rework
@@ -626,23 +567,20 @@ The audit stamp can be easily removed later if needed (it's always at the bottom
 
 This quality workflow integrates with:
 
-**Before:**
-
+**Before:** 
 - [Page Init Workflow](../steps-s/ and ../data/page-creation-flows/) - Creates initial page structure
 - [Sketch Analysis](../steps-k/step-01-sketch-analysis.md) - Identifies page elements
 
 **After:**
-
 - [Agentic Development](../../wds-5-agentic-development/) - Builds HTML demos from specs
 - [Handover](../steps-h/) - Packages specs for handoff
-- [Platform Requirements](../../../wds-1-project-brief/steps-c/ 'steps 27-32') - Technical boundaries from specs
+- [Platform Requirements](../../../wds-1-project-brief/steps-c/ (steps 27-32)) - Technical boundaries from specs
 
 ---
 
 ## Tips for Success
 
 ### Do:
-
 - ✅ Run the workflow every time you create or update a page
 - ✅ Use checklists systematically (don't skip items)
 - ✅ Fix critical issues before proceeding to next step
@@ -650,7 +588,6 @@ This quality workflow integrates with:
 - ✅ Track metrics over time to improve process
 
 ### Don't:
-
 - ❌ Skip steps (each builds on the previous)
 - ❌ Ignore warnings (they become critical issues later)
 - ❌ Rush through validation (thoroughness matters)
@@ -666,14 +603,12 @@ This quality workflow integrates with:
 You can customize this workflow by:
 
 **Adjusting Standards:**
-
 - Modify Object ID naming conventions
 - Add project-specific sections
 - Extend validation checklists
 - Add custom quality metrics
 
 **Adding Steps:**
-
 - Step 3.5: Accessibility audit
 - Step 4.5: Content strategy review
 - Step 5.5: Stakeholder approval
@@ -689,18 +624,15 @@ Customizations should be documented in:
 ### Questions or Issues?
 
 **Documentation:**
-
 - [WDS Specification Pattern](../guides/WDS-SPECIFICATION-PATTERN.md)
 - [Object Types](../object-types/)
 - [Component File Structure](../modular-architecture/COMPONENT-FILE-STRUCTURE.md)
 
 **Examples:**
-
 - See fictional TaskFlow examples in workflow steps
 - Check existing WDS project specifications for real-world patterns
 
 **Contact:**
-
 - File issues in project repo
 - Discuss in team channel
 - Reference this workflow in PRs
@@ -710,7 +642,6 @@ Customizations should be documented in:
 ## Version History
 
 **v1.0.0** - 2025-12-28
-
 - Initial release
 - Pattern extracted from successful WDS projects
 - 6-step sequential workflow
@@ -719,3 +650,4 @@ Customizations should be documented in:
 ---
 
 **Start the workflow:** [workflow.md](workflow.md)
+

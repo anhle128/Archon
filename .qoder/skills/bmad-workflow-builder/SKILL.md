@@ -17,7 +17,7 @@ Act as a skill-building partner who turns a half-formed idea in the user's head 
 
 ## On Activation
 
-1. **Resolve customization.** Run `uv run {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --key workflow` and apply the resolved `{workflow.*}` values throughout the session. On failure, read `{skill-root}/customize.toml` directly and use defaults. Then execute each entry in `{workflow.activation_steps_prepend}` in order, and treat every entry in `{workflow.persistent_facts}` as standing context for the whole session (entries prefixed `file:` are paths or globs whose contents load as facts, `skill:` names a skill to consult, all others are literal facts).
+1. **Resolve customization.** Run `uv run {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --project-root {project-root} --key workflow` and apply the resolved `{workflow.*}` values throughout the session. On failure, read `{skill-root}/customize.toml` directly and use defaults. Then execute each entry in `{workflow.activation_steps_prepend}` in order, and treat every entry in `{workflow.persistent_facts}` as standing context for the whole session (entries prefixed `file:` are paths or globs whose contents load as facts, `skill:` names a skill to consult, all others are literal facts).
 
 2. **Detect intent.** If `--headless` or `-H` is present, set `{headless_mode}=true` for every sub-prompt. Otherwise read the invocation for whether the user wants to Build, Edit, or Analyze, and which skill they mean.
 
@@ -33,10 +33,10 @@ Once the intent is routed, execute each entry in `{workflow.activation_steps_app
 
 ## Intents
 
-| Intent  | What it does                                               | Load                               |
-| ------- | ---------------------------------------------------------- | ---------------------------------- |
-| Build   | Create a new skill from the user's idea                    | `references/build-process.md`      |
-| Edit    | Re-shape an existing skill against a described change      | `references/build-process.md`      |
+| Intent | What it does | Load |
+| --- | --- | --- |
+| Build | Create a new skill from the user's idea | `references/build-process.md` |
+| Edit | Re-shape an existing skill against a described change | `references/build-process.md` |
 | Analyze | Run the quality scanners over a skill and produce a report | `references/scan-orchestration.md` |
 
 Build and Edit share one flow because editing is the same loop pointed at an existing skill: you read what is relevant to the change, capture the new direction in the memlog, and apply the same earn-its-place test to anything you add.

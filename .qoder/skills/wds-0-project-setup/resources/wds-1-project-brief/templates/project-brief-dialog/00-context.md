@@ -18,7 +18,6 @@
 ## Working Relationship Context
 
 ### Stakes
-
 **Level:** {{personal|business|departmental|enterprise}}
 
 **What this means:**
@@ -49,7 +48,6 @@
 **Justification Level:** {{trust_based|balanced|evidence_based}}
 
 **Adapted approach:**
-
 - Tone: {{tone_description}}
 - Detail level: {{detail_level}}
 - Evidence requirements: {{evidence_approach}}

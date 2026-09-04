@@ -95,7 +95,6 @@
 {{interaction_models}}
 
 **Technical Requirements:**
-
 - **Offline Functionality:** {{offline_requirements}}
 - **Native Features:** {{native_features_needed}}
 
@@ -122,28 +121,24 @@
 1. **{{tone_attribute_1}}**: {{tone_description_1}}
 2. **{{tone_attribute_2}}**: {{tone_description_2}}
 3. **{{tone_attribute_3}}**: {{tone_description_3}}
-   {{#if tone_attribute_4}}4. **{{tone_attribute_4}}**: {{tone_description_4}}{{/if}}
-   {{#if tone_attribute_5}}5. **{{tone_attribute_5}}**: {{tone_description_5}}{{/if}}
+{{#if tone_attribute_4}}4. **{{tone_attribute_4}}**: {{tone_description_4}}{{/if}}
+{{#if tone_attribute_5}}5. **{{tone_attribute_5}}**: {{tone_description_5}}{{/if}}
 
 ### Examples
 
 **Error Messages:**
-
 - ✅ {{tone_example_error_good}}
 - ❌ {{tone_example_error_bad}}
 
 **Button Text:**
-
 - ✅ {{tone_example_button_good}}
 - ❌ {{tone_example_button_bad}}
 
 **Empty States:**
-
 - ✅ {{tone_example_empty_good}}
 - ❌ {{tone_example_empty_bad}}
 
 **Success Messages:**
-
 - ✅ {{tone_example_success_good}}
 - ❌ {{tone_example_success_bad}}
 
@@ -157,7 +152,7 @@
 
 ---
 
-_Note: Tone of Voice applies to UI microcopy (labels, buttons, errors, system messages). Strategic content (headlines, feature descriptions, value propositions) uses the Content Creation Workshop based on page-specific purpose and context._
+*Note: Tone of Voice applies to UI microcopy (labels, buttons, errors, system messages). Strategic content (headlines, feature descriptions, value propositions) uses the Content Creation Workshop based on page-specific purpose and context.*
 
 ---
 
@@ -173,7 +168,7 @@ _Note: Tone of Voice applies to UI microcopy (labels, buttons, errors, system me
 - **Solution:** {{solution}}
 - **Target Users:** {{target_users}}
 
-_Full strategic analysis (business goals, personas, driving forces) is developed in [Phase 2: Trigger Mapping](../B-Trigger-Map/)._
+*Full strategic analysis (business goals, personas, driving forces) is developed in [Phase 2: Trigger Mapping](../B-Trigger-Map/).*
 
 ---
 

@@ -31,7 +31,6 @@ With `[target-agent]`: wraps own session AND writes a handoff to `progress/[targ
 
     **Call threshold:** If this session has had 15+ tool calls, surface once as part of step 2:
     `Note: session at [N] calls — good time to wrap for fresh context.`
-
   </step>
 
   <step id="1-compile">
@@ -62,7 +61,6 @@ With `[target-agent]`: wraps own session AND writes a handoff to `progress/[targ
 
     **spec_sync:** Did anything change that diverges from a written spec/brief/doc?
     "None" if nothing changed.
-
   </step>
 
   <step id="2-show">
@@ -78,7 +76,6 @@ With `[target-agent]`: wraps own session AND writes a handoff to `progress/[targ
     [If call threshold reached: print "Note: session at [N] calls — good time to wrap."]
 
     Wait for no input. Proceed immediately to step 3.
-
   </step>
 
   <step id="3-subagent">
@@ -151,7 +148,6 @@ With `[target-agent]`: wraps own session AND writes a handoff to `progress/[targ
 
     **If the subagent fails at any step:** complete the remaining steps manually.
     Failure does not excuse skipping the final output.
-
   </step>
 
   <step id="4-handoff" condition="only if target-agent argument was given">
@@ -197,7 +193,6 @@ With `[target-agent]`: wraps own session AND writes a handoff to `progress/[targ
 
     **The command block above is always the last thing output. Nothing is printed after it —
     no summary, no explanation, no confirmation. The block is the signal that the wrap is complete.**
-
   </step>
 
 </wrap-steps>

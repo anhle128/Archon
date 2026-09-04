@@ -7,7 +7,6 @@
 ## Detection
 
 The status script returns `session_state` in CSV column 6:
-
 - `crashed` - Session exited with non-zero exit code (column 5 = exit code, column 4 = output file)
 - `not_found` - Session disappeared (killed, crashed without trace)
 
@@ -15,12 +14,12 @@ The status script returns `session_state` in CSV column 6:
 
 ## Recovery Logic
 
-| Condition                  | Action                                     |
-| -------------------------- | ------------------------------------------ |
+| Condition | Action |
+|-----------|--------|
 | `crashed` with output file | Read output, check partial progress, retry |
-| `not_found` (no output)    | Session died silently, retry immediately   |
-| Retry 1 failed             | Retry with `-r2` suffix in session name    |
-| Retry 2 failed             | Escalate to user with diagnostics          |
+| `not_found` (no output) | Session died silently, retry immediately |
+| Retry 1 failed | Retry with `-r2` suffix in session name |
+| Retry 2 failed | Escalate to user with diagnostics |
 
 ---
 
@@ -63,7 +62,6 @@ fi
 ```
 
 **Fallback flow:**
-
 1. Primary agent crashes after 2 retries
 2. IF `fallback != "false"` AND haven't tried fallback yet
 3. Switch `AI_AGENT` to fallback agent
@@ -79,7 +77,6 @@ fi
 ## Escalation (after exhausting all retries)
 
 Display:
-
 ```
 **Session crashed for Story {N}**
 
@@ -102,7 +99,6 @@ Show any partial output captured for diagnostics.
 ## Integration with Adaptive Retry
 
 Crash recovery is SEPARATE from adaptive retry:
-
 - **Adaptive retry** = session completed but FAILED (wrong output, tests failed)
 - **Crash recovery** = session DIED unexpectedly (context limit, API error, kill)
 
@@ -118,7 +114,6 @@ Track both counters independently.
 When the orchestrator uses background tasks (e.g., Bash with `run_in_background`) to monitor tmux sessions, the monitoring task itself can crash. This is **different** from the tmux session crashing.
 
 **Observed failure mode:**
-
 1. Orchestrator spawns background task to run create+dev+monitor loop
 2. Background task crashes after dev-story completes
 3. TaskOutput shows "running" but task is dead
@@ -130,19 +125,18 @@ When the orchestrator uses background tasks (e.g., Bash with `run_in_background`
 
 Signs that your monitoring task has crashed (not the tmux session):
 
-| Signal                              | Meaning                  |
-| ----------------------------------- | ------------------------ |
-| `TaskOutput` returns empty 2+ times | Task may be dead         |
-| Output file path doesn't exist      | Task never wrote results |
-| "running" status but no progress    | Task is stuck or dead    |
-| Background task ID invalid          | Task crashed             |
+| Signal | Meaning |
+|--------|---------|
+| `TaskOutput` returns empty 2+ times | Task may be dead |
+| Output file path doesn't exist | Task never wrote results |
+| "running" status but no progress | Task is stuck or dead |
+| Background task ID invalid | Task crashed |
 
 ### Recovery Sequence
 
 **See `monitoring-fallback.md` for detailed fallback patterns.**
 
 Quick reference:
-
 1. Stop waiting on dead monitoring task
 2. Find tmux sessions: `tmux list-sessions | grep "sa-.*e{epic}-s{story}"`
 3. Check session status directly: `story-automator tmux-status-check`

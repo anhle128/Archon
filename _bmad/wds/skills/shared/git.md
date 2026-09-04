@@ -16,13 +16,13 @@ All agents follow this when committing, branching, and handing off.
 Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 ```
 
-| Type       | When                            |
-| ---------- | ------------------------------- |
-| `feat`     | New feature or capability       |
-| `fix`      | Bug fix                         |
-| `bump`     | Version number update           |
-| `docs`     | Documentation only              |
-| `chore`    | Maintenance, config, tooling    |
+| Type | When |
+|------|------|
+| `feat` | New feature or capability |
+| `fix` | Bug fix |
+| `bump` | Version number update |
+| `docs` | Documentation only |
+| `chore` | Maintenance, config, tooling |
 | `refactor` | Restructure, no behavior change |
 
 - One logical change per commit

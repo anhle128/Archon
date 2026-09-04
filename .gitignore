@@ -124,3 +124,7 @@ test-results/
 
 # Stray run logs from a mis-threaded logDir argument (see #2299) — never committed.
 main/
+.bmad-loop/runs/
+.bmad-loop/cache/
+.bmad-loop/policy.toml
+_bmad/render/

@@ -242,7 +242,6 @@ For each component:
 **Workflows:**
 
 **A. Figma → WDS (Existing):**
-
 1. Designer creates/updates component in Figma
 2. Designer adds WDS component ID to description
 3. MCP reads component via Figma API
@@ -250,7 +249,6 @@ For each component:
 5. Designer reviews and confirms
 
 **B. Prototype → Figma → WDS (NEW):**
-
 1. HTML prototype created (Phase 4D)
 2. Extract to Figma using html.to.design
 3. Designer refines visual design in Figma

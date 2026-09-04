@@ -1,6 +1,8 @@
 ---
 name: bmad-create-architecture
-description: 'Deprecated — forwards to bmad-architecture (create intent).'
+description: 'Deprecated — forwards to bmad-architecture (create intent)'
+metadata:
+  lifecycle: shim
 ---
 
 # DEPRECATED — forwards to bmad-architecture (create intent)
@@ -9,7 +11,7 @@ This skill was consolidated into `bmad-architecture`. It is retained as a thin c
 
 ## On Activation
 
-1. Resolve customization: `python3 {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --key workflow`. This picks up any `{project-root}/_bmad/custom/bmad-create-architecture.toml` and `bmad-create-architecture.user.toml` overrides for the legacy fields (`activation_steps_prepend`, `activation_steps_append`, `persistent_facts`, `on_complete`).
+1. Resolve customization: `uv run {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --project-root {project-root} --key workflow`. This picks up any `{project-root}/_bmad/custom/bmad-create-architecture.toml` and `bmad-create-architecture.user.toml` overrides for the legacy fields (`activation_steps_prepend`, `activation_steps_append`, `persistent_facts`, `on_complete`).
 
 2. Load `{project-root}/_bmad/bmm/config.yaml` (and `config.user.yaml` if present) to resolve `{user_name}` and `{communication_language}`.
 
@@ -18,6 +20,7 @@ This skill was consolidated into `bmad-architecture`. It is retained as a thin c
    > Notice: `bmad-create-architecture` is deprecated and will be removed in a future release. It now forwards to `bmad-architecture` with create intent. To silence this notice and access the full new customization surface (`spine_template`, `spine_output_path`, `run_folder_pattern`, `doc_standards`, `external_sources`, `external_handoffs`, `finalize_reviewers`), migrate `_bmad/custom/bmad-create-architecture.toml` to `_bmad/custom/bmad-architecture.toml` and invoke `bmad-architecture` directly next time. Customization fields that were in this version still remain in the new version and will be respected if present in `_bmad/custom/bmad-architecture.toml`, but the new version also supports additional fields that you can take advantage of by migrating.
 
 4. Invoke `bmad-architecture` with the following context. Pass these as the activating context so `bmad-architecture` honors them instead of resolving its own customization from scratch:
+
    - **Intent:** `create` — skip `bmad-architecture`'s usual intent detection step.
    - **Pre-resolved legacy customization** — use these in place of resolving from `bmad-architecture`'s own `customize.toml` for the four legacy fields. For everything else (`spine_template`, `spine_output_path`, `run_folder_pattern`, `doc_standards`, `external_sources`, `external_handoffs`, `finalize_reviewers`), use `bmad-architecture`'s own defaults and overrides as normal:
      - `activation_steps_prepend` = the resolved value from step 1

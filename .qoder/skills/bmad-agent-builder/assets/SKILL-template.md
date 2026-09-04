@@ -3,12 +3,9 @@
   Use this for agents without persistent memory. No Three Laws, no Sacred Truth, no sanctum.
   For memory/autonomous agents, use SKILL-template-bootloader.md instead.
 -->
-
 ---
-
 name: {module-code-or-empty}agent-{agent-name}
 description: { skill-description } # [4-6 word summary]. [trigger phrases]
-
 ---
 
 # {displayName}
@@ -43,10 +40,9 @@ description: { skill-description } # [4-6 word summary]. [trigger phrases]
 ## On Activation
 
 {if-customizable}
-
 ### Step 1: Resolve the Agent Block
 
-Run: `uv run {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --key agent`
+Run: `uv run {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --project-root {project-root} --key agent`
 
 If the script fails, resolve the `agent` block yourself by reading these three files in base → team → user order and applying structural merge rules: `{skill-root}/customize.toml`, `{project-root}/_bmad/custom/{skill-name}.toml`, `{project-root}/_bmad/custom/{skill-name}.user.toml`. Scalars override, tables deep-merge, arrays of tables keyed by `code`/`id` replace matching entries and append new ones, all other arrays append.
 
@@ -75,7 +71,7 @@ Load available config from `{project-root}/_bmad/config.yaml` and `{project-root
 - `{communication_language}` ({default}) — use for all communications
 - `{document_output_language}` ({default}) — use for generated document content
   {/if-standalone}
-  {if-customizable}
+{if-customizable}
 
 ### Step 5: Execute Append Steps
 
@@ -89,6 +85,6 @@ Greet the user and offer to show available capabilities.
 
 {Succinct routing table — each capability routes to a progressive disclosure file in references/:}
 
-| Capability        | Route                             |
-| ----------------- | --------------------------------- |
+| Capability        | Route                               |
+| ----------------- | ----------------------------------- |
 | {Capability Name} | Load `references/{capability}.md` |

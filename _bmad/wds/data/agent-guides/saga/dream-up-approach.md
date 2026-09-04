@@ -35,14 +35,12 @@ Layer 5: Self-Review Against Standards
 ## When to Offer Dream Up Modes
 
 ### Offer When:
-
 ✅ User requests artifact generation (Trigger Map, Product Brief companions)
 ✅ Product Brief exists from Phase 1 (provides substance)
 ✅ Quality rubric exists for the artifact type
 ✅ Task is structured generation (not pure discovery)
 
 ### Don't Offer When:
-
 ❌ Pure discovery conversation (no artifact to generate)
 ❌ No Product Brief exists yet (no substance to work with)
 ❌ User explicitly wants dialog/workshop approach
@@ -77,7 +75,6 @@ Choose: [W] Workshop | [S] Suggest | [D] Dream
 ```
 
 **If user unsure, recommend based on:**
-
 - Product Brief quality (rich → Suggest/Dream, sparse → Workshop)
 - User skill level (beginner → Workshop, comfortable → Suggest/Dream)
 - Time constraints (limited time → Dream)
@@ -92,7 +89,6 @@ Choose: [W] Workshop | [S] Suggest | [D] Dream
 ### For Phase 2 (Trigger Mapping)
 
 **Load these WDS learning materials:**
-
 ```
 docs/method/phase-wds-2-trigger-mapping-guide.md
 docs/quick-start/0wds-2-trigger-mapping.md
@@ -104,7 +100,6 @@ docs/method/dream-up-rubric-phase-2.md
 **Learn and internalize:**
 
 #### Structure Requirements
-
 - Business Goals Layer (vision + SMART objectives)
 - Product/Solution Hub
 - Target Groups (3-4 max, prioritized)
@@ -114,7 +109,6 @@ docs/method/dream-up-rubric-phase-2.md
 - Optional: Feature Impact Analysis, Visual Diagram
 
 #### Quality Criteria (7 standards)
-
 1. **Strategic Depth** - Reveal specific psychology, not surface observations
 2. **Usage Context Clarity** - Usage goals, not life goals
 3. **Persona Depth** - Psychological, not demographic
@@ -124,14 +118,12 @@ docs/method/dream-up-rubric-phase-2.md
 7. **Business Goal Connection** - Every user serves a goal
 
 #### Common Mistakes to Avoid
-
 - ❌ Solutions on the map (keep psychology, not features)
 - ❌ Generic/obvious forces (be specific to context)
 - ❌ Demographic personas (focus on psychology)
 - ❌ Inconsistent priority (make hard choices)
 
 #### Best Practices
-
 - ✅ Alliterative persona names (memorable, hints at role)
 - ✅ Equal weight to negative drivers (loss aversion is powerful)
 - ✅ Context declaration (explicit usage context)
@@ -143,19 +135,16 @@ docs/method/dream-up-rubric-phase-2.md
 ## Layer 1: WDS Form Learned
 
 ### Methodology Loaded
-
 - Phase 2 Trigger Mapping Guide
 - Quality Rubric with 7 criteria
 - Impact/Effect Mapping model
 
 ### Structure Internalized
-
 - 4 core layers: Goals → Product → Groups → Drivers
 - Prioritization required at each level
 - Personas with psychological depth, not demographics
 
 ### Quality Standards
-
 - Minimum threshold: 7/9 complete, 5/7 quality, 4/4 mistakes avoided
 - Excellence threshold: 9/9 complete, 7/7 quality, 4/4 practices followed
 
@@ -167,7 +156,6 @@ docs/method/dream-up-rubric-phase-2.md
 ### For Phase 3 (Scenarios)
 
 **Load these WDS learning materials:**
-
 ```
 src/workflows/wds-3-scenarios/data/quality-checklist.md
 src/workflows/wds-3-scenarios/data/scenario-outline-template.md
@@ -177,7 +165,6 @@ src/workflows/wds-3-scenarios/data/validation-standards.md
 **Learn and internalize:**
 
 #### Structure Requirements
-
 - Scenario has 7 required components (Name, Core Feature, Entry Point, Mental State, Success Goals, Shortest Path, Trigger Map Connections)
 - Entry points must be realistic (device + context + discovery) — max 2 sentences
 - Mental states must be visceral (Trigger/Hope/Worry) — one sentence each
@@ -185,7 +172,6 @@ src/workflows/wds-3-scenarios/data/validation-standards.md
 - Success goals must be mutual (user + business, both measurable)
 
 #### Quality Criteria (from quality-checklist.md)
-
 1. **Persona Alignment** — Serves specific Trigger Map persona
 2. **Mental State Richness** — Visceral, not generic
 3. **Mutual Success Clarity** — Both specific and measurable
@@ -195,7 +181,6 @@ src/workflows/wds-3-scenarios/data/validation-standards.md
 7. **Business Goal Connection** — Traces to Trigger Map
 
 #### Common Mistakes to Avoid
-
 - Edge cases in sunshine path (zero "if" statements)
 - Feature-first naming (use persona + purpose)
 - Missing mental state components
@@ -213,7 +198,6 @@ src/workflows/wds-3-scenarios/data/validation-standards.md
 ### Initial Load: Product Brief (Start of Phase 2)
 
 **Read these files:**
-
 ```
 {output_folder}/A-Product-Brief/product-brief.md
 {output_folder}/A-Product-Brief/content-language.md
@@ -224,14 +208,12 @@ src/workflows/wds-3-scenarios/data/validation-standards.md
 **Extract and summarize:**
 
 #### Business Context
-
 - Business name, location, industry, services
 - Market position, reputation, years in business
 - Current challenges (what problem does product solve)
 - Success criteria (what winning looks like)
 
 #### User Archetypes (from Product Brief)
-
 - Each archetype name and description
 - Their context (when do they use product)
 - Their needs/goals (high-level)
@@ -240,14 +222,12 @@ src/workflows/wds-3-scenarios/data/validation-standards.md
 **Note:** These archetypes will be deepened into personas with driving forces in Phase 2.
 
 #### Constraints
-
 - Technical: Platform, tech stack, integrations
 - Business: Budget, timeline, resources, maintenance level
 - Scope: What's in/out
 - Brand: Tone, personality, visual direction, keywords
 
 #### Strategic Direction
-
 - Business goals mentioned in brief
 - Target audience priorities
 - SEO keywords (if relevant)
@@ -259,26 +239,22 @@ src/workflows/wds-3-scenarios/data/validation-standards.md
 ## Layer 2: Project Context (Initial Load)
 
 ### From Product Brief
-
 **Business:** Källa Fordonservice AB, car mechanic on northern Öland, 20+ years, 4.8/5 rating
 **Challenge:** Repetitive phone calls about basic info, no website presence
 **Goal:** Reduce admin burden while maintaining findability
 
 ### User Archetypes (to deepen)
-
 1. **Tomas the Tourist** - Summer visitor, car trouble, stressed, needs immediate help
 2. **Lennart the Local** - Year-round resident, loyal customer, checks hours
 3. **Farmer Fredrik** - Agricultural equipment, understands wait times
 4. **Motorhome Maria** - RV passing through, specialized expertise needed
 
 ### Constraints
-
 - Technical: WordPress + Tailwind, mobile-first, low maintenance
 - Business: Björn at capacity, phone-first contact strategy
 - Brand: Professional but unpretentious, warm and practical tone
 
 ### Strategic Direction
-
 - Primary: Reduce repetitive info calls
 - Secondary: Rank for "bilverkstad Öland" keywords
 - Future: AI phone assistant integration
@@ -287,13 +263,10 @@ src/workflows/wds-3-scenarios/data/validation-standards.md
 ### Cumulative Growth: Add After Each Step
 
 **After Business Goals created:**
-
 ```markdown
 ### Business Goals (Added to Layer 2)
-
 **Vision:** [Inspirational direction]
 **SMART Objectives:**
-
 1. [Measurable target]
 2. [Measurable target]
 3. [Measurable target]
@@ -302,10 +275,8 @@ src/workflows/wds-3-scenarios/data/validation-standards.md
 ```
 
 **After Target Groups created:**
-
 ```markdown
 ### Target Groups (Added to Layer 2)
-
 **Primary 👥:** [Group name] - [Why they matter to Goal 1]
 **Secondary 👤:** [Group name] - [Why they matter]
 **Tertiary:** [Group name] - [Why they matter]
@@ -314,12 +285,9 @@ src/workflows/wds-3-scenarios/data/validation-standards.md
 ```
 
 **After Driving Forces created:**
-
 ```markdown
 ### Driving Forces (Added to Layer 2)
-
 **Per Persona:**
-
 - Positive Drivers (✅): [List]
 - Negative Drivers (❌): [List]
 
@@ -327,10 +295,8 @@ src/workflows/wds-3-scenarios/data/validation-standards.md
 ```
 
 **After Prioritization created:**
-
 ```markdown
 ### Prioritization (Added to Layer 2)
-
 - Goals ranked: [Order]
 - Groups ranked: [Order]
 - Drivers ranked per persona: [Top 3 each]
@@ -343,16 +309,13 @@ src/workflows/wds-3-scenarios/data/validation-standards.md
 ### For Phase 3: Cumulative Context Growth
 
 **Initial Load (start of Phase 3):**
-
 - Product Brief (all 4 documents from Phase 1)
 - Trigger Map (all documents from Phase 2)
 - Strategic context (business goal, persona, driving forces)
 
 **After each scenario outlined:**
-
 ```markdown
 ### Scenario [NN] (Added to Layer 2)
-
 **Persona:** [Name]
 **Pages covered:** [List]
 **Driving forces addressed:** [Which ones from Trigger Map]
@@ -370,19 +333,16 @@ src/workflows/wds-3-scenarios/data/validation-standards.md
 ### Research Per Step
 
 **For Business Goals:**
-
 - WebSearch: "[Industry] business goals best practices"
 - WebSearch: "[Business type] success metrics"
 - Look for: Common SMART objectives in this industry
 
 **For Target Groups:**
-
 - WebSearch: "[Business type] customer types"
 - WebSearch: "[Location/context] user behavior"
 - Look for: Who actually uses these services and why
 
 **Example for Källa (Car Mechanic on Öland):**
-
 ```
 WebSearch: "car mechanic rural tourist area customer types"
 WebSearch: "northern Öland tourism caravan RV statistics"
@@ -390,13 +350,11 @@ WebSearch: "seasonal mechanic business challenges Sweden"
 ```
 
 **For Driving Forces:**
-
 - WebSearch: "[User type] pain points frustrations"
 - WebSearch: "[Service] user reviews complaints"
 - Look for: Real user voices, forums, review sites
 
 **Example for Tourist persona:**
-
 ```
 WebSearch: "car breakdown vacation stress what customers want"
 WebSearch: "tourist mechanic trust safety concerns"
@@ -404,7 +362,6 @@ Forums: Reddit r/travel, car forums about breakdowns while traveling
 ```
 
 **For Prioritization:**
-
 - WebSearch: "[Business type] what matters most to customers"
 - WebSearch: "[Industry] feature prioritization"
 - Competitor analysis: What do similar businesses emphasize?
@@ -417,7 +374,6 @@ Forums: Reddit r/travel, car forums about breakdowns while traveling
 ### Step: [Current step name]
 
 **Research Conducted:**
-
 1. WebSearch: "[Query]"
    - Finding: [Key insight]
    - Relevance: [How this informs generation]
@@ -427,7 +383,6 @@ Forums: Reddit r/travel, car forums about breakdowns while traveling
    - Relevance: [How this informs generation]
 
 **Key Insights:**
-
 - [Domain-specific pattern discovered]
 - [Industry standard identified]
 - [User behavior validated]
@@ -439,19 +394,16 @@ Forums: Reddit r/travel, car forums about breakdowns while traveling
 ### For Phase 3 (Scenarios)
 
 **For Entry Points:**
-
 - WebSearch: "[user type] how they find [service type]"
 - WebSearch: "[device type] user behavior [context]"
 - Look for: Real search terms, realistic discovery paths, device usage statistics
 
 **For Mental States:**
-
 - WebSearch: "[situation] user emotions anxiety"
 - WebSearch: "[service] customer reviews pain points"
 - Look for: Actual user language from reviews and forums — visceral, specific feelings
 
 **For Shortest Paths:**
-
 - WebSearch: "[similar service] website user flow best practices"
 - WebSearch: "[industry] conversion funnel steps"
 - Look for: Industry-standard page flows, minimum viable steps for this type of service
@@ -470,7 +422,6 @@ Forums: Reddit r/travel, car forums about breakdowns while traveling
 ## Generation Plan: [Artifact name]
 
 **Applying:**
-
 - WDS Form: [Structure from Layer 1]
 - Project Context: [All prior artifacts from Layer 2]
 - Domain Research: [Insights from Layer 3]
@@ -486,61 +437,51 @@ Forums: Reddit r/travel, car forums about breakdowns while traveling
 #### Step 1: Business Goals
 
 **Input:**
-
 - Form: Vision + SMART objectives structure (Layer 1)
 - Substance: Product Brief goals and success criteria (Layer 2)
 - Research: Industry best practices for this business type (Layer 3)
 
 **Generate:**
-
 1. Vision statement (inspirational, directional)
 2. 3-5 SMART objectives (measurable, time-bound)
 3. Connection to product/solution
 
 **Example Output Structure:**
-
 ```markdown
 ## Business Goals
 
 ### Vision
-
 [Inspirational statement about where business is going]
 
 ### SMART Objectives
-
 1. [Specific - Measurable - Achievable - Relevant - Time-bound]
 2. [...]
 3. [...]
 
 ### Product Connection
-
 [How the product/website serves these goals]
 ```
 
 #### Step 2: Target Groups
 
 **Input:**
-
 - Form: 3-4 groups max, prioritized, connected to goals (Layer 1)
 - Substance: Product Brief archetypes + Business Goals (Layer 2)
 - Research: Customer types for this industry + location (Layer 3)
 
 **Generate:**
-
 1. Refine Product Brief archetypes into strategic target groups
 2. Connect each to business goals they serve
 3. Prioritize: Primary 👥, Secondary 👤, Tertiary
 4. Create detailed persona for each
 
 **Persona Template (Psychological Depth):**
-
 ```markdown
 ### [Alliterative Name the Role]
 
 **Context:** [When/why they use product - usage context, not life context]
 
 **Psychological Profile:**
-
 - Role: [Their position relative to product]
 - Mindset: [How they think/feel in this context]
 - Internal State: [Confidence, anxiety, urgency, etc.]
@@ -558,7 +499,6 @@ Forums: Reddit r/travel, car forums about breakdowns while traveling
 #### Step 3: Driving Forces
 
 **Input:**
-
 - Form: Positive + negative drivers, equal weight, contextual (Layer 1)
 - Substance: Personas + Business Goals (Layer 2)
 - Research: User pain points, reviews, forums, behavior patterns (Layer 3)
@@ -566,31 +506,26 @@ Forums: Reddit r/travel, car forums about breakdowns while traveling
 **Generate for EACH persona:**
 
 **Positive Drivers (✅ 3-5 per persona):**
-
 - What they want to achieve (usage goals, not life goals)
 - Specific to context (not generic "save time")
 - Actionable (designer can create feature from this)
 
 **Negative Drivers (❌ 3-5 per persona):**
-
 - What they want to avoid (fears, frustrations)
 - Specific and visceral (loss aversion is powerful)
 - Equally detailed as positive drivers
 
 **Example Format:**
-
 ```markdown
 ### Tomas the Tourist - Driving Forces
 
 **Positive Drivers (✅):**
-
 1. Get back on road quickly without ruining vacation plans
 2. Feel confident that mechanic is certified and trustworthy
 3. Understand what's wrong and what it costs before committing
 4. Know exact timeline so can adjust other plans accordingly
 
 **Negative Drivers (❌):**
-
 1. Fear being stranded on vacation far from home
 2. Fear getting ripped off by unknown mechanic in unfamiliar place
 3. Avoid wasting vacation time waiting with no updates
@@ -600,19 +535,16 @@ Forums: Reddit r/travel, car forums about breakdowns while traveling
 #### Step 4: Prioritization
 
 **Input:**
-
 - Form: Rank goals, groups, drivers (Layer 1)
 - Substance: All of above (Layer 2)
 - Research: What matters most in this industry (Layer 3)
 
 **Generate:**
-
 1. Business Goals ranked (which matters most NOW)
 2. Target Groups ranked (which impacts top goal most)
 3. Driving Forces ranked per persona (top 3 most urgent)
 
 **Output Strategic Focus Statement:**
-
 ```markdown
 ## Strategic Focus
 
@@ -641,7 +573,6 @@ This combination guides all design decisions.
 ### Completeness: {{X}}/9
 
 **Core Sections:**
-
 - [✅/❌] Business Goals (vision + SMART)
 - [✅/❌] Product Hub
 - [✅/❌] Target Groups (3-4, prioritized)
@@ -651,7 +582,6 @@ This combination guides all design decisions.
 - [✅/❌] Prioritization
 
 **Optional:**
-
 - [✅/❌] Feature Impact Analysis
 - [✅/❌] Visual Diagram
 
@@ -733,14 +663,12 @@ For each of 7 criteria: ✅ (met), ⚠️ (partial), ❌ (gap)
 **Best Practices:** {{X}}/4
 
 **Threshold Analysis:**
-
 - Minimum (present to user): 7+ complete, 5+ quality, 4 mistakes, 2+ practices
 - Excellent: 9+ complete, 7 quality, 4 mistakes, 4 practices
 
 **Current Status:** [Meets minimum / Meets excellent / Needs refinement]
 
 **Key Gaps:**
-
 1. [Specific gap with evidence]
 2. [Specific gap with evidence]
 
@@ -753,18 +681,15 @@ For each of 7 criteria: ✅ (met), ⚠️ (partial), ❌ (gap)
 ## Refinement Plan: Iteration {{N+1}}
 
 ### Gap 1: [Description]
-
 **Current:** [What's wrong]
 **Target:** [What it should be]
 **Action:** [Specific change]
 **Reference:** [Rubric criteria or example guiding this]
 
 ### Gap 2: [Description]
-
 [Same structure]
 
 ### Expected Improvement:
-
 - Completeness: {{current}} → {{target}}
 - Quality: {{current}} → {{target}}
 - Overall: {{current}}/10 → {{target}}/10
@@ -784,7 +709,6 @@ For each of 7 criteria: ✅ (met), ⚠️ (partial), ❌ (gap)
 **Run quality-checklist.md against each generated scenario. Score using the checklist's own format.**
 
 **Refinement triggers for scenarios:**
-
 - Any Dimension 3 failure (Common Mistakes) → immediate fix (zero tolerance)
 - Dimension 1 below 6/7 → fix before proceeding
 - Dimension 2 below 5/7 → refine mental state and success goals first (most common gap)
@@ -802,31 +726,25 @@ For each of 7 criteria: ✅ (met), ⚠️ (partial), ❌ (gap)
 ## Suggest Mode: Iteration {{N}}
 
 ### What I Created
-
 [Summary of artifact section generated]
 
 Key elements:
-
 - [Bullet point summary]
 - [Sample content]
 
 ### Learning & Research Applied
-
 **WDS Form:** [What methodology guided structure]
 **Project Context:** [What prior artifacts informed this]
 **Domain Research:** [What insights enhanced this]
 
 ### Self-Review Results
-
 **Quality Score:** {{X}}/10
 
 **Strengths:**
-
 - ✅ [What's working well]
 - ✅ [What meets standards]
 
 **Gaps Identified:**
-
 - ❌ [What needs improvement]
 - ⚠️ [What's partial]
 
@@ -857,24 +775,23 @@ Type your choice or provide feedback:
 ### Progress
 
 🔄 **Business Goals**
-Generated → Self-reviewed → Quality: 8/10 → ✅ Threshold met
+   Generated → Self-reviewed → Quality: 8/10 → ✅ Threshold met
 
 🔄 **Target Groups**
-Generated → Self-reviewed → Quality: 7/10 → Gaps found → Refining...
-Iteration 2 → Self-reviewed → Quality: 9/10 → ✅ Threshold met
+   Generated → Self-reviewed → Quality: 7/10 → Gaps found → Refining...
+   Iteration 2 → Self-reviewed → Quality: 9/10 → ✅ Threshold met
 
 🔄 **Driving Forces**
-Generated → Self-reviewed → Quality: 8/10 → ✅ Threshold met
+   Generated → Self-reviewed → Quality: 8/10 → ✅ Threshold met
 
 🔄 **Prioritization**
-Generated → Self-reviewed → Quality: 9/10 → ✅ Threshold met
+   Generated → Self-reviewed → Quality: 9/10 → ✅ Threshold met
 
 ---
 
 **✅ Generation Complete**
 
 **Final Quality Assessment:** 9/10
-
 - Completeness: 9/9 ✅
 - Quality Criteria: 7/7 ✅
 - Mistakes Avoided: 4/4 ✅
@@ -902,34 +819,28 @@ Would you like to review the full Trigger Map now?
 Run this gate after autonomous generation completes:
 
 **Mandatory files in `{output_folder}/B-Trigger-Map/`:**
-
 - [ ] `00-trigger-map.md` — Hub document with Mermaid diagram
 - [ ] `01-Business-Goals.md` — Vision + SMART objectives
 - [ ] One persona document per target group (`02-XX.md`, `03-XX.md`, etc.)
 - [ ] `05-Key-Insights.md` — Strategic insights summary
 
 **Conditional files:**
-
 - [ ] `06-Feature-Impact.md` — Only if feature impact workshop was completed
 
 ### Validation Rules:
-
 - Each file must be non-empty (contains actual content, not just headers)
 - Hub document must contain a Mermaid code block
 - Persona count must match the number of target groups from workshops
 - Business Goals must contain vision + at least 2 SMART objectives
 
 ### IF any file missing or empty:
-
 1. Identify which file is missing
 2. Re-run Layer 4 generation for that specific artifact
 3. Re-run Layer 5 self-review for that artifact
 4. Re-check this gate
 
 ### IF 3 retries fail for any file:
-
 Switch to Suggest mode for the missing artifact:
-
 > "I generated most of the Trigger Map autonomously, but [missing artifact] needs your input. Let's switch to Suggest mode for this section."
 
 ---
@@ -946,11 +857,9 @@ Switch to Suggest mode for the missing artifact:
 **Final Quality Score:** {{X}}/10
 
 ### Generated Artifact
-
 **Location:** {output_folder}/B-Trigger-Map/trigger-map.md
 
 **Contents:**
-
 - Business Goals: {{vision}} + {{N}} SMART objectives
 - Target Groups: {{N}} personas ({{names}})
 - Driving Forces: {{N}} positive + {{N}} negative per persona
@@ -959,26 +868,21 @@ Switch to Suggest mode for the missing artifact:
 - {{If created}} Visual Mermaid Diagram
 
 ### Quality Validation
-
 - ✅ WDS Form Applied: All structure requirements met
 - ✅ Project Context Used: All Product Brief insights integrated
 - ✅ Domain Research: Industry insights enhanced generation
 - ✅ Self-Review: All quality criteria met
 
 ### Strategic Insights
-
 [2-3 key takeaways from the completed Trigger Map]
 
 ### What's Next
-
 This Trigger Map feeds into:
-
 - **Phase 4 (UX Design)** - Personas and drivers guide scenario design
 - **Feature Prioritization** - Feature Impact scores guide roadmap
 - **Content Strategy** - Driving forces guide messaging
 
 Would you like to:
-
 - [R] Review the full Trigger Map
 - [A] Make adjustments
 - [N] Continue to next phase
@@ -998,7 +902,6 @@ On step: [Step name]
 After 5 iterations, this section hasn't met minimum quality standards. This suggests human insight would be valuable.
 
 **Current State:**
-
 - Quality Score: {{X}}/10
 - Persistent gaps: [List issues that won't resolve]
 
@@ -1029,7 +932,6 @@ Would you like to:
 ---
 
 ## Layer 1: WDS Form Learned
-
 [Full learning documentation]
 
 ---
@@ -1037,23 +939,18 @@ Would you like to:
 ## Layer 2: Project Context (Cumulative)
 
 ### Initial: Product Brief
-
 [Extracted substance]
 
 ### Added: Business Goals
-
 [After generation]
 
 ### Added: Target Groups
-
 [After generation]
 
 ### Added: Driving Forces
-
 [After generation]
 
 ### Added: Prioritization
-
 [After generation]
 
 ---
@@ -1061,19 +958,15 @@ Would you like to:
 ## Layer 3: Domain Research
 
 ### Step: Business Goals
-
 [Research conducted and insights]
 
 ### Step: Target Groups
-
 [Research conducted and insights]
 
 ### Step: Driving Forces
-
 [Research conducted and insights]
 
 ### Step: Prioritization
-
 [Research conducted and insights]
 
 ---
@@ -1081,15 +974,12 @@ Would you like to:
 ## Generation & Self-Review Log
 
 ### Business Goals - Iteration 1
-
 [Full self-review]
 
 ### Target Groups - Iteration 1
-
 [Full self-review]
 
 ### Target Groups - Iteration 2 (refinement)
-
 [Full self-review]
 
 [Continue for all steps and iterations]
@@ -1107,7 +997,6 @@ Would you like to:
 ```
 
 **Save agent experience at:**
-
 ```
 {output_folder}/_progress/agent-experiences/{date}-trigger-map-{{mode}}.md
 ```
@@ -1117,34 +1006,29 @@ Would you like to:
 ## Tips for Quality Self-Review
 
 ### Be Honest, Not Optimistic
-
 - Mark ⚠️ partial even if "pretty good"
 - Mark ❌ gap if rubric shows higher bar
 - Don't inflate scores to meet threshold faster
 
 ### Use Rubric Examples Directly
-
 - Compare output to good/bad examples in rubric
 - If matches "bad example" → ❌
 - If between → ⚠️
 - If matches "good example" → ✅
 
 ### Actionability Test
-
 - Can designer create feature from this driving force?
 - Would two designers interpret this persona the same?
 - Can I trace this user to a specific business goal?
 
 ### Context is King
-
 - "Want to save time" = ❌ Generic
 - "Want to find phone within 3 seconds because stressed on vacation" = ✅ Contextual
 
 ### Psychology Over Demographics
-
 - "Sarah, 35, consultant" = ❌ Demographic
 - "Sophie struggles with imposter syndrome when presenting to executives" = ✅ Psychological
 
 ---
 
-_This guide enables Saga to execute Suggest and Dream modes for Phase 2 Trigger Mapping with quality control through systematic 5-layer generation and self-review._
+*This guide enables Saga to execute Suggest and Dream modes for Phase 2 Trigger Mapping with quality control through systematic 5-layer generation and self-review.*

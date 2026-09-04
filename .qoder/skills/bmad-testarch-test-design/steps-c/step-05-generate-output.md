@@ -2,7 +2,7 @@
 name: 'step-05-generate-output'
 description: 'Generate output documents with adaptive orchestration (agent-team, subagent, or sequential)'
 outputFile: '{test_artifacts}/test-design-epic-{epic_num}.md'
-progressFile: '{test_artifacts}/test-design-progress.md'
+progressFile: '{test_artifacts}/test-design-progress-{run_key}.md'
 ---
 
 # Step 5: Generate Outputs & Validate
@@ -49,18 +49,13 @@ const orchestrationContext = {
   timestamp: new Date().toISOString().replace(/[:.]/g, '-'),
 };
 
-const normalizeUserExecutionMode = mode => {
+const normalizeUserExecutionMode = (mode) => {
   if (typeof mode !== 'string') return null;
   const normalized = mode.trim().toLowerCase().replace(/[-_]/g, ' ').replace(/\s+/g, ' ');
 
   if (normalized === 'auto') return 'auto';
   if (normalized === 'sequential') return 'sequential';
-  if (
-    normalized === 'subagent' ||
-    normalized === 'sub agent' ||
-    normalized === 'subagents' ||
-    normalized === 'sub agents'
-  ) {
+  if (normalized === 'subagent' || normalized === 'sub agent' || normalized === 'subagents' || normalized === 'sub agents') {
     return 'subagent';
   }
   if (normalized === 'agent team' || normalized === 'agent teams' || normalized === 'agentteam') {
@@ -70,7 +65,7 @@ const normalizeUserExecutionMode = mode => {
   return null;
 };
 
-const normalizeConfigExecutionMode = mode => {
+const normalizeConfigExecutionMode = (mode) => {
   if (mode === 'subagent') return 'subagent';
   if (mode === 'auto' || mode === 'sequential' || mode === 'subagent' || mode === 'agent-team') {
     return mode;
@@ -79,14 +74,9 @@ const normalizeConfigExecutionMode = mode => {
 };
 
 // Explicit user instruction in the active run takes priority over config.
-const explicitModeFromUser = normalizeUserExecutionMode(
-  runtime.getExplicitExecutionModeHint?.() || null
-);
+const explicitModeFromUser = normalizeUserExecutionMode(runtime.getExplicitExecutionModeHint?.() || null);
 
-const requestedMode =
-  explicitModeFromUser ||
-  normalizeConfigExecutionMode(orchestrationContext.config.execution_mode) ||
-  'auto';
+const requestedMode = explicitModeFromUser || normalizeConfigExecutionMode(orchestrationContext.config.execution_mode) || 'auto';
 const probeEnabled = orchestrationContext.config.capability_probe;
 
 const supports = { subagent: false, agentTeam: false };
@@ -129,7 +119,7 @@ If `resolvedMode` is `agent-team` or `subagent`, these two documents can be gene
 Generate **one** document:
 
 - `{outputFile}` using `test-design-template.md`
-- If `epic_num` is unclear, ask the user
+- Use the `epic_num` resolved in step 1. It is the value that named this run's progress checkpoint, so the plan and its checkpoint always identify the same run. Do not re-derive it and do not ask the user again.
 
 Epic-level mode remains single-worker by default (one output artifact).
 
@@ -208,6 +198,8 @@ Summarize:
 
   ```yaml
   ---
+  runScope: '{run_scope}'
+  runKey: '{run_key}'
   workflowStatus: 'completed'
   totalSteps: 5
   stepsCompleted: ['step-05-generate-output']
@@ -220,6 +212,7 @@ Summarize:
   Then write this step's output below the frontmatter.
 
 - **If `{progressFile}` already exists**, update:
+  - Leave `runScope` and `runKey` exactly as step 1 wrote them
   - Set `workflowStatus: 'completed'`
   - Set `totalSteps: 5`
   - Add `'step-05-generate-output'` to `stepsCompleted` array (only if not already present)
@@ -241,7 +234,7 @@ Summarize:
 
 ## On Complete
 
-Run: `python3 {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --key workflow.on_complete`
+Run: `uv run {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --project-root {project-root} --key workflow.on_complete`
 
 If the resolver succeeds and returns a non-empty `workflow.on_complete`, execute that value as the final terminal instruction before exiting.
 

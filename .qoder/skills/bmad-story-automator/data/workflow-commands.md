@@ -6,10 +6,10 @@
 
 ## Multi-Agent Support
 
-| Agent      | CLI Command                             | Prompt Style                  |
-| ---------- | --------------------------------------- | ----------------------------- |
+| Agent | CLI Command | Prompt Style |
+|-------|-------------|--------------|
 | **Claude** | `claude --dangerously-skip-permissions` | Natural language skill prompt |
-| **Codex**  | `codex exec --full-auto`                | Natural language skill prompt |
+| **Codex** | `codex exec --full-auto` | Natural language skill prompt |
 
 All child sessions receive explicit skill and workflow paths. Command wrappers are not required.
 

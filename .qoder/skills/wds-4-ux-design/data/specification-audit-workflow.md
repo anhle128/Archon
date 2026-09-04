@@ -9,7 +9,6 @@
 ## When to Use This Workflow
 
 **Triggers:**
-
 - Before handoff to development (Phase 4 [H] Handover)
 - After completing scenario specifications
 - When reviewing existing specifications
@@ -21,15 +20,12 @@
 ## Audit Levels
 
 ### Quick Audit (15-30 minutes)
-
 Essential checks only - use for rapid validation during active design work.
 
 ### Standard Audit (1-2 hours)
-
 Comprehensive review - use before development handoff.
 
 ### Complete Audit (2-4 hours)
-
 Full validation including visual-spec alignment - use for critical pages or final quality gate.
 
 ---
@@ -39,27 +35,21 @@ Full validation including visual-spec alignment - use for critical pages or fina
 The audit follows a hierarchical approach from formatting → scenario → page → component → content.
 
 ### Level 0: Specification Formatting & Standards
-
 **WDS Formatting Compliance**
 
 ### Level 1: Scenario-Level Audit
-
 **Strategic Foundation**
 
 ### Level 2: Page-Level Audit
-
 **Structure & Organization**
 
 ### Level 3: Component-Level Audit
-
 **Componentization & Design System**
 
 ### Level 4: Feature-Level Audit
-
 **Shared Functionality**
 
 ### Level 5: Content Audit
-
 **Text & Accessibility Content**
 
 ---
@@ -71,7 +61,6 @@ The audit follows a hierarchical approach from formatting → scenario → page 
 ### Checklist
 
 **Markdown Structure:**
-
 - [ ] Proper heading hierarchy (H1 → H2 → H3 → H4, no skipped levels)
 - [ ] Only one H1 per page (page title)
 - [ ] H2 for major sections
@@ -79,13 +68,11 @@ The audit follows a hierarchical approach from formatting → scenario → page 
 - [ ] H4 for component details
 
 **Area Label Format:**
-
 - [ ] Format: `**AREA LABEL**: `{label}`` (bold, all caps, backticks)
 - [ ] Naming convention: `{page}-{section}-{element}` (lowercase, hyphens)
 - [ ] Consistent throughout specification
 
 **Translation Format:**
-
 - [ ] Each language on separate line
 - [ ] Format: `- {LANG}: "{content}"`
 - [ ] All product languages present for each content item
@@ -93,20 +80,17 @@ The audit follows a hierarchical approach from formatting → scenario → page 
 - [ ] No inline translations (e.g., "Text (EN), Text (SE)")
 
 **List Formatting:**
-
 - [ ] Use `-` for unordered lists (not `*` or `+`)
 - [ ] Consistent indentation (2 spaces per level)
 - [ ] Proper spacing (blank line before/after lists)
 - [ ] No unnecessary blank lines between items
 
 **Code Blocks:**
-
 - [ ] Language specified for syntax highlighting
 - [ ] Triple backticks used
 - [ ] Proper indentation
 
 **Section Organization:**
-
 - [ ] Sections in standard order (per template)
 - [ ] No missing required sections
 - [ ] No duplicate sections
@@ -114,20 +98,17 @@ The audit follows a hierarchical approach from formatting → scenario → page 
 - [ ] **Open Questions section present** (even if empty)
 
 **Spacing & Formatting:**
-
 - [ ] Consistent spacing between sections
 - [ ] Proper use of bold for field labels
 - [ ] No excessive blank lines
 - [ ] Consistent indentation throughout
 
 **Links:**
-
 - [ ] Descriptive link text (not "here" or "click here")
 - [ ] Valid relative paths for internal links
 - [ ] Proper markdown format: `[Text](path)`
 
 **File Naming:**
-
 - [ ] Follows WDS naming conventions
 - [ ] No generic names (README.md, GUIDE.md)
 - [ ] Descriptive and specific
@@ -135,18 +116,15 @@ The audit follows a hierarchical approach from formatting → scenario → page 
 ### Common Formatting Violations
 
 **Inline Translations:**
-
 ```markdown
 ❌ **Content:** "Sign In" (EN), "Logga In" (SE)
 
 ✅ **Content:**
-
-- EN: "Sign In"
-- SE: "Logga In"
+   - EN: "Sign In"
+   - SE: "Logga In"
 ```
 
 **Inconsistent Area Label Format:**
-
 ```markdown
 ❌ Area Label: signin-form-email
 ❌ **area-label**: `signin-form-email`
@@ -155,40 +133,31 @@ The audit follows a hierarchical approach from formatting → scenario → page 
 ```
 
 **Skipped Heading Levels:**
-
 ```markdown
 ❌ # Page Title
-
-#### Component
+   #### Component
 
 ✅ # Page Title
-
-## Section
-
-### Subsection
-
-#### Component
+   ## Section
+   ### Subsection
+   #### Component
 ```
 
 **Missing Translations:**
-
 ```markdown
 ❌ **Content:**
-
-- EN: "Submit"
-  (Missing SE)
+   - EN: "Submit"
+   (Missing SE)
 
 ✅ **Content:**
-
-- EN: "Submit"
-- SE: "Skicka"
+   - EN: "Submit"
+   - SE: "Skicka"
 ```
 
 ### Navigation Best Practice
 
 **Navigation Placement (Required for Long Specs):**
 Long specifications must have navigation links in THREE locations so users can navigate without scrolling:
-
 ```markdown
 ✅ Above the sketch:
 **Previous Step:** ← [3.1 Page Name](path)
@@ -206,11 +175,9 @@ Long specifications must have navigation links in THREE locations so users can n
 **Previous Step:** ← [3.1 Page Name](path)
 **Next Step:** → [3.3 Page Name](path)
 ```
-
 This is especially important for storyboards and multi-state specifications where sketches and content can be very long.
 
 ### Output
-
 - List of formatting violations by type
 - Specific line numbers or sections with issues
 - Recommendations for corrections
@@ -227,7 +194,6 @@ This is especially important for storyboards and multi-state specifications wher
 ### Checklist
 
 **Strategic Foundation**
-
 - [ ] User situation clearly defined
 - [ ] Usage context documented
 - [ ] Strategic context (Trigger Map) defined and linked
@@ -235,7 +201,6 @@ This is especially important for storyboards and multi-state specifications wher
 - [ ] Success criteria defined
 
 **Navigation Flow**
-
 - [ ] All pages in scenario identified
 - [ ] Entry points documented for each page
 - [ ] Exit points documented for each page
@@ -244,14 +209,12 @@ This is especially important for storyboards and multi-state specifications wher
 - [ ] Dead ends identified and resolved
 
 **Scenario Overview**
-
 - [ ] Scenario overview file exists
 - [ ] Overview describes user journey
 - [ ] Page sequence makes sense
 - [ ] Links to all page specifications work
 
 ### Output
-
 - List of missing strategic elements
 - Navigation flow gaps
 - Broken links or missing pages
@@ -265,7 +228,6 @@ This is especially important for storyboards and multi-state specifications wher
 ### A. Template Check
 
 **Determine which template applies:**
-
 - [ ] Single sketch → uses page-specification.template.md
 - [ ] Multiple sketches → uses storyboard extension
 - [ ] If storyboard: State Flow Overview present with ASCII diagram
@@ -275,7 +237,6 @@ This is especially important for storyboards and multi-state specifications wher
 ### B. Structure & Organization
 
 **Checklist:**
-
 - [ ] Page purpose clearly stated
 - [ ] Success criteria defined
 - [ ] Trigger Map reference present
@@ -286,7 +247,6 @@ This is especially important for storyboards and multi-state specifications wher
 - [ ] Navigation present (Previous/Next links: above sketch, below sketch, and at document bottom)
 
 **Structural Area Labels:**
-
 - [ ] Page container (`{page-name}-page`)
 - [ ] Header section (`{page-name}-header`)
 - [ ] Main content area (`{page-name}-main`)
@@ -297,7 +257,6 @@ This is especially important for storyboards and multi-state specifications wher
 ### C. Visual-Spec Alignment
 
 **Checklist:**
-
 - [ ] Sketch/visualization exists in Sketches/ folder
 - [ ] Sketch linked in specification
 - [ ] All objects in sketch documented in spec
@@ -306,7 +265,6 @@ This is especially important for storyboards and multi-state specifications wher
 - [ ] Component placement matches sketch
 
 **Gap Analysis:**
-
 - Objects in sketch but missing from spec → Add to spec
 - Objects in spec but missing from sketch → Update sketch or remove from spec
 - Visual elements don't match description → Align sketch and spec
@@ -314,7 +272,6 @@ This is especially important for storyboards and multi-state specifications wher
 ### D. Area Label Coverage
 
 **Checklist:**
-
 - [ ] All interactive elements have Area Labels (OBJECT IDs)
 - [ ] Labels follow naming convention (`{page}-{section}-{element}`)
 - [ ] Labels are unique within page
@@ -322,7 +279,6 @@ This is especially important for storyboards and multi-state specifications wher
 - [ ] Labels support html.to.design layer naming
 
 ### Output
-
 - Structure issues list
 - Visual-spec misalignment report
 - Missing Area Labels list
@@ -337,7 +293,6 @@ This is especially important for storyboards and multi-state specifications wher
 ### A. Componentization
 
 **Checklist:**
-
 - [ ] Reusable sections identified (header, footer, navigation)
 - [ ] Components properly separated from page specs
 - [ ] Component specifications exist
@@ -345,7 +300,6 @@ This is especially important for storyboards and multi-state specifications wher
 - [ ] Shared patterns documented
 
 **Common Reusable Components:**
-
 - Navigation header
 - Footer
 - Form fields (inputs, selects, textareas)
@@ -360,7 +314,6 @@ This is especially important for storyboards and multi-state specifications wher
 **Purpose:** Compare sections across all pages in the scenario and flag identical or near-identical content that should be shared components.
 
 **Process:**
-
 1. Collect all section definitions from completed page specs in the scenario
 2. Compare sections by structure (heading patterns, object types, layout)
 3. Flag matches:
@@ -369,7 +322,6 @@ This is especially important for storyboards and multi-state specifications wher
    - **Repeated pattern** — same object types appearing in multiple pages (e.g., card grids, form fields)
 
 **Checklist:**
-
 - [ ] All completed pages in scenario scanned
 - [ ] Exact duplicates flagged with source pages listed
 - [ ] Near duplicates flagged with diff summary
@@ -377,7 +329,6 @@ This is especially important for storyboards and multi-state specifications wher
 - [ ] Extraction recommendation for each finding (extract / leave as-is / parameterize)
 
 **Severity:**
-
 - **Critical** — Exact duplicate in 3+ pages (must extract)
 - **Warning** — Exact duplicate in 2 pages or near duplicate in 3+ (should extract)
 - **Suggestion** — Repeated pattern (consider extracting)
@@ -385,7 +336,6 @@ This is especially important for storyboards and multi-state specifications wher
 ### C. Design System Integration (if enabled)
 
 **Checklist:**
-
 - [ ] All components added to design system
 - [ ] Components at proper hierarchy level:
   - Atomic: Buttons, inputs, icons, labels
@@ -396,7 +346,6 @@ This is especially important for storyboards and multi-state specifications wher
 - [ ] Component variants documented
 
 ### Output
-
 - Cross-page duplicate report (from B)
 - List of components needing extraction
 - Design system gaps
@@ -411,7 +360,6 @@ This is especially important for storyboards and multi-state specifications wher
 ### Checklist
 
 **Shared Features:**
-
 - [ ] Common features identified (e.g., image upload, validation)
 - [ ] Feature files created and documented
 - [ ] Feature references consistent across pages
@@ -419,7 +367,6 @@ This is especially important for storyboards and multi-state specifications wher
 - [ ] Error handling standardized
 
 **Common Shared Features:**
-
 - Image upload/cropping
 - Form validation
 - Authentication flows
@@ -430,7 +377,6 @@ This is especially important for storyboards and multi-state specifications wher
 - Date/time selection
 
 ### Output
-
 - List of features needing extraction
 - Feature documentation gaps
 - Inconsistencies across pages
@@ -444,7 +390,6 @@ This is especially important for storyboards and multi-state specifications wher
 ### A. Text Content
 
 **Checklist:**
-
 - [ ] **All Text Defined** - No placeholder content?
 - [ ] **Error Messages** - All error states have messages in all languages?
 - [ ] **Success Messages** - Confirmation messages defined?
@@ -461,53 +406,45 @@ This is especially important for storyboards and multi-state specifications wher
 **Checklist:**
 
 **ARIA Labels:**
-
 - [ ] All interactive elements have aria-label attributes
 - [ ] ARIA labels descriptive and meaningful
 - [ ] ARIA labels match Area Labels
 
 **Images:**
-
 - [ ] All images have alt text specified
 - [ ] Alt text descriptive (not just filename)
 - [ ] Decorative images marked as such (alt="")
 
 **Forms:**
-
 - [ ] All inputs have associated labels (visible or aria-label)
 - [ ] Required fields marked with aria-required
 - [ ] Field instructions associated with aria-describedby
 - [ ] Error messages announced to screen readers
 
 **Keyboard Navigation:**
-
 - [ ] Tab order documented
 - [ ] Focus management specified
 - [ ] Keyboard shortcuts documented (if any)
 - [ ] Skip links present
 
 **Screen Reader Support:**
-
 - [ ] Semantic HTML specified (header, main, nav, section)
 - [ ] Heading hierarchy logical (H1 → H2 → H3)
 - [ ] ARIA live regions for dynamic content
 - [ ] Loading states announced
 
 **Visual Accessibility:**
-
 - [ ] Color contrast meets WCAG AA (4.5:1 for text)
 - [ ] Information not conveyed by color alone
 - [ ] Focus indicators visible (3:1 contrast)
 - [ ] Text readable at 200% zoom
 
 **WCAG Compliance:**
-
 - [ ] Target compliance level documented (AA/AAA)
 - [ ] Known accessibility issues documented
 - [ ] Testing approach specified
 
 ### Output
-
 - Missing content list
 - Accessibility gaps
 - WCAG compliance issues
@@ -540,12 +477,10 @@ This is especially important for storyboards and multi-state specifications wher
 ## Level 1: Scenario-Level Findings
 
 ### Strategic Foundation
-
 - ✅ Pass / ⚠️ Warning / ❌ Fail
 - Issues: {list}
 
 ### Navigation Flow
-
 - ✅ Pass / ⚠️ Warning / ❌ Fail
 - Issues: {list}
 
@@ -554,17 +489,14 @@ This is especially important for storyboards and multi-state specifications wher
 ## Level 2: Page-Level Findings
 
 ### Structure & Organization
-
 - ✅ Pass / ⚠️ Warning / ❌ Fail
 - Issues: {list}
 
 ### Visual-Spec Alignment
-
 - ✅ Pass / ⚠️ Warning / ❌ Fail
 - Misalignments: {list}
 
 ### Area Label Coverage
-
 - ✅ Pass / ⚠️ Warning / ❌ Fail
 - Missing Labels: {list}
 
@@ -573,12 +505,10 @@ This is especially important for storyboards and multi-state specifications wher
 ## Level 3: Component-Level Findings
 
 ### Componentization
-
 - ✅ Pass / ⚠️ Warning / ❌ Fail
 - Issues: {list}
 
 ### Design System Integration
-
 - ✅ Pass / ⚠️ Warning / ❌ Fail
 - Issues: {list}
 
@@ -587,7 +517,6 @@ This is especially important for storyboards and multi-state specifications wher
 ## Level 4: Feature-Level Findings
 
 ### Shared Functionality
-
 - ✅ Pass / ⚠️ Warning / ❌ Fail
 - Issues: {list}
 
@@ -596,12 +525,10 @@ This is especially important for storyboards and multi-state specifications wher
 ## Level 5: Content Audit Findings
 
 ### Text Content
-
 - ✅ Pass / ⚠️ Warning / ❌ Fail
 - Missing content: {list}
 
 ### Accessibility Content
-
 - ✅ Pass / ⚠️ Warning / ❌ Fail
 - Accessibility gaps: {list}
 
@@ -610,17 +537,14 @@ This is especially important for storyboards and multi-state specifications wher
 ## Recommendations
 
 ### Critical (Must Fix Before Development)
-
 1. {Issue and recommended fix}
 2. {Issue and recommended fix}
 
 ### Warnings (Should Fix)
-
 1. {Issue and recommended fix}
 2. {Issue and recommended fix}
 
 ### Suggestions (Nice to Have)
-
 1. {Issue and recommended fix}
 2. {Issue and recommended fix}
 
@@ -644,14 +568,12 @@ This is especially important for storyboards and multi-state specifications wher
 For rapid validation during active design work:
 
 **Formatting (Level 0):**
-
 - [ ] Proper heading hierarchy
 - [ ] Area Label format correct
 - [ ] Translations on separate lines
 - [ ] All product languages present
 
 **Content (Levels 1-5):**
-
 - [ ] Page purpose clear
 - [ ] Trigger Map reference present
 - [ ] Structural Area Labels complete
@@ -673,7 +595,6 @@ For comprehensive review before development handoff:
 **All Quick Audit items, plus:**
 
 **Formatting (Level 0):**
-
 - [ ] Section organization follows template
 - [ ] Consistent spacing and indentation
 - [ ] Code blocks have language specified
@@ -681,7 +602,6 @@ For comprehensive review before development handoff:
 - [ ] No formatting violations
 
 **Content (Levels 1-5):**
-
 - [ ] Scenario navigation complete
 - [ ] Section purposes defined
 - [ ] Visual-spec alignment verified
@@ -719,24 +639,21 @@ For full validation including visual verification:
 ## Integration with WDS
 
 **Workflow Placement:**
-
 - Phase 4 (UX Design) - Before prototype creation
 - Phase 4 [H] Handover (Design Deliveries) - Before development handoff
 - Phase 8 (Product Evolution) - When updating specifications
 
 **Agent Integration:**
-
 - Freya runs audits on page specifications
 - Freya can request audits before development
 - Saga can audit for strategic alignment
 
 **Menu Trigger:**
 Add to Freya's menu:
-
 ```yaml
 - trigger: audit-spec
-  exec: 'skill:wds-4-ux-design'
-  description: '[AS] Audit page or scenario specifications for completeness and quality'
+  exec: "skill:wds-4-ux-design"
+  description: "[AS] Audit page or scenario specifications for completeness and quality"
 ```
 
 ---
@@ -744,12 +661,10 @@ Add to Freya's menu:
 ## Related Resources
 
 ### Templates
-
 - **Page Specification:** `./templates/page-specification.template.md`
 - **Storyboard Extension:** `./templates/storyboard-specification.template.md` (for multi-sketch pages)
 
 ### Micro-Instructions (conditional sections)
-
 - **Open Questions (always):** `./templates/instructions/open-questions.instructions.md` ← Auto-populate questions
 - **SEO/Social:** `./templates/instructions/meta-content.instructions.md`
 - **Forms:** `./templates/instructions/form-validation.instructions.md`
@@ -759,7 +674,6 @@ Add to Freya's menu:
 - **Accessibility Audit:** `./templates/instructions/accessibility-audit.workflow.md`
 
 ### Guides
-
 - **Specification Quality Guide:** `../../data/agent-guides/freya/specification-quality.md`
 - **Accessibility Guidelines:** WCAG 2.1 Level AA
 
@@ -769,20 +683,20 @@ Add to Freya's menu:
 
 **Before auditing, determine which template applies:**
 
-| Condition                         | Template                                  |
-| --------------------------------- | ----------------------------------------- |
-| Single sketch                     | page-specification.template.md            |
+| Condition | Template |
+|-----------|----------|
+| Single sketch | page-specification.template.md |
 | Multiple sketches (states, flows) | page-specification + storyboard extension |
 
 **Check for required micro-instructions:**
 
-| Page Has             | Include                                                      |
-| -------------------- | ------------------------------------------------------------ |
-| **All pages**        | **open-questions.instructions.md** (auto-populate questions) |
-| Public visibility    | meta-content.instructions.md                                 |
-| Forms/inputs         | form-validation.instructions.md                              |
-| API data             | data-api.instructions.md                                     |
-| Multiple breakpoints | responsive.instructions.md                                   |
+| Page Has | Include |
+|----------|---------|
+| **All pages** | **open-questions.instructions.md** (auto-populate questions) |
+| Public visibility | meta-content.instructions.md |
+| Forms/inputs | form-validation.instructions.md |
+| API data | data-api.instructions.md |
+| Multiple breakpoints | responsive.instructions.md |
 
 ---
 
@@ -799,7 +713,6 @@ Page
 ```
 
 **Storyboard pages also need:**
-
 - State Flow Overview (ASCII diagram + state table)
 - State 1 fully documented (baseline)
 - States 2+ document only changes (reuse OBJECT IDs)

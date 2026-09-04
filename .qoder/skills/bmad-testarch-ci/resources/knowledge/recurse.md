@@ -24,7 +24,11 @@ The `recurse` utility provides:
 ## Quick Start
 
 ```typescript
-import { test } from '@seontechnologies/playwright-utils/recurse/fixtures';
+import { expect, mergeTests } from '@playwright/test';
+import { test as apiRequestFixture } from '@seontechnologies/playwright-utils/api-request/fixtures';
+import { test as recurseFixture } from '@seontechnologies/playwright-utils/recurse/fixtures';
+
+const test = mergeTests(apiRequestFixture, recurseFixture);
 
 test('wait for job completion', async ({ recurse, apiRequest }) => {
   const { body } = await apiRequest({
@@ -36,8 +40,8 @@ test('wait for job completion', async ({ recurse, apiRequest }) => {
   // Poll until job completes
   const result = await recurse(
     () => apiRequest({ method: 'GET', path: `/api/jobs/${body.id}` }),
-    response => response.body.status === 'completed',
-    { timeout: 60000 }
+    (response) => response.body.status === 'completed',
+    { timeout: 60000 },
   );
 
   expect(result.body.downloadUrl).toBeDefined();
@@ -53,7 +57,11 @@ test('wait for job completion', async ({ recurse, apiRequest }) => {
 **Implementation**:
 
 ```typescript
-import { test } from '@seontechnologies/playwright-utils/recurse/fixtures';
+import { expect, mergeTests } from '@playwright/test';
+import { test as apiRequestFixture } from '@seontechnologies/playwright-utils/api-request/fixtures';
+import { test as recurseFixture } from '@seontechnologies/playwright-utils/recurse/fixtures';
+
+const test = mergeTests(apiRequestFixture, recurseFixture);
 
 test('should wait for job completion', async ({ recurse, apiRequest }) => {
   // Start job
@@ -66,12 +74,12 @@ test('should wait for job completion', async ({ recurse, apiRequest }) => {
   // Poll until ready
   const result = await recurse(
     () => apiRequest({ method: 'GET', path: `/api/jobs/${body.id}` }),
-    response => response.body.status === 'completed',
+    (response) => response.body.status === 'completed',
     {
       timeout: 60000, // 60 seconds max
       interval: 2000, // Check every 2 seconds
       log: 'Waiting for export job to complete',
-    }
+    },
   );
 
   expect(result.body.downloadUrl).toBeDefined();
@@ -105,13 +113,13 @@ test('should poll with assertions', async ({ recurse, apiRequest }) => {
       const { body } = await apiRequest({ method: 'GET', path: '/api/events/123' });
       return body;
     },
-    event => {
+    (event) => {
       // If all assertions pass, predicate succeeds
       expect(event.processed).toBe(true);
       expect(event.timestamp).toBeDefined();
       // No need to return true - just let assertions pass
     },
-    { timeout: 30000 }
+    { timeout: 30000 },
   );
 });
 ```
@@ -129,15 +137,15 @@ So you can:
 
 ```typescript
 // Option 1: Use assertions only (recommended)
-event => {
+(event) => {
   expect(event.processed).toBe(true);
 };
 
 // Option 2: Return boolean (also works)
-event => event.processed === true;
+(event) => event.processed === true;
 
 // Option 3: Mixed (assertions + explicit return)
-event => {
+(event) => {
   expect(event.processed).toBe(true);
   return true;
 };
@@ -175,11 +183,11 @@ test('custom error on timeout', async ({ recurse, apiRequest }) => {
   try {
     await recurse(
       () => apiRequest({ method: 'GET', path: '/api/status' }),
-      res => res.body.ready === true,
+      (res) => res.body.ready === true,
       {
         timeout: 10000,
         error: 'System failed to become ready within 10 seconds - check background workers',
-      }
+      },
     );
   } catch (error) {
     // Error message includes custom context
@@ -199,16 +207,16 @@ test('custom error on timeout', async ({ recurse, apiRequest }) => {
 test('post-poll processing', async ({ recurse, apiRequest }) => {
   const finalResult = await recurse(
     () => apiRequest({ method: 'GET', path: '/api/batch-job/123' }),
-    res => res.body.status === 'completed',
+    (res) => res.body.status === 'completed',
     {
       timeout: 60000,
-      post: result => {
+      post: (result) => {
         // Runs after successful polling
         console.log(`Job completed in ${result.body.duration}ms`);
         console.log(`Processed ${result.body.itemsProcessed} items`);
         return result.body;
       },
-    }
+    },
   );
 
   expect(finalResult.itemsProcessed).toBeGreaterThan(0);
@@ -235,12 +243,12 @@ test('table data loads', async ({ page, recurse }) => {
   // Poll for table rows to appear
   await recurse(
     async () => page.locator('table tbody tr').count(),
-    count => count >= 10, // Wait for at least 10 rows
+    (count) => count >= 10, // Wait for at least 10 rows
     {
       timeout: 15000,
       interval: 500,
       log: 'Waiting for table data to load',
-    }
+    },
   );
 
   // Now safe to interact with table
@@ -266,7 +274,7 @@ test('kafka event processed', async ({ recurse, apiRequest }) => {
   // Poll for downstream effect of Kafka consumer processing
   const inventoryResult = await recurse(
     () => apiRequest({ method: 'GET', path: '/api/inventory/ABC123' }),
-    res => {
+    (res) => {
       // Assumes test fixture seeds inventory at 100; in production tests,
       // fetch baseline first and assert: expect(res.body.available).toBe(baseline - 2)
       expect(res.body.available).toBeLessThanOrEqual(98);
@@ -275,7 +283,7 @@ test('kafka event processed', async ({ recurse, apiRequest }) => {
       timeout: 30000, // Kafka processing may take time
       interval: 1000,
       log: 'Waiting for Kafka event to be processed',
-    }
+    },
   );
 
   expect(inventoryResult.body.lastOrderId).toBeDefined();
@@ -289,7 +297,11 @@ test('kafka event processed', async ({ recurse, apiRequest }) => {
 **Implementation**:
 
 ```typescript
-import { test } from '@seontechnologies/playwright-utils/fixtures';
+import { expect, mergeTests } from '@playwright/test';
+import { test as apiRequestFixture } from '@seontechnologies/playwright-utils/api-request/fixtures';
+import { test as recurseFixture } from '@seontechnologies/playwright-utils/recurse/fixtures';
+
+const test = mergeTests(apiRequestFixture, recurseFixture);
 
 test('end-to-end polling', async ({ apiRequest, recurse }) => {
   // Trigger async operation
@@ -302,7 +314,7 @@ test('end-to-end polling', async ({ apiRequest, recurse }) => {
   // Poll until import completes
   const importResult = await recurse(
     () => apiRequest({ method: 'GET', path: `/api/data-import/${createResp.importId}` }),
-    response => {
+    (response) => {
       const { status, rowsImported } = response.body;
       return status === 'completed' && rowsImported > 0;
     },
@@ -310,7 +322,7 @@ test('end-to-end polling', async ({ apiRequest, recurse }) => {
       timeout: 120000, // 2 minutes for large imports
       interval: 5000, // Check every 5 seconds
       log: `Polling import ${createResp.importId}`,
-    }
+    },
   );
 
   expect(importResult.body.rowsImported).toBeGreaterThan(1000);
@@ -321,7 +333,7 @@ test('end-to-end polling', async ({ apiRequest, recurse }) => {
 **Key Points**:
 
 - Combine `apiRequest` + `recurse` for API polling
-- Both from `@seontechnologies/playwright-utils/fixtures`
+- Compose both with `mergeTests`: `apiRequest` from `@seontechnologies/playwright-utils/api-request/fixtures`, `recurse` from `@seontechnologies/playwright-utils/recurse/fixtures`
 - Complex predicates with multiple conditions
 - Logging shows polling progress in test reports
 
@@ -395,8 +407,8 @@ expect(await page.textContent('#status')).toBe('Ready');
 await page.click('#export');
 await recurse(
   () => page.textContent('#status'),
-  status => status === 'Ready',
-  { timeout: 10000 }
+  (status) => status === 'Ready',
+  { timeout: 10000 },
 );
 ```
 
@@ -405,8 +417,8 @@ await recurse(
 ```typescript
 await recurse(
   () => apiRequest({ method: 'GET', path: '/status' }),
-  res => res.body.ready,
-  { interval: 100 } // Hammers API every 100ms!
+  (res) => res.body.ready,
+  { interval: 100 }, // Hammers API every 100ms!
 );
 ```
 
@@ -415,7 +427,7 @@ await recurse(
 ```typescript
 await recurse(
   () => apiRequest({ method: 'GET', path: '/status' }),
-  res => res.body.ready,
-  { interval: 2000 } // Check every 2 seconds (reasonable)
+  (res) => res.body.ready,
+  { interval: 2000 }, // Check every 2 seconds (reasonable)
 );
 ```

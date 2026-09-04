@@ -8,12 +8,12 @@ After retrospective generates documents, verify updates against code:
 
 ### Documents to Check
 
-| Doc Type     | Pattern                      | Verification Method                      |
-| ------------ | ---------------------------- | ---------------------------------------- |
-| Architecture | `*architecture*.md`          | Compare decisions against implementation |
-| API Docs     | `*api*.md`, `*openapi*.yaml` | Verify endpoints match code              |
-| README       | `README.md`                  | Check setup/usage instructions           |
-| Config Docs  | `*config*.md`                | Verify env vars and settings             |
+| Doc Type | Pattern | Verification Method |
+|----------|---------|---------------------|
+| Architecture | `*architecture*.md` | Compare decisions against implementation |
+| API Docs | `*api*.md`, `*openapi*.yaml` | Verify endpoints match code |
+| README | `README.md` | Check setup/usage instructions |
+| Config Docs | `*config*.md` | Verify env vars and settings |
 
 ### Verification Prompt Template
 
@@ -65,7 +65,6 @@ Look for sections in retrospective output:
 ```
 
 Extract into structured format:
-
 ```json
 {
   "proposals": [
@@ -82,15 +81,14 @@ Extract into structured format:
 ### Retrospective Completion Markers
 
 Successful completion indicators:
-
 - "Retrospective Complete" in output
-- "epic-{N}-retro-\*.md" file created
+- "epic-{N}-retro-*.md" file created
 - Sprint status updated with retrospective done
 
 Failure indicators:
-
 - Session timeout
 - Error messages in output
 - No retro file created after 30+ minutes
 
 ---
+

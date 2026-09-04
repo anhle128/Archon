@@ -8,7 +8,7 @@
 
 Dev Mode is a built-in feature in all WDS prototypes that allows testers, stakeholders, and designers to easily reference specific UI elements when providing feedback.
 
-Instead of saying _"The button in the top right"_, you can say _"Fix `customer-sign-bankid`"_ - precise and unambiguous!
+Instead of saying *"The button in the top right"*, you can say *"Fix `customer-sign-bankid`"* - precise and unambiguous!
 
 ---
 
@@ -17,7 +17,6 @@ Instead of saying _"The button in the top right"_, you can say _"Fix `customer-s
 ### Step 1: Activate Dev Mode
 
 **Two ways**:
-
 1. Click the **Dev Mode button** (top-right corner)
 2. Press **Ctrl+E** on your keyboard
 
@@ -52,7 +51,6 @@ You'll see a green success message: **"✓ Copied: [object-id]"**
 Now paste the Object ID in your feedback:
 
 **Good feedback**:
-
 ```
 ❌ Issue with `customer-sign-bankid`:
 The button is disabled even after I check the consent checkbox.
@@ -67,12 +65,12 @@ Make the video auto-play on mobile.
 
 ## 🎨 Visual Guide
 
-| State                      | Appearance       | Action                       |
-| -------------------------- | ---------------- | ---------------------------- |
-| **Dev Mode OFF**           | Normal prototype | Click button or press Ctrl+E |
-| **Dev Mode ON (hovering)** | Gray outline     | Shows Object ID in tooltip   |
-| **Shift held (hovering)**  | Green outline    | Click to copy                |
-| **After copying**          | Green flash      | Object ID in clipboard       |
+| State | Appearance | Action |
+|-------|------------|--------|
+| **Dev Mode OFF** | Normal prototype | Click button or press Ctrl+E |
+| **Dev Mode ON (hovering)** | Gray outline | Shows Object ID in tooltip |
+| **Shift held (hovering)** | Green outline | Click to copy |
+| **After copying** | Green flash | Object ID in clipboard |
 
 ---
 
@@ -108,7 +106,6 @@ Make the video auto-play on mobile.
 ### Designer's Perspective:
 
 Receives feedback:
-
 ```
 Bug: `customer-facility-startdate-group` shows wrong default date
 ```
@@ -159,14 +156,12 @@ A: No! Use it for any feedback - bugs, suggestions, questions, clarifications.
 ## 🎓 Best Practices
 
 ### For Testers:
-
 - ✅ **DO**: Include Object ID in every piece of feedback
 - ✅ **DO**: Test prototype normally, copy IDs when needed
 - ✅ **DO**: Combine Object ID with description
 - ❌ **DON'T**: Leave Dev Mode on during normal use
 
 ### For Designers:
-
 - ✅ **DO**: Ensure all interactive elements have Object IDs
 - ✅ **DO**: Use descriptive, consistent naming
 - ✅ **DO**: Include Dev Mode in all prototypes
@@ -191,3 +186,4 @@ A: No! Use it for any feedback - bugs, suggestions, questions, clarifications.
 ---
 
 **Dev Mode makes feedback precise, fast, and frustration-free!** 🎯
+

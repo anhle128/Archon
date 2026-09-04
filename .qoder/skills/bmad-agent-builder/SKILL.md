@@ -27,7 +27,7 @@ The builder produces agents along one gradient surfaced as feature decisions, no
 
 ## On Activation
 
-1. **Resolve customization.** Run `uv run {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --key agent` and apply the resolved `{agent.*}` values throughout the session. On failure, read `{skill-root}/customize.toml` directly and use defaults. Then execute each entry in `{agent.activation_steps_prepend}` in order, and treat every entry in `{agent.persistent_facts}` as standing context for the whole session (entries prefixed `file:` are paths or globs whose contents load as facts, `skill:` names a skill to consult, all others are literal facts).
+1. **Resolve customization.** Run `uv run {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --project-root {project-root} --key agent` and apply the resolved `{agent.*}` values throughout the session. On failure, read `{skill-root}/customize.toml` directly and use defaults. Then execute each entry in `{agent.activation_steps_prepend}` in order, and treat every entry in `{agent.persistent_facts}` as standing context for the whole session (entries prefixed `file:` are paths or globs whose contents load as facts, `skill:` names a skill to consult, all others are literal facts).
 
 2. **Detect intent.** If `--headless` or `-H` is present, set `{headless_mode}=true` for every sub-prompt; this makes the builder non-interactive and is not the Pulse Mode a built autonomous agent runs at its own runtime. Otherwise read the invocation for whether the user wants to Create, Edit, or Analyze, and which agent they mean.
 
@@ -41,10 +41,10 @@ The builder produces agents along one gradient surfaced as feature decisions, no
 
 ## Intents
 
-| Intent  | What it does                                                                     | Load                             |
-| ------- | -------------------------------------------------------------------------------- | -------------------------------- |
-| Create  | Build a new agent, or rebuild an existing one from its core outcomes and persona | `references/build-process.md`    |
-| Edit    | Change specific behavior in an existing agent while preserving its design        | `references/edit-guidance.md`    |
-| Analyze | Run the quality lenses over an agent and produce a report                        | `references/quality-analysis.md` |
+| Intent | What it does | Load |
+| --- | --- | --- |
+| Create | Build a new agent, or rebuild an existing one from its core outcomes and persona | `references/build-process.md` |
+| Edit | Change specific behavior in an existing agent while preserving its design | `references/edit-guidance.md` |
+| Analyze | Run the quality lenses over an agent and produce a report | `references/quality-analysis.md` |
 
 When the user hands over an existing agent without saying which intent, present the three-way choice and route on the answer: Analyze runs the lenses and returns an actionable report; Edit changes specific behavior while keeping the current approach; Rebuild rethinks from core outcomes and persona using the old agent as reference material, which is the Create flow pointed at existing input.

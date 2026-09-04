@@ -24,7 +24,6 @@
 {{how_this_shapes_project}}
 
 **Alternatives considered:**
-
 - {{option_1}} — {{why_not}}
 - {{option_2}} — {{why_not}}
 
@@ -51,7 +50,6 @@
 {{how_this_shapes_project}}
 
 **Alternatives considered:**
-
 - {{option_1}} — {{why_not}}
 - {{option_2}} — {{why_not}}
 
@@ -78,7 +76,6 @@
 {{how_this_shapes_project}}
 
 **Alternatives considered:**
-
 - {{option_1}} — {{why_not}}
 
 **Documented in:** {{file_path}}

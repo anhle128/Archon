@@ -28,15 +28,14 @@ echo "Code review using: primary=$review_agent, fallback=$review_fallback, model
 ```
 
 **Per-task override example in state document:**
-
 ```yaml
 agentConfig:
-  defaultPrimary: 'codex'
-  defaultFallback: 'claude'
+  defaultPrimary: "codex"
+  defaultFallback: "claude"
   perTask:
     review:
-      primary: 'claude' # Override: use Claude for reviews
-      fallback: false # Disable fallback for reviews
+      primary: "claude"      # Override: use Claude for reviews
+      fallback: false        # Disable fallback for reviews
 ```
 
 **Note on Codex:** If Codex is configured for reviews and fails to update sprint-status, the `story-automator monitor-session --workflow review` verification catches this and returns `final_state: "incomplete"`, triggering the escalation path below.
@@ -105,14 +104,12 @@ is_done=$(echo "$status" | jq -r '.done')
 ### Handle final_state (v2.2)
 
 **IF final_state == "completed":**
-
 - Session verified complete (sprint-status shows "done")
 - Log "Code review passed, story marked done"
 - Cleanup: `"$scripts" tmux-wrapper kill "$session_name"`
 - **EXIT LOOP** → proceed to Git Commit
 
 **IF final_state == "incomplete":** (v2.2 - Codex-specific)
-
 - Session idle but sprint-status NOT updated
 - Cleanup: `"$scripts" tmux-wrapper kill "$session_name"`
 - Increment `reviewCycle`
@@ -124,7 +121,6 @@ is_done=$(echo "$status" | jq -r '.done')
 - **HALT** — wait for user choice only after maxCycles is exhausted
 
 **IF final_state == "crashed" or "stuck":**
-
 - Log "Review session failed: $final_state"
 - Cleanup: `"$scripts" tmux-wrapper kill "$session_name"`
 - Increment reviewCycle
@@ -133,18 +129,15 @@ is_done=$(echo "$status" | jq -r '.done')
 ### Handle is_done check
 
 **IF is_done == true:**
-
 - Log "Sprint-status verified done"
 - **EXIT LOOP** → proceed to Git Commit
 
 **IF is_done == false AND final_state == "completed":**
-
 - This shouldn't happen with v2.2 verification
 - Fallback: check story file status
 - If story file shows "done", treat as complete
 
 **IF reviewCycle > maxCycles:**
-
 - Check escalation: `"$scripts" orchestrator-helper escalate review-loop "cycles=$reviewCycle"`
 - **HALT** — wait for user choice
 
@@ -153,7 +146,6 @@ is_done=$(echo "$status" | jq -r '.done')
 ## Sprint-Status Verification (v3.0)
 
 Status is determined by **CRITICAL issues remaining** after auto-fix:
-
 - "done" → 0 CRITICAL issues, proceed to commit
 - "in-progress" → 1+ CRITICAL issues, new review cycle
 

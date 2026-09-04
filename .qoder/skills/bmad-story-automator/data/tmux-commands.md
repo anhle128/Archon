@@ -9,20 +9,17 @@
 **Pattern (v3.0 - MULTI-PROJECT):** `sa-{project_slug}-{YYMMDD}-{HHMMSS}-e{epic}-s{story}-{step}`
 
 **Examples:**
-
 - `sa-myproj-260114-223045-e6-s64-dev` (Project "myproject", Epic 6, Story 6.4, dev step)
 - `sa-webapp-260114-223512-e6-s64-review-1` (Project "webapp", review cycle 1)
 
 ### Project Slug for Multi-Project Support
 
 **Why project slug (v3.0):**
-
 - **Isolates sessions per project** - List only current project's sessions
 - **Prevents cross-project interference** - Won't kill another project's sessions
 - **Enables parallel orchestration** - Run story-automator on multiple projects simultaneously
 
 **Generate project slug:**
-
 ```bash
 # First 8 chars of project directory name (lowercase, alphanumeric only)
 project_slug=$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]' | cut -c1-8)
@@ -31,14 +28,12 @@ project_slug=$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]'
 **Example:** Project at `/home/user/my-awesome-project` → `project_slug="myawesom"`
 
 **Why timestamps with seconds (v2.1):**
-
 - Prevents collisions when multiple sessions spawn in same minute
 - Easier debugging across multiple orchestration runs
 - Session names are unique even if re-running same story
 - Can identify stale sessions from crashed runs
 
 **Generate full session name:**
-
 ```bash
 project_slug=$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]' | cut -c1-8)
 timestamp=$(date +%y%m%d-%H%M%S)  # Returns "260114-223045"
@@ -48,14 +43,12 @@ session_name="sa-${project_slug}-${timestamp}-e{epic}-s{story_suffix}-{step}"
 ### Listing/Killing Project-Specific Sessions
 
 **List only current project's sessions:**
-
 ```bash
 project_slug=$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]' | cut -c1-8)
 tmux list-sessions 2>/dev/null | grep "^sa-${project_slug}-"
 ```
 
 **Kill only current project's sessions:**
-
 ```bash
 project_slug=$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]' | cut -c1-8)
 tmux list-sessions -F '#{session_name}' 2>/dev/null | grep "^sa-${project_slug}-" | xargs -I {} tmux kill-session -t {}
@@ -99,7 +92,6 @@ error,0,0,capture_failed,30,error
 ```
 
 **CSV Columns:**
-
 1. `status` - "active" | "idle" | "not_found" | "error" | "crashed"
 2. `todos_done` - completed todo count (Claude only; Codex returns 0)
 3. `todos_total` - total todo count (Claude only; Codex returns 0)
@@ -115,26 +107,22 @@ error,0,0,capture_failed,30,error
 
 **Agent Detection (v1.3.0):**
 The status check script automatically detects Claude vs Codex sessions:
-
 - **Claude:** Looks for `ctrl+c to interrupt`, `☒`/`☐` checkboxes
 - **Codex:** Looks for `OpenAI Codex`, `codex exec`, `codex-cli`, `gpt-*-codex`, `tokens used`
 - **Codex completion cues:** `tokens used` line, shell prompt return (e.g., `❯`, `$`, `#`), or clean tmux exit
 - Codex sessions get 1.5x longer wait estimates (90s vs 60s default); "succeeded" alone is not treated as active
 
 **Runtime Behavior (v1.13.0):**
-
 - Normal `tmux-wrapper spawn` now uses a runner-based tmux path with explicit session state, not `tmux send-keys`
 - Lifecycle truth comes from the session state file first; pane capture is still used for exported `output_file` artifacts
 - Sessions keep dead panes with `remain-on-exit on`, so `pane_dead` and `pane_dead_status` remain inspectable after completion
 - Temporary migration switch: `SA_TMUX_RUNTIME=legacy|runner|auto` (`auto` is the default)
 
 **For full output (when completed/stuck):**
-
 ```bash
 script="$(printf "%s" "{project_root}/<installed-skill-root>/bmad-story-automator/scripts/story-automator")"
 "$script" tmux-status-check "SESSION_NAME" --full
 ```
-
 Returns: `idle,0,0,/tmp/sa-output-SESSION_NAME.txt,0,completed`
 
 ---
@@ -143,16 +131,15 @@ Returns: `idle,0,0,/tmp/sa-output-SESSION_NAME.txt,0,completed`
 
 **Use `wait_estimate` from CSV - heuristic estimates optimal interval.**
 
-| status      | Action                                                                                        |
-| ----------- | --------------------------------------------------------------------------------------------- |
-| `active`    | Log: "{todos_done}/{todos_total} - {active_task}". Sleep `wait_estimate` seconds, re-poll     |
-| `idle`      | Run `--full`, parse output per success-patterns.md                                            |
-| `crashed`   | Session crashed! Column 4 = output file, Column 5 = exit code. Apply adaptive retry strategy. |
-| `not_found` | Session ended unexpectedly, escalate                                                          |
-| `error`     | Retry once, then escalate                                                                     |
+| status | Action |
+|--------|--------|
+| `active` | Log: "{todos_done}/{todos_total} - {active_task}". Sleep `wait_estimate` seconds, re-poll |
+| `idle` | Run `--full`, parse output per success-patterns.md |
+| `crashed` | Session crashed! Column 4 = output file, Column 5 = exit code. Apply adaptive retry strategy. |
+| `not_found` | Session ended unexpectedly, escalate |
+| `error` | Retry once, then escalate |
 
 **Crashed vs Completed (v2):**
-
 - `completed` = session was active, then exited cleanly (exit code 0)
 - `crashed` = session exited with non-zero exit code (context limit, API error, etc.)
 - Always check session_state to distinguish between success and failure!
@@ -201,18 +188,17 @@ tmux capture-pane -t "SESSION" -p -S -100   # Raw capture (use sparingly)
 
 **Agent Configuration (v1.3.0):**
 
-| Variable           | Claude                                  | Codex                         |
-| ------------------ | --------------------------------------- | ----------------------------- |
-| CLI                | `claude --dangerously-skip-permissions` | `codex exec --full-auto`      |
-| Prompt Style       | Natural language skill prompt           | Natural language skill prompt |
-| Timeout Multiplier | 1x (60min)                              | 1.5x (90min)                  |
-| Todo Tracking      | ☒/☐ checkboxes                          | Not supported                 |
+| Variable | Claude | Codex |
+|----------|--------|-------|
+| CLI | `claude --dangerously-skip-permissions` | `codex exec --full-auto` |
+| Prompt Style | Natural language skill prompt | Natural language skill prompt |
+| Timeout Multiplier | 1x (60min) | 1.5x (90min) |
+| Todo Tracking | ☒/☐ checkboxes | Not supported |
 
 **Environment Variables:**
-
 - `AI_AGENT` = `claude` or `codex` (used by story-automator tmux-wrapper and story-automator monitor-session)
 - `AI_COMMAND` = Full CLI (legacy, deprecated)
 
 `{projectPath}` = project root
 
-_See `workflow-commands.md` for BMAD workflow command patterns (including Codex natural language prompts)._
+*See `workflow-commands.md` for BMAD workflow command patterns (including Codex natural language prompts).*

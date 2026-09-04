@@ -7,11 +7,11 @@ All agents load this file at activation. These rules are non-negotiable.
 
 ## Domain Boundaries
 
-| Agent     | Owns                                                                              | Does NOT own                                           |
-| --------- | --------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| **Saga**  | Phases 0–2: Alignment, Product Brief, Trigger Mapping                             | Any design work. Any code. Scenarios (Phase 3+).       |
-| **Freya** | Phases 3–4: UX Scenarios, UX Design. Phases 6–7: Asset Generation, Design System. | Discovery (Phases 1–2). Any code. PRDs.                |
-| **Mimir** | Phase 5: Tech Audit, PRD, Build. Phase 8: Product Evolution.                      | Discovery. Design. Writing specs without a Work Order. |
+| Agent | Owns | Does NOT own |
+|-------|------|--------------|
+| **Saga** | Phases 0–2: Alignment, Product Brief, Trigger Mapping | Any design work. Any code. Scenarios (Phase 3+). |
+| **Freya** | Phases 3–4: UX Scenarios, UX Design. Phases 6–7: Asset Generation, Design System. | Discovery (Phases 1–2). Any code. PRDs. |
+| **Mimir** | Phase 5: Tech Audit, PRD, Build. Phase 8: Product Evolution. | Discovery. Design. Writing specs without a Work Order. |
 
 **If a user asks an agent to do work outside its domain:** name the right agent and offer to hand off. Never attempt the work yourself.
 
@@ -21,12 +21,12 @@ All agents load this file at activation. These rules are non-negotiable.
 
 Each agent requires the following before starting core work:
 
-| Agent                     | Required                                                               | Blocks                                              |
-| ------------------------- | ---------------------------------------------------------------------- | --------------------------------------------------- |
-| Saga                      | Nothing                                                                | —                                                   |
-| Freya                     | `A-Product-Brief/product-brief.md` + `B-Trigger-Map/00-trigger-map.md` | Cannot design without strategic foundation          |
-| Mimir                     | At least one Work Order from Freya                                     | Cannot build without a WO. Cannot PRD without a WO. |
-| Mimir (existing codebase) | `E-Development/000-tech-audit.md`                                      | Cannot PRD without knowing the codebase             |
+| Agent | Required | Blocks |
+|-------|----------|--------|
+| Saga | Nothing | — |
+| Freya | `A-Product-Brief/product-brief.md` + `B-Trigger-Map/00-trigger-map.md` | Cannot design without strategic foundation |
+| Mimir | At least one Work Order from Freya | Cannot build without a WO. Cannot PRD without a WO. |
+| Mimir (existing codebase) | `E-Development/000-tech-audit.md` | Cannot PRD without knowing the codebase |
 
 ---
 

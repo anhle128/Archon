@@ -1,26 +1,26 @@
 ---
-name: 'step-01b-continue'
-description: 'Handle workflow continuation from previous session'
-outputFolder: '{output_folder}/story-automator'
-outputFile: '{outputFolder}/orchestration-{epic_id}-{timestamp}.md'
-defaultSprintStatusFile: '{implementation_artifacts}/sprint-status.yaml'
-preflightStep: './step-02-preflight.md'
-preflightConfigStep: './step-02a-preflight-config.md'
-preflightFinalizeStep: './step-02b-preflight-finalize.md'
-executeStep: './step-03-execute.md'
-executeReviewStep: './step-03a-execute-review.md'
-executeFinishStep: './step-03b-execute-finish.md'
-executeCompleteStep: './step-03c-execute-complete.md'
-wrapupStep: './step-04-wrapup.md'
-stateFilePattern: '{outputFolder}/orchestration-*.md'
-stateHelper: '../scripts/story-automator'
-ensureMarkerGitignore: '../scripts/story-automator'
-deriveProjectSlug: '../scripts/story-automator'
-listSessions: '../scripts/story-automator'
-sprintCompare: '../scripts/story-automator'
-tmuxCommands: '../data/tmux-commands.md'
+name: "step-01b-continue"
+description: "Handle workflow continuation from previous session"
+outputFolder: "{output_folder}/story-automator"
+outputFile: "{outputFolder}/orchestration-{epic_id}-{timestamp}.md"
+defaultSprintStatusFile: "{implementation_artifacts}/sprint-status.yaml"
+preflightStep: "./step-02-preflight.md"
+preflightConfigStep: "./step-02a-preflight-config.md"
+preflightFinalizeStep: "./step-02b-preflight-finalize.md"
+executeStep: "./step-03-execute.md"
+executeReviewStep: "./step-03a-execute-review.md"
+executeFinishStep: "./step-03b-execute-finish.md"
+executeCompleteStep: "./step-03c-execute-complete.md"
+wrapupStep: "./step-04-wrapup.md"
+stateFilePattern: "{outputFolder}/orchestration-*.md"
+stateHelper: "../scripts/story-automator"
+ensureMarkerGitignore: "../scripts/story-automator"
+deriveProjectSlug: "../scripts/story-automator"
+listSessions: "../scripts/story-automator"
+sprintCompare: "../scripts/story-automator"
+tmuxCommands: "../data/tmux-commands.md"
 # Optional: provided by workflow.md when using Resume mode (skips state search)
-resumeStatePath: ''
+resumeStatePath: ""
 ---
 
 # Step 1b: Continue Previous Session

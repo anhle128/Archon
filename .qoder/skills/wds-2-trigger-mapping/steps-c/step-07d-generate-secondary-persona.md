@@ -58,7 +58,6 @@ Create the SECONDARY persona document with validation strategy, trust building f
 ### 1. Gather Input
 
 From trigger map data:
-
 - targetGroups.secondary section
 - Name, role, type, roleInFlywheel
 - 6 drivingForces (3 wants, 3 fears)
@@ -82,7 +81,6 @@ Use the comprehensive persona document template.
 **Secondary-Specific Section:** Include "Validation Strategy"
 
 Show:
-
 - What they need to see about the product
 - Conversion path: Discovery -> Evaluation -> Adoption -> Advocacy
 - Focus on validation and trust building
@@ -105,13 +103,11 @@ Present MENU: [C] Continue to Key Insights Document | [M] Return to Activity Men
 (If no tertiary, nextStepFile should be adjusted to step-07f-generate-key-insights.md)
 
 #### Menu Handling Logic:
-
 - IF C: Load and execute {nextStepFile} (or step-07f if no tertiary)
 - IF M: Return to {activityWorkflowFile}
 - IF Any other comments or queries: help user respond then [Redisplay Menu Options]
 
 #### EXECUTION RULES:
-
 - ALWAYS halt and wait for user input after presenting menu
 - User can chat or ask questions - always respond and then redisplay menu options
 
@@ -124,7 +120,6 @@ ONLY WHEN user selects [C] will you load the next step file. Secondary persona d
 ## 🚨 SYSTEM SUCCESS/FAILURE METRICS
 
 ### ✅ SUCCESS:
-
 - All 13 sections from template included
 - 6 driving forces with Product Answers (3 wants, 3 fears)
 - Validation strategy section included
@@ -134,7 +129,6 @@ ONLY WHEN user selects [C] will you load the next step file. Secondary persona d
 - Correct routing based on tertiary persona existence
 
 ### ❌ SYSTEM FAILURE:
-
 - Missing required sections
 - Driving forces without Product Answers
 - Missing validation strategy

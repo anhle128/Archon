@@ -60,13 +60,11 @@ Announce implementation start.
 ### 2. Create or Update HTML File
 
 **For Section 1 ONLY**:
-
 - Create new HTML file from `templates/page-template.html`
 - Name it: `[View].html`
 - Place in prototype root folder
 
 **For Sections 2+**:
-
 - Open existing `[View].html` file
 - Find insertion point (after previous section or before placeholder)
 
@@ -96,7 +94,6 @@ Announce implementation start.
 ### 6. Final Check
 
 **Before presenting to user, verify**:
-
 - [ ] All Object IDs from story file are present
 - [ ] Tailwind classes match story file
 - [ ] JavaScript functions implemented
@@ -109,12 +106,10 @@ Announce implementation start.
 Display: "**Select an Option:** [C] Continue to Step 4d: Present for Testing"
 
 #### Menu Handling Logic:
-
 - IF C: Update design log, then load, read entire file, then execute {nextStepFile}
 - IF Any other comments or queries: help user respond then [Redisplay Menu Options]
 
 #### EXECUTION RULES:
-
 - ALWAYS halt and wait for user input after presenting menu
 - ONLY proceed to next step when user selects 'C'
 - User can chat or ask questions - always respond and then redisplay menu options
@@ -128,7 +123,6 @@ ONLY WHEN the section is fully implemented per the story file will you then load
 ## 🚨 SYSTEM SUCCESS/FAILURE METRICS
 
 ### ✅ SUCCESS:
-
 - All Object IDs from story file present
 - Tailwind classes match story file
 - JavaScript functions implemented
@@ -136,7 +130,6 @@ ONLY WHEN the section is fully implemented per the story file will you then load
 - Placeholder for remaining sections added (if applicable)
 
 ### ❌ SYSTEM FAILURE:
-
 - Deviating from story file instructions
 - Missing Object IDs
 - Adding unplanned features

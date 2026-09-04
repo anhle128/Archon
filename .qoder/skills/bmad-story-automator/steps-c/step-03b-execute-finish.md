@@ -53,9 +53,7 @@ fi
 - If `is_done == true` → proceed to G
 
 ### G. Story Complete
-
 Display: "**✅ Story {N} complete.**"
-
 ```bash
 "{scriptsDir}" orchestrator-helper state-update "{outputFile}" \
   --set lastUpdated="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -65,7 +63,6 @@ echo "- **[$(date -u +%Y-%m-%dT%H:%M:%SZ)]** Story {story_id}: ✅ complete (com
 tmp_state=$(mktemp)
 sed "s/^| ${story_id} |.*$/| ${story_id} | done | done | done | done | done | done |/" "{outputFile}" > "$tmp_state" && mv "$tmp_state" "{outputFile}"
 ```
-
 Display: `[story {N}/{total}] finalize -> done`
 
 ### H. Check Epic Completion & Trigger Retrospective (Multi-Epic Support)
@@ -160,7 +157,6 @@ fi
 ```
 
 3. Update state document with retrospective status:
-
 ```yaml
 retrospectives:
   epic-{epic_number}:
@@ -172,11 +168,9 @@ retrospectives:
 4. **Continue to next story regardless of retrospective result** (retrospectives never block)
 
 **IF trigger_retro == false:**
-
 - Continue to next story (epic not yet complete)
 
 **IMPORTANT RULES:**
-
 - **ALL stories must be done**: Retrospective only triggers when every story in the epic shows "done" in sprint status
 - **Use configured retro agent**: Resolve retrospective agent from `agentConfig` before spawn
 - **Never escalate; non-blocking**: If retrospective fails for any reason, log warning and continue
@@ -184,5 +178,4 @@ retrospectives:
 **END FOR EACH**
 
 ## Then
-
 → After all stories complete, load and execute `{nextStep}`

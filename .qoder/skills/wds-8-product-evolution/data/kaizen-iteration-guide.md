@@ -40,7 +40,6 @@ Ship → Monitor → Learn → Improve → Ship → Monitor → Learn...
 **See:** [data/monitoring-templates.md](../data/monitoring-templates.md) for Learnings Documentation template
 
 Key questions:
-
 - What worked?
 - What didn't work?
 - What patterns are emerging?

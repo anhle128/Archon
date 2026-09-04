@@ -51,7 +51,7 @@ describe('Movie API Contract', () => {
         status: 200,
         body: MatchersV3.like({ id: 1, name: 'Inception', year: 2010 }),
       })
-      .executeTest(async mockServer => {
+      .executeTest(async (mockServer) => {
         const res = await fetch(`${mockServer.url}/movies/1`);
         const movie = await res.json();
         expect(movie.name).toBe('Inception');
@@ -121,7 +121,7 @@ await provider
   .uponReceiving('a request when no movies exist')
   .withRequest({ method: 'GET', path: '/movies' })
   .willRespondWith({ status: 200, body: [] })
-  .executeTest(async mockServer => {
+  .executeTest(async (mockServer) => {
     const res = await fetch(`${mockServer.url}/movies`);
     const movies = await res.json();
     expect(movies).toEqual([]);
@@ -145,7 +145,7 @@ await provider
     headers: { Authorization: MatchersV3.like('Bearer token') },
   })
   .willRespondWith({ status: 200, body: MatchersV3.like({ id: 5 }) })
-  .executeTest(async mockServer => {
+  .executeTest(async (mockServer) => {
     // test implementation
   });
 ```
@@ -168,14 +168,14 @@ await pact
     setJsonContent({
       query: { name: 'Inception' },
       headers: { Accept: 'application/json' },
-    })
+    }),
   )
   .willRespondWith(
     200,
     setJsonBody({
       status: 200,
       data: { id: integer(1), name: string('Inception') },
-    })
+    }),
   );
 ```
 
@@ -200,7 +200,7 @@ it('handles movie lookup scenarios', async () => {
     .uponReceiving('a request to get movie by id')
     .withRequest('GET', '/movies/1')
     .willRespondWith(200, setJsonBody({ id: integer(1), name: string('The Matrix') }))
-    .executeTest(async mockServer => {
+    .executeTest(async (mockServer) => {
       /* ... */
     });
 
@@ -211,7 +211,7 @@ it('handles movie lookup scenarios', async () => {
     .uponReceiving('a request for an empty list')
     .withRequest('GET', '/movies')
     .willRespondWith(200, setJsonBody([]))
-    .executeTest(async mockServer => {
+    .executeTest(async (mockServer) => {
       /* ... */
     });
 });
@@ -224,7 +224,7 @@ it('gets a movie by id', async () => {
     .uponReceiving('a request to get movie by id')
     .withRequest('GET', '/movies/1')
     .willRespondWith(200, setJsonBody({ id: integer(1), name: string('The Matrix') }))
-    .executeTest(async mockServer => {
+    .executeTest(async (mockServer) => {
       /* ... */
     });
 });
@@ -236,7 +236,7 @@ it('returns empty list when no movies exist', async () => {
     .uponReceiving('a request for an empty list')
     .withRequest('GET', '/movies')
     .willRespondWith(200, setJsonBody([]))
-    .executeTest(async mockServer => {
+    .executeTest(async (mockServer) => {
       /* ... */
     });
 });
@@ -252,7 +252,7 @@ it.each([
     .uponReceiving(`a request to get movie ${id}`)
     .withRequest('GET', `/movies/${id}`)
     .willRespondWith(200, setJsonBody({ id: integer(id), name: string(name) }))
-    .executeTest(async mockServer => {
+    .executeTest(async (mockServer) => {
       /* ... */
     });
 });
@@ -260,10 +260,9 @@ it.each([
 
 **Key Points**:
 
-- **This rule stacks with two other MANDATORY vitest settings**: `fileParallelism: false` AND `pool: 'forks'` with `poolOptions.forks.singleFork: true`. All three are required and address different failure modes — `fileParallelism: false` prevents parallel workers from racing on the shared pact JSON; `pool: 'forks'` + `singleFork: true` prevents the Pact Rust FFI from leaking state across files (manifests as "request was expected but not received" flakes on Linux CI only); one-interaction-per-`it()` prevents the FFI from dropping interactions within a single test body.
-- Symptom of violating this rule: the pact file is byte-different between otherwise-identical runs; `scripts/check-pact-determinism.sh` flags drift; PactFlow rejects a republish with `Cannot change pact content`.
+- **This rule stacks with two MANDATORY vitest settings and one file-organization rule. All four address different failure modes; none substitutes for the others**: (1) `fileParallelism: false` — prevents parallel workers racing on the shared pact JSON file; (2) `pool: 'forks'` with `singleFork: true` — required for pact JSON write safety across multiple files; (3) **one `.pacttest.ts` per consumer+provider pair** — `singleFork: true` keeps all files in one process, so two files for the same pair produce an FFI handle collision ("request was expected but not received" on Linux CI, sporadic); (4) one-interaction-per-`it()` (this rule) — prevents the FFI from dropping interactions within a single test body. See `pact-consumer-framework-setup.md` Example 10 for the file-organization ✅/❌ pattern.
+- Symptom of violating this rule: the pact file is byte-different between otherwise-identical runs; PactFlow rejects a republish with `Cannot change pact content`.
 - The rule applies to both HTTP consumer pacts (`PactV4`) and message consumer pacts (`MessageConsumerPact`).
-- See `pact-consumer-framework-setup.md` Example 10 for the determinism gate that automatically catches violations of this rule.
 
 ## Key Points
 
@@ -278,13 +277,13 @@ it.each([
 - **Body shorthand**: `setJsonBody` keeps body-only responses concise and readable
 - **Matchers check type, not value**: `string('My movie')` means "any string", `integer(1)` means "any integer". The example values are arbitrary — the provider can return different values and verification still passes as long as the type matches. Use matchers only in `.willRespondWith()` (responses), never in `.withRequest()` (requests) — Postel's Law applies.
 - **Reuse test values across files**: Interactions are uniquely identified by `uponReceiving` + `.given()`, not by placeholder values. Two test files can both use `testId: 100` without conflicting. On the provider side, shared values simplify state handlers — idempotent handlers (check if exists, create if not) only need to ensure one record exists. Use different values only when testing different states of the same entity type (e.g., `movieExists(100)` for happy paths vs. `movieNotFound(999)` for error paths).
-- **One `addInteraction()` per `it()` block (MANDATORY for PactV4)**: Multiple interactions inside one `it()` cause the Rust FFI to non-deterministically drop interactions. Use one `it()` per interaction or `it.each(...)` for parameterized cases. See Example 6 and the determinism gate in `pact-consumer-framework-setup.md` Example 10.
+- **One `addInteraction()` per `it()` block (MANDATORY for PactV4)**: Multiple interactions inside one `it()` cause the Rust FFI to non-deterministically drop interactions. Use one `it()` per interaction or `it.each(...)` for parameterized cases. See Example 6.
 
 ## Related Fragments
 
 - `pactjs-utils-overview.md` — installation, decision tree, design philosophy
 - `pactjs-utils-provider-verifier.md` — provider-side state handler implementation; same `pool: 'forks'` + `singleFork: true` rule as consumer
-- `pact-consumer-framework-setup.md` — Vitest `fileParallelism: false` + `pool: 'forks'` + `singleFork: true` config, determinism gate (Example 10), and CI wiring
+- `pact-consumer-framework-setup.md` — Vitest `fileParallelism: false` + `pool: 'forks'` + `singleFork: true` config and CI wiring
 - `contract-testing.md` — foundational patterns with raw Pact.js
 
 ## Anti-Patterns
@@ -308,7 +307,7 @@ provider.given(
   ...createProviderState({
     name: 'user exists',
     params: { id: 1, createdAt: new Date(), metadata: { role: 'admin' } },
-  })
+  }),
 );
 ```
 
@@ -354,16 +353,8 @@ provider.given(...createProviderState({ name: STATES.USER_EXISTS, params: { id: 
 ```typescript
 // ❌ PactV4 FFI non-deterministically drops one of these interactions ~1/N runs
 it('handles both success and empty list', async () => {
-  await pact
-    .addInteraction()
-    .uponReceiving('get movie')
-    .withRequest(/* ... */)
-    .executeTest(/* ... */);
-  await pact
-    .addInteraction()
-    .uponReceiving('empty list')
-    .withRequest(/* ... */)
-    .executeTest(/* ... */);
+  await pact.addInteraction().uponReceiving('get movie').withRequest(/* ... */).executeTest(/* ... */);
+  await pact.addInteraction().uponReceiving('empty list').withRequest(/* ... */).executeTest(/* ... */);
 });
 ```
 
@@ -383,6 +374,6 @@ it('returns empty list', async () => {
 });
 ```
 
-See Example 6 above for the full rationale and the determinism gate that enforces this rule.
+See Example 6 above for the full rationale.
 
 _Source: @seontechnologies/pactjs-utils consumer-helpers module, pactjs-utils sample-app consumer tests_

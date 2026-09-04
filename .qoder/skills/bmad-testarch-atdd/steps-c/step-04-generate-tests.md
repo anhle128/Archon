@@ -71,8 +71,11 @@ const subagentContext = {
   config: {
     test_framework: config.test_framework,
     use_playwright_utils: config.tea_use_playwright_utils,
+    playwright_utils_mandate: config.tea_use_playwright_utils === true,  // when true, workers MUST follow playwright-utils-mandate.md
     use_pactjs_utils: config.tea_use_pactjs_utils,
     pact_mcp: config.tea_pact_mcp,  // "mcp" | "none"
+    pact_mcp_reachable: /* from Step 1: the probe result, not the mode. `mcp` alone does not mean the tools are there */,
+    pact_fallback_source: /* from Step 1: 'broker' | 'provider-source' | 'openapi' | 'none' */,
     browser_automation: config.tea_browser_automation,
     execution_mode: config.tea_execution_mode || 'auto',  // "auto" | "subagent" | "agent-team" | "sequential"
     capability_probe: parseBooleanFlag(config.tea_capability_probe, true),  // supports booleans and "false"/"true" strings
@@ -87,18 +90,13 @@ const subagentContext = {
 ### 2. Resolve Execution Mode with Capability Probe
 
 ```javascript
-const normalizeUserExecutionMode = mode => {
+const normalizeUserExecutionMode = (mode) => {
   if (typeof mode !== 'string') return null;
   const normalized = mode.trim().toLowerCase().replace(/[-_]/g, ' ').replace(/\s+/g, ' ');
 
   if (normalized === 'auto') return 'auto';
   if (normalized === 'sequential') return 'sequential';
-  if (
-    normalized === 'subagent' ||
-    normalized === 'sub agent' ||
-    normalized === 'subagents' ||
-    normalized === 'sub agents'
-  ) {
+  if (normalized === 'subagent' || normalized === 'sub agent' || normalized === 'subagents' || normalized === 'sub agents') {
     return 'subagent';
   }
   if (normalized === 'agent team' || normalized === 'agent teams' || normalized === 'agentteam') {
@@ -108,7 +106,7 @@ const normalizeUserExecutionMode = mode => {
   return null;
 };
 
-const normalizeConfigExecutionMode = mode => {
+const normalizeConfigExecutionMode = (mode) => {
   if (mode === 'subagent') return 'subagent';
   if (mode === 'auto' || mode === 'sequential' || mode === 'subagent' || mode === 'agent-team') {
     return mode;
@@ -117,14 +115,9 @@ const normalizeConfigExecutionMode = mode => {
 };
 
 // Explicit user instruction in the active run takes priority over config.
-const explicitModeFromUser = normalizeUserExecutionMode(
-  runtime.getExplicitExecutionModeHint?.() || null
-);
+const explicitModeFromUser = normalizeUserExecutionMode(runtime.getExplicitExecutionModeHint?.() || null);
 
-const requestedMode =
-  explicitModeFromUser ||
-  normalizeConfigExecutionMode(subagentContext.config.execution_mode) ||
-  'auto';
+const requestedMode = explicitModeFromUser || normalizeConfigExecutionMode(subagentContext.config.execution_mode) || 'auto';
 const probeEnabled = subagentContext.config.capability_probe;
 
 const supports = {
@@ -153,8 +146,7 @@ subagentContext.execution = {
 
 if (!probeEnabled && (requestedMode === 'agent-team' || requestedMode === 'subagent')) {
   const unsupportedRequestedMode =
-    (requestedMode === 'agent-team' && !supports.agentTeam) ||
-    (requestedMode === 'subagent' && !supports.subagent);
+    (requestedMode === 'agent-team' && !supports.agentTeam) || (requestedMode === 'subagent' && !supports.subagent);
 
   if (unsupportedRequestedMode) {
     subagentContext.execution.error = `Requested execution mode "${requestedMode}" is unavailable because capability probing is disabled.`;
@@ -170,6 +162,30 @@ Resolution precedence:
 3. Runtime capability fallback (when probing enabled)
 
 If probing is disabled, honor the requested mode strictly. If that mode cannot be executed at runtime, fail with explicit error instead of silent fallback.
+
+---
+
+### Playwright Utils Generation Contract
+
+When `use_playwright_utils` is `true`, both workers below generate in the playwright-utils style by default. `playwright-utils-mandate.md` is the binding rule; pass it in `knowledge_fragments_loaded` and restate it in each worker's dispatch context.
+
+A red-phase scaffold is production test code that happens to be skipped. It is the file the developer un-skips and then lives with, so it must be born in the right style. Generating a vanilla scaffold "because it will be rewritten anyway" is the failure mode this contract exists to prevent.
+
+The non-negotiable substitutions:
+
+| Vanilla                                                  | Required instead                                    |
+| -------------------------------------------------------- | --------------------------------------------------- |
+| `page.route` / `page.waitForResponse` on an app endpoint | `interceptNetworkCall`                              |
+| `request.get/post/put/patch/delete`                      | `apiRequest`                                        |
+| `page.waitForTimeout`, bare `expect.poll`                | `recurse`                                           |
+| `console.log`                                            | `log.info` / `log.step`                             |
+| `import { test } from '@playwright/test'` in a spec      | `import { test } from '../support/merged-fixtures'` |
+
+`auth-session`, `network-recorder`, `webhook`, and `burn-in` are recommended rather than required: they need project wiring. Propose them and name the wiring; never silently emit the vanilla equivalent instead.
+
+The endpoints and selectors do not exist yet in the red phase. That is a reason to apply `confidence-gate.md` and stop to ask, not a reason to fall back to vanilla shapes.
+
+This contract does not apply to Cypress suites, Maestro flows, or Pact/Vitest contract artifacts.
 
 ---
 

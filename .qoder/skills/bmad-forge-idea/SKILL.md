@@ -1,6 +1,6 @@
 ---
 name: bmad-forge-idea
-description: Pressure-test an idea through persona-driven interrogation until it hardens, proves out, or dies cheaply. Use when the user says 'forge an idea', 'pressure-test this idea', 'stress-test my thinking', or 'harden this idea'.
+description: Test a half-formed idea in a questioning conversation, with different personas probing its weak points, until the user can act on it or drop it with confidence. Optionally writes a short brief for planning skills to build on. Use when the user says 'forge an idea', 'pressure-test this idea', 'stress-test my thinking', or 'harden this idea'
 ---
 
 # BMad Forge Idea
@@ -22,7 +22,7 @@ Lead by questioning, not lecturing. Ask one question at a time, press on weak po
 
 ## On Activation
 
-1. Resolve customization: `uv run {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --key workflow`. On failure, read `{skill-root}/customize.toml` directly with defaults. Apply the resolved `{workflow.*}` values throughout.
+1. Resolve customization: `uv run {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --project-root {project-root} --key workflow`. On failure, read `{skill-root}/customize.toml` directly with defaults. Apply the resolved `{workflow.*}` values throughout.
 2. Run each `{workflow.activation_steps_prepend}` entry; treat each `{workflow.persistent_facts}` entry as foundational context (`file:` entries load their contents, `skill:` names a skill to consult, others are facts verbatim).
 3. Resolve central config: `uv run {project-root}/_bmad/scripts/resolve_config.py --project-root {project-root} --key core`; from the merged JSON read `{user_name}`, `{communication_language}`, `{output_folder}`. On failure use neutral defaults; never block. Greet `{user_name}` in `{communication_language}` and stay in it.
 4. Note whether a BMad persona is already active in this conversation — the user loaded one (e.g. the analyst, the storyteller) and invoked the forge from within it. If so, that persona leads the session, in voice, throughout.
@@ -34,17 +34,14 @@ Lead by questioning, not lecturing. Ask one question at a time, press on weak po
 Start by scrutinizing the idea, not endorsing it.
 
 ### Discover intent
-
-Identify:
-
-- the subject idea,
-- the user's goal for the session,
+Identify: 
+- the subject idea, 
+- the user's goal for the session, 
 - whether the idea is new or a change to an existing project
 
-If any of these are already clear from the prompt that invoked this skill or previous context, ask the user to confirm and continue.
+If any of these are already clear from the prompt that invoked this skill or previous context, ask the user to confirm and continue. 
 
-Otherwise ask for what's missing, in order:
-
+Otherwise ask for what's missing, in order: 
 - what is the idea?
 - do you want to clarify and understand it, test whether it holds up, or make it better?
 - is it a new idea or a change to an existing project? If the latter, what project is it, and where can I find its files or other relevant materials?
@@ -89,7 +86,6 @@ Resolve the available persona pool once, as soon as the goal is known:
 The script returns installed BMad agents (`agents`), user-defined personas (`members`), and saved parties (`parties`). Parties may include a `scene`; some are open-cast. This gives you the same roster information as `bmad-party-mode` without invoking it.
 
 Each turn uses two voices:
-
 - **One available persona** — choose an installed agent or user-defined persona whose expertise fits the current branch. Vary this voice every few turns; do not let one voice dominate. If the user names a specific persona, use it. If the user calls a saved party, use the whole party and its scene. If the user asks to go one-on-one, use only the requested persona. If no pool is available, generate this voice yourself.
 - **One generated persona** — create a fresh outside voice, such as a competitor, buyer, finance reviewer, domain expert, or critic. Give it a name and enough characterization to keep its viewpoint distinct.
 
@@ -101,7 +97,7 @@ Voice the personas yourself by default. Spawn separate agents only when a branch
 
 The session can end in three valid states:
 
-- **Hardened** — the idea is stronger and specific enough to use. Distill the memlog into `{workspace}/forged-idea.md`. Keep it extremely short: only the decisions, rejected options, and reasons that matter downstream, in the user's meaning. Do not write a prose summary, template, or conversation recap. If it reads like a document, it is too long. If planning or dev skills are installed (`bmad-spec`, `bmad-prd`, `bmad-prfaq`, `bmad-quick-dev`), offer the file as their input; if none are, the file stands on its own — never treat a missing skill as an error.
+- **Hardened** — the idea is stronger and specific enough to use. Distill the memlog into `{workspace}/forged-idea.md`. Keep it extremely short: only the decisions, rejected options, and reasons that matter downstream, in the user's meaning. Do not write a prose summary, template, or conversation recap. If it reads like a document, it is too long. If planning or dev skills are installed (`bmad-spec`, `bmad-prd`, `bmad-prfaq`, `bmad-build`), offer the file as their input; if none are, the file stands on its own — never treat a missing skill as an error.
 - **Killed** — the idea does not hold up. Say so plainly and record why. Finding that out early is a valid outcome.
 - **Clearer** — the user understands the idea better, but there is no hardened idea to hand off. Leave the memlog as the record; no `forged-idea.md` is needed.
 

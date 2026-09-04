@@ -33,8 +33,9 @@ Playwright's `mergeTests` provides:
 // playwright/support/merged-fixtures.ts
 import { mergeTests } from '@playwright/test';
 import { test as apiRequestFixture } from '@seontechnologies/playwright-utils/api-request/fixtures';
-import { test as authFixture } from '@seontechnologies/playwright-utils/auth-session/fixtures';
 import { test as recurseFixture } from '@seontechnologies/playwright-utils/recurse/fixtures';
+// Auth fixture built in your project (setAuthProvider + createAuthFixtures)
+import { test as authFixture } from './auth-fixture';
 
 // Merge all fixtures
 export const test = mergeTests(apiRequestFixture, authFixture, recurseFixture);
@@ -60,7 +61,7 @@ test('all utilities available', async ({
 
   await recurse(
     () => apiRequest({ method: 'GET', path: `/status/${body.id}` }),
-    res => res.body.ready === true
+    (res) => res.body.ready === true,
   );
 });
 ```
@@ -105,13 +106,14 @@ export const test = base.extend({
 // playwright/support/merged-fixtures.ts - Combine everything
 import { mergeTests } from '@playwright/test';
 import { test as apiRequestFixture } from '@seontechnologies/playwright-utils/api-request/fixtures';
-import { test as authFixture } from '@seontechnologies/playwright-utils/auth-session/fixtures';
+// Auth fixture built in your project (setAuthProvider + createAuthFixtures)
+import { test as authFixture } from './auth-fixture';
 import { test as customFixtures } from './custom-fixtures';
 
 export const test = mergeTests(
   apiRequestFixture,
   authFixture,
-  customFixtures // Your project fixtures
+  customFixtures, // Your project fixtures
 );
 
 export { expect } from '@playwright/test';
@@ -158,23 +160,17 @@ import { mergeTests } from '@playwright/test';
 
 // Playwright utils fixtures
 import { test as apiRequestFixture } from '@seontechnologies/playwright-utils/api-request/fixtures';
-import { test as authFixture } from '@seontechnologies/playwright-utils/auth-session/fixtures';
 import { test as interceptFixture } from '@seontechnologies/playwright-utils/intercept-network-call/fixtures';
 import { test as recurseFixture } from '@seontechnologies/playwright-utils/recurse/fixtures';
 import { test as networkRecorderFixture } from '@seontechnologies/playwright-utils/network-recorder/fixtures';
 
 // Custom project fixtures
+// Auth fixture built in your project (setAuthProvider + createAuthFixtures)
+import { test as authFixture } from './auth-fixture';
 import { test as customFixtures } from './custom-fixtures';
 
 // Merge everything
-export const test = mergeTests(
-  apiRequestFixture,
-  authFixture,
-  interceptFixture,
-  recurseFixture,
-  networkRecorderFixture,
-  customFixtures
-);
+export const test = mergeTests(apiRequestFixture, authFixture, interceptFixture, recurseFixture, networkRecorderFixture, customFixtures);
 
 export { expect } from '@playwright/test';
 ```
@@ -358,8 +354,8 @@ test('clean', async ({ apiRequest, authToken, testUser }) => {
 
 ```typescript
 import { test } from '@seontechnologies/playwright-utils/api-request/fixtures';
-// Also need auth...
-import { test as authTest } from '@seontechnologies/playwright-utils/auth-session/fixtures';
+// Also need auth... (fixture built in your project: setAuthProvider + createAuthFixtures)
+import { test as authTest } from './support/auth/auth-fixture';
 // Name conflict! Which test to use?
 ```
 

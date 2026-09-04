@@ -63,7 +63,7 @@ test('logging demo', async ({ page }) => {
   try {
     await page.click('#nonexistent');
   } catch (error) {
-    await log.error('Click failed', false); // false = no console output
+    await log.error('Click failed', { console: false }); // suppress console output
     throw error;
   }
 });
@@ -211,18 +211,12 @@ const createDefaultTodos = functionTestStep('Create default todos', async (page:
   await log.success('Created all default todos');
 });
 
-const checkNumberOfTodosInLocalStorage = functionTestStep(
-  'Check total todos count fn-step',
-  async (page: Page, expected: number) => {
-    await log.info(`Verifying todo count: ${expected}`);
-    const result = await page.waitForFunction(
-      e => JSON.parse(localStorage['react-todos']).length === e,
-      expected
-    );
-    await log.success(`Verified todo count: ${expected}`);
-    return result;
-  }
-);
+const checkNumberOfTodosInLocalStorage = functionTestStep('Check total todos count fn-step', async (page: Page, expected: number) => {
+  await log.info(`Verifying todo count: ${expected}`);
+  const result = await page.waitForFunction((e) => JSON.parse(localStorage['react-todos']).length === e, expected);
+  await log.success(`Verified todo count: ${expected}`);
+  return result;
+});
 ```
 
 ### Example 5: File Logging
@@ -265,7 +259,13 @@ export const test = base.extend({
 **Implementation**:
 
 ```typescript
-import { test } from '@seontechnologies/playwright-utils/fixtures';
+import { mergeTests } from '@playwright/test';
+import { log } from '@seontechnologies/playwright-utils';
+import { test as apiRequestFixture } from '@seontechnologies/playwright-utils/api-request/fixtures';
+// Auth fixture built in your project (see auth-session.md: setAuthProvider + createAuthFixtures)
+import { test as authFixture } from './support/auth/auth-fixture';
+
+const test = mergeTests(authFixture, apiRequestFixture);
 
 // Helper to create safe token preview
 function createTokenPreview(token: string): string {
@@ -428,5 +428,5 @@ for (const item of items) {
 
 ```typescript
 await log.step(`Processing ${items.length} items`);
-await log.debug({ itemIds: items.map(i => i.id) }); // One log entry
+await log.debug({ itemIds: items.map((i) => i.id) }); // One log entry
 ```

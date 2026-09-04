@@ -36,7 +36,6 @@ Pass a specific piece of work to another WDS agent. This is NOT a session wrap �
     ```
 
     This is task context, not session history. Always include full absolute file paths — never just filenames. If the receiving agent doesn't need something to do the task, leave it out.
-
   </step>
 
   <step id="2-show">
@@ -48,7 +47,6 @@ Pass a specific piece of work to another WDS agent. This is NOT a session wrap �
     ──────────────────────────────────────────────
 
     Then proceed immediately to step 3.
-
   </step>
 
   <step id="3-write">
@@ -88,7 +86,6 @@ Pass a specific piece of work to another WDS agent. This is NOT a session wrap �
     ```
 
     Session continues.
-
   </step>
 
 </handoff-steps>

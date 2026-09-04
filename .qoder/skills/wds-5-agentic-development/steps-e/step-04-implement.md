@@ -79,7 +79,6 @@ For each planned commit:
 ### 4. Ensure Backward Compatibility at Each Commit
 
 At every commit, ask:
-
 - Does the existing functionality still work?
 - Can an existing user do everything they could before?
 - Are any existing API consumers affected?
@@ -88,7 +87,6 @@ At every commit, ask:
 ### 5. Use Feature Flags if Needed
 
 When the plan calls for feature flags:
-
 - Implement the flag check early (before building the feature behind it)
 - Default to "off" — new feature is hidden until explicitly enabled
 - Ensure the "off" path is identical to the pre-change behavior
@@ -108,12 +106,10 @@ When the plan calls for feature flags:
 Display: "**Select an Option:** [C] Continue to Step 5: Verify and Document"
 
 #### Menu Handling Logic:
-
 - IF C: Update design log, then load, read entire file, then execute {nextStepFile}
 - IF Any other comments or queries: help user respond then [Redisplay Menu Options]
 
 #### EXECUTION RULES:
-
 - ALWAYS halt and wait for user input after presenting menu
 - ONLY proceed to next step when user selects 'C'
 - User can chat or ask questions - always respond and then redisplay menu options
@@ -127,7 +123,6 @@ ONLY WHEN all planned steps are implemented, tested, and committed with backward
 ## 🚨 SYSTEM SUCCESS/FAILURE METRICS
 
 ### ✅ SUCCESS:
-
 - Feature branch created
 - Each planned step implemented and committed separately
 - Tests pass after each commit
@@ -136,7 +131,6 @@ ONLY WHEN all planned steps are implemented, tested, and committed with backward
 - Dialog file updated with implementation progress
 
 ### ❌ SYSTEM FAILURE:
-
 - Proceeding to next step with broken tests
 - Not verifying backward compatibility
 - Implementing outside the planned scope

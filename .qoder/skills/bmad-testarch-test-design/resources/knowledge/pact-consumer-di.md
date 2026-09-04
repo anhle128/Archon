@@ -224,12 +224,7 @@ describe('Transaction Statistics - Count Endpoint', () => {
       })
       .executeTest(async (mockServer: V3MockServer) => {
         const context = createTestContext(mockServer.url);
-        const result = await makeApiRequestWithContext<CountStatistics>(
-          context,
-          '/transactions/statistics/count',
-          'POST',
-          statsRequest
-        );
+        const result = await makeApiRequestWithContext<CountStatistics>(context, '/transactions/statistics/count', 'POST', statsRequest);
         expect(result.count).toBeDefined();
       });
   });
@@ -263,7 +258,7 @@ expect(response.status).toBe(200);
 
 ```typescript
 // BAD: ESM hoisting makes this non-obvious and brittle
-vi.mock('../../src/constants.js', async importOriginal => ({
+vi.mock('../../src/constants.js', async (importOriginal) => ({
   ...(await importOriginal()),
   get API_BASE_URL() {
     return mockBaseUrl;
@@ -303,7 +298,7 @@ expect(result.transactions).toBeDefined();
 - `pactjs-utils-consumer-helpers.md` — `createProviderState()`, `setJsonContent()`, and `setJsonBody()` helpers used alongside this pattern
 - `pactjs-utils-provider-verifier.md` — Provider-side verification configuration
 - `fixture-architecture.md` — Composable fixture patterns (`createTestContext` follows pure-function-first)
-- `api-testing-foundations.md` — API testing best practices
+- `api-testing-patterns.md` — API testing best practices
 
 Used in workflows:
 

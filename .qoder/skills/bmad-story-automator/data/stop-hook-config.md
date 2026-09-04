@@ -9,7 +9,6 @@ This document defines the Stop hook required for the story-automator to prevent 
 ## Overview
 
 The Stop hook uses a **marker file approach**:
-
 1. When story-automator starts → Creates marker file with orchestration context
 2. When the active agent tries to stop → Hook script checks marker file
 3. If no marker or completed → Allow stop (normal agent usage)
@@ -30,7 +29,6 @@ The Stop hook uses a **marker file approach**:
 ### Why Project-Scoped?
 
 When running story-automator on multiple projects at the same time:
-
 - Old: All projects shared `/tmp/.story-automator-active` → Cross-project interference
 - New: Each project has its own marker in the active runtime layout. The marker follows the active installed skill root parent, for example `.claude/`, `.agents/`, or `.codex/`.
 
@@ -46,7 +44,6 @@ Do not hard-code the marker path. Use `orchestrator-helper marker path`; this ke
 ### State Files Also Scoped
 
 The status check script state files are also project-scoped:
-
 - **Old:** `/tmp/.tmux-session-{SESSION}-state.json`
 - **New:** `/tmp/.sa-{project_hash}-session-{SESSION}-state.json`
 
@@ -59,7 +56,6 @@ Where `project_hash` = first 8 chars of MD5 hash of project root path.
 ### Runtime Selection
 
 The helper selects hook configuration syntax from the active provider:
-
 - `BMAD_RUNTIME_PROVIDER`
 - `STORY_AUTOMATOR_RUNTIME_PROVIDER`
 
@@ -128,7 +124,6 @@ This prevents the inconsistency where the AI agent resolves frontmatter paths di
 **Migration:** If an existing hook config contains a relative or project-relative path, `ensure-stop-hook` will normalize it to absolute in-place without triggering a restart (`reason: "hook_normalized"`).
 
 **When hook fails with "no such file or directory":**
-
 - Verify BMAD is installed in the target project
 - Check the binary exists in the active runtime skills tree, for example: `test -x <installed-skill-root>/bmad-story-automator/scripts/story-automator`
 - Ensure binary is executable: `chmod +x <installed-skill-root>/bmad-story-automator/scripts/story-automator`
@@ -139,10 +134,9 @@ This prevents the inconsistency where the AI agent resolves frontmatter paths di
 
 **Location (v2.0):** resolved by `orchestrator-helper marker path`
 
-_Note: The orchestrator adds the active marker entry returned by `orchestrator-helper marker path` to `.gitignore`. Common entries are `.claude/.story-automator-active`, `.agents/.story-automator-active`, and `.codex/.story-automator-active`._
+*Note: The orchestrator adds the active marker entry returned by `orchestrator-helper marker path` to `.gitignore`. Common entries are `.claude/.story-automator-active`, `.agents/.story-automator-active`, and `.codex/.story-automator-active`.*
 
 Content (JSON - v1.2.0 with heartbeat):
-
 ```json
 {
   "epic": "epic-01",
@@ -156,7 +150,6 @@ Content (JSON - v1.2.0 with heartbeat):
 ```
 
 ### Fields (v1.2.0):
-
 - `heartbeat`: Last activity timestamp, updated periodically during execution
 - `pid`: Process ID of the orchestrator (helps detect crashed sessions)
 
@@ -184,11 +177,11 @@ IF not found → Add hook, instruct restart
 
 ## Hook Behavior
 
-| Scenario                              | Action                                  |
-| ------------------------------------- | --------------------------------------- |
-| `STORY_AUTOMATOR_CHILD=true`          | `exit 0` → Always allow (child session) |
-| No marker file                        | `exit 0` → Allow stop                   |
-| Marker exists, `storiesRemaining=0`   | `exit 0` → Allow stop                   |
-| Marker exists, `storiesRemaining > 0` | Output JSON → Block stop with reason    |
+| Scenario | Action |
+|----------|--------|
+| `STORY_AUTOMATOR_CHILD=true` | `exit 0` → Always allow (child session) |
+| No marker file | `exit 0` → Allow stop |
+| Marker exists, `storiesRemaining=0` | `exit 0` → Allow stop |
+| Marker exists, `storiesRemaining > 0` | Output JSON → Block stop with reason |
 
 **Key fix (Session 10):** The hook no longer checks `stop_hook_active`. This flag was causing premature exits in long orchestrations because it stays `true` for the entire session after the first blocked stop.

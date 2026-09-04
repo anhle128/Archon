@@ -28,11 +28,9 @@ tmuxCommands: '../data/tmux-commands.md'
 ## Do
 
 ### 1. Load Rules
-
 Load `{rules}` once for context on expected state structure.
 
 ### 2. Request State Document
-
 ```
 **Which orchestration would you like to validate?**
 
@@ -47,9 +45,7 @@ Enter filename or number to select:
 **Wait.**
 
 ### 3. Load and Parse State
-
 Load the selected state document (resolved as `{state_path}` for this run). Extract frontmatter:
-
 - `epic`, `epicName`, `storyRange`
 - `status`, `currentStory`, `currentStep`
 - `stepsCompleted`, `lastUpdated`
@@ -59,7 +55,6 @@ Load the selected state document (resolved as `{state_path}` for this run). Extr
 ### 3a. Helper CLI Contract Check (Required)
 
 Before running validation commands, verify helper interfaces in parallel:
-
 ```bash
 tmp_help_validate=$(mktemp)
 tmp_help_sessions=$(mktemp)
@@ -125,31 +120,28 @@ rm -f "$tmp_validation" "$tmp_sessions"
 
 **Required Fields Check:**
 
-| Field                    | Present | Valid                                          |
-| ------------------------ | ------- | ---------------------------------------------- |
-| epic                     | ✅/❌   | non-empty string                               |
-| epicName                 | ✅/❌   | non-empty string                               |
-| storyRange               | ✅/❌   | array                                          |
-| status                   | ✅/❌   | valid enum                                     |
-| lastUpdated              | ✅/❌   | ISO date                                       |
-| aiCommand or agentConfig | ✅/❌   | at least one runtime command source is present |
+| Field | Present | Valid |
+|-------|---------|-------|
+| epic | ✅/❌ | non-empty string |
+| epicName | ✅/❌ | non-empty string |
+| storyRange | ✅/❌ | array |
+| status | ✅/❌ | valid enum |
+| lastUpdated | ✅/❌ | ISO date |
+| aiCommand or agentConfig | ✅/❌ | at least one runtime command source is present |
 
 **Valid status values:** INITIALIZING, READY, IN_PROGRESS, PAUSED, COMPLETE, ABORTED
 
 **Record issues:**
-
 - Missing required fields
 - Invalid field values
 - Malformed YAML
 
 Single-pass structure issue extraction (compact output):
-
 ```bash
 field_issues=$(echo "$validation" | jq -r '.issues[]? | select(.type=="missing_field" or .type=="invalid_value" or .type=="yaml_error") | "\(.type): \(.field // .message)"')
 ```
 
 Using `{tmuxCommands}` semantics and `sessions` output, compare state vs live sessions in one pass:
-
 ```bash
 state_sessions=$(echo "$validation" | jq -r '.activeSessions[]?.sessionId // empty' | sort -u)
 live_sessions=$(echo "$sessions" | jq -r '.sessions[]?.name // empty' | sort -u)
@@ -160,16 +152,15 @@ untracked_live=$(comm -13 <(echo "$state_sessions") <(echo "$live_sessions"))
 
 **Session consistency checks:**
 
-| Check                                     | Result              |
-| ----------------------------------------- | ------------------- |
+| Check | Result |
+|-------|--------|
 | Active sessions in state but not in T-Mux | Orphaned references |
-| T-Mux sessions not in state               | Untracked sessions  |
-| Status=IN_PROGRESS but no active sessions | Stale state         |
+| T-Mux sessions not in state | Untracked sessions |
+| Status=IN_PROGRESS but no active sessions | Stale state |
 
 ### 6. Carry Forward Validation Context
 
 Carry forward to `{nextStep}`:
-
 - `state_path`
 - `validation`
 - `sessions`
@@ -184,5 +175,4 @@ Display: "**Structure and session baseline complete. Proceeding to progress vali
 ---
 
 ## Then
-
 → Load and execute `{nextStep}`

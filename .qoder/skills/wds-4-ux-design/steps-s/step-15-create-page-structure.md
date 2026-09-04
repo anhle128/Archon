@@ -60,11 +60,9 @@ Create the physical page folder structure, generate the initial specification do
 **Determine page folder path:**
 
 **For single page projects (no scenarios):**
-
 - Page path: `C-UX-Scenarios/{{page_slug}}/`
 
 **For scenario-based projects:**
-
 - Read scenario_number from context
 - Read current_page_index from `scenario-tracking.yaml`
 - Calculate page_number: `{{scenario_number}}.{{current_page_index + 1}}`
@@ -89,7 +87,6 @@ Store page_path and page_number
 File: `{{page_path}}{{page_number}}-{{page_slug}}.md`
 
 Content:
-
 ```markdown
 # {{page_number}} {{page_name}}
 
@@ -107,7 +104,6 @@ Content:
 **Page Purpose:** {{page_purpose}}
 
 **Entry Points:**
-
 - {{entry_point}}
 
 **User Mental State:**
@@ -122,7 +118,6 @@ Content:
 ---
 
 {{#if scenario_name}}
-
 ## Journey Context
 
 {{#if total_pages}}
@@ -138,7 +133,6 @@ This is **page {{current_page_index + 1}} of {{total_pages}}** in the "{{scenari
 {{/if}}
 
 ---
-
 {{/if}}
 
 ## Design Sections
@@ -163,17 +157,15 @@ _This starter document was generated from the page initialization workshop. Comp
 **Update scenario-tracking.yaml (if applicable):**
 
 If this is a scenario-based project:
-
 - Update current_page_index: increment by 1
 - Update page status in pages_list
-  </action>
+</action>
 
 <output>**Page structure created:**
 
 **Page:** {{page_number}} {{page_name}}
 
 **Folder:**
-
 - `{{page_path}}`
 
 **Purpose:** {{page_purpose}}
@@ -183,7 +175,6 @@ If this is a scenario-based project:
 {{/if}}
 
 **Next Steps:**
-
 - Add sketches to the sketches folder
 - Continue with page design</output>
 
@@ -198,7 +189,7 @@ After page structure is created, present exactly two options:
 
 1. **Specify this page** — add full detail with [P] Specify
 2. **Design the next scenario step** — [next page name]
-   </output>
+</output>
 
 **If this is the last page in the scenario:**
 
@@ -207,7 +198,7 @@ After page structure is created, present exactly two options:
 
 1. **Specify this page** — add full detail with [P] Specify
 2. **All pages in this scenario are created!** — return to dashboard
-   </output>
+</output>
 
 #### Transition Handling:
 

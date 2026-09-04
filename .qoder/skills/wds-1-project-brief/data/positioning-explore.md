@@ -24,7 +24,6 @@ Reference: `src/data/agent-guides/saga/conversational-followups.md`
 **Signals:** "For busy parents...", "Enterprise teams...", "Small businesses..."
 
 **Follow-ups:**
-
 - "What's typical for them? Walk me through their situation"
 - "Why them specifically - what makes them the right fit?"
 - "How do you know they have this problem?"
@@ -34,7 +33,6 @@ Reference: `src/data/agent-guides/saga/conversational-followups.md`
 **Signals:** "People struggle with...", "Current solutions don't...", "They need..."
 
 **Follow-ups:**
-
 - "How do they handle this today?"
 - "What happens when this goes wrong?"
 - "Why hasn't this been solved already?"
@@ -44,7 +42,6 @@ Reference: `src/data/agent-guides/saga/conversational-followups.md`
 **Signals:** "Unlike X...", "Better than...", "People currently use..."
 
 **Follow-ups:**
-
 - "What do people use today - what are the real alternatives?"
 - "Why would someone stick with [alternative] instead of using yours?"
 - "What can [alternative] do that you can't?"
@@ -54,7 +51,6 @@ Reference: `src/data/agent-guides/saga/conversational-followups.md`
 **Signals:** "We're the only...", "Our unique...", "Unlike others, we..."
 
 **Follow-ups:**
-
 - "Why does that matter to users?"
 - "How long will that remain unique?"
 - "Is that a real advantage or just a feature?"
@@ -64,7 +60,6 @@ Reference: `src/data/agent-guides/saga/conversational-followups.md`
 **Examples:** "It's better...", "More convenient...", "Professional..."
 
 **Follow-ups:**
-
 - "Better how? Give me a specific example"
 - "What does 'professional' look like to your users?"
 - "Convenient compared to what?"
@@ -101,7 +96,6 @@ You're ready when you can answer ALL of these:
 **User:** "Yeah - peace of mind. We're certified, been here 20+ years, we'll figure it out."
 
 **Agent thinks - Components Captured:**
-
 - ✅ **Who:** Summer tourists + year-round locals (focus on tourists)
 - ✅ **Need:** Vehicle breakdown, need immediate expert help, uncertainty about service availability
 - ✅ **Category:** Auto service garage (broad spectrum)

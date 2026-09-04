@@ -16,7 +16,6 @@ This workshop will guide AI agents through importing design specifications from 
 ### When to Use Figma to Code
 
 Import from Figma when:
-
 - ✅ Designer has updated visual specifications in Figma
 - ✅ New design system components need implementation
 - ✅ Design tokens (colors, spacing, typography) need extraction
@@ -35,4 +34,4 @@ Import from Figma when:
 
 ---
 
-_This workshop will be developed to complement the Code to Figma workflow._
+*This workshop will be developed to complement the Code to Figma workflow.*

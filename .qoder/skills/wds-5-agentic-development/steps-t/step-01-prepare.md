@@ -56,28 +56,24 @@ Gather all materials and set up your testing environment before starting validat
 ### 1. Gather Materials
 
 #### Test Scenario
-
 - Load test scenario file: `test-scenarios/TS-XXX.yaml`
 - Review all test cases
 - Understand success criteria
 - Note any special setup needed
 
 #### Design Delivery
-
 - Load Design Delivery file: `deliveries/DD-XXX.yaml`
 - Review user value and success criteria
 - Review acceptance criteria
 - Understand what "done" looks like
 
 #### Scenario Specifications
-
 - Load all scenario specs from `C-UX-Scenarios/`
 - Review each scenario specification
 - Note design details
 - Understand expected behavior
 
 #### Design System Specs
-
 - Load design system specs from `D-Design-System/`
 - Review component specifications
 - Review design tokens
@@ -86,17 +82,14 @@ Gather all materials and set up your testing environment before starting validat
 ### 2. Set Up Environment
 
 #### Access the Build
-
 - Staging URL, credentials, platform
 - Install build if needed (TestFlight, APK, or web staging)
 
 #### Prepare Test Devices
-
 - Primary device: charged, WiFi, screen recording enabled, screenshot tools ready
 - Secondary device (if needed): different platform, screen size, OS version
 
 #### Set Up Tools
-
 - Screen recording (QuickTime, built-in, OBS Studio)
 - Screenshot tools with annotation
 - Markdown editor and note-taking
@@ -105,7 +98,6 @@ Gather all materials and set up your testing environment before starting validat
 ### 3. Prepare Test Data
 
 Create test accounts and prepare test data:
-
 - Valid and invalid emails
 - Strong and weak passwords
 - Special characters
@@ -114,7 +106,6 @@ Create test accounts and prepare test data:
 ### 4. Create Testing Workspace
 
 Create file structure:
-
 ```
 testing/DD-XXX/
 ├── screenshots/
@@ -126,7 +117,6 @@ testing/DD-XXX/
 ### 5. Review Test Plan
 
 Understand what you are testing:
-
 - Happy Path Tests: count, flows, expected results
 - Error State Tests: count, scenarios, error messages
 - Edge Case Tests: count, unusual scenarios, expected behavior
@@ -155,12 +145,10 @@ Calculate total testing time with 20% buffer.
 Display: "**Select an Option:** [C] Continue to Step 2: Execute"
 
 #### Menu Handling Logic:
-
 - IF C: Update design log, then load, read entire file, then execute {nextStepFile}
 - IF Any other comments or queries: help user respond then [Redisplay Menu Options]
 
 #### EXECUTION RULES:
-
 - ALWAYS halt and wait for user input after presenting menu
 - ONLY proceed to next step when user selects 'C'
 - User can chat or ask questions - always respond and then redisplay menu options
@@ -174,7 +162,6 @@ ONLY WHEN all materials are gathered, environment is set up, and workspace is re
 ## 🚨 SYSTEM SUCCESS/FAILURE METRICS
 
 ### ✅ SUCCESS:
-
 - All materials gathered
 - Environment set up and accessible
 - Test devices ready
@@ -185,7 +172,6 @@ ONLY WHEN all materials are gathered, environment is set up, and workspace is re
 - Time estimated
 
 ### ❌ SYSTEM FAILURE:
-
 - Starting testing without materials
 - Cannot access staging environment
 - Test devices not ready

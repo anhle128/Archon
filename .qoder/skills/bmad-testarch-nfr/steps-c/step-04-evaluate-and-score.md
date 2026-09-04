@@ -69,18 +69,13 @@ const subagentContext = {
 ### 2. Resolve Execution Mode with Capability Probe
 
 ```javascript
-const normalizeUserExecutionMode = mode => {
+const normalizeUserExecutionMode = (mode) => {
   if (typeof mode !== 'string') return null;
   const normalized = mode.trim().toLowerCase().replace(/[-_]/g, ' ').replace(/\s+/g, ' ');
 
   if (normalized === 'auto') return 'auto';
   if (normalized === 'sequential') return 'sequential';
-  if (
-    normalized === 'subagent' ||
-    normalized === 'sub agent' ||
-    normalized === 'subagents' ||
-    normalized === 'sub agents'
-  ) {
+  if (normalized === 'subagent' || normalized === 'sub agent' || normalized === 'subagents' || normalized === 'sub agents') {
     return 'subagent';
   }
   if (normalized === 'agent team' || normalized === 'agent teams' || normalized === 'agentteam') {
@@ -90,7 +85,7 @@ const normalizeUserExecutionMode = mode => {
   return null;
 };
 
-const normalizeConfigExecutionMode = mode => {
+const normalizeConfigExecutionMode = (mode) => {
   if (mode === 'subagent') return 'subagent';
   if (mode === 'auto' || mode === 'sequential' || mode === 'subagent' || mode === 'agent-team') {
     return mode;
@@ -99,14 +94,9 @@ const normalizeConfigExecutionMode = mode => {
 };
 
 // Explicit user instruction in the active run takes priority over config.
-const explicitModeFromUser = normalizeUserExecutionMode(
-  runtime.getExplicitExecutionModeHint?.() || null
-);
+const explicitModeFromUser = normalizeUserExecutionMode(runtime.getExplicitExecutionModeHint?.() || null);
 
-const requestedMode =
-  explicitModeFromUser ||
-  normalizeConfigExecutionMode(subagentContext.config.execution_mode) ||
-  'auto';
+const requestedMode = explicitModeFromUser || normalizeConfigExecutionMode(subagentContext.config.execution_mode) || 'auto';
 const probeEnabled = subagentContext.config.capability_probe;
 
 const supports = {
@@ -172,10 +162,10 @@ If probing is disabled, honor the requested mode strictly. If that mode cannot b
 - Output: `/tmp/tea-nfr-reliability-${timestamp}.json`
 - Status: Running... ⟳
 
-**Subagent D: Scalability Evidence Audit**
+**Subagent D: Maintainability Evidence Audit**
 
-- File: `./step-04d-subagent-scalability.md`
-- Output: `/tmp/tea-nfr-scalability-${timestamp}.json`
+- File: `./step-04d-subagent-maintainability.md`
+- Output: `/tmp/tea-nfr-maintainability-${timestamp}.json`
 - Status: Running... ⟳
 
 In `agent-team` and `subagent` modes, runtime decides worker scheduling and concurrency.
@@ -191,7 +181,7 @@ In `agent-team` and `subagent` modes, runtime decides worker scheduling and conc
   ├── Subagent A (Security): Running... ⟳
   ├── Subagent B (Performance): Running... ⟳
   ├── Subagent C (Reliability): Running... ⟳
-  └── Subagent D (Scalability): Running... ⟳
+  └── Subagent D (Maintainability): Running... ⟳
 
 [... time passes ...]
 
@@ -209,11 +199,9 @@ In `agent-team` and `subagent` modes, runtime decides worker scheduling and conc
 ### 5. Verify All Outputs Exist
 
 ```javascript
-const outputs = ['security', 'performance', 'reliability', 'scalability'].map(
-  domain => `/tmp/tea-nfr-${domain}-${timestamp}.json`
-);
+const outputs = ['security', 'performance', 'reliability', 'maintainability'].map((domain) => `/tmp/tea-nfr-${domain}-${timestamp}.json`);
 
-outputs.forEach(output => {
+outputs.forEach((output) => {
   if (!fs.existsSync(output)) {
     throw new Error(`Subagent output missing: ${output}`);
   }

@@ -69,31 +69,48 @@ const parseBooleanFlag = (value, defaultValue = true) => {
 const subagentContext = {
   test_files: /* from Step 2 */,
   knowledge_fragments_loaded: ['test-quality'],
+  // The single rule registry. Every worker reads severities from it and chooses
+  // none of its own, so two vendors that agree on a defect cannot disagree on
+  // the deduction it carries. A required input, not a hint.
+  criteria_registry: '{skill-root}/steps-c/criteria-registry.md',
+  // Measured in step-2b over the corpus OUTSIDE the review set. Convention rows
+  // score against this rather than an absolute standard, which is what stops
+  // "no priority markers" from firing in a repo that never used one.
+  convention_baseline: /* from Step 2b */,
   config: {
     execution_mode: config.tea_execution_mode || 'auto',  // "auto" | "subagent" | "agent-team" | "sequential"
     capability_probe: parseBooleanFlag(config.tea_capability_probe, true),  // supports booleans and "false"/"true" strings
+    // Rows M9, M10 and L9 need BOTH: the flag says the project intends the utilities,
+    // the install says it can actually use them. Flag alone never deducts.
+    use_playwright_utils: parseBooleanFlag(config.tea_use_playwright_utils, true),
+    playwright_utils_installed: /* from Step 1: @seontechnologies/playwright-utils in package.json */,
+    use_pactjs_utils: parseBooleanFlag(config.tea_use_pactjs_utils, true),
+    pactjs_utils_installed: /* from Step 1: @seontechnologies/pactjs-utils in package.json */,
+    pact_mcp: config.tea_pact_mcp || 'mcp',  // "mcp" | "none"; broker steps degrade when the tools are unreachable
   },
   timestamp: timestamp
 };
 ```
+
+**Every worker loads `criteria-registry.md` before evaluating anything, and every
+worker receives `convention_baseline` verbatim.** A worker that scores from its own
+sense of severity, or that consults repo adoption for an `Absolute` row, has broken
+the contract this step exists to hold. A worker handed no baseline reports
+`unknown` and passes its Convention rows as `n/a`; it never infers a convention
+from the reviewed files, which would be circular.
 
 ---
 
 ### 2. Resolve Execution Mode with Capability Probe
 
 ```javascript
-const normalizeUserExecutionMode = mode => {
+const normalizeUserExecutionMode = (mode) => {
   if (typeof mode !== 'string') return null;
   const normalized = mode.trim().toLowerCase().replace(/[-_]/g, ' ').replace(/\s+/g, ' ');
 
   if (normalized === 'auto') return 'auto';
   if (normalized === 'sequential') return 'sequential';
-  if (
-    normalized === 'subagent' ||
-    normalized === 'sub agent' ||
-    normalized === 'subagents' ||
-    normalized === 'sub agents'
-  ) {
+  if (normalized === 'subagent' || normalized === 'sub agent' || normalized === 'subagents' || normalized === 'sub agents') {
     return 'subagent';
   }
   if (normalized === 'agent team' || normalized === 'agent teams' || normalized === 'agentteam') {
@@ -103,7 +120,7 @@ const normalizeUserExecutionMode = mode => {
   return null;
 };
 
-const normalizeConfigExecutionMode = mode => {
+const normalizeConfigExecutionMode = (mode) => {
   if (mode === 'subagent') return 'subagent';
   if (mode === 'auto' || mode === 'sequential' || mode === 'subagent' || mode === 'agent-team') {
     return mode;
@@ -112,14 +129,9 @@ const normalizeConfigExecutionMode = mode => {
 };
 
 // Explicit user instruction in the active run takes priority over config.
-const explicitModeFromUser = normalizeUserExecutionMode(
-  runtime.getExplicitExecutionModeHint?.() || null
-);
+const explicitModeFromUser = normalizeUserExecutionMode(runtime.getExplicitExecutionModeHint?.() || null);
 
-const requestedMode =
-  explicitModeFromUser ||
-  normalizeConfigExecutionMode(subagentContext.config.execution_mode) ||
-  'auto';
+const requestedMode = explicitModeFromUser || normalizeConfigExecutionMode(subagentContext.config.execution_mode) || 'auto';
 const probeEnabled = subagentContext.config.capability_probe;
 
 const supports = {
@@ -216,10 +228,10 @@ In `agent-team` and `subagent` modes, runtime decides worker scheduling and conc
 
 ```javascript
 const outputs = ['determinism', 'isolation', 'maintainability', 'performance'].map(
-  dim => `/tmp/tea-test-review-${dim}-${timestamp}.json`
+  (dim) => `/tmp/tea-test-review-${dim}-${timestamp}.json`,
 );
 
-outputs.forEach(output => {
+outputs.forEach((output) => {
   if (!fs.existsSync(output)) {
     throw new Error(`Subagent output missing: ${output}`);
   }
@@ -248,8 +260,8 @@ Load next step: `{nextStepFile}`
 The aggregation step (3F) will:
 
 - Read all 4 subagent outputs
-- Calculate weighted overall score (0-100)
 - Aggregate violations by severity
+- Calculate the overall score (0-100) from the deduction ledger
 - Generate review report with top suggestions
 
 ---

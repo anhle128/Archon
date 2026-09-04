@@ -61,7 +61,6 @@ Read all page specifications in `{output_folder}/C-UX-Scenarios/` and extract co
 ### 2. Cross-Reference
 
 For each component:
-
 - Is it defined in the design system? (yes/no)
 - Is it used consistently (same props/states)? (yes/warning)
 - Are there conflicting definitions? (yes/no)
@@ -83,7 +82,6 @@ For each component:
 ### 4. Resolve
 
 For each issue:
-
 - Update component definition to match usage
 - Update page specifications to match design system
 - Remove orphaned components

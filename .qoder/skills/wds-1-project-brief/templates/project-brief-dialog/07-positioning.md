@@ -53,7 +53,6 @@
 {{positioning_understanding}}
 
 **User response:**
-
 - [ ] Confirmed
 - [ ] Corrected
 
@@ -78,7 +77,6 @@
 ## Supporting Evidence
 
 **Why this position makes sense:**
-
 1. {{rationale_1}}
 2. {{rationale_2}}
 3. {{rationale_3}}

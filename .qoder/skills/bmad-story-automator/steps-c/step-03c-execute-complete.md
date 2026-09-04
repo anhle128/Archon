@@ -19,7 +19,6 @@ triggers: '../data/escalation-triggers.md'
 ## All Complete
 
 Display:
-
 ```
 **All {count} stories completed!**
 
@@ -46,7 +45,6 @@ echo "- **[$(date -u +%Y-%m-%dT%H:%M:%SZ)]** All stories complete — execution 
 ## Parallelism & Escalation
 
 **Parallelism:** When `overrides.maxParallel > 1`, batch independent stories into concurrent groups:
-
 1. Check story dependency graph — only stories with no shared file dependencies can run in parallel
 2. Spawn up to `maxParallel` tmux sessions simultaneously (each runs steps A→F independently)
 3. Wait for all sessions in the batch to complete before starting the next batch
@@ -67,5 +65,4 @@ Display: "**Execution loop complete. Proceeding to wrap-up...**"
 ```
 
 ## Then
-
 → Immediately load and execute `{nextStep}`

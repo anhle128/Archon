@@ -15,7 +15,6 @@ validateWorkflow: './steps-v/step-01-target-group-coverage.md'
 ## INITIALIZATION
 
 ### Design Log
-
 Read `{output_folder}/_progress/00-design-log.md`. Check Current and Backlog for context.
 
 ### Configuration Loading

@@ -69,7 +69,7 @@ describe('User API Contract', () => {
             createdAt: string('2025-01-15T10:00:00Z'),
           }),
         })
-        .executeTest(async mockServer => {
+        .executeTest(async (mockServer) => {
           // Act: Call consumer code against mock server
           const user = await getUserById(1, {
             baseURL: mockServer.url,
@@ -83,7 +83,7 @@ describe('User API Contract', () => {
               name: 'John Doe',
               email: 'john@example.com',
               role: 'user',
-            })
+            }),
           );
         });
     });
@@ -105,11 +105,9 @@ describe('User API Contract', () => {
             code: 'USER_NOT_FOUND',
           },
         })
-        .executeTest(async mockServer => {
+        .executeTest(async (mockServer) => {
           // Act & Assert: Consumer handles 404 gracefully
-          await expect(getUserById(999, { baseURL: mockServer.url })).rejects.toThrow(
-            'User not found'
-          );
+          await expect(getUserById(999, { baseURL: mockServer.url })).rejects.toThrow('User not found');
         });
     });
   });
@@ -145,7 +143,7 @@ describe('User API Contract', () => {
             createdAt: string('2025-01-15T11:00:00Z'),
           }),
         })
-        .executeTest(async mockServer => {
+        .executeTest(async (mockServer) => {
           const createdUser = await createUser(newUser, {
             baseURL: mockServer.url,
           });
@@ -156,7 +154,7 @@ describe('User API Contract', () => {
               name: 'Jane Smith',
               email: 'jane@example.com',
               role: 'admin',
-            })
+            }),
           );
         });
     });
@@ -460,6 +458,43 @@ jobs:
 
 ---
 
+### Coordinating Different Short-Lived Branch Names
+
+`matchingBranch: true` works only when consumer and provider branches share a
+name. Release trains often break that assumption: a consumer feature branch may
+need a provider at `release/week-32`.
+
+Treat this as two separate checks:
+
+1. **Provider selects the consumer branch.** Pass a scoped `consumer` plus
+   `consumerBranch` to `buildVerifierOptions` or
+   `buildMessageVerifierOptions`. `PACT_CONSUMER_BRANCH` is the default input.
+   The explicit `{ consumer, branch }` selector is additive to matching, main,
+   and deployed selectors.
+2. **Consumer selects the provider branch.** On PRs only, parse `Pact provider
+branch: <name>` into `PACT_PROVIDER_BRANCH`. Keep the environment-wide
+   `can-i-deploy` call, use `--ignore <provider>` for that one in-flight
+   pacticipant, then run a second `can-i-deploy` with the provider's
+   `--branch`. Both calls must fail hard.
+
+The second check is weaker than `--to-environment`: it proves compatibility
+with a branch tip, not with deployed software. Its safety comes from narrow
+scope and short lifetime. Never read the override from the merged PR on push,
+and never replace the environment check globally.
+
+Keep manual PR branch selection separate from PactFlow's
+`contract_requiring_verification_published` webhook. That event names the exact
+provider version missing a verification result. Check out its
+`providerVersionNumber`, confirm that commit belongs to
+`providerVersionBranch`, and publish with the same version and branch. Stop the
+job when the target cannot be checked out. A substitute revision produces no
+evidence for the Broker's requested target.
+
+See `pactjs-utils-provider-verifier.md`,
+`pact-consumer-framework-setup.md`, and `pact-broker-webhooks.md`.
+
+---
+
 ### Example 4: Resilience Coverage (Testing Fallback Behavior)
 
 **Context**: Capture timeout, retry, and error handling behavior explicitly in contracts.
@@ -502,7 +537,7 @@ describe('User API Resilience Contract', () => {
           retryable: true,
         },
       })
-      .executeTest(async mockServer => {
+      .executeTest(async (mockServer) => {
         // Consumer should retry on 500
         try {
           await getUserById(1, {
@@ -542,7 +577,7 @@ describe('User API Resilience Contract', () => {
           code: 'RATE_LIMIT_EXCEEDED',
         },
       })
-      .executeTest(async mockServer => {
+      .executeTest(async (mockServer) => {
         try {
           await getUserById(1, {
             baseURL: mockServer.url,
@@ -575,7 +610,7 @@ describe('User API Resilience Contract', () => {
         body: like({ id: 1, name: 'John' }),
       })
       .withDelay(15000) // Simulate 15 second delay
-      .executeTest(async mockServer => {
+      .executeTest(async (mockServer) => {
         try {
           await getUserById(1, {
             baseURL: mockServer.url,
@@ -611,7 +646,7 @@ describe('User API Resilience Contract', () => {
           // role, createdAt, etc. omitted (optional fields)
         },
       })
-      .executeTest(async mockServer => {
+      .executeTest(async (mockServer) => {
         const user = await getUserById(1, { baseURL: mockServer.url });
 
         // Consumer handles missing optional fields gracefully
@@ -635,7 +670,7 @@ export class ApiError extends Error {
     message: string,
     public code: string,
     public retryable: boolean = false,
-    public retryAfter?: number
+    public retryAfter?: number,
   ) {
     super(message);
   }
@@ -646,11 +681,7 @@ export class ApiError extends Error {
  */
 export async function getUserById(
   id: number,
-  config?: AxiosRequestConfig & {
-    retries?: number;
-    retryDelay?: number;
-    respectRateLimit?: boolean;
-  }
+  config?: AxiosRequestConfig & { retries?: number; retryDelay?: number; respectRateLimit?: boolean },
 ): Promise<User> {
   const { retries = 3, retryDelay = 1000, respectRateLimit = true, ...axiosConfig } = config || {};
 
@@ -671,7 +702,7 @@ export async function getUserById(
 
       // Retry on 500 errors
       if (error.response?.status === 500 && attempt < retries) {
-        await new Promise(resolve => setTimeout(resolve, retryDelay * attempt));
+        await new Promise((resolve) => setTimeout(resolve, retryDelay * attempt));
         continue;
       }
 
@@ -745,7 +776,7 @@ function tagRelease(version: string, environment: 'staging' | 'production') {
       '--broker-token',
       PACT_BROKER_TOKEN,
     ],
-    { stdio: 'inherit' }
+    { stdio: 'inherit' },
   );
 }
 
@@ -770,7 +801,7 @@ function recordDeployment(version: string, environment: 'staging' | 'production'
       '--broker-token',
       PACT_BROKER_TOKEN,
     ],
-    { stdio: 'inherit' }
+    { stdio: 'inherit' },
   );
 }
 
@@ -796,7 +827,7 @@ function cleanupOldPacts() {
       '--keep-min-age',
       '30',
     ],
-    { stdio: 'inherit' }
+    { stdio: 'inherit' },
   );
 }
 
@@ -826,7 +857,7 @@ function canIDeploy(version: string, toEnvironment: string): boolean {
         '--retry-interval',
         '30',
       ],
-      { stdio: 'inherit' }
+      { stdio: 'inherit' },
     );
     return true;
   } catch (error) {
@@ -861,9 +892,7 @@ async function main() {
       break;
 
     default:
-      console.error(
-        'Unknown command. Use: tag-release | record-deployment | can-i-deploy | cleanup'
-      );
+      console.error('Unknown command. Use: tag-release | record-deployment | can-i-deploy | cleanup');
       process.exit(1);
   }
 }
@@ -1022,6 +1051,8 @@ Before implementing contract testing, verify:
 - [ ] **Provider verification**: Runs on PR, verifies all consumer pacts
 - [ ] **State handlers**: Provider implements all given() states
 - [ ] **can-i-deploy**: Blocks deployment if contracts incompatible
+- [ ] **Short-lived branch overrides**: PR-only, scoped to one pacticipant, and
+      additive to the environment gate
 - [ ] **Webhooks configured**: Consumer changes trigger provider verification
 - [ ] **Retention policy**: Old pacts archived (keep 30 days, all production tags)
 - [ ] **Resilience tested**: Timeouts, retries, error codes in contracts
@@ -1047,25 +1078,31 @@ When `tea_use_pactjs_utils` is enabled, the following utilities replace manual b
 | Repeated builder callbacks for query/header/body         | `setJsonContent({ query, headers, body })`                                        | Reusable callback for `.withRequest(...)` and `.willRespondWith(...)`                                      |
 | Inline body lambda `(builder) => builder.jsonBody(body)` | `setJsonBody(body)`                                                               | Body-only shorthand for cleaner response builders                                                          |
 | 30+ lines of `VerifierOptions` assembly                  | `buildVerifierOptions({ provider, port, includeMainAndDeployed, stateHandlers })` | One-call setup, env-aware, flow auto-detection                                                             |
-| Manual broker URL + selector logic from env vars         | `handlePactBrokerUrlAndSelectors({ ..., options })`                               | Mutates options in-place with broker URL and selectors                                                     |
+| Manual broker URL + selector logic from env vars         | `handlePactBrokerUrlAndSelectors({ ..., consumerBranch, options })`               | Handles standard selectors and a scoped named consumer branch                                              |
 | DIY Express middleware for auth injection                | `createRequestFilter({ tokenGenerator })`                                         | Bearer prefix contract prevents double-prefix bugs                                                         |
 | Manual CI branch/tag extraction                          | `getProviderVersionTags()`                                                        | CI-aware (GitHub Actions, GitLab CI, etc.)                                                                 |
+| Repeated main/master/release branch classification       | `isBreakingChangeTolerantBranch(branch)`                                          | One exact boundary for an explicit breaking-change tolerance policy                                        |
 | Message verifier config assembly                         | `buildMessageVerifierOptions({ provider, messageProviders })`                     | Same one-call pattern for Kafka/async contracts                                                            |
 | Inline no-op filter `(req, res, next) => next()`         | `noOpRequestFilter`                                                               | Pre-built pass-through for no-auth providers                                                               |
 | Hand-written matcher helper duplicating a Zod/TS type    | `zodToPactMatchers(ConsumerMovieSchema, example)`                                 | Single source of truth for response shape; consumer-curated scope keeps contracts lean and consumer-driven |
 
 See the `pactjs-utils-*.md` knowledge fragments for complete examples and anti-patterns (`pactjs-utils-zod-to-pact.md` covers the consumer-curated schema pattern).
 
+For differently named in-flight branches, use pactjs-utils 1.2.0 or newer.
+That release adds `consumerBranch` to both verifier builders and ships the
+PR-only provider-branch detection, additive `can-i-deploy` templates, and
+`isBreakingChangeTolerantBranch`.
+
 ### PactV4 Determinism & FFI Safety (Mandatory)
 
 Four rules that together prevent both (a) non-deterministic pact generation failures that cause `Cannot change pact content for already published pact` errors at PactFlow publish, and (b) "request was expected but not received" flakes observed on Linux CI once a consumer+provider pair has more than one `.pacttest.ts` file:
 
 1. **Consumer Vitest `fileParallelism: false`** in `vitest.config.pact.ts` — prevents parallel workers from racing on the shared pact JSON. See `pact-consumer-framework-setup.md` Example 2.
-2. **Consumer Vitest `pool: 'forks'` + `poolOptions.forks.singleFork: true`** in `vitest.config.pact.ts` — same config as the provider side (`pactjs-utils-provider-verifier.md` Example 7). Best current understanding: the `@pact-foundation/pact` napi-rs binding is not robust across Vitest worker threads sharing a process; serialization alone (via `fileParallelism: false`) is insufficient on the default threads pool in Vitest v1. Forks + `singleFork: true` runs every pact file in one subprocess with a coherent FFI handle and eliminated a reproducible Linux-CI flake across multiple repos. Single-file consumer suites have not been observed to flake; this rule is still recommended as a future-proof. See `pact-consumer-framework-setup.md` Example 2.
+2. **Consumer Vitest `pool: 'forks'` + `poolOptions.forks.singleFork: true`** in `vitest.config.pact.ts` — same config as the provider side (`pactjs-utils-provider-verifier.md` Example 8). Best current understanding: the `@pact-foundation/pact` napi-rs binding is not robust across Vitest worker threads sharing a process; serialization alone (via `fileParallelism: false`) is insufficient on the default threads pool in Vitest v1. Forks + `singleFork: true` runs every pact file in one subprocess with a coherent FFI handle and eliminated a reproducible Linux-CI flake across multiple repos. Single-file consumer suites have not been observed to flake; this rule is still recommended as a future-proof. See `pact-consumer-framework-setup.md` Example 2.
 3. **One `addInteraction()` per `it()` block** — see `pactjs-utils-consumer-helpers.md` Example 6.
 4. **`publish-pact.sh` jq normalization** sorts interactions before publish — ensures byte-stable payload to PactFlow regardless of generator ordering quirks. See `pact-consumer-framework-setup.md` Example 4.
 
-Provider suites require the same `pool: 'forks'` + `singleFork: true` combination — see `pactjs-utils-provider-verifier.md` Example 7.
+Provider suites require the same `pool: 'forks'` + `singleFork: true` combination — see `pactjs-utils-provider-verifier.md` Example 8.
 
 ### Webhook Auth & Staleness
 

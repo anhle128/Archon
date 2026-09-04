@@ -100,9 +100,7 @@ test.describe('Users API', () => {
 
     const error = await response.json();
     expect(error.code).toBe('VALIDATION_ERROR');
-    expect(error.details).toContainEqual(
-      expect.objectContaining({ field: 'email', message: expect.any(String) })
-    );
+    expect(error.details).toContainEqual(expect.objectContaining({ field: 'email', message: expect.any(String) }));
   });
 });
 ```
@@ -122,7 +120,8 @@ test.describe('Users API', () => {
 
 ```typescript
 // tests/api/orders.spec.ts
-import { test, expect } from '@seontechnologies/playwright-utils/api-request/fixtures';
+import { expect } from '@playwright/test';
+import { test } from '@seontechnologies/playwright-utils/api-request/fixtures';
 import { z } from 'zod';
 
 // Define schema for type safety and validation
@@ -134,7 +133,7 @@ const OrderSchema = z.object({
       productId: z.string(),
       quantity: z.number().positive(),
       price: z.number().positive(),
-    })
+    }),
   ),
   total: z.number().positive(),
   status: z.enum(['pending', 'processing', 'shipped', 'delivered']),
@@ -209,7 +208,11 @@ test.describe('Orders API', () => {
 
 ```typescript
 // tests/api/service-integration.spec.ts
-import { test, expect } from '@seontechnologies/playwright-utils/fixtures';
+import { expect, mergeTests } from '@playwright/test';
+import { test as apiRequestFixture } from '@seontechnologies/playwright-utils/api-request/fixtures';
+import { test as recurseFixture } from '@seontechnologies/playwright-utils/recurse/fixtures';
+
+const test = mergeTests(apiRequestFixture, recurseFixture);
 
 test.describe('Service Integration', () => {
   const USER_SERVICE_URL = process.env.USER_SERVICE_URL || 'http://localhost:3001';
@@ -282,8 +285,8 @@ test.describe('Service Integration', () => {
           path: '/api/inventory/prod-1',
           baseUrl: INVENTORY_SERVICE_URL,
         }),
-      response => response.body.quantity === initialInventory.quantity - 2,
-      { timeout: 10000, interval: 500 }
+      (response) => response.body.quantity === initialInventory.quantity - 2,
+      { timeout: 10000, interval: 500 },
     );
 
     expect(updatedInventory.quantity).toBe(initialInventory.quantity - 2);
@@ -306,7 +309,8 @@ test.describe('Service Integration', () => {
 
 ```typescript
 // tests/api/graphql.spec.ts
-import { test, expect } from '@seontechnologies/playwright-utils/api-request/fixtures';
+import { expect } from '@playwright/test';
+import { test } from '@seontechnologies/playwright-utils/api-request/fixtures';
 
 const GRAPHQL_ENDPOINT = '/graphql';
 
@@ -440,7 +444,8 @@ test.describe('GraphQL API', () => {
 
 ```typescript
 // tests/api/with-data-setup.spec.ts
-import { test, expect } from '@seontechnologies/playwright-utils/fixtures';
+import { expect } from '@playwright/test';
+import { test } from '@seontechnologies/playwright-utils/api-request/fixtures';
 
 test.describe('Orders with Data Setup', () => {
   let testUser: { id: string; email: string };
@@ -539,7 +544,11 @@ test.describe('Orders with Data Setup', () => {
 
 ```typescript
 // tests/api/background-jobs.spec.ts
-import { test, expect } from '@seontechnologies/playwright-utils/fixtures';
+import { expect, mergeTests } from '@playwright/test';
+import { test as apiRequestFixture } from '@seontechnologies/playwright-utils/api-request/fixtures';
+import { test as recurseFixture } from '@seontechnologies/playwright-utils/recurse/fixtures';
+
+const test = mergeTests(apiRequestFixture, recurseFixture);
 
 test.describe('Background Jobs', () => {
   test('should process export job', async ({ apiRequest, recurse }) => {
@@ -560,12 +569,12 @@ test.describe('Background Jobs', () => {
     // Poll until job completes
     const { body: completedJob } = await recurse(
       () => apiRequest({ method: 'GET', path: `/api/exports/${job.id}` }),
-      response => response.body.status === 'completed',
+      (response) => response.body.status === 'completed',
       {
         timeout: 60000,
         interval: 2000,
         log: `Waiting for export job ${job.id} to complete`,
-      }
+      },
     );
 
     expect(completedJob.status).toBe('completed');
@@ -587,8 +596,8 @@ test.describe('Background Jobs', () => {
     // Poll until job fails
     const { body: failedJob } = await recurse(
       () => apiRequest({ method: 'GET', path: `/api/exports/${job.id}` }),
-      response => ['completed', 'failed'].includes(response.body.status),
-      { timeout: 30000 }
+      (response) => ['completed', 'failed'].includes(response.body.status),
+      { timeout: 30000 },
     );
 
     expect(failedJob.status).toBe('failed');
@@ -611,8 +620,8 @@ test.describe('Background Jobs', () => {
     // Poll for webhook delivery status
     const { body: webhookStatus } = await recurse(
       () => apiRequest({ method: 'GET', path: `/api/webhooks/order/${order.id}` }),
-      response => response.body.delivered === true,
-      { timeout: 30000, interval: 1000 }
+      (response) => response.body.delivered === true,
+      { timeout: 30000, interval: 1000 },
     );
 
     expect(webhookStatus.delivered).toBe(true);
@@ -637,7 +646,8 @@ test.describe('Background Jobs', () => {
 
 ```typescript
 // tests/api/authenticated.spec.ts
-import { test, expect } from '@seontechnologies/playwright-utils/fixtures';
+import { expect } from '@playwright/test';
+import { test } from '@seontechnologies/playwright-utils/api-request/fixtures';
 
 test.describe('Authenticated API Tests', () => {
   let authToken: string;
@@ -724,7 +734,11 @@ test.describe('Authenticated API Tests', () => {
 
 ```typescript
 // tests/api/operations.spec.ts
-import { test, expect } from '@seontechnologies/playwright-utils/api-request/fixtures';
+import { expect, mergeTests } from '@playwright/test';
+import { test as apiRequestFixture } from '@seontechnologies/playwright-utils/api-request/fixtures';
+import { test as recurseFixture } from '@seontechnologies/playwright-utils/recurse/fixtures';
+
+const test = mergeTests(apiRequestFixture, recurseFixture);
 
 test.describe('API Tests with Generated Operations', () => {
   test('should create entity with full type safety', async ({ apiRequest }) => {
@@ -764,8 +778,8 @@ test.describe('API Tests with Generated Operations', () => {
           operation: getJobOp({ workspaceId, jobId: job.id }),
           headers: getHeaders(workspaceId),
         }),
-      res => res.body.status === 'completed',
-      { timeout: 60000, interval: 2000 }
+      (res) => res.body.status === 'completed',
+      { timeout: 60000, interval: 2000 },
     );
   });
 });

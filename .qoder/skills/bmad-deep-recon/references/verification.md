@@ -11,7 +11,7 @@ The memlog `claim` entries are the ledger: every claim a decision could rest on,
 Per the resolved `validation` level (request > knob > default `normal`):
 
 - **normal** — spot-check the **load-bearing claims only**: the handful per dimension the recommendation actually rests on. One independent-source check each, at landing. Everything else ships with its single source cited and confidence marked honestly. Fast by design.
-- **high** — cross-check every claim in the pack's _two-source classes_, and run the red-team pass on major conclusions regardless of `{workflow.red_team}`.
+- **high** — cross-check every claim in the pack's *two-source classes*, and run the red-team pass on major conclusions regardless of `{workflow.red_team}`.
 - **max** — cross-check every ledger claim, run the red-team pass below at full breadth (every major conclusion), and primary-source-priority ranking: where a primary source (filing, regulator text, official docs, original paper) exists, secondary reporting alone does not verify.
 
 Verifier assistants run behind the research firewall on `{workflow.subagent_models}` when set; judgment work never drops to the smallest tier.

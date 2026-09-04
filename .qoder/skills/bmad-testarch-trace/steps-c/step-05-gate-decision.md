@@ -51,7 +51,7 @@ const matrixPath = frontmatter.tempCoverageMatrixPath;
 if (!matrixPath) {
   throw new Error(
     '❌ tempCoverageMatrixPath not found in progress frontmatter. ' +
-      'Step 4 must record the resolved temp file path before Step 5 can proceed.'
+      'Step 4 must record the resolved temp file path before Step 5 can proceed.',
   );
 }
 const coverageMatrix = JSON.parse(fs.readFileSync(matrixPath, 'utf8'));
@@ -86,7 +86,7 @@ if (
 ) {
   throw new Error(
     'Phase 1 coverage_statistics.priority_breakdown is missing or incomplete. ' +
-      'Step 4 must emit P0-P3 totals and coverage percentages before Step 5 can proceed.'
+      'Step 4 must emit P0-P3 totals and coverage percentages before Step 5 can proceed.',
   );
 }
 const priorityBreakdown = stats.priority_breakdown;
@@ -96,16 +96,14 @@ const hasP1Requirements = (priorityBreakdown.P1.total || 0) > 0;
 const effectiveP1Coverage = hasP1Requirements ? p1Coverage : 100;
 const overallCoverage = stats.overall_coverage_percentage;
 const criticalGaps = (coverageMatrix.gap_analysis?.critical_gaps || []).length;
-const isUnresolved = value =>
-  typeof value === 'string' && value.startsWith('{') && value.endsWith('}');
-const normalizeResolvedToken = value => {
+const isUnresolved = (value) => typeof value === 'string' && value.startsWith('{') && value.endsWith('}');
+const normalizeResolvedToken = (value) => {
   if (value === undefined || value === null) return null;
   const normalized = String(value).trim().toLowerCase();
   if (!normalized || normalized === 'auto' || isUnresolved(normalized)) return null;
   return normalized;
 };
-const oracleResolutionMode =
-  normalizeResolvedToken(coverageMatrix.oracle?.resolution_mode) || 'formal_requirements';
+const oracleResolutionMode = normalizeResolvedToken(coverageMatrix.oracle?.resolution_mode) || 'formal_requirements';
 const coverageBasis =
   normalizeResolvedToken(coverageMatrix.coverage_basis) ||
   {
@@ -124,18 +122,75 @@ const oracleConfidence =
     synthetic_source: 'medium',
   }[oracleResolutionMode] ||
   'medium';
-const syntheticOracle =
-  coverageMatrix.oracle?.synthetic === true ||
-  ['synthetic_requirements', 'user_journeys'].includes(coverageBasis);
-const deriveActiveTestCasesFromRequirements = requirements => {
+const syntheticOracle = coverageMatrix.oracle?.synthetic === true || ['synthetic_requirements', 'user_journeys'].includes(coverageBasis);
+
+// Defaults keep a Phase 1 matrix written before live evidence existed readable: no live block means
+// no live-only requirements, which leaves every gate decision below exactly as it was.
+const liveEvidenceDefaults = {
+  present: false,
+  results_file: '',
+  freshness: 'not_present',
+  recorded_source_sha: '',
+  current_source_sha: '',
+  producer: '',
+  counted: 0,
+  stale: 0,
+  unverifiable: 0,
+  failed: 0,
+  contradicted: 0,
+  blocked: 0,
+  skipped: 0,
+  unmatched: 0,
+  invalid: 0,
+  requirements_live_only: 0,
+};
+const reportedLiveEvidence =
+  coverageMatrix.live_evidence && typeof coverageMatrix.live_evidence === 'object' && !Array.isArray(coverageMatrix.live_evidence)
+    ? coverageMatrix.live_evidence
+    : {};
+const liveEvidence = { ...liveEvidenceDefaults, ...reportedLiveEvidence };
+
+// The live-only count is what stands between live evidence and an unconditional PASS, so it is
+// re-derived here from the requirements themselves rather than trusted as a scalar. Phase 1 can be
+// resumed, hand-edited, or produced by an older step-04, and every one of those paths would otherwise
+// resolve a missing or malformed count to zero, which means "cap off". Deriving and taking the larger
+// of the two fails closed: a wrong count can only ever tighten the gate, never loosen it.
+const liveCoverageEligible = new Set(['FULL', 'PARTIAL', 'UNIT-ONLY', 'INTEGRATION-ONLY']);
+const isActiveTest = (test) => {
+  const status = String(test.status || '')
+    .trim()
+    .toLowerCase();
+  if (['skipped', 'pending', 'fixme'].includes(status)) return false;
+  return test.skipped !== true && test.pending !== true && test.fixme !== true;
+};
+const derivedLiveOnlyRequirements = (coverageMatrix.requirements || []).filter((req) => {
+  if (!liveCoverageEligible.has(req.coverage)) return false;
+  const activeTests = (req.tests || []).filter(isActiveTest);
+  return (
+    activeTests.length > 0 &&
+    activeTests.every(
+      (test) =>
+        String(test.level || '')
+          .trim()
+          .toLowerCase() === 'live',
+    )
+  );
+}).length;
+const reportedLiveOnly = Number(liveEvidence.requirements_live_only);
+const liveOnlyCoveredRequirements = Math.max(
+  derivedLiveOnlyRequirements,
+  Number.isFinite(reportedLiveOnly) ? Math.max(0, reportedLiveOnly) : 0,
+);
+liveEvidence.requirements_live_only = liveOnlyCoveredRequirements;
+const deriveActiveTestCasesFromRequirements = (requirements) => {
   const uniqueTests = new Map();
 
-  (requirements || []).forEach(req => {
-    (req.tests || []).forEach(test => {
+  (requirements || []).forEach((req) => {
+    (req.tests || []).forEach((test) => {
       const stableId =
         test.id ||
         [test.file, test.title || test.name, test.line]
-          .filter(value => value !== undefined && value !== null && value !== '')
+          .filter((value) => value !== undefined && value !== null && value !== '')
           .join(':') ||
         null;
 
@@ -158,7 +213,7 @@ const deriveActiveTestCasesFromRequirements = requirements => {
     });
   });
 
-  return [...uniqueTests.values()].filter(status => status === 'active').length;
+  return [...uniqueTests.values()].filter((status) => status === 'active').length;
 };
 const summarizedTestInventory = coverageMatrix.test_inventory?.summary || null;
 const activeTestCases =
@@ -169,7 +224,7 @@ const activeTestCases =
         (summarizedTestInventory.cases || 0) -
           (summarizedTestInventory.skipped_cases || 0) -
           (summarizedTestInventory.fixme_cases || 0) -
-          (summarizedTestInventory.pending_cases || 0)
+          (summarizedTestInventory.pending_cases || 0),
       );
 let effectiveOracleConfidence = oracleConfidence;
 if (effectiveOracleConfidence === 'high' && activeTestCases === 0) {
@@ -186,9 +241,7 @@ const normalizeBoolean = (value, defaultValue = true) => {
   return Boolean(value);
 };
 
-const collectionMode = String(
-  !isUnresolved(coverageMatrix.collection_mode) ? coverageMatrix.collection_mode : 'contract_static'
-)
+const collectionMode = String(!isUnresolved(coverageMatrix.collection_mode) ? coverageMatrix.collection_mode : 'contract_static')
   .trim()
   .toLowerCase();
 const rawAllowGate = !isUnresolved(coverageMatrix.allow_gate) ? coverageMatrix.allow_gate : true;
@@ -244,8 +297,14 @@ if (!gateEligible) {
       : `P0 coverage is 100% and overall coverage is ${overallCoverage}% (minimum: 80%), but additional non-P1 gaps need mitigation.`;
   }
 
-  // Rule 6: Manual waiver — set gateDecision = 'WAIVED' and update rationale here
-  // if a stakeholder-approved waiver applies (wired through config or user input upstream).
+  // Rule 6: Manual waiver — deliberately not computed here. Rules 1-5 above are the only rules
+  // that set gateDecision automatically; WAIVED is never derived from coverage data or any other
+  // input to this step. It can only be applied by a human overriding the automated decision after
+  // the fact, and the resulting artifact must carry the full waiver contract (approver, approval
+  // date, waiver reason, expiry, monitoring plan, remediation owner, fix target) defined in
+  // trace-template.md's "Waiver Details" section and validated by checklist.md's Decision
+  // Integrity and Waiver Scenarios checks. There is no default waiver expiry anywhere in the
+  // repo; a human granting a waiver must supply one explicitly.
 
   // Oracle confidence overlay
   if (syntheticOracle && gateDecision === 'PASS' && effectiveOracleConfidence !== 'high') {
@@ -253,15 +312,25 @@ if (!gateEligible) {
     rationale =
       `Coverage traced against inferred ${coverageBasis.replace('_', ' ')} with ${effectiveOracleConfidence} confidence. ` +
       `Base coverage meets PASS thresholds, but confidence is not high enough for an unconditional PASS.`;
-  } else if (
-    syntheticOracle &&
-    effectiveOracleConfidence === 'low' &&
-    gateDecision === 'NOT_EVALUATED'
-  ) {
+  } else if (syntheticOracle && effectiveOracleConfidence === 'low' && gateDecision === 'NOT_EVALUATED') {
     gateDecision = 'CONCERNS';
     rationale =
       `Coverage traced against inferred ${coverageBasis.replace('_', ' ')} with low confidence. ` +
       `Treat this result as advisory until the inferred journeys are confirmed or formalized.`;
+  }
+
+  // Live evidence overlay. Same treatment the oracle confidence overlay above gives inferred
+  // requirements: sound enough to count as coverage, not sound enough to carry an unconditional PASS.
+  // A live result is a one-time observation of one commit with no artifact anyone can re-run, so a
+  // requirement resting only on it is capped at CONCERNS. This overlay only ever lowers PASS or
+  // annotates an existing CONCERNS; it can never lift a FAIL.
+  if (liveOnlyCoveredRequirements > 0 && ['PASS', 'CONCERNS'].includes(gateDecision)) {
+    gateDecision = 'CONCERNS';
+    // Appended rather than replaced so the coverage numbers that produced the base decision survive.
+    rationale =
+      `${rationale} ${liveOnlyCoveredRequirements} requirement(s) are covered only by recorded live verification ` +
+      `observed at ${liveEvidence.recorded_source_sha || 'an unrecorded commit'}. Live evidence is a point-in-time ` +
+      `observation with no re-runnable artifact, so it is capped at CONCERNS.`;
   }
 }
 ```
@@ -289,8 +358,7 @@ const gateReport = {
         p1_coverage_target: '90%',
         p1_coverage_minimum: '80%',
         p1_coverage_actual: `${effectiveP1Coverage}%`,
-        p1_status:
-          effectiveP1Coverage >= 90 ? 'MET' : effectiveP1Coverage >= 80 ? 'PARTIAL' : 'NOT_MET',
+        p1_status: effectiveP1Coverage >= 90 ? 'MET' : effectiveP1Coverage >= 80 ? 'PARTIAL' : 'NOT_MET',
 
         overall_coverage_minimum: '80%',
         overall_coverage_actual: `${overallCoverage}%`,
@@ -298,9 +366,7 @@ const gateReport = {
       }
     : null,
 
-  uncovered_requirements: (coverageMatrix.gap_analysis?.critical_gaps || []).concat(
-    coverageMatrix.gap_analysis?.high_gaps || []
-  ),
+  uncovered_requirements: (coverageMatrix.gap_analysis?.critical_gaps || []).concat(coverageMatrix.gap_analysis?.high_gaps || []),
 
   recommendations: coverageMatrix.recommendations,
 };
@@ -321,17 +387,18 @@ const buildFallbackInventory = () => {
     api: { tests: 0, criteria_covered: 0 },
     component: { tests: 0, criteria_covered: 0 },
     unit: { tests: 0, criteria_covered: 0 },
+    live: { tests: 0, criteria_covered: 0 }, // recorded runtime verification; no file on disk
     other: { tests: 0, criteria_covered: 0 }, // captures tests with unrecognized or empty level
   };
   const coverageEligibleStatuses = new Set(['FULL', 'PARTIAL', 'UNIT-ONLY', 'INTEGRATION-ONLY']);
   const uniqueTests = new Map();
 
-  (coverageMatrix.requirements || []).forEach(req => {
-    (req.tests || []).forEach(test => {
+  (coverageMatrix.requirements || []).forEach((req) => {
+    (req.tests || []).forEach((test) => {
       const stableId =
         test.id ||
         [test.file, test.title || test.name, test.line]
-          .filter(value => value !== undefined && value !== null && value !== '')
+          .filter((value) => value !== undefined && value !== null && value !== '')
           .join(':') ||
         null; // unresolvable — skip rather than manufacture a key
 
@@ -360,43 +427,42 @@ const buildFallbackInventory = () => {
         fixme: status === 'fixme',
         pending: status === 'pending',
         status: status,
-        blocker_reason:
-          test.skip_reason || test.blocker_reason || test.fixme_reason || test.pending_reason || '',
+        blocker_reason: test.skip_reason || test.blocker_reason || test.fixme_reason || test.pending_reason || '',
       });
     });
 
     if (!coverageEligibleStatuses.has(req.coverage)) return;
     const requirementLevels = new Set(
-      (req.tests || []).map(test => {
+      (req.tests || []).map((test) => {
         const level = String(test.level || '')
           .trim()
           .toLowerCase();
         return byLevel[level] ? level : 'other';
-      })
+      }),
     );
-    requirementLevels.forEach(level => {
+    requirementLevels.forEach((level) => {
       byLevel[level].criteria_covered += 1;
     });
   });
 
   const deduplicatedTests = [...uniqueTests.values()];
-  deduplicatedTests.forEach(test => {
+  deduplicatedTests.forEach((test) => {
     const bucket = byLevel[test.level] ? test.level : 'other';
     byLevel[bucket].tests += 1;
   });
 
   return {
     summary: {
-      files: [...new Set(deduplicatedTests.map(test => test.file).filter(Boolean))].length,
+      files: [...new Set(deduplicatedTests.map((test) => test.file).filter(Boolean))].length,
       cases: deduplicatedTests.length,
-      skipped_cases: deduplicatedTests.filter(test => test.skipped).length,
-      fixme_cases: deduplicatedTests.filter(test => test.fixme).length,
-      pending_cases: deduplicatedTests.filter(test => test.pending).length,
+      skipped_cases: deduplicatedTests.filter((test) => test.skipped).length,
+      fixme_cases: deduplicatedTests.filter((test) => test.fixme).length,
+      pending_cases: deduplicatedTests.filter((test) => test.pending).length,
       by_level: byLevel,
     },
     blockers: deduplicatedTests
-      .filter(test => ['skipped', 'pending', 'fixme'].includes(test.status))
-      .map(test => ({
+      .filter((test) => ['skipped', 'pending', 'fixme'].includes(test.status))
+      .map((test) => ({
         id: test.id,
         severity: test.status === 'skipped' ? 'high' : 'medium',
         reason: test.blocker_reason || `Test marked ${test.status} during trace collection`,
@@ -407,9 +473,22 @@ const buildFallbackInventory = () => {
 };
 
 const fallbackInventory = buildFallbackInventory();
-const testInventory = coverageMatrix.test_inventory?.summary || fallbackInventory.summary;
-const blockers =
-  coverageMatrix.blockers || coverageMatrix.test_inventory?.blockers || fallbackInventory.blockers;
+const rawTestInventory = coverageMatrix.test_inventory?.summary || fallbackInventory.summary;
+// A Phase 1 matrix from an older step-04 has no `live` bucket, which would leave this file declaring
+// schema_version 0.2.0 while omitting a key that version promises. Fill the shape, keep the counts.
+const testInventory = {
+  ...rawTestInventory,
+  by_level: {
+    e2e: { tests: 0, criteria_covered: 0 },
+    api: { tests: 0, criteria_covered: 0 },
+    component: { tests: 0, criteria_covered: 0 },
+    unit: { tests: 0, criteria_covered: 0 },
+    live: { tests: 0, criteria_covered: 0 },
+    other: { tests: 0, criteria_covered: 0 },
+    ...(rawTestInventory.by_level || {}),
+  },
+};
+const blockers = coverageMatrix.blockers || coverageMatrix.test_inventory?.blockers || fallbackInventory.blockers;
 
 const heuristicCounts = coverageMatrix.coverage_heuristics?.counts || {};
 const endpointGapCount = heuristicCounts.endpoints_without_tests ?? 0;
@@ -417,7 +496,10 @@ const authGapCount = heuristicCounts.auth_missing_negative_paths ?? 0;
 const errorPathGapCount = heuristicCounts.happy_path_only_criteria ?? 0;
 const uiJourneyGapCount = heuristicCounts.ui_journeys_without_e2e;
 const uiStateGapCount = heuristicCounts.ui_states_missing_coverage;
-const sourceSha = process.env.GITHUB_SHA || runtime.getSourceSha?.() || '';
+// Same resolution order and same value as step-02's freshness check: the working tree is the authority,
+// and `live_evidence.current_source_sha` carries what step-02 actually resolved. Two fields in one file
+// disagreeing about "the commit under trace" would undermine the freshness contract they both describe.
+const sourceSha = liveEvidence.current_source_sha || runtime.getSourceSha?.() || runtime.getGitHeadSha?.() || process.env.GITHUB_SHA || '';
 const mapOptionalHeuristicStatus = (count, applicable) => {
   if (!applicable) return 'not_applicable';
   if (typeof count !== 'number' || Number.isNaN(count)) return 'unknown';
@@ -427,7 +509,7 @@ const mapOptionalHeuristicStatus = (count, applicable) => {
 const gateBasis = gateEligible ? 'priority_thresholds' : 'none';
 
 const e2eTraceSummary = {
-  schema_version: '0.1.0',
+  schema_version: '0.2.0', // 0.2.0 added live_evidence and the by_level.live bucket
   snapshot_at: new Date().toISOString(),
   repo: '{project_name}',
   collection_mode: collectionMode,
@@ -495,12 +577,20 @@ const e2eTraceSummary = {
 
   heuristics: {
     endpoint_gaps: endpointGapCount,
+    // `runtime_manifest` skips static discovery, so the heuristics had nothing to inspect. Zero gaps
+    // there means "not examined", and reporting that as `present` would assert auth negative paths and
+    // error paths are covered on the strength of an analysis that never ran.
     auth_negative_path_status:
-      authGapCount === 0 ? 'present' : authGapCount <= 2 ? 'partial' : 'none',
+      collectionMode === 'runtime_manifest' ? 'unknown' : authGapCount === 0 ? 'present' : authGapCount <= 2 ? 'partial' : 'none',
     error_path_status:
-      errorPathGapCount === 0 ? 'present' : errorPathGapCount <= 2 ? 'partial' : 'none',
+      collectionMode === 'runtime_manifest' ? 'unknown' : errorPathGapCount === 0 ? 'present' : errorPathGapCount <= 2 ? 'partial' : 'none',
     ui_journey_status: mapOptionalHeuristicStatus(uiJourneyGapCount, syntheticOracle),
     ui_state_status: mapOptionalHeuristicStatus(uiStateGapCount, syntheticOracle),
+  },
+
+  live_evidence: {
+    ...liveEvidence,
+    current_source_sha: liveEvidence.current_source_sha || sourceSha || '',
   },
 
   blockers: blockers,
@@ -523,8 +613,7 @@ if (gateEligible) {
     p1_coverage_target: '90%',
     p1_coverage_minimum: '80%',
     p1_coverage_actual: `${effectiveP1Coverage}%`,
-    p1_status:
-      effectiveP1Coverage >= 90 ? 'MET' : effectiveP1Coverage >= 80 ? 'PARTIAL' : 'NOT_MET',
+    p1_status: effectiveP1Coverage >= 90 ? 'MET' : effectiveP1Coverage >= 80 ? 'PARTIAL' : 'NOT_MET',
     overall_coverage_minimum: '80%',
     overall_coverage_actual: `${overallCoverage}%`,
     overall_status: overallCoverage >= 80 ? 'MET' : 'NOT_MET',
@@ -615,6 +704,13 @@ fs.writeFileSync('{outputFile}', reportContent, 'utf8');
 ✅ Decision Rationale:
 {rationale}
 
+{if liveEvidence.present}
+🔴 Live Evidence: {liveEvidence.freshness} ({liveEvidence.counted} counted, {liveEvidence.stale} stale)
+{endif}
+{if liveOnlyCoveredRequirements > 0}
+- Requirements covered only by live evidence: {liveOnlyCoveredRequirements} (this run is capped at CONCERNS)
+{endif}
+
 ⚠️ Critical Gaps: {criticalGaps.length}
 
 📝 Recommended Actions:
@@ -688,11 +784,11 @@ Then append the gate decision summary (from section 5 above) to the end of the e
 - `e2e-trace-summary.json` missing or invalid JSON
 - Report missing or incomplete
 
-**Master Rule:** Gate decision MUST be deterministic based on clear criteria (P0 100%, P1 90/80, overall >=80) whenever `allow_gate` is true and `collection_status` is `COLLECTED`. `e2e-trace-summary.json` MUST be written before the workflow terminates.
+**Master Rule:** Gate decision MUST be deterministic based on clear criteria (P0 100%, P1 90/80, overall >=80) whenever `allow_gate` is true and `collection_status` is `COLLECTED`. A run with any requirement covered only by recorded live verification MUST NOT return PASS. `e2e-trace-summary.json` MUST be written before the workflow terminates.
 
 ## On Complete
 
-Run: `python3 {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --key workflow.on_complete`
+Run: `uv run {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --project-root {project-root} --key workflow.on_complete`
 
 If the resolver succeeds and returns a non-empty `workflow.on_complete`, execute that value as the final terminal instruction before exiting.
 

@@ -57,7 +57,6 @@ Verify scenarios are consistent with each other — no contradictions, proper pa
 ### 1. Shared Page Consistency
 
 For pages that appear in multiple scenarios:
-
 - [ ] Same page name = same page purpose everywhere
 - [ ] Page descriptions are compatible (not contradictory)
 - [ ] If a page serves different personas, it should handle both needs
@@ -77,7 +76,6 @@ For pages that appear in multiple scenarios:
 ### 4. Scenario Overlap
 
 Check for:
-
 - [ ] No two scenarios are essentially duplicates (same path, different name)
 - [ ] Overlapping scenarios have distinct user intents
 - [ ] Shared pages are intentional, not accidental

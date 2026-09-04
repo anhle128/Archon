@@ -2580,6 +2580,110 @@ branch refs/heads/feature/auth
   });
 
   // ==========================================================================
+  // status.ts
+  // ==========================================================================
+
+  describe('getGitStatus', () => {
+    let execSpy: Mock<typeof git.execFileAsync>;
+
+    beforeEach(() => {
+      execSpy = spyOn(git, 'execFileAsync');
+    });
+
+    afterEach(() => {
+      execSpy.mockRestore();
+    });
+
+    test('parses modified, added, and deleted paths', async () => {
+      const mockOutput = ' M src/modified.ts\nA  src/added.ts\n D src/deleted.ts\n';
+      execSpy.mockResolvedValue({ stdout: mockOutput, stderr: '' });
+
+      const result = await git.getGitStatus('/workspace/repo');
+
+      expect(result).toEqual({
+        readable: true,
+        entries: [
+          { path: 'src/modified.ts', status: 'M' },
+          { path: 'src/added.ts', status: 'A' },
+          { path: 'src/deleted.ts', status: 'D' },
+        ],
+      });
+    });
+
+    test('collapses untracked files to A', async () => {
+      execSpy.mockResolvedValue({ stdout: '?? src/new-file.ts\n', stderr: '' });
+
+      const result = await git.getGitStatus('/workspace/repo');
+
+      expect(result).toEqual({
+        readable: true,
+        entries: [{ path: 'src/new-file.ts', status: 'A' }],
+      });
+    });
+
+    test('collapses renames to M and resolves the new path', async () => {
+      execSpy.mockResolvedValue({ stdout: 'R  src/old-name.ts -> src/new-name.ts\n', stderr: '' });
+
+      const result = await git.getGitStatus('/workspace/repo');
+
+      expect(result).toEqual({
+        readable: true,
+        entries: [{ path: 'src/new-name.ts', status: 'M' }],
+      });
+    });
+
+    test('prefers D when the index and worktree codes disagree', async () => {
+      execSpy.mockResolvedValue({ stdout: 'AD src/added-then-deleted.ts\n', stderr: '' });
+
+      const result = await git.getGitStatus('/workspace/repo');
+
+      expect(result).toEqual({
+        readable: true,
+        entries: [{ path: 'src/added-then-deleted.ts', status: 'D' }],
+      });
+    });
+
+    test('returns an empty entry list for a clean working tree', async () => {
+      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
+
+      const result = await git.getGitStatus('/workspace/repo');
+
+      expect(result).toEqual({ readable: true, entries: [] });
+    });
+
+    test('returns { readable: false } for a missing directory', async () => {
+      const error = new Error('Command failed') as Error & { stderr?: string };
+      error.stderr = "fatal: cannot change to '/tmp/does-not-exist': No such file or directory";
+      execSpy.mockRejectedValue(error);
+
+      const result = await git.getGitStatus('/tmp/does-not-exist');
+      expect(result).toEqual({ readable: false });
+    });
+
+    test('returns { readable: false } for a directory that is not a git checkout', async () => {
+      execSpy.mockRejectedValue(new Error('fatal: not a git repository (or any parent up to /)'));
+
+      const result = await git.getGitStatus('/tmp/plain-dir');
+      expect(result).toEqual({ readable: false });
+    });
+
+    test('throws and logs for unexpected errors', async () => {
+      const mockError = new Error('permission denied') as Error & { stderr?: string };
+      mockError.stderr = 'fatal: permission denied';
+      execSpy.mockRejectedValue(mockError);
+      mockLogger.error.mockClear();
+
+      await expect(git.getGitStatus('/workspace/repo')).rejects.toThrow(
+        'Failed to read git status for /workspace/repo'
+      );
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ dirPath: '/workspace/repo', stderr: 'fatal: permission denied' }),
+        'git.status_read_failed'
+      );
+    });
+  });
+
+  // ==========================================================================
   // types.ts
   // ==========================================================================
 

@@ -20,7 +20,7 @@ Ask the user for the path to their module's skills folder (or a single skill fol
 Run the validation script for deterministic checks:
 
 ```bash
-python3 ./scripts/validate-module.py "{module-skills-folder}"
+uv run ./scripts/validate-module.py "{module-skills-folder}"
 ```
 
 This checks: module structure (setup skill or standalone), module.yaml completeness, CSV integrity (missing entries, orphans, duplicate menu codes, broken before/after references, missing required fields). For standalone modules, it also verifies the presence of module-setup.md and merge scripts.
@@ -78,9 +78,7 @@ When `--headless` is set, run the full validation (script + quality assessment) 
   "status": "pass|fail",
   "module_code": "...",
   "structural_issues": [{ "severity": "...", "message": "...", "file": "..." }],
-  "quality_findings": [
-    { "severity": "...", "skill": "...", "message": "...", "suggestion": "..." }
-  ],
+  "quality_findings": [{ "severity": "...", "skill": "...", "message": "...", "suggestion": "..." }],
   "summary": "Module is ready for use.|Module has N issues requiring attention."
 }
 ```

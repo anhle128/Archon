@@ -61,23 +61,24 @@ This sketch appears identical to the existing specification.
 
 {{#each section in modified_sections}}
 
-  --- ###
-  {{section.name}}
+---
 
-  **Current specification:**
-  {{section.current_spec_summary}}
+### {{section.name}}
 
-  **New sketch shows:**
-  {{section.new_sketch_summary}}
+**Current specification:**
+{{section.current_spec_summary}}
 
-  **Detected changes:**
-  {{#each change in section.changes}}
-    -
-    {{change.description}}
-  {{/each}}
+**New sketch shows:**
+{{section.new_sketch_summary}}
 
-  **Confidence:**
-  {{section.confidence}}% ---
+**Detected changes:**
+{{#each change in section.changes}}
+- {{change.description}}
+{{/each}}
+
+**Confidence:** {{section.confidence}}%
+
+---
 {{/each}}
 ```
 
@@ -112,20 +113,17 @@ This sketch appears identical to the existing specification.
 ## Menu Options
 
 **Update Strategy Menu (with changes):**
-
 - [A] Update all changed/new/completed sections
 - [B] Pick specific sections to update
 - [C] Show me detailed comparison first
 - [D] Actually, this is the same - cancel
 
 **Update Strategy Menu (only removals):**
-
 - [A] Remove deleted sections from spec
 - [B] Keep them marked as "removed from design"
 - [C] Cancel - I'll fix the sketch
 
 **Completion Menu:**
-
 - [A] Generate HTML prototype
 - [B] Add another page
 - [C] Update another section

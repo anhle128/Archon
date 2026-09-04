@@ -120,12 +120,10 @@ Save report to `{output_folder}/B-Trigger-Map/validation-report.md`
 Display: "**Select an Option:** [M] Return to Activity Menu"
 
 #### Menu Handling Logic:
-
 - IF M: Return to {activityWorkflowFile}
 - IF Any other comments or queries: help user respond then [Redisplay Menu Options]
 
 #### EXECUTION RULES:
-
 - ALWAYS halt and wait for user input after presenting menu
 - User can chat or ask questions - always respond and then redisplay menu options
 
@@ -138,7 +136,6 @@ This is the LAST step in the validation workflow. ONLY the [M] Return option is 
 ## 🚨 SYSTEM SUCCESS/FAILURE METRICS
 
 ### ✅ SUCCESS:
-
 - Terminology consistency verified across all documents
 - Narrative coherence checked
 - Cross-references verified (bidirectional)
@@ -149,7 +146,6 @@ This is the LAST step in the validation workflow. ONLY the [M] Return option is 
 - Only [M] Return option available (last step)
 
 ### ❌ SYSTEM FAILURE:
-
 - Not checking terminology across documents
 - Not verifying Mermaid diagram accuracy
 - Not compiling results from all 5 steps

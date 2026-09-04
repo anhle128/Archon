@@ -12,11 +12,10 @@
 **User Journey**: [Brief description of complete user flow]
 
 **Pages in this Scenario**:
-
 1. [Page 1] - [Description]
 2. [Page 2] - [Description]
 3. [Page 3] - [Description]
-   ...
+...
 
 ---
 
@@ -24,17 +23,15 @@
 
 **Type**: [Mobile-Only | Mobile + Tablet | Fully Responsive | Desktop-Only]
 
-**Reasoning**:
+**Reasoning**: 
 [Why this device compatibility was chosen for this scenario]
 
 **Test Viewports**:
-
 - [Device 1] ([width]px × [height]px) - [Purpose]
 - [Device 2] ([width]px × [height]px) - [Purpose]
 - [Device 3] ([width]px × [height]px) - [Purpose]
 
 **Optimization Strategy**:
-
 - ✅ [Optimization 1]
 - ✅ [Optimization 2]
 - ✅ [Optimization 3]
@@ -42,7 +39,6 @@
 - ❌ [Not included 2]
 
 **Tailwind Approach**:
-
 ```html
 <!-- [Brief description of Tailwind strategy] -->
 ```
@@ -52,7 +48,6 @@
 ## 📁 Folder Structure
 
 **HTML Files** (root level - double-click to open):
-
 ```
 [Page-1].html
 [Page-2].html
@@ -61,7 +56,6 @@
 ```
 
 **Supporting Folders**:
-
 - `shared/` - Shared code (ONE COPY for all pages)
 - `components/` - Reusable UI components (ONE COPY)
 - `pages/` - Page-specific scripts (only for complex pages)
@@ -74,21 +68,18 @@
 ## 🚀 Quick Start
 
 ### For Testing
-
 1. **Open** `[First-Page].html` (double-click)
 2. **Demo data prompt** → Click YES
 3. **Navigate** through the flow
 4. **Data persists** across pages (sessionStorage)
 
 ### For Stakeholders
-
 1. **Unzip** the Prototype folder
 2. **Open** `[First-Page].html`
 3. **Test** complete user journey
 4. **Share feedback**
 
 ### For Developers
-
 1. **Review** `work/` folder for specifications
 2. **Check** `stories/` folder for implementation details
 3. **Examine** `shared/prototype-api.js` for data operations
@@ -100,36 +91,31 @@
 ## 🎨 Shared Resources (No Duplication!)
 
 ### `shared/prototype-api.js`
-
 **Used by**: ALL prototypes  
 **Purpose**: API abstraction layer (simulates backend with sessionStorage)
 
 **Key methods**:
-
 ```javascript
-PrototypeAPI.getUser();
-PrototypeAPI.createUserProfile(userData);
-PrototypeAPI.createFamily(familyData);
-PrototypeAPI.addDog(dogData);
+PrototypeAPI.getUser()
+PrototypeAPI.createUserProfile(userData)
+PrototypeAPI.createFamily(familyData)
+PrototypeAPI.addDog(dogData)
 // ... see file for complete API
 ```
 
 **Console commands** (for debugging):
-
 ```javascript
-PrototypeAPI.getDebugInfo(); // See current state
-PrototypeAPI.clearAllData(); // Reset everything
+PrototypeAPI.getDebugInfo()  // See current state
+PrototypeAPI.clearAllData()  // Reset everything
 ```
 
 ---
 
 ### `shared/init.js`
-
 **Used by**: ALL prototypes  
 **Purpose**: Auto-initialization (loads demo data, sets up page)
 
 **What it does**:
-
 - Checks if demo data exists
 - Loads from `data/demo-data.json` if empty
 - Calls `window.initPage()` if defined
@@ -138,7 +124,6 @@ PrototypeAPI.clearAllData(); // Reset everything
 ---
 
 ### `shared/utils.js`
-
 **Used by**: ALL prototypes  
 **Purpose**: Helper functions (date formatting, validation, etc.)
 
@@ -147,12 +132,10 @@ PrototypeAPI.clearAllData(); // Reset everything
 ## 🧩 Components (Reusable - ONE COPY)
 
 ### `components/image-crop.js`
-
 **Used by**: [Pages that use image upload]  
 **Purpose**: Image upload with circular crop
 
 **Usage**:
-
 ```javascript
 ImageCrop.cropImage(file, { aspectRatio: 1 });
 ```
@@ -160,12 +143,10 @@ ImageCrop.cropImage(file, { aspectRatio: 1 });
 ---
 
 ### `components/toast.js`
-
 **Used by**: [Pages with notifications]  
 **Purpose**: Success/error toast notifications
 
 **Usage**:
-
 ```javascript
 showToast('Success message!', 'success');
 showToast('Error message', 'error');
@@ -174,14 +155,12 @@ showToast('Error message', 'error');
 ---
 
 ### `components/modal.js`
-
 **Used by**: [Pages with modals]  
 **Purpose**: Generic modal overlay
 
 ---
 
 ### `components/form-validation.js`
-
 **Used by**: [Pages with forms]  
 **Purpose**: Real-time form validation
 
@@ -190,11 +169,9 @@ showToast('Error message', 'error');
 ## 📊 Demo Data
 
 ### `data/demo-data.json`
-
 **Purpose**: Complete demo dataset for scenario
 
 **Contents**:
-
 - User profile
 - Family data
 - [Other data entities]
@@ -204,22 +181,20 @@ showToast('Error message', 'error');
 ---
 
 ### `data/[additional-data].json`
-
 **Purpose**: [Description]
 
 ---
 
 ## 📋 Prototype Status
 
-| Page     | Status         | Sections | Last Updated | Notes                |
-| -------- | -------------- | -------- | ------------ | -------------------- |
-| [Page 1] | ✅ Complete    | 3/3      | [Date]       | -                    |
-| [Page 2] | ✅ Complete    | 4/4      | [Date]       | -                    |
-| [Page 3] | 🚧 In Progress | 2/5      | [Date]       | Building form fields |
-| [Page 4] | ⏸️ Not Started | 0/6      | -            | Planned              |
+| Page | Status | Sections | Last Updated | Notes |
+|------|--------|----------|--------------|-------|
+| [Page 1] | ✅ Complete | 3/3 | [Date] | - |
+| [Page 2] | ✅ Complete | 4/4 | [Date] | - |
+| [Page 3] | 🚧 In Progress | 2/5 | [Date] | Building form fields |
+| [Page 4] | ⏸️ Not Started | 0/6 | - | Planned |
 
 **Status Legend**:
-
 - ✅ Complete - All sections done, tested, approved
 - 🚧 In Progress - Currently building section-by-section
 - ⏸️ Not Started - Planned, not yet started
@@ -230,7 +205,6 @@ showToast('Error message', 'error');
 ## 🔄 Development Workflow
 
 ### 1. Planning Phase
-
 - Create work file: `work/[Page]-Work.yaml`
 - Define sections (4-8 per page)
 - Identify Object IDs
@@ -238,7 +212,6 @@ showToast('Error message', 'error');
 - Get approval
 
 ### 2. Implementation Phase
-
 - Build section-by-section
 - Create story files just-in-time
 - Test after each section
@@ -246,7 +219,6 @@ showToast('Error message', 'error');
 - File lives in root from start (no temp folder)
 
 ### 3. Finalization Phase
-
 - Complete integration test
 - Update status to Complete
 - Document any changes
@@ -257,7 +229,6 @@ showToast('Error message', 'error');
 ## 🧪 Testing Requirements
 
 ### Functional Testing (All Pages)
-
 - [ ] All form fields work
 - [ ] Validation shows errors correctly
 - [ ] Submit buttons work with loading states
@@ -266,7 +237,6 @@ showToast('Error message', 'error');
 - [ ] Data persists across pages
 
 ### Device Testing
-
 - [ ] [Primary viewport] ([width]px)
 - [ ] [Secondary viewport] ([width]px)
 - [ ] [Tertiary viewport] ([width]px)
@@ -275,7 +245,6 @@ showToast('Error message', 'error');
 - [ ] No horizontal scroll
 
 ### Browser Testing
-
 - [ ] Chrome (primary)
 - [ ] Safari (iOS/Mac)
 - [ ] Firefox
@@ -286,7 +255,6 @@ showToast('Error message', 'error');
 ## 🎓 Tailwind Reference
 
 ### Project Colors
-
 ```javascript
 // Tailwind config (in each HTML file)
 '[project-name]': {
@@ -302,27 +270,18 @@ showToast('Error message', 'error');
 ### Common Patterns
 
 **Form Input**:
-
 ```html
-<input
-  class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[project]-500"
-/>
+<input class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[project]-500">
 ```
 
 **Primary Button**:
-
 ```html
-<button
-  class="w-full py-3 bg-[project]-600 text-white rounded-lg font-semibold hover:bg-[project]-700 transition-colors"
-></button>
+<button class="w-full py-3 bg-[project]-600 text-white rounded-lg font-semibold hover:bg-[project]-700 transition-colors">
 ```
 
 **Toast Notification**:
-
 ```html
-<div
-  class="fixed bottom-6 left-1/2 -translate-x-1/2 bg-gray-900 text-white px-6 py-3 rounded-lg shadow-lg"
-></div>
+<div class="fixed bottom-6 left-1/2 -translate-x-1/2 bg-gray-900 text-white px-6 py-3 rounded-lg shadow-lg">
 ```
 
 ---
@@ -330,23 +289,18 @@ showToast('Error message', 'error');
 ## 🐛 Troubleshooting
 
 ### Issue: Demo data not loading
-
 **Solution**: Check `data/demo-data.json` exists, check console for errors
 
 ### Issue: Tailwind not working
-
 **Solution**: Check `<script src="https://cdn.tailwindcss.com"></script>` in `<head>`
 
 ### Issue: Navigation not working
-
 **Solution**: Check relative paths (should be `[Page].html` from root)
 
 ### Issue: Shared code not loading
-
 **Solution**: Check paths are `shared/[file].js`, `components/[file].js`
 
 ### Issue: Form not submitting
-
 **Solution**: Check `event.preventDefault()` in `handleSubmit(event)`
 
 ---
@@ -354,14 +308,12 @@ showToast('Error message', 'error');
 ## 📚 Documentation
 
 **Work Files** (`work/` folder):
-
 - High-level plans for each page
 - Section breakdowns
 - Object ID maps
 - Acceptance criteria
 
 **Story Files** (`stories/` folder):
-
 - Detailed section implementation guides
 - Created just-in-time during development
 - Document what was actually built
@@ -372,7 +324,6 @@ showToast('Error message', 'error');
 ## 🚀 Production Migration
 
 ### Steps to Production
-
 1. **Replace** `PrototypeAPI` calls with real backend
 2. **Migrate** sessionStorage to database
 3. **Add** authentication layer
@@ -383,7 +334,6 @@ showToast('Error message', 'error');
 8. **Test** with real data
 
 ### Migration Helpers
-
 - Search for `TODO:` comments in code
 - Check `PrototypeAPI` methods for Supabase equivalents
 - Review work files for production requirements
@@ -417,12 +367,10 @@ showToast('Error message', 'error');
 ## 📝 Change Log
 
 ### [Date]
-
 - [Change description]
 - [Page affected]
 
 ### [Date]
-
 - [Change description]
 - [Page affected]
 
@@ -431,3 +379,4 @@ showToast('Error message', 'error');
 **Last Updated**: [Date]  
 **Version**: 1.0  
 **Status**: [In Development | Testing | Complete]
+

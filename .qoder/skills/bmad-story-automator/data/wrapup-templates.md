@@ -66,29 +66,24 @@ Append this to the sidecar learnings file:
 **Stories:** {story_range}
 
 ### Patterns Observed
-
 - {pattern_1}
 - {pattern_2}
 
 ### Code Review Insights
-
 - Common issues: {list}
 - Average cycles to clean: {avg}
 
 ### Timing Estimates
-
 - create-story: ~{avg_time}
 - dev-story: ~{avg_time}
 - code-review: ~{avg_time} per cycle
 
 ### Recommendations for Future Runs
-
 - {recommendation_1}
 - {recommendation_2}
 ```
 
 **Patterns to capture:**
-
 - Common code review issues (what kept failing?)
 - Steps that frequently needed escalation
 - Stories that took longer than expected

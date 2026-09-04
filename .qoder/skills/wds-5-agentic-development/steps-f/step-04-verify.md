@@ -101,12 +101,10 @@ Confirm the fix works and has not introduced regressions.
 Display: "**Select an Option:** [C] Continue to Step 5: Document"
 
 #### Menu Handling Logic:
-
 - IF C: Update design log, then load, read entire file, then execute {nextStepFile}
 - IF Any other comments or queries: help user respond then [Redisplay Menu Options]
 
 #### EXECUTION RULES:
-
 - ALWAYS halt and wait for user input after presenting menu
 - ONLY proceed to next step when user selects 'C'
 - User can chat or ask questions - always respond and then redisplay menu options
@@ -120,7 +118,6 @@ ONLY WHEN all verification passes with no regressions will you then load and rea
 ## 🚨 SYSTEM SUCCESS/FAILURE METRICS
 
 ### ✅ SUCCESS:
-
 - Reproduction steps pass — bug is fixed
 - Test suite passes (all tests green)
 - Edge cases tested around the fix
@@ -128,7 +125,6 @@ ONLY WHEN all verification passes with no regressions will you then load and rea
 - Cross-platform verification done (if applicable)
 
 ### ❌ SYSTEM FAILURE:
-
 - Not re-running reproduction steps
 - Skipping regression test suite
 - Not testing edge cases

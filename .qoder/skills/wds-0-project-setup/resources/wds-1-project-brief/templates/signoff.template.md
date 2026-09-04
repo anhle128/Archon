@@ -144,28 +144,27 @@ This document serves as formal approval to proceed with the project as outlined 
 
 **Project Sponsor**:
 
-Name: ********\_********  
-Signature: ********\_********  
-Date: ******\_\_\_******
+Name: _________________  
+Signature: _________________  
+Date: _______________
 
 **Budget Approver**:
 
-Name: ********\_********  
-Signature: ********\_********  
-Date: ******\_\_\_******
+Name: _________________  
+Signature: _________________  
+Date: _______________
 
 **Project Owner**:
 
 Name: {{project_owner}}  
-Signature: ********\_********  
-Date: ******\_\_\_******
+Signature: _________________  
+Date: _______________
 
 ---
 
 ## 9. Next Steps
 
 Upon signoff:
-
 1. Proceed to full Project Brief development
 2. Execute work plan as outlined above
 3. Deliverables will be provided according to the agreed timeline
@@ -185,4 +184,5 @@ Any changes to scope, timeline, or investment must be agreed upon by all signato
 
 ---
 
-_This signoff document is based on the project pitch dated {{date}}._
+*This signoff document is based on the project pitch dated {{date}}.*
+

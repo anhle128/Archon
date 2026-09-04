@@ -64,13 +64,11 @@ I will now make an **initial impact assessment** for all features based on your 
 **Assessment approach:**
 
 For each feature, I'll evaluate:
-
 - **Impact on {{primary_persona.name}}** (Primary) - High/Medium/Low
 - **Impact on {{secondary_persona.name}}** (Secondary) - High/Medium/Low
 - **Impact on {{tertiary_persona.name}}** (Tertiary) - High/Medium/Low (if applicable)
 
 **Scoring:**
-
 - **Primary Persona:** High = 5 pts | Medium = 3 pts | Low = 1 pt
 - **Other Personas:** High = 3 pts | Medium = 1 pt | Low = 0 pts
 
@@ -89,13 +87,11 @@ Wait for user to confirm readiness.
 Display: "**Select an Option:** [C] Continue to Run Assessment | [M] Return to Activity Menu"
 
 #### Menu Handling Logic:
-
 - IF C: Load and execute {nextStepFile}
 - IF M: Return to {activityWorkflowFile}
 - IF Any other comments or queries: help user respond then [Redisplay Menu Options]
 
 #### EXECUTION RULES:
-
 - ALWAYS halt and wait for user input after presenting menu
 - User can chat or ask questions - always respond and then redisplay menu options
 
@@ -108,14 +104,12 @@ ONLY WHEN user selects [C] will you load the next step file. User must explicitl
 ## 🚨 SYSTEM SUCCESS/FAILURE METRICS
 
 ### ✅ SUCCESS:
-
 - Assessment methodology explained clearly
 - Scoring system presented (Primary weighted higher)
 - User informed about review opportunity after assessment
 - User explicitly confirmed readiness to proceed
 
 ### ❌ SYSTEM FAILURE:
-
 - Starting assessment without explanation
 - Not explaining scoring methodology
 - Proceeding without user confirmation

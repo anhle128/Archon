@@ -3,14 +3,12 @@
 ### Issue: Session spawns Claude instead of Codex
 
 **Symptoms:**
-
 - Output shows Claude-specific messages (e.g., "You've used 84% of your weekly limit")
 - Expected Codex but got Claude
 
 **Cause:** The `--agent` flag must be passed to `story-automator tmux-wrapper spawn`, not to `build-cmd`.
 
 **Correct Usage (v1.4.0+):**
-
 ```bash
 # Method 1: Use --agent flag on spawn (RECOMMENDED)
 session=$("$scripts" tmux-wrapper spawn dev "$epic" "$story_id" \
@@ -24,7 +22,6 @@ session=$("$scripts" tmux-wrapper spawn dev "$epic" "$story_id" \
 ```
 
 **Wrong Usage:**
-
 ```bash
 # WRONG - this doesn't work
 session=$("$scripts" tmux-wrapper spawn dev "$epic" "$story_id" \
@@ -34,20 +31,17 @@ session=$("$scripts" tmux-wrapper spawn dev "$epic" "$story_id" \
 ### Issue: Monitor reports "stuck" but Codex is active
 
 **Symptoms:**
-
 - `story-automator monitor-session` returns `stuck` state after 4 polls
 - Manual inspection shows Codex still producing output (no prompt, output continues to grow)
 
 **Cause:** The monitoring script relied on marker detection instead of output freshness.
 
 **Fixed in v2.4.0:**
-
 - Output freshness tracking (no marker reliance)
 - `CODEX_OUTPUT_STALE_SECONDS` controls how long Codex can be silent before "stuck"
 - Codex still gets 6 poll grace period before "stuck"
 
 **Verification:**
-
 ```bash
 # Check if session has AI_AGENT set
 tmux show-environment -t "session-name" AI_AGENT
@@ -59,7 +53,6 @@ tmux show-environment -t "session-name" AI_AGENT
 ### Issue: log command error when using --agent flag
 
 **Symptoms:**
-
 ```
 log: Unknown subcommand 'Codex agent detected - applying 1.5x timeout (90min)'
 ```
@@ -71,7 +64,6 @@ log: Unknown subcommand 'Codex agent detected - applying 1.5x timeout (90min)'
 ### Issue: Manual polling required as workaround
 
 **If monitoring still fails**, use this manual polling approach:
-
 ```bash
 for i in {1..60}; do
     sleep 30
@@ -92,7 +84,6 @@ done
 ### Issue: Codex sessions explore files but don't execute full workflow (v1.4.0)
 
 **Symptoms:**
-
 - Session output shows file exploration (`sed`, `rg`, `cat` commands)
 - No actual review findings or story updates
 - Sprint-status never changes from "review" to "done"
@@ -101,35 +92,32 @@ done
 **Cause:** Codex uses natural language prompts and may not follow structured workflow instructions as reliably as Claude.
 
 **Mitigation strategies:**
-
 1. **Use Claude for code-review by default** - More reliable at following multi-step workflows
 2. **Add explicit step markers** - Tell Codex to output "STEP 1 COMPLETE", "STEP 2 COMPLETE" etc.
 3. **Verify after session** - Check story file Status field, not just sprint-status
 
 **Recommended agent configuration for deterministic reliability:**
-
 ```yaml
 agentConfig:
-  defaultPrimary: 'auto'
-  defaultFallback: false # Disable global fallback; opt in per task
+  defaultPrimary: "auto"
+  defaultFallback: false  # Disable global fallback; opt in per task
   perTask:
     # create-story: Either agent works well
     create:
-      primary: 'claude'
+      primary: "claude"
     # dev-story: Either agent works, Codex may be faster for simple tasks
     dev:
-      primary: 'codex'
-      fallback: 'claude'
+      primary: "codex"
+      fallback: "claude"
     # code-review: Claude recommended - more reliable at following workflow
     review:
-      primary: 'claude'
+      primary: "claude"
       fallback: false
 ```
 
 ### Issue: Code-review doesn't update sprint-status.yaml
 
 **Symptoms:**
-
 - Code-review session completes
 - Story file shows review was done (Dev Agent Record updated)
 - But sprint-status.yaml still shows "review" instead of "done"
@@ -137,7 +125,6 @@ agentConfig:
 **Cause:** Code-review workflow step 5 updates sprint-status, but session may not reach step 5 or may use wrong story key format.
 
 **Verification (v1.4.0):**
-
 ```bash
 # Check story file status directly
 "$scripts" orchestrator-helper story-file-status 8.2
@@ -152,14 +139,12 @@ agentConfig:
 ### When to manually intervene
 
 **Intervene immediately if:**
-
 1. **5 code-review cycles with no progress** - Agent likely stuck in a loop
 2. **Story file shows "done" but sprint-status doesn't** - Sync issue, manual fix is faster
 3. **Tests passing but review keeps finding issues** - May be false positives
 4. **Codex sessions consistently incomplete** - Switch to Claude for that workflow
 
 **Steps for manual intervention:**
-
 ```bash
 # 1. Check actual story status
 "$scripts" orchestrator-helper story-file-status {story_id}

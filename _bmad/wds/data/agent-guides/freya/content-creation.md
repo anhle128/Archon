@@ -13,7 +13,6 @@
 ## Content Creation Workshop
 
 **Use the Content Creation Workshop for:**
-
 - ✅ Headlines and subheadlines
 - ✅ Hero sections and value propositions
 - ✅ Feature descriptions and benefits
@@ -21,7 +20,6 @@
 - ✅ Page sections (entire blocks)
 
 **NOT for:**
-
 - ❌ Field labels ("Email", "Password")
 - ❌ Button text ("Submit", "Cancel")
 - ❌ Error messages ("Invalid email format")
@@ -32,7 +30,6 @@
 ## When to Suggest the Workshop
 
 ### Signs User Needs It
-
 - Creating content without strategic context
 - Asking "What should this headline say?"
 - Struggling with messaging
@@ -40,7 +37,6 @@
 - Multiple content pieces to create
 
 ### How to Suggest (Natural, Not Pushy)
-
 > "This headline is important - it hooks Problem Aware users. Want to use the Content Creation Workshop to ensure it triggers the right psychology? Takes 10-15 minutes but makes content way more effective."
 
 **Let them decide.** Some users prefer quick mode, others want depth.
@@ -50,16 +46,13 @@
 ## Quick Mode vs Workshop Mode
 
 ### Quick Mode
-
 **When:**
-
 - Simple, straightforward content
 - User is experienced with WDS
 - Context is crystal clear
 - Time is tight
 
 **Process:**
-
 1. Load Trigger Map for context
 2. Consider Customer Awareness
 3. Apply Golden Circle (WHY → HOW → WHAT)
@@ -69,9 +62,7 @@
 ---
 
 ### Workshop Mode
-
 **When:**
-
 - Critical content (hero, main CTA)
 - User wants strategic depth
 - Multiple frameworks apply
@@ -81,7 +72,6 @@
 Load: `skill:wds-6-asset-generation`
 
 **6-Step Framework:**
-
 1. Define purpose & success criteria
 2. Load Trigger Map context
 3. Apply Customer Awareness strategy
@@ -95,7 +85,6 @@ Load: `skill:wds-6-asset-generation`
 ## The 6-Model Framework
 
 ### 1. Content Purpose
-
 **"What job does this content do?"**
 
 - Convince Problem Aware users that speed matters
@@ -107,7 +96,6 @@ Load: `skill:wds-6-asset-generation`
 ---
 
 ### 2. Trigger Map
-
 **Strategic foundation**
 
 - Business Goal: What are we trying to achieve?
@@ -120,7 +108,6 @@ Load: `skill:wds-6-asset-generation`
 ---
 
 ### 3. Customer Awareness Cycle
-
 **Content strategy - language & focus**
 
 Where user is → Where we want them:
@@ -136,7 +123,6 @@ Where user is → Where we want them:
 ---
 
 ### 4. Action Mapping
-
 **Content filter - relevance**
 
 For EVERY content element: **"What action does this enable?"**
@@ -149,7 +135,6 @@ For EVERY content element: **"What action does this enable?"**
 ---
 
 ### 5. Kathy Sierra Badass Users
-
 **Content tone & frame**
 
 Frame content around user becoming capable:
@@ -164,7 +149,6 @@ Frame content around user becoming capable:
 ---
 
 ### 6. Golden Circle
-
 **Structural order**
 
 Always structure: **WHY → HOW → WHAT**
@@ -197,13 +181,11 @@ Features (WHAT): 10K templates, smart pricing, e-signatures
 ## Content Purpose Examples
 
 ### Good (Specific & Measurable)
-
 - "Convince Problem Aware users that proposal speed matters more than perfection"
 - "Reassure Product Aware users about data security concerns"
 - "Trigger Solution Aware users' desire to feel like industry experts"
 
 ### Bad (Vague)
-
 - "Make users want the product"
 - "Explain features"
 - "Sound professional"
@@ -217,7 +199,6 @@ Features (WHAT): 10K templates, smart pricing, e-signatures
 **Different content types prioritize different models:**
 
 ### Landing Page Hero
-
 - Customer Awareness: ⭐⭐⭐
 - Golden Circle: ⭐⭐⭐
 - Badass Users: ⭐⭐
@@ -226,7 +207,6 @@ Features (WHAT): 10K templates, smart pricing, e-signatures
 - Content Purpose: Always defined
 
 ### Feature Description
-
 - Action Mapping: ⭐⭐⭐
 - Badass Users: ⭐⭐⭐
 - Customer Awareness: ⭐⭐
@@ -235,7 +215,6 @@ Features (WHAT): 10K templates, smart pricing, e-signatures
 - Content Purpose: Always defined
 
 ### Error Messages
-
 **Don't use workshop** - Use Tone of Voice instead
 
 ---
@@ -243,7 +222,6 @@ Features (WHAT): 10K templates, smart pricing, e-signatures
 ## Tone of Voice vs Strategic Content
 
 ### Tone of Voice (Product-Wide)
-
 - Field labels: "Email address"
 - Button text: "Get started"
 - Error messages: "Please enter a valid email"
@@ -254,7 +232,6 @@ Features (WHAT): 10K templates, smart pricing, e-signatures
 ---
 
 ### Strategic Content (Context-Specific)
-
 - Headlines: "Stop losing clients to slow proposals"
 - Value propositions: "AI-powered templates that close deals faster"
 - Feature benefits: "Create stunning proposals in minutes, not hours"
@@ -289,4 +266,5 @@ Features (WHAT): 10K templates, smart pricing, e-signatures
 
 ---
 
-_Every word is a strategic choice. Content triggers psychology._
+*Every word is a strategic choice. Content triggers psychology.*
+

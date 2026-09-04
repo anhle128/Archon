@@ -15,12 +15,12 @@ scripts/
 
 ## 🚨 FORBIDDEN PATTERNS (NO EXCEPTIONS)
 
-| Pattern                           | Why Forbidden                                   |
-| --------------------------------- | ----------------------------------------------- |
-| `tmux capture-pane` directly      | Context bloat, use status script                |
-| `while true` loops in LLM context | Session crash, use `$scripts monitor-session`   |
-| Manual session name construction  | Error-prone, use `$scripts tmux-wrapper`        |
-| Parsing raw output yourself       | Use `$scripts orchestrator-helper parse-output` |
+| Pattern | Why Forbidden |
+|---------|---------------|
+| `tmux capture-pane` directly | Context bloat, use status script |
+| `while true` loops in LLM context | Session crash, use `$scripts monitor-session` |
+| Manual session name construction | Error-prone, use `$scripts tmux-wrapper` |
+| Parsing raw output yourself | Use `$scripts orchestrator-helper parse-output` |
 
 ---
 
@@ -120,14 +120,14 @@ verified=$(echo "$validation" | jq -r '.verified')
 
 After `$scripts monitor-session` returns:
 
-| final_state  | Action                                                                   |
-| ------------ | ------------------------------------------------------------------------ |
-| `completed`  | Run step verifier or parser for the active workflow                      |
+| final_state | Action |
+|-------------|--------|
+| `completed` | Run step verifier or parser for the active workflow |
 | `incomplete` | **(v2.2)** Session idle but workflow NOT verified → Escalate immediately |
-| `crashed`    | Check retry count → retry or escalate                                    |
-| `stuck`      | Get output → investigate → may need restart                              |
-| `timeout`    | Get output → escalate to user                                            |
-| `not_found`  | Session gone → check for partial work                                    |
+| `crashed` | Check retry count → retry or escalate |
+| `stuck` | Get output → investigate → may need restart |
+| `timeout` | Get output → escalate to user |
+| `not_found` | Session gone → check for partial work |
 
 ---
 
@@ -136,7 +136,6 @@ After `$scripts monitor-session` returns:
 **See `monitoring-fallback.md` for complete fallback patterns when monitoring fails.**
 
 Key points:
-
 - If monitoring crashes, tmux session may have completed successfully
 - Fall back to direct session checks + source of truth verification
 - Do NOT treat monitoring failure as step failure
@@ -150,14 +149,12 @@ Key points:
 ### How It Works
 
 Claude Code displays a statusline at the bottom of the terminal:
-
 ```
 folder | ctx(N%) | HH:MM:SS
                    ^^^^^^^^ <- This time updates continuously while Claude runs
 ```
 
 The installed helper's `$scripts tmux-status-check` command:
-
 1. Parses the statusline time from the tmux pane
 2. Stores it in the session state file
 3. Compares with previous poll's time
@@ -165,19 +162,18 @@ The installed helper's `$scripts tmux-status-check` command:
 
 ### Decision Matrix
 
-| Previous Time | Current Time | Other Checks Say | Result                                     |
-| ------------- | ------------ | ---------------- | ------------------------------------------ |
-| 10:00:00      | 10:01:00     | stuck            | `just_started` (time advanced = alive)     |
-| 10:00:00      | 10:00:00     | stuck            | `stuck` (time unchanged)                   |
-| (none)        | 10:00:00     | stuck            | `just_started` (first observation = alive) |
-| (none)        | (none)       | stuck            | `stuck` (no statusline data)               |
+| Previous Time | Current Time | Other Checks Say | Result |
+|---------------|--------------|------------------|--------|
+| 10:00:00 | 10:01:00 | stuck | `just_started` (time advanced = alive) |
+| 10:00:00 | 10:00:00 | stuck | `stuck` (time unchanged) |
+| (none) | 10:00:00 | stuck | `just_started` (first observation = alive) |
+| (none) | (none) | stuck | `stuck` (no statusline data) |
 
 ### Key Principle
 
 **The statusline time gate is the FINAL AUTHORITY.** Even if all other detection methods (process checks, activity indicators, heartbeat) suggest the session is stuck, if the statusline time has advanced, the session is definitively alive and MUST NOT be escalated.
 
 This prevents false escalations for:
-
 - Complex sessions in long thinking phases
 - Sessions with unusual output patterns
 - Edge cases where other detection fails

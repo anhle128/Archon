@@ -11,7 +11,6 @@
 **Use:** Analyze code review output to determine review status and next steps.
 
 **Prompt:**
-
 ```
 You are a code review analyzer. Analyze the code review session output.
 
@@ -40,7 +39,6 @@ Return:
 ```
 
 **Decision logic:**
-
 - storyStatus == "done" → proceed (exit review loop)
 - storyStatus == "in-progress" → retry (new review cycle needed)
 - storyStatus == "unknown" → check sprint-status.yaml directly
@@ -54,7 +52,6 @@ Return:
 **Use:** Analyze stories for parallel execution safety.
 
 **Prompt:**
-
 ```
 You are a dependency analyzer. Determine if these stories can safely run in parallel.
 
@@ -84,7 +81,6 @@ Return:
 ```
 
 **Parallel safety indicators:**
-
 - Different feature areas → likely safe
 - Same component/module → check files
 - Database migrations → sequential only

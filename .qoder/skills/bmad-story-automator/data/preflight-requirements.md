@@ -29,7 +29,6 @@ Steps 1-3 MUST be completed IN ORDER using the Python helper BEFORE proceeding t
 ## ✅ REQUIRED Verification
 
 Before step 5 (Configure Agent), you MUST have:
-
 - [ ] `stories_json` variable populated with complexity data from Python helper
 - [ ] Complexity Matrix displayed to user showing all stories with levels/scores
 - [ ] User has seen the complexity breakdown before being asked about agents
@@ -39,7 +38,6 @@ Before step 5 (Configure Agent), you MUST have:
 ## Why This Matters
 
 Without programmatic complexity scoring:
-
 - Agent configuration cannot be informed by actual story difficulty
 - User cannot make informed decisions about which agents to use
 - The orchestration may fail or produce suboptimal results
@@ -71,7 +69,6 @@ After gathering complexity data, you MUST display:
 ## Verification Gate (Step 3d)
 
 Before proceeding to step 4 (Custom Instructions), verify:
-
 - `stories_json` contains complexity data for ALL selected stories
 - Complexity Matrix has been displayed to user
 - If either is missing, DO NOT PROCEED - re-run step 3

@@ -37,7 +37,6 @@ Skills without a `customize.toml` are fine — older skills or ones that predate
 > "I found one skill: **{skill-name}**. For single-skill modules, I recommend the **standalone self-registering** approach — instead of generating a separate setup skill, the registration logic is built directly into this skill via a setup reference file. When users pass `setup` or `configure` as an argument, the skill handles its own module registration.
 >
 > This means:
->
 > - No separate `-setup` skill to maintain
 > - Simpler distribution (single skill folder + marketplace.json)
 > - Users install by adding the skill and running it with `setup`
@@ -104,7 +103,7 @@ agents:
     icon: 📊
     description: Strategic business analyst and requirements expert.
   - code: creative-muse
-    name: '' # learned at First Breath — owner fills post-activation
+    name: ""                    # learned at First Breath — owner fills post-activation
     title: Creative Muse
     icon: ✨
     description: Creative companion and muse.
@@ -171,7 +170,7 @@ Iterate until the user confirms everything is correct.
 Write the confirmed module.yaml and module-help.csv content to temporary files at `{bmad_builder_reports}/{module-code}-temp-module.yaml` and `{bmad_builder_reports}/{module-code}-temp-help.csv`. Run the scaffold script:
 
 ```bash
-python3 ./scripts/scaffold-setup-skill.py \
+uv run ./scripts/scaffold-setup-skill.py \
   --target-dir "{skills-folder}" \
   --module-code "{code}" \
   --module-name "{name}" \
@@ -191,7 +190,7 @@ This creates `{code}-setup/` in the user's skills folder containing:
 Write the confirmed module.yaml and module-help.csv directly to the skill's `assets/` folder (create the folder if needed). Then run the standalone scaffold script to copy the template infrastructure:
 
 ```bash
-python3 ./scripts/scaffold-standalone-module.py \
+uv run ./scripts/scaffold-standalone-module.py \
   --skill-dir "{skill-folder}" \
   --module-code "{code}" \
   --module-name "{name}"

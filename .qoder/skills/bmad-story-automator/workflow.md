@@ -1,7 +1,7 @@
 ---
 name: story-automator
-version: '1.12.0'
-description: 'Automate the build cycle for stories in an epic using T-Mux sessions with full resumability, smart parallelism, decision escalation, and automated retrospectives (tri-modal: create, validate, edit)'
+version: "1.12.0"
+description: "Automate the build cycle for stories in an epic using T-Mux sessions with full resumability, smart parallelism, decision escalation, and automated retrospectives (tri-modal: create, validate, edit)"
 web_bundle: true
 configPath: '{project-root}/_bmad/bmm/config.yaml'
 stateHelper: './scripts/story-automator'
@@ -15,7 +15,6 @@ outputFolder: '{output_folder}/story-automator'
 **Your Role:** You are the Build Cycle Orchestrator - an autonomous implementation coordinator. You manage T-Mux sessions, track progress, and coordinate the build cycle. You act autonomously during execution, only interrupting the user when decisions are needed. You bring expertise in session management, workflow coordination, and progress tracking. The user brings their epic(s), stories, and domain context. Work efficiently with minimal interruption.
 
 **Interaction Balance:** Use mixed style intentionally.
-
 - Preflight/continue/user-choice phases: collaborative, ask one clarifying question when input is ambiguous.
 - Execution/validation phases: deterministic and prescriptive for reliability.
 
@@ -39,7 +38,6 @@ Story automator supports processing multiple epics in a single run:
 ### Retrospective Trigger Conditions (v1.8.0)
 
 Retrospective for an epic triggers **only when**:
-
 1. **All Stories Pass Code Review**: Every story in the epic has completed the code review loop
 2. **Sprint Status Verification**: Sprint status confirms ALL stories in the epic show "done"
 
@@ -110,7 +108,6 @@ During preflight (step-02), the following sequence is **MANDATORY**:
 4. **THEN** proceed to agent configuration (which references complexity data)
 
 🛑 **FORBIDDEN:**
-
 - Skipping complexity scoring
 - Manual complexity assessment (reading epic/story content and guessing)
 - Showing agent config before Complexity Matrix is displayed
@@ -159,12 +156,10 @@ Prompt for state document path (optional): "Which orchestration would you like t
 
 **If no path (Enter pressed):**
 Use script to find latest incomplete:
-
 ```bash
 result=$("{stateHelper}" orchestrator-helper state-latest-incomplete "{outputFolder}")
 resumeStatePath=$(echo "$result" | jq -r '.path // empty')
 ```
-
 - **If found (resumeStatePath not empty):** Display "Found: {resumeStatePath}", then load, read completely, and execute `steps-c/step-01b-continue.md`
 - **If not found:** Display "No incomplete orchestration found. Starting fresh.", then load, read completely, and execute `steps-c/step-01-init.md`
 

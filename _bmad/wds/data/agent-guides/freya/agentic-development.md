@@ -18,15 +18,14 @@ The design log bridges the gap between specifications and working code. Each ste
 
 Agentic Development is a **workflow approach** that produces various outputs:
 
-| Output Type                  | Description                                    | When to Use                     |
-| ---------------------------- | ---------------------------------------------- | ------------------------------- |
-| **Interactive Prototypes**   | HTML prototypes that let users FEEL the design | Validating UX before production |
-| **Prototype Implementation** | Building features from specifications          | Feature development             |
-| **Bug Fixes**                | Structured debugging and fixing                | Issue resolution                |
-| **Design Exploration**       | Exploring visual/UX directions                 | Creative iteration              |
+| Output Type | Description | When to Use |
+|-------------|-------------|-------------|
+| **Interactive Prototypes** | HTML prototypes that let users FEEL the design | Validating UX before production |
+| **Prototype Implementation** | Building features from specifications | Feature development |
+| **Bug Fixes** | Structured debugging and fixing | Issue resolution |
+| **Design Exploration** | Exploring visual/UX directions | Creative iteration |
 
 **Key Insight:** By structuring work with a design log and experience records, we create:
-
 - **Isolation** — Each step can run in a fresh context
 - **Traceability** — Clear record of what was planned and executed
 - **Replayability** — Instructions can be rerun if needed
@@ -87,15 +86,14 @@ The design log bridges **specifications** and **development**:
 
 During implementation, classify and handle feedback naturally:
 
-| Type                 | What It Is                                  | When to Address                              |
-| -------------------- | ------------------------------------------- | -------------------------------------------- |
-| **Bug/Issue**        | Something broken or not working as expected | Now — iterate until fixed                    |
-| **Quick Adjustment** | Small tweak to current work                 | Now — implement immediately                  |
-| **Addition**         | New requirement that fits current scope     | Later step — add to plan                     |
-| **Change Request**   | Outside current dialog scope                | Future session — document in Change Requests |
+| Type | What It Is | When to Address |
+|------|------------|-----------------|
+| **Bug/Issue** | Something broken or not working as expected | Now — iterate until fixed |
+| **Quick Adjustment** | Small tweak to current work | Now — implement immediately |
+| **Addition** | New requirement that fits current scope | Later step — add to plan |
+| **Change Request** | Outside current dialog scope | Future session — document in Change Requests |
 
 **Response Pattern:**
-
 1. **Classify** — Note what kind of feedback this is
 2. **Timing** — State when it should be addressed
 3. **Confirm** — For additions and change requests, confirm before proceeding
@@ -118,7 +116,6 @@ During agentic development, use Puppeteer to verify measurable criteria after ea
 5. **Split test plans** — Story files divide criteria into agent-verifiable and user-evaluable
 
 **Responsibility split:**
-
 - **Agent handles:** Text content, colors, dimensions, touch targets, error states, visibility, state transitions
 - **Human handles:** Flow feel, visual hierarchy, user understanding, overall consistency
 
@@ -133,14 +130,12 @@ Interactive Prototypes are **one output** of Agentic Development.
 ### Why HTML Prototypes?
 
 **Static Specs Can't Show:**
-
 - How it FEELS to interact
 - Where users get confused
 - What's missing in the flow
 - If the pacing feels right
 
 **HTML Prototypes Reveal:**
-
 - Interaction feels natural or awkward
 - Information appears when needed
 - Flow has logical gaps
@@ -148,23 +143,21 @@ Interactive Prototypes are **one output** of Agentic Development.
 
 ### Fidelity Levels
 
-| Level             | Focus                    | Use When                 |
-| ----------------- | ------------------------ | ------------------------ |
-| **Wireframe**     | Information architecture | Testing flow logic only  |
-| **Interactive**   | User experience          | Validating UX (standard) |
-| **Design System** | Component-based          | Phase 5 enabled          |
+| Level | Focus | Use When |
+|-------|-------|----------|
+| **Wireframe** | Information architecture | Testing flow logic only |
+| **Interactive** | User experience | Validating UX (standard) |
+| **Design System** | Component-based | Phase 5 enabled |
 
 ### Prototype vs Production
 
 **Prototypes ARE:**
-
 - Thinking tools
 - Communication tools
 - Validation tools
 - Specification supplements
 
 **Prototypes are NOT:**
-
 - Production code
 - Pixel-perfect mockups
 - Final design
@@ -182,16 +175,15 @@ Each step links to specifications (doesn't duplicate):
 ```markdown
 ## Object ID Implementation Map
 
-| Object ID               | Spec Section  | Lines     |
-| ----------------------- | ------------- | --------- |
+| Object ID | Spec Section | Lines |
+|-----------|--------------|-------|
 | `booking-detail-header` | Drawer Header | L149-L158 |
-| `booking-detail-close`  | Close Button  | L159-L168 |
+| `booking-detail-close` | Close Button | L159-L168 |
 ```
 
 ### Implementation Checklist Pattern
 
 For each Object ID:
-
 1. **Read** — Load the spec section
 2. **Implement** — Build to match spec
 3. **Verify (Puppeteer)** — Open in browser, check measurable criteria with ✓/✗ narration
@@ -202,19 +194,16 @@ For each Object ID:
 ## Best Practices
 
 ### Single Source of Truth
-
 - **Never duplicate spec content** — Link to spec sections with line numbers
 - **Object IDs are the contract** — Every implementation maps to an Object ID
 - **Spec changes update the spec** — Not the dialog or step files
 
 ### Design Log
-
 - **Be thorough in Setup Context** — Assume zero prior knowledge
 - **Include file paths** — Always use absolute or project-relative paths
 - **Track progress** — Update the design log after each step
 
 ### Execution
-
 - **Read spec first** — Before implementing any Object ID
 - **Fresh context is fine** — Steps are designed to work in isolation
 - **Update as you go** — Don't wait to update progress
@@ -231,4 +220,4 @@ For each Object ID:
 
 ---
 
-_Build incrementally. Document thoroughly. Let users FEEL the design before committing to production._
+*Build incrementally. Document thoroughly. Let users FEEL the design before committing to production.*

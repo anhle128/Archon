@@ -32,7 +32,6 @@ Without documented visual/UX preferences from real examples, Dream Up agents mus
 6. **Synthesized design principles** — strategic takeaways that guide all future design
 
 **Quality bar:**
-
 - At least 2 sites analyzed (more if client provides them)
 - For each site: specific elements with client's reaction (not vague overall impression)
 - Synthesized principles clear enough for a Dream Up agent to self-review against
@@ -45,7 +44,6 @@ Without documented visual/UX preferences from real examples, Dream Up agents mus
 ### Getting URLs
 
 Ask the client for 2-4 sites they find inspiring. These could be:
-
 - Sites with layout/structure they like
 - Competitor sites (to learn what works and doesn't)
 - Sites with visual style they admire
@@ -62,7 +60,6 @@ Ask the client for 2-4 sites they find inspiring. These could be:
 **Step 2: Ask open first** — "What drew you to this site?" / "What do you like about it?" Let the client lead.
 
 **Step 3: Get specific** — naturally ask about elements you can see on the site. Don't use a checklist. Ask about what's actually there:
-
 - Their layout approach
 - How they handle navigation
 - How content is displayed
@@ -71,7 +68,6 @@ Ask the client for 2-4 sites they find inspiring. These could be:
 - Performance and load feel
 
 **Step 4: Capture nuance** — listen for:
-
 - Approval ("like that") — document what specifically and why
 - Rejection ("don't like that") — document what and why not
 - Conditional ("like but...") — document the adaptation needed
@@ -82,7 +78,6 @@ Ask the client for 2-4 sites they find inspiring. These could be:
 ### Synthesizing
 
 After all sites are analyzed, organize findings into design principles by category:
-
 - Layout patterns (to use / to avoid)
 - Content hierarchy (priorities / anti-patterns)
 - Visual style (direction / what to avoid)
@@ -95,35 +90,30 @@ After all sites are analyzed, organize findings into design principles by catego
 ## Types of Information to Surface
 
 **Layout and structure:**
-
 - Single-page vs multi-page preference
 - Section organization and flow
 - Content density (busy vs minimal)
 - White space usage
 
 **Navigation and UX:**
-
 - Menu style (simple vs complex)
 - How key actions are accessed (contact, booking, etc.)
 - Mobile behavior
 - Scroll behavior
 
 **Visual style:**
-
 - Color palette impression
 - Typography feel (modern, classic, etc.)
 - Photo style (real vs stock, dark vs light)
 - Overall aesthetic (minimal, rich, corporate, casual)
 
 **Content display:**
-
 - How services/features are shown (grid, list, cards)
 - Testimonial/review presentation
 - How contact info is displayed
 - Map and location presentation
 
 **Performance and feel:**
-
 - Loading speed impression
 - Animation and movement
 - Overall "feel" (fast, heavy, smooth, clunky)
@@ -135,56 +125,45 @@ After all sites are analyzed, organize findings into design principles by catego
 Create `inspiration-analysis.md` in the Product Brief output folder.
 
 **For each site:**
-
 ```markdown
 ## Site: [Name or URL]
 
 ### What Client Liked
-
 - [Specific element] — [Why it works for them]
 - [Specific element] — [Why it works]
 
 ### What Client Didn't Like
-
 - [Specific element] — [Why it doesn't work]
 
 ### Adaptations Needed
-
 - [Element] — [Like the concept but needs modification because...]
 
 ### Principles Extracted
-
 - [Strategic takeaway from this site]
 ```
 
 **Synthesis:**
-
 ```markdown
 ## Design Principles (from all sites)
 
 ### Layout
-
 - DO: [Patterns to follow]
 - DON'T: [Patterns to avoid]
 
 ### Content Hierarchy
-
 - DO: [How to prioritize]
 - DON'T: [What not to do]
 
 ### Visual Style
-
 - DO: [Visual direction]
 - DON'T: [What to avoid]
 
 ### User Experience
-
 - DO: [UX patterns to adopt]
 - DON'T: [Anti-patterns]
 ```
 
 **Usage note at the end:**
-
 ```markdown
 ## How to Use This Document
 
@@ -219,7 +198,6 @@ Check generated output against documented preferences.
 ## Success Criteria
 
 **You've succeeded when:**
-
 - Client has reacted to specific visual/UX elements from real examples
 - Preferences are documented with concrete references (not abstract words)
 - Design principles are clear and actionable
@@ -227,7 +205,6 @@ Check generated output against documented preferences.
 - Client confirms the synthesis captures their vision
 
 **Dream Up agents can now:**
-
 - Reference documented preferences during generation
 - Self-review against specific approved examples
 - Avoid patterns the client explicitly rejected
@@ -235,4 +212,4 @@ Check generated output against documented preferences.
 
 ---
 
-_Concrete examples beat abstract descriptions every time. This document turns "make it modern" into "like Site A's single-page layout with fixed contact header, but simpler than Site B's cluttered services grid."_
+*Concrete examples beat abstract descriptions every time. This document turns "make it modern" into "like Site A's single-page layout with fixed contact header, but simpler than Site B's cluttered services grid."*

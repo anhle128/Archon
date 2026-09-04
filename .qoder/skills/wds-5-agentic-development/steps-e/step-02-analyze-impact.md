@@ -85,11 +85,11 @@ Understand how the proposed changes affect existing code, and identify risks.
 
 Write a risk assessment in the dialog file:
 
-| Risk                                     | Likelihood | Impact | Mitigation                         |
-| ---------------------------------------- | ---------- | ------ | ---------------------------------- |
-| Shared component breaks for existing use | Medium     | High   | Test all existing consumers        |
-| API change breaks mobile client          | Low        | High   | Make change additive, not breaking |
-| State management conflict                | Medium     | Medium | Isolate new state, feature flag    |
+| Risk | Likelihood | Impact | Mitigation |
+|------|-----------|--------|------------|
+| Shared component breaks for existing use | Medium | High | Test all existing consumers |
+| API change breaks mobile client | Low | High | Make change additive, not breaking |
+| State management conflict | Medium | Medium | Isolate new state, feature flag |
 
 ### 6. Verify Checklist
 
@@ -104,12 +104,10 @@ Write a risk assessment in the dialog file:
 Display: "**Select an Option:** [C] Continue to Step 3: Plan Implementation"
 
 #### Menu Handling Logic:
-
 - IF C: Update design log, then load, read entire file, then execute {nextStepFile}
 - IF Any other comments or queries: help user respond then [Redisplay Menu Options]
 
 #### EXECUTION RULES:
-
 - ALWAYS halt and wait for user input after presenting menu
 - ONLY proceed to next step when user selects 'C'
 - User can chat or ask questions - always respond and then redisplay menu options
@@ -123,7 +121,6 @@ ONLY WHEN the impact analysis is complete with dependencies mapped and risks doc
 ## 🚨 SYSTEM SUCCESS/FAILURE METRICS
 
 ### ✅ SUCCESS:
-
 - All affected code read and understood
 - Dependencies mapped
 - Breaking change risks identified
@@ -131,7 +128,6 @@ ONLY WHEN the impact analysis is complete with dependencies mapped and risks doc
 - Risk assessment documented in dialog file
 
 ### ❌ SYSTEM FAILURE:
-
 - Beginning implementation planning without completing impact analysis
 - Not reading all affected code
 - Skipping dependency mapping

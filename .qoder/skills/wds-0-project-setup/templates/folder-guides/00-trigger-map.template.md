@@ -21,7 +21,6 @@ The Trigger Map reveals the human forces behind product decisions through five w
 This folder feeds directly into Phase 4 (UX Scenarios). Every page spec should trace back to a driving force documented here.
 
 **Learn more:**
-
 - WDS Course Module 06: Trigger Mapping — Connect Business Goals to User Psychology
 - WDS Course Module 06, Lessons 4–8: The Five Workshops
 
@@ -34,7 +33,6 @@ This folder feeds directly into Phase 4 (UX Scenarios). Every page spec should t
 **Templates:** `./resources/wds-2-trigger-mapping/templates/`
 
 **Before writing anything in this folder:**
-
 1. Read the Product Brief in `A-Product-Brief/` — trigger mapping builds on it
 2. Load the workflow and follow the five workshop sequence
 3. Use Dialog mode — personas emerge from conversation, not invention
@@ -51,11 +49,11 @@ This folder feeds directly into Phase 4 (UX Scenarios). Every page spec should t
 
 _This section will be updated as documents are created during Phase 2._
 
-| #   | Document                | Purpose                     | Status      |
-| --- | ----------------------- | --------------------------- | ----------- |
-| 01  | Business Goals          | Vision, objectives, metrics | Not started |
-| 02+ | Persona files           | One per target group        | Not started |
-| —   | Feature Impact Analysis | Forces × features scoring   | Not started |
+| # | Document | Purpose | Status |
+|---|----------|---------|--------|
+| 01 | Business Goals | Vision, objectives, metrics | Not started |
+| 02+ | Persona files | One per target group | Not started |
+| — | Feature Impact Analysis | Forces × features scoring | Not started |
 
 ---
 

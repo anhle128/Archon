@@ -28,7 +28,6 @@ If state found: show resume prompt. Wait for user response before continuing.
 ## Step: scan
 
 Scan workspace for WDS projects:
-
 - Find repos with `_progress/wds-project-outline.yaml` or `_progress/00-design-log.md`
 - Skip system repos (bmad-method-wds-expansion, whiteport-design-studio)
 - For each project: read design log, note phase status and in-progress work

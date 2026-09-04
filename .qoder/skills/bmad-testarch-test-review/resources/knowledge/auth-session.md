@@ -34,12 +34,7 @@ The `auth-session` utility provides:
 
 ```typescript
 // Step 1: Configure in global-setup.ts
-import {
-  authStorageInit,
-  setAuthProvider,
-  configureAuthSession,
-  authGlobalInit,
-} from '@seontechnologies/playwright-utils/auth-session';
+import { authStorageInit, setAuthProvider, configureAuthSession, authGlobalInit } from '@seontechnologies/playwright-utils/auth-session';
 import myCustomProvider from './auth/custom-auth-provider';
 
 async function globalSetup() {
@@ -63,10 +58,7 @@ export default globalSetup;
 
 // Step 2: Create auth fixture
 import { test as base } from '@playwright/test';
-import {
-  createAuthFixtures,
-  setAuthProvider,
-} from '@seontechnologies/playwright-utils/auth-session';
+import { createAuthFixtures, setAuthProvider } from '@seontechnologies/playwright-utils/auth-session';
 import myCustomProvider from './custom-auth-provider';
 
 // Register provider early
@@ -265,21 +257,17 @@ test('parallel test 2', async ({ page }) => {
 import { type AuthProvider } from '@seontechnologies/playwright-utils/auth-session';
 
 const apiAuthProvider: AuthProvider = {
-  getEnvironment: options => options.environment || 'local',
-  getUserIdentifier: options => options.userIdentifier || 'api-user',
+  getEnvironment: (options) => options.environment || 'local',
+  getUserIdentifier: (options) => options.userIdentifier || 'api-user',
 
-  extractToken: storageState => {
+  extractToken: (storageState) => {
     // Token stored in localStorage format for disk persistence
-    const tokenEntry = storageState.origins?.[0]?.localStorage?.find(
-      item => item.name === 'auth_token'
-    );
+    const tokenEntry = storageState.origins?.[0]?.localStorage?.find((item) => item.name === 'auth_token');
     return tokenEntry?.value;
   },
 
-  isTokenExpired: storageState => {
-    const expiryEntry = storageState.origins?.[0]?.localStorage?.find(
-      item => item.name === 'token_expiry'
-    );
+  isTokenExpired: (storageState) => {
+    const expiryEntry = storageState.origins?.[0]?.localStorage?.find((item) => item.name === 'token_expiry');
     if (!expiryEntry) return true;
     return Date.now() > parseInt(expiryEntry.value, 10);
   },
@@ -325,10 +313,7 @@ export default apiAuthProvider;
 // Step 2: Create auth fixture
 // playwright/support/fixtures.ts
 import { test as base } from '@playwright/test';
-import {
-  createAuthFixtures,
-  setAuthProvider,
-} from '@seontechnologies/playwright-utils/auth-session';
+import { createAuthFixtures, setAuthProvider } from '@seontechnologies/playwright-utils/auth-session';
 import apiAuthProvider from './api-auth-provider';
 
 setAuthProvider(apiAuthProvider);
@@ -460,16 +445,16 @@ test.describe('Service-to-Service Auth', () => {
 import { type AuthProvider } from '@seontechnologies/playwright-utils/auth-session';
 
 const myCustomProvider: AuthProvider = {
-  getEnvironment: options => options.environment || 'local',
+  getEnvironment: (options) => options.environment || 'local',
 
-  getUserIdentifier: options => options.userIdentifier || 'default-user',
+  getUserIdentifier: (options) => options.userIdentifier || 'default-user',
 
-  extractToken: storageState => {
+  extractToken: (storageState) => {
     // Extract token from your storage format
-    return storageState.cookies.find(c => c.name === 'auth_token')?.value;
+    return storageState.cookies.find((c) => c.name === 'auth_token')?.value;
   },
 
-  extractCookies: tokenData => {
+  extractCookies: (tokenData) => {
     // Convert token to cookies for browser context
     return [
       {
@@ -483,9 +468,9 @@ const myCustomProvider: AuthProvider = {
     ];
   },
 
-  isTokenExpired: storageState => {
+  isTokenExpired: (storageState) => {
     // Check if token is expired
-    const expiresAt = storageState.cookies.find(c => c.name === 'expires_at');
+    const expiresAt = storageState.cookies.find((c) => c.name === 'expires_at');
     return Date.now() > parseInt(expiresAt?.value || '0');
   },
 
@@ -501,7 +486,12 @@ export default myCustomProvider;
 ## Integration with API Request
 
 ```typescript
-import { test } from '@seontechnologies/playwright-utils/fixtures';
+import { expect, mergeTests } from '@playwright/test';
+import { test as apiRequestFixture } from '@seontechnologies/playwright-utils/api-request/fixtures';
+// Auth fixture from Step 2 above (setAuthProvider + createAuthFixtures)
+import { test as authFixture } from './support/auth/auth-fixture';
+
+const test = mergeTests(authFixture, apiRequestFixture);
 
 test('authenticated API call', async ({ apiRequest, authToken }) => {
   const { status, body } = await apiRequest({

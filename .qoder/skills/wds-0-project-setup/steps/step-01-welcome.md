@@ -65,7 +65,6 @@ WDS is a **design methodology** that helps you create great digital products thr
 **What WDS Does**
 
 **For NEW products** (Greenfield):
-
 - Phase 1: Define your vision (Project Brief)
 - Phase 2: Understand your users (Trigger Mapping)
 - Phase 3: Specify features (PRD Platform)
@@ -75,7 +74,6 @@ WDS is a **design methodology** that helps you create great digital products thr
 - Phase 7: Launch & Go Live
 
 **For EXISTING products** (Brownfield):
-
 - Phase 8: Strategic improvements (Kaizen approach)
 - Limited Brief (document what exists)
 - Focused improvements (not complete redesigns)
@@ -97,10 +95,10 @@ WDS is a **thinking framework** with templates to guide your design decisions.
 
 Three specialized agents help you:
 
-| Agent     | Domain   | Specialty                                                        |
-| --------- | -------- | ---------------------------------------------------------------- |
-| **Saga**  | Strategy | Project Briefs, user research, requirements                      |
-| **Freya** | Design   | UX/UI, wireframes, specifications, prototypes, product evolution |
+| Agent | Domain | Specialty |
+|-------|--------|-----------|
+| **Saga** | Strategy | Project Briefs, user research, requirements |
+| **Freya** | Design | UX/UI, wireframes, specifications, prototypes, product evolution |
 
 You are currently working with one of these agents.
 
@@ -130,7 +128,6 @@ Understanding your starting point ensures you follow the right workflow.
 Based on user responses:
 
 **If alignment = [B] Need to pitch:**
-
 1. Route to: `skill:wds-0-alignment-signoff`
 2. After alignment complete -> Return here for project configuration
 
@@ -150,13 +147,11 @@ Next: Set up your project structure.
 Display: "**Select an Option:** [C] Continue to Step 2: Configuration & Structure"
 
 #### Menu Handling Logic:
-
 - IF C: Load, read entire file, then execute {nextStepFile}
 - IF M: Return to {workflowFile}
 - IF Any other comments or queries: help user respond then [Redisplay Menu Options]
 
 #### EXECUTION RULES:
-
 - ALWAYS halt and wait for user input after presenting menu
 - ONLY proceed to next step when user selects 'C'
 - User can chat or ask questions - always respond and then redisplay menu options
@@ -170,14 +165,12 @@ ONLY WHEN the project type is confirmed and alignment decision is made will you 
 ## 🚨 SYSTEM SUCCESS/FAILURE METRICS
 
 ### ✅ SUCCESS:
-
 - User understands WDS methodology at a high level
 - Project type (greenfield/brownfield) is determined
 - Alignment needs are assessed and routed correctly
 - User feels oriented and confident about the path ahead
 
 ### ❌ SYSTEM FAILURE:
-
 - Skipping project type determination
 - Assuming greenfield or brownfield without asking
 - Not assessing alignment needs

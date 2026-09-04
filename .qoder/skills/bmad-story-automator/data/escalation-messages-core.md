@@ -5,7 +5,6 @@ Use these templates when an escalation trigger fires.
 ## 1. Code Review Loop Exceeded
 
 **Pre-Escalation Verification:**
-
 ```bash
 file_status=$("$scripts" orchestrator-helper story-file-status {story_id})
 file_done=$(echo "$file_status" | jq -r '.status')
@@ -23,7 +22,6 @@ tests_pass=$([[ "$test_result" != *"FAIL"* ]] && echo "true" || echo "false")
 {cycle_history_table}
 
 **Escalation message:**
-
 ```
 🔔 DECISION NEEDED: Code Review Loop (5 cycles exhausted)
 
@@ -36,7 +34,6 @@ Story ID: {story_id}
 ## 2. Cannot Parse Session Output
 
 **Escalation message:**
-
 ```
 🔔 DECISION NEEDED: Ambiguous Session Output
 
@@ -63,7 +60,6 @@ Select option:
 ## 3. Session Spawn Failure
 
 **Escalation message:**
-
 ```
 🔔 DECISION NEEDED: Session Spawn Failed
 
@@ -87,7 +83,6 @@ Select option:
 ## 4. Git Commit Failure
 
 **Escalation message:**
-
 ```
 🔔 DECISION NEEDED: Git Commit Failed
 

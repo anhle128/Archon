@@ -13,21 +13,17 @@
 ## Three Design System Modes
 
 ### Mode A: No Design System
-
 **What it means:**
-
 - All components stay page-specific
 - No component extraction
 - AI/dev team handles consistency
 - Faster for simple projects
 
 **When this workflow doesn't run:**
-
 - Phase 7 is disabled
 - Components reference page context only
 
 **Agent behavior:**
-
 - Create components as page-specific
 - Use clear, descriptive class names
 - No need to think about reusability
@@ -35,16 +31,13 @@
 ---
 
 ### Mode B: Custom Figma Design System
-
 **What it means:**
-
 - Designer defines components in Figma
 - Components extracted as discovered during Phase 4
 - Figma MCP endpoints for integration
 - Component IDs link spec ↔ Figma
 
 **Workflow:**
-
 1. Designer creates component in Figma
 2. Component discovered during page design
 3. Agent links to Figma via Component ID
@@ -55,16 +48,13 @@
 ---
 
 ### Mode C: Component Library Design System
-
 **What it means:**
-
 - Uses shadcn/Radix/similar library
 - Library chosen during setup
 - Components mapped to library defaults
 - Variants customized as needed
 
 **Workflow:**
-
 1. Component needed during page design
 2. Check if library has it (button, input, card, etc.)
 3. Map to library component
@@ -77,13 +67,11 @@
 **Runs automatically during Phase 4 component specification**
 
 **For each component:**
-
 1. Check: Design system enabled? (Mode B or C)
 2. If NO → Create page-specific, continue
 3. If YES → Call design-system-router.md
 
 **Router asks:**
-
 - Is this component new?
 - Is there a similar component?
 - Should we create new or use/extend existing?
@@ -95,11 +83,9 @@
 ## Never Create Components Speculatively
 
 ### ❌ Wrong Approach
-
 "Let me create a full component library upfront..."
 
 **Why bad:**
-
 - You don't know what you'll actually need
 - Over-engineering
 - Wasted effort on unused components
@@ -107,11 +93,9 @@
 ---
 
 ### ✅ Right Approach
-
 "I'm designing the landing page hero... oh, I need a button."
 
 **Process:**
-
 1. Design the button for this specific page
 2. When another page needs a button → Opportunity!
 3. Assess: Similar enough to extract?
@@ -128,7 +112,6 @@
 **See:** `../../workflows/wds-7-design-system/assessment/`
 
 **7 Micro-Steps:**
-
 1. Scan existing components
 2. Compare attributes (visual, behavior, states)
 3. Calculate similarity score
@@ -138,7 +121,6 @@
 7. Execute decision
 
 **Outcomes:**
-
 - **Use existing** - Component is close enough
 - **Create variant** - Extend existing with new state
 - **Create new** - Too different, warrants separate component
@@ -151,7 +133,6 @@
 **Before any components:**
 
 ### 1. Design Tokens
-
 ```
 Design tokens = the DNA of your design system
 
@@ -212,28 +193,23 @@ organisms/
 **See:** `../../workflows/wds-7-design-system/operations/`
 
 ### 1. Initialize Design System
-
 **First component triggers auto-initialization**
-
 - Creates folder structure
 - Creates design-tokens.md
 - Creates component-library-config.md (if Mode C)
 
 ### 2. Create New Component
-
 - Defines component specification
 - Assigns Component ID
 - Documents states and variants
 - Notes where used
 
 ### 3. Add Variant
-
 - Extends existing component
 - Documents variant trigger
 - Updates component spec
 
 ### 4. Update Component
-
 - Modifies existing definition
 - Increments version
 - Documents change rationale
@@ -250,16 +226,13 @@ organisms/
 **Figma:** [Link if Mode B]
 
 ## Purpose
-
 [What job does this component do?]
 
 ## Variants
-
 - variant-name: [When to use]
 - variant-name: [When to use]
 
 ## States
-
 - default
 - hover
 - active
@@ -268,23 +241,19 @@ organisms/
 - error (if applicable)
 
 ## Props/Attributes
-
-| Prop    | Type               | Default | Description  |
-| ------- | ------------------ | ------- | ------------ |
-| size    | sm\|md\|lg         | md      | Button size  |
+| Prop | Type | Default | Description |
+|------|------|---------|-------------|
+| size | sm\|md\|lg | md | Button size |
 | variant | primary\|secondary | primary | Visual style |
 
 ## Styling
-
 [Design tokens or Figma reference]
 
 ## Used In
-
 - [Page name] ([Component purpose in context])
 - [Page name] ([Component purpose in context])
 
 ## Version History
-
 - v1.0.0 (2024-01-01): Initial creation
 ```
 
@@ -312,7 +281,6 @@ User creates page specification
 ```
 
 **Result:**
-
 - Page spec contains references + page-specific content
 - Design System contains component definitions
 - Clean separation maintained
@@ -322,27 +290,19 @@ User creates page specification
 ## Common Mistakes
 
 ### ❌ Creating Library Before Designing
-
 "Let me make 50 components upfront..."
-
 - **Instead:** Design pages, extract components as needed
 
 ### ❌ Over-Abstracting Too Early
-
 "This button might need 10 variants someday..."
-
 - **Instead:** Start simple, add variants when actually needed
 
 ### ❌ Forcing Reuse
-
 "I'll make this work even though it's awkward..."
-
 - **Instead:** Sometimes a new component is better than a forced variant
 
 ### ❌ No Design Tokens
-
 "I'll define colors per component..."
-
 - **Instead:** Tokens first, components second
 
 ---
@@ -369,4 +329,5 @@ Before marking a component "complete":
 
 ---
 
-_Components emerge from real needs. Design systems grow organically._
+*Components emerge from real needs. Design systems grow organically.*
+

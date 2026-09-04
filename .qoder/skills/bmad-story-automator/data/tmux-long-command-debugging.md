@@ -13,7 +13,6 @@
 Tmux sessions spawned via `tmux send-keys` were failing silently when commands exceeded ~1000 characters. Sessions would spawn successfully but the command would never execute, resulting in `stuck/never_active` status.
 
 **Symptoms:**
-
 - Session spawns successfully (tmux session exists)
 - Command appears in terminal output (visible in capture-pane)
 - No child processes running (Claude never starts)
@@ -27,7 +26,6 @@ Tmux sessions spawned via `tmux send-keys` were failing silently when commands e
 **Default tmux terminal dimensions:** 80 columns × 24 rows
 
 When `tmux send-keys` sends a command longer than the terminal width:
-
 1. The command wraps across multiple lines in the terminal buffer
 2. The shell receives the wrapped input as if it were multiple lines
 3. Shell parsing fails or behaves unexpectedly with multi-line wrapped input
@@ -50,7 +48,6 @@ tmux new-session -d -s "$session_name" -x 200 -y 50 -c "$PROJECT_ROOT"
 ```
 
 **Why 200×50:**
-
 - 200 columns handles commands up to ~3000 chars without wrapping
 - 50 rows provides adequate scrollback for monitoring
 - These dimensions don't affect the actual terminal the user might attach to
@@ -62,7 +59,6 @@ tmux new-session -d -s "$session_name" -x 200 -y 50 -c "$PROJECT_ROOT"
 ### 1. Silent Failures are Deceptive
 
 The command appears in the terminal output but never executes. This makes debugging difficult because:
-
 - `tmux capture-pane` shows the command was "sent"
 - No error message is visible
 - The session exists and appears healthy
@@ -72,7 +68,6 @@ The command appears in the terminal output but never executes. This makes debugg
 ### 2. Length Threshold is Approximate
 
 The exact failure point depends on:
-
 - Terminal width (obviously)
 - Command content (special characters, quotes)
 - Shell type (bash vs zsh)

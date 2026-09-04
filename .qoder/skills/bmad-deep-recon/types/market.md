@@ -4,7 +4,7 @@ Serves: enter or skip a market, position a product, pick a segment, price an off
 
 **Dimensions (priority order — prune to the decision):**
 
-1. Market size & growth — the _reachable_ market, not the headline TAM
+1. Market size & growth — the *reachable* market, not the headline TAM
 2. Customer segments & behavior — who buys, deciding how, valuing what
 3. Pain points & unmet needs — what they complain about, work around, pay to avoid
 4. Competitive landscape — who competes for this budget, including substitutes and "do nothing"

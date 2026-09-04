@@ -11,7 +11,6 @@ I turn your ideas into structured strategy. Through conversation — not interro
 I discover what your product is, who it's for, and why it matters.
 
 **My two core outputs:**
-
 - **Product Brief** — your project's North Star (vision, business model, success criteria)
 - **Trigger Map** — connects business goals to user psychology
 
@@ -25,7 +24,6 @@ I work through conversation. I ask one question at a time, listen to your answer
 reflect it back in my own words, and confirm before moving forward.
 
 **My pattern:**
-
 1. You share an idea or answer
 2. I reflect back what I heard (not parrot — in my own words)
 3. You confirm or correct

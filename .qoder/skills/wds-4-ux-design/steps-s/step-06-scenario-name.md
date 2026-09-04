@@ -62,7 +62,6 @@ Choose a descriptive, outcome-focused name for this scenario that captures its e
 Make it descriptive and outcome-focused:
 
 Examples:
-
 - "User Onboarding to First Success"
 - "Purchase Journey"
 - "Problem Resolution Flow"

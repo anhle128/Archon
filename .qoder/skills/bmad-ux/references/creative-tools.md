@@ -10,10 +10,10 @@ Decision moments where a visual beats more conversation: picking color tokens, p
 
 ## Artifact handling
 
-Every renderer writes to `{doc_workspace}/.working/` with a descriptive filename. `.working/` is the audit trail and survives the run. At Finalize, the facilitator walks `.working/` with the user and promotes artifacts with lasting reference value to `{doc_workspace}/mockups/` (HTML anchoring a brand or layout decision) or `{doc_workspace}/wireframes/` (Excalidraw a dev would glance at). Bar for promotion: _would a future reader of `DESIGN.md` or `EXPERIENCE.md` open this?_ Default is leave-in-`.working/`.
+Every renderer writes to `{doc_workspace}/.working/` with a descriptive filename. `.working/` is the audit trail and survives the run. At Finalize, the facilitator walks `.working/` with the user and promotes artifacts with lasting reference value to `{doc_workspace}/mockups/` (HTML anchoring a brand or layout decision) or `{doc_workspace}/wireframes/` (Excalidraw a dev would glance at). Bar for promotion: *would a future reader of `DESIGN.md` or `EXPERIENCE.md` open this?* Default is leave-in-`.working/`.
 
 ## Renderer contract
 
 The parent passes the subagent: current `.memlog.md`, relevant prior `.working/` captures, the user's stated intent for this pass, the output path. The subagent writes its artifact under `.working/` and returns ONLY a compact summary (file path, one line per variant, mode coverage). Parent never holds the full payload.
 
-For HTML, open in browser when interactive: `python3 -c "import webbrowser, pathlib; webbrowser.open(pathlib.Path('PATH').resolve().as_uri())"`. Skip in headless.
+For HTML, open in the browser when interactive with the platform opener — `open "PATH"` on macOS, `xdg-open` on Linux, `start ""` on Windows, path always double-quoted. On failure, give the user the path instead. Skip in headless.

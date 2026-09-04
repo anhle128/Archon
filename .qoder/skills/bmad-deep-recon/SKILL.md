@@ -1,6 +1,6 @@
 ---
 name: bmad-deep-recon
-description: 'Decision-grade research, three ways: draft a deep-research prompt for the user to run in their own tool (ChatGPT, Gemini, Grok, Perplexity, …), process a finished research report — file it, distill a succinct cited summary with metadata that downstream skills consume without reprocessing — or run the research here through web fan-out. Shipped type packs: market, domain, technical, competitive, user-voice, academic-lit — plus a select shape for choose-between decisions and custom types via overrides. Use when the user says "deep recon", "research this", "draft a research prompt", "process this research report", "market research", "domain research", "technical research", "competitor research", "literature review", or "help me choose between".'
+description: 'Research a topic to support a decision, three ways: draft a research prompt for the user to run in their own tool (ChatGPT, Gemini, Grok, Perplexity, …), turn a finished research report into a short summary with cited sources that other skills can use directly, or run the research here with parallel web searches. Built-in research types: market, domain, technical, competitive, user-voice, academic-lit; also supports choosing between candidates, and custom types via overrides. Use when the user says "deep recon", "research this", "draft a research prompt", "process this research report", "market research", "domain research", "technical research", "competitor research", "literature review", or "help me choose between"'
 ---
 
 # BMad Deep Recon
@@ -13,8 +13,8 @@ Three services, freely combined — each detailed in its reference: **Draft** a 
 
 **Epistemics — two standing rules, inherited verbatim by every subagent you spawn:**
 
-1. **Never conclude from training data alone.** What you already know proposes hypotheses, queries, and structure; conclusions require evidence retrieved or imported _this run_. A claim you cannot evidence is stated as an unverified belief or not at all.
-2. **The research firewall.** Project context — briefs, PRDs, code, memory, `{workflow.persistent_facts}` — shapes _what to ask_, never _what is true_. It is inadmissible as evidence: every claim in a research artifact traces to a digest or import file with a source. Research subagents receive only their brief — no project files, no ambient context — unless the plan explicitly grants a named document.
+1. **Never conclude from training data alone.** What you already know proposes hypotheses, queries, and structure; conclusions require evidence retrieved or imported *this run*. A claim you cannot evidence is stated as an unverified belief or not at all.
+2. **The research firewall.** Project context — briefs, PRDs, code, memory, `{workflow.persistent_facts}` — shapes *what to ask*, never *what is true*. It is inadmissible as evidence: every claim in a research artifact traces to a digest or import file with a source. Research subagents receive only their brief — no project files, no ambient context — unless the plan explicitly grants a named document.
 
 ## How you work
 
@@ -37,7 +37,7 @@ Three services, freely combined — each detailed in its reference: **Draft** a 
 
 **Forwarded activation:** if a caller invoked you with a stated intent, research type, or pre-resolved customization fields (the legacy research shims and Mary's menu do), honor them verbatim — skip your own inference for those values and resolve only the rest.
 
-1. Resolve customization: `uv run {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --key workflow` (on failure read `{skill-root}/customize.toml`, use defaults). Run `{workflow.activation_steps_prepend}`, then `{workflow.activation_steps_append}`.
+1. Resolve customization: `uv run {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --project-root {project-root} --key workflow` (on failure read `{skill-root}/customize.toml`, use defaults). Run `{workflow.activation_steps_prepend}`, then `{workflow.activation_steps_append}`.
 2. Resolve config: `uv run {project-root}/_bmad/scripts/resolve_config.py --project-root {project-root}`. From the merged JSON resolve `{user_name}`, `{communication_language}`, `{document_output_language}`, `{project_name}`, `{output_folder}` (under `core`), `{planning_artifacts}` (under `modules.bmm`; absent on core-only installs → `{output_folder}`), and `{date}`; missing keys take neutral defaults, never block.
 3. Headless (no interactive user) → see `## Headless Mode`. Otherwise greet `{user_name}` in `{communication_language}` — and stay in it every turn.
 4. Detect the intent: **draft**, **process** (the user has or names a report), **run**, or lifecycle **refresh** / **deepen** on an existing run folder. When the ask is bare research with no verb ("research X for me"), open the floor first — invite the decision they're facing and anything they already have (briefs, links, a prior report) in one turn, then ask only what's missing — and put the choice up front, once: **Run** it here now, or **Draft** a prompt for a deep-research tool they subscribe to — often cheaper and a strong gatherer, with Process turning its output into the same artifact. State the trade honestly (tokens and minutes here vs. one manual round-trip there); their call, remembered for the session.
@@ -55,12 +55,12 @@ Orthogonal to type is the **decision shape**: **explore** (the default — under
 
 Route on the detected intent and load only what it names. Every intent shares the run-folder workspace shape — `brief.md`, `imports/`, `digests/`, `research.md`, `.memlog.md` — and ends per `references/finalize.md`.
 
-| Intent           | What it does                                                                                | Load                                                                               |
-| ---------------- | ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| Draft            | Compose a deep-research prompt for the user's own tool, carrying the pack's craft           | `references/draft.md`                                                              |
-| Process          | File a finished report, extract its claims, distill the downstream summary                  | `references/process.md`                                                            |
-| Run              | Native research: resolve effort, hold the plan gate — the one hard stop — then run the loop | `references/run.md`, then `references/verification.md` + `references/synthesis.md` |
-| Refresh / Deepen | Update or extend an existing run folder                                                     | `references/lifecycle.md`                                                          |
+| Intent | What it does | Load |
+| --- | --- | --- |
+| Draft | Compose a deep-research prompt for the user's own tool, carrying the pack's craft | `references/draft.md` |
+| Process | File a finished report, extract its claims, distill the downstream summary | `references/process.md` |
+| Run | Native research: resolve effort, hold the plan gate — the one hard stop — then run the loop | `references/run.md`, then `references/verification.md` + `references/synthesis.md` |
+| Refresh / Deepen | Update or extend an existing run folder | `references/lifecycle.md` |
 
 ## Headless Mode
 
@@ -73,7 +73,7 @@ When invoked headless, do not ask. Bare research defaults to **run**; a named re
   "type": "market",
   "report": "{doc_workspace}/research.md",
   "memlog": "{doc_workspace}/.memlog.md",
-  "claims": { "verified": 12, "unverified": 3, "overturned": 0 },
+  "claims": {"verified": 12, "unverified": 3, "overturned": 0},
   "open_questions": [],
   "external_handoffs": []
 }

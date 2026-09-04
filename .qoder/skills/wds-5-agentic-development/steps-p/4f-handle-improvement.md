@@ -66,7 +66,6 @@ Acknowledge the suggestion, describe current approach, proposed improvement, and
 ### 3. Update Story File with Improvement
 
 Add to story file `stories/[View].[N]-[section-name].md`:
-
 - Original: What it was
 - Improved to: What it is now
 - Reason: Why it is better
@@ -91,12 +90,10 @@ After re-presenting, route back to Step 4d for user feedback.
 Display: "**Select an Option:** [C] Continue to Step 4d: Present for Testing (re-test)"
 
 #### Menu Handling Logic:
-
 - IF C: Update design log, then load, read entire file, then execute `./4d-present-for-testing.md`
 - IF Any other comments or queries: help user respond then [Redisplay Menu Options]
 
 #### EXECUTION RULES:
-
 - ALWAYS halt and wait for user input after presenting menu
 - ONLY proceed to next step when user selects 'C'
 - User can chat or ask questions - always respond and then redisplay menu options
@@ -110,7 +107,6 @@ ONLY WHEN the improvement is implemented and documented will you then loop back 
 ## 🚨 SYSTEM SUCCESS/FAILURE METRICS
 
 ### ✅ SUCCESS:
-
 - Improvement acknowledged and understood
 - Implementation enhances UX or code quality
 - Story file updated with improvement details
@@ -118,7 +114,6 @@ ONLY WHEN the improvement is implemented and documented will you then loop back 
 - Re-presented for testing
 
 ### ❌ SYSTEM FAILURE:
-
 - Rejecting valid improvement without explanation
 - Not documenting the improvement in story file
 - Not asking about specification update

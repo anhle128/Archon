@@ -99,19 +99,16 @@ For each component in TS-XXX.yaml `design_system_checks` section:
 ### 5. Accessibility Tests
 
 #### Screen Reader Testing
-
 - Enable VoiceOver (iOS) or TalkBack (Android)
 - Navigate through flow using only screen reader
 - Check button labels, form field labels, error announcements
 
 #### Color Contrast Testing
-
 - Use contrast checker tool
 - Body text: 4.5:1 minimum (WCAG AA)
 - Large text: 3:1 minimum
 
 #### Touch Target Testing
-
 - Measure all interactive elements
 - Minimum: 44x44px
 - Minimum 8px spacing between targets
@@ -119,7 +116,6 @@ For each component in TS-XXX.yaml `design_system_checks` section:
 ### 6. Compile Overall Summary
 
 After all tests complete, create overall test summary:
-
 - Overall result (PASS/FAIL)
 - Test coverage percentages
 - Issues by severity
@@ -142,12 +138,10 @@ After all tests complete, create overall test summary:
 Display: "**Select an Option:** [C] Continue to Step 3: Document Issues"
 
 #### Menu Handling Logic:
-
 - IF C: Update design log, then load, read entire file, then execute {nextStepFile}
 - IF Any other comments or queries: help user respond then [Redisplay Menu Options]
 
 #### EXECUTION RULES:
-
 - ALWAYS halt and wait for user input after presenting menu
 - ONLY proceed to next step when user selects 'C'
 - User can chat or ask questions - always respond and then redisplay menu options
@@ -161,7 +155,6 @@ ONLY WHEN all test categories are executed and results documented will you then 
 ## 🚨 SYSTEM SUCCESS/FAILURE METRICS
 
 ### ✅ SUCCESS:
-
 - All happy path tests executed
 - All error state tests executed
 - All edge case tests executed
@@ -172,7 +165,6 @@ ONLY WHEN all test categories are executed and results documented will you then 
 - Screen recordings saved
 
 ### ❌ SYSTEM FAILURE:
-
 - Skipping test categories
 - Not documenting results
 - No screenshots for issues

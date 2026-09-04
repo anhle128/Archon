@@ -112,12 +112,10 @@ output/
 Display: "**Select an Option:** [C] Continue to Step 4: Extract Design System"
 
 #### Menu Handling Logic:
-
 - IF C: Update design log, then load, read entire file, then execute {nextStepFile}
 - IF Any other comments or queries: help user respond then [Redisplay Menu Options]
 
 #### EXECUTION RULES:
-
 - ALWAYS halt and wait for user input after presenting menu
 - ONLY proceed to next step when user selects 'C'
 - User can chat or ask questions - always respond and then redisplay menu options
@@ -131,7 +129,6 @@ ONLY WHEN all page specifications and scenario outlines are generated and saved 
 ## 🚨 SYSTEM SUCCESS/FAILURE METRICS
 
 ### ✅ SUCCESS:
-
 - Pages prioritized and ordered
 - Page specification created for each key page
 - Layout structure documented
@@ -141,7 +138,6 @@ ONLY WHEN all page specifications and scenario outlines are generated and saved 
 - Specs saved to output folder
 
 ### ❌ SYSTEM FAILURE:
-
 - Beginning design system extraction before specs are complete
 - Missing pages in specifications
 - Component list does not match inventory

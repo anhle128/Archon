@@ -63,7 +63,6 @@ Create an ordered, incremental implementation plan with verification points.
 ### 2. Determine If Feature Flags Are Needed
 
 Use feature flags when:
-
 - The change is large enough that partial deployment is risky
 - The feature needs to be toggled per environment or per user
 - Rollback needs to be instant (without redeploying)
@@ -73,13 +72,11 @@ If not needed, keep it simple — branches and PRs are sufficient.
 ### 3. Plan Incremental Commits
 
 Each commit should:
-
 - Be a complete, working unit (system stays functional after each commit)
 - Be small enough to review and understand
 - Have a clear purpose described in its message
 
 Example plan structure:
-
 ```
 Commit 1: Add new data model (no UI, no routes)
 Commit 2: Add API endpoint for new feature (behind feature flag)
@@ -91,7 +88,6 @@ Commit 5: Enable feature, update tests
 ### 4. Define Verification Points
 
 Between steps, define what to check:
-
 - After commit 1: "Run migrations, verify existing queries still work"
 - After commit 3: "Render component in isolation, verify it matches spec"
 - After commit 4: "Full regression on existing page, verify new feature appears"
@@ -116,12 +112,10 @@ Between steps, define what to check:
 Display: "**Select an Option:** [C] Continue to Step 4: Implement"
 
 #### Menu Handling Logic:
-
 - IF C: Update design log, then load, read entire file, then execute {nextStepFile}
 - IF Any other comments or queries: help user respond then [Redisplay Menu Options]
 
 #### EXECUTION RULES:
-
 - ALWAYS halt and wait for user input after presenting menu
 - ONLY proceed to next step when user selects 'C'
 - User can chat or ask questions - always respond and then redisplay menu options
@@ -135,7 +129,6 @@ ONLY WHEN the implementation plan is complete with ordered steps, verification p
 ## 🚨 SYSTEM SUCCESS/FAILURE METRICS
 
 ### ✅ SUCCESS:
-
 - Changes ordered by dependency
 - Feature flag decision made and documented
 - Incremental commits planned (each leaves system working)
@@ -144,7 +137,6 @@ ONLY WHEN the implementation plan is complete with ordered steps, verification p
 - Implementation plan written to dialog file
 
 ### ❌ SYSTEM FAILURE:
-
 - Beginning implementation without a complete plan
 - Planning commits that leave the system in a broken state
 - Not defining verification points

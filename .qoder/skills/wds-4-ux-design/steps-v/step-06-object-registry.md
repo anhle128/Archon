@@ -60,7 +60,6 @@ Verify that page specification includes complete Object Registry with 100% cover
 Check for "## Object Registry" header. Verify introduction paragraph exists. Extract all Object IDs from Page Sections and compare against Object Registry table(s).
 
 Validate:
-
 - "## Object Registry" header present
 - Introduction paragraph explaining registry purpose
 - Master Object List table(s) with all Object IDs
@@ -70,7 +69,6 @@ Validate:
 ### 2. Calculate Coverage
 
 Calculate coverage percentage:
-
 - Identify missing Object IDs (in sections but not in registry)
 - Identify orphaned Object IDs (in registry but not in sections)
 

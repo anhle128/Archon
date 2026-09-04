@@ -19,17 +19,14 @@ Before showing agent configuration prompts, you MUST have:
 **IMPORTANT:** This prompt MUST reference the actual complexity data. Do not show generic prompts.
 
 **IMPORTANT:** Select the correct table variant based on `skip_automate`:
-
 - If `skip_automate` is **false**: show the **WITH auto** table
 - If `skip_automate` is **true**: show the **WITHOUT auto** table
 
 **IMPORTANT:** Before displaying options, check for saved presets:
-
 ```bash
 presets_result=$("{buildStateDoc}" agent-config list --file "{agentConfigPresets}")
 preset_count=$(echo "$presets_result" | jq -r '.count')
 ```
-
 - If `preset_count > 0`: include **[L]oad saved** option in the menu
 - If `preset_count == 0`: omit [L] option (show only S/U/C)
 
@@ -108,7 +105,6 @@ presets_result=$("{buildStateDoc}" agent-config list --file "{agentConfigPresets
 ```
 
 Display:
-
 ```
 **Saved Agent Configurations:**
 
@@ -124,22 +120,18 @@ Enter preset number to load, or [B]ack to return to options:
 **Wait.**
 
 **IF number selected:**
-
 ```bash
 preset_name="{selected preset name}"
 loaded=$("{buildStateDoc}" agent-config load --file "{agentConfigPresets}" --name "$preset_name")
 agent_config_json=$(echo "$loaded" | jq -r '.config')
 ```
-
 Display loaded config summary, then proceed with this as `agent_config_json`.
 
 **IF D selected:**
 Ask which preset number to delete, then:
-
 ```bash
 "{buildStateDoc}" agent-config delete --file "{agentConfigPresets}" --name "$delete_name"
 ```
-
 Redisplay this prompt (or return to main options if no presets remain).
 
 **IF B selected:** Return to main S/U/C/L menu.
@@ -159,11 +151,9 @@ Enter a name to save (e.g., `all-claude`, `codex-heavy`) or [N]o to skip:
 **Wait.**
 
 **IF name provided:**
-
 ```bash
 "{buildStateDoc}" agent-config save --file "{agentConfigPresets}" --name "$save_name" --config-json "$agent_config_json"
 ```
-
 Display: "Configuration saved as **{save_name}**."
 
 **IF N or empty:** Skip, continue.

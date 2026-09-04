@@ -95,9 +95,7 @@ expect(error).toBeInstanceOf(WebhookTimeoutError);
 expect(error.totalReceived).toBeGreaterThanOrEqual(1);
 
 // The movie.created webhook that did arrive is visible in the error
-const createdWebhook = error.receivedWebhooks.find(
-  w => (w.body as { data: { id: number } }).data.id === movieId
-);
+const createdWebhook = error.receivedWebhooks.find((w) => (w.body as { data: { id: number } }).data.id === movieId);
 expect(createdWebhook).toBeDefined();
 expect((createdWebhook!.body as { event: string }).event).toBe('movie.created');
 ```

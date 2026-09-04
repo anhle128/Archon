@@ -15,7 +15,6 @@
 ### 1. Load Strategic Context
 
 **Ask yourself:**
-
 - What's in the Trigger Map for this page/scenario?
 - What does the Product Brief say?
 
@@ -26,12 +25,10 @@
 ### 2. Connect to Business Goals
 
 **Every major design choice should answer:**
-
 - Which business goal does this serve?
 - How does this move the needle on our success metrics?
 
 **Example:**
-
 - ❌ "Let's make this button blue because it's pretty"
 - ✅ "This CTA should be prominent because it serves the 'Convert Problem Aware users' goal"
 
@@ -40,12 +37,10 @@
 ### 3. Identify User Driving Forces
 
 **From the Trigger Map, ask:**
-
 - What positive driving forces should we trigger? (wishes, desires, aspirations)
 - What negative driving forces should we address? (fears, frustrations, anxieties)
 
 **Example:**
-
 - User wants to "feel like an industry expert"
 - User fears "looking unprofessional to clients"
 - Design should make them feel capable, not overwhelmed
@@ -63,7 +58,6 @@
 5. **Most Aware** - Ready to buy/use → Make it easy, reinforce decision
 
 **Design implications:**
-
 - Unaware users need more context, education
 - Most Aware users need less explanation, more action
 
@@ -78,7 +72,6 @@
 - **WHAT** - Features, specifics, details (last)
 
 **Example:**
-
 ```
 Hero Section:
 ├── Headline (WHY): "Stop losing clients to competitors with better proposals"
@@ -103,7 +96,6 @@ Before finalizing any design:
 ## When You're Stuck
 
 **If you can't connect a design choice to strategy:**
-
 1. It might not be needed (remove it)
 2. You need more strategic context (ask for Trigger Map)
 3. There's a better alternative (explore options)
@@ -120,4 +112,5 @@ Before finalizing any design:
 
 ---
 
-_Strategic design is what makes WDS different. Every pixel has a purpose._
+*Strategic design is what makes WDS different. Every pixel has a purpose.*
+

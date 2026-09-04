@@ -48,6 +48,10 @@ export {
 export { detectForge } from './forge';
 export type { ForgeType, ForgeInfo } from './forge';
 
+// Working-tree status
+export { getGitStatus } from './status';
+export type { GitStatusEntry, GitStatusListResult } from './status';
+
 // Repository operations
 export {
   findRepoRoot,

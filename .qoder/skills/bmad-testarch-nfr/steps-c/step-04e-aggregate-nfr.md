@@ -28,12 +28,42 @@ Read outputs from 4 parallel NFR evidence audit subagents, calculate overall ris
 ### 1. Read All Subagent Outputs
 
 ```javascript
-const domains = ['security', 'performance', 'reliability', 'scalability'];
+const domains = ['security', 'performance', 'reliability', 'maintainability'];
 const assessments = {};
 
-domains.forEach(domain => {
+domains.forEach((domain) => {
   const outputPath = `/tmp/tea-nfr-${domain}-{{timestamp}}.json`;
   assessments[domain] = JSON.parse(fs.readFileSync(outputPath, 'utf8'));
+});
+```
+
+---
+
+### 1a. Enforce the Undefined-Threshold Default
+
+Step 2 (Define Thresholds) marks a category **UNKNOWN** when no threshold was
+found in any source, and states the plan to report **CONCERNS** for it (see
+`{skill-root}/steps-c/nfr-status-definitions.md`). This is where that plan is
+checked, not just stated: a worker cannot silently report PASS for a domain
+whose threshold was never established.
+
+```javascript
+const domainThresholdKnown = (domain) => {
+  const threshold = subagentContext.nfr_thresholds?.[domain];
+  return threshold !== undefined && threshold !== 'UNKNOWN';
+};
+
+domains.forEach((domain) => {
+  if (domainThresholdKnown(domain)) return;
+  assessments[domain].findings.forEach((finding) => {
+    if (finding.status === 'PASS') {
+      finding.status = 'CONCERNS';
+      finding.description = `${finding.description} (downgraded from PASS: threshold was UNKNOWN at Step 2; an unmeasured target cannot pass).`;
+    }
+  });
+  Object.entries(assessments[domain].compliance || {}).forEach(([standard, status]) => {
+    if (status === 'PASS') assessments[domain].compliance[standard] = 'CONCERNS';
+  });
 });
 ```
 
@@ -45,9 +75,9 @@ domains.forEach(domain => {
 
 ```javascript
 const riskLevels = { HIGH: 3, MEDIUM: 2, LOW: 1, NONE: 0 };
-const domainRisks = domains.map(d => assessments[d].risk_level);
-const maxRiskValue = Math.max(...domainRisks.map(r => riskLevels[r]));
-const overallRisk = Object.keys(riskLevels).find(k => riskLevels[k] === maxRiskValue);
+const domainRisks = domains.map((d) => assessments[d].risk_level);
+const maxRiskValue = Math.max(...domainRisks.map((r) => riskLevels[r]));
+const overallRisk = Object.keys(riskLevels).find((k) => riskLevels[k] === maxRiskValue);
 ```
 
 **Risk assessment:**
@@ -63,7 +93,7 @@ const overallRisk = Object.keys(riskLevels).find(k => riskLevels[k] === maxRiskV
 ```javascript
 const allCompliance = {};
 
-domains.forEach(domain => {
+domains.forEach((domain) => {
   const compliance = assessments[domain].compliance;
   Object.entries(compliance).forEach(([standard, status]) => {
     if (!allCompliance[standard]) {
@@ -76,8 +106,8 @@ domains.forEach(domain => {
 // Determine overall compliance per standard
 const complianceSummary = {};
 Object.entries(allCompliance).forEach(([standard, statuses]) => {
-  const hasFail = statuses.some(s => s.status === 'FAIL');
-  const hasPartial = statuses.some(s => s.status === 'PARTIAL' || s.status === 'CONCERN');
+  const hasFail = statuses.some((s) => s.status === 'FAIL');
+  const hasPartial = statuses.some((s) => s.status === 'PARTIAL' || s.status === 'CONCERNS');
 
   complianceSummary[standard] = hasFail ? 'FAIL' : hasPartial ? 'PARTIAL' : 'PASS';
 });
@@ -92,20 +122,20 @@ Object.entries(allCompliance).forEach(([standard, statuses]) => {
 ```javascript
 const crossDomainRisks = [];
 
-// Example: Performance + Scalability issue
-const perfConcerns = assessments.performance.findings.filter(f => f.status !== 'PASS');
-const scaleConcerns = assessments.scalability.findings.filter(f => f.status !== 'PASS');
-if (perfConcerns.length > 0 && scaleConcerns.length > 0) {
+// Example: Reliability + Maintainability issue
+const reliabilityFindingConcerns = assessments.reliability.findings.filter((f) => f.status !== 'PASS');
+const maintainabilityConcerns = assessments.maintainability.findings.filter((f) => f.status !== 'PASS');
+if (reliabilityFindingConcerns.length > 0 && maintainabilityConcerns.length > 0) {
   crossDomainRisks.push({
-    domains: ['performance', 'scalability'],
-    description: 'Performance issues may worsen under scale',
+    domains: ['reliability', 'maintainability'],
+    description: 'Low test coverage or missing observability may hide reliability regressions',
     impact: 'HIGH',
   });
 }
 
 // Example: Security + Reliability issue
-const securityFails = assessments.security.findings.filter(f => f.status === 'FAIL');
-const reliabilityConcerns = assessments.reliability.findings.filter(f => f.status !== 'PASS');
+const securityFails = assessments.security.findings.filter((f) => f.status === 'FAIL');
+const reliabilityConcerns = assessments.reliability.findings.filter((f) => f.status !== 'PASS');
 if (securityFails.length > 0 && reliabilityConcerns.length > 0) {
   crossDomainRisks.push({
     domains: ['security', 'reliability'],
@@ -120,12 +150,12 @@ if (securityFails.length > 0 && reliabilityConcerns.length > 0) {
 ### 5. Aggregate Priority Actions
 
 ```javascript
-const allPriorityActions = domains.flatMap(domain =>
-  assessments[domain].priority_actions.map(action => ({
+const allPriorityActions = domains.flatMap((domain) =>
+  assessments[domain].priority_actions.map((action) => ({
     domain,
     action,
     urgency: assessments[domain].risk_level === 'HIGH' ? 'URGENT' : 'NORMAL',
-  }))
+  })),
 );
 
 // Sort by urgency
@@ -170,7 +200,7 @@ const executiveSummary = {
     security: assessments.security.risk_level,
     performance: assessments.performance.risk_level,
     reliability: assessments.reliability.risk_level,
-    scalability: assessments.scalability.risk_level,
+    maintainability: assessments.maintainability.risk_level,
   },
 
   subagent_execution: subagentExecutionLabel,
@@ -178,11 +208,7 @@ const executiveSummary = {
 };
 
 // Save for Step 5 (report generation)
-fs.writeFileSync(
-  '/tmp/tea-nfr-summary-{{timestamp}}.json',
-  JSON.stringify(executiveSummary, null, 2),
-  'utf8'
-);
+fs.writeFileSync('/tmp/tea-nfr-summary-{{timestamp}}.json', JSON.stringify(executiveSummary, null, 2), 'utf8');
 ```
 
 ---
@@ -198,7 +224,7 @@ fs.writeFileSync(
 - Security:      {security_risk}
 - Performance:   {performance_risk}
 - Reliability:   {reliability_risk}
-- Scalability:   {scalability_risk}
+- Maintainability: {maintainability_risk}
 
 ✅ Compliance Summary:
 {list standards with PASS/PARTIAL/FAIL}

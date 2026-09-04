@@ -15,14 +15,12 @@
 ### Features
 
 **Component-Level Precision:**
-
 - Select specific components by Object ID
 - Inject individual components or sections
 - Batch component extraction
 - Granular control over what gets refined
 
 **Conversion Capabilities:**
-
 - HTML structure → Figma frames
 - CSS styles → Figma styling
 - Layout (Flexbox/Grid) → Auto Layout
@@ -31,7 +29,6 @@
 - Spacing → Padding/gaps
 
 **Preservation:**
-
 - Object IDs maintained in layer names
 - Element hierarchy preserved
 - Component boundaries respected
@@ -40,7 +37,6 @@
 ### How to Use
 
 **1. Prepare Prototype**
-
 ```
 Ensure your HTML prototype:
 - Uses semantic HTML elements
@@ -50,7 +46,6 @@ Ensure your HTML prototype:
 ```
 
 **2. Inject via MCP Server**
-
 ```bash
 # Single component
 wds figma inject btn-login-submit --file abc123
@@ -63,7 +58,6 @@ wds figma inject-section login-form --file abc123
 ```
 
 **3. Verify in Figma**
-
 ```
 - Open target Figma file
 - Navigate to injection page
@@ -72,7 +66,6 @@ wds figma inject-section login-form --file abc123
 ```
 
 **4. Read Refined Components Back**
-
 ```bash
 # After designer refines in Figma
 wds figma read btn-login-submit --file abc123 --update-design-system
@@ -102,14 +95,12 @@ wds figma read btn-login-submit --file abc123 --update-design-system
 ### When to Use html.to.design
 
 **Use when:**
-
 - MCP server not configured
 - Need to extract entire page at once
 - Quick one-off conversion needed
 - Exploring design possibilities
 
 **Don't use when:**
-
 - MCP server available (use MCP instead)
 - Need component-level precision
 - Require Object ID traceability
@@ -118,7 +109,6 @@ wds figma read btn-login-submit --file abc123 --update-design-system
 ### How to Use
 
 **1. Prepare Prototype**
-
 ```
 Ensure your HTML prototype:
 - Uses semantic HTML elements
@@ -127,7 +117,6 @@ Ensure your HTML prototype:
 ```
 
 **2. Upload to html.to.design**
-
 ```
 1. Go to https://html.to.design
 2. Upload HTML file
@@ -136,7 +125,6 @@ Ensure your HTML prototype:
 ```
 
 **3. Import to Figma**
-
 ```
 1. Download converted Figma file
 2. Open in Figma
@@ -145,7 +133,6 @@ Ensure your HTML prototype:
 ```
 
 **Limitations:**
-
 - No automatic Object ID preservation
 - Entire page extraction (less precise)
 - Manual token extraction required
@@ -154,7 +141,6 @@ Ensure your HTML prototype:
 ### Best Practices
 
 **DO ✅**
-
 - Use semantic HTML (header, nav, main, section, article)
 - Apply consistent class naming
 - Use Flexbox/Grid for layouts
@@ -163,7 +149,6 @@ Ensure your HTML prototype:
 - Test prototype before extracting
 
 **DON'T ❌**
-
 - Use complex CSS positioning (absolute, fixed)
 - Rely on JavaScript-generated content
 - Use inline styles excessively
@@ -174,7 +159,6 @@ Ensure your HTML prototype:
 ### Limitations
 
 **What Works Well:**
-
 - Standard layouts (header, content, footer)
 - Flexbox and Grid layouts
 - Text content and typography
@@ -183,7 +167,6 @@ Ensure your HTML prototype:
 - Component-based structures
 
 **What May Need Manual Adjustment:**
-
 - Complex animations
 - JavaScript-driven interactions
 - Dynamic content
@@ -194,7 +177,6 @@ Ensure your HTML prototype:
 ### Tips for Better Extraction
 
 **1. Simplify Structure**
-
 ```html
 <!-- Before: Complex nesting -->
 <div class="wrapper">
@@ -212,7 +194,6 @@ Ensure your HTML prototype:
 ```
 
 **2. Use Flexbox/Grid**
-
 ```css
 /* Preferred: Flexbox */
 .container {
@@ -230,14 +211,14 @@ Ensure your HTML prototype:
 ```
 
 **3. Include Object IDs**
-
 ```html
 <!-- Good: Object ID for traceability -->
-<button data-object-id="btn-login-submit" class="btn-primary">Log In</button>
+<button data-object-id="btn-login-submit" class="btn-primary">
+  Log In
+</button>
 ```
 
 **4. Clean CSS**
-
 ```css
 /* Preferred: Token-based */
 .button {
@@ -262,14 +243,12 @@ Ensure your HTML prototype:
 
 **Website:** <https://nanobanana.com>
 
-**Use Cases in WDS:**
-
+**Use Cases in WDS:** 
 1. Create visual design assets and explore design concepts
 2. Convert sketches/specifications to visual designs (images or code)
 3. Generate design inspiration and placeholder assets
 
 **Output Formats:**
-
 - Images (visual designs, graphics)
 - Code snippets (HTML/CSS/React)
 
@@ -278,7 +257,6 @@ Ensure your HTML prototype:
 ### Features
 
 **Asset Creation Capabilities:**
-
 - Visual design generation
 - Design inspiration and variations
 - Custom graphics and icons
@@ -289,7 +267,6 @@ Ensure your HTML prototype:
 ### Integration with WDS
 
 **Workflow:**
-
 ```
 Design Concept
     → NanoBanana (create assets/inspiration)
@@ -300,7 +277,6 @@ Design Concept
 ```
 
 **When to Use:**
-
 - Need visual design inspiration
 - Creating custom graphics/assets
 - Exploring design variations
@@ -309,7 +285,6 @@ Design Concept
 - Brand identity exploration
 
 **When to Skip:**
-
 - Have existing design assets
 - Working with established brand
 - Simple text/layout designs
@@ -319,7 +294,6 @@ Design Concept
 ### Best Practices
 
 **DO ✅**
-
 - Use for creative exploration
 - Generate multiple variations
 - Refine AI-generated assets
@@ -328,7 +302,6 @@ Design Concept
 - Document asset sources
 
 **DON'T ❌**
-
 - Replace human design thinking
 - Skip refinement process
 - Ignore brand guidelines
@@ -349,30 +322,25 @@ Design Concept
 HTML `<area>` elements within `<map>` tags that define clickable regions on images:
 
 ```html
-<img src="prototype-screenshot.png" usemap="#prototype-map" alt="Prototype" />
+<img src="prototype-screenshot.png" usemap="#prototype-map" alt="Prototype">
 
 <map name="prototype-map">
-  <area
-    shape="rect"
-    coords="100,50,300,150"
-    data-object-id="btn-login"
-    alt="Login Button"
-    href="#login"
-  />
-  <area
-    shape="rect"
-    coords="100,200,300,250"
-    data-object-id="link-signup"
-    alt="Sign Up Link"
-    href="#signup"
-  />
+  <area shape="rect" 
+        coords="100,50,300,150" 
+        data-object-id="btn-login"
+        alt="Login Button"
+        href="#login">
+  <area shape="rect" 
+        coords="100,200,300,250" 
+        data-object-id="link-signup"
+        alt="Sign Up Link"
+        href="#signup">
 </map>
 ```
 
 ### When to Use Area Tags
 
 **Use When:**
-
 - Working with image-based prototypes
 - Need precise click mapping
 - Complex UI with overlapping elements
@@ -380,7 +348,6 @@ HTML `<area>` elements within `<map>` tags that define clickable regions on imag
 - Testing click regions
 
 **Don't Use When:**
-
 - HTML elements are clickable directly
 - Simple button/link interactions
 - Fully interactive prototype exists
@@ -402,7 +369,6 @@ document.querySelectorAll('area').forEach(area => {
 ### Creating Area Tags
 
 **1. Get Coordinates**
-
 ```
 Use image editor or browser dev tools:
 - Top-left corner: (x1, y1)
@@ -411,21 +377,17 @@ Use image editor or browser dev tools:
 ```
 
 **2. Define Area**
-
 ```html
-<area
-  shape="rect"
-  coords="x1,y1,x2,y2"
-  data-object-id="unique-id"
-  alt="Description"
-  href="#target"
-/>
+<area shape="rect" 
+      coords="x1,y1,x2,y2"
+      data-object-id="unique-id"
+      alt="Description"
+      href="#target">
 ```
 
 **3. Link to Map**
-
 ```html
-<img src="image.png" usemap="#mapname" />
+<img src="image.png" usemap="#mapname">
 <map name="mapname">
   <!-- area tags here -->
 </map>
@@ -434,7 +396,6 @@ Use image editor or browser dev tools:
 ### Best Practices
 
 **DO ✅**
-
 - Include Object IDs in data attributes
 - Provide descriptive alt text
 - Test all clickable regions
@@ -442,7 +403,6 @@ Use image editor or browser dev tools:
 - Use for image-based prototypes
 
 **DON'T ❌**
-
 - Use for fully interactive HTML prototypes
 - Forget accessibility considerations
 - Overlap areas without purpose
@@ -452,24 +412,20 @@ Use image editor or browser dev tools:
 ### Accessibility Considerations
 
 Area tags have limitations:
-
 - Not keyboard accessible by default
 - Screen readers may not announce properly
 - Better to use actual HTML elements when possible
 
 **Workaround:**
-
 ```html
 <!-- Add keyboard support -->
-<area
-  shape="rect"
-  coords="100,50,300,150"
-  data-object-id="btn-login"
-  alt="Login Button"
-  href="#login"
-  tabindex="0"
-  role="button"
-/>
+<area shape="rect" 
+      coords="100,50,300,150"
+      data-object-id="btn-login"
+      alt="Login Button"
+      href="#login"
+      tabindex="0"
+      role="button">
 ```
 
 ---
@@ -483,7 +439,6 @@ Area tags have limitations:
 ### Features
 
 **Object ID Extraction:**
-
 - Hold Shift + Click to copy Object IDs
 - Visual highlights when Shift held
 - Tooltip display on hover
@@ -491,7 +446,6 @@ Area tags have limitations:
 - Form field protection
 
 **Area Tag Extraction:**
-
 - Detect area tags in prototype
 - Extract coordinates
 - Map to Object IDs
@@ -500,20 +454,17 @@ Area tags have limitations:
 ### Usage
 
 **1. Include in Prototype**
-
 ```html
 <script src="shared/dev-mode.js"></script>
 ```
 
 **2. Activate Dev Mode**
-
 ```
 - Click "Dev Mode" button, or
 - Press Ctrl+E (Cmd+E on Mac)
 ```
 
 **3. Extract Object IDs**
-
 ```
 - Hold Shift
 - Click on element
@@ -521,7 +472,6 @@ Area tags have limitations:
 ```
 
 **4. Extract Area Coordinates**
-
 ```
 - Dev mode detects area tags
 - Displays coordinates
@@ -531,7 +481,6 @@ Area tags have limitations:
 ### Integration with html.to.design
 
 **Workflow:**
-
 ```
 1. Create prototype with Object IDs
 2. Use dev mode to verify Object IDs
@@ -544,13 +493,13 @@ Area tags have limitations:
 
 ## Tool Comparison
 
-| Tool               | Category          | Primary Use                         | Input            | Output           | WDS Use Case                                     |
-| ------------------ | ----------------- | ----------------------------------- | ---------------- | ---------------- | ------------------------------------------------ |
-| **MCP Server**     | Figma Integration | Automated sync                      | HTML + Object ID | Figma components | Precise refinement (PRIMARY)                     |
-| **html.to.design** | HTML → Figma      | Full-page conversion                | HTML/CSS         | Figma file       | Fallback method (OPTIONAL)                       |
-| **NanoBanana**     | AI Design         | Asset creation + Sketch envisioning | Text/Sketch/Spec | Images or Code   | Early exploration OR sketch-to-design (OPTIONAL) |
-| **Area Tags**      | Region mapping    | Clickable regions                   | Image + coords   | Clickable map    | Image prototypes                                 |
-| **Dev Mode**       | ID extraction     | Object ID tracking                  | Prototype        | Object IDs       | Traceability                                     |
+| Tool | Category | Primary Use | Input | Output | WDS Use Case |
+|------|----------|-------------|-------|--------|--------------|
+| **MCP Server** | Figma Integration | Automated sync | HTML + Object ID | Figma components | Precise refinement (PRIMARY) |
+| **html.to.design** | HTML → Figma | Full-page conversion | HTML/CSS | Figma file | Fallback method (OPTIONAL) |
+| **NanoBanana** | AI Design | Asset creation + Sketch envisioning | Text/Sketch/Spec | Images or Code | Early exploration OR sketch-to-design (OPTIONAL) |
+| **Area Tags** | Region mapping | Clickable regions | Image + coords | Clickable map | Image prototypes |
+| **Dev Mode** | ID extraction | Object ID tracking | Prototype | Object IDs | Traceability |
 
 ---
 
@@ -571,7 +520,6 @@ Area tags have limitations:
 ```
 
 **Advantages:**
-
 - Component-level precision
 - Object ID traceability maintained
 - Automated design system updates
@@ -611,7 +559,6 @@ Area tags have limitations:
 ```
 
 **Use NanoBanana for:**
-
 - Creating custom graphics/icons
 - Generating design inspiration
 - Exploring visual concepts
@@ -636,24 +583,20 @@ Area tags have limitations:
 ## Cost Considerations
 
 ### html.to.design
-
 - Free tier available
 - Paid plans for advanced features
 - Check current pricing at website
 
 ### NanoBanana
-
 - Pricing varies by usage
 - Check current pricing at website
 - Consider cost vs time savings
 
 ### Area Tags
-
 - Free (standard HTML)
 - No additional cost
 
 ### Dev Mode
-
 - Free (included in WDS)
 - No additional cost
 
@@ -701,22 +644,18 @@ Area tags have limitations:
 ## Resources
 
 **html.to.design:**
-
 - Website: <https://html.to.design>
 - Documentation: Check website for latest docs
 
 **NanoBanana:**
-
 - Website: <https://nanobanana.com>
 - Documentation: Check website for latest docs
 
 **HTML Area Tags:**
-
 - MDN Reference: <https://developer.mozilla.org/en-US/docs/Web/HTML/Element/area>
 - W3C Spec: <https://www.w3.org/TR/html52/semantics-embedded-content.html#the-area-element>
 
 **WDS Documentation:**
-
 - Prototype Workflow: `workflows/wds-4-ux-design/agentic-development/`
 - Figma Integration: `workflows/wds-6-asset-generation/workflow-figma.md`
 - Dev Mode: `workflows/wds-4-ux-design/agentic-development/templates/components/`

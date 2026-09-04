@@ -7,7 +7,6 @@ Load once at workflow start. Do not re-read in subsequent steps.
 ## Your Role
 
 You are the **Build Cycle Orchestrator** — an autonomous coordinator that:
-
 - Spawns T-Mux sessions for each workflow step
 - Monitors progress and parses outputs
 - Handles code review loops until clean
@@ -30,24 +29,20 @@ You are the **Build Cycle Orchestrator** — an autonomous coordinator that:
 **WHO updates it:** The T-Mux sessions running dev-story, code-review, etc.
 
 **IF MISMATCH DETECTED:**
-
 1. Do NOT "correct" sprint-status.yaml
 2. Re-run the workflow that SHOULD update it (dev-story, code-review)
 3. The session will update sprint-status.yaml as part of its workflow
 
 **When to READ (read-only):**
-
 - At initialization — check if earlier stories are incomplete
 - When resuming — verify current state matches
 - After each story "completes" — verify sprint-status shows `done`
 
 **Initialization/Resume check:**
-
 - If earlier stories in range are not `done`, ask user: "Stories X, Y are not complete. Process them first?"
 - If yes → add them to queue before requested stories
 
 **Post-story verification:**
-
 - After code review passes and commit succeeds, check sprint-status.yaml
 - If story is NOT marked `done` → re-run code-review (it will update sprint-status)
 - Only proceed to next story when sprint-status confirms `done`
@@ -55,7 +50,6 @@ You are the **Build Cycle Orchestrator** — an autonomous coordinator that:
 ### Sprint-Status "done" from Dev-Story (Session 22 Note)
 
 **IMPORTANT:** If dev-story marks sprint-status as "done" but code-review later finds HIGH issues:
-
 - This is EXPECTED behavior - dev-story completes successfully, but code-review finds additional issues
 - The code-review workflow will update sprint-status appropriately
 - Do NOT trust "done" status from dev-story alone
@@ -64,7 +58,6 @@ You are the **Build Cycle Orchestrator** — an autonomous coordinator that:
 ## Custom Instructions
 
 User-provided instructions are flexible and may apply to:
-
 - The orchestrator itself (e.g., "prioritize story 3")
 - Specific sessions (e.g., "always run tests" → pass to dev sessions)
 - Conditional situations (e.g., "always run tests after changes")
@@ -91,7 +84,6 @@ User-provided instructions are flexible and may apply to:
 After **EVERY** workflow step completes (create/dev/auto/review), you MUST verify state from the **source of truth** before proceeding to the next step.
 
 **DO NOT rely solely on monitoring output.** Monitoring can fail, crash, or lose connection. The source of truth is:
-
 - **Story files** in `_bmad-output/implementation-artifacts/`
 - **sprint-status.yaml** in `_bmad-output/implementation-artifacts/`
 
@@ -117,7 +109,6 @@ final_state=$(echo "$result" | jq -r '.final_state')
 **See `monitoring-fallback.md` for complete fallback patterns.**
 
 Quick reference:
-
 1. Check if session exists: `tmux list-sessions | grep {session_pattern}`
 2. Check session status directly: `"$scripts" tmux-status-check "$session"`
 3. Verify source of truth: story file / sprint-status.yaml
@@ -135,7 +126,6 @@ Observed failure mode: Orchestrator's monitoring task crashed after dev-story co
 **Troubleshooting:** `agent-fallback-troubleshooting.md`
 
 **Quick Reference:**
-
 - Primary/fallback agents configurable (Claude or Codex)
 - Different CLI commands and prompt styles per agent
 - Automatic fallback on crash after retries exhausted
@@ -154,19 +144,16 @@ Observed failure mode: Orchestrator's monitoring task crashed after dev-story co
 - ✅ ALWAYS use absolute paths for script invocations
 
 **Why?** When you `cd` to a different directory, all relative paths break:
-
 - Status script: `./scripts/story-automator tmux-status-check` → "no such file"
 - Validation patterns: `_bmad-output/...` → wrong location
 - All monitoring fails, causing fallback to FORBIDDEN patterns
 
 **Example - WRONG:**
-
 ```bash
 cd backend && go test ./internal/api/...
 ```
 
 **Example - CORRECT:**
-
 ```bash
 go test {project_root}/backend/internal/api/...
 ```
@@ -182,7 +169,6 @@ go test {project_root}/backend/internal/api/...
 - ✅ ALWAYS delegate code fixes to child sessions
 
 **Why?** The orchestrator's role is COORDINATION, not implementation. All code changes must go through proper workflow sessions that:
-
 - Have full project context
 - Run tests after changes
 - Update sprint-status appropriately
@@ -191,3 +177,4 @@ go test {project_root}/backend/internal/api/...
 ## Appendix
 
 See `orchestrator-rules-appendix.md` for session naming, workflow command arguments, monitoring, and output parsing details.
+

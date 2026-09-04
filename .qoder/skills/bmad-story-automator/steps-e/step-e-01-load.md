@@ -18,11 +18,9 @@ validateStep: '../steps-v/step-v-01-check.md'
 ## Do
 
 ### 1. Load Rules
-
 Load `{rules}` once for context.
 
 ### 2. Request State Document
-
 ```
 **Which orchestration would you like to edit?**
 
@@ -35,17 +33,14 @@ Enter filename or number to select:
 **Wait.**
 
 Deterministic listing (matches `{stateFilePattern}`):
-
 ```bash
 state_list=$("{stateHelper}" orchestrator-helper state-list "{outputFolder}")
 ```
 
 ### 3. Load Current State
-
 Load the selected state document (resolved as `{outputFile}` for this run). Display current configuration:
 
 Deterministic summary:
-
 ```bash
 summary=$("{stateHelper}" orchestrator-helper state-summary "{state_path}")
 ```
@@ -89,7 +84,6 @@ summary=$("{stateHelper}" orchestrator-helper state-summary "{state_path}")
 **Wait.**
 
 #### Menu Handling Logic:
-
 - IF S: Update status, log change → redisplay menu
 - IF R: Update story range, log change → redisplay menu
 - IF O: Update overrides, log change → redisplay menu
@@ -100,22 +94,21 @@ summary=$("{stateHelper}" orchestrator-helper state-summary "{state_path}")
 - IF Any other: help user respond, then redisplay menu
 
 #### EXECUTION RULES:
-
 - ALWAYS halt and wait for user input after presenting menu
 - After non-exit options, return to this menu
 - Keep prompts concise and progressive (one decision at a time)
 
 ### 5. Handle Edits
 
-| Choice | Action                                                                                                 |
-| ------ | ------------------------------------------------------------------------------------------------------ |
-| **S**  | Present status options: READY, IN_PROGRESS, PAUSED → update, log change → redisplay menu               |
-| **R**  | Show stories, ask for new range (e.g., "3-5", "all") → update, log change → redisplay menu             |
-| **O**  | Show override settings, allow changes → update, log change → redisplay menu                            |
-| **T**  | Show current context, accept new text → update, log change → redisplay menu                            |
-| **I**  | Show current command, accept new (e.g., "cursor", "/path/to/ai") → update, log change → redisplay menu |
-| **D**  | Show current paths, allow updates → update, log change → redisplay menu                                |
-| **X**  | Proceed to step 6                                                                                      |
+| Choice | Action |
+|--------|--------|
+| **S** | Present status options: READY, IN_PROGRESS, PAUSED → update, log change → redisplay menu |
+| **R** | Show stories, ask for new range (e.g., "3-5", "all") → update, log change → redisplay menu |
+| **O** | Show override settings, allow changes → update, log change → redisplay menu |
+| **T** | Show current context, accept new text → update, log change → redisplay menu |
+| **I** | Show current command, accept new (e.g., "cursor", "/path/to/ai") → update, log change → redisplay menu |
+| **D** | Show current paths, allow updates → update, log change → redisplay menu |
+| **X** | Proceed to step 6 |
 
 ### 6. Confirm and Save
 
@@ -130,21 +123,19 @@ summary=$("{stateHelper}" orchestrator-helper state-summary "{state_path}")
 
 **Wait.**
 
-| Choice | Action                                                                |
-| ------ | --------------------------------------------------------------------- |
-| **S**  | Update `lastUpdated`, log "Configuration edited", write file → step 7 |
-| **D**  | Display "Changes discarded." → end                                    |
-| **E**  | Return to step 4                                                      |
+| Choice | Action |
+|--------|--------|
+| **S** | Update `lastUpdated`, log "Configuration edited", write file → step 7 |
+| **D** | Display "Changes discarded." → end |
+| **E** | Return to step 4 |
 
 #### Menu Handling Logic:
-
 - IF S: Save changes then proceed to step 7
 - IF D: Discard changes and end
 - IF E: Return to step 4
 - IF Any other: help user respond, then redisplay this menu
 
 #### EXECUTION RULES:
-
 - ALWAYS halt and wait for user input after presenting menu
 - Keep prompts concise and progressive (one decision at a time)
 
@@ -160,26 +151,23 @@ summary=$("{stateHelper}" orchestrator-helper state-summary "{state_path}")
 
 **Wait.**
 
-| Choice | Action                                                                      |
-| ------ | --------------------------------------------------------------------------- |
-| **R**  | Route to appropriate step based on `currentStep` (preflight/execute/wrapup) |
-| **V**  | Load `{validateStep}`                                                       |
-| **X**  | Display "Edit complete." and end                                            |
+| Choice | Action |
+|--------|--------|
+| **R** | Route to appropriate step based on `currentStep` (preflight/execute/wrapup) |
+| **V** | Load `{validateStep}` |
+| **X** | Display "Edit complete." and end |
 
 #### Menu Handling Logic:
-
 - IF R: Route based on `currentStep`
 - IF V: Load `{validateStep}`
 - IF X: End workflow
 - IF Any other: help user respond, then redisplay this menu
 
 #### EXECUTION RULES:
-
 - ALWAYS halt and wait for user input after presenting menu
 - Keep prompts concise and progressive (one decision at a time)
 
 ---
 
 ## Then
-
 → End workflow or route based on choice

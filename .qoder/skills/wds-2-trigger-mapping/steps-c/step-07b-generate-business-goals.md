@@ -65,7 +65,6 @@ See {businessGoalsTemplate} for the complete template structure.
 ### 2. Generate Document Sections
 
 Include:
-
 1. **Header** - Project name, date, status
 2. **Vision Statement** - 1-2 sentence transformation goal
 3. **Business Objectives** - 3 priority tiers (Primary/Secondary/Tertiary)
@@ -74,23 +73,19 @@ Include:
 6. **Related Documents Footer** - Links to other trigger map docs
 
 **Language Requirements:**
-
 - "Create awesome [users]" NOT "convert users"
 - "Naturally become [champions]" NOT "make them champions"
 - Empowering, organic growth language
 
 **Priority Clarity:**
-
 - PRIMARY GOAL clearly marked as THE ENGINE
 - SECONDARY driven by primary
 - TERTIARY benefits FOR members (not company revenue)
 
 **SMART Objectives:**
-
 - Specific, Measurable, Achievable, Relevant, Time-bound
 
 **Flywheel Logic:**
-
 - Shows causal relationships
 - Emphasizes natural emergence
 - Makes primary goal's importance clear
@@ -106,13 +101,11 @@ Output: "Business goals document created with flywheel!"
 Display: "**Select an Option:** [C] Continue to Primary Persona Document | [M] Return to Activity Menu"
 
 #### Menu Handling Logic:
-
 - IF C: Load and execute {nextStepFile}
 - IF M: Return to {activityWorkflowFile}
 - IF Any other comments or queries: help user respond then [Redisplay Menu Options]
 
 #### EXECUTION RULES:
-
 - ALWAYS halt and wait for user input after presenting menu
 - User can chat or ask questions - always respond and then redisplay menu options
 
@@ -125,7 +118,6 @@ ONLY WHEN user selects [C] will you load the next step file. Document must be ge
 ## 🚨 SYSTEM SUCCESS/FAILURE METRICS
 
 ### ✅ SUCCESS:
-
 - Document generated with all 6 sections
 - Vision statement clear and inspiring
 - 3 priority tiers with SMART objectives
@@ -136,7 +128,6 @@ ONLY WHEN user selects [C] will you load the next step file. Document must be ge
 - Document saved to correct location
 
 ### ❌ SYSTEM FAILURE:
-
 - Missing required sections
 - Using "convert users" or similar language
 - PRIMARY GOAL not clearly marked

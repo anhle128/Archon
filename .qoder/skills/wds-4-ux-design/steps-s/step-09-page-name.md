@@ -60,7 +60,6 @@ Capture the page name from the user and generate a URL-friendly slug for folder 
 <ask>**What's the name of this page?**
 
 Examples:
-
 - Start Page / Home
 - About
 - Contact

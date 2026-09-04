@@ -6,11 +6,11 @@ Native research, when chosen: resolve effort, hold the plan gate, then run the a
 
 Three knobs bundled in a **preset**; any knob pins individually, and **what the user says in the request beats both**.
 
-| Preset (`{workflow.preset}`) | subagents  | sources/round | depth |
-| ---------------------------- | ---------- | ------------- | ----- |
-| `quick`                      | low (2)    | 5             | 1     |
-| `standard` (default)         | normal (3) | 8             | 2     |
-| `deep`                       | high (6)   | 12            | 3     |
+| Preset (`{workflow.preset}`) | subagents | sources/round | depth |
+|---|---|---|---|
+| `quick` | low (2) | 5 | 1 |
+| `standard` (default) | normal (3) | 8 | 2 |
+| `deep` | high (6) | 12 | 3 |
 
 - **subagents** — parallel assistants: `none` (0 — inline, sequential; also the no-subagent-harness fallback), `low` (2), `normal` (3), `high` (6, cap 10 — beyond the 3–5 sweet spot only for genuinely wide work).
 - **max_sources_per_round** — distinct sources actually read per dimension per round (cap 25).
@@ -21,7 +21,7 @@ Three knobs bundled in a **preset**; any knob pins individually, and **what the 
 
 ## The plan gate
 
-The one hard stop, kept light: decision, type and pack-derived dimensions pruned to it, shape, the **decomposition topology** — _breadth-first_ (independent sub-questions: assistants split the dimensions), _depth-first_ (one question that needs several perspectives: assistants split by angle or methodology, not by dimension), or _straightforward_ (a focused ask: one assistant, a handful of calls, no fan-out — never overinvest in a simple query) — knobs in force and where each came from, which search surfaces exist (harness web search; installed search-shaped MCP tools; `{workflow.external_sources}` — check, don't assume), whether to run the fan-out as a workflow when the harness offers orchestration and `{workflow.use_workflows}` allows, and an honest time estimate (a standard run is minutes; deep runs are tens of minutes and many times the tokens).
+The one hard stop, kept light: decision, type and pack-derived dimensions pruned to it, shape, the **decomposition topology** — *breadth-first* (independent sub-questions: assistants split the dimensions), *depth-first* (one question that needs several perspectives: assistants split by angle or methodology, not by dimension), or *straightforward* (a focused ask: one assistant, a handful of calls, no fan-out — never overinvest in a simple query) — knobs in force and where each came from, which search surfaces exist (harness web search; installed search-shaped MCP tools; `{workflow.external_sources}` — check, don't assume), whether to run the fan-out as a workflow when the harness offers orchestration and `{workflow.use_workflows}` allows, and an honest time estimate (a standard run is minutes; deep runs are tens of minutes and many times the tokens).
 
 Present as a compact checklist, get approval, then: bind `{doc_workspace}` under `{workflow.research_output_path}` — expand the folder name with `uv run scripts/recon_kit.py slug "<topic>" --type <type> --pattern "{workflow.run_folder_pattern}"` so the same topic always resolves to the same folder — seed `research.md` from `{workflow.research_template}`, init the memlog (`uv run {project-root}/_bmad/scripts/memlog.py init --workspace {doc_workspace} --field topic="<topic>" --field type="<type>" --field decision="<decision>" --field preset="<preset>"`), log the approved plan as a `decision`, and tell the user the path.
 
@@ -42,7 +42,7 @@ Say which one ended it. Hitting the round cap with open questions is reported as
 
 ## The fan-out
 
-Fan out researcher assistants for the round — concurrency per the resolved `subagents` level, split by the plan's **topology**: breadth-first gives each assistant independent sub-questions; depth-first gives each a distinct perspective or methodology on the _same_ question; straightforward is one assistant with a small budget — never fan out what one focused assistant answers. Each assistant runs behind the **research firewall**: it gets its brief and nothing else — no project files, no ambient context. The brief contains:
+Fan out researcher assistants for the round — concurrency per the resolved `subagents` level, split by the plan's **topology**: breadth-first gives each assistant independent sub-questions; depth-first gives each a distinct perspective or methodology on the *same* question; straightforward is one assistant with a small budget — never fan out what one focused assistant answers. Each assistant runs behind the **research firewall**: it gets its brief and nothing else — no project files, no ambient context. The brief contains:
 
 - the questions it owns, the decision they serve, and the topic
 - its search surfaces (specialized tools first — installed search-shaped MCP tools, `{workflow.external_sources}` entries whose directive matches — then generic search), plus `{workflow.preferred_sources}` first / `{workflow.banned_sources}` never

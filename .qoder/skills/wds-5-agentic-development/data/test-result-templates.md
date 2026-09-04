@@ -181,14 +181,12 @@ Templates for documenting test execution results.
 **Total Issues:** X
 
 **By Severity:**
-
 - Critical: X
 - High: X
 - Medium: X
 - Low: X
 
 **By Category:**
-
 - Functionality: X
 - Design System: X
 - Accessibility: X

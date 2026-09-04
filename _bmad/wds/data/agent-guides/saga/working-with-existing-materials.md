@@ -19,15 +19,14 @@
 **Phase 0 asks:** "Do you have existing materials?" (website, brief, guidelines, research)
 
 **Stored in outline:**
-
 ```yaml
 existing_materials:
   has_materials: true/false
-  website: '[URL]'
-  previous_brief: '[path]'
-  brand_guidelines: '[path]'
-  research: '[path]'
-  context_notes: '[brief notes]'
+  website: "[URL]"
+  previous_brief: "[path]"
+  brand_guidelines: "[path]"
+  research: "[path]"
+  context_notes: "[brief notes]"
 ```
 
 **If materials exist:** Read them before starting PB steps
@@ -39,11 +38,9 @@ existing_materials:
 ### Opening Adaptation
 
 **Without materials:**
-
 > "Let's start with vision. What are you envisioning?"
 
 **With materials:**
-
 > "I see you mentioned [reference from materials]. Let's build on that - tell me more."
 
 ### Follow-Up Patterns
@@ -59,13 +56,13 @@ existing_materials:
 
 **Apply to all conversational steps** (2, 3, 5, 7, 7a, 8, 9, 10, 11, 12):
 
-| Step            | No Materials                   | With Materials                                                       |
-| --------------- | ------------------------------ | -------------------------------------------------------------------- |
-| Vision (2)      | "What are you envisioning?"    | "You mentioned [vision]. Tell me more."                              |
-| Positioning (3) | "Let's explore positioning."   | "Your brief positions this as [quote]. Still accurate?"              |
-| Users (7)       | "Who are ideal users?"         | "You described [archetypes]. Still primary users?"                   |
-| Concept (7a)    | "What's the core concept?"     | "I see [concept from materials]. Tell me more about that principle." |
-| Success (8)     | "What does success look like?" | "You mentioned success means [quote]. Still the goal?"               |
+| Step | No Materials | With Materials |
+|------|-------------|----------------|
+| Vision (2) | "What are you envisioning?" | "You mentioned [vision]. Tell me more." |
+| Positioning (3) | "Let's explore positioning." | "Your brief positions this as [quote]. Still accurate?" |
+| Users (7) | "Who are ideal users?" | "You described [archetypes]. Still primary users?" |
+| Concept (7a) | "What's the core concept?" | "I see [concept from materials]. Tell me more about that principle." |
+| Success (8) | "What does success look like?" | "You mentioned success means [quote]. Still the goal?" |
 
 **Pattern:** Reference existing → Validate → Build on it
 
@@ -91,7 +88,6 @@ When materials exist, capture:
 **User response:** [Confirmed/refined/changed]
 
 **Key exchanges:**
-
 - [Exploration]
 - [Gaps filled]
 - [Evolution]
@@ -111,7 +107,6 @@ Does that capture it?"
 ## Common Scenarios
 
 **Scenario: Previous brief exists**
-
 1. Read it thoroughly
 2. Identify solid vs gaps/unclear
 3. Open: "I read your brief. [Strong points] captured well. Questions about [gaps]."
@@ -119,21 +114,18 @@ Does that capture it?"
 5. Dialog: what was there + what we added + why
 
 **Scenario: Existing website**
-
 1. Review site (if URL in materials)
 2. Note current positioning/tone/UX
 3. Reference: "I looked at your site. It positions you as [observation]. Still the direction?"
 4. Use as baseline for "what's changing?"
 
 **Scenario: Brand guidelines exist**
-
 1. Read guidelines (voice, values, identity)
 2. Reference when discussing tone: "Your guidelines describe tone as [quote]. Match exactly or evolve?"
 3. Don't re-ask defined things (colors, values)
 4. Focus on how brand translates to this project
 
 **Scenario: Research exists**
-
 1. Review findings
 2. Reference insights: "Your research showed [finding]. Great insight for..."
 3. Validate currency: "Is this still what you hear from customers?"
@@ -166,7 +158,6 @@ Does that capture it?"
 **Check:** `existing_materials.has_materials` in outline
 
 **If true:**
-
 1. Read materials before starting PB
 2. Adapt openings to reference what exists
 3. Validate currency with each step

@@ -139,7 +139,7 @@ test('should handle 500 errors', async ({ apiRequest }) => {
       method: 'GET',
       path: '/api/error',
       retryConfig: { maxRetries: 0 }, // Disable retry
-    })
+    }),
   ).rejects.toThrow('Request failed with status 500');
 });
 ```
@@ -212,7 +212,11 @@ await apiRequest({
 **Implementation**:
 
 ```typescript
-import { test } from '@seontechnologies/playwright-utils/fixtures';
+import { expect, mergeTests } from '@playwright/test';
+import { test as apiRequestFixture } from '@seontechnologies/playwright-utils/api-request/fixtures';
+import { test as recurseFixture } from '@seontechnologies/playwright-utils/recurse/fixtures';
+
+const test = mergeTests(apiRequestFixture, recurseFixture);
 
 test('should poll until job completes', async ({ apiRequest, recurse }) => {
   // Create job
@@ -227,8 +231,8 @@ test('should poll until job completes', async ({ apiRequest, recurse }) => {
   // Poll until ready
   const completedJob = await recurse(
     () => apiRequest({ method: 'GET', path: `/api/jobs/${jobId}` }),
-    response => response.body.status === 'completed',
-    { timeout: 60000, interval: 2000 }
+    (response) => response.body.status === 'completed',
+    { timeout: 60000, interval: 2000 },
   );
 
   expect(completedJob.body.result).toBeDefined();
@@ -248,7 +252,8 @@ test('should poll until job completes', async ({ apiRequest, recurse }) => {
 **Implementation**:
 
 ```typescript
-import { test, expect } from '@seontechnologies/playwright-utils/fixtures';
+import { expect } from '@playwright/test';
+import { test } from '@seontechnologies/playwright-utils/api-request/fixtures';
 
 const USER_SERVICE = process.env.USER_SERVICE_URL || 'http://localhost:3001';
 const ORDER_SERVICE = process.env.ORDER_SERVICE_URL || 'http://localhost:3002';
@@ -381,7 +386,11 @@ test.describe('GraphQL API', () => {
 // Generated operation definition — structural typing, no import from playwright-utils needed
 // type OperationShape = { path: string; method: 'POST'|'GET'|'PUT'|'DELETE'|'PATCH'|'HEAD'; response: unknown; request: unknown; query?: unknown }
 
-import { test, expect } from '@seontechnologies/playwright-utils/api-request/fixtures';
+import { expect, mergeTests } from '@playwright/test';
+import { test as apiRequestFixture } from '@seontechnologies/playwright-utils/api-request/fixtures';
+import { test as recurseFixture } from '@seontechnologies/playwright-utils/recurse/fixtures';
+
+const test = mergeTests(apiRequestFixture, recurseFixture);
 
 // --- Basic usage: operation replaces method + path ---
 test('should upsert person via operation overload', async ({ apiRequest }) => {
@@ -428,11 +437,11 @@ test('should poll until person is reviewed', async ({ apiRequest, recurse }) => 
         operation: getPersonv2({ customerId, hash }),
         headers: getHeaders(customerId),
       }),
-    res => {
+    (res) => {
       expect(res.status).toBe(200);
       expect(res.body.status).toBe('REVIEWED');
     },
-    { timeout: 30000, interval: 1000 }
+    { timeout: 30000, interval: 1000 },
   );
 });
 

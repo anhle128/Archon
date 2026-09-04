@@ -17,8 +17,7 @@ Discover not just WHO your users are, but WHY they act and WHAT triggers their d
 **Trigger Mapping is WDS's adaptation of Impact/Effect Mapping** that focuses on user psychology.
 
 **Key differences from generic Impact Mapping:**
-
-- ✅ Removes solutions from the map (solutions designed _against_ map, not _on_ it)
+- ✅ Removes solutions from the map (solutions designed *against* map, not *on* it)
 - ✅ Adds negative driving forces (fears, frustrations) alongside positive ones
 - ✅ Focuses on smaller, targeted maps (3-4 user groups max)
 - ✅ Integrates explicit prioritization for driving forces
@@ -93,12 +92,10 @@ Goal 3: [Prerequisite - e.g., Work smarter]
 Ask: "What does 'winning' look like for this business?" Extract aspirational goals from Product Brief.
 
 Order goals hierarchically:
-
 1. **Primary Outcome Goal** - Ultimate business success (e.g., "Become more profitable")
 2. **Prerequisite Goals** - What enables the primary goal (e.g., "Get happier customers", "Work smarter")
 
 **Common business goals:**
-
 - Become more profitable (financial health) - often primary
 - Get happier customers (satisfaction, loyalty) - often prerequisite
 - Work smarter (reduce costs, less admin) - often prerequisite
@@ -141,17 +138,14 @@ Each objective must align with its parent goal:
 **Critical: Metrics ≠ Goals**
 
 ❌ **Don't do this:**
-
 - "Business Goal: Reduce phone calls 40%" (metric, not aspirational)
 - "Business Goal: Page 1 on Google" (tactic, not vision)
 
 ✅ **Do this:**
-
 - "Business Goal: Work smarter → Measured by: 40% fewer calls"
 - "Business Goal: Constant customer flow → Measured by: Page 1 ranking"
 
 **Self-Check:**
-
 - Are your goals visionary/aspirational? (exciting to achieve?)
 - Do metrics support goals? (not replace them?)
 - Would these goals still be relevant if tactics changed?
@@ -163,7 +157,6 @@ Each objective must align with its parent goal:
 **Connect each target group to specific business goals they serve.**
 
 ### Example
-
 ```
 Business Goal: 1,000 registered users
     ↓
@@ -182,7 +175,6 @@ Target Groups:
 **Go beyond demographics → psychological depth**
 
 ### Wrong (Shallow)
-
 > "Sarah, 35, consultant, lives in London"
 
 **Why bad:** Doesn't help design decisions
@@ -190,9 +182,8 @@ Target Groups:
 ---
 
 ### Right (Deep)
-
 > **Harriet the Hairdresser**
->
+> 
 > Owns a salon, 15 years experience, ambitious. Wants to be seen as the "queen of beauty" in her town - not just another hairdresser, but THE expert everyone comes to. Fears falling behind competitors who have better online presence. Frustrated by not knowing how to market herself effectively. In her salon context, she's confident. In the digital marketing context, she feels like a beginner.
 
 **Why better:** You can design for her psychology
@@ -230,7 +221,6 @@ When Lars thinks about car service, he feels **calm and secure**. There's no anx
 Lars checks the website occasionally, mostly to confirm hours before calling. He already has Björn's number saved. He might visit the site to show someone else: "See, this is the place I go to." The website reinforces his choice — certifications, reviews, professionalism.
 
 **Relationship to Business Goals:**
-
 - ✅ **Become More Profitable:** Highest lifetime value — multiple vehicles, predictable revenue
 - ✅ **Get Happier Customers:** Loyal for 12 years, refers others, never complains
 - ✅ **Work Smarter:** Books ahead, minimal hand-holding, trusts recommendations
@@ -243,27 +233,22 @@ Lars checks the website occasionally, mostly to confirm hours before calling. He
 For each persona's Usage Context section, answer:
 
 **1. Access/Discovery:** How do they find/reach the product?
-
 - Example: "Google search 'motorhome repair Öland'"
 - Example: "Has phone number saved, checks website for hours"
 
 **2. Emotional State:** What do they feel during usage?
-
 - Example: "Panic mode, stressed, vulnerable"
 - Example: "Calm and secure, already trusts the service"
 
 **3. Behavior Pattern:** How do they interact?
-
 - Example: "Scans quickly, doesn't read paragraphs, looks for trust signals"
 - Example: "Reads carefully, wants to understand details"
 
 **4. Decision Criteria:** What signals matter most?
-
 - Example: "Capability confirmation (do you fix X?), trust signals (reviews, certifications)"
 - Example: "Price transparency, availability, booking process"
 
 **5. Success Outcome:** What gets them to take action?
-
 - Example: "Finds phone number and calls within 30 seconds"
 - Example: "Feels confident enough to book appointment"
 
@@ -272,7 +257,6 @@ For each persona's Usage Context section, answer:
 ```markdown
 **Usage Context:**
 Hasse finds the website via Google search. He's scanning for **trust signals and capability confirmation**:
-
 - ✅ "Husbilservice" listed → Okay, they do motorhomes
 - ✅ "20+ years, Autoexperten certified" → Seems legitimate
 - ✅ "4.8/5 reviews" → Other people trust them
@@ -288,9 +272,7 @@ He doesn't read paragraphs. He scans, checks, decides, calls. The website's job 
 **Critical distinction:**
 
 ### User Goals (Life Context)
-
 What they want in general life:
-
 - Be a successful consultant
 - Provide for family
 - Be respected in industry
@@ -298,9 +280,7 @@ What they want in general life:
 ---
 
 ### Usage Goals (Product Context)
-
 What they want when using your product:
-
 - Feel prepared for client meeting
 - Look professional to prospects
 - Save time on formatting
@@ -314,7 +294,6 @@ What they want when using your product:
 **The Dubai Golf Course Example:**
 
 A golfer using a booking form has specific **usage goals** in that moment:
-
 - Book a tee time quickly
 - See availability clearly
 - Feel confident about the booking
@@ -324,12 +303,10 @@ What they do at the resort restaurant later is a **different context** with diff
 **The Harriet Example:**
 
 When booking beauty product supplier:
-
 - **Active goal:** "Compare prices efficiently"
 - **Not active:** "Feel like queen of beauty" (that's in salon context)
 
 When marketing her salon online:
-
 - **Active goal:** "Feel like queen of beauty"
 - **Not active:** "Compare supplier prices" (different context)
 
@@ -340,7 +317,6 @@ When marketing her salon online:
 ## Driving Forces (The Psychology)
 
 ### Positive Driving Forces (Wishes/Desires)
-
 **What pulls them forward?**
 
 - Want to feel prepared
@@ -354,7 +330,6 @@ When marketing her salon online:
 ---
 
 ### Negative Driving Forces (Fears/Frustrations)
-
 **What pushes them away from current state?**
 
 - Fear looking unprofessional
@@ -436,7 +411,6 @@ If no to any question, add more specificity using WHAT + WHY + WHEN.
 Score each driving force on three dimensions (1-5 scale):
 
 **1. Frequency (1-5):** How often does this force matter?
-
 - **5** = Every interaction / constant concern
 - **4** = Most of the time
 - **3** = Regularly but not always
@@ -444,7 +418,6 @@ Score each driving force on three dimensions (1-5 scale):
 - **1** = Rare edge case
 
 **2. Intensity (1-5):** How strongly do they feel this?
-
 - **5** = Critical, visceral, blocks action if not addressed
 - **4** = Very important, strong emotion
 - **3** = Important but manageable
@@ -452,7 +425,6 @@ Score each driving force on three dimensions (1-5 scale):
 - **1** = Nice to have, minimal emotion
 
 **3. Fit (1-5):** How well can the product address this?
-
 - **5** = Perfect fit, direct solution
 - **4** = Strong fit, clear approach
 - **3** = Moderate fit, partial solution
@@ -464,25 +436,21 @@ Score each driving force on three dimensions (1-5 scale):
 ### Score Interpretation
 
 **14-15: HIGH PRIORITY**
-
 - Must address in core product
 - Core to user success
 - Strong ROI on design effort
 
 **11-13: MEDIUM PRIORITY**
-
 - Should address if feasible
 - Significant but not critical
 - Enhances experience
 
 **8-10: LOW PRIORITY**
-
 - Nice to have
 - Limited strategic impact
 - Consider for future iterations
 
 **<8: DEPRIORITIZE**
-
 - Minimal strategic value
 - Resource drain vs. benefit
 - May indicate wrong target group
@@ -512,18 +480,15 @@ Siv Skötsam: "See detailed pricing upfront"
 ### Using Scores Strategically
 
 **Prioritize Features:**
-
 - Design for 14-15 forces first
 - Group 11-13 forces into common solutions
 - Defer <10 forces until core experience is solid
 
 **Defend Decisions:**
-
 - "This feature addresses 3 forces with 14+ scores"
 - "We're deprioritizing X because it scored 7/15"
 
 **Identify Gaps:**
-
 - High-intensity forces with low fit = product limitation
 - High-frequency, low-intensity = table stakes (must have, but not differentiator)
 - Low-frequency, high-intensity = edge case (support via other channels)
@@ -544,7 +509,6 @@ Scenario adds:
 ```
 
 **Example:**
-
 - **Start:** "I know my proposals lose clients" (Problem Aware)
 - **Through scenario:** Experience our solution working
 - **End:** "This tool makes my proposals professional" (Product Aware)
@@ -554,7 +518,6 @@ Scenario adds:
 ## Common Trigger Mapping Mistakes
 
 ### ❌ Too Many Target Groups
-
 "Let's map 10 different user types..."
 
 **Why bad:** Dilutes focus, overwhelming, unused
@@ -564,7 +527,6 @@ Scenario adds:
 ---
 
 ### ❌ Shallow Personas
-
 "John, 32, works in consulting..."
 
 **Why bad:** Doesn't inform design
@@ -574,7 +536,6 @@ Scenario adds:
 ---
 
 ### ❌ Only Positive Forces
-
 "Users want to save time and be efficient..."
 
 **Why bad:** Missing powerful negative triggers
@@ -584,7 +545,6 @@ Scenario adds:
 ---
 
 ### ❌ Solutions on the Map
-
 "They need a template library and e-signature..."
 
 **Why bad:** Locks in solutions too early, map ages quickly
@@ -594,7 +554,6 @@ Scenario adds:
 ---
 
 ### ❌ Generic Goals
-
 "Want a better experience..."
 
 **Why bad:** Too vague to design for
@@ -633,9 +592,9 @@ Design Context (Focused):
 graph TD
     BG1[1000 Users] --> TG1[Independent Consultants]
     BG1 --> TG2[Small Firms]
-
+    
     TG1 --> P1[Harriet - Solo Consultant]
-
+    
     P1 --> DF1[+ Feel professional]
     P1 --> DF2[+ Save time]
     P1 --> DF3[- Fear losing clients]
@@ -672,7 +631,6 @@ graph TD
 - ✅ Priorities shift based on data
 
 **Process:**
-
 1. Create new version (v2)
 2. Document what changed and why
 3. Review impact on active design work
@@ -690,4 +648,6 @@ graph TD
 
 ---
 
-_Trigger Mapping connects business goals to user psychology. It's the strategic foundation that makes design purposeful._
+*Trigger Mapping connects business goals to user psychology. It's the strategic foundation that makes design purposeful.*
+
+

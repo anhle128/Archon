@@ -324,7 +324,6 @@ accessibility:
 ## New Functionality
 
 ### Test HP-001: [Name]
-
 - Status: [PASS | FAIL]
 - Notes: [Any observations]
 
@@ -335,7 +334,6 @@ accessibility:
 ## Regression Testing
 
 ### Test REG-001: [Name]
-
 - Status: [PASS | FAIL]
 - Notes: [Any observations]
 
