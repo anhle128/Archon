@@ -11,11 +11,12 @@
  * - main transcript: `<sessionDir>/<timestamp>_<sessionId>.jsonl`
  * - artifact dir: same path without `.jsonl`
  * - top-level advisor: `<artifactDir>/__advisor.jsonl` or `__advisor.<slug>.jsonl`
- * - task-agent: only stems proven by parent main-transcript task spawn/lifecycle
- *   records (assistant `toolCall` name=task arguments.tasks[].name, or task
- *   toolResult details.progress/results[].id) plus exact filename constructors
- * - nested advisor: advisor files under `<taskStem>/` beside an owned task file
- *
+ * - task-agent: only stems proven by the immediate parent transcript's task
+ *   spawn/lifecycle records (assistant `toolCall` name=task arguments.tasks[].name,
+ *   or task toolResult details.progress/results[].id) plus exact filename constructors;
+ *   ownership chains main → task → nested task (global stem membership never authorizes
+ *   another subtree)
+ * - nested advisor: advisor files under a proven parent task stem directory
  * Resolution order for sessionDir:
  * 1. exact `PI_CODING_AGENT_SESSION_DIR` from the spawned env
  * 2. `$PI_CODING_AGENT_DIR/sessions/<encoded-cwd>` or `~/.omp/agent/sessions/<encoded-cwd>`
@@ -526,11 +527,18 @@ async function* iterateJsonlLinesFromHandle(
 }
 
 /**
- * Collect task-agent stems proven by the parent main transcript.
+ * Collect task-agent stems proven by a parent transcript on one verified handle.
  * Ownership sources (supported OMP parent-session format):
- * - assistant toolCall name=task → arguments.tasks[].name
+ * - assistant toolCall name=task → arguments.tasks[].name / .id
  * - toolResult toolName=task → details.progress[].id / details.results[].id
+ * - custom tool_execution_start toolName=task → taskId/name/tasks[]
  * A bare session-shaped child JSONL is never enough.
+ *
+ * Main transcripts pass `expectedSessionId` (header id must match or enrichment omits).
+ * Nested task parents omit `expectedSessionId`. Soft header/open failures return
+ * `{ unverified: true }` so callers do not descend into the artifact subtree; a
+ * verified parent with zero child stems still returns `{ stems }` (empty) and may
+ * host nested advisors.
  */
 
 function collectTaskStemFromUnknown(value: unknown, into: Set<string>): void {
@@ -612,14 +620,27 @@ function extractTaskStemsFromRecord(obj: JsonObject, into: Set<string>): void {
   }
 }
 
-export async function extractOwnedTaskStemsFromMain(
+export async function extractOwnedTaskStemsFromParent(
   transcriptPath: string,
-  sessionDirReal: string,
-  sessionId: string,
-  expectedCwd?: string
-): Promise<{ stems: Set<string> } | { omit: true; reason: string }> {
-  const opened = await openVerifiedFile(transcriptPath, sessionDirReal);
-  if (!opened) return { omit: true, reason: 'main_open_failed' };
+  rootReal: string,
+  options?: {
+    expectedSessionId?: string;
+    expectedCwd?: string;
+    expectedIdentity?: { realPath: string; dev: number; ino: number };
+  }
+): Promise<
+  { stems: Set<string> } | { unverified: true; reason: string } | { omit: true; reason: string }
+> {
+  const expectedSessionId = options?.expectedSessionId;
+  const expectedCwd = options?.expectedCwd;
+  const strictHeader = expectedSessionId !== undefined;
+
+  const opened = await openVerifiedFile(transcriptPath, rootReal, options?.expectedIdentity);
+  if (!opened) {
+    return strictHeader
+      ? { omit: true, reason: 'main_open_failed' }
+      : { unverified: true, reason: 'parent_open_failed' };
+  }
   if (opened.size > bounds().maxFileBytes) {
     await opened.handle.close().catch(() => undefined);
     getLog().warn(
@@ -651,13 +672,15 @@ export async function extractOwnedTaskStemsFromMain(
       if (obj.type === 'session') {
         const id = stringField(obj.id);
         if (!id) continue;
-        if (id !== sessionId) {
+        if (expectedSessionId !== undefined && id !== expectedSessionId) {
           return { omit: true, reason: 'header_mismatch' };
         }
         if (expectedCwd !== undefined) {
           const headerCwd = stringField(obj.cwd);
           if (!headerCwd || path.resolve(headerCwd) !== path.resolve(expectedCwd)) {
-            return { omit: true, reason: 'header_mismatch' };
+            return strictHeader
+              ? { omit: true, reason: 'header_mismatch' }
+              : { unverified: true, reason: 'header_mismatch' };
           }
         }
         headerOk = true;
@@ -668,13 +691,37 @@ export async function extractOwnedTaskStemsFromMain(
       if (!headerOk) continue;
       extractTaskStemsFromRecord(obj, stems);
     }
-    if (!headerOk) return { omit: true, reason: 'header_mismatch' };
+    if (!headerOk) {
+      return strictHeader
+        ? { omit: true, reason: 'header_mismatch' }
+        : { unverified: true, reason: 'header_mismatch' };
+    }
     return { stems };
   } catch {
-    return { omit: true, reason: 'main_read_failed' };
+    return strictHeader
+      ? { omit: true, reason: 'main_read_failed' }
+      : { unverified: true, reason: 'parent_read_failed' };
   } finally {
     await opened.handle.close().catch(() => undefined);
   }
+}
+
+/** Main-transcript ownership extract — session id is required and fail-closed. */
+export async function extractOwnedTaskStemsFromMain(
+  transcriptPath: string,
+  sessionDirReal: string,
+  sessionId: string,
+  expectedCwd?: string
+): Promise<{ stems: Set<string> } | { omit: true; reason: string }> {
+  const result = await extractOwnedTaskStemsFromParent(transcriptPath, sessionDirReal, {
+    expectedSessionId: sessionId,
+    expectedCwd,
+  });
+  // Main path never returns unverified; collapse the discriminant for callers.
+  if ('unverified' in result) {
+    return { omit: true, reason: result.reason };
+  }
+  return result;
 }
 
 /**
@@ -743,25 +790,33 @@ interface CandidateFile {
 
 /**
  * Recursively list JSONL candidates under the artifact root using OMP constructors
- * plus parent-proven task stems:
- * - advisors: `__advisor.jsonl` / `__advisor.<slug>.jsonl` (constructor is ownership)
- * - task agents: filename constructor AND stem ∈ ownedTaskStems from the main transcript
- * - nested dirs: only `<taskStem>/` beside an accepted owned task-agent file
+ * plus immediate-parent-proven task stems:
+ * - advisors: `__advisor.jsonl` / `__advisor.<slug>.jsonl` (constructor is ownership
+ *   inside a proven artifact subtree — root or `<ownedTask>/`)
+ * - task agents: filename constructor AND stem ∈ stems authorized by the immediate
+ *   parent of this directory (main at root; the parent task transcript one level up)
+ * - nested dirs: only `<taskStem>/` beside an accepted owned task-agent file; child
+ *   stems are derived from that parent file on a verified handle (not a global set)
  * Discovery sizes are advisory early exits; authoritative totals use verified open sizes.
  */
 async function listHiddenCandidates(
   artifactRootReal: string,
   sessionId: string,
-  ownedTaskStems: ReadonlySet<string>
+  rootOwnedStems: ReadonlySet<string>,
+  expectedCwd?: string
 ): Promise<{ candidates: CandidateFile[] } | { omit: true; reason: string }> {
   const candidates: CandidateFile[] = [];
   let discoveryTotalBytes = 0;
   // Only descend into `<taskStem>/` dirs that sit beside an accepted task-agent file.
-  const stack: string[] = [artifactRootReal];
+  // Each stack entry carries stems proven by that directory's immediate parent only.
+  const stack: { dir: string; ownedStems: ReadonlySet<string> }[] = [
+    { dir: artifactRootReal, ownedStems: rootOwnedStems },
+  ];
 
   while (stack.length > 0) {
-    const dir = stack.pop();
-    if (!dir) break;
+    const frame = stack.pop();
+    if (!frame) break;
+    const { dir, ownedStems: levelOwnedStems } = frame;
     let entries: {
       name: string;
       isDirectory(): boolean;
@@ -774,7 +829,8 @@ async function listHiddenCandidates(
       continue;
     }
 
-    const acceptedTaskStems = new Set<string>();
+    // Child stems authorized under each accepted task file at this level (parent-local).
+    const childStemsByTask = new Map<string, ReadonlySet<string>>();
     const nestedDirs: string[] = [];
 
     for (const entry of entries) {
@@ -792,7 +848,7 @@ async function listHiddenCandidates(
       const isAdvisor = isAdvisorFileName(entry.name);
       const isTaskConstructor = isTaskAgentFileName(entry.name, sessionId);
       const taskStem = isTaskConstructor ? entry.name.slice(0, -JSONL_SUFFIX.length) : undefined;
-      const isOwnedTask = taskStem !== undefined && ownedTaskStems.has(taskStem);
+      const isOwnedTask = taskStem !== undefined && levelOwnedStems.has(taskStem);
       if (!isAdvisor && !isOwnedTask) {
         // Unrelated constructor, unowned Orphan.jsonl, reserved __*, etc. — never bill.
         continue;
@@ -834,7 +890,16 @@ async function listHiddenCandidates(
       }
       const relativePath = path.relative(artifactRootReal, realFile);
       if (isOwnedTask && taskStem) {
-        acceptedTaskStems.add(taskStem);
+        // Derive child stems only from a verified parent handle — never a global set.
+        // Unverified parents stay billable as candidates but do not authorize a subtree.
+        const childOwned = await extractOwnedTaskStemsFromParent(realFile, artifactRootReal, {
+          expectedCwd,
+          expectedIdentity: { realPath: realFile, dev: st.dev, ino: st.ino },
+        });
+        if ('omit' in childOwned) return { omit: true, reason: childOwned.reason };
+        if (!('unverified' in childOwned)) {
+          childStemsByTask.set(taskStem, childOwned.stems);
+        }
       }
       candidates.push({
         absolutePath: realFile,
@@ -850,17 +915,28 @@ async function listHiddenCandidates(
       const name = path.basename(abs);
       // Nested artifact dirs exist only beside an owned task-agent transcript of the same stem
       // (OMP: artifactsDir = sessionFile without `.jsonl`). Orphan dirs are ignored.
-      if (!acceptedTaskStems.has(name)) continue;
+      // Child stems come solely from that parent transcript — not from main or siblings.
+      if (!childStemsByTask.has(name)) continue;
       const realDir = await safeRealPath(abs);
       if (!realDir || !isPathInsideRoot(artifactRootReal, realDir)) {
         getLog().warn({ issue: 'path_escape' }, 'omp.session_usage_path_rejected');
         continue;
       }
-      stack.push(realDir);
+      stack.push({
+        dir: realDir,
+        ownedStems: childStemsByTask.get(name) ?? new Set<string>(),
+      });
     }
   }
 
-  candidates.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+  // Parents before descendants so resume/fork subtree-omit sees the parent first.
+  candidates.sort((a, b) => {
+    const depth = (rel: string): number => rel.split(/[/\\]/).filter(Boolean).length;
+    const da = depth(a.relativePath);
+    const db = depth(b.relativePath);
+    if (da !== db) return da - db;
+    return a.relativePath.localeCompare(b.relativePath);
+  });
   return { candidates };
 }
 
@@ -966,7 +1042,12 @@ export async function snapshotHiddenSessionFiles(input: {
     return null;
   }
 
-  const listed = await listHiddenCandidates(artifactRootReal, input.resumeSessionId, owned.stems);
+  const listed = await listHiddenCandidates(
+    artifactRootReal,
+    input.resumeSessionId,
+    owned.stems,
+    input.cwd
+  );
   if ('omit' in listed) return null;
 
   const files: FileSnapshot[] = [];
@@ -1218,7 +1299,12 @@ export async function collectHiddenSessionUsage(input: {
     return undefined;
   }
 
-  const listed = await listHiddenCandidates(artifactRootReal, input.sessionId, owned.stems);
+  const listed = await listHiddenCandidates(
+    artifactRootReal,
+    input.sessionId,
+    owned.stems,
+    input.cwd
+  );
   if ('omit' in listed) return undefined;
 
   if (input.afterCandidatesListed) {
@@ -1238,8 +1324,25 @@ export async function collectHiddenSessionUsage(input: {
   const entries: ModelUsageEntry[] = [];
   let tokens = emptyTokens();
   let actualTotalBytes = 0;
+  // When a subagent parent is unverifiable on resume/fork, omit its entire artifact subtree.
+  const omittedSubtreePrefixes: string[] = [];
+
+  const isUnderOmittedSubtree = (relativePath: string): boolean => {
+    for (const prefix of omittedSubtreePrefixes) {
+      if (
+        relativePath === prefix ||
+        relativePath.startsWith(prefix + path.sep) ||
+        relativePath.startsWith(`${prefix}/`)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  };
 
   for (const candidate of listed.candidates) {
+    if (isUnderOmittedSubtree(candidate.relativePath)) continue;
+
     const prior = snapshotByRel.get(candidate.relativePath);
     let byteOffset = 0;
     let expectedPrefix: { byteLength: number; digest: string } | undefined;
@@ -1247,6 +1350,9 @@ export async function collectHiddenSessionUsage(input: {
     if (prior) {
       if (!prior.endsAtRecordBoundary) {
         getLog().warn({ issue: 'mid_record_snapshot' }, 'omp.session_usage_file_omitted');
+        if (candidate.kind === 'subagent') {
+          omittedSubtreePrefixes.push(candidate.relativePath.slice(0, -JSONL_SUFFIX.length));
+        }
         continue;
       }
       expectedPrefix = { byteLength: prior.byteLength, digest: prior.prefixDigest };
@@ -1269,7 +1375,12 @@ export async function collectHiddenSessionUsage(input: {
       }
     );
     if (parsed.status === 'omit_all') return undefined;
-    if (parsed.status === 'skip') continue;
+    if (parsed.status === 'skip') {
+      if (candidate.kind === 'subagent') {
+        omittedSubtreePrefixes.push(candidate.relativePath.slice(0, -JSONL_SUFFIX.length));
+      }
+      continue;
+    }
 
     actualTotalBytes += parsed.openedSize;
     if (actualTotalBytes > bounds().maxTotalBytes) {

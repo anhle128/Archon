@@ -1720,3 +1720,567 @@ describe('US-041 reject calendar-impossible OMP main transcript names', () => {
     expect(hidden).toBeUndefined();
   });
 });
+
+describe('US-042 follow OMP task ownership recursively through task transcripts', () => {
+  test('main→ScoutTask→NestedTask chain bills tasks and nested advisors once', async () => {
+    const fx = await layoutFresh({ withAdvisor: false, withTask: false });
+
+    await writeTranscript(path.join(fx.artifactDir, 'ScoutTask.jsonl'), [
+      sessionHeader(`${fx.sessionId}-scout`, fx.cwd),
+      taskSpawnToolResult(['NestedTask']),
+      assistantLine({
+        provider: 'openai-codex',
+        model: 'scout-task',
+        input: 30,
+        output: 6,
+        cost: 0.4,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    await writeTranscript(path.join(fx.artifactDir, 'ScoutTask', 'NestedTask.jsonl'), [
+      sessionHeader(`${fx.sessionId}-nested`, fx.cwd),
+      assistantLine({
+        provider: 'openai-codex',
+        model: 'nested-task',
+        input: 12,
+        output: 3,
+        cost: 0.12,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    await writeTranscript(path.join(fx.artifactDir, 'ScoutTask', 'NestedTask', '__advisor.jsonl'), [
+      sessionHeader(`${fx.sessionId}-nested-adv`, fx.cwd),
+      assistantLine({
+        provider: 'anthropic',
+        model: 'nested-task-advisor',
+        input: 4,
+        output: 1,
+        cost: 0.04,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    await writeTranscript(path.join(fx.artifactDir, 'ScoutTask', '__advisor.jsonl'), [
+      sessionHeader(`${fx.sessionId}-scout-adv`, fx.cwd),
+      assistantLine({
+        provider: 'anthropic',
+        model: 'scout-advisor',
+        input: 5,
+        output: 1,
+        cost: 0.05,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    await proveTaskOwnership(fx.mainPath, ['ScoutTask']);
+
+    const hidden = await collectHiddenSessionUsage({
+      env: fx.env,
+      cwd: fx.cwd,
+      sessionId: fx.sessionId,
+    });
+    expect(hidden?.entries.map(e => e.model).sort()).toEqual(
+      ['nested-task', 'nested-task-advisor', 'scout-advisor', 'scout-task'].sort()
+    );
+    // Exactly once each — no double-count.
+    expect(hidden?.entries.filter(e => e.model === 'nested-task')).toHaveLength(1);
+    expect(hidden?.entries.filter(e => e.model === 'scout-task')).toHaveLength(1);
+  });
+
+  test('orphan nested task and cross-subtree same-name task are omitted without immediate parent proof', async () => {
+    const fx = await layoutFresh({ withAdvisor: false, withTask: false });
+
+    // Main owns ScoutTask + OtherTask. Only ScoutTask names NestedTask.
+    await writeTranscript(path.join(fx.artifactDir, 'ScoutTask.jsonl'), [
+      sessionHeader(`${fx.sessionId}-scout`, fx.cwd),
+      taskSpawnToolResult(['NestedTask']),
+      assistantLine({
+        model: 'scout-task',
+        input: 10,
+        output: 2,
+        cost: 0.1,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    await writeTranscript(path.join(fx.artifactDir, 'ScoutTask', 'NestedTask.jsonl'), [
+      sessionHeader(`${fx.sessionId}-nested-owned`, fx.cwd),
+      assistantLine({
+        model: 'owned-nested',
+        input: 8,
+        output: 2,
+        cost: 0.08,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+
+    // OtherTask is owned by main but does NOT name NestedTask — same stem under OtherTask is orphan.
+    await writeTranscript(path.join(fx.artifactDir, 'OtherTask.jsonl'), [
+      sessionHeader(`${fx.sessionId}-other`, fx.cwd),
+      assistantLine({
+        model: 'other-task',
+        input: 6,
+        output: 1,
+        cost: 0.06,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    await writeTranscript(path.join(fx.artifactDir, 'OtherTask', 'NestedTask.jsonl'), [
+      sessionHeader(`${fx.sessionId}-nested-cross`, fx.cwd),
+      assistantLine({
+        model: 'cross-subtree-nested',
+        input: 99,
+        output: 9,
+        cost: 9.9,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+
+    // Orphan nested dir with no parent task file ownership at all.
+    await writeTranscript(path.join(fx.artifactDir, 'OrphanParent', 'NestedTask.jsonl'), [
+      sessionHeader(`${fx.sessionId}-orphan-nested`, fx.cwd),
+      assistantLine({
+        model: 'orphan-nested',
+        input: 50,
+        output: 5,
+        cost: 5,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+
+    // Global main naming NestedTask must not authorize OtherTask/NestedTask.
+    await proveTaskOwnership(fx.mainPath, ['ScoutTask', 'OtherTask', 'NestedTask']);
+    await writeTranscript(path.join(fx.artifactDir, 'NestedTask.jsonl'), [
+      sessionHeader(`${fx.sessionId}-root-nested`, fx.cwd),
+      assistantLine({
+        model: 'root-nested-from-main',
+        input: 3,
+        output: 1,
+        cost: 0.03,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+
+    const hidden = await collectHiddenSessionUsage({
+      env: fx.env,
+      cwd: fx.cwd,
+      sessionId: fx.sessionId,
+    });
+    expect(hidden?.entries.map(e => e.model).sort()).toEqual(
+      ['other-task', 'owned-nested', 'root-nested-from-main', 'scout-task'].sort()
+    );
+    expect(hidden?.entries.some(e => e.model === 'cross-subtree-nested')).toBe(false);
+    expect(hidden?.entries.some(e => e.model === 'orphan-nested')).toBe(false);
+  });
+
+  test('resume nested-task layout excludes copied prefixes, includes appends and new descendants', async () => {
+    const fx = await layoutFresh({ withAdvisor: false, withTask: false });
+
+    const scoutPath = path.join(fx.artifactDir, 'ScoutTask.jsonl');
+    const nestedPath = path.join(fx.artifactDir, 'ScoutTask', 'NestedTask.jsonl');
+    await writeTranscript(scoutPath, [
+      sessionHeader(`${fx.sessionId}-scout`, fx.cwd),
+      taskSpawnToolResult(['NestedTask']),
+      assistantLine({
+        model: 'scout-prior',
+        input: 10,
+        output: 2,
+        cost: 0.1,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    await writeTranscript(nestedPath, [
+      sessionHeader(`${fx.sessionId}-nested`, fx.cwd),
+      assistantLine({
+        model: 'nested-prior',
+        input: 8,
+        output: 2,
+        cost: 0.08,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    await proveTaskOwnership(fx.mainPath, ['ScoutTask']);
+
+    const snap = await snapshotHiddenSessionFiles({
+      env: fx.env,
+      cwd: fx.cwd,
+      resumeSessionId: fx.sessionId,
+    });
+    expect(snap).not.toBeNull();
+    expect(snap?.files.map(f => f.relativePath).sort()).toEqual(
+      ['ScoutTask.jsonl', path.join('ScoutTask', 'NestedTask.jsonl')].sort()
+    );
+
+    // Append new usage to both parents; add a brand-new nested advisor descendant.
+    await fs.appendFile(
+      scoutPath,
+      `${assistantLine({
+        model: 'scout-delta',
+        input: 1,
+        output: 1,
+        cost: 0.01,
+        cacheRead: 0,
+        cacheWrite: 0,
+      })}\n`,
+      'utf8'
+    );
+    await fs.appendFile(
+      nestedPath,
+      `${assistantLine({
+        model: 'nested-delta',
+        input: 2,
+        output: 1,
+        cost: 0.02,
+        cacheRead: 0,
+        cacheWrite: 0,
+      })}\n`,
+      'utf8'
+    );
+    await writeTranscript(path.join(fx.artifactDir, 'ScoutTask', 'NestedTask', '__advisor.jsonl'), [
+      sessionHeader(`${fx.sessionId}-new-adv`, fx.cwd),
+      assistantLine({
+        model: 'new-descendant-advisor',
+        input: 3,
+        output: 1,
+        cost: 0.03,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+
+    const hidden = await collectHiddenSessionUsage({
+      env: fx.env,
+      cwd: fx.cwd,
+      sessionId: fx.sessionId,
+      snapshot: snap,
+    });
+    expect(hidden?.entries.map(e => e.model).sort()).toEqual(
+      ['nested-delta', 'new-descendant-advisor', 'scout-delta'].sort()
+    );
+    expect(hidden?.entries.some(e => e.model === 'scout-prior')).toBe(false);
+    expect(hidden?.entries.some(e => e.model === 'nested-prior')).toBe(false);
+  });
+
+  test('unverifiable parent prefix omits the descendant subtree on resume', async () => {
+    const fx = await layoutFresh({ withAdvisor: false, withTask: false });
+
+    const scoutPath = path.join(fx.artifactDir, 'ScoutTask.jsonl');
+    const nestedPath = path.join(fx.artifactDir, 'ScoutTask', 'NestedTask.jsonl');
+    await writeTranscript(scoutPath, [
+      sessionHeader(`${fx.sessionId}-scout`, fx.cwd),
+      taskSpawnToolResult(['NestedTask']),
+      assistantLine({
+        model: 'scout-prior',
+        input: 10,
+        output: 2,
+        cost: 0.1,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    await writeTranscript(nestedPath, [
+      sessionHeader(`${fx.sessionId}-nested`, fx.cwd),
+      assistantLine({
+        model: 'nested-should-omit',
+        input: 8,
+        output: 2,
+        cost: 0.08,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    await writeTranscript(path.join(fx.artifactDir, 'ScoutTask', '__advisor.jsonl'), [
+      sessionHeader(`${fx.sessionId}-scout-adv`, fx.cwd),
+      assistantLine({
+        model: 'scout-adv-should-omit',
+        input: 4,
+        output: 1,
+        cost: 0.04,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    await proveTaskOwnership(fx.mainPath, ['ScoutTask']);
+
+    const snap = await snapshotHiddenSessionFiles({
+      env: fx.env,
+      cwd: fx.cwd,
+      resumeSessionId: fx.sessionId,
+    });
+    expect(snap).not.toBeNull();
+
+    // Corrupt ScoutTask prefix so resume verification fails; NestedTask file itself is intact.
+    const tamperedSnap: SessionUsageSnapshot = {
+      ...snap!,
+      files: snap!.files.map(f =>
+        f.relativePath === 'ScoutTask.jsonl' ? { ...f, prefixDigest: '0'.repeat(64) } : f
+      ),
+    };
+
+    // NestedTask also grew after snapshot — must still be omitted with parent.
+    await fs.appendFile(
+      nestedPath,
+      `${assistantLine({
+        model: 'nested-delta-also-omit',
+        input: 1,
+        output: 1,
+        cost: 0.01,
+        cacheRead: 0,
+        cacheWrite: 0,
+      })}
+`,
+      'utf8'
+    );
+
+    // Sibling root advisor created after snapshot: fully new, outside omitted subtree.
+    await writeTranscript(path.join(fx.artifactDir, '__advisor.jsonl'), [
+      sessionHeader(`${fx.sessionId}-root-adv`, fx.cwd),
+      assistantLine({
+        model: 'root-advisor-kept',
+        input: 2,
+        output: 1,
+        cost: 0.02,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+
+    const hidden = await collectHiddenSessionUsage({
+      env: fx.env,
+      cwd: fx.cwd,
+      sessionId: fx.sessionId,
+      snapshot: tamperedSnap,
+    });
+    expect(hidden?.entries.map(e => e.model)).toEqual(['root-advisor-kept']);
+    expect(hidden?.entries.some(e => e.model === 'nested-should-omit')).toBe(false);
+    expect(hidden?.entries.some(e => e.model === 'nested-delta-also-omit')).toBe(false);
+    expect(hidden?.entries.some(e => e.model === 'scout-adv-should-omit')).toBe(false);
+    expect(hidden?.entries.some(e => e.model === 'scout-prior')).toBe(false);
+  });
+
+  test('unverified parent cwd blocks subtree (nested task + advisor) while parent usage still bills', async () => {
+    const fx = await layoutFresh({ withAdvisor: false, withTask: false });
+    await writeTranscript(path.join(fx.artifactDir, 'ScoutTask.jsonl'), [
+      sessionHeader(`${fx.sessionId}-scout`, path.join(fx.root, 'other-cwd')),
+      taskSpawnToolResult(['NestedTask']),
+      assistantLine({
+        model: 'scout-wrong-cwd',
+        input: 10,
+        output: 2,
+        cost: 0.1,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    await writeTranscript(path.join(fx.artifactDir, 'ScoutTask', 'NestedTask.jsonl'), [
+      sessionHeader(`${fx.sessionId}-nested`, fx.cwd),
+      assistantLine({
+        model: 'nested-blocked',
+        input: 9,
+        output: 9,
+        cost: 9,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    await writeTranscript(path.join(fx.artifactDir, 'ScoutTask', '__advisor.jsonl'), [
+      sessionHeader(`${fx.sessionId}-adv-blocked`, fx.cwd),
+      assistantLine({
+        model: 'advisor-blocked',
+        input: 7,
+        output: 1,
+        cost: 0.07,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    await proveTaskOwnership(fx.mainPath, ['ScoutTask']);
+
+    const hidden = await collectHiddenSessionUsage({
+      env: fx.env,
+      cwd: fx.cwd,
+      sessionId: fx.sessionId,
+    });
+    // Parent still bills (main proved ownership); subtree blocked because parent handle
+    // was unverified (cwd mismatch) — distinct from a verified parent with zero children.
+    expect(hidden?.entries.map(e => e.model)).toEqual(['scout-wrong-cwd']);
+    expect(hidden?.entries.some(e => e.model === 'nested-blocked')).toBe(false);
+    expect(hidden?.entries.some(e => e.model === 'advisor-blocked')).toBe(false);
+  });
+
+  test('fork nested-task layout excludes copied history and bills only new descendants', async () => {
+    const source = await layoutFresh({
+      sessionId: 'fork-src',
+      withAdvisor: false,
+      withTask: false,
+    });
+    await writeTranscript(path.join(source.artifactDir, 'ScoutTask.jsonl'), [
+      sessionHeader(`${source.sessionId}-scout`, source.cwd),
+      taskSpawnToolResult(['NestedTask']),
+      assistantLine({
+        model: 'src-scout',
+        input: 10,
+        output: 2,
+        cost: 0.1,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    await writeTranscript(path.join(source.artifactDir, 'ScoutTask', 'NestedTask.jsonl'), [
+      sessionHeader(`${source.sessionId}-nested`, source.cwd),
+      assistantLine({
+        model: 'src-nested',
+        input: 8,
+        output: 2,
+        cost: 0.08,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    await proveTaskOwnership(source.mainPath, ['ScoutTask']);
+
+    const snap = await snapshotHiddenSessionFiles({
+      env: source.env,
+      cwd: source.cwd,
+      resumeSessionId: source.sessionId,
+    });
+    expect(snap).not.toBeNull();
+    expect(snap!.files.map(f => f.relativePath).sort()).toEqual(
+      ['ScoutTask.jsonl', path.join('ScoutTask', 'NestedTask.jsonl')].sort()
+    );
+
+    // Destination fork session: copy historical nested files, then append + add new descendant.
+    const dest = await layoutFresh({
+      sessionId: 'fork-dst',
+      cwd: source.cwd,
+      withAdvisor: false,
+      withTask: false,
+    });
+    await fs.mkdir(path.join(dest.artifactDir, 'ScoutTask', 'NestedTask'), { recursive: true });
+    await fs.copyFile(
+      path.join(source.artifactDir, 'ScoutTask.jsonl'),
+      path.join(dest.artifactDir, 'ScoutTask.jsonl')
+    );
+    await fs.copyFile(
+      path.join(source.artifactDir, 'ScoutTask', 'NestedTask.jsonl'),
+      path.join(dest.artifactDir, 'ScoutTask', 'NestedTask.jsonl')
+    );
+    await proveTaskOwnership(dest.mainPath, ['ScoutTask']);
+
+    await fs.appendFile(
+      path.join(dest.artifactDir, 'ScoutTask.jsonl'),
+      `${assistantLine({
+        model: 'fork-scout-delta',
+        input: 1,
+        output: 1,
+        cost: 0.01,
+        cacheRead: 0,
+        cacheWrite: 0,
+      })}\n`,
+      'utf8'
+    );
+    await fs.appendFile(
+      path.join(dest.artifactDir, 'ScoutTask', 'NestedTask.jsonl'),
+      `${assistantLine({
+        model: 'fork-nested-delta',
+        input: 2,
+        output: 1,
+        cost: 0.02,
+        cacheRead: 0,
+        cacheWrite: 0,
+      })}\n`,
+      'utf8'
+    );
+    await writeTranscript(
+      path.join(dest.artifactDir, 'ScoutTask', 'NestedTask', '__advisor.jsonl'),
+      [
+        sessionHeader(`${dest.sessionId}-new-adv`, dest.cwd),
+        assistantLine({
+          model: 'fork-new-descendant',
+          input: 3,
+          output: 1,
+          cost: 0.03,
+          cacheRead: 0,
+          cacheWrite: 0,
+        }),
+      ]
+    );
+
+    // Snapshot relative paths/digests still match the copied prefixes under dest.
+    const destSnap: SessionUsageSnapshot = {
+      sessionDir: dest.sessionDir,
+      artifactRoot: dest.artifactDir,
+      files: snap!.files.map(f => ({ ...f })),
+    };
+
+    const hidden = await collectHiddenSessionUsage({
+      env: dest.env,
+      cwd: dest.cwd,
+      sessionId: dest.sessionId,
+      snapshot: destSnap,
+    });
+    expect(hidden?.entries.map(e => e.model).sort()).toEqual(
+      ['fork-nested-delta', 'fork-new-descendant', 'fork-scout-delta'].sort()
+    );
+    expect(hidden?.entries.some(e => e.model === 'src-scout')).toBe(false);
+    expect(hidden?.entries.some(e => e.model === 'src-nested')).toBe(false);
+  });
+
+  test('verified parent with zero child stems still hosts nested advisors', async () => {
+    const fx = await layoutFresh({ withAdvisor: false, withTask: false });
+    await writeTranscript(path.join(fx.artifactDir, 'ScoutTask.jsonl'), [
+      sessionHeader(`${fx.sessionId}-scout`, fx.cwd),
+      // No NestedTask spawn — verified empty child set.
+      assistantLine({
+        model: 'scout-only',
+        input: 10,
+        output: 2,
+        cost: 0.1,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    await writeTranscript(path.join(fx.artifactDir, 'ScoutTask', '__advisor.jsonl'), [
+      sessionHeader(`${fx.sessionId}-adv`, fx.cwd),
+      assistantLine({
+        model: 'zero-child-advisor',
+        input: 4,
+        output: 1,
+        cost: 0.04,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    await writeTranscript(path.join(fx.artifactDir, 'ScoutTask', 'NestedTask.jsonl'), [
+      sessionHeader(`${fx.sessionId}-nested`, fx.cwd),
+      assistantLine({
+        model: 'should-not-bill',
+        input: 9,
+        output: 9,
+        cost: 9,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    await proveTaskOwnership(fx.mainPath, ['ScoutTask']);
+
+    const hidden = await collectHiddenSessionUsage({
+      env: fx.env,
+      cwd: fx.cwd,
+      sessionId: fx.sessionId,
+    });
+    expect(hidden?.entries.map(e => e.model).sort()).toEqual(
+      ['scout-only', 'zero-child-advisor'].sort()
+    );
+    expect(hidden?.entries.some(e => e.model === 'should-not-bill')).toBe(false);
+  });
+});
