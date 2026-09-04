@@ -4,8 +4,8 @@
 
 ### Human group labels use full fixed dimension tuples
 - **Where**: `packages/cli/src/commands/usage.ts` `dimensionLabel`; `UsageBreakdownTable.tsx` `groupLabel`
-- **Pattern**: `groupBy=model` → provider/model + modelSource; `groupBy=node` → nodeId · run · agent · provider/model · source · kind. Missing/unknown modelSource → `unknown model source`; null kind → `unclassified kind`. Labels are human-only — `--json`/API stay core report objects.
-- **Example**: same `anthropic/sonnet` with `reported` vs `unknown` modelSource → two distinct rows
+- **Pattern**: Every plan §11 fixed dim appears in the human label. model → provider/model/modelSource; node → full runId + nodeId + agent + provider/model + source + kind; project → name + id; run → full runId + workflowName + codebaseId (never truncate runId). Missing/unknown modelSource → `unknown model source`; null kind → `unclassified kind`. Labels human-only — `--json`/API stay core report objects.
+- **Example**: same `anthropic/sonnet` with `reported` vs `unknown` modelSource → two distinct rows; node rows with different agents stay distinct even if nodeId matches
 
 ### Event-only usage before empty states
 - **Where**: `UsageBreakdownTable.tsx` `describeUsageState` / `formatMissingMeasures` / `eventOnlyUsageMessage`; `RunDetailHeader.tsx` `RunHeaderUsageLabel`
@@ -742,20 +742,21 @@
 
 **Status**: PASSED
 **Files changed**:
-- `packages/cli/src/commands/usage.ts` — `dimensionLabel` includes full model/node fixed dimensions; export for tests
-- `packages/cli/src/commands/usage.test.ts` — modelSource/node tuple + null/unknown/unclassified + human/--json contract tests
-- `packages/web/src/experiments/console/components/UsageBreakdownTable.tsx` — exported `groupLabel` with matching full tuples
-- `packages/web/src/experiments/console/components/UsageBreakdownTable.test.ts` — model/node/null label coverage + multi-row markup asserts
+- `packages/cli/src/commands/usage.ts` — `dimensionLabel` full tuples for model/node/project/run; export for tests
+- `packages/cli/src/commands/usage.test.ts` — modelSource/node agent-differing fixtures, project/run full dims, null/unknown, human/--json contract
+- `packages/web/src/experiments/console/components/UsageBreakdownTable.tsx` — exported `groupLabel` with matching full tuples (full runId)
+- `packages/web/src/experiments/console/components/UsageBreakdownTable.test.ts` — model/node/project/run/null coverage + multi-row markup asserts
 
 **Acceptance criteria verified**:
 - [x] Two groupBy=model rows same provider/model different modelSource → distinct human labels (CLI + web)
-- [x] Two groupBy=node rows same node id different agent/provider/model/source/kind → labels distinguish every fixed dimension
+- [x] Two groupBy=node rows same node id different agent/provider/model/source/kind → labels distinguish every fixed dimension (agents differ: claude vs codex)
 - [x] Null/unknown/unclassified → explicit `unknown model source` and `unclassified kind`
 - [x] CLI --json remains byte-for-contract equal to core report object
-- [x] Focused tests pass (CLI usage 15, UsageBreakdownTable 12)
+- [x] Focused tests pass (CLI usage 16, UsageBreakdownTable 13); project/run also include every fixed §11 dim
 
 **Learnings**:
-- Keep label format parallel across CLI/web so operators see the same tuple vocabulary; web shortens runId for table width, CLI keeps full runId.
+- Keep label format parallel across CLI/web; never truncate runId in labels when runId is a fixed grouping dimension.
 - Do not put labels into the JSON report — human formatting only.
+- Node fixture ACs that name agent as a differing dim must actually set different `agentProvider` values.
 
 ---
