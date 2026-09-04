@@ -11,8 +11,10 @@
  * - main transcript: `<sessionDir>/<timestamp>_<sessionId>.jsonl`
  * - artifact dir: same path without `.jsonl`
  * - top-level advisor: `<artifactDir>/__advisor.jsonl` or `__advisor.<slug>.jsonl`
- * - task-agent: recursive `*.jsonl` under the artifact dir
- * - nested advisor: advisor files beside nested task transcripts
+ * - task-agent: only stems proven by parent main-transcript task spawn/lifecycle
+ *   records (assistant `toolCall` name=task arguments.tasks[].name, or task
+ *   toolResult details.progress/results[].id) plus exact filename constructors
+ * - nested advisor: advisor files under `<taskStem>/` beside an owned task file
  *
  * Resolution order for sessionDir:
  * 1. exact `PI_CODING_AGENT_SESSION_DIR` from the spawned env
@@ -52,8 +54,23 @@ export interface SessionUsageBounds {
 
 let boundsOverride: Partial<SessionUsageBounds> | undefined;
 
+/** Test-only: largest buffer allocated on the chunked prefix digest path. */
+let observedMaxChunkAlloc = 0;
+
 export function setSessionUsageBoundsForTest(bounds?: Partial<SessionUsageBounds>): void {
   boundsOverride = bounds;
+}
+
+export function resetObservedMaxChunkAllocForTest(): void {
+  observedMaxChunkAlloc = 0;
+}
+
+export function getObservedMaxChunkAllocForTest(): number {
+  return observedMaxChunkAlloc;
+}
+
+function noteChunkAlloc(bytes: number): void {
+  if (bytes > observedMaxChunkAlloc) observedMaxChunkAlloc = bytes;
 }
 
 function bounds(): SessionUsageBounds {
@@ -204,8 +221,8 @@ export function resolveOmpSessionDir(input: ResolveSessionDirInput): ResolveSess
   };
 }
 
-function digestBytes(buf: Buffer): string {
-  return createHash('sha256').update(buf).digest('hex');
+function emptySha256Hex(): string {
+  return createHash('sha256').update(Buffer.alloc(0)).digest('hex');
 }
 
 function isPathInsideRoot(rootReal: string, candidateReal: string): boolean {
@@ -262,7 +279,8 @@ interface OpenedFile {
 
 async function openVerifiedFile(
   filePath: string,
-  rootReal: string
+  rootReal: string,
+  expected?: { realPath: string; dev: number; ino: number }
 ): Promise<OpenedFile | undefined> {
   let lstat;
   try {
@@ -282,6 +300,13 @@ async function openVerifiedFile(
     getLog().warn({ issue: 'path_escape' }, 'omp.session_usage_path_rejected');
     return undefined;
   }
+  if (
+    expected &&
+    (realPath !== expected.realPath || lstat.dev !== expected.dev || lstat.ino !== expected.ino)
+  ) {
+    getLog().warn({ issue: 'discovery_identity_mismatch' }, 'omp.session_usage_path_rejected');
+    return undefined;
+  }
   let handle: fs.FileHandle;
   try {
     handle = await fs.open(realPath, 'r');
@@ -293,6 +318,14 @@ async function openVerifiedFile(
     if (!st.isFile() || st.size !== lstat.size || st.dev !== lstat.dev || st.ino !== lstat.ino) {
       await handle.close();
       getLog().warn({ issue: 'identity_mismatch' }, 'omp.session_usage_path_rejected');
+      return undefined;
+    }
+    if (
+      expected &&
+      (st.dev !== expected.dev || st.ino !== expected.ino || realPath !== expected.realPath)
+    ) {
+      await handle.close();
+      getLog().warn({ issue: 'discovery_identity_mismatch' }, 'omp.session_usage_path_rejected');
       return undefined;
     }
     return {
@@ -308,17 +341,107 @@ async function openVerifiedFile(
   }
 }
 
-async function readPrefix(handle: fs.FileHandle, byteLength: number): Promise<Buffer> {
-  if (byteLength <= 0) return Buffer.alloc(0);
-  const buf = Buffer.alloc(byteLength);
-  let offset = 0;
-  while (offset < byteLength) {
-    const { bytesRead } = await handle.read(buf, offset, byteLength - offset, offset);
-    if (bytesRead === 0) break;
-    offset += bytesRead;
+/**
+ * SHA-256 a prefix through fixed-size chunks. Never allocates `byteLength`.
+ * Optionally scans JSONL lines in the same pass for a session header.
+ */
+async function digestPrefixFromHandle(
+  handle: fs.FileHandle,
+  byteLength: number,
+  options?: { scanSessionHeader?: boolean }
+): Promise<
+  | {
+      digest: string;
+      endsAtRecordBoundary: boolean;
+      hasSessionHeader: boolean;
+      bytesHashed: number;
+    }
+  | { error: 'read_short' | 'line_too_large' }
+> {
+  if (byteLength <= 0) {
+    return {
+      digest: emptySha256Hex(),
+      endsAtRecordBoundary: true,
+      hasSessionHeader: false,
+      bytesHashed: 0,
+    };
   }
-  return offset === byteLength ? buf : buf.subarray(0, offset);
+
+  const hash = createHash('sha256');
+  const chunk = Buffer.alloc(JSONL_READ_CHUNK_BYTES);
+  noteChunkAlloc(JSONL_READ_CHUNK_BYTES);
+  let pos = 0;
+  let lastByte = 0;
+  let carry = Buffer.alloc(0);
+  noteChunkAlloc(0);
+  let hasSessionHeader = false;
+  // When true: track every JSONL line size through the full prefix and look for a
+  // session header. Finding the header must NOT stop size tracking — a later
+  // oversize historical line still fails closed.
+  const trackLines = options?.scanSessionHeader === true;
+
+  while (pos < byteLength) {
+    const toRead = Math.min(JSONL_READ_CHUNK_BYTES, byteLength - pos);
+    const { bytesRead } = await handle.read(chunk, 0, toRead, pos);
+    if (bytesRead === 0) return { error: 'read_short' };
+    const slice = chunk.subarray(0, bytesRead);
+    hash.update(slice);
+    lastByte = slice[bytesRead - 1] ?? 0;
+    pos += bytesRead;
+
+    if (!trackLines) continue;
+
+    const data = carry.length === 0 ? Buffer.from(slice) : Buffer.concat([carry, slice]);
+    noteChunkAlloc(data.length);
+    let lineStart = 0;
+    for (let i = 0; i < data.length; i++) {
+      if (data[i] !== 0x0a) continue;
+      let lineBuf = data.subarray(lineStart, i);
+      if (lineBuf.length > 0 && lineBuf[lineBuf.length - 1] === 0x0d) {
+        lineBuf = lineBuf.subarray(0, lineBuf.length - 1);
+      }
+      lineStart = i + 1;
+      if (lineBuf.length > bounds().maxLineBytes) return { error: 'line_too_large' };
+      // Only JSON-parse until the session header is proven; size checks continue.
+      if (hasSessionHeader || lineBuf.length === 0) continue;
+      try {
+        const parsed: unknown = JSON.parse(lineBuf.toString('utf8'));
+        const obj = asObject(parsed);
+        if (obj?.type === 'session' && stringField(obj.id)) {
+          hasSessionHeader = true;
+        }
+      } catch {
+        // Malformed lines are ignored for header proof; digest still covers them.
+      }
+    }
+    carry = lineStart >= data.length ? Buffer.alloc(0) : Buffer.from(data.subarray(lineStart));
+    noteChunkAlloc(carry.length);
+    if (carry.length > bounds().maxLineBytes) return { error: 'line_too_large' };
+  }
+
+  if (trackLines && !hasSessionHeader && carry.length > 0) {
+    let lineBuf = carry;
+    if (lineBuf[lineBuf.length - 1] === 0x0d) {
+      lineBuf = lineBuf.subarray(0, lineBuf.length - 1);
+    }
+    if (lineBuf.length > bounds().maxLineBytes) return { error: 'line_too_large' };
+    try {
+      const parsed: unknown = JSON.parse(lineBuf.toString('utf8'));
+      const obj = asObject(parsed);
+      if (obj?.type === 'session' && stringField(obj.id)) hasSessionHeader = true;
+    } catch {
+      // ignore
+    }
+  }
+
+  return {
+    digest: hash.digest('hex'),
+    endsAtRecordBoundary: lastByte === 0x0a,
+    hasSessionHeader,
+    bytesHashed: pos,
+  };
 }
+
 async function* iterateJsonlLinesFromHandle(
   handle: fs.FileHandle,
   start: number,
@@ -328,6 +451,7 @@ async function* iterateJsonlLinesFromHandle(
   let pos = start;
   let carry = Buffer.alloc(0);
   const chunk = Buffer.alloc(JSONL_READ_CHUNK_BYTES);
+  noteChunkAlloc(JSONL_READ_CHUNK_BYTES);
 
   while (pos < end) {
     const toRead = Math.min(JSONL_READ_CHUNK_BYTES, end - pos);
@@ -339,6 +463,7 @@ async function* iterateJsonlLinesFromHandle(
       carry.length === 0
         ? Buffer.from(chunk.subarray(0, bytesRead))
         : Buffer.concat([carry, chunk.subarray(0, bytesRead)]);
+    noteChunkAlloc(data.length);
     let lineStart = 0;
     for (let i = 0; i < data.length; i++) {
       if (data[i] !== 0x0a) continue;
@@ -355,6 +480,7 @@ async function* iterateJsonlLinesFromHandle(
     }
     // Copy residual bytes — must not alias the reused read chunk.
     carry = lineStart >= data.length ? Buffer.alloc(0) : Buffer.from(data.subarray(lineStart));
+    noteChunkAlloc(carry.length);
     if (carry.length > bounds().maxLineBytes) {
       yield { omitAll: true, issue: 'line_too_large' };
       return;
@@ -371,6 +497,158 @@ async function* iterateJsonlLinesFromHandle(
       return;
     }
     yield { line: lineBuf.toString('utf8'), lineBytes: lineBuf.length };
+  }
+}
+
+/**
+ * Collect task-agent stems proven by the parent main transcript.
+ * Ownership sources (supported OMP parent-session format):
+ * - assistant toolCall name=task → arguments.tasks[].name
+ * - toolResult toolName=task → details.progress[].id / details.results[].id
+ * A bare session-shaped child JSONL is never enough.
+ */
+
+function collectTaskStemFromUnknown(value: unknown, into: Set<string>): void {
+  if (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    !value.includes('/') &&
+    !value.includes('\\')
+  ) {
+    into.add(value);
+  }
+}
+
+function extractTaskStemsFromRecord(obj: JsonObject, into: Set<string>): void {
+  if (obj.type === 'message') {
+    const message = asObject(obj.message);
+    if (!message) return;
+    const role = stringField(message.role);
+    if (role === 'assistant') {
+      const content = message.content;
+      if (!Array.isArray(content)) return;
+      for (const item of content) {
+        const call = asObject(item);
+        if (!call) continue;
+        if (stringField(call.type) !== 'toolCall') continue;
+        if (stringField(call.name) !== 'task') continue;
+        let args: unknown = call.arguments ?? call.args ?? call.input;
+        if (typeof args === 'string') {
+          try {
+            args = JSON.parse(args);
+          } catch {
+            continue;
+          }
+        }
+        const argsObj = asObject(args);
+        const tasks = argsObj?.tasks;
+        if (!Array.isArray(tasks)) continue;
+        for (const task of tasks) {
+          const taskObj = asObject(task);
+          if (!taskObj) continue;
+          collectTaskStemFromUnknown(taskObj.name, into);
+          collectTaskStemFromUnknown(taskObj.id, into);
+        }
+      }
+      return;
+    }
+    if (role === 'toolResult' && stringField(message.toolName) === 'task') {
+      const details = asObject(message.details);
+      if (!details) return;
+      for (const key of ['progress', 'results'] as const) {
+        const rows = details[key];
+        if (!Array.isArray(rows)) continue;
+        for (const row of rows) {
+          const rowObj = asObject(row);
+          if (!rowObj) continue;
+          collectTaskStemFromUnknown(rowObj.id, into);
+          collectTaskStemFromUnknown(rowObj.name, into);
+        }
+      }
+    }
+    return;
+  }
+
+  if (obj.type === 'custom' && stringField(obj.customType) === 'tool_execution_start') {
+    const data = asObject(obj.data);
+    if (!data || stringField(data.toolName) !== 'task') return;
+    // Start events often omit task ids; still accept explicit ids/names when present.
+    collectTaskStemFromUnknown(data.taskId, into);
+    collectTaskStemFromUnknown(data.name, into);
+    const tasks = data.tasks;
+    if (Array.isArray(tasks)) {
+      for (const task of tasks) {
+        const taskObj = asObject(task);
+        if (!taskObj) continue;
+        collectTaskStemFromUnknown(taskObj.name, into);
+        collectTaskStemFromUnknown(taskObj.id, into);
+      }
+    }
+  }
+}
+
+export async function extractOwnedTaskStemsFromMain(
+  transcriptPath: string,
+  sessionDirReal: string,
+  sessionId: string,
+  expectedCwd?: string
+): Promise<{ stems: Set<string> } | { omit: true; reason: string }> {
+  const opened = await openVerifiedFile(transcriptPath, sessionDirReal);
+  if (!opened) return { omit: true, reason: 'main_open_failed' };
+  if (opened.size > bounds().maxFileBytes) {
+    await opened.handle.close().catch(() => undefined);
+    getLog().warn(
+      { issue: 'file_too_large', bound: bounds().maxFileBytes },
+      'omp.session_usage_bound_exceeded'
+    );
+    return { omit: true, reason: 'file_too_large' };
+  }
+
+  const stems = new Set<string>();
+  let headerOk = false;
+  try {
+    for await (const item of iterateJsonlLinesFromHandle(opened.handle, 0, opened.size)) {
+      if ('omitAll' in item) {
+        getLog().warn({ issue: item.issue }, 'omp.session_usage_bound_exceeded');
+        return { omit: true, reason: item.issue };
+      }
+      const { line } = item;
+      if (line.trim().length === 0) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const obj = asObject(parsed);
+      if (!obj) continue;
+
+      if (obj.type === 'session') {
+        const id = stringField(obj.id);
+        if (!id) continue;
+        if (id !== sessionId) {
+          return { omit: true, reason: 'header_mismatch' };
+        }
+        if (expectedCwd !== undefined) {
+          const headerCwd = stringField(obj.cwd);
+          if (!headerCwd || path.resolve(headerCwd) !== path.resolve(expectedCwd)) {
+            return { omit: true, reason: 'header_mismatch' };
+          }
+        }
+        headerOk = true;
+        continue;
+      }
+
+      // Ownership records are only trusted after the matching session header on this handle.
+      if (!headerOk) continue;
+      extractTaskStemsFromRecord(obj, stems);
+    }
+    if (!headerOk) return { omit: true, reason: 'header_mismatch' };
+    return { stems };
+  } catch {
+    return { omit: true, reason: 'main_read_failed' };
+  } finally {
+    await opened.handle.close().catch(() => undefined);
   }
 }
 
@@ -433,21 +711,26 @@ interface CandidateFile {
   relativePath: string;
   kind: 'advisor' | 'subagent';
   size: number;
+  /** Discovery-time identity; verified open must match or the candidate is rejected. */
+  dev: number;
+  ino: number;
 }
 
 /**
- * Recursively list JSONL candidates under the artifact root using OMP constructors:
- * - advisors: `__advisor.jsonl` / `__advisor.<slug>.jsonl`
- * - task agents: non-advisor `.jsonl` that is not main-transcript-shaped for this session
- * - nested dirs: only `<taskStem>/` beside an accepted task-agent `<taskStem>.jsonl`
- * Main transcript is outside the artifact root and is never returned here.
+ * Recursively list JSONL candidates under the artifact root using OMP constructors
+ * plus parent-proven task stems:
+ * - advisors: `__advisor.jsonl` / `__advisor.<slug>.jsonl` (constructor is ownership)
+ * - task agents: filename constructor AND stem ∈ ownedTaskStems from the main transcript
+ * - nested dirs: only `<taskStem>/` beside an accepted owned task-agent file
+ * Discovery sizes are advisory early exits; authoritative totals use verified open sizes.
  */
 async function listHiddenCandidates(
   artifactRootReal: string,
-  sessionId: string
+  sessionId: string,
+  ownedTaskStems: ReadonlySet<string>
 ): Promise<{ candidates: CandidateFile[] } | { omit: true; reason: string }> {
   const candidates: CandidateFile[] = [];
-  let totalBytes = 0;
+  let discoveryTotalBytes = 0;
   // Only descend into `<taskStem>/` dirs that sit beside an accepted task-agent file.
   const stack: string[] = [artifactRootReal];
 
@@ -466,7 +749,7 @@ async function listHiddenCandidates(
       continue;
     }
 
-    const taskStems = new Set<string>();
+    const acceptedTaskStems = new Set<string>();
     const nestedDirs: string[] = [];
 
     for (const entry of entries) {
@@ -482,9 +765,11 @@ async function listHiddenCandidates(
       if (!entry.isFile() || !entry.name.endsWith(JSONL_SUFFIX)) continue;
 
       const isAdvisor = isAdvisorFileName(entry.name);
-      const isTask = isTaskAgentFileName(entry.name, sessionId);
-      if (!isAdvisor && !isTask) {
-        // Unrelated constructor (main-shaped, reserved __*, etc.) — never bill.
+      const isTaskConstructor = isTaskAgentFileName(entry.name, sessionId);
+      const taskStem = isTaskConstructor ? entry.name.slice(0, -JSONL_SUFFIX.length) : undefined;
+      const isOwnedTask = taskStem !== undefined && ownedTaskStems.has(taskStem);
+      if (!isAdvisor && !isOwnedTask) {
+        // Unrelated constructor, unowned Orphan.jsonl, reserved __*, etc. — never bill.
         continue;
       }
 
@@ -509,8 +794,8 @@ async function listHiddenCandidates(
         );
         return { omit: true, reason: 'file_too_large' };
       }
-      totalBytes += st.size;
-      if (totalBytes > bounds().maxTotalBytes) {
+      discoveryTotalBytes += st.size;
+      if (discoveryTotalBytes > bounds().maxTotalBytes) {
         getLog().warn(
           { issue: 'total_bytes', bound: bounds().maxTotalBytes },
           'omp.session_usage_bound_exceeded'
@@ -523,22 +808,24 @@ async function listHiddenCandidates(
         continue;
       }
       const relativePath = path.relative(artifactRootReal, realFile);
-      if (isTask) {
-        taskStems.add(entry.name.slice(0, -JSONL_SUFFIX.length));
+      if (isOwnedTask && taskStem) {
+        acceptedTaskStems.add(taskStem);
       }
       candidates.push({
         absolutePath: realFile,
         relativePath,
         kind: isAdvisor ? 'advisor' : 'subagent',
         size: st.size,
+        dev: st.dev,
+        ino: st.ino,
       });
     }
 
     for (const abs of nestedDirs) {
       const name = path.basename(abs);
-      // Nested artifact dirs exist only beside a task-agent transcript of the same stem
+      // Nested artifact dirs exist only beside an owned task-agent transcript of the same stem
       // (OMP: artifactsDir = sessionFile without `.jsonl`). Orphan dirs are ignored.
-      if (!taskStems.has(name)) continue;
+      if (!acceptedTaskStems.has(name)) continue;
       const realDir = await safeRealPath(abs);
       if (!realDir || !isPathInsideRoot(artifactRootReal, realDir)) {
         getLog().warn({ issue: 'path_escape' }, 'omp.session_usage_path_rejected');
@@ -552,42 +839,50 @@ async function listHiddenCandidates(
   return { candidates };
 }
 
-function prefixContainsSessionHeader(prefix: Buffer): boolean {
-  if (prefix.length === 0) return false;
-  const text = prefix.toString('utf8');
-  for (const line of text.split('\n')) {
-    if (line.trim().length === 0) continue;
-    try {
-      const parsed: unknown = JSON.parse(line);
-      const obj = asObject(parsed);
-      if (obj?.type === 'session' && stringField(obj.id)) return true;
-    } catch {
-      continue;
-    }
-  }
-  return false;
-}
+type SnapshotFileResult =
+  | { status: 'ok'; snap: FileSnapshot; openedSize: number }
+  | { status: 'skip' }
+  | { status: 'omit_all'; reason: string };
 
 async function snapshotFile(
   absolutePath: string,
   relativePath: string,
   rootReal: string,
-  kind: 'advisor' | 'subagent'
-): Promise<FileSnapshot | undefined> {
-  const opened = await openVerifiedFile(absolutePath, rootReal);
-  if (!opened) return undefined;
+  kind: 'advisor' | 'subagent',
+  expected?: { realPath: string; dev: number; ino: number }
+): Promise<SnapshotFileResult> {
+  const opened = await openVerifiedFile(absolutePath, rootReal, expected);
+  if (!opened) return { status: 'skip' };
   try {
-    if (opened.size > bounds().maxFileBytes) return undefined;
-    const prefix = await readPrefix(opened.handle, opened.size);
-    const endsAtRecordBoundary = prefix.length === 0 || prefix[prefix.length - 1] === 0x0a;
+    if (opened.size > bounds().maxFileBytes) {
+      getLog().warn(
+        { issue: 'file_too_large', bound: bounds().maxFileBytes },
+        'omp.session_usage_bound_exceeded'
+      );
+      return { status: 'omit_all', reason: 'file_too_large' };
+    }
+    const scanned = await digestPrefixFromHandle(opened.handle, opened.size, {
+      scanSessionHeader: true,
+    });
+    if ('error' in scanned) {
+      if (scanned.error === 'line_too_large') {
+        getLog().warn({ issue: 'line_too_large' }, 'omp.session_usage_bound_exceeded');
+        return { status: 'omit_all', reason: 'line_too_large' };
+      }
+      return { status: 'skip' };
+    }
     // Empty new files are allowed; non-empty candidates must prove a session header.
-    if (prefix.length > 0 && !prefixContainsSessionHeader(prefix)) return undefined;
+    if (scanned.bytesHashed > 0 && !scanned.hasSessionHeader) return { status: 'skip' };
     return {
-      relativePath,
-      byteLength: prefix.length,
-      prefixDigest: digestBytes(prefix),
-      endsAtRecordBoundary,
-      kind,
+      status: 'ok',
+      openedSize: opened.size,
+      snap: {
+        relativePath,
+        byteLength: scanned.bytesHashed,
+        prefixDigest: scanned.digest,
+        endsAtRecordBoundary: scanned.endsAtRecordBoundary,
+        kind,
+      },
     };
   } finally {
     await opened.handle.close().catch(() => undefined);
@@ -620,14 +915,14 @@ export async function snapshotHiddenSessionFiles(input: {
     return null;
   }
 
-  const headerOk = await validateMainSessionHeader(
+  const owned = await extractOwnedTaskStemsFromMain(
     mainTranscript,
     sessionDirReal,
     input.resumeSessionId,
     input.cwd
   );
-  if (!headerOk) {
-    getLog().warn({ reason: 'header_mismatch' }, 'omp.session_usage_snapshot_skipped');
+  if ('omit' in owned) {
+    getLog().warn({ reason: owned.reason }, 'omp.session_usage_snapshot_skipped');
     return null;
   }
 
@@ -646,22 +941,40 @@ export async function snapshotHiddenSessionFiles(input: {
     return null;
   }
 
-  const listed = await listHiddenCandidates(artifactRootReal, input.resumeSessionId);
+  const listed = await listHiddenCandidates(artifactRootReal, input.resumeSessionId, owned.stems);
   if ('omit' in listed) return null;
 
   const files: FileSnapshot[] = [];
+  let actualTotalBytes = 0;
   for (const candidate of listed.candidates) {
     const snap = await snapshotFile(
       candidate.absolutePath,
       candidate.relativePath,
       artifactRootReal,
-      candidate.kind
+      candidate.kind,
+      {
+        realPath: candidate.absolutePath,
+        dev: candidate.dev,
+        ino: candidate.ino,
+      }
     );
-    if (!snap) {
+    if (snap.status === 'omit_all') {
+      getLog().warn({ reason: snap.reason }, 'omp.session_usage_snapshot_skipped');
+      return null;
+    }
+    if (snap.status === 'skip') {
       getLog().warn({ reason: 'candidate_snapshot_failed' }, 'omp.session_usage_snapshot_skipped');
       return null;
     }
-    files.push(snap);
+    actualTotalBytes += snap.openedSize;
+    if (actualTotalBytes > bounds().maxTotalBytes) {
+      getLog().warn(
+        { issue: 'total_bytes', bound: bounds().maxTotalBytes },
+        'omp.session_usage_bound_exceeded'
+      );
+      return null;
+    }
+    files.push(snap.snap);
   }
   return { sessionDir: sessionDirReal, artifactRoot: artifactRootReal, files };
 }
@@ -688,7 +1001,7 @@ function addTokens(acc: TokenUsage, entry: ModelUsageEntry): TokenUsage {
 }
 
 export type ParseTranscriptResult =
-  | { status: 'ok'; entries: ModelUsageEntry[] }
+  | { status: 'ok'; entries: ModelUsageEntry[]; openedSize: number }
   | { status: 'skip' }
   | { status: 'omit_all' };
 
@@ -699,6 +1012,10 @@ export interface ParseTranscriptOptions {
    * handle so a pathname swap after verification cannot redirect the reader.
    */
   expectedPrefix?: { byteLength: number; digest: string };
+  /**
+   * Discovery-time file identity; open must resolve to the same real path/dev/ino.
+   */
+  expectedIdentity?: { realPath: string; dev: number; ino: number };
   /**
    * Test seam: runs after prefix verification (when expectedPrefix is set) and
    * before delta parsing, still holding the original open handle.
@@ -719,7 +1036,7 @@ export async function parseTranscriptUsageEntries(
   options?: ParseTranscriptOptions
 ): Promise<ParseTranscriptResult> {
   const requireSessionHeader = options?.requireSessionHeader ?? byteOffset === 0;
-  const opened = await openVerifiedFile(filePath, rootReal);
+  const opened = await openVerifiedFile(filePath, rootReal, options?.expectedIdentity);
   if (!opened) return { status: 'skip' };
   if (opened.size > bounds().maxFileBytes) {
     await opened.handle.close().catch(() => undefined);
@@ -740,8 +1057,8 @@ export async function parseTranscriptUsageEntries(
         getLog().warn({ issue: 'prefix_mismatch' }, 'omp.session_usage_file_omitted');
         return { status: 'skip' };
       }
-      const prefix = await readPrefix(opened.handle, byteLength);
-      if (prefix.length !== byteLength || digestBytes(prefix) !== digest) {
+      const scanned = await digestPrefixFromHandle(opened.handle, byteLength);
+      if ('error' in scanned || scanned.bytesHashed !== byteLength || scanned.digest !== digest) {
         getLog().warn({ issue: 'prefix_mismatch' }, 'omp.session_usage_file_omitted');
         return { status: 'skip' };
       }
@@ -750,7 +1067,7 @@ export async function parseTranscriptUsageEntries(
         await options.afterPrefixVerified();
       }
       if (opened.size === readStart) {
-        return { status: 'ok', entries: [] };
+        return { status: 'ok', entries: [], openedSize: opened.size };
       }
     } else if (byteOffset > opened.size) {
       return { status: 'skip' };
@@ -802,7 +1119,7 @@ export async function parseTranscriptUsageEntries(
     getLog().warn({ issue: 'unsupported_jsonl_layout' }, 'omp.session_usage_file_omitted');
     return { status: 'skip' };
   }
-  return { status: 'ok', entries };
+  return { status: 'ok', entries, openedSize: opened.size };
 }
 
 /**
@@ -818,6 +1135,13 @@ export async function collectHiddenSessionUsage(input: {
   snapshot?: SessionUsageSnapshot | null;
   homeDir?: string;
   tmpDir?: string;
+  /**
+   * Test seam: after candidate discovery, before verified opens/parsing.
+   * Used to prove growth/replacement races are fail-closed on actual opened sizes.
+   */
+  afterCandidatesListed?: (
+    candidates: readonly { relativePath: string; absolutePath: string }[]
+  ) => Promise<void>;
 }): Promise<HiddenSessionUsage | undefined> {
   if (input.noSession) return undefined;
   if (input.snapshot === null) {
@@ -843,21 +1167,22 @@ export async function collectHiddenSessionUsage(input: {
     return undefined;
   }
 
-  const headerOk = await validateMainSessionHeader(
+  if (!mainTranscript.endsWith(JSONL_SUFFIX)) {
+    getLog().warn({ reason: 'unsupported_layout' }, 'omp.session_usage_omitted');
+    return undefined;
+  }
+
+  const owned = await extractOwnedTaskStemsFromMain(
     mainTranscript,
     sessionDirReal,
     input.sessionId,
     input.cwd
   );
-  if (!headerOk) {
-    getLog().warn({ reason: 'header_mismatch' }, 'omp.session_usage_omitted');
+  if ('omit' in owned) {
+    getLog().warn({ reason: owned.reason }, 'omp.session_usage_omitted');
     return undefined;
   }
 
-  if (!mainTranscript.endsWith(JSONL_SUFFIX)) {
-    getLog().warn({ reason: 'unsupported_layout' }, 'omp.session_usage_omitted');
-    return undefined;
-  }
   const artifactRoot = mainTranscript.slice(0, -JSONL_SUFFIX.length);
   const artifactRootReal = await safeRealPath(artifactRoot);
   if (!artifactRootReal) {
@@ -868,8 +1193,17 @@ export async function collectHiddenSessionUsage(input: {
     return undefined;
   }
 
-  const listed = await listHiddenCandidates(artifactRootReal, input.sessionId);
+  const listed = await listHiddenCandidates(artifactRootReal, input.sessionId, owned.stems);
   if ('omit' in listed) return undefined;
+
+  if (input.afterCandidatesListed) {
+    await input.afterCandidatesListed(
+      listed.candidates.map(c => ({
+        relativePath: c.relativePath,
+        absolutePath: c.absolutePath,
+      }))
+    );
+  }
 
   const snapshotByRel = new Map<string, FileSnapshot>();
   if (input.snapshot) {
@@ -878,6 +1212,7 @@ export async function collectHiddenSessionUsage(input: {
 
   const entries: ModelUsageEntry[] = [];
   let tokens = emptyTokens();
+  let actualTotalBytes = 0;
 
   for (const candidate of listed.candidates) {
     const prior = snapshotByRel.get(candidate.relativePath);
@@ -900,11 +1235,26 @@ export async function collectHiddenSessionUsage(input: {
       byteOffset,
       {
         requireSessionHeader: byteOffset === 0 && !expectedPrefix,
+        expectedIdentity: {
+          realPath: candidate.absolutePath,
+          dev: candidate.dev,
+          ino: candidate.ino,
+        },
         ...(expectedPrefix ? { expectedPrefix } : {}),
       }
     );
     if (parsed.status === 'omit_all') return undefined;
     if (parsed.status === 'skip') continue;
+
+    actualTotalBytes += parsed.openedSize;
+    if (actualTotalBytes > bounds().maxTotalBytes) {
+      getLog().warn(
+        { issue: 'total_bytes', bound: bounds().maxTotalBytes },
+        'omp.session_usage_bound_exceeded'
+      );
+      return undefined;
+    }
+
     for (const entry of parsed.entries) {
       entries.push(entry);
       tokens = addTokens(tokens, entry);
