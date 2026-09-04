@@ -237,7 +237,7 @@ function toError(error: unknown): Error {
 
 function buildTransportErrorResult(
   parser: OmpEventParser,
-  errorSubtype: 'omp_protocol_error' | 'omp_exit_nonzero',
+  errorSubtype: 'omp_protocol_error' | 'omp_exit_nonzero' | 'omp_transport_error',
   message: string,
   resumeRequested: boolean
 ): MessageChunk {
@@ -249,6 +249,14 @@ function buildTransportErrorResult(
     errorSubtype,
     errors: [message, ...(observed.errors ?? []).filter(error => error !== message)],
   };
+}
+
+function hasAuthoritativeUsage(result: MessageChunk): boolean {
+  return (
+    result.type === 'result' &&
+    Array.isArray(result.usageBreakdown) &&
+    result.usageBreakdown.length > 0
+  );
 }
 
 async function maybeEnrichResult(
@@ -440,7 +448,33 @@ export class OmpProvider implements IAgentProvider {
         stderrOutcomePromise,
       ]);
       if (abortSignal?.aborted) throw new Error('Query aborted');
-      if (transportError) throw transportError;
+
+      // Late I/O after the parser already accepted authoritative usage must
+      // yield one terminal isError result (not throw) so the executor can
+      // record spend before failing the node. No-usage I/O still throws.
+      const lateIoError =
+        transportError ??
+        (!exitOutcome.ok ? exitOutcome.error : undefined) ??
+        (!stderrOutcome.ok ? stderrOutcome.error : undefined);
+      if (lateIoError) {
+        const observed = parser.buildResult(resumeSessionId !== undefined ? false : undefined);
+        if (hasAuthoritativeUsage(observed)) {
+          const message = lateIoError.message;
+          yield { type: 'system', content: message };
+          yield await maybeEnrichResult(
+            buildTransportErrorResult(
+              parser,
+              'omp_transport_error',
+              message,
+              resumeSessionId !== undefined
+            ),
+            { env, cwd, noSession, snapshot }
+          );
+          return;
+        }
+        throw lateIoError;
+      }
+      // lateIoError already covered both failure arms; re-check to narrow the union.
       if (!exitOutcome.ok) throw exitOutcome.error;
       if (!stderrOutcome.ok) throw stderrOutcome.error;
 
