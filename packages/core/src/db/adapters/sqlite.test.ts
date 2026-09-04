@@ -1813,6 +1813,238 @@ describe('SqliteAdapter', () => {
   });
 });
 
+describe('SqliteAdapter transaction isolation', () => {
+  let db: SqliteAdapter;
+
+  afterEach(async () => {
+    if (db) await db.close();
+    if (currentDbPath) {
+      try {
+        unlinkSync(currentDbPath);
+      } catch {
+        // ignore missing temp db
+      }
+      try {
+        unlinkSync(`${currentDbPath}-wal`);
+      } catch {
+        // ignore
+      }
+      try {
+        unlinkSync(`${currentDbPath}-shm`);
+      } catch {
+        // ignore
+      }
+      currentDbPath = '';
+    }
+  });
+
+  test('public query mutation cannot run inside an open withSnapshotRead transaction', async () => {
+    db = createTestDb();
+    await insertCodebase(db, 'cb-snap');
+
+    let releaseSnapshot!: () => void;
+    const snapshotHold = new Promise<void>(resolve => {
+      releaseSnapshot = resolve;
+    });
+
+    let publicPromise!: Promise<unknown>;
+
+    const snapshotPromise = db.withSnapshotRead(async query => {
+      await query('SELECT 1 AS n');
+      // Start ordinary public mutation while snapshot is open — do NOT await it
+      // inside the callback (it serializes outside and would deadlock).
+      publicPromise = db.query(
+        `INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)`,
+        ['cb-public', 'public-after-snap', '/tmp/public']
+      );
+      // Yield so the public query enqueues on txTail.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const during = await query<{ id: string }>(
+        `SELECT id FROM remote_agent_codebases WHERE id = $1`,
+        ['cb-public']
+      );
+      // Public work has not executed inside this transaction.
+      expect(during.rows).toHaveLength(0);
+      await snapshotHold;
+      return 'snap-ok';
+    });
+
+    // Second connection must not see the public insert while snapshot still holds.
+    await Promise.resolve();
+    await Promise.resolve();
+    const probe = new SqliteAdapter(currentDbPath);
+    try {
+      const rows = await probe.query<{ id: string }>(
+        `SELECT id FROM remote_agent_codebases WHERE id = $1`,
+        ['cb-public']
+      );
+      expect(rows.rows).toHaveLength(0);
+    } finally {
+      await probe.close();
+    }
+
+    releaseSnapshot();
+    await expect(snapshotPromise).resolves.toBe('snap-ok');
+    await publicPromise;
+
+    const after = await db.query<{ id: string }>(
+      `SELECT id FROM remote_agent_codebases WHERE id = $1`,
+      ['cb-public']
+    );
+    expect(after.rows).toHaveLength(1);
+  });
+
+  test('throwing withSnapshotRead cannot roll back an acknowledged outside mutation', async () => {
+    db = createTestDb();
+    await insertCodebase(db, 'cb-base');
+
+    let releaseSnapshot!: () => void;
+    const snapshotHold = new Promise<void>(resolve => {
+      releaseSnapshot = resolve;
+    });
+
+    let publicPromise!: Promise<unknown>;
+
+    const snapshotPromise = db.withSnapshotRead(async query => {
+      await query('SELECT 1 AS n');
+      publicPromise = db.query(
+        `INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)`,
+        ['cb-outside', 'outside-mutation', '/tmp/outside']
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      await snapshotHold;
+      throw new Error('snapshot boom');
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    releaseSnapshot();
+    await expect(snapshotPromise).rejects.toThrow('snapshot boom');
+    await publicPromise;
+
+    const rows = await db.query<{ id: string }>(
+      `SELECT id FROM remote_agent_codebases WHERE id = $1`,
+      ['cb-outside']
+    );
+    expect(rows.rows).toHaveLength(1);
+  });
+
+  test('public write cannot become a child of withTransaction', async () => {
+    db = createTestDb();
+    await insertCodebase(db, 'cb-tx');
+
+    let releaseTx!: () => void;
+    const txHold = new Promise<void>(resolve => {
+      releaseTx = resolve;
+    });
+
+    let publicPromise!: Promise<unknown>;
+
+    const txPromise = db.withTransaction(async query => {
+      await query(
+        `INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)`,
+        ['cb-inside', 'inside-tx', '/tmp/inside']
+      );
+      publicPromise = db.query(
+        `INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)`,
+        ['cb-child', 'would-be-child', '/tmp/child']
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      // Still invisible via tx-scoped read — public insert has not joined this tx.
+      const during = await query<{ id: string }>(
+        `SELECT id FROM remote_agent_codebases WHERE id = $1`,
+        ['cb-child']
+      );
+      expect(during.rows).toHaveLength(0);
+      await txHold;
+      throw new Error('tx boom');
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    releaseTx();
+    await expect(txPromise).rejects.toThrow('tx boom');
+    await publicPromise;
+
+    const inside = await db.query<{ id: string }>(
+      `SELECT id FROM remote_agent_codebases WHERE id = $1`,
+      ['cb-inside']
+    );
+    const child = await db.query<{ id: string }>(
+      `SELECT id FROM remote_agent_codebases WHERE id = $1`,
+      ['cb-child']
+    );
+    expect(inside.rows).toHaveLength(0);
+    expect(child.rows).toHaveLength(1);
+  });
+
+  test('rejects public BEGIN/COMMIT/ROLLBACK', async () => {
+    db = createTestDb();
+    await expect(db.query('BEGIN')).rejects.toThrow('public transaction-control');
+    await expect(db.query('COMMIT')).rejects.toThrow('public transaction-control');
+    await expect(db.query('ROLLBACK')).rejects.toThrow('public transaction-control');
+  });
+
+  test('serializes concurrent withTransaction without nested BEGIN errors', async () => {
+    db = createTestDb();
+    await insertCodebase(db, 'cb-cas');
+
+    const results = await Promise.all([
+      db.withTransaction(async query => {
+        await query(
+          `INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)`,
+          ['cb-a', 'a', '/tmp/a']
+        );
+        return 'a';
+      }),
+      db.withTransaction(async query => {
+        await query(
+          `INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)`,
+          ['cb-b', 'b', '/tmp/b']
+        );
+        return 'b';
+      }),
+    ]);
+
+    expect(results.sort()).toEqual(['a', 'b']);
+    const rows = await db.query<{ id: string }>(
+      `SELECT id FROM remote_agent_codebases WHERE id IN ('cb-a', 'cb-b') ORDER BY id`
+    );
+    expect(rows.rows.map(r => r.id)).toEqual(['cb-a', 'cb-b']);
+  });
+
+  test('preserves original error when ROLLBACK fails', async () => {
+    db = createTestDb();
+    const rawDb = db['db'] as Database;
+    const originalPrepare = rawDb.prepare.bind(rawDb);
+    let sawRollback = false;
+    rawDb.prepare = ((sql: string) => {
+      if (typeof sql === 'string' && sql.trim().toUpperCase() === 'ROLLBACK') {
+        sawRollback = true;
+        return {
+          run: () => {
+            throw new Error('rollback failed');
+          },
+          all: () => [],
+          finalize: () => undefined,
+        };
+      }
+      return originalPrepare(sql);
+    }) as typeof rawDb.prepare;
+
+    await expect(
+      db.withTransaction(async () => {
+        throw new Error('original error');
+      })
+    ).rejects.toThrow('original error');
+    expect(sawRollback).toBe(true);
+  });
+});
+
 /**
  * Advance past a SQL string literal / quoted identifier that opens at `start`,
  * returning the index of its closing quote. Doubled quotes escape.

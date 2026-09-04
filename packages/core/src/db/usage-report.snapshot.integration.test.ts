@@ -244,4 +244,73 @@ describe('queryUsageReport — coherent snapshot under concurrent write', () => 
       code: 'overflow',
     });
   });
+
+  test('same-connection public mutation cannot join an open report snapshot', async () => {
+    const runId = 'run-usage-snap-same-conn';
+    await ensureRun(runId);
+    await seedUsageObservation(db, {
+      runId,
+      eventId: 'evt-same-1',
+      ledgerId: 'led-same-1',
+      createdAt: '2026-09-01 14:00:00.000',
+      tokensInput: 7,
+    });
+
+    let releaseSnapshot!: () => void;
+    const hold = new Promise<void>(resolve => {
+      releaseSnapshot = resolve;
+    });
+    let reachedHold!: () => void;
+    const atHold = new Promise<void>(resolve => {
+      reachedHold = resolve;
+    });
+
+    let publicPromise!: Promise<unknown>;
+
+    const snapshotPromise = db.withSnapshotRead(async query => {
+      const first = await query<{ c: number }>(
+        `SELECT COUNT(*) AS c FROM remote_agent_usage_ledger l
+         JOIN remote_agent_workflow_events e ON e.id = l.workflow_event_id
+         WHERE e.workflow_run_id = $1`,
+        [runId]
+      );
+      expect(Number(first.rows[0]?.c)).toBe(1);
+
+      // Ordinary public write on the SAME adapter while snapshot is open.
+      publicPromise = seedUsageObservation(db, {
+        runId,
+        eventId: 'evt-same-2',
+        ledgerId: 'led-same-2',
+        createdAt: '2026-09-01 14:00:01.000',
+        tokensInput: 3,
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const mid = await query<{ c: number }>(
+        `SELECT COUNT(*) AS c FROM remote_agent_usage_ledger l
+         JOIN remote_agent_workflow_events e ON e.id = l.workflow_event_id
+         WHERE e.workflow_run_id = $1`,
+        [runId]
+      );
+      // Public seed is queued outside — must not appear inside this snapshot.
+      expect(Number(mid.rows[0]?.c)).toBe(1);
+      reachedHold();
+      await hold;
+      return Number(first.rows[0]?.c);
+    });
+
+    await atHold;
+    releaseSnapshot();
+    await expect(snapshotPromise).resolves.toBe(1);
+    await publicPromise;
+    const after = await queryUsageReport({
+      from: '2026-09-01T00:00:00.000Z',
+      to: '2026-09-02T00:00:00.000Z',
+      runId,
+      groupBy: 'provider',
+    });
+    expect(after.totals.recordCount).toBe(2);
+    expect(after.totals.tokensInput).toBe(10);
+  });
 });

@@ -20,14 +20,16 @@ export class SqliteAdapter implements IDatabase {
   readonly dialect = 'sqlite' as const;
   readonly sql: SqlDialect = sqliteDialect;
   /**
-   * Tail of the transaction queue. bun:sqlite is a single connection, so two
-   * overlapping `withTransaction` blocks would interleave their BEGINs and throw
-   * "cannot start a transaction within a transaction." Chaining each transaction
-   * onto this tail serializes them: the second waits for the first to COMMIT,
-   * then sees its committed state — exactly what the approval-gate CAS needs so a
+   * Tail of the exclusive single-connection queue. bun:sqlite is one connection, so
+   * overlapping BEGIN blocks would throw "cannot start a transaction within a
+   * transaction." Transactions and public queries that must wait out an open
+   * transaction chain onto this tail. A second transaction waits for the first to
+   * COMMIT, then sees committed state — exactly what approval-gate CAS needs so a
    * concurrent second resolver cleanly loses (rowCount 0) instead of erroring.
    */
   private txTail: Promise<unknown> = Promise.resolve();
+  /** True while an adapter-owned BEGIN…COMMIT/ROLLBACK is open on this connection. */
+  private txOpen = false;
 
   constructor(dbPath: string) {
     // Ensure directory exists
@@ -54,6 +56,95 @@ export class SqliteAdapter implements IDatabase {
   }
 
   async query<T>(sql: string, params?: unknown[]): Promise<QueryResult<T>> {
+    // Public path never owns transaction control — withTransaction/withSnapshotRead do.
+    const control = sql.trim().toUpperCase();
+    if (
+      control === 'BEGIN' ||
+      control.startsWith('BEGIN ') ||
+      control === 'COMMIT' ||
+      control === 'ROLLBACK'
+    ) {
+      throw new Error(
+        'SQLite adapter rejects public transaction-control statements. ' +
+          'Use withTransaction() or withSnapshotRead() so the adapter owns BEGIN/COMMIT/ROLLBACK.'
+      );
+    }
+    // An open adapter transaction must not absorb unrelated async work on this
+    // connection. Queue the public query until after COMMIT/ROLLBACK.
+    if (this.txOpen) {
+      return this.enqueueExclusive(() => this.executeQuery<T>(sql, params));
+    }
+    return this.executeQuery<T>(sql, params);
+  }
+
+  async withTransaction<T>(
+    fn: (query: <U>(sql: string, params?: unknown[]) => Promise<QueryResult<U>>) => Promise<T>
+  ): Promise<T> {
+    return this.withSerializedTransaction(fn);
+  }
+
+  /**
+   * Snapshot-isolated multi-statement reads. bun:sqlite deferred BEGIN freezes
+   * the database view at the first read for the life of the transaction, so
+   * concurrent writers (other connections / WAL) cannot tear totals vs groups
+   * vs coverage. Serialized on `txTail` with write transactions.
+   */
+  async withSnapshotRead<T>(
+    fn: (query: <U>(sql: string, params?: unknown[]) => Promise<QueryResult<U>>) => Promise<T>
+  ): Promise<T> {
+    return this.withSerializedTransaction(fn);
+  }
+
+  /**
+   * Chain work onto the exclusive queue. Failures are swallowed on the stored
+   * tail so one rejection never blocks later work.
+   */
+  private enqueueExclusive<T>(run: () => Promise<T>): Promise<T> {
+    const result = this.txTail.then(run, run);
+    this.txTail = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  }
+
+  private withSerializedTransaction<T>(
+    fn: (query: <U>(sql: string, params?: unknown[]) => Promise<QueryResult<U>>) => Promise<T>
+  ): Promise<T> {
+    const run = async (): Promise<T> => {
+      // BEGIN/COMMIT/ROLLBACK go through executeQuery only — never public query() —
+      // so they cannot deadlock on txOpen serialization or be issued by callers.
+      await this.executeQuery('BEGIN');
+      this.txOpen = true;
+      try {
+        // Transaction-scoped query path: runs immediately inside the open
+        // transaction. Public adapter.query() from other async flows cannot
+        // enter this scope (serialized outside via txOpen + txTail).
+        const txQuery = <U>(sql: string, params?: unknown[]): Promise<QueryResult<U>> =>
+          this.executeQuery<U>(sql, params);
+        const result = await fn(txQuery);
+        await this.executeQuery('COMMIT');
+        return result;
+      } catch (e) {
+        try {
+          await this.executeQuery('ROLLBACK');
+        } catch (rollbackError) {
+          getLog().error({ err: rollbackError as Error }, 'db.sqlite_transaction_rollback_failed');
+        }
+        throw e;
+      } finally {
+        this.txOpen = false;
+      }
+    };
+    return this.enqueueExclusive(run);
+  }
+
+  /**
+   * Execute one statement on the underlying connection with no queue/tx gating.
+   * Callers must already hold exclusive access (no open foreign work, or the
+   * active transaction callback).
+   */
+  private async executeQuery<T>(sql: string, params?: unknown[]): Promise<QueryResult<T>> {
     // Convert $1, $2, etc. to ? placeholders and reorder params to match
     const { sql: convertedSql, params: reorderedParams } = this.convertPlaceholders(
       sql,
@@ -111,52 +202,6 @@ export class SqliteAdapter implements IDatabase {
       );
       throw error;
     }
-  }
-
-  async withTransaction<T>(
-    fn: (query: <U>(sql: string, params?: unknown[]) => Promise<QueryResult<U>>) => Promise<T>
-  ): Promise<T> {
-    return this.withSerializedTransaction(fn);
-  }
-
-  /**
-   * Snapshot-isolated multi-statement reads. bun:sqlite deferred BEGIN freezes
-   * the database view at the first read for the life of the transaction, so
-   * concurrent writers (other connections / WAL) cannot tear totals vs groups
-   * vs coverage. Serialized on `txTail` with write transactions.
-   */
-  async withSnapshotRead<T>(
-    fn: (query: <U>(sql: string, params?: unknown[]) => Promise<QueryResult<U>>) => Promise<T>
-  ): Promise<T> {
-    return this.withSerializedTransaction(fn);
-  }
-
-  private withSerializedTransaction<T>(
-    fn: (query: <U>(sql: string, params?: unknown[]) => Promise<QueryResult<U>>) => Promise<T>
-  ): Promise<T> {
-    const run = async (): Promise<T> => {
-      await this.query('BEGIN');
-      try {
-        const result = await fn(this.query.bind(this));
-        await this.query('COMMIT');
-        return result;
-      } catch (e) {
-        try {
-          await this.query('ROLLBACK');
-        } catch (rollbackError) {
-          getLog().error({ err: rollbackError as Error }, 'db.sqlite_transaction_rollback_failed');
-        }
-        throw e;
-      }
-    };
-    // Serialize against any in-flight transaction (see `txTail`). The stored tail
-    // is made non-rejecting so one transaction's failure never blocks the next.
-    const result = this.txTail.then(run, run);
-    this.txTail = result.then(
-      () => undefined,
-      () => undefined
-    );
-    return result;
   }
 
   async close(): Promise<void> {
