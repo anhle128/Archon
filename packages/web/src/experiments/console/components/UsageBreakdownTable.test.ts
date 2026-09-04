@@ -152,6 +152,25 @@ describe('describeUsageState', () => {
       )
     ).toBe('has-data');
   });
+
+  test('partial base coverage + zero matched rows → filter-empty (not event-only)', () => {
+    expect(
+      describeUsageState(
+        report({
+          totals: emptyMetrics({ recordCount: 0 }),
+          groups: [],
+          coverage: {
+            ...report().coverage,
+            hasRecordedUsage: true,
+            usageEventCount: 5,
+            ledgeredEventCount: 3,
+            unledgeredEventCount: 2,
+          },
+        }),
+        false
+      )
+    ).toBe('filter-empty');
+  });
 });
 
 describe('formatUsdAmount display rules (shared with Cost page)', () => {
@@ -476,6 +495,46 @@ describe('UsageBreakdownTable event-only and coverage', () => {
     expect(markup).not.toContain('Incomplete usage coverage');
     expect(markup).not.toContain('event-only');
     expect(markup).not.toContain('No usage recorded');
+  });
+
+  test('partial base + filter miss shows No groups matched and separate base warning', () => {
+    const partialFilterMiss = report({
+      totals: emptyMetrics({ recordCount: 0 }),
+      groups: [],
+      coverage: {
+        ...report().coverage,
+        usageEventCount: 5,
+        ledgeredEventCount: 3,
+        unledgeredEventCount: 2,
+        hasRecordedUsage: true,
+      },
+    });
+
+    const markup = renderToStaticMarkup(
+      createElement(
+        MemoryRouter,
+        null,
+        createElement(UsageBreakdownTable, { report: partialFilterMiss })
+      )
+    );
+
+    // Primary empty state is filter miss — never wholly event-only or no usage recorded.
+    expect(markup).toContain('data-usage-state="filter-empty"');
+    expect(markup).toContain('No groups matched filters');
+    expect(markup).not.toContain('data-usage-state="event-only"');
+    expect(markup).not.toContain('No usage recorded');
+    expect(markup).not.toContain('Incomplete usage coverage');
+
+    // Separate base-scope warning uses exact unledgered count; does not claim the empty
+    // filtered dimension owns the two missing rows.
+    expect(markup).toContain('data-usage-state="partial-unledgered"');
+    expect(markup).toContain('data-coverage-scope="base"');
+    expect(markup).toContain('Base scope: 2 usage events lack ledger rows');
+    expect(markup).toContain('3/5 ledgered');
+    expect(markup).toContain('2 unledgered');
+    expect(markup).toContain('not a property of the empty filtered dimension');
+    expect(markup).not.toContain('5 usage events lack ledger rows');
+    expect(markup).not.toContain('empty filtered dimension itself has two missing');
   });
 
   test('partial coverage warns exactly unledgered count, not total events', () => {

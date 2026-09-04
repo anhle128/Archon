@@ -157,13 +157,16 @@ function runDetailHref(group: UsageReportGroup): string | null {
  * Order matters:
  * 1. unavailable / null
  * 2. historical never-recorded (`hasRecordedUsage: false`)
- * 3. true event-only fallback (base scope has unledgered usage events, zero matched rows)
- * 4. dimension-filter no-match (fully ledgered base scope, zero matched ledger rows)
+ * 3. true event-only (base scope has usage events and ZERO ledgered rows)
+ * 4. dimension-filter no-match (base scope has any ledgered rows, zero matched groups;
+ *    partial unledgered may still ride as a separate base-scope warning)
  * 5. has-data (matched ledger rows; partial unledgered is a warning inside this state)
  *
  * Coverage is conservative date/project/run/node integrity and does NOT include
- * provider/model/kind filters — so fully-ledgered base + empty groups is a filter miss,
- * not incomplete coverage and not "No usage recorded".
+ * provider/model/kind filters. True event-only is defined from base ledger coverage
+ * (`ledgeredEventCount === 0`), never from `recordCount===0` alone under dimension filters.
+ * A base with any ledgered event + empty matched groups is a filter miss — not wholly
+ * event-only — even when some sibling events remain unledgered.
  */
 export type UsageUiState =
   | 'unavailable'
@@ -178,12 +181,13 @@ export function describeUsageState(report: UsageReport | null, unavailable: bool
 
   const { unledgeredEventCount, ledgeredEventCount, usageEventCount } = report.coverage;
   if (report.totals.recordCount === 0) {
-    // True event-only: base scope recorded usage events that lack ledger rows.
-    if (unledgeredEventCount > 0 || (usageEventCount > 0 && ledgeredEventCount === 0)) {
+    // True event-only: base scope recorded usage events but materialised ZERO ledger rows.
+    // Dimension filters must not reclassify a partially-ledgered base as wholly event-only.
+    if (ledgeredEventCount === 0 && (unledgeredEventCount > 0 || usageEventCount > 0)) {
       return 'event-only';
     }
-    // Fully ledgered base (or empty integrity with hasRecordedUsage) + zero matched
-    // ledger rows = provider/model/kind filter miss — not incomplete, not unrecorded.
+    // Any ledgered base event + zero matched ledger rows = provider/model/kind filter miss.
+    // Partial unledgered (if any) is a separate base-scope warning, not this empty state.
     return 'filter-empty';
   }
   return 'has-data';
@@ -299,16 +303,54 @@ export function UsageBreakdownTable({
     );
   }
 
-  // Fully ledgered base scope + dimension filters matched zero ledger rows.
+  // Base scope has ledgered rows (or empty integrity) but dimension filters matched zero groups.
+  // Partial unledgered is a SEPARATE base-scope warning — never rebrand this as wholly event-only,
+  // and never claim the empty filtered dimension itself owns the missing ledger rows.
   if (state === 'filter-empty') {
+    if (report === null) {
+      return (
+        <div
+          className={`rounded-[10px] border border-warning/40 bg-warning/[0.06] px-4 py-3 ${className}`}
+          role="status"
+        >
+          <p className="text-[13px] font-medium text-warning">Usage report unavailable</p>
+        </div>
+      );
+    }
+    const coverage = report.coverage;
+    const partialBase = coverage.unledgeredEventCount > 0;
     return (
-      <div className={className} data-usage-state="filter-empty">
+      <div className={`flex flex-col gap-3 ${className}`} data-usage-state="filter-empty">
         {title !== undefined ? (
-          <h3 className="mb-2 text-[13px] font-semibold text-text-primary">{title}</h3>
+          <h3 className="text-[13px] font-semibold text-text-primary">{title}</h3>
+        ) : null}
+        {partialBase ? (
+          <div
+            className="rounded-[10px] border border-warning/30 bg-warning/[0.05] px-3 py-2 text-[12px] text-text-secondary"
+            role="status"
+            data-usage-state="partial-unledgered"
+            data-coverage-scope="base"
+          >
+            <p>
+              Base scope: {String(coverage.unledgeredEventCount)} usage event
+              {coverage.unledgeredEventCount === 1 ? '' : 's'} lack ledger rows. Totals may
+              under-count until those rows are repaired. This is base date/project/run/node coverage
+              — not a property of the empty filtered dimension.
+            </p>
+            <p className="mt-1 font-mono text-[11px] tabular-nums text-text-tertiary">
+              Ledger coverage: {String(coverage.ledgeredEventCount)}/
+              {String(coverage.usageEventCount)} ledgered · {String(coverage.unledgeredEventCount)}{' '}
+              unledgered
+            </p>
+          </div>
         ) : null}
         <EmptyState
           title="No groups matched filters"
-          hint="Base-scope usage is fully ledgered. Provider, model, or kind filters matched no ledger rows — this is not incomplete coverage and not missing usage."
+          hint={
+            partialBase
+              ? 'Provider, model, or kind filters matched no ledger rows. Some base-scope events still lack ledger rows (see warning above) — that under-count is base coverage, not this empty filter result.'
+              : 'Base-scope usage is fully ledgered. Provider, model, or kind filters matched no ledger rows — this is not incomplete coverage and not missing usage.'
+          }
         />
       </div>
     );
