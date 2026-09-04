@@ -74,22 +74,32 @@ export function groupLabel(group: UsageReportGroup, groupBy: UsageGroupBy): stri
       const m = d.model === null || d.model === undefined ? '(unknown model)' : d.model;
       return `${p}/${m} · ${formatModelSourceLabel(d.modelSource)}`;
     }
-    case 'project':
-      return d.codebaseName ?? d.codebaseId ?? '(deleted project)';
+    case 'project': {
+      // Fixed dims: codebaseId, codebaseName (null = unassigned/deleted)
+      const name =
+        d.codebaseName === null || d.codebaseName === undefined
+          ? '(no project name)'
+          : d.codebaseName;
+      const id =
+        d.codebaseId === null || d.codebaseId === undefined ? '(no project id)' : d.codebaseId;
+      return `${name} · id ${id}`;
+    }
     case 'run': {
-      const wf = d.workflowName ?? 'workflow';
-      const id = d.runId !== undefined ? d.runId.replace(/-/g, '').slice(0, 8) : '?';
-      return `${wf} · ${id}`;
+      // Fixed dims: runId, workflowName, codebaseId — full runId, never truncated
+      const run = d.runId !== undefined && d.runId !== '' ? d.runId : '(unknown run)';
+      const wf = d.workflowName ?? '(unknown workflow)';
+      const projectId =
+        d.codebaseId === null || d.codebaseId === undefined || d.codebaseId === ''
+          ? '(no project id)'
+          : d.codebaseId;
+      return `${run} · ${wf} · project ${projectId}`;
     }
     case 'day':
       return d.day ?? '(unknown day)';
     case 'node': {
       // Fixed dims: runId, nodeId, agentProvider, provider, model, modelSource, kind
       const nodeId = d.nodeId === null || d.nodeId === undefined ? '(unattributed)' : d.nodeId;
-      const runId =
-        d.runId !== undefined && d.runId !== ''
-          ? d.runId.replace(/-/g, '').slice(0, 8)
-          : '(unknown run)';
+      const runId = d.runId !== undefined && d.runId !== '' ? d.runId : '(unknown run)';
       const agent = d.agentProvider ?? '(unknown agent)';
       const provider = d.provider ?? '(unknown provider)';
       const model = d.model === null || d.model === undefined ? '(unknown model)' : d.model;

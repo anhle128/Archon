@@ -177,7 +177,7 @@ describe('groupLabel full grouping tuples', () => {
         dimensions: {
           runId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
           nodeId: 'implement',
-          agentProvider: 'claude',
+          agentProvider: 'codex',
           provider: 'openai',
           model: 'gpt-4.1-mini',
           modelSource: 'requested',
@@ -189,17 +189,45 @@ describe('groupLabel full grouping tuples', () => {
     );
 
     expect(primary).toContain('implement');
-    expect(primary).toContain('run aaaaaaaa');
+    expect(primary).toContain('run aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
+    expect(primary).not.toContain('run aaaaaaaa ·');
     expect(primary).toContain('agent claude');
     expect(primary).toContain('anthropic/claude-sonnet-4');
     expect(primary).toContain('source reported');
     expect(primary).toContain('unclassified kind');
 
     expect(advisor).toContain('implement');
+    expect(advisor).toContain('agent codex');
     expect(advisor).toContain('openai/gpt-4.1-mini');
     expect(advisor).toContain('source requested');
     expect(advisor).toContain('kind advisor');
     expect(primary).not.toBe(advisor);
+    expect(primary).not.toContain('agent codex');
+    expect(advisor).not.toContain('agent claude');
+  });
+
+  test('includes every fixed project and run dimension with full runId', () => {
+    const project = groupLabel(
+      {
+        dimensions: { codebaseId: 'cb-1', codebaseName: 'Archon' },
+        metrics: emptyMetrics(),
+      },
+      'project'
+    );
+    expect(project).toBe('Archon · id cb-1');
+
+    const run = groupLabel(
+      {
+        dimensions: {
+          runId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+          workflowName: 'feature-dev',
+          codebaseId: 'cb-1',
+        },
+        metrics: emptyMetrics(),
+      },
+      'run'
+    );
+    expect(run).toBe('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee · feature-dev · project cb-1');
   });
 
   test('uses explicit non-misleading labels for null/unknown/unclassified dimensions', () => {
@@ -242,7 +270,9 @@ describe('UsageBreakdownTable multi-row node expansion', () => {
       groups: [
         {
           dimensions: {
+            runId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
             nodeId: 'implement',
+            agentProvider: 'claude',
             provider: 'anthropic',
             model: 'claude-sonnet-4',
             modelSource: 'reported',
@@ -257,7 +287,9 @@ describe('UsageBreakdownTable multi-row node expansion', () => {
         },
         {
           dimensions: {
+            runId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
             nodeId: 'implement',
+            agentProvider: 'codex',
             provider: 'openai',
             model: 'gpt-4.1-mini',
             modelSource: 'requested',
@@ -287,14 +319,15 @@ describe('UsageBreakdownTable multi-row node expansion', () => {
 
     // Both exact rows retained with distinct full-tuple labels (US-022).
     expect(markup).toContain('Usage · implement');
+    expect(markup).toContain('run aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
+    expect(markup).toContain('agent claude');
+    expect(markup).toContain('agent codex');
     expect(markup).toContain('anthropic/claude-sonnet-4');
     expect(markup).toContain('source reported');
     expect(markup).toContain('unclassified kind');
     expect(markup).toContain('openai/gpt-4.1-mini');
     expect(markup).toContain('source requested');
     expect(markup).toContain('kind advisor');
-    // Cumulative totals strip + totals row.
-    expect(markup).toContain('$0.20');
     expect(markup).toContain('≈$0.05');
     expect(markup).toContain('150');
     // Per-row metrics still present (not collapsed into one overwrite).

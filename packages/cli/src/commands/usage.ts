@@ -108,17 +108,22 @@ export function dimensionLabel(group: UsageReportGroup, groupBy: UsageGroupBy): 
       return `${provider}/${model} · ${formatModelSourceLabel(d.modelSource)}`;
     }
     case 'project': {
-      const name = d.codebaseName === null || d.codebaseName === undefined ? null : d.codebaseName;
-      const id = d.codebaseId === null || d.codebaseId === undefined ? null : d.codebaseId;
-      if (name && id) return `${name} (${id})`;
-      if (name) return name;
-      if (id) return id;
-      return '(no project)';
+      // Fixed dims: codebaseId, codebaseName (null = unassigned/deleted)
+      const name =
+        d.codebaseName === null || d.codebaseName === undefined
+          ? '(no project name)'
+          : d.codebaseName;
+      const id =
+        d.codebaseId === null || d.codebaseId === undefined ? '(no project id)' : d.codebaseId;
+      return `${name} · id ${id}`;
     }
     case 'run': {
+      // Fixed dims: runId, workflowName, codebaseId
       const run = d.runId ?? '(unknown run)';
-      const wf = d.workflowName ? ` ${d.workflowName}` : '';
-      return `${run}${wf}`;
+      const wf = d.workflowName ?? '(unknown workflow)';
+      const projectId =
+        d.codebaseId === null || d.codebaseId === undefined ? '(no project id)' : d.codebaseId;
+      return `${run} · ${wf} · project ${projectId}`;
     }
     case 'day':
       return d.day ?? '(unknown day)';

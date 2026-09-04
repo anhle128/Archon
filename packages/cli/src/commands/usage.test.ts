@@ -152,7 +152,7 @@ describe('dimensionLabel full grouping tuples', () => {
         dimensions: {
           runId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
           nodeId: 'implement',
-          agentProvider: 'claude',
+          agentProvider: 'codex',
           provider: 'openai',
           model: 'gpt-4.1-mini',
           modelSource: 'requested',
@@ -171,10 +171,37 @@ describe('dimensionLabel full grouping tuples', () => {
     expect(primary).toContain('unclassified kind');
 
     expect(advisor).toContain('implement');
+    expect(advisor).toContain('agent codex');
     expect(advisor).toContain('openai/gpt-4.1-mini');
     expect(advisor).toContain('source requested');
     expect(advisor).toContain('kind advisor');
     expect(primary).not.toBe(advisor);
+    expect(primary).not.toContain('agent codex');
+    expect(advisor).not.toContain('agent claude');
+  });
+
+  it('includes every fixed project and run dimension in human labels', () => {
+    const project = dimensionLabel(
+      {
+        dimensions: { codebaseId: 'cb-1', codebaseName: 'Archon' },
+        metrics: emptyMetrics(),
+      },
+      'project'
+    );
+    expect(project).toBe('Archon · id cb-1');
+
+    const run = dimensionLabel(
+      {
+        dimensions: {
+          runId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+          workflowName: 'feature-dev',
+          codebaseId: 'cb-1',
+        },
+        metrics: emptyMetrics(),
+      },
+      'run'
+    );
+    expect(run).toBe('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee · feature-dev · project cb-1');
   });
 
   it('uses explicit non-misleading labels for null/unknown/unclassified dimensions', () => {
