@@ -855,7 +855,8 @@
         "US-040"
       ],
       "priority": 41,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration after US-040. Files: packages/providers/src/community/omp/session-usage.ts, session-usage.test.ts. Calendar round-trip via toISOString dash form; 43 focused tests green."
     },
     {
       "id": "US-042",
@@ -874,7 +875,8 @@
         "US-041"
       ],
       "priority": 42,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration after US-041. Files: packages/providers/src/community/omp/session-usage.ts, session-usage.test.ts. Recursive verified parent-chain ownership; unverified parents block descent; parent-before-descendant sort; resume/fork subtree omit. 50 session-usage + 27 provider tests green; type-check/lint clean."
     },
     {
       "id": "US-043",
@@ -894,7 +896,8 @@
         "US-042"
       ],
       "priority": 43,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration after US-042. Files: packages/core/src/schemas/usage-report.ts,.test.ts; packages/core/src/db/usage-report.ts,.test.ts; packages/server usage schema+api.usage.test; packages/cli usage.ts+.test; docs api/cli; packages/web api.generated.d.ts. Schema rejects >3 fractional digits before Date/SQL; 0\u20133 digits + Z/offset accepted losslessly. Focused schema/db/sqlite-boundary/server/cli tests green."
     },
     {
       "id": "US-044",

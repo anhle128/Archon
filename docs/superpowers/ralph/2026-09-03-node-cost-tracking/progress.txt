@@ -1,6 +1,19 @@
 ## Codebase Patterns
 
 
+### Usage instants are millisecond-bounded RFC3339
+- **Where**: `packages/core/src/schemas/usage-report.ts` `usageInstantStringSchema`; `parseUsageInstant`; CLI/REST reuse the same schema
+- **Pattern**: Reject fractional seconds with >3 digits *before* `datetime({offset:true})` / `new Date` / SQL params. Accept absent fraction and 1–3 digits with Z or numeric offset. Error text must say "3 fractional second digits" so callers never silently truncate. OpenAPI field descriptions and docs state the same bound.
+- **Example**: `.0004Z` / `.123456Z` / `.123456789Z` fail; `.1Z` / `.12Z` / `.123Z` and `+07:00` equivalents share UTC ms and half-open scope
+
+
+
+
+
+### OMP main transcript requires calendar-valid ISO-dash round-trip
+- **Where**: `packages/providers/src/community/omp/session-usage.ts` `isCanonicalMainTranscriptTimestamp` / `isMainTranscriptFileName`
+- **Pattern**: After shape `YYYY-MM-DDTHH-mm-ss-sssZ`, rebuild ISO (`T` + `:` + `.`) and require `new Date(iso).toISOString().replace(/[:.]/g, '-') === prefix`. Regex alone accepts month 13 / Feb 29 non-leap / hour 24; round-trip rejects rolled Invalid Date. `isTaskAgentFileName` shares the predicate so impossible timestamps stay task candidates, never trusted mains.
+- **Example**: `2025-02-29T00-00-00-000Z` → false; `2024-02-29T00-00-00-000Z` and `…T23-59-59-999Z` → true; impossible decoy alone → no main; one valid exact wins
 
 ### OpenCode stream reject/close packages usage like session.error
 - **Where**: `packages/providers/src/community/opencode/{session,multi-agent}.ts` `abortableStream` / stream end paths
@@ -69,10 +82,10 @@
 - **Example**: earlier valid breakdown + later `{ type:'result' }` with no usage → no recorder call
 
 
-### OMP task ownership requires parent transcript proof
-- **Where**: `packages/providers/src/community/omp/session-usage.ts` `extractOwnedTaskStemsFromMain` / `listHiddenCandidates`
-- **Pattern**: Task-agent `.jsonl` is billed only when the main transcript proves the stem via assistant `toolCall` name=task `arguments.tasks[].name` or task `toolResult` details.progress/results[].id, after validating session id/cwd on that same open handle. Advisors keep constructor ownership. Snapshot prefix digests stay chunked; line bounds apply across the full prefix after the session header; discovery stores dev/ino and open must match.
-- **Example**: `Orphan.jsonl` with a valid session header but no parent task record is omitted; foreign main session id omits all hidden enrichment.
+### OMP task ownership is a verified parent chain (recursive)
+- **Where**: `packages/providers/src/community/omp/session-usage.ts` `extractOwnedTaskStemsFromParent` / `listHiddenCandidates` / `collectHiddenSessionUsage`
+- **Pattern**: Each directory level authorizes task stems only from its immediate parent transcript on one verified handle. Main requires session id+cwd; nested parents return `{stems}` when verified (empty stems still host advisors) or `{unverified:true}` on soft header/open failure (no descent). Candidates sort parent-before-descendant. Global stem membership never authorizes another subtree. Resume/fork: unverifiable subagent parent omits its entire relative subtree. Advisors remain constructor-owned inside proven dirs only.
+- **Example**: main→ScoutTask→NestedTask bills both + nested advisors once; OtherTask/NestedTask omitted even if main names NestedTask; wrong-cwd ScoutTask bills parent usage only
 
 ### Usage range strings are RFC 3339 with offset only
 - **Where**: `packages/core/src/schemas/usage-report.ts` `usageInstantStringSchema`; `packages/core/src/db/usage-report.ts` `parseUsageInstant`; CLI `usage.ts`; server `usage.schemas.ts`
@@ -1279,5 +1292,73 @@
 **Learnings**:
 - `void nextPromise.finally(...)` on the abort race side-channel rethrows iterator rejections as unhandled rejections even when Promise.race correctly rejects the await — use `.then(ok, err)` cleanup instead
 - Premature close previously yielded bare `{type:'result', sessionId}` success — that path must throw through the same usage-bearing failure constructor as session.error
+
+---
+## 2026-09-05 — US-041: Reject calendar-impossible OMP main transcript names
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/omp/session-usage.ts` — `isCanonicalMainTranscriptTimestamp` round-trips ISO-dash prefixes through `toISOString().replace(/[:.]/g, '-')`; `isMainTranscriptFileName` / task exclusion share it
+- `packages/providers/src/community/omp/session-usage.test.ts` — US-041 impossible months/days, non-leap Feb 29, hour/min/sec bounds, decoy isolation, valid main selection, task stem ownership, multi-exact ambiguity
+
+**Acceptance criteria verified**:
+- [x] Filename predicate rejects impossible months, zero/out-of-range days, non-leap Feb 29, hour 24/99, minute/second 60/99, exact-width non-round-trip decoys
+- [x] Canonical leap day and 23-59-59-999Z remain accepted
+- [x] Impossible-date decoy with valid header/cwd and no valid main → no trusted main; adding one valid exact selects only that file
+- [x] Task-file exclusion uses the same calendar-valid predicate; impossible timestamp-shaped task id is not trusted main and still bills when parent-owned
+- [x] Multiple real exact constructors remain ambiguous/fail closed; focused suite 43 pass
+
+**Learnings**:
+- `Date` rolls some impossible calendar values (Feb 29 non-leap → Mar 1, day 31 in 30-day month, hour 24 → next day) so identity round-trip is required; others (month 13, min 60) yield Invalid Date — both paths reject
+- Shared predicate keeps impossible-shaped stems eligible as task agents under ownership proof
+
+---
+
+## 2026-09-05 — US-042: Follow OMP task ownership recursively through task transcripts
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/omp/session-usage.ts` — `extractOwnedTaskStemsFromParent` verified/unverified/omit; per-level ownership; parent-before-descendant candidate sort; resume/fork subtree omit
+- `packages/providers/src/community/omp/session-usage.test.ts` — US-042 nested chain, cross-subtree orphan, resume+fork nested layouts, prefix-fail subtree omit, wrong-cwd vs zero-child verified parent
+
+**Acceptance criteria verified**:
+- [x] main owns ScoutTask → ScoutTask owns NestedTask → NestedTask + nested advisors billed exactly once
+- [x] Orphan nested task and same-name under unrelated/unproving parent omitted; main naming NestedTask does not authorize OtherTask/NestedTask
+- [x] Resume and fork nested layouts exclude copied prefixes, include appends + new descendants; unverifiable parent prefix omits descendant subtree
+- [x] Each accepted task level reuses parent-record parser on same bounded handle; child stems only from that verified parent
+- [x] Advisors only in proven subtrees; containment/symlink/bounds/fresh/resume/fork rules fail closed; 50 session-usage + 27 provider tests green; type-check clean
+
+**Learnings**:
+- Soft parent failure must return `unverified` (not empty stems) so nested advisors are not billed under an unproven parent; verified empty stems still host advisors
+- `taskSpawnAssistantCall` emits billable assistant usage (`gpt-test`); use `taskSpawnToolResult` when fixtures need ownership without extra usage rows
+- Root advisors present in the pre-spawn snapshot contribute zero delta rows — place post-snapshot when asserting fresh sibling billing beside an omitted subtree
+- Candidate sort by depth then path ensures parents process before descendants for subtree-omit
+
+---
+
+## 2026-09-05 — US-043: Reject usage instants beyond lossless precision
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/schemas/usage-report.ts` — `usageInstantStringSchema` rejects >3 fractional digits with actionable message; keeps datetime offset/calendar checks
+- `packages/core/src/schemas/usage-report.test.ts` — precision reject/accept, offset equivalence, shape/calendar rejects
+- `packages/core/src/db/usage-report.ts` — `parseUsageInstant` surfaces schema precision/shape messages
+- `packages/core/src/db/usage-report.test.ts` — sub-ms reject + 1–3 digit half-open scope ms
+- `packages/cli/src/commands/usage.ts` + `usage.test.ts` — CLI `--since`/`--until` same gate and messages
+- `packages/server/src/routes/schemas/usage.schemas.ts` + `api.usage.test.ts` — OpenAPI descriptions + REST reject/accept
+- `packages/docs-web/.../api.md`, `cli.md` — public precision wording
+- `packages/web/src/lib/api.generated.d.ts` — regenerated from OpenAPI descriptions
+
+**Acceptance criteria verified**:
+- [x] Schema, REST, and CLI reject >3 fractional digits before Date/SQL/scope normalization
+- [x] No fraction and 1–3 digits with Z/numeric offsets accepted; equivalent offsets share UTC ms; half-open scope preserved
+- [x] 4/6/9-digit fractions fail with actionable precision message; prior invalid calendar/zone/range/SQLite cases retained
+- [x] Accepted instants map exactly through Date/SQLite/PG path (no silent truncate)
+- [x] Docs, OpenAPI, REST, CLI, generated web types describe 0–3 fractional digits
+
+**Learnings**:
+- Zod `datetime({ precision: N })` requires *exactly* N digits — cannot express 0–3; custom fraction pre-check + `datetime({ offset: true })` is the right split
+- `0004Z` and `0005Z` both collapse to the same Date ms in Bun — rejecting both is required for lossless half-open ranges
+- Generate `api.generated.d.ts` from the worktree server port, not a stale :3090 without `/api/usage`
 
 ---
