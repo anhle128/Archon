@@ -1974,6 +1974,35 @@ describe('GET /api/workflows/runs/:runId', () => {
     expect(body.events).toHaveLength(3);
     expect(body.usage).toBeNull();
   });
+
+  test('OpenAPI marks run-detail usage via NullableUsageReport without contaminating UsageReport', async () => {
+    const { app } = makeApp();
+    const document = app.getOpenAPIDocument({
+      openapi: '3.0.0',
+      info: { title: 'test', version: '0' },
+    });
+
+    const detail = document.components?.schemas?.WorkflowRunDetail as
+      | {
+          properties?: {
+            usage?: { $ref?: string; nullable?: boolean };
+          };
+        }
+      | undefined;
+    expect(detail?.properties?.usage?.$ref).toBe('#/components/schemas/NullableUsageReport');
+
+    const usageReport = document.components?.schemas?.UsageReport as
+      | { type?: string; nullable?: boolean }
+      | undefined;
+    expect(usageReport?.type).toBe('object');
+    expect(usageReport?.nullable).toBeUndefined();
+
+    const nullable = document.components?.schemas?.NullableUsageReport as
+      | { type?: string; nullable?: boolean }
+      | undefined;
+    expect(nullable?.nullable).toBe(true);
+    expect(nullable).not.toEqual(usageReport);
+  });
 });
 
 // ---------------------------------------------------------------------------

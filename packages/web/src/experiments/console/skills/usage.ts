@@ -18,14 +18,20 @@ type UsageGetOperation = paths['/api/usage']['get'];
 /** Query-string contract for GET /api/usage. */
 type GeneratedUsageQuery = NonNullable<UsageGetOperation['parameters']['query']>;
 
-/** 200 response body for GET /api/usage (schema may already be `T | null`). */
+/**
+ * 200 response body for GET /api/usage — exactly the non-null UsageReport object.
+ * Do not wrap in NonNullable: drift that reintroduces null must fail type-check.
+ */
 type GeneratedUsageResponse = UsageGetOperation['responses'][200]['content']['application/json'];
 
-/** Nullable direct-run usage on GET workflow run detail. */
+/** Nullable direct-run usage on GET workflow run detail (`NullableUsageReport`). */
 type GeneratedRunDetailUsage = components['schemas']['WorkflowRunDetail']['usage'];
 
-/** Named OpenAPI schema may be `T | null` because run-detail marks usage nullable. */
+/** Named non-null UsageReport OpenAPI component (GET /api/usage). */
 type GeneratedUsageReportSchema = components['schemas']['UsageReport'];
+
+/** Own nullable wrapper identity used only by run-detail. */
+type GeneratedNullableUsageReportSchema = components['schemas']['NullableUsageReport'];
 
 // ---------------------------------------------------------------------------
 // Public aliases — derived only from generated contracts (no parallel unions)
@@ -40,10 +46,16 @@ export type UsageKindFilter = NonNullable<UsageQuery['kind']>;
 /** Group-by dimensions accepted by GET /api/usage. */
 export type UsageGroupBy = NonNullable<UsageQuery['groupBy']>;
 
-/** Non-null usage report body (ledger aggregates). */
-export type UsageReport = NonNullable<GeneratedUsageReportSchema>;
+/**
+ * Non-null usage report body (ledger aggregates).
+ * Derived from the GET /api/usage operation response — not NonNullable(schema).
+ */
+export type UsageReport = GeneratedUsageResponse;
 export type UsageReportGroup = UsageReport['groups'][number];
 export type UsageMetrics = UsageReport['totals'];
+
+/** Run-detail usage alias — remains nullable (query failure → null). */
+export type RunDetailUsage = GeneratedRunDetailUsage;
 
 // ---------------------------------------------------------------------------
 // Compile-time drift guards — fail type-check if OpenAPI and aliases diverge
@@ -62,14 +74,18 @@ type UsageGroupByTiedToOpenApi = AssertTrue<
   ExactMatch<UsageGroupBy, NonNullable<GeneratedUsageQuery['groupBy']>>
 >;
 type UsageGroupByMatchesReport = AssertTrue<ExactMatch<UsageGroupBy, UsageReport['groupBy']>>;
-type UsageReportResponseTiedToOpenApi = AssertTrue<
-  ExactMatch<UsageReport | null, GeneratedUsageResponse>
->;
+/** GET /api/usage 200 is exactly the non-null report object. */
+type UsageReportResponseTiedToOpenApi = AssertTrue<ExactMatch<UsageReport, GeneratedUsageResponse>>;
+/** Named UsageReport component is non-null (not contaminated by run-detail). */
+type UsageReportSchemaIsNonNull = AssertTrue<ExactMatch<GeneratedUsageReportSchema, UsageReport>>;
+/** Run-detail usage is exactly the object or null via its own wrapper identity. */
 type RunDetailUsageTiedToOpenApi = AssertTrue<
-  ExactMatch<UsageReport | null, GeneratedRunDetailUsage>
+  ExactMatch<RunDetailUsage, GeneratedNullableUsageReportSchema>
 >;
-type UsageReportSchemaIsNullable = AssertTrue<
-  ExactMatch<GeneratedUsageReportSchema, UsageReport | null>
+type RunDetailUsageIsNullableReport = AssertTrue<ExactMatch<RunDetailUsage, UsageReport | null>>;
+/** Nullable wrapper identity is distinct from the non-null UsageReport component. */
+type NullableWrapperDistinctFromUsageReport = AssertTrue<
+  ExactMatch<ExactMatch<GeneratedNullableUsageReportSchema, GeneratedUsageReportSchema>, false>
 >;
 
 /** Touch asserts so `noUnusedLocals` cannot drop them silently. */
@@ -79,8 +95,10 @@ export type UsageOpenApiContractChecks = [
   UsageGroupByTiedToOpenApi,
   UsageGroupByMatchesReport,
   UsageReportResponseTiedToOpenApi,
+  UsageReportSchemaIsNonNull,
   RunDetailUsageTiedToOpenApi,
-  UsageReportSchemaIsNullable,
+  RunDetailUsageIsNullableReport,
+  NullableWrapperDistinctFromUsageReport,
 ];
 
 // ---------------------------------------------------------------------------
@@ -127,10 +145,12 @@ export function buildUsageSearchParams(query: UsageQuery): URLSearchParams {
   return qs;
 }
 
-export async function getUsageReport(query: UsageQuery = {}): Promise<UsageReport> {
+export async function getUsageReport(query: UsageQuery = {}): Promise<GeneratedUsageResponse> {
   const qs = buildUsageSearchParams(query);
   const suffix = qs.size > 0 ? `?${qs.toString()}` : '';
-  return requestJson<UsageReport>(`/api/usage${suffix}`);
+  // Return type is the generated operation 200 body (non-null UsageReport).
+  // Do not widen/narrow with a hand-written generic that erases nullability drift.
+  return requestJson<GeneratedUsageResponse>(`/api/usage${suffix}`);
 }
 
 /** UTC calendar-day `YYYY-MM-DD` for an instant. */

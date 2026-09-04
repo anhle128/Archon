@@ -479,22 +479,68 @@ describe('GET /api/usage', () => {
     }
   });
 
-  test('OpenAPI documents GET /api/usage with UsageReport response', async () => {
+  test('returns a non-null empty object-valued report when there is no history', async () => {
+    mockQueryUsageReport.mockImplementationOnce(async () =>
+      sampleReport({
+        groups: [],
+        totals: emptyMetrics(),
+        coverage: {
+          usageEventCount: 0,
+          ledgeredEventCount: 0,
+          unledgeredEventCount: 0,
+          hasRecordedUsage: false,
+          historicalBackfill: false,
+          filterScope: 'date-project-run-node',
+        },
+      })
+    );
+
+    const app = makeApp();
+    const response = await app.request('/api/usage');
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as {
+      groups: unknown[];
+      coverage: { hasRecordedUsage: boolean; usageEventCount: number };
+    } | null;
+    expect(body).not.toBeNull();
+    expect(typeof body).toBe('object');
+    expect(Array.isArray(body?.groups)).toBe(true);
+    expect(body?.groups).toEqual([]);
+    expect(body?.coverage.hasRecordedUsage).toBe(false);
+    expect(body?.coverage.usageEventCount).toBe(0);
+  });
+
+  test('OpenAPI keeps GET /api/usage UsageReport non-null and separate from nullable wrapper', async () => {
     const app = makeApp();
     const document = app.getOpenAPIDocument({
       openapi: '3.0.0',
       info: { title: 'test', version: '0' },
     });
+
     const pathItem = document.paths['/api/usage'];
     expect(pathItem?.get).toBeDefined();
-    const schema = pathItem?.get?.responses?.['200']?.content?.['application/json']?.schema;
+    const schema = pathItem?.get?.responses?.['200']?.content?.['application/json']?.schema as
+      | { $ref?: string; nullable?: boolean; type?: string }
+      | undefined;
     expect(schema).toBeDefined();
-    // Named component or inline object both ok — must not be missing.
-    const ref = (schema as { $ref?: string } | undefined)?.$ref;
-    if (ref) {
-      expect(ref).toContain('UsageReport');
-    } else {
-      expect((schema as { type?: string }).type).toBe('object');
-    }
+    expect(schema?.$ref).toBe('#/components/schemas/UsageReport');
+    expect(schema?.nullable).toBeUndefined();
+
+    const usageReport = document.components?.schemas?.UsageReport as
+      | { type?: string; nullable?: boolean }
+      | undefined;
+    expect(usageReport).toBeDefined();
+    expect(usageReport?.type).toBe('object');
+    expect(usageReport?.nullable).toBeUndefined();
+
+    const nullableUsageReport = document.components?.schemas?.NullableUsageReport as
+      | { type?: string; nullable?: boolean }
+      | undefined;
+    expect(nullableUsageReport).toBeDefined();
+    expect(nullableUsageReport?.nullable).toBe(true);
+
+    // Shared named component must not equal the nullable wrapper identity.
+    expect(usageReport).not.toEqual(nullableUsageReport);
   });
 });

@@ -4235,7 +4235,7 @@ export interface components {
             };
             events: components["schemas"]["WorkflowEvent"][];
             nodeStates: components["schemas"]["WorkflowNodeState"][];
-            usage: components["schemas"]["UsageReport"];
+            usage: components["schemas"]["NullableUsageReport"];
         };
         WorkflowEvent: {
             id: string;
@@ -4300,7 +4300,7 @@ export interface components {
                 type: "disabled";
             };
         };
-        UsageReport: {
+        NullableUsageReport: {
             scope: {
                 from: string | null;
                 to: string | null;
@@ -4375,6 +4375,81 @@ export interface components {
                 filterScope: "date-project-run-node";
             };
         } | null;
+        UsageReport: {
+            scope: {
+                from: string | null;
+                to: string | null;
+                codebaseId?: string;
+                runId?: string;
+                /** @enum {boolean} */
+                includesChildRollup: false;
+            };
+            /** @enum {string} */
+            groupBy: "agent" | "provider" | "model" | "project" | "run" | "day" | "node";
+            totals: {
+                tokensInput: number | null;
+                tokensOutput: number | null;
+                tokensReasoning: number | null;
+                tokensCacheRead: number | null;
+                tokensCacheWrite: number | null;
+                requests: number | null;
+                reportedUsd: number | null;
+                estimatedUsd: number | null;
+                recordCount: number;
+                missingTokensInput: number;
+                missingTokensOutput: number;
+                missingTokensReasoning: number;
+                missingTokensCacheRead: number;
+                missingTokensCacheWrite: number;
+                missingRequests: number;
+                rowsMissingUsd: number;
+            };
+            groups: {
+                dimensions: {
+                    agentProvider?: string;
+                    provider?: string;
+                    model?: string | null;
+                    /** @enum {string} */
+                    modelSource?: "reported" | "requested" | "unknown";
+                    codebaseId?: string | null;
+                    codebaseName?: string | null;
+                    runId?: string;
+                    workflowName?: string;
+                    day?: string;
+                    nodeId?: string | null;
+                    /** @enum {string|null} */
+                    kind?: "advisor" | "subagent" | null;
+                };
+                metrics: {
+                    tokensInput: number | null;
+                    tokensOutput: number | null;
+                    tokensReasoning: number | null;
+                    tokensCacheRead: number | null;
+                    tokensCacheWrite: number | null;
+                    requests: number | null;
+                    reportedUsd: number | null;
+                    estimatedUsd: number | null;
+                    recordCount: number;
+                    missingTokensInput: number;
+                    missingTokensOutput: number;
+                    missingTokensReasoning: number;
+                    missingTokensCacheRead: number;
+                    missingTokensCacheWrite: number;
+                    missingRequests: number;
+                    rowsMissingUsd: number;
+                };
+            }[];
+            coverage: {
+                usageEventCount: number;
+                ledgeredEventCount: number;
+                unledgeredEventCount: number;
+                hasRecordedUsage: boolean;
+                /** @enum {boolean} */
+                historicalBackfill: false;
+                /** @enum {string} */
+                filterScope: "date-project-run-node";
+            };
+        };
         ValidateWorkflowResponse: {
             valid: boolean;
             errors?: string[];

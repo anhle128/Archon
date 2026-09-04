@@ -48,10 +48,26 @@ export const usageQuerySchema = z
 
 /**
  * GET /api/usage response — same core report contract with an OpenAPI label.
- * Coverage is ledger-integrity only (date/project/run/node filters); it cannot
- * detect provider passes that never emitted a usage event.
+ * Always a non-null object (empty coverage when there is no history). Coverage is
+ * ledger-integrity only (date/project/run/node filters); it cannot detect
+ * provider passes that never emitted a usage event.
+ *
+ * IMPORTANT: do NOT call `.nullable()` on this schema. `@hono/zod-openapi`
+ * registers the OpenAPI component from the named schema object; applying
+ * `.nullable()` on it contaminates the shared `UsageReport` component and makes
+ * GET /api/usage appear nullable. Run-detail nullability uses
+ * `nullableUsageReportResponseSchema` below — a separate schema identity.
  */
 export const usageReportResponseSchema = usageReportSchema.openapi('UsageReport');
 
+/**
+ * Nullable usage report for nested run-detail only.
+ * Own OpenAPI component so `.nullable()` cannot mutate the shared `UsageReport`.
+ */
+export const nullableUsageReportResponseSchema = usageReportSchema
+  .nullable()
+  .openapi('NullableUsageReport');
+
 export type UsageQuery = z.infer<typeof usageQuerySchema>;
 export type UsageReportResponse = z.infer<typeof usageReportResponseSchema>;
+export type NullableUsageReportResponse = z.infer<typeof nullableUsageReportResponseSchema>;
