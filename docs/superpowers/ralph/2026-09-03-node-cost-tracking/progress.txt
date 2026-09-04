@@ -1,5 +1,11 @@
 ## Codebase Patterns
 
+### Terminal result always replaces pass usage state
+- **Where**: `packages/workflows/src/dag-executor.ts` standard `runStreamPass` + direct-loop attempt capture
+- **Pattern**: On every `type: 'result'`, set `passUsageBreakdown` from boundary-validated array OR `undefined` (absent/non-array). Always set `passTerminalError`/`passErrorSubtype` from that same result. Non-array logs index+issue type only via `workflow.usage_entry_rejected`.
+- **Example**: earlier valid breakdown + later `{ type:'result' }` with no usage → no recorder call
+
+
 ### OMP task ownership requires parent transcript proof
 - **Where**: `packages/providers/src/community/omp/session-usage.ts` `extractOwnedTaskStemsFromMain` / `listHiddenCandidates`
 - **Pattern**: Task-agent `.jsonl` is billed only when the main transcript proves the stem via assistant `toolCall` name=task `arguments.tasks[].name` or task `toolResult` details.progress/results[].id, after validating session id/cwd on that same open handle. Advisors keep constructor ownership. Snapshot prefix digests stay chunked; line bounds apply across the full prefix after the session header; discovery stores dev/ino and open must match.
@@ -869,5 +875,25 @@
 - Ownership extract must validate session id/cwd on the same handle that yields stems.
 - Snapshot line-bound checks must continue after the session header is found.
 - Discovery must pin dev/ino; open-time lstat==fstat alone cannot catch same-path inode replacement.
+
+---
+
+## 2026-09-04 — US-027: Make every terminal result replace workflow pass state
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/dag-executor.ts` — standard + direct-loop capture sites replace pass usage and terminalError/errorSubtype on every terminal result; absent/non-array usageBreakdown clears earlier state with path-safe `workflow.usage_entry_rejected` logging
+- `packages/workflows/src/dag-executor.test.ts` — omit, non-array fail-closed, error-owns-breakdown, and later-error-without-breakdown cases for standard nodes and direct loops
+
+**Acceptance criteria verified**:
+- [x] Earlier valid usage cleared when later terminal result omits usageBreakdown (standard + direct-loop) → no recorder call
+- [x] Runtime-malformed non-array usageBreakdown fail-closes with path-safe logging and does not preserve earlier usage
+- [x] terminalError/errorSubtype always from the same latest terminal result that owns the recorded breakdown; later error with no breakdown clears usage
+- [x] Standard nodes and direct loops share replacement semantics; mixed-entry array boundary validation retained
+- [x] Recorder failure remains fail-soft; `packages/workflows` `bun test src/dag-executor.test.ts` 524 pass
+
+**Learnings**:
+- Guarding pass state updates behind `Array.isArray(usageBreakdown)` left stale cumulative usage when a later result omitted the field (same class of bug as unconditional resolvedModel assignment).
+- Error metadata must update on every terminal result, not only when an array breakdown is present — otherwise success usage can be recorded under a later error's subtype, or vice versa.
 
 ---

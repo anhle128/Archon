@@ -571,8 +571,8 @@
         "US-026"
       ],
       "priority": 27,
-      "passes": false,
-      "notes": "Pending Ralph implementation from the Convergence 2 audit."
+      "passes": true,
+      "notes": "Implemented in Ralph iteration. Files: packages/workflows/src/dag-executor.ts, packages/workflows/src/dag-executor.test.ts. Every terminal result replaces pass usage + terminalError/errorSubtype; absent/non-array clears earlier usage with path-safe logging; standard + direct-loop share semantics."
     },
     {
       "id": "US-028",
