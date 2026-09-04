@@ -651,7 +651,7 @@
       ],
       "priority": 31,
       "passes": true,
-      "notes": "Post-Convergence 2 validation 2026-09-04. Focused package tests+builds green (providers/workflows/core/server/cli/web/docs-web). Generated artifacts current (bundled-schema/defaults/skill/pi-vendor-map/capability-matrix). OpenAPI types regenerated against worktree server PORT=3291 — unchanged. bun run validate exit 0. check:schema-upgrades OK on PGHOST=127.0.0.1:5432 (archon-postgres-1); fresh 74 indexes; 9 baselines v0.2.13…v0.9.0 converge; expected remote_agent_codebases_kind_check only. CHANGELOG untouched; no prior story reset."
+      "notes": "Post-Convergence 2 validation 2026-09-04. Focused package tests+builds green (providers/workflows/core/server/cli/web/docs-web). Generated artifacts current (bundled-schema/defaults/skill/pi-vendor-map/capability-matrix). OpenAPI types regenerated against worktree server PORT=3291 \u2014 unchanged. bun run validate exit 0. check:schema-upgrades OK on PGHOST=127.0.0.1:5432 (archon-postgres-1); fresh 74 indexes; 9 baselines v0.2.13\u2026v0.9.0 converge; expected remote_agent_codebases_kind_check only. CHANGELOG untouched; no prior story reset."
     },
     {
       "id": "US-032",
@@ -753,7 +753,8 @@
         "US-035"
       ],
       "priority": 36,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration. Files: packages/providers/src/community/omp/{provider.ts,provider.test.ts}, packages/providers/src/grok/{provider.ts,provider.test.ts}. Late stderr/exit/stdout I/O after authoritative usage yields one omp_transport_error/grok_transport_error result via existing buildTransportErrorResult path; no-usage still throws; protocol/nonzero subtypes preserved."
     },
     {
       "id": "US-037",

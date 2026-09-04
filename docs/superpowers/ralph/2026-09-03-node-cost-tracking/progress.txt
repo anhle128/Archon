@@ -1,5 +1,11 @@
 ## Codebase Patterns
 
+
+### OMP/Grok late transport I/O preserves usage via transport error result
+- **Where**: `packages/providers/src/community/omp/provider.ts`, `packages/providers/src/grok/provider.ts`
+- **Pattern**: After stdout parse + `Promise.all(exit, stderr)`, if transport/exit/stderr I/O failed AND `parser.buildResult(...).usageBreakdown` is non-empty, yield one `isError` result via existing `buildTransportErrorResult`/`transportErrorResult` with subtype `omp_transport_error`/`grok_transport_error` (and OMP `maybeEnrichResult` fail-soft). No-usage I/O still throws. Abort still throws first. protocol_error and exit_nonzero paths unchanged.
+- **Example**: terminal usage then stderr reject → one result with usageBreakdown once + transport subtype; empty stdout + stderr reject → throw
+
 ### Copilot late sendAndWait reject carries usage via CopilotUsageBearingError
 - **Where**: `packages/providers/src/community/copilot/{event-bridge,provider}.ts`
 - **Pattern**: On sendAndWait rejection after observed assistant.usage, bridge throws `CopilotUsageBearingError` with packaged breakdown/tokens/sessionId. Provider catches and yields one terminal `isError` result with `buildFriendlyCopilotError` message; no-usage rejections still throw. session.error + successful fallback remains success.
@@ -1133,5 +1139,29 @@
 - Mirror Claude/OpenCode: attach usage at the throw site (bridge), convert to isError only at the provider boundary so friendly classification still runs.
 - Copilot has no internal retry loop — one observed attempt packages once; do not invent merge/retry machinery here.
 - session.error alone does not discard spend when sendAndWait later resolves with fallback content; only the reject path needs the usage-bearing error.
+
+---
+
+## 2026-09-04 — US-036: Preserve OMP and Grok usage across transport failures
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/omp/provider.ts` — late I/O with authoritative usage yields `omp_transport_error` via `buildTransportErrorResult`; no-usage still throws
+- `packages/providers/src/community/omp/provider.test.ts` — stderr/exit/stdout-after-usage fixtures; early no-usage throw; kill-driven exit helpers
+- `packages/providers/src/grok/provider.ts` — same late I/O path with `grok_transport_error`
+- `packages/providers/src/grok/provider.test.ts` — usage-then-transport matrix + nonzero-with-usage subtype retention
+
+**Acceptance criteria verified**:
+- [x] Valid terminal usage then stderr-read rejection → terminal error result retains usage/session/model once
+- [x] Rejected process-exit and stdout failure after terminal usage preserve the same usage
+- [x] Early transport failures with no parsed usage still throw without fabricating observations
+- [x] Protocol-error and nonzero-exit keep original subtype/message and fail the node
+- [x] Post-usage transport failures route through observed-result construction; abort still throws
+- [x] OMP enrichment remains fail-soft; Grok incomplete/resume/abort paths do not regress
+
+**Learnings**:
+- OMP/Grok already preserved usage on protocol/nonzero via `buildTransportErrorResult`; only the late throw sites after `Promise.all` dropped spend
+- Prefer routing through the existing observed-result helper over a UsageBearingError class when the provider already owns a transport-error result builder
+- Fake processes that `Promise.resolve(0)` exit immediately can skip SIGTERM reap; drive exit from `kill` when asserting teardown
 
 ---
