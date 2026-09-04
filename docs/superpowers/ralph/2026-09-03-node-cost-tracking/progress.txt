@@ -1,5 +1,10 @@
 ## Codebase Patterns
 
+### Bundled annotation scans use raw YAML, not parseWorkflow
+- **Where**: `packages/workflows/src/dag-executor.test.ts` opus invariant (#1610); `defaults/bundled-defaults.test.ts` `Bun.YAML.parse`
+- **Pattern**: Annotation-only corpus checks parse with `Bun.YAML.parse` so malformed YAML throws and loader structural/provider errors never silently skip nodes. `gh pr --repo` guards classify backtick prose as non-invocation while unpinned real shell calls still fail fixtures. Native Ralph model assertions bind to the accepted dual-model YAML contract (`xai-oauth/grok-4.5` vs `cursor/cursor-grok-4.5`), not a single hardcoded id.
+- **Example**: opus scan counts nodes with model containing `opus` and requires node or workflow `provider: claude`; `isGuardedInvocation('gh pr create --title x') === true` and throws without `--repo`
+
 ### Legacy cost presence is separate from numeric sum
 - **Where**: `packages/workflows/src/dag-executor.ts` `RunLayersContext.totalCostUsd` / `buildRunUsageProps`; `packages/web/.../primitives/run.ts` `readCost`; `NodeDivider` / `RunDetailHeader`
 - **Pattern**: Accumulators start `undefined`, not `0`. Fold only when a node/iteration reports cost (`costUsd !== undefined`); write `total_cost_usd` / telemetry when defined including authoritative 0. Web parses finite `>= 0` metadata (reject negative/NaN). UI: legacy `$0.00` + "legacy total" when no-history report; ledger rows (incl. reported 0) beat legacy; formatUsdAmount never rounds sub-micro into `$0.00`.
@@ -1470,5 +1475,27 @@
 - Initialized `totalCostUsd: 0` made loop_group always look reported after first iteration — must start undefined and only fold when body reported.
 - `formatCost(0)` was `$0.0000`; usage/legacy surfaces must use `formatUsdAmount` for `$0.00`.
 - HTML-escaped floor `&lt;$0.000001` contains substring `$0.00` — assert with regex boundary, not plain not.toContain.
+
+---
+
+## 2026-09-05 — US-048: Justify or remove unrelated bundled-workflow test changes
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/dag-executor.test.ts` — opus #1610 scan via Bun.YAML.parse (no silent parseWorkflow skip); Ralph loop model fixture cites accepted xai-oauth contract
+- `packages/workflows/src/defaults/bundled-defaults.test.ts` — #2226 isGuardedInvocation + fixtures proving prose vs unpinned real gh pr calls
+- `packages/workflows/src/loader.test.ts` — dual-model path fixtures for native Ralph loops documented against YAML
+
+**Acceptance criteria verified**:
+- [x] Reviewed 81752b24 changes in the three test files without changing bundled workflow production behavior
+- [x] Isolated reverse patch + focused tests proved node-cost does not depend on them (failures are YAML dual-model, null-workflow TypeError, backtick hard-rule prose)
+- [x] Retained as independently justified contracts with fixtures (#2226, #1610, accepted Ralph dual-model YAML) — not weakened safety invariants
+- [x] Otherwise-remove path not taken: adjustments correct independent behavior
+- [x] gh pr --repo still detects real invocations; parser/YAML failures not silently skipped; native Ralph models match accepted workflow contract; no production behavior changed
+
+**Learnings**:
+- Reverse-applying an unblock test patch is the proof that separates feature coupling from independent fixture drift.
+- Opus annotation scans must not call parseWorkflow: two bundled YAMLs are load-time incomplete and provider registration is orthogonal to the annotation contract.
+- Hard-rule prose that forbids `gh pr create` in backticks is not an invocation; classification fixtures must cover mixed backtick+real lines.
 
 ---

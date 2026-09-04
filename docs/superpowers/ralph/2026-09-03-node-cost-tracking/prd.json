@@ -998,7 +998,8 @@
         "US-047"
       ],
       "priority": 48,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration after US-047. Reviewed 81752b24 test-only adjustments via isolated reverse patch: bundled-defaults failed on backtick hard-rule prose; loader/dag-executor failed on accepted dual-model YAML (xai-oauth/grok-4.5 vs cursor/cursor-grok-4.5); opus scan TypeError from null workflow. Retained as independently justified contracts (#2226 gh pr --repo with prose/invocation fixtures; #1610 opus via Bun.YAML.parse no silent skip; native Ralph dual-model fixtures). No production YAML/behavior changes. Focused tests green: bundled-defaults 41, loader 314, dag-executor 528. Files: packages/workflows/src/dag-executor.test.ts, defaults/bundled-defaults.test.ts, loader.test.ts."
     },
     {
       "id": "US-049",
