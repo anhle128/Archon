@@ -113,21 +113,16 @@ function normalizeClaudeUsage(usage?: {
 }
 
 /**
- * Pick the concrete model that did the bulk of a turn's work from the SDK's
- * per-model usage record.
+ * Resolve a concrete terminal model id from the SDK's per-model usage record.
  *
- * More than one entry is reachable for a single turn: a subagent pinned to
- * another model via `agents:`, or a `fallbackModel` takeover. Key insertion
- * order happens to put the main model first today, but nothing in the SDK
- * guarantees it — so select by greatest output-token count (the main model
- * produces the bulk of the output) and WARN whenever the record is ambiguous,
- * so a multi-model turn is visible instead of silently collapsed.
+ * Exactly one entry → that model id. Empty/absent → undefined (caller omits
+ * `resolvedModel`). Multiple entries are reachable for one turn (subagent via
+ * `agents:`, `fallbackModel` takeover); key order and output volume are both
+ * guesses about which model was "main", so warn with the model ids and return
+ * undefined — every usage row still survives via `mapClaudeModelUsage`.
  *
  * `modelUsage` is non-optional in the SDK types but arrives over an IPC
- * boundary, so the absent/empty cases stay guarded — absence yields undefined
- * and the caller omits `resolvedModel` entirely rather than inventing a value.
- * On a tie (or output counts the SDK didn't send) the first key wins, which is
- * exactly the pre-#2314 behavior — safe, and the warning still fires.
+ * boundary, so the absent/empty cases stay guarded.
  */
 function selectResolvedModelId(
   modelUsage: Record<string, ModelUsage> | undefined
@@ -137,17 +132,8 @@ function selectResolvedModelId(
   if (entries.length === 0) return undefined;
   if (entries.length === 1) return entries[0][0];
 
-  const outputTokensOf = (usage: ModelUsage): number =>
-    Number.isFinite(usage.outputTokens) ? usage.outputTokens : 0;
-  let selected = entries[0];
-  for (const entry of entries.slice(1)) {
-    if (outputTokensOf(entry[1]) > outputTokensOf(selected[1])) selected = entry;
-  }
-  getLog().warn(
-    { models: entries.map(([id]) => id), selected: selected[0] },
-    'claude.resolved_model_ambiguous'
-  );
-  return selected[0];
+  getLog().warn({ models: entries.map(([id]) => id) }, 'claude.resolved_model_ambiguous');
+  return undefined;
 }
 
 /**

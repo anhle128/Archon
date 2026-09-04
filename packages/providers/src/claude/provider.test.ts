@@ -275,10 +275,10 @@ describe('ClaudeProvider', () => {
       expect(mockLogger.warn).not.toHaveBeenCalled();
     });
 
-    test('picks the greatest-output-token model and warns when modelUsage has multiple keys', async () => {
+    test('emits every multi-model usage row and omits resolvedModel without inventing a selection', async () => {
       // A subagent pinned via `agents:` (or a fallbackModel takeover) puts more
-      // than one model in the record, and key order carries no guarantee — the
-      // main model here is deliberately NOT first.
+      // than one model in the record. Output volume is still a guess about the
+      // main model — keep every observation and leave resolvedModel absent.
       mockQuery.mockImplementation(async function* () {
         yield {
           type: 'result',
@@ -288,11 +288,17 @@ describe('ClaudeProvider', () => {
               inputTokens: 400,
               outputTokens: 20,
               cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+              webSearchRequests: 0,
+              costUSD: 0.002,
             },
             'claude-sonnet-5': {
               inputTokens: 120,
               outputTokens: 900,
               cacheReadInputTokens: 10,
+              cacheCreationInputTokens: 2,
+              webSearchRequests: 0,
+              costUSD: 0.04,
             },
           },
         };
@@ -303,14 +309,42 @@ describe('ClaudeProvider', () => {
         chunks.push(chunk);
       }
 
-      expect(chunks[0]).toMatchObject({ resolvedModel: { id: 'claude-sonnet-5' } });
+      expect(chunks[0]).not.toHaveProperty('resolvedModel');
+      expect(chunks[0]).toMatchObject({
+        usageBreakdown: [
+          {
+            provider: 'anthropic',
+            model: 'claude-haiku-4-5-20251001',
+            modelSource: 'reported',
+            inputTokens: 400,
+            outputTokens: 20,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            costUsd: 0.002,
+          },
+          {
+            provider: 'anthropic',
+            model: 'claude-sonnet-5',
+            modelSource: 'reported',
+            inputTokens: 120,
+            outputTokens: 900,
+            cacheReadTokens: 10,
+            cacheWriteTokens: 2,
+            costUsd: 0.04,
+          },
+        ],
+      });
       expect(mockLogger.warn).toHaveBeenCalledWith(
         {
           models: ['claude-haiku-4-5-20251001', 'claude-sonnet-5'],
-          selected: 'claude-sonnet-5',
         },
         'claude.resolved_model_ambiguous'
       );
+      // Warning carries model ids only — no invented `selected` field.
+      const warnCall = mockLogger.warn.mock.calls.find(
+        (call: unknown[]) => call[1] === 'claude.resolved_model_ambiguous'
+      );
+      expect(warnCall?.[0]).not.toHaveProperty('selected');
     });
 
     test('omits resolvedModel when modelUsage is an empty record', async () => {
