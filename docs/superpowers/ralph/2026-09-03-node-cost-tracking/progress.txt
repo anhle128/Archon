@@ -1,6 +1,12 @@
 ## Codebase Patterns
 
 
+### Event-only usage before empty states
+- **Where**: `UsageBreakdownTable.tsx` `describeUsageState` / `formatMissingMeasures` / `eventOnlyUsageMessage`; `RunDetailHeader.tsx` `RunHeaderUsageLabel`
+- **Pattern**: Classify `hasRecordedUsage && recordCount===0` as `event-only` BEFORE not-recorded/empty. Never render "No usage recorded" for fallback events. Missing token/request counters (`in/out/reason/cacheR/cacheW/req`) stay separate from unpriced USD and ledger coverage. Header shows `incomplete · event-only` (not legacy, not not-recorded).
+- **Example**: `usageEventCount=3, ledgered=0, unledgered=3, hasRecordedUsage=true, recordCount=0` → Incomplete usage coverage warning
+
+
 ### Run-detail node usage is multi-group collection + aggregate
 - **Where**: `packages/web/src/experiments/console/components/RunStream.tsx` `collectUsageByNode` / `aggregateUsageMetrics`; `NodeDivider.tsx`
 - **Pattern**: Never `Map<nodeId, single group>` — bucket every exact API group under the step name, aggregate with SQL-SUM nullability (`sumNullableMetric`: all-null→null, zero stays zero, counters always sum). Pass `usageGroups` + `usageAggregate` to NodeDivider; expansion synthetic report keeps every row.
@@ -701,5 +707,27 @@
 **Learnings**:
 - UsageBreakdownTable.test.ts is `.ts` not `.tsx` — use `createElement`, not JSX, for renderToStaticMarkup fixtures.
 - Header cost must use the aggregate, not the last overwritten group; expansion totals must match the same helper.
+
+---
+
+## 2026-09-04 — US-021: Render coverage before empty states
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/components/UsageBreakdownTable.tsx` — event-only state before empty; missing measures strip + column; shared warning helpers
+- `packages/web/src/experiments/console/components/UsageBreakdownTable.test.ts` — event-only, historical not-recorded, missing-counter coverage
+- `packages/web/src/experiments/console/components/RunDetailHeader.tsx` — `RunHeaderUsageLabel` surfaces event-only / partial-unledgered / not-recorded distinctly
+- `packages/web/src/experiments/console/components/RunDetailHeader.test.tsx` — header state matrix
+
+**Acceptance criteria verified**:
+- [x] Event-only report (usageEventCount>0, ledgered=0, unledgered>0, hasRecordedUsage, recordCount=0) shows incomplete warning, never "No usage recorded"
+- [x] Historical zero-event runs still "No usage recorded" / "not recorded"
+- [x] Totals and groups expose every missing counter separate from unpriced USD and ledger coverage
+- [x] RunDetailHeader surfaces event-only warning when no ledger groups
+- [x] Known zero and small-positive USD formatting unchanged; focused tests pass (UsageBreakdownTable 9, RunDetailHeader 4)
+
+**Learnings**:
+- `describeUsageState` previously mapped `recordCount===0` to not-recorded even when `hasRecordedUsage` was true — that is exactly the event-only fallback hole.
+- Prefer a typed `RunHeaderUsageLabel` helper over an IIFE in JSX (`explicit-function-return-type`).
 
 ---

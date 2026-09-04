@@ -447,7 +447,8 @@
         "US-020"
       ],
       "priority": 21,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration after US-020. Files: UsageBreakdownTable.tsx (event-only state + missing measures), RunDetailHeader.tsx (RunHeaderUsageLabel), UsageBreakdownTable.test.ts, RunDetailHeader.test.tsx."
     },
     {
       "id": "US-022",
