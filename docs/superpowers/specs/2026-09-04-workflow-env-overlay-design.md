@@ -3,7 +3,7 @@
 **Status:** aligned with `plans/architectures/workflow-env-overlay-architecture.md` (2026-09-05)
 **Date:** 2026-09-04
 
-Architecture log: `plans/architectures/workflow-env-overlay.md`
+Architecture: `plans/architectures/workflow-env-overlay-architecture.md`
 
 ## Problem
 
