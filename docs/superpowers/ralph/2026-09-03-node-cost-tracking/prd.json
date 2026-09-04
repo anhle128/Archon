@@ -650,8 +650,8 @@
         "US-030"
       ],
       "priority": 31,
-      "passes": false,
-      "notes": "Pending Ralph validation after Convergence 2 implementation."
+      "passes": true,
+      "notes": "Post-Convergence 2 validation 2026-09-04. Focused package tests+builds green (providers/workflows/core/server/cli/web/docs-web). Generated artifacts current (bundled-schema/defaults/skill/pi-vendor-map/capability-matrix). OpenAPI types regenerated against worktree server PORT=3291 — unchanged. bun run validate exit 0. check:schema-upgrades OK on PGHOST=127.0.0.1:5432 (archon-postgres-1); fresh 74 indexes; 9 baselines v0.2.13…v0.9.0 converge; expected remote_agent_codebases_kind_check only. CHANGELOG untouched; no prior story reset."
     }
   ]
 }

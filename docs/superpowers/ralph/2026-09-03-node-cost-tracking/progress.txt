@@ -983,3 +983,36 @@
 - `paths['/api/usage']['get']['parameters']['query']` is the single source for request filters — no parallel UsageQuery schema component is emitted despite server `.openapi('UsageQuery')` (query params stay inline on the operation).
 
 ---
+## 2026-09-04 — US-031: Run post-Convergence 2 validation
+
+**Status**: PASSED
+**Files changed**:
+- `docs/superpowers/ralph/2026-09-03-node-cost-tracking/prd.json` — US-031 passes:true + validation notes
+- `docs/superpowers/ralph/2026-09-03-node-cost-tracking/progress.txt` — this entry
+
+**No product code changes** (validation-only story after Convergence 2).
+
+**Acceptance criteria verified**:
+- [x] After US-025–US-030 pass, focused package validation sequence ran (never root `bun test`):
+  - `bun --filter @archon/providers test` exit 0
+  - `bun --filter @archon/workflows test` exit 0
+  - `bun --filter @archon/core test` exit 0
+  - `bun --filter @archon/server test` exit 0
+  - `bun --filter @archon/cli test` exit 0
+  - `bun --filter @archon/web test` exit 0
+  - `bun --filter @archon/web build` exit 0
+  - `bun --filter @archon/docs-web build` exit 0
+- [x] Regenerated tracked artifacts only when stale:
+  - `check:bundled` / `check:bundled-skill` / `check:bundled-schema` / `check:pi-vendor-map` / `check:capability-matrix` all current
+  - OpenAPI types regenerated via worktree server PORT=3291 → `packages/web/src/lib/api.generated.d.ts` UNCHANGED
+- [x] `bun run validate` exit 0 (check:bundled* + type-check + lint --max-warnings 0 + format:check + test:install + test)
+- [x] `bun run check:schema-upgrades` OK against reachable PostgreSQL:
+  - PGHOST=127.0.0.1 PGPORT=5432 PGUSER=postgres PGPASSWORD=postgres (archon-postgres-1 / postgres:17)
+  - fresh install OK (74 indexes); all 9 distinct baselines (v0.2.13…v0.9.0) converge; expected `remote_agent_codebases_kind_check` divergence only
+- [x] Validation notes are post-Convergence 2; CHANGELOG.md untouched; no previously passing story reset
+
+**Learnings**:
+- Worktree `bun --filter @archon/server start` with PORT override is enough to refresh OpenAPI types; generate:types script hard-codes :3090 so use `bunx openapi-typescript http://127.0.0.1:$PORT/api/openapi.json` against the worktree server.
+- Post-Convergence 2 validation is a pure gate — no product commit when artifacts already match.
+
+---
