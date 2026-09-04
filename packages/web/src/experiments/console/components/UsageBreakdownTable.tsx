@@ -17,6 +17,17 @@ export interface UsageBreakdownTableProps {
   /** Compact mode for inline node expansion. */
   compact?: boolean;
   className?: string;
+  /**
+   * `base` (default): report.coverage is the conservative date/project/run/node integrity scope.
+   * `node-ledger`: groups are node-local ledger rows only — do not treat report.coverage as
+   * node event integrity, and never invent event counts from ledger row counts.
+   */
+  coveragePresentation?: 'base' | 'node-ledger';
+  /**
+   * Optional run-wide integrity context for node expansion. When present with unledgered
+   * events, render an explicitly labeled run-wide warning — never as this node's under-count.
+   */
+  runWideCoverage?: UsageReport['coverage'] | null;
 }
 
 function fmtTok(n: number | null): string {
@@ -141,18 +152,40 @@ function runDetailHref(group: UsageReportGroup): string | null {
 }
 
 /**
- * Pure helpers exported for unit tests — loading/error/empty/event-only states.
+ * Pure helpers exported for unit tests — loading/error/empty/event-only/filter states.
  *
- * Order matters: recorded-but-unledgered (`event-only`) is classified before the
- * no-row empty state so fallback events are never mislabeled as "No usage recorded".
+ * Order matters:
+ * 1. unavailable / null
+ * 2. historical never-recorded (`hasRecordedUsage: false`)
+ * 3. true event-only fallback (base scope has unledgered usage events, zero matched rows)
+ * 4. dimension-filter no-match (fully ledgered base scope, zero matched ledger rows)
+ * 5. has-data (matched ledger rows; partial unledgered is a warning inside this state)
+ *
+ * Coverage is conservative date/project/run/node integrity and does NOT include
+ * provider/model/kind filters — so fully-ledgered base + empty groups is a filter miss,
+ * not incomplete coverage and not "No usage recorded".
  */
-export type UsageUiState = 'unavailable' | 'not-recorded' | 'event-only' | 'has-data';
+export type UsageUiState =
+  | 'unavailable'
+  | 'not-recorded'
+  | 'event-only'
+  | 'filter-empty'
+  | 'has-data';
 
 export function describeUsageState(report: UsageReport | null, unavailable: boolean): UsageUiState {
   if (unavailable || report === null) return 'unavailable';
   if (!report.coverage.hasRecordedUsage) return 'not-recorded';
-  // hasRecordedUsage with zero ledger rows = event-only fallback (incomplete).
-  if (report.totals.recordCount === 0) return 'event-only';
+
+  const { unledgeredEventCount, ledgeredEventCount, usageEventCount } = report.coverage;
+  if (report.totals.recordCount === 0) {
+    // True event-only: base scope recorded usage events that lack ledger rows.
+    if (unledgeredEventCount > 0 || (usageEventCount > 0 && ledgeredEventCount === 0)) {
+      return 'event-only';
+    }
+    // Fully ledgered base (or empty integrity with hasRecordedUsage) + zero matched
+    // ledger rows = provider/model/kind filter miss — not incomplete, not unrecorded.
+    return 'filter-empty';
+  }
   return 'has-data';
 }
 
@@ -168,12 +201,23 @@ export function formatMissingMeasures(m: UsageMetrics): string {
   ].join(' ');
 }
 
-/** Shared warning copy for Cost table + run header when events lack ledger rows. */
+/**
+ * Shared warning copy for Cost table + run header when events lack ledger rows.
+ * Always uses exact `unledgeredEventCount` — never substitutes total event count.
+ */
 export function eventOnlyUsageMessage(coverage: UsageReport['coverage']): string {
   const n = coverage.unledgeredEventCount;
-  const label =
-    n === 1 ? '1 usage event' : `${String(Math.max(n, coverage.usageEventCount))} usage events`;
+  const label = n === 1 ? '1 usage event' : `${String(n)} usage events`;
   return `${label} recorded without ledger rows (event-only fallback). Totals are incomplete and under-counted.`;
+}
+
+/** Run-wide incomplete coverage — never presented as a node-local under-count. */
+export function runWideCoverageMessage(coverage: UsageReport['coverage']): string {
+  const n = coverage.unledgeredEventCount;
+  if (n === 1) {
+    return 'Run-wide: 1 usage event lacks ledger rows. This is run-scope coverage, not this node local under-count.';
+  }
+  return `Run-wide: ${String(n)} usage events lack ledger rows. This is run-scope coverage, not this node local under-count.`;
 }
 
 export function UsageBreakdownTable({
@@ -182,6 +226,8 @@ export function UsageBreakdownTable({
   title,
   compact = false,
   className = '',
+  coveragePresentation = 'base',
+  runWideCoverage = null,
 }: UsageBreakdownTableProps): ReactElement {
   const state = describeUsageState(report, unavailable);
 
@@ -253,6 +299,21 @@ export function UsageBreakdownTable({
     );
   }
 
+  // Fully ledgered base scope + dimension filters matched zero ledger rows.
+  if (state === 'filter-empty') {
+    return (
+      <div className={className} data-usage-state="filter-empty">
+        {title !== undefined ? (
+          <h3 className="mb-2 text-[13px] font-semibold text-text-primary">{title}</h3>
+        ) : null}
+        <EmptyState
+          title="No groups matched filters"
+          hint="Base-scope usage is fully ledgered. Provider, model, or kind filters matched no ledger rows — this is not incomplete coverage and not missing usage."
+        />
+      </div>
+    );
+  }
+
   // state === 'has-data' — report must be non-null after the guards above.
   if (report === null) {
     return (
@@ -266,6 +327,8 @@ export function UsageBreakdownTable({
   }
   const coverage = report.coverage;
   const pad = compact ? 'px-2 py-1' : 'px-2 py-1.5';
+  const showBaseCoverage = coveragePresentation === 'base';
+  const showRunWideWarning = runWideCoverage !== null && runWideCoverage.unledgeredEventCount > 0;
 
   return (
     <div className={`flex flex-col gap-3 ${className}`}>
@@ -329,27 +392,58 @@ export function UsageBreakdownTable({
             {formatMissingMeasures(report.totals)}
           </span>
         </div>
-        <div className="ml-auto flex flex-col gap-0.5 text-right">
-          <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-text-tertiary">
-            Ledger coverage
-          </span>
-          <span className="font-mono text-[12px] tabular-nums text-text-secondary">
-            {String(coverage.ledgeredEventCount)}/{String(coverage.usageEventCount)} ledgered
-            {coverage.unledgeredEventCount > 0
-              ? ` · ${String(coverage.unledgeredEventCount)} unledgered`
-              : ''}
-          </span>
-        </div>
+        {showBaseCoverage ? (
+          <div className="ml-auto flex flex-col gap-0.5 text-right">
+            <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-text-tertiary">
+              Ledger coverage
+            </span>
+            <span className="font-mono text-[12px] tabular-nums text-text-secondary">
+              {String(coverage.ledgeredEventCount)}/{String(coverage.usageEventCount)} ledgered
+              {coverage.unledgeredEventCount > 0
+                ? ` · ${String(coverage.unledgeredEventCount)} unledgered`
+                : ''}
+            </span>
+          </div>
+        ) : (
+          <div className="ml-auto flex flex-col gap-0.5 text-right">
+            <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-text-tertiary">
+              Scope
+            </span>
+            <span
+              className="font-mono text-[12px] tabular-nums text-text-secondary"
+              data-coverage-scope="node-ledger"
+            >
+              node ledger rows
+            </span>
+          </div>
+        )}
       </div>
 
-      {coverage.unledgeredEventCount > 0 ? (
+      {showBaseCoverage && coverage.unledgeredEventCount > 0 ? (
         <div
           className="rounded-[10px] border border-warning/30 bg-warning/[0.05] px-3 py-2 text-[12px] text-text-secondary"
           role="status"
+          data-usage-state="partial-unledgered"
         >
           {String(coverage.unledgeredEventCount)} usage event
           {coverage.unledgeredEventCount === 1 ? '' : 's'} lack ledger rows (event-only fallback).
           Totals under-count until those rows are repaired.
+        </div>
+      ) : null}
+
+      {showRunWideWarning && runWideCoverage !== null ? (
+        <div
+          className="rounded-[10px] border border-warning/30 bg-warning/[0.05] px-3 py-2 text-[12px] text-text-secondary"
+          role="status"
+          data-coverage-scope="run-wide"
+          data-usage-state="run-wide-unledgered"
+        >
+          {runWideCoverageMessage(runWideCoverage)}
+          <span className="mt-1 block font-mono text-[11px] tabular-nums text-text-tertiary">
+            Run-wide ledger: {String(runWideCoverage.ledgeredEventCount)}/
+            {String(runWideCoverage.usageEventCount)} ledgered ·{' '}
+            {String(runWideCoverage.unledgeredEventCount)} unledgered
+          </span>
         </div>
       ) : null}
 

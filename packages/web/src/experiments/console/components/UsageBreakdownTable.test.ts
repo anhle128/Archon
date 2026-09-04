@@ -87,6 +87,25 @@ describe('describeUsageState', () => {
     ).toBe('event-only');
   });
 
+  test('fully ledgered base + zero matched rows → filter-empty (not event-only)', () => {
+    expect(
+      describeUsageState(
+        report({
+          totals: emptyMetrics({ recordCount: 0 }),
+          groups: [],
+          coverage: {
+            ...report().coverage,
+            hasRecordedUsage: true,
+            usageEventCount: 1,
+            ledgeredEventCount: 1,
+            unledgeredEventCount: 0,
+          },
+        }),
+        false
+      )
+    ).toBe('filter-empty');
+  });
+
   test('recorded usage with rows → has-data', () => {
     expect(
       describeUsageState(
@@ -104,6 +123,30 @@ describe('describeUsageState', () => {
               metrics: emptyMetrics({ recordCount: 2, reportedUsd: 0, estimatedUsd: 0.004 }),
             },
           ],
+        }),
+        false
+      )
+    ).toBe('has-data');
+  });
+
+  test('partial unledgered with matched rows stays has-data', () => {
+    expect(
+      describeUsageState(
+        report({
+          totals: emptyMetrics({ recordCount: 3 }),
+          groups: [
+            {
+              dimensions: { provider: 'anthropic' },
+              metrics: emptyMetrics({ recordCount: 3 }),
+            },
+          ],
+          coverage: {
+            ...report().coverage,
+            hasRecordedUsage: true,
+            usageEventCount: 5,
+            ledgeredEventCount: 3,
+            unledgeredEventCount: 2,
+          },
         }),
         false
       )
@@ -411,6 +454,68 @@ describe('UsageBreakdownTable event-only and coverage', () => {
     expect(eventOnlyUsageMessage(eventOnly.coverage)).toContain('3 usage events');
   });
 
+  test('fully ledgered filter miss renders No groups matched filters only', () => {
+    const filterMiss = report({
+      totals: emptyMetrics({ recordCount: 0 }),
+      groups: [],
+      coverage: {
+        ...report().coverage,
+        usageEventCount: 1,
+        ledgeredEventCount: 1,
+        unledgeredEventCount: 0,
+        hasRecordedUsage: true,
+      },
+    });
+
+    const markup = renderToStaticMarkup(
+      createElement(MemoryRouter, null, createElement(UsageBreakdownTable, { report: filterMiss }))
+    );
+
+    expect(markup).toContain('data-usage-state="filter-empty"');
+    expect(markup).toContain('No groups matched filters');
+    expect(markup).not.toContain('Incomplete usage coverage');
+    expect(markup).not.toContain('event-only');
+    expect(markup).not.toContain('No usage recorded');
+  });
+
+  test('partial coverage warns exactly unledgered count, not total events', () => {
+    const partial = report({
+      groupBy: 'provider',
+      totals: emptyMetrics({
+        recordCount: 3,
+        reportedUsd: 0.1,
+        estimatedUsd: null,
+      }),
+      groups: [
+        {
+          dimensions: { provider: 'anthropic' },
+          metrics: emptyMetrics({ recordCount: 3, reportedUsd: 0.1 }),
+        },
+      ],
+      coverage: {
+        ...report().coverage,
+        usageEventCount: 5,
+        ledgeredEventCount: 3,
+        unledgeredEventCount: 2,
+        hasRecordedUsage: true,
+      },
+    });
+
+    const markup = renderToStaticMarkup(
+      createElement(MemoryRouter, null, createElement(UsageBreakdownTable, { report: partial }))
+    );
+
+    expect(markup).toContain('data-usage-state="partial-unledgered"');
+    expect(markup).toContain('2 usage events lack ledger rows');
+    expect(markup).toContain('3/5 ledgered');
+    expect(markup).toContain('2 unledgered');
+    expect(markup).not.toContain('5 usage events lack ledger rows');
+    expect(eventOnlyUsageMessage(partial.coverage)).toBe(
+      '2 usage events recorded without ledger rows (event-only fallback). Totals are incomplete and under-counted.'
+    );
+    expect(eventOnlyUsageMessage(partial.coverage)).not.toContain('5 usage events');
+  });
+
   test('historical zero-event runs still render not-recorded empty state', () => {
     const historical = report({
       totals: emptyMetrics({ recordCount: 0 }),
@@ -430,6 +535,84 @@ describe('UsageBreakdownTable event-only and coverage', () => {
 
     expect(markup).toContain('No usage recorded');
     expect(markup).not.toContain('event-only');
+    expect(markup).not.toContain('Incomplete usage coverage');
+    expect(markup).not.toContain('No groups matched filters');
+  });
+
+  test('node-ledger presentation keeps groups and labels run-wide coverage separately', () => {
+    const nodeLocal = report({
+      groupBy: 'node',
+      totals: emptyMetrics({
+        reportedUsd: 0.2,
+        estimatedUsd: null,
+        recordCount: 1,
+        tokensInput: 100,
+      }),
+      groups: [
+        {
+          dimensions: {
+            runId: 'run-a',
+            nodeId: 'node-a',
+            agentProvider: 'claude',
+            provider: 'anthropic',
+            model: 'sonnet',
+            modelSource: 'reported',
+            kind: null,
+          },
+          metrics: emptyMetrics({
+            reportedUsd: 0.2,
+            recordCount: 1,
+            tokensInput: 100,
+          }),
+        },
+      ],
+      // Synthetic node coverage must not claim local under-count.
+      coverage: {
+        ...report().coverage,
+        usageEventCount: 0,
+        ledgeredEventCount: 0,
+        unledgeredEventCount: 0,
+        hasRecordedUsage: true,
+      },
+    });
+
+    const runWide = {
+      usageEventCount: 4,
+      ledgeredEventCount: 3,
+      unledgeredEventCount: 1,
+      hasRecordedUsage: true,
+      historicalBackfill: false as const,
+      filterScope: 'date-project-run-node' as const,
+    };
+
+    const markup = renderToStaticMarkup(
+      createElement(
+        MemoryRouter,
+        null,
+        createElement(UsageBreakdownTable, {
+          report: nodeLocal,
+          compact: true,
+          title: 'Usage · node-a',
+          coveragePresentation: 'node-ledger',
+          runWideCoverage: runWide,
+        })
+      )
+    );
+
+    expect(markup).toContain('Usage · node-a');
+    expect(markup).toContain('anthropic/sonnet');
+    expect(markup).toContain('$0.20');
+    expect(markup).toContain('data-coverage-scope="node-ledger"');
+    expect(markup).toContain('node ledger rows');
+    expect(markup).toContain('data-coverage-scope="run-wide"');
+    expect(markup).toContain('data-usage-state="run-wide-unledgered"');
+    expect(markup).toContain('Run-wide: 1 usage event lacks ledger rows');
+    expect(markup).toContain('not this node local under-count');
+    expect(markup).toContain('Run-wide ledger: 3/4 ledgered · 1 unledgered');
+    // Must not present run-wide incomplete as this node's local under-count.
+    expect(markup).not.toContain('data-usage-state="partial-unledgered"');
+    expect(markup).not.toContain('1 usage events lack ledger rows (event-only fallback)');
+    expect(markup).not.toContain('Totals under-count until those rows are repaired');
     expect(markup).not.toContain('Incomplete usage coverage');
   });
 

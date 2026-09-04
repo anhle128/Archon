@@ -5,6 +5,7 @@ import {
   pairToolEvents,
   sumNullableMetric,
 } from './RunStream';
+import { buildNodeLedgerUsageReport } from './NodeDivider';
 import { toRunEvent } from '../primitives/event';
 import type { UsageMetrics, UsageReport, UsageReportGroup } from '../skills/usage';
 
@@ -261,5 +262,73 @@ describe('collectUsageByNode', () => {
     );
     expect(map.size).toBe(1);
     expect(map.get('ok')?.groups).toHaveLength(1);
+  });
+});
+
+describe('buildNodeLedgerUsageReport', () => {
+  test('node A ledger groups do not inherit node B run-wide unledgered as local coverage', () => {
+    const nodeA = group(
+      {
+        nodeId: 'node-a',
+        provider: 'anthropic',
+        model: 'sonnet',
+        modelSource: 'reported',
+        agentProvider: 'claude',
+      },
+      { reportedUsd: 0.2, recordCount: 1, tokensInput: 40 }
+    );
+    const runUsage: UsageReport = {
+      ...nodeReport([
+        nodeA,
+        group(
+          { nodeId: 'node-b', provider: 'openai', model: 'gpt', modelSource: 'requested' },
+          { reportedUsd: 0.05, recordCount: 1 }
+        ),
+      ]),
+      coverage: {
+        usageEventCount: 3,
+        ledgeredEventCount: 2,
+        // Unledgered event belongs to another node / pass — still run-wide only.
+        unledgeredEventCount: 1,
+        hasRecordedUsage: true,
+        historicalBackfill: false,
+        filterScope: 'date-project-run-node',
+      },
+    };
+
+    const { report, runWideCoverage } = buildNodeLedgerUsageReport({
+      usageGroups: [nodeA],
+      usageAggregate: aggregateUsageMetrics([nodeA]),
+      runUsage,
+    });
+
+    expect(report.groups).toEqual([nodeA]);
+    expect(report.totals.reportedUsd).toBe(0.2);
+    expect(report.totals.recordCount).toBe(1);
+    // Never invent per-node event coverage from ledger row counts.
+    expect(report.coverage.usageEventCount).toBe(0);
+    expect(report.coverage.ledgeredEventCount).toBe(0);
+    expect(report.coverage.unledgeredEventCount).toBe(0);
+    expect(report.coverage.hasRecordedUsage).toBe(true);
+    // Run-wide incomplete is retained only as separately labeled context.
+    expect(runWideCoverage).toEqual(runUsage.coverage);
+    expect(runWideCoverage?.unledgeredEventCount).toBe(1);
+  });
+
+  test('fully ledgered run yields no run-wide coverage warning payload', () => {
+    const nodeA = group(
+      { nodeId: 'node-a', provider: 'anthropic', model: 'sonnet', modelSource: 'reported' },
+      { reportedUsd: 0.1, recordCount: 2 }
+    );
+    const runUsage = nodeReport([nodeA]);
+
+    const { report, runWideCoverage } = buildNodeLedgerUsageReport({
+      usageGroups: [nodeA],
+      usageAggregate: aggregateUsageMetrics([nodeA]),
+      runUsage,
+    });
+
+    expect(report.coverage.unledgeredEventCount).toBe(0);
+    expect(runWideCoverage).toBeNull();
   });
 });

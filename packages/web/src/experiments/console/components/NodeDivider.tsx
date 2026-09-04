@@ -38,8 +38,50 @@ interface NodeDividerProps {
   usageGroups?: UsageReportGroup[];
   /** Pre-aggregated metrics across usageGroups (expansion totals). */
   usageAggregate?: UsageMetrics;
-  /** Full direct-run usage (for coverage/unavailable context on expand). */
+  /** Full direct-run usage (for optional run-wide coverage context on expand). */
   runUsage?: UsageReport | null;
+}
+
+/**
+ * Build a node-local synthetic usage report for expansion.
+ *
+ * Coverage is intentionally empty integrity (not inferred from ledger row counts)
+ * and never copies run-wide unledgered counts as this node's under-count.
+ * Callers pass run-wide coverage separately so the table can label it run-wide.
+ */
+export function buildNodeLedgerUsageReport(args: {
+  usageGroups: UsageReportGroup[];
+  usageAggregate: UsageMetrics;
+  runUsage: UsageReport | null;
+}): {
+  report: UsageReport;
+  runWideCoverage: UsageReport['coverage'] | null;
+} {
+  const { usageGroups, usageAggregate, runUsage } = args;
+  return {
+    report: {
+      scope: runUsage?.scope ?? {
+        from: null,
+        to: null,
+        includesChildRollup: false as const,
+      },
+      groupBy: 'node',
+      totals: usageAggregate,
+      groups: usageGroups,
+      // Scope-correct placeholder only — never invent event coverage from ledger rows,
+      // never copy run-wide unledgered counts into node-local integrity.
+      coverage: {
+        usageEventCount: 0,
+        ledgeredEventCount: 0,
+        unledgeredEventCount: 0,
+        hasRecordedUsage: true,
+        historicalBackfill: false as const,
+        filterScope: 'date-project-run-node' as const,
+      },
+    },
+    runWideCoverage:
+      runUsage !== null && runUsage.coverage.unledgeredEventCount > 0 ? runUsage.coverage : null,
+  };
 }
 
 const STATUS_LABEL: Record<NodeDividerProps['status'], string> = {
@@ -127,28 +169,17 @@ export function NodeDivider({
     usageGroups.length > 0 &&
     usageAggregate !== undefined;
 
-  // Multi-row synthetic report — retains every exact group; totals from parent aggregate.
-  const nodeReport: UsageReport | null =
+  // Multi-row synthetic report — node ledger groups only; run-wide coverage labeled separately.
+  const nodeUsageView =
     canExpand && usageGroups !== undefined && usageAggregate !== undefined
-      ? {
-          scope: runUsage?.scope ?? {
-            from: null,
-            to: null,
-            includesChildRollup: false as const,
-          },
-          groupBy: 'node',
-          totals: usageAggregate,
-          groups: usageGroups,
-          coverage: runUsage?.coverage ?? {
-            usageEventCount: usageAggregate.recordCount,
-            ledgeredEventCount: usageAggregate.recordCount,
-            unledgeredEventCount: 0,
-            hasRecordedUsage: true,
-            historicalBackfill: false as const,
-            filterScope: 'date-project-run-node' as const,
-          },
-        }
+      ? buildNodeLedgerUsageReport({
+          usageGroups,
+          usageAggregate,
+          runUsage,
+        })
       : null;
+  const nodeReport = nodeUsageView?.report ?? null;
+  const runWideCoverage = nodeUsageView?.runWideCoverage ?? null;
 
   return (
     <div
@@ -215,7 +246,13 @@ export function NodeDivider({
       ) : null}
       {expanded && nodeReport !== null ? (
         <div className="ml-[68px] mt-2">
-          <UsageBreakdownTable report={nodeReport} compact title={`Usage · ${nodeName}`} />
+          <UsageBreakdownTable
+            report={nodeReport}
+            compact
+            title={`Usage · ${nodeName}`}
+            coveragePresentation="node-ledger"
+            runWideCoverage={runWideCoverage}
+          />
         </div>
       ) : null}
     </div>
