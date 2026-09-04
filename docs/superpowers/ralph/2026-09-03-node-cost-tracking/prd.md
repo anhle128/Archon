@@ -103,6 +103,16 @@ Providers normalize only what they observe; the workflow executor attaches run/n
 | 37 | US-037 | Make coverage UI truthful for filters and node scope | US-013, US-021, US-022, US-036 | 2065-2095 |
 | 38 | US-038 | Reject malformed pricing before estimation | US-007, US-019, US-037 | 2097-2126 |
 | 39 | US-039 | Run post-Convergence 3 validation | US-038 | 1303-1345, 2128 |
+| 40 | US-040 | Preserve OpenCode usage across raw stream failures | US-034, US-039 | 2134-2164 |
+| 41 | US-041 | Reject calendar-impossible OMP main transcript names | US-033, US-040 | 2166-2193 |
+| 42 | US-042 | Follow OMP task ownership recursively through task transcripts | US-026, US-041 | 2195-2225 |
+| 43 | US-043 | Reject usage instants beyond lossless precision | US-023, US-028, US-042 | 2227-2261 |
+| 44 | US-044 | Keep partial coverage distinct from filter misses | US-037, US-043 | 2263-2292 |
+| 45 | US-045 | Separate GET usage and run-detail nullability | US-011, US-030, US-044 | 2294-2326 |
+| 46 | US-046 | Bound OMP directory enumeration before entry allocation | US-042, US-045 | 2328-2355 |
+| 47 | US-047 | Preserve reported zero in legacy totals and fallbacks | US-010, US-013, US-017, US-046 | 2357-2390 |
+| 48 | US-048 | Justify or remove unrelated bundled-workflow test changes | US-047 | 2392-2421 |
+| 49 | US-049 | Run post-Convergence 4 validation | US-048 | 1303-1345, 2423 |
 
 ## Ralph Execution Notes
 
