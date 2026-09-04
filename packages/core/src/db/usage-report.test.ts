@@ -190,6 +190,69 @@ describe('queryUsageReport validation', () => {
     }
   });
 
+  test('rejects sub-millisecond fractional precision with an actionable message', async () => {
+    const rejected = [
+      '2026-09-01T00:00:00.0004Z',
+      '2026-09-01T00:00:00.0005Z',
+      '2026-09-01T00:00:00.123456Z',
+      '2026-09-01T00:00:00.123456789Z',
+      '2026-09-01T00:00:00.0004+00:00',
+    ];
+    for (const bad of rejected) {
+      await expect(
+        queryUsageReport({ from: bad, to: '2026-09-02T00:00:00.000Z' })
+      ).rejects.toMatchObject({
+        name: 'UsageReportQueryError',
+        code: 'validation',
+        message: expect.stringMatching(/Invalid from:.*3 fractional second digits/),
+      });
+      await expect(
+        queryUsageReport({ from: '2026-09-01T00:00:00.000Z', to: bad })
+      ).rejects.toMatchObject({
+        code: 'validation',
+        message: expect.stringMatching(/Invalid to:.*3 fractional second digits/),
+      });
+    }
+  });
+
+  test('accepts 1–3 fractional digits and preserves half-open UTC equivalence', async () => {
+    installQueryRouter({});
+    const cases: Array<{ from: string; to: string; fromMs: number; toMs: number }> = [
+      {
+        from: '2026-09-01T00:00:00.1Z',
+        to: '2026-09-01T00:00:00.2Z',
+        fromMs: Date.parse('2026-09-01T00:00:00.100Z'),
+        toMs: Date.parse('2026-09-01T00:00:00.200Z'),
+      },
+      {
+        from: '2026-09-01T00:00:00.12Z',
+        to: '2026-09-01T00:00:00.123Z',
+        fromMs: Date.parse('2026-09-01T00:00:00.120Z'),
+        toMs: Date.parse('2026-09-01T00:00:00.123Z'),
+      },
+      {
+        // offset-equivalent lower bound (.5Z ≡ +07:00) with a distinct exclusive end
+        from: '2026-09-01T07:00:00.5+07:00',
+        to: '2026-09-01T00:00:01.000Z',
+        fromMs: Date.parse('2026-09-01T00:00:00.500Z'),
+        toMs: Date.parse('2026-09-01T00:00:01.000Z'),
+      },
+      {
+        from: '2026-09-01T00:00:00.500Z',
+        to: '2026-09-01T00:00:01.000Z',
+        fromMs: Date.parse('2026-09-01T00:00:00.500Z'),
+        toMs: Date.parse('2026-09-01T00:00:01.000Z'),
+      },
+    ];
+    for (const { from, to, fromMs, toMs } of cases) {
+      mockQuery.mockClear();
+      installQueryRouter({});
+      const report = await queryUsageReport({ from, to });
+      expect(new Date(report.scope.from!).getTime()).toBe(fromMs);
+      expect(new Date(report.scope.to!).getTime()).toBe(toMs);
+    }
+  });
+
   test('accepts Z and explicit-offset RFC 3339 instants', async () => {
     installQueryRouter({});
     const validPairs: Array<[string, string]> = [

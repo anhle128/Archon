@@ -419,6 +419,47 @@ describe('GET /api/usage', () => {
     }
   });
 
+  test('rejects sub-millisecond fractional instants via OpenAPI before query', async () => {
+    const app = makeApp();
+    const invalid = [
+      '2026-09-01T00:00:00.0004Z',
+      '2026-09-01T00:00:00.0005Z',
+      '2026-09-01T00:00:00.123456Z',
+      '2026-09-01T00:00:00.123456789Z',
+      '2026-09-01T00:00:00.0004+00:00',
+    ];
+    for (const bad of invalid) {
+      mockQueryUsageReport.mockClear();
+      const qs = new URLSearchParams({
+        from: bad,
+        to: '2026-09-02T00:00:00.000Z',
+      });
+      const response = await app.request(`/api/usage?${qs.toString()}`);
+      expect(response.status).toBe(400);
+      expect(mockQueryUsageReport).not.toHaveBeenCalled();
+      const body = (await response.json()) as { error?: unknown; success?: boolean };
+      // Hono/Zod validation payload — ensure precision is mentioned somewhere.
+      expect(JSON.stringify(body)).toContain('3 fractional second digits');
+    }
+  });
+
+  test('accepts 1–3 fractional digits with Z and numeric offsets', async () => {
+    const app = makeApp();
+    const pairs: Array<[string, string]> = [
+      ['2026-09-01T00:00:00.1Z', '2026-09-01T00:00:00.2Z'],
+      ['2026-09-01T00:00:00.12Z', '2026-09-01T00:00:00.123Z'],
+      ['2026-09-01T07:00:00.5+07:00', '2026-09-01T00:00:01.000Z'],
+    ];
+    for (const [from, to] of pairs) {
+      mockQueryUsageReport.mockClear();
+      const qs = new URLSearchParams({ from, to });
+      const response = await app.request(`/api/usage?${qs.toString()}`);
+      expect(response.status).toBe(200);
+      const [[callArgs]] = mockQueryUsageReport.mock.calls as [[{ [k: string]: unknown }]][];
+      expect(callArgs).toEqual({ from, to });
+    }
+  });
+
   test('accepts Z and explicit-offset RFC 3339 instants', async () => {
     const app = makeApp();
     const pairs: Array<[string, string]> = [

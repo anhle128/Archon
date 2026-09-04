@@ -8,11 +8,38 @@ import { z } from '@hono/zod-openapi';
 import { usageLedgerKindSchema, usageLedgerModelSourceSchema } from './usage-ledger';
 
 /**
- * External usage range string: complete RFC 3339 instant with explicit `Z`
- * or numeric offset. Rejects date-only, zone-less, locale, and calendar-
- * rollover forms — never rely on implementation-defined `Date` parsing.
+ * Max fractional-second digits lossless across JS `Date`, SQLite `strftime %f`,
+ * and PostgreSQL `timestamptz` on the shared usage query path.
  */
-export const usageInstantStringSchema = z.string().datetime({ offset: true });
+export const USAGE_INSTANT_MAX_FRACTION_DIGITS = 3;
+
+/** Actionable rejection when a bound carries sub-millisecond fraction digits. */
+export const USAGE_INSTANT_PRECISION_MESSAGE =
+  'must be a valid RFC 3339 instant with Z or numeric offset and at most 3 fractional second digits (millisecond precision; longer fractions are rejected, not truncated)';
+
+/** Shape/calendar/offset rejection (no precision issue). */
+export const USAGE_INSTANT_SHAPE_MESSAGE =
+  'must be a valid RFC 3339 instant with Z or numeric offset';
+
+/**
+ * External usage range string: complete RFC 3339 instant with explicit `Z`
+ * or numeric offset. Fractional seconds are optional and limited to 1–3 digits
+ * so every accepted value is representable exactly by JS Date, SQLite, and
+ * PostgreSQL without silent rounding or truncation. Rejects date-only,
+ * zone-less, locale, calendar-rollover, and sub-ms forms — never rely on
+ * implementation-defined `Date` parsing.
+ */
+export const usageInstantStringSchema = z.string().superRefine((value, ctx) => {
+  const fraction = /T\d{2}:\d{2}:\d{2}\.(\d+)/.exec(value);
+  if (fraction && fraction[1].length > USAGE_INSTANT_MAX_FRACTION_DIGITS) {
+    ctx.addIssue({ code: 'custom', message: USAGE_INSTANT_PRECISION_MESSAGE });
+    return;
+  }
+  const datetime = z.string().datetime({ offset: true }).safeParse(value);
+  if (!datetime.success) {
+    ctx.addIssue({ code: 'custom', message: USAGE_INSTANT_SHAPE_MESSAGE });
+  }
+});
 export type UsageInstantString = z.infer<typeof usageInstantStringSchema>;
 
 export const usageGroupBySchema = z.enum([

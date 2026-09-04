@@ -12,6 +12,7 @@ import type { QueryResult } from './adapters/types';
 
 import { createLogger } from '@archon/paths';
 import {
+  USAGE_INSTANT_SHAPE_MESSAGE,
   usageGroupBySchema,
   usageInstantStringSchema,
   usageKindFilterSchema,
@@ -22,6 +23,7 @@ import {
   type UsageMetrics,
   type UsageReport,
 } from '../schemas/usage-report';
+
 import type { UsageLedgerKind, UsageLedgerModelSource } from '../schemas/usage-ledger';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger). */
@@ -178,7 +180,8 @@ function utcDayExpression(): string {
 /**
  * Parse a usage range bound.
  * - `Date` instances are accepted for internal typed callers (must be finite).
- * - Strings must be complete RFC 3339 instants with `Z` or a numeric offset.
+ * - Strings must be complete RFC 3339 instants with `Z` or a numeric offset
+ *   and at most 3 fractional second digits (millisecond precision).
  */
 export function parseUsageInstant(value: Date | string, label: string): Date {
   if (value instanceof Date) {
@@ -189,16 +192,14 @@ export function parseUsageInstant(value: Date | string, label: string): Date {
   }
   const parsed = usageInstantStringSchema.safeParse(value);
   if (!parsed.success) {
-    throw new UsageReportQueryError(
-      'validation',
-      `Invalid ${label}: must be a valid RFC 3339 instant with Z or numeric offset`
-    );
+    const detail = parsed.error.issues[0]?.message ?? USAGE_INSTANT_SHAPE_MESSAGE;
+    throw new UsageReportQueryError('validation', `Invalid ${label}: ${detail}`);
   }
   const d = new Date(parsed.data);
   if (Number.isNaN(d.getTime())) {
     throw new UsageReportQueryError(
       'validation',
-      `Invalid ${label}: must be a valid RFC 3339 instant with Z or numeric offset`
+      `Invalid ${label}: ${USAGE_INSTANT_SHAPE_MESSAGE}`
     );
   }
   return d;

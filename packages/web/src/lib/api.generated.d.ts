@@ -2564,9 +2564,9 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
-                    /** @description RFC 3339 inclusive range start with Z or numeric offset. Must be paired with `to`. Half-open range is [from, to). */
+                    /** @description RFC 3339 inclusive range start with Z or numeric offset; optional fractional seconds limited to 1–3 digits (millisecond precision). Must be paired with `to`. Half-open range is [from, to). */
                     from?: string;
-                    /** @description RFC 3339 exclusive range end with Z or numeric offset. Must be paired with `from`. Half-open range is [from, to). */
+                    /** @description RFC 3339 exclusive range end with Z or numeric offset; optional fractional seconds limited to 1–3 digits (millisecond precision). Must be paired with `from`. Half-open range is [from, to). */
                     to?: string;
                     codebaseId?: string;
                     agentProvider?: string;

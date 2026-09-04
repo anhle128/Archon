@@ -691,18 +691,20 @@ repository. Reuses the same core query as `GET /api/usage` (defaults, filters,
 range bounds, grouping, ledger coverage) — no separate SQL path.
 
 **Date range is half-open UTC `[since, until)`.** Both flags must be present or
-both absent. With neither dates nor `--run-id`, the report defaults to the
-current UTC calendar month. With `--run-id` alone (no dates), the entire run is
-included. Cross-run ranges cannot exceed 366 days. `--node` requires `--run-id`
-and matches the exact persisted step name.
+both absent. Instants are RFC 3339 with `Z` or numeric offset; fractional
+seconds are optional and limited to 1–3 digits (millisecond precision — longer
+fractions are rejected, not truncated). With neither dates nor `--run-id`, the
+report defaults to the current UTC calendar month. With `--run-id` alone (no
+dates), the entire run is included. Cross-run ranges cannot exceed 366 days.
+`--node` requires `--run-id` and matches the exact persisted step name.
 
 Use `--since` / `--until` (not `--from` / `--to`). `--from` remains the
 worktree branch-selection flag and is rejected on `usage`.
 
 | Flag | Maps to | Notes |
 |------|---------|-------|
-| `--since <RFC3339>` | `from` | Inclusive range start (UTC) |
-| `--until <RFC3339>` | `to` | Exclusive range end (UTC) |
+| `--since <RFC3339>` | `from` | Inclusive start; RFC 3339, ≤3 fractional digits |
+| `--until <RFC3339>` | `to` | Exclusive end; RFC 3339, ≤3 fractional digits |
 | `--by <dim>` | `groupBy` | `agent` \| `provider` (default) \| `model` \| `project` \| `run` \| `day` \| `node` |
 | `--codebase-id <uuid>` | `codebaseId` | Project filter |
 | `--agent <id>` | `agentProvider` | Archon agent provider id |
@@ -712,6 +714,7 @@ worktree branch-selection flag and is rejected on `usage`.
 | `--run-id <id>` | `runId` | Direct run only (no child rollup) |
 | `--node <step>` | `nodeId` | Exact step name; requires `--run-id` |
 | `--json` | — | Exact camelCase report on stdout; logs suppressed |
+
 
 Unsupported flags fail clearly (top-level parse is `strict: false`).
 

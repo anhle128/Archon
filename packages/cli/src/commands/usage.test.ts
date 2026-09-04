@@ -351,6 +351,62 @@ describe('usageCommand', () => {
     expect(errSpy.mock.calls.flat().join('\n')).toContain('Invalid --until');
   });
 
+  it('rejects sub-millisecond fractional --since/--until with an actionable precision message', async () => {
+    const rejected = [
+      '2026-09-01T00:00:00.0004Z',
+      '2026-09-01T00:00:00.0005Z',
+      '2026-09-01T00:00:00.123456Z',
+      '2026-09-01T00:00:00.123456789Z',
+    ];
+    for (const bad of rejected) {
+      let called = false;
+      errSpy.mockClear();
+      const code = await usageCommand(
+        { since: bad, until: '2026-09-02T00:00:00.000Z' },
+        async () => {
+          called = true;
+          return sampleReport();
+        }
+      );
+      expect(code).toBe(1);
+      expect(called).toBe(false);
+      const err = errSpy.mock.calls.flat().join('\n');
+      expect(err).toContain('Invalid --since');
+      expect(err).toContain('3 fractional second digits');
+    }
+
+    errSpy.mockClear();
+    let calledUntil = false;
+    const untilCode = await usageCommand(
+      { since: '2026-09-01T00:00:00.000Z', until: '2026-09-01T00:00:00.123456Z' },
+      async () => {
+        calledUntil = true;
+        return sampleReport();
+      }
+    );
+    expect(untilCode).toBe(1);
+    expect(calledUntil).toBe(false);
+    expect(errSpy.mock.calls.flat().join('\n')).toContain('Invalid --until');
+    expect(errSpy.mock.calls.flat().join('\n')).toContain('3 fractional second digits');
+  });
+
+  it('accepts 1–3 fractional digits on --since/--until', async () => {
+    const pairs: Array<[string, string]> = [
+      ['2026-09-01T00:00:00.1Z', '2026-09-01T00:00:00.2Z'],
+      ['2026-09-01T00:00:00.12Z', '2026-09-01T00:00:00.123Z'],
+      ['2026-09-01T07:00:00.5+07:00', '2026-09-01T00:00:01.000Z'],
+    ];
+    for (const [since, until] of pairs) {
+      let received: UsageReportQuery | undefined;
+      const code = await usageCommand({ since, until }, async options => {
+        received = options;
+        return sampleReport();
+      });
+      expect(code).toBe(0);
+      expect(received).toEqual({ from: since, to: until });
+    }
+  });
+
   it('accepts Z and explicit-offset RFC 3339 --since/--until', async () => {
     const pairs: Array<[string, string]> = [
       ['2026-09-01T00:00:00Z', '2026-09-02T00:00:00Z'],

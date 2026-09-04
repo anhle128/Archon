@@ -20,12 +20,13 @@ export const usageQuerySchema = z
   .object({
     from: usageInstantStringSchema.optional().openapi({
       description:
-        'RFC 3339 inclusive range start with Z or numeric offset. Must be paired with `to`. Half-open range is [from, to).',
+        'RFC 3339 inclusive range start with Z or numeric offset; optional fractional seconds limited to 1–3 digits (millisecond precision). Must be paired with `to`. Half-open range is [from, to).',
     }),
     to: usageInstantStringSchema.optional().openapi({
       description:
-        'RFC 3339 exclusive range end with Z or numeric offset. Must be paired with `from`. Half-open range is [from, to).',
+        'RFC 3339 exclusive range end with Z or numeric offset; optional fractional seconds limited to 1–3 digits (millisecond precision). Must be paired with `from`. Half-open range is [from, to).',
     }),
+
     codebaseId: z.string().optional(),
     agentProvider: z.string().optional(),
     provider: z.string().optional(),

@@ -424,7 +424,7 @@ ledger coverage as [`archon usage`](/reference/cli/#usage)).
 
 | Param | Notes |
 |-------|-------|
-| `from` / `to` | Half-open UTC `[from, to)`. Both required or both omitted. Default without `runId`: current UTC calendar month. With `runId` alone: entire run (`from`/`to` null). Cross-run ranges capped at 366 days. |
+| `from` / `to` | Half-open UTC `[from, to)`. Both required or both omitted. Instants are RFC 3339 with `Z` or numeric offset; fractional seconds optional and limited to 1–3 digits (millisecond precision — longer fractions are rejected, not truncated). Default without `runId`: current UTC calendar month. With `runId` alone: entire run (`from`/`to` null). Cross-run ranges capped at 366 days. |
 | `codebaseId` | Project filter |
 | `agentProvider` | Archon agent id (`claude`, `codex`, …) |
 | `provider` / `model` | Upstream provider and model |

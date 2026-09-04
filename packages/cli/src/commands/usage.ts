@@ -18,10 +18,12 @@ import type {
   UsageReportGroup,
 } from '@archon/core/schemas/usage-report';
 import {
+  USAGE_INSTANT_SHAPE_MESSAGE,
   usageGroupBySchema,
   usageInstantStringSchema,
   usageKindFilterSchema,
 } from '@archon/core/schemas/usage-report';
+
 import { writeJsonLine } from '../utils/stdout';
 
 /** Positive amounts strictly below this floor use the `<$0.000001` form. */
@@ -212,16 +214,19 @@ function buildQuery(options: UsageCommandOptions): UsageReportQuery | { error: s
     }
     const sinceParsed = usageInstantStringSchema.safeParse(options.since);
     if (!sinceParsed.success) {
+      const detail = sinceParsed.error.issues[0]?.message ?? USAGE_INSTANT_SHAPE_MESSAGE;
       return {
-        error: 'Invalid --since: must be a valid RFC 3339 instant with Z or numeric offset',
+        error: `Invalid --since: ${detail}`,
       };
     }
     const untilParsed = usageInstantStringSchema.safeParse(options.until);
     if (!untilParsed.success) {
+      const detail = untilParsed.error.issues[0]?.message ?? USAGE_INSTANT_SHAPE_MESSAGE;
       return {
-        error: 'Invalid --until: must be a valid RFC 3339 instant with Z or numeric offset',
+        error: `Invalid --until: ${detail}`,
       };
     }
+
     query.from = sinceParsed.data;
     query.to = untilParsed.data;
   }
