@@ -6,7 +6,7 @@ import {
   formatUsdAmount,
 } from '../lib/format';
 import { useStreamContext } from '../lib/stream-context';
-import type { UsageReport, UsageReportGroup } from '../skills/usage';
+import type { UsageMetrics, UsageReport, UsageReportGroup } from '../skills/usage';
 import { UsageBreakdownTable } from './UsageBreakdownTable';
 
 interface NodeDividerProps {
@@ -34,8 +34,10 @@ interface NodeDividerProps {
   skipExpr?: string | null;
   /** When true, surface skip reason / stop reason inline. */
   showDetail?: boolean;
-  /** Single-node group from the run usage report for expansion. */
-  usageGroup?: UsageReportGroup;
+  /** Every exact ledger group for this step name (provider/model/source/kind splits). */
+  usageGroups?: UsageReportGroup[];
+  /** Pre-aggregated metrics across usageGroups (expansion totals). */
+  usageAggregate?: UsageMetrics;
   /** Full direct-run usage (for coverage/unavailable context on expand). */
   runUsage?: UsageReport | null;
 }
@@ -79,7 +81,8 @@ export function NodeDivider({
   skipReason,
   skipExpr,
   showDetail = false,
-  usageGroup,
+  usageGroups,
+  usageAggregate,
   runUsage = null,
 }: NodeDividerProps): ReactElement {
   const { runStartedAt } = useStreamContext();
@@ -118,11 +121,15 @@ export function NodeDivider({
     skipReason !== undefined &&
     skipReason.length > 0;
 
-  const canExpand = hasLedgerUsage && usageGroup !== undefined;
+  const canExpand =
+    hasLedgerUsage &&
+    usageGroups !== undefined &&
+    usageGroups.length > 0 &&
+    usageAggregate !== undefined;
 
-  // Single-node synthetic report for the shared table on expand.
+  // Multi-row synthetic report — retains every exact group; totals from parent aggregate.
   const nodeReport: UsageReport | null =
-    canExpand && usageGroup !== undefined
+    canExpand && usageGroups !== undefined && usageAggregate !== undefined
       ? {
           scope: runUsage?.scope ?? {
             from: null,
@@ -130,11 +137,11 @@ export function NodeDivider({
             includesChildRollup: false as const,
           },
           groupBy: 'node',
-          totals: usageGroup.metrics,
-          groups: [usageGroup],
+          totals: usageAggregate,
+          groups: usageGroups,
           coverage: runUsage?.coverage ?? {
-            usageEventCount: usageGroup.metrics.recordCount,
-            ledgeredEventCount: usageGroup.metrics.recordCount,
+            usageEventCount: usageAggregate.recordCount,
+            ledgeredEventCount: usageAggregate.recordCount,
             unledgeredEventCount: 0,
             hasRecordedUsage: true,
             historicalBackfill: false as const,
