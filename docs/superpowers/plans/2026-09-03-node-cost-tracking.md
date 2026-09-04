@@ -1895,3 +1895,234 @@ These tasks remain after reviewing the present implementation rather than trusti
 ```
 
 After Convergence Tasks 10–15 pass their focused tests, run the full validation sequence named above, including the PostgreSQL schema-upgrade check.
+
+## Convergence 3 — Skeptical no-mistakes audit (2026-09-04)
+
+These tasks remain after comparing the present code to the complete plan and tracing concrete failure states through the surrounding runtime. Complete them in order. They close existing truthfulness, durability, and UI-contract gaps; they do not authorize a new product surface.
+
+### Convergence Task 16: Isolate every SQLite transaction from unrelated queries
+
+**Severity:** CRITICAL  
+**Gap type:** `contradicts`  
+**Source ref:** Plan §§9 and 11, Convergence Task 14, Pass A `A3-001`, and hidden finding `H3-001`.
+
+**Files:**
+
+- Modify `packages/core/src/db/adapters/sqlite.ts` and `sqlite.test.ts`.
+- Modify `packages/core/src/db/usage-report.snapshot.integration.test.ts`.
+- Modify `packages/core/src/db/workflows.ts` and `workflows.test.ts` to remove raw transaction ownership from callers.
+
+**TDD order:**
+
+1. On one `SqliteAdapter`, pause a `withSnapshotRead()` callback after its first read, start an ordinary public `query()` mutation from another async flow, and prove the mutation cannot execute inside the report's open transaction. The report must be internally coherent and the mutation must commit separately after the snapshot ends.
+2. Repeat with the snapshot callback throwing after the concurrent mutation starts; an acknowledged outside mutation must never be rolled back by the snapshot's `ROLLBACK`.
+3. Add the equivalent contamination test for `withTransaction()` so an ordinary write cannot become an accidental child of the usage recorder's atomic event-plus-ledger transaction.
+4. Add focused cleanup/delete tests proving `cleanupOldWorkflowRuns()` and `deleteWorkflowRun()` use the adapter transaction callback rather than issuing public `BEGIN`/`COMMIT`/`ROLLBACK` statements that can collide with another owner.
+5. Make the SQLite adapter own transaction boundaries and provide its callback a transaction-scoped query path, while public queries from other async flows serialize outside the active transaction. Keep the PostgreSQL adapter contract unchanged.
+
+**Acceptance criteria:**
+
+- A query that did not originate from a transaction callback cannot run inside, commit, or roll back that callback's SQLite transaction.
+- No caller outside the database adapter issues raw transaction-control statements for the affected workflow cleanup/delete operations.
+- Usage reports retain one coherent snapshot, while usage event plus ledger writes remain atomic and duplicate-safe.
+- Concurrent approval/CAS behavior, nested-transaction failure behavior, rollback logging, and the separate-connection WAL snapshot test do not regress.
+
+**Commands:**
+
+```bash
+(cd packages/core && bun test src/db/adapters/sqlite.test.ts)
+(cd packages/core && bun test src/db/usage-report.snapshot.integration.test.ts)
+(cd packages/core && bun test src/db/workflows.test.ts)
+```
+
+### Convergence Task 17: Recognize only OMP's exact main-transcript constructor
+
+**Severity:** CRITICAL  
+**Gap type:** `contradicts`  
+**Source ref:** Plan §5 exact session layout, Convergence Tasks 4 and 11, Pass A `A3-002`, and hidden finding `H3-002`.
+
+**Files:**
+
+- Modify `packages/providers/src/community/omp/session-usage.ts` and `session-usage.test.ts`.
+
+**TDD order:**
+
+1. Add main-directory decoys named `notes_<sessionId>.jsonl`, `_<sessionId>.jsonl`, and malformed/non-canonical timestamp variants with otherwise valid session headers; none may be selected as the main transcript.
+2. Add one exact `<ISO timestamp with colon/dot separators replaced by dashes>_<sessionId>.jsonl` plus one suffix-only decoy; the exact file must win without an ambiguity warning.
+3. Retain the fail-closed case for two exact main constructors, and add task-file classification cases proving the same exact predicate is used when excluding copied main transcripts from artifact candidates.
+4. Centralize discovery on one exact constructor predicate that mirrors OMP's supported timestamp filename format instead of accepting an arbitrary non-empty prefix.
+
+**Acceptance criteria:**
+
+- `findMainTranscriptPath()` and `isMainTranscriptFileName()` agree on the exact supported OMP constructor.
+- A suffix match alone cannot establish the trusted main transcript, suppress a legitimate parent-linked task filename, or seed hidden-session ownership.
+- One exact main plus arbitrary decoys resolves deterministically; more than one exact main remains ambiguous and omits hidden enrichment.
+- Existing containment, one-handle verification, parent-link ownership, file/byte bounds, and fail-soft primary provider result behavior do not regress.
+
+**Commands:**
+
+```bash
+(cd packages/providers && bun test src/community/omp/session-usage.test.ts)
+```
+
+### Convergence Task 18: Carry OpenCode usage through late failures and internal retries
+
+**Severity:** CRITICAL  
+**Gap type:** `partial`  
+**Source ref:** Plan §§2, 4, 6, and 7; acceptance criterion “the last terminal result is cumulative per `sendQuery()` invocation”; Pass A `A3-003`; hidden finding `H3-003`.
+
+**Files:**
+
+- Modify `packages/providers/src/community/opencode/session.ts`, `multi-agent.ts`, and `provider.ts`.
+- Modify `packages/providers/src/community/opencode/provider.test.ts`; modify `tokens.ts`/`tokens.test.ts` only if a typed merge helper belongs there.
+
+**TDD order:**
+
+1. Emit an authoritative assistant `message.updated` usage observation and then a retryable `session.error`; make the next internal attempt succeed and assert the final terminal result contains both attempts in source order exactly once.
+2. Exhaust retries after at least one observed usage entry and assert a terminal `isError` result carries the cumulative observations and the final typed error metadata, so the workflow executor can persist usage before failing the node.
+3. In multi-agent mode, let one child (or another child before it) report usage and then emit `session.error`; assert every already-observed child entry survives with `kind: 'subagent'` and no unobserved entry is synthesized.
+4. Preserve accumulated usage across provider-owned retry boundaries, while keeping per-message replacement within an attempt and the current rate-limit/crash/agent-refresh classification and backoff behavior.
+
+**Acceptance criteria:**
+
+- Usage observed before a late OpenCode error is not discarded by `session.error`, stream abort/error propagation, another child's failure, or an internal retry.
+- One `sendQuery()` invocation ends with one cumulative authoritative breakdown; repeated attempts append spend rather than replace it, while repeated updates for the same assistant message still replace within that observation.
+- Final failures with usage produce an error result that preserves classification and causes the existing executor path to record once and then fail; failures with no observed usage retain the existing no-fabrication error behavior.
+- Requested/reported model identity, missing request counts, cache/reasoning fields, resume outcome, and multi-agent attribution do not regress.
+
+**Commands:**
+
+```bash
+(cd packages/providers && bun test src/community/opencode/provider.test.ts)
+(cd packages/providers && bun test src/community/opencode/tokens.test.ts)
+```
+
+### Convergence Task 19: Preserve Copilot usage when `sendAndWait` rejects late
+
+**Severity:** CRITICAL  
+**Gap type:** `partial`  
+**Source ref:** Plan §§2, 4, 6, and 7 failure-preservation rules; Pass A `A3-003`; hidden finding `H3-004`.
+
+**Files:**
+
+- Modify `packages/providers/src/community/copilot/event-bridge.ts` and `provider.ts`.
+- Modify `packages/providers/src/community/copilot/event-bridge.test.ts` and `provider.test.ts`.
+
+**TDD order:**
+
+1. Fire one or more `assistant.usage` events and then reject `sendAndWait`; assert the terminal error path carries every captured entry and aggregate token value exactly once.
+2. Drive that result through the provider boundary and assert the existing friendly Copilot error classification/message is retained while the result is marked terminal-error for executor persistence.
+3. Retain a rejection-before-any-usage case proving no usage entry is invented and the established throw/error behavior remains intact.
+4. Retain the `session.error` followed by successful assistant fallback case so SDK auto-recovery does not become a false terminal failure or duplicate usage.
+
+**Acceptance criteria:**
+
+- Once `assistant.usage` has been observed, a later SDK promise rejection cannot discard it.
+- The workflow consumer receives one usage-bearing terminal error result, records it once, and still fails the node with the same actionable Copilot classification.
+- Multiple authoritative usage events remain distinct observations with their provider/model/kind fields; missing upstream measures remain missing.
+- Abort/disconnect cleanup, session reuse, structured-output parsing, and the no-usage rejection path do not regress.
+
+**Commands:**
+
+```bash
+(cd packages/providers && bun test src/community/copilot/event-bridge.test.ts)
+(cd packages/providers && bun test src/community/copilot/provider.test.ts)
+```
+
+### Convergence Task 20: Preserve parsed OMP and Grok usage across late transport failures
+
+**Severity:** CRITICAL  
+**Gap type:** `partial`  
+**Source ref:** Plan §§2, 4, 5, 6, and 7 failure-preservation rules; Pass A `A3-003`; hidden findings `H3-005` and `H3-006`.
+
+**Files:**
+
+- Modify `packages/providers/src/community/omp/provider.ts` and `provider.test.ts`.
+- Modify `packages/providers/src/grok/provider.ts` and `provider.test.ts`.
+- Modify the corresponding event parser only if a narrow typed observed-result accessor is required.
+
+**TDD order:**
+
+1. For each provider, stream a valid terminal event containing authoritative primary usage, then make stderr reading reject; assert a terminal error result retains the parsed usage/session/model metadata exactly once.
+2. Repeat for a rejected process-exit promise and, where separately reachable, a stdout failure after the terminal event. Early transport failures with no parsed usage must still throw without fabricating an observation.
+3. Keep protocol-error and nonzero-exit fixtures green; all transport error variants must preserve their original subtype/message and fail the node rather than turning transport failure into success.
+4. Route post-usage transport failures through the existing observed-result construction boundary. Preserve caller cancellation semantics on abort even if already-observed usage must be carried to the workflow accounting boundary.
+
+**Acceptance criteria:**
+
+- Authoritative usage already accepted by the OMP/Grok parser survives a later nonzero/protocol/I/O/exit failure and is persisted before node failure.
+- No transport path creates usage when the parser observed none, and no primary observation is emitted twice.
+- OMP hidden transcript enrichment remains fail-soft and cannot change primary success/error status; Grok incomplete-output and resume semantics remain unchanged.
+- Child termination/reaping and abort behavior remain bounded and do not leak a subprocess.
+
+**Commands:**
+
+```bash
+(cd packages/providers && bun test src/community/omp/provider.test.ts)
+(cd packages/providers && bun test src/grok/provider.test.ts)
+```
+
+### Convergence Task 21: Make coverage UI truthful for filter and node scope
+
+**Severity:** HIGH  
+**Gap type:** `partial`  
+**Source ref:** Plan §§11 and 14 conservative coverage/empty-state rules, Pass A `A3-004`, and hidden findings `H3-007` and `H3-008`.
+
+**Files:**
+
+- Modify `packages/web/src/experiments/console/components/UsageBreakdownTable.tsx` and `UsageBreakdownTable.test.ts`.
+- Modify `packages/web/src/experiments/console/components/NodeDivider.tsx` and the focused `RunStream.test.tsx`/component tests.
+
+**TDD order:**
+
+1. Render a fully ledgered base scope (`1/1`, `unledgeredEventCount = 0`, `hasRecordedUsage = true`) whose provider/model/kind filter matches zero ledger rows; assert “No groups matched filters” (or equivalent), never “Incomplete usage coverage,” “event-only,” or “No usage recorded.”
+2. Render partial coverage with five usage events and exactly two unledgered; every fallback warning must say two, not five. Retain a true zero-ledger/event-only case and a historical zero-event case.
+3. Expand node A with ledger groups while run-wide coverage includes an unledgered event owned by node B; node A's table must not present run coverage as node-local coverage or claim node A's totals under-count. If run-wide context is retained, label its scope explicitly.
+4. Separate row-match state from conservative base-scope coverage and pass only scope-correct coverage into synthetic node reports; do not infer per-node event coverage from ledger row counts.
+
+**Acceptance criteria:**
+
+- Dimension-filter no-match, true event-only fallback, partial coverage, historical no-recording, and query-unavailable are five truthfully distinct observable states.
+- Fallback copy uses exactly `unledgeredEventCount`; it never substitutes total event count.
+- A node breakdown displays only node-scoped integrity coverage, or clearly labels any run-wide warning as run-wide; it never synthesizes event coverage from ledger groups.
+- Cost page filters/groupings, full tuple labels, run links, nullable/zero/sub-cent formatting, and run-header coverage warnings do not regress.
+
+**Commands:**
+
+```bash
+(cd packages/web && bun test src/experiments/console/components/UsageBreakdownTable.test.ts)
+(cd packages/web && bun test src/experiments/console/components/RunStream.test.tsx)
+```
+
+### Convergence Task 22: Reject malformed config and catalog pricing before estimation
+
+**Severity:** HIGH  
+**Gap type:** `partial`  
+**Source ref:** Plan §10 use-time validation and the pricing test matrix; repository fail-explicit rule; Pass A `A3-005`; hidden findings `H3-009` and `H3-010`.
+
+**Files:**
+
+- Modify `packages/core/src/usage/estimate.ts` and `estimate.test.ts`.
+- Modify `packages/providers/src/community/pi/model-catalog.ts` only if the provider-owned catalog contract needs a narrow validated type; core remains the pricing-policy owner.
+
+**TDD order:**
+
+1. Pass runtime-malformed present pricing values (primitive, array, and non-array `models`) through `loadPricingLookups()`; assert a structured warning and empty config index. Missing `pricing` and an intentionally empty object remain valid no-pricing states.
+2. Inject catalog pairs with a negative base rate that is offset by a positive category, non-finite rates, negative/non-finite tier thresholds, and invalid tier rates; assert the exact pair is rejected with a structured warning and cannot produce any estimate.
+3. Retain valid zero rates, valid tiers, slash-containing exact identities, config-over-catalog precedence, invalid/duplicate config blocking, and null-estimate behavior for missing positive-category rates.
+4. Validate every external catalog/config rate set before indexing it; estimation must never depend on the final sum alone to discover invalid component rates.
+
+**Acceptance criteria:**
+
+- A malformed present pricing block is diagnosed instead of silently disabling estimates; pricing remains fail-soft for workflow execution.
+- Every indexed base/tier rate and threshold is finite and non-negative. One negative component can never be hidden by positive components and stored as a plausible positive estimate.
+- Invalid identifiable config pairs still block catalog fallback for that exact pair; invalid catalog pairs remain unpriced. Reported provider USD continues to bypass estimation.
+- Structured warnings identify source and issue without logging operator config contents or credentials.
+
+**Commands:**
+
+```bash
+(cd packages/core && bun test src/usage/estimate.test.ts)
+```
+
+After Convergence Tasks 16–22 pass their focused tests, run the plan's complete validation sequence, including `bun run validate` and `bun run check:schema-upgrades` against reachable PostgreSQL.
