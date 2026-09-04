@@ -510,7 +510,8 @@
         "US-023"
       ],
       "priority": 24,
-      "passes": false
+      "passes": true,
+      "notes": "Post-convergence validation 2026-09-04. Focused package tests (providers/workflows/core/server/cli/web) green; web+docs-web builds green; bundled schema/defaults/skill/pi-vendor-map/capability-matrix up to date; regenerated packages/web/src/lib/api.generated.d.ts (from/to RFC3339 Z-or-offset descriptions only); bun run validate EXIT 0; bun run check:schema-upgrades OK against PGHOST=127.0.0.1:5432 user=postgres (archon-postgres-1, postgres:17). Did not modify CHANGELOG.md or reset any prior story passes."
     }
   ]
 }

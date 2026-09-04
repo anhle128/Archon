@@ -791,3 +791,35 @@
 - CLI should pre-validate with the shared schema so injected `queryFn` tests still see rejection without a live DB.
 
 ---
+
+## 2026-09-04 — US-024: Run post-convergence validation
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/lib/api.generated.d.ts` — regenerated from live OpenAPI; `/api/usage` `from`/`to` descriptions now say RFC 3339 with Z or numeric offset (US-023 contract). No other schema drift.
+
+**Acceptance criteria verified**:
+- [x] Focused package validation sequence from plan (never `bun test` from repo root):
+  - `bun install --frozen-lockfile` (no changes)
+  - `bun --filter @archon/providers test` exit 0
+  - `bun --filter @archon/workflows test` exit 0
+  - `bun --filter @archon/core test` exit 0
+  - `bun --filter @archon/server test` exit 0
+  - `bun --filter @archon/cli test` exit 0
+  - `bun --filter @archon/web test` exit 0
+  - `bun --filter @archon/web build` exit 0
+  - `bun --filter @archon/docs-web build` exit 0
+- [x] Tracked artifacts current or regenerated when stale:
+  - `check:bundled-schema` / `check:bundled` / `check:bundled-skill` / `check:pi-vendor-map` / `check:capability-matrix` all OK without rewrite
+  - OpenAPI types regenerated against worktree server on PORT=3291; only description text changed → committed
+- [x] `bun run validate` exit 0 (check:bundled* + type-check + lint --max-warnings 0 + format:check + test:install + test)
+- [x] `bun run check:schema-upgrades` OK against reachable PostgreSQL:
+  - PGHOST=127.0.0.1 PGPORT=5432 PGUSER=postgres (archon-postgres-1 / postgres:17-alpine)
+  - fresh install OK (74 indexes); all 9 distinct baselines (v0.2.13…v0.9.0) converge; expected `remote_agent_codebases_kind_check` divergence only
+- [x] Validation notes are post-convergence; CHANGELOG.md untouched; no previously passing story reset
+
+**Learnings**:
+- Host lacked `psql` and bare `docker` on PATH; Docker Desktop binary at `/usr/local/bin/docker` and `brew install libpq` (keg-only `/opt/homebrew/opt/libpq/bin`) unblocked the schema-upgrade gate against the already-running archon-postgres container.
+- Regenerating OpenAPI types is the only artifact that lagged after US-023 description wording; bundled schema was already current.
+
+---
