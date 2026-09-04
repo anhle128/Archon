@@ -82,6 +82,7 @@ import {
   thinkingConfigSchema,
   routeLoopRuntimeMetadataSchema,
   inputEnvKey,
+  validateProviderUsageAtBoundary,
 } from './schemas';
 import { applyRouteLoopTransition } from './route-loop-state';
 import { formatToolCall } from './utils/tool-formatter';
@@ -2037,7 +2038,8 @@ async function executeNodeInternal(
     nodeCostUsd = undefined;
     nodeIdleTimedOut = false;
     backgroundTasksIncomplete = [];
-    // Last non-empty usageBreakdown on a result chunk for THIS pass only.
+    // Latest validated usageBreakdown for THIS pass only. Empty/all-invalid
+    // terminal results clear earlier cumulative state rather than retaining it.
     let passUsageBreakdown: UsageBreakdown | undefined;
     let passTerminalError = false;
     let passErrorSubtype: string | null = null;
@@ -2309,11 +2311,12 @@ async function executeNodeInternal(
           // is the exact defect #2314 exists to prevent; absence must stay absence.
           nodeResolvedModel = msg.resolvedModel;
           if (msg.structuredOutput !== undefined) structuredOutput = msg.structuredOutput;
-          // Capture the latest non-empty usageBreakdown for pass accounting. Later
-          // cumulative results (background-task wait) overwrite — only one append
-          // per pass. Terminal-error flags track the result that owns that usage.
-          if (Array.isArray(msg.usageBreakdown) && msg.usageBreakdown.length > 0) {
-            passUsageBreakdown = msg.usageBreakdown;
+          // Latest terminal result owns pass accounting. Validate per entry at the
+          // workflow boundary so one malformed row cannot discard siblings, and an
+          // empty/all-invalid latest result clears earlier cumulative usage.
+          if (Array.isArray(msg.usageBreakdown)) {
+            const validated = validateProviderUsageAtBoundary(msg.usageBreakdown);
+            passUsageBreakdown = validated?.breakdown;
             if (msg.isError && msg.errorSubtype !== 'success') {
               passTerminalError = true;
               passErrorSubtype = msg.errorSubtype ?? 'unknown';
@@ -5165,7 +5168,7 @@ async function executeLoopNode(
       iterationTokens = undefined;
       iterationNumTurns = undefined;
       iterationUsageFolded = false;
-      // Last non-empty usageBreakdown for THIS attempt only (iteration + reask).
+      // Latest validated usageBreakdown for THIS attempt only (iteration + reask).
       let passUsageBreakdown: UsageBreakdown | undefined;
       let passTerminalError = false;
       let passErrorSubtype: string | null = null;
@@ -5362,9 +5365,10 @@ async function executeLoopNode(
             if (msg.structuredOutput !== undefined) {
               attemptStructured = msg.structuredOutput;
             }
-            // Latest non-empty usageBreakdown wins for this attempt (one append).
-            if (Array.isArray(msg.usageBreakdown) && msg.usageBreakdown.length > 0) {
-              passUsageBreakdown = msg.usageBreakdown;
+            // Latest terminal result owns attempt accounting after boundary validation.
+            if (Array.isArray(msg.usageBreakdown)) {
+              const validated = validateProviderUsageAtBoundary(msg.usageBreakdown);
+              passUsageBreakdown = validated?.breakdown;
               if (msg.isError && msg.errorSubtype !== 'success') {
                 passTerminalError = true;
                 passErrorSubtype = msg.errorSubtype ?? 'unknown';

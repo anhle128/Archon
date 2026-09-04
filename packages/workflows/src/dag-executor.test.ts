@@ -5633,6 +5633,166 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(calls[0].usageBreakdown).toEqual(latest);
     });
 
+    it('keeps valid siblings when one usage entry is invalid on a standard node', async () => {
+      mockLogFn.mockClear();
+      const validA = sampleEntry({ model: 'a', inputTokens: 11, costUsd: 0.011 });
+      const invalid = {
+        provider: 'anthropic',
+        model: 'b',
+        modelSource: 'reported',
+        // missing numeric measure → rejected
+      };
+      const validC = sampleEntry({ model: 'c', inputTokens: 33, costUsd: 0.033 });
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'ok' };
+        yield {
+          type: 'result',
+          sessionId: 's1',
+          usageBreakdown: [validA, invalid, validC],
+        };
+      });
+      const { mockDeps } = await runSimple({});
+      const calls = usageCalls(mockDeps);
+      expect(calls).toHaveLength(1);
+      expect(calls[0].usageBreakdown).toEqual([validA, validC]);
+      const rejectedWarns = mockLogFn.mock.calls.filter(
+        (c: unknown[]) => c[1] === 'workflow.usage_entry_rejected'
+      );
+      expect(rejectedWarns).toHaveLength(1);
+      const payload = rejectedWarns[0][0] as {
+        rejected: Array<{ index: number; issue: string }>;
+        retainedCount: number;
+      };
+      expect(payload.retainedCount).toBe(2);
+      expect(payload.rejected).toEqual([{ index: 1, issue: expect.any(String) }]);
+      expect(payload.rejected[0].issue).not.toContain('anthropic');
+      expect(JSON.stringify(payload)).not.toContain('"b"');
+    });
+
+    it('keeps valid siblings when one usage entry is invalid on a direct loop', async () => {
+      mockLogFn.mockClear();
+      const validA = sampleEntry({ model: 'loop-a', inputTokens: 5, costUsd: 0.005 });
+      const invalid = { estimatedCostUsd: 1 };
+      const validC = sampleEntry({ model: 'loop-c', outputTokens: 7, costUsd: 0.007 });
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'result',
+          sessionId: 'loop',
+          usageBreakdown: [validA, invalid, validC],
+        };
+        yield { type: 'assistant', content: 'DONE' };
+      });
+      const { mockDeps } = await runSimple({
+        workflow: {
+          name: 'loop-mixed-usage',
+          nodes: [
+            {
+              id: 'work',
+              loop: {
+                prompt: 'go',
+                until: 'DONE',
+                max_iterations: 2,
+              },
+            },
+          ],
+        },
+      });
+      const calls = usageCalls(mockDeps);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        stepName: 'work',
+        iteration: 1,
+        terminalError: false,
+      });
+      expect(calls[0].usageBreakdown).toEqual([validA, validC]);
+      const rejectedWarns = mockLogFn.mock.calls.filter(
+        (c: unknown[]) => c[1] === 'workflow.usage_entry_rejected'
+      );
+      expect(rejectedWarns.length).toBeGreaterThanOrEqual(1);
+      const payload = rejectedWarns[0][0] as {
+        rejected: Array<{ index: number; issue: string }>;
+      };
+      expect(payload.rejected.map(r => r.index)).toEqual([1]);
+      expect(JSON.stringify(payload)).not.toContain('estimatedCostUsd');
+    });
+
+    it('clears earlier cumulative usage when the latest terminal result is empty', async () => {
+      const earlier = [sampleEntry({ inputTokens: 40, costUsd: 0.04 })];
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't1', taskType: 'local_agent', description: 'bg' }],
+        };
+        yield { type: 'result', sessionId: 's1', usageBreakdown: earlier };
+        yield { type: 'background_tasks', tasks: [] };
+        yield { type: 'assistant', content: 'done' };
+        yield { type: 'result', sessionId: 's1', usageBreakdown: [] };
+      });
+      const { mockDeps } = await runSimple({});
+      expect(usageCalls(mockDeps)).toHaveLength(0);
+    });
+
+    it('clears earlier cumulative usage when the latest terminal result is all-invalid', async () => {
+      mockLogFn.mockClear();
+      const earlier = [sampleEntry({ inputTokens: 50, costUsd: 0.05 })];
+      const allInvalid = [
+        { provider: '', model: 'x', modelSource: 'reported', inputTokens: 1 },
+        { estimatedCostUsd: 9 },
+      ];
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't1', taskType: 'local_agent', description: 'bg' }],
+        };
+        yield { type: 'result', sessionId: 's1', usageBreakdown: earlier };
+        yield { type: 'background_tasks', tasks: [] };
+        yield { type: 'result', sessionId: 's1', usageBreakdown: allInvalid };
+      });
+      const { mockDeps } = await runSimple({});
+      expect(usageCalls(mockDeps)).toHaveLength(0);
+      const rejectedWarns = mockLogFn.mock.calls.filter(
+        (c: unknown[]) => c[1] === 'workflow.usage_entry_rejected'
+      );
+      expect(rejectedWarns.length).toBeGreaterThanOrEqual(1);
+      for (const call of rejectedWarns) {
+        const payload = call[0] as { rejected: Array<{ index: number; issue: string }> };
+        expect(JSON.stringify(payload)).not.toContain('estimatedCostUsd');
+        for (const r of payload.rejected) {
+          expect(r).toEqual({ index: expect.any(Number), issue: expect.any(String) });
+        }
+      }
+    });
+
+    it('clears earlier loop usage when the latest attempt result is empty', async () => {
+      const earlier = [sampleEntry({ costUsd: 0.02 })];
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't1', taskType: 'local_agent', description: 'bg' }],
+        };
+        yield { type: 'result', sessionId: 'loop', usageBreakdown: earlier };
+        yield { type: 'background_tasks', tasks: [] };
+        yield { type: 'assistant', content: 'DONE' };
+        yield { type: 'result', sessionId: 'loop', usageBreakdown: [] };
+      });
+      const { mockDeps } = await runSimple({
+        workflow: {
+          name: 'loop-clear-usage',
+          nodes: [
+            {
+              id: 'work',
+              loop: {
+                prompt: 'go',
+                until: 'DONE',
+                max_iterations: 2,
+              },
+            },
+          ],
+        },
+      });
+      expect(usageCalls(mockDeps)).toHaveLength(0);
+    });
+
     it('records each structured-output reask independently', async () => {
       const u1 = [sampleEntry({ costUsd: 0.01 })];
       const u2 = [sampleEntry({ costUsd: 0.02 })];
