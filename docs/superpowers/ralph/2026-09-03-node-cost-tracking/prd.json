@@ -916,7 +916,8 @@
         "US-043"
       ],
       "priority": 44,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented after US-043. Files: packages/web UsageBreakdownTable.tsx + .test.ts. True event-only requires ledgeredEventCount===0; partial base + zero matched groups is filter-empty with separate base-scope unledgered warning using exact unledgeredEventCount. 25 focused web tests green."
     },
     {
       "id": "US-045",

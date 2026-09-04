@@ -28,8 +28,8 @@
 
 ### Coverage UI separates filter miss, event-only, and node vs run-wide scope
 - **Where**: `packages/web/src/experiments/console/components/UsageBreakdownTable.tsx`, `NodeDivider.tsx` `buildNodeLedgerUsageReport`
-- **Pattern**: `describeUsageState` order is unavailable → not-recorded → event-only (unledgered>0 or usage>0&ledgered=0 with zero rows) → filter-empty (fully ledgered base + zero matched rows) → has-data. Warnings use exact `unledgeredEventCount` only. Node expand builds synthetic report with empty integrity coverage + `coveragePresentation:'node-ledger'`; run-wide unledgered is passed separately and labeled `data-coverage-scope="run-wide"` — never copied as node-local incomplete, never inferred from ledger `recordCount`.
-- **Example**: coverage 1/1 unledgered=0 + empty groups → "No groups matched filters"; 5 events/2 unledgered → "2 usage events…"; node A groups + run unledgered from B → run-wide banner only
+- **Pattern**: `describeUsageState` order is unavailable → not-recorded → true event-only (`ledgeredEventCount===0` and unledgered/usage>0 with zero matched rows) → filter-empty (any base `ledgeredEventCount>0` + zero matched rows; partial unledgered is a separate base-scope warning) → has-data. True event-only is base ledger coverage, never `recordCount===0 && unledgered>0` under dimension filters. Warnings use exact `unledgeredEventCount` only and must not claim the empty filtered dimension owns missing rows. Node expand builds synthetic report with empty integrity coverage + `coveragePresentation:'node-ledger'`; run-wide unledgered is passed separately and labeled `data-coverage-scope="run-wide"` — never copied as node-local incomplete, never inferred from ledger `recordCount`.
+- **Example**: coverage 5/3 unledgered=2 + empty groups → filter-empty + "Base scope: 2 usage events…"; coverage 1/1 unledgered=0 + empty groups → filter-empty only; 3/0 unledgered=3 → event-only; node A groups + run unledgered from B → run-wide banner only
 
 ### OMP/Grok late transport I/O preserves usage via transport error result
 - **Where**: `packages/providers/src/community/omp/provider.ts`, `packages/providers/src/grok/provider.ts`
@@ -1360,5 +1360,24 @@
 - Zod `datetime({ precision: N })` requires *exactly* N digits — cannot express 0–3; custom fraction pre-check + `datetime({ offset: true })` is the right split
 - `0004Z` and `0005Z` both collapse to the same Date ms in Bun — rejecting both is required for lossless half-open ranges
 - Generate `api.generated.d.ts` from the worktree server port, not a stale :3090 without `/api/usage`
+
+---
+## 2026-09-05 — US-044: Keep partial coverage distinct from filter misses
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/components/UsageBreakdownTable.tsx` — true event-only requires base `ledgeredEventCount===0`; any ledgered base + zero matched groups is filter-empty; filter-empty keeps "No groups matched filters" and optional separate base-scope unledgered warning (`data-coverage-scope="base"`) using exact `unledgeredEventCount`
+- `packages/web/src/experiments/console/components/UsageBreakdownTable.test.ts` — classify + render fixtures for partial base (5/3/2) with zero matched groups
+
+**Acceptance criteria verified**:
+- [x] Base coverage 5/3/2 + zero matched groups → "No groups matched filters", not true event-only or no usage recorded
+- [x] Same state retains separate base-scope warning for exactly two unledgered events; does not claim empty dimension owns the missing rows
+- [x] True event-only, partial with matched rows, fully ledgered filter-empty, historical no-recording, unavailable remain distinct
+- [x] True event-only defined from base ledger coverage (`ledgeredEventCount===0`), not `recordCount===0 && unledgered>0` under dimension filters
+- [x] Fallback copy uses exact `unledgeredEventCount`; RunDetailHeader + existing formatting/label tests still green (25 focused)
+
+**Learnings**:
+- Prior event-only branch `unledgeredEventCount > 0` swallowed partial+filter-miss as wholly event-only — gate true event-only on zero ledgered base rows only
+- Filter-empty hint must branch: fully ledgered vs partial base; partial warning is base-scope, never per-dimension fabricated coverage
 
 ---
