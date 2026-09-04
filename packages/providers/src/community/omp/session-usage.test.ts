@@ -7,6 +7,7 @@ import * as path from 'node:path';
 import {
   JSONL_READ_CHUNK_BYTES,
   MAX_CANDIDATE_FILES,
+  MAX_DISCOVERY_ENTRIES,
   MAX_FILE_BYTES,
   MAX_LINE_BYTES,
   MAX_TOTAL_BYTES,
@@ -14,10 +15,12 @@ import {
   encodeOmpSessionCwdDirName,
   enrichResultWithHiddenUsage,
   findMainTranscriptPath,
+  getDiscoveryMetricsForTest,
   getObservedMaxChunkAllocForTest,
   isMainTranscriptFileName,
   isTaskAgentFileName,
   parseTranscriptUsageEntries,
+  resetDiscoveryMetricsForTest,
   resetObservedMaxChunkAllocForTest,
   resolveOmpSessionDir,
   setSessionUsageBoundsForTest,
@@ -30,6 +33,7 @@ const tempRoots: string[] = [];
 afterEach(async () => {
   setSessionUsageBoundsForTest(undefined);
   resetObservedMaxChunkAllocForTest();
+  resetDiscoveryMetricsForTest();
   while (tempRoots.length > 0) {
     const root = tempRoots.pop();
     if (!root) break;
@@ -2282,5 +2286,228 @@ describe('US-042 follow OMP task ownership recursively through task transcripts'
       ['scout-only', 'zero-child-advisor'].sort()
     );
     expect(hidden?.entries.some(e => e.model === 'should-not-bill')).toBe(false);
+  });
+});
+
+describe('US-046 bound OMP directory enumeration before entry allocation', () => {
+  test('production discovery-entry ceiling is independent of candidate-file limit', () => {
+    expect(MAX_DISCOVERY_ENTRIES).toBe(10_000);
+    expect(MAX_CANDIDATE_FILES).toBe(1_000);
+    expect(MAX_FILE_BYTES).toBe(64 * 1024 * 1024);
+    expect(MAX_TOTAL_BYTES).toBe(256 * 1024 * 1024);
+    expect(MAX_LINE_BYTES).toBe(8 * 1024 * 1024);
+  });
+
+  test('main-transcript discovery: exact-bound succeeds and one-over omits before full scan', async () => {
+    // layoutFresh session dir always has main.jsonl + artifact directory (2 entries).
+    // Bound counts every name, not only mains.
+    setSessionUsageBoundsForTest({ maxDiscoveryEntries: 6 });
+    const fx = await layoutFresh({ withAdvisor: false, withTask: false });
+
+    // Exact: main + artifact dir + 4 noise files = 6 entries.
+    for (let i = 0; i < 4; i++) {
+      await fs.writeFile(path.join(fx.sessionDir, `noise-${i}.txt`), `n${i}`, 'utf8');
+    }
+    resetDiscoveryMetricsForTest();
+    await expect(findMainTranscriptPath(fx.sessionDir, fx.sessionId)).resolves.toBe(fx.mainPath);
+    expect(getDiscoveryMetricsForTest().entriesExamined).toBe(6);
+
+    // One-over: 7th name forces fail-closed before any further materialization.
+    await fs.writeFile(path.join(fx.sessionDir, 'noise-overflow.txt'), 'x', 'utf8');
+    resetDiscoveryMetricsForTest();
+    await expect(findMainTranscriptPath(fx.sessionDir, fx.sessionId)).resolves.toBeUndefined();
+    expect(getDiscoveryMetricsForTest().entriesExamined).toBe(7);
+
+    // Hidden enrichment omits entirely (deterministic, not a partial prefix).
+    const hidden = await collectHiddenSessionUsage({
+      env: fx.env,
+      cwd: fx.cwd,
+      sessionId: fx.sessionId,
+    });
+    expect(hidden).toBeUndefined();
+  });
+
+  test('artifact traversal: noise + candidates exact-bound succeeds; one-over omits without statting all', async () => {
+    setSessionUsageBoundsForTest({ maxDiscoveryEntries: 4 });
+    const fx = await layoutFresh({ withAdvisor: false, withTask: false });
+
+    // Exact 4 entries under artifact root: 1 advisor + 1 owned task + 2 noise files.
+    await writeTranscript(path.join(fx.artifactDir, '__advisor.jsonl'), [
+      sessionHeader(`${fx.sessionId}-adv`, fx.cwd),
+      assistantLine({
+        model: 'adv-exact',
+        input: 2,
+        output: 1,
+        cost: 0.02,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    await writeTranscript(path.join(fx.artifactDir, 'ScoutTask.jsonl'), [
+      sessionHeader(`${fx.sessionId}-scout`, fx.cwd),
+      assistantLine({
+        model: 'scout-exact',
+        input: 3,
+        output: 1,
+        cost: 0.03,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    await fs.writeFile(path.join(fx.artifactDir, 'noise-a.bin'), 'aa', 'utf8');
+    await fs.writeFile(path.join(fx.artifactDir, 'noise-b.bin'), 'bb', 'utf8');
+    await proveTaskOwnership(fx.mainPath, ['ScoutTask']);
+
+    resetDiscoveryMetricsForTest();
+    const exact = await collectHiddenSessionUsage({
+      env: fx.env,
+      cwd: fx.cwd,
+      sessionId: fx.sessionId,
+    });
+    expect(exact?.entries.map(e => e.model).sort()).toEqual(['adv-exact', 'scout-exact'].sort());
+    // listHiddenCandidates ends with artifact examined=4 (main discovery uses a separate counter).
+    expect(getDiscoveryMetricsForTest().entriesExamined).toBe(4);
+    expect(getDiscoveryMetricsForTest().lstatCalls).toBe(2); // only billable JSONL
+
+    // One-over: add filler so artifact root has 5 names. Fail closed with no candidate lstats.
+    await fs.writeFile(path.join(fx.artifactDir, 'noise-overflow.bin'), 'cc', 'utf8');
+    resetDiscoveryMetricsForTest();
+    const over = await collectHiddenSessionUsage({
+      env: fx.env,
+      cwd: fx.cwd,
+      sessionId: fx.sessionId,
+    });
+    expect(over).toBeUndefined();
+    const overMetrics = getDiscoveryMetricsForTest();
+    expect(overMetrics.entriesExamined).toBe(5);
+    expect(overMetrics.lstatCalls).toBe(0);
+  });
+
+  test('recursive artifact dirs share one discovery-entry counter', async () => {
+    // Root: ScoutTask.jsonl + ScoutTask/ dir = 2 entries.
+    // Nested: NestedTask.jsonl + 2 noise = 3 more → total examined 5 at exact bound.
+    setSessionUsageBoundsForTest({ maxDiscoveryEntries: 5 });
+    const fx = await layoutFresh({ withAdvisor: false, withTask: false });
+    await writeTranscript(path.join(fx.artifactDir, 'ScoutTask.jsonl'), [
+      sessionHeader(`${fx.sessionId}-scout`, fx.cwd),
+      assistantLine({
+        model: 'scout-nested-bound',
+        input: 5,
+        output: 1,
+        cost: 0.05,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    await writeTranscript(path.join(fx.artifactDir, 'ScoutTask', 'NestedTask.jsonl'), [
+      sessionHeader(`${fx.sessionId}-nested`, fx.cwd),
+      assistantLine({
+        model: 'nested-exact',
+        input: 2,
+        output: 1,
+        cost: 0.02,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    await fs.appendFile(
+      path.join(fx.artifactDir, 'ScoutTask.jsonl'),
+      `${taskSpawnToolResult(['NestedTask'])}\n`,
+      'utf8'
+    );
+    await fs.writeFile(path.join(fx.artifactDir, 'ScoutTask', 'noise-a.txt'), 'a', 'utf8');
+    await fs.writeFile(path.join(fx.artifactDir, 'ScoutTask', 'noise-b.txt'), 'b', 'utf8');
+    await proveTaskOwnership(fx.mainPath, ['ScoutTask']);
+
+    resetDiscoveryMetricsForTest();
+    const exact = await collectHiddenSessionUsage({
+      env: fx.env,
+      cwd: fx.cwd,
+      sessionId: fx.sessionId,
+    });
+    expect(exact?.entries.map(e => e.model).sort()).toEqual(
+      ['nested-exact', 'scout-nested-bound'].sort()
+    );
+    expect(getDiscoveryMetricsForTest().entriesExamined).toBe(5);
+
+    // One more nested noise → examined 6 > bound 5 → omit all.
+    await fs.writeFile(path.join(fx.artifactDir, 'ScoutTask', 'noise-c.txt'), 'c', 'utf8');
+    resetDiscoveryMetricsForTest();
+    const over = await collectHiddenSessionUsage({
+      env: fx.env,
+      cwd: fx.cwd,
+      sessionId: fx.sessionId,
+    });
+    expect(over).toBeUndefined();
+    expect(getDiscoveryMetricsForTest().entriesExamined).toBe(6);
+  });
+
+  test('candidate-file limit still independent when discovery entries fit', async () => {
+    setSessionUsageBoundsForTest({ maxDiscoveryEntries: 50, maxCandidateFiles: 2 });
+    const fx = await layoutFresh({ withAdvisor: false, withTask: false });
+    for (let i = 0; i < 3; i++) {
+      const name = i === 0 ? '__advisor.jsonl' : `Task${i}.jsonl`;
+      await writeTranscript(path.join(fx.artifactDir, name), [
+        sessionHeader(`id-${i}`, fx.cwd),
+        assistantLine({
+          model: `m-${i}`,
+          input: 1,
+          output: 0,
+          cost: 0.001,
+          cacheRead: 0,
+          cacheWrite: 0,
+        }),
+      ]);
+    }
+    await proveTaskOwnership(fx.mainPath, ['Task1', 'Task2']);
+    for (let i = 0; i < 5; i++) {
+      await fs.writeFile(path.join(fx.artifactDir, `pad-${i}.txt`), 'p', 'utf8');
+    }
+    const over = await collectHiddenSessionUsage({
+      env: fx.env,
+      cwd: fx.cwd,
+      sessionId: fx.sessionId,
+    });
+    expect(over).toBeUndefined();
+  });
+
+  test('result is order-independent: overflow omits regardless of which name is last', async () => {
+    setSessionUsageBoundsForTest({ maxDiscoveryEntries: 3 });
+    const fx = await layoutFresh({ withAdvisor: false, withTask: false });
+    // 4 entries under artifact — always one-over, whichever readdir order.
+    await writeTranscript(path.join(fx.artifactDir, '__advisor.jsonl'), [
+      sessionHeader(`${fx.sessionId}-adv`, fx.cwd),
+      assistantLine({
+        model: 'should-not-appear',
+        input: 9,
+        output: 9,
+        cost: 9,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    await writeTranscript(path.join(fx.artifactDir, 'ScoutTask.jsonl'), [
+      sessionHeader(`${fx.sessionId}-scout`, fx.cwd),
+      assistantLine({
+        model: 'also-omitted',
+        input: 8,
+        output: 8,
+        cost: 8,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    await fs.writeFile(path.join(fx.artifactDir, 'zzz-noise.txt'), 'z', 'utf8');
+    await fs.writeFile(path.join(fx.artifactDir, 'aaa-noise.txt'), 'a', 'utf8');
+    await proveTaskOwnership(fx.mainPath, ['ScoutTask']);
+
+    for (let i = 0; i < 3; i++) {
+      const hidden = await collectHiddenSessionUsage({
+        env: fx.env,
+        cwd: fx.cwd,
+        sessionId: fx.sessionId,
+      });
+      expect(hidden).toBeUndefined();
+    }
   });
 });

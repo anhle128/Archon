@@ -24,6 +24,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import type { Dir } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -38,6 +39,12 @@ export const MAX_CANDIDATE_FILES = 1_000;
 export const MAX_TOTAL_BYTES = 256 * 1024 * 1024;
 export const MAX_FILE_BYTES = 64 * 1024 * 1024;
 export const MAX_LINE_BYTES = 8 * 1024 * 1024;
+/**
+ * Max directory entries examined during main-transcript discovery and recursive
+ * artifact traversal (all names, not only billable JSONL). Prevents unbounded
+ * readdir materialization / lstat work from irrelevant filler files.
+ */
+export const MAX_DISCOVERY_ENTRIES = 10_000;
 /** Chunk size for bounded JSONL streaming (keeps multi-byte UTF-8 in the carry buffer). */
 export const JSONL_READ_CHUNK_BYTES = 64 * 1024;
 
@@ -51,12 +58,16 @@ export interface SessionUsageBounds {
   maxTotalBytes: number;
   maxFileBytes: number;
   maxLineBytes: number;
+  maxDiscoveryEntries: number;
 }
 
 let boundsOverride: Partial<SessionUsageBounds> | undefined;
 
 /** Test-only: largest buffer allocated on the chunked prefix digest path. */
 let observedMaxChunkAlloc = 0;
+
+/** Test-only: discovery enumeration metrics (entries examined + discovery lstats). */
+let discoveryMetrics = { entriesExamined: 0, lstatCalls: 0 };
 
 export function setSessionUsageBoundsForTest(bounds?: Partial<SessionUsageBounds>): void {
   boundsOverride = bounds;
@@ -70,6 +81,20 @@ export function getObservedMaxChunkAllocForTest(): number {
   return observedMaxChunkAlloc;
 }
 
+export function resetDiscoveryMetricsForTest(): void {
+  discoveryMetrics = { entriesExamined: 0, lstatCalls: 0 };
+}
+
+export function getDiscoveryMetricsForTest(): Readonly<{
+  entriesExamined: number;
+  lstatCalls: number;
+}> {
+  return {
+    entriesExamined: discoveryMetrics.entriesExamined,
+    lstatCalls: discoveryMetrics.lstatCalls,
+  };
+}
+
 function noteChunkAlloc(bytes: number): void {
   if (bytes > observedMaxChunkAlloc) observedMaxChunkAlloc = bytes;
 }
@@ -80,6 +105,7 @@ function bounds(): SessionUsageBounds {
     maxTotalBytes: boundsOverride?.maxTotalBytes ?? MAX_TOTAL_BYTES,
     maxFileBytes: boundsOverride?.maxFileBytes ?? MAX_FILE_BYTES,
     maxLineBytes: boundsOverride?.maxLineBytes ?? MAX_LINE_BYTES,
+    maxDiscoveryEntries: boundsOverride?.maxDiscoveryEntries ?? MAX_DISCOVERY_ENTRIES,
   };
 }
 
@@ -267,20 +293,97 @@ async function safeRealPath(target: string): Promise<string | undefined> {
 }
 
 /**
+ * Snapshot of one directory entry. Dirent objects from `opendir` may be reused
+ * across iterations, so name/type bits are copied immediately.
+ */
+interface BoundedDirEntry {
+  name: string;
+  isFile(): boolean;
+  isDirectory(): boolean;
+  isSymbolicLink(): boolean;
+}
+
+type BoundedDirReadResult =
+  | { status: 'ok'; entries: BoundedDirEntry[] }
+  | { status: 'omit'; reason: 'too_many_entries' }
+  | { status: 'unavailable' };
+
+/**
+ * Stream-enumerate a directory with a shared examined counter.
+ * Counts every name (files, dirs, noise) toward {@link SessionUsageBounds.maxDiscoveryEntries}.
+ * On one-over, fails closed without keeping a partial entry list and without further reads.
+ */
+async function readDirEntriesBounded(
+  dirPath: string,
+  examined: { count: number }
+): Promise<BoundedDirReadResult> {
+  const max = bounds().maxDiscoveryEntries;
+  let handle: Dir | undefined;
+  try {
+    handle = await fs.opendir(dirPath);
+  } catch {
+    return { status: 'unavailable' };
+  }
+
+  const entries: BoundedDirEntry[] = [];
+  try {
+    // Manual read loop — for-await auto-closes Dir on some runtimes and races a
+    // finally close (handle.close becomes undefined mid-flight).
+    for (;;) {
+      const dirent = await handle.read();
+      if (dirent === null) break;
+      examined.count += 1;
+      discoveryMetrics.entriesExamined = examined.count;
+      if (examined.count > max) {
+        getLog().warn(
+          { issue: 'too_many_entries', bound: max },
+          'omp.session_usage_bound_exceeded'
+        );
+        return { status: 'omit', reason: 'too_many_entries' };
+      }
+      // Copy identity immediately — some runtimes reuse the Dirent instance.
+      const name = dirent.name;
+      const file = dirent.isFile();
+      const directory = dirent.isDirectory();
+      const symlink = dirent.isSymbolicLink();
+      entries.push({
+        name,
+        isFile: () => file,
+        isDirectory: () => directory,
+        isSymbolicLink: () => symlink,
+      });
+    }
+  } catch {
+    return { status: 'unavailable' };
+  } finally {
+    const open = handle;
+    handle = undefined;
+    if (open) {
+      // Bun's Dir.close may return void (sync); never assume a thenable.
+      try {
+        await open.close();
+      } catch {
+        // already closed / unavailable
+      }
+    }
+  }
+  return { status: 'ok', entries };
+}
+
+/**
  * Find the exact OMP main transcript under sessionDir.
  * Uses {@link isMainTranscriptFileName} only — suffix decoys never match.
+ * Enumeration is bounded: one-over {@link MAX_DISCOVERY_ENTRIES} omits rather than
+ * materializing an unbounded names array.
  */
 export async function findMainTranscriptPath(
   sessionDir: string,
   sessionId: string
 ): Promise<string | undefined> {
-  let entries: { name: string; isFile(): boolean }[];
-  try {
-    entries = await fs.readdir(sessionDir, { withFileTypes: true });
-  } catch {
-    return undefined;
-  }
-  const matches = entries
+  const examined = { count: 0 };
+  const listed = await readDirEntriesBounded(sessionDir, examined);
+  if (listed.status === 'omit' || listed.status === 'unavailable') return undefined;
+  const matches = listed.entries
     .filter(entry => entry.isFile() && isMainTranscriptFileName(entry.name, sessionId))
     .map(entry => path.join(sessionDir, entry.name));
   if (matches.length === 1) return matches[0];
@@ -798,6 +901,8 @@ interface CandidateFile {
  * - nested dirs: only `<taskStem>/` beside an accepted owned task-agent file; child
  *   stems are derived from that parent file on a verified handle (not a global set)
  * Discovery sizes are advisory early exits; authoritative totals use verified open sizes.
+ * Directory enumeration is bounded across the whole traversal: every examined name
+ * (noise, dirs, JSONL) counts toward maxDiscoveryEntries before any lstat work.
  */
 async function listHiddenCandidates(
   artifactRootReal: string,
@@ -807,6 +912,8 @@ async function listHiddenCandidates(
 ): Promise<{ candidates: CandidateFile[] } | { omit: true; reason: string }> {
   const candidates: CandidateFile[] = [];
   let discoveryTotalBytes = 0;
+  // Shared across every directory visited so filler trees cannot reset the bound.
+  const examined = { count: 0 };
   // Only descend into `<taskStem>/` dirs that sit beside an accepted task-agent file.
   // Each stack entry carries stems proven by that directory's immediate parent only.
   const stack: { dir: string; ownedStems: ReadonlySet<string> }[] = [
@@ -817,17 +924,10 @@ async function listHiddenCandidates(
     const frame = stack.pop();
     if (!frame) break;
     const { dir, ownedStems: levelOwnedStems } = frame;
-    let entries: {
-      name: string;
-      isDirectory(): boolean;
-      isFile(): boolean;
-      isSymbolicLink(): boolean;
-    }[];
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
-      continue;
-    }
+    const listed = await readDirEntriesBounded(dir, examined);
+    if (listed.status === 'omit') return { omit: true, reason: listed.reason };
+    if (listed.status === 'unavailable') continue;
+    const entries = listed.entries;
 
     // Child stems authorized under each accepted task file at this level (parent-local).
     const childStemsByTask = new Map<string, ReadonlySet<string>>();
@@ -863,6 +963,7 @@ async function listHiddenCandidates(
       }
       let st;
       try {
+        discoveryMetrics.lstatCalls += 1;
         st = await fs.lstat(abs);
       } catch {
         continue;
