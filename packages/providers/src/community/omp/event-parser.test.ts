@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import { OmpEventParser } from './event-parser';
+import { OmpEventParser, messageUsageToEntry } from './event-parser';
 
 const OMP_SUCCESS_LINES = [
   JSON.stringify({
@@ -493,3 +493,95 @@ function completeMessage(text: string): Record<string, unknown> {
     stopReason: 'stop',
   };
 }
+
+describe('usageBreakdown missingness (US-017)', () => {
+  test('messageUsageToEntry omits missing/blank provider without fabricating unknown', () => {
+    const usage = { input: 3, output: 1, totalTokens: 4, cost: { total: 0.02 } };
+    expect(messageUsageToEntry({ model: 'm' }, usage)).toBeUndefined();
+    expect(messageUsageToEntry({ provider: '', model: 'm' }, usage)).toBeUndefined();
+    expect(messageUsageToEntry({ provider: '   ', model: 'm' }, usage)).toBeUndefined();
+    expect(messageUsageToEntry({ provider: 'openai-codex', model: 'm' }, usage)).toMatchObject({
+      provider: 'openai-codex',
+      model: 'm',
+      modelSource: 'reported',
+      inputTokens: 3,
+      outputTokens: 1,
+      costUsd: 0.02,
+      requests: 1,
+    });
+  });
+
+  test('primary stream keeps valid siblings and legacy totals when one provider is blank', () => {
+    const parser = new OmpEventParser(false);
+    parser.consumeLine(JSON.stringify({ type: 'session', id: 'omp-miss' }));
+    for (const message of [
+      {
+        role: 'assistant',
+        provider: 'openai-codex',
+        model: 'first',
+        content: [{ type: 'text', text: 'A' }],
+        usage: { input: 2, output: 1, totalTokens: 3, cost: { total: 0.1 } },
+        stopReason: 'stop',
+      },
+      {
+        role: 'assistant',
+        provider: '',
+        model: 'blank',
+        content: [{ type: 'text', text: 'B' }],
+        usage: { input: 9, output: 9, totalTokens: 18, cost: { total: 0.9 } },
+        stopReason: 'stop',
+      },
+      {
+        role: 'assistant',
+        model: 'missing',
+        content: [{ type: 'text', text: 'C' }],
+        usage: { input: 4, output: 1, totalTokens: 5, cost: { total: 0.04 } },
+        stopReason: 'stop',
+      },
+      {
+        role: 'assistant',
+        provider: 'anthropic',
+        model: 'last',
+        content: [{ type: 'text', text: 'D' }],
+        usage: { input: 1, output: 0, totalTokens: 1, cost: { total: 0 } },
+        stopReason: 'stop',
+      },
+    ]) {
+      parser.consumeLine(JSON.stringify({ type: 'message_start', message: { role: 'assistant' } }));
+      parser.consumeLine(
+        JSON.stringify({
+          type: 'message_update',
+          assistantMessageEvent: { type: 'text_delta', delta: message.content[0].text },
+        })
+      );
+      parser.consumeLine(JSON.stringify({ type: 'message_end', message }));
+    }
+    parser.consumeLine(JSON.stringify({ type: 'agent_end', messages: [] }));
+    const result = parser.buildResult(undefined);
+    expect(result.tokens).toEqual({ input: 16, output: 11, total: 27, cost: 1.04 });
+    expect(result.cost).toBe(1.04);
+    expect(result.stopReason).toBe('stop');
+    expect(result.numTurns).toBe(4);
+    expect(result.usageBreakdown).toEqual([
+      {
+        provider: 'openai-codex',
+        model: 'first',
+        modelSource: 'reported',
+        inputTokens: 2,
+        outputTokens: 1,
+        requests: 1,
+        costUsd: 0.1,
+      },
+      {
+        provider: 'anthropic',
+        model: 'last',
+        modelSource: 'reported',
+        inputTokens: 1,
+        outputTokens: 0,
+        requests: 1,
+        costUsd: 0,
+      },
+    ]);
+    expect(result.usageBreakdown?.some(e => e.provider === 'unknown')).toBe(false);
+  });
+});

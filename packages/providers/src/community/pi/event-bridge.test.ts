@@ -1140,3 +1140,137 @@ describe('assistant chunk coalescing', () => {
     expect(assistantChunks[0].content).toBe('partial answer before crash');
   });
 });
+
+describe('usageBreakdown missingness (US-017)', () => {
+  const usage = {
+    input: 10,
+    output: 5,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 15,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.01 },
+  };
+
+  test('omits missing/blank provider observations without poisoning siblings', () => {
+    const chunk = buildResultChunk([
+      {
+        role: 'assistant',
+        provider: 'anthropic',
+        model: 'first',
+        usage: {
+          input: 1,
+          output: 2,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 3,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.1 },
+        },
+        stopReason: 'toolUse',
+        content: [],
+      },
+      {
+        role: 'assistant',
+        provider: '',
+        model: 'blank-provider',
+        usage: {
+          input: 9,
+          output: 9,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 18,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.9 },
+        },
+        stopReason: 'toolUse',
+        content: [],
+      },
+      {
+        role: 'assistant',
+        // missing provider entirely
+        model: 'missing-provider',
+        usage: {
+          input: 4,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 5,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.04 },
+        },
+        stopReason: 'stop',
+        content: [],
+      },
+      {
+        role: 'assistant',
+        provider: 'openai',
+        model: 'last',
+        usage,
+        stopReason: 'stop',
+        content: [],
+      },
+    ] as unknown[]);
+
+    if (chunk.type !== 'result') throw new Error('expected result');
+    // Legacy still sums every assistant usage including untrusted-provider ones.
+    expect(chunk.tokens).toEqual({ input: 24, output: 17, total: 41, cost: 1.05 });
+    expect(chunk.cost).toBe(1.05);
+    expect(chunk.stopReason).toBe('stop');
+    expect(chunk.usageBreakdown).toEqual([
+      {
+        provider: 'anthropic',
+        model: 'first',
+        modelSource: 'requested',
+        inputTokens: 1,
+        outputTokens: 2,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        requests: 1,
+        costUsd: 0.1,
+      },
+      {
+        provider: 'openai',
+        model: 'last',
+        modelSource: 'requested',
+        inputTokens: 10,
+        outputTokens: 5,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        requests: 1,
+        costUsd: 0.01,
+      },
+    ]);
+    expect(chunk.usageBreakdown?.some(e => e.provider === 'unknown')).toBe(false);
+  });
+
+  test('known zero cost remains observable on a trusted provider', () => {
+    const chunk = buildResultChunk([
+      {
+        role: 'assistant',
+        provider: 'anthropic',
+        model: 'm',
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: 'stop',
+        content: [],
+      },
+    ]);
+    if (chunk.type !== 'result') throw new Error('expected result');
+    expect(chunk.usageBreakdown).toEqual([
+      {
+        provider: 'anthropic',
+        model: 'm',
+        modelSource: 'requested',
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        requests: 1,
+        costUsd: 0,
+      },
+    ]);
+  });
+});

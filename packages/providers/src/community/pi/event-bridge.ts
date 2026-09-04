@@ -130,8 +130,17 @@ function sumUsages(usages: readonly Usage[]): TokenUsage {
 /**
  * Map one Pi assistant message to a normalized usage observation.
  * Prefer responseModel (reported), then model (requested), else unknown.
+ * Missing/blank provider yields no observation — never fabricate `unknown`.
  */
-export function assistantMessageToUsageEntry(message: AssistantMessage): ModelUsageEntry {
+export function assistantMessageToUsageEntry(
+  message: AssistantMessage
+): ModelUsageEntry | undefined {
+  const provider =
+    typeof message.provider === 'string' && message.provider.trim().length > 0
+      ? message.provider.trim()
+      : undefined;
+  if (!provider) return undefined;
+
   const responseModel =
     typeof message.responseModel === 'string' ? message.responseModel.trim() : '';
   const requestedModel = typeof message.model === 'string' ? message.model.trim() : '';
@@ -148,11 +157,6 @@ export function assistantMessageToUsageEntry(message: AssistantMessage): ModelUs
     model = null;
     modelSource = 'unknown';
   }
-
-  const provider =
-    typeof message.provider === 'string' && message.provider.trim().length > 0
-      ? message.provider.trim()
-      : 'unknown';
 
   const usage = message.usage;
   const entry: ModelUsageEntry = {
@@ -209,7 +213,7 @@ function extractLastAssistantText(messages: readonly unknown[]): string | undefi
  * Build the terminal `result` chunk from the final `agent_end` event.
  * Legacy tokens/cost sum every assistant message; stop reason, error,
  * structured-output completion, and resolvedModel stay last-assistant-only.
- * usageBreakdown emits one observation per assistant message.
+ * usageBreakdown emits one observation per assistant message with a real provider.
  */
 export function buildResultChunk(messages: readonly unknown[]): MessageChunk {
   const assistants = messages.filter(isAssistantMessage);
@@ -224,7 +228,12 @@ export function buildResultChunk(messages: readonly unknown[]): MessageChunk {
   }
 
   const tokens = sumUsages(assistants.map(message => message.usage));
-  const usageBreakdown = toUsageBreakdown(assistants.map(assistantMessageToUsageEntry));
+  const usageEntries: ModelUsageEntry[] = [];
+  for (const assistant of assistants) {
+    const entry = assistantMessageToUsageEntry(assistant);
+    if (entry) usageEntries.push(entry);
+  }
+  const usageBreakdown = toUsageBreakdown(usageEntries);
   const isError = last.stopReason === 'error' || last.stopReason === 'aborted';
 
   const chunk: MessageChunk = {

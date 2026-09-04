@@ -37,6 +37,14 @@ export class GrokEventParser {
   private stopReason: string | undefined;
   private numTurns: number | undefined;
   private modelUsage: Record<string, unknown> | undefined;
+  /** Optional measures for usageBreakdown only — never default missing categories to 0. */
+  private observedUsage:
+    | {
+        inputTokens?: number;
+        outputTokens?: number;
+        totalTokens?: number;
+      }
+    | undefined;
   private structuredOutput: unknown;
   private errorMessage: string | undefined;
   private structuredOutputError: string | undefined;
@@ -147,14 +155,16 @@ export class GrokEventParser {
   /**
    * Build normalized observations from Grok aggregate usage + modelUsage keys.
    * Never apportions aggregate tokens/USD across model names.
+   * Observed token categories stay absent when upstream omitted them; legacy
+   * `this.tokens` may still default missing categories to 0 for compatibility.
    */
   private buildUsageBreakdown(): UsageBreakdown | undefined {
     const modelEntries = this.collectReportedModels();
-    const hasAggregate =
-      this.tokens !== undefined || (this.cost !== undefined && Number.isFinite(this.cost));
+    const hasAggregate = this.hasObservedAggregate();
     if (modelEntries.length === 0 && !hasAggregate) return undefined;
 
     const entries: ModelUsageEntry[] = [];
+    const observedTokens = this.observedTokenFields();
 
     if (modelEntries.length === 1) {
       const only = modelEntries[0];
@@ -162,9 +172,7 @@ export class GrokEventParser {
         provider: 'xai',
         model: only.model,
         modelSource: 'reported',
-        ...(this.tokens
-          ? { inputTokens: this.tokens.input, outputTokens: this.tokens.output }
-          : {}),
+        ...observedTokens,
         ...(this.cost !== undefined ? { costUsd: this.cost } : {}),
         ...(only.requests !== undefined ? { requests: only.requests } : {}),
       });
@@ -183,9 +191,7 @@ export class GrokEventParser {
           provider: 'xai',
           model: null,
           modelSource: 'unknown',
-          ...(this.tokens
-            ? { inputTokens: this.tokens.input, outputTokens: this.tokens.output }
-            : {}),
+          ...observedTokens,
           ...(this.cost !== undefined ? { costUsd: this.cost } : {}),
         });
       }
@@ -194,9 +200,7 @@ export class GrokEventParser {
         provider: 'xai',
         model: this.requestedModel,
         modelSource: 'requested',
-        ...(this.tokens
-          ? { inputTokens: this.tokens.input, outputTokens: this.tokens.output }
-          : {}),
+        ...observedTokens,
         ...(this.cost !== undefined ? { costUsd: this.cost } : {}),
       });
     } else {
@@ -204,15 +208,30 @@ export class GrokEventParser {
         provider: 'xai',
         model: null,
         modelSource: 'unknown',
-        ...(this.tokens
-          ? { inputTokens: this.tokens.input, outputTokens: this.tokens.output }
-          : {}),
+        ...observedTokens,
         ...(this.cost !== undefined ? { costUsd: this.cost } : {}),
       });
     }
 
     const breakdown = toUsageBreakdown(entries);
     return breakdown.length > 0 ? breakdown : undefined;
+  }
+
+  /** True when upstream reported at least one token category or a finite cost. */
+  private hasObservedAggregate(): boolean {
+    return (
+      this.observedUsage !== undefined || (this.cost !== undefined && Number.isFinite(this.cost))
+    );
+  }
+
+  /** Optional token fields for normalized rows — omit keys upstream did not report. */
+  private observedTokenFields(): Pick<ModelUsageEntry, 'inputTokens' | 'outputTokens'> {
+    const observed = this.observedUsage;
+    if (!observed) return {};
+    return {
+      ...(observed.inputTokens !== undefined ? { inputTokens: observed.inputTokens } : {}),
+      ...(observed.outputTokens !== undefined ? { outputTokens: observed.outputTokens } : {}),
+    };
   }
 
   private collectReportedModels(): { model: string; requests?: number }[] {
@@ -279,13 +298,28 @@ export class GrokEventParser {
     }
     const usage = asObject(event.usage);
     if (usage) {
-      const input = finiteNumber(usage.input_tokens) ?? 0;
-      const output = finiteNumber(usage.output_tokens) ?? 0;
-      const total = finiteNumber(usage.total_tokens) ?? input + output;
+      const input = finiteNumber(usage.input_tokens);
+      const output = finiteNumber(usage.output_tokens);
+      const total = finiteNumber(usage.total_tokens);
+      // Observed measures stay optional for usageBreakdown. An empty `{}`
+      // leaves observedUsage unset so it alone cannot create a row.
+      if (input !== undefined || output !== undefined || total !== undefined) {
+        this.observedUsage = {
+          ...(input !== undefined ? { inputTokens: input } : {}),
+          ...(output !== undefined ? { outputTokens: output } : {}),
+          ...(total !== undefined ? { totalTokens: total } : {}),
+        };
+      } else {
+        this.observedUsage = undefined;
+      }
+      // Legacy TokenUsage still defaults missing categories to 0 for callers
+      // that expect numeric aggregates when a usage object was present.
+      const legacyInput = input ?? 0;
+      const legacyOutput = output ?? 0;
       this.tokens = {
-        input,
-        output,
-        total,
+        input: legacyInput,
+        output: legacyOutput,
+        total: total ?? legacyInput + legacyOutput,
         ...(this.cost !== undefined ? { cost: this.cost } : {}),
       };
     }

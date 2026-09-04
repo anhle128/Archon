@@ -557,3 +557,60 @@ describe('bounds constants', () => {
     expect(MAX_FILE_BYTES).toBe(64 * 1024 * 1024);
   });
 });
+
+describe('hidden transcript missingness (US-017)', () => {
+  test('omits blank/missing provider rows while keeping valid sibling order', async () => {
+    const fx = await layoutFresh({ withAdvisor: false, withTask: false });
+    await writeTranscript(path.join(fx.artifactDir, '__advisor.jsonl'), [
+      sessionHeader('adv-miss', fx.cwd),
+      assistantLine({
+        provider: 'anthropic',
+        model: 'keep-first',
+        input: 2,
+        output: 1,
+        cost: 0.2,
+      }),
+      // blank provider — must not become unknown
+      JSON.stringify({
+        type: 'message',
+        message: {
+          role: 'assistant',
+          provider: '',
+          model: 'blank',
+          content: [],
+          usage: { input: 9, output: 9, cost: { total: 0.9 } },
+        },
+      }),
+      // missing provider
+      JSON.stringify({
+        type: 'message',
+        message: {
+          role: 'assistant',
+          model: 'missing',
+          content: [],
+          usage: { input: 4, output: 1, cost: { total: 0.04 } },
+        },
+      }),
+      assistantLine({
+        provider: 'openai-codex',
+        model: 'keep-last',
+        input: 3,
+        output: 2,
+        cost: 0.03,
+      }),
+    ]);
+
+    const hidden = await collectHiddenSessionUsage({
+      env: fx.env,
+      cwd: fx.cwd,
+      sessionId: fx.sessionId,
+    });
+    expect(hidden?.entries.map(e => ({ provider: e.provider, model: e.model }))).toEqual([
+      { provider: 'anthropic', model: 'keep-first' },
+      { provider: 'openai-codex', model: 'keep-last' },
+    ]);
+    expect(hidden?.entries.some(e => e.provider === 'unknown')).toBe(false);
+    expect(hidden?.entries[0]?.kind).toBe('advisor');
+    expect(hidden?.entries[1]?.kind).toBe('advisor');
+  });
+});

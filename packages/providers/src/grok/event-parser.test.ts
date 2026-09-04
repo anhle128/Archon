@@ -245,3 +245,69 @@ describe('usageBreakdown normalization (US-002)', () => {
     ]);
   });
 });
+
+describe('usageBreakdown missingness (US-017)', () => {
+  test('absent token categories stay undefined; authoritative zero survives', () => {
+    const outputOnly = new GrokEventParser('grok-4');
+    outputOnly.consumeLine(
+      JSON.stringify({
+        type: 'end',
+        sessionId: 'miss-1',
+        usage: { output_tokens: 5 },
+        modelUsage: { 'grok-4': { modelCalls: 1 } },
+      })
+    );
+    const outputResult = outputOnly.buildResult(undefined);
+    expect(outputResult.usageBreakdown).toEqual([
+      {
+        provider: 'xai',
+        model: 'grok-4',
+        modelSource: 'reported',
+        outputTokens: 5,
+        requests: 1,
+      },
+    ]);
+    expect(outputResult.usageBreakdown?.[0]).not.toHaveProperty('inputTokens');
+    // Legacy compatibility still defaults missing input to 0.
+    expect(outputResult.tokens).toEqual({ input: 0, output: 5, total: 5 });
+
+    const zeroInput = new GrokEventParser('grok-4');
+    zeroInput.consumeLine(
+      JSON.stringify({
+        type: 'end',
+        sessionId: 'miss-2',
+        usage: { input_tokens: 0 },
+        total_cost_usd: 0,
+      })
+    );
+    const zeroResult = zeroInput.buildResult(undefined);
+    expect(zeroResult.usageBreakdown).toEqual([
+      {
+        provider: 'xai',
+        model: 'grok-4',
+        modelSource: 'requested',
+        inputTokens: 0,
+        costUsd: 0,
+      },
+    ]);
+    expect(zeroResult.usageBreakdown?.[0]).not.toHaveProperty('outputTokens');
+    expect(zeroResult.tokens).toEqual({ input: 0, output: 0, total: 0, cost: 0 });
+  });
+
+  test('empty usage object alone does not create a normalized row', () => {
+    const parser = new GrokEventParser('grok-4');
+    parser.consumeLine(
+      JSON.stringify({
+        type: 'end',
+        sessionId: 'miss-empty',
+        usage: {},
+      })
+    );
+    const result = parser.buildResult(undefined);
+    expect(result.usageBreakdown).toBeUndefined();
+    // Legacy still records zero aggregates when a usage object was present.
+    expect(result.tokens).toEqual({ input: 0, output: 0, total: 0 });
+    expect(result.stopReason).toBeUndefined();
+    expect(result.isError).toBeUndefined();
+  });
+});

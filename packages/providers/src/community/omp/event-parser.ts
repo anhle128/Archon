@@ -364,15 +364,21 @@ export class OmpEventParser {
 /**
  * Map one OMP assistant message + usage object to a normalized observation.
  * Stream and transcript parsers share this so primary and hidden rows stay aligned.
+ * Missing/blank provider yields no observation — never fabricate `unknown`.
+ * Legacy accumulateUsage stays separate and still sums whatever the stream reported.
  */
 export function messageUsageToEntry(
   message: JsonObject,
   usage: JsonObject,
   kind?: ModelUsageEntry['kind']
 ): ModelUsageEntry | undefined {
-  const providerRaw = stringField(message.provider);
+  const provider =
+    typeof message.provider === 'string' && message.provider.trim().length > 0
+      ? message.provider.trim()
+      : undefined;
+  if (!provider) return undefined;
+
   const modelRaw = stringField(message.model);
-  const provider = providerRaw ?? 'unknown';
   let model: string | null;
   let modelSource: ModelUsageEntry['modelSource'];
   if (modelRaw) {
