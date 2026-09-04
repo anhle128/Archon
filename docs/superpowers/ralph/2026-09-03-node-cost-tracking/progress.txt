@@ -1,6 +1,12 @@
 ## Codebase Patterns
 
 
+
+### Human group labels use full fixed dimension tuples
+- **Where**: `packages/cli/src/commands/usage.ts` `dimensionLabel`; `UsageBreakdownTable.tsx` `groupLabel`
+- **Pattern**: `groupBy=model` → provider/model + modelSource; `groupBy=node` → nodeId · run · agent · provider/model · source · kind. Missing/unknown modelSource → `unknown model source`; null kind → `unclassified kind`. Labels are human-only — `--json`/API stay core report objects.
+- **Example**: same `anthropic/sonnet` with `reported` vs `unknown` modelSource → two distinct rows
+
 ### Event-only usage before empty states
 - **Where**: `UsageBreakdownTable.tsx` `describeUsageState` / `formatMissingMeasures` / `eventOnlyUsageMessage`; `RunDetailHeader.tsx` `RunHeaderUsageLabel`
 - **Pattern**: Classify `hasRecordedUsage && recordCount===0` as `event-only` BEFORE not-recorded/empty. Never render "No usage recorded" for fallback events. Missing token/request counters (`in/out/reason/cacheR/cacheW/req`) stay separate from unpriced USD and ledger coverage. Header shows `incomplete · event-only` (not legacy, not not-recorded).
@@ -729,5 +735,27 @@
 **Learnings**:
 - `describeUsageState` previously mapped `recordCount===0` to not-recorded even when `hasRecordedUsage` was true — that is exactly the event-only fallback hole.
 - Prefer a typed `RunHeaderUsageLabel` helper over an IIFE in JSX (`explicit-function-return-type`).
+
+---
+
+## 2026-09-04 — US-022: Label full human grouping tuples
+
+**Status**: PASSED
+**Files changed**:
+- `packages/cli/src/commands/usage.ts` — `dimensionLabel` includes full model/node fixed dimensions; export for tests
+- `packages/cli/src/commands/usage.test.ts` — modelSource/node tuple + null/unknown/unclassified + human/--json contract tests
+- `packages/web/src/experiments/console/components/UsageBreakdownTable.tsx` — exported `groupLabel` with matching full tuples
+- `packages/web/src/experiments/console/components/UsageBreakdownTable.test.ts` — model/node/null label coverage + multi-row markup asserts
+
+**Acceptance criteria verified**:
+- [x] Two groupBy=model rows same provider/model different modelSource → distinct human labels (CLI + web)
+- [x] Two groupBy=node rows same node id different agent/provider/model/source/kind → labels distinguish every fixed dimension
+- [x] Null/unknown/unclassified → explicit `unknown model source` and `unclassified kind`
+- [x] CLI --json remains byte-for-contract equal to core report object
+- [x] Focused tests pass (CLI usage 15, UsageBreakdownTable 12)
+
+**Learnings**:
+- Keep label format parallel across CLI/web so operators see the same tuple vocabulary; web shortens runId for table width, CLI keeps full runId.
+- Do not put labels into the JSON report — human formatting only.
 
 ---

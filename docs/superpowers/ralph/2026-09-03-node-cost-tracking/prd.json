@@ -468,7 +468,8 @@
         "US-021"
       ],
       "priority": 22,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration after US-021. Files: packages/cli/src/commands/usage.ts (dimensionLabel full tuples), usage.test.ts, UsageBreakdownTable.tsx (groupLabel), UsageBreakdownTable.test.ts."
     },
     {
       "id": "US-023",
