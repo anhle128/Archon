@@ -35,6 +35,21 @@ export interface IDatabase {
   ): Promise<T>;
 
   /**
+   * Run read queries against one committed database snapshot.
+   *
+   * PostgreSQL opens `REPEATABLE READ READ ONLY` (not default `READ COMMITTED`).
+   * SQLite opens a deferred transaction so subsequent reads share the snapshot
+   * established at the first read. Use this when multiple SELECTs must describe
+   * the same point in time under concurrent writers.
+   *
+   * @param fn - Callback receiving a snapshot-scoped query function
+   * @returns The callback's return value
+   */
+  withSnapshotRead<T>(
+    fn: (query: <U>(sql: string, params?: unknown[]) => Promise<QueryResult<U>>) => Promise<T>
+  ): Promise<T>;
+
+  /**
    * Close the database connection
    */
   close(): Promise<void>;

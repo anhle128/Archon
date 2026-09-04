@@ -116,6 +116,24 @@ export class SqliteAdapter implements IDatabase {
   async withTransaction<T>(
     fn: (query: <U>(sql: string, params?: unknown[]) => Promise<QueryResult<U>>) => Promise<T>
   ): Promise<T> {
+    return this.withSerializedTransaction(fn);
+  }
+
+  /**
+   * Snapshot-isolated multi-statement reads. bun:sqlite deferred BEGIN freezes
+   * the database view at the first read for the life of the transaction, so
+   * concurrent writers (other connections / WAL) cannot tear totals vs groups
+   * vs coverage. Serialized on `txTail` with write transactions.
+   */
+  async withSnapshotRead<T>(
+    fn: (query: <U>(sql: string, params?: unknown[]) => Promise<QueryResult<U>>) => Promise<T>
+  ): Promise<T> {
+    return this.withSerializedTransaction(fn);
+  }
+
+  private withSerializedTransaction<T>(
+    fn: (query: <U>(sql: string, params?: unknown[]) => Promise<QueryResult<U>>) => Promise<T>
+  ): Promise<T> {
     const run = async (): Promise<T> => {
       await this.query('BEGIN');
       try {

@@ -7,7 +7,9 @@
  * All filter values are SQL parameters. GROUP BY / ORDER BY fragments come only
  * from an exhaustive enum switch — never from request string interpolation.
  */
-import { pool, getDatabaseType } from './connection';
+import { getDatabase, getDatabaseType } from './connection';
+import type { QueryResult } from './adapters/types';
+
 import { createLogger } from '@archon/paths';
 import {
   usageGroupBySchema,
@@ -27,6 +29,24 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('db.usage-report');
   return cachedLog;
+}
+
+/** Logical phases between multi-statement snapshot reads (test concurrency seam). */
+export type UsageReportSnapshotPhase = 'after-totals' | 'after-groups';
+
+type UsageReportSnapshotSeam = (phase: UsageReportSnapshotPhase) => void | Promise<void>;
+
+/**
+ * Test-only hook invoked between totals → groups → coverage reads inside the
+ * snapshot. Production keeps this undefined. Lets tests commit a concurrent
+ * observation mid-report and assert the returned object never tears.
+ */
+let usageReportSnapshotSeamForTest: UsageReportSnapshotSeam | undefined;
+
+/** @internal */ export function setUsageReportSnapshotSeamForTest(
+  seam: UsageReportSnapshotSeam | undefined
+): void {
+  usageReportSnapshotSeamForTest = seam;
 }
 
 const MAX_GROUPS = 500;
@@ -683,11 +703,17 @@ export async function queryUsageReport(options: UsageReportQuery = {}): Promise<
   `;
 
   try {
-    const [totalsResult, groupsResult, coverageResult] = await Promise.all([
-      pool.query<MetricAggRow>(totalsSql, ledger.params),
-      pool.query<GroupAggRow>(groupsSql, ledger.params),
-      pool.query<CoverageRow>(coverageSql, coverage.params),
-    ]);
+    const db = getDatabase();
+    const { totalsResult, groupsResult, coverageResult } = await db.withSnapshotRead(
+      async (query: <U>(sql: string, params?: unknown[]) => Promise<QueryResult<U>>) => {
+        const totalsResult = await query<MetricAggRow>(totalsSql, ledger.params);
+        await usageReportSnapshotSeamForTest?.('after-totals');
+        const groupsResult = await query<GroupAggRow>(groupsSql, ledger.params);
+        await usageReportSnapshotSeamForTest?.('after-groups');
+        const coverageResult = await query<CoverageRow>(coverageSql, coverage.params);
+        return { totalsResult, groupsResult, coverageResult };
+      }
+    );
 
     if (groupsResult.rows.length > MAX_GROUPS) {
       throw new UsageReportQueryError(

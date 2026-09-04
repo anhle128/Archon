@@ -10,12 +10,18 @@ mock.module('./connection', () => ({
   getDatabaseType: () => databaseType,
   getDatabase: () => ({
     query: mockQuery,
+    withSnapshotRead: async <T>(fn: (query: typeof mockQuery) => Promise<T>): Promise<T> =>
+      fn(mockQuery),
     dialect: databaseType === 'postgresql' ? 'postgres' : 'sqlite',
     sql: mockPostgresDialect,
   }),
 }));
 
-import { queryUsageReport, UsageReportQueryError } from './usage-report';
+import {
+  queryUsageReport,
+  setUsageReportSnapshotSeamForTest,
+  UsageReportQueryError,
+} from './usage-report';
 
 function emptyMetricRow(overrides: Record<string, unknown> = {}) {
   return {
@@ -69,29 +75,37 @@ function coverageRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-/** Route mockQuery calls: totals, groups, coverage — in Promise.all order is not guaranteed.
- *  Identify by SQL shape instead. */
+/** Route mockQuery calls: totals, groups, coverage — sequential inside withSnapshotRead.
+ *  Identify by SQL shape instead of call order. */
 function installQueryRouter(opts: {
   totals?: Record<string, unknown>;
   groups?: Record<string, unknown>[];
   coverage?: Record<string, unknown>;
+  /** Optional per-call overrides after the first hit of each shape (for seam tests). */
+  onTotals?: () => Record<string, unknown>;
+  onGroups?: () => Record<string, unknown>[];
+  onCoverage?: () => Record<string, unknown>;
 }) {
   mockQuery.mockImplementation((sql: string) => {
     const s = String(sql);
     if (s.includes("event_type = 'node_usage_recorded'") && s.includes('usage_event_count')) {
-      return Promise.resolve(createQueryResult([opts.coverage ?? coverageRow()]));
+      const row = opts.onCoverage?.() ?? opts.coverage ?? coverageRow();
+      return Promise.resolve(createQueryResult([row]));
     }
     if (s.includes('GROUP BY')) {
-      return Promise.resolve(createQueryResult(opts.groups ?? []));
+      const rows = opts.onGroups?.() ?? opts.groups ?? [];
+      return Promise.resolve(createQueryResult(rows));
     }
     // totals
-    return Promise.resolve(createQueryResult([opts.totals ?? emptyMetricRow()]));
+    const row = opts.onTotals?.() ?? opts.totals ?? emptyMetricRow();
+    return Promise.resolve(createQueryResult([row]));
   });
 }
 
 beforeEach(() => {
   mockQuery.mockReset();
   databaseType = 'postgresql';
+  setUsageReportSnapshotSeamForTest(undefined);
 });
 
 describe('queryUsageReport validation', () => {
@@ -528,6 +542,77 @@ describe('queryUsageReport grouping and aggregates', () => {
     expect(report.totals.tokensInput).toBeNull();
     expect(report.coverage.hasRecordedUsage).toBe(false);
     expect(report.coverage.historicalBackfill).toBe(false);
+  });
+});
+
+describe('queryUsageReport snapshot coherence', () => {
+  test('runs totals, groups, and coverage sequentially inside one withSnapshotRead', async () => {
+    const phases: string[] = [];
+    const callOrder: string[] = [];
+    installQueryRouter({
+      totals: metricRow({ record_count: '1', tokens_input_sum: '5' }),
+      groups: [
+        {
+          ...metricRow({ record_count: '1', tokens_input_sum: '5' }),
+          dim_provider: 'anthropic',
+        },
+      ],
+      coverage: coverageRow({ usage_event_count: '1', ledgered_event_count: '1' }),
+    });
+    // Wrap implementation to observe SQL kind order
+    const inner = mockQuery.getMockImplementation()!;
+    mockQuery.mockImplementation((sql: string, params?: unknown[]) => {
+      const s = String(sql);
+      if (s.includes('usage_event_count')) callOrder.push('coverage');
+      else if (s.includes('GROUP BY')) callOrder.push('groups');
+      else callOrder.push('totals');
+      return inner(sql, params);
+    });
+    setUsageReportSnapshotSeamForTest(phase => {
+      phases.push(phase);
+    });
+
+    const report = await queryUsageReport({
+      from: '2026-09-01T00:00:00.000Z',
+      to: '2026-09-02T00:00:00.000Z',
+    });
+
+    expect(callOrder).toEqual(['totals', 'groups', 'coverage']);
+    expect(phases).toEqual(['after-totals', 'after-groups']);
+    expect(report.totals.recordCount).toBe(1);
+    expect(report.groups).toHaveLength(1);
+    expect(report.groups[0]?.metrics.recordCount).toBe(1);
+    expect(report.coverage.usageEventCount).toBe(1);
+    expect(report.coverage.ledgeredEventCount).toBe(1);
+    expect(report.totals.recordCount).toBe(report.coverage.usageEventCount);
+  });
+
+  test('overflow detection uses groups rows from the same snapshot callback', async () => {
+    const groups = Array.from({ length: 501 }, (_, i) => ({
+      ...metricRow({ record_count: '1' }),
+      dim_provider: `p-${String(i)}`,
+    }));
+    let sawAfterTotals = false;
+    let sawAfterGroups = false;
+    installQueryRouter({ groups });
+    setUsageReportSnapshotSeamForTest(phase => {
+      if (phase === 'after-totals') sawAfterTotals = true;
+      if (phase === 'after-groups') sawAfterGroups = true;
+    });
+
+    await expect(
+      queryUsageReport({
+        from: '2026-09-01T00:00:00.000Z',
+        to: '2026-09-02T00:00:00.000Z',
+      })
+    ).rejects.toMatchObject({ code: 'overflow' });
+
+    // Seam fires after totals and after groups (coverage still runs inside the
+    // snapshot callback; overflow is raised after the snapshot returns).
+
+    expect(sawAfterTotals).toBe(true);
+    expect(sawAfterGroups).toBe(true);
+    expect(mockQuery.mock.calls.some(c => String(c[0]).includes('GROUP BY'))).toBe(true);
   });
 });
 
