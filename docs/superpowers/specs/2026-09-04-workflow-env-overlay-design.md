@@ -39,6 +39,10 @@ Pricing / quality comparison across runs is a separate product and is out of thi
 14. **`resolved` is start/resume audit only (Q5-A).**
     Execution never reads `resolved` for `sendQuery`.
     Resume recomputes and updates the table from the live profile.
+15. **Preview is non-authoritative (Q6-B).**
+    An ENV PATCH between preview GET and Start can diverge.
+    Run-detail `resolved` after Start is the source of truth.
+    No `updatedAt` / 409 on Start in v1.
 
 ## Current state (evidence)
 
@@ -215,6 +219,7 @@ All routes go through `registerOpenApiRoute`.
 
 - Optional Env select (`None (YAML)` / names).
 - After ENV select, show preview table: node, provider, model, thinking.
+  Label it as a preview, not a guarantee of the coming run.
 - Manage: CRUD allowlisted fields.
 - `startRun` sends `envId` when not None.
 
@@ -222,6 +227,7 @@ Run detail:
 
 - Chip `env: <name>` from snapshot.
 - Table from `metadata.envOverlay.resolved`, labeled as resolved at this start/resume, not as a frozen execution contract.
+  This table is authoritative for “did this run apply that ENV”.
 
 Out of v1: legacy start surfaces, resume ENV picker, CLI.
 
@@ -274,10 +280,12 @@ Schema / API seams: both dialects, `generate:bundled-schema`, parity, `migration
 - Creating the run row before isolation
 - Hard-fail `unknown_node`
 - Legacy dashboard mobile (separate intent)
+- Start `updatedAt` / 409 optimistic concurrency (preview→Start TOCTOU documented, not guarded)
 
 ## Open items
 
 None for v1.
 YAML drift under identity B is handled by skip-missing-ids plus filtered snapshot.
 `resolved` is audit-only; unpatched `model: large` keeps current-tier meaning.
+Preview→Start ENV edit race is accepted; run-detail `resolved` is authoritative.
 

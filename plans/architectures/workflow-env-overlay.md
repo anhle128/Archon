@@ -258,6 +258,36 @@ Resume recomputes and updates the table.
 Execution always uses patched YAML plus the live profile.
 ENV-patched fields stay frozen because they live in the filtered patch map, not because `resolved` drives sendQuery.
 
+## Q6 — preview vs Start TOCTOU (asked, awaiting answer)
+
+ENV rows are install-global.
+Another user (or the same user in Manage) can PATCH the ENV between preview GET and Start POST.
+The shared helper does not stop that.
+
+Options:
+
+- A. Optimistic concurrency.
+  Preview returns `updatedAt`.
+  Start sends it with `envId`.
+  Route 409 if the row changed, UI refreshes preview.
+  Also covers lost updates on full-map PATCH.
+
+- B. Preview is non-authoritative.
+  Run-detail `resolved` after Start is the source of truth.
+  Document the race.
+  No extra Start field.
+
+Recommendation: B for v1.
+The operator already gets the post-Start table they asked for.
+409 is a second protocol on `POST .../run`.
+
+User answer: (pending)
+User answer: B.
+Preview is non-authoritative.
+Run-detail `resolved` after Start is the source of truth.
+The race is documented.
+No `updatedAt` / 409 on Start for v1.
+
 ## Interruption
 
 User asked about legacy dashboard mobile, then said we are still in plan-architecture for ENV overlay.

@@ -49,7 +49,9 @@ UI labels the table as resolved at this start/resume, not as a frozen execution 
 **Start preview:** GET using conversation project cwd + optional `envId`.
 Same clone → apply → shared metadata helper.
 DraftRunCard shows the table when an ENV is selected.
-Run detail reads `metadata.envOverlay.resolved` as audit, not `node_started`.
+Preview is **non-authoritative** (Q6-B): an ENV PATCH between preview and Start can diverge.
+Run detail `resolved` after Start is the source of truth.
+No `updatedAt` / 409 on Start in v1.
 
 `resolveNodeModel` today does not return `thinking`.
 Thinking follows node → workflow → preset via `applyPresetOptions`.
@@ -80,6 +82,7 @@ ENV rows in `@archon/core`.
   Existing workflow-name shadowing is reused.
   Start visibility is preview GET plus snapshot-at-run-row (Q4-C).
   `resolved` is audit-only (Q5-A); unpatched `model: large` keeps meaning current large tier.
+  Preview is non-authoritative (Q6-B); run-detail `resolved` is the apply proof.
 
 ## Missing pieces
 
@@ -95,7 +98,7 @@ Console picker, Manage, Start preview table, run-detail table.
 ## Verification
 
 Apply ENV A on a cached bundled definition, then run the same definition with no ENV and assert original nodes are unchanged.
-Preview table for an ENV matches `metadata.envOverlay.resolved` on the resulting run, including thinking.
+Preview table for an ENV is a hint; `metadata.envOverlay.resolved` on the resulting run is authoritative, including thinking.
 
 ## Spikes & experiments
 
@@ -106,3 +109,4 @@ Optional small spike only if `applyPresetOptions` thinking precedence is unclear
 
 None for v1.
 CLI `--env`, pricing comparison, and legacy dashboard mobile stay separate intents.
+Start `updatedAt` / 409 is deferred; preview→Start ENV edit race is accepted.
