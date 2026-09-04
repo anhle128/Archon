@@ -796,7 +796,8 @@
         "US-037"
       ],
       "priority": 38,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration after US-037. Files: packages/core/src/usage/estimate.ts, estimate.test.ts. Focused bun test src/usage/estimate.test.ts green (34)."
     },
     {
       "id": "US-039",

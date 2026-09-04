@@ -2,6 +2,11 @@
 
 
 
+### Malformed pricing rejected before estimation
+- **Where**: `packages/core/src/usage/estimate.ts` `buildConfigPricingIndex` / `parseCatalogCost` / `estimateTokensUsd`
+- **Pattern**: Present malformed pricing (primitive/array/non-array models) → structured `usage.pricing_config_invalid` + empty index. Missing/`{}`/`models:[]` stay silent. Catalog/config rates and tier thresholds must be finite non-negative at index time; one bad component rejects the whole pair. estimateTokensUsd re-checks components before multiply so a negative rate cannot hide behind a positive sibling sum. Warnings: source+issue(+identity) only — never rates/config blobs.
+- **Example**: cost `{input:-5,output:100}` omitted from catalog index; materialize → null estimate; reported `costUsd` still wins
+
 ### Coverage UI separates filter miss, event-only, and node vs run-wide scope
 - **Where**: `packages/web/src/experiments/console/components/UsageBreakdownTable.tsx`, `NodeDivider.tsx` `buildNodeLedgerUsageReport`
 - **Pattern**: `describeUsageState` order is unavailable → not-recorded → event-only (unledgered>0 or usage>0&ledgered=0 with zero rows) → filter-empty (fully ledgered base + zero matched rows) → has-data. Warnings use exact `unledgeredEventCount` only. Node expand builds synthetic report with empty integrity coverage + `coveragePresentation:'node-ledger'`; run-wide unledgered is passed separately and labeled `data-coverage-scope="run-wide"` — never copied as node-local incomplete, never inferred from ledger `recordCount`.
@@ -1192,5 +1197,26 @@
 - Coverage integrity is date/project/run/node only — provider/model/kind empty groups are filter misses when the base is fully ledgered
 - `eventOnlyUsageMessage` must never `Math.max(unledgered, usageEventCount)` — that mislabels partial coverage as total-event failure
 - Node synthetic reports should use empty integrity + separate runWideCoverage prop rather than copying `runUsage.coverage`
+
+---
+
+## 2026-09-04 — US-038: Reject malformed pricing before estimation
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/usage/estimate.ts` — diagnose malformed present pricing blocks; validate catalog base/tier rates before indexing; component-rate defense in estimateTokensUsd; structured warnPricing + test sink
+- `packages/core/src/usage/estimate.test.ts` — malformed pricing load path, negative/non-finite catalog rates/tiers, zero rates retained, reported USD bypass, silent empty pricing
+
+**Acceptance criteria verified**:
+- [x] loadPricingLookups() handles runtime-malformed present pricing (primitive, array, non-array models) with structured warning + empty config index; missing/empty pricing stay silent no-pricing
+- [x] Catalog pairs with negative base rates offset by positive categories, non-finite rates, negative/non-finite tier thresholds, and invalid tier rates rejected with structured warnings and cannot produce estimates
+- [x] Valid zero rates, valid tiers, slash-containing exact identities, config-over-catalog precedence, invalid/duplicate config blocking, and null estimates for missing positive-category rates remain covered
+- [x] Every external catalog/config rate set validated before indexing; estimation never depends on final sum alone to discover invalid component rates
+- [x] Warnings identify source and issue without logging operator config contents or credentials; pricing remains fail-soft; reported provider USD continues to bypass estimation
+
+**Learnings**:
+- Present malformed `pricing` must be distinguished from absent/`{}`/`models:[]` — only the former warns (`pricing_not_object` / `models_not_array`)
+- A negative rate offset by a larger positive sibling yields a plausible positive sum; component validation before multiply is mandatory (index + estimate defense)
+- Warning payloads carry `source`+`issue`(+identity) only — never rate values, pricing blobs, or credentials
 
 ---
