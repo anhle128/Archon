@@ -1,5 +1,11 @@
 ## Codebase Patterns
 
+### NullableUsageReport is a separate OpenAPI identity
+- **Where**: `packages/server/src/routes/schemas/usage.schemas.ts` `nullableUsageReportResponseSchema`; `workflow.schemas.ts` run-detail `usage`
+- **Pattern**: Never call `.nullable()` on an already-`.openapi('UsageReport')` schema — zod-openapi mutates the shared component to `nullable: true`, making GET /api/usage appear nullable in generated TS. Branch from the core schema: `usageReportSchema.nullable().openapi('NullableUsageReport')` for run-detail only. Web skill derives GET body from `paths['/api/usage']['get']...[200]` (non-null) and run-detail from `WorkflowRunDetail['usage']` / `NullableUsageReport`; compile-time ExactMatch fails if the shared component becomes nullable again.
+- **Example**: GET `/api/usage` → `$ref UsageReport` (no nullable); `WorkflowRunDetail.usage` → `$ref NullableUsageReport` (`T | null`)
+
+
 
 ### Usage instants are millisecond-bounded RFC3339
 - **Where**: `packages/core/src/schemas/usage-report.ts` `usageInstantStringSchema`; `parseUsageInstant`; CLI/REST reuse the same schema
@@ -1379,5 +1385,29 @@
 **Learnings**:
 - Prior event-only branch `unledgeredEventCount > 0` swallowed partial+filter-miss as wholly event-only — gate true event-only on zero ledgered base rows only
 - Filter-empty hint must branch: fully ledgered vs partial base; partial warning is base-scope, never per-dimension fabricated coverage
+
+---
+
+## 2026-09-05 — US-045: Separate GET usage and run-detail nullability
+
+**Status**: PASSED
+**Files changed**:
+- `packages/server/src/routes/schemas/usage.schemas.ts` — added `nullableUsageReportResponseSchema` (own `NullableUsageReport` OpenAPI identity); documented never-null GET contract
+- `packages/server/src/routes/schemas/workflow.schemas.ts` — run-detail `usage` uses nullable wrapper, not `usageReportResponseSchema.nullable()`
+- `packages/server/src/routes/api.usage.test.ts` — empty non-null report runtime case + OpenAPI non-null UsageReport vs NullableUsageReport contract
+- `packages/server/src/routes/api.workflow-runs.test.ts` — OpenAPI run-detail usage ref contract
+- `packages/web/src/lib/api.generated.d.ts` — regenerated: UsageReport non-null; NullableUsageReport = T | null; WorkflowRunDetail.usage refs wrapper
+- `packages/web/src/experiments/console/skills/usage.ts` — UsageReport from GET operation 200; RunDetailUsage nullable; removed NonNullable erasure + nullable-schema asserts
+
+**Acceptance criteria verified**:
+- [x] Generated contract assertions prove GET /api/usage 200 is non-null UsageReport; WorkflowRunDetail.usage is object or null
+- [x] Runtime: GET usage empty object report for no history; run-detail usage:null only on query failure; hasRecordedUsage:false object for no history
+- [x] Nullable run-detail composition has own NullableUsageReport identity
+- [x] Web skill return types derive from generated operation; run-detail alias nullable; NonNullable erasure removed
+- [x] OpenAPI + generated TS + server contract tests + web type-check fail on future nullability drift
+
+**Learnings**:
+- `.nullable()` on a named `.openapi('X')` schema contaminates component X itself in @hono/zod-openapi — always branch from the unlabeled core schema for nullable wrappers
+- openapi-typescript maps component `nullable: true` to `T | null` on the named schema, so a separate wrapper name is required when one route needs null and another must stay non-null
 
 ---

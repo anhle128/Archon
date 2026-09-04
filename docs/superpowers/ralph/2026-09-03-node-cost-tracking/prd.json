@@ -937,7 +937,8 @@
         "US-044"
       ],
       "priority": 45,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration. Files: packages/server/src/routes/schemas/usage.schemas.ts, workflow.schemas.ts, api.usage.test.ts, api.workflow-runs.test.ts, packages/web/src/experiments/console/skills/usage.ts, packages/web/src/lib/api.generated.d.ts. NullableUsageReport own OpenAPI identity; GET /api/usage non-null; run-detail nullable."
     },
     {
       "id": "US-046",
