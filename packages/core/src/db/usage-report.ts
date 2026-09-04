@@ -136,12 +136,16 @@ interface FilterBuild {
 
 /**
  * Format a Date for `created_at` comparison params to match dialect storage.
- * SQLite stores `datetime('now')` as "YYYY-MM-DD HH:MM:SS" TEXT.
+ * SQLite stores timestamps as TEXT (`datetime('now')` → "YYYY-MM-DD HH:MM:SS",
+ * optionally with fractional seconds). Preserve the full instant — never slice
+ * to whole seconds — so half-open `[from, to)` bounds match PostgreSQL.
  */
 function toDbDateParam(d: Date): string {
-  return getDatabaseType() === 'sqlite'
-    ? d.toISOString().replace('T', ' ').slice(0, 19)
-    : d.toISOString();
+  if (getDatabaseType() !== 'sqlite') {
+    return d.toISOString();
+  }
+  // "2026-09-01T00:00:00.500Z" → "2026-09-01 00:00:00.500"
+  return d.toISOString().replace('T', ' ').replace(/Z$/, '');
 }
 
 /** UTC day expression for GROUP BY day — constant dialect branch only. */
@@ -297,8 +301,15 @@ function appendDateAndIdentityFilters(scope: ResolvedScope, out: FilterBuild): v
     const fromParam = pushParam(out.params, toDbDateParam(scope.from));
     const toParam = pushParam(out.params, toDbDateParam(scope.to));
     if (getDatabaseType() === 'sqlite') {
-      out.clauses.push(`datetime(e.created_at) >= datetime(${fromParam})`);
-      out.clauses.push(`datetime(e.created_at) < datetime(${toParam})`);
+      // `datetime()` truncates fractional seconds. Normalize both sides with
+      // strftime %f so whole-second stored values and fractional bounds compare
+      // as the same fixed-width UTC instant (".000" padded when absent).
+      out.clauses.push(
+        `strftime('%Y-%m-%d %H:%M:%f', e.created_at) >= strftime('%Y-%m-%d %H:%M:%f', ${fromParam})`
+      );
+      out.clauses.push(
+        `strftime('%Y-%m-%d %H:%M:%f', e.created_at) < strftime('%Y-%m-%d %H:%M:%f', ${toParam})`
+      );
     } else {
       out.clauses.push(`e.created_at >= ${fromParam}::timestamptz`);
       out.clauses.push(`e.created_at < ${toParam}::timestamptz`);

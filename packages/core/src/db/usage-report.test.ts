@@ -415,9 +415,9 @@ describe('queryUsageReport grouping and aggregates', () => {
       unknown[],
     ];
     expect(groupsCall[0]).toContain("strftime('%Y-%m-%d', e.created_at)");
-    expect(groupsCall[0]).toContain('datetime(e.created_at)');
-    // sqlite date params
-    expect(String(groupsCall[1][0])).toBe('2026-09-01 00:00:00');
+    expect(groupsCall[0]).toContain("strftime('%Y-%m-%d %H:%M:%f', e.created_at)");
+    // sqlite date params preserve fractional seconds (ms padded by toISOString)
+    expect(String(groupsCall[1][0])).toBe('2026-09-01 00:00:00.000');
   });
 
   test('converts PG bigint strings and preserves null sums vs zero', async () => {
