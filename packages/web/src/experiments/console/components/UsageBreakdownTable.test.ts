@@ -2,7 +2,13 @@ import { createElement } from 'react';
 import { describe, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
-import { describeUsageState, UsageBreakdownTable } from './UsageBreakdownTable';
+import {
+  describeUsageState,
+  eventOnlyUsageMessage,
+  formatMissingMeasures,
+  UsageBreakdownTable,
+} from './UsageBreakdownTable';
+
 import type { UsageReport } from '../skills/usage';
 import { formatUsdAmount } from '../lib/format';
 
@@ -59,6 +65,25 @@ describe('describeUsageState', () => {
         false
       )
     ).toBe('not-recorded');
+  });
+
+  test('recorded events with zero ledger rows → event-only (not empty)', () => {
+    expect(
+      describeUsageState(
+        report({
+          totals: emptyMetrics({ recordCount: 0 }),
+          coverage: {
+            ...report().coverage,
+            hasRecordedUsage: true,
+            usageEventCount: 2,
+            ledgeredEventCount: 0,
+            unledgeredEventCount: 2,
+          },
+          groups: [],
+        }),
+        false
+      )
+    ).toBe('event-only');
   });
 
   test('recorded usage with rows → has-data', () => {
@@ -171,5 +196,130 @@ describe('UsageBreakdownTable multi-row node expansion', () => {
     expect(markup).toContain('n/a'); // missing reported on advisor row
     expect(markup).toContain('100');
     expect(markup).toContain('50');
+  });
+});
+
+describe('UsageBreakdownTable event-only and coverage', () => {
+  test('event-only fallback warns incomplete and never says No usage recorded', () => {
+    const eventOnly = report({
+      totals: emptyMetrics({ recordCount: 0 }),
+      groups: [],
+      coverage: {
+        ...report().coverage,
+        usageEventCount: 3,
+        ledgeredEventCount: 0,
+        unledgeredEventCount: 3,
+        hasRecordedUsage: true,
+      },
+    });
+
+    const markup = renderToStaticMarkup(
+      createElement(MemoryRouter, null, createElement(UsageBreakdownTable, { report: eventOnly }))
+    );
+
+    expect(markup).toContain('data-usage-state="event-only"');
+    expect(markup).toContain('Incomplete usage coverage');
+    expect(markup).toContain('event-only fallback');
+    expect(markup).toContain('under-counted');
+    expect(markup).toContain('0/3 ledgered');
+    expect(markup).toContain('3 unledgered');
+    expect(markup).not.toContain('No usage recorded');
+    expect(eventOnlyUsageMessage(eventOnly.coverage)).toContain('3 usage events');
+  });
+
+  test('historical zero-event runs still render not-recorded empty state', () => {
+    const historical = report({
+      totals: emptyMetrics({ recordCount: 0 }),
+      groups: [],
+      coverage: {
+        ...report().coverage,
+        usageEventCount: 0,
+        ledgeredEventCount: 0,
+        unledgeredEventCount: 0,
+        hasRecordedUsage: false,
+      },
+    });
+
+    const markup = renderToStaticMarkup(
+      createElement(MemoryRouter, null, createElement(UsageBreakdownTable, { report: historical }))
+    );
+
+    expect(markup).toContain('No usage recorded');
+    expect(markup).not.toContain('event-only');
+    expect(markup).not.toContain('Incomplete usage coverage');
+  });
+
+  test('totals and groups expose every missing counter separate from unpriced and ledger', () => {
+    const withMissing = report({
+      groupBy: 'provider',
+      totals: emptyMetrics({
+        recordCount: 2,
+        reportedUsd: 0,
+        estimatedUsd: 0.004,
+        rowsMissingUsd: 1,
+        missingTokensInput: 2,
+        missingTokensOutput: 1,
+        missingTokensReasoning: 3,
+        missingTokensCacheRead: 4,
+        missingTokensCacheWrite: 5,
+        missingRequests: 6,
+      }),
+      coverage: {
+        ...report().coverage,
+        hasRecordedUsage: true,
+        usageEventCount: 2,
+        ledgeredEventCount: 2,
+        unledgeredEventCount: 0,
+      },
+      groups: [
+        {
+          dimensions: { provider: 'anthropic' },
+          metrics: emptyMetrics({
+            recordCount: 1,
+            reportedUsd: 0,
+            rowsMissingUsd: 0,
+            missingTokensInput: 1,
+            missingTokensOutput: 0,
+            missingTokensReasoning: 1,
+            missingTokensCacheRead: 2,
+            missingTokensCacheWrite: 2,
+            missingRequests: 3,
+          }),
+        },
+        {
+          dimensions: { provider: 'openai' },
+          metrics: emptyMetrics({
+            recordCount: 1,
+            estimatedUsd: 0.004,
+            rowsMissingUsd: 1,
+            missingTokensInput: 1,
+            missingTokensOutput: 1,
+            missingTokensReasoning: 2,
+            missingTokensCacheRead: 2,
+            missingTokensCacheWrite: 3,
+            missingRequests: 3,
+          }),
+        },
+      ],
+    });
+
+    const markup = renderToStaticMarkup(
+      createElement(MemoryRouter, null, createElement(UsageBreakdownTable, { report: withMissing }))
+    );
+
+    const totalsMissing = formatMissingMeasures(withMissing.totals);
+    expect(totalsMissing).toBe('in:2 out:1 reason:3 cacheR:4 cacheW:5 req:6');
+    expect(markup).toContain('Missing measures');
+    expect(markup).toContain(totalsMissing);
+    expect(markup).toContain('Missing'); // column header
+    expect(markup).toContain(formatMissingMeasures(withMissing.groups[0]!.metrics));
+    expect(markup).toContain(formatMissingMeasures(withMissing.groups[1]!.metrics));
+    // Unpriced and ledger remain distinct labels/values.
+    expect(markup).toContain('Unpriced rows');
+    expect(markup).toContain('Ledger coverage');
+    expect(markup).toContain('2/2 ledgered');
+    // Known zero reported + small estimated still format correctly.
+    expect(markup).toContain('$0.00');
+    expect(markup).toContain('≈$0.004');
   });
 });

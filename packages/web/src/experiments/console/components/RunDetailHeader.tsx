@@ -13,6 +13,7 @@ import {
 import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
 import { statusLabel, statusTextClass } from '../lib/run-status';
 import type { UsageReport } from '../skills/usage';
+import { describeUsageState, eventOnlyUsageMessage } from './UsageBreakdownTable';
 
 interface RunDetailHeaderProps {
   run: Run;
@@ -20,6 +21,90 @@ interface RunDetailHeaderProps {
   projectId: string;
   /** Direct-run usage from GET detail (`null` = query failed). */
   usage: UsageReport | null;
+}
+
+/** Cost strip for the run header — keeps event-only distinct from not-recorded. */
+function RunHeaderUsageLabel({
+  run,
+  usage,
+}: {
+  run: Run;
+  usage: UsageReport | null;
+}): ReactElement {
+  const usageState = describeUsageState(usage, false);
+  if (usageState === 'unavailable') {
+    return (
+      <span
+        className="font-mono text-[11px] text-warning"
+        title="Usage report query failed for this run"
+      >
+        usage unavailable
+      </span>
+    );
+  }
+  if (usageState === 'event-only' && usage !== null) {
+    return (
+      <span
+        className="font-mono text-[11px] text-warning"
+        title={eventOnlyUsageMessage(usage.coverage)}
+        data-usage-state="event-only"
+      >
+        incomplete · event-only
+      </span>
+    );
+  }
+  if (usageState === 'has-data' && usage !== null) {
+    return (
+      <span
+        className="flex items-center gap-2 font-mono text-[12px] tabular-nums text-text-secondary"
+        title={
+          usage.coverage.unledgeredEventCount > 0
+            ? eventOnlyUsageMessage(usage.coverage)
+            : 'Direct-run ledger only (no child rollup)'
+        }
+      >
+        <span title="Provider-reported USD">
+          {formatUsdAmount(usage.totals.reportedUsd, false)}
+        </span>
+        <span className="text-text-tertiary" aria-hidden>
+          /
+        </span>
+        <span title="Estimated USD">{formatUsdAmount(usage.totals.estimatedUsd, true)}</span>
+        <span className="text-[10px] uppercase tracking-[0.08em] text-text-tertiary">direct</span>
+        {usage.coverage.unledgeredEventCount > 0 ? (
+          <span
+            className="text-[10px] uppercase tracking-[0.08em] text-warning"
+            data-usage-state="partial-unledgered"
+          >
+            incomplete
+          </span>
+        ) : null}
+      </span>
+    );
+  }
+  // not-recorded
+  if (typeof run.costUsd === 'number') {
+    return (
+      <span
+        className="font-mono text-[12px] tabular-nums text-text-secondary"
+        title="Legacy run total — not from the usage ledger"
+      >
+        {formatCost(run.costUsd)}
+        <span className="ml-1 text-[10px] uppercase tracking-[0.08em] text-text-tertiary">
+          legacy total
+        </span>
+      </span>
+    );
+  }
+  return (
+    <span
+      className="font-mono text-[11px] text-text-tertiary"
+      title="No usage events recorded for this run"
+      data-usage-state="not-recorded"
+    >
+      not recorded
+    </span>
+  );
 }
 
 function useLiveElapsed(run: Run): string {
@@ -124,50 +209,12 @@ export function RunDetailHeader({
 
       {/* Cost + elapsed + IDE — right-aligned.
           Direct ledger reported/estimated stay separate. usage:null is a warning,
-          hasRecordedUsage:false is not-recorded — neither is zero. Legacy run.costUsd
-          only appears with an explicit label when the new ledger has nothing. */}
+          hasRecordedUsage:false is not-recorded — neither is zero. Event-only
+          fallback (recorded events, zero ledger rows) is incomplete/under-counted,
+          never "not recorded". Legacy run.costUsd only appears with an explicit
+          label when the new ledger has nothing and no usage events exist. */}
       <div className="ml-auto flex items-center gap-3">
-        {usage === null ? (
-          <span
-            className="font-mono text-[11px] text-warning"
-            title="Usage report query failed for this run"
-          >
-            usage unavailable
-          </span>
-        ) : usage.coverage.hasRecordedUsage ? (
-          <span
-            className="flex items-center gap-2 font-mono text-[12px] tabular-nums text-text-secondary"
-            title="Direct-run ledger only (no child rollup)"
-          >
-            <span title="Provider-reported USD">
-              {formatUsdAmount(usage.totals.reportedUsd, false)}
-            </span>
-            <span className="text-text-tertiary" aria-hidden>
-              /
-            </span>
-            <span title="Estimated USD">{formatUsdAmount(usage.totals.estimatedUsd, true)}</span>
-            <span className="text-[10px] uppercase tracking-[0.08em] text-text-tertiary">
-              direct
-            </span>
-          </span>
-        ) : typeof run.costUsd === 'number' ? (
-          <span
-            className="font-mono text-[12px] tabular-nums text-text-secondary"
-            title="Legacy run total — not from the usage ledger"
-          >
-            {formatCost(run.costUsd)}
-            <span className="ml-1 text-[10px] uppercase tracking-[0.08em] text-text-tertiary">
-              legacy total
-            </span>
-          </span>
-        ) : (
-          <span
-            className="font-mono text-[11px] text-text-tertiary"
-            title="No usage events recorded for this run"
-          >
-            not recorded
-          </span>
-        )}
+        <RunHeaderUsageLabel run={run} usage={usage} />
 
         <span className="font-mono text-[12px] tabular-nums text-text-tertiary">{elapsed}</span>
         {canOpenIde && run.workingPath !== null ? (

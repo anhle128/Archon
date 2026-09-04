@@ -44,6 +44,12 @@ function MetricsCells({ m }: { m: UsageMetrics }): ReactElement {
       <td className="px-2 py-1.5 text-right font-mono tabular-nums text-text-secondary">
         {fmtTok(m.requests)}
       </td>
+      <td
+        className="px-2 py-1.5 text-right font-mono tabular-nums text-text-tertiary"
+        title="Missing token/request measure counts (not unpriced USD)"
+      >
+        {formatMissingMeasures(m)}
+      </td>
       <td className="px-2 py-1.5 text-right font-mono tabular-nums text-text-tertiary">
         {String(m.recordCount)}
       </td>
@@ -87,16 +93,39 @@ function runDetailHref(group: UsageReportGroup): string | null {
 }
 
 /**
- * Pure helpers exported for unit tests — loading/error/empty/zero/sub-cent states.
+ * Pure helpers exported for unit tests — loading/error/empty/event-only states.
+ *
+ * Order matters: recorded-but-unledgered (`event-only`) is classified before the
+ * no-row empty state so fallback events are never mislabeled as "No usage recorded".
  */
-export function describeUsageState(
-  report: UsageReport | null,
-  unavailable: boolean
-): 'unavailable' | 'not-recorded' | 'empty-zero' | 'has-data' {
+export type UsageUiState = 'unavailable' | 'not-recorded' | 'event-only' | 'has-data';
+
+export function describeUsageState(report: UsageReport | null, unavailable: boolean): UsageUiState {
   if (unavailable || report === null) return 'unavailable';
   if (!report.coverage.hasRecordedUsage) return 'not-recorded';
-  if (report.totals.recordCount === 0) return 'not-recorded';
+  // hasRecordedUsage with zero ledger rows = event-only fallback (incomplete).
+  if (report.totals.recordCount === 0) return 'event-only';
   return 'has-data';
+}
+
+/** Compact per-dimension missing counters — separate from unpriced USD / ledger coverage. */
+export function formatMissingMeasures(m: UsageMetrics): string {
+  return [
+    `in:${String(m.missingTokensInput)}`,
+    `out:${String(m.missingTokensOutput)}`,
+    `reason:${String(m.missingTokensReasoning)}`,
+    `cacheR:${String(m.missingTokensCacheRead)}`,
+    `cacheW:${String(m.missingTokensCacheWrite)}`,
+    `req:${String(m.missingRequests)}`,
+  ].join(' ');
+}
+
+/** Shared warning copy for Cost table + run header when events lack ledger rows. */
+export function eventOnlyUsageMessage(coverage: UsageReport['coverage']): string {
+  const n = coverage.unledgeredEventCount;
+  const label =
+    n === 1 ? '1 usage event' : `${String(Math.max(n, coverage.usageEventCount))} usage events`;
+  return `${label} recorded without ledger rows (event-only fallback). Totals are incomplete and under-counted.`;
 }
 
 export function UsageBreakdownTable({
@@ -123,6 +152,7 @@ export function UsageBreakdownTable({
     );
   }
 
+  // Historical / never-recorded — distinct from event-only fallback below.
   if (state === 'not-recorded') {
     return (
       <div className={className}>
@@ -133,6 +163,44 @@ export function UsageBreakdownTable({
           title="No usage recorded"
           hint="No workflow AI usage events in this scope. That is not the same as a known $0.00 cost."
         />
+      </div>
+    );
+  }
+
+  // Event-only fallback: usage events exist, ledger materialization failed.
+  // Must render BEFORE any empty/no-row treatment and never say "No usage recorded".
+  if (state === 'event-only') {
+    if (report === null) {
+      return (
+        <div
+          className={`rounded-[10px] border border-warning/40 bg-warning/[0.06] px-4 py-3 ${className}`}
+          role="status"
+        >
+          <p className="text-[13px] font-medium text-warning">Usage report unavailable</p>
+        </div>
+      );
+    }
+    const coverage = report.coverage;
+    return (
+      <div className={`flex flex-col gap-3 ${className}`}>
+        {title !== undefined ? (
+          <h3 className="text-[13px] font-semibold text-text-primary">{title}</h3>
+        ) : null}
+        <div
+          className="rounded-[10px] border border-warning/40 bg-warning/[0.06] px-4 py-3"
+          role="status"
+          data-usage-state="event-only"
+        >
+          <p className="text-[13px] font-medium text-warning">Incomplete usage coverage</p>
+          <p className="mt-1 text-[12px] text-text-secondary">{eventOnlyUsageMessage(coverage)}</p>
+          <p className="mt-2 font-mono text-[11px] tabular-nums text-text-tertiary">
+            Ledger coverage: {String(coverage.ledgeredEventCount)}/
+            {String(coverage.usageEventCount)} ledgered
+            {coverage.unledgeredEventCount > 0
+              ? ` · ${String(coverage.unledgeredEventCount)} unledgered`
+              : ''}
+          </p>
+        </div>
       </div>
     );
   }
@@ -199,6 +267,20 @@ export function UsageBreakdownTable({
             {fmtTok(report.totals.requests)}
           </span>
         </div>
+        <div className="flex flex-col gap-0.5">
+          <span
+            className="font-mono text-[10px] uppercase tracking-[0.12em] text-text-tertiary"
+            title="Missing token/request measure counts — separate from unpriced USD and ledger coverage"
+          >
+            Missing measures
+          </span>
+          <span
+            className="font-mono text-[11px] tabular-nums text-text-secondary"
+            data-testid="missing-measures-totals"
+          >
+            {formatMissingMeasures(report.totals)}
+          </span>
+        </div>
         <div className="ml-auto flex flex-col gap-0.5 text-right">
           <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-text-tertiary">
             Ledger coverage
@@ -224,7 +306,7 @@ export function UsageBreakdownTable({
       ) : null}
 
       <div className="overflow-x-auto rounded-[10px] border border-border">
-        <table className="w-full min-w-[720px] border-collapse text-left text-[12px]">
+        <table className="w-full min-w-[820px] border-collapse text-left text-[12px]">
           <thead>
             <tr className="border-b border-border bg-surface-elevated/50 font-mono text-[10px] uppercase tracking-[0.1em] text-text-tertiary">
               <th className={`${pad} font-semibold`}>Group</th>
@@ -234,6 +316,7 @@ export function UsageBreakdownTable({
               <th className={`${pad} text-right font-semibold`}>In</th>
               <th className={`${pad} text-right font-semibold`}>Out</th>
               <th className={`${pad} text-right font-semibold`}>Req</th>
+              <th className={`${pad} text-right font-semibold`}>Missing</th>
               <th className={`${pad} text-right font-semibold`}>Rows</th>
             </tr>
           </thead>
