@@ -325,7 +325,8 @@
         "US-002"
       ],
       "priority": 15,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration after US-014. Files: packages/providers/src/claude/provider.ts, packages/providers/src/claude/provider.test.ts. Multi-model Claude results omit resolvedModel; warn without selected guess; both usage rows preserved. Observability fallback already covered."
     },
     {
       "id": "US-016",
@@ -345,7 +346,8 @@
         "US-015"
       ],
       "priority": 16,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration after US-015. Files: packages/workflows/src/dag-executor.ts, dag-executor.test.ts. Boundary validation at both capture sites; mixed valid/invalid keeps siblings; empty/all-invalid latest clears stale usage. Focused dag-executor tests green (516)."
     },
     {
       "id": "US-017",
@@ -365,7 +367,8 @@
         "US-016"
       ],
       "priority": 17,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration after US-016. Files: grok/event-parser.ts(+test), community/pi/event-bridge.ts(+test), community/omp/event-parser.ts(+test), community/omp/session-usage.test.ts. Grok observed optional tokens vs legacy zeros; Pi/OMP omit blank provider; empty Grok usage alone yields no row."
     },
     {
       "id": "US-018",

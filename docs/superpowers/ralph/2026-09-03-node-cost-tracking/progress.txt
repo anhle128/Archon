@@ -1,6 +1,23 @@
 ## Codebase Patterns
 
 
+### Provider missingness: never invent zeros or unknown provider
+- **Where**: `packages/providers/src/grok/event-parser.ts`, `community/pi/event-bridge.ts`, `community/omp/event-parser.ts` `messageUsageToEntry`
+- **Pattern**: Keep legacy TokenUsage defaults separate from optional fields used for `usageBreakdown`. Grok stores observed input/output only when upstream sent them; empty `{}` usage alone does not create a row. Pi/OMP return no normalized entry when provider is missing/blank — never emit fabricated `unknown` provider; valid siblings stay in order; legacy totals may still sum the untrusted message.
+- **Example**: Grok `{output_tokens:5}` → breakdown has only `outputTokens`; Pi blank provider between two valid msgs → two breakdown rows + full legacy sum
+
+### Workflow boundary validates usage on every terminal result
+- **Where**: `packages/workflows/src/dag-executor.ts` standard `runStreamPass` + direct-loop attempt capture
+- **Pattern**: On every result with `Array.isArray(usageBreakdown)` (including empty), call `validateProviderUsageAtBoundary` and set `passUsageBreakdown = validated?.breakdown`. Empty/all-invalid clears earlier cumulative state; mixed arrays keep valid siblings in order. Recorder still defense-in-depth. Logs only rejected index/issue via `workflow.usage_entry_rejected`.
+- **Example**: `[valid, invalid, valid]` → one recorder call with two valid rows; latest `[]` after earlier usage → no recorder call
+
+
+### Claude multi-model results omit resolvedModel
+- **Where**: `packages/providers/src/claude/provider.ts` `selectResolvedModelId`
+- **Pattern**: Exactly one `modelUsage` key → that id. Zero keys → undefined. Multiple keys → warn with `models: string[]` only (no `selected`), return undefined so terminal result and spans never invent a main model from output volume. Every entry still maps through `mapClaudeModelUsage`.
+- **Example**: `{haiku: 20 out, sonnet: 900 out}` → both usageBreakdown rows, no `resolvedModel`, warn `claude.resolved_model_ambiguous`
+
+
 ### Console Cost page uses generated usage types only
 - **Where**: `packages/web/src/experiments/console/skills/usage.ts`, `routes/CostPage.tsx`, `components/UsageBreakdownTable.tsx`
 - **Pattern**: Types from `api.generated` via skill re-exports; never import `@archon/core`/`workflows`. UTC date-only From/Through map to half-open API range. Cache key encodes every filter. Reported vs estimated USD never combined. `node_usage_recorded` → `kind: 'system'`.
@@ -538,5 +555,71 @@
 - Reproducibility: PASS — package-isolated tests + generators
 - Security: PASS — global-only pricing; whitelisted SQL groups; bounded OMP transcript reads
 - Reversibility: PASS — application rollback only; table/event retained
+
+---
+
+## 2026-09-04 — US-015: Stop guessing Claude resolved model
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/claude/provider.ts` — `selectResolvedModelId` returns undefined on multi-model; warn lists model ids without selected guess
+- `packages/providers/src/claude/provider.test.ts` — multi-model test asserts both usage rows, absent resolvedModel, no invented selection
+
+**Acceptance criteria verified**:
+- [x] Two model keys emit every reported usage entry in order and omit resolvedModel (no greatest-output pick)
+- [x] Empty modelUsage omits resolvedModel; single-model preserves it
+- [x] Observability fallback order already covered (resolvedModel → options.model → assistant → absent; never usage array)
+- [x] Typed failure/retry/usage accumulation paths untouched
+- [x] `bun test src/claude/provider.test.ts src/observability.test.ts` green (150 pass)
+
+**Learnings**:
+- Greatest-output selection was still a main-model guess even with a warning — omission + full usage rows is the truthful contract.
+- Observability tests from US-001 already cover the span fallback; no observability.ts change needed for this story.
+
+---
+
+## 2026-09-04 — US-016: Validate usage at workflow boundaries
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/dag-executor.ts` — validate at standard + direct-loop capture; clear on empty/all-invalid latest
+- `packages/workflows/src/dag-executor.test.ts` — mixed valid/invalid standard+loop; empty/all-invalid clear; loop empty clear
+
+**Acceptance criteria verified**:
+- [x] Standard-node and direct-loop `[valid, invalid, valid]` record two valid entries in order; log rejected index/issue only
+- [x] Latest empty or all-invalid after earlier cumulative clears pass state; no recorder call
+- [x] `validateProviderUsageAtBoundary()` runs whenever a terminal result replaces pass state at both sites
+- [x] Success/error/reask/retry/iteration/epoch metadata unchanged (existing matrix still green)
+- [x] `bun test src/dag-executor.test.ts` green (516 pass)
+
+**Learnings**:
+- “Latest non-empty” was the stale-usage bug: empty arrays must also replace pass state after boundary validation returns null.
+- Do not weaken the core recorder; workflow-boundary filter is the primary gate and the recorder remains defense in depth.
+
+---
+
+## 2026-09-04 — US-017: Preserve provider-reported missingness
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/grok/event-parser.ts` — observedUsage optional token fields separate from legacy zero defaults; empty usage alone no row
+- `packages/providers/src/grok/event-parser.test.ts` — absent/zero/empty usage cases
+- `packages/providers/src/community/pi/event-bridge.ts` — assistantMessageToUsageEntry returns undefined on missing/blank provider
+- `packages/providers/src/community/pi/event-bridge.test.ts` — mixed blank/missing provider + zero cost
+- `packages/providers/src/community/omp/event-parser.ts` — messageUsageToEntry omits missing/blank provider
+- `packages/providers/src/community/omp/event-parser.test.ts` — unit + primary stream sibling order
+- `packages/providers/src/community/omp/session-usage.test.ts` — hidden transcript blank/missing provider
+
+**Acceptance criteria verified**:
+- [x] Grok preserves absent token categories as undefined, keeps authoritative zeros, no row for empty usage alone
+- [x] Pi omits missing/blank provider observations without poisoning valid siblings or emitting unknown
+- [x] OMP primary and hidden omit missing/blank provider while preserving sibling order and fail-soft behavior
+- [x] Legacy aggregate state separated from optional normalized fields; status/stop reason unchanged
+- [x] Focused provider tests green (Grok, Pi, OMP primary, OMP hidden)
+
+**Learnings**:
+- Grok's prior `?? 0` on input/output was the missingness bug for breakdown; keep legacy defaults only on TokenUsage.
+- Fabricating `provider: 'unknown'` is worse than omitting the observation — operators cannot tell invented identity from a real upstream vendor named unknown.
+- Shared `messageUsageToEntry` covers both OMP primary stream and hidden transcript paths in one change.
 
 ---
