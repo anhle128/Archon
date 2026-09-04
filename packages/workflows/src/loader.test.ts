@@ -3766,6 +3766,8 @@ nodes:
       ];
       for (const nodeId of requiredStages) expect(nodes.has(nodeId)).toBe(true);
 
+      // Accepted dual-model contract from speckit-ralph-native-feature.yaml:
+      // first native loop = xai-oauth/grok-4.5; final Speckit loop = cursor/cursor-grok-4.5.
       const paths = [
         {
           preflightId: 'ralph-native-preflight',
