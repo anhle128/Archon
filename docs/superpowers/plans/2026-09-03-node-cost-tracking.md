@@ -1409,3 +1409,301 @@ One provider array, one event type, one child ledger table, one query operation,
 - An event-only fallback preserves raw usage but is excluded from aggregates and loses any materialized estimate until a future explicit reconciliation feature is implemented.
 
 These limits are explicit, testable, and do not block the v1 goal.
+
+## Convergence
+
+The following tasks are required by the convergence audit. Complete them in order; keep the existing additive contracts and do not weaken fail-soft workflow execution.
+
+### Convergence Task 1: Stop guessing Claude's resolved model on multi-model results
+
+**Severity:** CRITICAL
+**Gap type:** `contradicts`
+**Source ref:** Plan §§3–4 and acceptance criterion “No provider fabricates an unknown model”; Pass A `A-001`.
+
+**Files:**
+
+- Modify `packages/providers/src/claude/provider.ts`.
+- Modify `packages/providers/src/claude/provider.test.ts`.
+- Modify `packages/providers/src/observability.test.ts` only if coverage of the fallback order is not already sufficient.
+
+**TDD order:**
+
+1. Replace the current greatest-output expectation with a failing test whose SDK result contains two model keys and asserts that every usage row survives, `resolvedModel` is absent, and the ambiguity warning contains model ids but no invented selection.
+2. Add/retain a span test proving that an absent terminal `resolvedModel` falls through to the effective requested/configured model and otherwise omits the model attribute.
+3. Simplify `selectResolvedModelId()` so exactly one SDK model is returned and multiple models warn then return `undefined`.
+
+**Acceptance criteria:**
+
+- `{haiku: 20 output tokens, sonnet: 900 output tokens}` emits both reported usage entries but does not label the terminal result or span as Sonnet merely because it produced more output.
+- Empty usage omits `resolvedModel`; one model preserves it.
+- Existing typed failure/retry behavior and usage accumulation are unchanged.
+
+**Commands:**
+
+```bash
+(cd packages/providers && bun test src/claude/provider.test.ts)
+(cd packages/providers && bun test src/observability.test.ts)
+```
+
+### Convergence Task 2: Enforce the per-entry workflow boundary at both provider consumption sites
+
+**Severity:** CRITICAL
+**Gap type:** `partial`
+**Source ref:** Plan §6, Task 6, and acceptance criteria for validated atomic event/ledger writes; Pass A `A-002`.
+
+**Files:**
+
+- Modify `packages/workflows/src/dag-executor.ts`.
+- Modify `packages/workflows/src/dag-executor.test.ts`.
+- Do not weaken `packages/core/src/workflows/usage-recorder.ts`; its strict validation remains defense in depth after this workflow-boundary fix.
+
+**TDD order:**
+
+1. Add failing standard-node and direct-loop tests with `[valid, invalid, valid]`; assert one recorder call containing the two valid entries in source order and one path-safe rejected-index/issues warning.
+2. Add failing cases where the latest terminal result is all-invalid or explicitly empty after an earlier cumulative result; assert the earlier array is cleared and no usage event is requested.
+3. Invoke `validateProviderUsageAtBoundary()` when each terminal result replaces pass state at both capture sites, before the recorder port is called.
+
+**Acceptance criteria:**
+
+- One malformed provider row cannot discard authoritative siblings.
+- The latest terminal result owns pass accounting; “latest non-empty” cannot retain stale usage from an earlier cumulative result.
+- All-invalid/empty results produce no recorder call, and logs contain only rejected indexes/schema issues, never raw provider values.
+- Standard success/error/reask/retry and direct-loop iteration metadata remain unchanged.
+
+**Commands:**
+
+```bash
+(cd packages/workflows && bun test src/dag-executor.test.ts)
+```
+
+### Convergence Task 3: Preserve provider-reported missingness instead of manufacturing observations
+
+**Severity:** CRITICAL
+**Gap type:** `contradicts`
+**Source ref:** Plan provider contract and §§4–5; acceptance criteria for no fabricated provider/token/request/USD values; Pass A `A-003`.
+
+**Files:**
+
+- Modify `packages/providers/src/grok/event-parser.ts` and `event-parser.test.ts`.
+- Modify `packages/providers/src/community/pi/event-bridge.ts` and `event-bridge.test.ts`.
+- Modify `packages/providers/src/community/omp/event-parser.ts` and `event-parser.test.ts`.
+- Modify `packages/providers/src/community/omp/session-usage.test.ts` for the shared transcript mapping case.
+
+**TDD order:**
+
+1. Add Grok cases for `{output_tokens: 5}`, `{input_tokens: 0}`, and `{}`; absent categories must stay absent in normalized rows, an authoritative zero must survive, and an empty usage object alone must not create a row.
+2. Add mixed Pi transcript and OMP primary/hidden cases where one assistant message has a missing/blank provider; that observation must be omitted without poisoning valid sibling observations and without emitting the literal upstream vendor `unknown`.
+3. Separate any legacy aggregate compatibility state from the optional fields used to build normalized observations, and make the Pi/OMP mappers return no normalized entry when upstream provider identity is absent.
+
+**Acceptance criteria:**
+
+- Grok never converts an absent token category to zero in `usageBreakdown`.
+- Pi and OMP use the reported message provider exactly; missing/blank provider produces no normalized observation rather than a fabricated identity.
+- Known zero usage/cost remains observable, and valid sibling rows remain in order.
+- Legacy result status, stop reason, and fail-soft transcript behavior do not regress.
+
+**Commands:**
+
+```bash
+(cd packages/providers && bun test src/grok/event-parser.test.ts)
+(cd packages/providers && bun test src/community/pi/event-bridge.test.ts)
+(cd packages/providers && bun test src/community/omp/event-parser.test.ts)
+(cd packages/providers && bun test src/community/omp/session-usage.test.ts)
+```
+
+### Convergence Task 4: Make OMP hidden-session discovery exact, streamed, and race-safe
+
+**Severity:** CRITICAL
+**Gap type:** `partial`
+**Source ref:** Plan §5 reader/layout/resume requirements, Task 3, and OMP acceptance criteria; hidden findings `H-004` through `H-007`.
+
+**Files:**
+
+- Modify `packages/providers/src/community/omp/session-usage.ts`.
+- Modify `packages/providers/src/community/omp/session-usage.test.ts`.
+- Modify `packages/providers/src/community/omp/provider.test.ts` only for end-to-end success/error status preservation coverage.
+
+**TDD order:**
+
+1. Add failing discovery tests for two matching main transcripts and for an unrelated, valid session-shaped `.jsonl` under the artifact directory; both cases must fail closed or omit the unrelated file according to the exact supported OMP constructors.
+2. Add a deterministic resume test that replaces the candidate pathname after prefix verification but before delta parsing; no bytes from the replacement inode may be counted.
+3. Add chunk-boundary JSONL tests and exact/one-over tests for 1,000 files, 256 MiB total, 64 MiB per file, and 8 MiB per line. Use sparse fixtures or a focused file-operation seam so the test does not allocate hundreds of MiB.
+4. Add a hidden usage fixture with non-zero cache-read/cache-write values and assert the legacy hidden `total` includes every category represented by Pi's `totalTokens`, while input/output and `numTurns` retain their existing meanings.
+5. Mirror the pinned OMP filename constructors, process prefix verification and appended parsing through the same verified open handle, and replace whole-file buffering with bounded chunked JSONL/digest processing.
+
+**Acceptance criteria:**
+
+- Multiple `*_<sessionId>.jsonl` candidates are ambiguous and never resolved by newest filename.
+- Only exact main/advisor/task-agent/nested-advisor layouts are eligible; an arbitrary valid-looking `.jsonl` cannot be billed as a subagent.
+- Containment, identity, prefix digest, and delta bytes refer to one verified open file, so a path swap cannot redirect the read.
+- The parser never allocates the remaining transcript size as one buffer; records split across read chunks, including UTF-8 boundaries, are handled correctly.
+- Exact bounds succeed; exceeding any named bound omits all hidden enrichment for the invocation and leaves the primary provider result/status intact.
+- Resume/fork history is not counted, and hidden legacy totals include cache dimensions rather than only input plus output.
+
+**Commands:**
+
+```bash
+(cd packages/providers && bun test src/community/omp/session-usage.test.ts)
+(cd packages/providers && bun test src/community/omp/provider.test.ts)
+```
+
+### Convergence Task 5: Keep duplicate pricing identity structured end to end
+
+**Severity:** HIGH
+**Gap type:** `contradicts`
+**Source ref:** Plan §10 and exact-pricing acceptance criterion; Pass A `A-007`.
+
+**Files:**
+
+- Modify `packages/core/src/usage/estimate.ts`.
+- Modify `packages/core/src/usage/estimate.test.ts`.
+
+**TDD order:**
+
+1. Add a failing behavioral test with two duplicate exact pairs whose provider/model values contain the current separator character, plus a neighboring non-duplicate pair; assert only the exact duplicate is blocked and the neighbor remains independently priceable.
+2. Replace the concatenated duplicate set and separator parsing with the existing nested provider/model map/set representation.
+3. Retain duplicate warnings and catalog-fallback blocking for the exact rejected pair.
+
+**Acceptance criteria:**
+
+- No pricing identity is concatenated and later parsed.
+- Duplicate detection, rate removal, and catalog blocking all address the same exact `(provider, model)` tuple for every accepted string identity.
+- Slash-containing and separator-containing identities cannot collide or mutate a different pair.
+
+**Commands:**
+
+```bash
+(cd packages/core && bun test src/usage/estimate.test.ts)
+```
+
+### Convergence Task 6: Aggregate every exact ledger group for a node in run detail
+
+**Severity:** HIGH
+**Gap type:** `partial`
+**Source ref:** Plan §14 cumulative per-node requirement; hidden finding `H-001`.
+
+**Files:**
+
+- Modify `packages/web/src/experiments/console/components/RunStream.tsx`.
+- Modify `packages/web/src/experiments/console/components/NodeDivider.tsx`.
+- Add `packages/web/src/experiments/console/components/RunStream.test.tsx`.
+- Modify `packages/web/src/experiments/console/components/UsageBreakdownTable.test.ts` to cover multi-row node expansion.
+
+**TDD order:**
+
+1. Add a failing fixture with two API groups sharing one `nodeId` but differing in provider/model/source/kind; assert the node summary includes both and expansion retains both rows.
+2. Add nullable metric cases: all-null sums remain `null`, known zeros remain zero, present values sum, and missing/record counters sum.
+3. Replace the one-value `Map<nodeId, group>` overwrite with a per-node collection plus a single tested aggregation helper; pass the collection and its aggregate to `NodeDivider`.
+
+**Acceptance criteria:**
+
+- A node using Anthropic primary usage plus OpenAI advisor usage shows their cumulative direct reported/estimated values and both exact breakdown rows.
+- No provider/model/source/kind group is discarded because it shares a node id.
+- Missing values are not converted to zero while aggregating.
+
+**Commands:**
+
+```bash
+(cd packages/web && bun test src/experiments/console/components/RunStream.test.tsx)
+(cd packages/web && bun test src/experiments/console/components/UsageBreakdownTable.test.ts)
+```
+
+### Convergence Task 7: Render token/request coverage and event-only fallback before empty states
+
+**Severity:** HIGH
+**Gap type:** `partial`
+**Source ref:** Plan §14 separate coverage/empty-state requirements; Pass A `A-005`; hidden finding `H-002`.
+
+**Files:**
+
+- Modify `packages/web/src/experiments/console/components/UsageBreakdownTable.tsx` and `UsageBreakdownTable.test.ts`.
+- Modify `packages/web/src/experiments/console/components/RunDetailHeader.tsx`.
+- Add `packages/web/src/experiments/console/components/RunDetailHeader.test.tsx`.
+- Modify `packages/web/src/experiments/console/components/NodeDivider.tsx` only as needed to preserve the corrected state in inline detail.
+
+**TDD order:**
+
+1. Add a failing report with `usageEventCount > 0`, `ledgeredEventCount = 0`, `unledgeredEventCount > 0`, `hasRecordedUsage = true`, and `recordCount = 0`; assert an explicit under-count/event-only warning and never “No usage recorded.”
+2. Add totals/group fixtures for every API missing counter (`missingTokensInput`, output, reasoning, cache read, cache write, requests) and assert token/request coverage is visible separately from ledger coverage and unpriced USD.
+3. Reorder state classification/rendering so recorded-but-unledgered is handled before the no-row state, and surface the same warning in the run header when the table has no ledger groups.
+
+**Acceptance criteria:**
+
+- Historical runs with zero usage events still render “not recorded.”
+- Event-only fallback is visibly recorded but incomplete/under-counted even when it has no ledger row; it is never described as no usage.
+- Reported USD, estimated USD, unpriced rows, per-dimension token/request coverage, and ledger coverage are separate values.
+- Known zero and small-positive formatting remains unchanged.
+
+**Commands:**
+
+```bash
+(cd packages/web && bun test src/experiments/console/components/UsageBreakdownTable.test.ts)
+(cd packages/web && bun test src/experiments/console/components/RunDetailHeader.test.tsx)
+```
+
+### Convergence Task 8: Make human group labels identify the full grouping tuple
+
+**Severity:** MEDIUM
+**Gap type:** `partial`
+**Source ref:** Plan §11 fixed dimensions and §13–14 reporting semantics; hidden finding `H-003`.
+
+**Files:**
+
+- Modify `packages/cli/src/commands/usage.ts` and `usage.test.ts`.
+- Modify `packages/web/src/experiments/console/components/UsageBreakdownTable.tsx` and `UsageBreakdownTable.test.ts`.
+
+**TDD order:**
+
+1. Add two `groupBy=model` rows with the same provider/model but different `modelSource`, and two `groupBy=node` rows with the same node id but different agent/provider/model/source/kind.
+2. Assert human CLI and web labels visibly distinguish every row using all dimensions fixed for that grouping, including `unknown` model source and `unclassified` kind.
+3. Implement one explicit label format per surface without changing the API/JSON objects or combining rows.
+
+**Acceptance criteria:**
+
+- Distinct exact groups cannot render with identical human labels solely because secondary dimensions were omitted.
+- CLI `--json` remains byte-for-contract equivalent to the core/API report.
+- Null/unknown dimensions have explicit, non-misleading labels.
+
+**Commands:**
+
+```bash
+(cd packages/cli && bun test src/commands/usage.test.ts)
+(cd packages/web && bun test src/experiments/console/components/UsageBreakdownTable.test.ts)
+```
+
+### Convergence Task 9: Enforce RFC 3339 instants and real UTC calendar dates
+
+**Severity:** MEDIUM
+**Gap type:** `partial`
+**Source ref:** Plan §§11, 13, and 14 date contracts; Pass A `A-006`.
+
+**Files:**
+
+- Modify `packages/core/src/db/usage-report.ts` and `usage-report.test.ts`.
+- Modify `packages/server/src/routes/schemas/usage.schemas.ts` and `packages/server/src/routes/api.usage.test.ts`.
+- Modify `packages/cli/src/commands/usage.test.ts` for flag behavior.
+- Modify `packages/web/src/experiments/console/skills/usage.ts` and `usage.test.ts`.
+
+**TDD order:**
+
+1. Add core/API/CLI rejection cases for date-only, locale-formatted, zone-less, invalid-offset, and calendar-rollover strings; retain valid `Z` and explicit-offset RFC 3339 cases.
+2. Add web helper cases for `2026-02-29`, `2026-02-30`, and valid leap day `2028-02-29`; invalid date-only controls must fail before fetching rather than normalize into March.
+3. Make core the authoritative strict instant validator, align the route schema, and make the UTC date helper prove a round-trip to the same calendar components before constructing `[from, to)`.
+
+**Acceptance criteria:**
+
+- External string inputs are complete RFC 3339 instants with an explicit `Z` or numeric offset; implementation-defined `Date` parsing is not accepted as validation.
+- Existing internal `Date` callers remain supported if required by the typed core operation.
+- Web From/Through controls reject nonexistent dates and still send UTC midnight through exclusive midnight-after-Through for valid dates.
+- Range-pair, ordering, and 366-day limits retain their current behavior.
+
+**Commands:**
+
+```bash
+(cd packages/core && bun test src/db/usage-report.test.ts)
+(cd packages/server && bun test src/routes/api.usage.test.ts)
+(cd packages/cli && bun test src/commands/usage.test.ts)
+(cd packages/web && bun test src/experiments/console/skills/usage.test.ts)
+```
+
+After all convergence tasks pass their focused tests, run the plan's full validation sequence, including `bun run validate` and `bun run check:schema-upgrades` against reachable PostgreSQL.
