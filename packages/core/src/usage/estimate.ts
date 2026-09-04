@@ -14,7 +14,7 @@
 import { createLogger } from '@archon/paths';
 import { listPiModels, type PiModelInfo } from '@archon/providers';
 import type { ModelUsageEntry } from '@archon/providers/types';
-import type { GlobalConfig, PricingConfig, PricingModelRate } from '../config/config-types';
+import type { GlobalConfig, PricingModelRate } from '../config/config-types';
 import { loadGlobalConfig } from '../config/config-loader';
 import type { UsageLedgerPricingSource } from '../schemas/usage-ledger';
 
@@ -146,32 +146,78 @@ function tryReadPricingIdentity(
 }
 
 /**
+ * Emit a structured pricing warning. Logs source + issue (+ optional identity)
+ * only — never operator config contents, rate values, or credentials.
+ */
+interface PricingWarnFields {
+  source: 'config' | 'catalog' | 'estimate';
+  issue: string;
+  index?: number;
+  provider?: string;
+  model?: string;
+}
+
+/** @internal test seam — captures structured warnings without payload contents. */
+let pricingWarnSinkForTest: ((message: string, fields: PricingWarnFields) => void) | undefined;
+
+/** @internal */ export function setPricingWarnSinkForTest(
+  sink: ((message: string, fields: PricingWarnFields) => void) | undefined
+): void {
+  pricingWarnSinkForTest = sink;
+}
+
+function warnPricing(message: string, fields: PricingWarnFields): void {
+  getLog().warn(fields, message);
+  pricingWarnSinkForTest?.(message, fields);
+}
+
+/**
  * Validate one operator pricing entry at use time. Returns null + logs when
  * invalid; never partially applies a bad entry.
  */
 function parsePricingModelRate(raw: unknown, index: number): PricingModelRate | null {
   if (!isPlainObject(raw)) {
-    getLog().warn({ index, issue: 'entry_not_object' }, 'usage.pricing_entry_invalid');
+    warnPricing('usage.pricing_entry_invalid', {
+      source: 'config',
+      index,
+      issue: 'entry_not_object',
+    });
     return null;
   }
 
   if (typeof raw.provider !== 'string') {
-    getLog().warn({ index, issue: 'provider_invalid' }, 'usage.pricing_entry_invalid');
+    warnPricing('usage.pricing_entry_invalid', {
+      source: 'config',
+      index,
+      issue: 'provider_invalid',
+    });
     return null;
   }
   const provider = raw.provider.trim();
   if (provider.length === 0) {
-    getLog().warn({ index, issue: 'provider_empty' }, 'usage.pricing_entry_invalid');
+    warnPricing('usage.pricing_entry_invalid', {
+      source: 'config',
+      index,
+      issue: 'provider_empty',
+    });
     return null;
   }
 
   if (typeof raw.model !== 'string') {
-    getLog().warn({ index, issue: 'model_invalid' }, 'usage.pricing_entry_invalid');
+    warnPricing('usage.pricing_entry_invalid', {
+      source: 'config',
+      index,
+      issue: 'model_invalid',
+    });
     return null;
   }
   const model = raw.model.trim();
   if (model.length === 0) {
-    getLog().warn({ index, issue: 'model_empty' }, 'usage.pricing_entry_invalid');
+    warnPricing('usage.pricing_entry_invalid', {
+      source: 'config',
+      index,
+      issue: 'model_empty',
+    });
     return null;
   }
 
@@ -180,7 +226,13 @@ function parsePricingModelRate(raw: unknown, index: number): PricingModelRate | 
   for (const field of RATE_FIELDS) {
     if (!(field in raw) || raw[field] === undefined) continue;
     if (!isFiniteNonNegative(raw[field])) {
-      getLog().warn({ index, issue: `${field}_invalid` }, 'usage.pricing_entry_invalid');
+      warnPricing('usage.pricing_entry_invalid', {
+        source: 'config',
+        index,
+        provider,
+        model,
+        issue: `${field}_invalid`,
+      });
       return null;
     }
     rates[field] = raw[field];
@@ -188,7 +240,13 @@ function parsePricingModelRate(raw: unknown, index: number): PricingModelRate | 
   }
 
   if (!hasRate) {
-    getLog().warn({ index, issue: 'missing_rate' }, 'usage.pricing_entry_invalid');
+    warnPricing('usage.pricing_entry_invalid', {
+      source: 'config',
+      index,
+      provider,
+      model,
+      issue: 'missing_rate',
+    });
     return null;
   }
 
@@ -197,7 +255,13 @@ function parsePricingModelRate(raw: unknown, index: number): PricingModelRate | 
     if (key === 'provider' || key === 'model' || (RATE_FIELDS as readonly string[]).includes(key)) {
       continue;
     }
-    getLog().warn({ index, issue: `unknown_field:${key}` }, 'usage.pricing_entry_invalid');
+    warnPricing('usage.pricing_entry_invalid', {
+      source: 'config',
+      index,
+      provider,
+      model,
+      issue: `unknown_field:${key}`,
+    });
     return null;
   }
 
@@ -209,18 +273,41 @@ function parsePricingModelRate(raw: unknown, index: number): PricingModelRate | 
  * Duplicate `(provider, model)` pairs and identifiable invalid entries are
  * recorded in `blocked` so catalog fallback cannot price them. Invalid entries
  * without a recoverable identity are skipped with a warning only.
+ *
+ * Accepts `unknown` because global config is YAML-loaded without a runtime
+ * schema — present malformed values must be diagnosed, not silently dropped.
+ * Missing pricing and intentionally empty objects remain valid no-pricing states.
  */
 export function buildConfigPricingIndex(
-  pricing: PricingConfig | undefined | null
+  // YAML-loaded config has no runtime schema — accept unknown present values.
+  pricing: unknown
 ): ConfigPricingIndex {
   const rates = new Map<string, Map<string, PricingRates>>();
   const blocked = new Map<string, Set<string>>();
-  if (!pricing || typeof pricing !== 'object') return { rates, blocked };
+
+  // Absent pricing is a valid no-pricing state.
+  if (pricing === undefined || pricing === null) return { rates, blocked };
+
+  // Present but not a plain object (primitive, array, …) → diagnose + empty.
+  if (!isPlainObject(pricing)) {
+    warnPricing('usage.pricing_config_invalid', {
+      source: 'config',
+      issue: 'pricing_not_object',
+    });
+    return { rates, blocked };
+  }
+
+  // Intentionally empty object `{}` is a valid no-pricing state.
+  if (!('models' in pricing) || pricing.models === undefined) {
+    return { rates, blocked };
+  }
 
   const models = pricing.models;
-  if (models === undefined) return { rates, blocked };
   if (!Array.isArray(models)) {
-    getLog().warn({ issue: 'models_not_array' }, 'usage.pricing_config_invalid');
+    warnPricing('usage.pricing_config_invalid', {
+      source: 'config',
+      issue: 'models_not_array',
+    });
     return { rates, blocked };
   }
 
@@ -248,10 +335,12 @@ export function buildConfigPricingIndex(
     }
     if (byModel.has(parsed.model)) {
       blockPair(duplicates, parsed.provider, parsed.model);
-      getLog().warn(
-        { provider: parsed.provider, model: parsed.model, issue: 'duplicate_provider_model' },
-        'usage.pricing_entry_duplicate'
-      );
+      warnPricing('usage.pricing_entry_duplicate', {
+        source: 'config',
+        provider: parsed.provider,
+        model: parsed.model,
+        issue: 'duplicate_provider_model',
+      });
       continue;
     }
     byModel.set(parsed.model, index);
@@ -278,29 +367,138 @@ export function buildConfigPricingIndex(
   return { rates, blocked };
 }
 
-function catalogCostToRates(cost: PiModelInfo['cost']): PricingRates {
-  const rates: PricingRates = {
-    input: cost.input,
-    output: cost.output,
-    cacheRead: cost.cacheRead,
-    cacheWrite: cost.cacheWrite,
-  };
-  const tiers = cost.tiers;
-  if (tiers && tiers.length > 0) {
-    rates.tiers = tiers.map(tier => ({
-      inputTokensAbove: tier.inputTokensAbove,
-      input: tier.input,
-      output: tier.output,
-      cacheRead: tier.cacheRead,
-      cacheWrite: tier.cacheWrite,
-    }));
+/**
+ * Validate one catalog cost object before indexing. Every present base/tier
+ * rate and threshold must be finite and non-negative. One invalid component
+ * rejects the whole pair — estimation must never discover bad rates only via
+ * the final sum (a negative rate can be offset by a positive sibling).
+ * Returns null + structured warning; never indexes a partial invalid entry.
+ */
+function parseCatalogCost(
+  cost: unknown,
+  identity: { provider: string; model: string }
+): PricingRates | null {
+  const { provider, model } = identity;
+  if (!isPlainObject(cost)) {
+    warnPricing('usage.pricing_catalog_entry_invalid', {
+      source: 'catalog',
+      provider,
+      model,
+      issue: 'cost_not_object',
+    });
+    return null;
   }
+
+  const rates: PricingRates = {};
+  for (const field of RATE_FIELDS) {
+    if (!(field in cost) || cost[field] === undefined) continue;
+    if (!isFiniteNonNegative(cost[field])) {
+      warnPricing('usage.pricing_catalog_entry_invalid', {
+        source: 'catalog',
+        provider,
+        model,
+        issue: `${field}_invalid`,
+      });
+      return null;
+    }
+    rates[field] = cost[field];
+  }
+
+  if (cost.tiers !== undefined) {
+    if (!Array.isArray(cost.tiers)) {
+      warnPricing('usage.pricing_catalog_entry_invalid', {
+        source: 'catalog',
+        provider,
+        model,
+        issue: 'tiers_not_array',
+      });
+      return null;
+    }
+
+    if (cost.tiers.length > 0) {
+      const tiers: PricingRateTier[] = [];
+      for (const tierRaw of cost.tiers) {
+        if (!isPlainObject(tierRaw)) {
+          warnPricing('usage.pricing_catalog_entry_invalid', {
+            source: 'catalog',
+            provider,
+            model,
+            issue: 'tier_not_object',
+          });
+          return null;
+        }
+
+        const threshold = tierRaw.inputTokensAbove;
+        const tierInput = tierRaw.input;
+        const tierOutput = tierRaw.output;
+        const tierCacheRead = tierRaw.cacheRead;
+        const tierCacheWrite = tierRaw.cacheWrite;
+
+        if (!isFiniteNonNegative(threshold)) {
+          warnPricing('usage.pricing_catalog_entry_invalid', {
+            source: 'catalog',
+            provider,
+            model,
+            issue: 'tier_threshold_invalid',
+          });
+          return null;
+        }
+        if (!isFiniteNonNegative(tierInput)) {
+          warnPricing('usage.pricing_catalog_entry_invalid', {
+            source: 'catalog',
+            provider,
+            model,
+            issue: 'tier_input_invalid',
+          });
+          return null;
+        }
+        if (!isFiniteNonNegative(tierOutput)) {
+          warnPricing('usage.pricing_catalog_entry_invalid', {
+            source: 'catalog',
+            provider,
+            model,
+            issue: 'tier_output_invalid',
+          });
+          return null;
+        }
+        if (!isFiniteNonNegative(tierCacheRead)) {
+          warnPricing('usage.pricing_catalog_entry_invalid', {
+            source: 'catalog',
+            provider,
+            model,
+            issue: 'tier_cacheRead_invalid',
+          });
+          return null;
+        }
+        if (!isFiniteNonNegative(tierCacheWrite)) {
+          warnPricing('usage.pricing_catalog_entry_invalid', {
+            source: 'catalog',
+            provider,
+            model,
+            issue: 'tier_cacheWrite_invalid',
+          });
+          return null;
+        }
+
+        tiers.push({
+          inputTokensAbove: threshold,
+          input: tierInput,
+          output: tierOutput,
+          cacheRead: tierCacheRead,
+          cacheWrite: tierCacheWrite,
+        });
+      }
+      rates.tiers = tiers;
+    }
+  }
+
   return rates;
 }
 
 /**
  * Build the exact-match Pi catalog rate index. Keys are catalog `provider` + `id`
- * (not `ref`, which concatenates with `/`).
+ * (not `ref`, which concatenates with `/`). Invalid rate sets are omitted with
+ * a structured warning — they remain unpriced (not config-blocked).
  */
 export function buildCatalogPricingIndex(
   catalog: readonly PiModelInfo[] | null | undefined
@@ -313,8 +511,11 @@ export function buildCatalogPricingIndex(
     const provider = entry.provider.trim();
     const model = entry.id.trim();
     if (provider.length === 0 || model.length === 0) continue;
-    if (!entry.cost || typeof entry.cost !== 'object') continue;
-    setNestedRate(root, provider, model, catalogCostToRates(entry.cost));
+    if (entry.cost === undefined || entry.cost === null) continue;
+
+    const rates = parseCatalogCost(entry.cost, { provider, model });
+    if (!rates) continue;
+    setNestedRate(root, provider, model, rates);
   }
 
   return root;
@@ -401,8 +602,12 @@ function missingPositiveRate(tokens: number | undefined, rate: number | undefine
 /**
  * Apply matched rates to reported token dimensions.
  * Returns null when estimation is impossible (missing required tokens/rates,
- * partial positive category without a rate, or non-finite product).
- * Reasoning is never charged separately — it is already inside output.
+ * partial positive category without a rate, invalid component rates, or
+ * non-finite product). Reasoning is never charged separately — it is already
+ * inside output.
+ *
+ * Component rates are checked individually before multiplication so a negative
+ * rate cannot hide behind a larger positive sibling and produce a plausible sum.
  */
 export function estimateTokensUsd(
   entry: Pick<
@@ -419,6 +624,20 @@ export function estimateTokensUsd(
   const aggregate =
     entry.inputTokens + (entry.cacheReadTokens ?? 0) + (entry.cacheWriteTokens ?? 0);
   const active = selectRatesForAggregate(rates, aggregate);
+
+  // Defense in depth: every present rate component must be finite non-negative
+  // before any multiplication. Indexing already validates external sources;
+  // this catches injected/stale rates without relying on the final sum.
+  for (const field of RATE_FIELDS) {
+    const rate = active[field];
+    if (rate !== undefined && !isFiniteNonNegative(rate)) {
+      warnPricing('usage.pricing_estimate_invalid', {
+        source: 'estimate',
+        issue: `${field}_invalid`,
+      });
+      return null;
+    }
+  }
 
   // Positive reported categories must have a rate; missing → whole estimate null.
   // Zero-count categories may omit the rate (contribute nothing).
@@ -444,7 +663,10 @@ export function estimateTokensUsd(
   }
 
   if (!Number.isFinite(total) || total < 0) {
-    getLog().warn({ issue: 'non_finite_estimate' }, 'usage.pricing_estimate_invalid');
+    warnPricing('usage.pricing_estimate_invalid', {
+      source: 'estimate',
+      issue: 'non_finite_estimate',
+    });
     return null;
   }
 

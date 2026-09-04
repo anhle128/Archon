@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'bun:test';
 import type { ModelUsageEntry } from '@archon/providers/types';
 import type { PiModelInfo } from '@archon/providers';
 import type { PricingConfig } from '../config/config-types';
@@ -9,9 +9,24 @@ import {
   loadPricingLookups,
   materializeUsageCost,
   selectRatesForAggregate,
+  setPricingWarnSinkForTest,
   type PricingLookups,
   type PricingRates,
 } from './estimate';
+
+type CapturedWarn = { message: string; fields: Record<string, unknown> };
+
+function captureWarns(): CapturedWarn[] {
+  const warns: CapturedWarn[] = [];
+  setPricingWarnSinkForTest((message, fields) => {
+    warns.push({ message, fields: { ...fields } });
+  });
+  return warns;
+}
+
+afterEach(() => {
+  setPricingWarnSinkForTest(undefined);
+});
 
 function entry(overrides: Partial<ModelUsageEntry> = {}): ModelUsageEntry {
   return {
@@ -192,7 +207,23 @@ describe('buildConfigPricingIndex', () => {
   test('returns empty index for missing or non-array models', () => {
     expect(buildConfigPricingIndex(undefined).rates.size).toBe(0);
     expect(buildConfigPricingIndex({}).rates.size).toBe(0);
+    expect(buildConfigPricingIndex({ models: [] }).rates.size).toBe(0);
     expect(buildConfigPricingIndex({ models: null as unknown as [] }).rates.size).toBe(0);
+  });
+
+  test('preserves valid zero rates', () => {
+    const index = buildConfigPricingIndex({
+      models: [
+        { provider: 'openai', model: 'free', input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      ],
+    });
+    expect(index.rates.get('openai')?.get('free')).toEqual({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+    expect(index.blocked.size).toBe(0);
   });
 });
 
@@ -229,6 +260,199 @@ describe('buildCatalogPricingIndex', () => {
     expect(index.get('openrouter')?.get('org/model')?.tiers?.[0]?.inputTokensAbove).toBe(1000);
     // Never key by concatenated ref alone
     expect(index.get('openrouter/org')?.get('model')).toBeUndefined();
+  });
+
+  test('rejects negative base rates even when siblings are positive', () => {
+    const warns = captureWarns();
+    // Negative input would be offset by large positive output if only the sum were checked.
+    const catalog: PiModelInfo[] = [
+      {
+        ref: 'openai/bad-neg',
+        provider: 'openai',
+        id: 'bad-neg',
+        name: 'Bad',
+        reasoning: false,
+        cost: { input: -5, output: 100, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+      },
+      {
+        ref: 'openai/ok',
+        provider: 'openai',
+        id: 'ok',
+        name: 'Ok',
+        reasoning: false,
+        cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+      },
+    ];
+    const index = buildCatalogPricingIndex(catalog);
+    expect(index.get('openai')?.get('bad-neg')).toBeUndefined();
+    expect(index.get('openai')?.get('ok')).toEqual({
+      input: 1,
+      output: 2,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+    expect(
+      warns.some(w => w.fields.source === 'catalog' && w.fields.issue === 'input_invalid')
+    ).toBe(true);
+    // No rate values or full cost objects in the warning payload
+    for (const w of warns) {
+      expect(w.fields).not.toHaveProperty('input');
+      expect(w.fields).not.toHaveProperty('output');
+      expect(w.fields).not.toHaveProperty('cost');
+      expect(JSON.stringify(w.fields)).not.toContain('-5');
+    }
+
+    // Cannot produce an estimate via materialize either
+    expect(
+      materializeUsageCost(
+        entry({
+          provider: 'openai',
+          model: 'bad-neg',
+          inputTokens: 1_000_000,
+          outputTokens: 1_000_000,
+        }),
+        {
+          configByProviderModel: new Map(),
+          configBlockedByProviderModel: new Map(),
+          catalogByProviderModel: index,
+        }
+      )
+    ).toEqual({ cost_usd: null, cost_estimated_usd: null, pricing_source: null });
+  });
+
+  test('rejects non-finite rates, invalid tier thresholds, and invalid tier rates', () => {
+    const warns = captureWarns();
+    const catalog = [
+      {
+        ref: 'p/nan',
+        provider: 'p',
+        id: 'nan',
+        name: 'n',
+        reasoning: false,
+        cost: { input: Number.NaN, output: 1, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1,
+      },
+      {
+        ref: 'p/inf',
+        provider: 'p',
+        id: 'inf',
+        name: 'i',
+        reasoning: false,
+        cost: { input: 1, output: Number.POSITIVE_INFINITY, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1,
+      },
+      {
+        ref: 'p/tier-neg-threshold',
+        provider: 'p',
+        id: 'tier-neg-threshold',
+        name: 't',
+        reasoning: false,
+        cost: {
+          input: 1,
+          output: 2,
+          cacheRead: 0,
+          cacheWrite: 0,
+          tiers: [{ inputTokensAbove: -1, input: 3, output: 4, cacheRead: 0, cacheWrite: 0 }],
+        },
+        contextWindow: 1,
+      },
+      {
+        ref: 'p/tier-nan-threshold',
+        provider: 'p',
+        id: 'tier-nan-threshold',
+        name: 't',
+        reasoning: false,
+        cost: {
+          input: 1,
+          output: 2,
+          cacheRead: 0,
+          cacheWrite: 0,
+          tiers: [
+            {
+              inputTokensAbove: Number.NaN,
+              input: 3,
+              output: 4,
+              cacheRead: 0,
+              cacheWrite: 0,
+            },
+          ],
+        },
+        contextWindow: 1,
+      },
+      {
+        ref: 'p/tier-bad-rate',
+        provider: 'p',
+        id: 'tier-bad-rate',
+        name: 't',
+        reasoning: false,
+        cost: {
+          input: 1,
+          output: 2,
+          cacheRead: 0,
+          cacheWrite: 0,
+          tiers: [{ inputTokensAbove: 100, input: -3, output: 4, cacheRead: 0, cacheWrite: 0 }],
+        },
+        contextWindow: 1,
+      },
+      {
+        ref: 'p/good-zero',
+        provider: 'p',
+        id: 'good-zero',
+        name: 'g',
+        reasoning: false,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          tiers: [{ inputTokensAbove: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }],
+        },
+        contextWindow: 1,
+      },
+    ] as unknown as PiModelInfo[];
+
+    const index = buildCatalogPricingIndex(catalog);
+    expect(index.get('p')?.get('nan')).toBeUndefined();
+    expect(index.get('p')?.get('inf')).toBeUndefined();
+    expect(index.get('p')?.get('tier-neg-threshold')).toBeUndefined();
+    expect(index.get('p')?.get('tier-nan-threshold')).toBeUndefined();
+    expect(index.get('p')?.get('tier-bad-rate')).toBeUndefined();
+    expect(index.get('p')?.get('good-zero')).toEqual({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      tiers: [{ inputTokensAbove: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }],
+    });
+
+    const issues = warns.map(w => w.fields.issue);
+    expect(issues).toContain('input_invalid');
+    expect(issues).toContain('output_invalid');
+    expect(issues).toContain('tier_threshold_invalid');
+    expect(issues).toContain('tier_input_invalid');
+    expect(warns.every(w => w.fields.source === 'catalog')).toBe(true);
+  });
+
+  test('estimateTokensUsd rejects negative component rates before summing', () => {
+    // Defense in depth: even if a bad rate slipped into PricingRates, a negative
+    // input offset by a larger positive output must not yield a plausible total.
+    const warns = captureWarns();
+    expect(
+      estimateTokensUsd(
+        { inputTokens: 1_000_000, outputTokens: 1_000_000 },
+        { input: -5, output: 100 }
+      )
+    ).toBeNull();
+    expect(warns.some(w => w.fields.issue === 'input_invalid')).toBe(true);
+    // Sum-only check would have returned 95 — ensure we never publish that.
+    expect(
+      estimateTokensUsd(
+        { inputTokens: 1_000_000, outputTokens: 1_000_000 },
+        { input: -5, output: 100 }
+      )
+    ).toBeNull();
   });
 });
 
@@ -628,5 +852,89 @@ describe('loadPricingLookups', () => {
     });
     expect(loaded.configByProviderModel.size).toBe(0);
     expect(loaded.catalogByProviderModel.size).toBe(0);
+  });
+
+  test('malformed present pricing values warn and yield empty config index', async () => {
+    const cases: Array<{ label: string; pricing: unknown; issue: string }> = [
+      { label: 'string', pricing: 'not-pricing', issue: 'pricing_not_object' },
+      { label: 'number', pricing: 42, issue: 'pricing_not_object' },
+      { label: 'boolean', pricing: true, issue: 'pricing_not_object' },
+      {
+        label: 'array',
+        pricing: [{ provider: 'x', model: 'y', input: 1 }],
+        issue: 'pricing_not_object',
+      },
+      { label: 'models-string', pricing: { models: 'nope' }, issue: 'models_not_array' },
+      { label: 'models-object', pricing: { models: { provider: 'x' } }, issue: 'models_not_array' },
+    ];
+
+    for (const c of cases) {
+      const warns = captureWarns();
+      const loaded = await loadPricingLookups({
+        globalConfig: { pricing: c.pricing as PricingConfig },
+        catalog: [],
+      });
+      expect(loaded.configByProviderModel.size).toBe(0);
+      expect(loaded.configBlockedByProviderModel.size).toBe(0);
+      expect(
+        warns.some(
+          w =>
+            w.message === 'usage.pricing_config_invalid' &&
+            w.fields.source === 'config' &&
+            w.fields.issue === c.issue
+        ),
+        `${c.label} should warn ${c.issue}`
+      ).toBe(true);
+      // Never dump the malformed value into the log fields
+      for (const w of warns) {
+        expect(w.fields).not.toHaveProperty('pricing');
+        expect(w.fields).not.toHaveProperty('models');
+        expect(w.fields).not.toHaveProperty('value');
+      }
+      setPricingWarnSinkForTest(undefined);
+    }
+  });
+
+  test('missing pricing and empty pricing objects remain silent no-pricing states', async () => {
+    const warns = captureWarns();
+    const missing = await loadPricingLookups({ globalConfig: {}, catalog: [] });
+    const emptyObj = await loadPricingLookups({
+      globalConfig: { pricing: {} },
+      catalog: [],
+    });
+    const emptyModels = await loadPricingLookups({
+      globalConfig: { pricing: { models: [] } },
+      catalog: [],
+    });
+    expect(missing.configByProviderModel.size).toBe(0);
+    expect(emptyObj.configByProviderModel.size).toBe(0);
+    expect(emptyModels.configByProviderModel.size).toBe(0);
+    expect(warns.filter(w => w.message === 'usage.pricing_config_invalid')).toHaveLength(0);
+  });
+
+  test('reported provider USD still bypasses estimation after malformed catalog', async () => {
+    const loaded = await loadPricingLookups({
+      globalConfig: { pricing: 'bad' as unknown as PricingConfig },
+      catalog: [
+        {
+          ref: 'openai/gpt-5.4',
+          provider: 'openai',
+          id: 'gpt-5.4',
+          name: 'GPT',
+          reasoning: false,
+          cost: { input: -1, output: 99, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128000,
+        } as unknown as PiModelInfo,
+      ],
+    });
+    expect(loaded.configByProviderModel.size).toBe(0);
+    expect(loaded.catalogByProviderModel.get('openai')?.get('gpt-5.4')).toBeUndefined();
+    expect(
+      materializeUsageCost(entry({ costUsd: 1.25, inputTokens: 10, outputTokens: 10 }), loaded)
+    ).toEqual({
+      cost_usd: 1.25,
+      cost_estimated_usd: null,
+      pricing_source: null,
+    });
   });
 });
