@@ -1,5 +1,10 @@
 ## Codebase Patterns
 
+### Copilot late sendAndWait reject carries usage via CopilotUsageBearingError
+- **Where**: `packages/providers/src/community/copilot/{event-bridge,provider}.ts`
+- **Pattern**: On sendAndWait rejection after observed assistant.usage, bridge throws `CopilotUsageBearingError` with packaged breakdown/tokens/sessionId. Provider catches and yields one terminal `isError` result with `buildFriendlyCopilotError` message; no-usage rejections still throw. session.error + successful fallback remains success.
+- **Example**: three usage events then reject → one isError result, three breakdown rows, summed tokens; model-not-available keeps friendly classification
+
 
 ### OpenCode late failures carry usage via OpencodeUsageBearingError
 - **Where**: `packages/providers/src/community/opencode/{session,multi-agent,provider,errors,tokens}.ts`
@@ -1105,5 +1110,28 @@
 - Mirror Claude's ClaudeApiResultError pattern: attach usage on the throw site, accumulate in sendQuery, yield isError only when usage exists.
 - Multi-agent must package ALL states' observed infos on any child session.error — the failing child may have zero usage while a sibling already spent.
 - scriptedEvents is global in provider tests; per-attempt usage/error streams need custom subscribe mocks per runtime.
+
+---
+
+## 2026-09-04 — US-035: Preserve Copilot usage across late sendAndWait rejects
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/copilot/event-bridge.ts` — CopilotUsageBearingError; package captured usage on late sendAndWait reject
+- `packages/providers/src/community/copilot/provider.ts` — yield one terminal isError + friendly classification when usage-bearing; no-usage still throws
+- `packages/providers/src/community/copilot/event-bridge.test.ts` — CopilotUsageBearingError unit coverage
+- `packages/providers/src/community/copilot/provider.test.ts` — multi-entry late reject, friendly model-access, fallback success, no-usage throw retained
+
+**Acceptance criteria verified**:
+- [x] assistant.usage then sendAndWait reject → terminal error path carries every entry + aggregate tokens exactly once
+- [x] Provider boundary returns usage-bearing terminal isError with existing friendly Copilot classification/message
+- [x] Rejection before any usage preserves established throw behavior; no invented usage
+- [x] session.error + successful assistant fallback remains successful; no duplicate usage / false terminal failure
+- [x] Multiple authoritative usage events stay distinct (provider/model/kind); missing measures stay missing; abort/disconnect/session reuse/structured-output do not regress (62 focused copilot tests pass)
+
+**Learnings**:
+- Mirror Claude/OpenCode: attach usage at the throw site (bridge), convert to isError only at the provider boundary so friendly classification still runs.
+- Copilot has no internal retry loop — one observed attempt packages once; do not invent merge/retry machinery here.
+- session.error alone does not discard spend when sendAndWait later resolves with fallback content; only the reject path needs the usage-bearing error.
 
 ---
