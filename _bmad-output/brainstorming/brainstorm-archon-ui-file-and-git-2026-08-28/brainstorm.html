@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Brainstorm · Source Control cho màn hình workflow-run</title>
+<style>
+  :root{
+    --bg:#0d1117; --bg2:#010409; --panel:#161b22; --panel2:#1c2230;
+    --line:#30363d; --line2:#21262d;
+    --ink:#e6edf3; --mute:#8b949e; --faint:#6e7681;
+    --add:#2ea043; --addbg:#12261a; --addln:#3fb950;
+    --del:#f85149; --delbg:#2b1416; --delln:#ff7b72;
+    --accent:#58a6ff; --accent2:#a371f7; --amber:#d29922; --amberbg:#241b06;
+    --mono:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:
+      radial-gradient(1200px 600px at 80% -10%,rgba(163,113,247,.10),transparent),
+      radial-gradient(900px 500px at -5% 10%,rgba(88,166,255,.08),transparent),
+      var(--bg2);
+    color:var(--ink);font-family:var(--sans);line-height:1.6;-webkit-font-smoothing:antialiased}
+  a{color:var(--accent);text-decoration:none}
+  code,.mono{font-family:var(--mono);font-size:.86em}
+  .tok{background:#1f6feb1a;border:1px solid #1f6feb33;color:#79c0ff;border-radius:5px;padding:.5px 6px;font-family:var(--mono);font-size:.82em;white-space:nowrap}
+  .wrap{max-width:1040px;margin:0 auto;padding:0 22px}
+  section{padding:46px 0;border-top:1px solid var(--line2)}
+  h2{font-size:1.55rem;margin:0 0 4px}
+  h3{font-size:1.06rem;margin:22px 0 10px;color:#c9d1d9}
+  p{margin:.5em 0}
+  .mute{color:var(--mute)} .faint{color:var(--faint)}
+
+  /* ---------- HERO ---------- */
+  header{position:relative;overflow:hidden;padding:70px 0 54px;border-bottom:1px solid var(--line)}
+  header::before{content:"";position:absolute;inset:0;
+    background-image:linear-gradient(var(--line2) 1px,transparent 1px),linear-gradient(90deg,var(--line2) 1px,transparent 1px);
+    background-size:40px 40px;opacity:.25;mask-image:radial-gradient(circle at 50% 30%,#000,transparent 75%)}
+  .eyebrow{font-family:var(--mono);font-size:.72rem;letter-spacing:.28em;text-transform:uppercase;color:var(--accent2)}
+  h1{font-size:2.5rem;line-height:1.14;margin:.28em 0;letter-spacing:-.02em}
+  h1 .g{background:linear-gradient(92deg,#58a6ff,#a371f7 60%,#3fb950);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .sub{max-width:720px;color:var(--mute);font-size:1.05rem;position:relative}
+  .meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:22px;position:relative}
+  .chip{font-family:var(--mono);font-size:.74rem;background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:5px 12px;color:var(--mute)}
+  .chip b{color:var(--ink);font-weight:600}
+  .goalcard{margin-top:26px;position:relative;background:linear-gradient(180deg,#161b22,#12161d);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:12px;padding:16px 18px}
+  .goalcard .lbl{font-family:var(--mono);font-size:.7rem;letter-spacing:.2em;text-transform:uppercase;color:var(--accent)}
+
+  /* ---------- window chrome ---------- */
+  .win{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden;box-shadow:0 12px 40px -18px #000}
+  .titlebar{display:flex;align-items:center;gap:8px;background:#0f141b;border-bottom:1px solid var(--line);padding:9px 12px}
+  .dots{display:flex;gap:6px}.dots i{width:11px;height:11px;border-radius:50%;display:block}
+  .dots i:nth-child(1){background:#ff5f56}.dots i:nth-child(2){background:#ffbd2e}.dots i:nth-child(3){background:#27c93f}
+  .titlebar .tt{font-family:var(--mono);font-size:.76rem;color:var(--mute)}
+  .tabs{display:flex;gap:2px;margin-left:auto}
+  .tabs span{font-size:.76rem;padding:3px 10px;border-radius:6px;color:var(--faint)}
+  .tabs span.on{background:var(--panel2);color:var(--ink);border:1px solid var(--line)}
+
+  /* ---------- technique block ---------- */
+  .tno{font-family:var(--mono);font-size:.72rem;color:var(--bg);background:var(--accent);border-radius:6px;padding:2px 9px;font-weight:700}
+  .thead{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .lead{color:var(--mute);max-width:760px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  @media(max-width:720px){.grid2,.grid3{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .card .who{font-family:var(--mono);font-size:.66rem;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);display:block;margin-bottom:4px}
+  .card.user{border-left:3px solid var(--accent)}
+  .card.coach{border-left:3px solid var(--accent2)}
+  .card.user .who{color:var(--accent)} .card.coach .who{color:var(--accent2)}
+
+  /* JTBD ticket */
+  .jtbd{background:linear-gradient(180deg,#12161d,#0f141b);border:1px dashed var(--line);border-radius:12px;padding:20px}
+  .jtbd .quote{font-size:1.15rem;font-style:italic;color:#c9d1d9}
+  .jtbd .hire{margin-top:14px;background:var(--addbg);border:1px solid #2ea04340;border-radius:8px;padding:12px 14px}
+  .jtbd .hire b{color:var(--addln)}
+
+  /* two clocks */
+  .clocks{display:flex;gap:16px;flex-wrap:wrap;align-items:stretch}
+  .clock{flex:1;min-width:230px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;text-align:center}
+  .dial{width:96px;height:96px;border-radius:50%;margin:6px auto 10px;position:relative;
+    background:conic-gradient(var(--c,#58a6ff) 0 0),#0d1117;border:2px solid var(--line);box-shadow:inset 0 0 0 6px #0d1117}
+  .dial::before,.dial::after{content:"";position:absolute;left:50%;top:50%;background:var(--c,#58a6ff);transform-origin:bottom center;border-radius:3px}
+  .dial::before{width:3px;height:30px;transform:translate(-50%,-100%) rotate(var(--h,40deg))}
+  .dial::after{width:3px;height:38px;transform:translate(-50%,-100%) rotate(var(--m,200deg));opacity:.7}
+  .dial .pin{position:absolute;width:8px;height:8px;background:var(--c);border-radius:50%;left:50%;top:50%;transform:translate(-50%,-50%);z-index:2}
+  .clock h4{margin:2px 0 2px;font-size:1rem}
+  .clock .k{font-family:var(--mono);font-size:.72rem;color:var(--mute)}
+  .vs{align-self:center;font-family:var(--mono);color:var(--faint);font-weight:700}
+
+  /* diff mock */
+  .diff{border:1px solid var(--line);border-radius:8px;overflow:hidden;font-family:var(--mono);font-size:.8rem}
+  .diff .bar{display:flex;justify-content:space-between;background:#0f141b;border-bottom:1px solid var(--line);padding:6px 12px;color:var(--mute);font-size:.72rem}
+  .diff .panes{display:grid;grid-template-columns:1fr 1fr}
+  @media(max-width:600px){.diff .panes{grid-template-columns:1fr}}
+  .diff .pane{padding:0}
+  .diff .pane:first-child{border-right:1px solid var(--line)}
+  .diff .ph{padding:4px 12px;font-size:.68rem;letter-spacing:.1em;text-transform:uppercase;border-bottom:1px solid var(--line2)}
+  .diff .ph.before{color:var(--delln);background:var(--delbg)}
+  .diff .ph.after{color:var(--addln);background:var(--addbg)}
+  .ln{display:flex;gap:10px;padding:1px 12px;white-space:pre}
+  .ln .g{color:var(--faint);user-select:none;min-width:22px;text-align:right}
+  .ln.del{background:var(--delbg)} .ln.del .t{color:var(--delln)}
+  .ln.add{background:var(--addbg)} .ln.add .t{color:var(--addln)}
+
+  /* M vs A viewer split */
+  .viewer{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:720px){.viewer{grid-template-columns:1fr}}
+  .vbox{border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .vbox .cap{display:flex;align-items:center;gap:8px;padding:8px 12px;background:#0f141b;border-bottom:1px solid var(--line);font-size:.8rem}
+  .badge{font-family:var(--mono);font-weight:700;width:20px;height:20px;display:grid;place-items:center;border-radius:5px;font-size:.74rem}
+  .badge.m{background:#3a2a00;color:var(--amber);border:1px solid #6a4d00}
+  .badge.a{background:#0e2b17;color:var(--addln);border:1px solid #1c5a30}
+  .vbox .body{padding:10px 12px;font-family:var(--mono);font-size:.78rem}
+  .single{background:#0f141b}
+
+  /* morphology axes */
+  .morph{display:grid;grid-template-columns:180px 1fr;gap:0;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .morph .ax{padding:11px 14px;border-bottom:1px solid var(--line2);font-family:var(--mono);font-size:.78rem;color:var(--accent2);background:#141922}
+  .morph .op{padding:11px 14px;border-bottom:1px solid var(--line2);display:flex;flex-wrap:wrap;gap:7px;align-items:center}
+  .morph .ax:last-of-type,.morph .op:last-of-type{border-bottom:0}
+  .opt{font-size:.78rem;border:1px solid var(--line);border-radius:6px;padding:3px 9px;color:var(--mute)}
+  .opt.pick{background:#0e2b17;border-color:#1c5a30;color:var(--addln);font-weight:600}
+  .opt.pick::before{content:"✓ ";color:var(--addln)}
+
+  /* constraint -> feature */
+  .flip{display:grid;grid-template-columns:1fr 40px 1fr;gap:0;align-items:stretch;margin:10px 0}
+  @media(max-width:600px){.flip{grid-template-columns:1fr;gap:8px}}
+  .flip .bad{background:var(--delbg);border:1px solid #f8514933;border-radius:8px;padding:12px 14px}
+  .flip .good{background:var(--addbg);border:1px solid #2ea04333;border-radius:8px;padding:12px 14px}
+  .flip .arr{display:grid;place-items:center;color:var(--faint);font-size:1.3rem}
+  @media(max-width:600px){.flip .arr{transform:rotate(90deg)}}
+  .flip .tag{font-family:var(--mono);font-size:.66rem;letter-spacing:.12em;text-transform:uppercase;display:block;margin-bottom:4px}
+  .bad .tag{color:var(--delln)} .good .tag{color:var(--addln)}
+
+  /* SCAMPER strip */
+  .scamper{display:flex;flex-direction:column;gap:10px}
+  .srow{display:grid;grid-template-columns:118px 1fr;gap:0;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+  .srow .verb{background:linear-gradient(180deg,#1b2130,#151a24);display:grid;place-items:center;font-family:var(--mono);font-size:.74rem;color:var(--accent);border-right:1px solid var(--line);text-align:center;padding:8px}
+  .srow .txt{padding:11px 14px;font-size:.92rem}
+  .keep{float:right;font-family:var(--mono);font-size:.64rem;color:var(--addln);border:1px solid #1c5a30;border-radius:5px;padding:1px 6px;background:#0e2b17}
+
+  /* Failure analysis - CODE vs RUNTIME */
+  .evsplit{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:8px}
+  @media(max-width:720px){.evsplit{grid-template-columns:1fr}}
+  .ev{border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .ev .h{padding:9px 14px;font-family:var(--mono);font-size:.76rem;font-weight:700;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
+  .ev.code .h{background:#101a26;color:#79c0ff} .ev.code{border-color:#1f6feb44}
+  .ev.rt .h{background:#1a1420;color:#d2a8ff} .ev.rt{border-color:#a371f744}
+  .ev ul{margin:0;padding:12px 14px 12px 30px;font-size:.86rem;color:var(--mute)}
+  .ev li{margin:7px 0}
+  .fcards{display:flex;flex-direction:column;gap:12px;margin:6px 0 18px}
+  .fcard{border:1px solid var(--line);border-left:3px solid var(--del);border-radius:9px;padding:12px 15px;background:#160f11}
+  .fcard .ttl{color:var(--delln);font-weight:600}
+  .fcard .ans{margin-top:8px;padding-top:8px;border-top:1px dashed var(--line);color:#c9d1d9}
+  .fcard .ans b{color:var(--addln)}
+  .fcard.set{border-left-color:var(--amber);background:var(--amberbg)}
+  .fcard.set .ttl{color:var(--amber)}
+
+  /* worktree gone empty state */
+  .empty{border:1px dashed var(--line);border-radius:10px;padding:26px;text-align:center;background:#0f141b}
+  .empty .ic{font-size:2rem;filter:grayscale(1);opacity:.6}
+  .empty .msg{font-family:var(--mono);color:var(--mute);margin-top:6px}
+
+  /* worst idea */
+  .worst .flip .bad .tag::before{content:"☠ "}
+
+  /* crank the dial */
+  .gauge{position:relative;height:16px;border-radius:999px;background:linear-gradient(90deg,#1c2230,#2b1416);border:1px solid var(--line);overflow:hidden;margin:6px 0 2px}
+  .gauge i{position:absolute;inset:0;width:100%;background:linear-gradient(90deg,#58a6ff,#a371f7 55%,#f85149);opacity:.85}
+  .gauge .m11{position:absolute;right:6px;top:50%;transform:translateY(-50%);font-family:var(--mono);font-size:.7rem;color:#fff;font-weight:700;text-shadow:0 1px 2px #000}
+  .crankcard{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:linear-gradient(180deg,#171015,#12161d)}
+  .demote{margin-top:10px;background:#241b06;border:1px solid #6a4d0055;border-radius:8px;padding:10px 13px;font-size:.86rem}
+  .demote b{color:var(--amber)}
+
+  /* truth model */
+  .truth{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:10px}
+  @media(max-width:720px){.truth{grid-template-columns:1fr}}
+  .tcol{border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center}
+  .tcol .t{font-family:var(--mono);font-size:.72rem;letter-spacing:.1em;text-transform:uppercase}
+  .tcol.sot{border-color:#2ea04366;background:#0e1c14} .tcol.sot .t{color:var(--addln)}
+  .tcol.dur{border-color:#d2992266;background:#1c1608} .tcol.dur .t{color:var(--amber)}
+  .tcol.hint{border-color:#8b949e44;background:#12161d} .tcol.hint .t{color:var(--faint)}
+  .tcol p{font-size:.84rem;color:var(--mute);margin:.4em 0 0}
+
+  /* MoSCoW board */
+  .moscow{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  @media(max-width:820px){.moscow{grid-template-columns:1fr 1fr}}
+  @media(max-width:520px){.moscow{grid-template-columns:1fr}}
+  .col{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel)}
+  .col .ch{padding:9px 12px;font-family:var(--mono);font-size:.78rem;font-weight:700;text-align:center}
+  .col.must .ch{background:#0e2b17;color:var(--addln);border-bottom:1px solid #1c5a30}
+  .col.should .ch{background:#101a26;color:#79c0ff;border-bottom:1px solid #1f6feb44}
+  .col.could .ch{background:#1a1420;color:#d2a8ff;border-bottom:1px solid #a371f744}
+  .col.wont .ch{background:#241416;color:var(--delln);border-bottom:1px solid #f8514944}
+  .col ul{list-style:none;margin:0;padding:10px}
+  .col li{font-size:.82rem;padding:7px 9px;border-bottom:1px solid var(--line2);color:var(--mute)}
+  .col li:last-child{border-bottom:0}
+  .col li b{color:var(--ink);font-weight:600}
+
+  /* final synthesis climax */
+  .climax{background:
+      radial-gradient(600px 300px at 90% 0,rgba(46,160,67,.10),transparent),
+      radial-gradient(600px 300px at 0 100%,rgba(88,166,255,.10),transparent),
+      linear-gradient(180deg,#0f141b,#0b0f15)}
+  .top3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:18px 0}
+  @media(max-width:820px){.top3{grid-template-columns:1fr}}
+  .pr{position:relative;border:1px solid var(--line);border-radius:14px;padding:20px 18px 18px;background:linear-gradient(180deg,#161b22,#11151c);overflow:hidden}
+  .pr .num{position:absolute;right:14px;top:6px;font-size:3.4rem;font-weight:800;color:#ffffff08;font-family:var(--mono)}
+  .pr .k{font-family:var(--mono);font-size:.7rem;letter-spacing:.14em;text-transform:uppercase;color:var(--accent)}
+  .pr h4{margin:6px 0;font-size:1.06rem}
+  .pr p{font-size:.86rem;color:var(--mute)}
+  .pr.p1{border-top:3px solid var(--accent)} .pr.p2{border-top:3px solid var(--add)} .pr.p3{border-top:3px solid var(--accent2)}
+  .upgrade{margin-top:8px;border:1px solid #d2992255;border-radius:14px;padding:18px 20px;background:linear-gradient(100deg,#1c1608,#12161d)}
+  .upgrade .k{color:var(--amber);font-family:var(--mono);font-size:.72rem;letter-spacing:.14em;text-transform:uppercase}
+  .conn{display:flex;flex-direction:column;gap:10px;margin-top:16px}
+  .conn .c{display:grid;grid-template-columns:34px 1fr;gap:12px;align-items:start;border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:#11151c}
+  .conn .n{font-family:var(--mono);font-weight:700;color:var(--bg);background:var(--accent);border-radius:8px;width:30px;height:30px;display:grid;place-items:center}
+  .conn .c:nth-child(2) .n{background:var(--add)} .conn .c:nth-child(3) .n{background:var(--accent2)}
+
+  footer{padding:40px 0 60px;border-top:1px solid var(--line);color:var(--faint);font-size:.82rem;text-align:center}
+  .callout{background:#12161d;border:1px solid var(--line);border-left:3px solid var(--amber);border-radius:8px;padding:12px 15px;margin:14px 0;font-size:.9rem}
+  .callout .k{font-family:var(--mono);font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:var(--amber);display:block;margin-bottom:3px}
+  .nav{position:sticky;top:0;z-index:20;background:#0b0f15e6;backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+  .nav .wrap{display:flex;gap:4px;overflow-x:auto;padding:8px 22px}
+  .nav a{font-family:var(--mono);font-size:.72rem;color:var(--mute);padding:5px 9px;border-radius:6px;white-space:nowrap}
+  .nav a:hover{background:var(--panel);color:var(--ink)}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div class="eyebrow">Phiên Brainstorm · Creative Partner · 2026-08-28</div>
+    <h1>Nhìn vào <span class="g">worktree từ xa</span> ngay trên màn hình workflow-run</h1>
+    <p class="sub">Một tab <b>Source Control</b> cho Archon: xem file, xem file git đã đổi, xem lịch sử git của một run — mà máy tính <em>không hề có bản clone</em> nào của repo.</p>
+    <div class="meta">
+      <span class="chip"><b>Chủ đề</b> · file &amp; git views trên run screen</span>
+      <span class="chip"><b>Chế độ</b> · partner</span>
+      <span class="chip"><b>7</b> kỹ thuật</span>
+      <span class="chip"><b>Trạng thái</b> · complete</span>
+    </div>
+    <div class="goalcard">
+      <div class="lbl">Mục tiêu</div>
+      <p style="margin:.3em 0 0">Kiểm tra worktree từ xa ngay trên màn hình workflow-run: mở một file, xem những file git đã thay đổi, xem lịch sử git — <b>không cần clone về máy</b>.</p>
+    </div>
+  </div>
+</header>
+
+<nav class="nav"><div class="wrap">
+  <a href="#t1">01 · Job to Be Done</a>
+  <a href="#t2">02 · Morphological</a>
+  <a href="#t3">03 · Constraint Mapping</a>
+  <a href="#t4">04 · SCAMPER</a>
+  <a href="#t5">05 · Failure Analysis</a>
+  <a href="#t6">06 · Worst Possible Idea</a>
+  <a href="#t7">07 · Crank the Dial to 11</a>
+  <a href="#final">★ Tổng hợp</a>
+</div></nav>
+
+<!-- ============ 01 JTBD ============ -->
+<section id="t1"><div class="wrap">
+  <div class="thead"><span class="tno">01</span><h2>Job to Be Done</h2></div>
+  <p class="lead">Người dùng "thuê" tính năng này để làm gì? Đào tận công việc thực sự cần hoàn thành, không phải để có thêm một cây file tree.</p>
+
+  <div class="jtbd">
+    <div class="quote">"Kiểm tra trạng thái file, xem những file nào <em>hiện đang</em> thay đổi, và nội dung của chúng ra sao."</div>
+    <div class="hire">
+      <b>Đối tượng được thuê:</b> một <b>radar worktree từ xa còn sống</b> — dirty status + danh sách path đã đổi + nội dung file. Nó trả lời đúng một câu: <em>"node này có đụng vào đúng thứ mình nghĩ nó đụng không?"</em> — chứ không phải một IDE file tree chung chung.
+    </div>
+  </div>
+
+  <h3>Lấy VS Code làm hình mẫu, không phải bản clone</h3>
+  <div class="grid2">
+    <div class="card user"><span class="who">User</span>Tham chiếu <b>VS Code Explorer</b> git decorations &amp; Source Control: cần file status, current changes, content, và những file mà commit trước đã đưa vào.</div>
+    <div class="card coach"><span class="who">Coach</span><b>Time-travel trên worktree từ xa:</b> "bây giờ" (dirty status + content) đối chiếu với danh sách file của một commit trong quá khứ. VS Code SCM là hình dáng tham chiếu — không phải là một local clone.</div>
+    <div class="card user"><span class="who">User</span>Muốn click <b>bất kỳ commit nào</b> trên graph như VS Code, không chỉ HEAD hay các commit của run này.</div>
+    <div class="card coach"><span class="who">Coach</span>Graph là chỉ mục vào lịch sử từ xa; sau khi click, xem tập file của commit đó như một điểm đến time-travel.</div>
+  </div>
+
+  <h3>Hai chiếc đồng hồ, một trình đọc</h3>
+  <p class="mute">User: "Không cần diff, chỉ muốn nội dung file tại snapshot commit đó." → rồi đổi ý: "Hoặc xem side-by-side như VS Code — thấy phần được thêm vào file, tô đỏ/xanh."</p>
+  <div class="clocks">
+    <div class="clock"><div class="dial" style="--c:#58a6ff;--h:35deg;--m:255deg"><span class="pin"></span></div>
+      <h4>NOW</h4><div class="k">worktree đang sống · dirty</div><div class="k faint" style="margin-top:6px">diff = worktree vs <span class="tok">HEAD</span></div></div>
+    <div class="vs">↔</div>
+    <div class="clock"><div class="dial" style="--c:#a371f7;--h:130deg;--m:20deg"><span class="pin"></span></div>
+      <h4>COMMIT</h4><div class="k">blob read-only tại commit đã click</div><div class="k faint" style="margin-top:6px">diff = commit vs <span class="tok">parent</span></div></div>
+  </div>
+
+  <div class="callout"><span class="k">Chốt hướng</span>
+    <b>Chỉ Diff mode</b> cho lúc này — <b>không hỗ trợ Snapshot</b> đứng riêng. v1 là <b>trình đọc-thay-đổi</b>, không phải trình đọc-file: chỉ mở những path có before/after (dirty vs <span class="tok">HEAD</span>, hoặc commit vs parent). "Đỏ là trước khi đổi, xanh là sau khi đổi."</div>
+
+  <div class="diff" style="margin-top:12px">
+    <div class="bar"><span>providers/worktree.ts &nbsp;·&nbsp; <span style="color:var(--amber)">M</span> modified</span><span>NOW ↔ HEAD</span></div>
+    <div class="panes">
+      <div class="pane"><div class="ph before">Trước (đỏ)</div>
+        <div class="ln"><span class="g">41</span><span class="t">  const dir = repoRoot;</span></div>
+        <div class="ln del"><span class="g">42</span><span class="t">  return git.log(dir);</span></div>
+        <div class="ln"><span class="g">43</span><span class="t">}</span></div>
+      </div>
+      <div class="pane"><div class="ph after">Sau (xanh)</div>
+        <div class="ln"><span class="g">41</span><span class="t">  const dir = workingPath;</span></div>
+        <div class="ln add"><span class="g">42</span><span class="t">  return git.raw(['-C', dir, 'log']);</span></div>
+        <div class="ln"><span class="g">43</span><span class="t">}</span></div>
+      </div>
+    </div>
+  </div>
+</div></section>
+
+<!-- ============ 02 Morphological ============ -->
+<section id="t2"><div class="wrap">
+  <div class="thead"><span class="tno">02</span><h2>Morphological Analysis</h2></div>
+  <p class="lead">Tách thiết kế thành các trục độc lập, rồi chọn một giá trị trên mỗi trục để dựng thành hình khối cụ thể.</p>
+
+  <div class="morph">
+    <div class="ax">Vị trí trên run screen</div>
+    <div class="op"><span class="opt">panel nổi</span><span class="opt">sidebar</span><span class="opt pick">tab mới: Source Control (cạnh Graph · Logs · Chat)</span></div>
+    <div class="ax">Danh sách file</div>
+    <div class="op"><span class="opt">full Explorer tree</span><span class="opt pick">chỉ file đã đổi: M &amp; A</span></div>
+    <div class="ax">Đồng hồ</div>
+    <div class="op"><span class="opt pick">NOW (worktree vs HEAD)</span><span class="opt pick">History (commit vs parent)</span></div>
+    <div class="ax">Trình xem</div>
+    <div class="op"><span class="opt pick">Diff-only</span><span class="opt">Snapshot riêng</span></div>
+    <div class="ax">Nguồn dữ liệu</div>
+    <div class="op"><span class="opt pick">worktree từ xa của chính run này</span><span class="opt">base repo</span></div>
+  </div>
+
+  <h3>Hai trạng thái — và chỉ hai — trong danh sách file</h3>
+  <p class="mute">User: "Trong danh sách file của một commit, chỉ có hai trạng thái: <b>M</b> modified và <b>A</b> append/new." — Và: "Untracked không phải type thứ ba: file ở NOW cũng chỉ hiện M và A, cùng cơ chế như file bên trong một commit."</p>
+
+  <div class="viewer">
+    <div class="vbox"><div class="cap"><span class="badge m">M</span>Modified → mở <b>Diff</b> vs parent</div>
+      <div class="diff" style="border:0;border-radius:0"><div class="panes">
+        <div class="pane"><div class="ph before">before</div>
+          <div class="ln del"><span class="g">7</span><span class="t">port = 8080</span></div></div>
+        <div class="pane"><div class="ph after">after</div>
+          <div class="ln add"><span class="g">7</span><span class="t">port = 3737</span></div></div>
+      </div></div>
+    </div>
+    <div class="vbox"><div class="cap"><span class="badge a">A</span>Added / untracked → <b>single-pane</b>, không màu</div>
+      <div class="body single">
+        <div class="ln"><span class="g">1</span><span class="t">export const runId = …</span></div>
+        <div class="ln"><span class="g">2</span><span class="t">export const workingPath = …</span></div>
+        <div class="ln"><span class="g">3</span><span class="t">// file mới — không có "before"</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout"><span class="k">Chốt layout</span>Một widget danh sách cho cả hai đồng hồ. <b>Changes (M/A chưa commit)</b> cố định phía trên, <b>lịch sử commit</b> phía dưới — như VS Code. Click một file ở vùng nào cũng mở <em>cùng một</em> trình xem. Đừng gọi lịch sử git là "Graph" — Archon đã có tab Graph của workflow rồi → đặt tất cả vào tab mới <b>Source Control</b>.</div>
+</div></section>
+
+<!-- ============ 03 Constraint Mapping ============ -->
+<section id="t3"><div class="wrap">
+  <div class="thead"><span class="tno">03</span><h2>Constraint Mapping</h2></div>
+  <p class="lead">Nhận diện ràng buộc thật, rồi biến nó thành <em>tính năng</em> thay vì giới hạn.</p>
+
+  <div class="flip">
+    <div class="bad"><span class="tag">Ràng buộc</span>Laptop không có repo — Source Control buộc phải đọc worktree từ xa của chính run này.</div>
+    <div class="arr">→</div>
+    <div class="good"><span class="tag">Biến thành feature</span>Chính "no local repo" là <b>lý do tồn tại</b> của tính năng — điểm phân biệt với việc nhúng VS Code.</div>
+  </div>
+  <div class="flip">
+    <div class="bad"><span class="tag">Ràng buộc</span>"Slow" — độ trễ từ xa là nỗi đau lớn nhất.</div>
+    <div class="arr">→</div>
+    <div class="good"><span class="tag">Biến thành feature</span>Fetch khi click; hiện loading + error; viewer giữ yên. Refresh là <b>một nút bấm</b> + thông báo "file đã đổi", không phải view nhảy loạn.</div>
+  </div>
+
+  <div class="callout"><span class="k">Chốt quyết định</span><b>Nút Reload thủ công</b>, không auto-update. Manual reload cũng chặn tải từ xa: list &amp; file chỉ fetch theo yêu cầu, <b>không polling</b> worktree.</div>
+
+  <h3>Yêu cầu bất di bất dịch: file lớn phải mở được, đừng chặn</h3>
+  <p class="mute">User giao phương pháp latency cho coach; yêu cầu duy nhất: <b>file phải mở được</b>.</p>
+  <div class="grid2">
+    <div class="card coach"><span class="who">Coach · streaming</span>Mở file lớn bằng cách stream theo chunk: nạp màn hình đầu, "Load more" khi scroll, chỉ fetch range đang thấy.</div>
+    <div class="card coach"><span class="who">Coach · payload nhỏ</span>Diff-only payload: server chỉ gửi hunk đã đổi + vài dòng context, không gửi cả file → M file lớn vẫn nhẹ.</div>
+    <div class="card coach"><span class="who">Coach · skeleton</span>Metadata-first: list &amp; sizes hiện tức thì, viewer vẽ skeleton trong lúc bytes về, có thể Cancel.</div>
+    <div class="card coach"><span class="who">Coach · binary</span>Binary không diff dạng text: ảnh render inline, pdf/binary cho download hoặc hex-peek — không bao giờ đổ ra rác text.</div>
+  </div>
+  <div class="callout" style="border-left-color:var(--add)"><span class="k" style="color:var(--add)">Phương pháp mở đã chọn</span>M gửi diff hunks + context · A/text lớn stream theo chunk với Load more · skeleton metadata-first có Cancel · binary render ảnh hoặc cho download/hex. <b>Không gì bị chặn, mọi thứ đều mở được.</b></div>
+</div></section>
+
+<!-- ============ 04 SCAMPER ============ -->
+<section id="t4"><div class="wrap">
+  <div class="thead"><span class="tno">04</span><h2>SCAMPER</h2></div>
+  <p class="lead">Sáu góc bẻ ý tưởng để tìm những khác biệt "chỉ có ở run-aware Source Control". <b>Cả 5 ý được giữ — không cái nào lãng phí.</b></p>
+
+  <div class="scamper">
+    <div class="srow"><div class="verb">Combine</div><div class="txt"><span class="keep">KEEP</span>Ghép <b>Logs + Source Control</b>: một dòng log chạy lệnh sẽ link tới các file lệnh đó đụng vào, nhảy thẳng đến diff của chúng.</div></div>
+    <div class="srow"><div class="verb">Adapt</div><div class="txt"><span class="keep">KEEP</span>Mượn từ workflow <b>Graph</b>: mỗi node hiện badge "changed-files"; click node để lọc Source Control về các file node đó tạo ra.</div></div>
+    <div class="srow"><div class="verb">Put to<br>other use</div><div class="txt"><span class="keep">KEEP</span>Tái dùng diff viewer làm <b>bề mặt review HITL</b>: cổng approval hiện đúng các diff của run trước khi approve.</div></div>
+    <div class="srow"><div class="verb">Reverse</div><div class="txt"><span class="keep">KEEP</span>Đảo mặc định: mở Source Control ở <b>các commit của chính run này</b> trước, full history là bộ lọc dự phòng.</div></div>
+    <div class="srow"><div class="verb">Eliminate</div><div class="txt"><span class="keep">KEEP</span>Bỏ vùng Changes rỗng: run auto-commit no-HITL không có gì uncommitted → thu gọn Changes, dẫn đầu bằng history.</div></div>
+  </div>
+  <p class="mute" style="margin-top:12px">Batch bốn kỹ thuật hoàn tất: một thiết kế đã lắng + năm điểm khác biệt run-aware. User chọn chạy thêm một batch ý tưởng.</p>
+</div></section>
+
+<!-- ============ 05 Failure Analysis ============ -->
+<section id="t5"><div class="wrap">
+  <div class="thead"><span class="tno">05</span><h2>Failure Analysis</h2></div>
+  <p class="lead">Ba cách tính năng này có thể vỡ. User: gạt failure #1 (secrets) sang một bên; với #2 &amp; #3 hãy <b>đọc code Archon thật + instance đang chạy</b>, đừng đoán.</p>
+
+  <div class="fcards">
+    <div class="fcard set"><span class="ttl">☰ Failure #1 · Rò rỉ bí mật — TẠM GÁC</span> Diff viewer của file từ xa có thể lộ <span class="tok">.env</span>/secrets/keys sống trong worktree; cần redaction hoặc denylist trước khi hiện. → User quyết định set-aside lúc này.</div>
+
+    <div class="fcard"><span class="ttl">⚠ Failure #2 · Repo/submodule mơ hồ</span> Đây là workspace multi-repo có submodules → không rõ run đã dùng repo/worktree nào.
+      <div class="ans"><b>Trả lời (verified):</b> Pin file reads vào <span class="tok">run.working_path</span> + <span class="tok">codebase_id</span> — đã lưu sẵn và expose tại <span class="tok">GET /api/workflows/runs/{runId}</span>. Một run bind ĐÚNG một <span class="tok">codebase_id</span> + một checkout <span class="tok">working_path</span> (nullable); submodules init <span class="tok">--recursive</span> vào worktree; project folder/<span class="tok">--no-worktree</span> có working_path null. <span class="tok">WorkflowExecution.tsx:344</span> đã đọc workingPath.</div></div>
+
+    <div class="fcard"><span class="ttl">⚠ Failure #3 · Worktree bị dọn/di chuyển</span> Run xong, worktree bị cleanup hoặc move → file biến mất; viewer phải báo "worktree gone" chứ không crash.
+      <div class="ans"><b>Trả lời (verified):</b> Worktree KHÔNG bị xóa ở terminal status; nó bị xóa bởi conversation/PR close, scheduler (merged 6h · stale 14d), thủ công, codebase delete, hoặc orphan. Destroy xóa checkout + <span class="tok">git branch -D</span>. Trước khi đọc: kiểm tra env <span class="tok">active|destroyed</span> + worktree còn tồn tại → hiện trạng thái "worktree gone". RUNTIME xác nhận run <span class="tok">completed</span> vẫn còn file.</div></div>
+  </div>
+
+  <h3>Bằng chứng: CODE ⟂ RUNTIME</h3>
+  <div class="evsplit">
+    <div class="ev code"><div class="h">◧ CODE (đọc source thật)</div>
+      <ul>
+        <li>Raw routes chỉ có: <span class="tok">/api/stream/*</span>, <span class="tok">/api/artifacts/:runId/*</span>, webhooks — <b>không</b> có route git/worktree/diff/source.</li>
+        <li><span class="tok">@archon/git</span> chỉ có boolean <span class="tok">hasUncommittedChanges</span> (git status --porcelain).</li>
+        <li>Artifacts route resolve path server-side &amp; reject <span class="tok">..</span> (<span class="tok">api.ts:5071-5078</span>) — chính là hình mẫu cho một API git read-only MỚI.</li>
+        <li>isolation env status: <span class="tok">active|destroyed</span> (<span class="tok">cleanup-service.ts</span>, <span class="tok">isolation/types.ts:28</span>).</li>
+      </ul>
+    </div>
+    <div class="ev rt"><div class="h">◨ RUNTIME (mac mini đang chạy)</div>
+      <ul>
+        <li>Live API KHÔNG có route git/file/diff/worktree — chỉ <span class="tok">/api/runs/{runId}/artifacts</span> → feature này thực sự mới.</li>
+        <li>Run row lưu <span class="tok">working_path</span> (.../worktrees/archon/thread-&lt;id&gt;), <span class="tok">output_root</span>, <span class="tok">codebase_id</span>.</li>
+        <li>Cùng worktree xuất hiện dưới HAI root: <span class="tok">/Users/agent/.archon/…</span> vs 109 tool path dùng <span class="tok">/Volumes/WD_BLACK/archon/…</span> → path symlink/relocatable, UI phải <b>realpath</b> &amp; chịu được cả hai.</li>
+        <li>Status enum: <span class="tok">pending|running|completed|failed|cancelled|paused</span>; run completed vẫn còn worktree.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout"><span class="k">UNVERIFIED</span>Sự tồn tại của thư mục worktree trên mac mini <b>chưa</b> được stat (không có fs endpoint, không dùng SSH). DB <span class="tok">working_path</span> chỉ là bản ghi → UI phải xử lý thư mục biến mất ngay lúc đọc.</div>
+
+  <h3>Trạng thái rỗng khi worktree biến mất</h3>
+  <div class="win">
+    <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span class="tt">run · thread-8f21c</span>
+      <span class="tabs"><span>Graph</span><span>Logs</span><span>Chat</span><span class="on">Source Control</span></span></div>
+    <div class="empty"><div class="ic">🌲✕</div>
+      <div style="font-weight:600;margin-top:6px">Worktree đã bị dọn</div>
+      <div class="msg">git branch -D + checkout removal đã chạy · các commit dangling có thể đã bị GC</div>
+      <div class="msg faint" style="margin-top:8px">Không giả nguồn. Không hiện base repo thay thế.</div>
+    </div>
+  </div>
+
+  <div class="callout" style="border-left-color:var(--del)"><span class="k" style="color:var(--del)">Điều chỉnh của user</span>Mỗi workflow tự tạo worktree riêng → đọc history <b>từ worktree</b>, KHÔNG từ base <span class="tok">default_cwd</span>.
+  <br><b>Coach sửa lại:</b> đọc history/diff/content từ <span class="tok">run.working_path</span> qua <span class="tok">git -C working_path</span> (log/show/diff/status); worktree chia sẻ object store; default_cwd nằm trên baseBranch <span class="tok">dev</span>, không hiện branch của run trừ khi đã merge.
+  <br><b>Caveat còn lại:</b> sau <span class="tok">branch -D</span> + xóa checkout, commit của run có thể unreachable (GC) trừ khi merged/pushed → history bền vững post-cleanup cần capture-before-teardown.</div>
+</div></section>
+
+<!-- ============ 06 Worst Possible Idea ============ -->
+<section id="t6"><div class="wrap worst">
+  <div class="thead"><span class="tno">06</span><h2>Worst Possible Idea</h2></div>
+  <p class="lead">Cố tình nghĩ ra thiết kế tệ nhất — rồi lật ngược để lấy nguyên tắc đúng.</p>
+
+  <div class="flip"><div class="bad"><span class="tag">tệ</span>Ship cả repo xuống browser khi mở.</div><div class="arr">→</div>
+    <div class="good"><span class="tag">lật</span>Stream server-side, chỉ fetch đúng file/hunk được yêu cầu.</div></div>
+  <div class="flip"><div class="bad"><span class="tag">tệ</span>Biến nó thành editor đầy đủ, commit từ UI.</div><div class="arr">→</div>
+    <div class="good"><span class="tag">lật</span>Inspection <b>strictly read-only</b>, không ghi vào run worktree.</div></div>
+  <div class="flip"><div class="bad"><span class="tag">tệ</span>Dựng git diff bằng cách nội suy ref của user vào shell command.</div><div class="arr">→</div>
+    <div class="good"><span class="tag">lật</span><span class="tok">execFileAsync</span>/<span class="tok">@archon/git</span> với args do server kiểm soát, KHÔNG shell-string (luật dự án).</div></div>
+  <div class="flip"><div class="bad"><span class="tag">tệ</span>Khi worktree mất, âm thầm hiện base repo.</div><div class="arr">→</div>
+    <div class="good"><span class="tag">lật</span>Trạng thái rỗng "worktree-reaped" tường minh — không bao giờ giả nguồn.</div></div>
+</div></section>
+
+<!-- ============ 07 Crank the Dial to 11 ============ -->
+<section id="t7"><div class="wrap">
+  <div class="thead"><span class="tno">07</span><h2>Crank the Dial to 11</h2></div>
+  <p class="lead">Đẩy một thuộc tính lên cực đại để lộ ra đột phá.</p>
+  <div class="gauge"><i></i><span class="m11">11</span></div>
+
+  <div class="grid2" style="margin-top:14px">
+    <div class="crankcard">
+      <h3 style="margin-top:0">Crank "remote-native" → 11</h3>
+      <p class="mute">Tái dựng view file-đã-đổi của run từ <b>event stream</b> của workflow (event đã mang mọi tool_input file path + edit) → có change view kể cả khi git/worktree đã mất.</p>
+      <div class="demote"><b>Đã hạ cấp:</b> event stream <b>KHÔNG</b> authoritative cho changes — shell/sed/scripts/subprocess/rename/delete đổi file mà không sinh path event có cấu trúc → giáng xuống thành <b>lớp phủ provenance tùy chọn</b>.</div>
+    </div>
+    <div class="crankcard">
+      <h3 style="margin-top:0">Crank "speed + durability" → 11</h3>
+      <p class="mute">Tại run-end / mỗi commit, precompute changed-files + diff rồi ghi làm <b>artifact dưới <span class="tok">output_root</span></b> (sống sót qua cleanup). Source Control đọc artifact bền vững cực nhanh thay vì đụng worktree sống, chỉ fallback về worktree sống khi nó còn tồn tại.</p>
+    </div>
+  </div>
+
+  <h3>Mô hình sự thật (Truth model)</h3>
+  <div class="truth">
+    <div class="tcol sot"><div class="t">Source of truth</div><p><b>git của worktree đang sống</b> — nguồn thật cho changes/diff/history.</p></div>
+    <div class="tcol dur"><div class="t">Durable post-cleanup</div><p><b>git-snapshot artifact</b> do server sinh tại checkpoint (run end / per commit) dưới <span class="tok">output_root</span>.</p></div>
+    <div class="tcol hint"><div class="t">Hint layer</div><p><b>events</b> = gợi ý provenance (node/log nào có thể liên quan file), <em>không bao giờ</em> là change list.</p></div>
+  </div>
+  <div class="callout" style="border-left-color:var(--add)"><span class="k" style="color:var(--add)">Chiều diff cố định</span>NOW = <span class="tok">HEAD</span> → worktree · commit đã chọn = <span class="tok">parent</span> → commit.</div>
+</div></section>
+
+<!-- ============ FINAL SYNTHESIS ============ -->
+<section id="final" class="climax"><div class="wrap">
+  <div class="eyebrow" style="color:var(--add)">★ Hội tụ · Build-ready spec</div>
+  <h2>Tổng hợp cuối cùng</h2>
+  <p class="lead">Sau vòng mirror, ba kết nối lớn khép lại toàn bộ phiên brainstorm.</p>
+
+  <div class="conn">
+    <div class="c"><div class="n">1</div><div><b>Cái pin duy nhất:</b> resolve <span class="tok">working_path</span> server-side từ <span class="tok">runId</span> + <span class="tok">realpath</span> — buộc chặt sự thật "1 run = 1 worktree" của user với luật bảo mật "không nhận path từ UI". Sai chỗ này thì mọi view đều sai hoặc mất an toàn.</div></div>
+    <div class="c"><div class="n">2</div><div><b>Bề mặt đọc tối thiểu:</b> git-from-worktree + diff-only + viewer M/A + manual Reload — vừa đủ để trả lời trọn vẹn JTBD "run này có đụng đúng thứ mình nghĩ không?".</div></div>
+    <div class="c"><div class="n">3</div><div><b>Đáng tin trên run từ xa còn sống:</b> trạng thái rỗng worktree-gone/null làm tính năng trung thực — thiết kế sớm ở Constraint Mapping, được bằng chứng lifecycle cleanup xác nhận đúng y nguyên về sau.</div></div>
+  </div>
+
+  <h3 style="margin-top:26px">Top-3 ưu tiên v1</h3>
+  <div class="top3">
+    <div class="pr p1"><span class="num">01</span><div class="k">The Pin</div><h4>Pin working_path</h4><p>Server resolve <span class="tok">working_path</span> từ <span class="tok">runId</span> + <span class="tok">realpath</span>, reject <span class="tok">..</span>, read-only <span class="tok">execFileAsync</span>. Không bao giờ nhận path từ UI.</p></div>
+    <div class="pr p2"><span class="num">02</span><div class="k">Read surface</div><h4>git-from-worktree, diff-only M/A</h4><p><span class="tok">git -C working_path</span> log/show/diff/status. Click file → viewer: M = diff đỏ/xanh, A = single-pane content. File lớn + binary phải mở được.</p></div>
+    <div class="pr p3"><span class="num">03</span><div class="k">Graceful</div><h4>Worktree-gone empty state</h4><p>Kiểm tra env <span class="tok">active|destroyed</span> + worktree tồn tại trước khi đọc; báo "worktree gone", không crash, không giả base repo.</p></div>
+  </div>
+
+  <div class="upgrade">
+    <div class="k">★ Nâng cấp (SHOULD) — không critical cho v1</div>
+    <h4 style="margin:6px 0">git-snapshot artifact bền vững dưới output_root</h4>
+    <p class="mute">Artifact do server sinh tại checkpoint run-end. Đây là đột phá thật: nó biến "gone" thành "vẫn còn đây" và giải quyết <b>slow + worktree-biến-mất + history bền vững</b> cùng một lúc.</p>
+  </div>
+
+  <h3 style="margin-top:30px">Bảng scope MoSCoW đã khóa</h3>
+  <div class="moscow">
+    <div class="col must"><div class="ch">MUST · v1</div><ul>
+      <li>Tab <b>Source Control</b></li>
+      <li>Changes (M/A) + commit history đọc từ worktree qua <span class="tok">git -C working_path</span></li>
+      <li>Click file mở viewer: <b>M</b> = diff đỏ/xanh, <b>A</b> = single-pane</li>
+      <li>Nút <b>Reload</b> thủ công</li>
+      <li>Server resolve path từ <span class="tok">runId</span>, reject <span class="tok">..</span>, read-only <span class="tok">execFileAsync</span></li>
+      <li>Empty state worktree-gone/null</li>
+      <li>File lớn + binary phải mở được</li>
+    </ul></div>
+    <div class="col should"><div class="ch">SHOULD</div><ul>
+      <li>git-snapshot artifact tại run-end checkpoint dưới <span class="tok">output_root</span></li>
+      <li>→ history bền vững post-cleanup + đọc nhanh</li>
+    </ul></div>
+    <div class="col could"><div class="ch">COULD</div><ul>
+      <li>Link Logs ↔ Source Control</li>
+      <li>Graph node changed-files badge/filter</li>
+      <li>Tái dùng diff viewer làm HITL review</li>
+      <li>Lớp phủ provenance từ events</li>
+      <li>Mặc định history = commit của chính run, fallback full history</li>
+      <li>Thu gọn vùng Changes rỗng trên run auto-commit</li>
+    </ul></div>
+    <div class="col wont"><div class="ch">WON'T · lần này</div><ul>
+      <li>Snapshot mode đứng riêng cho M</li>
+      <li>Full Explorer tree file không đổi</li>
+      <li>Edit/commit từ UI</li>
+      <li>Auto-refresh/polling</li>
+      <li>Change-view authoritative dựng từ events</li>
+    </ul></div>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  Archon · Source Control tab — brainstorm keepsake · 7 kỹ thuật · phiên hoàn tất 2026-08-30<br>
+  <span class="faint">Radar worktree từ xa: <span class="mono">now</span> ↔ <span class="mono">HEAD</span> · <span class="mono">commit</span> ↔ <span class="mono">parent</span> — không cần local clone.</span>
+</div></footer>
+
+</body>
+</html>
