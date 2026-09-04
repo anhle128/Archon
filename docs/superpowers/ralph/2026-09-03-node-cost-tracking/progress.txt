@@ -1,5 +1,10 @@
 ## Codebase Patterns
 
+### OMP task ownership requires parent transcript proof
+- **Where**: `packages/providers/src/community/omp/session-usage.ts` `extractOwnedTaskStemsFromMain` / `listHiddenCandidates`
+- **Pattern**: Task-agent `.jsonl` is billed only when the main transcript proves the stem via assistant `toolCall` name=task `arguments.tasks[].name` or task `toolResult` details.progress/results[].id, after validating session id/cwd on that same open handle. Advisors keep constructor ownership. Snapshot prefix digests stay chunked; line bounds apply across the full prefix after the session header; discovery stores dev/ino and open must match.
+- **Example**: `Orphan.jsonl` with a valid session header but no parent task record is omitted; foreign main session id omits all hidden enrichment.
+
 ### Usage range strings are RFC 3339 with offset only
 - **Where**: `packages/core/src/schemas/usage-report.ts` `usageInstantStringSchema`; `packages/core/src/db/usage-report.ts` `parseUsageInstant`; CLI `usage.ts`; server `usage.schemas.ts`
 - **Pattern**: External string bounds use `z.string().datetime({ offset: true })` — Z or numeric offset required. Never `new Date(string)` for validation. Internal `Date` args stay allowed. Web date-only uses UTC component round-trip (`Date.UTC` then re-read Y/M/D), not `Date.parse`.
@@ -842,5 +847,27 @@
 **Learnings**:
 - OpenCode has no authoritative request-count field on assistant message info — fabricating `requests: 1` from message existence violates truthfulness and under-reports missingRequests coverage.
 - Ledger already does `entry.requests ?? null`; provider omission is enough for null/missingRequests without core changes.
+
+---
+
+## 2026-09-04 — US-026: Finish OMP hidden-session ownership and bounded streaming
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/omp/session-usage.ts` — parent task-stem ownership with same-handle session header/cwd validation; chunked prefix digest with full-prefix line bounds; discovery dev/ino identity on open; verified opened-size total accounting; afterCandidatesListed test seam
+- `packages/providers/src/community/omp/session-usage.test.ts` — Orphan ownership, chunked digest alloc, growth race, post-header oversize, inode replacement, foreign main header; fixture ownership for task agents
+
+**Acceptance criteria verified**:
+- [x] Orphan.jsonl without parent ownership omitted; owned task + nested advisor counted
+- [x] Session-header/prefix digest use fixed chunks; no Buffer.alloc(byteLength) up to file bound
+- [x] Path replacement/growth after discovery fail closed (identity + opened sizes)
+- [x] File/total/line/count bounds omit all hidden enrichment; primary status intact
+- [x] session-usage.test.ts 33 pass; provider.test.ts 23 pass
+
+**Learnings**:
+- Task ownership lives in main transcript toolCall/toolResult records, not filename alone.
+- Ownership extract must validate session id/cwd on the same handle that yields stems.
+- Snapshot line-bound checks must continue after the session header is found.
+- Discovery must pin dev/ino; open-time lstat==fstat alone cannot catch same-path inode replacement.
 
 ---

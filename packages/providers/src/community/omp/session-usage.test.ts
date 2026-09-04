@@ -1252,6 +1252,40 @@ describe('US-026 OMP hidden-session ownership and bounded streaming', () => {
     expect(hidden).toBeUndefined();
   });
 
+  test('OMP-allocated __advisor-2 task stem is billable when parent-owned; unowned __debug is not', async () => {
+    const fx = await layoutFresh({ withAdvisor: false, withTask: false });
+    await writeTranscript(path.join(fx.artifactDir, '__advisor-2.jsonl'), [
+      sessionHeader('adv2-task', fx.cwd),
+      assistantLine({
+        model: 'advisor-bumped-task',
+        input: 2,
+        output: 1,
+        cost: 0.02,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    await writeTranscript(path.join(fx.artifactDir, '__debug.jsonl'), [
+      sessionHeader('debug', fx.cwd),
+      assistantLine({
+        model: 'debug-dump',
+        input: 3,
+        output: 1,
+        cost: 0.03,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    await proveTaskOwnership(fx.mainPath, ['__advisor-2']);
+    const hidden = await collectHiddenSessionUsage({
+      env: fx.env,
+      cwd: fx.cwd,
+      sessionId: fx.sessionId,
+    });
+    expect(hidden?.entries.map(e => e.model)).toEqual(['advisor-bumped-task']);
+    expect(hidden?.entries.some(e => e.model === 'debug-dump')).toBe(false);
+  });
+
   test('ownership extract rejects main transcripts whose session header does not match', async () => {
     const fx = await layoutFresh({ withAdvisor: false, withTask: false });
     // Rewrite main with a foreign session id but plant a task ownership record.

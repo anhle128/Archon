@@ -165,8 +165,9 @@ export function isMainTranscriptFileName(name: string, sessionId: string): boole
 export function isTaskAgentFileName(name: string, sessionId: string): boolean {
   if (!name.endsWith(JSONL_SUFFIX) || isAdvisorFileName(name)) return false;
   if (isMainTranscriptFileName(name, sessionId)) return false;
-  // Reject other reserved double-underscore dumps that are not advisors.
-  if (name.startsWith('__')) return false;
+  // OMP AgentOutputManager reserves only the advisor stem (bumped to __advisor-2 on
+  // collision). Parent-transcript ownership still gates billing — bare __*.jsonl
+  // without a proven task id is never listed.
   return name.length > JSONL_SUFFIX.length;
 }
 

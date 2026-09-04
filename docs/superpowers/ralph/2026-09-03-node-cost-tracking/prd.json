@@ -551,8 +551,8 @@
         "US-025"
       ],
       "priority": 26,
-      "passes": false,
-      "notes": "Pending Ralph implementation from the Convergence 2 audit."
+      "passes": true,
+      "notes": "Implemented after US-025. Files: packages/providers/src/community/omp/session-usage.ts, session-usage.test.ts. Parent ownership + same-handle header validation, chunked digests, opened-size bounds, discovery identity checks."
     },
     {
       "id": "US-027",
