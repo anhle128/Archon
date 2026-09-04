@@ -512,6 +512,146 @@
       "priority": 24,
       "passes": true,
       "notes": "Post-convergence validation 2026-09-04. Focused package tests (providers/workflows/core/server/cli/web) green; web+docs-web builds green; bundled schema/defaults/skill/pi-vendor-map/capability-matrix up to date; regenerated packages/web/src/lib/api.generated.d.ts (from/to RFC3339 Z-or-offset descriptions only); bun run validate EXIT 0; bun run check:schema-upgrades OK against PGHOST=127.0.0.1:5432 user=postgres (archon-postgres-1, postgres:17). Did not modify CHANGELOG.md or reset any prior story passes."
+    },
+    {
+      "id": "US-025",
+      "title": "Do not fabricate OpenCode request counts",
+      "description": "As an operator, I want OpenCode usage to omit request counts the upstream assistant info did not report, so that request coverage remains truthful instead of invented.",
+      "acceptanceCriteria": [
+        "OpenCode mapping tests prove a concrete assistant message observation preserves upstream provider, model, token, cache, reasoning, and USD fields while omitting requests when no authoritative request-count field exists.",
+        "The normalized boundary and ledger/report path represent OpenCode requests as null and increment missingRequests; they never turn the missing value into zero or one.",
+        "The unconditional requests: 1 assignment is removed without regressing distinct assistant-message replacement or multi-agent kind: subagent behavior.",
+        "Legacy totals and reasoning-as-output-subset behavior remain unchanged for OpenCode single-session and multi-agent flows.",
+        "Focused tests pass for packages/providers/src/community/opencode/tokens.test.ts and provider.test.ts."
+      ],
+      "technicalNotes": "Convergence Task 10 in docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1715-1743. Modify packages/providers/src/community/opencode/tokens.ts and tokens.test.ts; modify provider.test.ts only where existing expectations assert fabricated requests. Source anchors: docs/superpowers/plans/2026-09-03-node-cost-tracking.md:215-225 and 344-358.",
+      "dependsOn": [
+        "US-002",
+        "US-017",
+        "US-024"
+      ],
+      "priority": 25,
+      "passes": false,
+      "notes": "Pending Ralph implementation from the Convergence 2 audit."
+    },
+    {
+      "id": "US-026",
+      "title": "Finish OMP hidden-session ownership and bounded streaming",
+      "description": "As an operator, I want OMP hidden transcript enrichment to count only proven child work through bounded streaming reads, so that unrelated or raced files cannot be billed.",
+      "acceptanceCriteria": [
+        "A valid session-shaped top-level Orphan.jsonl with billable-looking assistant usage is omitted unless a supported parent transcript record proves ownership; paired task-agent and nested-advisor fixtures remain counted.",
+        "Session-header scans, snapshot prefix verification, digesting, and delta parsing use fixed bounded chunks instead of whole-prefix buffers or Buffer.alloc(byteLength) paths up to the 64 MiB per-file bound.",
+        "Candidate discovery, containment, verified-open identity checks, actual opened-size accounting, prefix digest checks, and delta parsing fail closed when a path is replaced or grows after discovery.",
+        "Exceeding 1,000 files, 256 MiB actual total bytes, 64 MiB per file, or 8 MiB per line omits all hidden enrichment for the invocation while primary streamed usage and provider success/error status remain intact.",
+        "Focused tests pass for packages/providers/src/community/omp/session-usage.test.ts and provider.test.ts."
+      ],
+      "technicalNotes": "Convergence Task 11 in docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1745-1776. Modify packages/providers/src/community/omp/session-usage.ts and session-usage.test.ts; touch provider.test.ts only for end-to-end fail-soft status coverage. Builds on OMP requirements at docs/superpowers/plans/2026-09-03-node-cost-tracking.md:384-443 and Convergence Task 4:1514-1548.",
+      "dependsOn": [
+        "US-018",
+        "US-025"
+      ],
+      "priority": 26,
+      "passes": false,
+      "notes": "Pending Ralph implementation from the Convergence 2 audit."
+    },
+    {
+      "id": "US-027",
+      "title": "Make every terminal result replace workflow pass state",
+      "description": "As an operator, I want workflow pass accounting to use the latest terminal result only, so that stale usage and mismatched error metadata cannot leak into recorded events.",
+      "acceptanceCriteria": [
+        "Standard-node and direct-loop tests prove an earlier terminal result with valid usage is cleared when a later terminal result omits usageBreakdown, producing no recorder call.",
+        "Runtime-malformed non-array usageBreakdown values fail closed with path-safe logging and do not preserve earlier usage.",
+        "terminalError and errorSubtype always come from the same latest terminal result that owns the recorded breakdown, including a later error result with no breakdown.",
+        "Standard nodes and direct loops share the same replacement semantics while retaining mixed-entry per-boundary validation for valid arrays.",
+        "Recorder failure remains fail-soft and never masks the provider or node outcome; packages/workflows/src/dag-executor.test.ts passes."
+      ],
+      "technicalNotes": "Convergence Task 12 in docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1778-1806. Modify packages/workflows/src/dag-executor.ts and dag-executor.test.ts. Source anchors: docs/superpowers/plans/2026-09-03-node-cost-tracking.md:444-454, 532-546, and Convergence Task 2:1448-1477.",
+      "dependsOn": [
+        "US-016",
+        "US-026"
+      ],
+      "priority": 27,
+      "passes": false,
+      "notes": "Pending Ralph implementation from the Convergence 2 audit."
+    },
+    {
+      "id": "US-028",
+      "title": "Preserve fractional RFC3339 boundaries in SQLite reports",
+      "description": "As an API consumer, I want SQLite usage filtering to preserve fractional RFC 3339 instants exactly, so that half-open accounting ranges match PostgreSQL.",
+      "acceptanceCriteria": [
+        "SQLite integration coverage proves from=...00.500Z excludes an event at ...00 while to=...00.500Z includes it, and the same instant expressed with an explicit offset behaves identically.",
+        "A stored fractional timestamp fixture proves filtering remains exact if event precision increases later.",
+        "SQLite filtering no longer truncates fractional bounds through datetime() conversion; PostgreSQL timestamptz behavior remains unchanged.",
+        "Current-month defaults, UTC day grouping, date-pair and ordering validation, and the 366-day cap retain their current behavior.",
+        "Focused core tests pass for packages/core/src/db/usage-report.test.ts."
+      ],
+      "technicalNotes": "Convergence Task 13 in docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1808-1835. Modify packages/core/src/db/usage-report.ts and usage-report.test.ts; add or update a focused SQLite integration test for real comparison behavior. Source anchors: docs/superpowers/plans/2026-09-03-node-cost-tracking.md:725-747 and 1196-1208.",
+      "dependsOn": [
+        "US-023",
+        "US-027"
+      ],
+      "priority": 28,
+      "passes": false,
+      "notes": "Pending Ralph implementation from the Convergence 2 audit."
+    },
+    {
+      "id": "US-029",
+      "title": "Return one coherent usage-report snapshot",
+      "description": "As an operator, I want usage report totals, groups, and coverage to come from one committed snapshot, so that concurrent recorder writes cannot produce a mixed report.",
+      "acceptanceCriteria": [
+        "A deterministic concurrency seam commits a new atomic usage event and ledger observation between logical report reads and proves totals, groups, and coverage are entirely before or entirely after that commit.",
+        "Overflow detection uses the same snapshot as totals and coverage, so a 501-row narrowing error cannot describe rows from a different point in time.",
+        "The core query executes totals, groups, and coverage from one database snapshot in both dialects through one SQL statement or an explicitly proven snapshot-isolation mechanism; a default PostgreSQL READ COMMITTED multi-statement transaction is not accepted.",
+        "recordCount, grouped counts, and ledgered-event coverage cannot tear across separate pool connections or statements.",
+        "Deterministic ordering, nullable sums, 501-row overflow detection, and fail-explicit unsafe-aggregate behavior remain unchanged; packages/core/src/db/usage-report.test.ts passes."
+      ],
+      "technicalNotes": "Convergence Task 14 in docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1837-1864. Modify packages/core/src/db/usage-report.ts and usage-report.test.ts; change database-adapter code only for a narrowly typed cross-dialect snapshot primitive if required. Source anchors: docs/superpowers/plans/2026-09-03-node-cost-tracking.md:713-830 and 1196-1212.",
+      "dependsOn": [
+        "US-009",
+        "US-028"
+      ],
+      "priority": 29,
+      "passes": false,
+      "notes": "Pending Ralph implementation from the Convergence 2 audit."
+    },
+    {
+      "id": "US-030",
+      "title": "Derive web usage request contract from generated OpenAPI types",
+      "description": "As a maintainer, I want the web usage skill to derive request and response types from generated OpenAPI contracts, so that server API drift creates a web type error instead of a silent duplicate interface mismatch.",
+      "acceptanceCriteria": [
+        "Compile-time assertions tie the usage query, groupBy enum, kind filter, usage report response, and nullable run-detail usage to the generated /api/usage and workflow-run-detail OpenAPI types.",
+        "The handwritten UsageQuery interface and duplicated kind union are removed; public web usage skill aliases are derived from generated operation types through the established API re-export boundary.",
+        "Run-detail usage casts are removed so the generated WorkflowRunDetail usage property drives the return type.",
+        "The web package imports no core or workflow runtime/type surface and keeps cache-key coverage plus query-string behavior unchanged for every generated filter.",
+        "Focused validation passes with packages/web bun run type-check and src/experiments/console/skills/usage.test.ts."
+      ],
+      "technicalNotes": "Convergence Task 15 in docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1866-1895. Modify packages/web/src/experiments/console/skills/usage.ts and tests/type checks; modify packages/web/src/experiments/console/skills/runs.ts only to remove run-detail usage casts; re-export generated types through packages/web/src/lib/api.ts only if that is the established boundary. Source anchors: docs/superpowers/plans/2026-09-03-node-cost-tracking.md:899-900 and 917-919.",
+      "dependsOn": [
+        "US-013",
+        "US-029"
+      ],
+      "priority": 30,
+      "passes": false,
+      "notes": "Pending Ralph implementation from the Convergence 2 audit."
+    },
+    {
+      "id": "US-031",
+      "title": "Run post-Convergence 2 validation",
+      "description": "As a maintainer, I want the full validation sequence rerun after Convergence 2 fixes, so that the approved no-mistakes audit is verified without resetting earlier completed stories.",
+      "acceptanceCriteria": [
+        "After US-025 through US-030 pass, run the focused package validation sequence from the plan without invoking bun test from the repository root.",
+        "Regenerate tracked artifacts required by this feature only when stale, including bundled schema and web OpenAPI types with the server running.",
+        "bun run validate passes after all Convergence 2 fixes and generated artifacts are current.",
+        "bun run check:schema-upgrades passes against reachable PostgreSQL, or validation notes explicitly record that PostgreSQL was unavailable as allowed by the plan.",
+        "Validation notes reference the post-Convergence 2 run and do not modify CHANGELOG.md or reset any previously passing story."
+      ],
+      "technicalNotes": "Post-Convergence 2 validation required by docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1897, using the validation sequence at docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1303-1345. This new story exists because US-024 is already passing for the first convergence batch and must remain unchanged.",
+      "dependsOn": [
+        "US-030"
+      ],
+      "priority": 31,
+      "passes": false,
+      "notes": "Pending Ralph validation after Convergence 2 implementation."
     }
   ]
 }

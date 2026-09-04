@@ -88,6 +88,13 @@ Providers normalize only what they observe; the workflow executor attaches run/n
 | 22 | US-022 | Label full human grouping tuples | US-012, US-013, US-021 | 749-761, 849-881, 1644-1672 |
 | 23 | US-023 | Enforce RFC3339 usage ranges | US-009, US-011, US-012, US-013, US-022 | 725-747, 905-908, 1674-1707 |
 | 24 | US-024 | Run post-convergence validation | US-023 | 1303-1345, 1709 |
+| 25 | US-025 | Do not fabricate OpenCode request counts | US-002, US-017, US-024 | 215-225, 344-358, 1715-1743 |
+| 26 | US-026 | Finish OMP hidden-session ownership and bounded streaming | US-018, US-025 | 384-443, 1514-1548, 1745-1776 |
+| 27 | US-027 | Make every terminal result replace workflow pass state | US-016, US-026 | 444-454, 532-546, 1448-1477, 1778-1806 |
+| 28 | US-028 | Preserve fractional RFC3339 boundaries in SQLite reports | US-023, US-027 | 725-747, 1196-1208, 1808-1835 |
+| 29 | US-029 | Return one coherent usage-report snapshot | US-009, US-028 | 713-830, 1196-1212, 1837-1864 |
+| 30 | US-030 | Derive web usage request contract from generated OpenAPI types | US-013, US-029 | 899-900, 917-919, 1866-1895 |
+| 31 | US-031 | Run post-Convergence 2 validation | US-030 | 1303-1345, 1897 |
 
 ## Ralph Execution Notes
 
