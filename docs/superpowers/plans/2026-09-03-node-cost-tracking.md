@@ -2126,3 +2126,298 @@ These tasks remain after comparing the present code to the complete plan and tra
 ```
 
 After Convergence Tasks 16–22 pass their focused tests, run the plan's complete validation sequence, including `bun run validate` and `bun run check:schema-upgrades` against reachable PostgreSQL.
+
+## Convergence 4 — Skeptical no-mistakes audit (2026-09-04)
+
+The present code still has the following concrete gaps after Convergence 3. Complete these tasks in order. They repair existing accounting, trust-boundary, public-contract, and presentation requirements; they do not authorize a new product surface.
+
+### Convergence Task 23: Preserve OpenCode usage across raw stream failure and premature closure
+
+**Severity:** CRITICAL
+**Gap type:** `partial`
+**Source ref:** Plan §§2, 4, 6, and 7; Convergence Task 18's stream-abort/error requirement; hidden finding `H4-001`.
+
+**Files:**
+
+- Modify `packages/providers/src/community/opencode/session.ts`, `multi-agent.ts`, and `provider.ts`.
+- Modify `packages/providers/src/community/opencode/provider.test.ts`; modify `tokens.test.ts` only if the existing typed aggregation seam is reused there.
+
+**TDD order:**
+
+1. Emit a valid assistant `message.updated` with tokens/cost, then reject the underlying event async iterator without a `session.error`; assert the final provider error retains that observation exactly once and keeps the original failure classification/message.
+2. End the single-agent iterator normally after the same observation but before `session.idle`; assert this is a usage-bearing terminal failure, never the current bare successful `{ type: 'result', sessionId }`.
+3. Repeat rejection and premature-close cases in multi-agent mode after one or more children report usage; every observed child remains `kind: 'subagent'`, no unobserved child is synthesized, and the invocation still fails.
+4. Keep explicit `session.error`, retry accumulation, clean `session.idle`, caller abort, and no-usage failure cases green. Abort cleanup must not turn cancellation into a retryable crash or emit a second terminal result.
+
+**Acceptance criteria:**
+
+- Every OpenCode event-stream termination path after authoritative usage reaches the same usage-bearing failure boundary as explicit `session.error`.
+- An event stream that closes before the required terminal idle signal cannot be reported as a successful query.
+- The provider records accumulated usage once before propagating the actionable error; failures before any observation still fabricate nothing.
+- Internal retries append prior-attempt spend, while repeated updates for one message id still replace within that attempt.
+
+**Commands:**
+
+```bash
+(cd packages/providers && bun test src/community/opencode/provider.test.ts)
+(cd packages/providers && bun test src/community/opencode/tokens.test.ts)
+```
+
+### Convergence Task 24: Reject calendar-impossible OMP main transcript names
+
+**Severity:** CRITICAL
+**Gap type:** `contradicts`
+**Source ref:** Plan §5 exact trusted layout and fail-closed rules; Convergence Task 17; hidden finding `H4-002`.
+
+**Files:**
+
+- Modify `packages/providers/src/community/omp/session-usage.ts` and `session-usage.test.ts`.
+
+**TDD order:**
+
+1. Add filename predicate cases for impossible months, zero/out-of-range days, non-leap February 29, hour 24/99, minute/second 60/99, and otherwise exact-width decoys; all must be rejected.
+2. Retain canonical boundary cases, including a valid leap day and `23-59-59-999Z`.
+3. Place an impossible-date decoy with a valid-looking session header/cwd beside no valid main; `findMainTranscriptPath()` must return no trusted transcript. Then add one valid exact main and prove it alone is selected.
+4. Prove task-file exclusion uses the same calendar-valid constructor predicate, so an impossible timestamp-shaped task id is not silently reclassified as a trusted main.
+
+**Acceptance criteria:**
+
+- The accepted filename prefix round-trips to the exact canonical UTC ISO instant produced by `toISOString().replace(/[:.]/g, '-')`; regex shape alone is insufficient.
+- An impossible timestamp can neither seed hidden-session ownership nor suppress an owned task transcript.
+- Multiple real exact constructors remain ambiguous and fail closed; primary streamed usage/status remain unchanged.
+
+**Commands:**
+
+```bash
+(cd packages/providers && bun test src/community/omp/session-usage.test.ts)
+```
+
+### Convergence Task 25: Follow OMP task ownership recursively through task transcripts
+
+**Severity:** CRITICAL
+**Gap type:** `missing`
+**Source ref:** Plan §5 requirement to capture task-agent transcripts recursively; Convergence Tasks 4 and 11; hidden finding `H4-003`.
+
+**Files:**
+
+- Modify `packages/providers/src/community/omp/session-usage.ts` and `session-usage.test.ts`.
+- Modify `packages/providers/src/community/omp/provider.test.ts` only for one end-to-end enrichment assertion if needed.
+
+**TDD order:**
+
+1. Build a main transcript that owns `ScoutTask`, a trusted `ScoutTask.jsonl` that invokes `NestedTask`, and `ScoutTask/NestedTask.jsonl` with authoritative usage. Assert both task observations and nested advisors are included exactly once.
+2. Add an orphan nested task with valid-looking usage and an identically named task under an unrelated directory; neither may be billed unless its immediately trusted parent transcript proves ownership.
+3. Repeat the nested-task layout for resume/fork: copied prefixes are excluded, appended bytes/new descendants are included, and an unverifiable parent prefix omits its descendant subtree.
+4. Reuse the supported parent-record parser at each accepted task level. Validate each parent header/cwd and file identity on the same bounded handle before deriving only that parent's child stems.
+
+**Acceptance criteria:**
+
+- Ownership forms a proven chain `main -> task -> nested task -> ...`; discovery is not limited to task ids named directly by the main transcript.
+- A child task is eligible only beside the verified parent task transcript that named it; global stem membership cannot authorize another subtree.
+- Advisors remain eligible only inside a proven artifact subtree, and every containment, symlink, byte, file-count, line, identity, and prefix rule remains fail closed.
+- Fresh, resume, fork, success, and terminal-error enrichment do not double-count historical or primary usage.
+
+**Commands:**
+
+```bash
+(cd packages/providers && bun test src/community/omp/session-usage.test.ts)
+(cd packages/providers && bun test src/community/omp/provider.test.ts)
+```
+
+### Convergence Task 26: Reject usage instants that the shared query path cannot represent losslessly
+
+**Severity:** HIGH
+**Gap type:** `contradicts`
+**Source ref:** Plan §§11 and 13 half-open RFC3339 semantics; Convergence Task 13's exact-instant criterion; hidden finding `H4-004`.
+
+**Files:**
+
+- Modify `packages/core/src/schemas/usage-report.ts`, `usage-report.test.ts`, and `packages/core/src/db/usage-report.ts`.
+- Modify `packages/core/src/db/usage-report.sqlite-boundaries.integration.test.ts` and focused PostgreSQL/query tests as appropriate.
+- Modify `packages/server/src/routes/api.usage.test.ts`, `packages/cli/src/commands/usage.test.ts`, and the RFC3339 precision wording in API/CLI docs.
+- Regenerate `packages/web/src/lib/api.generated.d.ts` if the public schema changes.
+
+**TDD order:**
+
+1. Submit `from=...0004Z` and `to=...0005Z`; they must not both normalize to the same millisecond. Given the shared JavaScript/SQLite representation, reject fractional precision beyond three digits at schema, REST, and CLI boundaries instead of truncating it.
+2. Test no fractional part and one-, two-, and three-digit fractions with `Z` and numeric offsets; equivalent offsets must resolve to the same UTC millisecond and preserve half-open inclusion/exclusion.
+3. Test four-, six-, and nine-digit fractions as validation failures with an actionable precision message. They must never reach `new Date()`, range ordering, SQL parameters, or response-scope normalization.
+4. Retain invalid calendar, missing-zone, reversed-range, exact-366-day, over-366-day, SQLite fractional-boundary, and PostgreSQL parameter cases.
+
+**Acceptance criteria:**
+
+- Every accepted usage instant is represented exactly by the common Date/SQLite/PostgreSQL path; no accepted input is silently rounded or truncated.
+- Public docs and OpenAPI describe the supported RFC3339 precision (no fraction or 1–3 digits), and REST/CLI reject unsupported precision consistently.
+- `[from, to)` behavior and returned normalized scope remain exact for every accepted offset/precision.
+
+**Commands:**
+
+```bash
+(cd packages/core && bun test src/schemas/usage-report.test.ts)
+(cd packages/core && bun test src/db/usage-report.test.ts)
+(cd packages/core && bun test src/db/usage-report.sqlite-boundaries.integration.test.ts)
+(cd packages/server && bun test src/routes/api.usage.test.ts)
+(cd packages/cli && bun test src/commands/usage.test.ts)
+```
+
+### Convergence Task 27: Keep partial base coverage distinct from a dimension-filter miss
+
+**Severity:** HIGH
+**Gap type:** `partial`
+**Source ref:** Plan §§11 and 14 conservative coverage semantics; Convergence Task 21; hidden finding `H4-005`.
+
+**Files:**
+
+- Modify `packages/web/src/experiments/console/components/UsageBreakdownTable.tsx` and `UsageBreakdownTable.test.ts`.
+- Modify `RunDetailHeader.test.tsx` only if its shared state helper expectations need coverage.
+
+**TDD order:**
+
+1. Render base coverage `usageEventCount=5`, `ledgeredEventCount=3`, `unledgeredEventCount=2`, `hasRecordedUsage=true` with a provider/model/kind filter whose report has `recordCount=0`; assert the primary empty state is “No groups matched filters,” not true event-only.
+2. In that same state, retain a separate base-scope warning that exactly two events lack ledger rows and that totals may under-count; do not claim the empty dimension itself has two missing rows.
+3. Retain true event-only (`ledgeredEventCount=0`, positive unledgered count), partial coverage with matched rows, fully ledgered filter-empty, historical no-recording, and query-unavailable cases.
+4. Define true event-only from base ledger coverage, not merely `recordCount===0 && unledgeredEventCount>0`; dimension filters do not participate in coverage counts.
+
+**Acceptance criteria:**
+
+- A base scope with any ledgered event cannot be labeled wholly event-only just because dimension filters match zero ledger groups.
+- Partial coverage and filter-empty information are simultaneously visible without fabricating per-dimension coverage.
+- The five established states remain truthfully distinct, and fallback copy always uses exact `unledgeredEventCount`.
+
+**Commands:**
+
+```bash
+(cd packages/web && bun test src/experiments/console/components/UsageBreakdownTable.test.ts)
+(cd packages/web && bun test src/experiments/console/components/RunDetailHeader.test.tsx)
+```
+
+### Convergence Task 28: Separate non-null GET usage from nullable run-detail usage in OpenAPI
+
+**Severity:** HIGH
+**Gap type:** `contradicts`
+**Source ref:** Plan §§11, 12, and 14; Convergence Task 15; repository OpenAPI-derived type requirement; hidden finding `H4-006`.
+
+**Files:**
+
+- Modify `packages/server/src/routes/schemas/usage.schemas.ts`, `workflow.schemas.ts`, and focused route/OpenAPI tests.
+- Regenerate `packages/web/src/lib/api.generated.d.ts`.
+- Modify `packages/web/src/experiments/console/skills/usage.ts` and `usage.test.ts`/type assertions.
+
+**TDD order:**
+
+1. Assert in the generated contract that `GET /api/usage` status 200 is exactly a non-null `UsageReport` object, while `WorkflowRunDetail.usage` is exactly that object or `null`.
+2. Add/retain runtime route cases: GET usage returns an empty object-valued report for no history; run-detail returns `usage:null` only on query failure and an object with `hasRecordedUsage:false` for no history.
+3. Give nullable run-detail composition its own wrapper/schema identity so applying `.nullable()` cannot make the shared named `UsageReport` component nullable.
+4. Remove `NonNullable`/generic request assertions that erase generated GET nullability. Make the web skill's return type derive directly from the generated operation and keep the run-detail alias nullable.
+
+**Acceptance criteria:**
+
+- The OpenAPI document and generated TypeScript express the actual stable contracts: top-level GET is non-null; nested run-detail usage is nullable.
+- Reusing a named schema in a nullable property cannot mutate or contaminate another route's response component.
+- A future nullability drift fails server contract tests or web type-check instead of being hidden by `requestJson<UsageReport>`.
+
+**Commands:**
+
+```bash
+(cd packages/server && bun test src/routes/api.usage.test.ts)
+(cd packages/server && bun test src/routes/api.workflow-runs.test.ts)
+(cd packages/web && bun run type-check)
+(cd packages/web && bun test src/experiments/console/skills/usage.test.ts)
+```
+
+### Convergence Task 29: Bound OMP directory enumeration before allocating entry lists
+
+**Severity:** HIGH
+**Gap type:** `partial`
+**Source ref:** Plan §5 bounded-reader rules and Convergence Tasks 4 and 11; hidden finding `H4-007`.
+
+**Files:**
+
+- Modify `packages/providers/src/community/omp/session-usage.ts` and `session-usage.test.ts`.
+
+**TDD order:**
+
+1. Create or inject a session/artifact directory with one more than the configured discovery-entry bound, using unrelated files/directories as well as JSONL candidates; assert hidden enrichment fails closed before materializing or statting the complete directory.
+2. Test exact-bound success and one-over omission for both main-transcript discovery and recursive artifact traversal. The result must be deterministic regardless of directory iteration order.
+3. Replace whole-directory `readdir()` arrays with bounded streaming enumeration (or an equivalently strict seam), counting all entries examined rather than only already-authorized/billable files.
+4. Retain the independent 1,000 candidate-file, 256 MiB total, 64 MiB file, and 8 MiB line limits; exceeding discovery work warns with path-safe metadata and never changes primary provider status.
+
+**Acceptance criteria:**
+
+- An OMP-controlled directory containing arbitrarily many irrelevant entries cannot force an unbounded names array, unbounded scan, or unbounded `lstat`/realpath work before a safety limit fires.
+- A limit breach omits all hidden enrichment for the invocation, not a nondeterministic prefix, while primary streamed usage remains valid.
+- Recursive ownership, symlink/containment checks, one-handle identity verification, resume/fork prefix validation, and exact-main ambiguity behavior do not regress.
+
+**Commands:**
+
+```bash
+(cd packages/providers && bun test src/community/omp/session-usage.test.ts)
+```
+
+### Convergence Task 30: Preserve reported zero in legacy workflow totals and fallbacks
+
+**Severity:** HIGH
+**Gap type:** `partial`
+**Source ref:** Plan §§2 and 14, Task 2's legacy-agreement requirement, and test-matrix rule “known zero survives”; hidden finding `H4-008`.
+
+**Files:**
+
+- Modify `packages/workflows/src/dag-executor.ts` and focused cost tests in `dag-executor.test.ts`.
+- Modify `packages/web/src/experiments/console/primitives/run.ts` and `run.test.ts`.
+- Modify `packages/web/src/experiments/console/components/NodeDivider.tsx`, `RunDetailHeader.test.tsx`, and focused `RunStream.test.tsx` coverage.
+
+**TDD order:**
+
+1. Return an explicit provider `cost: 0`; assert the completed run persists `metadata.total_cost_usd: 0` and the node lifecycle preserves zero. A result with no `cost` must still omit both fields.
+2. Track cost presence separately from its numeric sum across nodes, iterations, reasks, failures, and sub-runs, so an initialized accumulator of zero is not mistaken for “no provider reported cost.” Estimates must never enter this path.
+3. Parse finite non-negative legacy metadata as a value; reject negative/non-finite values. With a non-null no-history usage report, render legacy `$0.00` with the explicit “legacy total” label.
+4. With no node ledger rows, render an explicitly present legacy node cost of `$0.00`; any ledger row, including a ledgered reported zero, retains precedence. Preserve absent/not-recorded and unavailable distinctions.
+
+**Acceptance criteria:**
+
+- Missing legacy cost remains absent, while authoritative reported zero survives provider result, node/run aggregation, metadata, and human fallback formatting.
+- Fully observable new-ledger and legacy totals agree for zero as well as positive spend.
+- Zero is never mislabeled “not recorded,” and a positive sub-micro amount is never rounded into the zero representation.
+- Budget enforcement, telemetry absence semantics, and estimate isolation do not regress.
+
+**Commands:**
+
+```bash
+(cd packages/workflows && bun test src/dag-executor.test.ts)
+(cd packages/web && bun test src/experiments/console/primitives/run.test.ts)
+(cd packages/web && bun test src/experiments/console/components/RunDetailHeader.test.tsx)
+(cd packages/web && bun test src/experiments/console/components/RunStream.test.tsx)
+```
+
+### Convergence Task 31: Justify or remove unrelated bundled-workflow test changes
+
+**Severity:** MEDIUM
+**Gap type:** `unrequested`
+**Source ref:** The node-cost plan's bounded file/component scope and non-goals; Pass A awareness item `U4-001`.
+
+**Files:**
+
+- Review the feature-branch changes in `packages/workflows/src/dag-executor.test.ts`, `defaults/bundled-defaults.test.ts`, and `loader.test.ts` introduced by commit `81752b24`.
+- Do not change bundled workflow behavior as part of this node-cost task.
+
+**Review order:**
+
+1. Revert the three unrelated test-only adjustments in an isolated patch and run their focused tests to prove whether node-cost implementation actually depends on them.
+2. If they correct independently supported bundled-workflow behavior, move them to a separately justified change linked to an accepted issue and retain fixtures that prove the intended model/parser/`gh pr --repo` contract.
+3. Otherwise remove them from this feature. Do not weaken a safety invariant merely to make an unrelated validation leg green.
+
+**Acceptance criteria:**
+
+- The node-cost change set contains only work required by this plan, or each retained unrelated test change has independent issue/PR rationale and behavioral evidence.
+- The bundled `gh pr --repo` guard still detects real invocations, parser failures are not silently skipped, and native Ralph model assertions reflect an explicitly accepted workflow contract.
+- No production behavior is changed under this review-only task.
+
+**Commands:**
+
+```bash
+(cd packages/workflows && bun test src/defaults/bundled-defaults.test.ts)
+(cd packages/workflows && bun test src/loader.test.ts)
+(cd packages/workflows && bun test src/dag-executor.test.ts)
+```
+
+After Convergence Tasks 23–31 pass their focused tests, run the plan's complete validation sequence, including `bun run validate` and `bun run check:schema-upgrades` against reachable PostgreSQL.
