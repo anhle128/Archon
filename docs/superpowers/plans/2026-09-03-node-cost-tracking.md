@@ -1707,3 +1707,191 @@ The following tasks are required by the convergence audit. Complete them in orde
 ```
 
 After all convergence tasks pass their focused tests, run the plan's full validation sequence, including `bun run validate` and `bun run check:schema-upgrades` against reachable PostgreSQL.
+
+## Convergence 2 — No-mistakes audit (2026-09-04)
+
+These tasks remain after reviewing the present implementation rather than trusting the story ledger. Complete them in order. They refine the existing plan contract; they do not authorize a new product surface.
+
+### Convergence Task 10: Do not fabricate OpenCode request counts
+
+**Severity:** CRITICAL
+**Gap type:** `contradicts`
+**Source ref:** Plan §2 truthfulness rules, §4 OpenCode mapping, and acceptance criterion “No provider fabricates model, token, request, or USD values”; Pass A `A2-001`.
+
+**Files:**
+
+- Modify `packages/providers/src/community/opencode/tokens.ts` and `tokens.test.ts`.
+- Modify `packages/providers/src/community/opencode/provider.test.ts` only where it currently expects the fabricated field.
+
+**TDD order:**
+
+1. Change the OpenCode mapping fixture to assert that a concrete assistant `message.updated` observation preserves provider/model/token/cache/reasoning/USD fields but has no `requests` property when the upstream info has no authoritative request-count field.
+2. Add a missing-request coverage assertion at the normalized boundary so this absence remains observable rather than becoming zero or one.
+3. Remove the unconditional `requests: 1` assignment; do not infer requests from the existence of an assistant message.
+
+**Acceptance criteria:**
+
+- OpenCode emits only fields named by the OpenCode mapping and actually present in upstream assistant info.
+- An OpenCode ledger row reports `requests = NULL` and increments `missingRequests`; it never reports a known request merely because one distinct assistant message was observed.
+- Distinct-message replacement, multi-agent `kind: 'subagent'`, legacy totals, and reasoning-as-output-subset behavior do not regress.
+
+**Commands:**
+
+```bash
+(cd packages/providers && bun test src/community/opencode/tokens.test.ts)
+(cd packages/providers && bun test src/community/opencode/provider.test.ts)
+```
+
+### Convergence Task 11: Finish OMP hidden-session ownership and bounded streaming
+
+**Severity:** CRITICAL
+**Gap type:** `partial`
+**Source ref:** Plan §5 and Convergence Task 4 exact-layout/streaming/bound acceptance criteria; Pass A `A2-002`; hidden findings `H2-001` and `H2-002`.
+
+**Files:**
+
+- Modify `packages/providers/src/community/omp/session-usage.ts` and `session-usage.test.ts`.
+- Modify `packages/providers/src/community/omp/provider.test.ts` only if end-to-end fail-soft status coverage needs to change.
+
+**TDD order:**
+
+1. Add a valid session-shaped top-level `Orphan.jsonl` containing billable-looking assistant usage but no authoritative parent spawn/lifecycle linkage; assert it is omitted. Add the paired valid child fixture, including nested advisor layout, and prove it remains counted.
+2. Add snapshot and resume-prefix cases at the exact file bound that observe the reader's maximum allocation/read chunk; the digest and session-header scan must remain chunked instead of allocating the prefix length.
+3. Add a race fixture that grows or replaces candidates between discovery and verified open so the sum of actual verified sizes crosses 256 MiB; assert all hidden enrichment is omitted rather than relying on stale discovery sizes.
+4. Derive eligible task ids/relative paths from the supported OMP parent transcript records and exact filename constructors, fail closed on unknown layout, and process session headers plus SHA-256 prefixes incrementally on the same verified handle used for delta parsing.
+5. Enforce file/total bounds against the verified opened sizes and bytes actually considered, not only earlier directory-entry stats.
+
+**Acceptance criteria:**
+
+- A `.jsonl` suffix and a syntactically valid session header are insufficient ownership proof; only task transcripts linked by the supported parent-session format can be billed.
+- Snapshot and resume prefix verification use fixed bounded chunks; there is no `Buffer.alloc(byteLength)` or whole-prefix string/split path up to 64 MiB.
+- Candidate discovery, containment, identity, actual size accounting, prefix digest, and delta parsing fail closed under path replacement or growth.
+- Exceeding 1,000 files, 256 MiB actual total bytes, 64 MiB per file, or 8 MiB per line omits the invocation's hidden enrichment while primary streamed usage and provider status remain intact.
+
+**Commands:**
+
+```bash
+(cd packages/providers && bun test src/community/omp/session-usage.test.ts)
+(cd packages/providers && bun test src/community/omp/provider.test.ts)
+```
+
+### Convergence Task 12: Make every terminal result replace workflow pass state
+
+**Severity:** CRITICAL
+**Gap type:** `partial`
+**Source ref:** Plan §§6–7, Task 6, and Convergence Task 2 requirement that the latest terminal result owns pass accounting; Pass A `A2-003`; hidden finding `H2-003`.
+
+**Files:**
+
+- Modify `packages/workflows/src/dag-executor.ts` and `dag-executor.test.ts`.
+
+**TDD order:**
+
+1. Add standard-node and direct-loop cases where an earlier terminal result contains valid usage and a later terminal result omits `usageBreakdown`; assert stale usage is cleared and no recorder call occurs.
+2. Add runtime-malformed non-array cases and prove the same fail-closed replacement behavior with path-safe logging.
+3. Add success/error pairs proving `terminalError` and `errorSubtype` always come from the same latest terminal result that owns the recorded breakdown, including a later error result with no breakdown.
+4. Replace pass usage and terminal-status state for every terminal result. Validate array entries when an array is present; treat absent/malformed latest usage as no authoritative pass breakdown.
+
+**Acceptance criteria:**
+
+- Earlier cumulative usage cannot survive a later terminal result that provides no authoritative breakdown.
+- Error metadata is not updated only as a side effect of `Array.isArray(usageBreakdown)`; it belongs to the owning terminal result.
+- Standard nodes and direct loops behave identically, and valid mixed-entry arrays retain their current per-entry boundary validation.
+- Recorder failure remains fail-soft and never masks the provider/node outcome.
+
+**Commands:**
+
+```bash
+(cd packages/workflows && bun test src/dag-executor.test.ts)
+```
+
+### Convergence Task 13: Preserve fractional RFC 3339 boundaries in SQLite reports
+
+**Severity:** HIGH
+**Gap type:** `partial`
+**Source ref:** Plan §11 half-open `[from, to)` semantics and Query/API boundary acceptance tests; Pass A `A2-004`; hidden finding `H2-004`.
+
+**Files:**
+
+- Modify `packages/core/src/db/usage-report.ts` and `usage-report.test.ts`.
+- Add or modify a focused SQLite integration test for real comparison behavior.
+
+**TDD order:**
+
+1. Seed SQLite events on a whole-second boundary. Prove that `from=...00.500Z` excludes an event at `...00`, while `to=...00.500Z` includes it; cover an equivalent explicit-offset instant.
+2. Add a fractional stored timestamp case so comparison remains correct if event precision increases later.
+3. Replace the SQLite parameter truncation/`datetime()` comparison with a dialect-safe representation that preserves the complete instant and exact half-open semantics. Keep PostgreSQL `timestamptz` behavior unchanged.
+
+**Acceptance criteria:**
+
+- Every accepted RFC 3339 precision and offset maps to the same exact UTC instant in SQLite and PostgreSQL filtering.
+- SQLite does not truncate fractional bounds before applying `>= from` and `< to`.
+- Current-month defaults, UTC day grouping, pair/order validation, and the 366-day cap remain unchanged.
+
+**Commands:**
+
+```bash
+(cd packages/core && bun test src/db/usage-report.test.ts)
+```
+
+### Convergence Task 14: Return one coherent usage-report snapshot
+
+**Severity:** HIGH
+**Gap type:** `partial`
+**Source ref:** Plan §11 stable report contract and trustworthy accounting goal; hidden finding `H2-005`.
+
+**Files:**
+
+- Modify `packages/core/src/db/usage-report.ts` and `usage-report.test.ts`.
+- Modify database-adapter code only if a narrowly typed cross-dialect snapshot primitive is necessary; do not widen unrelated interfaces speculatively.
+
+**TDD order:**
+
+1. Add a deterministic concurrency seam that commits a new atomic usage event/ledger observation between the report's logical totals, groups, and coverage reads; assert the returned object is entirely before or entirely after that commit, never mixed.
+2. Add the same invariant for overflow detection so totals/coverage cannot describe rows excluded from a differently timed group read.
+3. Execute totals, groups, and coverage from one database snapshot in both dialects, using one SQL statement or an explicitly proven snapshot isolation mechanism. A default PostgreSQL `READ COMMITTED` multi-statement transaction is not sufficient.
+
+**Acceptance criteria:**
+
+- `totals`, `groups`, and `coverage` always describe one committed database snapshot under concurrent recorder writes.
+- `recordCount`, grouped counts, and ledgered-event coverage cannot tear across separate pool connections/statements.
+- Deterministic ordering, 501-row overflow detection, nullable sums, and fail-explicit unsafe-aggregate behavior remain unchanged.
+
+**Commands:**
+
+```bash
+(cd packages/core && bun test src/db/usage-report.test.ts)
+```
+
+### Convergence Task 15: Derive the web usage request contract from generated OpenAPI types
+
+**Severity:** MEDIUM
+**Gap type:** `partial`
+**Source ref:** Plan §14 generated-type requirement and the repository type-safety/package-boundary rules; Pass A `A2-005`.
+
+**Files:**
+
+- Modify `packages/web/src/experiments/console/skills/usage.ts` and its tests/type checks.
+- Modify `packages/web/src/experiments/console/skills/runs.ts` only to remove casts that bypass the generated run-detail `usage` property.
+- Re-export generated types through `packages/web/src/lib/api.ts` if that is the established boundary selected for this surface.
+
+**TDD order:**
+
+1. Add compile-time assertions tying the usage query, grouping, kind filter, report response, and nullable run-detail usage directly to `paths['/api/usage']`/generated schema types.
+2. Remove the handwritten `UsageQuery` interface and duplicated kind union; derive the public skill aliases from the generated operation.
+3. Remove the run-detail usage cast and let the generated `WorkflowRunDetail` property drive the return type.
+
+**Acceptance criteria:**
+
+- Changing the OpenAPI query enum or parameter shape creates a web type error until the skill is updated; no parallel request union/interface can silently drift.
+- The web package imports no core/workflow runtime or type surface.
+- Cache-key coverage and query-string behavior remain unchanged for every generated filter.
+
+**Commands:**
+
+```bash
+(cd packages/web && bun run type-check)
+(cd packages/web && bun test src/experiments/console/skills/usage.test.ts)
+```
+
+After Convergence Tasks 10–15 pass their focused tests, run the full validation sequence named above, including the PostgreSQL schema-upgrade check.
