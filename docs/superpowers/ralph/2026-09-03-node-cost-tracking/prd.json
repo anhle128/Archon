@@ -711,7 +711,8 @@
         "US-033"
       ],
       "priority": 34,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration. Files: packages/providers/src/community/opencode/{errors,session,multi-agent,provider,tokens}.ts + provider/tokens tests. OpencodeUsageBearingError carries late-failure usage; provider merges across retries and yields isError on exhaustion."
     },
     {
       "id": "US-035",

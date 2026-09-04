@@ -1,6 +1,11 @@
 ## Codebase Patterns
 
 
+### OpenCode late failures carry usage via OpencodeUsageBearingError
+- **Where**: `packages/providers/src/community/opencode/{session,multi-agent,provider,errors,tokens}.ts`
+- **Pattern**: On session.error/abort after observed assistant infos, throw `OpencodeUsageBearingError` with packaged breakdown (multi-agent uses kind:`subagent` for every already-observed child; never synthesize). `sendQuery` merges prior attempts with `mergeUsageBreakdowns` into success results; on exhaustion with usage yield terminal `isError` + `errorSubtype` classification; no-usage failures still throw.
+- **Example**: usage then 429 then success → two breakdown rows in order; three exhausted rate-limits with usage → isError result length 3
+
 ### OMP main transcript is exact ISO-dash constructor only
 - **Where**: `packages/providers/src/community/omp/session-usage.ts` `isMainTranscriptFileName` / `findMainTranscriptPath`
 - **Pattern**: Main filename = `toISOString().replace(/[:.]/g, '-') + '_' + sessionId + '.jsonl'`. Prefix must match `^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$`. Never accept arbitrary non-empty prefixes or suffix-only `*_<sessionId>.jsonl`. Discovery and task-file exclusion share this predicate.
@@ -1075,5 +1080,30 @@
 - OMP SessionManager names mains as `new Date().toISOString().replace(/[:.]/g, '-') + '_' + sessionId + '.jsonl'` — regex `^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$` is the exact prefix, not “any non-empty prefix”.
 - findMainTranscriptPath previously suffix-matched independently of isMainTranscriptFileName; centralizing on the predicate is what stops decoys from seeding ownership or creating false ambiguity.
 - Suffix decoys under the artifact dir remain task-agent constructors when parent-owned; only the exact main shape is excluded from task classification.
+
+---
+
+## 2026-09-04 — US-034: Preserve OpenCode usage across late failures
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/opencode/errors.ts` — OpencodeUsageBearingError carries breakdown/tokens/cost/sessionId
+- `packages/providers/src/community/opencode/tokens.ts` — mergeUsageBreakdowns + packageAssistantUsage
+- `packages/providers/src/community/opencode/session.ts` — session.error/abort package observed usage
+- `packages/providers/src/community/opencode/multi-agent.ts` — sibling failure preserves observed child rows as kind:subagent
+- `packages/providers/src/community/opencode/provider.ts` — accumulate across retries; success merge; exhaustion isError yield
+- `packages/providers/src/community/opencode/provider.test.ts` / `tokens.test.ts` — AC coverage
+
+**Acceptance criteria verified**:
+- [x] Authoritative message.updated then retryable session.error then success → both attempts in source order exactly once
+- [x] Retry exhaustion after observed usage → terminal isError with cumulative observations + typed error metadata
+- [x] Multi-agent: observed child usage survives kind:subagent; no unobserved synthesis
+- [x] Across retries append; within-attempt same message id still replaces
+- [x] Rate-limit/crash/agent-refresh classification, backoff, model identity, missing requests, cache/reasoning, resume, multi-agent attribution do not regress (47 focused tests pass)
+
+**Learnings**:
+- Mirror Claude's ClaudeApiResultError pattern: attach usage on the throw site, accumulate in sendQuery, yield isError only when usage exists.
+- Multi-agent must package ALL states' observed infos on any child session.error — the failing child may have zero usage while a sibling already spent.
+- scriptedEvents is global in provider tests; per-attempt usage/error streams need custom subscribe mocks per runtime.
 
 ---
