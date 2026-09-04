@@ -631,8 +631,8 @@
         "US-029"
       ],
       "priority": 30,
-      "passes": false,
-      "notes": "Pending Ralph implementation from the Convergence 2 audit."
+      "passes": true,
+      "notes": "Implemented in iteration after US-029. Files: packages/web/src/experiments/console/skills/usage.ts, packages/web/src/experiments/console/skills/runs.ts. UsageQuery/kind/groupBy derived from paths[/api/usage]; ExactMatch asserts for query/report/run-detail; getRun usage uncast."
     },
     {
       "id": "US-031",

@@ -1,6 +1,12 @@
 ## Codebase Patterns
 
 
+### Web usage types derive from generated OpenAPI paths only
+- **Where**: `packages/web/src/experiments/console/skills/usage.ts`; `runs.ts` `getRun`
+- **Pattern**: `UsageQuery` = `NonNullable<paths['/api/usage']['get']['parameters']['query']>`; `UsageKindFilter`/`UsageGroupBy` = `NonNullable<UsageQuery['kind'|'groupBy']>`; `UsageReport` = `NonNullable<components['schemas']['UsageReport']>` (schema is `T | null` because run-detail marks usage nullable). Compile-time `ExactMatch`/`AssertTrue` tuple (`UsageOpenApiContractChecks`) ties query, kind, groupBy, report response, and `WorkflowRunDetail['usage']`. Never handwrite parallel request interfaces or kind unions. `getRun` returns `RunDetailResponse['usage']` with no cast. Import `@/lib/api.generated` only — never `@archon/core`/`workflows`.
+- **Example**: changing OpenAPI `kind` enum fails web type-check until the skill aliases follow
+
+
 ### Usage report totals/groups/coverage share one snapshot
 - **Where**: `packages/core/src/db/adapters/{types,postgres,sqlite}.ts` `withSnapshotRead`; `packages/core/src/db/usage-report.ts` `queryUsageReport`
 - **Pattern**: Never `Promise.all` three pool queries for one report. Run totals → groups → coverage inside `getDatabase().withSnapshotRead`. Postgres: `BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY` (default READ COMMITTED multi-statement is insufficient). SQLite: deferred BEGIN (snapshot at first read), serialized on `txTail`. Test seam `setUsageReportSnapshotSeamForTest` fires `after-totals`/`after-groups` for concurrent-writer proofs; real isolation lives in `usage-report.snapshot.integration.test.ts`.
@@ -956,5 +962,24 @@
 - Default `withTransaction` BEGIN on Postgres is READ COMMITTED — insufficient for multi-SELECT report coherence.
 - SQLite WAL + second connection is required to prove mid-snapshot concurrent commits; same-adapter writer serializes on txTail and cannot interleave.
 - Unit mocks cannot freeze SQL results across statements; isolation proof belongs in a real-adapter integration file.
+
+---
+## 2026-09-04 — US-030: Derive web usage request contract from generated OpenAPI types
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/skills/usage.ts` — UsageQuery/kind/groupBy from paths['/api/usage']; ExactMatch contract checks; removed handwritten interface/kind union
+- `packages/web/src/experiments/console/skills/runs.ts` — getRun usage return type is RunDetailResponse['usage']; cast removed
+
+**Acceptance criteria verified**:
+- [x] Compile-time assertions tie usage query, groupBy enum, kind filter, usage report response, and nullable run-detail usage to generated /api/usage and workflow-run-detail OpenAPI types
+- [x] Handwritten UsageQuery interface and duplicated kind union removed; public aliases derived from generated operation types
+- [x] Run-detail usage casts removed; generated WorkflowRunDetail usage property drives return type
+- [x] Web package imports no core/workflow runtime/type surface; cache-key + query-string behavior unchanged
+- [x] packages/web bun run type-check green; usage.test.ts 11 pass
+
+**Learnings**:
+- openapi-typescript folds nullable run-detail `usage` into `components['schemas']['UsageReport']` as `T | null`, so skill aliases need NonNullable for the report body and `UsageReport | null` for response/detail asserts.
+- `paths['/api/usage']['get']['parameters']['query']` is the single source for request filters — no parallel UsageQuery schema component is emitted despite server `.openapi('UsageQuery')` (query params stay inline on the operation).
 
 ---
