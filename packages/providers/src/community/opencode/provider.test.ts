@@ -54,6 +54,20 @@ function createEventStream(events: OpencodeEvent[]): AsyncIterable<OpencodeEvent
   };
 }
 
+function createRejectingEventStream(
+  events: OpencodeEvent[],
+  rejection: Error
+): AsyncIterable<OpencodeEvent> {
+  return {
+    async *[Symbol.asyncIterator]() {
+      for (const event of events) {
+        yield event;
+      }
+      throw rejection;
+    },
+  };
+}
+
 function createPendingStream(): AsyncIterable<OpencodeEvent> {
   return {
     [Symbol.asyncIterator]() {
@@ -1729,6 +1743,358 @@ describe('OpencodeProvider', () => {
     expect(chunks.filter(isResultChunk)).toHaveLength(0);
     expect(error?.message).toContain('OpenCode rate_limit');
     expect(mockCreateOpencode).toHaveBeenCalledTimes(3);
+  });
+
+  test('usage before raw stream rejection yields isError with observation once', async () => {
+    const observed: OpencodeEvent = {
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'msg-stream-reject',
+          role: 'assistant',
+          sessionID: 'session-1',
+          providerID: 'anthropic',
+          modelID: 'claude-sonnet',
+          cost: 0.07,
+          tokens: { input: 11, output: 3, reasoning: 0, cache: { read: 0, write: 0 } },
+        },
+      },
+    };
+    runtimeQueue.push(
+      makeRuntime({
+        subscribe: mock(async () => ({
+          stream: createRejectingEventStream([observed], new Error('upstream protocol broken')),
+        })),
+      })
+    );
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider({ retryBaseDelayMs: 1 }).sendQuery('hi', '/tmp', undefined, {
+        assistantConfig: TEST_MODEL,
+      })
+    );
+
+    expect(error).toBeUndefined();
+    const results = chunks.filter(isResultChunk);
+    expect(results).toHaveLength(1);
+    const result = results[0];
+    expect(result).toMatchObject({
+      type: 'result',
+      isError: true,
+      errorSubtype: 'unknown',
+      sessionId: 'session-1',
+    });
+    expect(Array.isArray(result?.errors) && result.errors[0]).toContain(
+      'OpenCode unknown: upstream protocol broken'
+    );
+    expect(result?.usageBreakdown).toEqual([
+      {
+        provider: 'anthropic',
+        model: 'claude-sonnet',
+        modelSource: 'reported',
+        inputTokens: 11,
+        outputTokens: 3,
+        reasoningTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        costUsd: 0.07,
+      },
+    ]);
+    expect(result?.usageBreakdown).toHaveLength(1);
+    expect(result?.cost).toBeCloseTo(0.07);
+  });
+
+  test('usage then premature stream close fails instead of bare sessionId success', async () => {
+    runtimeQueue.push(
+      makeRuntime({
+        subscribe: mock(async () => ({
+          stream: createEventStream([
+            {
+              type: 'message.updated',
+              properties: {
+                info: {
+                  id: 'msg-premature',
+                  role: 'assistant',
+                  sessionID: 'session-1',
+                  providerID: 'anthropic',
+                  modelID: 'claude-sonnet',
+                  cost: 0.04,
+                  tokens: { input: 6, output: 2, reasoning: 0, cache: { read: 0, write: 0 } },
+                },
+              },
+            },
+            // No session.idle — stream ends after the observation.
+          ]),
+        })),
+      })
+    );
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider({ retryBaseDelayMs: 1 }).sendQuery('hi', '/tmp', undefined, {
+        assistantConfig: TEST_MODEL,
+      })
+    );
+
+    expect(error).toBeUndefined();
+    const results = chunks.filter(isResultChunk);
+    expect(results).toHaveLength(1);
+    const result = results[0];
+    expect(result).toMatchObject({
+      type: 'result',
+      isError: true,
+      errorSubtype: 'unknown',
+      sessionId: 'session-1',
+    });
+    expect(result).not.toEqual({ type: 'result', sessionId: 'session-1' });
+    expect(Array.isArray(result?.errors) && result.errors[0]).toContain(
+      'OpenCode event stream ended before session.idle'
+    );
+    expect(result?.usageBreakdown).toEqual([
+      expect.objectContaining({
+        provider: 'anthropic',
+        model: 'claude-sonnet',
+        costUsd: 0.04,
+        inputTokens: 6,
+        outputTokens: 2,
+      }),
+    ]);
+    expect(result?.usageBreakdown).toHaveLength(1);
+  });
+
+  test('multi-agent stream rejection preserves observed subagent usage without synthesis', async () => {
+    const cwd = await createTempProjectDir();
+    const sessionIds = ['scout-session', 'reviewer-session'];
+    runtimeQueue.push(
+      makeRuntime({
+        sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
+        subscribe: mock(async () => ({
+          stream: createRejectingEventStream(
+            [
+              {
+                type: 'message.updated',
+                properties: {
+                  info: {
+                    id: 'scout-msg',
+                    role: 'assistant',
+                    sessionID: 'scout-session',
+                    providerID: 'anthropic',
+                    modelID: 'claude-haiku',
+                    cost: 0.15,
+                    tokens: { input: 5, output: 2, reasoning: 0, cache: { read: 0, write: 0 } },
+                  },
+                },
+              },
+            ],
+            new Error('event bus disconnected')
+          ),
+        })),
+      })
+    );
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider({ retryBaseDelayMs: 1 }).sendQuery('hi', cwd, undefined, {
+        assistantConfig: TEST_MODEL,
+        nodeConfig: {
+          nodeId: 'research',
+          agents: {
+            scout: { description: 'Scout', prompt: 'Explore' },
+            reviewer: { description: 'Reviewer', prompt: 'Review' },
+          },
+        },
+      })
+    );
+
+    expect(error).toBeUndefined();
+    const result = chunks.find(isResultChunk);
+    expect(result).toMatchObject({
+      type: 'result',
+      isError: true,
+      errorSubtype: 'unknown',
+    });
+    expect(Array.isArray(result?.errors) && result.errors[0]).toContain('event bus disconnected');
+    expect(result?.usageBreakdown).toEqual([
+      {
+        provider: 'anthropic',
+        model: 'claude-haiku',
+        modelSource: 'reported',
+        kind: 'subagent',
+        inputTokens: 5,
+        outputTokens: 2,
+        reasoningTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        costUsd: 0.15,
+      },
+    ]);
+    expect(result?.usageBreakdown).toHaveLength(1);
+  });
+
+  test('multi-agent premature close preserves observed child usage and fails', async () => {
+    const cwd = await createTempProjectDir();
+    const sessionIds = ['scout-session', 'reviewer-session'];
+    runtimeQueue.push(
+      makeRuntime({
+        sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
+        subscribe: mock(async () => ({
+          stream: createEventStream([
+            {
+              type: 'message.updated',
+              properties: {
+                info: {
+                  id: 'scout-only',
+                  role: 'assistant',
+                  sessionID: 'scout-session',
+                  providerID: 'anthropic',
+                  modelID: 'claude-haiku',
+                  cost: 0.09,
+                  tokens: { input: 3, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+                },
+              },
+            },
+            {
+              type: 'session.idle',
+              properties: { sessionID: 'scout-session' },
+            },
+            // reviewer never idles — stream ends
+          ]),
+        })),
+      })
+    );
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider({ retryBaseDelayMs: 1 }).sendQuery('hi', cwd, undefined, {
+        assistantConfig: TEST_MODEL,
+        nodeConfig: {
+          nodeId: 'research',
+          agents: {
+            scout: { description: 'Scout', prompt: 'Explore' },
+            reviewer: { description: 'Reviewer', prompt: 'Review' },
+          },
+        },
+      })
+    );
+
+    expect(error).toBeUndefined();
+    const result = chunks.find(isResultChunk);
+    expect(result).toMatchObject({
+      type: 'result',
+      isError: true,
+      errorSubtype: 'unknown',
+    });
+    expect(Array.isArray(result?.errors) && result.errors[0]).toContain(
+      'OpenCode multi-agent stream ended before all agents completed'
+    );
+    expect(result?.usageBreakdown).toEqual([
+      expect.objectContaining({
+        kind: 'subagent',
+        model: 'claude-haiku',
+        costUsd: 0.09,
+      }),
+    ]);
+    expect(result?.usageBreakdown).toHaveLength(1);
+  });
+
+  test('repeated message.updated for one id replaces within attempt on stream rejection', async () => {
+    runtimeQueue.push(
+      makeRuntime({
+        subscribe: mock(async () => ({
+          stream: createRejectingEventStream(
+            [
+              {
+                type: 'message.updated',
+                properties: {
+                  info: {
+                    id: 'same-msg',
+                    role: 'assistant',
+                    sessionID: 'session-1',
+                    providerID: 'anthropic',
+                    modelID: 'claude-sonnet',
+                    cost: 0.01,
+                    tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+                  },
+                },
+              },
+              {
+                type: 'message.updated',
+                properties: {
+                  info: {
+                    id: 'same-msg',
+                    role: 'assistant',
+                    sessionID: 'session-1',
+                    providerID: 'anthropic',
+                    modelID: 'claude-sonnet',
+                    cost: 0.22,
+                    tokens: { input: 40, output: 10, reasoning: 2, cache: { read: 4, write: 1 } },
+                  },
+                },
+              },
+            ],
+            new Error('socket hang up')
+          ),
+        })),
+      }),
+      // crash-class rejection is retryable — second attempt also fails with no usage so
+      // accumulated first-attempt observation still surfaces once on exhaustion.
+      makeRuntime({
+        subscribe: mock(async () => ({
+          stream: createRejectingEventStream([], new Error('socket hang up')),
+        })),
+      }),
+      makeRuntime({
+        subscribe: mock(async () => ({
+          stream: createRejectingEventStream([], new Error('socket hang up')),
+        })),
+      })
+    );
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider({ retryBaseDelayMs: 1 }).sendQuery('hi', '/tmp', undefined, {
+        assistantConfig: TEST_MODEL,
+      })
+    );
+
+    expect(error).toBeUndefined();
+    const result = chunks.find(isResultChunk);
+    expect(result).toMatchObject({
+      type: 'result',
+      isError: true,
+      errorSubtype: 'crash',
+    });
+    // Same message id replaced within the attempt — only the later observation.
+    expect(result?.usageBreakdown).toEqual([
+      {
+        provider: 'anthropic',
+        model: 'claude-sonnet',
+        modelSource: 'reported',
+        inputTokens: 40,
+        outputTokens: 10,
+        reasoningTokens: 2,
+        cacheReadTokens: 4,
+        cacheWriteTokens: 1,
+        costUsd: 0.22,
+      },
+    ]);
+    expect(result?.usageBreakdown).toHaveLength(1);
+    expect(mockCreateOpencode).toHaveBeenCalledTimes(3);
+  });
+
+  test('no-usage stream rejection still throws without fabricating usage', async () => {
+    runtimeQueue.push(
+      makeRuntime({
+        subscribe: mock(async () => ({
+          stream: createRejectingEventStream([], new Error('upstream protocol broken')),
+        })),
+      })
+    );
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider({ retryBaseDelayMs: 1 }).sendQuery('hi', '/tmp', undefined, {
+        assistantConfig: TEST_MODEL,
+      })
+    );
+
+    expect(chunks.filter(isResultChunk)).toHaveLength(0);
+    expect(error?.message).toContain('OpenCode unknown: upstream protocol broken');
   });
 });
 function isResultChunk(chunk: unknown): chunk is {

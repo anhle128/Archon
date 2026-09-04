@@ -139,6 +139,7 @@ export async function* streamOpencodeSession(
   let lastAssistantInfo: Record<string, unknown> | undefined;
   let aborted = requestOptions?.abortSignal?.aborted === true;
   let resultYielded = false;
+  let managedFailure: Error | undefined;
 
   const abortHandler = (): void => {
     aborted = true;
@@ -158,148 +159,166 @@ export async function* streamOpencodeSession(
     const promptBody = createSessionPromptBody(prompt, model, requestOptions);
     await promptSession(client, cwd, sessionId, promptBody);
 
-    for await (const rawEvent of abortableStream(events.stream, streamController.signal)) {
-      const event = rawEvent as {
-        type?: string;
-        properties?: Record<string, unknown>;
-      };
-      const properties = isRecord(event.properties) ? event.properties : {};
+    try {
+      for await (const rawEvent of abortableStream(events.stream, streamController.signal)) {
+        const event = rawEvent as {
+          type?: string;
+          properties?: Record<string, unknown>;
+        };
+        const properties = isRecord(event.properties) ? event.properties : {};
 
-      if (event.type === 'message.updated') {
-        const info = isRecord(properties.info) ? properties.info : undefined;
-        if (info?.role === 'assistant' && info.sessionID === sessionId) {
-          lastAssistantInfo = info;
-          if (typeof info.id === 'string' && info.id.length > 0) {
-            assistantInfoById.set(info.id, info);
-            lastAssistantMessageId = info.id;
-          }
-        }
-        continue;
-      }
-
-      if (event.type === 'message.part.updated') {
-        const part = isRecord(properties.part) ? properties.part : undefined;
-        if (!part || part?.sessionID !== sessionId || typeof part.type !== 'string') {
-          continue;
-        }
-
-        if (part.type === 'text') {
-          const delta = typeof properties.delta === 'string' ? properties.delta : undefined;
-          const text = delta ?? (typeof part.text === 'string' ? part.text : '');
-          if (text) {
-            yield { type: 'assistant', content: text };
-          }
-          continue;
-        }
-
-        if (part.type === 'reasoning') {
-          const delta = typeof properties.delta === 'string' ? properties.delta : undefined;
-          const text = delta ?? (typeof part.text === 'string' ? part.text : '');
-          if (text) {
-            yield { type: 'thinking', content: text };
-          }
-          continue;
-        }
-
-        if (part.type === 'tool') {
-          const callId = typeof part.callID === 'string' ? part.callID : undefined;
-          const toolName = typeof part.tool === 'string' ? part.tool : 'unknown';
-          const state = isRecord(part.state) ? part.state : undefined;
-          const toolInput = isRecord(state?.input) ? state.input : undefined;
-          const status = typeof state?.status === 'string' ? state.status : undefined;
-
-          if (callId && !seenToolCalls.has(callId)) {
-            seenToolCalls.add(callId);
-            yield {
-              type: 'tool',
-              toolName,
-              ...(toolInput ? { toolInput } : {}),
-              ...(callId ? { toolCallId: callId } : {}),
-            };
-          }
-
-          if (callId && !completedToolCalls.has(callId)) {
-            if (status === 'completed') {
-              completedToolCalls.add(callId);
-              yield {
-                type: 'tool_result',
-                toolName,
-                toolOutput: typeof state?.output === 'string' ? state.output : '',
-                ...(callId ? { toolCallId: callId } : {}),
-                toolOutcome: 'success',
-              };
-            } else if (status === 'error') {
-              completedToolCalls.add(callId);
-              yield {
-                type: 'tool_result',
-                toolName,
-                toolOutput: typeof state?.error === 'string' ? state.error : 'Tool failed',
-                ...(callId ? { toolCallId: callId } : {}),
-                toolOutcome: 'error',
-              };
+        if (event.type === 'message.updated') {
+          const info = isRecord(properties.info) ? properties.info : undefined;
+          if (info?.role === 'assistant' && info.sessionID === sessionId) {
+            lastAssistantInfo = info;
+            if (typeof info.id === 'string' && info.id.length > 0) {
+              assistantInfoById.set(info.id, info);
+              lastAssistantMessageId = info.id;
             }
           }
+          continue;
         }
-        continue;
+
+        if (event.type === 'message.part.updated') {
+          const part = isRecord(properties.part) ? properties.part : undefined;
+          if (!part || part?.sessionID !== sessionId || typeof part.type !== 'string') {
+            continue;
+          }
+
+          if (part.type === 'text') {
+            const delta = typeof properties.delta === 'string' ? properties.delta : undefined;
+            const text = delta ?? (typeof part.text === 'string' ? part.text : '');
+            if (text) {
+              yield { type: 'assistant', content: text };
+            }
+            continue;
+          }
+
+          if (part.type === 'reasoning') {
+            const delta = typeof properties.delta === 'string' ? properties.delta : undefined;
+            const text = delta ?? (typeof part.text === 'string' ? part.text : '');
+            if (text) {
+              yield { type: 'thinking', content: text };
+            }
+            continue;
+          }
+
+          if (part.type === 'tool') {
+            const callId = typeof part.callID === 'string' ? part.callID : undefined;
+            const toolName = typeof part.tool === 'string' ? part.tool : 'unknown';
+            const state = isRecord(part.state) ? part.state : undefined;
+            const toolInput = isRecord(state?.input) ? state.input : undefined;
+            const status = typeof state?.status === 'string' ? state.status : undefined;
+
+            if (callId && !seenToolCalls.has(callId)) {
+              seenToolCalls.add(callId);
+              yield {
+                type: 'tool',
+                toolName,
+                ...(toolInput ? { toolInput } : {}),
+                ...(callId ? { toolCallId: callId } : {}),
+              };
+            }
+
+            if (callId && !completedToolCalls.has(callId)) {
+              if (status === 'completed') {
+                completedToolCalls.add(callId);
+                yield {
+                  type: 'tool_result',
+                  toolName,
+                  toolOutput: typeof state?.output === 'string' ? state.output : '',
+                  ...(callId ? { toolCallId: callId } : {}),
+                  toolOutcome: 'success',
+                };
+              } else if (status === 'error') {
+                completedToolCalls.add(callId);
+                yield {
+                  type: 'tool_result',
+                  toolName,
+                  toolOutput: typeof state?.error === 'string' ? state.error : 'Tool failed',
+                  ...(callId ? { toolCallId: callId } : {}),
+                  toolOutcome: 'error',
+                };
+              }
+            }
+          }
+          continue;
+        }
+
+        if (event.type === 'session.error') {
+          const eventSessionId =
+            typeof properties.sessionID === 'string' ? properties.sessionID : undefined;
+          if (eventSessionId && eventSessionId !== sessionId) continue;
+
+          const rawError = isRecord(properties.error) ? properties.error : properties;
+          managedFailure = createSessionFailureError({
+            message: errorMessage(rawError),
+            cause: rawError,
+            sessionId,
+            assistantInfoById,
+            lastAssistantInfo,
+          });
+          throw managedFailure;
+        }
+
+        if (event.type === 'session.idle') {
+          if (properties.sessionID !== sessionId) continue;
+
+          const structuredOutput = await readStructuredOutput(
+            client,
+            cwd,
+            sessionId,
+            lastAssistantMessageId
+          );
+          const assistantInfos =
+            assistantInfoById.size > 0
+              ? Array.from(assistantInfoById.values())
+              : lastAssistantInfo
+                ? [lastAssistantInfo]
+                : [];
+          const tokens = sumTokenUsages(assistantInfos.map(info => normalizeTokens(info)));
+          const usageBreakdown = usageBreakdownFromAssistantInfos(assistantInfos);
+          const terminalInfo =
+            (lastAssistantMessageId ? assistantInfoById.get(lastAssistantMessageId) : undefined) ??
+            lastAssistantInfo;
+
+          yield {
+            type: 'result',
+            sessionId,
+            ...(tokens ? { tokens } : {}),
+            ...(usageBreakdown ? { usageBreakdown } : {}),
+            ...(structuredOutput !== undefined ? { structuredOutput } : {}),
+            // Top-level cost is the sum across distinct assistant messages
+            // (matches tokens.cost). dag-executor accounts msg.cost only.
+            ...(tokens?.cost !== undefined ? { cost: tokens.cost } : {}),
+            ...(typeof terminalInfo?.finish === 'string'
+              ? { stopReason: terminalInfo.finish }
+              : {}),
+            ...(typeof terminalInfo?.modelID === 'string' && terminalInfo.modelID.length > 0
+              ? { resolvedModel: { id: terminalInfo.modelID } }
+              : {}),
+          };
+          resultYielded = true;
+          return;
+        }
       }
-
-      if (event.type === 'session.error') {
-        const eventSessionId =
-          typeof properties.sessionID === 'string' ? properties.sessionID : undefined;
-        if (eventSessionId && eventSessionId !== sessionId) continue;
-
-        const rawError = isRecord(properties.error) ? properties.error : properties;
+    } catch (streamError) {
+      // Caller abort already sets `aborted` and ends the iterator as done; any
+      // other stream rejection after observations must reach the same
+      // usage-bearing boundary as explicit session.error.
+      if (aborted) {
+        // Fall through to the abort throw below.
+      } else if (streamError === managedFailure) {
+        throw streamError;
+      } else {
         throw createSessionFailureError({
-          message: errorMessage(rawError),
-          cause: rawError,
+          message: errorMessage(streamError),
+          cause: streamError,
           sessionId,
           assistantInfoById,
           lastAssistantInfo,
         });
       }
-
-      if (event.type === 'session.idle') {
-        if (properties.sessionID !== sessionId) continue;
-
-        const structuredOutput = await readStructuredOutput(
-          client,
-          cwd,
-          sessionId,
-          lastAssistantMessageId
-        );
-        const assistantInfos =
-          assistantInfoById.size > 0
-            ? Array.from(assistantInfoById.values())
-            : lastAssistantInfo
-              ? [lastAssistantInfo]
-              : [];
-        const tokens = sumTokenUsages(assistantInfos.map(info => normalizeTokens(info)));
-        const usageBreakdown = usageBreakdownFromAssistantInfos(assistantInfos);
-        const terminalInfo =
-          (lastAssistantMessageId ? assistantInfoById.get(lastAssistantMessageId) : undefined) ??
-          lastAssistantInfo;
-
-        yield {
-          type: 'result',
-          sessionId,
-          ...(tokens ? { tokens } : {}),
-          ...(usageBreakdown ? { usageBreakdown } : {}),
-          ...(structuredOutput !== undefined ? { structuredOutput } : {}),
-          // Top-level cost is the sum across distinct assistant messages
-          // (matches tokens.cost). dag-executor accounts msg.cost only.
-          ...(tokens?.cost !== undefined ? { cost: tokens.cost } : {}),
-          ...(typeof terminalInfo?.finish === 'string' ? { stopReason: terminalInfo.finish } : {}),
-          ...(typeof terminalInfo?.modelID === 'string' && terminalInfo.modelID.length > 0
-            ? { resolvedModel: { id: terminalInfo.modelID } }
-            : {}),
-        };
-        resultYielded = true;
-        return;
-      }
-    }
-
-    if (!resultYielded && !aborted) {
-      yield { type: 'result', sessionId };
     }
 
     if (aborted) {
@@ -309,6 +328,17 @@ export async function* streamOpencodeSession(
         (abortReason ? `: ${String(abortReason)}` : '');
       throw createSessionFailureError({
         message,
+        sessionId,
+        assistantInfoById,
+        lastAssistantInfo,
+      });
+    }
+
+    // Stream closed without session.idle — never report bare success. Package
+    // any observed usage the same way session.error does.
+    if (!resultYielded) {
+      throw createSessionFailureError({
+        message: 'OpenCode event stream ended before session.idle',
         sessionId,
         assistantInfoById,
         lastAssistantInfo,
@@ -359,19 +389,33 @@ export async function* abortableStream(
     }
 
     const nextPromise = iterator.next();
-    const result = await Promise.race([
-      nextPromise,
-      new Promise<IteratorResult<unknown>>(resolve => {
-        const onAbort = (): void => {
-          signal.removeEventListener('abort', onAbort);
-          resolve({ done: true, value: undefined });
-        };
-        signal.addEventListener('abort', onAbort, { once: true });
-        void nextPromise.finally((): void => {
-          signal.removeEventListener('abort', onAbort);
-        });
-      }),
-    ]);
+    let result: IteratorResult<unknown>;
+    try {
+      result = await Promise.race([
+        nextPromise,
+        new Promise<IteratorResult<unknown>>(resolve => {
+          const onAbort = (): void => {
+            signal.removeEventListener('abort', onAbort);
+            resolve({ done: true, value: undefined });
+          };
+          signal.addEventListener('abort', onAbort, { once: true });
+          // Handle both fulfill and reject so a rejecting next() never becomes
+          // an unhandled rejection on this side-channel (void finally rethrows).
+          void nextPromise.then(
+            () => {
+              signal.removeEventListener('abort', onAbort);
+            },
+            () => {
+              signal.removeEventListener('abort', onAbort);
+            }
+          );
+        }),
+      ]);
+    } catch (error) {
+      // Iterator rejected — surface to caller so session/multi-agent can package usage.
+      await iterator.return?.().catch(() => undefined);
+      throw error;
+    }
 
     if (result.done) {
       await iterator.return?.().catch(() => undefined);
