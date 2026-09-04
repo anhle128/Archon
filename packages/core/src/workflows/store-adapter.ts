@@ -4,7 +4,6 @@
  */
 import type { IWorkflowStore } from '@archon/workflows/store';
 import type { WorkflowConfig, WorkflowDeps } from '@archon/workflows/deps';
-import { createWorkflowUsageRecorder } from './usage-recorder';
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import type { MergedConfig } from '../config/config-types';
 import * as workflowDb from '../db/workflows';
@@ -458,7 +457,6 @@ export function createWorkflowDeps(): WorkflowDeps {
   const provider = registeredGitHubAppAuthProvider;
   return {
     store: createWorkflowStore(),
-    usageRecorder: createWorkflowUsageRecorder(),
     getAgentProvider,
     loadConfig: loadMergedConfig,
     // App mode: resolve fresh installation tokens for subprocess env. PAT mode:

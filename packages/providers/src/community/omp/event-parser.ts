@@ -1,7 +1,6 @@
 import { createLogger } from '@archon/paths';
 
-import type { MessageChunk, ModelUsageEntry, TokenUsage } from '../../types';
-import { normalizeModelUsageEntry, toUsageBreakdown } from '../../usage-breakdown';
+import type { MessageChunk, TokenUsage } from '../../types';
 import { tryParseStructuredOutput } from '../../shared/structured-output';
 
 const MAX_ERROR_PREVIEW_CHARS = 1000;
@@ -54,7 +53,6 @@ export class OmpEventParser {
   private streamError: string | undefined;
   private readonly activeTools = new Map<string, string>();
   private tokens: TokenUsage = { input: 0, output: 0, total: 0, cost: 0 };
-  private readonly usageEntries: ModelUsageEntry[] = [];
   private stopReason: string | undefined;
   private errorMessage: string | undefined;
   private resolvedModel: string | undefined;
@@ -132,14 +130,12 @@ export class OmpEventParser {
       this.wantsStructured && !this.streamError
         ? tryParseStructuredOutput(this.structuredText)
         : undefined;
-    const usageBreakdown = toUsageBreakdown(this.usageEntries);
     return {
       type: 'result',
       ...(this.sessionId ? { sessionId: this.sessionId } : {}),
       ...(this.numTurns > 0
         ? { tokens: this.tokens, cost: this.tokens.cost, numTurns: this.numTurns }
         : {}),
-      ...(usageBreakdown.length > 0 ? { usageBreakdown } : {}),
       ...(this.stopReason ? { stopReason: this.stopReason } : {}),
       ...(this.resolvedModel ? { resolvedModel: { id: this.resolvedModel } } : {}),
       ...(structuredOutput !== undefined ? { structuredOutput } : {}),
@@ -262,11 +258,6 @@ export class OmpEventParser {
     this.sawAssistantMessage = true;
     this.activeAssistantMessage = false;
     this.accumulateUsage(usage);
-    const usageEntry = messageUsageToEntry(message, usage);
-    if (usageEntry) {
-      const normalized = normalizeModelUsageEntry(usageEntry);
-      if (normalized.ok) this.usageEntries.push(normalized.entry);
-    }
     this.numTurns += 1;
     const provider = stringField(message.provider);
     this.resolvedModel = provider && model ? `${provider}/${model}` : model;
@@ -359,68 +350,4 @@ export class OmpEventParser {
       throw new Error('OMP CLI assistant message_end has invalid usage.');
     }
   }
-}
-
-/**
- * Map one OMP assistant message + usage object to a normalized observation.
- * Stream and transcript parsers share this so primary and hidden rows stay aligned.
- * Missing/blank provider yields no observation — never fabricate `unknown`.
- * Legacy accumulateUsage stays separate and still sums whatever the stream reported.
- */
-export function messageUsageToEntry(
-  message: JsonObject,
-  usage: JsonObject,
-  kind?: ModelUsageEntry['kind']
-): ModelUsageEntry | undefined {
-  const provider =
-    typeof message.provider === 'string' && message.provider.trim().length > 0
-      ? message.provider.trim()
-      : undefined;
-  if (!provider) return undefined;
-
-  const modelRaw = stringField(message.model);
-  let model: string | null;
-  let modelSource: ModelUsageEntry['modelSource'];
-  if (modelRaw) {
-    model = modelRaw;
-    modelSource = 'reported';
-  } else {
-    model = null;
-    modelSource = 'unknown';
-  }
-
-  const cost = asObject(usage.cost);
-  const entry: ModelUsageEntry = {
-    provider,
-    model,
-    modelSource,
-    requests: 1,
-  };
-
-  if (typeof usage.input === 'number' && Number.isFinite(usage.input)) {
-    entry.inputTokens = usage.input;
-  }
-  if (typeof usage.output === 'number' && Number.isFinite(usage.output)) {
-    entry.outputTokens = usage.output;
-  }
-  if (typeof usage.cacheRead === 'number' && Number.isFinite(usage.cacheRead)) {
-    entry.cacheReadTokens = usage.cacheRead;
-  }
-  if (typeof usage.cacheWrite === 'number' && Number.isFinite(usage.cacheWrite)) {
-    entry.cacheWriteTokens = usage.cacheWrite;
-  }
-  const reasoning =
-    typeof usage.reasoningTokens === 'number'
-      ? usage.reasoningTokens
-      : typeof usage.reasoning === 'number'
-        ? usage.reasoning
-        : undefined;
-  if (typeof reasoning === 'number' && Number.isFinite(reasoning)) {
-    entry.reasoningTokens = reasoning;
-  }
-  if (cost && typeof cost.total === 'number' && Number.isFinite(cost.total)) {
-    entry.costUsd = cost.total;
-  }
-  if (kind) entry.kind = kind;
-  return entry;
 }

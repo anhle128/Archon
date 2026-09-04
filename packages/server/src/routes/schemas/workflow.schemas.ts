@@ -10,7 +10,6 @@ import {
   routeLoopDecisionEventDataSchema,
 } from '@archon/core/schemas/workflow-event';
 import { dashboardWorkflowRunSchema as coreDashboardWorkflowRunSchema } from '@archon/core/schemas/workflow-run';
-import { nullableUsageReportResponseSchema } from './usage.schemas';
 
 /** Workflow definition schema — derived from engine schema via direct subpath import. */
 export const workflowDefinitionSchema =
@@ -170,16 +169,6 @@ export const workflowRunDetailSchema = z
     }),
     events: z.array(workflowEventSchema),
     nodeStates: z.array(workflowNodeStateSchema),
-    /**
-     * Direct-run usage grouped by node. Null when the usage query fails;
-     * empty coverage (`hasRecordedUsage: false`) when the run has no usage events.
-     * Never includes child-run charges.
-     *
-     * Uses `nullableUsageReportResponseSchema` (own OpenAPI identity) — never
-     * `usageReportResponseSchema.nullable()`, which would contaminate the shared
-     * non-null `UsageReport` component used by GET /api/usage.
-     */
-    usage: nullableUsageReportResponseSchema,
   })
   .openapi('WorkflowRunDetail');
 

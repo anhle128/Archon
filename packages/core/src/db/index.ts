@@ -22,7 +22,6 @@ export * as workflowDb from './workflows';
 export * as workflowNodeSessionDb from './workflow-node-sessions';
 export * as workflowCheckpointDb from './workflow-checkpoints';
 export * as userDb from './users';
-export * as usageDb from './usage';
 
 // Also export individual functions for direct imports
 export * from './conversations';

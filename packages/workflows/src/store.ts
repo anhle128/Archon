@@ -131,10 +131,6 @@ export const WORKFLOW_EVENT_TYPES = [
   // deliverable. `data.warnings` is the message list. Absence means the YAML was
   // clean OR the run predates this event type — never that delivery failed.
   'workflow_parse_warnings',
-  // Per AI stream-pass usage observation (#node-cost-tracking). Append-only
-  // internal audit event; not mapped to external outbox or dashboard SSE sources.
-  // Payload schema: packages/workflows/src/schemas/usage-breakdown.ts.
-  'node_usage_recorded',
 ] as const;
 
 export type WorkflowEventType = (typeof WORKFLOW_EVENT_TYPES)[number];

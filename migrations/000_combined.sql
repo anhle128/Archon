@@ -8,28 +8,24 @@
 --     COMMENT ON COLUMN — goes in the final "Indexes and column comments"
 --     section, below every ADD COLUMN.
 --
--- 20 Application Tables (+ the 4 remote_agent_auth_* Better Auth tables, listed inline below):
+-- 19 Tables (+ the remote_agent_auth_* Better Auth tables, listed inline below):
 --   1. remote_agent_codebases
---   2. remote_agent_codebase_env_vars
---   3. remote_agent_users
---   4. remote_agent_user_identities
---   5. remote_agent_conversations
---   6. remote_agent_sessions
---   7. remote_agent_isolation_environments
---   8. remote_agent_workflow_runs
---   9. remote_agent_workflow_events
---  10. remote_agent_workflow_node_checkpoints
---  11. remote_agent_workflow_node_sessions
---  12. remote_agent_messages
---  13. remote_agent_user_github_tokens
---  14. remote_agent_user_provider_keys
---  15. remote_agent_user_ai_prefs
---  16. remote_agent_schema_version
---  17. remote_agent_workflow_provider_bindings
---  18. remote_agent_workflow_event_outbox
---  19. remote_agent_workflow_event_delivery_attempts
---  20. remote_agent_usage_ledger
---  21-24. remote_agent_auth_user / session / account / verification (PostgreSQL-only)
+--   1b. remote_agent_codebase_env_vars
+--   1c. remote_agent_users
+--   1d. remote_agent_user_identities
+--   2. remote_agent_conversations
+--   3. remote_agent_sessions
+--   4. remote_agent_isolation_environments
+--   5. remote_agent_workflow_runs
+--   6. remote_agent_workflow_events
+--   6b. remote_agent_workflow_node_sessions
+--   7. remote_agent_messages
+--   8. remote_agent_user_github_tokens
+--   9. remote_agent_user_provider_keys
+--   10. remote_agent_user_ai_prefs
+--   11. remote_agent_workflow_provider_bindings
+--   12. remote_agent_workflow_event_outbox
+--   13. remote_agent_workflow_event_delivery_attempts
 --
 -- Dropped tables (via migrations):
 --   - remote_agent_command_templates (017)
@@ -661,63 +657,6 @@ COMMENT ON TABLE remote_agent_workflow_event_delivery_attempts IS
   'Append-only HTTP delivery attempt history for external workflow events';
 
 -- ============================================================================
--- Table 20: Usage Ledger (normalized child of node_usage_recorded events)
--- ============================================================================
-
-CREATE TABLE IF NOT EXISTS remote_agent_usage_ledger (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  workflow_event_id UUID NOT NULL REFERENCES remote_agent_workflow_events(id) ON DELETE CASCADE,
-  entry_index INTEGER NOT NULL CHECK (entry_index >= 0),
-  agent_provider TEXT NOT NULL CHECK (agent_provider <> ''),
-  provider TEXT NOT NULL CHECK (provider <> ''),
-  model TEXT,
-  model_source TEXT NOT NULL CHECK (model_source IN ('reported', 'requested', 'unknown')),
-  kind TEXT CHECK (kind IS NULL OR kind IN ('advisor', 'subagent')),
-  tokens_input BIGINT CHECK (tokens_input IS NULL OR tokens_input >= 0),
-  tokens_output BIGINT CHECK (tokens_output IS NULL OR tokens_output >= 0),
-  tokens_reasoning BIGINT CHECK (tokens_reasoning IS NULL OR tokens_reasoning >= 0),
-  tokens_cache_read BIGINT CHECK (tokens_cache_read IS NULL OR tokens_cache_read >= 0),
-  tokens_cache_write BIGINT CHECK (tokens_cache_write IS NULL OR tokens_cache_write >= 0),
-  requests BIGINT CHECK (requests IS NULL OR requests > 0),
-  cost_usd DOUBLE PRECISION CHECK (cost_usd IS NULL OR cost_usd >= 0),
-  cost_estimated_usd DOUBLE PRECISION CHECK (cost_estimated_usd IS NULL OR cost_estimated_usd >= 0),
-  pricing_source TEXT CHECK (pricing_source IS NULL OR pricing_source IN ('config', 'catalog')),
-  UNIQUE (workflow_event_id, entry_index),
-  -- At least one token, request, reported-cost, or estimated-cost measure.
-  CHECK (
-    tokens_input IS NOT NULL
-    OR tokens_output IS NOT NULL
-    OR tokens_reasoning IS NOT NULL
-    OR tokens_cache_read IS NOT NULL
-    OR tokens_cache_write IS NOT NULL
-    OR requests IS NOT NULL
-    OR cost_usd IS NOT NULL
-    OR cost_estimated_usd IS NOT NULL
-  ),
-  -- Provider-reported and estimated USD never coexist on one row.
-  CHECK (NOT (cost_usd IS NOT NULL AND cost_estimated_usd IS NOT NULL)),
-  -- pricing_source is present exactly when an estimate is present.
-  CHECK (
-    (cost_estimated_usd IS NULL AND pricing_source IS NULL)
-    OR (cost_estimated_usd IS NOT NULL AND pricing_source IS NOT NULL)
-  ),
-  -- model is null only for unknown source; reported/requested require a model.
-  CHECK (
-    (model_source = 'unknown' AND model IS NULL)
-    OR (model_source IN ('reported', 'requested') AND model IS NOT NULL AND model <> '')
-  ),
-  -- Reasoning tokens are an output subset when both are present.
-  CHECK (
-    tokens_reasoning IS NULL
-    OR tokens_output IS NULL
-    OR tokens_reasoning <= tokens_output
-  )
-);
-
-COMMENT ON TABLE remote_agent_usage_ledger IS
-  'Normalized usage observations owned by node_usage_recorded workflow events; one row per validated usage entry.';
-
--- ============================================================================
 -- Indexes and column comments
 -- ============================================================================
 --
@@ -815,9 +754,6 @@ CREATE INDEX IF NOT EXISTS idx_workflow_runs_parent_run
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_last_activity
   ON remote_agent_workflow_runs(last_activity_at)
   WHERE status = 'running';
-CREATE INDEX IF NOT EXISTS idx_workflow_runs_codebase_id
-  ON remote_agent_workflow_runs(codebase_id);
-
 
 -- Workflow events
 CREATE INDEX IF NOT EXISTS idx_workflow_events_run_id
@@ -833,11 +769,6 @@ CREATE INDEX IF NOT EXISTS idx_workflow_events_created_at
 CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_events_run_order
   ON remote_agent_workflow_events(workflow_run_id, event_order)
   WHERE event_order IS NOT NULL;
--- Partial created_at index for usage-event reporting joins
-CREATE INDEX IF NOT EXISTS idx_workflow_events_usage_created_at
-  ON remote_agent_workflow_events(created_at)
-  WHERE event_type = 'node_usage_recorded';
-
 
 -- Workflow node sessions
 CREATE INDEX IF NOT EXISTS idx_workflow_node_sessions_scope
@@ -884,26 +815,3 @@ COMMENT ON COLUMN remote_agent_workflow_event_outbox.event_body IS
 -- Workflow event delivery attempts
 CREATE INDEX IF NOT EXISTS idx_workflow_event_delivery_attempts_outbox
   ON remote_agent_workflow_event_delivery_attempts(outbox_event_id);
-
--- Usage ledger
-CREATE INDEX IF NOT EXISTS idx_usage_ledger_agent_provider
-  ON remote_agent_usage_ledger(agent_provider);
-CREATE INDEX IF NOT EXISTS idx_usage_ledger_provider_model
-  ON remote_agent_usage_ledger(provider, model);
-
-COMMENT ON COLUMN remote_agent_usage_ledger.workflow_event_id IS
-  'Owning node_usage_recorded workflow event; cascade-deletes with the event.';
-COMMENT ON COLUMN remote_agent_usage_ledger.entry_index IS
-  'Zero-based position of this observation inside the event usage_breakdown array.';
-COMMENT ON COLUMN remote_agent_usage_ledger.agent_provider IS
-  'Archon agent provider id that produced the observation (claude/codex/pi/...).';
-COMMENT ON COLUMN remote_agent_usage_ledger.provider IS
-  'Upstream model-vendor id from the usage entry (anthropic/openai/...).';
-COMMENT ON COLUMN remote_agent_usage_ledger.model_source IS
-  'reported / requested / unknown — agrees with model nullability.';
-COMMENT ON COLUMN remote_agent_usage_ledger.cost_usd IS
-  'Provider-reported billed USD when present; mutually exclusive with cost_estimated_usd.';
-COMMENT ON COLUMN remote_agent_usage_ledger.cost_estimated_usd IS
-  'Point-in-time estimate USD; present only with pricing_source.';
-COMMENT ON COLUMN remote_agent_usage_ledger.pricing_source IS
-  'config or catalog — set exactly when cost_estimated_usd is present.';

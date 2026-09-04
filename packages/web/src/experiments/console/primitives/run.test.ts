@@ -154,44 +154,11 @@ describe('toRun — cost', () => {
     expect(r.costUsd).toBe(1.5);
   });
 
-  test('preserves authoritative reported zero from metadata', () => {
+  test('treats $0.00 (and non-positive) as null — the > 0 guard', () => {
     const zero = toRun(
       raw({ id: 'r1', workflow_name: 'plan', status: 'completed', metadata: { total_cost_usd: 0 } })
     );
-    expect(zero.costUsd).toBe(0);
-  });
-
-  test('rejects negative and non-finite total_cost_usd', () => {
-    expect(
-      toRun(
-        raw({
-          id: 'r1',
-          workflow_name: 'plan',
-          status: 'completed',
-          metadata: { total_cost_usd: -0.01 },
-        })
-      ).costUsd
-    ).toBeNull();
-    expect(
-      toRun(
-        raw({
-          id: 'r1',
-          workflow_name: 'plan',
-          status: 'completed',
-          metadata: { total_cost_usd: Number.NaN },
-        })
-      ).costUsd
-    ).toBeNull();
-    expect(
-      toRun(
-        raw({
-          id: 'r1',
-          workflow_name: 'plan',
-          status: 'completed',
-          metadata: { total_cost_usd: Number.POSITIVE_INFINITY },
-        })
-      ).costUsd
-    ).toBeNull();
+    expect(zero.costUsd).toBeNull();
   });
 
   test('cost is null when metadata is absent or non-numeric', () => {

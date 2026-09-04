@@ -1742,24 +1742,29 @@ describe('workflows database', () => {
   });
 
   describe('deleteOldWorkflowRuns', () => {
-    test('cleans retry refs and deletes events then runs via withTransaction', async () => {
+    test('cleans retry refs and executes BEGIN, two DELETEs (events then runs), and COMMIT', async () => {
       mockQuery
         .mockResolvedValueOnce(
           createQueryResult([{ id: 'old-run-1', working_path: '/workspace/repo' }])
-        ) // eligible run SELECT (public)
-        .mockResolvedValueOnce(createQueryResult([], 0)) // events DELETE (tx)
-        .mockResolvedValueOnce(createQueryResult([], 3)); // runs DELETE (tx)
+        ) // eligible run SELECT
+        .mockResolvedValueOnce(createQueryResult([])) // BEGIN
+        .mockResolvedValueOnce(createQueryResult([], 0)) // events DELETE
+        .mockResolvedValueOnce(createQueryResult([], 3)) // runs DELETE
+        .mockResolvedValueOnce(createQueryResult([])); // COMMIT
 
       const result = await deleteOldWorkflowRuns(30);
 
       expect(result.count).toBe(3);
       expect(mockDeleteRetryRefsByRunId).toHaveBeenCalledWith('/workspace/repo', 'old-run-1');
-      expect(mockWithTransaction).toHaveBeenCalledTimes(1);
-      expect(mockQuery).toHaveBeenCalledTimes(3);
-      const sqls = mockQuery.mock.calls.map(call => (call as [string, unknown[]])[0]);
-      expect(sqls.some(s => s === 'BEGIN' || s === 'COMMIT' || s === 'ROLLBACK')).toBe(false);
-      expect(sqls[1]).toContain('remote_agent_workflow_events');
-      expect(sqls[2]).toContain("status IN ('completed', 'failed', 'cancelled')");
+      expect(mockQuery).toHaveBeenCalledTimes(5);
+      const [beginSql] = mockQuery.mock.calls[1] as [string, unknown[]];
+      expect(beginSql).toBe('BEGIN');
+      const [eventsSql] = mockQuery.mock.calls[2] as [string, unknown[]];
+      expect(eventsSql).toContain('remote_agent_workflow_events');
+      const [runsSql] = mockQuery.mock.calls[3] as [string, unknown[]];
+      expect(runsSql).toContain("status IN ('completed', 'failed', 'cancelled')");
+      const [commitSql] = mockQuery.mock.calls[4] as [string, unknown[]];
+      expect(commitSql).toBe('COMMIT');
     });
 
     test('uses PostgreSQL INTERVAL syntax', async () => {
@@ -1767,7 +1772,7 @@ describe('workflows database', () => {
 
       await deleteOldWorkflowRuns(7);
 
-      const [eventsSql] = mockQuery.mock.calls[1] as [string, unknown[]];
+      const [eventsSql] = mockQuery.mock.calls[2] as [string, unknown[]];
       expect(eventsSql).toContain("INTERVAL '7 days'");
     });
 
@@ -1777,15 +1782,15 @@ describe('workflows database', () => {
         .mockResolvedValueOnce(
           createQueryResult([{ id: 'old-run-1', working_path: '/workspace/repo' }])
         )
+        .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([], 0))
-        .mockResolvedValueOnce(createQueryResult([], 1));
+        .mockResolvedValueOnce(createQueryResult([], 1))
+        .mockResolvedValueOnce(createQueryResult([]));
 
       const result = await deleteOldWorkflowRuns(30);
 
       expect(result.count).toBe(1);
-      expect(mockWithTransaction).toHaveBeenCalledTimes(1);
-      const sqls = mockQuery.mock.calls.map(call => (call as [string, unknown[]])[0]);
-      expect(sqls).not.toContain('COMMIT');
+      expect(mockQuery).toHaveBeenCalledWith('COMMIT', []);
     });
 
     test('validates olderThanDays is a non-negative integer', async () => {
@@ -1796,57 +1801,62 @@ describe('workflows database', () => {
     test('rolls back and throws on database error', async () => {
       mockQuery
         .mockResolvedValueOnce(createQueryResult([])) // eligible run SELECT
-        .mockRejectedValueOnce(new Error('disk full')); // events DELETE fails inside tx
+        .mockResolvedValueOnce(createQueryResult([])) // BEGIN
+        .mockRejectedValueOnce(new Error('disk full')); // events DELETE fails
 
       await expect(deleteOldWorkflowRuns(30)).rejects.toThrow(
         'Failed to clean up old workflow runs: disk full'
       );
-      expect(mockWithTransaction).toHaveBeenCalledTimes(1);
     });
   });
 
   describe('deleteWorkflowRun', () => {
     test('deletes events then run within a transaction for terminal run', async () => {
       mockQuery
+        .mockResolvedValueOnce(createQueryResult([])) // BEGIN
         .mockResolvedValueOnce(createQueryResult([{ status: 'completed', working_path: '/repo' }])) // SELECT guard
         .mockResolvedValueOnce(createQueryResult([], 1)) // events DELETE
-        .mockResolvedValueOnce(createQueryResult([], 1)); // run DELETE
+        .mockResolvedValueOnce(createQueryResult([], 1)) // run DELETE
+        .mockResolvedValueOnce(createQueryResult([])); // COMMIT
 
       await deleteWorkflowRun('run-123');
 
       expect(mockDeleteRetryRefsByRunId).toHaveBeenCalledWith('/repo', 'run-123');
-      expect(mockWithTransaction).toHaveBeenCalledTimes(1);
-      expect(mockQuery).toHaveBeenCalledTimes(3);
-      const sqls = mockQuery.mock.calls.map(call => (call as [string, unknown[]])[0]);
-      expect(sqls.some(s => s === 'BEGIN' || s === 'COMMIT' || s === 'ROLLBACK')).toBe(false);
-      expect(sqls[0]).toContain('SELECT status');
-      expect(sqls[1]).toContain('remote_agent_workflow_events');
-      expect(sqls[2]).toContain('remote_agent_workflow_runs');
+      expect(mockQuery).toHaveBeenCalledTimes(5);
+      const [selectSql] = mockQuery.mock.calls[1] as [string, unknown[]];
+      expect(selectSql).toContain('SELECT status');
+      const [eventsSql] = mockQuery.mock.calls[2] as [string, unknown[]];
+      expect(eventsSql).toContain('remote_agent_workflow_events');
+      const [runsSql] = mockQuery.mock.calls[3] as [string, unknown[]];
+      expect(runsSql).toContain('remote_agent_workflow_runs');
     });
 
     test('throws "not found" when run does not exist', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([])); // SELECT guard — empty
+      mockQuery
+        .mockResolvedValueOnce(createQueryResult([])) // BEGIN
+        .mockResolvedValueOnce(createQueryResult([])); // SELECT guard — empty
 
       await expect(deleteWorkflowRun('missing')).rejects.toThrow('Workflow run not found: missing');
-      expect(mockWithTransaction).toHaveBeenCalledTimes(1);
     });
 
     test('throws when run is not in terminal status', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([{ status: 'running' }])); // SELECT guard
+      mockQuery
+        .mockResolvedValueOnce(createQueryResult([])) // BEGIN
+        .mockResolvedValueOnce(createQueryResult([{ status: 'running' }])); // SELECT guard
 
       await expect(deleteWorkflowRun('run-active')).rejects.toThrow(
         "Cannot delete workflow run in 'running' status"
       );
-      expect(mockWithTransaction).toHaveBeenCalledTimes(1);
     });
 
     test('throws on database error', async () => {
-      mockQuery.mockRejectedValueOnce(new Error('constraint violation'));
+      mockQuery
+        .mockResolvedValueOnce(createQueryResult([])) // BEGIN
+        .mockRejectedValueOnce(new Error('constraint violation'));
 
       await expect(deleteWorkflowRun('run-123')).rejects.toThrow(
         'Failed to delete workflow run: constraint violation'
       );
-      expect(mockWithTransaction).toHaveBeenCalledTimes(1);
     });
   });
 });

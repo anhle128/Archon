@@ -245,7 +245,7 @@ describe('modelCountByBackend', () => {
       id,
       name: id,
       reasoning: false,
-      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+      cost: { input: 1, output: 2 },
       contextWindow: 100000,
     });
     const counts = modelCountByBackend([model('groq', 'a'), model('groq', 'b'), model('xai', 'c')]);

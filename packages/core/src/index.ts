@@ -54,7 +54,6 @@ export * as isolationEnvDb from './db/isolation-environments';
 export * as workflowDb from './db/workflows';
 export * as messageDb from './db/messages';
 export * as userDb from './db/users';
-export * as usageDb from './db/usage';
 
 // Re-export SessionNotFoundError for error handling
 export { SessionNotFoundError } from './db/sessions';
@@ -76,9 +75,6 @@ export type { ChildWorktreeResolverConfig } from './workflows/child-isolation-re
 
 // Workflow Events DB
 export * as workflowEventDb from './db/workflow-events';
-
-// Usage ledger writes (atomic with node_usage_recorded events)
-export { createWorkflowUsageRecorder } from './workflows/usage-recorder';
 
 // =============================================================================
 // Operations (shared business logic for CLI and command-handler)
@@ -130,23 +126,6 @@ export {
   type TiersPatch,
   type AliasesPatch,
 } from './config/config-loader';
-
-// =============================================================================
-// Usage accounting (pricing estimates)
-// =============================================================================
-export {
-  buildCatalogPricingIndex,
-  buildConfigPricingIndex,
-  estimateTokensUsd,
-  loadPricingLookups,
-  materializeUsageCost,
-  selectRatesForAggregate,
-  type ConfigPricingIndex,
-  type MaterializedUsageCost,
-  type PricingLookups,
-  type PricingRates,
-  type PricingRateTier,
-} from './usage/estimate';
 
 // =============================================================================
 // Services

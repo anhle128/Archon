@@ -1,5 +1,3 @@
-import type { TokenUsage, UsageBreakdown } from '../../types';
-
 const RATE_LIMIT_PATTERNS = ['rate limit', 'too many requests', '429', 'overloaded'];
 const AUTH_PATTERNS = ['unauthorized', 'authentication', 'invalid token', '401', '403', 'api key'];
 const CRASH_PATTERNS = [
@@ -73,36 +71,4 @@ export function enrichOpencodeError(error: unknown, errorClass: RetryableErrorCl
   const err = new Error(`OpenCode ${errorClass}: ${errorMessage(error)}`);
   if (error instanceof Error) err.cause = error;
   return err;
-}
-
-/**
- * Late OpenCode failure that still observed authoritative assistant usage.
- * Provider retries/exhaustion merge these observations into the terminal result.
- */
-export class OpencodeUsageBearingError extends Error {
-  readonly usageBreakdown?: UsageBreakdown;
-  readonly tokens?: TokenUsage;
-  readonly cost?: number;
-  readonly sessionId?: string;
-
-  constructor(
-    message: string,
-    extras?: {
-      usageBreakdown?: UsageBreakdown;
-      tokens?: TokenUsage;
-      cost?: number;
-      sessionId?: string;
-      cause?: unknown;
-    }
-  ) {
-    super(message);
-    this.name = 'OpencodeUsageBearingError';
-    if (extras?.usageBreakdown) this.usageBreakdown = extras.usageBreakdown;
-    if (extras?.tokens) this.tokens = extras.tokens;
-    if (extras?.cost !== undefined) this.cost = extras.cost;
-    if (extras?.sessionId) this.sessionId = extras.sessionId;
-    if (extras?.cause !== undefined) {
-      this.cause = extras.cause;
-    }
-  }
 }

@@ -134,22 +134,13 @@ function resolveModel(
   options: SendQueryOptions | undefined,
   chunk?: MessageChunk
 ): string | undefined {
-  // Precedence: terminal resolvedModel → effective options.model → configured
-  // assistant model → absent. Never guess from a multi-model usage array.
-  if (chunk?.type === 'result' && chunk.resolvedModel?.id) {
-    const resolved = chunk.resolvedModel.id.trim();
-    if (resolved.length > 0) return resolved;
-  }
-
-  if (options?.model) {
-    const requested = options.model.trim();
-    if (requested.length > 0) return requested;
-  }
+  if (options?.model) return options.model;
 
   const configuredModel = options?.assistantConfig?.model;
-  if (typeof configuredModel === 'string') {
-    const configured = configuredModel.trim();
-    if (configured.length > 0) return configured;
+  if (typeof configuredModel === 'string') return configuredModel;
+
+  if (chunk?.type === 'result' && chunk.modelUsage) {
+    return Object.keys(chunk.modelUsage)[0];
   }
 
   return undefined;

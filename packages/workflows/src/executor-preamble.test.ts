@@ -144,9 +144,6 @@ function makePlatform(): IWorkflowPlatform & { sendMessage: ReturnType<typeof mo
 function makeDeps(store?: IWorkflowStore): WorkflowDeps {
   return {
     store: store ?? makeStore(),
-    usageRecorder: {
-      recordWorkflowUsage: mock(async () => {}),
-    },
     loadConfig: mock(
       async (): Promise<WorkflowConfig> => ({
         assistant: 'claude' as const,

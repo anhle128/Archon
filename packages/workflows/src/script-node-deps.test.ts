@@ -156,9 +156,6 @@ const mockGetAgentProvider = mock(() => ({
 function createMockDeps(): WorkflowDeps {
   return {
     store: createMockStore(),
-    usageRecorder: {
-      recordWorkflowUsage: mock(() => Promise.resolve()),
-    },
     getAgentProvider: mockGetAgentProvider,
     loadConfig: mock(() =>
       Promise.resolve({

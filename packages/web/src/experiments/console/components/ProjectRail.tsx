@@ -1,13 +1,6 @@
 import { useCallback, useMemo, useRef, useState, type ReactElement } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router';
-import {
-  Settings,
-  Workflow,
-  ArrowLeft,
-  PenTool,
-  CircleDollarSign,
-  type LucideIcon,
-} from 'lucide-react';
+import { Settings, Workflow, ArrowLeft, PenTool, type LucideIcon } from 'lucide-react';
 import { ProjectRow } from './ProjectRow';
 import { EnvVarsDialog } from './EnvVarsDialog';
 import { useEntity, invalidate } from '../store/cache';
@@ -319,13 +312,6 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
           title="Visual workflow builder (beta)"
           badge="beta"
         />
-        <RailNavLink
-          to="/console/cost"
-          icon={CircleDollarSign}
-          label="Cost"
-          title="Usage and cost (installation)"
-        />
-
         <RailNavLink
           to="/console/settings"
           icon={Settings}

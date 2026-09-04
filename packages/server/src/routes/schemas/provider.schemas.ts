@@ -39,28 +39,6 @@ export const providerListResponseSchema = z
   })
   .openapi('ProviderListResponse');
 
-/** One request-wide Pi pricing tier (USD per million tokens). */
-const piModelCostTierSchema = z
-  .object({
-    inputTokensAbove: z.number(),
-    input: z.number(),
-    output: z.number(),
-    cacheRead: z.number(),
-    cacheWrite: z.number(),
-  })
-  .openapi('PiModelCostTier');
-
-/** Pi catalog cost rates including cache dimensions and optional tiers. */
-const piModelCostSchema = z
-  .object({
-    input: z.number(),
-    output: z.number(),
-    cacheRead: z.number(),
-    cacheWrite: z.number(),
-    tiers: z.array(piModelCostTierSchema).optional(),
-  })
-  .openapi('PiModelCost');
-
 /** One Pi catalog model — metadata only (no credentials). */
 export const piModelInfoSchema = z
   .object({
@@ -69,7 +47,7 @@ export const piModelInfoSchema = z
     id: z.string(),
     name: z.string(),
     reasoning: z.boolean(),
-    cost: piModelCostSchema,
+    cost: z.object({ input: z.number(), output: z.number() }),
     contextWindow: z.number(),
   })
   .openapi('PiModelInfo');

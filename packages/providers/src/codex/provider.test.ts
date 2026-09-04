@@ -11,17 +11,6 @@ mock.module('@archon/paths', () => ({
 
 /** Default usage matching Codex SDK's Usage type (required on TurnCompletedEvent) */
 const defaultUsage = { input_tokens: 10, cached_input_tokens: 0, output_tokens: 5 };
-/** Normalized observation for `defaultUsage` when no effective model is known. */
-const defaultUsageBreakdown = [
-  {
-    provider: 'openai',
-    model: null,
-    modelSource: 'unknown',
-    inputTokens: 10,
-    cacheReadTokens: 0,
-    outputTokens: 5,
-  },
-] as const;
 
 // Create mock runStreamed first (before it's referenced)
 const mockRunStreamed = mock(() =>
@@ -290,7 +279,6 @@ describe('CodexProvider', () => {
         type: 'result',
         sessionId: 'new-thread-id',
         tokens: { input: 10, output: 5 },
-        usageBreakdown: defaultUsageBreakdown,
       });
     });
 
@@ -320,7 +308,6 @@ describe('CodexProvider', () => {
         type: 'result',
         sessionId: 'evt-thread-id',
         tokens: { input: 10, output: 5 },
-        usageBreakdown: defaultUsageBreakdown,
       });
     });
 
@@ -965,7 +952,6 @@ describe('CodexProvider', () => {
         type: 'result',
         sessionId: 'new-thread-id',
         tokens: { input: 10, output: 5 },
-        usageBreakdown: defaultUsageBreakdown,
       });
     });
 
@@ -1061,7 +1047,6 @@ describe('CodexProvider', () => {
         type: 'result',
         sessionId: 'fallback-thread',
         tokens: { input: 10, output: 5 },
-        usageBreakdown: defaultUsageBreakdown,
         // A requested resume that fell back to a fresh thread is reported as cold.
         resumed: false,
       });
@@ -1727,7 +1712,6 @@ describe('CodexProvider', () => {
         type: 'result',
         sessionId: 'new-thread-id',
         tokens: { input: 10, output: 5 },
-        usageBreakdown: defaultUsageBreakdown,
       });
       expect(mockLogger.error).toHaveBeenCalledWith({ message: 'Transient blip' }, 'stream_error');
     });
@@ -1778,7 +1762,6 @@ describe('CodexProvider', () => {
         type: 'result',
         sessionId: 'new-thread-id',
         tokens: { input: 10, output: 5 },
-        usageBreakdown: defaultUsageBreakdown,
       });
       // Logged but not surfaced as failure
       expect(mockLogger.error).toHaveBeenCalledWith(
@@ -1843,7 +1826,6 @@ describe('CodexProvider', () => {
           type: 'result',
           sessionId: 'new-thread-id',
           tokens: { input: 10, output: 5 },
-          usageBreakdown: defaultUsageBreakdown,
         });
       } finally {
         await rm(testDir, { recursive: true, force: true });
@@ -2011,7 +1993,6 @@ describe('CodexProvider', () => {
         type: 'result',
         sessionId: 'new-thread-id',
         tokens: { input: 10, output: 5 },
-        usageBreakdown: defaultUsageBreakdown,
       });
     });
 
@@ -2633,107 +2614,4 @@ describe('sendQuery decomposition behaviors', () => {
       process.removeListener('uncaughtException', handler);
     }
   }, 5_000);
-});
-
-describe('usageBreakdown normalization (US-002)', () => {
-  let client: CodexProvider;
-
-  beforeEach(() => {
-    resetCodexSingleton();
-    client = new CodexProvider({ retryBaseDelayMs: 1 });
-    mockRunStreamed.mockClear();
-    mockStartThread.mockClear();
-    mockResumeThread.mockClear();
-    mockLogger.info.mockClear();
-    mockLogger.warn.mockClear();
-    mockLogger.error.mockClear();
-    mockLogger.debug.mockClear();
-    mockStartThread.mockReturnValue(createMockThread('new-thread-id'));
-    mockResumeThread.mockReturnValue(createMockThread('resumed-thread-id'));
-  });
-
-  test('maps requested model, cache subtraction, and reasoning subset; omits requests/USD', async () => {
-    mockRunStreamed.mockResolvedValue({
-      events: (async function* () {
-        yield {
-          type: 'turn.completed',
-          usage: {
-            input_tokens: 100,
-            cached_input_tokens: 40,
-            output_tokens: 30,
-            reasoning_output_tokens: 12,
-          },
-        };
-      })(),
-    });
-
-    const chunks = [];
-    for await (const chunk of client.sendQuery('test', '/workspace', undefined, {
-      model: 'gpt-5-codex',
-    })) {
-      chunks.push(chunk);
-    }
-
-    expect(chunks[0]).toMatchObject({
-      type: 'result',
-      // Legacy total input unchanged
-      tokens: { input: 100, output: 30 },
-      usageBreakdown: [
-        {
-          provider: 'openai',
-          model: 'gpt-5-codex',
-          modelSource: 'requested',
-          inputTokens: 60,
-          cacheReadTokens: 40,
-          outputTokens: 30,
-          reasoningTokens: 12,
-        },
-      ],
-    });
-    expect(chunks[0].usageBreakdown?.[0]).not.toHaveProperty('requests');
-    expect(chunks[0].usageBreakdown?.[0]).not.toHaveProperty('costUsd');
-  });
-
-  test('clamps cache greater than input to zero non-cached input', async () => {
-    mockRunStreamed.mockResolvedValue({
-      events: (async function* () {
-        yield {
-          type: 'turn.completed',
-          usage: {
-            input_tokens: 10,
-            cached_input_tokens: 25,
-            output_tokens: 3,
-            reasoning_output_tokens: 1,
-          },
-        };
-      })(),
-    });
-    const chunks = [];
-    for await (const chunk of client.sendQuery('test', '/workspace')) chunks.push(chunk);
-    expect(chunks[0].usageBreakdown?.[0]).toMatchObject({
-      inputTokens: 0,
-      cacheReadTokens: 25,
-      outputTokens: 3,
-      reasoningTokens: 1,
-      model: null,
-      modelSource: 'unknown',
-    });
-  });
-
-  test('records no usage entry for incomplete turns without turn.completed.usage', async () => {
-    mockRunStreamed.mockResolvedValue({
-      events: (async function* () {
-        yield { type: 'turn.failed', error: { message: 'aborted' } };
-      })(),
-    });
-    const chunks = [];
-    for await (const chunk of client.sendQuery('test', '/workspace')) chunks.push(chunk);
-    expect(chunks[0]).toMatchObject({
-      type: 'result',
-      isError: true,
-      errorSubtype: 'codex_turn_failed',
-    });
-    expect(chunks[0]).not.toHaveProperty('usageBreakdown');
-    expect(chunks[0]).not.toHaveProperty('tokens');
-  });
 });

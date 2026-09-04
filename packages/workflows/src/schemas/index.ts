@@ -184,28 +184,6 @@ export type { WorkflowNodeSession } from './workflow-node-session';
 export { nodeArtifactSchema } from './node-artifact';
 export type { NodeArtifact } from './node-artifact';
 
-// Provider usage breakdown + node_usage_recorded event payload
-export {
-  modelSourceSchema,
-  modelUsageEntrySchema,
-  usageBreakdownSchema,
-  modelUsageEntryPersistedSchema,
-  nodeUsageRecordedEventDataSchema,
-  toPersistedUsageEntry,
-  buildNodeUsageRecordedEventData,
-  validateProviderUsageAtBoundary,
-} from './usage-breakdown';
-export type {
-  ModelSource,
-  ModelUsageEntry,
-  UsageBreakdown,
-  ModelUsageEntryPersisted,
-  NodeUsageRecordedEventData,
-  BuildNodeUsageRecordedEventDataInput,
-  UsageEntryRejection,
-  ValidateProviderUsageResult,
-} from './usage-breakdown';
-
 // Result types (non-schema hand-written types)
 export type {
   LoadCommandResult,

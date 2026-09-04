@@ -36,7 +36,7 @@ import { COPILOT_CAPABILITIES } from './capabilities';
 import { COPILOT_EFFORTS, parseCopilotConfig, type CopilotProviderDefaults } from './config';
 import { clampEffort } from '../../shared/effort';
 import { resolveCopilotBinaryPath } from './binary-resolver';
-import { bridgeSession, CopilotUsageBearingError } from './event-bridge';
+import { bridgeSession } from './event-bridge';
 
 // `ReasoningEffort` is defined in the SDK but not re-exported from its barrel
 // (as of @github/copilot-sdk@0.2.2), so the vocabulary is mirrored in ./config
@@ -619,21 +619,6 @@ export class CopilotProvider implements IAgentProvider {
       log.info({ sessionId: session.sessionId }, 'copilot.prompt_completed');
     } catch (err) {
       log.error({ err, sessionId: session.sessionId }, 'copilot.prompt_failed');
-      // Observed assistant.usage before a late SDK rejection → one terminal
-      // isError result (friendly message retained) so the executor records
-      // spend once and still fails the node. No-usage rejections throw.
-      if (err instanceof CopilotUsageBearingError && err.usageBreakdown) {
-        const friendly = buildFriendlyCopilotError(err);
-        yield {
-          type: 'result',
-          isError: true,
-          sessionId: err.sessionId ?? session.sessionId,
-          errors: [friendly.message],
-          usageBreakdown: err.usageBreakdown,
-          ...(err.tokens ? { tokens: err.tokens } : {}),
-        };
-        return;
-      }
       throw buildFriendlyCopilotError(err);
     } finally {
       // Stop the client so its CLI subprocess shuts down; bridgeSession already

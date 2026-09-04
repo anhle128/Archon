@@ -117,9 +117,7 @@ export function normalizeOrigin(s: string | null | undefined): RunOrigin {
 function readCost(meta: Record<string, unknown> | undefined): number | null {
   if (meta === undefined) return null;
   const raw = meta.total_cost_usd;
-  // Finite non-negative only — authoritative reported zero survives; negatives/NaN
-  // never become a legacy total.
-  return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : null;
+  return typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : null;
 }
 
 /**

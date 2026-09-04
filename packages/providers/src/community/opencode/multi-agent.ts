@@ -1,8 +1,8 @@
 import { createLogger } from '@archon/paths';
 
-import type { MessageChunk, SendQueryOptions } from '../../types';
+import type { MessageChunk, SendQueryOptions, TokenUsage } from '../../types';
 import { getOrderedAgents, type NamedAgentConfig } from './agent-config';
-import { errorMessage, OpencodeUsageBearingError } from './errors';
+import { errorMessage } from './errors';
 import type { OpencodeClientLike } from './runtime';
 import {
   abortableStream,
@@ -10,12 +10,7 @@ import {
   promptSession,
   resolveSessionId,
 } from './session';
-import {
-  normalizeTokens,
-  packageAssistantUsage,
-  sumTokenUsages,
-  usageBreakdownFromAssistantInfos,
-} from './tokens';
+import { normalizeTokens } from './tokens';
 
 interface ProviderModel {
   providerID: string;
@@ -27,10 +22,8 @@ interface AgentRunState {
   cwd: string;
   sessionId: string;
   chunks: MessageChunk[];
-  /** Latest assistant info by message id — repeated updates replace same entry. */
-  assistantInfoById: Map<string, Record<string, unknown>>;
+  latestAssistantInfo?: Record<string, unknown>;
   lastAssistantMessageId?: string;
-  lastAssistantInfo?: Record<string, unknown>;
   done: boolean;
 }
 
@@ -139,7 +132,6 @@ export async function* streamMultiAgentOpencodeSession(
   const streamController = new AbortController();
   const sessionToAgent = new Map<string, AgentRunState>();
   let aborted = requestOptions?.abortSignal?.aborted === true;
-  let managedFailure: Error | undefined;
 
   const abortAll = async (): Promise<void> => {
     await Promise.all(
@@ -177,7 +169,6 @@ export async function* streamMultiAgentOpencodeSession(
           cwd,
           sessionId,
           chunks: [],
-          assistantInfoById: new Map(),
           done: false,
         };
         sessionToAgent.set(sessionId, state);
@@ -210,253 +201,197 @@ export async function* streamMultiAgentOpencodeSession(
     // Phase 3: Listen to events and demux by sessionID
     getLog().info({ nodeId }, 'opencode.multi_agent_listening');
     let eventCount = 0;
-    try {
-      for await (const rawEvent of abortableStream(events.stream, streamController.signal)) {
-        eventCount++;
-        if (eventCount <= 5) {
-          getLog().info(
-            { nodeId, eventCount, eventType: (rawEvent as { type?: string })?.type },
-            'opencode.multi_agent_event_received'
-          );
-        }
-        const event = rawEvent as {
-          type?: string;
-          properties?: Record<string, unknown>;
-        };
-        const properties = isRecord(event.properties) ? event.properties : {};
+    for await (const rawEvent of abortableStream(events.stream, streamController.signal)) {
+      eventCount++;
+      if (eventCount <= 5) {
+        getLog().info(
+          { nodeId, eventCount, eventType: (rawEvent as { type?: string })?.type },
+          'opencode.multi_agent_event_received'
+        );
+      }
+      const event = rawEvent as {
+        type?: string;
+        properties?: Record<string, unknown>;
+      };
+      const properties = isRecord(event.properties) ? event.properties : {};
 
-        if (event.type === 'message.updated') {
-          const info = isRecord(properties.info) ? properties.info : undefined;
-          const sessionId = typeof info?.sessionID === 'string' ? info.sessionID : undefined;
-          const state = sessionId ? sessionToAgent.get(sessionId) : undefined;
-          if (!state || info?.role !== 'assistant') continue;
-          state.lastAssistantInfo = info;
-          if (typeof info.id === 'string' && info.id.length > 0) {
-            state.assistantInfoById.set(info.id, info);
-            state.lastAssistantMessageId = info.id;
+      if (event.type === 'message.updated') {
+        const info = isRecord(properties.info) ? properties.info : undefined;
+        const sessionId = typeof info?.sessionID === 'string' ? info.sessionID : undefined;
+        const state = sessionId ? sessionToAgent.get(sessionId) : undefined;
+        if (!state || info?.role !== 'assistant') continue;
+        state.latestAssistantInfo = info;
+        if (typeof info.id === 'string') {
+          state.lastAssistantMessageId = info.id;
+        }
+        continue;
+      }
+
+      if (event.type === 'message.part.updated') {
+        const part = isRecord(properties.part) ? properties.part : undefined;
+        const sessionId = typeof part?.sessionID === 'string' ? part.sessionID : undefined;
+        const state = sessionId ? sessionToAgent.get(sessionId) : undefined;
+        if (!state || typeof part?.type !== 'string') continue;
+
+        if (part.type === 'text') {
+          const delta = typeof properties.delta === 'string' ? properties.delta : undefined;
+          const text = delta ?? (typeof part.text === 'string' ? part.text : '');
+          if (text) {
+            state.chunks.push({ type: 'assistant', content: text });
           }
           continue;
         }
 
-        if (event.type === 'message.part.updated') {
-          const part = isRecord(properties.part) ? properties.part : undefined;
-          const sessionId = typeof part?.sessionID === 'string' ? part.sessionID : undefined;
-          const state = sessionId ? sessionToAgent.get(sessionId) : undefined;
-          if (!state || typeof part?.type !== 'string') continue;
+        if (part.type === 'reasoning') {
+          const delta = typeof properties.delta === 'string' ? properties.delta : undefined;
+          const text = delta ?? (typeof part.text === 'string' ? part.text : '');
+          if (text) {
+            state.chunks.push({ type: 'thinking', content: text });
+          }
+          continue;
+        }
 
-          if (part.type === 'text') {
-            const delta = typeof properties.delta === 'string' ? properties.delta : undefined;
-            const text = delta ?? (typeof part.text === 'string' ? part.text : '');
-            if (text) {
-              state.chunks.push({ type: 'assistant', content: text });
-            }
-            continue;
+        if (part.type === 'tool') {
+          const rawCallId = typeof part.callID === 'string' ? part.callID : undefined;
+          const toolName = typeof part.tool === 'string' ? part.tool : 'unknown';
+          const stateRecord = isRecord(part.state) ? part.state : undefined;
+          const toolInput = isRecord(stateRecord?.input) ? stateRecord.input : undefined;
+          const status = typeof stateRecord?.status === 'string' ? stateRecord.status : undefined;
+          const scopedCallId = rawCallId ? `${state.agent.key}:${rawCallId}` : undefined;
+
+          if (scopedCallId && !seenToolCalls.has(scopedCallId)) {
+            seenToolCalls.add(scopedCallId);
+            state.chunks.push({
+              type: 'tool',
+              toolName,
+              ...(toolInput ? { toolInput } : {}),
+              toolCallId: scopedCallId,
+            });
           }
 
-          if (part.type === 'reasoning') {
-            const delta = typeof properties.delta === 'string' ? properties.delta : undefined;
-            const text = delta ?? (typeof part.text === 'string' ? part.text : '');
-            if (text) {
-              state.chunks.push({ type: 'thinking', content: text });
-            }
-            continue;
-          }
-
-          if (part.type === 'tool') {
-            const rawCallId = typeof part.callID === 'string' ? part.callID : undefined;
-            const toolName = typeof part.tool === 'string' ? part.tool : 'unknown';
-            const stateRecord = isRecord(part.state) ? part.state : undefined;
-            const toolInput = isRecord(stateRecord?.input) ? stateRecord.input : undefined;
-            const status = typeof stateRecord?.status === 'string' ? stateRecord.status : undefined;
-            const scopedCallId = rawCallId ? `${state.agent.key}:${rawCallId}` : undefined;
-
-            if (scopedCallId && !seenToolCalls.has(scopedCallId)) {
-              seenToolCalls.add(scopedCallId);
+          if (scopedCallId && !completedToolCalls.has(scopedCallId)) {
+            if (status === 'completed') {
+              completedToolCalls.add(scopedCallId);
               state.chunks.push({
-                type: 'tool',
+                type: 'tool_result',
                 toolName,
-                ...(toolInput ? { toolInput } : {}),
+                toolOutput: typeof stateRecord?.output === 'string' ? stateRecord.output : '',
                 toolCallId: scopedCallId,
+                toolOutcome: 'success',
+              });
+            } else if (status === 'error') {
+              completedToolCalls.add(scopedCallId);
+              state.chunks.push({
+                type: 'tool_result',
+                toolName,
+                toolOutput:
+                  typeof stateRecord?.error === 'string' ? stateRecord.error : 'Tool failed',
+                toolCallId: scopedCallId,
+                toolOutcome: 'error',
               });
             }
-
-            if (scopedCallId && !completedToolCalls.has(scopedCallId)) {
-              if (status === 'completed') {
-                completedToolCalls.add(scopedCallId);
-                state.chunks.push({
-                  type: 'tool_result',
-                  toolName,
-                  toolOutput: typeof stateRecord?.output === 'string' ? stateRecord.output : '',
-                  toolCallId: scopedCallId,
-                  toolOutcome: 'success',
-                });
-              } else if (status === 'error') {
-                completedToolCalls.add(scopedCallId);
-                state.chunks.push({
-                  type: 'tool_result',
-                  toolName,
-                  toolOutput:
-                    typeof stateRecord?.error === 'string' ? stateRecord.error : 'Tool failed',
-                  toolCallId: scopedCallId,
-                  toolOutcome: 'error',
-                });
-              }
-            }
-          }
-          continue;
-        }
-
-        if (event.type === 'session.error') {
-          const sessionId =
-            typeof properties.sessionID === 'string' ? properties.sessionID : undefined;
-          const state = sessionId ? sessionToAgent.get(sessionId) : undefined;
-          if (!state) continue;
-          await abortAll();
-          const rawError = isRecord(properties.error) ? properties.error : properties;
-          managedFailure = createMultiAgentFailureError({
-            message: `[${state.agent.key}] ${errorMessage(rawError)}`,
-            cause: rawError,
-            sessionId: state.sessionId,
-            states,
-          });
-          throw managedFailure;
-        }
-
-        if (event.type === 'session.idle') {
-          const sessionId =
-            typeof properties.sessionID === 'string' ? properties.sessionID : undefined;
-          const state = sessionId ? sessionToAgent.get(sessionId) : undefined;
-          if (!state) continue;
-          state.done = true;
-          getLog().info(
-            {
-              nodeId,
-              agent: state.agent.key,
-              sessionId,
-              doneCount: states.filter(s => s.done).length,
-              totalCount: states.length,
-            },
-            'opencode.multi_agent_session_idle'
-          );
-
-          // Check if all agents are done
-          if (states.every(candidate => candidate.done)) {
-            // Emit collected tool chunks first
-            const toolChunks = collectToolChunksForEmission(states);
-            for (const chunk of toolChunks) {
-              yield chunk;
-            }
-
-            // Emit combined assistant output
-            yield {
-              type: 'assistant',
-              content: formatBufferedAssistantOutput(states),
-            };
-
-            // Aggregate tokens + one observation per distinct assistant message.
-            // Child multi-agent observations are always kind: subagent.
-            const allAssistantInfos = states.flatMap(candidate => {
-              if (candidate.assistantInfoById.size > 0) {
-                return Array.from(candidate.assistantInfoById.values());
-              }
-              return candidate.lastAssistantInfo ? [candidate.lastAssistantInfo] : [];
-            });
-            const tokens = sumTokenUsages(allAssistantInfos.map(info => normalizeTokens(info)));
-            const usageBreakdown = usageBreakdownFromAssistantInfos(allAssistantInfos, {
-              kind: 'subagent',
-            });
-
-            // Fetch structured outputs from all agents
-            const structuredOutputs = await Promise.all(
-              states.map(async state => {
-                const output = await readStructuredOutput(
-                  client,
-                  state.cwd,
-                  state.sessionId,
-                  state.lastAssistantMessageId
-                );
-                return output !== undefined ? ([state.agent.key, output] as const) : undefined;
-              })
-            ).then(results => {
-              const filtered = results.filter(entry => entry !== undefined) as [string, unknown][];
-              return filtered.length > 0 ? Object.fromEntries(filtered) : undefined;
-            });
-
-            // Multi-agent runs span multiple sessions; there is no single canonical
-            // sessionId to resume, so we omit it rather than returning an arbitrary one.
-            yield {
-              type: 'result',
-              ...(tokens ? { tokens } : {}),
-              ...(usageBreakdown ? { usageBreakdown } : {}),
-              // Top-level cost is the sum across distinct assistant messages
-              // (matches tokens.cost). dag-executor accounts msg.cost only.
-              ...(tokens?.cost !== undefined ? { cost: tokens.cost } : {}),
-              ...(structuredOutputs ? { structuredOutput: structuredOutputs } : {}),
-            };
-            getLog().info({ nodeId }, 'opencode.multi_agent_completed');
-            return;
           }
         }
+        continue;
       }
-    } catch (streamError) {
-      // Same boundary as session.error: package already-observed child usage and
-      // never synthesize unobserved agents. Abort falls through below.
-      if (aborted) {
-        // Fall through to the abort throw below.
-      } else if (streamError === managedFailure) {
-        throw streamError;
-      } else {
-        throw createMultiAgentFailureError({
-          message: errorMessage(streamError),
-          cause: streamError,
-          states,
-        });
+
+      if (event.type === 'session.error') {
+        const sessionId =
+          typeof properties.sessionID === 'string' ? properties.sessionID : undefined;
+        const state = sessionId ? sessionToAgent.get(sessionId) : undefined;
+        if (!state) continue;
+        await abortAll();
+        const rawError = isRecord(properties.error) ? properties.error : properties;
+        const err = new Error(`[${state.agent.key}] ${errorMessage(rawError)}`);
+        err.cause = rawError;
+        throw err;
+      }
+
+      if (event.type === 'session.idle') {
+        const sessionId =
+          typeof properties.sessionID === 'string' ? properties.sessionID : undefined;
+        const state = sessionId ? sessionToAgent.get(sessionId) : undefined;
+        if (!state) continue;
+        state.done = true;
+        getLog().info(
+          {
+            nodeId,
+            agent: state.agent.key,
+            sessionId,
+            doneCount: states.filter(s => s.done).length,
+            totalCount: states.length,
+          },
+          'opencode.multi_agent_session_idle'
+        );
+
+        // Check if all agents are done
+        if (states.every(candidate => candidate.done)) {
+          // Emit collected tool chunks first
+          const toolChunks = collectToolChunksForEmission(states);
+          for (const chunk of toolChunks) {
+            yield chunk;
+          }
+
+          // Emit combined assistant output
+          yield {
+            type: 'assistant',
+            content: formatBufferedAssistantOutput(states),
+          };
+
+          // Aggregate tokens
+          const tokens = states.reduce<TokenUsage | undefined>((acc, candidate) => {
+            const next = normalizeTokens(candidate.latestAssistantInfo);
+            if (!next) return acc;
+            if (!acc) return { ...next };
+            return {
+              input: acc.input + next.input,
+              output: acc.output + next.output,
+              total:
+                (acc.total ?? acc.input + acc.output) + (next.total ?? next.input + next.output),
+              cost: (acc.cost ?? 0) + (next.cost ?? 0),
+            };
+          }, undefined);
+
+          // Fetch structured outputs from all agents
+          const structuredOutputs = await Promise.all(
+            states.map(async state => {
+              const output = await readStructuredOutput(
+                client,
+                state.cwd,
+                state.sessionId,
+                state.lastAssistantMessageId
+              );
+              return output !== undefined ? ([state.agent.key, output] as const) : undefined;
+            })
+          ).then(results => {
+            const filtered = results.filter(entry => entry !== undefined) as [string, unknown][];
+            return filtered.length > 0 ? Object.fromEntries(filtered) : undefined;
+          });
+
+          // Multi-agent runs span multiple sessions; there is no single canonical
+          // sessionId to resume, so we omit it rather than returning an arbitrary one.
+          yield {
+            type: 'result',
+            ...(tokens ? { tokens } : {}),
+            ...(structuredOutputs ? { structuredOutput: structuredOutputs } : {}),
+          };
+          getLog().info({ nodeId }, 'opencode.multi_agent_completed');
+          return;
+        }
       }
     }
 
     getLog().info({ nodeId, aborted, eventCount }, 'opencode.multi_agent_loop_exited');
     if (aborted) {
       const abortReason = requestOptions?.abortSignal?.reason;
-      const message =
+      throw new Error(
         `OpenCode query aborted (nodeId: ${nodeId}, agents: ${agents.length}, cwd: ${cwd})` +
-        (abortReason ? `: ${String(abortReason)}` : '');
-      throw createMultiAgentFailureError({
-        message,
-        states,
-      });
+          (abortReason ? `: ${String(abortReason)}` : '')
+      );
     }
-    throw createMultiAgentFailureError({
-      message: 'OpenCode multi-agent stream ended before all agents completed',
-      states,
-    });
+    throw new Error('OpenCode multi-agent stream ended before all agents completed');
   } finally {
     requestOptions?.abortSignal?.removeEventListener('abort', abortHandler);
     streamController.abort();
   }
-}
-
-function createMultiAgentFailureError(args: {
-  message: string;
-  cause?: unknown;
-  sessionId?: string;
-  states: readonly AgentRunState[];
-}): Error {
-  // Preserve every already-observed child entry; never synthesize unobserved ones.
-  const infos = args.states.flatMap(candidate => {
-    if (candidate.assistantInfoById.size > 0) {
-      return Array.from(candidate.assistantInfoById.values());
-    }
-    return candidate.lastAssistantInfo ? [candidate.lastAssistantInfo] : [];
-  });
-  const packaged = packageAssistantUsage(infos, { kind: 'subagent' });
-  if (packaged.usageBreakdown) {
-    return new OpencodeUsageBearingError(args.message, {
-      ...packaged,
-      ...(args.sessionId ? { sessionId: args.sessionId } : {}),
-      ...(args.cause !== undefined ? { cause: args.cause } : {}),
-    });
-  }
-  const err = new Error(args.message);
-  if (args.cause !== undefined) err.cause = args.cause;
-  return err;
 }

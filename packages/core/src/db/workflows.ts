@@ -32,6 +32,16 @@ export type { GateResolutionEvent } from '@archon/workflows/store';
 import { createLogger } from '@archon/paths';
 import { deleteRetryRefsByRunId } from '@archon/git';
 
+/** Best-effort ROLLBACK — log but swallow errors since we're already in an error path. */
+function rollback(): Promise<void> {
+  return pool.query('ROLLBACK', []).then(
+    () => undefined,
+    rollbackErr => {
+      getLog().warn({ err: rollbackErr as Error }, 'db.rollback_failed');
+    }
+  );
+}
+
 /** Guard error for deleteWorkflowRun — re-thrown without wrapping in the outer catch. */
 class WorkflowRunGuardError extends Error {}
 
@@ -1860,27 +1870,26 @@ export async function deleteOldWorkflowRuns(olderThanDays: number): Promise<{ co
       await cleanupRetryRefsForRun(run);
     }
 
-    // Adapter owns BEGIN/COMMIT/ROLLBACK — never issue raw transaction control
-    // on the public query path (collides with other exclusive SQLite work).
-    return await getDatabase().withTransaction(async query => {
-      // Delete events first (FK reference)
-      await query(
-        `DELETE FROM remote_agent_workflow_events WHERE workflow_run_id IN (
-          SELECT id FROM remote_agent_workflow_runs
-          WHERE status IN ('completed', 'failed', 'cancelled')
-            AND started_at < ${cutoff}
-        )`,
-        []
-      );
-      const result = await query(
-        `DELETE FROM remote_agent_workflow_runs
-         WHERE status IN ('completed', 'failed', 'cancelled')
-           AND started_at < ${cutoff}`,
-        []
-      );
-      return { count: result.rowCount ?? 0 };
-    });
+    await pool.query('BEGIN', []);
+    // Delete events first (FK reference)
+    await pool.query(
+      `DELETE FROM remote_agent_workflow_events WHERE workflow_run_id IN (
+        SELECT id FROM remote_agent_workflow_runs
+        WHERE status IN ('completed', 'failed', 'cancelled')
+          AND started_at < ${cutoff}
+      )`,
+      []
+    );
+    const result = await pool.query(
+      `DELETE FROM remote_agent_workflow_runs
+       WHERE status IN ('completed', 'failed', 'cancelled')
+         AND started_at < ${cutoff}`,
+      []
+    );
+    await pool.query('COMMIT', []);
+    return { count: result.rowCount ?? 0 };
   } catch (error) {
+    await rollback();
     const err = error as Error;
     getLog().error({ err, olderThanDays }, 'db.workflow_runs_cleanup_failed');
     throw new Error(`Failed to clean up old workflow runs: ${err.message}`);
@@ -1893,26 +1902,26 @@ export async function deleteOldWorkflowRuns(olderThanDays: number): Promise<{ co
  */
 export async function deleteWorkflowRun(id: string): Promise<void> {
   try {
-    // Adapter owns transaction boundaries. Guard + deletes stay atomic; retry-ref
-    // cleanup remains best-effort inside the same callback (same order as before).
-    await getDatabase().withTransaction(async query => {
-      const check = await query<{ status: string; working_path: string | null }>(
-        'SELECT status, working_path FROM remote_agent_workflow_runs WHERE id = $1',
-        [id]
+    await pool.query('BEGIN', []);
+    // Guard: verify run exists and is terminal before deleting
+    const check = await pool.query<{ status: string; working_path: string | null }>(
+      'SELECT status, working_path FROM remote_agent_workflow_runs WHERE id = $1',
+      [id]
+    );
+    if (check.rows.length === 0) {
+      throw new WorkflowRunGuardError(`Workflow run not found: ${id}`);
+    }
+    if (!TERMINAL_WORKFLOW_STATUSES.includes(check.rows[0].status as WorkflowRunStatus)) {
+      throw new WorkflowRunGuardError(
+        `Cannot delete workflow run in '${check.rows[0].status}' status — cancel it first`
       );
-      if (check.rows.length === 0) {
-        throw new WorkflowRunGuardError(`Workflow run not found: ${id}`);
-      }
-      if (!TERMINAL_WORKFLOW_STATUSES.includes(check.rows[0].status as WorkflowRunStatus)) {
-        throw new WorkflowRunGuardError(
-          `Cannot delete workflow run in '${check.rows[0].status}' status — cancel it first`
-        );
-      }
-      await cleanupRetryRefsForRun({ id, working_path: check.rows[0].working_path });
-      await query('DELETE FROM remote_agent_workflow_events WHERE workflow_run_id = $1', [id]);
-      await query('DELETE FROM remote_agent_workflow_runs WHERE id = $1', [id]);
-    });
+    }
+    await cleanupRetryRefsForRun({ id, working_path: check.rows[0].working_path });
+    await pool.query('DELETE FROM remote_agent_workflow_events WHERE workflow_run_id = $1', [id]);
+    await pool.query('DELETE FROM remote_agent_workflow_runs WHERE id = $1', [id]);
+    await pool.query('COMMIT', []);
   } catch (error) {
+    await rollback();
     if (error instanceof WorkflowRunGuardError) throw error;
     const err = error as Error;
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_delete_failed');

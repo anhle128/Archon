@@ -240,46 +240,6 @@ export interface ResolvedModel {
 }
 
 /**
- * How a usage entry's model identity was obtained from the upstream source.
- * - `reported`: the SDK/CLI named the concrete model in the response
- * - `requested`: only the effective request model is known
- * - `unknown`: the upstream source did not identify a model
- */
-export type ModelSource = 'reported' | 'requested' | 'unknown';
-
-/**
- * One provider-observed usage row for a single upstream model call or aggregate.
- * Identity lives in fields (model ids may contain `/`); missing measures stay
- * `undefined` — never coerced to zero. Archon estimates and run/node context
- * are forbidden here; those attach downstream.
- */
-export interface ModelUsageEntry {
-  /** Upstream model/catalog namespace: anthropic, openai, xai, github-copilot, etc. */
-  provider: string;
-  /** Concrete model id, or null when the upstream source did not identify one. */
-  model: string | null;
-  /** Whether model came from an upstream response, effective request, or neither. */
-  modelSource: ModelSource;
-  /** Provider-reported non-cached input when distinguishable; otherwise its input field. */
-  inputTokens?: number;
-  /** Provider-reported output, inclusive of reasoning where the SDK defines it that way. */
-  outputTokens?: number;
-  /** A subset of outputTokens, never added to output again. */
-  reasoningTokens?: number;
-  cacheReadTokens?: number;
-  cacheWriteTokens?: number;
-  /** Known upstream model-call count; omitted when the SDK reports only an aggregate turn. */
-  requests?: number;
-  /** Upstream SDK/CLI-supplied USD; never an Archon estimate or subscription multiplier. */
-  costUsd?: number;
-  /** Present only when the upstream source identifies hidden delegated work. */
-  kind?: 'advisor' | 'subagent';
-}
-
-/** Ordered, validated usage observations for one provider stream pass. */
-export type UsageBreakdown = readonly ModelUsageEntry[];
-
-/**
  * Message chunk from AI assistant.
  * Discriminated union with per-type required fields for type safety.
  */
@@ -307,10 +267,7 @@ export type MessageChunk =
       cost?: number;
       stopReason?: string;
       numTurns?: number;
-      /** Raw provider-specific usage map retained for existing emitters; prefer `usageBreakdown`. */
       modelUsage?: Record<string, unknown>;
-      /** Normalized per-model usage for this stream pass; omitted when none was observed. */
-      usageBreakdown?: UsageBreakdown;
       /** Concrete model reported by the provider; omitted when its SDK does not expose one. */
       resolvedModel?: ResolvedModel;
       /**

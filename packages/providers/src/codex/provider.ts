@@ -18,9 +18,7 @@ import type {
   TokenUsage,
   ProviderCapabilities,
   CodexProviderDefaults,
-  UsageBreakdown,
 } from '../types';
-import { toUsageBreakdown } from '../usage-breakdown';
 import { parseCodexConfig } from './config';
 import { CODEX_CAPABILITIES } from './capabilities';
 import { resolveCodexBinaryPath } from './binary-resolver';
@@ -323,42 +321,14 @@ function classifyCodexError(
   return 'unknown';
 }
 
-function extractUsageFromCodexEvent(
-  event: TurnCompletedEvent,
-  requestedModel: string | undefined
-): { tokens: TokenUsage; usageBreakdown?: UsageBreakdown } {
+function extractUsageFromCodexEvent(event: TurnCompletedEvent): TokenUsage {
   if (!event.usage) {
     getLog().warn({ eventType: event.type }, 'codex.usage_null_on_turn_completed');
-    return { tokens: { input: 0, output: 0 } };
+    return { input: 0, output: 0 };
   }
-  const inputTokens = event.usage.input_tokens;
-  const cachedInputTokens = event.usage.cached_input_tokens;
-  const outputTokens = event.usage.output_tokens;
-  const reasoningTokens = event.usage.reasoning_output_tokens;
-  // Legacy TokenUsage.input keeps the SDK total input value unchanged.
-  const tokens: TokenUsage = {
-    input: inputTokens,
-    output: outputTokens,
-  };
-  const model =
-    typeof requestedModel === 'string' && requestedModel.trim() !== ''
-      ? requestedModel.trim()
-      : null;
-  const breakdown = toUsageBreakdown([
-    {
-      provider: 'openai',
-      model,
-      modelSource: model ? 'requested' : 'unknown',
-      // Non-cached input: clamp when cache exceeds total input rather than go negative.
-      inputTokens: Math.max(inputTokens - cachedInputTokens, 0),
-      cacheReadTokens: cachedInputTokens,
-      outputTokens,
-      reasoningTokens,
-    },
-  ]);
   return {
-    tokens,
-    ...(breakdown.length > 0 ? { usageBreakdown: breakdown } : {}),
+    input: event.usage.input_tokens,
+    output: event.usage.output_tokens,
   };
 }
 
@@ -475,8 +445,7 @@ async function* streamCodexEvents(
   hasOutputFormat: boolean,
   threadId: string | null | undefined,
   abortSignal?: AbortSignal,
-  surfaceMcpClientErrors = false,
-  requestedModel?: string
+  surfaceMcpClientErrors = false
 ): AsyncGenerator<MessageChunk> {
   const state: CodexStreamState = {
     startedToolItemIds: new Set<string>(),
@@ -797,10 +766,7 @@ async function* streamCodexEvents(
 
     if (event.type === 'turn.completed') {
       getLog().debug('turn_completed');
-      const { tokens, usageBreakdown } = extractUsageFromCodexEvent(
-        event as TurnCompletedEvent,
-        requestedModel
-      );
+      const usage = extractUsageFromCodexEvent(event as TurnCompletedEvent);
 
       // Codex returns structured output inline in agent_message text.
       // Normalize: parse as JSON and put on structuredOutput so the
@@ -827,8 +793,7 @@ async function* streamCodexEvents(
       yield {
         type: 'result',
         sessionId: resolvedThreadId ?? undefined,
-        tokens,
-        ...(usageBreakdown ? { usageBreakdown } : {}),
+        tokens: usage,
         ...(structuredOutput !== undefined ? { structuredOutput } : {}),
       };
       return;
@@ -1091,8 +1056,7 @@ export class CodexProvider implements IAgentProvider {
                   hasOutputFormat,
                   thread.id,
                   attemptController.signal,
-                  Boolean(requestOptions?.nodeConfig?.mcp),
-                  threadOptions.model
+                  Boolean(requestOptions?.nodeConfig?.mcp)
                 ),
                 // Stamp from the attempt that produced the result: any retry
                 // (attempt > 0) re-runs on a fresh startThread (cold), so the prior

@@ -10,7 +10,6 @@ import { RunDetailPage } from './routes/RunDetailPage';
 import { ChatPage } from './routes/ChatPage';
 import { PreviewPage } from './routes/PreviewPage';
 import { SettingsPage } from './routes/SettingsPage';
-import { CostPage } from './routes/CostPage';
 import { invalidate } from './store/cache';
 import { K } from './store/keys';
 import { useKeymap, type Binding } from './lib/keymap';
@@ -75,8 +74,6 @@ export function ConsoleApp(): ReactElement {
           <Routes>
             <Route index element={<RunsPage />} />
             <Route path="settings" element={<SettingsPage />} />
-            <Route path="cost" element={<CostPage />} />
-
             <Route path="builder" element={<BuilderConnected />} />
             <Route path="builder/:name" element={<BuilderConnected />} />
             <Route path="_preview" element={<PreviewPage />} />

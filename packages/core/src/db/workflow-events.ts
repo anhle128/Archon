@@ -62,23 +62,6 @@ export interface WorkflowEventInput {
   step_index?: number;
   step_name?: string;
   data?: Record<string, unknown>;
-  /**
-   * Optional caller-generated event id. When omitted, a UUID is generated.
-   * The usage recorder supplies a pre-tx id so the event-only fallback can
-   * reuse it without creating a second row.
-   */
-  id?: string;
-}
-
-/** Options for the throwing insert primitive. */
-export interface InsertWorkflowEventOptions {
-  /**
-   * When true, ignore primary-key collisions (`ON CONFLICT (id) DO NOTHING`).
-   * Restricted to the usage-recorder event-only fallback path so an ambiguous
-   * commit cannot create a second `node_usage_recorded` event.
-   * Default path still throws on duplicate ids.
-   */
-  ignoreDuplicateId?: boolean;
 }
 
 /**
@@ -97,22 +80,16 @@ type EventInsertQuery = (sql: string, params?: unknown[]) => Promise<QueryResult
  * db/workflows.ts, #2146) pass a transaction-scoped query so a failed event
  * write rolls back the enclosing UPDATE instead of stranding a resolved gate
  * with no audit trail.
- *
- * Returns the inserted (or caller-supplied) event id. Existing callers may
- * ignore the return value. Optional `ignoreDuplicateId` is for the usage
- * recorder fallback only.
  */
 export async function insertWorkflowEvent(
   query: EventInsertQuery,
-  data: WorkflowEventInput,
-  options?: InsertWorkflowEventOptions
-): Promise<string> {
+  data: WorkflowEventInput
+): Promise<void> {
   const dialect = getDialect();
-  const id = data.id ?? dialect.generateUuid();
-  const conflictClause = options?.ignoreDuplicateId ? '\n     ON CONFLICT (id) DO NOTHING' : '';
+  const id = dialect.generateUuid();
   await query(
     `INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type, step_index, step_name, data)
-     VALUES ($1, $2, $3, $4, $5, $6)${conflictClause}`,
+     VALUES ($1, $2, $3, $4, $5, $6)`,
     [
       id,
       data.workflow_run_id,
@@ -122,7 +99,6 @@ export async function insertWorkflowEvent(
       JSON.stringify(data.data ?? {}),
     ]
   );
-  return id;
 }
 
 /**

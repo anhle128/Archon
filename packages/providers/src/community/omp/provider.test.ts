@@ -69,74 +69,20 @@ function makeRunningProcess(exitOn: NodeJS.Signals, stdoutFailure?: Error): Fake
   return proc;
 }
 
-function makeStderrRejectingProcess(stdoutChunks: string[] = []): FakeProcess {
-  let resolveExit: ((code: number) => void) | undefined;
-  let reaped = false;
+function makeStderrRejectingProcess(): FakeProcess {
   const proc: FakeProcess = {
-    stdout: streamFromChunks(stdoutChunks),
+    stdout: streamFromChunks([]),
     stderr: new ReadableStream<Uint8Array>({
       start(controller): void {
         controller.error(new Error('stderr read failed'));
       },
     }),
-    // Exit only after kill so the provider's terminate path can reap the child.
     exited: new Promise<number>(resolve => {
-      resolveExit = resolve;
+      setTimeout(() => resolve(0), 20);
     }),
     signals: [],
     kill: (signal = 'SIGTERM'): void => {
       proc.signals.push(signal);
-      if (!reaped) {
-        reaped = true;
-        resolveExit?.(0);
-      }
-    },
-  };
-  return proc;
-}
-
-function makeExitRejectingProcess(stdoutChunks: string[]): FakeProcess {
-  const proc: FakeProcess = {
-    stdout: streamFromChunks(stdoutChunks),
-    stderr: streamFromChunks([]),
-    exited: Promise.reject(new Error('exit wait failed')),
-    signals: [],
-    kill: (signal = 'SIGTERM'): void => {
-      proc.signals.push(signal);
-    },
-  };
-  // Prevent unhandled rejection noise if kill races the await.
-  void proc.exited.catch(() => undefined);
-  return proc;
-}
-
-function makeStdoutFailAfterTerminal(stdoutText: string): FakeProcess {
-  const payload = encoder.encode(stdoutText.endsWith('\n') ? stdoutText : `${stdoutText}\n`);
-  let delivered = false;
-  let resolveExit: ((code: number) => void) | undefined;
-  let reaped = false;
-  const proc: FakeProcess = {
-    stdout: new ReadableStream<Uint8Array>({
-      pull(controller): void {
-        if (!delivered) {
-          delivered = true;
-          controller.enqueue(payload);
-          return;
-        }
-        controller.error(new Error('stdout read failed'));
-      },
-    }),
-    stderr: streamFromChunks([]),
-    exited: new Promise<number>(resolve => {
-      resolveExit = resolve;
-    }),
-    signals: [],
-    kill: (signal = 'SIGTERM'): void => {
-      proc.signals.push(signal);
-      if (!reaped) {
-        reaped = true;
-        resolveExit?.(0);
-      }
     },
   };
   return proc;
@@ -564,90 +510,6 @@ describe('OmpProvider', () => {
       'stderr read failed'
     );
     expect(proc.signals).toEqual(['SIGTERM']);
-  });
-
-  test('preserves parsed usage once when stderr rejects after a terminal turn', async () => {
-    const proc = makeStderrRejectingProcess([successfulLines('usage-stderr-session').join('\n')]);
-    const chunks = await collect(new OmpProvider({ spawn: makeSpawner(proc, []) }));
-    const results = chunks.filter(chunk => chunk.type === 'result');
-    expect(results).toHaveLength(1);
-    expect(results[0]).toMatchObject({
-      type: 'result',
-      isError: true,
-      errorSubtype: 'omp_transport_error',
-      sessionId: 'usage-stderr-session',
-      tokens: { input: 3, output: 2, total: 5, cost: 0.1 },
-      cost: 0.1,
-      stopReason: 'stop',
-      resolvedModel: { id: 'openai-codex/gpt-5.6-sol' },
-      usageBreakdown: [
-        {
-          provider: 'openai-codex',
-          model: 'gpt-5.6-sol',
-          modelSource: 'reported',
-          inputTokens: 3,
-          outputTokens: 2,
-          costUsd: 0.1,
-        },
-      ],
-      errors: ['stderr read failed'],
-    });
-    expect(proc.signals).toEqual(['SIGTERM']);
-  });
-
-  test('preserves parsed usage once when process.exited rejects after a terminal turn', async () => {
-    const proc = makeExitRejectingProcess([successfulLines('usage-exit-session').join('\n')]);
-    const chunks = await collect(new OmpProvider({ spawn: makeSpawner(proc, []) }));
-    const results = chunks.filter(chunk => chunk.type === 'result');
-    expect(results).toHaveLength(1);
-    expect(results[0]).toMatchObject({
-      type: 'result',
-      isError: true,
-      errorSubtype: 'omp_transport_error',
-      sessionId: 'usage-exit-session',
-      usageBreakdown: [
-        {
-          provider: 'openai-codex',
-          model: 'gpt-5.6-sol',
-          modelSource: 'reported',
-          inputTokens: 3,
-          outputTokens: 2,
-          costUsd: 0.1,
-        },
-      ],
-      errors: ['exit wait failed'],
-    });
-  });
-
-  test('preserves parsed usage once when stdout fails after the terminal event', async () => {
-    const proc = makeStdoutFailAfterTerminal(successfulLines('usage-stdout-session').join('\n'));
-    const chunks = await collect(new OmpProvider({ spawn: makeSpawner(proc, []) }));
-    const results = chunks.filter(chunk => chunk.type === 'result');
-    expect(results).toHaveLength(1);
-    expect(results[0]).toMatchObject({
-      type: 'result',
-      isError: true,
-      errorSubtype: 'omp_transport_error',
-      sessionId: 'usage-stdout-session',
-      usageBreakdown: [
-        {
-          provider: 'openai-codex',
-          model: 'gpt-5.6-sol',
-          modelSource: 'reported',
-          inputTokens: 3,
-          outputTokens: 2,
-          costUsd: 0.1,
-        },
-      ],
-      errors: ['stdout read failed'],
-    });
-  });
-
-  test('throws on exit rejection with no parsed usage and does not invent observations', async () => {
-    const proc = makeExitRejectingProcess([]);
-    await expect(collect(new OmpProvider({ spawn: makeSpawner(proc, []) }))).rejects.toThrow(
-      'exit wait failed'
-    );
   });
 
   test('overlays request environment values on defined process values', async () => {

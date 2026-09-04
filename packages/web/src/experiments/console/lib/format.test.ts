@@ -9,7 +9,6 @@ import {
   ensureUtc,
   formatClock,
   formatRelativeToBaseline,
-  formatUsdAmount,
   relativeTime,
 } from './format';
 
@@ -75,18 +74,5 @@ describe('formatRelativeToBaseline', () => {
 
   test('offsets correctly when both inputs are naive', () => {
     expect(formatRelativeToBaseline('2026-06-13 23:22:54', NAIVE)).toBe('+00:01');
-  });
-});
-
-describe('formatUsdAmount', () => {
-  test('matches CLI rules for absent zero sub-cent floor estimated', () => {
-    expect(formatUsdAmount(null)).toBe('n/a');
-    expect(formatUsdAmount(undefined, true)).toBe('n/a');
-    expect(formatUsdAmount(0)).toBe('$0.00');
-    expect(formatUsdAmount(0, true)).toBe('≈$0.00');
-    expect(formatUsdAmount(0.0000004)).toBe('<$0.000001');
-    expect(formatUsdAmount(0.004)).toBe('$0.004');
-    expect(formatUsdAmount(0.004, true)).toBe('≈$0.004');
-    expect(formatUsdAmount(2.5)).toBe('$2.50');
   });
 });

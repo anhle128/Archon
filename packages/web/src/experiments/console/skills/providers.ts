@@ -22,20 +22,8 @@ export interface PiModelInfo {
   id: string;
   name: string;
   reasoning: boolean;
-  /** USD per million tokens, including cache rates and optional tiers. */
-  cost: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    tiers?: {
-      inputTokensAbove: number;
-      input: number;
-      output: number;
-      cacheRead: number;
-      cacheWrite: number;
-    }[];
-  };
+  /** USD per million tokens. */
+  cost: { input: number; output: number };
   contextWindow: number;
 }
 

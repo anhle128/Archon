@@ -315,19 +315,6 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
     };
   }
 
-  // Append-only usage accounting (#node cost tracking). System-only: never dump
-  // raw JSON when the System toggle is off. Label stays short — detail is the
-  // step name when present, not the breakdown payload.
-  if (et === 'node_usage_recorded') {
-    const step = raw.step_name ?? '';
-    return {
-      ...base,
-      kind: 'system',
-      label: 'Usage recorded',
-      detail: step.length > 0 ? step : readString(data, 'agent_provider'),
-    };
-  }
-
   // Container isolation lifecycle (folder-project container runs). Persisted with
   // DB-side names, NOT the emitter's `container_lifecycle` type — this normalizer
   // reads DB rows. Surfaced behind the System toggle. created/destroyed bracket the

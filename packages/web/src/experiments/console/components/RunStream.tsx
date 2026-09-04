@@ -15,7 +15,6 @@ import type {
   ErrorEvent,
 } from '../primitives/event';
 import { StreamCard } from './StreamCard';
-import type { UsageMetrics, UsageReport, UsageReportGroup } from '../skills/usage';
 
 interface RunStreamProps {
   messages: Message[];
@@ -24,8 +23,6 @@ interface RunStreamProps {
   showSystem: boolean;
   /** `'all'` shows every node; otherwise restrict the stream to one node's entries. */
   selectedNodeId: string;
-  /** Direct-run usage grouped by node from GET detail (`null` = unavailable). */
-  usage: UsageReport | null;
 }
 
 /**
@@ -116,90 +113,6 @@ export function pairToolEvents(events: RunEvent[]): PairedToolCall[] {
   return paired;
 }
 
-/** SQL-SUM nullability: all-null stays null; any present value participates (0 stays 0). */
-export function sumNullableMetric(a: number | null, b: number | null): number | null {
-  if (a === null && b === null) return null;
-  return (a ?? 0) + (b ?? 0);
-}
-
-/**
- * Aggregate exact ledger groups that share a node id.
- * Nullable token/USD sums preserve missingness; counters always sum.
- */
-export function aggregateUsageMetrics(groups: readonly UsageReportGroup[]): UsageMetrics {
-  const empty: UsageMetrics = {
-    tokensInput: null,
-    tokensOutput: null,
-    tokensReasoning: null,
-    tokensCacheRead: null,
-    tokensCacheWrite: null,
-    requests: null,
-    reportedUsd: null,
-    estimatedUsd: null,
-    recordCount: 0,
-    missingTokensInput: 0,
-    missingTokensOutput: 0,
-    missingTokensReasoning: 0,
-    missingTokensCacheRead: 0,
-    missingTokensCacheWrite: 0,
-    missingRequests: 0,
-    rowsMissingUsd: 0,
-  };
-  if (groups.length === 0) return empty;
-
-  return groups.reduce<UsageMetrics>((acc, g) => {
-    const m = g.metrics;
-    return {
-      tokensInput: sumNullableMetric(acc.tokensInput, m.tokensInput),
-      tokensOutput: sumNullableMetric(acc.tokensOutput, m.tokensOutput),
-      tokensReasoning: sumNullableMetric(acc.tokensReasoning, m.tokensReasoning),
-      tokensCacheRead: sumNullableMetric(acc.tokensCacheRead, m.tokensCacheRead),
-      tokensCacheWrite: sumNullableMetric(acc.tokensCacheWrite, m.tokensCacheWrite),
-      requests: sumNullableMetric(acc.requests, m.requests),
-      reportedUsd: sumNullableMetric(acc.reportedUsd, m.reportedUsd),
-      estimatedUsd: sumNullableMetric(acc.estimatedUsd, m.estimatedUsd),
-      recordCount: acc.recordCount + m.recordCount,
-      missingTokensInput: acc.missingTokensInput + m.missingTokensInput,
-      missingTokensOutput: acc.missingTokensOutput + m.missingTokensOutput,
-      missingTokensReasoning: acc.missingTokensReasoning + m.missingTokensReasoning,
-      missingTokensCacheRead: acc.missingTokensCacheRead + m.missingTokensCacheRead,
-      missingTokensCacheWrite: acc.missingTokensCacheWrite + m.missingTokensCacheWrite,
-      missingRequests: acc.missingRequests + m.missingRequests,
-      rowsMissingUsd: acc.rowsMissingUsd + m.rowsMissingUsd,
-    };
-  }, empty);
-}
-
-export interface NodeUsageCollection {
-  /** Every exact API group for this step name (provider/model/source/kind splits). */
-  groups: UsageReportGroup[];
-  /** Cumulative metrics across those groups for the node header. */
-  aggregate: UsageMetrics;
-}
-
-/**
- * Collect every exact ledger group under its nodeId — never overwrite siblings
- * that share a step name but differ by provider/model/source/kind.
- */
-export function collectUsageByNode(usage: UsageReport | null): Map<string, NodeUsageCollection> {
-  const map = new Map<string, NodeUsageCollection>();
-  if (usage?.groupBy !== 'node') return map;
-
-  const buckets = new Map<string, UsageReportGroup[]>();
-  for (const g of usage.groups) {
-    const id = g.dimensions.nodeId;
-    if (id === null || id === undefined || id === '') continue;
-    const list = buckets.get(id) ?? [];
-    list.push(g);
-    buckets.set(id, list);
-  }
-
-  for (const [id, groups] of buckets) {
-    map.set(id, { groups, aggregate: aggregateUsageMetrics(groups) });
-  }
-  return map;
-}
-
 /**
  * Merges conversation messages + workflow events into a single timeline.
  *
@@ -224,14 +137,10 @@ export function RunStream({
   showToolCalls,
   showSystem,
   selectedNodeId,
-  usage,
 }: RunStreamProps): ReactElement {
   // Single source for the folded nodes — consumed by both the timeline (one
   // divider per node) and the node-filter window so they can't drift.
   const nodeRuns = useMemo(() => foldNodeRuns(events), [events]);
-
-  // Cumulative usage per exact step name — every provider/model/source/kind group.
-  const usageByNode = useMemo(() => collectUsageByNode(usage), [usage]);
 
   const timeline = useMemo<TimelineEntry[]>(() => {
     const entries: TimelineEntry[] = [];
@@ -399,7 +308,6 @@ export function RunStream({
           return <ToolCallItem key={entry.key} call={entry.call} timestamp={entry.timestamp} />;
         }
         if (entry.kind === 'node') {
-          const nodeUsage = usageByNode.get(entry.node.nodeId);
           return (
             <NodeDivider
               key={entry.key}
@@ -409,21 +317,14 @@ export function RunStream({
               durationMs={entry.node.durationMs}
               timestamp={entry.node.startedAt}
               costUsd={entry.node.costUsd}
-              reportedUsd={nodeUsage?.aggregate.reportedUsd}
-              estimatedUsd={nodeUsage?.aggregate.estimatedUsd}
-              hasLedgerUsage={nodeUsage !== undefined && nodeUsage.groups.length > 0}
               numTurns={entry.node.numTurns}
               stopReason={entry.node.stopReason}
               skipReason={entry.node.skipReason}
               skipExpr={entry.node.skipExpr}
               showDetail={entry.showDetail}
-              usageGroups={nodeUsage?.groups}
-              usageAggregate={nodeUsage?.aggregate}
-              runUsage={usage}
             />
           );
         }
-
         if (entry.kind === 'system') {
           const ev = entry.event;
           const isError = ev.kind === 'error';
