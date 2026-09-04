@@ -979,7 +979,8 @@
         "US-046"
       ],
       "priority": 47,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in Ralph iteration. Files: packages/workflows/src/dag-executor.ts(+test), packages/web/.../primitives/run.ts(+test), NodeDivider.tsx, RunDetailHeader.tsx(+test), RunStream.test.tsx. Cost presence separate from sum; cost:0 persists to metadata/node; legacy $0.00 label; ledger zero wins. Focused plan tests green."
     },
     {
       "id": "US-048",

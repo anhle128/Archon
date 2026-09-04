@@ -1,5 +1,10 @@
 ## Codebase Patterns
 
+### Legacy cost presence is separate from numeric sum
+- **Where**: `packages/workflows/src/dag-executor.ts` `RunLayersContext.totalCostUsd` / `buildRunUsageProps`; `packages/web/.../primitives/run.ts` `readCost`; `NodeDivider` / `RunDetailHeader`
+- **Pattern**: Accumulators start `undefined`, not `0`. Fold only when a node/iteration reports cost (`costUsd !== undefined`); write `total_cost_usd` / telemetry when defined including authoritative 0. Web parses finite `>= 0` metadata (reject negative/NaN). UI: legacy `$0.00` + "legacy total" when no-history report; ledger rows (incl. reported 0) beat legacy; formatUsdAmount never rounds sub-micro into `$0.00`.
+- **Example**: provider `cost: 0` → node `cost_usd: 0` + run `total_cost_usd: 0`; absent cost still omits both; header legacy zero shows `$0.00 legacy total` not "not recorded"
+
 
 ### OMP discovery enumerates directories with a shared entry bound
 - **Where**: `packages/providers/src/community/omp/session-usage.ts` `readDirEntriesBounded` / `MAX_DISCOVERY_ENTRIES`
@@ -1441,3 +1446,29 @@
 
 ---
 
+## 2026-09-05 — US-047: Preserve reported zero in legacy totals and fallbacks
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/dag-executor.ts` — `totalCostUsd` optional presence; authoritative cost:0 through node/run/loop_group/fan-out; telemetry includes zero
+- `packages/workflows/src/dag-executor.test.ts` — cost:0 metadata + node lifecycle; absent still omits; multi-node and loop zeros
+- `packages/web/src/experiments/console/primitives/run.ts` — `readCost` accepts finite >= 0 including 0
+- `packages/web/src/experiments/console/primitives/run.test.ts` — zero preserved; negative/NaN/Infinity rejected
+- `packages/web/src/experiments/console/components/NodeDivider.tsx` — legacy zero when no ledger; ledger wins
+- `packages/web/src/experiments/console/components/RunDetailHeader.tsx` — legacy total uses formatUsdAmount (`$0.00`)
+- `packages/web/src/experiments/console/components/RunDetailHeader.test.tsx` — legacy zero label; ledger zero precedence
+- `packages/web/src/experiments/console/components/RunStream.test.tsx` — NodeDivider zero/absent/ledger/sub-micro cases
+
+**Acceptance criteria verified**:
+- [x] provider cost: 0 persists metadata.total_cost_usd: 0 and node cost_usd: 0; absent cost omits both
+- [x] cost presence tracked separately from sum across nodes/iterations/reasks/failures/sub-runs; estimates not on legacy path
+- [x] finite non-negative legacy metadata parses; negative/non-finite rejected; no-history report shows `$0.00` + legacy total
+- [x] no node ledger rows → legacy node `$0.00`; any ledger row including reported zero wins
+- [x] missing stays absent; zero not "not recorded"; sub-micro never rounds to zero representation
+
+**Learnings**:
+- Initialized `totalCostUsd: 0` made loop_group always look reported after first iteration — must start undefined and only fold when body reported.
+- `formatCost(0)` was `$0.0000`; usage/legacy surfaces must use `formatUsdAmount` for `$0.00`.
+- HTML-escaped floor `&lt;$0.000001` contains substring `$0.00` — assert with regex boundary, not plain not.toContain.
+
+---
