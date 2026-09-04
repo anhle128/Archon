@@ -1,5 +1,11 @@
 ## Codebase Patterns
 
+
+### SQLite usage bounds preserve fractional instants via strftime %f
+- **Where**: `packages/core/src/db/usage-report.ts` `toDbDateParam` + `appendDateAndIdentityFilters`
+- **Pattern**: Never `slice(0, 19)` or wrap bounds in `datetime()` — both drop sub-second precision. Format SQLite params as `YYYY-MM-DD HH:MM:SS.sss` (ISO with `T`→space, strip `Z`). Compare with `strftime('%Y-%m-%d %H:%M:%f', col/param)` so whole-second stored TEXT (no `.000`) and fractional bounds share a fixed-width UTC instant. Postgres stays `::timestamptz`. Real half-open proofs live in `usage-report.sqlite-boundaries.integration.test.ts` (isolated `bun test` invocation).
+- **Example**: event at `2026-09-01 00:00:00` is OUT for `from=...00.500Z` and IN for `to=...00.500Z`
+
 ### Terminal result always replaces pass usage state
 - **Where**: `packages/workflows/src/dag-executor.ts` standard `runStreamPass` + direct-loop attempt capture
 - **Pattern**: On every `type: 'result'`, set `passUsageBreakdown` from boundary-validated array OR `undefined` (absent/non-array). Always set `passTerminalError`/`passErrorSubtype` from that same result. Non-array logs index+issue type only via `workflow.usage_entry_rejected`.
@@ -895,5 +901,28 @@
 **Learnings**:
 - Guarding pass state updates behind `Array.isArray(usageBreakdown)` left stale cumulative usage when a later result omitted the field (same class of bug as unconditional resolvedModel assignment).
 - Error metadata must update on every terminal result, not only when an array breakdown is present — otherwise success usage can be recorded under a later error's subtype, or vice versa.
+
+---
+
+## 2026-09-04 — US-028: Preserve fractional RFC3339 boundaries in SQLite reports
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/db/usage-report.ts` — SQLite `toDbDateParam` keeps ms; replace `datetime()` filters with `strftime(...%f...)` half-open compares
+- `packages/core/src/db/usage-report.test.ts` — unit expects fractional SQLite params + strftime filter SQL
+- `packages/core/src/db/usage-report.sqlite-boundaries.integration.test.ts` — real SQLite half-open .500Z, offset equivalence, fractional stored fixtures
+- `packages/core/package.json` — isolated integration test invocation before usage-report unit tests
+
+**Acceptance criteria verified**:
+- [x] `from=...00.500Z` excludes event at `...00`; `to=...00.500Z` includes it; explicit `+00:00` matches Z
+- [x] Stored fractional `...00.250` compares exactly (inclusive from / exclusive to)
+- [x] SQLite no longer truncates fractional bounds; PostgreSQL `timestamptz` path unchanged
+- [x] Current-month defaults, UTC day grouping, pair/order validation, 366-day cap unchanged (unit suite still covers)
+- [x] `bun test src/db/usage-report.sqlite-boundaries.integration.test.ts` 5 pass; `bun test src/db/usage-report.test.ts` 20 pass
+
+**Learnings**:
+- SQLite `datetime()` always drops fractional seconds — cannot be used for half-open accounting bounds.
+- Raw TEXT compare between whole-second storage (`...00`) and padded bound (`...00.000`) is lexicographically wrong; `strftime %f` normalizes both sides.
+- Integration test must use real SqliteAdapter — mocked SQL shape tests cannot prove comparison semantics.
 
 ---

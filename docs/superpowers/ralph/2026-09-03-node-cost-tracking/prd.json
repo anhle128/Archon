@@ -591,8 +591,8 @@
         "US-027"
       ],
       "priority": 28,
-      "passes": false,
-      "notes": "Pending Ralph implementation from the Convergence 2 audit."
+      "passes": true,
+      "notes": "Implemented in Ralph iteration. Files: packages/core/src/db/usage-report.ts, usage-report.test.ts, usage-report.sqlite-boundaries.integration.test.ts, package.json. SQLite bounds keep ms via strftime %f; half-open .500Z + offset + fractional stored fixtures green."
     },
     {
       "id": "US-029",
