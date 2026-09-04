@@ -336,6 +336,79 @@ describe('PostgresAdapter', () => {
   });
 
   // -------------------------------------------------------------------------
+  // withSnapshotRead()
+  // -------------------------------------------------------------------------
+
+  describe('withSnapshotRead()', () => {
+    test('opens REPEATABLE READ READ ONLY, not plain BEGIN', async () => {
+      const issued: string[] = [];
+      mockClient = {
+        query: async sql => {
+          issued.push(sql);
+          return { rows: [], rowCount: 0 };
+        },
+        release: () => {},
+      };
+
+      await adapter.withSnapshotRead(async () => 'ok');
+
+      expect(issued[0]).toBe('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+      expect(issued).not.toContain('BEGIN');
+      expect(issued[issued.length - 1]).toBe('COMMIT');
+    });
+
+    test('runs sequential queries on the same client snapshot', async () => {
+      const seen: string[] = [];
+      mockClient = {
+        query: async (sql: string) => {
+          seen.push(sql);
+          if (sql.startsWith('SELECT 1')) return { rows: [{ n: 1 }], rowCount: 1 };
+          if (sql.startsWith('SELECT 2')) return { rows: [{ n: 2 }], rowCount: 1 };
+          return { rows: [], rowCount: 0 };
+        },
+        release: () => {},
+      };
+
+      const result = await adapter.withSnapshotRead(async query => {
+        const a = await query<{ n: number }>('SELECT 1 AS n');
+        const b = await query<{ n: number }>('SELECT 2 AS n');
+        return [a.rows[0]?.n, b.rows[0]?.n] as const;
+      });
+
+      expect(result).toEqual([1, 2]);
+      expect(seen[0]).toBe('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+      expect(seen).toContain('SELECT 1 AS n');
+      expect(seen).toContain('SELECT 2 AS n');
+      expect(seen[seen.length - 1]).toBe('COMMIT');
+    });
+
+    test('rolls back and releases on error', async () => {
+      const issued: string[] = [];
+      let released = false;
+      mockClient = {
+        query: async sql => {
+          issued.push(sql);
+          return { rows: [], rowCount: 0 };
+        },
+        release: () => {
+          released = true;
+        },
+      };
+
+      await expect(
+        adapter.withSnapshotRead(async () => {
+          throw new Error('snapshot boom');
+        })
+      ).rejects.toThrow('snapshot boom');
+
+      expect(issued[0]).toBe('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+      expect(issued).toContain('ROLLBACK');
+      expect(issued).not.toContain('COMMIT');
+      expect(released).toBe(true);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // close()
   // -------------------------------------------------------------------------
 

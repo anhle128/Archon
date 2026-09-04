@@ -60,16 +60,18 @@ export async function listGlobalCounts(): Promise<RunCounts> {
   return normalizeCounts(res.counts);
 }
 
-interface RunDetailResponse {
-  run: Parameters<typeof toRun>[0];
-  events: Parameters<typeof toRunEvent>[0][];
-}
+/** GET /api/workflows/runs/:id — retains generated `usage` (nullable report). */
+export type RunDetailResponse = components['schemas']['WorkflowRunDetail'];
 
-export async function getRun(id: string): Promise<{ run: Run; events: RunEvent[] }> {
+export async function getRun(
+  id: string
+): Promise<{ run: Run; events: RunEvent[]; usage: RunDetailResponse['usage'] }> {
   const res = await requestJson<RunDetailResponse>(`/api/workflows/runs/${encodeURIComponent(id)}`);
   return {
     run: toRun(res.run),
     events: res.events.map(toRunEvent),
+    // Generated WorkflowRunDetail.usage is already UsageReport | null — no cast.
+    usage: res.usage,
   };
 }
 

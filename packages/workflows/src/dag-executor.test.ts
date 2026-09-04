@@ -265,6 +265,9 @@ function createMockDeps(storeOverride?: IWorkflowStore): WorkflowDeps {
   const store = storeOverride ?? createMockStore();
   return {
     store,
+    usageRecorder: {
+      recordWorkflowUsage: mock(() => Promise.resolve()),
+    },
     getAgentProvider: mockGetAgentProviderDag,
     loadConfig: mock(() =>
       Promise.resolve({
@@ -5502,6 +5505,841 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
     expect(completedEvent?.[0].data).not.toHaveProperty('tokens');
   });
 
+  // ─── Per-pass usage recording (node cost tracking) ──────────────────────
+  describe('executeDagWorkflow -- usage recording per AI pass', () => {
+    const sampleEntry = (overrides?: Record<string, unknown>) => ({
+      provider: 'anthropic',
+      model: 'claude-test',
+      modelSource: 'reported' as const,
+      inputTokens: 10,
+      outputTokens: 4,
+      costUsd: 0.012,
+      ...overrides,
+    });
+
+    const runSimple = async (opts: {
+      store?: ReturnType<typeof createMockStore>;
+      deps?: WorkflowDeps;
+      runId?: string;
+      workflow?: WorkflowDefinition;
+      workflowRun?: WorkflowRun;
+      provider?: string;
+      config?: WorkflowConfig;
+    }) => {
+      const store = opts.store ?? createMockStore();
+      const mockDeps = opts.deps ?? createMockDeps(store);
+      const platform = createMockPlatform();
+      const workflowRun = opts.workflowRun ?? makeWorkflowRun(opts.runId ?? 'usage-run');
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-usage',
+        testDir,
+        opts.workflow ?? {
+          name: 'usage-wf',
+          nodes: [{ id: 'ai', prompt: 'do work' }],
+        },
+        workflowRun,
+        opts.provider ?? 'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        opts.config ?? minimalConfig
+      );
+      return { store, mockDeps, workflowRun };
+    };
+
+    const usageCalls = (deps: WorkflowDeps) =>
+      (deps.usageRecorder.recordWorkflowUsage as Mock).mock.calls.map(
+        (c: unknown[]) => c[0] as Record<string, unknown>
+      );
+
+    it('records once on standard AI success', async () => {
+      const breakdown = [sampleEntry()];
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'ok' };
+        yield { type: 'result', sessionId: 's1', usageBreakdown: breakdown };
+      });
+      const { mockDeps, workflowRun } = await runSimple({});
+      const calls = usageCalls(mockDeps);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        runId: workflowRun.id,
+        stepName: 'ai',
+        agentProvider: 'claude',
+        retryEpoch: 0,
+        reaskAttempt: 0,
+        terminalError: false,
+        errorSubtype: null,
+        iteration: null,
+      });
+      expect(calls[0].usageBreakdown).toEqual(breakdown);
+    });
+
+    it('records once before failing on SDK error result with usage', async () => {
+      const breakdown = [sampleEntry({ costUsd: 0.05 })];
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'result',
+          sessionId: 'err',
+          isError: true,
+          errorSubtype: 'error_during_execution',
+          usageBreakdown: breakdown,
+        };
+      });
+      const { mockDeps, store } = await runSimple({});
+      const calls = usageCalls(mockDeps);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        terminalError: true,
+        errorSubtype: 'error_during_execution',
+        reaskAttempt: 0,
+      });
+      expect(calls[0].usageBreakdown).toEqual(breakdown);
+      const failed = (store.createWorkflowEvent as Mock).mock.calls.find(
+        (c: unknown[]) => (c[0] as { event_type: string }).event_type === 'node_failed'
+      );
+      expect(failed).toBeDefined();
+    });
+
+    it('records nothing when the generator throws without a terminal usage result', async () => {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'partial' };
+        throw new Error('stream exploded');
+      });
+      const { mockDeps } = await runSimple({});
+      expect(usageCalls(mockDeps)).toHaveLength(0);
+    });
+
+    it('records only the latest usageBreakdown when one pass yields two cumulative results', async () => {
+      const first = [sampleEntry({ inputTokens: 1, costUsd: 0.001 })];
+      const latest = [sampleEntry({ inputTokens: 99, costUsd: 0.09 })];
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't1', taskType: 'local_agent', description: 'bg' }],
+        };
+        yield { type: 'result', sessionId: 's1', usageBreakdown: first };
+        yield { type: 'background_tasks', tasks: [] };
+        yield { type: 'assistant', content: 'done after bg' };
+        yield { type: 'result', sessionId: 's1', usageBreakdown: latest };
+      });
+      const { mockDeps } = await runSimple({});
+      const calls = usageCalls(mockDeps);
+      expect(calls).toHaveLength(1);
+      expect(calls[0].usageBreakdown).toEqual(latest);
+    });
+
+    it('keeps valid siblings when one usage entry is invalid on a standard node', async () => {
+      mockLogFn.mockClear();
+      const validA = sampleEntry({ model: 'a', inputTokens: 11, costUsd: 0.011 });
+      const invalid = {
+        provider: 'anthropic',
+        model: 'b',
+        modelSource: 'reported',
+        // missing numeric measure → rejected
+      };
+      const validC = sampleEntry({ model: 'c', inputTokens: 33, costUsd: 0.033 });
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'ok' };
+        yield {
+          type: 'result',
+          sessionId: 's1',
+          usageBreakdown: [validA, invalid, validC],
+        };
+      });
+      const { mockDeps } = await runSimple({});
+      const calls = usageCalls(mockDeps);
+      expect(calls).toHaveLength(1);
+      expect(calls[0].usageBreakdown).toEqual([validA, validC]);
+      const rejectedWarns = mockLogFn.mock.calls.filter(
+        (c: unknown[]) => c[1] === 'workflow.usage_entry_rejected'
+      );
+      expect(rejectedWarns).toHaveLength(1);
+      const payload = rejectedWarns[0][0] as {
+        rejected: Array<{ index: number; issue: string }>;
+        retainedCount: number;
+      };
+      expect(payload.retainedCount).toBe(2);
+      expect(payload.rejected).toEqual([{ index: 1, issue: expect.any(String) }]);
+      expect(payload.rejected[0].issue).not.toContain('anthropic');
+      expect(JSON.stringify(payload)).not.toContain('"b"');
+    });
+
+    it('keeps valid siblings when one usage entry is invalid on a direct loop', async () => {
+      mockLogFn.mockClear();
+      const validA = sampleEntry({ model: 'loop-a', inputTokens: 5, costUsd: 0.005 });
+      const invalid = { estimatedCostUsd: 1 };
+      const validC = sampleEntry({ model: 'loop-c', outputTokens: 7, costUsd: 0.007 });
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'result',
+          sessionId: 'loop',
+          usageBreakdown: [validA, invalid, validC],
+        };
+        yield { type: 'assistant', content: 'DONE' };
+      });
+      const { mockDeps } = await runSimple({
+        workflow: {
+          name: 'loop-mixed-usage',
+          nodes: [
+            {
+              id: 'work',
+              loop: {
+                prompt: 'go',
+                until: 'DONE',
+                max_iterations: 2,
+              },
+            },
+          ],
+        },
+      });
+      const calls = usageCalls(mockDeps);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        stepName: 'work',
+        iteration: 1,
+        terminalError: false,
+      });
+      expect(calls[0].usageBreakdown).toEqual([validA, validC]);
+      const rejectedWarns = mockLogFn.mock.calls.filter(
+        (c: unknown[]) => c[1] === 'workflow.usage_entry_rejected'
+      );
+      expect(rejectedWarns.length).toBeGreaterThanOrEqual(1);
+      const payload = rejectedWarns[0][0] as {
+        rejected: Array<{ index: number; issue: string }>;
+      };
+      expect(payload.rejected.map(r => r.index)).toEqual([1]);
+      expect(JSON.stringify(payload)).not.toContain('estimatedCostUsd');
+    });
+
+    it('clears earlier cumulative usage when the latest terminal result is empty', async () => {
+      const earlier = [sampleEntry({ inputTokens: 40, costUsd: 0.04 })];
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't1', taskType: 'local_agent', description: 'bg' }],
+        };
+        yield { type: 'result', sessionId: 's1', usageBreakdown: earlier };
+        yield { type: 'background_tasks', tasks: [] };
+        yield { type: 'assistant', content: 'done' };
+        yield { type: 'result', sessionId: 's1', usageBreakdown: [] };
+      });
+      const { mockDeps } = await runSimple({});
+      expect(usageCalls(mockDeps)).toHaveLength(0);
+    });
+
+    it('clears earlier cumulative usage when the latest terminal result is all-invalid', async () => {
+      mockLogFn.mockClear();
+      const earlier = [sampleEntry({ inputTokens: 50, costUsd: 0.05 })];
+      const allInvalid = [
+        { provider: '', model: 'x', modelSource: 'reported', inputTokens: 1 },
+        { estimatedCostUsd: 9 },
+      ];
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't1', taskType: 'local_agent', description: 'bg' }],
+        };
+        yield { type: 'result', sessionId: 's1', usageBreakdown: earlier };
+        yield { type: 'background_tasks', tasks: [] };
+        yield { type: 'result', sessionId: 's1', usageBreakdown: allInvalid };
+      });
+      const { mockDeps } = await runSimple({});
+      expect(usageCalls(mockDeps)).toHaveLength(0);
+      const rejectedWarns = mockLogFn.mock.calls.filter(
+        (c: unknown[]) => c[1] === 'workflow.usage_entry_rejected'
+      );
+      expect(rejectedWarns.length).toBeGreaterThanOrEqual(1);
+      for (const call of rejectedWarns) {
+        const payload = call[0] as { rejected: Array<{ index: number; issue: string }> };
+        expect(JSON.stringify(payload)).not.toContain('estimatedCostUsd');
+        for (const r of payload.rejected) {
+          expect(r).toEqual({ index: expect.any(Number), issue: expect.any(String) });
+        }
+      }
+    });
+
+    it('clears earlier loop usage when the latest attempt result is empty', async () => {
+      const earlier = [sampleEntry({ costUsd: 0.02 })];
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't1', taskType: 'local_agent', description: 'bg' }],
+        };
+        yield { type: 'result', sessionId: 'loop', usageBreakdown: earlier };
+        yield { type: 'background_tasks', tasks: [] };
+        yield { type: 'assistant', content: 'DONE' };
+        yield { type: 'result', sessionId: 'loop', usageBreakdown: [] };
+      });
+      const { mockDeps } = await runSimple({
+        workflow: {
+          name: 'loop-clear-usage',
+          nodes: [
+            {
+              id: 'work',
+              loop: {
+                prompt: 'go',
+                until: 'DONE',
+                max_iterations: 2,
+              },
+            },
+          ],
+        },
+      });
+      expect(usageCalls(mockDeps)).toHaveLength(0);
+    });
+
+    it('clears earlier standard usage when the latest terminal result omits usageBreakdown', async () => {
+      const earlier = [sampleEntry({ inputTokens: 41, costUsd: 0.041 })];
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't1', taskType: 'local_agent', description: 'bg' }],
+        };
+        yield { type: 'result', sessionId: 's1', usageBreakdown: earlier };
+        yield { type: 'background_tasks', tasks: [] };
+        yield { type: 'assistant', content: 'done' };
+        // Final result deliberately omits usageBreakdown — stale earlier usage must not survive.
+        yield { type: 'result', sessionId: 's1' };
+      });
+      const { mockDeps } = await runSimple({});
+      expect(usageCalls(mockDeps)).toHaveLength(0);
+    });
+
+    it('clears earlier loop usage when the latest attempt result omits usageBreakdown', async () => {
+      const earlier = [sampleEntry({ costUsd: 0.021 })];
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't1', taskType: 'local_agent', description: 'bg' }],
+        };
+        yield { type: 'result', sessionId: 'loop', usageBreakdown: earlier };
+        yield { type: 'background_tasks', tasks: [] };
+        yield { type: 'assistant', content: 'DONE' };
+        yield { type: 'result', sessionId: 'loop' };
+      });
+      const { mockDeps } = await runSimple({
+        workflow: {
+          name: 'loop-omit-usage',
+          nodes: [
+            {
+              id: 'work',
+              loop: {
+                prompt: 'go',
+                until: 'DONE',
+                max_iterations: 2,
+              },
+            },
+          ],
+        },
+      });
+      expect(usageCalls(mockDeps)).toHaveLength(0);
+    });
+
+    it('fail-closes non-array usageBreakdown on standard nodes without retaining earlier usage', async () => {
+      mockLogFn.mockClear();
+      const earlier = [sampleEntry({ inputTokens: 60, costUsd: 0.06 })];
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't1', taskType: 'local_agent', description: 'bg' }],
+        };
+        yield { type: 'result', sessionId: 's1', usageBreakdown: earlier };
+        yield { type: 'background_tasks', tasks: [] };
+        yield {
+          type: 'result',
+          sessionId: 's1',
+          // Runtime-malformed: providers must send an array; object must not preserve earlier usage.
+          usageBreakdown: { provider: 'anthropic', inputTokens: 9 },
+        } as never;
+      });
+      const { mockDeps } = await runSimple({});
+      expect(usageCalls(mockDeps)).toHaveLength(0);
+      const rejectedWarns = mockLogFn.mock.calls.filter(
+        (c: unknown[]) => c[1] === 'workflow.usage_entry_rejected'
+      );
+      expect(rejectedWarns.length).toBeGreaterThanOrEqual(1);
+      for (const call of rejectedWarns) {
+        const payload = call[0] as { rejected: Array<{ index: number; issue: string }> };
+        expect(JSON.stringify(payload)).not.toContain('anthropic');
+        expect(JSON.stringify(payload)).not.toContain('inputTokens');
+        for (const r of payload.rejected) {
+          expect(r).toEqual({ index: expect.any(Number), issue: expect.any(String) });
+        }
+      }
+    });
+
+    it('fail-closes non-array usageBreakdown on direct loops without retaining earlier usage', async () => {
+      mockLogFn.mockClear();
+      const earlier = [sampleEntry({ costUsd: 0.022 })];
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't1', taskType: 'local_agent', description: 'bg' }],
+        };
+        yield { type: 'result', sessionId: 'loop', usageBreakdown: earlier };
+        yield { type: 'background_tasks', tasks: [] };
+        yield { type: 'assistant', content: 'DONE' };
+        yield {
+          type: 'result',
+          sessionId: 'loop',
+          usageBreakdown: 'not-an-array',
+        } as never;
+      });
+      const { mockDeps } = await runSimple({
+        workflow: {
+          name: 'loop-malformed-usage',
+          nodes: [
+            {
+              id: 'work',
+              loop: {
+                prompt: 'go',
+                until: 'DONE',
+                max_iterations: 2,
+              },
+            },
+          ],
+        },
+      });
+      expect(usageCalls(mockDeps)).toHaveLength(0);
+      const rejectedWarns = mockLogFn.mock.calls.filter(
+        (c: unknown[]) => c[1] === 'workflow.usage_entry_rejected'
+      );
+      expect(rejectedWarns.length).toBeGreaterThanOrEqual(1);
+      for (const call of rejectedWarns) {
+        expect(JSON.stringify(call[0])).not.toContain('not-an-array');
+      }
+    });
+
+    it('pairs terminalError metadata with the latest standard result that owns the breakdown', async () => {
+      const successUsage = [sampleEntry({ costUsd: 0.01 })];
+      const errorUsage = [sampleEntry({ costUsd: 0.09 })];
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't1', taskType: 'local_agent', description: 'bg' }],
+        };
+        yield {
+          type: 'result',
+          sessionId: 's1',
+          usageBreakdown: successUsage,
+        };
+        yield { type: 'background_tasks', tasks: [] };
+        yield {
+          type: 'result',
+          sessionId: 's1',
+          isError: true,
+          errorSubtype: 'error_during_execution',
+          usageBreakdown: errorUsage,
+        };
+      });
+      const { mockDeps } = await runSimple({});
+      const calls = usageCalls(mockDeps);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        terminalError: true,
+        errorSubtype: 'error_during_execution',
+      });
+      expect(calls[0].usageBreakdown).toEqual(errorUsage);
+    });
+
+    it('clears standard usage when a later error result omits breakdown', async () => {
+      const earlier = [sampleEntry({ costUsd: 0.08 })];
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't1', taskType: 'local_agent', description: 'bg' }],
+        };
+        yield { type: 'result', sessionId: 's1', usageBreakdown: earlier };
+        yield { type: 'background_tasks', tasks: [] };
+        yield {
+          type: 'result',
+          sessionId: 's1',
+          isError: true,
+          errorSubtype: 'error_during_execution',
+        };
+      });
+      const { mockDeps, store } = await runSimple({});
+      // Latest terminal result owns accounting and provided no breakdown — no stale success usage.
+      expect(usageCalls(mockDeps)).toHaveLength(0);
+      expect(store.failWorkflowRun).toHaveBeenCalled();
+    });
+
+    it('pairs loop terminalError metadata with the latest attempt result that owns the breakdown', async () => {
+      const successUsage = [sampleEntry({ costUsd: 0.011 })];
+      const errorUsage = [sampleEntry({ costUsd: 0.044 })];
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't1', taskType: 'local_agent', description: 'bg' }],
+        };
+        yield { type: 'result', sessionId: 'loop', usageBreakdown: successUsage };
+        yield { type: 'background_tasks', tasks: [] };
+        yield {
+          type: 'result',
+          sessionId: 'loop',
+          isError: true,
+          errorSubtype: 'error_during_execution',
+          usageBreakdown: errorUsage,
+        };
+      });
+      const { mockDeps, store } = await runSimple({
+        workflow: {
+          name: 'loop-error-owns-usage',
+          nodes: [
+            {
+              id: 'work',
+              loop: {
+                prompt: 'go',
+                until: 'DONE',
+                max_iterations: 3,
+              },
+            },
+          ],
+        },
+      });
+      const calls = usageCalls(mockDeps);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        stepName: 'work',
+        iteration: 1,
+        terminalError: true,
+        errorSubtype: 'error_during_execution',
+      });
+      expect(calls[0].usageBreakdown).toEqual(errorUsage);
+      expect(store.failWorkflowRun).toHaveBeenCalled();
+    });
+
+    it('clears loop usage when a later error result omits breakdown', async () => {
+      const earlier = [sampleEntry({ costUsd: 0.033 })];
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't1', taskType: 'local_agent', description: 'bg' }],
+        };
+        yield { type: 'result', sessionId: 'loop', usageBreakdown: earlier };
+        yield { type: 'background_tasks', tasks: [] };
+        yield {
+          type: 'result',
+          sessionId: 'loop',
+          isError: true,
+          errorSubtype: 'error_during_execution',
+        };
+      });
+      const { mockDeps, store } = await runSimple({
+        workflow: {
+          name: 'loop-error-omit-usage',
+          nodes: [
+            {
+              id: 'work',
+              loop: {
+                prompt: 'go',
+                until: 'DONE',
+                max_iterations: 3,
+              },
+            },
+          ],
+        },
+      });
+      expect(usageCalls(mockDeps)).toHaveLength(0);
+      expect(store.failWorkflowRun).toHaveBeenCalled();
+    });
+
+    it('records each structured-output reask independently', async () => {
+      const u1 = [sampleEntry({ costUsd: 0.01 })];
+      const u2 = [sampleEntry({ costUsd: 0.02 })];
+      mockSendQueryDag.mockImplementationOnce(function* () {
+        yield {
+          type: 'result',
+          sessionId: 's1',
+          structuredOutput: { other: 'x' },
+          usageBreakdown: u1,
+        };
+      });
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'result',
+          sessionId: 's2',
+          structuredOutput: { verdict: 'ok' },
+          usageBreakdown: u2,
+        };
+      });
+      const { mockDeps } = await runSimple({
+        provider: 'pi',
+        config: { ...minimalConfig, assistant: 'pi' },
+        workflow: {
+          name: 'reask-usage',
+          nodes: [
+            {
+              id: 'classify',
+              prompt: 'decide',
+              provider: 'pi',
+              output_format: {
+                type: 'object',
+                properties: { verdict: { type: 'string' } },
+                required: ['verdict'],
+              },
+              retry: { max_attempts: 0 },
+            },
+          ],
+        },
+      });
+      const calls = usageCalls(mockDeps);
+      expect(calls).toHaveLength(2);
+      expect(calls[0]).toMatchObject({
+        stepName: 'classify',
+        agentProvider: 'pi',
+        reaskAttempt: 0,
+        terminalError: false,
+      });
+      expect(calls[0].usageBreakdown).toEqual(u1);
+      expect(calls[1]).toMatchObject({ reaskAttempt: 1, terminalError: false });
+      expect(calls[1].usageBreakdown).toEqual(u2);
+    });
+
+    it('records each outer node-level retry independently', async () => {
+      let callCount = 0;
+      mockSendQueryDag.mockImplementation(function* () {
+        callCount++;
+        if (callCount === 1) {
+          throw new Error('Claude Code crash: process exited with code 1');
+        }
+        yield { type: 'assistant', content: 'recovered' };
+        yield {
+          type: 'result',
+          sessionId: 'retry-ok',
+          usageBreakdown: [sampleEntry({ costUsd: 0.03 })],
+        };
+      });
+      const { mockDeps } = await runSimple({
+        workflow: {
+          name: 'outer-retry-usage',
+          nodes: [
+            {
+              id: 'flaky',
+              prompt: 'try',
+              retry: { max_attempts: 2, delay_ms: 0, backoff: 'fixed' },
+            },
+          ],
+        },
+      });
+      // First attempt threw with no usage; second attempt recorded once.
+      const calls = usageCalls(mockDeps);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({ stepName: 'flaky', reaskAttempt: 0, terminalError: false });
+    });
+
+    it('records each direct-loop iteration/reask with iteration metadata', async () => {
+      let n = 0;
+      mockSendQueryDag.mockImplementation(function* () {
+        n++;
+        if (n === 1) {
+          yield {
+            type: 'assistant',
+            content: 'still going',
+          };
+          yield {
+            type: 'result',
+            sessionId: 'loop-1',
+            usageBreakdown: [sampleEntry({ costUsd: 0.01 })],
+          };
+          return;
+        }
+        yield {
+          type: 'assistant',
+          content: 'DONE',
+        };
+        yield {
+          type: 'result',
+          sessionId: 'loop-2',
+          usageBreakdown: [sampleEntry({ costUsd: 0.02 })],
+        };
+      });
+      const { mockDeps } = await runSimple({
+        workflow: {
+          name: 'loop-usage',
+          nodes: [
+            {
+              id: 'work',
+              loop: {
+                prompt: 'Do the work until DONE.',
+                until: 'DONE',
+                max_iterations: 5,
+              },
+            },
+          ],
+        },
+      });
+      const calls = usageCalls(mockDeps);
+      expect(calls).toHaveLength(2);
+      expect(calls[0]).toMatchObject({
+        stepName: 'work',
+        iteration: 1,
+        reaskAttempt: 0,
+        terminalError: false,
+      });
+      expect(calls[1]).toMatchObject({
+        stepName: 'work',
+        iteration: 2,
+        reaskAttempt: 0,
+        terminalError: false,
+      });
+    });
+
+    it('loop-group body nodes use namespaced stepName with no group-level duplicate', async () => {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'COMPLETE' };
+        yield {
+          type: 'result',
+          sessionId: 'lg',
+          usageBreakdown: [sampleEntry()],
+        };
+      });
+      const { mockDeps } = await runSimple({
+        workflow: {
+          name: 'lg-usage',
+          nodes: [
+            {
+              id: 'group',
+              loop_group: {
+                until: 'COMPLETE',
+                max_iterations: 2,
+                nodes: [{ id: 'body', prompt: 'emit COMPLETE' }],
+              },
+            },
+          ],
+        },
+      });
+      const calls = usageCalls(mockDeps);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        stepName: 'group.body',
+        // Loop-group body uses standard path — iteration is null on the usage record
+        // (group iteration lives on lifecycle events only).
+        iteration: null,
+        reaskAttempt: 0,
+      });
+      // No group-level stepName 'group' usage row.
+      expect(calls.every(c => c.stepName === 'group.body')).toBe(true);
+    });
+
+    it('pause/resume and retry_epoch append rather than replace', async () => {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'ok' };
+        yield {
+          type: 'result',
+          sessionId: 'epoch',
+          usageBreakdown: [sampleEntry({ costUsd: 0.07 })],
+        };
+      });
+      // First pass epoch 0
+      const store = createMockStore();
+      const mockDeps = createMockDeps(store);
+      await runSimple({
+        store,
+        deps: mockDeps,
+        runId: 'epoch-run',
+        workflowRun: makeWorkflowRun('epoch-run', { metadata: { retry_epoch: 0 } }),
+      });
+      // Second pass (manual retry-node style) epoch 2 — same recorder mock accumulates.
+      await runSimple({
+        store,
+        deps: mockDeps,
+        runId: 'epoch-run',
+        workflowRun: makeWorkflowRun('epoch-run', { metadata: { retry_epoch: 2 } }),
+      });
+      const calls = usageCalls(mockDeps);
+      expect(calls).toHaveLength(2);
+      expect(calls[0].retryEpoch).toBe(0);
+      expect(calls[1].retryEpoch).toBe(2);
+    });
+
+    it('does not record for bash/script/non-AI nodes', async () => {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'should not run' };
+        yield { type: 'result', sessionId: 'x', usageBreakdown: [sampleEntry()] };
+      });
+      const { mockDeps } = await runSimple({
+        workflow: {
+          name: 'non-ai',
+          nodes: [
+            { id: 'b', bash: 'echo hi' },
+            {
+              id: 's',
+              runtime: 'bun',
+              script: 'console.log("hi")',
+              depends_on: ['b'],
+            },
+          ],
+        },
+      });
+      expect(usageCalls(mockDeps)).toHaveLength(0);
+      expect(mockSendQueryDag.mock.calls.length).toBe(0);
+    });
+
+    it('recorder rejection never changes the node outcome', async () => {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'ok' };
+        yield {
+          type: 'result',
+          sessionId: 's',
+          usageBreakdown: [sampleEntry()],
+        };
+      });
+      const store = createMockStore();
+      const mockDeps = createMockDeps(store);
+      (mockDeps.usageRecorder.recordWorkflowUsage as Mock).mockImplementation(() =>
+        Promise.reject(new Error('recorder blew up'))
+      );
+      await runSimple({ store, deps: mockDeps });
+      const completed = (store.createWorkflowEvent as Mock).mock.calls.find(
+        (c: unknown[]) => (c[0] as { event_type: string }).event_type === 'node_completed'
+      );
+      expect(completed).toBeDefined();
+      expect(store.completeWorkflowRun).toHaveBeenCalled();
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    });
+
+    it('records loop SDK error usage with terminalError before fail', async () => {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'result',
+          isError: true,
+          errorSubtype: 'error_during_execution',
+          usageBreakdown: [sampleEntry({ costUsd: 0.04 })],
+        };
+      });
+      const { mockDeps, store } = await runSimple({
+        workflow: {
+          name: 'loop-err-usage',
+          nodes: [
+            {
+              id: 'work',
+              loop: {
+                prompt: 'go',
+                until: 'DONE',
+                max_iterations: 3,
+              },
+            },
+          ],
+        },
+      });
+      const calls = usageCalls(mockDeps);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        stepName: 'work',
+        iteration: 1,
+        terminalError: true,
+        errorSubtype: 'error_during_execution',
+      });
+      expect(store.failWorkflowRun).toHaveBeenCalled();
+    });
+  });
+
   // ─── Background Agent Task Gating (#2083) ───────────────────────────────
 
   describe('background task completion gating (#2083)', () => {
@@ -5846,11 +6684,14 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       await executeNativeRalphFixture(fixture.workflow, store);
 
       expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
-      // The native Ralph loop node declares its own provider/model, so the loop's
-      // per-iteration sendQuery runs as that — not the workflow-level default.
+      // Accepted contract: speckit-ralph-native-feature.yaml ralph-loop-run uses
+      // omp + xai-oauth/grok-4.5 (final loop uses cursor/cursor-grok-4.5 — see loader test).
+      const loopNode = fixture.workflow.nodes.find(node => node.id === 'ralph-loop-run');
+      expect(loopNode?.provider).toBe('omp');
+      expect(loopNode?.model).toBe('xai-oauth/grok-4.5');
       expect(mockGetAgentProviderDag.mock.calls[0][0]).toBe('omp');
       const options = mockSendQueryDag.mock.calls[0][3] as SendQueryOptions;
-      expect(options.model).toBe('cursor/cursor-grok-4.5');
+      expect(options.model).toBe(loopNode?.model);
       expect(options.nodeConfig?.effort).toBe('xhigh');
       expect(store.completeWorkflowRun).toHaveBeenCalled();
       expect(store.failWorkflowRun).not.toHaveBeenCalled();
@@ -14006,6 +14847,190 @@ describe('executeDagWorkflow -- cost tracking', () => {
     expect(completeCalls.length).toBe(1);
     expect(completeCalls[0][1]).toMatchObject({ total_cost_usd: 0.004 });
   });
+
+  it('persists total_cost_usd: 0 and node cost_usd: 0 when provider reports cost 0', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'free' };
+      yield { type: 'result', sessionId: 'sid-zero-cost', cost: 0 };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      { name: 'dag-zero-cost', nodes: [{ id: 'step', prompt: 'Do free thing.' }] },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const completeCalls = (
+      store.completeWorkflowRun as Mock<
+        (id: string, metadata?: Record<string, unknown>) => Promise<void>
+      >
+    ).mock.calls;
+    expect(completeCalls.length).toBe(1);
+    expect(completeCalls[0][1]).toMatchObject({ total_cost_usd: 0 });
+
+    const completed = (store.createWorkflowEvent as Mock).mock.calls.find((c: unknown[]) => {
+      const ev = c[0] as { event_type: string; step_name?: string | null };
+      return ev.event_type === 'node_completed' && ev.step_name === 'step';
+    }) as [{ data?: { cost_usd?: number } }] | undefined;
+    expect(completed?.[0]?.data?.cost_usd).toBe(0);
+  });
+
+  it('still omits total_cost_usd when provider never yields cost (even after zero-cost path exists)', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'no cost field' };
+      yield { type: 'result', sessionId: 'sid-absent-cost' };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      { name: 'dag-absent-cost', nodes: [{ id: 'step', prompt: 'No cost.' }] },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const completeCalls = (
+      store.completeWorkflowRun as Mock<
+        (id: string, metadata?: Record<string, unknown>) => Promise<void>
+      >
+    ).mock.calls;
+    expect(completeCalls[0][1]).not.toHaveProperty('total_cost_usd');
+
+    const completed = (store.createWorkflowEvent as Mock).mock.calls.find((c: unknown[]) => {
+      const ev = c[0] as { event_type: string; step_name?: string | null };
+      return ev.event_type === 'node_completed' && ev.step_name === 'step';
+    }) as [{ data?: Record<string, unknown> }] | undefined;
+    expect(completed?.[0]?.data).not.toHaveProperty('cost_usd');
+  });
+
+  it('sums zeros across sequential nodes without treating init zero as absent', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'z' };
+      yield { type: 'result', sessionId: 'sid-z', cost: 0 };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'dag-zero-multi',
+        nodes: [
+          { id: 'step1', prompt: 'A.' },
+          { id: 'step2', prompt: 'B.', depends_on: ['step1'] },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const completeCalls = (
+      store.completeWorkflowRun as Mock<
+        (id: string, metadata?: Record<string, unknown>) => Promise<void>
+      >
+    ).mock.calls;
+    expect(completeCalls[0][1]).toMatchObject({ total_cost_usd: 0 });
+  });
+
+  it('accumulates loop iteration zeros into completeWorkflowRun total_cost_usd: 0', async () => {
+    let callCount = 0;
+    mockSendQueryDag.mockImplementation(function* () {
+      callCount++;
+      if (callCount < 2) {
+        yield { type: 'assistant', content: 'still free' };
+        yield { type: 'result', sessionId: `loop-z-${String(callCount)}`, cost: 0 };
+      } else {
+        yield { type: 'assistant', content: 'done <promise>COMPLETE</promise>' };
+        yield { type: 'result', sessionId: `loop-z-${String(callCount)}`, cost: 0 };
+      }
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'dag-loop-zero-cost',
+        nodes: [
+          {
+            id: 'my-loop',
+            loop: { prompt: 'Work free.', until: 'COMPLETE', max_iterations: 5 },
+          },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const completeCalls = (
+      store.completeWorkflowRun as Mock<
+        (id: string, metadata?: Record<string, unknown>) => Promise<void>
+      >
+    ).mock.calls;
+    expect(completeCalls[0][1]).toMatchObject({ total_cost_usd: 0 });
+
+    const completed = (store.createWorkflowEvent as Mock).mock.calls.find((c: unknown[]) => {
+      const ev = c[0] as { event_type: string; step_name?: string | null };
+      return ev.event_type === 'node_completed' && ev.step_name === 'my-loop';
+    }) as [{ data?: { cost_usd?: number } }] | undefined;
+    expect(completed?.[0]?.data?.cost_usd).toBe(0);
+  });
 });
 
 describe('executeDagWorkflow -- script nodes', () => {
@@ -15399,8 +16424,10 @@ describe('provider resolution -- regression for #1610', () => {
 
 describe('bundled opus nodes -- provider annotation invariant (#1610)', () => {
   it('every bundled node with an opus model has provider: claude at the node or workflow level', async () => {
-    // Resolve the defaults directory relative to this package (same logic as getAppArchonBasePath).
-    // import.meta.dir = packages/workflows/src → go up 3 levels to repo root → .archon/workflows/defaults
+    // Annotation-only invariant: parse raw YAML (same approach as bundled-defaults.test).
+    // Do NOT use parseWorkflow here — loader structural/provider errors are unrelated to
+    // the opus provider annotation contract and must not disable this scan (#1610).
+    // Malformed YAML throws from Bun.YAML.parse (no silent skip).
     const repoRoot = join(import.meta.dir, '..', '..', '..');
     const defaultsDir = join(repoRoot, '.archon', 'workflows', 'defaults');
 
@@ -15408,32 +16435,32 @@ describe('bundled opus nodes -- provider annotation invariant (#1610)', () => {
     const files = (await readdir(defaultsDir)).filter(f => f.endsWith('.yaml'));
     expect(files.length).toBeGreaterThan(0);
 
+    let opusNodesScanned = 0;
     for (const file of files) {
       const src = await readFileFs(join(defaultsDir, file), 'utf-8');
-      const result = parseWorkflow(src, file);
-      if (!('workflow' in result)) continue; // skip load errors
+      const wf = Bun.YAML.parse(src) as {
+        provider?: string;
+        nodes?: Array<{ id?: string; model?: string; provider?: string }>;
+      };
+      if (!wf || typeof wf !== 'object' || !Array.isArray(wf.nodes)) continue;
 
-      const wf = result.workflow;
-      if (!('nodes' in wf) || !wf.nodes) continue; // skip non-DAG workflows
-
-      const workflowProvider: string | undefined = (wf as { provider?: string }).provider;
-
+      const workflowProvider = wf.provider;
       for (const n of wf.nodes) {
-        const nodeModel: string | undefined = (n as { model?: string }).model;
+        const nodeModel = n.model;
         if (!nodeModel || !nodeModel.toLowerCase().includes('opus')) continue;
 
-        const nodeProvider: string | undefined = (n as { provider?: string }).provider;
+        opusNodesScanned += 1;
+        const nodeProvider = n.provider;
         const hasExplicitClaude = nodeProvider === 'claude' || workflowProvider === 'claude';
-
         expect(hasExplicitClaude).toBe(true);
         if (!hasExplicitClaude) {
-          // Surface which file+node is missing the annotation
           throw new Error(
-            `${file}: node '${(n as { id?: string }).id ?? '?'}' has model '${nodeModel}' but no provider: claude at node or workflow level`
+            `${file}: node '${n.id ?? '?'}' has model '${nodeModel}' but no provider: claude at node or workflow level`
           );
         }
       }
     }
+    expect(opusNodesScanned).toBeGreaterThan(0);
   });
 });
 

@@ -28,10 +28,12 @@ import { foldNodeRuns, type RunEvent } from '../primitives/event';
 import type { Message } from '../primitives/message';
 import type { Project } from '../primitives/project';
 import type { ArtifactFile } from '../skills/runs';
+import type { UsageReport } from '../skills/usage';
 
 interface RunDetailView {
   run: Run;
   events: RunEvent[];
+  usage: UsageReport | null;
 }
 
 /**
@@ -378,7 +380,12 @@ export function RunDetailPage(): ReactElement {
   return (
     <StreamContextProvider value={{ runStartedAt: run.startedAt }}>
       <section className="flex h-full flex-col">
-        <RunDetailHeader run={run} projectId={projectId} projectName={project?.name ?? projectId} />
+        <RunDetailHeader
+          run={run}
+          projectId={projectId}
+          projectName={project?.name ?? projectId}
+          usage={detail.usage}
+        />
 
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {view === 'log' ? (
@@ -387,6 +394,14 @@ export function RunDetailPage(): ReactElement {
                 <div className="sticky top-0 z-10 -mx-6 bg-surface px-6">{toolbar}</div>
 
                 <div className="py-4">
+                  {detail.usage === null ? (
+                    <div
+                      className="mb-3 rounded-[10px] border border-warning/40 bg-warning/[0.06] px-3 py-2 text-[12px] text-warning"
+                      role="status"
+                    >
+                      Usage report unavailable for this run. This is not zero cost.
+                    </div>
+                  ) : null}
                   <RunStartedLine run={run} />
 
                   <div className="mt-2">
@@ -396,6 +411,7 @@ export function RunDetailPage(): ReactElement {
                       showToolCalls={showToolCalls}
                       showSystem={showSystem}
                       selectedNodeId={selectedNodeId}
+                      usage={detail.usage}
                     />
                   </div>
 

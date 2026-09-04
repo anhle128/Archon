@@ -1121,6 +1121,327 @@ describe('SqliteAdapter', () => {
     });
   });
 
+  describe('remote_agent_usage_ledger', () => {
+    let db: SqliteAdapter;
+
+    afterEach(async () => {
+      if (db) {
+        await db.close();
+      }
+      try {
+        unlinkSync(currentDbPath);
+      } catch {
+        /* may not exist */
+      }
+      try {
+        unlinkSync(currentDbPath + '-wal');
+      } catch {
+        /* may not exist */
+      }
+      try {
+        unlinkSync(currentDbPath + '-shm');
+      } catch {
+        /* may not exist */
+      }
+    });
+
+    async function seedEvent(eventId = 'evt-usage-1'): Promise<void> {
+      await insertCodebase(db, 'cb-1');
+      await db.query(
+        `INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id)
+         VALUES ($1, $2, $3)`,
+        ['conv-1', 'web', 'conv-1']
+      );
+      await db.query(
+        `INSERT INTO remote_agent_workflow_runs
+         (id, conversation_id, codebase_id, workflow_name, user_message, status)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        ['run-1', 'conv-1', 'cb-1', 'cost-track', 'measure', 'running']
+      );
+      await db.query(
+        `INSERT INTO remote_agent_workflow_events
+         (id, workflow_run_id, event_type, step_name, data)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [eventId, 'run-1', 'node_usage_recorded', 'prompt-1', '{}']
+      );
+    }
+
+    async function insertLedger(
+      id: string,
+      overrides: Record<string, unknown> = {}
+    ): Promise<void> {
+      const row = {
+        workflow_event_id: 'evt-usage-1',
+        entry_index: 0,
+        agent_provider: 'claude',
+        provider: 'anthropic',
+        model: 'claude-sonnet-4',
+        model_source: 'reported',
+        kind: null as string | null,
+        tokens_input: 10,
+        tokens_output: 5,
+        tokens_reasoning: null as number | null,
+        tokens_cache_read: null as number | null,
+        tokens_cache_write: null as number | null,
+        requests: null as number | null,
+        cost_usd: 0.01,
+        cost_estimated_usd: null as number | null,
+        pricing_source: null as string | null,
+        ...overrides,
+      };
+      await db.query(
+        `INSERT INTO remote_agent_usage_ledger (
+           id, workflow_event_id, entry_index, agent_provider, provider, model, model_source, kind,
+           tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write,
+           requests, cost_usd, cost_estimated_usd, pricing_source
+         ) VALUES (
+           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17
+         )`,
+        [
+          id,
+          row.workflow_event_id,
+          row.entry_index,
+          row.agent_provider,
+          row.provider,
+          row.model,
+          row.model_source,
+          row.kind,
+          row.tokens_input,
+          row.tokens_output,
+          row.tokens_reasoning,
+          row.tokens_cache_read,
+          row.tokens_cache_write,
+          row.requests,
+          row.cost_usd,
+          row.cost_estimated_usd,
+          row.pricing_source,
+        ]
+      );
+    }
+
+    test('fresh schema: creates all 17 ledger columns and required indexes', async () => {
+      db = createTestDb();
+      const cols = raw_pragma(currentDbPath, 'remote_agent_usage_ledger');
+      expect(cols.sort()).toEqual(
+        [
+          'id',
+          'workflow_event_id',
+          'entry_index',
+          'agent_provider',
+          'provider',
+          'model',
+          'model_source',
+          'kind',
+          'tokens_input',
+          'tokens_output',
+          'tokens_reasoning',
+          'tokens_cache_read',
+          'tokens_cache_write',
+          'requests',
+          'cost_usd',
+          'cost_estimated_usd',
+          'pricing_source',
+        ].sort()
+      );
+
+      const indexes = raw_indexes(currentDbPath);
+      expect(indexes).toContain('idx_usage_ledger_agent_provider');
+      expect(indexes).toContain('idx_usage_ledger_provider_model');
+      expect(indexes).toContain('idx_workflow_events_usage_created_at');
+      expect(indexes).toContain('idx_workflow_runs_codebase_id');
+    });
+
+    test('fresh schema: accepts a valid reported-cost row', async () => {
+      db = createTestDb();
+      await seedEvent();
+      await expect(insertLedger('led-1')).resolves.toBeUndefined();
+
+      const result = await db.query(
+        'SELECT id, entry_index, cost_usd FROM remote_agent_usage_ledger WHERE id = $1',
+        ['led-1']
+      );
+      expect(result.rows).toHaveLength(1);
+      expect(result.rows[0]).toEqual({ id: 'led-1', entry_index: 0, cost_usd: 0.01 });
+    });
+
+    test('fresh schema: UNIQUE(workflow_event_id, entry_index) rejects duplicates', async () => {
+      db = createTestDb();
+      await seedEvent();
+      await insertLedger('led-1');
+      await expect(insertLedger('led-2')).rejects.toThrow();
+    });
+
+    test('fresh schema: workflow_event_id FK rejects missing events and cascades on delete', async () => {
+      db = createTestDb();
+      await seedEvent();
+      await expect(
+        insertLedger('led-missing-event', { workflow_event_id: 'missing-event' })
+      ).rejects.toThrow(/FOREIGN KEY/i);
+
+      await insertLedger('led-1');
+      await db.query('DELETE FROM remote_agent_workflow_events WHERE id = $1', ['evt-usage-1']);
+      const after = await db.query('SELECT id FROM remote_agent_usage_ledger WHERE id = $1', [
+        'led-1',
+      ]);
+      expect(after.rows).toHaveLength(0);
+    });
+
+    test('fresh schema: deleting a run cascades through events to ledger rows', async () => {
+      db = createTestDb();
+      await seedEvent();
+      await insertLedger('led-1');
+      await db.query('DELETE FROM remote_agent_workflow_runs WHERE id = $1', ['run-1']);
+      const after = await db.query('SELECT id FROM remote_agent_usage_ledger');
+      expect(after.rows).toHaveLength(0);
+    });
+
+    test('fresh schema: rejects empty measure set', async () => {
+      db = createTestDb();
+      await seedEvent();
+      await expect(
+        insertLedger('led-empty', {
+          tokens_input: null,
+          tokens_output: null,
+          tokens_reasoning: null,
+          tokens_cache_read: null,
+          tokens_cache_write: null,
+          requests: null,
+          cost_usd: null,
+          cost_estimated_usd: null,
+          pricing_source: null,
+        })
+      ).rejects.toThrow(/CHECK/i);
+    });
+
+    test('fresh schema: reported and estimated USD are mutually exclusive', async () => {
+      db = createTestDb();
+      await seedEvent();
+      await expect(
+        insertLedger('led-both-costs', {
+          cost_usd: 0.01,
+          cost_estimated_usd: 0.02,
+          pricing_source: 'config',
+        })
+      ).rejects.toThrow(/CHECK/i);
+    });
+
+    test('fresh schema: pricing_source present exactly with estimates', async () => {
+      db = createTestDb();
+      await seedEvent();
+      await expect(
+        insertLedger('led-source-only', {
+          cost_usd: null,
+          cost_estimated_usd: null,
+          pricing_source: 'config',
+        })
+      ).rejects.toThrow(/CHECK/i);
+      await expect(
+        insertLedger('led-estimate-only', {
+          cost_usd: null,
+          cost_estimated_usd: 0.02,
+          pricing_source: null,
+        })
+      ).rejects.toThrow(/CHECK/i);
+      await expect(
+        insertLedger('led-estimate-ok', {
+          cost_usd: null,
+          cost_estimated_usd: 0.02,
+          pricing_source: 'catalog',
+        })
+      ).resolves.toBeUndefined();
+    });
+
+    test('fresh schema: model_source and model nullability agree', async () => {
+      db = createTestDb();
+      await seedEvent();
+      await expect(
+        insertLedger('led-unknown-with-model', {
+          model_source: 'unknown',
+          model: 'should-be-null',
+        })
+      ).rejects.toThrow(/CHECK/i);
+      await expect(
+        insertLedger('led-reported-null-model', {
+          model_source: 'reported',
+          model: null,
+        })
+      ).rejects.toThrow(/CHECK/i);
+      await expect(
+        insertLedger('led-unknown-ok', {
+          model_source: 'unknown',
+          model: null,
+          cost_usd: null,
+          requests: 1,
+        })
+      ).resolves.toBeUndefined();
+    });
+
+    test('fresh schema: rejects negative measures, non-positive requests, and reasoning above output', async () => {
+      db = createTestDb();
+      await seedEvent();
+      await expect(insertLedger('led-neg-tokens', { tokens_input: -1 })).rejects.toThrow(/CHECK/i);
+      await expect(insertLedger('led-zero-requests', { requests: 0 })).rejects.toThrow(/CHECK/i);
+      await expect(
+        insertLedger('led-reasoning-high', { tokens_output: 2, tokens_reasoning: 3 })
+      ).rejects.toThrow(/CHECK/i);
+      await expect(insertLedger('led-empty-provider', { provider: '' })).rejects.toThrow(/CHECK/i);
+      await expect(insertLedger('led-neg-index', { entry_index: -1 })).rejects.toThrow(/CHECK/i);
+    });
+
+    test('fresh schema: accepts zero reported cost and zero token measures', async () => {
+      db = createTestDb();
+      await seedEvent();
+      await expect(
+        insertLedger('led-zero-cost', {
+          tokens_input: 0,
+          tokens_output: 0,
+          cost_usd: 0,
+        })
+      ).resolves.toBeUndefined();
+    });
+
+    test('upgrade: missing ledger table is added without touching unrelated rows', async () => {
+      const dbPath = join(
+        import.meta.dir,
+        `.test-sqlite-pre-ledger-${Date.now()}-${Math.random().toString(36).slice(2)}.db`
+      );
+      currentDbPath = dbPath;
+
+      const raw = new Database(dbPath);
+      raw.exec(`
+        CREATE TABLE remote_agent_codebases (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          default_cwd TEXT NOT NULL
+        );
+        INSERT INTO remote_agent_codebases (id, name, default_cwd)
+          VALUES ('cb-pre', 'pre', '/tmp/pre');
+      `);
+      raw.close();
+
+      db = new SqliteAdapter(dbPath);
+      const cols = raw_pragma(dbPath, 'remote_agent_usage_ledger');
+      expect(cols).toContain('workflow_event_id');
+      expect(cols).toContain('cost_estimated_usd');
+      expect(cols).toHaveLength(17);
+
+      const preserved = await db.query('SELECT name FROM remote_agent_codebases WHERE id = $1', [
+        'cb-pre',
+      ]);
+      expect(preserved.rows).toHaveLength(1);
+    });
+
+    test('repeated construction against the same file is idempotent for ledger objects', async () => {
+      db = createTestDb();
+      await db.close();
+      expect(() => {
+        db = new SqliteAdapter(currentDbPath);
+      }).not.toThrow();
+      await seedEvent();
+      await expect(insertLedger('led-1')).resolves.toBeUndefined();
+    });
+  });
+
   describe('schema parity with the Postgres migration (000_combined.sql)', () => {
     /**
      * The SQLite schema (createSchema() in sqlite.ts) and the Postgres schema
@@ -1163,7 +1484,7 @@ describe('SqliteAdapter', () => {
      * suite stayed green. Adjust when the schema legitimately changes size —
      * the failure names the count, so the intended value is never a guess.
      */
-    const MIN_NON_AUTH_COLUMNS = 138;
+    const MIN_NON_AUTH_COLUMNS = 155;
 
     /**
      * Archon table names declared by the Postgres migration. Body-independent
@@ -1489,6 +1810,238 @@ describe('SqliteAdapter', () => {
       expect(info?.appVersion).toBe(APP_VERSION);
       expect(info?.appliedAt).toBeTruthy();
     });
+  });
+});
+
+describe('SqliteAdapter transaction isolation', () => {
+  let db: SqliteAdapter;
+
+  afterEach(async () => {
+    if (db) await db.close();
+    if (currentDbPath) {
+      try {
+        unlinkSync(currentDbPath);
+      } catch {
+        // ignore missing temp db
+      }
+      try {
+        unlinkSync(`${currentDbPath}-wal`);
+      } catch {
+        // ignore
+      }
+      try {
+        unlinkSync(`${currentDbPath}-shm`);
+      } catch {
+        // ignore
+      }
+      currentDbPath = '';
+    }
+  });
+
+  test('public query mutation cannot run inside an open withSnapshotRead transaction', async () => {
+    db = createTestDb();
+    await insertCodebase(db, 'cb-snap');
+
+    let releaseSnapshot!: () => void;
+    const snapshotHold = new Promise<void>(resolve => {
+      releaseSnapshot = resolve;
+    });
+
+    let publicPromise!: Promise<unknown>;
+
+    const snapshotPromise = db.withSnapshotRead(async query => {
+      await query('SELECT 1 AS n');
+      // Start ordinary public mutation while snapshot is open — do NOT await it
+      // inside the callback (it serializes outside and would deadlock).
+      publicPromise = db.query(
+        `INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)`,
+        ['cb-public', 'public-after-snap', '/tmp/public']
+      );
+      // Yield so the public query enqueues on txTail.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const during = await query<{ id: string }>(
+        `SELECT id FROM remote_agent_codebases WHERE id = $1`,
+        ['cb-public']
+      );
+      // Public work has not executed inside this transaction.
+      expect(during.rows).toHaveLength(0);
+      await snapshotHold;
+      return 'snap-ok';
+    });
+
+    // Second connection must not see the public insert while snapshot still holds.
+    await Promise.resolve();
+    await Promise.resolve();
+    const probe = new SqliteAdapter(currentDbPath);
+    try {
+      const rows = await probe.query<{ id: string }>(
+        `SELECT id FROM remote_agent_codebases WHERE id = $1`,
+        ['cb-public']
+      );
+      expect(rows.rows).toHaveLength(0);
+    } finally {
+      await probe.close();
+    }
+
+    releaseSnapshot();
+    await expect(snapshotPromise).resolves.toBe('snap-ok');
+    await publicPromise;
+
+    const after = await db.query<{ id: string }>(
+      `SELECT id FROM remote_agent_codebases WHERE id = $1`,
+      ['cb-public']
+    );
+    expect(after.rows).toHaveLength(1);
+  });
+
+  test('throwing withSnapshotRead cannot roll back an acknowledged outside mutation', async () => {
+    db = createTestDb();
+    await insertCodebase(db, 'cb-base');
+
+    let releaseSnapshot!: () => void;
+    const snapshotHold = new Promise<void>(resolve => {
+      releaseSnapshot = resolve;
+    });
+
+    let publicPromise!: Promise<unknown>;
+
+    const snapshotPromise = db.withSnapshotRead(async query => {
+      await query('SELECT 1 AS n');
+      publicPromise = db.query(
+        `INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)`,
+        ['cb-outside', 'outside-mutation', '/tmp/outside']
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      await snapshotHold;
+      throw new Error('snapshot boom');
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    releaseSnapshot();
+    await expect(snapshotPromise).rejects.toThrow('snapshot boom');
+    await publicPromise;
+
+    const rows = await db.query<{ id: string }>(
+      `SELECT id FROM remote_agent_codebases WHERE id = $1`,
+      ['cb-outside']
+    );
+    expect(rows.rows).toHaveLength(1);
+  });
+
+  test('public write cannot become a child of withTransaction', async () => {
+    db = createTestDb();
+    await insertCodebase(db, 'cb-tx');
+
+    let releaseTx!: () => void;
+    const txHold = new Promise<void>(resolve => {
+      releaseTx = resolve;
+    });
+
+    let publicPromise!: Promise<unknown>;
+
+    const txPromise = db.withTransaction(async query => {
+      await query(
+        `INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)`,
+        ['cb-inside', 'inside-tx', '/tmp/inside']
+      );
+      publicPromise = db.query(
+        `INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)`,
+        ['cb-child', 'would-be-child', '/tmp/child']
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      // Still invisible via tx-scoped read — public insert has not joined this tx.
+      const during = await query<{ id: string }>(
+        `SELECT id FROM remote_agent_codebases WHERE id = $1`,
+        ['cb-child']
+      );
+      expect(during.rows).toHaveLength(0);
+      await txHold;
+      throw new Error('tx boom');
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    releaseTx();
+    await expect(txPromise).rejects.toThrow('tx boom');
+    await publicPromise;
+
+    const inside = await db.query<{ id: string }>(
+      `SELECT id FROM remote_agent_codebases WHERE id = $1`,
+      ['cb-inside']
+    );
+    const child = await db.query<{ id: string }>(
+      `SELECT id FROM remote_agent_codebases WHERE id = $1`,
+      ['cb-child']
+    );
+    expect(inside.rows).toHaveLength(0);
+    expect(child.rows).toHaveLength(1);
+  });
+
+  test('rejects public BEGIN/COMMIT/ROLLBACK', async () => {
+    db = createTestDb();
+    await expect(db.query('BEGIN')).rejects.toThrow('public transaction-control');
+    await expect(db.query('COMMIT')).rejects.toThrow('public transaction-control');
+    await expect(db.query('ROLLBACK')).rejects.toThrow('public transaction-control');
+  });
+
+  test('serializes concurrent withTransaction without nested BEGIN errors', async () => {
+    db = createTestDb();
+    await insertCodebase(db, 'cb-cas');
+
+    const results = await Promise.all([
+      db.withTransaction(async query => {
+        await query(
+          `INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)`,
+          ['cb-a', 'a', '/tmp/a']
+        );
+        return 'a';
+      }),
+      db.withTransaction(async query => {
+        await query(
+          `INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)`,
+          ['cb-b', 'b', '/tmp/b']
+        );
+        return 'b';
+      }),
+    ]);
+
+    expect(results.sort()).toEqual(['a', 'b']);
+    const rows = await db.query<{ id: string }>(
+      `SELECT id FROM remote_agent_codebases WHERE id IN ('cb-a', 'cb-b') ORDER BY id`
+    );
+    expect(rows.rows.map(r => r.id)).toEqual(['cb-a', 'cb-b']);
+  });
+
+  test('preserves original error when ROLLBACK fails', async () => {
+    db = createTestDb();
+    const rawDb = db['db'] as Database;
+    const originalPrepare = rawDb.prepare.bind(rawDb);
+    let sawRollback = false;
+    rawDb.prepare = ((sql: string) => {
+      if (typeof sql === 'string' && sql.trim().toUpperCase() === 'ROLLBACK') {
+        sawRollback = true;
+        return {
+          run: () => {
+            throw new Error('rollback failed');
+          },
+          all: () => [],
+          finalize: () => undefined,
+        };
+      }
+      return originalPrepare(sql);
+    }) as typeof rawDb.prepare;
+
+    await expect(
+      db.withTransaction(async () => {
+        throw new Error('original error');
+      })
+    ).rejects.toThrow('original error');
+    expect(sawRollback).toBe(true);
   });
 });
 

@@ -21,8 +21,16 @@ import {
   routeLoopRuntimeMetadataSchema,
   routeOutcomeSchema,
   workflowRunSchema,
+  workflowRunMetadataSchema,
   inputEnvKey,
   readSubrunMetadata,
+  modelUsageEntrySchema,
+  modelUsageEntryPersistedSchema,
+  nodeUsageRecordedEventDataSchema,
+  usageBreakdownSchema,
+  toPersistedUsageEntry,
+  buildNodeUsageRecordedEventData,
+  validateProviderUsageAtBoundary,
 } from './schemas';
 import type {
   WorkflowDefinition,
@@ -38,6 +46,7 @@ import type {
   RouteLoopConfig,
 } from './schemas';
 import { applyRouteLoopTransition } from './route-loop-state';
+import { WORKFLOW_EVENT_TYPES } from './store';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -2062,6 +2071,348 @@ describe('dagNodeSchema — plannotator_gate', () => {
     expect(parsed.success).toBe(true);
     if (parsed.success) {
       expect(isPlannotatorGateNode(parsed.data)).toBe(false);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// usage-breakdown — node_usage_recorded schemas + boundary validation
+// ---------------------------------------------------------------------------
+
+describe('WORKFLOW_EVENT_TYPES — node_usage_recorded', () => {
+  test('includes node_usage_recorded as an internal event type', () => {
+    expect(WORKFLOW_EVENT_TYPES).toContain('node_usage_recorded');
+  });
+});
+
+describe('modelUsageEntrySchema', () => {
+  const validBase = {
+    provider: 'openai',
+    model: 'gpt-5.4',
+    modelSource: 'reported' as const,
+    inputTokens: 100,
+    outputTokens: 20,
+  };
+
+  test('accepts a full valid entry including zero cost and slash model id', () => {
+    const parsed = modelUsageEntrySchema.safeParse({
+      ...validBase,
+      model: 'openrouter/qwen/qwen3-coder',
+      modelSource: 'requested',
+      reasoningTokens: 8,
+      cacheReadTokens: 40,
+      cacheWriteTokens: 0,
+      requests: 1,
+      costUsd: 0,
+      kind: 'subagent',
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.model).toBe('openrouter/qwen/qwen3-coder');
+      expect(parsed.data.costUsd).toBe(0);
+      expect(parsed.data.cacheWriteTokens).toBe(0);
+    }
+  });
+
+  test('preserves known zeros and omits missing measures as undefined', () => {
+    const parsed = modelUsageEntrySchema.safeParse({
+      provider: 'anthropic',
+      model: null,
+      modelSource: 'unknown',
+      costUsd: 0,
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.costUsd).toBe(0);
+      expect(parsed.data.inputTokens).toBeUndefined();
+      expect(parsed.data.outputTokens).toBeUndefined();
+      expect(parsed.data.requests).toBeUndefined();
+    }
+  });
+
+  test('rejects model/source mismatch, unsafe ints, NaN, negative, zero requests, reasoning bounds', () => {
+    expect(
+      modelUsageEntrySchema.safeParse({
+        provider: 'openai',
+        model: 'x',
+        modelSource: 'unknown',
+        inputTokens: 1,
+      }).success
+    ).toBe(false);
+
+    expect(
+      modelUsageEntrySchema.safeParse({
+        provider: 'openai',
+        model: null,
+        modelSource: 'reported',
+        inputTokens: 1,
+      }).success
+    ).toBe(false);
+
+    expect(
+      modelUsageEntrySchema.safeParse({
+        ...validBase,
+        inputTokens: Number.MAX_SAFE_INTEGER + 1,
+      }).success
+    ).toBe(false);
+
+    expect(
+      modelUsageEntrySchema.safeParse({
+        ...validBase,
+        costUsd: Number.NaN,
+      }).success
+    ).toBe(false);
+
+    expect(
+      modelUsageEntrySchema.safeParse({
+        ...validBase,
+        costUsd: Number.POSITIVE_INFINITY,
+      }).success
+    ).toBe(false);
+
+    expect(
+      modelUsageEntrySchema.safeParse({
+        ...validBase,
+        outputTokens: -1,
+      }).success
+    ).toBe(false);
+
+    expect(
+      modelUsageEntrySchema.safeParse({
+        ...validBase,
+        requests: 0,
+      }).success
+    ).toBe(false);
+
+    expect(
+      modelUsageEntrySchema.safeParse({
+        ...validBase,
+        outputTokens: 5,
+        reasoningTokens: 6,
+      }).success
+    ).toBe(false);
+  });
+
+  test('rejects missing numeric measure and forbidden fields', () => {
+    expect(
+      modelUsageEntrySchema.safeParse({
+        provider: 'openai',
+        model: 'm',
+        modelSource: 'reported',
+      }).success
+    ).toBe(false);
+
+    expect(
+      modelUsageEntrySchema.safeParse({
+        ...validBase,
+        estimatedCostUsd: 1.5,
+      }).success
+    ).toBe(false);
+
+    expect(
+      modelUsageEntrySchema.safeParse({
+        ...validBase,
+        runId: 'run-1',
+      }).success
+    ).toBe(false);
+  });
+});
+
+describe('validateProviderUsageAtBoundary', () => {
+  test('retains valid entries in order and drops invalid ones independently', () => {
+    const result = validateProviderUsageAtBoundary(
+      [
+        {
+          provider: 'openai',
+          model: 'a',
+          modelSource: 'reported',
+          inputTokens: 1,
+        },
+        {
+          provider: 'openai',
+          model: 'b',
+          modelSource: 'unknown', // mismatch — rejected
+          inputTokens: 2,
+        },
+        {
+          provider: 'anthropic',
+          model: 'c',
+          modelSource: 'requested',
+          outputTokens: 3,
+        },
+        { not: 'an entry' },
+      ],
+      { log: false }
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.breakdown.map(e => e.model)).toEqual(['a', 'c']);
+    expect(result!.rejected.map(r => r.index)).toEqual([1, 3]);
+    // Issue codes never embed raw payload values
+    for (const r of result!.rejected) {
+      expect(r.issue).not.toContain('an entry');
+      expect(r.issue).not.toMatch(/"b"/);
+    }
+  });
+
+  test('returns null when no valid entries remain (no usage event)', () => {
+    const result = validateProviderUsageAtBoundary(
+      [
+        { provider: '', model: 'x', modelSource: 'reported', inputTokens: 1 },
+        { estimatedCostUsd: 1 },
+      ],
+      { log: false }
+    );
+    expect(result).toBeNull();
+  });
+
+  test('returns null for an empty array', () => {
+    expect(validateProviderUsageAtBoundary([], { log: false })).toBeNull();
+  });
+});
+
+describe('nodeUsageRecordedEventDataSchema + persistence helpers', () => {
+  test('persisted event JSON uses snake_case fields only', () => {
+    const entry = modelUsageEntrySchema.parse({
+      provider: 'openai',
+      model: 'gpt-5.4',
+      modelSource: 'requested',
+      inputTokens: 100,
+      outputTokens: 20,
+      reasoningTokens: 8,
+      cacheReadTokens: 40,
+      costUsd: 0.012,
+    });
+    const persisted = toPersistedUsageEntry(entry);
+    expect(persisted).toEqual({
+      provider: 'openai',
+      model: 'gpt-5.4',
+      model_source: 'requested',
+      input_tokens: 100,
+      output_tokens: 20,
+      reasoning_tokens: 8,
+      cache_read_tokens: 40,
+      cost_usd: 0.012,
+    });
+    expect(Object.keys(persisted).some(k => /[A-Z]/.test(k))).toBe(false);
+
+    const event = buildNodeUsageRecordedEventData({
+      agentProvider: 'codex',
+      usageBreakdown: [entry],
+      retryEpoch: 0,
+      iteration: null,
+      reaskAttempt: 0,
+      terminalError: false,
+      errorSubtype: null,
+    });
+
+    expect(event).toEqual({
+      schema_version: 1,
+      agent_provider: 'codex',
+      usage_breakdown: [persisted],
+      retry_epoch: 0,
+      iteration: null,
+      reask_attempt: 0,
+      terminal_error: false,
+      error_subtype: null,
+    });
+    expect(Object.keys(event).sort()).toEqual(
+      [
+        'agent_provider',
+        'error_subtype',
+        'iteration',
+        'reask_attempt',
+        'retry_epoch',
+        'schema_version',
+        'terminal_error',
+        'usage_breakdown',
+      ].sort()
+    );
+
+    const roundTrip = nodeUsageRecordedEventDataSchema.safeParse(event);
+    expect(roundTrip.success).toBe(true);
+  });
+
+  test('rejects empty usage_breakdown and unknown event fields', () => {
+    expect(
+      nodeUsageRecordedEventDataSchema.safeParse({
+        schema_version: 1,
+        agent_provider: 'claude',
+        usage_breakdown: [],
+        retry_epoch: 0,
+        iteration: null,
+        reask_attempt: 0,
+        terminal_error: false,
+        error_subtype: null,
+      }).success
+    ).toBe(false);
+
+    expect(
+      nodeUsageRecordedEventDataSchema.safeParse({
+        schema_version: 1,
+        agent_provider: 'claude',
+        usage_breakdown: [
+          {
+            provider: 'anthropic',
+            model: 'm',
+            model_source: 'reported',
+            input_tokens: 1,
+          },
+        ],
+        retry_epoch: 0,
+        iteration: null,
+        reask_attempt: 0,
+        terminal_error: false,
+        error_subtype: null,
+        extra: true,
+      }).success
+    ).toBe(false);
+  });
+
+  test('persisted entry schema accepts snake_case and rejects camelCase keys', () => {
+    expect(
+      modelUsageEntryPersistedSchema.safeParse({
+        provider: 'openai',
+        model: 'm',
+        model_source: 'reported',
+        input_tokens: 1,
+      }).success
+    ).toBe(true);
+
+    expect(
+      modelUsageEntryPersistedSchema.safeParse({
+        provider: 'openai',
+        model: 'm',
+        modelSource: 'reported',
+        inputTokens: 1,
+      }).success
+    ).toBe(false);
+  });
+
+  test('usageBreakdownSchema requires at least one entry', () => {
+    expect(usageBreakdownSchema.safeParse([]).success).toBe(false);
+    expect(
+      usageBreakdownSchema.safeParse([
+        {
+          provider: 'xai',
+          model: 'grok',
+          modelSource: 'reported',
+          requests: 1,
+        },
+      ]).success
+    ).toBe(true);
+  });
+});
+
+describe('node_completed and run metadata stay free of usage breakdown', () => {
+  test('workflowRunMetadataSchema does not require or accept usage fields as required shape', () => {
+    // Compatibility: empty metadata still parses; usage is not part of run metadata.
+    const parsed = workflowRunMetadataSchema.safeParse({});
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data).not.toHaveProperty('usage_breakdown');
+      expect(parsed.data).not.toHaveProperty('usageBreakdown');
+      expect(parsed.data).not.toHaveProperty('usage');
     }
   });
 });

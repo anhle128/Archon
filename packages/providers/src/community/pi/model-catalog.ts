@@ -17,6 +17,26 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
+/** One request-wide pricing tier from the pinned Pi catalog. */
+export interface PiModelCostTier {
+  /** Use this tier when aggregate input exceeds this token count. */
+  inputTokensAbove: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
+/** USD-per-million rates from the pinned Pi catalog, including cache rates. */
+export interface PiModelCost {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  /** Optional request-wide tiers from the pinned SDK `ModelCost.tiers`. */
+  tiers?: PiModelCostTier[];
+}
+
 /** One Pi catalog entry — metadata only, no credentials. */
 export interface PiModelInfo {
   /** Full Archon model ref as used in `model:` fields: '<pi-provider>/<model-id>' */
@@ -25,8 +45,8 @@ export interface PiModelInfo {
   id: string;
   name: string;
   reasoning: boolean;
-  /** USD per million tokens. */
-  cost: { input: number; output: number };
+  /** USD per million tokens, including cache rates and optional tiers. */
+  cost: PiModelCost;
   contextWindow: number;
 }
 
@@ -45,15 +65,32 @@ export async function listPiModels(): Promise<PiModelInfo[]> {
     const piCodingAgent = await import('@earendil-works/pi-coding-agent');
     const authStorage = piCodingAgent.AuthStorage.create();
     const registry = piCodingAgent.ModelRegistry.create(authStorage);
-    cachedCatalog = registry.getAll().map(m => ({
-      ref: `${m.provider}/${m.id}`,
-      provider: m.provider,
-      id: m.id,
-      name: m.name,
-      reasoning: m.reasoning,
-      cost: { input: m.cost.input, output: m.cost.output },
-      contextWindow: m.contextWindow,
-    }));
+    cachedCatalog = registry.getAll().map(m => {
+      const cost: PiModelCost = {
+        input: m.cost.input,
+        output: m.cost.output,
+        cacheRead: m.cost.cacheRead,
+        cacheWrite: m.cost.cacheWrite,
+      };
+      if (Array.isArray(m.cost.tiers) && m.cost.tiers.length > 0) {
+        cost.tiers = m.cost.tiers.map(tier => ({
+          inputTokensAbove: tier.inputTokensAbove,
+          input: tier.input,
+          output: tier.output,
+          cacheRead: tier.cacheRead,
+          cacheWrite: tier.cacheWrite,
+        }));
+      }
+      return {
+        ref: `${m.provider}/${m.id}`,
+        provider: m.provider,
+        id: m.id,
+        name: m.name,
+        reasoning: m.reasoning,
+        cost,
+        contextWindow: m.contextWindow,
+      };
+    });
     return cachedCatalog;
   } catch (err) {
     // Intentional fallback: the catalog is a hint, not a dependency.

@@ -682,7 +682,7 @@ export function logConfig(config: MergedConfig): void {
  * Invalidates the cached config so next loadConfig() picks up changes.
  */
 export async function updateGlobalConfig(
-  updates: Partial<Omit<GlobalConfig, 'tiers' | 'aliases'>> & {
+  updates: Partial<Omit<GlobalConfig, 'tiers' | 'aliases' | 'pricing'>> & {
     tiers?: TiersPatch;
     aliases?: AliasesPatch;
   }

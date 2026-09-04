@@ -87,6 +87,43 @@ export function formatCost(usd: number): string {
   return `$${usd.toFixed(4)}`;
 }
 
+/** Positive amounts strictly below this floor use the `<$0.000001` form. */
+const USD_POSITIVE_FLOOR = 0.000_001;
+const ONE_CENT = 0.01;
+
+/**
+ * Format a USD amount for usage/cost surfaces (Cost page, run header, node rows).
+ *
+ * Matches CLI `archon usage` rules:
+ * - null/undefined → `n/a`
+ * - exact 0 → `$0.00` or `≈$0.00`
+ * - positive below 1e-6 → `<$0.000001` / `≈<$0.000001` (never rounds to zero)
+ * - positive below one cent → up to six significant decimals
+ * - otherwise → two decimals
+ * - estimated amounts prefix `≈`
+ */
+export function formatUsdAmount(amount: number | null | undefined, estimated = false): string {
+  if (amount === null || amount === undefined) {
+    return 'n/a';
+  }
+  const approx = estimated ? '≈' : '';
+  if (amount === 0) {
+    return `${approx}$0.00`;
+  }
+  if (amount > 0 && amount < USD_POSITIVE_FLOOR) {
+    return `${approx}<$0.000001`;
+  }
+  if (amount > 0 && amount < ONE_CENT) {
+    const fixed = amount.toFixed(6);
+    const trimmed = fixed.replace(/(\.\d*?[1-9])0+$/, '$1').replace(/\.0+$/, '');
+    if (trimmed === '0' || trimmed === '0.0') {
+      return `${approx}<$0.000001`;
+    }
+    return `${approx}$${trimmed}`;
+  }
+  return `${approx}$${amount.toFixed(2)}`;
+}
+
 /**
  * Compact project subtitle. Prefer the local filesystem path because it's
  * what the user actually navigates to (and what worktrees / artifacts hang

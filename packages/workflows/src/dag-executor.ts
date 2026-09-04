@@ -28,6 +28,7 @@ import type {
   ResolvedModel,
   ExecutionContext,
   OverlayChangeSummary,
+  UsageBreakdown,
 } from '@archon/providers/types';
 import { CONTAINER_ENV_DENYLIST } from '@archon/providers/types';
 import type { ContainerRunContext } from './container-context';
@@ -81,6 +82,7 @@ import {
   thinkingConfigSchema,
   routeLoopRuntimeMetadataSchema,
   inputEnvKey,
+  validateProviderUsageAtBoundary,
 } from './schemas';
 import { applyRouteLoopTransition } from './route-loop-state';
 import { formatToolCall } from './utils/tool-formatter';
@@ -324,21 +326,28 @@ function findRunningTool(
 /**
  * Usage totals for the terminal telemetry event. Fields are omitted (not sent
  * as zero) when nothing was reported, so absence in PostHog means "providers
- * reported no usage", never "zero spend".
+ * reported no usage". An authoritative reported zero is included — known free
+ * spend must not collapse into absence.
  */
 function buildRunUsageProps(totals: {
-  costUsd: number;
+  /** Undefined until at least one node reported a cost (including 0). */
+  costUsd: number | undefined;
   tokensIn: number;
   tokensOut: number;
   loopIterations: number;
 }): { costUsd?: number; tokensIn?: number; tokensOut?: number; loopIterations?: number } {
   return {
-    ...(totals.costUsd > 0 ? { costUsd: totals.costUsd } : {}),
+    ...(totals.costUsd !== undefined ? { costUsd: totals.costUsd } : {}),
     ...(totals.tokensIn > 0 || totals.tokensOut > 0
       ? { tokensIn: totals.tokensIn, tokensOut: totals.tokensOut }
       : {}),
     ...(totals.loopIterations > 0 ? { loopIterations: totals.loopIterations } : {}),
   };
+}
+
+/** Finite non-negative provider/run cost — rejects NaN/Infinity/negative. */
+function isAuthoritativeCostUsd(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
 
 /**
@@ -640,7 +649,7 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
     childRunId: run.id,
     status: run.status,
     output: typeof md.summary === 'string' ? md.summary : undefined,
-    costUsd: typeof md.total_cost_usd === 'number' ? md.total_cost_usd : undefined,
+    costUsd: isAuthoritativeCostUsd(md.total_cost_usd) ? md.total_cost_usd : undefined,
     tokens,
     error: typeof md.error === 'string' ? md.error : undefined,
   };
@@ -2022,10 +2031,13 @@ async function executeNodeInternal(
   // (output text, structured output, the batched-message buffer, per-pass cost,
   // idle-timeout flag) so a prior reask attempt's state never leaks into this one,
   // then streams. Throws on SDK error / budget cap (propagates to the outer catch
-  // — those failures are never reasked).
+  // — those failures are never reasked). Records the last valid terminal
+  // usageBreakdown exactly once in a non-throwing finally before the pass returns
+  // or throws — so reask decisions and error escapes still see accounting.
   const runStreamPass = async (
     attemptPrompt: string,
-    attemptResumeId: string | undefined
+    attemptResumeId: string | undefined,
+    passReaskAttempt: number
   ): Promise<void> => {
     nodeOutputText = '';
     structuredOutput = undefined;
@@ -2033,356 +2045,420 @@ async function executeNodeInternal(
     nodeCostUsd = undefined;
     nodeIdleTimedOut = false;
     backgroundTasksIncomplete = [];
+    // Latest validated usageBreakdown for THIS pass only. Empty/all-invalid
+    // terminal results clear earlier cumulative state rather than retaining it.
+    let passUsageBreakdown: UsageBreakdown | undefined;
+    let passTerminalError = false;
+    let passErrorSubtype: string | null = null;
     const backgroundTasks = createBackgroundTaskTracker();
-    for await (const msg of withIdleTimeout(
-      aiClient.sendQuery(attemptPrompt, cwd, attemptResumeId, nodeOptionsWithAbort),
-      effectiveIdleTimeout,
-      () => {
-        nodeIdleTimedOut = true;
-        getLog().warn(
-          { nodeId: node.id, timeoutMs: effectiveIdleTimeout },
-          'dag_node_idle_timeout_reached'
-        );
-        nodeAbortController.abort();
-      }
-    )) {
-      const tickNow = Date.now();
-      const nodeKey = `${workflowRun.id}:${node.id}`;
+    try {
+      for await (const msg of withIdleTimeout(
+        aiClient.sendQuery(attemptPrompt, cwd, attemptResumeId, nodeOptionsWithAbort),
+        effectiveIdleTimeout,
+        () => {
+          nodeIdleTimedOut = true;
+          getLog().warn(
+            { nodeId: node.id, timeoutMs: effectiveIdleTimeout },
+            'dag_node_idle_timeout_reached'
+          );
+          nodeAbortController.abort();
+        }
+      )) {
+        const tickNow = Date.now();
+        const nodeKey = `${workflowRun.id}:${node.id}`;
 
-      // Cancel/pause check — read-only, no write contention in WAL mode (every 10s).
-      //
-      // `paused` is tolerated here: an approval node can transition the run to
-      // paused while this concurrent node is mid-stream (same topological layer).
-      // The streaming node should be allowed to finish its own output — the
-      // paused gate owns workflow progression, not individual node lifecycles.
-      // Only truly terminal / unknown states (null, cancelled, failed, completed)
-      // abort the in-flight stream.
-      if (tickNow - (lastNodeCancelCheck.get(nodeKey) ?? 0) > CANCEL_CHECK_INTERVAL_MS) {
-        lastNodeCancelCheck.set(nodeKey, tickNow);
-        try {
-          const streamStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
-          if (!shouldContinueStreamingForStatus(streamStatus)) {
-            getLog().info(
-              { workflowRunId: workflowRun.id, nodeId: node.id, status: streamStatus ?? 'deleted' },
-              'dag.stop_detected_during_streaming'
+        // Cancel/pause check — read-only, no write contention in WAL mode (every 10s).
+        //
+        // `paused` is tolerated here: an approval node can transition the run to
+        // paused while this concurrent node is mid-stream (same topological layer).
+        // The streaming node should be allowed to finish its own output — the
+        // paused gate owns workflow progression, not individual node lifecycles.
+        // Only truly terminal / unknown states (null, cancelled, failed, completed)
+        // abort the in-flight stream.
+        if (tickNow - (lastNodeCancelCheck.get(nodeKey) ?? 0) > CANCEL_CHECK_INTERVAL_MS) {
+          lastNodeCancelCheck.set(nodeKey, tickNow);
+          try {
+            const streamStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
+            if (!shouldContinueStreamingForStatus(streamStatus)) {
+              getLog().info(
+                {
+                  workflowRunId: workflowRun.id,
+                  nodeId: node.id,
+                  status: streamStatus ?? 'deleted',
+                },
+                'dag.stop_detected_during_streaming'
+              );
+              nodeAbortController.abort();
+              break;
+            }
+          } catch (cancelCheckErr) {
+            getLog().warn(
+              { err: cancelCheckErr as Error, workflowRunId: workflowRun.id, nodeId: node.id },
+              'dag.status_check_failed'
             );
-            nodeAbortController.abort();
-            break;
           }
-        } catch (cancelCheckErr) {
-          getLog().warn(
-            { err: cancelCheckErr as Error, workflowRunId: workflowRun.id, nodeId: node.id },
-            'dag.status_check_failed'
-          );
         }
-      }
 
-      // Activity heartbeat — write, throttled to every 60s (only for stale/zombie detection)
-      if (tickNow - (lastNodeActivityUpdate.get(nodeKey) ?? 0) > ACTIVITY_HEARTBEAT_INTERVAL_MS) {
-        lastNodeActivityUpdate.set(nodeKey, tickNow);
-        try {
-          await deps.store.updateWorkflowActivity(workflowRun.id);
-        } catch (e) {
-          getLog().warn(
-            { err: e as Error, workflowRunId: workflowRun.id },
-            'dag.activity_update_failed'
-          );
+        // Activity heartbeat — write, throttled to every 60s (only for stale/zombie detection)
+        if (tickNow - (lastNodeActivityUpdate.get(nodeKey) ?? 0) > ACTIVITY_HEARTBEAT_INTERVAL_MS) {
+          lastNodeActivityUpdate.set(nodeKey, tickNow);
+          try {
+            await deps.store.updateWorkflowActivity(workflowRun.id);
+          } catch (e) {
+            getLog().warn(
+              { err: e as Error, workflowRunId: workflowRun.id },
+              'dag.activity_update_failed'
+            );
+          }
         }
-      }
 
-      if (msg.type === 'assistant' && msg.content) {
-        nodeOutputText += msg.content; // ALWAYS capture for $node_id.output
-        if (streamingMode === 'stream' || msg.flush) {
-          // `flush` chunks (e.g. Pi notify() emitting a plannotator review URL)
-          // must reach the user before the node blocks. Drain any queued batch
-          // content first so order is preserved.
-          if (streamingMode === 'batch' && batchMessages.length > 0) {
+        if (msg.type === 'assistant' && msg.content) {
+          nodeOutputText += msg.content; // ALWAYS capture for $node_id.output
+          if (streamingMode === 'stream' || msg.flush) {
+            // `flush` chunks (e.g. Pi notify() emitting a plannotator review URL)
+            // must reach the user before the node blocks. Drain any queued batch
+            // content first so order is preserved.
+            if (streamingMode === 'batch' && batchMessages.length > 0) {
+              await safeSendMessage(
+                platform,
+                conversationId,
+                batchMessages.join('\n\n'),
+                nodeContext
+              );
+              batchMessages.length = 0;
+            }
+            await safeSendMessage(platform, conversationId, msg.content, nodeContext);
+          } else {
+            batchMessages.push(msg.content);
+          }
+          await logAssistant(logDir, workflowRun.id, msg.content);
+        } else if (msg.type === 'tool' && msg.toolName) {
+          const now = Date.now();
+          const toolCallId = msg.toolCallId ?? `anonymous-${String(++anonymousToolSequence)}`;
+
+          // Providers without stable IDs report sequential tool calls. Preserve their
+          // legacy boundary while allowing identified calls to overlap.
+          const previousTool = lastAnonymousToolCallId
+            ? runningTools.get(lastAnonymousToolCallId)
+            : undefined;
+          if (previousTool && lastAnonymousToolCallId !== undefined) {
+            getWorkflowEventEmitter().emit({
+              type: 'tool_completed',
+              runId: workflowRun.id,
+              toolName: previousTool.toolName,
+              stepName: node.id,
+              durationMs: now - previousTool.startedAt,
+              toolCallId: lastAnonymousToolCallId,
+              toolOutcome: 'unknown',
+            });
+            deps.store
+              .createWorkflowEvent({
+                workflow_run_id: workflowRun.id,
+                event_type: 'tool_completed',
+                step_name: stepName,
+                data: {
+                  tool_name: previousTool.toolName,
+                  duration_ms: now - previousTool.startedAt,
+                  tool_call_id: lastAnonymousToolCallId,
+                  tool_outcome: 'unknown',
+                },
+              })
+              .catch((err: Error) => {
+                getLog().error(
+                  { err, workflowRunId: workflowRun.id, eventType: 'tool_completed' },
+                  'workflow_event_persist_failed'
+                );
+              });
+            runningTools.delete(lastAnonymousToolCallId);
+          }
+          runningTools.set(toolCallId, { toolName: msg.toolName, startedAt: now });
+          if (!msg.toolCallId) lastAnonymousToolCallId = toolCallId;
+
+          // Emit tool_started for the current tool (fire-and-forget)
+          getWorkflowEventEmitter().emit({
+            type: 'tool_started',
+            runId: workflowRun.id,
+            toolName: msg.toolName,
+            stepName: node.id,
+            toolCallId,
+          });
+
+          if (streamingMode === 'stream') {
+            const toolMsg = formatToolCall(msg.toolName, msg.toolInput);
+            await safeSendMessage(platform, conversationId, toolMsg, nodeContext, {
+              category: 'tool_call_formatted',
+            } as WorkflowMessageMetadata);
+
+            // Send structured event to adapters that support it (Web UI)
+            if (platform.sendStructuredEvent) {
+              await platform.sendStructuredEvent(conversationId, msg);
+            }
+          }
+          await logTool(logDir, workflowRun.id, msg.toolName, msg.toolInput ?? {});
+
+          // Persist tool_called event for ALL adapters (fire-and-forget)
+          deps.store
+            .createWorkflowEvent({
+              workflow_run_id: workflowRun.id,
+              event_type: 'tool_called',
+              step_name: stepName,
+              data: {
+                tool_name: msg.toolName,
+                tool_input: msg.toolInput ?? {},
+                tool_call_id: toolCallId,
+              },
+            })
+            .catch((err: Error) => {
+              getLog().error(
+                { err, workflowRunId: workflowRun.id, eventType: 'tool_called' },
+                'workflow_event_persist_failed'
+              );
+            });
+        } else if (msg.type === 'tool_result' && msg.toolName) {
+          const now = Date.now();
+          const completedTool = findRunningTool(runningTools, msg.toolName, msg.toolCallId);
+          if (completedTool) {
+            const [completedToolCallId, tool] = completedTool;
+            getWorkflowEventEmitter().emit({
+              type: 'tool_completed',
+              runId: workflowRun.id,
+              toolName: tool.toolName,
+              stepName: node.id,
+              durationMs: now - tool.startedAt,
+              toolCallId: completedToolCallId,
+              ...(msg.toolOutcome !== undefined ? { toolOutcome: msg.toolOutcome } : {}),
+              ...(msg.exitCode !== undefined ? { exitCode: msg.exitCode } : {}),
+            });
+            deps.store
+              .createWorkflowEvent({
+                workflow_run_id: workflowRun.id,
+                event_type: 'tool_completed',
+                step_name: stepName,
+                data: {
+                  tool_name: tool.toolName,
+                  duration_ms: now - tool.startedAt,
+                  tool_call_id: completedToolCallId,
+                  ...(msg.toolOutcome !== undefined ? { tool_outcome: msg.toolOutcome } : {}),
+                  ...(msg.exitCode !== undefined ? { exit_code: msg.exitCode } : {}),
+                },
+              })
+              .catch((err: Error) => {
+                getLog().error(
+                  { err, workflowRunId: workflowRun.id, eventType: 'tool_completed' },
+                  'workflow_event_persist_failed'
+                );
+              });
+            runningTools.delete(completedToolCallId);
+            if (completedToolCallId === lastAnonymousToolCallId) {
+              lastAnonymousToolCallId = undefined;
+            }
+          }
+          if (streamingMode === 'stream' && platform.sendStructuredEvent) {
+            await platform.sendStructuredEvent(conversationId, msg);
+          }
+        } else if (msg.type === 'result') {
+          // A terminal result closes every outstanding lifecycle.
+          for (const [toolCallId, prevTool] of runningTools) {
+            getWorkflowEventEmitter().emit({
+              type: 'tool_completed',
+              runId: workflowRun.id,
+              toolName: prevTool.toolName,
+              stepName: node.id,
+              durationMs: Date.now() - prevTool.startedAt,
+              toolCallId,
+              toolOutcome: 'unknown',
+            });
+            deps.store
+              .createWorkflowEvent({
+                workflow_run_id: workflowRun.id,
+                event_type: 'tool_completed',
+                step_name: stepName,
+                data: {
+                  tool_name: prevTool.toolName,
+                  duration_ms: Date.now() - prevTool.startedAt,
+                  tool_call_id: toolCallId,
+                  tool_outcome: 'unknown',
+                },
+              })
+              .catch((err: Error) => {
+                getLog().error(
+                  { err, workflowRunId: workflowRun.id, eventType: 'tool_completed' },
+                  'workflow_event_persist_failed'
+                );
+              });
+            runningTools.delete(toolCallId);
+          }
+          if (msg.sessionId) newSessionId = msg.sessionId;
+          if (msg.resumed !== undefined) nodeResumed = msg.resumed;
+          if (msg.tokens !== undefined) {
+            // Normalized to `{input, output}` — the ONLY two fields every provider
+            // reports the same way, and therefore the only shape a consumer can read
+            // without knowing which provider produced the row. `total` is
+            // provider-defined and is NOT input + output (Pi folds cacheRead/cacheWrite
+            // into it, OpenCode sums its own per-agent totals); `cost` duplicates the
+            // separately-persisted `cost_usd`. Same NaN guard rationale as the
+            // DAG-level accumulator: a non-finite value must be dropped loudly, not
+            // persisted as a wrong number that gets believed.
+            if (Number.isFinite(msg.tokens.input) && Number.isFinite(msg.tokens.output)) {
+              nodeTokens = { input: msg.tokens.input, output: msg.tokens.output };
+            } else {
+              getLog().warn(
+                { nodeId: node.id, tokens: msg.tokens },
+                'dag_node.usage_tokens_non_finite_ignored'
+              );
+            }
+          }
+          if (isAuthoritativeCostUsd(msg.cost)) nodeCostUsd = msg.cost;
+          if (msg.stopReason !== undefined) nodeStopReason = msg.stopReason;
+          if (msg.numTurns !== undefined) nodeNumTurns = msg.numTurns;
+          // Assigned UNCONDITIONALLY. A guarded assignment cannot CLEAR a stale value:
+          // Pi/Copilot reask loops yield several result chunks, and Pi omits resolvedModel
+          // when its later assistant message has no responseModel — so an earlier attempt's
+          // model would be persisted as the final attempt's answer. Fabricated attribution
+          // is the exact defect #2314 exists to prevent; absence must stay absence.
+          nodeResolvedModel = msg.resolvedModel;
+          if (msg.structuredOutput !== undefined) structuredOutput = msg.structuredOutput;
+          // Latest terminal result owns pass accounting unconditionally. Validate
+          // array entries at the boundary so one malformed row cannot discard
+          // siblings; absent/malformed latest usage clears earlier cumulative
+          // state rather than retaining it. Error metadata belongs to the same
+          // owning result — not only when usageBreakdown happens to be an array.
+          if (Array.isArray(msg.usageBreakdown)) {
+            const validated = validateProviderUsageAtBoundary(msg.usageBreakdown);
+            passUsageBreakdown = validated?.breakdown;
+          } else {
+            if (msg.usageBreakdown !== undefined) {
+              getLog().warn(
+                {
+                  rejectedCount: 1,
+                  retainedCount: 0,
+                  rejected: [
+                    { index: 0, issue: `usage_breakdown_type_${typeof msg.usageBreakdown}` },
+                  ],
+                },
+                'workflow.usage_entry_rejected'
+              );
+            }
+            passUsageBreakdown = undefined;
+          }
+          if (msg.isError && msg.errorSubtype !== 'success') {
+            passTerminalError = true;
+            passErrorSubtype = msg.errorSubtype ?? 'unknown';
+          } else {
+            passTerminalError = false;
+            passErrorSubtype = null;
+          }
+          // Fail the node if the SDK reports a cost cap exceeded error
+          if (msg.isError && msg.errorSubtype === 'error_max_budget_usd') {
+            const cap = nodeOptions?.maxBudgetUsd;
+            getLog().warn(
+              { nodeId: node.id, maxBudgetUsd: cap, durationMs: Date.now() - nodeStartTime },
+              'dag.node_budget_cap_exceeded'
+            );
+            throw new Error(
+              `Node '${node.id}' exceeded cost cap${cap !== undefined ? ` of $${cap.toFixed(2)}` : ''}.`
+            );
+          }
+          // Fail loudly on any other SDK error result. Previously we broke out of
+          // the stream silently, producing empty/partial output without signaling
+          // failure — which let failed iterations masquerade as successes.
+          // Exception: errorSubtype === 'success' is the Claude SDK's marker for a
+          // clean stop_sequence termination. The Claude provider already filters
+          // this out, but the guard here keeps a third-party IAgentProvider that
+          // forwards the SDK pair raw from producing a "SDK returned success"
+          // false failure.
+          if (msg.isError && msg.errorSubtype !== 'success') {
+            const subtype = msg.errorSubtype ?? 'unknown';
+            const errorsDetail = msg.errors?.length ? ` — ${msg.errors.join('; ')}` : '';
+            getLog().error(
+              {
+                nodeId: node.id,
+                errorSubtype: subtype,
+                errors: msg.errors,
+                sessionId: msg.sessionId,
+                stopReason: msg.stopReason,
+                durationMs: Date.now() - nodeStartTime,
+              },
+              'dag.node_sdk_error_result'
+            );
+            throw new Error(`Node '${node.id}' failed: SDK returned ${subtype}${errorsDetail}`);
+          }
+          if (backgroundTasks.shouldBreakOnResult()) {
+            break; // Result is the "I'm done" signal — don't wait for subprocess to exit
+          }
+          // Result arrived with background Agent tasks still live (#2083).
+          // Breaking here would .return() the generator chain → SDK cleanup →
+          // SIGTERM the CLI → kill the tasks and lose their pending artifacts.
+          // Keep consuming: the SDK holds the subprocess open until the tasks
+          // drain, runs a follow-up turn to integrate their output, and emits a
+          // final result (whose fields overwrite the captures above — correct,
+          // since SDK cost/usage are session-cumulative). Bounded by the
+          // existing idle timeout; task_progress chunks reset it.
+          getLog().warn(
+            {
+              nodeId: node.id,
+              taskCount: backgroundTasks.count(),
+              taskIds: backgroundTasks.ids(),
+            },
+            'dag.node_result_with_live_background_tasks'
+          );
+          if (backgroundTasks.shouldAnnounceWait()) {
             await safeSendMessage(
               platform,
               conversationId,
-              batchMessages.join('\n\n'),
+              `⏳ Node \`${node.id}\`: turn ended with ${String(backgroundTasks.count())} background agent task(s) still running — waiting for them to finish before completing the node.`,
               nodeContext
             );
-            batchMessages.length = 0;
           }
-          await safeSendMessage(platform, conversationId, msg.content, nodeContext);
-        } else {
-          batchMessages.push(msg.content);
-        }
-        await logAssistant(logDir, workflowRun.id, msg.content);
-      } else if (msg.type === 'tool' && msg.toolName) {
-        const now = Date.now();
-        const toolCallId = msg.toolCallId ?? `anonymous-${String(++anonymousToolSequence)}`;
+        } else if (msg.type === 'background_tasks') {
+          // Level signal (REPLACE semantics): swap the live set for the payload.
+          backgroundTasks.update(msg.tasks);
+        } else if (msg.type === 'system' && msg.content) {
+          // Providers yield system chunks for user-actionable issues (missing env
+          // vars, Haiku+MCP, structured output failures, etc.). MCP-failure
+          // chunks need filtering: user-level plugin MCPs inherited from
+          // `~/.claude/` (e.g. `telegram`) routinely fail to connect inside the
+          // headless subprocess and aren't actionable for the workflow author.
+          // Other warnings (⚠️) are always actionable and surface verbatim.
+          if (msg.content.startsWith(MCP_FAILURE_PREFIX)) {
+            const failedEntries = parseMcpFailureServerNames(msg.content);
+            const workflowFailures = failedEntries.filter(e => configuredMcpNames.has(e.name));
+            const pluginFailures = failedEntries.filter(e => !configuredMcpNames.has(e.name));
 
-        // Providers without stable IDs report sequential tool calls. Preserve their
-        // legacy boundary while allowing identified calls to overlap.
-        const previousTool = lastAnonymousToolCallId
-          ? runningTools.get(lastAnonymousToolCallId)
-          : undefined;
-        if (previousTool && lastAnonymousToolCallId !== undefined) {
-          getWorkflowEventEmitter().emit({
-            type: 'tool_completed',
-            runId: workflowRun.id,
-            toolName: previousTool.toolName,
-            stepName: node.id,
-            durationMs: now - previousTool.startedAt,
-            toolCallId: lastAnonymousToolCallId,
-            toolOutcome: 'unknown',
-          });
-          deps.store
-            .createWorkflowEvent({
-              workflow_run_id: workflowRun.id,
-              event_type: 'tool_completed',
-              step_name: stepName,
-              data: {
-                tool_name: previousTool.toolName,
-                duration_ms: now - previousTool.startedAt,
-                tool_call_id: lastAnonymousToolCallId,
-                tool_outcome: 'unknown',
-              },
-            })
-            .catch((err: Error) => {
-              getLog().error(
-                { err, workflowRunId: workflowRun.id, eventType: 'tool_completed' },
-                'workflow_event_persist_failed'
+            if (workflowFailures.length > 0) {
+              const filteredMsg = `${MCP_FAILURE_PREFIX}${workflowFailures.map(e => e.segment).join(', ')}`;
+              getLog().warn(
+                { nodeId: node.id, systemContent: filteredMsg },
+                'dag.provider_warning_forwarded'
               );
-            });
-          runningTools.delete(lastAnonymousToolCallId);
-        }
-        runningTools.set(toolCallId, { toolName: msg.toolName, startedAt: now });
-        if (!msg.toolCallId) lastAnonymousToolCallId = toolCallId;
-
-        // Emit tool_started for the current tool (fire-and-forget)
-        getWorkflowEventEmitter().emit({
-          type: 'tool_started',
-          runId: workflowRun.id,
-          toolName: msg.toolName,
-          stepName: node.id,
-          toolCallId,
-        });
-
-        if (streamingMode === 'stream') {
-          const toolMsg = formatToolCall(msg.toolName, msg.toolInput);
-          await safeSendMessage(platform, conversationId, toolMsg, nodeContext, {
-            category: 'tool_call_formatted',
-          } as WorkflowMessageMetadata);
-
-          // Send structured event to adapters that support it (Web UI)
-          if (platform.sendStructuredEvent) {
-            await platform.sendStructuredEvent(conversationId, msg);
-          }
-        }
-        await logTool(logDir, workflowRun.id, msg.toolName, msg.toolInput ?? {});
-
-        // Persist tool_called event for ALL adapters (fire-and-forget)
-        deps.store
-          .createWorkflowEvent({
-            workflow_run_id: workflowRun.id,
-            event_type: 'tool_called',
-            step_name: stepName,
-            data: {
-              tool_name: msg.toolName,
-              tool_input: msg.toolInput ?? {},
-              tool_call_id: toolCallId,
-            },
-          })
-          .catch((err: Error) => {
-            getLog().error(
-              { err, workflowRunId: workflowRun.id, eventType: 'tool_called' },
-              'workflow_event_persist_failed'
-            );
-          });
-      } else if (msg.type === 'tool_result' && msg.toolName) {
-        const now = Date.now();
-        const completedTool = findRunningTool(runningTools, msg.toolName, msg.toolCallId);
-        if (completedTool) {
-          const [completedToolCallId, tool] = completedTool;
-          getWorkflowEventEmitter().emit({
-            type: 'tool_completed',
-            runId: workflowRun.id,
-            toolName: tool.toolName,
-            stepName: node.id,
-            durationMs: now - tool.startedAt,
-            toolCallId: completedToolCallId,
-            ...(msg.toolOutcome !== undefined ? { toolOutcome: msg.toolOutcome } : {}),
-            ...(msg.exitCode !== undefined ? { exitCode: msg.exitCode } : {}),
-          });
-          deps.store
-            .createWorkflowEvent({
-              workflow_run_id: workflowRun.id,
-              event_type: 'tool_completed',
-              step_name: stepName,
-              data: {
-                tool_name: tool.toolName,
-                duration_ms: now - tool.startedAt,
-                tool_call_id: completedToolCallId,
-                ...(msg.toolOutcome !== undefined ? { tool_outcome: msg.toolOutcome } : {}),
-                ...(msg.exitCode !== undefined ? { exit_code: msg.exitCode } : {}),
-              },
-            })
-            .catch((err: Error) => {
-              getLog().error(
-                { err, workflowRunId: workflowRun.id, eventType: 'tool_completed' },
-                'workflow_event_persist_failed'
+              const delivered = await safeSendMessage(
+                platform,
+                conversationId,
+                filteredMsg,
+                nodeContext
               );
-            });
-          runningTools.delete(completedToolCallId);
-          if (completedToolCallId === lastAnonymousToolCallId) {
-            lastAnonymousToolCallId = undefined;
-          }
-        }
-        if (streamingMode === 'stream' && platform.sendStructuredEvent) {
-          await platform.sendStructuredEvent(conversationId, msg);
-        }
-      } else if (msg.type === 'result') {
-        // A terminal result closes every outstanding lifecycle.
-        for (const [toolCallId, prevTool] of runningTools) {
-          getWorkflowEventEmitter().emit({
-            type: 'tool_completed',
-            runId: workflowRun.id,
-            toolName: prevTool.toolName,
-            stepName: node.id,
-            durationMs: Date.now() - prevTool.startedAt,
-            toolCallId,
-            toolOutcome: 'unknown',
-          });
-          deps.store
-            .createWorkflowEvent({
-              workflow_run_id: workflowRun.id,
-              event_type: 'tool_completed',
-              step_name: stepName,
-              data: {
-                tool_name: prevTool.toolName,
-                duration_ms: Date.now() - prevTool.startedAt,
-                tool_call_id: toolCallId,
-                tool_outcome: 'unknown',
-              },
-            })
-            .catch((err: Error) => {
-              getLog().error(
-                { err, workflowRunId: workflowRun.id, eventType: 'tool_completed' },
-                'workflow_event_persist_failed'
+              if (!delivered) {
+                getLog().error(
+                  { nodeId: node.id, workflowRunId: workflowRun.id },
+                  'dag.provider_warning_delivery_failed'
+                );
+              }
+            }
+            if (pluginFailures.length > 0) {
+              getLog().debug(
+                { nodeId: node.id, pluginFailures: pluginFailures.map(e => e.name) },
+                'dag.mcp_plugin_connection_suppressed'
               );
-            });
-          runningTools.delete(toolCallId);
-        }
-        if (msg.sessionId) newSessionId = msg.sessionId;
-        if (msg.resumed !== undefined) nodeResumed = msg.resumed;
-        if (msg.tokens !== undefined) {
-          // Normalized to `{input, output}` — the ONLY two fields every provider
-          // reports the same way, and therefore the only shape a consumer can read
-          // without knowing which provider produced the row. `total` is
-          // provider-defined and is NOT input + output (Pi folds cacheRead/cacheWrite
-          // into it, OpenCode sums its own per-agent totals); `cost` duplicates the
-          // separately-persisted `cost_usd`. Same NaN guard rationale as the
-          // DAG-level accumulator: a non-finite value must be dropped loudly, not
-          // persisted as a wrong number that gets believed.
-          if (Number.isFinite(msg.tokens.input) && Number.isFinite(msg.tokens.output)) {
-            nodeTokens = { input: msg.tokens.input, output: msg.tokens.output };
-          } else {
+            }
+          } else if (msg.content.startsWith('⚠️')) {
             getLog().warn(
-              { nodeId: node.id, tokens: msg.tokens },
-              'dag_node.usage_tokens_non_finite_ignored'
-            );
-          }
-        }
-        if (msg.cost !== undefined) nodeCostUsd = msg.cost;
-        if (msg.stopReason !== undefined) nodeStopReason = msg.stopReason;
-        if (msg.numTurns !== undefined) nodeNumTurns = msg.numTurns;
-        // Assigned UNCONDITIONALLY. A guarded assignment cannot CLEAR a stale value:
-        // Pi/Copilot reask loops yield several result chunks, and Pi omits resolvedModel
-        // when its later assistant message has no responseModel — so an earlier attempt's
-        // model would be persisted as the final attempt's answer. Fabricated attribution
-        // is the exact defect #2314 exists to prevent; absence must stay absence.
-        nodeResolvedModel = msg.resolvedModel;
-        if (msg.structuredOutput !== undefined) structuredOutput = msg.structuredOutput;
-        // Fail the node if the SDK reports a cost cap exceeded error
-        if (msg.isError && msg.errorSubtype === 'error_max_budget_usd') {
-          const cap = nodeOptions?.maxBudgetUsd;
-          getLog().warn(
-            { nodeId: node.id, maxBudgetUsd: cap, durationMs: Date.now() - nodeStartTime },
-            'dag.node_budget_cap_exceeded'
-          );
-          throw new Error(
-            `Node '${node.id}' exceeded cost cap${cap !== undefined ? ` of $${cap.toFixed(2)}` : ''}.`
-          );
-        }
-        // Fail loudly on any other SDK error result. Previously we broke out of
-        // the stream silently, producing empty/partial output without signaling
-        // failure — which let failed iterations masquerade as successes.
-        // Exception: errorSubtype === 'success' is the Claude SDK's marker for a
-        // clean stop_sequence termination. The Claude provider already filters
-        // this out, but the guard here keeps a third-party IAgentProvider that
-        // forwards the SDK pair raw from producing a "SDK returned success"
-        // false failure.
-        if (msg.isError && msg.errorSubtype !== 'success') {
-          const subtype = msg.errorSubtype ?? 'unknown';
-          const errorsDetail = msg.errors?.length ? ` — ${msg.errors.join('; ')}` : '';
-          getLog().error(
-            {
-              nodeId: node.id,
-              errorSubtype: subtype,
-              errors: msg.errors,
-              sessionId: msg.sessionId,
-              stopReason: msg.stopReason,
-              durationMs: Date.now() - nodeStartTime,
-            },
-            'dag.node_sdk_error_result'
-          );
-          throw new Error(`Node '${node.id}' failed: SDK returned ${subtype}${errorsDetail}`);
-        }
-        if (backgroundTasks.shouldBreakOnResult()) {
-          break; // Result is the "I'm done" signal — don't wait for subprocess to exit
-        }
-        // Result arrived with background Agent tasks still live (#2083).
-        // Breaking here would .return() the generator chain → SDK cleanup →
-        // SIGTERM the CLI → kill the tasks and lose their pending artifacts.
-        // Keep consuming: the SDK holds the subprocess open until the tasks
-        // drain, runs a follow-up turn to integrate their output, and emits a
-        // final result (whose fields overwrite the captures above — correct,
-        // since SDK cost/usage are session-cumulative). Bounded by the
-        // existing idle timeout; task_progress chunks reset it.
-        getLog().warn(
-          {
-            nodeId: node.id,
-            taskCount: backgroundTasks.count(),
-            taskIds: backgroundTasks.ids(),
-          },
-          'dag.node_result_with_live_background_tasks'
-        );
-        if (backgroundTasks.shouldAnnounceWait()) {
-          await safeSendMessage(
-            platform,
-            conversationId,
-            `⏳ Node \`${node.id}\`: turn ended with ${String(backgroundTasks.count())} background agent task(s) still running — waiting for them to finish before completing the node.`,
-            nodeContext
-          );
-        }
-      } else if (msg.type === 'background_tasks') {
-        // Level signal (REPLACE semantics): swap the live set for the payload.
-        backgroundTasks.update(msg.tasks);
-      } else if (msg.type === 'system' && msg.content) {
-        // Providers yield system chunks for user-actionable issues (missing env
-        // vars, Haiku+MCP, structured output failures, etc.). MCP-failure
-        // chunks need filtering: user-level plugin MCPs inherited from
-        // `~/.claude/` (e.g. `telegram`) routinely fail to connect inside the
-        // headless subprocess and aren't actionable for the workflow author.
-        // Other warnings (⚠️) are always actionable and surface verbatim.
-        if (msg.content.startsWith(MCP_FAILURE_PREFIX)) {
-          const failedEntries = parseMcpFailureServerNames(msg.content);
-          const workflowFailures = failedEntries.filter(e => configuredMcpNames.has(e.name));
-          const pluginFailures = failedEntries.filter(e => !configuredMcpNames.has(e.name));
-
-          if (workflowFailures.length > 0) {
-            const filteredMsg = `${MCP_FAILURE_PREFIX}${workflowFailures.map(e => e.segment).join(', ')}`;
-            getLog().warn(
-              { nodeId: node.id, systemContent: filteredMsg },
+              { nodeId: node.id, systemContent: msg.content },
               'dag.provider_warning_forwarded'
             );
             const delivered = await safeSendMessage(
               platform,
               conversationId,
-              filteredMsg,
+              msg.content,
               nodeContext
             );
             if (!delivered) {
@@ -2391,222 +2467,227 @@ async function executeNodeInternal(
                 'dag.provider_warning_delivery_failed'
               );
             }
-          }
-          if (pluginFailures.length > 0) {
+          } else {
             getLog().debug(
-              { nodeId: node.id, pluginFailures: pluginFailures.map(e => e.name) },
-              'dag.mcp_plugin_connection_suppressed'
+              { nodeId: node.id, systemContent: msg.content },
+              'dag.system_message_unhandled'
             );
           }
-        } else if (msg.content.startsWith('⚠️')) {
-          getLog().warn(
-            { nodeId: node.id, systemContent: msg.content },
-            'dag.provider_warning_forwarded'
-          );
-          const delivered = await safeSendMessage(
+        } else if (msg.type === 'task_started') {
+          // Subagent task spawned inside this node (Claude Task tool or
+          // inline sub-agent). Forward as a task_activity emitter event so
+          // the Web UI can render it as an expandable sub-item under the
+          // parent node in the run detail view.
+          getWorkflowEventEmitter().emit({
+            type: 'task_activity',
+            runId: workflowRun.id,
+            nodeId: node.id,
+            taskId: msg.taskId,
+            activity: 'started',
+            ...(msg.description !== undefined ? { description: msg.description } : {}),
+            ...(msg.taskType !== undefined ? { taskType: msg.taskType } : {}),
+          });
+          deps.store
+            .createWorkflowEvent({
+              workflow_run_id: workflowRun.id,
+              event_type: 'task_activity',
+              step_name: stepName,
+              data: {
+                task_id: msg.taskId,
+                activity: 'started',
+                ...(msg.description !== undefined ? { description: msg.description } : {}),
+                ...(msg.taskType !== undefined ? { task_type: msg.taskType } : {}),
+              },
+            })
+            .catch((err: Error) => {
+              getLog().error(
+                { err, workflowRunId: workflowRun.id, eventType: 'task_activity' },
+                'workflow_event_persist_failed'
+              );
+            });
+        } else if (msg.type === 'task_progress') {
+          getWorkflowEventEmitter().emit({
+            type: 'task_activity',
+            runId: workflowRun.id,
+            nodeId: node.id,
+            taskId: msg.taskId,
+            activity: 'progress',
+            ...(msg.description !== undefined ? { description: msg.description } : {}),
+            ...(msg.summary !== undefined ? { summary: msg.summary } : {}),
+            ...(msg.usage !== undefined ? { usage: msg.usage } : {}),
+            ...(msg.lastToolName !== undefined ? { lastToolName: msg.lastToolName } : {}),
+          });
+          // task_progress fires every ~30s while a subagent is running. Persist
+          // it for the timeline view but don't log — the volume would dominate.
+          deps.store
+            .createWorkflowEvent({
+              workflow_run_id: workflowRun.id,
+              event_type: 'task_activity',
+              step_name: stepName,
+              data: {
+                task_id: msg.taskId,
+                activity: 'progress',
+                ...(msg.description !== undefined ? { description: msg.description } : {}),
+                ...(msg.summary !== undefined ? { summary: msg.summary } : {}),
+                ...(msg.usage !== undefined ? { usage: msg.usage } : {}),
+                ...(msg.lastToolName !== undefined ? { last_tool_name: msg.lastToolName } : {}),
+              },
+            })
+            .catch((err: Error) => {
+              getLog().error(
+                { err, workflowRunId: workflowRun.id, eventType: 'task_activity' },
+                'workflow_event_persist_failed'
+              );
+            });
+        } else if (msg.type === 'task_notification') {
+          getWorkflowEventEmitter().emit({
+            type: 'task_activity',
+            runId: workflowRun.id,
+            nodeId: node.id,
+            taskId: msg.taskId,
+            activity: msg.status,
+            ...(msg.summary !== undefined ? { summary: msg.summary } : {}),
+            ...(msg.usage !== undefined ? { usage: msg.usage } : {}),
+            ...(msg.outputFile ? { outputFile: msg.outputFile } : {}),
+          });
+          deps.store
+            .createWorkflowEvent({
+              workflow_run_id: workflowRun.id,
+              event_type: 'task_activity',
+              step_name: stepName,
+              data: {
+                task_id: msg.taskId,
+                activity: msg.status,
+                ...(msg.summary !== undefined ? { summary: msg.summary } : {}),
+                ...(msg.usage !== undefined ? { usage: msg.usage } : {}),
+                // Where the settled task wrote its output — the artifact trail
+                // for delegated work (#2083).
+                ...(msg.outputFile ? { output_file: msg.outputFile } : {}),
+              },
+            })
+            .catch((err: Error) => {
+              getLog().error(
+                { err, workflowRunId: workflowRun.id, eventType: 'task_activity' },
+                'workflow_event_persist_failed'
+              );
+            });
+        } else if (msg.type === 'hook_started') {
+          getWorkflowEventEmitter().emit({
+            type: 'hook_activity',
+            runId: workflowRun.id,
+            nodeId: node.id,
+            hookId: msg.hookId,
+            hookName: msg.hookName,
+            hookEvent: msg.hookEvent,
+            activity: 'started',
+          });
+          deps.store
+            .createWorkflowEvent({
+              workflow_run_id: workflowRun.id,
+              event_type: 'hook_activity',
+              step_name: stepName,
+              data: {
+                hook_id: msg.hookId,
+                hook_name: msg.hookName,
+                hook_event: msg.hookEvent,
+                activity: 'started',
+              },
+            })
+            .catch((err: Error) => {
+              getLog().error(
+                { err, workflowRunId: workflowRun.id, eventType: 'hook_activity' },
+                'workflow_event_persist_failed'
+              );
+            });
+        } else if (msg.type === 'hook_response') {
+          getWorkflowEventEmitter().emit({
+            type: 'hook_activity',
+            runId: workflowRun.id,
+            nodeId: node.id,
+            hookId: msg.hookId,
+            hookName: msg.hookName,
+            hookEvent: msg.hookEvent,
+            activity: 'response',
+            outcome: msg.outcome,
+            ...(msg.exitCode !== undefined ? { exitCode: msg.exitCode } : {}),
+          });
+          deps.store
+            .createWorkflowEvent({
+              workflow_run_id: workflowRun.id,
+              event_type: 'hook_activity',
+              step_name: stepName,
+              data: {
+                hook_id: msg.hookId,
+                hook_name: msg.hookName,
+                hook_event: msg.hookEvent,
+                activity: 'response',
+                outcome: msg.outcome,
+                ...(msg.exitCode !== undefined ? { exit_code: msg.exitCode } : {}),
+              },
+            })
+            .catch((err: Error) => {
+              getLog().error(
+                { err, workflowRunId: workflowRun.id, eventType: 'hook_activity' },
+                'workflow_event_persist_failed'
+              );
+            });
+        }
+        // rate_limit chunks: already log.warn'd in claude.ts; not surfaced to SSE per design
+      }
+
+      // Stream ended with background tasks still live: the SDK subprocess died or
+      // the idle timeout fired mid-wait. The tasks' artifacts may be missing —
+      // record the incompleteness (surfaced on the node_completed event) and warn
+      // loudly instead of silently completing (#2083). Cancellation is exempt:
+      // the node returns 'failed — Cancelled by user' and the warning would be noise.
+      if (!backgroundTasks.shouldBreakOnResult()) {
+        backgroundTasksIncomplete = backgroundTasks.ids();
+        const cancelled = nodeAbortController.signal.aborted && !nodeIdleTimedOut;
+        getLog().warn(
+          {
+            nodeId: node.id,
+            taskIds: backgroundTasksIncomplete,
+            idleTimedOut: nodeIdleTimedOut,
+            cancelled,
+          },
+          'dag.node_stream_ended_with_live_background_tasks'
+        );
+        if (!cancelled) {
+          await safeSendMessage(
             platform,
             conversationId,
-            msg.content,
+            `⚠️ Node \`${node.id}\`: the provider stream ended with ${String(backgroundTasksIncomplete.length)} background agent task(s) still running (${backgroundTasksIncomplete.join(', ')}). Their output may be missing — treat this node's artifacts as potentially incomplete.`,
             nodeContext
           );
-          if (!delivered) {
-            getLog().error(
-              { nodeId: node.id, workflowRunId: workflowRun.id },
-              'dag.provider_warning_delivery_failed'
-            );
-          }
-        } else {
-          getLog().debug(
-            { nodeId: node.id, systemContent: msg.content },
-            'dag.system_message_unhandled'
+        }
+      }
+    } finally {
+      // Never mask the original node result/exception. The recorder itself must
+      // not throw; the try/catch is belt-and-suspenders for a misbehaving deps mock.
+      if (passUsageBreakdown !== undefined) {
+        try {
+          await deps.usageRecorder.recordWorkflowUsage({
+            runId: workflowRun.id,
+            stepName,
+            agentProvider: provider,
+            usageBreakdown: passUsageBreakdown,
+            retryEpoch: getRunRetryEpoch(workflowRun, undefined),
+            iteration: null,
+            reaskAttempt: passReaskAttempt,
+            terminalError: passTerminalError,
+            errorSubtype: passErrorSubtype,
+          });
+        } catch (err) {
+          getLog().warn(
+            {
+              err: err as Error,
+              nodeId: node.id,
+              workflowRunId: workflowRun.id,
+              reaskAttempt: passReaskAttempt,
+            },
+            'dag.node_usage_record_failed'
           );
         }
-      } else if (msg.type === 'task_started') {
-        // Subagent task spawned inside this node (Claude Task tool or
-        // inline sub-agent). Forward as a task_activity emitter event so
-        // the Web UI can render it as an expandable sub-item under the
-        // parent node in the run detail view.
-        getWorkflowEventEmitter().emit({
-          type: 'task_activity',
-          runId: workflowRun.id,
-          nodeId: node.id,
-          taskId: msg.taskId,
-          activity: 'started',
-          ...(msg.description !== undefined ? { description: msg.description } : {}),
-          ...(msg.taskType !== undefined ? { taskType: msg.taskType } : {}),
-        });
-        deps.store
-          .createWorkflowEvent({
-            workflow_run_id: workflowRun.id,
-            event_type: 'task_activity',
-            step_name: stepName,
-            data: {
-              task_id: msg.taskId,
-              activity: 'started',
-              ...(msg.description !== undefined ? { description: msg.description } : {}),
-              ...(msg.taskType !== undefined ? { task_type: msg.taskType } : {}),
-            },
-          })
-          .catch((err: Error) => {
-            getLog().error(
-              { err, workflowRunId: workflowRun.id, eventType: 'task_activity' },
-              'workflow_event_persist_failed'
-            );
-          });
-      } else if (msg.type === 'task_progress') {
-        getWorkflowEventEmitter().emit({
-          type: 'task_activity',
-          runId: workflowRun.id,
-          nodeId: node.id,
-          taskId: msg.taskId,
-          activity: 'progress',
-          ...(msg.description !== undefined ? { description: msg.description } : {}),
-          ...(msg.summary !== undefined ? { summary: msg.summary } : {}),
-          ...(msg.usage !== undefined ? { usage: msg.usage } : {}),
-          ...(msg.lastToolName !== undefined ? { lastToolName: msg.lastToolName } : {}),
-        });
-        // task_progress fires every ~30s while a subagent is running. Persist
-        // it for the timeline view but don't log — the volume would dominate.
-        deps.store
-          .createWorkflowEvent({
-            workflow_run_id: workflowRun.id,
-            event_type: 'task_activity',
-            step_name: stepName,
-            data: {
-              task_id: msg.taskId,
-              activity: 'progress',
-              ...(msg.description !== undefined ? { description: msg.description } : {}),
-              ...(msg.summary !== undefined ? { summary: msg.summary } : {}),
-              ...(msg.usage !== undefined ? { usage: msg.usage } : {}),
-              ...(msg.lastToolName !== undefined ? { last_tool_name: msg.lastToolName } : {}),
-            },
-          })
-          .catch((err: Error) => {
-            getLog().error(
-              { err, workflowRunId: workflowRun.id, eventType: 'task_activity' },
-              'workflow_event_persist_failed'
-            );
-          });
-      } else if (msg.type === 'task_notification') {
-        getWorkflowEventEmitter().emit({
-          type: 'task_activity',
-          runId: workflowRun.id,
-          nodeId: node.id,
-          taskId: msg.taskId,
-          activity: msg.status,
-          ...(msg.summary !== undefined ? { summary: msg.summary } : {}),
-          ...(msg.usage !== undefined ? { usage: msg.usage } : {}),
-          ...(msg.outputFile ? { outputFile: msg.outputFile } : {}),
-        });
-        deps.store
-          .createWorkflowEvent({
-            workflow_run_id: workflowRun.id,
-            event_type: 'task_activity',
-            step_name: stepName,
-            data: {
-              task_id: msg.taskId,
-              activity: msg.status,
-              ...(msg.summary !== undefined ? { summary: msg.summary } : {}),
-              ...(msg.usage !== undefined ? { usage: msg.usage } : {}),
-              // Where the settled task wrote its output — the artifact trail
-              // for delegated work (#2083).
-              ...(msg.outputFile ? { output_file: msg.outputFile } : {}),
-            },
-          })
-          .catch((err: Error) => {
-            getLog().error(
-              { err, workflowRunId: workflowRun.id, eventType: 'task_activity' },
-              'workflow_event_persist_failed'
-            );
-          });
-      } else if (msg.type === 'hook_started') {
-        getWorkflowEventEmitter().emit({
-          type: 'hook_activity',
-          runId: workflowRun.id,
-          nodeId: node.id,
-          hookId: msg.hookId,
-          hookName: msg.hookName,
-          hookEvent: msg.hookEvent,
-          activity: 'started',
-        });
-        deps.store
-          .createWorkflowEvent({
-            workflow_run_id: workflowRun.id,
-            event_type: 'hook_activity',
-            step_name: stepName,
-            data: {
-              hook_id: msg.hookId,
-              hook_name: msg.hookName,
-              hook_event: msg.hookEvent,
-              activity: 'started',
-            },
-          })
-          .catch((err: Error) => {
-            getLog().error(
-              { err, workflowRunId: workflowRun.id, eventType: 'hook_activity' },
-              'workflow_event_persist_failed'
-            );
-          });
-      } else if (msg.type === 'hook_response') {
-        getWorkflowEventEmitter().emit({
-          type: 'hook_activity',
-          runId: workflowRun.id,
-          nodeId: node.id,
-          hookId: msg.hookId,
-          hookName: msg.hookName,
-          hookEvent: msg.hookEvent,
-          activity: 'response',
-          outcome: msg.outcome,
-          ...(msg.exitCode !== undefined ? { exitCode: msg.exitCode } : {}),
-        });
-        deps.store
-          .createWorkflowEvent({
-            workflow_run_id: workflowRun.id,
-            event_type: 'hook_activity',
-            step_name: stepName,
-            data: {
-              hook_id: msg.hookId,
-              hook_name: msg.hookName,
-              hook_event: msg.hookEvent,
-              activity: 'response',
-              outcome: msg.outcome,
-              ...(msg.exitCode !== undefined ? { exit_code: msg.exitCode } : {}),
-            },
-          })
-          .catch((err: Error) => {
-            getLog().error(
-              { err, workflowRunId: workflowRun.id, eventType: 'hook_activity' },
-              'workflow_event_persist_failed'
-            );
-          });
-      }
-      // rate_limit chunks: already log.warn'd in claude.ts; not surfaced to SSE per design
-    }
-
-    // Stream ended with background tasks still live: the SDK subprocess died or
-    // the idle timeout fired mid-wait. The tasks' artifacts may be missing —
-    // record the incompleteness (surfaced on the node_completed event) and warn
-    // loudly instead of silently completing (#2083). Cancellation is exempt:
-    // the node returns 'failed — Cancelled by user' and the warning would be noise.
-    if (!backgroundTasks.shouldBreakOnResult()) {
-      backgroundTasksIncomplete = backgroundTasks.ids();
-      const cancelled = nodeAbortController.signal.aborted && !nodeIdleTimedOut;
-      getLog().warn(
-        {
-          nodeId: node.id,
-          taskIds: backgroundTasksIncomplete,
-          idleTimedOut: nodeIdleTimedOut,
-          cancelled,
-        },
-        'dag.node_stream_ended_with_live_background_tasks'
-      );
-      if (!cancelled) {
-        await safeSendMessage(
-          platform,
-          conversationId,
-          `⚠️ Node \`${node.id}\`: the provider stream ended with ${String(backgroundTasksIncomplete.length)} background agent task(s) still running (${backgroundTasksIncomplete.join(', ')}). Their output may be missing — treat this node's artifacts as potentially incomplete.`,
-          nodeContext
-        );
       }
     }
   };
@@ -2653,7 +2734,11 @@ async function executeNodeInternal(
     while (true) {
       // Fresh session per reask attempt (resume only the original session on the
       // first pass) so a prior invalid turn isn't carried forward.
-      await runStreamPass(reaskPrompt, reaskAttempt === 0 ? resumeSessionId : undefined);
+      await runStreamPass(
+        reaskPrompt,
+        reaskAttempt === 0 ? resumeSessionId : undefined,
+        reaskAttempt
+      );
       if (nodeCostUsd !== undefined) {
         accumulatedCostUsd = (accumulatedCostUsd ?? 0) + nodeCostUsd;
       }
@@ -4178,7 +4263,7 @@ async function executeLoopGroupNode(
       // first processed iteration must continue the restored pre-pause session.
       lastSequentialSession: group.fresh_context || i === 1 ? undefined : loopLastSequentialSession,
       warnedProviderConflicts,
-      totalCostUsd: 0,
+      totalCostUsd: undefined,
       totalTokensIn: 0,
       totalTokensOut: 0,
       totalLoopIterations: 0,
@@ -4208,7 +4293,11 @@ async function executeLoopGroupNode(
       return { state: 'failed', output: lastIterationOutput, error: `Workflow ${effectiveStatus}` };
     }
     // Accumulate usage across iterations (charged on the failure path below too).
-    loopTotalCostUsd = (loopTotalCostUsd ?? 0) + iterCtx.totalCostUsd;
+    // Only fold iterations that reported cost — initialized absence must not mark
+    // the group as having provider-reported spend.
+    if (iterCtx.totalCostUsd !== undefined) {
+      loopTotalCostUsd = (loopTotalCostUsd ?? 0) + iterCtx.totalCostUsd;
+    }
     if (iterCtx.totalTokensIn > 0 || iterCtx.totalTokensOut > 0) {
       loopTotalTokens = {
         input: (loopTotalTokens?.input ?? 0) + iterCtx.totalTokensIn,
@@ -5106,6 +5195,11 @@ async function executeLoopNode(
       iterationTokens = undefined;
       iterationNumTurns = undefined;
       iterationUsageFolded = false;
+      // Latest validated usageBreakdown for THIS attempt only (iteration + reask).
+      let passUsageBreakdown: UsageBreakdown | undefined;
+      let passTerminalError = false;
+      let passErrorSubtype: string | null = null;
+      const passReaskAttempt = reaskAttempt;
 
       try {
         // Build prompt — substituteWorkflowVariables throws if $BASE_BRANCH referenced but empty
@@ -5272,7 +5366,7 @@ async function executeLoopNode(
             }
             // Overwrite, don't accumulate — a later result in the same iteration
             // (background-task wait, #2083) carries session-cumulative values.
-            if (msg.cost !== undefined) {
+            if (isAuthoritativeCostUsd(msg.cost)) {
               iterationCost = msg.cost;
             }
             if (msg.tokens !== undefined) {
@@ -5297,6 +5391,33 @@ async function executeLoopNode(
             loopResolvedModel = msg.resolvedModel;
             if (msg.structuredOutput !== undefined) {
               attemptStructured = msg.structuredOutput;
+            }
+            // Latest terminal result owns attempt accounting unconditionally —
+            // same replacement semantics as the standard AI-node path.
+            if (Array.isArray(msg.usageBreakdown)) {
+              const validated = validateProviderUsageAtBoundary(msg.usageBreakdown);
+              passUsageBreakdown = validated?.breakdown;
+            } else {
+              if (msg.usageBreakdown !== undefined) {
+                getLog().warn(
+                  {
+                    rejectedCount: 1,
+                    retainedCount: 0,
+                    rejected: [
+                      { index: 0, issue: `usage_breakdown_type_${typeof msg.usageBreakdown}` },
+                    ],
+                  },
+                  'workflow.usage_entry_rejected'
+                );
+              }
+              passUsageBreakdown = undefined;
+            }
+            if (msg.isError && msg.errorSubtype !== 'success') {
+              passTerminalError = true;
+              passErrorSubtype = msg.errorSubtype ?? 'unknown';
+            } else {
+              passTerminalError = false;
+              passErrorSubtype = null;
             }
             // Fail the iteration loudly on SDK error results. Previously we broke
             // silently, producing empty output and continuing to the next iteration —
@@ -5551,12 +5672,41 @@ async function executeLoopNode(
           .catch((evtErr: Error) => {
             logEventStoreError(evtErr, i);
           });
-        return failLoopNode(`Loop iteration ${i} failed: ${err.message}`, {
+        return await failLoopNode(`Loop iteration ${i} failed: ${err.message}`, {
           costUsd: loopTotalCostUsd,
           ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
           loopIterations: i,
           data: { iteration: i },
         });
+      } finally {
+        // Record before reask decisions / failure returns escape this attempt.
+        // Never masks the original iteration outcome.
+        if (passUsageBreakdown !== undefined) {
+          try {
+            await deps.usageRecorder.recordWorkflowUsage({
+              runId: workflowRun.id,
+              stepName,
+              agentProvider: workflowProvider,
+              usageBreakdown: passUsageBreakdown,
+              retryEpoch: getRunRetryEpoch(workflowRun, undefined),
+              iteration: i,
+              reaskAttempt: passReaskAttempt,
+              terminalError: passTerminalError,
+              errorSubtype: passErrorSubtype,
+            });
+          } catch (err) {
+            getLog().warn(
+              {
+                err: err as Error,
+                nodeId: node.id,
+                workflowRunId: workflowRun.id,
+                iteration: i,
+                reaskAttempt: passReaskAttempt,
+              },
+              'loop_node.usage_record_failed'
+            );
+          }
+        }
       }
 
       // Notify on idle timeout
@@ -6846,8 +6996,8 @@ async function resolveFanOutChildDefinition(
 
 /**
  * Σ of defined child `costUsd`. Returns undefined when NO child reported cost so the
- * node's own `costUsd` stays absent (a misleading `0` would look like a free run) —
- * matching the run-level aggregation's "only write when > 0" posture.
+ * node's own `costUsd` stays absent — matching run-level presence tracking (reported
+ * zero is kept; uninitialized absence is not written as free).
  *
  * UNDER-REPORTS: this is Σ of *completed* children, not Σ of children. Usage metadata is
  * persisted in exactly one place — inside `completeWorkflowRun` — so a child that burned
@@ -6863,7 +7013,7 @@ function sumFanOutCost(outcomes: readonly ChildWorkflowOutcome[]): number | unde
   let sum = 0;
   let any = false;
   for (const o of outcomes) {
-    if (o.costUsd !== undefined && Number.isFinite(o.costUsd)) {
+    if (isAuthoritativeCostUsd(o.costUsd)) {
       sum += o.costUsd;
       any = true;
     }
@@ -7632,8 +7782,12 @@ interface RunLayersContext {
    * reference with loop_group body contexts so an iteration cannot re-report.
    */
   warnedProviderConflicts: Set<string>;
-  /** Run-level usage accumulators (mutated by runLayers; caller reads after). */
-  totalCostUsd: number;
+  /**
+   * Run-level reported-cost accumulator. Undefined until at least one node reports
+   * cost (including authoritative 0). Presence is tracked separately from the sum so
+   * an initialized zero is never mistaken for "provider reported free".
+   */
+  totalCostUsd: number | undefined;
   totalTokensIn: number;
   totalTokensOut: number;
   totalLoopIterations: number;
@@ -8784,7 +8938,9 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
         // cost/tokens must be summed here and ONLY here — adding a per-node
         // telemetry capture elsewhere would double-count against the totals
         // sent on workflow_completed/workflow_failed.
-        if (output.costUsd !== undefined) ctx.totalCostUsd += output.costUsd;
+        if (output.costUsd !== undefined) {
+          ctx.totalCostUsd = (ctx.totalCostUsd ?? 0) + output.costUsd;
+        }
         if (output.tokens !== undefined) {
           // Token values come from providers (incl. community ones) — guard so
           // a NaN can't silently poison the totals (NaN > 0 is false, which
@@ -9806,7 +9962,7 @@ export async function executeDagWorkflow(
     priorCompletedNodes: resumePriorCompletedNodes,
     lastSequentialSession: undefined,
     warnedProviderConflicts: new Set<string>(),
-    totalCostUsd: 0,
+    totalCostUsd: undefined,
     totalTokensIn: priorTokenUsage?.input ?? 0,
     totalTokensOut: priorTokenUsage?.output ?? 0,
     totalLoopIterations: 0,
@@ -10180,8 +10336,8 @@ export async function executeDagWorkflow(
   try {
     await deps.store.completeWorkflowRun(workflowRun.id, {
       node_counts: nodeCounts,
-      // totalCostUsd starts at 0; only write metadata when at least one node reported cost
-      ...(totalCostUsd > 0 ? { total_cost_usd: totalCostUsd } : {}),
+      // totalCostUsd is undefined until a node reports cost; keep authoritative 0.
+      ...(totalCostUsd !== undefined ? { total_cost_usd: totalCostUsd } : {}),
       // Persist token totals (D8) so a `workflow:` parent rolls up tokens as well as
       // cost. Only when non-zero (telemetry-only fields otherwise).
       ...(totalTokensIn > 0 ? { total_tokens_in: totalTokensIn } : {}),

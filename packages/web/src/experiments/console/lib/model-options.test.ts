@@ -43,7 +43,7 @@ function model(over: Partial<PiModelInfo> & { ref: string; provider: string }): 
     id: over.ref.split('/').slice(1).join('/'),
     name: over.ref,
     reasoning: false,
-    cost: { input: 1, output: 2 },
+    cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 200_000,
     ...over,
   };
@@ -200,7 +200,7 @@ describe('piModelHint', () => {
       ref: 'x/y',
       provider: 'x',
       reasoning: true,
-      cost: { input: 3, output: 15 },
+      cost: { input: 3, output: 15, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 1_048_576,
     });
     expect(piModelHint(m)).toBe('$3/M in · $15/M out · reasoning · 1049k ctx');
@@ -209,7 +209,13 @@ describe('piModelHint', () => {
 
   test('zero-cost (free-tier) models render $0 rather than dropping the hint', () => {
     expect(
-      piModelHint(model({ ref: 'x/free', provider: 'x', cost: { input: 0, output: 0 } }))
+      piModelHint(
+        model({
+          ref: 'x/free',
+          provider: 'x',
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        })
+      )
     ).toBe('$0/M in · $0/M out · 200k ctx');
   });
 });

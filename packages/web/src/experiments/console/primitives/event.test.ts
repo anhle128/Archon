@@ -284,6 +284,39 @@ describe('toRunEvent — retry setup projection', () => {
   });
 });
 
+describe('toRunEvent — node_usage_recorded', () => {
+  test('maps to kind system with a short label (never raw JSON text)', () => {
+    const e = toRunEvent(
+      raw({
+        event_type: 'node_usage_recorded',
+        step_name: 'plan',
+        data: {
+          schema_version: 1,
+          agent_provider: 'claude',
+          usage_breakdown: [{ provider: 'anthropic', model: 'x', modelSource: 'reported' }],
+        },
+      })
+    );
+    expect(e.kind).toBe('system');
+    if (e.kind !== 'system') throw new Error('unreachable');
+    expect(e.label).toBe('Usage recorded');
+    expect(e.detail).toBe('plan');
+    // Must not dump the breakdown payload as text content.
+    expect(JSON.stringify(e)).not.toContain('usage_breakdown');
+  });
+
+  test('falls back to agent_provider when step_name is null', () => {
+    const e = toRunEvent(
+      raw({
+        event_type: 'node_usage_recorded',
+        step_name: null,
+        data: { agent_provider: 'codex' },
+      })
+    );
+    expect(e).toMatchObject({ kind: 'system', label: 'Usage recorded', detail: 'codex' });
+  });
+});
+
 describe('toRunEvent — fallback', () => {
   test('unknown event types fall through to a text event with a payload summary', () => {
     const e = toRunEvent(raw({ event_type: 'mystery_event', data: { foo: 'bar' } }));

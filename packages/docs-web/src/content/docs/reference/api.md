@@ -410,6 +410,52 @@ Returns `{ commands: [{ name, source: "bundled" | "project" }] }`.
 
 Query parameters include status filters, date ranges, and pagination. Used by the Command Center UI.
 
+
+## Usage
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/usage` | Installation-wide workflow usage report (direct runs only) |
+
+Reuses the core `usageReport` contract (same defaults, filters, grouping, and
+ledger coverage as [`archon usage`](/reference/cli/#usage)).
+
+**Query parameters**
+
+| Param | Notes |
+|-------|-------|
+| `from` / `to` | Half-open UTC `[from, to)`. Both required or both omitted. Instants are RFC 3339 with `Z` or numeric offset; fractional seconds optional and limited to 1–3 digits (millisecond precision — longer fractions are rejected, not truncated). Default without `runId`: current UTC calendar month. With `runId` alone: entire run (`from`/`to` null). Cross-run ranges capped at 366 days. |
+| `codebaseId` | Project filter |
+| `agentProvider` | Archon agent id (`claude`, `codex`, …) |
+| `provider` / `model` | Upstream provider and model |
+| `kind` | `unclassified` \| `advisor` \| `subagent` (`unclassified` maps to SQL null) |
+| `runId` | Direct run only — **no child rollup** |
+| `nodeId` | Exact persisted step name; requires `runId` |
+| `groupBy` | `agent` \| `provider` (default) \| `model` \| `project` \| `run` \| `day` \| `node` (`node` requires `runId`) |
+
+Response shape is camelCase `UsageReport`: nullable token/request/USD sums,
+missing-value counts, separate `totals.reportedUsd` and `totals.estimatedUsd`,
+group rows, and conservative coverage (`hasRecordedUsage`,
+`unledgeredEventCount`, `historicalBackfill: false`).
+More than 500 groups returns **400** (no silent truncation). Validation and
+overflow errors are **400**.
+
+Run detail (`GET /api/workflows/runs/{runId}`) includes nullable `usage` for
+the same direct run with `groupBy=node`. A usage-query failure returns the
+rest of the detail with `usage: null` rather than 500. Old runs without
+ledger data return empty coverage (`hasRecordedUsage: false`), not zeros.
+
+```bash
+# Current UTC month by upstream provider
+curl 'http://localhost:3090/api/usage'
+
+# One run, per node
+curl 'http://localhost:3090/api/usage?runId=<run-id>&groupBy=node'
+```
+
+See [Workflow usage and cost tracking](/getting-started/ai-assistants/#workflow-usage-and-cost-tracking)
+and [Pricing (global only)](/reference/configuration/#pricing-global-only).
+
 ---
 
 ## Configuration
