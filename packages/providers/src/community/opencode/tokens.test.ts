@@ -1,9 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 
 import { normalizeUsageBreakdown } from '../../usage-breakdown';
+
 import {
   assistantInfoToUsageEntry,
+  mergeUsageBreakdowns,
   normalizeTokens,
+  packageAssistantUsage,
   sumTokenUsages,
   usageBreakdownFromAssistantInfos,
 } from './tokens';
@@ -110,5 +113,61 @@ describe('sumTokenUsages', () => {
         { input: 4, output: 5, total: 9, cost: 0.2 },
       ])
     ).toEqual({ input: 5, output: 7, total: 12, cost: 0.1 + 0.2 });
+  });
+});
+
+describe('mergeUsageBreakdowns', () => {
+  test('appends attempt observations in source order and skips empty parts', () => {
+    const first = usageBreakdownFromAssistantInfos([
+      {
+        providerID: 'anthropic',
+        modelID: 'one',
+        cost: 0.1,
+        tokens: { input: 1, output: 1 },
+      },
+    ]);
+    const second = usageBreakdownFromAssistantInfos([
+      {
+        providerID: 'anthropic',
+        modelID: 'two',
+        cost: 0.2,
+        tokens: { input: 2, output: 2 },
+      },
+    ]);
+    expect(mergeUsageBreakdowns(undefined, first, undefined, second, [])).toEqual([
+      expect.objectContaining({ model: 'one', costUsd: 0.1 }),
+      expect.objectContaining({ model: 'two', costUsd: 0.2 }),
+    ]);
+  });
+});
+
+describe('packageAssistantUsage', () => {
+  test('returns empty object when no authoritative usage was observed', () => {
+    expect(packageAssistantUsage([])).toEqual({});
+    expect(packageAssistantUsage([{ role: 'assistant', modelID: 'x' }])).toEqual({});
+  });
+
+  test('packages tokens and subagent kind for multi-agent failure carry', () => {
+    const packaged = packageAssistantUsage(
+      [
+        {
+          providerID: 'anthropic',
+          modelID: 'haiku',
+          cost: 0.2,
+          tokens: { input: 8, output: 4, reasoning: 0, cache: { read: 1, write: 0 } },
+        },
+      ],
+      { kind: 'subagent' }
+    );
+    expect(packaged.usageBreakdown).toEqual([
+      expect.objectContaining({
+        kind: 'subagent',
+        model: 'haiku',
+        costUsd: 0.2,
+        cacheReadTokens: 1,
+      }),
+    ]);
+    expect(packaged.tokens).toEqual({ input: 8, output: 4, total: 12, cost: 0.2 });
+    expect(packaged.cost).toBe(0.2);
   });
 });

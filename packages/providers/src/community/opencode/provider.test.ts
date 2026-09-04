@@ -1440,4 +1440,306 @@ describe('OpencodeProvider', () => {
       "Invalid OpenCode agent model ref for 'bad-agent': 'invalid-no-slash-format'"
     );
   });
+
+  test('usage before retryable session.error survives into successful retry terminal result', async () => {
+    const failEvents: OpencodeEvent[] = [
+      {
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'msg-attempt-1',
+            role: 'assistant',
+            sessionID: 'session-1',
+            providerID: 'anthropic',
+            modelID: 'claude-sonnet',
+            cost: 0.1,
+            tokens: { input: 10, output: 2, reasoning: 0, cache: { read: 0, write: 0 } },
+          },
+        },
+      },
+      {
+        type: 'session.error',
+        properties: {
+          sessionID: 'session-1',
+          error: { message: '429 rate limit exceeded' },
+        },
+      },
+    ];
+    const successEvents: OpencodeEvent[] = [
+      {
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'msg-attempt-2',
+            role: 'assistant',
+            sessionID: 'session-1',
+            providerID: 'anthropic',
+            modelID: 'claude-sonnet',
+            cost: 0.05,
+            tokens: { input: 5, output: 3, reasoning: 1, cache: { read: 2, write: 0 } },
+          },
+        },
+      },
+      {
+        type: 'session.idle',
+        properties: { sessionID: 'session-1' },
+      },
+    ];
+
+    runtimeQueue.push(
+      makeRuntime({
+        subscribe: mock(async () => ({ stream: createEventStream(failEvents) })),
+      }),
+      makeRuntime({
+        subscribe: mock(async () => ({ stream: createEventStream(successEvents) })),
+      })
+    );
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider({ retryBaseDelayMs: 1 }).sendQuery('hi', '/tmp', undefined, {
+        assistantConfig: TEST_MODEL,
+      })
+    );
+
+    expect(error).toBeUndefined();
+    const result = chunks.find(isResultChunk);
+    expect(result).toBeDefined();
+    expect(result).not.toHaveProperty('isError');
+    expect(result?.usageBreakdown).toEqual([
+      {
+        provider: 'anthropic',
+        model: 'claude-sonnet',
+        modelSource: 'reported',
+        inputTokens: 10,
+        outputTokens: 2,
+        reasoningTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        costUsd: 0.1,
+      },
+      {
+        provider: 'anthropic',
+        model: 'claude-sonnet',
+        modelSource: 'reported',
+        inputTokens: 5,
+        outputTokens: 3,
+        reasoningTokens: 1,
+        cacheReadTokens: 2,
+        cacheWriteTokens: 0,
+        costUsd: 0.05,
+      },
+    ]);
+    expect(result?.tokens).toMatchObject({ input: 15, output: 5, total: 20 });
+    expect(result?.tokens?.cost).toBeCloseTo(0.15);
+    expect(result?.cost).toBeCloseTo(0.15);
+    expect(mockCreateOpencode).toHaveBeenCalledTimes(2);
+  });
+
+  test('retry exhaustion after observed usage yields isError with cumulative observations', async () => {
+    const usageThenRateLimit = (messageId: string, cost: number): OpencodeEvent[] => [
+      {
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: messageId,
+            role: 'assistant',
+            sessionID: 'session-1',
+            providerID: 'anthropic',
+            modelID: 'claude-sonnet',
+            cost,
+            tokens: { input: 4, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+          },
+        },
+      },
+      {
+        type: 'session.error',
+        properties: {
+          sessionID: 'session-1',
+          error: { message: '429 rate limit exceeded' },
+        },
+      },
+    ];
+
+    runtimeQueue.push(
+      makeRuntime({
+        subscribe: mock(async () => ({
+          stream: createEventStream(usageThenRateLimit('msg-a', 0.01)),
+        })),
+      }),
+      makeRuntime({
+        subscribe: mock(async () => ({
+          stream: createEventStream(usageThenRateLimit('msg-b', 0.02)),
+        })),
+      }),
+      makeRuntime({
+        subscribe: mock(async () => ({
+          stream: createEventStream(usageThenRateLimit('msg-c', 0.03)),
+        })),
+      })
+    );
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider({ retryBaseDelayMs: 1 }).sendQuery('hi', '/tmp', undefined, {
+        assistantConfig: TEST_MODEL,
+      })
+    );
+
+    expect(error).toBeUndefined();
+    const result = chunks.find(isResultChunk);
+    expect(result).toMatchObject({
+      type: 'result',
+      isError: true,
+      errorSubtype: 'rate_limit',
+      sessionId: 'session-1',
+    });
+    expect(result?.usageBreakdown).toHaveLength(3);
+    expect(result?.usageBreakdown).toEqual([
+      expect.objectContaining({ costUsd: 0.01, inputTokens: 4, outputTokens: 1 }),
+      expect.objectContaining({ costUsd: 0.02, inputTokens: 4, outputTokens: 1 }),
+      expect.objectContaining({ costUsd: 0.03, inputTokens: 4, outputTokens: 1 }),
+    ]);
+    const firstRow = Array.isArray(result?.usageBreakdown) ? result.usageBreakdown[0] : undefined;
+    expect(firstRow).not.toHaveProperty('requests');
+    expect(result?.cost).toBeCloseTo(0.06);
+    expect(Array.isArray(result?.errors) && result.errors[0]).toContain('OpenCode rate_limit');
+    expect(mockCreateOpencode).toHaveBeenCalledTimes(3);
+  });
+
+  test('multi-agent preserves observed child usage on sibling session.error without synthesis', async () => {
+    const cwd = await createTempProjectDir();
+    const sessionIds = ['scout-session', 'reviewer-session'];
+    const runtime = makeRuntime({
+      sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
+      subscribe: mock(async () => ({
+        stream: createEventStream([
+          {
+            type: 'message.updated',
+            properties: {
+              info: {
+                id: 'scout-msg',
+                role: 'assistant',
+                sessionID: 'scout-session',
+                providerID: 'anthropic',
+                modelID: 'claude-haiku',
+                cost: 0.2,
+                tokens: { input: 8, output: 4, reasoning: 0, cache: { read: 1, write: 0 } },
+              },
+            },
+          },
+          {
+            type: 'session.error',
+            properties: {
+              sessionID: 'reviewer-session',
+              error: { message: 'reviewer refused without usage' },
+            },
+          },
+        ]),
+      })),
+    });
+    runtimeQueue.push(runtime);
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider({ retryBaseDelayMs: 1 }).sendQuery('hi', cwd, undefined, {
+        assistantConfig: TEST_MODEL,
+        nodeConfig: {
+          nodeId: 'research',
+          agents: {
+            scout: { description: 'Scout', prompt: 'Explore' },
+            reviewer: { description: 'Reviewer', prompt: 'Review' },
+          },
+        },
+      })
+    );
+
+    // Non-retryable sibling failure after scout usage — preserve subagent row only.
+    expect(error).toBeUndefined();
+    const result = chunks.find(isResultChunk);
+    expect(result).toMatchObject({
+      type: 'result',
+      isError: true,
+      errorSubtype: 'unknown',
+    });
+    expect(result?.usageBreakdown).toEqual([
+      {
+        provider: 'anthropic',
+        model: 'claude-haiku',
+        modelSource: 'reported',
+        kind: 'subagent',
+        inputTokens: 8,
+        outputTokens: 4,
+        reasoningTokens: 0,
+        cacheReadTokens: 1,
+        cacheWriteTokens: 0,
+        costUsd: 0.2,
+      },
+    ]);
+    // Reviewer never reported assistant usage — no synthesized second row.
+    expect(result?.usageBreakdown).toHaveLength(1);
+  });
+
+  test('no-usage late failures still throw without fabricating a terminal usage result', async () => {
+    runtimeQueue.push(
+      makeRuntime({
+        subscribe: mock(async () => ({
+          stream: createEventStream([
+            {
+              type: 'session.error',
+              properties: {
+                sessionID: 'session-1',
+                error: { message: '429 rate limit exceeded' },
+              },
+            },
+          ]),
+        })),
+      }),
+      makeRuntime({
+        subscribe: mock(async () => ({
+          stream: createEventStream([
+            {
+              type: 'session.error',
+              properties: {
+                sessionID: 'session-1',
+                error: { message: '429 rate limit exceeded' },
+              },
+            },
+          ]),
+        })),
+      }),
+      makeRuntime({
+        subscribe: mock(async () => ({
+          stream: createEventStream([
+            {
+              type: 'session.error',
+              properties: {
+                sessionID: 'session-1',
+                error: { message: '429 rate limit exceeded' },
+              },
+            },
+          ]),
+        })),
+      })
+    );
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider({ retryBaseDelayMs: 1 }).sendQuery('hi', '/tmp', undefined, {
+        assistantConfig: TEST_MODEL,
+      })
+    );
+
+    expect(chunks.filter(isResultChunk)).toHaveLength(0);
+    expect(error?.message).toContain('OpenCode rate_limit');
+    expect(mockCreateOpencode).toHaveBeenCalledTimes(3);
+  });
 });
+function isResultChunk(chunk: unknown): chunk is {
+  type: 'result';
+  isError?: boolean;
+  errorSubtype?: string;
+  sessionId?: string;
+  usageBreakdown?: unknown;
+  tokens?: { input: number; output: number; total?: number; cost?: number };
+  cost?: number;
+  errors?: string[];
+} {
+  return typeof chunk === 'object' && chunk !== null && 'type' in chunk && chunk.type === 'result';
+}

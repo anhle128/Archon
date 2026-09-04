@@ -2,7 +2,7 @@ import { createLogger } from '@archon/paths';
 
 import type { MessageChunk, SendQueryOptions } from '../../types';
 import { getOrderedAgents, type NamedAgentConfig } from './agent-config';
-import { errorMessage } from './errors';
+import { errorMessage, OpencodeUsageBearingError } from './errors';
 import type { OpencodeClientLike } from './runtime';
 import {
   abortableStream,
@@ -10,7 +10,12 @@ import {
   promptSession,
   resolveSessionId,
 } from './session';
-import { normalizeTokens, sumTokenUsages, usageBreakdownFromAssistantInfos } from './tokens';
+import {
+  normalizeTokens,
+  packageAssistantUsage,
+  sumTokenUsages,
+  usageBreakdownFromAssistantInfos,
+} from './tokens';
 
 interface ProviderModel {
   providerID: string;
@@ -306,9 +311,12 @@ export async function* streamMultiAgentOpencodeSession(
         if (!state) continue;
         await abortAll();
         const rawError = isRecord(properties.error) ? properties.error : properties;
-        const err = new Error(`[${state.agent.key}] ${errorMessage(rawError)}`);
-        err.cause = rawError;
-        throw err;
+        throw createMultiAgentFailureError({
+          message: `[${state.agent.key}] ${errorMessage(rawError)}`,
+          cause: rawError,
+          sessionId: state.sessionId,
+          states,
+        });
       }
 
       if (event.type === 'session.idle') {
@@ -391,14 +399,43 @@ export async function* streamMultiAgentOpencodeSession(
     getLog().info({ nodeId, aborted, eventCount }, 'opencode.multi_agent_loop_exited');
     if (aborted) {
       const abortReason = requestOptions?.abortSignal?.reason;
-      throw new Error(
+      const message =
         `OpenCode query aborted (nodeId: ${nodeId}, agents: ${agents.length}, cwd: ${cwd})` +
-          (abortReason ? `: ${String(abortReason)}` : '')
-      );
+        (abortReason ? `: ${String(abortReason)}` : '');
+      throw createMultiAgentFailureError({
+        message,
+        states,
+      });
     }
     throw new Error('OpenCode multi-agent stream ended before all agents completed');
   } finally {
     requestOptions?.abortSignal?.removeEventListener('abort', abortHandler);
     streamController.abort();
   }
+}
+
+function createMultiAgentFailureError(args: {
+  message: string;
+  cause?: unknown;
+  sessionId?: string;
+  states: readonly AgentRunState[];
+}): Error {
+  // Preserve every already-observed child entry; never synthesize unobserved ones.
+  const infos = args.states.flatMap(candidate => {
+    if (candidate.assistantInfoById.size > 0) {
+      return Array.from(candidate.assistantInfoById.values());
+    }
+    return candidate.lastAssistantInfo ? [candidate.lastAssistantInfo] : [];
+  });
+  const packaged = packageAssistantUsage(infos, { kind: 'subagent' });
+  if (packaged.usageBreakdown) {
+    return new OpencodeUsageBearingError(args.message, {
+      ...packaged,
+      ...(args.sessionId ? { sessionId: args.sessionId } : {}),
+      ...(args.cause !== undefined ? { cause: args.cause } : {}),
+    });
+  }
+  const err = new Error(args.message);
+  if (args.cause !== undefined) err.cause = args.cause;
+  return err;
 }

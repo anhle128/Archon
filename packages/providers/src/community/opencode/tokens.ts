@@ -89,3 +89,41 @@ export function usageBreakdownFromAssistantInfos(
   const breakdown = toUsageBreakdown(entries);
   return breakdown.length > 0 ? breakdown : undefined;
 }
+
+/**
+ * Append distinct attempt observations in source order.
+ * Within an attempt, callers still replace by message id before packaging.
+ */
+export function mergeUsageBreakdowns(
+  ...parts: (UsageBreakdown | undefined)[]
+): UsageBreakdown | undefined {
+  const merged: ModelUsageEntry[] = [];
+  for (const part of parts) {
+    if (!part || part.length === 0) continue;
+    merged.push(...part);
+  }
+  if (merged.length === 0) return undefined;
+  return toUsageBreakdown(merged);
+}
+
+/**
+ * Package observed assistant infos into the usage fields a late failure can carry.
+ * Returns an empty object when nothing authoritative was observed (no fabrication).
+ */
+export function packageAssistantUsage(
+  infos: readonly Record<string, unknown>[],
+  options?: { kind?: 'subagent' }
+): {
+  usageBreakdown?: UsageBreakdown;
+  tokens?: TokenUsage;
+  cost?: number;
+} {
+  const usageBreakdown = usageBreakdownFromAssistantInfos(infos, options);
+  if (!usageBreakdown) return {};
+  const tokens = sumTokenUsages(infos.map(info => normalizeTokens(info)));
+  return {
+    usageBreakdown,
+    ...(tokens ? { tokens } : {}),
+    ...(tokens?.cost !== undefined ? { cost: tokens.cost } : {}),
+  };
+}

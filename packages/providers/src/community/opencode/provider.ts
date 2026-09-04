@@ -7,21 +7,25 @@ import type {
   MessageChunk,
   ProviderCapabilities,
   SendQueryOptions,
+  TokenUsage,
+  UsageBreakdown,
 } from '../../types';
 
 import { getOrderedAgents } from './agent-config';
 import { OPENCODE_CAPABILITIES } from './capabilities';
 import { parseModelRef, parseOpencodeConfig } from './config';
-import { classifyOpencodeError, enrichOpencodeError } from './errors';
+import { classifyOpencodeError, enrichOpencodeError, OpencodeUsageBearingError } from './errors';
 import { materializeAgents } from './agent-fs';
 import { streamMultiAgentOpencodeSession } from './multi-agent';
 import {
   acquireEmbeddedRuntime,
   disposeInstanceForDirectory,
   releaseEmbeddedRuntime,
+  type OpencodeClientLike,
 } from './runtime';
 import { resolveSessionId, streamOpencodeSession } from './session';
 import { withResumedOutcome, resumedOutcome } from '../../shared/resumed';
+import { mergeUsageBreakdowns, sumTokenUsages } from './tokens';
 
 export { parseModelRef } from './config';
 export { resetEmbeddedRuntime } from './runtime';
@@ -92,6 +96,10 @@ export class OpencodeProvider implements IAgentProvider {
 
     let lastError: Error | undefined;
     let recoveredAgentNotFound = false;
+    /** Cumulative observations across internal retry attempts for one sendQuery. */
+    let accumulatedUsage: UsageBreakdown | undefined;
+    let accumulatedTokens: TokenUsage | undefined;
+    let accumulatedCost: number | undefined;
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt += 1) {
       if (requestOptions?.abortSignal?.aborted) {
@@ -99,7 +107,7 @@ export class OpencodeProvider implements IAgentProvider {
       }
 
       const runtime = await (async (): Promise<{
-        client: import('./runtime').OpencodeClientLike;
+        client: OpencodeClientLike;
         release: () => void;
       }> => {
         const embedded = await acquireEmbeddedRuntime(requestOptions?.abortSignal);
@@ -139,16 +147,23 @@ export class OpencodeProvider implements IAgentProvider {
           // sessions internally and cannot resume a single prior session. If a
           // resume was requested, report it as cold (false) so the executor
           // surfaces the lost continuity instead of silently starting fresh.
-          yield* withResumedOutcome(
-            streamMultiAgentOpencodeSession(
-              runtime.client,
-              sessionCwd,
-              nodeId,
-              prompt,
-              parsedModel,
-              requestOptions
+          yield* mergeAccumulatedIntoStream(
+            withResumedOutcome(
+              streamMultiAgentOpencodeSession(
+                runtime.client,
+                sessionCwd,
+                nodeId,
+                prompt,
+                parsedModel,
+                requestOptions
+              ),
+              resumedOutcome(resumeSessionId, false)
             ),
-            resumedOutcome(resumeSessionId, false)
+            {
+              usage: accumulatedUsage,
+              tokens: accumulatedTokens,
+              cost: accumulatedCost,
+            }
           );
           return;
         }
@@ -165,19 +180,34 @@ export class OpencodeProvider implements IAgentProvider {
           };
         }
 
-        yield* withResumedOutcome(
-          streamOpencodeSession(
-            runtime.client,
-            sessionCwd,
-            sessionId,
-            prompt,
-            parsedModel,
-            requestOptions
+        yield* mergeAccumulatedIntoStream(
+          withResumedOutcome(
+            streamOpencodeSession(
+              runtime.client,
+              sessionCwd,
+              sessionId,
+              prompt,
+              parsedModel,
+              requestOptions
+            ),
+            resumedOutcome(resumeSessionId, resumed)
           ),
-          resumedOutcome(resumeSessionId, resumed)
+          {
+            usage: accumulatedUsage,
+            tokens: accumulatedTokens,
+            cost: accumulatedCost,
+          }
         );
         return;
       } catch (error) {
+        if (error instanceof OpencodeUsageBearingError) {
+          accumulatedUsage = mergeUsageBreakdowns(accumulatedUsage, error.usageBreakdown);
+          accumulatedTokens = sumTokenUsages([accumulatedTokens, error.tokens]);
+          if (error.cost !== undefined) {
+            accumulatedCost = (accumulatedCost ?? 0) + error.cost;
+          }
+        }
+
         const errorClass = classifyOpencodeError(
           error,
           requestOptions?.abortSignal?.aborted === true
@@ -199,6 +229,24 @@ export class OpencodeProvider implements IAgentProvider {
         );
 
         if (!shouldRetry || attempt >= MAX_RETRIES - 1) {
+          // Usage-bearing late failures yield a terminal isError result so the
+          // executor can persist observations and then fail the node. No-usage
+          // failures keep the existing throw path (no fabrication).
+          if (accumulatedUsage) {
+            yield {
+              type: 'result',
+              isError: true,
+              errorSubtype: errorClass,
+              errors: [enrichedError.message],
+              usageBreakdown: accumulatedUsage,
+              ...(accumulatedTokens ? { tokens: accumulatedTokens } : {}),
+              ...(accumulatedCost !== undefined ? { cost: accumulatedCost } : {}),
+              ...(error instanceof OpencodeUsageBearingError && error.sessionId
+                ? { sessionId: error.sessionId }
+                : {}),
+            };
+            return;
+          }
           throw enrichedError;
         }
 
@@ -228,5 +276,37 @@ export class OpencodeProvider implements IAgentProvider {
 
   getCapabilities(): ProviderCapabilities {
     return OPENCODE_CAPABILITIES;
+  }
+}
+
+async function* mergeAccumulatedIntoStream(
+  stream: AsyncIterable<MessageChunk>,
+  prior: {
+    usage: UsageBreakdown | undefined;
+    tokens: TokenUsage | undefined;
+    cost: number | undefined;
+  }
+): AsyncGenerator<MessageChunk> {
+  for await (const chunk of stream) {
+    if (chunk.type !== 'result' || (!prior.usage && !prior.tokens && prior.cost === undefined)) {
+      yield chunk;
+      continue;
+    }
+
+    const usageBreakdown = mergeUsageBreakdowns(prior.usage, chunk.usageBreakdown);
+    const tokens = sumTokenUsages([prior.tokens, chunk.tokens]);
+    const cost =
+      tokens?.cost !== undefined
+        ? tokens.cost
+        : prior.cost !== undefined || chunk.cost !== undefined
+          ? (prior.cost ?? 0) + (chunk.cost ?? 0)
+          : undefined;
+
+    yield {
+      ...chunk,
+      ...(usageBreakdown ? { usageBreakdown } : {}),
+      ...(tokens ? { tokens } : {}),
+      ...(cost !== undefined ? { cost } : {}),
+    };
   }
 }

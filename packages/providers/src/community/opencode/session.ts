@@ -8,9 +8,14 @@ import {
   selectSingleAgent,
   type NamedAgentConfig,
 } from './agent-config';
-import { errorMessage } from './errors';
+import { errorMessage, OpencodeUsageBearingError } from './errors';
 import type { OpencodeClientLike } from './runtime';
-import { normalizeTokens, sumTokenUsages, usageBreakdownFromAssistantInfos } from './tokens';
+import {
+  normalizeTokens,
+  packageAssistantUsage,
+  sumTokenUsages,
+  usageBreakdownFromAssistantInfos,
+} from './tokens';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 
@@ -244,9 +249,13 @@ export async function* streamOpencodeSession(
         if (eventSessionId && eventSessionId !== sessionId) continue;
 
         const rawError = isRecord(properties.error) ? properties.error : properties;
-        const err = new Error(errorMessage(rawError));
-        err.cause = rawError;
-        throw err;
+        throw createSessionFailureError({
+          message: errorMessage(rawError),
+          cause: rawError,
+          sessionId,
+          assistantInfoById,
+          lastAssistantInfo,
+        });
       }
 
       if (event.type === 'session.idle') {
@@ -295,15 +304,46 @@ export async function* streamOpencodeSession(
 
     if (aborted) {
       const abortReason = requestOptions?.abortSignal?.reason;
-      throw new Error(
+      const message =
         `OpenCode query aborted (session: ${sessionId}, cwd: ${cwd})` +
-          (abortReason ? `: ${String(abortReason)}` : '')
-      );
+        (abortReason ? `: ${String(abortReason)}` : '');
+      throw createSessionFailureError({
+        message,
+        sessionId,
+        assistantInfoById,
+        lastAssistantInfo,
+      });
     }
   } finally {
     requestOptions?.abortSignal?.removeEventListener('abort', abortHandler);
     streamController.abort();
   }
+}
+
+function createSessionFailureError(args: {
+  message: string;
+  cause?: unknown;
+  sessionId: string;
+  assistantInfoById: Map<string, Record<string, unknown>>;
+  lastAssistantInfo: Record<string, unknown> | undefined;
+}): Error {
+  const infos =
+    args.assistantInfoById.size > 0
+      ? Array.from(args.assistantInfoById.values())
+      : args.lastAssistantInfo
+        ? [args.lastAssistantInfo]
+        : [];
+  const packaged = packageAssistantUsage(infos);
+  if (packaged.usageBreakdown) {
+    return new OpencodeUsageBearingError(args.message, {
+      ...packaged,
+      sessionId: args.sessionId,
+      ...(args.cause !== undefined ? { cause: args.cause } : {}),
+    });
+  }
+  const err = new Error(args.message);
+  if (args.cause !== undefined) err.cause = args.cause;
+  return err;
 }
 
 export async function* abortableStream(
