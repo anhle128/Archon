@@ -611,8 +611,8 @@
         "US-028"
       ],
       "priority": 29,
-      "passes": false,
-      "notes": "Pending Ralph implementation from the Convergence 2 audit."
+      "passes": true,
+      "notes": "Implemented in iteration after US-028. Files: packages/core/src/db/adapters/{types,postgres,sqlite}.ts, postgres.test.ts, usage-report.ts, usage-report.test.ts, usage-report.snapshot.integration.test.ts, packages/core/package.json. withSnapshotRead + sequential totals/groups/coverage; concurrent WAL write and 501st-group overflow coherence proven."
     },
     {
       "id": "US-030",

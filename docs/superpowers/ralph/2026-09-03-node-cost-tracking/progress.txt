@@ -1,6 +1,11 @@
 ## Codebase Patterns
 
 
+### Usage report totals/groups/coverage share one snapshot
+- **Where**: `packages/core/src/db/adapters/{types,postgres,sqlite}.ts` `withSnapshotRead`; `packages/core/src/db/usage-report.ts` `queryUsageReport`
+- **Pattern**: Never `Promise.all` three pool queries for one report. Run totals → groups → coverage inside `getDatabase().withSnapshotRead`. Postgres: `BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY` (default READ COMMITTED multi-statement is insufficient). SQLite: deferred BEGIN (snapshot at first read), serialized on `txTail`. Test seam `setUsageReportSnapshotSeamForTest` fires `after-totals`/`after-groups` for concurrent-writer proofs; real isolation lives in `usage-report.snapshot.integration.test.ts`.
+- **Example**: concurrent 501st provider committed after totals leaves in-flight report at 500 coherent groups; next report overflows
+
 ### SQLite usage bounds preserve fractional instants via strftime %f
 - **Where**: `packages/core/src/db/usage-report.ts` `toDbDateParam` + `appendDateAndIdentityFilters`
 - **Pattern**: Never `slice(0, 19)` or wrap bounds in `datetime()` — both drop sub-second precision. Format SQLite params as `YYYY-MM-DD HH:MM:SS.sss` (ISO with `T`→space, strip `Z`). Compare with `strftime('%Y-%m-%d %H:%M:%f', col/param)` so whole-second stored TEXT (no `.000`) and fractional bounds share a fixed-width UTC instant. Postgres stays `::timestamptz`. Real half-open proofs live in `usage-report.sqlite-boundaries.integration.test.ts` (isolated `bun test` invocation).
@@ -924,5 +929,32 @@
 - SQLite `datetime()` always drops fractional seconds — cannot be used for half-open accounting bounds.
 - Raw TEXT compare between whole-second storage (`...00`) and padded bound (`...00.000`) is lexicographically wrong; `strftime %f` normalizes both sides.
 - Integration test must use real SqliteAdapter — mocked SQL shape tests cannot prove comparison semantics.
+
+---
+
+## 2026-09-04 — US-029: Return one coherent usage-report snapshot
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/db/adapters/types.ts` — `IDatabase.withSnapshotRead`
+- `packages/core/src/db/adapters/postgres.ts` — REPEATABLE READ READ ONLY snapshot
+- `packages/core/src/db/adapters/sqlite.ts` — deferred BEGIN via shared serialized tx helper
+- `packages/core/src/db/adapters/postgres.test.ts` — BEGIN isolation + sequential client + rollback tests
+- `packages/core/src/db/usage-report.ts` — sequential totals/groups/coverage inside snapshot + test seam
+- `packages/core/src/db/usage-report.test.ts` — seam order + overflow-within-snapshot unit coverage
+- `packages/core/src/db/usage-report.snapshot.integration.test.ts` — WAL concurrent commit coherence + 500→501 overflow
+- `packages/core/package.json` — isolated snapshot integration test invocation
+
+**Acceptance criteria verified**:
+- [x] Deterministic concurrency seam commits atomic usage between logical reads; totals/groups/coverage entirely before or after
+- [x] Overflow detection uses same snapshot — concurrent 501st group cannot flip in-flight 500-group report into overflow; subsequent report overflows
+- [x] One snapshot via withSnapshotRead (not default PG READ COMMITTED multi-statement); both dialects
+- [x] recordCount / grouped counts / ledgered coverage cannot tear across pool connections or statements
+- [x] Deterministic ordering, nullable sums, 501 overflow, fail-explicit unsafe aggregates unchanged; usage-report.test.ts 22 pass
+
+**Learnings**:
+- Default `withTransaction` BEGIN on Postgres is READ COMMITTED — insufficient for multi-SELECT report coherence.
+- SQLite WAL + second connection is required to prove mid-snapshot concurrent commits; same-adapter writer serializes on txTail and cannot interleave.
+- Unit mocks cannot freeze SQL results across statements; isolation proof belongs in a real-adapter integration file.
 
 ---
