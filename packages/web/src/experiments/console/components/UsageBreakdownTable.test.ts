@@ -251,6 +251,52 @@ describe('groupLabel full grouping tuples', () => {
     expect(sparse).toContain('unclassified kind');
   });
 });
+
+describe('UsageBreakdownTable rendered group labels', () => {
+  test('groupBy=model table renders distinct labels for same provider/model different modelSource', () => {
+    const modelReport = report({
+      groupBy: 'model',
+      totals: emptyMetrics({
+        reportedUsd: 0.1,
+        estimatedUsd: 0.05,
+        recordCount: 2,
+      }),
+      coverage: {
+        ...report().coverage,
+        hasRecordedUsage: true,
+        usageEventCount: 2,
+        ledgeredEventCount: 2,
+      },
+      groups: [
+        {
+          dimensions: {
+            provider: 'anthropic',
+            model: 'claude-sonnet-4',
+            modelSource: 'reported',
+          },
+          metrics: emptyMetrics({ reportedUsd: 0.1, recordCount: 1 }),
+        },
+        {
+          dimensions: {
+            provider: 'anthropic',
+            model: 'claude-sonnet-4',
+            modelSource: 'unknown',
+          },
+          metrics: emptyMetrics({ estimatedUsd: 0.05, recordCount: 1 }),
+        },
+      ],
+    });
+
+    const markup = renderToStaticMarkup(
+      createElement(MemoryRouter, null, createElement(UsageBreakdownTable, { report: modelReport }))
+    );
+
+    expect(markup).toContain('anthropic/claude-sonnet-4 · source reported');
+    expect(markup).toContain('anthropic/claude-sonnet-4 · unknown model source');
+    expect(markup).toContain('$0.10');
+    expect(markup).toContain('≈$0.05');
+  });
+});
 describe('UsageBreakdownTable multi-row node expansion', () => {
   test('two groups sharing one nodeId both render with cumulative totals', () => {
     const multiNodeReport = report({
