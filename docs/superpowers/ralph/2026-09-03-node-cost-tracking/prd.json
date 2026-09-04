@@ -387,7 +387,8 @@
         "US-017"
       ],
       "priority": 18,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration. Files: packages/providers/src/community/omp/session-usage.ts, session-usage.test.ts. Ambiguous main fail-closed; constructor-only hidden discovery; same-handle prefix+delta; chunked JSONL; cache in legacy totals; bound seam tests."
     },
     {
       "id": "US-019",

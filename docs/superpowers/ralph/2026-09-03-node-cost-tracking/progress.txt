@@ -1,6 +1,12 @@
 ## Codebase Patterns
 
 
+### OMP hidden discovery is constructor-exact, same-handle, chunked
+- **Where**: `packages/providers/src/community/omp/session-usage.ts`
+- **Pattern**: Ambiguous `*_<sessionId>.jsonl` mains fail closed. Hidden candidates only advisor (`__advisor.jsonl` / `__advisor.<slug>.jsonl`) and task-agent constructors (not main-shaped, not other `__*`); nest only under `<taskStem>/` beside `<taskStem>.jsonl`. Resume prefix digest + delta parse share one verified open handle. JSONL streamed in 64KiB chunks with owned carry buffers (never alias the read chunk). Legacy hidden `total` = input+output+cacheRead+cacheWrite. Bound tests use `setSessionUsageBoundsForTest` seam.
+- **Example**: `parseTranscriptUsageEntries(path, root, kind, offset, { expectedPrefix, afterPrefixVerified })`
+
+
 ### Provider missingness: never invent zeros or unknown provider
 - **Where**: `packages/providers/src/grok/event-parser.ts`, `community/pi/event-bridge.ts`, `community/omp/event-parser.ts` `messageUsageToEntry`
 - **Pattern**: Keep legacy TokenUsage defaults separate from optional fields used for `usageBreakdown`. Grok stores observed input/output only when upstream sent them; empty `{}` usage alone does not create a row. Pi/OMP return no normalized entry when provider is missing/blank — never emit fabricated `unknown` provider; valid siblings stay in order; legacy totals may still sum the untrusted message.
@@ -621,5 +627,26 @@
 - Grok's prior `?? 0` on input/output was the missingness bug for breakdown; keep legacy defaults only on TokenUsage.
 - Fabricating `provider: 'unknown'` is worse than omitting the observation — operators cannot tell invented identity from a real upstream vendor named unknown.
 - Shared `messageUsageToEntry` covers both OMP primary stream and hidden transcript paths in one change.
+
+---
+
+## 2026-09-04 — US-018: Harden OMP hidden-session discovery
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/omp/session-usage.ts` — fail-closed main discovery; OMP constructor filters + nested stem gating; same-handle prefix+delta; chunked JSONL with safe carry; cache in legacy totals; bounds test seam
+- `packages/providers/src/community/omp/session-usage.test.ts` — ambiguous main, unrelated JSONL, path-swap race, chunk/UTF-8, exact/one-over bounds, cache totals
+
+**Acceptance criteria verified**:
+- [x] Multiple matching main transcripts are ambiguous and fail closed; unrelated valid-looking JSONL under artifact never billed as subagent
+- [x] Resume/fork prefix verification and appended parsing use the same verified open file identity
+- [x] Chunked JSONL parsing handles records split across read chunks and UTF-8 boundaries without allocating the remaining transcript as one buffer
+- [x] Exact limits for 1,000 files, 256 MiB total, 64 MiB per file, and 8 MiB per line succeed (via production constants + seamed fixtures); one-over omits all hidden enrichment
+- [x] Hidden legacy totals include cache-read/cache-write; OMP session/provider focused tests pass (50)
+
+**Learnings**:
+- Incomplete JSONL carry must be `Buffer.from(...)` — a view into the reused read chunk is overwritten on the next `handle.read`.
+- `openVerifiedFile` containment needs a realpath'd root; tests calling `parseTranscriptUsageEntries` directly must realpath the artifact dir.
+- Multi-MiB exact-bound fixtures are better as a `setSessionUsageBoundsForTest` seam than sparse 64MiB files with unreadable zero holes.
 
 ---
