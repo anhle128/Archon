@@ -148,25 +148,40 @@ export function isAdvisorFileName(name: string): boolean {
 /**
  * OMP main transcript timestamp after `toISOString().replace(/[:.]/g, '-')`:
  * `YYYY-MM-DDTHH-mm-ss-sssZ` (colons and the millis dot become dashes).
- * Anything else is a decoy — never the trusted main constructor.
+ * Shape alone is insufficient — the prefix must round-trip to that canonical
+ * UTC form so calendar-impossible decoys (month 13, Feb 30, hour 24, …) fail.
  */
 const MAIN_TRANSCRIPT_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$/;
+
+/**
+ * True when `prefix` is exactly `new Date(iso).toISOString().replace(/[:.]/g, '-')`
+ * for a real UTC instant. Reconstructs ISO 8601 from the dash form and requires
+ * an identity round-trip; rolled-over or Invalid Date values are rejected.
+ */
+function isCanonicalMainTranscriptTimestamp(prefix: string): boolean {
+  if (!MAIN_TRANSCRIPT_TIMESTAMP_RE.test(prefix)) return false;
+  // YYYY-MM-DDTHH-mm-ss-sssZ → YYYY-MM-DDTHH:mm:ss.sssZ
+  const iso = `${prefix.slice(0, 10)}T${prefix.slice(11, 13)}:${prefix.slice(14, 16)}:${prefix.slice(17, 19)}.${prefix.slice(20, 23)}Z`;
+  const instant = new Date(iso);
+  if (Number.isNaN(instant.getTime())) return false;
+  return instant.toISOString().replace(/[:.]/g, '-') === prefix;
+}
 
 /**
  * OMP main transcript constructor under the session dir:
  * `${isoTimestampWithColonsDotsAsDashes}_<sessionId>.jsonl`.
  * Files matching this shape under an artifact dir are not task-agent constructors.
  * Suffix-only matches (`notes_<id>.jsonl`, bare `_<id>.jsonl`, malformed timestamps)
- * are never main transcripts.
+ * and calendar-impossible exact-width decoys are never main transcripts.
  */
 export function isMainTranscriptFileName(name: string, sessionId: string): boolean {
   if (sessionId.length === 0) return false;
   const suffix = `_${sessionId}${JSONL_SUFFIX}`;
   if (!name.endsWith(suffix)) return false;
   if (isAdvisorFileName(name)) return false;
-  // Exact constructor: one ISO timestamp segment, nothing else before `_sessionId`.
+  // Exact constructor: one calendar-valid ISO-dash timestamp, nothing else before `_sessionId`.
   const prefix = name.slice(0, -suffix.length);
-  return MAIN_TRANSCRIPT_TIMESTAMP_RE.test(prefix);
+  return isCanonicalMainTranscriptTimestamp(prefix);
 }
 
 /**

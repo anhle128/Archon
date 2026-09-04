@@ -1579,3 +1579,144 @@ describe('US-033 recognize only exact OMP main transcripts', () => {
     expect(hidden?.entries.some(e => e.model === 'copied-main-model')).toBe(false);
   });
 });
+
+describe('US-041 reject calendar-impossible OMP main transcript names', () => {
+  const sid = 'sess-cal-1';
+
+  test('isMainTranscriptFileName rejects impossible calendar decoys and keeps leap/boundary', () => {
+    // Canonical accepted boundaries
+    expect(isMainTranscriptFileName(`2024-02-29T00-00-00-000Z_${sid}.jsonl`, sid)).toBe(true);
+    expect(isMainTranscriptFileName(`2026-12-31T23-59-59-999Z_${sid}.jsonl`, sid)).toBe(true);
+    expect(isMainTranscriptFileName(`2026-09-04T00-00-00-000Z_${sid}.jsonl`, sid)).toBe(true);
+
+    // Impossible months / zero day / out-of-range day
+    expect(isMainTranscriptFileName(`2026-13-01T00-00-00-000Z_${sid}.jsonl`, sid)).toBe(false);
+    expect(isMainTranscriptFileName(`2026-00-15T00-00-00-000Z_${sid}.jsonl`, sid)).toBe(false);
+    expect(isMainTranscriptFileName(`2026-09-00T00-00-00-000Z_${sid}.jsonl`, sid)).toBe(false);
+    expect(isMainTranscriptFileName(`2026-09-31T00-00-00-000Z_${sid}.jsonl`, sid)).toBe(false);
+    expect(isMainTranscriptFileName(`2026-04-31T12-00-00-000Z_${sid}.jsonl`, sid)).toBe(false);
+
+    // Non-leap February 29
+    expect(isMainTranscriptFileName(`2025-02-29T00-00-00-000Z_${sid}.jsonl`, sid)).toBe(false);
+    expect(isMainTranscriptFileName(`2026-02-29T12-00-00-000Z_${sid}.jsonl`, sid)).toBe(false);
+
+    // Hour 24/99, minute/second 60/99
+    expect(isMainTranscriptFileName(`2026-09-04T24-00-00-000Z_${sid}.jsonl`, sid)).toBe(false);
+    expect(isMainTranscriptFileName(`2026-09-04T99-00-00-000Z_${sid}.jsonl`, sid)).toBe(false);
+    expect(isMainTranscriptFileName(`2026-09-04T00-60-00-000Z_${sid}.jsonl`, sid)).toBe(false);
+    expect(isMainTranscriptFileName(`2026-09-04T00-99-00-000Z_${sid}.jsonl`, sid)).toBe(false);
+    expect(isMainTranscriptFileName(`2026-09-04T00-00-60-000Z_${sid}.jsonl`, sid)).toBe(false);
+    expect(isMainTranscriptFileName(`2026-09-04T00-00-99-000Z_${sid}.jsonl`, sid)).toBe(false);
+  });
+
+  test('impossible-date decoy alone is never a trusted main; one valid exact wins', async () => {
+    const fx = await layoutFresh({ withAdvisor: false, withTask: false });
+    await fs.rm(fx.mainPath);
+
+    const impossible = `2026-02-29T00-00-00-000Z_${fx.sessionId}.jsonl`;
+    await writeTranscript(path.join(fx.sessionDir, impossible), [
+      sessionHeader(fx.sessionId, fx.cwd),
+      assistantLine({ input: 1, output: 1, cost: 0.01 }),
+      taskSpawnAssistantCall(['ShouldNotOwn']),
+    ]);
+    await writeTranscript(path.join(fx.artifactDir, 'ShouldNotOwn.jsonl'), [
+      sessionHeader('task', fx.cwd),
+      assistantLine({
+        model: 'should-not-bill',
+        input: 9,
+        output: 9,
+        cost: 9,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+
+    await expect(findMainTranscriptPath(fx.sessionDir, fx.sessionId)).resolves.toBeUndefined();
+    await expect(
+      collectHiddenSessionUsage({
+        env: fx.env,
+        cwd: fx.cwd,
+        sessionId: fx.sessionId,
+      })
+    ).resolves.toBeUndefined();
+
+    // One calendar-valid exact main selects only that file.
+    const validMain = path.join(fx.sessionDir, `2026-09-04T12-00-00-000Z_${fx.sessionId}.jsonl`);
+    await writeTranscript(validMain, [
+      sessionHeader(fx.sessionId, fx.cwd),
+      assistantLine({ input: 2, output: 1, cost: 0.02 }),
+    ]);
+    await expect(findMainTranscriptPath(fx.sessionDir, fx.sessionId)).resolves.toBe(validMain);
+  });
+
+  test('task-file exclusion uses the same calendar-valid constructor predicate', async () => {
+    const sidLocal = 'sess-cal-task';
+    const impossibleTaskId = `2025-02-29T00-00-00-000Z_${sidLocal}.jsonl`;
+    // Impossible timestamp is NOT a trusted main → remains a task-agent constructor candidate.
+    expect(isMainTranscriptFileName(impossibleTaskId, sidLocal)).toBe(false);
+    expect(isTaskAgentFileName(impossibleTaskId, sidLocal)).toBe(true);
+
+    // Real leap-day main constructor still excluded from task candidates.
+    expect(isMainTranscriptFileName(`2024-02-29T00-00-00-000Z_${sidLocal}.jsonl`, sidLocal)).toBe(
+      true
+    );
+    expect(isTaskAgentFileName(`2024-02-29T00-00-00-000Z_${sidLocal}.jsonl`, sidLocal)).toBe(false);
+
+    const fx = await layoutFresh({ withAdvisor: false, withTask: false });
+    // Parent owns an impossible-timestamp-shaped task stem; it must bill as a task, not main.
+    const impossibleStem = `2026-09-31T00-00-00-000Z_${fx.sessionId}`;
+    await proveTaskOwnership(fx.mainPath, [impossibleStem, 'PlainCalTask']);
+
+    await writeTranscript(path.join(fx.artifactDir, `${impossibleStem}.jsonl`), [
+      sessionHeader('impossible-task', fx.cwd),
+      assistantLine({
+        model: 'impossible-task-model',
+        input: 4,
+        output: 1,
+        cost: 0.04,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    await writeTranscript(path.join(fx.artifactDir, 'PlainCalTask.jsonl'), [
+      sessionHeader('plain-cal', fx.cwd),
+      assistantLine({
+        model: 'plain-cal-model',
+        input: 3,
+        output: 1,
+        cost: 0.03,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+
+    const hidden = await collectHiddenSessionUsage({
+      env: fx.env,
+      cwd: fx.cwd,
+      sessionId: fx.sessionId,
+    });
+    expect(hidden?.entries.map(e => e.model).sort()).toEqual(
+      ['impossible-task-model', 'plain-cal-model'].sort()
+    );
+  });
+
+  test('multiple real exact constructors remain ambiguous and fail closed', async () => {
+    const fx = await layoutFresh({ withAdvisor: false, withTask: false });
+    await writeTranscript(
+      path.join(fx.sessionDir, `2024-02-29T12-00-00-000Z_${fx.sessionId}.jsonl`),
+      [sessionHeader(fx.sessionId, fx.cwd), assistantLine({ input: 1, output: 1, cost: 0.01 })]
+    );
+    await writeTranscript(path.join(fx.artifactDir, '__advisor.jsonl'), [
+      sessionHeader('adv', fx.cwd),
+      assistantLine({ model: 'should-not-run', input: 9, output: 9, cost: 9 }),
+    ]);
+
+    await expect(findMainTranscriptPath(fx.sessionDir, fx.sessionId)).resolves.toBeUndefined();
+    const hidden = await collectHiddenSessionUsage({
+      env: fx.env,
+      cwd: fx.cwd,
+      sessionId: fx.sessionId,
+    });
+    expect(hidden).toBeUndefined();
+  });
+});
