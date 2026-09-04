@@ -1,6 +1,12 @@
 ## Codebase Patterns
 
 
+
+### Coverage UI separates filter miss, event-only, and node vs run-wide scope
+- **Where**: `packages/web/src/experiments/console/components/UsageBreakdownTable.tsx`, `NodeDivider.tsx` `buildNodeLedgerUsageReport`
+- **Pattern**: `describeUsageState` order is unavailable → not-recorded → event-only (unledgered>0 or usage>0&ledgered=0 with zero rows) → filter-empty (fully ledgered base + zero matched rows) → has-data. Warnings use exact `unledgeredEventCount` only. Node expand builds synthetic report with empty integrity coverage + `coveragePresentation:'node-ledger'`; run-wide unledgered is passed separately and labeled `data-coverage-scope="run-wide"` — never copied as node-local incomplete, never inferred from ledger `recordCount`.
+- **Example**: coverage 1/1 unledgered=0 + empty groups → "No groups matched filters"; 5 events/2 unledgered → "2 usage events…"; node A groups + run unledgered from B → run-wide banner only
+
 ### OMP/Grok late transport I/O preserves usage via transport error result
 - **Where**: `packages/providers/src/community/omp/provider.ts`, `packages/providers/src/grok/provider.ts`
 - **Pattern**: After stdout parse + `Promise.all(exit, stderr)`, if transport/exit/stderr I/O failed AND `parser.buildResult(...).usageBreakdown` is non-empty, yield one `isError` result via existing `buildTransportErrorResult`/`transportErrorResult` with subtype `omp_transport_error`/`grok_transport_error` (and OMP `maybeEnrichResult` fail-soft). No-usage I/O still throws. Abort still throws first. protocol_error and exit_nonzero paths unchanged.
@@ -1163,5 +1169,28 @@
 - OMP/Grok already preserved usage on protocol/nonzero via `buildTransportErrorResult`; only the late throw sites after `Promise.all` dropped spend
 - Prefer routing through the existing observed-result helper over a UsageBearingError class when the provider already owns a transport-error result builder
 - Fake processes that `Promise.resolve(0)` exit immediately can skip SIGTERM reap; drive exit from `kill` when asserting teardown
+
+---
+
+## 2026-09-04 — US-037: Make coverage UI truthful for filters and node scope
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/components/UsageBreakdownTable.tsx` — filter-empty state; unledgered-exact messages; node-ledger + run-wide coverage presentation
+- `packages/web/src/experiments/console/components/UsageBreakdownTable.test.ts` — filter miss, partial unledgered count, node/run-wide separation
+- `packages/web/src/experiments/console/components/NodeDivider.tsx` — `buildNodeLedgerUsageReport` scope-correct synthetic coverage
+- `packages/web/src/experiments/console/components/RunStream.test.tsx` — node A vs run-wide unledgered builder tests
+
+**Acceptance criteria verified**:
+- [x] Fully ledgered base + zero filter-matched rows → "No groups matched filters"; never incomplete/event-only/"No usage recorded"
+- [x] Partial coverage with 5 events / 2 unledgered warns exactly two; event-only and historical zero-event remain distinct
+- [x] Node A expansion with run-wide unledgered from node B does not claim node-local under-count; run-wide labeled explicitly
+- [x] Row-match separated from base-scope coverage; synthetic node reports do not invent event coverage from ledger row counts
+- [x] Labels, USD formatting, run-header coverage paths do not regress (UsageBreakdownTable + RunDetailHeader focused tests)
+
+**Learnings**:
+- Coverage integrity is date/project/run/node only — provider/model/kind empty groups are filter misses when the base is fully ledgered
+- `eventOnlyUsageMessage` must never `Math.max(unledgered, usageEventCount)` — that mislabels partial coverage as total-event failure
+- Node synthetic reports should use empty integrity + separate runWideCoverage prop rather than copying `runUsage.coverage`
 
 ---

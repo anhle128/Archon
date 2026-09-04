@@ -775,7 +775,8 @@
         "US-036"
       ],
       "priority": 37,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration after US-036. Files: UsageBreakdownTable.tsx/.test.ts, NodeDivider.tsx, RunStream.test.tsx. Five distinct UI states; unledgered-exact warnings; node-ledger vs run-wide coverage."
     },
     {
       "id": "US-038",
