@@ -1,0 +1,233 @@
+{
+  "run_id": "20260905-011602-f4b8",
+  "project": "/Users/dale/Desktop/workspace/OceanLabs/workflow-engine/archon",
+  "repo_root": "/Users/dale/Desktop/workspace/OceanLabs/workflow-engine/archon",
+  "code_root_restamp_pending": false,
+  "started_at": "2026-09-05T01:16:02",
+  "policy_snapshot": {
+    "gates": {
+      "mode": "per-epic",
+      "on_escalation": "pause",
+      "retrospective": "notify"
+    },
+    "limits": {
+      "max_review_cycles": 3,
+      "max_dev_attempts": 2,
+      "max_followup_reviews": 1,
+      "session_timeout_min": 90,
+      "git_timeout_s": 120,
+      "teardown_grace_s": 20,
+      "stop_without_result_nudges": 1,
+      "dev_stall_grace_s": 600,
+      "dev_stall_nudges": 2,
+      "dev_stall_nudges_cap": 6,
+      "workflow_stall_nudges_cap": 3,
+      "dev_contract_nudge": true,
+      "max_tokens_per_story": 2000000,
+      "cache_read_weight": 0.1,
+      "session_budget_mode": "warn",
+      "max_tokens_per_session": 4000000,
+      "session_budget_grace_s": 240
+    },
+    "verify": {
+      "commands": [],
+      "stream_capture_kb": 256
+    },
+    "notify": {
+      "desktop": true,
+      "file": true
+    },
+    "review": {
+      "enabled": true,
+      "trigger": "recommended",
+      "on_timeout": "retry",
+      "on_status_contradiction": "escalate"
+    },
+    "stories": {
+      "source": "sprint-status",
+      "spec_folder": "",
+      "board": ""
+    },
+    "dev": {
+      "skill": "bmad-dev-auto"
+    },
+    "adapter": {
+      "name": "claude",
+      "model": "",
+      "extra_args": null,
+      "cleanup_session_on_finish": true,
+      "usage_grace_s": null,
+      "stop_without_result_nudges": null,
+      "dev": {
+        "name": "claude",
+        "model": "sonnet",
+        "extra_args": ["--permission-mode", "bypassPermissions", "--effort", "xhigh"],
+        "usage_grace_s": null,
+        "stop_without_result_nudges": null
+      },
+      "review": {
+        "name": "codex",
+        "model": "gpt-5.6-sol",
+        "extra_args": [
+          "--dangerously-bypass-approvals-and-sandbox",
+          "-c",
+          "model_reasoning_effort=xhigh"
+        ],
+        "usage_grace_s": null,
+        "stop_without_result_nudges": null
+      },
+      "triage": {
+        "name": "codex",
+        "model": "gpt-5.6-sol",
+        "extra_args": [
+          "--dangerously-bypass-approvals-and-sandbox",
+          "-c",
+          "model_reasoning_effort=xhigh"
+        ],
+        "usage_grace_s": null,
+        "stop_without_result_nudges": null
+      }
+    },
+    "sweep": {
+      "auto": "never",
+      "max_bundles": 5,
+      "max_triage_attempts": 2,
+      "max_migration_attempts": 2,
+      "repeat": false,
+      "max_cycles": 5
+    },
+    "scm": {
+      "isolation": "none",
+      "branch_per": "story",
+      "target_branch": "",
+      "merge_strategy": "merge",
+      "delete_branch": true,
+      "keep_failed": true,
+      "rollback_on_failure": false,
+      "preserve_keep": 20,
+      "failed_diff_max_mb": 5,
+      "failed_diff_unlimited": false,
+      "commit_message_template": "",
+      "max_parallel": 1,
+      "seed_adapter_defaults": true,
+      "worktree_seed": []
+    },
+    "cleanup": {
+      "run_retention": 10,
+      "retention_days": 0,
+      "trim_artifacts": true,
+      "archive_old": true,
+      "auto_clean_on_finish": true,
+      "clean_tmp": true
+    },
+    "plugins": {
+      "enabled": [],
+      "settings": {}
+    },
+    "tui": {
+      "low_frame_rate": false,
+      "left_width": 62,
+      "runs_height": 0,
+      "deferred_height": 0,
+      "tasks_height": 0
+    },
+    "operator": {
+      "enabled": true
+    },
+    "mux": {
+      "backend": ""
+    }
+  },
+  "trusted_config_digest": "0d88b2b4d9739758d47fc46ffe0edfbd67ddaa48d3070b242828e1c4c1f1bbb7",
+  "current_epic": 1,
+  "epic_filter": null,
+  "story_filter": null,
+  "max_stories": null,
+  "paused_reason": "**ACTION REQUIRED \u2014 manual recovery needed (committed work present)**\nStory **1-1-see-this-runs-uncommitted-changed-files**'s attempt was stopped with auto-rollback OFF, and it **committed work above its baseline**. **Your commits are intact at the current HEAD of `/Users/dale/Desktop/workspace/OceanLabs/workflow-engine/archon`.** They may already be integrated or pushed to a remote \u2014 do NOT reset before checking.\n  1. **Save them first** \u2014 e.g. `git -C \"/Users/dale/Desktop/workspace/OceanLabs/workflow-engine/archon\" branch my-rescue HEAD` (the commits are `21bb96d9c103..HEAD` there).\n  2. Check whether they are already integrated (merged, pushed to a remote, referenced by open PRs) before discarding anything.\n  3. Only if you decide to discard the attempt: `git -C \"/Users/dale/Desktop/workspace/OceanLabs/workflow-engine/archon\" reset --hard 21bb96d9c103`, then review/remove leftover untracked files.\nThen run `bmad-loop resume 20260905-011602-f4b8`.",
+  "paused_stage": "escalation",
+  "paused_story_key": "1-1-see-this-runs-uncommitted-changed-files",
+  "finished": false,
+  "stopped": false,
+  "crashed": false,
+  "crash_error": null,
+  "run_type": "story",
+  "source": "sprint-status",
+  "spec_folder": "",
+  "board": "archon-source-control",
+  "sweep_cycle": 1,
+  "sweeps_triggered": [],
+  "sweeps_refused": {},
+  "target_branch": "",
+  "plugin_shared": {},
+  "tasks": {
+    "1-1-see-this-runs-uncommitted-changed-files": {
+      "story_key": "1-1-see-this-runs-uncommitted-changed-files",
+      "epic": 1,
+      "phase": "dev-verify",
+      "attempt": 1,
+      "review_cycle": 0,
+      "followup_reviews_spent": 0,
+      "generation": 0,
+      "escalations_resolved_upto": 0,
+      "followup_review_recommended": false,
+      "baseline_commit": "21bb96d9c1035fe8fb2183fcb22b88135922f02f",
+      "baseline_untracked": [],
+      "baseline_ledger_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "pre_harvest_ledger": null,
+      "pre_harvest_ledger_captured": false,
+      "post_engine_ledger_digest": null,
+      "harvest_wrote_ledger": false,
+      "ledger_changed_before_harvest": false,
+      "harvested_deferrals": [],
+      "bundle_closes_intended": [],
+      "story_closes_intended": [],
+      "board_advance_intended": null,
+      "accepted_dev_session_index": null,
+      "harvest_carry_commit_pending": false,
+      "isolated_ledger_carried": false,
+      "spec_file": null,
+      "dispatched_spec_file": null,
+      "dispatched_spec_snapshot": null,
+      "commit_sha": null,
+      "operator_actions": [],
+      "defer_reason": null,
+      "preserve_ref": null,
+      "preserve_partial": false,
+      "rearmed": false,
+      "resolved_redrive": false,
+      "plan_checkpoint_pending": false,
+      "plan_review_owed": false,
+      "sentinel_kind": "",
+      "restore_patch": null,
+      "dw_ids": [],
+      "bundle_file": null,
+      "worktree_path": "",
+      "branch": "",
+      "sessions": [
+        {
+          "task_id": "1-1-see-this-runs-uncommitted-changed-files-dev-1",
+          "role": "dev",
+          "status": "timeout",
+          "adapter": "claude",
+          "model": "sonnet",
+          "session_id": "f977949d-03ea-4386-9fed-15c4bd4d1cff",
+          "transcript_path": "/Users/dale/.claude/projects/-Users-dale-Desktop-workspace-OceanLabs-workflow-engine-archon/f977949d-03ea-4386-9fed-15c4bd4d1cff.jsonl",
+          "usage": {
+            "input_tokens": 542,
+            "output_tokens": 379194,
+            "cache_read_tokens": 76317822,
+            "cache_creation_tokens": 1300156
+          },
+          "result_json": null
+        }
+      ],
+      "tokens": {
+        "input_tokens": 542,
+        "output_tokens": 379194,
+        "cache_read_tokens": 76317822,
+        "cache_creation_tokens": 1300156
+      },
+      "token_budget_warned": true
+    }
+  }
+}
