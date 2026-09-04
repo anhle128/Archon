@@ -129,12 +129,25 @@ describe('queryUsageReport validation', () => {
   });
 
   test('caps cross-run ranges at 366 days', async () => {
+    // Exact 366-day span is allowed for unscoped queries.
+    installQueryRouter({});
+    const exact = await queryUsageReport({
+      from: '2025-01-01T00:00:00.000Z',
+      to: '2026-01-02T00:00:00.000Z',
+    });
+    expect(exact.scope.from).toBe('2025-01-01T00:00:00.000Z');
+    expect(exact.scope.to).toBe('2026-01-02T00:00:00.000Z');
+
+    // One day over the cap is rejected.
     await expect(
       queryUsageReport({
         from: '2025-01-01T00:00:00.000Z',
         to: '2026-01-03T00:00:00.000Z',
       })
-    ).rejects.toMatchObject({ code: 'validation' });
+    ).rejects.toMatchObject({
+      code: 'validation',
+      message: expect.stringContaining('366 days'),
+    });
   });
 
   test('allows >366 days when scoped to a runId', async () => {
