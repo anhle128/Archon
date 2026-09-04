@@ -162,7 +162,10 @@ Two paths. They must not mix.
 2. Load ENV by id.
 3. Validate against the expanded DAG.
 4. Apply patches in memory.
-5. Persist snapshot on the new `workflow_runs` row **before** any node `sendQuery`:
+5. Re-run `validateDagStructure` (same `$node.output` / text-surface scan as load) on the patched top-level DAG.
+   Schema-valid `prompt`/`bash` strings are not enough: overlay can introduce dangling refs the original YAML never had.
+   Non-null error → 400 `invalid_overlay_graph`, no snapshot, no worktree, no AI.
+6. Persist snapshot on the new `workflow_runs` row **before** any node `sendQuery`:
 
 ```ts
 metadata.envOverlay = {
@@ -173,13 +176,13 @@ metadata.envOverlay = {
 }
 ```
 
-6. `resolveNodeModel` sees the patched nodes. No new resolution origin.
+7. `resolveNodeModel` sees the patched nodes. No new resolution origin.
 
 **Resume, retry-run, retry-node:**
 
 - Ignore request `envId` if a client sends one.
 - Ignore the current DB ENV row (it may have been edited or deleted).
-- If `metadata.envOverlay` exists, re-apply `patches` from the snapshot, then resolve.
+- If `metadata.envOverlay` exists, re-apply `patches` from the snapshot, then run `validateDagStructure`. Fail the resume/retry if the snapshot no longer fits the DAG.
 - If no snapshot, behavior equals today’s resume (YAML only).
 
 Deleting or renaming an ENV never mutates historical or in-flight runs.
@@ -240,7 +243,7 @@ Behavioral:
 
 - CRUD: create, rename, replace patches, delete; unique `(workflow_name, name)`; PATCH/DELETE does not change existing run snapshots.
 - Fresh run with `envId`: patched fields win; omit `envId`: YAML byte-for-byte vs baseline.
-- 400 before AI: unknown node, forbidden field, `prompt` on non-prompt, `provider` on `bash:`.
+- Overlay `prompt`/`bash` that inserts a dangling `$node.output` ref → 400 `invalid_overlay_graph` before worktree. A schema-valid string is not sufficient.
 - Resume / retry-node / retry-run: re-apply snapshot; edited or deleted ENV row and request `envId` have no effect.
 - Include: `specify` hits the root node; include child requires `includeId__nodeId`.
 - Patching a `loop_group` **body** id is `unknown_node`. Patching the `loop_group` node itself is allowed.
