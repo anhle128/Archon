@@ -17,7 +17,11 @@ import type {
   UsageReport,
   UsageReportGroup,
 } from '@archon/core/schemas/usage-report';
-import { usageGroupBySchema, usageKindFilterSchema } from '@archon/core/schemas/usage-report';
+import {
+  usageGroupBySchema,
+  usageInstantStringSchema,
+  usageKindFilterSchema,
+} from '@archon/core/schemas/usage-report';
 import { writeJsonLine } from '../utils/stdout';
 
 /** Positive amounts strictly below this floor use the `<$0.000001` form. */
@@ -206,8 +210,20 @@ function buildQuery(options: UsageCommandOptions): UsageReportQuery | { error: s
         error: '--since and --until must both be present or both absent (half-open UTC range)',
       };
     }
-    query.from = options.since;
-    query.to = options.until;
+    const sinceParsed = usageInstantStringSchema.safeParse(options.since);
+    if (!sinceParsed.success) {
+      return {
+        error: 'Invalid --since: must be a valid RFC 3339 instant with Z or numeric offset',
+      };
+    }
+    const untilParsed = usageInstantStringSchema.safeParse(options.until);
+    if (!untilParsed.success) {
+      return {
+        error: 'Invalid --until: must be a valid RFC 3339 instant with Z or numeric offset',
+      };
+    }
+    query.from = sinceParsed.data;
+    query.to = untilParsed.data;
   }
 
   if (options.by !== undefined) {

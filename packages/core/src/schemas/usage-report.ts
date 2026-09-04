@@ -7,6 +7,14 @@
 import { z } from '@hono/zod-openapi';
 import { usageLedgerKindSchema, usageLedgerModelSourceSchema } from './usage-ledger';
 
+/**
+ * External usage range string: complete RFC 3339 instant with explicit `Z`
+ * or numeric offset. Rejects date-only, zone-less, locale, and calendar-
+ * rollover forms — never rely on implementation-defined `Date` parsing.
+ */
+export const usageInstantStringSchema = z.string().datetime({ offset: true });
+export type UsageInstantString = z.infer<typeof usageInstantStringSchema>;
+
 export const usageGroupBySchema = z.enum([
   'agent',
   'provider',

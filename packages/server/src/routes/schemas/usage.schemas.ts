@@ -5,6 +5,7 @@
 import { z } from '@hono/zod-openapi';
 import {
   usageGroupBySchema,
+  usageInstantStringSchema,
   usageKindFilterSchema,
   usageReportSchema,
 } from '@archon/core/schemas/usage-report';
@@ -12,17 +13,18 @@ import {
 /**
  * GET /api/usage query params (camelCase API convention).
  * Date pair, range bounds, node/run requirements, and grouping semantics are
- * enforced by `queryUsageReport` after the OpenAPI string/enum parse.
+ * enforced by core after the OpenAPI string/enum parse. Instant shape is
+ * validated here via the shared core RFC 3339 schema.
  */
 export const usageQuerySchema = z
   .object({
-    from: z.string().optional().openapi({
+    from: usageInstantStringSchema.optional().openapi({
       description:
-        'RFC 3339 inclusive range start (UTC). Must be paired with `to`. Half-open range is [from, to).',
+        'RFC 3339 inclusive range start with Z or numeric offset. Must be paired with `to`. Half-open range is [from, to).',
     }),
-    to: z.string().optional().openapi({
+    to: usageInstantStringSchema.optional().openapi({
       description:
-        'RFC 3339 exclusive range end (UTC). Must be paired with `from`. Half-open range is [from, to).',
+        'RFC 3339 exclusive range end with Z or numeric offset. Must be paired with `from`. Half-open range is [from, to).',
     }),
     codebaseId: z.string().optional(),
     agentProvider: z.string().optional(),

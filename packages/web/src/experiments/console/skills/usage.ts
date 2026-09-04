@@ -90,6 +90,9 @@ export function utcMonthStart(d: Date = new Date()): string {
 /**
  * Inclusive UTC calendar-day range → API half-open `[from, to)`.
  * `through` is the last included day; exclusive `to` is midnight after that day.
+ *
+ * Rejects nonexistent calendar days (e.g. 2026-02-29, 2026-02-30) by proving a
+ * UTC component round-trip — never normalize via Date rollover into March.
  */
 export function inclusiveUtcRangeToApi(
   fromDay: string,
@@ -98,11 +101,13 @@ export function inclusiveUtcRangeToApi(
   if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDay) || !/^\d{4}-\d{2}-\d{2}$/.test(throughDay)) {
     return { error: 'Dates must be YYYY-MM-DD (UTC calendar days).' };
   }
-  const fromMs = Date.parse(`${fromDay}T00:00:00.000Z`);
-  const throughMs = Date.parse(`${throughDay}T00:00:00.000Z`);
-  if (!Number.isFinite(fromMs) || !Number.isFinite(throughMs)) {
+  const fromParts = parseUtcDateOnlyParts(fromDay);
+  const throughParts = parseUtcDateOnlyParts(throughDay);
+  if (!fromParts || !throughParts) {
     return { error: 'Invalid UTC calendar day.' };
   }
+  const fromMs = Date.UTC(fromParts.year, fromParts.month - 1, fromParts.day);
+  const throughMs = Date.UTC(throughParts.year, throughParts.month - 1, throughParts.day);
   if (throughMs < fromMs) {
     return { error: 'Through must be on or after From.' };
   }
@@ -117,4 +122,37 @@ export function inclusiveUtcRangeToApi(
     from: new Date(fromMs).toISOString(),
     to: new Date(toMs).toISOString(),
   };
+}
+
+/**
+ * Parse `YYYY-MM-DD` and prove the UTC calendar components round-trip.
+ * Returns null for malformed or nonexistent dates (Date would roll over).
+ */
+function parseUtcDateOnlyParts(day: string): { year: number; month: number; day: number } | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const dayNum = Number(match[3]);
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(dayNum) ||
+    month < 1 ||
+    month > 12 ||
+    dayNum < 1 ||
+    dayNum > 31
+  ) {
+    return null;
+  }
+  const ms = Date.UTC(year, month - 1, dayNum);
+  const probe = new Date(ms);
+  if (
+    probe.getUTCFullYear() !== year ||
+    probe.getUTCMonth() !== month - 1 ||
+    probe.getUTCDate() !== dayNum
+  ) {
+    return null;
+  }
+  return { year, month, day: dayNum };
 }

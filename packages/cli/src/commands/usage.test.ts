@@ -311,6 +311,64 @@ describe('usageCommand', () => {
     expect(errSpy.mock.calls.flat().join('\n')).toContain('--since and --until');
   });
 
+  it('rejects date-only, locale, zone-less, invalid-offset, and calendar-rollover --since/--until', async () => {
+    const invalid = [
+      '2026-09-01',
+      '09/01/2026',
+      'Sep 1, 2026',
+      '2026-09-01T00:00:00',
+      '2026-09-01T00:00:00+0000',
+      '2026-02-29T00:00:00.000Z',
+      '2026-02-30T00:00:00.000Z',
+    ];
+    for (const bad of invalid) {
+      let called = false;
+      errSpy.mockClear();
+      const code = await usageCommand(
+        { since: bad, until: '2026-09-02T00:00:00.000Z' },
+        async () => {
+          called = true;
+          return sampleReport();
+        }
+      );
+      expect(code).toBe(1);
+      expect(called).toBe(false);
+      expect(errSpy.mock.calls.flat().join('\n')).toContain('Invalid --since');
+      expect(errSpy.mock.calls.flat().join('\n')).toContain('RFC 3339');
+    }
+
+    errSpy.mockClear();
+    let calledUntil = false;
+    const untilCode = await usageCommand(
+      { since: '2026-09-01T00:00:00.000Z', until: '2026-09-01T00:00:00' },
+      async () => {
+        calledUntil = true;
+        return sampleReport();
+      }
+    );
+    expect(untilCode).toBe(1);
+    expect(calledUntil).toBe(false);
+    expect(errSpy.mock.calls.flat().join('\n')).toContain('Invalid --until');
+  });
+
+  it('accepts Z and explicit-offset RFC 3339 --since/--until', async () => {
+    const pairs: Array<[string, string]> = [
+      ['2026-09-01T00:00:00Z', '2026-09-02T00:00:00Z'],
+      ['2026-09-01T00:00:00.000Z', '2026-09-02T00:00:00.000Z'],
+      ['2026-09-01T00:00:00+00:00', '2026-09-02T12:00:00-05:00'],
+      ['2028-02-29T00:00:00.000Z', '2028-03-01T00:00:00.000Z'],
+    ];
+    for (const [since, until] of pairs) {
+      let received: UsageReportQuery | undefined;
+      const code = await usageCommand({ since, until }, async options => {
+        received = options;
+        return sampleReport();
+      });
+      expect(code).toBe(0);
+      expect(received).toEqual({ from: since, to: until });
+    }
+  });
+
   it('rejects invalid --by and --kind before querying', async () => {
     expect(await usageCommand({ by: 'tokens' }, async () => sampleReport())).toBe(1);
     expect(errSpy.mock.calls.flat().join('\n')).toContain('Invalid --by');

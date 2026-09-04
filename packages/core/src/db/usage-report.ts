@@ -11,6 +11,7 @@ import { pool, getDatabaseType } from './connection';
 import { createLogger } from '@archon/paths';
 import {
   usageGroupBySchema,
+  usageInstantStringSchema,
   usageKindFilterSchema,
   usageReportSchema,
   type UsageDimensions,
@@ -150,16 +151,38 @@ function utcDayExpression(): string {
     : "strftime('%Y-%m-%d', e.created_at)";
 }
 
-function parseOptionalDate(value: Date | string | undefined, label: string): Date | undefined {
-  if (value === undefined) return undefined;
-  const d = value instanceof Date ? value : new Date(value);
+/**
+ * Parse a usage range bound.
+ * - `Date` instances are accepted for internal typed callers (must be finite).
+ * - Strings must be complete RFC 3339 instants with `Z` or a numeric offset.
+ */
+export function parseUsageInstant(value: Date | string, label: string): Date {
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) {
+      throw new UsageReportQueryError('validation', `Invalid ${label}: must be a valid Date`);
+    }
+    return value;
+  }
+  const parsed = usageInstantStringSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new UsageReportQueryError(
+      'validation',
+      `Invalid ${label}: must be a valid RFC 3339 instant with Z or numeric offset`
+    );
+  }
+  const d = new Date(parsed.data);
   if (Number.isNaN(d.getTime())) {
     throw new UsageReportQueryError(
       'validation',
-      `Invalid ${label}: must be a valid RFC 3339 instant`
+      `Invalid ${label}: must be a valid RFC 3339 instant with Z or numeric offset`
     );
   }
   return d;
+}
+
+function parseOptionalDate(value: Date | string | undefined, label: string): Date | undefined {
+  if (value === undefined) return undefined;
+  return parseUsageInstant(value, label);
 }
 
 function currentUtcMonthBounds(now = new Date()): { from: Date; to: Date } {

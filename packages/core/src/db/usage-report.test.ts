@@ -148,6 +148,69 @@ describe('queryUsageReport validation', () => {
       message: expect.stringContaining('groupBy=node requires runId'),
     });
   });
+
+  test('rejects date-only, locale, zone-less, invalid-offset, and calendar-rollover strings', async () => {
+    const invalid = [
+      '2026-09-01', // date-only
+      '09/01/2026', // locale-formatted
+      'Sep 1, 2026', // locale prose
+      '2026-09-01T00:00:00', // zone-less
+      '2026-09-01 00:00:00', // space separator, no zone
+      '2026-09-01T00:00:00+0000', // invalid offset form
+      '2026-09-01T00:00:00+00', // truncated offset
+      '2026-02-29T00:00:00.000Z', // non-leap calendar rollover
+      '2026-02-30T00:00:00.000Z', // nonexistent day
+      '2026-04-31T00:00:00.000Z', // nonexistent day
+    ];
+    for (const bad of invalid) {
+      await expect(
+        queryUsageReport({ from: bad, to: '2026-09-02T00:00:00.000Z' })
+      ).rejects.toMatchObject({
+        name: 'UsageReportQueryError',
+        code: 'validation',
+        message: expect.stringContaining('RFC 3339'),
+      });
+      await expect(
+        queryUsageReport({ from: '2026-09-01T00:00:00.000Z', to: bad })
+      ).rejects.toMatchObject({ code: 'validation' });
+    }
+  });
+
+  test('accepts Z and explicit-offset RFC 3339 instants', async () => {
+    installQueryRouter({});
+    const validPairs: Array<[string, string]> = [
+      ['2026-09-01T00:00:00Z', '2026-09-02T00:00:00Z'],
+      ['2026-09-01T00:00:00.000Z', '2026-09-02T00:00:00.000Z'],
+      ['2026-09-01T00:00:00+00:00', '2026-09-02T00:00:00+00:00'],
+      ['2026-09-01T05:30:00.000+05:30', '2026-09-01T06:30:00.000+05:30'],
+      ['2028-02-29T00:00:00.000Z', '2028-03-01T00:00:00.000Z'], // leap day
+    ];
+    for (const [from, to] of validPairs) {
+      mockQuery.mockClear();
+      installQueryRouter({});
+      const report = await queryUsageReport({ from, to });
+      expect(report.scope.from).not.toBeNull();
+      expect(report.scope.to).not.toBeNull();
+      expect(new Date(report.scope.from!).getTime()).toBeLessThan(
+        new Date(report.scope.to!).getTime()
+      );
+    }
+  });
+
+  test('accepts internal Date callers without string validation', async () => {
+    installQueryRouter({});
+    const from = new Date(Date.UTC(2026, 8, 1));
+    const to = new Date(Date.UTC(2026, 8, 2));
+    const report = await queryUsageReport({ from, to });
+    expect(report.scope.from).toBe(from.toISOString());
+    expect(report.scope.to).toBe(to.toISOString());
+  });
+
+  test('rejects invalid Date instances from internal callers', async () => {
+    await expect(
+      queryUsageReport({ from: new Date(Number.NaN), to: new Date() })
+    ).rejects.toMatchObject({ code: 'validation' });
+  });
 });
 
 describe('queryUsageReport defaults and filters', () => {

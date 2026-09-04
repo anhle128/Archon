@@ -64,6 +64,40 @@ describe('inclusiveUtcRangeToApi', () => {
       error: 'Through must be on or after From.',
     });
   });
+
+  test('rejects nonexistent date-only inputs without rolling into March', () => {
+    expect(inclusiveUtcRangeToApi('2026-02-29', '2026-02-29')).toEqual({
+      error: 'Invalid UTC calendar day.',
+    });
+    expect(inclusiveUtcRangeToApi('2026-02-30', '2026-03-01')).toEqual({
+      error: 'Invalid UTC calendar day.',
+    });
+    expect(inclusiveUtcRangeToApi('2026-04-31', '2026-05-01')).toEqual({
+      error: 'Invalid UTC calendar day.',
+    });
+    // Valid neighbor still works so rejection is not format-only.
+    expect(inclusiveUtcRangeToApi('2026-02-28', '2026-03-01')).toEqual({
+      from: '2026-02-28T00:00:00.000Z',
+      to: '2026-03-02T00:00:00.000Z',
+    });
+  });
+
+  test('accepts valid leap day 2028-02-29 with UTC midnight round trip', () => {
+    const r = inclusiveUtcRangeToApi('2028-02-29', '2028-02-29');
+    expect(r).toEqual({
+      from: '2028-02-29T00:00:00.000Z',
+      to: '2028-03-01T00:00:00.000Z',
+    });
+    if ('error' in r) throw new Error('unreachable');
+    // Prove calendar components round-trip from the emitted API bounds.
+    const from = new Date(r.from);
+    expect(from.getUTCFullYear()).toBe(2028);
+    expect(from.getUTCMonth()).toBe(1);
+    expect(from.getUTCDate()).toBe(29);
+    expect(from.getUTCHours()).toBe(0);
+    expect(from.getUTCMinutes()).toBe(0);
+    expect(from.getUTCSeconds()).toBe(0);
+  });
 });
 
 describe('utc month helpers', () => {

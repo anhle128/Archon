@@ -397,6 +397,47 @@ describe('GET /api/usage', () => {
     expect(mockQueryUsageReport).not.toHaveBeenCalled();
   });
 
+  test('rejects date-only, zone-less, locale, invalid-offset, and calendar-rollover instants via OpenAPI', async () => {
+    const app = makeApp();
+    const invalid = [
+      '2026-09-01',
+      '09/01/2026',
+      '2026-09-01T00:00:00',
+      '2026-09-01T00:00:00+0000',
+      '2026-02-29T00:00:00.000Z',
+      '2026-02-30T00:00:00.000Z',
+    ];
+    for (const bad of invalid) {
+      mockQueryUsageReport.mockClear();
+      const qs = new URLSearchParams({
+        from: bad,
+        to: '2026-09-02T00:00:00.000Z',
+      });
+      const response = await app.request(`/api/usage?${qs.toString()}`);
+      expect(response.status).toBe(400);
+      expect(mockQueryUsageReport).not.toHaveBeenCalled();
+    }
+  });
+
+  test('accepts Z and explicit-offset RFC 3339 instants', async () => {
+    const app = makeApp();
+    const pairs: Array<[string, string]> = [
+      ['2026-09-01T00:00:00Z', '2026-09-02T00:00:00Z'],
+      ['2026-09-01T00:00:00.000Z', '2026-09-02T00:00:00.000Z'],
+      ['2026-09-01T00:00:00+00:00', '2026-09-02T00:00:00+00:00'],
+      ['2026-09-01T05:30:00.000+05:30', '2026-09-01T06:30:00.000+05:30'],
+      ['2028-02-29T00:00:00.000Z', '2028-03-01T00:00:00.000Z'],
+    ];
+    for (const [from, to] of pairs) {
+      mockQueryUsageReport.mockClear();
+      const qs = new URLSearchParams({ from, to });
+      const response = await app.request(`/api/usage?${qs.toString()}`);
+      expect(response.status).toBe(200);
+      const [[callArgs]] = mockQueryUsageReport.mock.calls as [[{ [k: string]: unknown }]][];
+      expect(callArgs).toEqual({ from, to });
+    }
+  });
+
   test('OpenAPI documents GET /api/usage with UsageReport response', async () => {
     const app = makeApp();
     const document = app.getOpenAPIDocument({
