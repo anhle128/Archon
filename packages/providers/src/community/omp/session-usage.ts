@@ -146,16 +146,27 @@ export function isAdvisorFileName(name: string): boolean {
 }
 
 /**
+ * OMP main transcript timestamp after `toISOString().replace(/[:.]/g, '-')`:
+ * `YYYY-MM-DDTHH-mm-ss-sssZ` (colons and the millis dot become dashes).
+ * Anything else is a decoy — never the trusted main constructor.
+ */
+const MAIN_TRANSCRIPT_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$/;
+
+/**
  * OMP main transcript constructor under the session dir:
  * `${isoTimestampWithColonsDotsAsDashes}_<sessionId>.jsonl`.
  * Files matching this shape under an artifact dir are not task-agent constructors.
+ * Suffix-only matches (`notes_<id>.jsonl`, bare `_<id>.jsonl`, malformed timestamps)
+ * are never main transcripts.
  */
 export function isMainTranscriptFileName(name: string, sessionId: string): boolean {
-  if (!name.endsWith(`_${sessionId}${JSONL_SUFFIX}`)) return false;
+  if (sessionId.length === 0) return false;
+  const suffix = `_${sessionId}${JSONL_SUFFIX}`;
+  if (!name.endsWith(suffix)) return false;
   if (isAdvisorFileName(name)) return false;
-  const prefix = name.slice(0, -(sessionId.length + JSONL_SUFFIX.length + 1));
-  // Timestamp prefix is non-empty and does not itself end with another bare underscore id only.
-  return prefix.length > 0 && !prefix.includes('/');
+  // Exact constructor: one ISO timestamp segment, nothing else before `_sessionId`.
+  const prefix = name.slice(0, -suffix.length);
+  return MAIN_TRANSCRIPT_TIMESTAMP_RE.test(prefix);
 }
 
 /**
@@ -240,7 +251,8 @@ async function safeRealPath(target: string): Promise<string | undefined> {
 }
 
 /**
- * Find the main transcript `*_<sessionId>.jsonl` directly under sessionDir.
+ * Find the exact OMP main transcript under sessionDir.
+ * Uses {@link isMainTranscriptFileName} only — suffix decoys never match.
  */
 export async function findMainTranscriptPath(
   sessionDir: string,
@@ -252,11 +264,8 @@ export async function findMainTranscriptPath(
   } catch {
     return undefined;
   }
-  const suffix = `_${sessionId}${JSONL_SUFFIX}`;
   const matches = entries
-    .filter(
-      entry => entry.isFile() && entry.name.endsWith(suffix) && !isAdvisorFileName(entry.name)
-    )
+    .filter(entry => entry.isFile() && isMainTranscriptFileName(entry.name, sessionId))
     .map(entry => path.join(sessionDir, entry.name));
   if (matches.length === 1) return matches[0];
   if (matches.length > 1) {

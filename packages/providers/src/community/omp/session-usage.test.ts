@@ -15,6 +15,8 @@ import {
   enrichResultWithHiddenUsage,
   findMainTranscriptPath,
   getObservedMaxChunkAllocForTest,
+  isMainTranscriptFileName,
+  isTaskAgentFileName,
   parseTranscriptUsageEntries,
   resetObservedMaxChunkAllocForTest,
   resolveOmpSessionDir,
@@ -1383,5 +1385,197 @@ describe('US-026 OMP hidden-session ownership and bounded streaming', () => {
     });
     // Snapshot fails closed — no files accepted when any historical line exceeds the bound.
     expect(snap).toBeNull();
+  });
+});
+
+describe('US-033 recognize only exact OMP main transcripts', () => {
+  const sid = 'sess-exact-1';
+
+  test('isMainTranscriptFileName accepts only ISO-dash constructor', () => {
+    expect(isMainTranscriptFileName(`2026-09-04T00-00-00-000Z_${sid}.jsonl`, sid)).toBe(true);
+    expect(isMainTranscriptFileName(`2026-12-31T23-59-59-999Z_${sid}.jsonl`, sid)).toBe(true);
+
+    // Suffix decoys
+    expect(isMainTranscriptFileName(`notes_${sid}.jsonl`, sid)).toBe(false);
+    expect(isMainTranscriptFileName(`_${sid}.jsonl`, sid)).toBe(false);
+    expect(isMainTranscriptFileName(`${sid}.jsonl`, sid)).toBe(false);
+
+    // Malformed / non-canonical timestamps (colons/dots left, missing millis, wrong sep)
+    expect(isMainTranscriptFileName(`2026-09-04T00:00:00.000Z_${sid}.jsonl`, sid)).toBe(false);
+    expect(isMainTranscriptFileName(`2026-09-04T00-00-00Z_${sid}.jsonl`, sid)).toBe(false);
+    expect(isMainTranscriptFileName(`2026-09-04T00-00-00-00Z_${sid}.jsonl`, sid)).toBe(false);
+    expect(isMainTranscriptFileName(`2026-9-4T00-00-00-000Z_${sid}.jsonl`, sid)).toBe(false);
+    expect(isMainTranscriptFileName(`2026-09-04_00-00-00-000Z_${sid}.jsonl`, sid)).toBe(false);
+    expect(isMainTranscriptFileName(`prefix-2026-09-04T00-00-00-000Z_${sid}.jsonl`, sid)).toBe(
+      false
+    );
+    expect(isMainTranscriptFileName(`2026-09-04T00-00-00-000Z-extra_${sid}.jsonl`, sid)).toBe(
+      false
+    );
+    expect(isMainTranscriptFileName(`2026-09-04T00-00-00-000Z_${sid}-x.jsonl`, sid)).toBe(false);
+    expect(isMainTranscriptFileName(`2026-09-04T00-00-00-000Z_other.jsonl`, sid)).toBe(false);
+  });
+
+  test('findMainTranscriptPath ignores decoys and never selects them alone', async () => {
+    const fx = await layoutFresh({ withAdvisor: false, withTask: false });
+    // Remove the exact main; plant only decoys with valid-looking session headers.
+    await fs.rm(fx.mainPath);
+    const decoys = [
+      `notes_${fx.sessionId}.jsonl`,
+      `_${fx.sessionId}.jsonl`,
+      `2026-09-04T00:00:00.000Z_${fx.sessionId}.jsonl`,
+      `2026-09-04T00-00-00Z_${fx.sessionId}.jsonl`,
+      `2026-09-04_00-00-00-000Z_${fx.sessionId}.jsonl`,
+    ];
+    for (const name of decoys) {
+      await writeTranscript(path.join(fx.sessionDir, name), [
+        sessionHeader(fx.sessionId, fx.cwd),
+        assistantLine({ input: 1, output: 1, cost: 0.01 }),
+      ]);
+    }
+
+    await expect(findMainTranscriptPath(fx.sessionDir, fx.sessionId)).resolves.toBeUndefined();
+    // Decoys must not seed ownership either.
+    await writeTranscript(path.join(fx.artifactDir, 'ScoutTask.jsonl'), [
+      sessionHeader('task', fx.cwd),
+      assistantLine({
+        model: 'should-not-bill',
+        input: 9,
+        output: 9,
+        cost: 9,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    // Plant ownership claim inside a decoy "main" — still no trusted parent.
+    await fs.appendFile(
+      path.join(fx.sessionDir, decoys[0]!),
+      `${taskSpawnAssistantCall(['ScoutTask'])}\n`,
+      'utf8'
+    );
+    const hidden = await collectHiddenSessionUsage({
+      env: fx.env,
+      cwd: fx.cwd,
+      sessionId: fx.sessionId,
+    });
+    expect(hidden).toBeUndefined();
+  });
+
+  test('one exact main wins over suffix decoys without ambiguity warning', async () => {
+    const fx = await layoutFresh({ withAdvisor: true, withTask: true });
+    // Suffix decoys beside the exact constructor.
+    await writeTranscript(path.join(fx.sessionDir, `notes_${fx.sessionId}.jsonl`), [
+      sessionHeader(fx.sessionId, fx.cwd),
+      assistantLine({ model: 'decoy-notes', input: 99, output: 9, cost: 9 }),
+    ]);
+    await writeTranscript(path.join(fx.sessionDir, `_${fx.sessionId}.jsonl`), [
+      sessionHeader(fx.sessionId, fx.cwd),
+      assistantLine({ model: 'decoy-bare', input: 88, output: 8, cost: 8 }),
+    ]);
+    await writeTranscript(
+      path.join(fx.sessionDir, `2026-09-04T00:00:00.000Z_${fx.sessionId}.jsonl`),
+      [
+        sessionHeader(fx.sessionId, fx.cwd),
+        assistantLine({ model: 'decoy-colon', input: 1, output: 1, cost: 0.01 }),
+      ]
+    );
+
+    const found = await findMainTranscriptPath(fx.sessionDir, fx.sessionId);
+    expect(found).toBe(fx.mainPath);
+
+    const hidden = await collectHiddenSessionUsage({
+      env: fx.env,
+      cwd: fx.cwd,
+      sessionId: fx.sessionId,
+    });
+    // Exact main still owns ScoutTask + advisor; decoys do not suppress enrichment.
+    expect(hidden?.entries.map(e => e.model).sort()).toEqual(['claude-advisor', 'gpt-task'].sort());
+  });
+
+  test('two exact main constructors remain ambiguous and fail closed', async () => {
+    const fx = await layoutFresh({ withAdvisor: false, withTask: false });
+    await writeTranscript(
+      path.join(fx.sessionDir, `2026-09-04T01-00-00-000Z_${fx.sessionId}.jsonl`),
+      [sessionHeader(fx.sessionId, fx.cwd), assistantLine({ input: 1, output: 1, cost: 0.01 })]
+    );
+    await writeTranscript(path.join(fx.artifactDir, '__advisor.jsonl'), [
+      sessionHeader('adv', fx.cwd),
+      assistantLine({ model: 'should-not-run', input: 9, output: 9, cost: 9 }),
+    ]);
+
+    await expect(findMainTranscriptPath(fx.sessionDir, fx.sessionId)).resolves.toBeUndefined();
+    const hidden = await collectHiddenSessionUsage({
+      env: fx.env,
+      cwd: fx.cwd,
+      sessionId: fx.sessionId,
+    });
+    expect(hidden).toBeUndefined();
+  });
+
+  test('task-file classification uses the same exact main predicate', async () => {
+    const sidLocal = 'sess-task-cls';
+    // Exact main constructor is never a task-agent file (copied-main exclusion).
+    expect(isTaskAgentFileName(`2026-09-04T00-00-00-000Z_${sidLocal}.jsonl`, sidLocal)).toBe(false);
+    expect(isMainTranscriptFileName(`2026-09-04T00-00-00-000Z_${sidLocal}.jsonl`, sidLocal)).toBe(
+      true
+    );
+
+    // Suffix decoys are NOT main → remain eligible task constructors (ownership still gates).
+    expect(isTaskAgentFileName(`notes_${sidLocal}.jsonl`, sidLocal)).toBe(true);
+    expect(isMainTranscriptFileName(`notes_${sidLocal}.jsonl`, sidLocal)).toBe(false);
+    expect(isTaskAgentFileName(`ScoutTask.jsonl`, sidLocal)).toBe(true);
+
+    const fx = await layoutFresh({ withAdvisor: false, withTask: false });
+    // Parent owns a suffix-decoy stem AND a plain task; exact copied-main shape is never billed.
+    const decoyStem = `notes_${fx.sessionId}`;
+    await proveTaskOwnership(fx.mainPath, [decoyStem, 'PlainTask']);
+
+    await writeTranscript(path.join(fx.artifactDir, `${decoyStem}.jsonl`), [
+      sessionHeader('notes-task', fx.cwd),
+      assistantLine({
+        model: 'notes-task-model',
+        input: 4,
+        output: 1,
+        cost: 0.04,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    await writeTranscript(path.join(fx.artifactDir, 'PlainTask.jsonl'), [
+      sessionHeader('plain', fx.cwd),
+      assistantLine({
+        model: 'plain-task-model',
+        input: 3,
+        output: 1,
+        cost: 0.03,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    // Exact main constructor under artifact — same predicate excludes it from task candidates.
+    await writeTranscript(
+      path.join(fx.artifactDir, `2026-09-04T12-00-00-000Z_${fx.sessionId}.jsonl`),
+      [
+        sessionHeader('copied-main', fx.cwd),
+        assistantLine({
+          model: 'copied-main-model',
+          input: 40,
+          output: 4,
+          cost: 4,
+          cacheRead: 0,
+          cacheWrite: 0,
+        }),
+      ]
+    );
+
+    const hidden = await collectHiddenSessionUsage({
+      env: fx.env,
+      cwd: fx.cwd,
+      sessionId: fx.sessionId,
+    });
+    expect(hidden?.entries.map(e => e.model).sort()).toEqual(
+      ['notes-task-model', 'plain-task-model'].sort()
+    );
+    expect(hidden?.entries.some(e => e.model === 'copied-main-model')).toBe(false);
   });
 });
