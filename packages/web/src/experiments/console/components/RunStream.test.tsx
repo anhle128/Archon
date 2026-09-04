@@ -1,13 +1,16 @@
+import { createElement } from 'react';
 import { describe, test, expect } from 'bun:test';
+import { renderToStaticMarkup } from 'react-dom/server';
 import {
   aggregateUsageMetrics,
   collectUsageByNode,
   pairToolEvents,
   sumNullableMetric,
 } from './RunStream';
-import { buildNodeLedgerUsageReport } from './NodeDivider';
+import { buildNodeLedgerUsageReport, NodeDivider } from './NodeDivider';
 import { toRunEvent } from '../primitives/event';
 import type { UsageMetrics, UsageReport, UsageReportGroup } from '../skills/usage';
+import { StreamContextProvider } from '../lib/stream-context';
 
 type Raw = Parameters<typeof toRunEvent>[0];
 
@@ -330,5 +333,63 @@ describe('buildNodeLedgerUsageReport', () => {
 
     expect(report.coverage.unledgeredEventCount).toBe(0);
     expect(runWideCoverage).toBeNull();
+  });
+});
+
+describe('NodeDivider legacy cost zero', () => {
+  function renderDivider(props: {
+    costUsd?: number | null;
+    hasLedgerUsage?: boolean;
+    reportedUsd?: number | null;
+    estimatedUsd?: number | null;
+  }): string {
+    return renderToStaticMarkup(
+      createElement(StreamContextProvider, {
+        value: { runStartedAt: '2026-06-05T10:00:00Z' },
+        children: createElement(NodeDivider, {
+          nodeId: 'step',
+          nodeName: 'step',
+          status: 'completed',
+          durationMs: 1000,
+          timestamp: '2026-06-05T10:00:01Z',
+          costUsd: props.costUsd ?? null,
+          hasLedgerUsage: props.hasLedgerUsage ?? false,
+          reportedUsd: props.reportedUsd,
+          estimatedUsd: props.estimatedUsd,
+        }),
+      })
+    );
+  }
+
+  test('explicit legacy cost 0 renders $0.00 when no ledger rows', () => {
+    const markup = renderDivider({ costUsd: 0 });
+    expect(markup).toContain('$0.00');
+  });
+
+  test('absent legacy cost stays absent (no zero fabrication)', () => {
+    const markup = renderDivider({ costUsd: null });
+    expect(markup).not.toContain('$0.00');
+    expect(markup).not.toContain('n/a');
+  });
+
+  test('ledgered reported zero takes precedence over legacy positive cost', () => {
+    const markup = renderDivider({
+      costUsd: 1.5,
+      hasLedgerUsage: true,
+      reportedUsd: 0,
+      estimatedUsd: null,
+    });
+    expect(markup).toContain('$0.00');
+    expect(markup).toContain('n/a');
+    // Ledger path formats reported/estimated pair, not bare legacy alone.
+    expect(markup).toContain('$0.00 / n/a');
+  });
+
+  test('sub-micro positive legacy cost never rounds into zero representation', () => {
+    const markup = renderDivider({ costUsd: 1e-9 });
+    // renderToStaticMarkup HTML-escapes `<` → `&lt;`
+    expect(markup).toContain('&lt;$0.000001');
+    // Exact zero form is `$0.00` with a word/space boundary after — not the floor prefix.
+    expect(markup).not.toMatch(/\$0\.00(?!\d)/);
   });
 });

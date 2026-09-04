@@ -3,13 +3,7 @@ import { Link } from 'react-router';
 import { LiveDot } from './LiveDot';
 import { OriginBadge } from './OriginBadge';
 import type { Run } from '../primitives/run';
-import {
-  shortRunId,
-  formatElapsed,
-  elapsedSince,
-  formatCost,
-  formatUsdAmount,
-} from '../lib/format';
+import { shortRunId, formatElapsed, elapsedSince, formatUsdAmount } from '../lib/format';
 import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
 import { statusLabel, statusTextClass } from '../lib/run-status';
 import type { UsageReport } from '../skills/usage';
@@ -89,7 +83,7 @@ function RunHeaderUsageLabel({
         className="font-mono text-[12px] tabular-nums text-text-secondary"
         title="Legacy run total — not from the usage ledger"
       >
-        {formatCost(run.costUsd)}
+        {formatUsdAmount(run.costUsd, false)}
         <span className="ml-1 text-[10px] uppercase tracking-[0.08em] text-text-tertiary">
           legacy total
         </span>

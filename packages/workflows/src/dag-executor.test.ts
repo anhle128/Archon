@@ -14847,6 +14847,190 @@ describe('executeDagWorkflow -- cost tracking', () => {
     expect(completeCalls.length).toBe(1);
     expect(completeCalls[0][1]).toMatchObject({ total_cost_usd: 0.004 });
   });
+
+  it('persists total_cost_usd: 0 and node cost_usd: 0 when provider reports cost 0', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'free' };
+      yield { type: 'result', sessionId: 'sid-zero-cost', cost: 0 };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      { name: 'dag-zero-cost', nodes: [{ id: 'step', prompt: 'Do free thing.' }] },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const completeCalls = (
+      store.completeWorkflowRun as Mock<
+        (id: string, metadata?: Record<string, unknown>) => Promise<void>
+      >
+    ).mock.calls;
+    expect(completeCalls.length).toBe(1);
+    expect(completeCalls[0][1]).toMatchObject({ total_cost_usd: 0 });
+
+    const completed = (store.createWorkflowEvent as Mock).mock.calls.find((c: unknown[]) => {
+      const ev = c[0] as { event_type: string; step_name?: string | null };
+      return ev.event_type === 'node_completed' && ev.step_name === 'step';
+    }) as [{ data?: { cost_usd?: number } }] | undefined;
+    expect(completed?.[0]?.data?.cost_usd).toBe(0);
+  });
+
+  it('still omits total_cost_usd when provider never yields cost (even after zero-cost path exists)', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'no cost field' };
+      yield { type: 'result', sessionId: 'sid-absent-cost' };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      { name: 'dag-absent-cost', nodes: [{ id: 'step', prompt: 'No cost.' }] },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const completeCalls = (
+      store.completeWorkflowRun as Mock<
+        (id: string, metadata?: Record<string, unknown>) => Promise<void>
+      >
+    ).mock.calls;
+    expect(completeCalls[0][1]).not.toHaveProperty('total_cost_usd');
+
+    const completed = (store.createWorkflowEvent as Mock).mock.calls.find((c: unknown[]) => {
+      const ev = c[0] as { event_type: string; step_name?: string | null };
+      return ev.event_type === 'node_completed' && ev.step_name === 'step';
+    }) as [{ data?: Record<string, unknown> }] | undefined;
+    expect(completed?.[0]?.data).not.toHaveProperty('cost_usd');
+  });
+
+  it('sums zeros across sequential nodes without treating init zero as absent', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'z' };
+      yield { type: 'result', sessionId: 'sid-z', cost: 0 };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'dag-zero-multi',
+        nodes: [
+          { id: 'step1', prompt: 'A.' },
+          { id: 'step2', prompt: 'B.', depends_on: ['step1'] },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const completeCalls = (
+      store.completeWorkflowRun as Mock<
+        (id: string, metadata?: Record<string, unknown>) => Promise<void>
+      >
+    ).mock.calls;
+    expect(completeCalls[0][1]).toMatchObject({ total_cost_usd: 0 });
+  });
+
+  it('accumulates loop iteration zeros into completeWorkflowRun total_cost_usd: 0', async () => {
+    let callCount = 0;
+    mockSendQueryDag.mockImplementation(function* () {
+      callCount++;
+      if (callCount < 2) {
+        yield { type: 'assistant', content: 'still free' };
+        yield { type: 'result', sessionId: `loop-z-${String(callCount)}`, cost: 0 };
+      } else {
+        yield { type: 'assistant', content: 'done <promise>COMPLETE</promise>' };
+        yield { type: 'result', sessionId: `loop-z-${String(callCount)}`, cost: 0 };
+      }
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'dag-loop-zero-cost',
+        nodes: [
+          {
+            id: 'my-loop',
+            loop: { prompt: 'Work free.', until: 'COMPLETE', max_iterations: 5 },
+          },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const completeCalls = (
+      store.completeWorkflowRun as Mock<
+        (id: string, metadata?: Record<string, unknown>) => Promise<void>
+      >
+    ).mock.calls;
+    expect(completeCalls[0][1]).toMatchObject({ total_cost_usd: 0 });
+
+    const completed = (store.createWorkflowEvent as Mock).mock.calls.find((c: unknown[]) => {
+      const ev = c[0] as { event_type: string; step_name?: string | null };
+      return ev.event_type === 'node_completed' && ev.step_name === 'my-loop';
+    }) as [{ data?: { cost_usd?: number } }] | undefined;
+    expect(completed?.[0]?.data?.cost_usd).toBe(0);
+  });
 });
 
 describe('executeDagWorkflow -- script nodes', () => {

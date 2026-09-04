@@ -163,4 +163,52 @@ describe('RunDetailHeader usage states', () => {
     expect(markup).not.toContain('not recorded');
     expect(markup).not.toContain('event-only');
   });
+
+  test('non-null no-history usage report renders legacy $0.00 with legacy total label', () => {
+    const markup = renderHeader({
+      usage: usage({
+        coverage: {
+          usageEventCount: 0,
+          ledgeredEventCount: 0,
+          unledgeredEventCount: 0,
+          hasRecordedUsage: false,
+          historicalBackfill: false,
+          filterScope: 'date-project-run-node',
+        },
+      }),
+      runOverrides: { costUsd: 0 },
+    });
+
+    expect(markup).toContain('$0.00');
+    expect(markup).toContain('legacy total');
+    expect(markup).not.toContain('not recorded');
+    expect(markup).not.toContain('data-usage-state="not-recorded"');
+  });
+
+  test('ledgered reported zero takes precedence over legacy run total', () => {
+    const markup = renderHeader({
+      usage: usage({
+        totals: emptyMetrics({ recordCount: 1, reportedUsd: 0, estimatedUsd: null }),
+        groups: [
+          {
+            dimensions: { nodeId: 'implement' },
+            metrics: emptyMetrics({ recordCount: 1, reportedUsd: 0 }),
+          },
+        ],
+        coverage: {
+          usageEventCount: 1,
+          ledgeredEventCount: 1,
+          unledgeredEventCount: 0,
+          hasRecordedUsage: true,
+          historicalBackfill: false,
+          filterScope: 'date-project-run-node',
+        },
+      }),
+      runOverrides: { costUsd: 0 },
+    });
+
+    expect(markup).toContain('$0.00');
+    expect(markup).toContain('direct');
+    expect(markup).not.toContain('legacy total');
+  });
 });

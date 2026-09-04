@@ -141,8 +141,14 @@ export function NodeDivider({
     const rep = formatUsdAmount(reportedUsd ?? null, false);
     const est = formatUsdAmount(estimatedUsd ?? null, true);
     cost = ` · ${rep} / ${est}`;
-  } else if (costUsd !== null && costUsd !== undefined && costUsd > 0) {
+  } else if (
+    costUsd !== null &&
+    costUsd !== undefined &&
+    Number.isFinite(costUsd) &&
+    costUsd >= 0
+  ) {
     // Legacy node_completed cost only when the ledger has nothing for this step.
+    // Authoritative reported zero still renders; ledger rows (incl. ledgered zero) win.
     cost = ` · ${formatUsdAmount(costUsd, false)}`;
   }
 

@@ -326,21 +326,28 @@ function findRunningTool(
 /**
  * Usage totals for the terminal telemetry event. Fields are omitted (not sent
  * as zero) when nothing was reported, so absence in PostHog means "providers
- * reported no usage", never "zero spend".
+ * reported no usage". An authoritative reported zero is included — known free
+ * spend must not collapse into absence.
  */
 function buildRunUsageProps(totals: {
-  costUsd: number;
+  /** Undefined until at least one node reported a cost (including 0). */
+  costUsd: number | undefined;
   tokensIn: number;
   tokensOut: number;
   loopIterations: number;
 }): { costUsd?: number; tokensIn?: number; tokensOut?: number; loopIterations?: number } {
   return {
-    ...(totals.costUsd > 0 ? { costUsd: totals.costUsd } : {}),
+    ...(totals.costUsd !== undefined ? { costUsd: totals.costUsd } : {}),
     ...(totals.tokensIn > 0 || totals.tokensOut > 0
       ? { tokensIn: totals.tokensIn, tokensOut: totals.tokensOut }
       : {}),
     ...(totals.loopIterations > 0 ? { loopIterations: totals.loopIterations } : {}),
   };
+}
+
+/** Finite non-negative provider/run cost — rejects NaN/Infinity/negative. */
+function isAuthoritativeCostUsd(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
 
 /**
@@ -642,7 +649,7 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
     childRunId: run.id,
     status: run.status,
     output: typeof md.summary === 'string' ? md.summary : undefined,
-    costUsd: typeof md.total_cost_usd === 'number' ? md.total_cost_usd : undefined,
+    costUsd: isAuthoritativeCostUsd(md.total_cost_usd) ? md.total_cost_usd : undefined,
     tokens,
     error: typeof md.error === 'string' ? md.error : undefined,
   };
@@ -2301,7 +2308,7 @@ async function executeNodeInternal(
               );
             }
           }
-          if (msg.cost !== undefined) nodeCostUsd = msg.cost;
+          if (isAuthoritativeCostUsd(msg.cost)) nodeCostUsd = msg.cost;
           if (msg.stopReason !== undefined) nodeStopReason = msg.stopReason;
           if (msg.numTurns !== undefined) nodeNumTurns = msg.numTurns;
           // Assigned UNCONDITIONALLY. A guarded assignment cannot CLEAR a stale value:
@@ -4256,7 +4263,7 @@ async function executeLoopGroupNode(
       // first processed iteration must continue the restored pre-pause session.
       lastSequentialSession: group.fresh_context || i === 1 ? undefined : loopLastSequentialSession,
       warnedProviderConflicts,
-      totalCostUsd: 0,
+      totalCostUsd: undefined,
       totalTokensIn: 0,
       totalTokensOut: 0,
       totalLoopIterations: 0,
@@ -4286,7 +4293,11 @@ async function executeLoopGroupNode(
       return { state: 'failed', output: lastIterationOutput, error: `Workflow ${effectiveStatus}` };
     }
     // Accumulate usage across iterations (charged on the failure path below too).
-    loopTotalCostUsd = (loopTotalCostUsd ?? 0) + iterCtx.totalCostUsd;
+    // Only fold iterations that reported cost — initialized absence must not mark
+    // the group as having provider-reported spend.
+    if (iterCtx.totalCostUsd !== undefined) {
+      loopTotalCostUsd = (loopTotalCostUsd ?? 0) + iterCtx.totalCostUsd;
+    }
     if (iterCtx.totalTokensIn > 0 || iterCtx.totalTokensOut > 0) {
       loopTotalTokens = {
         input: (loopTotalTokens?.input ?? 0) + iterCtx.totalTokensIn,
@@ -5355,7 +5366,7 @@ async function executeLoopNode(
             }
             // Overwrite, don't accumulate — a later result in the same iteration
             // (background-task wait, #2083) carries session-cumulative values.
-            if (msg.cost !== undefined) {
+            if (isAuthoritativeCostUsd(msg.cost)) {
               iterationCost = msg.cost;
             }
             if (msg.tokens !== undefined) {
@@ -6985,8 +6996,8 @@ async function resolveFanOutChildDefinition(
 
 /**
  * Σ of defined child `costUsd`. Returns undefined when NO child reported cost so the
- * node's own `costUsd` stays absent (a misleading `0` would look like a free run) —
- * matching the run-level aggregation's "only write when > 0" posture.
+ * node's own `costUsd` stays absent — matching run-level presence tracking (reported
+ * zero is kept; uninitialized absence is not written as free).
  *
  * UNDER-REPORTS: this is Σ of *completed* children, not Σ of children. Usage metadata is
  * persisted in exactly one place — inside `completeWorkflowRun` — so a child that burned
@@ -7002,7 +7013,7 @@ function sumFanOutCost(outcomes: readonly ChildWorkflowOutcome[]): number | unde
   let sum = 0;
   let any = false;
   for (const o of outcomes) {
-    if (o.costUsd !== undefined && Number.isFinite(o.costUsd)) {
+    if (isAuthoritativeCostUsd(o.costUsd)) {
       sum += o.costUsd;
       any = true;
     }
@@ -7771,8 +7782,12 @@ interface RunLayersContext {
    * reference with loop_group body contexts so an iteration cannot re-report.
    */
   warnedProviderConflicts: Set<string>;
-  /** Run-level usage accumulators (mutated by runLayers; caller reads after). */
-  totalCostUsd: number;
+  /**
+   * Run-level reported-cost accumulator. Undefined until at least one node reports
+   * cost (including authoritative 0). Presence is tracked separately from the sum so
+   * an initialized zero is never mistaken for "provider reported free".
+   */
+  totalCostUsd: number | undefined;
   totalTokensIn: number;
   totalTokensOut: number;
   totalLoopIterations: number;
@@ -8923,7 +8938,9 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
         // cost/tokens must be summed here and ONLY here — adding a per-node
         // telemetry capture elsewhere would double-count against the totals
         // sent on workflow_completed/workflow_failed.
-        if (output.costUsd !== undefined) ctx.totalCostUsd += output.costUsd;
+        if (output.costUsd !== undefined) {
+          ctx.totalCostUsd = (ctx.totalCostUsd ?? 0) + output.costUsd;
+        }
         if (output.tokens !== undefined) {
           // Token values come from providers (incl. community ones) — guard so
           // a NaN can't silently poison the totals (NaN > 0 is false, which
@@ -9945,7 +9962,7 @@ export async function executeDagWorkflow(
     priorCompletedNodes: resumePriorCompletedNodes,
     lastSequentialSession: undefined,
     warnedProviderConflicts: new Set<string>(),
-    totalCostUsd: 0,
+    totalCostUsd: undefined,
     totalTokensIn: priorTokenUsage?.input ?? 0,
     totalTokensOut: priorTokenUsage?.output ?? 0,
     totalLoopIterations: 0,
@@ -10319,8 +10336,8 @@ export async function executeDagWorkflow(
   try {
     await deps.store.completeWorkflowRun(workflowRun.id, {
       node_counts: nodeCounts,
-      // totalCostUsd starts at 0; only write metadata when at least one node reported cost
-      ...(totalCostUsd > 0 ? { total_cost_usd: totalCostUsd } : {}),
+      // totalCostUsd is undefined until a node reports cost; keep authoritative 0.
+      ...(totalCostUsd !== undefined ? { total_cost_usd: totalCostUsd } : {}),
       // Persist token totals (D8) so a `workflow:` parent rolls up tokens as well as
       // cost. Only when non-zero (telemetry-only fields otherwise).
       ...(totalTokensIn > 0 ? { total_tokens_in: totalTokensIn } : {}),
