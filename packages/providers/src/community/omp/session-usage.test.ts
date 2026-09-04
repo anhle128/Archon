@@ -5,12 +5,17 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import {
+  MAX_CANDIDATE_FILES,
   MAX_FILE_BYTES,
   MAX_LINE_BYTES,
+  MAX_TOTAL_BYTES,
   collectHiddenSessionUsage,
   encodeOmpSessionCwdDirName,
   enrichResultWithHiddenUsage,
+  findMainTranscriptPath,
+  parseTranscriptUsageEntries,
   resolveOmpSessionDir,
+  setSessionUsageBoundsForTest,
   snapshotHiddenSessionFiles,
   type SessionUsageSnapshot,
 } from './session-usage';
@@ -18,6 +23,7 @@ import {
 const tempRoots: string[] = [];
 
 afterEach(async () => {
+  setSessionUsageBoundsForTest(undefined);
   while (tempRoots.length > 0) {
     const root = tempRoots.pop();
     if (!root) break;
@@ -46,9 +52,15 @@ function assistantLine(opts: {
   model?: string;
   input?: number;
   output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
   cost?: number;
   text?: string;
 }): string {
+  const input = opts.input ?? 10;
+  const output = opts.output ?? 4;
+  const cacheRead = opts.cacheRead ?? 1;
+  const cacheWrite = opts.cacheWrite ?? 0;
   return JSON.stringify({
     type: 'message',
     id: 'msg-1',
@@ -60,11 +72,11 @@ function assistantLine(opts: {
       provider: opts.provider ?? 'openai-codex',
       model: opts.model ?? 'gpt-test',
       usage: {
-        input: opts.input ?? 10,
-        output: opts.output ?? 4,
-        cacheRead: 1,
-        cacheWrite: 0,
-        totalTokens: (opts.input ?? 10) + (opts.output ?? 4),
+        input,
+        output,
+        cacheRead,
+        cacheWrite,
+        totalTokens: input + output + cacheRead + cacheWrite,
         cost: { total: opts.cost ?? 0.2 },
       },
       stopReason: 'stop',
@@ -612,5 +624,404 @@ describe('hidden transcript missingness (US-017)', () => {
     expect(hidden?.entries.some(e => e.provider === 'unknown')).toBe(false);
     expect(hidden?.entries[0]?.kind).toBe('advisor');
     expect(hidden?.entries[1]?.kind).toBe('advisor');
+  });
+});
+
+describe('US-018 harden OMP hidden-session discovery', () => {
+  test('multiple matching main transcripts fail closed', async () => {
+    const fx = await layoutFresh({ withAdvisor: false, withTask: false });
+    await writeTranscript(
+      path.join(fx.sessionDir, `2026-09-04T01-00-00-000Z_${fx.sessionId}.jsonl`),
+      [sessionHeader(fx.sessionId, fx.cwd), assistantLine({ input: 1, output: 1, cost: 0.01 })]
+    );
+    await writeTranscript(path.join(fx.artifactDir, '__advisor.jsonl'), [
+      sessionHeader('adv', fx.cwd),
+      assistantLine({ model: 'should-not-run', input: 9, output: 9, cost: 9 }),
+    ]);
+
+    await expect(findMainTranscriptPath(fx.sessionDir, fx.sessionId)).resolves.toBeUndefined();
+    const hidden = await collectHiddenSessionUsage({
+      env: fx.env,
+      cwd: fx.cwd,
+      sessionId: fx.sessionId,
+    });
+    expect(hidden).toBeUndefined();
+  });
+
+  test('unrelated valid session-shaped JSONL under artifact is never billed', async () => {
+    const fx = await layoutFresh({ withAdvisor: false, withTask: false });
+    // Main-transcript constructor dropped into the artifact dir.
+    await writeTranscript(
+      path.join(fx.artifactDir, `2026-09-04T00-00-00-000Z_${fx.sessionId}.jsonl`),
+      [
+        sessionHeader('foreign-main', fx.cwd),
+        assistantLine({
+          model: 'foreign-main',
+          input: 40,
+          output: 4,
+          cost: 4,
+          cacheRead: 0,
+          cacheWrite: 0,
+        }),
+      ]
+    );
+    // Reserved non-advisor dump.
+    await writeTranscript(path.join(fx.artifactDir, '__debug.jsonl'), [
+      sessionHeader('debug', fx.cwd),
+      assistantLine({
+        model: 'debug-model',
+        input: 11,
+        output: 1,
+        cost: 1.1,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    // Orphan nested dir without a sibling task-agent transcript.
+    await writeTranscript(path.join(fx.artifactDir, 'orphan-dir', 'Nested.jsonl'), [
+      sessionHeader('orphan', fx.cwd),
+      assistantLine({
+        model: 'orphan-nested',
+        input: 22,
+        output: 2,
+        cost: 2.2,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    // Valid advisor still bills.
+    await writeTranscript(path.join(fx.artifactDir, '__advisor.jsonl'), [
+      sessionHeader('adv-ok', fx.cwd),
+      assistantLine({
+        provider: 'anthropic',
+        model: 'advisor-ok',
+        input: 3,
+        output: 1,
+        cost: 0.03,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+
+    const hidden = await collectHiddenSessionUsage({
+      env: fx.env,
+      cwd: fx.cwd,
+      sessionId: fx.sessionId,
+    });
+    expect(hidden?.entries.map(e => e.model)).toEqual(['advisor-ok']);
+    expect(hidden?.entries.some(e => e.model === 'foreign-main')).toBe(false);
+    expect(hidden?.entries.some(e => e.model === 'debug-model')).toBe(false);
+    expect(hidden?.entries.some(e => e.model === 'orphan-nested')).toBe(false);
+  });
+
+  test('pathname swap after prefix verify cannot redirect the open handle', async () => {
+    const fx = await layoutFresh({ withAdvisor: false, withTask: false });
+    const artifactRoot = await fs.realpath(fx.artifactDir);
+    const goodPath = path.join(artifactRoot, '__advisor.jsonl');
+    const priorLines = [
+      sessionHeader('adv-swap', fx.cwd),
+      assistantLine({
+        provider: 'anthropic',
+        model: 'history',
+        input: 5,
+        output: 1,
+        cost: 0.05,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ];
+    await writeTranscript(goodPath, priorLines);
+    const prior = await fs.readFile(goodPath);
+    const delta = `${assistantLine({
+      provider: 'anthropic',
+      model: 'delta-good',
+      input: 7,
+      output: 2,
+      cost: 0.07,
+      cacheRead: 0,
+      cacheWrite: 0,
+      text: 'good-delta',
+    })}\n`;
+    await fs.appendFile(goodPath, delta);
+
+    const evilPath = path.join(artifactRoot, 'evil-tmp.jsonl');
+    await writeTranscript(evilPath, [
+      sessionHeader('evil', fx.cwd),
+      assistantLine({
+        provider: 'anthropic',
+        model: 'evil-model',
+        input: 99,
+        output: 9,
+        cost: 9.9,
+        cacheRead: 0,
+        cacheWrite: 0,
+        text: 'evil-bytes',
+      }),
+    ]);
+
+    const parsed = await parseTranscriptUsageEntries(
+      goodPath,
+      artifactRoot,
+      'advisor',
+      prior.byteLength,
+      {
+        requireSessionHeader: false,
+        expectedPrefix: {
+          byteLength: prior.byteLength,
+          digest: createHash('sha256').update(prior).digest('hex'),
+        },
+        afterPrefixVerified: async () => {
+          // Replace the pathname with a different inode after verification.
+          await fs.rename(goodPath, `${goodPath}.bak`);
+          await fs.rename(evilPath, goodPath);
+        },
+      }
+    );
+
+    expect(parsed.status).toBe('ok');
+    if (parsed.status !== 'ok') return;
+    expect(parsed.entries.map(e => e.model)).toEqual(['delta-good']);
+    expect(parsed.entries.some(e => e.model === 'evil-model')).toBe(false);
+    expect(JSON.stringify(parsed.entries)).not.toContain('evil-bytes');
+  });
+
+  test('chunked JSONL parsing handles records split across read chunks and UTF-8 boundaries', async () => {
+    const fx = await layoutFresh({ withAdvisor: false, withTask: false });
+    const artifactRoot = await fs.realpath(fx.artifactDir);
+    const filePath = path.join(artifactRoot, '__advisor.jsonl');
+    // Build a multi-kilobyte line so a 64KiB chunk boundary falls mid-record, and include
+    // a multi-byte UTF-8 character that can straddle an arbitrary byte split.
+    const pad = '字'.repeat(40_000); // 3 bytes each → ~120KiB payload
+    const lines = [
+      sessionHeader('chunked', fx.cwd),
+      assistantLine({
+        provider: 'anthropic',
+        model: 'chunk-model',
+        input: 2,
+        output: 1,
+        cost: 0.02,
+        cacheRead: 0,
+        cacheWrite: 0,
+        text: pad,
+      }),
+      assistantLine({
+        provider: 'anthropic',
+        model: 'after-chunk',
+        input: 3,
+        output: 1,
+        cost: 0.03,
+        cacheRead: 0,
+        cacheWrite: 0,
+        text: 'tail',
+      }),
+    ];
+    await writeTranscript(filePath, lines);
+
+    const parsed = await parseTranscriptUsageEntries(filePath, artifactRoot, 'advisor', 0);
+    expect(parsed.status).toBe('ok');
+    if (parsed.status !== 'ok') return;
+    expect(parsed.entries.map(e => e.model)).toEqual(['chunk-model', 'after-chunk']);
+    // Content is never returned — only usage rows.
+    expect(JSON.stringify(parsed.entries)).not.toContain(pad.slice(0, 32));
+  });
+
+  test('exact file count bound succeeds and one-over omits all hidden enrichment', async () => {
+    // Seam shrinks the production 1_000-file ceiling so the test stays cheap while
+    // exercising the same exclusive comparison used at MAX_CANDIDATE_FILES.
+    expect(MAX_CANDIDATE_FILES).toBe(1_000);
+    setSessionUsageBoundsForTest({ maxCandidateFiles: 3 });
+    const fx = await layoutFresh({ withAdvisor: false, withTask: false });
+    for (let i = 0; i < 3; i++) {
+      const name = i === 0 ? '__advisor.jsonl' : `Task${i}.jsonl`;
+      await writeTranscript(path.join(fx.artifactDir, name), [
+        sessionHeader(`id-${i}`, fx.cwd),
+        assistantLine({
+          model: `m-${i}`,
+          input: 1,
+          output: 0,
+          cost: 0.001,
+          cacheRead: 0,
+          cacheWrite: 0,
+        }),
+      ]);
+    }
+    const exact = await collectHiddenSessionUsage({
+      env: fx.env,
+      cwd: fx.cwd,
+      sessionId: fx.sessionId,
+    });
+    expect(exact?.entries).toHaveLength(3);
+
+    await writeTranscript(path.join(fx.artifactDir, 'TaskOverflow.jsonl'), [
+      sessionHeader('overflow', fx.cwd),
+      assistantLine({
+        model: 'overflow',
+        input: 1,
+        output: 0,
+        cost: 0.001,
+        cacheRead: 0,
+        cacheWrite: 0,
+      }),
+    ]);
+    const over = await collectHiddenSessionUsage({
+      env: fx.env,
+      cwd: fx.cwd,
+      sessionId: fx.sessionId,
+    });
+    expect(over).toBeUndefined();
+  });
+
+  test('exact and one-over file byte bound', async () => {
+    expect(MAX_FILE_BYTES).toBe(64 * 1024 * 1024);
+    setSessionUsageBoundsForTest({ maxFileBytes: 2_000 });
+    const fx = await layoutFresh({ withAdvisor: false, withTask: false });
+    const header = sessionHeader('file-bound', fx.cwd);
+    const body = assistantLine({
+      model: 'exact-file',
+      input: 1,
+      output: 1,
+      cost: 0.01,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+    const exactContent = `${header}\n${body}\n`;
+    const pad = 2_000 - Buffer.byteLength(exactContent, 'utf8') - 1;
+    expect(pad).toBeGreaterThan(0);
+    const content = `${exactContent}${' '.repeat(pad)}\n`;
+    expect(Buffer.byteLength(content, 'utf8')).toBe(2_000);
+    await fs.writeFile(path.join(fx.artifactDir, '__advisor.jsonl'), content);
+
+    const exact = await collectHiddenSessionUsage({
+      env: fx.env,
+      cwd: fx.cwd,
+      sessionId: fx.sessionId,
+    });
+    expect(exact?.entries.some(e => e.model === 'exact-file')).toBe(true);
+
+    await fs.writeFile(path.join(fx.artifactDir, '__advisor.jsonl'), `${content}x`);
+    expect((await fs.stat(path.join(fx.artifactDir, '__advisor.jsonl'))).size).toBe(2_001);
+    const over = await collectHiddenSessionUsage({
+      env: fx.env,
+      cwd: fx.cwd,
+      sessionId: fx.sessionId,
+    });
+    expect(over).toBeUndefined();
+  });
+
+  test('exact and one-over total byte bound', async () => {
+    expect(MAX_TOTAL_BYTES).toBe(256 * 1024 * 1024);
+    setSessionUsageBoundsForTest({ maxTotalBytes: 4_000 });
+    const fx = await layoutFresh({ withAdvisor: false, withTask: false });
+
+    const makeSized = async (name: string, model: string, targetSize: number) => {
+      const header = sessionHeader(`s-${model}`, fx.cwd);
+      const body = assistantLine({
+        model,
+        input: 1,
+        output: 0,
+        cost: 0.001,
+        cacheRead: 0,
+        cacheWrite: 0,
+      });
+      const base = `${header}\n${body}\n`;
+      const pad = targetSize - Buffer.byteLength(base, 'utf8') - 1;
+      expect(pad).toBeGreaterThanOrEqual(0);
+      const content = `${base}${' '.repeat(pad)}\n`;
+      expect(Buffer.byteLength(content, 'utf8')).toBe(targetSize);
+      await fs.writeFile(path.join(fx.artifactDir, name), content);
+    };
+
+    await makeSized('TaskA.jsonl', 'a', 2_000);
+    await makeSized('TaskB.jsonl', 'b', 2_000);
+    const exact = await collectHiddenSessionUsage({
+      env: fx.env,
+      cwd: fx.cwd,
+      sessionId: fx.sessionId,
+    });
+    expect(exact?.entries.map(e => e.model).sort()).toEqual(['a', 'b']);
+
+    await makeSized('TaskB.jsonl', 'b', 2_001);
+    const over = await collectHiddenSessionUsage({
+      env: fx.env,
+      cwd: fx.cwd,
+      sessionId: fx.sessionId,
+    });
+    expect(over).toBeUndefined();
+  });
+
+  test('exact line bound succeeds and one-over omits all hidden enrichment', async () => {
+    expect(MAX_LINE_BYTES).toBe(8 * 1024 * 1024);
+    setSessionUsageBoundsForTest({ maxLineBytes: 300 });
+    const fx = await layoutFresh({ withAdvisor: false, withTask: false });
+    const header = sessionHeader('line-bound', fx.cwd);
+    const prefix =
+      '{"type":"message","message":{"role":"assistant","provider":"x","model":"exact-line","usage":{"input":1,"output":1,"cost":{"total":1}},"content":[{"type":"text","text":"';
+    const suffix = '"}]}}';
+    const fill = 300 - Buffer.byteLength(prefix, 'utf8') - Buffer.byteLength(suffix, 'utf8');
+    expect(fill).toBeGreaterThan(0);
+    const exactLine = `${prefix}${'a'.repeat(fill)}${suffix}`;
+    expect(Buffer.byteLength(exactLine, 'utf8')).toBe(300);
+    await writeTranscript(path.join(fx.artifactDir, '__advisor.jsonl'), [header, exactLine]);
+    const exact = await collectHiddenSessionUsage({
+      env: fx.env,
+      cwd: fx.cwd,
+      sessionId: fx.sessionId,
+    });
+    expect(exact?.entries.some(e => e.model === 'exact-line')).toBe(true);
+
+    const overLine = `${prefix}${'a'.repeat(fill + 1)}${suffix}`;
+    expect(Buffer.byteLength(overLine, 'utf8')).toBe(301);
+    await writeTranscript(path.join(fx.artifactDir, '__advisor.jsonl'), [header, overLine]);
+    const over = await collectHiddenSessionUsage({
+      env: fx.env,
+      cwd: fx.cwd,
+      sessionId: fx.sessionId,
+    });
+    expect(over).toBeUndefined();
+  });
+
+  test('hidden legacy totals include cache-read and cache-write dimensions', async () => {
+    const fx = await layoutFresh({ withAdvisor: false, withTask: false });
+    await writeTranscript(path.join(fx.artifactDir, '__advisor.jsonl'), [
+      sessionHeader('cache-adv', fx.cwd),
+      assistantLine({
+        provider: 'anthropic',
+        model: 'cache-model',
+        input: 10,
+        output: 4,
+        cacheRead: 6,
+        cacheWrite: 2,
+        cost: 0.5,
+      }),
+    ]);
+    const hidden = await collectHiddenSessionUsage({
+      env: fx.env,
+      cwd: fx.cwd,
+      sessionId: fx.sessionId,
+    });
+    expect(hidden?.entries[0]).toEqual(
+      expect.objectContaining({
+        model: 'cache-model',
+        inputTokens: 10,
+        outputTokens: 4,
+        cacheReadTokens: 6,
+        cacheWriteTokens: 2,
+        costUsd: 0.5,
+      })
+    );
+    // Pi totalTokens = input + output + cacheRead + cacheWrite
+    expect(hidden?.tokens).toEqual({ input: 10, output: 4, total: 22, cost: 0.5 });
+
+    const enriched = enrichResultWithHiddenUsage(
+      {
+        tokens: { input: 1, output: 1, total: 2, cost: 0.01 },
+        cost: 0.01,
+        numTurns: 3,
+        usageBreakdown: [],
+      },
+      hidden!
+    );
+    expect(enriched.numTurns).toBe(3);
+    expect(enriched.tokens).toEqual({ input: 11, output: 5, total: 24, cost: 0.51 });
   });
 });
