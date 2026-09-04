@@ -307,6 +307,201 @@
       "priority": 14,
       "passes": true,
       "notes": "Implemented in iteration 14. Docs: configuration.md pricing, ai-assistants usage limits/OMP fail-soft, api.md GET /api/usage, cli usage consistency, database ledger inventory. Unblock: workflows Ralph model + null parse + gh-pr prose pins. Artifacts already current. validate green. schema-upgrades unavailable (no DATABASE_URL/PGHOST/docker). Rollout: claude run 07f24d4d4f1b907e405dc2be75ee0d99 unledgered=0 reported $0.05; codex/omp blocked by provider usage limits (omp.session_usage_omitted header_mismatch observed)."
+    },
+    {
+      "id": "US-015",
+      "title": "Stop guessing Claude resolved model",
+      "description": "As an operator, I want Claude multi-model results to preserve ambiguity, so that model attribution never selects a main model by output volume.",
+      "acceptanceCriteria": [
+        "A Claude SDK result with two model keys emits every reported usage entry in order but omits resolvedModel from the terminal result instead of selecting the greatest-output model.",
+        "Empty Claude modelUsage omits resolvedModel and a single-model result preserves resolvedModel exactly as before.",
+        "Observability falls through from absent terminal resolvedModel to the effective requested or configured model, and otherwise omits the model attribute without choosing from usageBreakdown.",
+        "Existing Claude typed failure classification, provider retry behavior, and usage accumulation for usage-bearing errors remain unchanged.",
+        "Focused provider and observability tests pass: src/claude/provider.test.ts and src/observability.test.ts."
+      ],
+      "technicalNotes": "Convergence Task 1 in docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1417-1446. Modify packages/providers/src/claude/provider.ts and provider.test.ts; modify packages/providers/src/observability.test.ts only if fallback-order coverage is insufficient. Source design anchors: docs/superpowers/plans/2026-09-03-node-cost-tracking.md:253-265 and 270-285.",
+      "dependsOn": [
+        "US-001",
+        "US-002"
+      ],
+      "priority": 15,
+      "passes": false
+    },
+    {
+      "id": "US-016",
+      "title": "Validate usage at workflow boundaries",
+      "description": "As a workflow engine maintainer, I want provider usage validated at both consumption sites, so that one malformed row cannot erase valid sibling observations or retain stale pass usage.",
+      "acceptanceCriteria": [
+        "Standard-node and direct-loop tests with [valid, invalid, valid] usage arrays record exactly the two valid entries in source order and log only rejected index/schema issues.",
+        "When the latest terminal result is empty or all-invalid after an earlier cumulative result, the earlier pass state is cleared and no recorder call is made.",
+        "validateProviderUsageAtBoundary() runs whenever a terminal result replaces pass state in both standard AI and direct-loop capture sites before calling the recorder port.",
+        "Standard success/error/reask/retry metadata, direct-loop iteration metadata, retry epoch, and terminal error behavior remain unchanged.",
+        "Focused workflow executor tests pass: src/dag-executor.test.ts."
+      ],
+      "technicalNotes": "Convergence Task 2 in docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1448-1477. Modify packages/workflows/src/dag-executor.ts and dag-executor.test.ts. Do not weaken packages/core/src/workflows/usage-recorder.ts; recorder validation remains defense in depth. Source design anchors: docs/superpowers/plans/2026-09-03-node-cost-tracking.md:444-454 and 532-546.",
+      "dependsOn": [
+        "US-005",
+        "US-010",
+        "US-015"
+      ],
+      "priority": 16,
+      "passes": false
+    },
+    {
+      "id": "US-017",
+      "title": "Preserve provider-reported missingness",
+      "description": "As an operator, I want provider mappings to omit untrusted observations instead of manufacturing values, so that missing tokens, providers, requests, and costs remain visibly absent.",
+      "acceptanceCriteria": [
+        "Grok normalized usage preserves absent token categories as undefined, preserves authoritative zero values, and emits no row for an empty usage object alone.",
+        "Pi assistant-message mapping omits normalized observations with missing or blank provider identity without poisoning valid sibling observations or emitting a fabricated unknown provider.",
+        "OMP primary and hidden transcript mapping omits normalized observations with missing or blank provider identity while preserving valid sibling order and fail-soft transcript behavior.",
+        "Legacy aggregate compatibility state is separated from optional fields used to build normalized observations, preserving result status and stop reason behavior.",
+        "Focused provider tests pass for Grok, Pi, OMP primary, and OMP hidden transcript usage."
+      ],
+      "technicalNotes": "Convergence Task 3 in docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1479-1512. Modify packages/providers/src/grok/event-parser.ts, community/pi/event-bridge.ts, community/omp/event-parser.ts, their tests, and community/omp/session-usage.test.ts for shared transcript mapping. Source design anchors: docs/superpowers/plans/2026-09-03-node-cost-tracking.md:215-225, 287-300, 322-342, 334-343, and 384-443.",
+      "dependsOn": [
+        "US-003",
+        "US-004",
+        "US-016"
+      ],
+      "priority": 17,
+      "passes": false
+    },
+    {
+      "id": "US-018",
+      "title": "Harden OMP hidden-session discovery",
+      "description": "As an operator, I want OMP hidden-session enrichment to be exact, streamed, and race-safe, so that hidden usage is counted only from proven session artifacts.",
+      "acceptanceCriteria": [
+        "Multiple matching main transcripts are ambiguous and fail closed; unrelated valid-looking JSONL files under the artifact directory are never billed as subagent usage.",
+        "Resume/fork prefix verification and appended parsing use the same verified open file identity, so a pathname swap after verification cannot redirect the reader.",
+        "Chunked JSONL parsing handles records split across read chunks and UTF-8 boundaries without allocating the remaining transcript as one buffer.",
+        "Exact limits for 1,000 files, 256 MiB total, 64 MiB per file, and 8 MiB per line succeed, while one-over cases omit all hidden enrichment and preserve the primary result/status.",
+        "Hidden legacy totals include cache-read/cache-write dimensions represented by Pi totalTokens while input/output and numTurns retain existing meanings; OMP session/provider focused tests pass."
+      ],
+      "technicalNotes": "Convergence Task 4 in docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1514-1548. Modify packages/providers/src/community/omp/session-usage.ts and session-usage.test.ts; modify provider.test.ts only for end-to-end status preservation. Mirror pinned OMP filename constructors and keep bounded streamed reads. Source design anchors: docs/superpowers/plans/2026-09-03-node-cost-tracking.md:384-443.",
+      "dependsOn": [
+        "US-004",
+        "US-017"
+      ],
+      "priority": 18,
+      "passes": false
+    },
+    {
+      "id": "US-019",
+      "title": "Keep pricing identity structured",
+      "description": "As an operator, I want duplicate pricing detection to use structured provider/model tuples, so that exact pricing cannot collide when identities contain separators.",
+      "acceptanceCriteria": [
+        "A behavioral test with duplicate provider/model pairs containing the current separator blocks only the exact duplicate and leaves a neighboring non-duplicate pair priceable.",
+        "Duplicate detection, rate removal, and catalog-fallback blocking all address the same exact structured (provider, model) tuple without concatenating and parsing identity strings.",
+        "Slash-containing and separator-containing provider or model ids cannot collide, shadow, or mutate a different pricing pair.",
+        "Existing duplicate warnings and catalog-fallback blocking semantics remain intact for the rejected exact pair.",
+        "Focused core estimate tests pass: src/usage/estimate.test.ts."
+      ],
+      "technicalNotes": "Convergence Task 5 in docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1550-1577. Modify packages/core/src/usage/estimate.ts and estimate.test.ts. Replace concatenated duplicate sets with an existing nested provider/model map or set representation. Source design anchors: docs/superpowers/plans/2026-09-03-node-cost-tracking.md:653-711.",
+      "dependsOn": [
+        "US-007",
+        "US-018"
+      ],
+      "priority": 19,
+      "passes": false
+    },
+    {
+      "id": "US-020",
+      "title": "Aggregate every node ledger group",
+      "description": "As a console user, I want run-detail node summaries to include every exact ledger group for a node, so that advisor, provider, model, source, and kind splits are not hidden by one map overwrite.",
+      "acceptanceCriteria": [
+        "A run-detail fixture with two API groups sharing one nodeId but differing by provider/model/source/kind shows cumulative direct reported and estimated values for both groups.",
+        "Node expansion retains every exact breakdown row; no provider/model/source/kind group is discarded because it shares a node id.",
+        "Aggregation preserves missingness: all-null sums remain null, known zeros remain zero, present values sum, and missing/record counters sum explicitly.",
+        "RunStream uses a per-node collection plus one tested aggregation helper and passes both the collection and aggregate to NodeDivider.",
+        "Focused web tests pass for RunStream and UsageBreakdownTable multi-row node expansion."
+      ],
+      "technicalNotes": "Convergence Task 6 in docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1579-1609. Modify packages/web/src/experiments/console/components/RunStream.tsx, NodeDivider.tsx, add RunStream.test.tsx, and extend UsageBreakdownTable.test.ts. Source design anchors: docs/superpowers/plans/2026-09-03-node-cost-tracking.md:885-936 and 928-930.",
+      "dependsOn": [
+        "US-013",
+        "US-019"
+      ],
+      "priority": 20,
+      "passes": false
+    },
+    {
+      "id": "US-021",
+      "title": "Render coverage before empty states",
+      "description": "As a console user, I want event-only fallback and token/request coverage shown before empty states, so that recorded-but-unledgered usage is not mislabeled as no usage.",
+      "acceptanceCriteria": [
+        "A report with usageEventCount > 0, ledgeredEventCount = 0, unledgeredEventCount > 0, hasRecordedUsage = true, and recordCount = 0 renders an explicit incomplete/under-counted event-only warning, never 'No usage recorded'.",
+        "Historical runs with zero usage events still render as not recorded, distinct from recorded-but-unledgered fallback events.",
+        "Totals and group fixtures expose every missing counter for input, output, reasoning, cache-read, cache-write, and requests separately from ledger coverage and unpriced USD.",
+        "RunDetailHeader surfaces the same event-only warning when direct-run usage has no ledger groups; NodeDivider preserves corrected inline detail state where needed.",
+        "Known zero and small-positive reported/estimated USD formatting remains unchanged; focused UsageBreakdownTable and RunDetailHeader tests pass."
+      ],
+      "technicalNotes": "Convergence Task 7 in docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1611-1642. Modify UsageBreakdownTable.tsx/test.ts, RunDetailHeader.tsx, add RunDetailHeader.test.tsx, and touch NodeDivider.tsx only as needed. Source design anchors: docs/superpowers/plans/2026-09-03-node-cost-tracking.md:913-927.",
+      "dependsOn": [
+        "US-013",
+        "US-020"
+      ],
+      "priority": 21,
+      "passes": false
+    },
+    {
+      "id": "US-022",
+      "title": "Label full human grouping tuples",
+      "description": "As an operator, I want CLI and web human labels to include each grouping's full tuple, so that distinct exact groups cannot render as the same row.",
+      "acceptanceCriteria": [
+        "CLI and web tests include two groupBy=model rows with the same provider/model but different modelSource and render distinct human labels for each row.",
+        "CLI and web tests include two groupBy=node rows with the same node id but different agent/provider/model/source/kind and render labels that distinguish every fixed node grouping dimension.",
+        "Null, unknown, and unclassified dimensions render explicit non-misleading labels including unknown model source and unclassified kind.",
+        "API and CLI --json output remain byte-for-contract equivalent to the core/API usage report; only human label formatting changes.",
+        "Focused CLI usage and web UsageBreakdownTable tests pass."
+      ],
+      "technicalNotes": "Convergence Task 8 in docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1644-1672. Modify packages/cli/src/commands/usage.ts and usage.test.ts plus UsageBreakdownTable.tsx/test.ts. Source design anchors: docs/superpowers/plans/2026-09-03-node-cost-tracking.md:749-761 and 849-881.",
+      "dependsOn": [
+        "US-012",
+        "US-013",
+        "US-021"
+      ],
+      "priority": 22,
+      "passes": false
+    },
+    {
+      "id": "US-023",
+      "title": "Enforce RFC3339 usage ranges",
+      "description": "As an API and CLI consumer, I want usage range inputs to require RFC 3339 instants and real UTC calendar dates, so that ambiguous Date parsing and nonexistent dates cannot affect accounting reports.",
+      "acceptanceCriteria": [
+        "Core, API, and CLI reject date-only, locale-formatted, zone-less, invalid-offset, and calendar-rollover strings while retaining valid Z and explicit-offset RFC 3339 instants.",
+        "The core query remains the authoritative strict instant validator and continues to support internal Date callers where the typed operation requires them.",
+        "Web From/Through controls reject nonexistent date-only inputs such as 2026-02-29 and 2026-02-30, accept valid leap day 2028-02-29, and prove a UTC calendar-component round trip before fetching.",
+        "Valid web date ranges still send UTC midnight From and exclusive UTC midnight after Through; range-pair, ordering, and 366-day limits retain current behavior.",
+        "Focused tests pass for core usage-report, server api.usage, CLI usage, and web usage skill."
+      ],
+      "technicalNotes": "Convergence Task 9 in docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1674-1707. Modify packages/core/src/db/usage-report.ts/test.ts, server usage schemas and api.usage.test.ts, CLI usage.test.ts, and web skills/usage.ts/test.ts. Source design anchors: docs/superpowers/plans/2026-09-03-node-cost-tracking.md:725-747 and 905-908.",
+      "dependsOn": [
+        "US-009",
+        "US-011",
+        "US-012",
+        "US-013",
+        "US-022"
+      ],
+      "priority": 23,
+      "passes": false
+    },
+    {
+      "id": "US-024",
+      "title": "Run post-convergence validation",
+      "description": "As a maintainer, I want the full validation sequence rerun after convergence fixes, so that the updated plan is shippable without relying on the pre-convergence US-014 result.",
+      "acceptanceCriteria": [
+        "After US-015 through US-023 pass, run the focused package validation sequence from the plan without invoking bun test from the repository root.",
+        "Regenerate tracked artifacts required by this feature only when stale, including bundled schema and web OpenAPI types with the server running.",
+        "bun run validate passes after all convergence fixes and generated artifacts are current.",
+        "bun run check:schema-upgrades passes against reachable PostgreSQL, or the result explicitly records the unavailable environment details as allowed by the plan.",
+        "Validation notes reference the post-convergence run and do not modify CHANGELOG.md or reset any previously passing story."
+      ],
+      "technicalNotes": "Post-convergence validation required by docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1709, using the validation sequence at docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1303-1345. This exists because US-014 passed before the approved convergence section and must remain unchanged.",
+      "dependsOn": [
+        "US-023"
+      ],
+      "priority": 24,
+      "passes": false
     }
   ]
 }

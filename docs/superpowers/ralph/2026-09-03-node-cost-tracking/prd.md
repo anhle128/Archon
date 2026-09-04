@@ -75,9 +75,19 @@ Providers normalize only what they observe; the workflow executor attaches run/n
 | 9 | US-009 | Implement usage report query | US-006, US-008 | 713-830, 1018-1043, 1196-1212 |
 | 10 | US-010 | Record every workflow AI pass | US-001, US-008 | 532-546, 1045-1060, 1160-1174 |
 | 11 | US-011 | Add REST usage and run detail contracts | US-009 | 713-847, 1062-1078 |
-| 12 | US-012 | Add the `archon usage` CLI | US-009 | 849-883, 1080-1095, 1213-1220 |
+| 12 | US-012 | Add the archon usage CLI | US-009 | 849-883, 1080-1095, 1213-1220 |
 | 13 | US-013 | Add console Cost page and run-detail usage | US-011 | 885-936, 1097-1112, 1221-1227 |
 | 14 | US-014 | Document and complete final verification | US-002, US-003, US-004, US-010, US-011, US-012, US-013 | 1114-1128, 1228-1345 |
+| 15 | US-015 | Stop guessing Claude resolved model | US-001, US-002 | 253-265, 270-285, 1417-1446 |
+| 16 | US-016 | Validate usage at workflow boundaries | US-005, US-010, US-015 | 444-454, 532-546, 1448-1477 |
+| 17 | US-017 | Preserve provider-reported missingness | US-003, US-004, US-016 | 215-225, 287-300, 322-342, 334-343, 384-443, 1479-1512 |
+| 18 | US-018 | Harden OMP hidden-session discovery | US-004, US-017 | 384-443, 1514-1548 |
+| 19 | US-019 | Keep pricing identity structured | US-007, US-018 | 653-711, 1550-1577 |
+| 20 | US-020 | Aggregate every node ledger group | US-013, US-019 | 885-936, 928-930, 1579-1609 |
+| 21 | US-021 | Render coverage before empty states | US-013, US-020 | 913-927, 1611-1642 |
+| 22 | US-022 | Label full human grouping tuples | US-012, US-013, US-021 | 749-761, 849-881, 1644-1672 |
+| 23 | US-023 | Enforce RFC3339 usage ranges | US-009, US-011, US-012, US-013, US-022 | 725-747, 905-908, 1674-1707 |
+| 24 | US-024 | Run post-convergence validation | US-023 | 1303-1345, 1709 |
 
 ## Ralph Execution Notes
 
