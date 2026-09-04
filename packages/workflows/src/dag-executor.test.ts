@@ -5793,6 +5793,262 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(usageCalls(mockDeps)).toHaveLength(0);
     });
 
+    it('clears earlier standard usage when the latest terminal result omits usageBreakdown', async () => {
+      const earlier = [sampleEntry({ inputTokens: 41, costUsd: 0.041 })];
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't1', taskType: 'local_agent', description: 'bg' }],
+        };
+        yield { type: 'result', sessionId: 's1', usageBreakdown: earlier };
+        yield { type: 'background_tasks', tasks: [] };
+        yield { type: 'assistant', content: 'done' };
+        // Final result deliberately omits usageBreakdown — stale earlier usage must not survive.
+        yield { type: 'result', sessionId: 's1' };
+      });
+      const { mockDeps } = await runSimple({});
+      expect(usageCalls(mockDeps)).toHaveLength(0);
+    });
+
+    it('clears earlier loop usage when the latest attempt result omits usageBreakdown', async () => {
+      const earlier = [sampleEntry({ costUsd: 0.021 })];
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't1', taskType: 'local_agent', description: 'bg' }],
+        };
+        yield { type: 'result', sessionId: 'loop', usageBreakdown: earlier };
+        yield { type: 'background_tasks', tasks: [] };
+        yield { type: 'assistant', content: 'DONE' };
+        yield { type: 'result', sessionId: 'loop' };
+      });
+      const { mockDeps } = await runSimple({
+        workflow: {
+          name: 'loop-omit-usage',
+          nodes: [
+            {
+              id: 'work',
+              loop: {
+                prompt: 'go',
+                until: 'DONE',
+                max_iterations: 2,
+              },
+            },
+          ],
+        },
+      });
+      expect(usageCalls(mockDeps)).toHaveLength(0);
+    });
+
+    it('fail-closes non-array usageBreakdown on standard nodes without retaining earlier usage', async () => {
+      mockLogFn.mockClear();
+      const earlier = [sampleEntry({ inputTokens: 60, costUsd: 0.06 })];
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't1', taskType: 'local_agent', description: 'bg' }],
+        };
+        yield { type: 'result', sessionId: 's1', usageBreakdown: earlier };
+        yield { type: 'background_tasks', tasks: [] };
+        yield {
+          type: 'result',
+          sessionId: 's1',
+          // Runtime-malformed: providers must send an array; object must not preserve earlier usage.
+          usageBreakdown: { provider: 'anthropic', inputTokens: 9 },
+        } as never;
+      });
+      const { mockDeps } = await runSimple({});
+      expect(usageCalls(mockDeps)).toHaveLength(0);
+      const rejectedWarns = mockLogFn.mock.calls.filter(
+        (c: unknown[]) => c[1] === 'workflow.usage_entry_rejected'
+      );
+      expect(rejectedWarns.length).toBeGreaterThanOrEqual(1);
+      for (const call of rejectedWarns) {
+        const payload = call[0] as { rejected: Array<{ index: number; issue: string }> };
+        expect(JSON.stringify(payload)).not.toContain('anthropic');
+        expect(JSON.stringify(payload)).not.toContain('inputTokens');
+        for (const r of payload.rejected) {
+          expect(r).toEqual({ index: expect.any(Number), issue: expect.any(String) });
+        }
+      }
+    });
+
+    it('fail-closes non-array usageBreakdown on direct loops without retaining earlier usage', async () => {
+      mockLogFn.mockClear();
+      const earlier = [sampleEntry({ costUsd: 0.022 })];
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't1', taskType: 'local_agent', description: 'bg' }],
+        };
+        yield { type: 'result', sessionId: 'loop', usageBreakdown: earlier };
+        yield { type: 'background_tasks', tasks: [] };
+        yield { type: 'assistant', content: 'DONE' };
+        yield {
+          type: 'result',
+          sessionId: 'loop',
+          usageBreakdown: 'not-an-array',
+        } as never;
+      });
+      const { mockDeps } = await runSimple({
+        workflow: {
+          name: 'loop-malformed-usage',
+          nodes: [
+            {
+              id: 'work',
+              loop: {
+                prompt: 'go',
+                until: 'DONE',
+                max_iterations: 2,
+              },
+            },
+          ],
+        },
+      });
+      expect(usageCalls(mockDeps)).toHaveLength(0);
+      const rejectedWarns = mockLogFn.mock.calls.filter(
+        (c: unknown[]) => c[1] === 'workflow.usage_entry_rejected'
+      );
+      expect(rejectedWarns.length).toBeGreaterThanOrEqual(1);
+      for (const call of rejectedWarns) {
+        expect(JSON.stringify(call[0])).not.toContain('not-an-array');
+      }
+    });
+
+    it('pairs terminalError metadata with the latest standard result that owns the breakdown', async () => {
+      const successUsage = [sampleEntry({ costUsd: 0.01 })];
+      const errorUsage = [sampleEntry({ costUsd: 0.09 })];
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't1', taskType: 'local_agent', description: 'bg' }],
+        };
+        yield {
+          type: 'result',
+          sessionId: 's1',
+          usageBreakdown: successUsage,
+        };
+        yield { type: 'background_tasks', tasks: [] };
+        yield {
+          type: 'result',
+          sessionId: 's1',
+          isError: true,
+          errorSubtype: 'error_during_execution',
+          usageBreakdown: errorUsage,
+        };
+      });
+      const { mockDeps } = await runSimple({});
+      const calls = usageCalls(mockDeps);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        terminalError: true,
+        errorSubtype: 'error_during_execution',
+      });
+      expect(calls[0].usageBreakdown).toEqual(errorUsage);
+    });
+
+    it('clears standard usage when a later error result omits breakdown', async () => {
+      const earlier = [sampleEntry({ costUsd: 0.08 })];
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't1', taskType: 'local_agent', description: 'bg' }],
+        };
+        yield { type: 'result', sessionId: 's1', usageBreakdown: earlier };
+        yield { type: 'background_tasks', tasks: [] };
+        yield {
+          type: 'result',
+          sessionId: 's1',
+          isError: true,
+          errorSubtype: 'error_during_execution',
+        };
+      });
+      const { mockDeps, store } = await runSimple({});
+      // Latest terminal result owns accounting and provided no breakdown — no stale success usage.
+      expect(usageCalls(mockDeps)).toHaveLength(0);
+      expect(store.failWorkflowRun).toHaveBeenCalled();
+    });
+
+    it('pairs loop terminalError metadata with the latest attempt result that owns the breakdown', async () => {
+      const successUsage = [sampleEntry({ costUsd: 0.011 })];
+      const errorUsage = [sampleEntry({ costUsd: 0.044 })];
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't1', taskType: 'local_agent', description: 'bg' }],
+        };
+        yield { type: 'result', sessionId: 'loop', usageBreakdown: successUsage };
+        yield { type: 'background_tasks', tasks: [] };
+        yield {
+          type: 'result',
+          sessionId: 'loop',
+          isError: true,
+          errorSubtype: 'error_during_execution',
+          usageBreakdown: errorUsage,
+        };
+      });
+      const { mockDeps, store } = await runSimple({
+        workflow: {
+          name: 'loop-error-owns-usage',
+          nodes: [
+            {
+              id: 'work',
+              loop: {
+                prompt: 'go',
+                until: 'DONE',
+                max_iterations: 3,
+              },
+            },
+          ],
+        },
+      });
+      const calls = usageCalls(mockDeps);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        stepName: 'work',
+        iteration: 1,
+        terminalError: true,
+        errorSubtype: 'error_during_execution',
+      });
+      expect(calls[0].usageBreakdown).toEqual(errorUsage);
+      expect(store.failWorkflowRun).toHaveBeenCalled();
+    });
+
+    it('clears loop usage when a later error result omits breakdown', async () => {
+      const earlier = [sampleEntry({ costUsd: 0.033 })];
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't1', taskType: 'local_agent', description: 'bg' }],
+        };
+        yield { type: 'result', sessionId: 'loop', usageBreakdown: earlier };
+        yield { type: 'background_tasks', tasks: [] };
+        yield {
+          type: 'result',
+          sessionId: 'loop',
+          isError: true,
+          errorSubtype: 'error_during_execution',
+        };
+      });
+      const { mockDeps, store } = await runSimple({
+        workflow: {
+          name: 'loop-error-omit-usage',
+          nodes: [
+            {
+              id: 'work',
+              loop: {
+                prompt: 'go',
+                until: 'DONE',
+                max_iterations: 3,
+              },
+            },
+          ],
+        },
+      });
+      expect(usageCalls(mockDeps)).toHaveLength(0);
+      expect(store.failWorkflowRun).toHaveBeenCalled();
+    });
+
     it('records each structured-output reask independently', async () => {
       const u1 = [sampleEntry({ costUsd: 0.01 })];
       const u2 = [sampleEntry({ costUsd: 0.02 })];

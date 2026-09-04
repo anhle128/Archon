@@ -2311,19 +2311,35 @@ async function executeNodeInternal(
           // is the exact defect #2314 exists to prevent; absence must stay absence.
           nodeResolvedModel = msg.resolvedModel;
           if (msg.structuredOutput !== undefined) structuredOutput = msg.structuredOutput;
-          // Latest terminal result owns pass accounting. Validate per entry at the
-          // workflow boundary so one malformed row cannot discard siblings, and an
-          // empty/all-invalid latest result clears earlier cumulative usage.
+          // Latest terminal result owns pass accounting unconditionally. Validate
+          // array entries at the boundary so one malformed row cannot discard
+          // siblings; absent/malformed latest usage clears earlier cumulative
+          // state rather than retaining it. Error metadata belongs to the same
+          // owning result — not only when usageBreakdown happens to be an array.
           if (Array.isArray(msg.usageBreakdown)) {
             const validated = validateProviderUsageAtBoundary(msg.usageBreakdown);
             passUsageBreakdown = validated?.breakdown;
-            if (msg.isError && msg.errorSubtype !== 'success') {
-              passTerminalError = true;
-              passErrorSubtype = msg.errorSubtype ?? 'unknown';
-            } else {
-              passTerminalError = false;
-              passErrorSubtype = null;
+          } else {
+            if (msg.usageBreakdown !== undefined) {
+              getLog().warn(
+                {
+                  rejectedCount: 1,
+                  retainedCount: 0,
+                  rejected: [
+                    { index: 0, issue: `usage_breakdown_type_${typeof msg.usageBreakdown}` },
+                  ],
+                },
+                'workflow.usage_entry_rejected'
+              );
             }
+            passUsageBreakdown = undefined;
+          }
+          if (msg.isError && msg.errorSubtype !== 'success') {
+            passTerminalError = true;
+            passErrorSubtype = msg.errorSubtype ?? 'unknown';
+          } else {
+            passTerminalError = false;
+            passErrorSubtype = null;
           }
           // Fail the node if the SDK reports a cost cap exceeded error
           if (msg.isError && msg.errorSubtype === 'error_max_budget_usd') {
@@ -5365,17 +5381,32 @@ async function executeLoopNode(
             if (msg.structuredOutput !== undefined) {
               attemptStructured = msg.structuredOutput;
             }
-            // Latest terminal result owns attempt accounting after boundary validation.
+            // Latest terminal result owns attempt accounting unconditionally —
+            // same replacement semantics as the standard AI-node path.
             if (Array.isArray(msg.usageBreakdown)) {
               const validated = validateProviderUsageAtBoundary(msg.usageBreakdown);
               passUsageBreakdown = validated?.breakdown;
-              if (msg.isError && msg.errorSubtype !== 'success') {
-                passTerminalError = true;
-                passErrorSubtype = msg.errorSubtype ?? 'unknown';
-              } else {
-                passTerminalError = false;
-                passErrorSubtype = null;
+            } else {
+              if (msg.usageBreakdown !== undefined) {
+                getLog().warn(
+                  {
+                    rejectedCount: 1,
+                    retainedCount: 0,
+                    rejected: [
+                      { index: 0, issue: `usage_breakdown_type_${typeof msg.usageBreakdown}` },
+                    ],
+                  },
+                  'workflow.usage_entry_rejected'
+                );
               }
+              passUsageBreakdown = undefined;
+            }
+            if (msg.isError && msg.errorSubtype !== 'success') {
+              passTerminalError = true;
+              passErrorSubtype = msg.errorSubtype ?? 'unknown';
+            } else {
+              passTerminalError = false;
+              passErrorSubtype = null;
             }
             // Fail the iteration loudly on SDK error results. Previously we broke
             // silently, producing empty output and continuing to the next iteration —
