@@ -36,6 +36,9 @@ Pricing / quality comparison across runs is a separate product and is out of thi
 12. **Start visibility (Q4-C):** preview GET on the Start form, and stamp `resolved` onto the run when the run row is created (after isolation, before first `sendQuery`).
     Not a run-row-before-isolation lifecycle change.
 13. **Apply returns a patched clone.** Never mutate a cached discovered definition.
+14. **`resolved` is start/resume audit only (Q5-A).**
+    Execution never reads `resolved` for `sendQuery`.
+    Resume recomputes and updates the table from the live profile.
 
 ## Current state (evidence)
 
@@ -178,7 +181,7 @@ metadata.envOverlay = {
   workflowName: string;
   patches: EnvPatches; // filtered applied map only
   skippedNodeIds?: string[];
-  resolved: Record<string, NodeExecutionMetadata>;
+  resolved: Record<string, NodeExecutionMetadata>; // audit at this start/resume, not execution input
 };
 ```
 
@@ -187,7 +190,9 @@ metadata.envOverlay = {
 - Ignore request `envId` and the live ENV row.
 - Re-apply `metadata.envOverlay.patches` (already filtered) onto a clone.
 - Run `validateDagStructure`.
+- Recompute `resolved` with the live profile and write it back.
 - Do not re-expand skipped keys if YAML later gains those nodes.
+- `sendQuery` still uses the patched clone + live profile, never the previous `resolved` table.
 
 Child `workflow:` sub-runs do not inherit the parent overlay.
 
@@ -216,7 +221,7 @@ All routes go through `registerOpenApiRoute`.
 Run detail:
 
 - Chip `env: <name>` from snapshot.
-- Table from `metadata.envOverlay.resolved`, not `node_started`.
+- Table from `metadata.envOverlay.resolved`, labeled as resolved at this start/resume, not as a frozen execution contract.
 
 Out of v1: legacy start surfaces, resume ENV picker, CLI.
 
@@ -236,6 +241,7 @@ Out of v1: legacy start surfaces, resume ENV picker, CLI.
 - Forbidden field / `prompt` on non-prompt / `provider` on existing `bash:`: dispatch fail before isolation.
 - Overlay `prompt`/`bash` with dangling `$node.output`: `invalid_overlay_graph` before isolation.
 - Resume: re-apply filtered snapshot only; YAML that later adds a skipped id does not receive that patch.
+- Resume after live `large` tier changes: `resolved` table updates; `sendQuery` uses the new tier for unpatched `model: large`, not the old `resolved` row.
 - Include: `specify` hits root; include child needs `includeId__nodeId`.
 - `loop_group` body id: skipped (not a top-level id).
 - Cache: apply ENV A, then no-ENV on the same cached bundled definition → original nodes unchanged.
@@ -272,4 +278,6 @@ Schema / API seams: both dialects, `generate:bundled-schema`, parity, `migration
 ## Open items
 
 None for v1.
-YAML drift under identity B is handled by skip-missing-ids plus filtered snapshot, not by create-time DAG checks.
+YAML drift under identity B is handled by skip-missing-ids plus filtered snapshot.
+`resolved` is audit-only; unpatched `model: large` keeps current-tier meaning.
+

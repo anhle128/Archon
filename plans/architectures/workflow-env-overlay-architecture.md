@@ -41,12 +41,15 @@ Execution uses that clone; do not rediscover-and-mutate the cache.
 
 **Snapshot (when the run row is created, after isolation, before first `sendQuery`):**
 filtered applied `patches`, optional `skippedNodeIds`, and `resolved` per node: `{ provider, model, effort, thinking }`.
-Resume/retry re-applies only the filtered snapshot.
+`resolved` is **start-time audit only**.
+Execution never reads `resolved` for `sendQuery`; it uses the patched clone plus the live profile.
+Resume/retry re-applies the filtered patches, recomputes `resolved`, and updates the table.
+UI labels the table as resolved at this start/resume, not as a frozen execution contract.
 
 **Start preview:** GET using conversation project cwd + optional `envId`.
 Same clone → apply → shared metadata helper.
 DraftRunCard shows the table when an ENV is selected.
-Run detail reads `metadata.envOverlay.resolved`, not `node_started`.
+Run detail reads `metadata.envOverlay.resolved` as audit, not `node_started`.
 
 `resolveNodeModel` today does not return `thinking`.
 Thinking follows node → workflow → preset via `applyPresetOptions`.
@@ -75,7 +78,8 @@ ENV rows in `@archon/core`.
   Missing node ids skipped; type errors on existing nodes fail.
   Apply returns a patched clone.
   Existing workflow-name shadowing is reused.
-  Start visibility is preview GET plus snapshot-at-run-row (Q4-C), not a run-row-before-isolation lifecycle change.
+  Start visibility is preview GET plus snapshot-at-run-row (Q4-C).
+  `resolved` is audit-only (Q5-A); unpatched `model: large` keeps meaning current large tier.
 
 ## Missing pieces
 

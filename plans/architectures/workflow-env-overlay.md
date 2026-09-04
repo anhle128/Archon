@@ -230,6 +230,34 @@ Engineering lock for Q4-C: do not call `resolveNodeModel` alone for the Start ta
 It does not return `thinking`.
 Extract `resolveNodeExecutionMetadata` covering provider, model, effort, and thinking (node → workflow → preset, same as `applyPresetOptions`) and use it for preview, snapshot, and `node_started`.
 
+## Q5 — is `resolved` audit-only or the execution source? (asked, awaiting answer)
+
+Resume re-applies patches then runs current `buildAiProfile` / `resolveNodeExecutionMetadata`.
+If the operator changes tiers or user prefs, the stamped `resolved` table can disagree with what resume actually runs.
+
+Options:
+
+- A. `resolved` is start-time audit only.
+  UI labels it as resolved at start.
+  Resume recomputes and updates the table.
+  Execution always goes through live profile + patched YAML.
+
+- B. Freeze execution.
+  Resume/retry uses snapshot `resolved` (provider/model/effort/thinking) as the source, not current tiers/prefs.
+
+Recommendation: A.
+ENV patches already freeze fields the operator set.
+Unpatched `model: large` should keep meaning “current large tier”.
+B is a second resolution path and fights existing profile layering.
+
+User answer: A.
+User answer: A.
+`resolved` is start-time audit only.
+UI labels it as resolved at start.
+Resume recomputes and updates the table.
+Execution always uses patched YAML plus the live profile.
+ENV-patched fields stay frozen because they live in the filtered patch map, not because `resolved` drives sendQuery.
+
 ## Interruption
 
 User asked about legacy dashboard mobile, then said we are still in plan-architecture for ENV overlay.
