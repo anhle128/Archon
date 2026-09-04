@@ -1,5 +1,12 @@
 ## Codebase Patterns
 
+
+### OMP discovery enumerates directories with a shared entry bound
+- **Where**: `packages/providers/src/community/omp/session-usage.ts` `readDirEntriesBounded` / `MAX_DISCOVERY_ENTRIES`
+- **Pattern**: Never `fs.readdir` whole directories for session/artifact discovery. Stream via `opendir` + manual `read()`; count every name (noise, dirs, JSONL) toward `maxDiscoveryEntries` (default 10_000, test-overridable). One-over → warn `too_many_entries` and omit all hidden enrichment (not a partial prefix). Recursive artifact traversal shares one examined counter across the stack. Independent of `maxCandidateFiles` / byte / line limits. Bun `Dir.close()` may return void — `try/await close` without `.catch` on the return value. Test seams: `getDiscoveryMetricsForTest` (`entriesExamined`, `lstatCalls`).
+- **Example**: artifact root with bound+1 filler files → `collectHiddenSessionUsage` undefined and `lstatCalls===0`; exact bound with noise+candidates still bills
+
+
 ### NullableUsageReport is a separate OpenAPI identity
 - **Where**: `packages/server/src/routes/schemas/usage.schemas.ts` `nullableUsageReportResponseSchema`; `workflow.schemas.ts` run-detail `usage`
 - **Pattern**: Never call `.nullable()` on an already-`.openapi('UsageReport')` schema — zod-openapi mutates the shared component to `nullable: true`, making GET /api/usage appear nullable in generated TS. Branch from the core schema: `usageReportSchema.nullable().openapi('NullableUsageReport')` for run-detail only. Web skill derives GET body from `paths['/api/usage']['get']...[200]` (non-null) and run-detail from `WorkflowRunDetail['usage']` / `NullableUsageReport`; compile-time ExactMatch fails if the shared component becomes nullable again.
@@ -1411,3 +1418,26 @@
 - openapi-typescript maps component `nullable: true` to `T | null` on the named schema, so a separate wrapper name is required when one route needs null and another must stay non-null
 
 ---
+
+## 2026-09-05 — US-046: Bound OMP directory enumeration before entry allocation
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/omp/session-usage.ts` — `MAX_DISCOVERY_ENTRIES` (10_000); `readDirEntriesBounded` via opendir streaming; main-transcript + recursive artifact discovery share entry counting (all names); discovery metrics test seam; omit-all on one-over before statting
+- `packages/providers/src/community/omp/session-usage.test.ts` — exact/one-over main + artifact + recursive; order-independent overflow; candidate-file limit remains independent; no pre-bound discovery lstat
+
+**Acceptance criteria verified**:
+- [x] Directory with one more than discovery-entry bound (noise + JSONL) fails closed before materializing/statting the complete directory
+- [x] Exact-bound success and one-over omission for main-transcript discovery and recursive artifact traversal; deterministic omit-all regardless of iteration order
+- [x] Whole-directory readdir replaced by bounded streaming enumeration counting all entries examined
+- [x] Independent 1_000 candidate-file, 256 MiB total, 64 MiB per-file, 8 MiB per-line limits remain; breach warns path-safe and omits all hidden enrichment
+- [x] Recursive ownership, symlink/containment, one-handle identity, resume/fork prefix, exact-main ambiguity, primary streamed usage do not regress (full session-usage.test.ts green: 56 pass)
+
+**Learnings**:
+- layoutFresh session dirs always contain main.jsonl + artifact subdirectory (2 baseline entries) — bound tests must count both
+- Bun `Dir.close()` can return void; never chain `.catch` on the return value
+- for-await of `Dir` auto-closes on some runtimes and races a finally close — prefer manual `dir.read()` loops
+- Nested ownership proofs via `taskSpawnAssistantCall` inject billable `gpt-test` usage rows; use `taskSpawnToolResult` when the test only needs stem proof
+
+---
+

@@ -957,7 +957,8 @@
         "US-045"
       ],
       "priority": 46,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration after US-045. Files: packages/providers/src/community/omp/session-usage.ts, session-usage.test.ts. MAX_DISCOVERY_ENTRIES=10000; bounded opendir streaming; main+recursive exact/one-over; independent candidate limits retained."
     },
     {
       "id": "US-047",
