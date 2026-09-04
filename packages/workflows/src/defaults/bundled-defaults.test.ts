@@ -540,25 +540,57 @@ describe('bundled-defaults', () => {
 
     const GUARDED = /gh pr (create|list|edit|ready)\b/;
 
+    /** True when the merged line is a real gh pr invocation that must pin --repo. */
+    const isGuardedInvocation = (line: string): boolean => {
+      if (!GUARDED.test(line)) return false;
+      // Prose references to a failed command (hook texts) are not invocations.
+      if (line.includes('gh pr create failed')) return false;
+      // Docs/hard-rule prose mentioning `gh pr …` in backticks is not an invocation
+      // (#2226 still requires every real shell call to pin --repo).
+      if (
+        /`gh pr (create|list|edit|ready)`/.test(line) &&
+        !/(?:^|[;&|($\s])gh pr (create|list|edit|ready)\b/.test(
+          line.replace(/`gh pr (?:create|list|edit|ready)`/g, '')
+        )
+      ) {
+        return false;
+      }
+      return true;
+    };
+
     const assertPinned = (bundle: Record<string, string>): void => {
       for (const [name, content] of Object.entries(bundle)) {
         for (const line of mergeContinuations(content)) {
-          if (!GUARDED.test(line)) continue;
-          // Prose references to a failed command (hook texts) are not invocations.
-          if (line.includes('gh pr create failed')) continue;
-          // Docs/hard-rule prose mentioning `gh pr …` in backticks is not an invocation.
-          if (
-            /`gh pr (create|list|edit|ready)`/.test(line) &&
-            !/(?:^|[;&|($\s])gh pr (create|list|edit|ready)\b/.test(
-              line.replace(/`gh pr (?:create|list|edit|ready)`/g, '')
-            )
-          ) {
-            continue;
-          }
+          if (!isGuardedInvocation(line)) continue;
           expect(`${name}: ${line.trim()}`).toContain('--repo');
         }
       }
     };
+
+    it('classifies backtick prose as non-invocation and unpinned shell calls as violations', () => {
+      const hardRule =
+        '**Hard rule — no pull request:** never `git push` for the purpose of opening a PR, never `gh pr create` / `gh pr edit`, and never treat PR creation as completion.';
+      const noPrBullet = '- **NO_PR**: No push-for-PR and no `gh pr create`';
+      const realCreate = 'gh pr create --title "x" --body "y"';
+      const realPinned = 'gh pr create --repo "$PR_REPO" --title "x" --body "y"';
+      const realList = 'gh pr list --head "$PR_HEAD"';
+      const failedProse = 'echo "gh pr create failed: $err"';
+      const mixed = 'never `gh pr create` but also run: gh pr create --title t';
+
+      expect(isGuardedInvocation(hardRule)).toBe(false);
+      expect(isGuardedInvocation(noPrBullet)).toBe(false);
+      expect(isGuardedInvocation(failedProse)).toBe(false);
+      expect(isGuardedInvocation(realCreate)).toBe(true);
+      expect(isGuardedInvocation(realPinned)).toBe(true);
+      expect(isGuardedInvocation(realList)).toBe(true);
+      // Backticks alone are not enough when a real invocation remains on the line.
+      expect(isGuardedInvocation(mixed)).toBe(true);
+
+      expect(() => assertPinned({ 'bad-create': realCreate })).toThrow(/--repo/);
+      expect(() => assertPinned({ 'bad-list': realList })).toThrow(/--repo/);
+      expect(() => assertPinned({ prose: hardRule })).not.toThrow();
+      expect(() => assertPinned({ ok: realPinned })).not.toThrow();
+    });
 
     it('every gh pr create/list/edit/ready in bundled commands pins --repo', () => {
       assertPinned(BUNDLED_COMMANDS);

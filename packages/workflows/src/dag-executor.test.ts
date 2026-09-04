@@ -5846,8 +5846,8 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       await executeNativeRalphFixture(fixture.workflow, store);
 
       expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
-      // The native Ralph loop node declares its own provider/model, so the loop's
-      // per-iteration sendQuery runs as that — not the workflow-level default.
+      // Accepted contract: speckit-ralph-native-feature.yaml ralph-loop-run uses
+      // omp + xai-oauth/grok-4.5 (final loop uses cursor/cursor-grok-4.5 — see loader test).
       const loopNode = fixture.workflow.nodes.find(node => node.id === 'ralph-loop-run');
       expect(loopNode?.provider).toBe('omp');
       expect(loopNode?.model).toBe('xai-oauth/grok-4.5');
@@ -15402,8 +15402,10 @@ describe('provider resolution -- regression for #1610', () => {
 
 describe('bundled opus nodes -- provider annotation invariant (#1610)', () => {
   it('every bundled node with an opus model has provider: claude at the node or workflow level', async () => {
-    // Resolve the defaults directory relative to this package (same logic as getAppArchonBasePath).
-    // import.meta.dir = packages/workflows/src → go up 3 levels to repo root → .archon/workflows/defaults
+    // Annotation-only invariant: parse raw YAML (same approach as bundled-defaults.test).
+    // Do NOT use parseWorkflow here — loader structural/provider errors are unrelated to
+    // the opus provider annotation contract and must not disable this scan (#1610).
+    // Malformed YAML throws from Bun.YAML.parse (no silent skip).
     const repoRoot = join(import.meta.dir, '..', '..', '..');
     const defaultsDir = join(repoRoot, '.archon', 'workflows', 'defaults');
 
@@ -15411,33 +15413,32 @@ describe('bundled opus nodes -- provider annotation invariant (#1610)', () => {
     const files = (await readdir(defaultsDir)).filter(f => f.endsWith('.yaml'));
     expect(files.length).toBeGreaterThan(0);
 
+    let opusNodesScanned = 0;
     for (const file of files) {
       const src = await readFileFs(join(defaultsDir, file), 'utf-8');
-      const result = parseWorkflow(src, file);
-      // ParseResult always has a `workflow` key; failed loads set it to null.
-      if (result.error || !result.workflow) continue;
+      const wf = Bun.YAML.parse(src) as {
+        provider?: string;
+        nodes?: Array<{ id?: string; model?: string; provider?: string }>;
+      };
+      if (!wf || typeof wf !== 'object' || !Array.isArray(wf.nodes)) continue;
 
-      const wf = result.workflow;
-      if (!('nodes' in wf) || !wf.nodes) continue; // skip non-DAG workflows
-
-      const workflowProvider: string | undefined = (wf as { provider?: string }).provider;
-
+      const workflowProvider = wf.provider;
       for (const n of wf.nodes) {
-        const nodeModel: string | undefined = (n as { model?: string }).model;
+        const nodeModel = n.model;
         if (!nodeModel || !nodeModel.toLowerCase().includes('opus')) continue;
 
-        const nodeProvider: string | undefined = (n as { provider?: string }).provider;
+        opusNodesScanned += 1;
+        const nodeProvider = n.provider;
         const hasExplicitClaude = nodeProvider === 'claude' || workflowProvider === 'claude';
-
         expect(hasExplicitClaude).toBe(true);
         if (!hasExplicitClaude) {
-          // Surface which file+node is missing the annotation
           throw new Error(
-            `${file}: node '${(n as { id?: string }).id ?? '?'}' has model '${nodeModel}' but no provider: claude at node or workflow level`
+            `${file}: node '${n.id ?? '?'}' has model '${nodeModel}' but no provider: claude at node or workflow level`
           );
         }
       }
     }
+    expect(opusNodesScanned).toBeGreaterThan(0);
   });
 });
 
