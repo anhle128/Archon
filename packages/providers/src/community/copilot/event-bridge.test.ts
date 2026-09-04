@@ -10,6 +10,7 @@ import type { SessionEvent } from '@github/copilot-sdk';
 import type { MessageChunk, ModelUsageEntry, TokenUsage } from '../../types';
 import {
   AsyncQueue,
+  CopilotUsageBearingError,
   mapCopilotEvent,
   mapCopilotUsageEntry,
   normalizeCopilotUsage,
@@ -428,5 +429,38 @@ describe('mapCopilotEvent', () => {
     expect(mapCopilotEvent(evt('session.idle', {}), ctx)).toEqual([]);
     expect(mapCopilotEvent(evt('assistant.turn_start', { turnId: 't1' }), ctx)).toEqual([]);
     expect(mapCopilotEvent(evt('user.message', {}), ctx)).toEqual([]);
+  });
+});
+
+describe('CopilotUsageBearingError', () => {
+  test('carries breakdown, tokens, and sessionId without inventing zeros', () => {
+    const err = new CopilotUsageBearingError('late reject', {
+      usageBreakdown: [
+        {
+          provider: 'github-copilot',
+          model: 'gpt-5',
+          modelSource: 'reported',
+          inputTokens: 1,
+          requests: 1,
+        },
+      ],
+      tokens: { input: 1, output: 0 },
+      sessionId: 'sess-1',
+      cause: new Error('root'),
+    });
+    expect(err).toBeInstanceOf(Error);
+    expect(err.name).toBe('CopilotUsageBearingError');
+    expect(err.message).toBe('late reject');
+    expect(err.usageBreakdown).toHaveLength(1);
+    expect(err.tokens).toEqual({ input: 1, output: 0 });
+    expect(err.sessionId).toBe('sess-1');
+    expect(err.cause).toBeInstanceOf(Error);
+  });
+
+  test('omits optional fields when not provided', () => {
+    const err = new CopilotUsageBearingError('plain');
+    expect(err.usageBreakdown).toBeUndefined();
+    expect(err.tokens).toBeUndefined();
+    expect(err.sessionId).toBeUndefined();
   });
 });

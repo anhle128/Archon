@@ -20,9 +20,39 @@
 import { createLogger } from '@archon/paths';
 import type { AssistantMessageEvent, CopilotSession, SessionEvent } from '@github/copilot-sdk';
 
-import type { MessageChunk, ModelUsageEntry, TokenUsage } from '../../types';
+import type { MessageChunk, ModelUsageEntry, TokenUsage, UsageBreakdown } from '../../types';
 import { toUsageBreakdown } from '../../usage-breakdown';
 import { tryParseStructuredOutput } from '../../shared/structured-output';
+
+/**
+ * Late sendAndWait rejection that still observed authoritative assistant.usage.
+ * Provider yields one terminal isError result so the executor can record spend
+ * before failing the node. No-usage rejections keep the plain throw path.
+ */
+export class CopilotUsageBearingError extends Error {
+  readonly usageBreakdown?: UsageBreakdown;
+  readonly tokens?: TokenUsage;
+  readonly sessionId?: string;
+
+  constructor(
+    message: string,
+    extras?: {
+      usageBreakdown?: UsageBreakdown;
+      tokens?: TokenUsage;
+      sessionId?: string;
+      cause?: unknown;
+    }
+  ) {
+    super(message);
+    this.name = 'CopilotUsageBearingError';
+    if (extras?.usageBreakdown) this.usageBreakdown = extras.usageBreakdown;
+    if (extras?.tokens) this.tokens = extras.tokens;
+    if (extras?.sessionId) this.sessionId = extras.sessionId;
+    if (extras?.cause !== undefined) {
+      this.cause = extras.cause;
+    }
+  }
+}
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -420,7 +450,28 @@ export async function* bridgeSession(
   try {
     for await (const item of queue) {
       if (item.kind === 'done') break;
-      if (item.kind === 'error') throw item.error;
+      if (item.kind === 'error') {
+        // Usage observed before a late rejection must survive into the
+        // provider boundary — throwing bare would discard the spend.
+        const capturedTokens = sumCopilotTokens(capturedTokenEvents);
+        const usageBreakdown =
+          capturedUsageEntries.length > 0 ? toUsageBreakdown(capturedUsageEntries) : undefined;
+        if (usageBreakdown && usageBreakdown.length > 0) {
+          const message =
+            item.error instanceof Error
+              ? item.error.message
+              : typeof item.error === 'string'
+                ? item.error
+                : 'Copilot sendAndWait rejected';
+          throw new CopilotUsageBearingError(message, {
+            usageBreakdown,
+            ...(capturedTokens ? { tokens: capturedTokens } : {}),
+            sessionId: session.sessionId,
+            cause: item.error,
+          });
+        }
+        throw item.error;
+      }
       if (item.chunk.type === 'assistant') sawAssistantContent = true;
       yield item.chunk;
     }
