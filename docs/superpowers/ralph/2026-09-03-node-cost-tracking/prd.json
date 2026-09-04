@@ -652,6 +652,163 @@
       "priority": 31,
       "passes": true,
       "notes": "Post-Convergence 2 validation 2026-09-04. Focused package tests+builds green (providers/workflows/core/server/cli/web/docs-web). Generated artifacts current (bundled-schema/defaults/skill/pi-vendor-map/capability-matrix). OpenAPI types regenerated against worktree server PORT=3291 — unchanged. bun run validate exit 0. check:schema-upgrades OK on PGHOST=127.0.0.1:5432 (archon-postgres-1); fresh 74 indexes; 9 baselines v0.2.13…v0.9.0 converge; expected remote_agent_codebases_kind_check only. CHANGELOG untouched; no prior story reset."
+    },
+    {
+      "id": "US-032",
+      "title": "Isolate SQLite transactions from unrelated queries",
+      "description": "As a maintainer, I want SQLite transaction scopes owned by the adapter, so that unrelated async queries cannot join, commit, or roll back another operation's transaction.",
+      "acceptanceCriteria": [
+        "A SqliteAdapter test pauses a withSnapshotRead callback after its first read, starts an ordinary public query mutation from another async flow, and proves the mutation cannot execute inside the open snapshot transaction and commits separately after the snapshot ends.",
+        "A throwing withSnapshotRead callback cannot roll back an acknowledged outside mutation that started while the snapshot was open.",
+        "A withTransaction contamination test proves an ordinary public write cannot become an accidental child of the usage recorder's atomic event-plus-ledger transaction.",
+        "cleanupOldWorkflowRuns() and deleteWorkflowRun() use the adapter transaction callback instead of issuing public BEGIN, COMMIT, or ROLLBACK statements from workflow callers.",
+        "Usage reports retain one coherent snapshot, usage event plus ledger writes remain atomic and duplicate-safe, and concurrent approval/CAS, nested-transaction failure, rollback logging, and separate-connection WAL snapshot behavior do not regress."
+      ],
+      "technicalNotes": "Convergence Task 16 in docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1903-1936. Modify packages/core/src/db/adapters/sqlite.ts and sqlite.test.ts, packages/core/src/db/usage-report.snapshot.integration.test.ts, packages/core/src/db/workflows.ts and workflows.test.ts. The SQLite adapter must own transaction boundaries and provide transaction-scoped query access; public queries from other async flows must serialize outside the active transaction. Keep the PostgreSQL adapter contract unchanged. Focused commands: (cd packages/core && bun test src/db/adapters/sqlite.test.ts), (cd packages/core && bun test src/db/usage-report.snapshot.integration.test.ts), and (cd packages/core && bun test src/db/workflows.test.ts).",
+      "dependsOn": [
+        "US-008",
+        "US-029",
+        "US-031"
+      ],
+      "priority": 32,
+      "passes": false
+    },
+    {
+      "id": "US-033",
+      "title": "Recognize only exact OMP main transcripts",
+      "description": "As an operator, I want OMP hidden-session enrichment to trust only the exact supported main-transcript filename, so that suffix decoys cannot seed ownership or suppress legitimate task usage.",
+      "acceptanceCriteria": [
+        "Main-directory decoys named notes_<sessionId>.jsonl, _<sessionId>.jsonl, and malformed or non-canonical timestamp variants with valid-looking session headers are never selected as the trusted main transcript.",
+        "One exact <ISO timestamp with colon/dot separators replaced by dashes>_<sessionId>.jsonl file wins without an ambiguity warning even when a suffix-only decoy is present.",
+        "Two exact main transcript constructors remain ambiguous and fail closed, omitting hidden enrichment rather than guessing.",
+        "findMainTranscriptPath(), isMainTranscriptFileName(), and copied-main exclusion for task-file classification all use the same centralized exact constructor predicate.",
+        "Existing containment checks, one-handle verification, parent-link ownership, file and byte bounds, and fail-soft primary provider result behavior do not regress."
+      ],
+      "technicalNotes": "Convergence Task 17 in docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1938-1966. Modify packages/providers/src/community/omp/session-usage.ts and session-usage.test.ts. Mirror OMP's supported timestamp filename constructor exactly instead of accepting arbitrary non-empty prefixes or suffix-only matches. Focused command: (cd packages/providers && bun test src/community/omp/session-usage.test.ts).",
+      "dependsOn": [
+        "US-026",
+        "US-032"
+      ],
+      "priority": 33,
+      "passes": false
+    },
+    {
+      "id": "US-034",
+      "title": "Preserve OpenCode usage across late failures",
+      "description": "As an operator, I want OpenCode usage observed before retries or late errors to survive into the terminal result, so that failed internal attempts still reach workflow accounting.",
+      "acceptanceCriteria": [
+        "A provider test emits authoritative assistant message.updated usage, then a retryable session.error, then a successful internal attempt, and the final terminal result contains both attempts in source order exactly once.",
+        "Retry exhaustion after at least one observed usage entry yields a terminal isError result carrying the cumulative observations and final typed error metadata for executor persistence before node failure.",
+        "In multi-agent mode, usage reported by a child before that child or another child fails survives with kind: 'subagent' and no unobserved entry is synthesized.",
+        "OpenCode preserves accumulated usage across provider-owned retry boundaries while repeated updates for the same assistant message still replace within an attempt.",
+        "Rate-limit, crash, agent-refresh classification, backoff behavior, requested/reported model identity, missing request counts, cache/reasoning fields, resume outcome, and multi-agent attribution do not regress."
+      ],
+      "technicalNotes": "Convergence Task 18 in docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1968-1998. Modify packages/providers/src/community/opencode/session.ts, multi-agent.ts, provider.ts, and provider.test.ts; touch tokens.ts/tokens.test.ts only for a narrow typed merge helper. One sendQuery invocation must end with one cumulative authoritative breakdown; repeated attempts append spend rather than replace it. Focused commands: (cd packages/providers && bun test src/community/opencode/provider.test.ts) and (cd packages/providers && bun test src/community/opencode/tokens.test.ts).",
+      "dependsOn": [
+        "US-025",
+        "US-033"
+      ],
+      "priority": 34,
+      "passes": false
+    },
+    {
+      "id": "US-035",
+      "title": "Preserve Copilot usage across late sendAndWait rejects",
+      "description": "As an operator, I want Copilot assistant.usage events captured before a late SDK rejection to be recorded before the node fails, so that valid spend is not discarded by the error path.",
+      "acceptanceCriteria": [
+        "When one or more assistant.usage events fire before sendAndWait rejects, the terminal error path carries every captured entry and aggregate token value exactly once.",
+        "The provider boundary returns a usage-bearing terminal error result that preserves the existing friendly Copilot classification and message and remains marked as terminal-error for executor persistence.",
+        "A rejection before any usage preserves the established throw/error behavior and does not invent a usage entry.",
+        "The session.error followed by successful assistant fallback case remains successful and does not duplicate usage or become a false terminal failure.",
+        "Multiple authoritative usage events remain distinct observations with their provider, model, and kind fields, while missing upstream measures remain missing and abort/disconnect cleanup, session reuse, and structured-output parsing do not regress."
+      ],
+      "technicalNotes": "Convergence Task 19 in docs/superpowers/plans/2026-09-03-node-cost-tracking.md:2000-2030. Modify packages/providers/src/community/copilot/event-bridge.ts, provider.ts, event-bridge.test.ts, and provider.test.ts. The workflow consumer must receive one usage-bearing terminal error result when usage was observed, record it once, and still fail the node with the same actionable Copilot classification. Focused commands: (cd packages/providers && bun test src/community/copilot/event-bridge.test.ts) and (cd packages/providers && bun test src/community/copilot/provider.test.ts).",
+      "dependsOn": [
+        "US-003",
+        "US-010",
+        "US-034"
+      ],
+      "priority": 35,
+      "passes": false
+    },
+    {
+      "id": "US-036",
+      "title": "Preserve OMP and Grok usage across transport failures",
+      "description": "As an operator, I want parsed OMP and Grok usage to survive late transport failures, so that accepted provider usage is persisted before the node fails.",
+      "acceptanceCriteria": [
+        "For OMP and Grok, a valid terminal event containing authoritative primary usage followed by stderr-read rejection produces a terminal error result retaining the parsed usage, session, and model metadata exactly once.",
+        "Rejected process-exit promises and reachable stdout-failure variants after terminal usage preserve the same usage, while early transport failures with no parsed usage still throw or fail without fabricating observations.",
+        "Protocol-error and nonzero-exit fixtures keep their original subtype and message and fail the node rather than turning transport failure into success.",
+        "Post-usage transport failures route through the existing observed-result construction boundary and preserve caller cancellation semantics on abort.",
+        "OMP hidden transcript enrichment remains fail-soft and cannot change primary success/error status; Grok incomplete-output and resume semantics, child termination/reaping, and abort bounds do not regress."
+      ],
+      "technicalNotes": "Convergence Task 20 in docs/superpowers/plans/2026-09-03-node-cost-tracking.md:2032-2063. Modify packages/providers/src/community/omp/provider.ts and provider.test.ts, packages/providers/src/grok/provider.ts and provider.test.ts, and event parsers only if a narrow typed observed-result accessor is required. Authoritative usage already accepted by the parser must be persisted before node failure and never emitted twice. Focused commands: (cd packages/providers && bun test src/community/omp/provider.test.ts) and (cd packages/providers && bun test src/grok/provider.test.ts).",
+      "dependsOn": [
+        "US-002",
+        "US-004",
+        "US-035"
+      ],
+      "priority": 36,
+      "passes": false
+    },
+    {
+      "id": "US-037",
+      "title": "Make coverage UI truthful for filters and node scope",
+      "description": "As a console user, I want cost coverage states to distinguish filter misses, event-only fallback, partial coverage, and node-local scope, so that the UI never mislabels missing rows or cross-node warnings.",
+      "acceptanceCriteria": [
+        "A fully ledgered base scope whose active provider/model/kind filter matches zero ledger rows renders a filter no-match state such as 'No groups matched filters' and never renders incomplete coverage, event-only fallback, or 'No usage recorded'.",
+        "A partial-coverage fixture with five usage events and exactly two unledgered events warns about exactly two unledgered events, while true zero-ledger/event-only and historical zero-event states remain distinct.",
+        "Expanding node A with ledger groups while run-wide coverage has an unledgered event owned by node B does not present that run-wide warning as node A's local under-count; any retained run-wide context is explicitly labeled as run-wide.",
+        "Row-match state is separated from conservative base-scope coverage, and synthetic node reports receive only scope-correct coverage without inferring per-node event coverage from ledger row counts.",
+        "Cost page filters/groupings, full tuple labels, run links, nullable/zero/sub-cent formatting, and run-header coverage warnings do not regress."
+      ],
+      "technicalNotes": "Convergence Task 21 in docs/superpowers/plans/2026-09-03-node-cost-tracking.md:2065-2095. Modify packages/web/src/experiments/console/components/UsageBreakdownTable.tsx and UsageBreakdownTable.test.ts; modify NodeDivider.tsx and focused RunStream/component tests as needed. Dimension-filter no-match, true event-only fallback, partial coverage, historical no-recording, and query-unavailable must remain five distinct observable states. Focused commands: (cd packages/web && bun test src/experiments/console/components/UsageBreakdownTable.test.ts) and (cd packages/web && bun test src/experiments/console/components/RunStream.test.tsx).",
+      "dependsOn": [
+        "US-013",
+        "US-021",
+        "US-022",
+        "US-036"
+      ],
+      "priority": 37,
+      "passes": false
+    },
+    {
+      "id": "US-038",
+      "title": "Reject malformed pricing before estimation",
+      "description": "As an operator, I want malformed config and catalog pricing diagnosed before indexing, so that invalid component rates cannot produce plausible-looking cost estimates.",
+      "acceptanceCriteria": [
+        "loadPricingLookups() handles runtime-malformed present pricing values, including primitive, array, and non-array models blocks, by logging a structured warning and returning an empty config index; missing pricing and intentionally empty pricing objects remain valid no-pricing states.",
+        "Catalog pairs with negative base rates offset by positive categories, non-finite rates, negative or non-finite tier thresholds, and invalid tier rates are rejected with structured warnings and cannot produce estimates.",
+        "Valid zero rates, valid tiers, slash-containing exact identities, config-over-catalog precedence, invalid or duplicate config blocking, and null estimates for missing positive-category rates remain covered.",
+        "Every external catalog/config rate set is validated before indexing; estimation never depends on the final sum alone to discover invalid component rates.",
+        "Warnings identify source and issue without logging operator config contents or credentials, pricing remains fail-soft for workflow execution, and reported provider USD continues to bypass estimation."
+      ],
+      "technicalNotes": "Convergence Task 22 in docs/superpowers/plans/2026-09-03-node-cost-tracking.md:2097-2126. Modify packages/core/src/usage/estimate.ts and estimate.test.ts; modify packages/providers/src/community/pi/model-catalog.ts only if the provider-owned catalog contract needs a narrow validated type. Core remains the pricing-policy owner. Invalid identifiable config pairs still block catalog fallback for that exact pair, while invalid catalog pairs remain unpriced. Focused command: (cd packages/core && bun test src/usage/estimate.test.ts).",
+      "dependsOn": [
+        "US-007",
+        "US-019",
+        "US-037"
+      ],
+      "priority": 38,
+      "passes": false
+    },
+    {
+      "id": "US-039",
+      "title": "Run post-Convergence 3 validation",
+      "description": "As a maintainer, I want the full validation sequence rerun after Convergence 3 fixes, so that the approved skeptical audit is verified without resetting earlier completed stories.",
+      "acceptanceCriteria": [
+        "After US-032 through US-038 pass, run the focused package validation sequence from the plan without invoking bun test from the repository root.",
+        "Regenerate tracked artifacts required by this feature only when stale, including bundled schema and web OpenAPI types with the server running when the OpenAPI contract changed.",
+        "bun run validate passes after all Convergence 3 fixes and generated artifacts are current.",
+        "bun run check:schema-upgrades passes against reachable PostgreSQL, or validation notes explicitly record PostgreSQL unavailability with the attempted connection path.",
+        "Validation notes reference the post-Convergence 3 run, do not modify CHANGELOG.md, and do not reset or delete any previously passing story."
+      ],
+      "technicalNotes": "Post-Convergence 3 validation required by docs/superpowers/plans/2026-09-03-node-cost-tracking.md:2128, using the validation sequence at docs/superpowers/plans/2026-09-03-node-cost-tracking.md:1303-1345. This story exists because US-024 and US-031 are already passing validation stories for earlier convergence batches and must remain unchanged.",
+      "dependsOn": [
+        "US-038"
+      ],
+      "priority": 39,
+      "passes": false
     }
   ]
 }

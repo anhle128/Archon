@@ -95,6 +95,14 @@ Providers normalize only what they observe; the workflow executor attaches run/n
 | 29 | US-029 | Return one coherent usage-report snapshot | US-009, US-028 | 713-830, 1196-1212, 1837-1864 |
 | 30 | US-030 | Derive web usage request contract from generated OpenAPI types | US-013, US-029 | 899-900, 917-919, 1866-1895 |
 | 31 | US-031 | Run post-Convergence 2 validation | US-030 | 1303-1345, 1897 |
+| 32 | US-032 | Isolate SQLite transactions from unrelated queries | US-008, US-029, US-031 | 1903-1936 |
+| 33 | US-033 | Recognize only exact OMP main transcripts | US-026, US-032 | 1938-1966 |
+| 34 | US-034 | Preserve OpenCode usage across late failures | US-025, US-033 | 1968-1998 |
+| 35 | US-035 | Preserve Copilot usage across late sendAndWait rejects | US-003, US-010, US-034 | 2000-2030 |
+| 36 | US-036 | Preserve OMP and Grok usage across transport failures | US-002, US-004, US-035 | 2032-2063 |
+| 37 | US-037 | Make coverage UI truthful for filters and node scope | US-013, US-021, US-022, US-036 | 2065-2095 |
+| 38 | US-038 | Reject malformed pricing before estimation | US-007, US-019, US-037 | 2097-2126 |
+| 39 | US-039 | Run post-Convergence 3 validation | US-038 | 1303-1345, 2128 |
 
 ## Ralph Execution Notes
 
