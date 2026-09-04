@@ -651,7 +651,7 @@
       ],
       "priority": 31,
       "passes": true,
-      "notes": "Post-Convergence 2 validation 2026-09-04. Focused package tests+builds green (providers/workflows/core/server/cli/web/docs-web). Generated artifacts current (bundled-schema/defaults/skill/pi-vendor-map/capability-matrix). OpenAPI types regenerated against worktree server PORT=3291 — unchanged. bun run validate exit 0. check:schema-upgrades OK on PGHOST=127.0.0.1:5432 (archon-postgres-1); fresh 74 indexes; 9 baselines v0.2.13…v0.9.0 converge; expected remote_agent_codebases_kind_check only. CHANGELOG untouched; no prior story reset."
+      "notes": "Post-Convergence 2 validation 2026-09-04. Focused package tests+builds green (providers/workflows/core/server/cli/web/docs-web). Generated artifacts current (bundled-schema/defaults/skill/pi-vendor-map/capability-matrix). OpenAPI types regenerated against worktree server PORT=3291 \u2014 unchanged. bun run validate exit 0. check:schema-upgrades OK on PGHOST=127.0.0.1:5432 (archon-postgres-1); fresh 74 indexes; 9 baselines v0.2.13\u2026v0.9.0 converge; expected remote_agent_codebases_kind_check only. CHANGELOG untouched; no prior story reset."
     },
     {
       "id": "US-032",
@@ -671,7 +671,8 @@
         "US-031"
       ],
       "priority": 32,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration after US-031. Files: packages/core/src/db/adapters/sqlite.ts, sqlite.test.ts, workflows.ts, workflows.test.ts, usage-report.snapshot.integration.test.ts. Public queries serialize outside open SQLite txs; cleanup/delete use withTransaction."
     },
     {
       "id": "US-033",
@@ -690,7 +691,8 @@
         "US-032"
       ],
       "priority": 33,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration after US-032. Files: packages/providers/src/community/omp/session-usage.ts, session-usage.test.ts. Exact ISO-dash timestamp constructor; findMainTranscriptPath shares isMainTranscriptFileName; decoys never match; 39 session-usage tests pass."
     },
     {
       "id": "US-034",

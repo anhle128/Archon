@@ -1,6 +1,19 @@
 ## Codebase Patterns
 
 
+### OMP main transcript is exact ISO-dash constructor only
+- **Where**: `packages/providers/src/community/omp/session-usage.ts` `isMainTranscriptFileName` / `findMainTranscriptPath`
+- **Pattern**: Main filename = `toISOString().replace(/[:.]/g, '-') + '_' + sessionId + '.jsonl'`. Prefix must match `^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$`. Never accept arbitrary non-empty prefixes or suffix-only `*_<sessionId>.jsonl`. Discovery and task-file exclusion share this predicate.
+- **Example**: `notes_<id>.jsonl` and `2026-09-04T00:00:00.000Z_<id>.jsonl` are never main; one exact + decoys → exact wins; two exact → ambiguous omit
+
+
+
+### SQLite adapter owns exclusive transaction scopes
+- **Where**: `packages/core/src/db/adapters/sqlite.ts` `withSerializedTransaction` / `query`; `packages/core/src/db/workflows.ts` `deleteOldWorkflowRuns` / `deleteWorkflowRun`
+- **Pattern**: BEGIN/COMMIT/ROLLBACK only via `executeQuery` inside adapter-owned callbacks. Callbacks receive a transaction-scoped `txQuery`. Public `query()` rejects control SQL and, while `txOpen`, enqueues on `txTail` so unrelated async work cannot join/commit/roll back the open transaction. Never `pool.query('BEGIN')` from callers — use `getDatabase().withTransaction`.
+- **Example**: public INSERT started during `withSnapshotRead` is invisible inside the snapshot and survives snapshot ROLLBACK
+
+
 ### Web usage types derive from generated OpenAPI paths only
 - **Where**: `packages/web/src/experiments/console/skills/usage.ts`; `runs.ts` `getRun`
 - **Pattern**: `UsageQuery` = `NonNullable<paths['/api/usage']['get']['parameters']['query']>`; `UsageKindFilter`/`UsageGroupBy` = `NonNullable<UsageQuery['kind'|'groupBy']>`; `UsageReport` = `NonNullable<components['schemas']['UsageReport']>` (schema is `T | null` because run-detail marks usage nullable). Compile-time `ExactMatch`/`AssertTrue` tuple (`UsageOpenApiContractChecks`) ties query, kind, groupBy, report response, and `WorkflowRunDetail['usage']`. Never handwrite parallel request interfaces or kind unions. `getRun` returns `RunDetailResponse['usage']` with no cast. Import `@/lib/api.generated` only — never `@archon/core`/`workflows`.
@@ -1014,5 +1027,53 @@
 **Learnings**:
 - Worktree `bun --filter @archon/server start` with PORT override is enough to refresh OpenAPI types; generate:types script hard-codes :3090 so use `bunx openapi-typescript http://127.0.0.1:$PORT/api/openapi.json` against the worktree server.
 - Post-Convergence 2 validation is a pure gate — no product commit when artifacts already match.
+
+---
+
+## 2026-09-04 — US-032: Isolate SQLite transactions from unrelated queries
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/db/adapters/sqlite.ts` — transaction-scoped query path; public queries serialize outside `txOpen`; reject public BEGIN/COMMIT/ROLLBACK
+- `packages/core/src/db/adapters/sqlite.test.ts` — contamination, rollback-survival, concurrent tx serialize, public control rejection, rollback-fail logging
+- `packages/core/src/db/workflows.ts` — `deleteOldWorkflowRuns` / `deleteWorkflowRun` use `withTransaction`; removed caller-owned rollback helper
+- `packages/core/src/db/workflows.test.ts` — expect withTransaction + no raw BEGIN/COMMIT/ROLLBACK
+- `packages/core/src/db/usage-report.snapshot.integration.test.ts` — same-connection public seed cannot join open report snapshot
+
+**Acceptance criteria verified**:
+- [x] withSnapshotRead pause + public mutation: mutation not inside snapshot; commits separately after snapshot ends
+- [x] throwing withSnapshotRead cannot roll back acknowledged outside mutation
+- [x] withTransaction contamination: public write survives tx ROLLBACK; inside write rolls back
+- [x] cleanup/delete use adapter transaction callback (no public BEGIN/COMMIT/ROLLBACK)
+- [x] Usage report snapshot coherence retained; concurrent withTransaction serialize; rollback failure preserves original error
+- [x] `(cd packages/core && bun test src/db/adapters/sqlite.test.ts)` 64 pass
+- [x] `(cd packages/core && bun test src/db/usage-report.snapshot.integration.test.ts)` 3 pass
+- [x] `(cd packages/core && bun test src/db/workflows.test.ts)` 109 pass
+
+**Learnings**:
+- Never await a public `adapter.query()` (or nested withTransaction) inside a transaction callback — it enqueues on `txTail` and deadlocks waiting for the open tx to finish.
+- Proof of isolation is rollback-survival of the outside mutation, not merely "not visible during SELECT" (deferred snapshot already hides concurrent other-connection commits).
+- Caller-owned `pool.query('BEGIN')` collides with adapter exclusive scopes on single-connection SQLite; migrate every multi-statement unit to `withTransaction`.
+
+---
+
+## 2026-09-04 — US-033: Recognize only exact OMP main transcripts
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/omp/session-usage.ts` — exact ISO-dash timestamp constructor for isMainTranscriptFileName; findMainTranscriptPath filters via that predicate only
+- `packages/providers/src/community/omp/session-usage.test.ts` — decoy rejection, exact-wins-over-decoys, two-exact ambiguity, shared task-file classification predicate
+
+**Acceptance criteria verified**:
+- [x] Main-directory decoys notes_<sessionId>.jsonl, _<sessionId>.jsonl, and malformed/non-canonical timestamps with valid headers are never selected as trusted main
+- [x] One exact <ISO with :/. → dashes>_<sessionId>.jsonl wins without ambiguity even with suffix decoys present
+- [x] Two exact main constructors remain ambiguous and fail closed (omit hidden enrichment)
+- [x] findMainTranscriptPath(), isMainTranscriptFileName(), and copied-main exclusion for task-file classification share the same exact constructor predicate
+- [x] Existing containment, one-handle verification, parent-link ownership, bounds, fail-soft primary result behavior do not regress (39 session-usage tests pass)
+
+**Learnings**:
+- OMP SessionManager names mains as `new Date().toISOString().replace(/[:.]/g, '-') + '_' + sessionId + '.jsonl'` — regex `^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$` is the exact prefix, not “any non-empty prefix”.
+- findMainTranscriptPath previously suffix-matched independently of isMainTranscriptFileName; centralizing on the predicate is what stops decoys from seeding ownership or creating false ambiguity.
+- Suffix decoys under the artifact dir remain task-agent constructors when parent-owned; only the exact main shape is excluded from task classification.
 
 ---
