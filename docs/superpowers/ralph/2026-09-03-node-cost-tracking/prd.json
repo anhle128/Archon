@@ -407,7 +407,8 @@
         "US-018"
       ],
       "priority": 19,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration after US-018. Files: packages/core/src/usage/estimate.ts, estimate.test.ts. Nested Map/Set duplicate tracking; null-byte and slash identity collision tests."
     },
     {
       "id": "US-020",

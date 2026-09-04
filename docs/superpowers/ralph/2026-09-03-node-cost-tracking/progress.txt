@@ -1,6 +1,12 @@
 ## Codebase Patterns
 
 
+### Pricing duplicate identity is nested maps only
+- **Where**: `packages/core/src/usage/estimate.ts` `buildConfigPricingIndex`
+- **Pattern**: `seen` and `duplicates` are `Map<provider, Map|Set<model>>` via `blockPair` — never `${provider}\0${model}` (or `/`) concat + re-parse. Rate removal and catalog blocking iterate the same nested structure. Provider/model may legally contain `/` or `\0`.
+- **Example**: duplicate `('a\\0b','c')` blocks only that pair; neighbor `('a','b\\0c')` stays priceable
+
+
 ### OMP hidden discovery is constructor-exact, same-handle, chunked
 - **Where**: `packages/providers/src/community/omp/session-usage.ts`
 - **Pattern**: Ambiguous `*_<sessionId>.jsonl` mains fail closed. Hidden candidates only advisor (`__advisor.jsonl` / `__advisor.<slug>.jsonl`) and task-agent constructors (not main-shaped, not other `__*`); nest only under `<taskStem>/` beside `<taskStem>.jsonl`. Resume prefix digest + delta parse share one verified open handle. JSONL streamed in 64KiB chunks with owned carry buffers (never alias the read chunk). Legacy hidden `total` = input+output+cacheRead+cacheWrite. Bound tests use `setSessionUsageBoundsForTest` seam.
@@ -648,5 +654,24 @@
 - Incomplete JSONL carry must be `Buffer.from(...)` — a view into the reused read chunk is overwritten on the next `handle.read`.
 - `openVerifiedFile` containment needs a realpath'd root; tests calling `parseTranscriptUsageEntries` directly must realpath the artifact dir.
 - Multi-MiB exact-bound fixtures are better as a `setSessionUsageBoundsForTest` seam than sparse 64MiB files with unreadable zero holes.
+
+---
+## 2026-09-04 — US-019: Keep pricing identity structured
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/usage/estimate.ts` — replace `\0`-joined duplicate Set + re-parse with nested Map/Set via `blockPair`
+- `packages/core/src/usage/estimate.test.ts` — separator-collision and catalog-block materialize coverage for null-byte/slash ids
+
+**Acceptance criteria verified**:
+- [x] Behavioral test with duplicate provider/model pairs containing the current separator blocks only the exact duplicate and leaves a neighboring non-duplicate pair priceable
+- [x] Duplicate detection, rate removal, and catalog-fallback blocking all address the same exact structured (provider, model) tuple without concatenating and parsing identity strings
+- [x] Slash-containing and separator-containing provider or model ids cannot collide, shadow, or mutate a different pricing pair
+- [x] Existing duplicate warnings and catalog-fallback blocking semantics remain intact for the rejected exact pair
+- [x] Focused core estimate tests pass: src/usage/estimate.test.ts (27 pass)
+
+**Learnings**:
+- The residual bug after nested rate maps was only the temporary `duplicates: Set<string>` keyed by `${provider}\0${model}` then `indexOf('\0')` split — first-null-byte parse mutates the wrong pair when provider itself contains `\0`.
+- Collision proof: duplicate `('a\0b','c')` + neighbor `('a','b\0c')` share concatenated key `a\0b\0c`; old code blocked the neighbor.
 
 ---
