@@ -241,7 +241,8 @@
         "US-006"
       ],
       "priority": 12,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration 12. Files: packages/core/src/orchestrator/orchestrator-agent.ts, packages/core/src/orchestrator/orchestrator-agent.test.ts. Genuine continuations ignore incompatible request ENV candidates; early hydrate distinguishes hydrate-null so fresh-start rejection stays pre-isolation."
     },
     {
       "id": "US-013",
@@ -264,7 +265,8 @@
         "US-012"
       ],
       "priority": 13,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration after US-012. Files: packages/workflows/src/executor.ts, packages/workflows/src/executor.test.ts, packages/server/src/routes/api.ts, packages/server/src/routes/api.workflow-envs.test.ts."
     },
     {
       "id": "US-014",

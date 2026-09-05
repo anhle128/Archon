@@ -22,7 +22,7 @@
 
 ### Shared NodeExecutionMetadata resolution
 - **Where**: `packages/workflows/src/node-model-resolution.ts`
-- **Pattern**: `resolveNodeExecutionRequest` is the pure chain + capability-aware effort/thinking used by `resolveNodeProviderAndModel`, `node_started`, ENV preview, and ENV snapshot. `buildResolvedRequestMetadata` walks prompt/command/loop + nested group bodies with qualified ids (`group.child`); excludes group containers and deterministic nodes. `resolveGroupModelScope` forwards group provider/model/preset/tier while preserving outer effort.
+- **Pattern**: `resolveNodeExecutionRequest` is the pure chain + capability-aware effort/thinking used by `resolveNodeProviderAndModel`, `node_started`, ENV preview, and ENV snapshot. Callers MUST pass full `ResolveNodeExecutionOptions` (`aiProfile`, `assistants` for legacy `modelReasoningEffort`, `workflowThinking`) — never `{ aiProfile }` alone. `buildResolvedRequestMetadata` walks prompt/command/loop + nested group bodies with qualified ids (`group.child`); excludes group containers and deterministic nodes. `resolveGroupModelScope` forwards group provider/model/preset/tier while preserving outer effort.
 - **Example**: `request.metadata` === `node_started.data` request fields; body scope = `resolveGroupModelScope(group, outerScope, …)`
 
 ### Workflow ENV store boundaries
@@ -37,17 +37,17 @@
 
 ### Executor overlay ownership
 - **Where**: `packages/workflows/src/executor.ts` (`prepareExecutionEnvOverlay`, complete snapshot before `workflow_started`)
-- **Pattern**: Caller-supplied `appliedEnvOverlay` → verify only (workflow already patched). Else parse `preCreatedRun.metadata.envOverlay` and reapply frozen patches. Overlay-bearing preCreated runs use `preCreatedRun.user_id` for prefs/creds; no-overlay keeps `opts.userId`. Pending applied form is stamped at first INSERT; complete snapshot with live `resolved` is written via `setWorkflowRunEnvOverlay` before any start event/DAG. Audit/prepare failure: fail-closed, no execution. Fresh children never copy parent overlay.
+- **Pattern**: Caller-supplied `appliedEnvOverlay` → verify only (workflow already patched). Else parse `preCreatedRun.metadata.envOverlay` and reapply frozen patches. Overlay-bearing preCreated runs use `preCreatedRun.user_id` for prefs/creds; no-overlay keeps `opts.userId`. Pending applied form is stamped at first INSERT; complete snapshot with live `resolved` is written via `setWorkflowRunEnvOverlay` before any start event/DAG using the same options as runtime (`aiProfile` + `config.assistants` + `workflow.thinking`). Audit/prepare failure: fail-closed, no execution. Fresh children never copy parent overlay.
 - **Example**: `executeWorkflow(..., { appliedEnvOverlay })` or resume with `preCreatedRun.metadata.envOverlay` only
 
 ### Orchestrator pre-isolation ENV gate
 - **Where**: `packages/core/src/orchestrator/env-overlay-dispatch.ts`, `orchestrator-agent.ts` (`dispatchOrchestratorWorkflow`)
-- **Pattern**: Frozen `EnvOverlayCandidate` rides `HandleMessageContext`/`WorkflowDispatchOptions` out-of-band (never the command string). After input/requirement gates and before conversation mutation/`validateAndResolveIsolation`: fresh → `resolveFreshDispatchEnvOverlay`; continuation → `resolveContinuationDispatchEnvOverlay` on run `metadata.envOverlay` (ignore request candidate + notify). Fail closed with safe codes. Hand off patched clone + detached `AppliedEnvOverlay` to fg `executeWorkflow` and bg `dispatchBackgroundWorkflow` (pre-create stamp already US-005). Hydrate-null fallthrough uses pre-validated request candidate, not the prior run overlay.
-- **Example**: `options.envOverlay` → apply before isolation → `executeWorkflow(..., executionWorkflow, { appliedEnvOverlay })`
+- **Pattern**: Frozen `EnvOverlayCandidate` rides out-of-band. Fresh starts call `resolveFreshDispatchEnvOverlay` before isolation. Genuine continuations call only `resolveContinuationDispatchEnvOverlay` (request candidate never validated/applied). When a request candidate is present on a would-be continuation, hydrate early before isolation: real resume → stored/YAML + ignored-ENV notice; hydrate-null → validate request candidate pre-isolation (fail closed). Reuse early hydrate result (CAS must not run twice). Logs/messages: env id/name/codes only — never prompt/bash bodies.
+- **Example**: incompatible request on paused run → resume stored ENV + notice; hydrate-null + incompatible → reject before isolation
 
 ### HTTP Workflow ENV CRUD + preview
 - **Where**: `packages/server/src/routes/api.ts`, `packages/server/src/routes/schemas/workflow-env.schemas.ts`, `packages/workflows/src/env-overlay.ts` (`listEnvOverlayTargets`)
-- **Pattern**: OpenAPI CRUD under `/api/workflows/{name}/envs` with camelCase wire mapper; list omits patches; create provenance via soft `resolveWebUserId` (null OK). Preview is a separate `/env-preview` route requiring `validateCwd`, discover+`resolveWorkflowName`, optional ENV identity (`400 env_not_found` / `env_workflow_mismatch`), `listEnvOverlayTargets` for editor matrix (top-level only), `applyEnvOverlay` + executor-parity `buildResolvedRequestMetadata`/`buildAiProfile` (corrupt prefs → config-only). Never echo prompt/bash in errors/responses.
+- **Pattern**: OpenAPI CRUD under `/api/workflows/{name}/envs` with camelCase wire mapper; list omits patches; create provenance via soft `resolveWebUserId` (null OK). Preview is a separate `/env-preview` route requiring `validateCwd`, discover+`resolveWorkflowName`, optional ENV identity (`400 env_not_found` / `env_workflow_mismatch`), `listEnvOverlayTargets` for editor matrix (top-level only), `applyEnvOverlay` + executor-parity `buildResolvedRequestMetadata` with full options (`aiProfile`, `config.assistants`, `workingWorkflow.thinking`) / `buildAiProfile` (corrupt prefs → config-only). Never echo prompt/bash in errors/responses.
 - **Example**: `GET .../env-preview?cwd=...&envId=...` → `{ preview:true, authoritative:false, targets, resolved, skippedNodeIds }`
 
 ### Start route ENV freeze
@@ -379,3 +379,52 @@
 - Schema: additive `remote_agent_workflow_envs` (table 21); mixed-version resume of overlay-bearing runs is unsafe — finish/abandon before rollback.
 
 ---
+
+## 2026-09-05 — US-012: Resume ignores newly selected ENV
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/orchestrator/orchestrator-agent.ts` — continuation never validates request ENV; early hydrate when candidate present so hydrate-null still rejects pre-isolation; named `HydratedResumableRun` type
+- `packages/core/src/orchestrator/orchestrator-agent.test.ts` — US-012 regressions: stored-ENV resume ignores incompatible request; YAML-only resume ignores with notice; hydrate-null rejects before isolation without echoing bodies
+
+**Acceptance criteria verified**:
+- [x] Paused run with valid stored ENV + incompatible request candidate resumes stored selection + ignored-ENV notice
+- [x] YAML-only resumable + incompatible request resumes YAML-only + ignored-ENV notice
+- [x] Hydrate-null remains fresh start; incompatible request rejected before isolation
+- [x] Genuine continuation never validates/applies request candidate via resolveFreshDispatchEnvOverlay
+- [x] Messages/logs contain only env ids/names/safe codes — no prompt/bash bodies
+- [x] `cd packages/core && bun test src/orchestrator/env-overlay-dispatch.test.ts && bun test src/orchestrator/orchestrator-agent.test.ts` green
+
+**Learnings**:
+- US-006 pre-validated the request candidate even on `willContinueExistingRun` so hydrate-null could reuse it after isolation; that blocked Contract 10 when the candidate was field-incompatible.
+- Fix: hydrate early *only when a request candidate is present* on a would-be continuation — distinguishes genuine resume (ignore candidate) from hydrate-null (validate before isolation) without moving every resume ahead of isolation.
+- `hydrateResumableRun` returns null *before* the resume CAS, so early null is safe; non-null claims the run and must be reused (no second hydrate).
+
+---
+
+## 2026-09-05 — US-013: Complete runtime resolution context
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/executor.ts` — snapshot `buildResolvedRequestMetadata` now receives `assistants: config.assistants` + `workflowThinking: workflow.thinking` (same as `resolveNodeProviderAndModel`)
+- `packages/workflows/src/executor.test.ts` — regression: ENV snapshot `resolved` equals pure runtime request metadata for assistant `modelReasoningEffort` + workflow thinking, including nested `loop_group` turns
+- `packages/server/src/routes/api.ts` — ENV Preview passes the same complete resolution options (not `{ aiProfile }` alone)
+- `packages/server/src/routes/api.workflow-envs.test.ts` — Preview parity coverage for legacy effort fallback + thinking on top-level and nested group bodies
+
+**Acceptance criteria verified**:
+- [x] executor.test.ts regression with assistants.<provider>.modelReasoningEffort, no portable effort, workflow-level thinking; snapshot resolved === runtime node_started request fields
+- [x] api.workflow-envs.test.ts Preview coverage matches the same assistant effort + thinking values (top-level + nested group)
+- [x] executor.ts passes every ResolveNodeExecutionOptions input used by resolveNodeProviderAndModel when building the snapshot map
+- [x] api.ts Preview uses the same complete context, not `{ aiProfile }` alone
+- [x] node-model-resolution.ts remains the single pure computation path
+- [x] Top-level and nested loop_group provider turns include the same modelReasoningEffort fallback and thinking values
+- [x] Focused verification: `bun test src/node-model-resolution.test.ts && bun test src/executor.test.ts && bun test src/dag-executor.test.ts` (workflows) + `bun test src/routes/api.workflow-envs.test.ts` (server)
+
+**Learnings**:
+- Snapshot/Preview dropping `assistants` silently omits legacy `modelReasoningEffort` while runtime `node_started` still shows it — audit drift without a hard failure.
+- Thinking schema uses camelCase `budgetTokens`, not `budget_tokens`; unknown keys are stripped by `thinkingConfigSchema`.
+- AC test commands must run as separate `bun test` invocations (mock.module pollution across executor/dag-executor).
+
+---
+
+
