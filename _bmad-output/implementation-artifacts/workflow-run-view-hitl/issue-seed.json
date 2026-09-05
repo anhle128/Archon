@@ -1,0 +1,56 @@
+{
+  "5-1-open-a-nodes-own-transcript-from-logs-legacy": [
+    "Open a node's own transcript from Logs (legacy)",
+    []
+  ],
+  "5-2-see-the-right-room-for-each-node-type-legacy": [
+    "See the right room for each node type (legacy)",
+    ["5-1-open-a-nodes-own-transcript-from-logs-legacy"]
+  ],
+  "5-3-open-the-same-node-room-from-the-graph-legacy": [
+    "Open the same node room from the graph (legacy)",
+    ["5-2-see-the-right-room-for-each-node-type-legacy"]
+  ],
+  "5-4-open-the-node-room-from-the-chat-timeline-legacy": [
+    "Open the node room from the chat timeline (legacy)",
+    ["5-3-open-the-same-node-room-from-the-graph-legacy"]
+  ],
+  "5-5-inspect-a-run-as-nodes-on-command-center": [
+    "Inspect a run as nodes on Command Center",
+    ["5-4-open-the-node-room-from-the-chat-timeline-legacy"]
+  ],
+  "6-1-prove-claude-and-pi-can-resume-after-askhuman": [
+    "Prove Claude and Pi can resume after AskHuman",
+    []
+  ],
+  "6-2-pause-a-run-when-the-agent-asks-without-stealing-the-approval-slot": [
+    "Pause a run when the agent asks, without stealing the approval slot",
+    ["5-1-open-a-nodes-own-transcript-from-logs-legacy"]
+  ],
+  "6-3-answer-or-decline-the-ask-so-the-node-can-continue": [
+    "Answer or decline the Ask so the node can continue",
+    [
+      "6-1-prove-claude-and-pi-can-resume-after-askhuman",
+      "6-2-pause-a-run-when-the-agent-asks-without-stealing-the-approval-slot"
+    ]
+  ],
+  "6-4-keep-several-asks-outstanding-without-a-second-scheduler": [
+    "Keep several Asks outstanding without a second scheduler",
+    ["6-3-answer-or-decline-the-ask-so-the-node-can-continue"]
+  ],
+  "6-5-answer-the-ask-in-the-legacy-node-room": [
+    "Answer the Ask in the legacy node room",
+    [
+      "5-4-open-the-node-room-from-the-chat-timeline-legacy",
+      "6-3-answer-or-decline-the-ask-so-the-node-can-continue"
+    ]
+  ],
+  "6-6-answer-the-ask-in-the-command-center-room": [
+    "Answer the Ask in the Command Center room",
+    ["5-5-inspect-a-run-as-nodes-on-command-center", "6-5-answer-the-ask-in-the-legacy-node-room"]
+  ],
+  "6-7-confirm-a-permission-by-envelope-only": [
+    "Confirm a permission by envelope only",
+    ["6-3-answer-or-decline-the-ask-so-the-node-can-continue"]
+  ]
+}

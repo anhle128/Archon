@@ -1,0 +1,122 @@
+{
+  "milestone": 2,
+  "stories": {
+    "5-1-open-a-nodes-own-transcript-from-logs-legacy": {
+      "blocked_by": [],
+      "epic": 5,
+      "node_id": "I_kwDOS4WbPs8AAAABP3-AoA",
+      "number": 81,
+      "status": "backlog",
+      "title": "Open a node's own transcript from Logs (legacy)",
+      "url": "https://github.com/anhle128/Archon/issues/81"
+    },
+    "5-2-see-the-right-room-for-each-node-type-legacy": {
+      "blocked_by": ["5-1-open-a-nodes-own-transcript-from-logs-legacy"],
+      "epic": 5,
+      "node_id": "I_kwDOS4WbPs8AAAABP3-Ctw",
+      "number": 82,
+      "status": "backlog",
+      "title": "See the right room for each node type (legacy)",
+      "url": "https://github.com/anhle128/Archon/issues/82"
+    },
+    "5-3-open-the-same-node-room-from-the-graph-legacy": {
+      "blocked_by": ["5-2-see-the-right-room-for-each-node-type-legacy"],
+      "epic": 5,
+      "node_id": "I_kwDOS4WbPs8AAAABP3-Ekw",
+      "number": 83,
+      "status": "backlog",
+      "title": "Open the same node room from the graph (legacy)",
+      "url": "https://github.com/anhle128/Archon/issues/83"
+    },
+    "5-4-open-the-node-room-from-the-chat-timeline-legacy": {
+      "blocked_by": ["5-3-open-the-same-node-room-from-the-graph-legacy"],
+      "epic": 5,
+      "node_id": "I_kwDOS4WbPs8AAAABP3-GoQ",
+      "number": 84,
+      "status": "backlog",
+      "title": "Open the node room from the chat timeline (legacy)",
+      "url": "https://github.com/anhle128/Archon/issues/84"
+    },
+    "5-5-inspect-a-run-as-nodes-on-command-center": {
+      "blocked_by": ["5-4-open-the-node-room-from-the-chat-timeline-legacy"],
+      "epic": 5,
+      "node_id": "I_kwDOS4WbPs8AAAABP3-Ikw",
+      "number": 85,
+      "status": "backlog",
+      "title": "Inspect a run as nodes on Command Center",
+      "url": "https://github.com/anhle128/Archon/issues/85"
+    },
+    "6-1-prove-claude-and-pi-can-resume-after-askhuman": {
+      "blocked_by": [],
+      "epic": 6,
+      "node_id": "I_kwDOS4WbPs8AAAABP3-KrA",
+      "number": 86,
+      "status": "backlog",
+      "title": "Prove Claude and Pi can resume after AskHuman",
+      "url": "https://github.com/anhle128/Archon/issues/86"
+    },
+    "6-2-pause-a-run-when-the-agent-asks-without-stealing-the-approval-slot": {
+      "blocked_by": ["5-1-open-a-nodes-own-transcript-from-logs-legacy"],
+      "epic": 6,
+      "node_id": "I_kwDOS4WbPs8AAAABP3-MKQ",
+      "number": 87,
+      "status": "backlog",
+      "title": "Pause a run when the agent asks, without stealing the approval slot",
+      "url": "https://github.com/anhle128/Archon/issues/87"
+    },
+    "6-3-answer-or-decline-the-ask-so-the-node-can-continue": {
+      "blocked_by": [
+        "6-1-prove-claude-and-pi-can-resume-after-askhuman",
+        "6-2-pause-a-run-when-the-agent-asks-without-stealing-the-approval-slot"
+      ],
+      "epic": 6,
+      "node_id": "I_kwDOS4WbPs8AAAABP3-OdA",
+      "number": 88,
+      "status": "backlog",
+      "title": "Answer or decline the Ask so the node can continue",
+      "url": "https://github.com/anhle128/Archon/issues/88"
+    },
+    "6-4-keep-several-asks-outstanding-without-a-second-scheduler": {
+      "blocked_by": ["6-3-answer-or-decline-the-ask-so-the-node-can-continue"],
+      "epic": 6,
+      "node_id": "I_kwDOS4WbPs8AAAABP3-QuA",
+      "number": 89,
+      "status": "backlog",
+      "title": "Keep several Asks outstanding without a second scheduler",
+      "url": "https://github.com/anhle128/Archon/issues/89"
+    },
+    "6-5-answer-the-ask-in-the-legacy-node-room": {
+      "blocked_by": [
+        "5-4-open-the-node-room-from-the-chat-timeline-legacy",
+        "6-3-answer-or-decline-the-ask-so-the-node-can-continue"
+      ],
+      "epic": 6,
+      "node_id": "I_kwDOS4WbPs8AAAABP3-S1g",
+      "number": 90,
+      "status": "backlog",
+      "title": "Answer the Ask in the legacy node room",
+      "url": "https://github.com/anhle128/Archon/issues/90"
+    },
+    "6-6-answer-the-ask-in-the-command-center-room": {
+      "blocked_by": [
+        "5-5-inspect-a-run-as-nodes-on-command-center",
+        "6-5-answer-the-ask-in-the-legacy-node-room"
+      ],
+      "epic": 6,
+      "node_id": "I_kwDOS4WbPs8AAAABP3-U_g",
+      "number": 91,
+      "status": "backlog",
+      "title": "Answer the Ask in the Command Center room",
+      "url": "https://github.com/anhle128/Archon/issues/91"
+    },
+    "6-7-confirm-a-permission-by-envelope-only": {
+      "blocked_by": ["6-3-answer-or-decline-the-ask-so-the-node-can-continue"],
+      "epic": 6,
+      "node_id": "I_kwDOS4WbPs8AAAABP3-XOA",
+      "number": 92,
+      "status": "backlog",
+      "title": "Confirm a permission by envelope only",
+      "url": "https://github.com/anhle128/Archon/issues/92"
+    }
+  }
+}
