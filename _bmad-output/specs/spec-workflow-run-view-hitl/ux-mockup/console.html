@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Archon Console — Workflow Run (HITL mockup)</title>
+    <link rel="stylesheet" href="styles.css?v=14" />
+  </head>
+  <body>
+    <div id="cc-app">
+      <!-- ============ Project rail (decorative, mirrors the real console) ============ -->
+      <div class="cc-rail">
+        <span class="rail-logo">CONSOLE</span>
+        <span class="rail-sep">›</span>
+        <span>PROJECTS</span>
+        <span class="rail-sep">›</span>
+        <span class="rail-project">x10.gigo.harness-service</span>
+        <span class="rail-hint">Command Center surface — same design language, log-first layout</span>
+      </div>
+
+      <!-- ============ Run header ============ -->
+      <header class="cc-head">
+        <span class="cc-title">speckit-ralph-native-feature</span>
+        <span class="status-badge status-running" id="run-status">
+          <span class="sb-dot"></span><span class="sb-label">Running</span>
+        </span>
+        <div class="cc-meta">
+          <span class="chip mono" title="Codebase">oceanlabs-holding/x10.gigo.harness-service</span>
+          <span class="chip mono" title="Branch">attach-first-writer</span>
+          <span class="chip mono" title="Provider · model">codex · gpt-5.5 · xhigh</span>
+        </div>
+        <div class="cc-right">
+          <span class="cc-stat mono" title="Elapsed"><b id="elapsed">0:00</b></span>
+          <span class="cc-stat mono" title="Messages"><b id="stat-runs">0</b> runs</span>
+          <span class="surface-switch" title="Compare surfaces">
+            <a href="index.html">Legacy</a>
+            <a href="console.html" class="active">Command Center</a>
+          </span>
+          <button type="button" class="btn" id="btn-replay" title="Restart the simulated run">
+            <span aria-hidden="true">&#8635;</span> Replay
+          </button>
+          <button type="button" class="btn" title="Decorative in the mockup">Cancel</button>
+        </div>
+      </header>
+
+      <!-- ============ Toolbar ============ -->
+      <div class="cc-toolbar">
+        <div class="cc-viewbtns" id="cc-viewbtns">
+          <button type="button" class="cc-vb active" data-view="log">Log</button>
+          <button type="button" class="cc-vb" data-view="graph">Graph</button>
+          <button type="button" class="cc-vb" data-view="artifacts">Artifacts&nbsp;2</button>
+        </div>
+        <div class="cc-toggles">
+          <label><input type="checkbox" id="tg-tools" checked /> Tool calls</label>
+          <label><input type="checkbox" id="tg-sys" checked /> System</label>
+        </div>
+        <div class="cc-filter">
+          <span>Node</span>
+          <select id="cc-filter"><option value="all">All nodes</option></select>
+        </div>
+      </div>
+
+      <!-- ============ Main: views + shared node panel ============ -->
+      <main class="cc-main">
+        <div class="cc-views">
+          <!-- Log view: one section per node RUN -->
+          <div class="cc-view" id="cc-view-log">
+            <div id="cc-stream"></div>
+          </div>
+
+          <!-- Graph view: same renderer as the Legacy mockup -->
+          <div class="cc-view hidden" id="cc-graph">
+            <div class="pane-head">
+              <span class="pane-title">Run graph</span>
+              <span class="pane-hint">Drag to pan · scroll to zoom · click a node to open its log</span>
+              <div class="graph-toolbar">
+                <button type="button" class="gt-btn" id="zoom-out" title="Zoom out">−</button>
+                <button type="button" class="gt-btn" id="zoom-in" title="Zoom in">+</button>
+                <button type="button" class="gt-btn" id="zoom-fit" title="Fit graph to view">Fit</button>
+              </div>
+            </div>
+            <div id="graph-pane">
+              <div id="graph-world"><!-- edges + node cards injected by console-app.js --></div>
+            </div>
+          </div>
+
+          <!-- Artifacts view -->
+          <div class="cc-view hidden" id="cc-view-artifacts">
+            <div class="cc-artifacts">
+              <div class="cc-artifact">
+                <span class="mono">specs/014-attach-first-writer/spec.md</span>
+                <span class="a-size">18.2 KB</span>
+              </div>
+              <div class="cc-artifact">
+                <span class="mono">specs/014-attach-first-writer/visual/speckit-clarify-explainer.html</span>
+                <span class="a-size">18.0 KB</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ============ Shared node panel (same component as Legacy) ============ -->
+        <div id="split-handle" class="hidden" title="Drag to resize"></div>
+        <aside id="node-panel" class="closed">
+          <div id="panel-header"></div>
+          <div id="panel-body"></div>
+        </aside>
+      </main>
+
+      <!-- ============ Composer ============ -->
+      <form class="cc-composer" id="cc-composer">
+        <input
+          type="text"
+          id="cc-input"
+          placeholder="Reply&hellip; (queued for the run's conversation)"
+          autocomplete="off"
+        />
+        <button type="submit" class="btn btn-primary">Continue</button>
+      </form>
+    </div>
+
+    <div id="modal-root"></div>
+
+    <script src="console-app.js?v=14"></script>
+  </body>
+</html>

@@ -1,0 +1,1104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Archon — Workflow Run View + HITL · UX prototype</title>
+<style>
+  /* ===== Brand tokens — mirrors packages/web/src/index.css (dark-only) ===== */
+  :root {
+    --background: oklch(0.14 0.005 260);
+    --surface: oklch(0.18 0.008 260);
+    --surface-elevated: oklch(0.22 0.01 260);
+    --surface-inset: oklch(0.12 0.005 260);
+    --surface-hover: oklch(0.24 0.01 260);
+    --border: oklch(0.28 0.01 260);
+    --border-bright: oklch(0.35 0.015 260);
+    --text-primary: oklch(0.93 0.005 260);
+    --text-secondary: oklch(0.65 0.01 260);
+    --text-tertiary: oklch(0.45 0.01 260);
+    --accent-bright: oklch(0.72 0.18 250);
+    --accent-muted: oklch(0.3 0.08 250);
+    --primary: oklch(0.65 0.18 250);
+    --success: oklch(0.65 0.17 155);
+    --warning: oklch(0.75 0.15 75);
+    --error: oklch(0.6 0.2 25);
+    --awaiting: var(--warning); /* the ONE new alias this design adds */
+    --node-command: oklch(0.62 0.18 250);
+    --node-prompt: oklch(0.58 0.19 290);
+    --node-bash: oklch(0.75 0.15 75);
+    --node-loop: oklch(0.62 0.18 170);
+    --node-approval: oklch(0.72 0.17 40);
+    --radius: 10px;
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', ui-sans-serif, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--background);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.45;
+  }
+  button { font-family: inherit; cursor: pointer; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: var(--background); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+  /* ===== App frame ===== */
+  #app { display: flex; flex-direction: column; height: 100vh; }
+  .topbar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 16px; border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .back-btn {
+    background: none; border: 1px solid var(--border); color: var(--text-secondary);
+    border-radius: 8px; padding: 4px 10px; font-size: 13px;
+  }
+  .back-btn:hover { background: var(--surface-hover); color: var(--text-primary); }
+  .wf-name { font-weight: 650; font-size: 15px; }
+  .run-id { font-family: var(--font-mono); font-size: 11px; color: var(--text-tertiary); }
+  .codebase-chip {
+    font-size: 12px; color: var(--text-secondary);
+    border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px;
+  }
+  .elapsed { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); }
+  .topbar-spacer { flex: 1; }
+
+  /* Run status pill (run-level roll-up) */
+  .run-pill {
+    display: inline-flex; align-items: center; gap: 7px;
+    border-radius: 999px; padding: 4px 12px; font-size: 12.5px; font-weight: 600;
+    border: 1px solid var(--border); color: var(--text-secondary); background: var(--surface);
+  }
+  .run-pill.awaiting {
+    color: var(--awaiting); border-color: color-mix(in oklch, var(--awaiting) 55%, transparent);
+    background: color-mix(in oklch, var(--awaiting) 12%, transparent);
+    cursor: pointer; animation: pill-pulse 2.4s ease-in-out infinite;
+  }
+  .run-pill.running { color: var(--accent-bright); border-color: color-mix(in oklch, var(--accent-bright) 45%, transparent); }
+  .run-pill.completed { color: var(--success); border-color: color-mix(in oklch, var(--success) 45%, transparent); }
+  .run-pill.paused { color: var(--warning); border-color: color-mix(in oklch, var(--warning) 45%, transparent); }
+  @keyframes pill-pulse { 0%,100% { box-shadow: 0 0 0 0 color-mix(in oklch, var(--awaiting) 35%, transparent); } 50% { box-shadow: 0 0 0 5px transparent; } }
+  @media (prefers-reduced-motion: reduce) { .run-pill.awaiting, .gnode.awaiting .node-ring { animation: none; } }
+
+  /* Scenario controls */
+  .ctl { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+  .ctl select, .ctl .toggle-btn {
+    background: var(--surface-elevated); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 8px; padding: 4px 8px; font-size: 12px;
+  }
+  .toggle-btn[aria-pressed="true"] { border-color: var(--accent-bright); color: var(--accent-bright); }
+
+  /* Tabs */
+  .tabs { display: flex; gap: 2px; padding: 6px 16px 0; border-bottom: 1px solid var(--border); background: var(--surface); }
+  .tab {
+    background: none; border: none; color: var(--text-secondary); font-size: 13px; font-weight: 550;
+    padding: 8px 14px; border-bottom: 2px solid transparent;
+  }
+  .tab:hover { color: var(--text-primary); }
+  .tab[aria-selected="true"] { color: var(--text-primary); border-bottom-color: var(--accent-bright); }
+  .tab .tab-badge {
+    margin-left: 6px; font-size: 10.5px; font-weight: 700; border-radius: 999px; padding: 1px 7px;
+    background: color-mix(in oklch, var(--awaiting) 18%, transparent); color: var(--awaiting);
+  }
+
+  /* Main split */
+  .main { flex: 1; display: flex; min-height: 0; }
+  .graph-pane { flex: 1.2; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--border); }
+  .graph-scroll { flex: 1; overflow: auto; display: flex; align-items: center; justify-content: center; padding: 16px; }
+  .graph-legend {
+    display: flex; gap: 16px; padding: 8px 16px; border-top: 1px solid var(--border);
+    font-size: 11px; color: var(--text-tertiary); flex-wrap: wrap;
+  }
+  .legend-item { display: inline-flex; align-items: center; gap: 6px; }
+  .legend-dot { width: 9px; height: 9px; border-radius: 50%; }
+  .panel-pane { flex: 1; min-width: 360px; max-width: 620px; display: flex; flex-direction: column; background: var(--surface); }
+
+  /* ===== DAG graph (SVG) ===== */
+  svg.dag { width: 100%; height: auto; max-height: 100%; }
+  .edge { fill: none; stroke: var(--border-bright); stroke-width: 1.5; }
+  .edge.to-running { stroke: var(--accent-bright); stroke-dasharray: 6 5; animation: dashmove 1s linear infinite; }
+  .edge.to-awaiting { stroke: var(--awaiting); }
+  .edge.to-completed { stroke: color-mix(in oklch, var(--success) 60%, transparent); }
+  @keyframes dashmove { to { stroke-dashoffset: -11; } }
+  .gnode { cursor: pointer; }
+  .gnode .node-box {
+    fill: var(--surface-elevated); stroke: var(--border); stroke-width: 1.2; rx: 10;
+    transition: stroke 120ms;
+  }
+  .gnode:hover .node-box { stroke: var(--border-bright); }
+  .gnode.selected .node-box { stroke: var(--text-secondary); stroke-width: 1.8; }
+  .gnode.running .node-box { stroke: var(--accent-bright); }
+  .gnode.awaiting .node-box { stroke: var(--awaiting); stroke-width: 1.8; }
+  .gnode.awaiting .node-ring {
+    fill: none; stroke: var(--awaiting); stroke-width: 1.4; opacity: 0.7;
+    animation: node-pulse 2.4s ease-in-out infinite;
+  }
+  @keyframes node-pulse { 0%,100% { opacity: 0.75; } 50% { opacity: 0.15; } }
+  .gnode.completed .node-box { stroke: color-mix(in oklch, var(--success) 55%, transparent); }
+  .gnode.failed .node-box { stroke: var(--error); }
+  .gnode.pending .node-box { opacity: 0.75; }
+  .gnode .node-name { fill: var(--text-primary); font-size: 12.5px; font-weight: 600; font-family: var(--font-sans); }
+  .gnode .node-type { font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em; font-family: var(--font-sans); }
+  .gnode .node-status { fill: var(--text-secondary); font-size: 10.5px; font-family: var(--font-sans); }
+  .gnode .status-awaiting { fill: var(--awaiting); font-weight: 700; }
+
+  /* ===== Node panel ===== */
+  .panel-header {
+    padding: 14px 16px; border-bottom: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .panel-title-row { display: flex; align-items: center; gap: 10px; }
+  .panel-node-name { font-size: 15px; font-weight: 650; font-family: var(--font-mono); }
+  .type-pill { font-size: 10px; font-weight: 700; letter-spacing: 0.05em; border-radius: 5px; padding: 2px 7px; }
+  .status-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 650; border-radius: 999px; padding: 3px 10px; border: 1px solid var(--border); color: var(--text-secondary); }
+  .status-badge.running { color: var(--accent-bright); border-color: color-mix(in oklch, var(--accent-bright) 45%, transparent); }
+  .status-badge.awaiting { color: var(--awaiting); border-color: color-mix(in oklch, var(--awaiting) 55%, transparent); background: color-mix(in oklch, var(--awaiting) 10%, transparent); }
+  .status-badge.completed { color: var(--success); border-color: color-mix(in oklch, var(--success) 45%, transparent); }
+  .status-badge.failed { color: var(--error); border-color: color-mix(in oklch, var(--error) 45%, transparent); }
+  .status-badge.paused { color: var(--warning); border-color: color-mix(in oklch, var(--warning) 45%, transparent); }
+  .panel-meta { display: flex; gap: 12px; font-size: 11.5px; color: var(--text-tertiary); font-family: var(--font-mono); }
+  .panel-body { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+
+  .placeholder {
+    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    color: var(--text-tertiary); gap: 8px; text-align: center; padding: 40px 20px;
+  }
+  .placeholder .big { font-size: 15px; color: var(--text-secondary); }
+
+  /* Agent room messages */
+  .msg { display: flex; flex-direction: column; gap: 4px; }
+  .msg-role { font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em; color: var(--text-tertiary); text-transform: uppercase; }
+  .msg-bubble {
+    background: var(--surface-elevated); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 10px 12px; font-size: 13.5px; color: var(--text-primary);
+    white-space: pre-wrap;
+  }
+  .tool-chip {
+    display: flex; align-items: center; gap: 8px;
+    border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px;
+    font-family: var(--font-mono); font-size: 11.5px; color: var(--text-secondary);
+    background: var(--surface);
+  }
+  .tool-chip .tool-name { color: var(--accent-bright); font-weight: 600; }
+  .tool-chip.ask-tool { border-color: color-mix(in oklch, var(--awaiting) 50%, transparent); }
+  .tool-chip.ask-tool .tool-name { color: var(--awaiting); }
+  .tool-chip .tool-status { margin-left: auto; font-size: 10.5px; }
+  .stream-cursor { display: inline-block; width: 7px; height: 14px; background: var(--accent-bright); vertical-align: -2px; animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* Terminal well (bash/script) */
+  .term {
+    background: var(--surface-inset); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 12px 14px; font-family: var(--font-mono); font-size: 12px; line-height: 1.6;
+    color: var(--text-secondary); white-space: pre-wrap; overflow-x: auto;
+  }
+  .term .ok { color: var(--success); }
+  .exit-chip { font-family: var(--font-mono); font-size: 11px; border-radius: 6px; padding: 2px 8px; border: 1px solid color-mix(in oklch, var(--success) 45%, transparent); color: var(--success); align-self: flex-start; }
+
+  /* ===== PendingInteractionCard (Ask) ===== */
+  .ask-card {
+    background: var(--surface-elevated);
+    border: 1px solid color-mix(in oklch, var(--awaiting) 45%, transparent);
+    border-left: 3px solid var(--awaiting);
+    border-radius: var(--radius);
+    padding: 14px 16px; display: flex; flex-direction: column; gap: 12px;
+    scroll-margin-top: 12px;
+  }
+  .ask-card.resolved { border-color: var(--border); border-left-color: var(--border-bright); opacity: 0.92; }
+  .ask-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .ask-title { font-size: 13px; font-weight: 700; color: var(--awaiting); display: inline-flex; align-items: center; gap: 7px; }
+  .ask-card.resolved .ask-title { color: var(--text-secondary); }
+  .ask-node { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-tertiary); }
+  .ask-wait { margin-left: auto; font-size: 11px; color: var(--text-tertiary); font-family: var(--font-mono); }
+  .ask-question { display: flex; flex-direction: column; gap: 8px; }
+  .ask-q-text { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+  .ask-q-hint { font-size: 11px; color: var(--text-tertiary); }
+  fieldset { border: none; display: flex; flex-direction: column; gap: 6px; }
+  .opt {
+    display: flex; align-items: flex-start; gap: 9px; padding: 8px 10px;
+    border: 1px solid var(--border); border-radius: 8px; cursor: pointer;
+    font-size: 13px; color: var(--text-primary); background: var(--surface);
+    transition: border-color 100ms, background 100ms;
+  }
+  .opt:hover { border-color: var(--border-bright); background: var(--surface-hover); }
+  .opt:has(input:checked) { border-color: var(--accent-bright); background: color-mix(in oklch, var(--accent-bright) 8%, var(--surface)); }
+  .opt input { margin-top: 2px; accent-color: var(--accent-bright); }
+  .opt.disabled { cursor: default; opacity: 0.85; }
+  .opt.disabled:hover { border-color: var(--border); background: var(--surface); }
+  .other-input {
+    margin-left: 28px; margin-top: 2px;
+    background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px;
+    color: var(--text-primary); font-family: var(--font-sans); font-size: 13px;
+    padding: 8px 10px; width: calc(100% - 28px); resize: vertical; min-height: 38px;
+  }
+  .other-input:focus { outline: 2px solid var(--accent-bright); outline-offset: -1px; }
+  .ask-foot { display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--border); padding-top: 12px; }
+  .payload-toggle { background: none; border: none; color: var(--text-tertiary); font-size: 11px; font-family: var(--font-mono); text-decoration: underline; text-underline-offset: 3px; }
+  .payload-toggle:hover { color: var(--text-secondary); }
+  .ask-actions { margin-left: auto; display: flex; gap: 8px; }
+  .btn {
+    border-radius: 8px; padding: 7px 16px; font-size: 13px; font-weight: 600;
+    border: 1px solid var(--border); background: var(--surface); color: var(--text-primary);
+  }
+  .btn:hover:not(:disabled) { background: var(--surface-hover); }
+  .btn.primary { background: var(--primary); border-color: var(--primary); color: oklch(0.98 0.005 260); }
+  .btn.primary:hover:not(:disabled) { background: var(--accent-bright); }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .btn.danger-outline { color: var(--error); border-color: color-mix(in oklch, var(--error) 45%, transparent); background: none; }
+  .btn .mini-spinner { display: inline-block; width: 11px; height: 11px; border: 2px solid oklch(0.98 0.005 260 / 0.35); border-top-color: oklch(0.98 0.005 260); border-radius: 50%; animation: spin 0.7s linear infinite; vertical-align: -1px; margin-right: 6px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .payload-pre {
+    background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px;
+    font-family: var(--font-mono); font-size: 10.5px; color: var(--text-secondary);
+    padding: 10px 12px; overflow-x: auto; white-space: pre;
+  }
+  .stamp { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 650; }
+  .stamp.answered { color: var(--success); }
+  .stamp.declined { color: var(--text-secondary); }
+  .stamp.failed { color: var(--error); }
+  .stamp-detail { font-size: 12px; color: var(--text-secondary); font-weight: 400; }
+  .answers-summary { font-size: 12.5px; color: var(--text-secondary); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+  .answers-summary b { color: var(--text-primary); font-weight: 600; }
+  .readonly-note {
+    font-size: 12px; color: var(--text-tertiary); font-style: italic;
+    border-top: 1px solid var(--border); padding-top: 10px;
+  }
+  .decline-confirm {
+    display: flex; flex-direction: column; gap: 8px;
+    border: 1px solid color-mix(in oklch, var(--error) 40%, transparent);
+    background: color-mix(in oklch, var(--error) 7%, transparent);
+    border-radius: 8px; padding: 10px 12px; font-size: 12.5px; color: var(--text-primary);
+  }
+  .decline-confirm .row { display: flex; gap: 8px; justify-content: flex-end; }
+
+  /* Approval gate (between-node HITL, existing pattern — shown for contrast) */
+  .gate-card {
+    border: 1px solid color-mix(in oklch, var(--node-approval) 50%, transparent);
+    border-left: 3px solid var(--node-approval);
+    background: var(--surface-elevated); border-radius: var(--radius); padding: 14px 16px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .gate-title { font-size: 13px; font-weight: 700; color: var(--node-approval); }
+  .gate-context { font-size: 12.5px; color: var(--text-secondary); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+  .gate-note { font-size: 11px; color: var(--text-tertiary); }
+
+  /* Logs tab */
+  .logs-wrap { flex: 1; overflow-y: auto; padding: 14px 18px; display: flex; flex-direction: column; gap: 3px; font-family: var(--font-mono); font-size: 12px; }
+  .log-line { display: flex; gap: 10px; align-items: baseline; color: var(--text-secondary); }
+  .log-node { color: var(--accent-bright); min-width: 130px; }
+  .log-node.awaiting { color: var(--awaiting); font-weight: 700; }
+  .log-ts { color: var(--text-tertiary); font-size: 10.5px; min-width: 62px; }
+  .logs-note { font-family: var(--font-sans); font-size: 11.5px; color: var(--text-tertiary); padding: 10px 18px; border-bottom: 1px solid var(--border); }
+
+  /* Chat tab */
+  .chat-wrap { flex: 1; overflow-y: auto; padding: 18px; display: flex; flex-direction: column; gap: 10px; max-width: 860px; }
+  .chat-user { align-self: flex-end; background: var(--accent-muted); border-radius: 12px 12px 4px 12px; padding: 9px 13px; font-size: 13.5px; max-width: 70%; }
+  .node-entry {
+    display: flex; align-items: center; gap: 10px; align-self: stretch;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 9px 12px; font-size: 12.5px; color: var(--text-secondary);
+    text-align: left; width: 100%;
+  }
+  button.node-entry:hover { border-color: var(--border-bright); background: var(--surface-hover); }
+  .node-entry .ne-name { font-family: var(--font-mono); font-weight: 600; color: var(--text-primary); }
+  .node-entry .ne-go { margin-left: auto; color: var(--text-tertiary); font-size: 11px; }
+  .node-entry.awaiting { border-color: color-mix(in oklch, var(--awaiting) 50%, transparent); background: color-mix(in oklch, var(--awaiting) 7%, var(--surface)); }
+  .chat-note { font-size: 11.5px; color: var(--text-tertiary); text-align: center; padding: 4px; }
+
+  /* Console surface */
+  .console-wrap { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
+  .pending-banner {
+    position: sticky; top: 0; z-index: 5;
+    display: flex; align-items: center; gap: 12px;
+    background: color-mix(in oklch, var(--awaiting) 12%, var(--surface));
+    border-bottom: 1px solid color-mix(in oklch, var(--awaiting) 45%, transparent);
+    padding: 10px 18px; font-size: 13px; color: var(--text-primary);
+  }
+  .pending-banner b { color: var(--awaiting); }
+  .banner-jump { background: none; border: 1px solid color-mix(in oklch, var(--awaiting) 55%, transparent); color: var(--awaiting); border-radius: 7px; padding: 3px 10px; font-size: 12px; font-weight: 600; }
+  .banner-jump:hover { background: color-mix(in oklch, var(--awaiting) 15%, transparent); }
+  .stream { padding: 18px; display: flex; flex-direction: column; gap: 12px; max-width: 900px; }
+  .stream-line { text-align: center; font-size: 11px; color: var(--text-tertiary); font-family: var(--font-mono); }
+  .node-divider {
+    display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+    border: 1px solid var(--border); border-radius: 10px; background: var(--surface);
+    cursor: pointer; width: 100%; text-align: left;
+  }
+  .node-divider:hover { border-color: var(--border-bright); }
+  .node-divider.selected { border-color: var(--text-secondary); }
+  .node-divider .nd-name { font-family: var(--font-mono); font-weight: 650; font-size: 13px; color: var(--text-primary); }
+  .node-divider .nd-meta { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  .console-card-indent { margin-left: 18px; }
+
+  /* Unsupported provider overlay */
+  .overlay {
+    position: fixed; inset: 0; z-index: 50;
+    background: color-mix(in oklch, var(--background) 82%, transparent);
+    display: flex; align-items: center; justify-content: center; padding: 24px;
+  }
+  .reject-card {
+    max-width: 560px; width: 100%;
+    background: var(--surface-elevated); border: 1px solid color-mix(in oklch, var(--error) 55%, transparent);
+    border-left: 4px solid var(--error);
+    border-radius: 14px; padding: 22px 24px; display: flex; flex-direction: column; gap: 14px;
+  }
+  .reject-title { font-size: 16px; font-weight: 700; color: var(--error); display: flex; align-items: center; gap: 9px; }
+  .reject-body { font-size: 13.5px; color: var(--text-primary); }
+  .reject-body code { font-family: var(--font-mono); font-size: 12px; background: var(--surface-inset); padding: 1px 6px; border-radius: 5px; color: var(--accent-bright); }
+  .reject-detail { font-size: 12.5px; color: var(--text-secondary); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+  .reject-detail li { margin-left: 18px; margin-top: 4px; }
+
+  .spec-footer {
+    padding: 8px 16px; border-top: 1px solid var(--border);
+    font-size: 10.5px; color: var(--text-tertiary); display: flex; gap: 14px; flex-wrap: wrap;
+    background: var(--surface);
+  }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+'use strict';
+
+/* =====================================================================
+ * Demo scenario — the SPEC's success signal:
+ * an agent node blocks on AskHuman for GitHub issue details
+ * (single-select + free-text Other), a parallel node asks a
+ * multi-select question, and an approval gate closes the run.
+ * ===================================================================== */
+
+const PROVIDERS = { claude: 'claude · sonnet-4.6', pi: 'pi · claude-haiku-4.5', codex: 'codex · gpt-5.3-codex' };
+
+const initialNodes = () => ({
+  'fetch-issue':   { type: 'bash',     status: 'completed', duration: '3.2s',  provider: null },
+  'analyze-issue': { type: 'prompt',   status: 'completed', duration: '41s',   provider: PROVIDERS.claude },
+  'reproduce-bug': { type: 'command',  status: 'awaiting',  duration: null,    provider: PROVIDERS.claude },
+  'draft-tests':   { type: 'prompt',   status: 'awaiting',  duration: null,    provider: PROVIDERS.pi },
+  'implement-fix': { type: 'prompt',   status: 'pending',   duration: null,    provider: PROVIDERS.claude },
+  'verify':        { type: 'bash',     status: 'pending',   duration: null,    provider: null },
+  'review-gate':   { type: 'approval', status: 'pending',   duration: null,    provider: null },
+});
+
+const EDGES = [
+  ['fetch-issue', 'analyze-issue'],
+  ['analyze-issue', 'reproduce-bug'],
+  ['analyze-issue', 'draft-tests'],
+  ['reproduce-bug', 'implement-fix'],
+  ['draft-tests', 'implement-fix'],
+  ['implement-fix', 'verify'],
+  ['verify', 'review-gate'],
+];
+
+/* Graph layout: center coordinates, viewBox 0 0 1080 480 */
+const POS = {
+  'fetch-issue':   [120, 240],
+  'analyze-issue': [290, 240],
+  'reproduce-bug': [480, 120],
+  'draft-tests':   [480, 360],
+  'implement-fix': [670, 240],
+  'verify':        [830, 240],
+  'review-gate':   [980, 240],
+};
+const NW = 132, NH = 64;
+
+const TYPE_COLORS = {
+  command: 'var(--node-command)', prompt: 'var(--node-prompt)', bash: 'var(--node-bash)',
+  loop: 'var(--node-loop)', approval: 'var(--node-approval)', script: 'var(--node-bash)',
+};
+
+const ASKS = {
+  'reproduce-bug': {
+    request_id: 'ask_01J7ZGM3KQ',
+    tool_use_id: 'toolu_01Xy4Ab9Qm',
+    session_id: 'sess_9f2c1d',
+    questions: [{
+      id: 'q1', kind: 'single',
+      text: "I can't reach external URLs from this environment. How should I get the details of issue #1247?",
+      options: [
+        'Paste the issue URL — I will retry fetching it',
+        'Paste the issue text directly here',
+        'Use the cached copy of issue #1247 from $STATE_DIR',
+      ],
+      other: true,
+    }],
+  },
+  'draft-tests': {
+    request_id: 'ask_01J7ZH8W2E',
+    tool_use_id: 'toolu_01Bq7Cd2Rf',
+    session_id: 'sess_a41b9e',
+    questions: [{
+      id: 'q1', kind: 'multi',
+      text: 'Which checks should the E2E draft cover before I write the fix?',
+      options: ['Unit tests (bun test)', 'Lint + type-check', 'E2E — chromium', 'E2E — firefox'],
+      other: false,
+    }],
+  },
+};
+
+const state = {
+  surface: 'legacy',          // 'legacy' | 'console'
+  persona: 'starter',         // 'starter' | 'teammate'
+  provider: 'claude',
+  tab: 'graph',               // 'graph' | 'logs' | 'chat'
+  selected: 'reproduce-bug',
+  nodes: initialNodes(),
+  cards: {},                  // nodeId -> { phase, sel, otherText, checks:Set, showPayload, confirmingDecline }
+  startedAt: Date.now() - (8 * 60 + 34) * 1000,
+  waitBase: { 'reproduce-bug': 4 * 60 + 12, 'draft-tests': 1 * 60 + 48 },
+  waitFrozen: {},
+  gate: { phase: 'pending' }, // review-gate approval demo
+};
+
+const resetCards = () => {
+  state.cards = {};
+  for (const id of Object.keys(ASKS)) {
+    state.cards[id] = { phase: 'pending', sel: null, otherText: '', checks: new Set(), showPayload: false, confirmingDecline: false };
+  }
+};
+resetCards();
+
+/* ---------------- helpers ---------------- */
+const $ = (sel) => document.querySelector(sel);
+const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const fmtClock = (totalSec) => {
+  const h = Math.floor(totalSec / 3600), m = Math.floor((totalSec % 3600) / 60), s = totalSec % 60;
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}` : `${m}:${String(s).padStart(2, '0')}`;
+};
+const awaitingNodes = () => Object.entries(state.nodes).filter(([, n]) => n.status === 'awaiting').map(([id]) => id);
+
+function runStatus() {
+  const list = Object.values(state.nodes);
+  const awaiting = awaitingNodes().length;
+  if (awaiting > 0) return { kind: 'awaiting', label: `◔ Awaiting input (${awaiting})` };
+  if (list.some((n) => n.status === 'paused')) return { kind: 'paused', label: '⏸ Paused at gate' };
+  if (list.every((n) => n.status === 'completed')) return { kind: 'completed', label: '✓ Completed' };
+  if (list.some((n) => n.status === 'running')) return { kind: 'running', label: '● Running' };
+  return { kind: 'running', label: '● Running' };
+}
+
+const STATUS_LABEL = {
+  pending: '○ pending', running: '● running', awaiting: '◔ waiting on you',
+  completed: '✓ done', failed: '✗ failed', paused: '⏸ at gate', skipped: '— skipped',
+};
+
+/* ---------------- DAG graph (SVG) ---------------- */
+function edgePath([x1, y1], [x2, y2]) {
+  const sx = x1 + NW / 2, tx = x2 - NW / 2;
+  const sy = y1, ty = y2;
+  const mx = (sx + tx) / 2;
+  return `M ${sx} ${sy} C ${mx} ${sy}, ${mx} ${ty}, ${tx} ${ty}`;
+}
+
+function graphSvg() {
+  const edges = EDGES.map(([a, b]) => {
+    const st = state.nodes[b].status;
+    const cls = st === 'running' ? 'to-running' : st === 'awaiting' ? 'to-awaiting' : st === 'completed' ? 'to-completed' : '';
+    return `<path class="edge ${cls}" d="${edgePath(POS[a], POS[b])}" marker-end="url(#arr)"/>`;
+  }).join('');
+
+  const nodes = Object.entries(state.nodes).map(([id, n]) => {
+    const [cx, cy] = POS[id];
+    const x = cx - NW / 2, y = cy - NH / 2;
+    const sel = state.selected === id && state.surface === 'legacy' && state.tab === 'graph';
+    const ring = n.status === 'awaiting'
+      ? `<rect class="node-ring" x="${x - 5}" y="${y - 5}" width="${NW + 10}" height="${NH + 10}" rx="13"/>` : '';
+    const statusCls = n.status === 'awaiting' ? 'node-status status-awaiting' : 'node-status';
+    const dur = n.duration ? ` · ${n.duration}` : '';
+    return `
+      <g class="gnode ${n.status} ${sel ? 'selected' : ''}" data-action="select-node" data-node="${id}" tabindex="0" role="button" aria-label="${id}, ${STATUS_LABEL[n.status]}">
+        ${ring}
+        <rect class="node-box" x="${x}" y="${y}" width="${NW}" height="${NH}" rx="10"/>
+        <text class="node-type" x="${x + 12}" y="${y + 17}" fill="${TYPE_COLORS[n.type]}">${n.type.toUpperCase()}</text>
+        <text class="node-name" x="${x + 12}" y="${y + 35}">${id}</text>
+        <text class="${statusCls}" x="${x + 12}" y="${y + 52}">${STATUS_LABEL[n.status]}${dur}</text>
+      </g>`;
+  }).join('');
+
+  return `
+  <svg class="dag" viewBox="0 0 1080 480" role="group" aria-label="Workflow graph">
+    <defs>
+      <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+        <path d="M0,0 L8,4 L0,8 z" fill="var(--border-bright)"/>
+      </marker>
+    </defs>
+    ${edges}${nodes}
+  </svg>`;
+}
+
+/* ---------------- Ask card ---------------- */
+function envelopeJson(nodeId) {
+  const ask = ASKS[nodeId];
+  return JSON.stringify({
+    type: 'ask',
+    request_id: ask.request_id,
+    node_id: nodeId,
+    session_id: ask.session_id,
+    tool_use_id: ask.tool_use_id,
+    questions: ask.questions.map((q) => ({
+      id: q.id, kind: q.kind === 'single' ? 'single-select' : 'multi-select',
+      text: q.text, options: q.options, allow_other: q.other,
+    })),
+  }, null, 2);
+}
+
+function cardHtml(nodeId) {
+  const ask = ASKS[nodeId];
+  const card = state.cards[nodeId];
+  const resolved = card.phase === 'answered' || card.phase === 'declined';
+  const readonly = state.persona === 'teammate' && !resolved;
+
+  let body = '';
+  if (card.phase === 'answered') {
+    const q = ask.questions[0];
+    const answers = q.kind === 'single'
+      ? (card.sel === '__other__' ? `Other: “${esc(card.otherText)}”` : esc(card.sel))
+      : [...card.checks].map(esc).join(', ');
+    body = `
+      <div class="stamp answered">✓ Answered <span class="stamp-detail">by ${state.persona === 'starter' ? 'you' : 'dale'} · just now — node resumed with your answer</span></div>
+      <div class="answers-summary"><b>${esc(q.text)}</b><br/>${answers}</div>`;
+  } else if (card.phase === 'declined') {
+    body = `
+      <div class="stamp declined">— Declined <span class="stamp-detail">by ${state.persona === 'starter' ? 'you' : 'dale'} · the agent was told you declined and decides how to proceed</span></div>
+      <div class="answers-summary"><b>${esc(ask.questions[0].text)}</b></div>`;
+  } else if (card.phase === 'failed-resume') {
+    body = `
+      <div class="stamp failed">✗ Resume failed <span class="stamp-detail">session expired — node failed loudly; your answer is preserved below</span></div>
+      <div class="answers-summary"><b>${esc(ask.questions[0].text)}</b><br/>${esc(card.sel || '')}</div>`;
+  } else {
+    const q = ask.questions[0];
+    const opts = q.options.map((opt) => {
+      if (q.kind === 'single') {
+        return `<label class="opt ${readonly ? 'disabled' : ''}">
+          <input type="radio" name="ask-${nodeId}" value="${esc(opt)}" data-action="opt" data-node="${nodeId}" ${card.sel === opt ? 'checked' : ''} ${readonly ? 'disabled' : ''}/>
+          <span>${esc(opt)}</span>
+        </label>`;
+      }
+      return `<label class="opt ${readonly ? 'disabled' : ''}">
+        <input type="checkbox" value="${esc(opt)}" data-action="check" data-node="${nodeId}" ${card.checks.has(opt) ? 'checked' : ''} ${readonly ? 'disabled' : ''}/>
+        <span>${esc(opt)}</span>
+      </label>`;
+    }).join('');
+
+    const other = q.other ? `
+      <label class="opt ${readonly ? 'disabled' : ''}">
+        <input type="radio" name="ask-${nodeId}" value="__other__" data-action="opt" data-node="${nodeId}" ${card.sel === '__other__' ? 'checked' : ''} ${readonly ? 'disabled' : ''}/>
+        <span>Other…</span>
+      </label>
+      ${card.sel === '__other__' ? `<textarea class="other-input" data-action="other" data-node="${nodeId}" placeholder="Type your answer…" aria-label="Other answer" ${readonly ? 'disabled' : ''}>${esc(card.otherText)}</textarea>` : ''}` : '';
+
+    const valid = q.kind === 'single'
+      ? card.sel && (card.sel !== '__other__' || card.otherText.trim().length > 0)
+      : card.checks.size > 0;
+
+    const declineBlock = card.confirmingDecline ? `
+      <div class="decline-confirm">
+        <span>Decline this question? The agent will be told you declined and will decide how to proceed — the engine does not force an outcome.</span>
+        <div class="row">
+          <button class="btn" data-action="decline-cancel" data-node="${nodeId}">Cancel</button>
+          <button class="btn danger-outline" data-action="decline-yes" data-node="${nodeId}">Yes, decline</button>
+        </div>
+      </div>` : '';
+
+    body = `
+      <fieldset ${readonly ? 'disabled' : ''}>
+        <div class="ask-question">
+          <span class="ask-q-text">${esc(q.text)}</span>
+          <span class="ask-q-hint">${q.kind === 'single' ? 'Pick one — or choose Other to type your own.' : 'Pick one or more.'}</span>
+        </div>
+        ${opts}${other}
+      </fieldset>
+      ${declineBlock}
+      <div class="ask-foot">
+        <button class="payload-toggle" data-action="payload" data-node="${nodeId}">${card.showPayload ? 'Hide payload' : 'View payload'}</button>
+        <div class="ask-actions">
+          ${!readonly && !card.confirmingDecline ? `<button class="btn" data-action="decline" data-node="${nodeId}">Decline</button>` : ''}
+          ${!readonly && !card.confirmingDecline ? `<button class="btn primary" data-action="submit" data-node="${nodeId}" ${!valid || card.phase === 'sending' ? 'disabled' : ''}>
+            ${card.phase === 'sending' ? '<span class="mini-spinner"></span>Sending…' : 'Submit answer'}
+          </button>` : ''}
+        </div>
+      </div>
+      ${readonly ? `<div class="readonly-note">Waiting for <b>dale</b> (run starter) to answer — only the identity that started the run can respond.</div>` : ''}`;
+  }
+
+  const wait = card.phase === 'pending' || card.phase === 'sending'
+    ? `<span class="ask-wait" data-wait="${nodeId}">waiting ${fmtClock(state.waitBase[nodeId])}</span>` : '';
+
+  return `
+  <div class="ask-card ${resolved ? 'resolved' : ''}" id="card-${nodeId}" data-card="${nodeId}">
+    <div class="ask-head">
+      <span class="ask-title">◔ Agent is asking</span>
+      <span class="ask-node">${nodeId} · ${ask.tool_use_id}</span>
+      ${wait}
+    </div>
+    ${body}
+    ${card.showPayload ? `<pre class="payload-pre">${esc(envelopeJson(nodeId))}</pre>` : ''}
+  </div>`;
+}
+
+/* ---------------- Agent room / panel bodies ---------------- */
+function agentRoomHtml(nodeId) {
+  const n = state.nodes[nodeId];
+  const room = {
+    'analyze-issue': `
+      <div class="msg"><span class="msg-role">Assistant</span>
+        <div class="msg-bubble">Reading issue #1247 from the local cache and scanning the checkout flow…</div></div>
+      <div class="tool-chip"><span class="tool-name">Read</span> app/checkout/verify.ts <span class="tool-status">✓ 1.2s</span></div>
+      <div class="tool-chip"><span class="tool-name">Grep</span> "e2e-verify" --type ts <span class="tool-status">✓ 0.4s</span></div>
+      <div class="msg"><span class="msg-role">Assistant</span>
+        <div class="msg-bubble">Root cause narrowed to the route-loop handoff. Splitting into reproduction and test drafting so they can proceed in parallel.</div></div>
+      <div class="tool-chip"><span>output</span> {"summary":"route-loop handoff","confidence":"high"} <span class="tool-status">✓ done · 41s</span></div>`,
+    'reproduce-bug': `
+      <div class="msg"><span class="msg-role">Assistant</span>
+        <div class="msg-bubble">Setting up a local reproduction. I have the failing route path from the analysis step.</div></div>
+      <div class="tool-chip"><span class="tool-name">Bash</span> bun run dev:server <span class="tool-status">✓ 2.8s</span></div>
+      <div class="msg"><span class="msg-role">Assistant</span>
+        <div class="msg-bubble">The repro script needs the exact issue payload. The issue URL is external, and this environment has no network route to it.</div></div>
+      <div class="tool-chip ask-tool"><span class="tool-name">AskHuman</span> {"questions":[…]} <span class="tool-status">◔ tool invoked → node awaiting</span></div>
+      ${cardHtml(nodeId)}
+      ${n.status === 'running' ? `<div class="msg"><span class="msg-role">Assistant</span><div class="msg-bubble">Got it — using that now. Re-running the reproduction against the route-loop fixture… <span class="stream-cursor"></span></div></div>` : ''}
+      ${n.status === 'completed' ? `<div class="tool-chip"><span>output</span> {"reproduced":true,"failingSpec":"route-loop.spec.ts:88"} <span class="tool-status">✓ done</span></div>` : ''}`,
+    'draft-tests': `
+      <div class="msg"><span class="msg-role">Assistant</span>
+        <div class="msg-bubble">Sketching the E2E matrix for the checkout regression. Before I write the spec files I want to bound the blast radius.</div></div>
+      <div class="tool-chip"><span class="tool-name">Glob</span> tests/e2e/**/*.spec.ts <span class="tool-status">✓ 0.3s</span></div>
+      <div class="tool-chip ask-tool"><span class="tool-name">AskHuman</span> {"questions":[…]} <span class="tool-status">◔ tool invoked → node awaiting</span></div>
+      ${cardHtml(nodeId)}
+      ${n.status === 'running' ? `<div class="msg"><span class="msg-role">Assistant</span><div class="msg-bubble">Writing the spec files for the selected checks… <span class="stream-cursor"></span></div></div>` : ''}
+      ${n.status === 'completed' ? `<div class="tool-chip"><span>output</span> {"specs":2,"covers":["route-loop","verify"]} <span class="tool-status">✓ done</span></div>` : ''}`,
+    'implement-fix': n.status === 'pending' ? '' : `
+      <div class="msg"><span class="msg-role">Assistant</span>
+        <div class="msg-bubble">Applying the fix to the route-loop handoff based on the reproduction… <span class="stream-cursor"></span></div></div>
+      ${n.status === 'completed' ? `<div class="tool-chip"><span>output</span> {"filesChanged":2} <span class="tool-status">✓ done</span></div>` : ''}`,
+  }[nodeId] || '';
+
+  if (!room) return `<div class="placeholder"><span class="big">Node hasn't produced output yet</span><span>Its room fills in as soon as the agent starts working.</span></div>`;
+  return room;
+}
+
+function bashBodyHtml(nodeId) {
+  if (nodeId === 'fetch-issue') {
+    return `
+      <div class="term">$ gh issue view 1247 --json title,body,labels --cache $STATE_DIR
+<span class="ok">✓</span> issue #1247 cached → $STATE_DIR/issues/1247.json
+title: "route-loop workflow hangs when e2e verify fails"
+labels: [bug, workflow-engine]</div>
+      <span class="exit-chip">exit 0 · 3.2s</span>`;
+  }
+  if (nodeId === 'verify') {
+    if (state.nodes.verify.status === 'pending') {
+      return `<div class="placeholder"><span class="big">Node hasn't produced output yet</span><span>stdout appears here while it runs.</span></div>`;
+    }
+    const done = state.nodes.verify.status === 'completed';
+    return `
+      <div class="term">$ bun run validate
+<span class="ok">✓</span> check:bundled
+<span class="ok">✓</span> type-check
+<span class="ok">✓</span> lint --max-warnings 0
+${done ? '<span class="ok">✓</span> test (14 packages)' : '<span class="stream-cursor"></span> running tests…'}</div>
+      ${done ? '<span class="exit-chip">exit 0 · 38s</span>' : ''}`;
+  }
+  return '';
+}
+
+function gateBodyHtml() {
+  const g = state.nodes['review-gate'];
+  if (g.status === 'pending') {
+    return `<div class="placeholder"><span class="big">Approval gate</span><span>When the run reaches this gate it pauses here — this is the existing <b>between-node</b> HITL, a different mechanism from the mid-node Ask card.</span></div>`;
+  }
+  if (g.status === 'paused') {
+    return `
+      <div class="gate-card">
+        <span class="gate-title">◈ Approval gate — review the fix</span>
+        <div class="gate-context">The agent changed 2 files in the route-loop handoff and all checks pass. Approve to merge the worktree branch, or reject with a reason to send it back.</div>
+        <div class="gate-note">Between-node gate (existing <code>approval:</code> node) — not the mid-turn AskHuman signal. Shown here so the two HITL kinds are visually distinct.</div>
+        <div class="ask-actions" style="margin-left:0">
+          <button class="btn" data-action="gate-reject">Reject</button>
+          <button class="btn primary" data-action="gate-approve">Approve &amp; merge</button>
+        </div>
+      </div>`;
+  }
+  return `<div class="stamp answered">✓ Approved <span class="stamp-detail">worktree branch merged — run complete</span></div>`;
+}
+
+function panelHtml() {
+  const id = state.selected;
+  if (!id) {
+    return `<div class="placeholder" style="flex:1"><span class="big">Select a node</span><span>Click any node on the graph — or a node entry in Chat — to open its room.</span></div>`;
+  }
+  const n = state.nodes[id];
+  const meta = [
+    n.provider ? `<span>${n.provider}</span>` : '',
+    n.duration ? `<span>duration ${n.duration}</span>` : '',
+    `<span>node id: ${id}</span>`,
+  ].filter(Boolean).join('');
+
+  let body;
+  if (n.type === 'bash' || n.type === 'script') body = bashBodyHtml(id);
+  else if (n.type === 'approval') body = gateBodyHtml();
+  else body = agentRoomHtml(id);
+
+  return `
+    <div class="panel-header">
+      <div class="panel-title-row">
+        <span class="panel-node-name">${id}</span>
+        <span class="type-pill" style="color:${TYPE_COLORS[n.type]};border:1px solid color-mix(in oklch, ${TYPE_COLORS[n.type]} 45%, transparent)">${n.type.toUpperCase()}</span>
+        <span class="status-badge ${n.status}">${STATUS_LABEL[n.status]}</span>
+      </div>
+      <div class="panel-meta">${meta}</div>
+    </div>
+    <div class="panel-body" id="panel-body">${body}</div>`;
+}
+
+/* ---------------- Tabs ---------------- */
+function logsHtml() {
+  const lines = [
+    ['08:41:02', 'fetch-issue', 'started'],
+    ['08:41:05', 'fetch-issue', 'completed · exit 0'],
+    ['08:41:05', 'analyze-issue', 'started · claude · sonnet-4.6'],
+    ['08:41:20', 'analyze-issue', 'tool Read app/checkout/verify.ts ✓'],
+    ['08:41:46', 'analyze-issue', 'completed · 41s'],
+    ['08:41:46', 'reproduce-bug', 'started · claude · sonnet-4.6'],
+    ['08:41:46', 'draft-tests', 'started · pi · claude-haiku-4.5'],
+    ['08:44:12', 'reproduce-bug', state.nodes['reproduce-bug'].status === 'awaiting' ? '◔ awaiting — AskHuman tool invoked' : `resumed → ${state.nodes['reproduce-bug'].status}`],
+    ['08:45:58', 'draft-tests', state.nodes['draft-tests'].status === 'awaiting' ? '◔ awaiting — AskHuman tool invoked' : `resumed → ${state.nodes['draft-tests'].status}`],
+  ];
+  if (state.nodes['implement-fix'].status !== 'pending') lines.push(['08:47:00', 'implement-fix', state.nodes['implement-fix'].status]);
+  if (state.nodes['verify'].status !== 'pending') lines.push(['08:47:31', 'verify', state.nodes['verify'].status]);
+  if (state.nodes['review-gate'].status !== 'pending') lines.push(['08:48:10', 'review-gate', STATUS_LABEL[state.nodes['review-gate'].status]]);
+
+  return `
+    <div class="logs-note">Logs tab — the merged run stream across all nodes, retained as-is (CAP-1). Per-node history lives in each node's room.</div>
+    <div class="logs-wrap">
+      ${lines.map(([ts, node, msg]) => `<div class="log-line"><span class="log-ts">${ts}</span><span class="log-node ${state.nodes[node]?.status === 'awaiting' ? 'awaiting' : ''}">${node}</span><span>${msg}</span></div>`).join('')}
+    </div>`;
+}
+
+function chatHtml() {
+  const entries = Object.keys(state.nodes).map((id) => {
+    const n = state.nodes[id];
+    return `
+      <button class="node-entry ${n.status === 'awaiting' ? 'awaiting' : ''}" data-action="chat-open" data-node="${id}">
+        <span class="ne-name">${id}</span>
+        <span class="status-badge ${n.status}">${STATUS_LABEL[n.status]}</span>
+        <span class="ne-go">open room →</span>
+      </button>`;
+  }).join('');
+  return `
+    <div class="chat-wrap">
+      <div class="chat-user">run issue-fix on #1247 — the route-loop hang from yesterday</div>
+      <div class="chat-note">Chat = your turns + per-node status (CAP-3). The full agent transcript is never inlined here — click a node entry to open its room.</div>
+      ${entries}
+    </div>`;
+}
+
+/* ---------------- Console surface ---------------- */
+function consoleHtml() {
+  const awaiting = awaitingNodes();
+  const banner = awaiting.length ? `
+    <div class="pending-banner">
+      <span><b>◔ ${awaiting.length} node${awaiting.length > 1 ? 's' : ''}</b> need${awaiting.length === 1 ? 's' : ''} your input</span>
+      ${awaiting.map((id) => `<button class="banner-jump" data-action="console-jump" data-node="${id}">${id}</button>`).join('')}
+    </div>` : '';
+
+  const section = (id, inner) => {
+    const n = state.nodes[id];
+    return `
+      <button class="node-divider ${state.selected === id ? 'selected' : ''}" data-action="console-select" data-node="${id}" id="divider-${id}">
+        <span class="nd-name">${id}</span>
+        <span class="type-pill" style="color:${TYPE_COLORS[n.type]}">${n.type.toUpperCase()}</span>
+        <span class="nd-meta"><span class="status-badge ${n.status}">${STATUS_LABEL[n.status]}</span></span>
+      </button>
+      ${inner ? `<div class="console-card-indent">${inner}</div>` : ''}`;
+  };
+
+  return `
+    <div class="console-wrap">
+      ${banner}
+      <div class="stream">
+        <div class="stream-line">run started · issue-fix · ${PROVIDERS[state.provider]}</div>
+        ${section('fetch-issue', `<div class="term">$ gh issue view 1247 --cache $STATE_DIR
+<span class="ok">✓</span> issue #1247 cached</div>`)}
+        ${section('analyze-issue', `<div class="msg"><span class="msg-role">Assistant</span><div class="msg-bubble">Root cause narrowed to the route-loop handoff…</div></div>`)}
+        ${section('reproduce-bug', agentRoomHtml('reproduce-bug'))}
+        ${section('draft-tests', agentRoomHtml('draft-tests'))}
+        ${section('implement-fix', state.nodes['implement-fix'].status === 'pending' ? '' : agentRoomHtml('implement-fix'))}
+        ${section('verify', state.nodes['verify'].status === 'pending' ? '' : bashBodyHtml('verify'))}
+        ${section('review-gate', state.nodes['review-gate'].status === 'pending' ? '' : gateBodyHtml())}
+        <div class="stream-line">${runStatus().kind === 'completed' ? 'run finished · exit 0' : 'run in progress…'}</div>
+      </div>
+    </div>`;
+}
+
+/* ---------------- Frame ---------------- */
+function render() {
+  const rs = runStatus();
+  const awaiting = awaitingNodes().length;
+  const app = $('#app');
+
+  const main = state.surface === 'console'
+    ? consoleHtml()
+    : state.tab === 'graph'
+      ? `<div class="main">
+          <div class="graph-pane">
+            <div class="graph-scroll">${graphSvg()}</div>
+            <div class="graph-legend">
+              <span class="legend-item"><span class="legend-dot" style="background:var(--accent-bright)"></span>running</span>
+              <span class="legend-item"><span class="legend-dot" style="background:var(--awaiting)"></span>awaiting — needs a human</span>
+              <span class="legend-item"><span class="legend-dot" style="background:var(--success)"></span>completed</span>
+              <span class="legend-item"><span class="legend-dot" style="background:var(--border-bright)"></span>pending</span>
+              <span class="legend-item"><span class="legend-dot" style="background:var(--error)"></span>failed</span>
+            </div>
+          </div>
+          <div class="panel-pane" role="region" aria-label="${state.selected ? state.selected + ' room' : 'node panel'}">${panelHtml()}</div>
+        </div>`
+      : state.tab === 'logs' ? logsHtml() : chatHtml();
+
+  app.innerHTML = `
+    <div class="topbar">
+      <button class="back-btn" title="Back to runs">← Runs</button>
+      <span class="wf-name">issue-fix</span>
+      <span class="run-id">run_01J7ZF8Q…</span>
+      <span class="run-pill ${rs.kind}" ${rs.kind === 'awaiting' ? 'data-action="pill-jump" role="button" tabindex="0" title="Jump to first awaiting node"' : ''} aria-live="polite">${rs.label}</span>
+      <span class="codebase-chip">OceanLabs / workflow-engine</span>
+      <span class="elapsed" id="elapsed"></span>
+      <div class="topbar-spacer"></div>
+      <div class="ctl"><label for="surface-sel">Surface</label>
+        <select id="surface-sel" data-action="surface">
+          <option value="legacy" ${state.surface === 'legacy' ? 'selected' : ''}>Legacy run view</option>
+          <option value="console" ${state.surface === 'console' ? 'selected' : ''}>/console renderer</option>
+        </select>
+      </div>
+      <div class="ctl"><label for="provider-sel">Provider</label>
+        <select id="provider-sel" data-action="provider">
+          <option value="claude" ${state.provider === 'claude' ? 'selected' : ''}>claude</option>
+          <option value="pi" ${state.provider === 'pi' ? 'selected' : ''}>pi</option>
+          <option value="codex" ${state.provider === 'codex' ? 'selected' : ''}>codex (no ask channel)</option>
+        </select>
+      </div>
+      <div class="ctl">
+        <button class="toggle-btn" data-action="persona" aria-pressed="${state.persona === 'teammate'}">${state.persona === 'starter' ? 'You: dale (run starter)' : 'You: teammate (read-only)'}</button>
+      </div>
+      <div class="ctl"><button class="toggle-btn" data-action="reset">Reset demo</button></div>
+    </div>
+    ${state.surface === 'legacy' ? `
+    <div class="tabs" role="tablist">
+      <button class="tab" role="tab" aria-selected="${state.tab === 'graph'}" data-action="tab" data-tab="graph">Graph</button>
+      <button class="tab" role="tab" aria-selected="${state.tab === 'logs'}" data-action="tab" data-tab="logs">Logs</button>
+      <button class="tab" role="tab" aria-selected="${state.tab === 'chat'}" data-action="tab" data-tab="chat">Chat${awaiting ? `<span class="tab-badge">${awaiting} waiting</span>` : ''}</button>
+    </div>` : ''}
+    ${main}
+    <div class="spec-footer">
+      <span>UX prototype · spec-workflow-run-view-hitl</span>
+      <span>CAP-1 node-centric graph ✓</span>
+      <span>CAP-2 per-type panel ✓</span>
+      <span>CAP-3 chat timeline ✓</span>
+      <span>CAP-4/5/6 Ask card ✓</span>
+      <span>CAP-7 provider gate ✓</span>
+      <span>Permission form: contract-level only (dormant)</span>
+    </div>
+    ${state.provider === 'codex' ? rejectOverlayHtml() : ''}`;
+
+  updateElapsed();
+}
+
+function rejectOverlayHtml() {
+  return `
+  <div class="overlay">
+    <div class="reject-card" role="alertdialog" aria-label="HITL not supported">
+      <span class="reject-title">✗ Run rejected at start — HITL not supported</span>
+      <div class="reject-body">
+        This workflow can ask questions mid-node (<code>AskHuman</code>), but provider <code>codex</code> has no in-process ask channel.
+        The run was refused <b>before</b> any worktree, clone, or AI cost — no node will hang waiting for an answer that can never arrive.
+      </div>
+      <div class="reject-detail">
+        Remedies:
+        <li>Switch the workflow provider to <code>claude</code> or <code>pi</code> (verified ask channel), or</li>
+        <li>Remove the ask-dependent prompts, or use a declared <code>approval:</code> gate (the always-available between-node path).</li>
+      </div>
+      <div class="ask-actions" style="margin-left:0">
+        <button class="btn primary" data-action="provider-claude">Switch to claude &amp; start</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ---------------- Engine simulation ---------------- */
+function completeNode(id) {
+  state.nodes[id].status = 'completed';
+  state.nodes[id].duration = id === 'reproduce-bug' ? '6m 02s' : id === 'draft-tests' ? '4m 40s' : state.nodes[id].duration;
+  maybeAdvance();
+  render();
+}
+
+function maybeAdvance() {
+  const n = state.nodes;
+  if (n['implement-fix'].status === 'pending' && n['reproduce-bug'].status === 'completed' && n['draft-tests'].status === 'completed') {
+    n['implement-fix'].status = 'running';
+    setTimeout(() => { n['implement-fix'].status = 'completed'; n['implement-fix'].duration = '52s'; startVerify(); render(); }, 2600);
+  }
+}
+function startVerify() {
+  const n = state.nodes;
+  if (n['verify'].status !== 'pending') return;
+  n['verify'].status = 'running';
+  setTimeout(() => {
+    n['verify'].status = 'completed'; n['verify'].duration = '38s';
+    if (n['review-gate'].status === 'pending') n['review-gate'].status = 'paused';
+    render();
+  }, 2400);
+}
+
+function resumeNode(id) {
+  state.nodes[id].status = 'running';
+  render();
+  setTimeout(() => completeNode(id), 2400);
+}
+
+/* ---------------- Events ---------------- */
+document.addEventListener('click', (e) => {
+  const el = e.target.closest('[data-action]');
+  if (!el) return;
+  const action = el.dataset.action;
+  const nodeId = el.dataset.node;
+
+  switch (action) {
+    case 'select-node':
+      state.selected = nodeId; state.tab = 'graph'; render();
+      break;
+    case 'chat-open':
+      state.selected = nodeId;
+      if (state.surface === 'legacy') { state.tab = 'graph'; render(); }
+      else { render(); setTimeout(() => $('#divider-' + nodeId)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 30); }
+      break;
+    case 'console-select':
+      state.selected = nodeId; render();
+      break;
+    case 'console-jump':
+      state.selected = nodeId; render();
+      setTimeout(() => $('#card-' + nodeId)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 30);
+      break;
+    case 'pill-jump': {
+      const first = awaitingNodes()[0];
+      if (first) {
+        state.selected = first;
+        if (state.surface === 'legacy') { state.tab = 'graph'; render(); }
+        else { render(); setTimeout(() => $('#card-' + first)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 30); }
+      }
+      break;
+    }
+    case 'tab': state.tab = el.dataset.tab; render(); break;
+    case 'surface': break; // handled on change
+    case 'persona':
+      state.persona = state.persona === 'starter' ? 'teammate' : 'starter'; render();
+      break;
+    case 'reset': {
+      state.nodes = initialNodes(); resetCards();
+      state.selected = 'reproduce-bug'; state.tab = 'graph'; state.provider = 'claude';
+      state.startedAt = Date.now() - (8 * 60 + 34) * 1000;
+      state.waitFrozen = {}; state.gate = { phase: 'pending' };
+      render();
+      break;
+    }
+    case 'payload': {
+      const c = state.cards[nodeId]; c.showPayload = !c.showPayload; render();
+      break;
+    }
+    case 'submit': {
+      const c = state.cards[nodeId];
+      if (c.phase !== 'pending') break;
+      c.phase = 'sending';
+      render();
+      setTimeout(() => {
+        c.phase = 'answered';
+        state.waitFrozen[nodeId] = true;
+        resumeNode(nodeId);
+      }, 700);
+      break;
+    }
+    case 'decline': state.cards[nodeId].confirmingDecline = true; render(); break;
+    case 'decline-cancel': state.cards[nodeId].confirmingDecline = false; render(); break;
+    case 'decline-yes': {
+      const c = state.cards[nodeId];
+      c.phase = 'declined'; c.confirmingDecline = false;
+      state.waitFrozen[nodeId] = true;
+      resumeNode(nodeId);
+      break;
+    }
+    case 'gate-approve':
+      state.nodes['review-gate'].status = 'completed';
+      state.nodes['review-gate'].duration = '—';
+      render();
+      break;
+    case 'gate-reject':
+      state.nodes['review-gate'].status = 'completed';
+      render();
+      break;
+    case 'provider-claude':
+      state.provider = 'claude'; render();
+      break;
+  }
+});
+
+document.addEventListener('change', (e) => {
+  const el = e.target.closest('[data-action]');
+  if (!el) return;
+  const action = el.dataset.action;
+  const nodeId = el.dataset.node;
+  if (action === 'surface') { state.surface = el.value; render(); }
+  if (action === 'provider') { state.provider = el.value; render(); }
+  if (action === 'opt') { state.cards[nodeId].sel = el.value; render(); }
+  if (action === 'check') {
+    const c = state.cards[nodeId];
+    if (el.checked) c.checks.add(el.value); else c.checks.delete(el.value);
+    render();
+  }
+});
+
+document.addEventListener('input', (e) => {
+  const el = e.target.closest('[data-action="other"]');
+  if (!el) return;
+  state.cards[el.dataset.node].otherText = el.value;
+  // enable/disable submit without full re-render (preserve textarea focus)
+  const card = state.cards[el.dataset.node];
+  const q = ASKS[el.dataset.node].questions[0];
+  const valid = q.kind === 'single'
+    ? card.sel && (card.sel !== '__other__' || card.otherText.trim().length > 0)
+    : card.checks.size > 0;
+  const btn = document.querySelector(`[data-action="submit"][data-node="${el.dataset.node}"]`);
+  if (btn) btn.disabled = !valid;
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && e.target.matches?.('.gnode')) {
+    state.selected = e.target.dataset.node; state.tab = 'graph'; render();
+  }
+});
+
+/* ---------------- Ticking clocks (targeted updates, no re-render) ---------------- */
+function updateElapsed() {
+  const el = $('#elapsed');
+  if (el) el.textContent = 'elapsed ' + fmtClock(Math.floor((Date.now() - state.startedAt) / 1000));
+}
+setInterval(() => {
+  updateElapsed();
+  for (const id of Object.keys(ASKS)) {
+    if (state.waitFrozen[id]) continue;
+    const c = state.cards[id];
+    if (c.phase !== 'pending' && c.phase !== 'sending') continue;
+    state.waitBase[id] += 1;
+    const w = document.querySelector(`[data-wait="${id}"]`);
+    if (w) w.textContent = 'waiting ' + fmtClock(state.waitBase[id]);
+  }
+}, 1000);
+
+render();
+</script>
+</body>
+</html>

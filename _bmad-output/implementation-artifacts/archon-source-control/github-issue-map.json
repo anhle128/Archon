@@ -1,0 +1,59 @@
+{
+  "milestone": 1,
+  "stories": {
+    "1-1-see-this-runs-uncommitted-files": {
+      "blocked_by": [],
+      "epic": 1,
+      "node_id": "I_kwDOS4WbPs8AAAABP3pH_Q",
+      "number": 75,
+      "status": "backlog",
+      "title": "See this run's uncommitted files",
+      "url": "https://github.com/anhle128/Archon/issues/75"
+    },
+    "1-2-open-a-changed-file-in-the-shared-viewer": {
+      "blocked_by": ["1-1-see-this-runs-uncommitted-files"],
+      "epic": 1,
+      "node_id": "I_kwDOS4WbPs8AAAABP3pgDQ",
+      "number": 76,
+      "status": "backlog",
+      "title": "Open a changed file in the shared viewer",
+      "url": "https://github.com/anhle128/Archon/issues/76"
+    },
+    "1-3-open-every-changed-file": {
+      "blocked_by": ["1-2-open-a-changed-file-in-the-shared-viewer"],
+      "epic": 1,
+      "node_id": "I_kwDOS4WbPs8AAAABP3pjhQ",
+      "number": 77,
+      "status": "backlog",
+      "title": "Open every changed file",
+      "url": "https://github.com/anhle128/Archon/issues/77"
+    },
+    "2-1-walk-this-runs-commit-history-as-a-lane-graph": {
+      "blocked_by": ["1-3-open-every-changed-file"],
+      "epic": 2,
+      "node_id": "I_kwDOS4WbPs8AAAABP3poNw",
+      "number": 78,
+      "status": "backlog",
+      "title": "Walk this run's commit history as a lane graph",
+      "url": "https://github.com/anhle128/Archon/issues/78"
+    },
+    "2-2-open-a-commits-files-in-the-same-viewer": {
+      "blocked_by": ["2-1-walk-this-runs-commit-history-as-a-lane-graph"],
+      "epic": 2,
+      "node_id": "I_kwDOS4WbPs8AAAABP3prWw",
+      "number": 79,
+      "status": "backlog",
+      "title": "Open a commit's files in the same viewer",
+      "url": "https://github.com/anhle128/Archon/issues/79"
+    },
+    "3-1-add-the-run-end-git-snapshot-seam": {
+      "blocked_by": [],
+      "epic": 3,
+      "node_id": "I_kwDOS4WbPs8AAAABP3puTQ",
+      "number": 80,
+      "status": "backlog",
+      "title": "Add the run-end git-snapshot seam",
+      "url": "https://github.com/anhle128/Archon/issues/80"
+    }
+  }
+}

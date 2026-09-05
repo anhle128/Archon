@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Archon — Workflow Run View (HITL mockup)</title>
+    <link rel="stylesheet" href="styles.css?v=13" />
+  </head>
+  <body>
+    <div id="app">
+      <!-- ============ Run header ============ -->
+      <header id="run-header">
+        <div class="rh-left">
+          <div class="rh-title-row">
+            <span class="rh-workflow">speckit-ralph-native-feature</span>
+            <span class="rh-runid mono" id="run-id">run_d9556522f45a</span>
+            <span class="status-badge status-running" id="run-status">
+              <span class="sb-dot"></span><span class="sb-label">Running</span>
+            </span>
+          </div>
+          <div class="rh-sub-row">
+            <span class="chip mono" title="Codebase">oceanlabs-holding/x10.gigo.harness-service</span>
+            <span class="chip mono" title="Provider · model">codex · gpt-5.5 · xhigh</span>
+            <span class="chip mono" title="Started by">starter: dale</span>
+            <span class="rh-elapsed mono" id="elapsed" title="Elapsed">0:00</span>
+          </div>
+        </div>
+        <div class="rh-right">
+          <span class="surface-switch" title="Compare surfaces">
+            <a href="index.html" class="active">Legacy</a>
+            <a href="console.html">Command Center</a>
+          </span>
+          <div class="view-toggle" id="view-toggle" title="Preview the run as the starter vs. a teammate">
+            <span class="vt-label">view as</span>
+            <button type="button" class="vt-btn active" data-view="starter">starter</button>
+            <button type="button" class="vt-btn" data-view="teammate">teammate</button>
+          </div>
+          <button type="button" class="btn" id="btn-replay" title="Restart the simulated run">
+            <span aria-hidden="true">&#8635;</span> Replay
+          </button>
+        </div>
+      </header>
+
+      <!-- ============ Awaiting banner (mirrors PendingInputBanner) ============ -->
+      <div id="awaiting-banner" class="hidden">
+        <span class="ab-icon" aria-hidden="true">&#9888;</span>
+        <span class="ab-title">Needs your input</span>
+        <span class="ab-count mono" id="awaiting-count">0</span>
+        <div class="ab-chips" id="awaiting-chips"></div>
+      </div>
+
+      <!-- ============ Tabs ============ -->
+      <nav id="tabs">
+        <button type="button" class="tab active" data-tab="graph">Graph</button>
+        <button type="button" class="tab" data-tab="logs">Logs</button>
+        <button type="button" class="tab" data-tab="chat">Chat</button>
+      </nav>
+
+      <main id="main">
+        <div id="tab-pages">
+          <!-- ============ Graph tab ============ -->
+          <section id="tab-graph" class="tab-page">
+            <div class="pane-head">
+              <span class="pane-title">Run graph</span>
+              <span class="pane-hint"
+                >Drag to pan · scroll to zoom · click a node to open its log</span
+              >
+              <div class="graph-toolbar">
+                <button type="button" class="gt-btn" id="zoom-out" title="Zoom out">−</button>
+                <button type="button" class="gt-btn" id="zoom-in" title="Zoom in">+</button>
+                <button type="button" class="gt-btn" id="zoom-fit" title="Fit graph to view">Fit</button>
+              </div>
+            </div>
+            <div id="graph-pane">
+              <div id="graph-world"><!-- edges + node cards injected by app.js --></div>
+            </div>
+          </section>
+
+          <!-- ============ Logs tab ============ -->
+          <section id="tab-logs" class="tab-page hidden">
+            <div class="pane-head">
+              <span class="pane-title">Node run history</span>
+              <span class="pane-hint"
+                >One entry per node run — a loop appears once per iteration, a re-run node once per
+                pass, never merged. Click an entry to open that run's log.</span
+              >
+            </div>
+            <div id="logs-list"></div>
+          </section>
+
+          <!-- ============ Chat tab ============ -->
+          <section id="tab-chat" class="tab-page hidden">
+            <div class="pane-head">
+              <span class="pane-title">Run conversation</span>
+              <span class="pane-hint"
+                >User turns + gates + route decisions — click a node entry to open its log</span
+              >
+            </div>
+            <div id="chat-stream"></div>
+            <form id="chat-composer">
+              <input
+                type="text"
+                id="chat-input"
+                placeholder="Message the run's conversation&hellip;"
+                autocomplete="off"
+              />
+              <button type="submit" class="btn btn-primary" id="chat-send">Send</button>
+            </form>
+          </section>
+        </div>
+
+        <!-- ============ Shared node panel (all tabs) ============ -->
+        <div id="split-handle" class="hidden" title="Drag to resize"></div>
+        <aside id="node-panel" class="closed">
+          <div id="panel-header"></div>
+          <div id="panel-body"></div>
+        </aside>
+      </main>
+    </div>
+
+    <div id="modal-root"></div>
+
+    <script src="app.js?v=13"></script>
+  </body>
+</html>
