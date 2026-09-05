@@ -535,8 +535,12 @@ function EditorView({
             </button>
           </div>
           {drafts.length === 0 ? (
-            <p className="rounded-[10px] border border-dashed border-border px-3 py-4 text-center font-mono text-[12px] text-text-tertiary">
-              No nodes yet — add a target and set at least one allowed field.
+            <p
+              className="rounded-[10px] border border-dashed border-border px-3 py-4 text-center font-mono text-[12px] text-text-tertiary"
+              data-testid="env-empty-patches"
+            >
+              No target nodes — saving creates a no-op ENV with patches: {}. Add a node to set
+              fields; each chosen node still needs at least one allowed field.
             </p>
           ) : (
             drafts.map((draft, index) => (
@@ -707,44 +711,102 @@ export function NodePatchEditor({
       </div>
 
       {allowed.has('prompt') ? (
-        <label className="mt-2 block">
-          <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-text-tertiary">
-            prompt
-          </span>
-          <textarea
-            value={draft.prompt}
-            disabled={disabled}
-            onChange={e => {
-              onChange({ ...draft, prompt: e.target.value });
-            }}
-            rows={3}
-            spellCheck={false}
-            className={`${fieldClass} resize-y`}
-            style={{ borderColor: 'var(--border-bright)' }}
-            data-testid="env-field-prompt"
-          />
-        </label>
+        <BodyField
+          label="prompt"
+          enabled={draft.promptEnabled}
+          value={draft.prompt}
+          disabled={disabled}
+          className={fieldClass}
+          onEnabledChange={enabled => {
+            onChange({
+              ...draft,
+              promptEnabled: enabled,
+              prompt: enabled ? draft.prompt : '',
+            });
+          }}
+          onValueChange={value => {
+            onChange({ ...draft, promptEnabled: true, prompt: value });
+          }}
+        />
       ) : null}
 
       {allowed.has('bash') ? (
-        <label className="mt-2 block">
-          <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-text-tertiary">
-            bash
-          </span>
-          <textarea
-            value={draft.bash}
+        <BodyField
+          label="bash"
+          enabled={draft.bashEnabled}
+          value={draft.bash}
+          disabled={disabled}
+          className={fieldClass}
+          onEnabledChange={enabled => {
+            onChange({
+              ...draft,
+              bashEnabled: enabled,
+              bash: enabled ? draft.bash : '',
+            });
+          }}
+          onValueChange={value => {
+            onChange({ ...draft, bashEnabled: true, bash: value });
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * prompt/bash body control: enable toggle separates omission from presence-with-empty.
+ * Enabled + empty string is a deliberate `prompt: ''` / `bash: ''` patch value.
+ */
+function BodyField({
+  label,
+  enabled,
+  value,
+  disabled,
+  className,
+  onEnabledChange,
+  onValueChange,
+}: {
+  label: 'prompt' | 'bash';
+  enabled: boolean;
+  value: string;
+  disabled: boolean;
+  className: string;
+  onEnabledChange: (enabled: boolean) => void;
+  onValueChange: (value: string) => void;
+}): ReactElement {
+  return (
+    <div className="mt-2 block" data-testid={`env-field-${label}-wrap`}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-text-tertiary">
+          {label}
+        </span>
+        <label className="flex items-center gap-1.5 font-mono text-[11px] text-text-secondary">
+          <input
+            type="checkbox"
+            checked={enabled}
             disabled={disabled}
             onChange={e => {
-              onChange({ ...draft, bash: e.target.value });
+              onEnabledChange(e.target.checked);
             }}
-            rows={3}
-            spellCheck={false}
-            className={`${fieldClass} resize-y`}
-            style={{ borderColor: 'var(--border-bright)' }}
-            data-testid="env-field-bash"
+            data-testid={`env-field-${label}-enabled`}
+            aria-label={`Include ${label} in patch`}
           />
+          include
         </label>
-      ) : null}
+      </div>
+      <textarea
+        value={value}
+        disabled={disabled || !enabled}
+        onChange={e => {
+          onValueChange(e.target.value);
+        }}
+        rows={3}
+        spellCheck={false}
+        placeholder={enabled ? '(empty body)' : 'Enable to set body (empty allowed)'}
+        className={`${className} resize-y ${enabled ? '' : 'opacity-50'}`}
+        style={{ borderColor: 'var(--border-bright)' }}
+        data-testid={`env-field-${label}`}
+      />
     </div>
   );
 }

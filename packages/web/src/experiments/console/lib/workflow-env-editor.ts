@@ -26,7 +26,14 @@ export interface NodePatchDraft {
   model: string;
   effort: string;
   thinking: ThinkingEditorValue;
+  /**
+   * Body fields distinguish omission from presence-with-empty-string.
+   * `*Enabled: false` → field omitted from the patch map.
+   * `*Enabled: true` → field included byte-for-byte (including `''` and whitespace).
+   */
+  promptEnabled: boolean;
   prompt: string;
+  bashEnabled: boolean;
   bash: string;
 }
 
@@ -49,7 +56,9 @@ export function emptyNodeDraft(nodeId = ''): NodePatchDraft {
     model: '',
     effort: '',
     thinking: { mode: 'unset', budgetTokens: '' },
+    promptEnabled: false,
     prompt: '',
+    bashEnabled: false,
     bash: '',
   };
 }
@@ -95,7 +104,10 @@ export function draftFromPatch(nodeId: string, patch: EnvNodePatch): NodePatchDr
     model: patch.model ?? '',
     effort: patch.effort ?? '',
     thinking: thinkingFromPatch(patch.thinking),
+    // Presence of the key (even with '') is distinct from omission.
+    promptEnabled: patch.prompt !== undefined,
     prompt: patch.prompt ?? '',
+    bashEnabled: patch.bash !== undefined,
     bash: patch.bash ?? '',
   };
 }
@@ -119,14 +131,18 @@ export function allowedFieldsForNode(
 
 /**
  * Build the complete patch map for create/PATCH (full document, not a deep delta).
- * Requires a non-empty patch object per chosen node.
+ * Zero drafts → valid no-op ENV `{}`.
+ * Requires a non-empty patch object per chosen node when any draft row exists.
+ * Explicitly enabled empty/whitespace prompt/bash bodies are preserved byte-for-byte;
+ * untouched (disabled) body controls remain omitted.
  */
 export function buildPatchesFromDrafts(
   drafts: NodePatchDraft[],
   targets: WorkflowEnvPreviewTarget[]
 ): { ok: true; patches: EnvPatches } | { ok: false; error: string } {
+  // Empty patch map is a valid no-op ENV (schema + store allow `{}`).
   if (drafts.length === 0) {
-    return { ok: false, error: 'Add at least one target node with a non-empty patch.' };
+    return { ok: true, patches: {} };
   }
   const byId = targetsByIdMap(targets);
   const patches: EnvPatches = {};
@@ -158,11 +174,11 @@ export function buildPatchesFromDrafts(
     if (allowed.has('effort') && draft.effort.trim().length > 0) {
       patch.effort = draft.effort.trim();
     }
-    // prompt/bash: any non-empty string (including whitespace-only) is intentional content.
-    if (allowed.has('prompt') && draft.prompt.length > 0) {
+    // prompt/bash: enabled means include byte-for-byte ('' and whitespace are valid).
+    if (allowed.has('prompt') && draft.promptEnabled) {
       patch.prompt = draft.prompt;
     }
-    if (allowed.has('bash') && draft.bash.length > 0) {
+    if (allowed.has('bash') && draft.bashEnabled) {
       patch.bash = draft.bash;
     }
     if (allowed.has('thinking') && draft.thinking.mode !== 'unset') {

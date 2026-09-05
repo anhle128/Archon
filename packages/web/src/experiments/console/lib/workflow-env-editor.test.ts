@@ -87,7 +87,9 @@ describe('buildPatchesFromDrafts — full-map replacement', () => {
           model: 'sonnet',
           effort: 'high',
           thinking: { mode: 'enabled', budgetTokens: '1000' },
+          promptEnabled: true,
           prompt: 'do the thing',
+          bashEnabled: false,
           bash: 'should-not-appear',
         }),
         draft({
@@ -97,6 +99,7 @@ describe('buildPatchesFromDrafts — full-map replacement', () => {
         }),
         draft({
           nodeId: 'run_bash',
+          bashEnabled: true,
           bash: 'echo hi',
         }),
       ],
@@ -129,6 +132,81 @@ describe('buildPatchesFromDrafts — full-map replacement', () => {
     expect(empty.ok).toBe(false);
     if (empty.ok) return;
     expect(empty.error).toMatch(/at least one allowed field/i);
+  });
+
+  test('zero drafts round-trip to empty no-op patches map', () => {
+    const result = buildPatchesFromDrafts([], targets);
+    expect(result).toEqual({ ok: true, patches: {} });
+  });
+
+  test('preserves explicit empty and whitespace prompt/bash; omits untouched bodies', () => {
+    const emptyPrompt = buildPatchesFromDrafts(
+      [draft({ nodeId: 'plan', promptEnabled: true, prompt: '' })],
+      targets
+    );
+    expect(emptyPrompt.ok).toBe(true);
+    if (!emptyPrompt.ok) return;
+    expect(emptyPrompt.patches).toEqual({ plan: { prompt: '' } });
+    expect(Object.prototype.hasOwnProperty.call(emptyPrompt.patches.plan, 'prompt')).toBe(true);
+
+    const emptyBash = buildPatchesFromDrafts(
+      [draft({ nodeId: 'run_bash', bashEnabled: true, bash: '' })],
+      targets
+    );
+    expect(emptyBash.ok).toBe(true);
+    if (!emptyBash.ok) return;
+    expect(emptyBash.patches).toEqual({ run_bash: { bash: '' } });
+
+    const whitespace = buildPatchesFromDrafts(
+      [
+        draft({ nodeId: 'plan', promptEnabled: true, prompt: '  \n\t' }),
+        draft({ nodeId: 'run_bash', bashEnabled: true, bash: ' \t ' }),
+      ],
+      targets
+    );
+    expect(whitespace.ok).toBe(true);
+    if (!whitespace.ok) return;
+    expect(whitespace.patches.plan?.prompt).toBe('  \n\t');
+    expect(whitespace.patches.run_bash?.bash).toBe(' \t ');
+
+    // Disabled/untouched body controls stay omitted even when the draft string is ''.
+    const absentBodies = buildPatchesFromDrafts(
+      [draft({ nodeId: 'plan', provider: 'claude', promptEnabled: false, prompt: '' })],
+      targets
+    );
+    expect(absentBodies.ok).toBe(true);
+    if (!absentBodies.ok) return;
+    expect(absentBodies.patches).toEqual({ plan: { provider: 'claude' } });
+    expect(absentBodies.patches.plan).not.toHaveProperty('prompt');
+    expect(absentBodies.patches.plan).not.toHaveProperty('bash');
+  });
+
+  test('draftFromPatch restores body presence vs omission', () => {
+    const withEmpty = draftFromPatch('plan', { prompt: '' });
+    expect(withEmpty.promptEnabled).toBe(true);
+    expect(withEmpty.prompt).toBe('');
+
+    const withWhitespace = draftFromPatch('run_bash', { bash: ' \n' });
+    expect(withWhitespace.bashEnabled).toBe(true);
+    expect(withWhitespace.bash).toBe(' \n');
+
+    const omitted = draftFromPatch('plan', { model: 'sonnet' });
+    expect(omitted.promptEnabled).toBe(false);
+    expect(omitted.bashEnabled).toBe(false);
+    expect(omitted.prompt).toBe('');
+    expect(omitted.bash).toBe('');
+
+    // Round-trip: empty body draft → patches → drafts keeps presence.
+    const built = buildPatchesFromDrafts(
+      [draft({ nodeId: 'plan', promptEnabled: true, prompt: '' })],
+      targets
+    );
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    const reloaded = draftsFromPatches(built.patches);
+    expect(reloaded).toHaveLength(1);
+    expect(reloaded[0]?.promptEnabled).toBe(true);
+    expect(reloaded[0]?.prompt).toBe('');
   });
 
   test('rejects unknown and duplicate targets', () => {

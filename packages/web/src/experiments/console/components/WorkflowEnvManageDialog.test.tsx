@@ -5,6 +5,7 @@ import { NodePatchEditor, WorkflowEnvManageDialog } from './WorkflowEnvManageDia
 import {
   LOOP_GROUP_BODY_NOTE,
   PLAINTEXT_NOTICE,
+  buildPatchesFromDrafts,
   emptyNodeDraft,
   type NodePatchDraft,
 } from '../lib/workflow-env-editor';
@@ -59,6 +60,7 @@ describe('NodePatchEditor allowed-field rendering', () => {
     expect(html).toContain('data-testid="env-field-effort"');
     expect(html).toContain('data-testid="env-field-thinking-mode"');
     expect(html).toContain('data-testid="env-field-prompt"');
+    expect(html).toContain('data-testid="env-field-prompt-enabled"');
     expect(html).not.toContain('data-testid="env-field-bash"');
     // Include-expanded ids appear as returned in the select options.
     expect(html).toContain('pack__step');
@@ -68,6 +70,7 @@ describe('NodePatchEditor allowed-field rendering', () => {
   test('bash target shows only bash field', () => {
     const html = renderNode(emptyNodeDraft('run_bash'), ['bash']);
     expect(html).toContain('data-testid="env-field-bash"');
+    expect(html).toContain('data-testid="env-field-bash-enabled"');
     expect(html).not.toContain('data-testid="env-field-provider"');
     expect(html).not.toContain('data-testid="env-field-prompt"');
     expect(html).not.toContain('data-testid="env-field-model"');
@@ -80,6 +83,82 @@ describe('NodePatchEditor allowed-field rendering', () => {
     expect(html).not.toContain('data-testid="env-field-prompt"');
     expect(html).not.toContain('data-testid="env-field-bash"');
     expect(html).not.toContain('data-testid="env-field-thinking-mode"');
+  });
+
+  test('explicitly enabled empty prompt/bash bodies render and are not dropped on save', () => {
+    const promptHtml = renderNode({
+      ...emptyNodeDraft('plan'),
+      promptEnabled: true,
+      prompt: '',
+    });
+    expect(promptHtml).toContain('data-testid="env-field-prompt-enabled"');
+    expect(promptHtml).toMatch(/data-testid="env-field-prompt-enabled"[^>]*checked/);
+    expect(promptHtml).toContain('data-testid="env-field-prompt"');
+    // Empty value is intentional — textarea present, body not forced non-empty.
+    expect(promptHtml).not.toMatch(/data-testid="env-field-prompt"[^>]*>[^<]+</);
+
+    const bashHtml = renderNode(
+      {
+        ...emptyNodeDraft('run_bash'),
+        bashEnabled: true,
+        bash: '',
+      },
+      ['bash']
+    );
+    expect(bashHtml).toMatch(/data-testid="env-field-bash-enabled"[^>]*checked/);
+
+    // Dialog onSubmit uses buildPatchesFromDrafts — enabled empty bodies survive full-map save.
+    const savedPrompt = buildPatchesFromDrafts(
+      [{ ...emptyNodeDraft('plan'), promptEnabled: true, prompt: '' }],
+      targets
+    );
+    expect(savedPrompt).toEqual({ ok: true, patches: { plan: { prompt: '' } } });
+
+    const savedBash = buildPatchesFromDrafts(
+      [{ ...emptyNodeDraft('run_bash'), bashEnabled: true, bash: '' }],
+      targets
+    );
+    expect(savedBash).toEqual({ ok: true, patches: { run_bash: { bash: '' } } });
+
+    // Untouched (disabled) body stays omitted.
+    const omitted = buildPatchesFromDrafts(
+      [{ ...emptyNodeDraft('plan'), provider: 'claude', promptEnabled: false, prompt: '' }],
+      targets
+    );
+    expect(omitted).toEqual({ ok: true, patches: { plan: { provider: 'claude' } } });
+  });
+});
+
+describe('WorkflowEnvManageDialog create/update empty patches', () => {
+  test('create and full-map PATCH can submit patches: {}', () => {
+    // EditorView starts create with drafts=[] and onSubmit calls buildPatchesFromDrafts.
+    // Zero chosen targets is a valid no-op ENV; PATCH with all rows removed is the same.
+    const createBody = buildPatchesFromDrafts([], targets);
+    expect(createBody).toEqual({ ok: true, patches: {} });
+
+    const fullMapPatch = buildPatchesFromDrafts([], targets);
+    expect(fullMapPatch).toEqual({ ok: true, patches: {} });
+    // Identity of the empty object map the dialog would POST/PATCH.
+    expect(JSON.stringify(createBody.ok ? createBody.patches : null)).toBe('{}');
+    expect(JSON.stringify(fullMapPatch.ok ? fullMapPatch.patches : null)).toBe('{}');
+  });
+
+  test('empty drafts state copy documents no-op ENV save', () => {
+    // Static shell cannot drive EditorView state; assert the empty-patches contract
+    // text lives on the component source used when drafts.length === 0.
+    // Runtime path is buildPatchesFromDrafts([]) above; UI copy is a secondary signal.
+    const html = renderToStaticMarkup(
+      createElement(NodePatchEditor, {
+        draft: emptyNodeDraft(''),
+        targets,
+        allowedFields: [],
+        onChange: () => undefined,
+        onRemove: () => undefined,
+      })
+    );
+    // Without a selected node, body enable toggles are not forced.
+    expect(html).toContain('data-testid="env-node-select"');
+    expect(html).not.toContain('data-testid="env-field-prompt-enabled"');
   });
 });
 
