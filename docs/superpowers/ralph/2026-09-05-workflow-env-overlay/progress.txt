@@ -1,7 +1,18 @@
 ## Codebase Patterns
 
+### invalid_env_request OpenAPI hook (US-023)
+- **Where**: `packages/server/src/routes/openapi-defaults.ts` (`workflowEnvValidationErrorHook`), `packages/server/src/routes/api.ts` (`registerOpenApiRoute` third arg)
+- **Pattern**: ENV routes pass a route-scoped OpenAPI hook so body/query/param Zod failures return `{ error: 'invalid_env_request', detail: formatSafeZodIssueDetail(error) }` instead of the global field-path-as-`error` prose. Detail uses path + schema message only. Handler-side ZodError catch reuses the same helper. Do not broaden to non-ENV routes.
+- **Example**: POST patches with unknown key → 400 invalid_env_request; POST /api/codebases {} still uses global `path: message` error string
 
 
+
+
+
+### Exact envId omission vs invalid_env_id (US-022)
+- **Where**: `packages/server/src/routes/api.ts` (`parseOptionalEnvIdField`), `packages/server/src/routes/schemas/workflow-env.schemas.ts` (`workflowEnvPreviewQuerySchema`)
+- **Pattern**: Only `undefined` or empty/whitespace string omit ENV (YAML-only). JSON `null`, numbers, objects, arrays/multipart duplicates → `400 { error: 'invalid_env_id' }` with zero ENV lookups. Preview query must allow empty `envId` (`z.string().optional()`, never `.min(1)`) so OpenAPI validation does not 400 before baseline handler. openapi-typescript request shape stays `envId?: string` (minLength not encoded).
+- **Example**: `?envId=` → baseline, no getWorkflowEnvById; Start `{ envId: null }` → invalid_env_id before freeze
 
 ### Overlay preamble fail-closed (US-021)
 - **Where**: `packages/workflows/src/executor.ts` (eager config/profile/scope/provider try/catch), `packages/core/src/db/workflows.ts` (`failWorkflowRun`)
@@ -648,5 +659,55 @@
 - Background pre-create leaves status=`pending` until DAG start flips to running — failWorkflowRun only on `running` left pending overlay rows stranded; expand CAS to pending.
 - Hoist any locals (e.g. userAiPrefs) that workflow_started / later paths still read outside the try block.
 - Broken repo aliases (missing `@`) are a reliable post-prepare throw via buildAiProfile rebuild.
+
+---
+
+## 2026-09-05 — US-022: Exact envId HTTP omission and type contract
+
+**Status**: PASSED
+**Files changed**:
+- `packages/server/src/routes/api.ts` — `parseOptionalEnvIdField` rejects null/non-string as `invalid_env_id`; Start description documents contract
+- `packages/server/src/routes/schemas/workflow-env.schemas.ts` — Preview query allows empty `envId` (no `.min(1)`)
+- `packages/server/src/routes/schemas/workflow.schemas.ts` — Start body docs: null is not omission
+- `packages/server/src/routes/api.workflow-envs.test.ts` — `?envId=` baseline without ENV lookup
+- `packages/server/src/routes/api.workflow-runs.test.ts` — null / non-string / duplicate multipart → exact `invalid_env_id`
+
+**Acceptance criteria verified**:
+- [x] Preview `?envId=` returns YAML-only baseline without reading a workflow ENV row
+- [x] JSON `{ "envId": null }` and other present non-strings return 400 `{ error: 'invalid_env_id' }` before lookup/dispatch
+- [x] Preview query schema allows empty envId to reach baseline handler
+- [x] parseOptionalEnvIdField treats only absence and empty strings as omission; JSON null never omission
+- [x] Duplicate/non-string multipart envId rejected; baseline/rejected cases avoid ENV lookups
+- [x] Checked-in web API types proven unchanged (`envId?: string` already; minLength not in d.ts)
+- [x] Focused verification: `bun test src/routes/api.workflow-envs.test.ts` (16 pass) && `bun test src/routes/api.workflow-runs.test.ts` (137 pass)
+
+**Learnings**:
+- Prior US-008 treated `null` as YAML-only omission — contradicts HTTP contract; present non-string must fail closed.
+- OpenAPI query `.min(1).optional()` rejects `?envId=` before the handler; empty-as-baseline needs plain `z.string().optional()`.
+- Stable error code is the machine field `invalid_env_id`, not freeform "envId must be a string" prose.
+
+---
+
+## 2026-09-05 — US-023: Stable ENV request validation errors
+
+**Status**: PASSED
+**Files changed**:
+- `packages/server/src/routes/openapi-defaults.ts` — `formatSafeZodIssueDetail`, `workflowEnvValidationErrorHook` → `{ error: 'invalid_env_request', detail }`
+- `packages/server/src/routes/api.ts` — `registerOpenApiRoute` optional hook; all ENV CRUD/preview routes use ENV hook; handler ZodError paths reuse safe detail helper
+- `packages/server/src/routes/api.workflow-envs.test.ts` — exact-body cases (invalid name, unknown field, empty node, >256 targets, >1MiB, empty PATCH) + 409 conflict preserved + unrelated route keeps global field-path shape
+
+**Acceptance criteria verified**:
+- [x] 400 `{ error: 'invalid_env_request', detail: <safe summary> }` for invalid ENV name, unknown node patch field, empty per-node patch, over-256 targets, over-1-MiB, empty PATCH body
+- [x] prompt/bash/unknown-field values absent from validation details
+- [x] Route-scoped hook via `registerOpenApiRoute` prevents global default field-path prose
+- [x] Unrelated routes keep existing validation body behavior
+- [x] ENV name conflicts still 409 `env_name_conflict`
+- [x] No public schema change — API types not regenerated
+- [x] Focused verification: `cd packages/server && bun test src/routes/api.workflow-envs.test.ts` (18 pass)
+
+**Learnings**:
+- `app.openapi(route, handler, hook)` overrides `defaultHook` per route; extend the thin `registerOpenApiRoute` wrapper with an optional third arg rather than calling `app.openapi` ad hoc.
+- Safe detail = first issue path (field names) + schema message only — never serialize request bodies or Zod `received` values into logs/responses (hook does not log).
+- Empty PATCH `{}` fails the refine before the handler; without the ENV hook it became global `": at least one of name or patches is required"` with empty path prefix.
 
 ---

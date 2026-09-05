@@ -168,7 +168,7 @@
         "Generated OpenAPI types drive new ENV skills and encoded cache keys; startRun() sends or omits envId correctly for JSON and multipart starts.",
         "DraftRunCard loads ENV summaries for the selected canonical workflow, includes None (YAML) as default, and clears ENV selection, preview, and declared input values when the workflow changes.",
         "Preview requests are keyed or cancelled by cwd/workflow/env id so a slower prior response cannot overwrite a newer selection.",
-        "UI renders provider-turn rows, skipped-id warnings, and 'Preview only \u2014 the ENV, workflow, or model profile may change before Start.'",
+        "UI renders provider-turn rows, skipped-id warnings, and 'Preview only — the ENV, workflow, or model profile may change before Start.'",
         "List failure leaves explicit None/YAML Start usable; selected ENV detail or preview loading/failure disables Start and never silently resets to YAML-only.",
         "Unit/component tests cover JSON/multipart request shapes, stale response races, selection reset, disabled-on-error behavior, and preview/skipped rendering."
       ],
@@ -343,7 +343,7 @@
         "Valid pending and complete overlay rendering remains covered in WorkflowEnvResolvedTable.test.tsx and RunDetailHeader.test.tsx.",
         "packages/web/src/experiments/console/primitives/run.ts accepts only strict pending and complete shapes, never exposes patch bodies, and returns null for malformed or legacy hybrids.",
         "RunDetailPage.tsx renders ENV-specific UI only for a non-null parsed overlay.",
-        "Malformed metadata cannot manufacture complete: true, cannot show a misleading \u201cNo provider-turn request rows\u201d state, and cannot crash or hide non-ENV run detail content.",
+        "Malformed metadata cannot manufacture complete: true, cannot show a misleading “No provider-turn request rows” state, and cannot crash or hide non-ENV run detail content.",
         "Focused verification passes: cd packages/web && bun test src/experiments/console/primitives/run.test.ts && bun test src/experiments/console/routes/RunDetailPage.test.tsx && bun test src/experiments/console/components/WorkflowEnvResolvedTable.test.tsx src/experiments/console/components/RunDetailHeader.test.tsx."
       ],
       "technicalNotes": "Convergence task 6 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:805. Modify packages/web/src/experiments/console/primitives/run.ts and packages/web/src/experiments/console/routes/RunDetailPage.tsx. Follow runtime overlay types lines 126-160, Run detail lines 429-438, and Console matrix lines 667-668. Preserve the existing no-prompt/bash-body display rule.",
@@ -458,7 +458,8 @@
         "US-021"
       ],
       "priority": 22,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration US-022. Files: packages/server/src/routes/api.ts (parseOptionalEnvIdField), workflow-env.schemas.ts (empty envId preview), workflow.schemas.ts docs, api.workflow-envs.test.ts, api.workflow-runs.test.ts. Generated api.generated.d.ts request shape already envId?: string — proven unchanged."
     },
     {
       "id": "US-023",
@@ -479,7 +480,8 @@
         "US-022"
       ],
       "priority": 23,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration US-023. Files: packages/server/src/routes/openapi-defaults.ts (workflowEnvValidationErrorHook + formatSafeZodIssueDetail), api.ts (registerOpenApiRoute optional hook on all ENV routes), api.workflow-envs.test.ts (exact-body invalid_env_request + unrelated-route regression). No public schema change — API types not regenerated."
     },
     {
       "id": "US-024",

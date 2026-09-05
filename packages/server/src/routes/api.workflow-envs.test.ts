@@ -7,6 +7,10 @@ import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
 import { clearRegistry, registerBuiltinProviders } from '@archon/providers';
 import { validationErrorHook } from './openapi-defaults';
+import {
+  ENV_OVERLAY_MAX_BYTES,
+  ENV_OVERLAY_MAX_TARGETS,
+} from '@archon/workflows/schemas/env-overlay';
 import { makeTestWorkflow, makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 
 beforeAll(() => {
@@ -446,6 +450,150 @@ describe('Workflow ENV CRUD', () => {
       headers: { 'X-Archon-User': 'alice' },
     });
     expect(allowed.status).toBe(200);
+  });
+
+  test('OpenAPI body failures return stable invalid_env_request without patch values', async () => {
+    const app = makeApp();
+    const secretPrompt = 'PROMPT_SECRET_BODY_US023';
+    const secretBash = 'BASH_SECRET_BODY_US023';
+    const secretUnknown = 'UNKNOWN_FIELD_SECRET_US023';
+
+    async function assertInvalidEnvRequest(
+      res: Response,
+      detailIncludes: string | RegExp
+    ): Promise<Record<string, unknown>> {
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body).toEqual({
+        error: 'invalid_env_request',
+        detail: expect.any(String),
+      });
+      const detail = String(body.detail);
+      expect(detail.length).toBeGreaterThan(0);
+      if (typeof detailIncludes === 'string') {
+        expect(detail).toContain(detailIncludes);
+      } else {
+        expect(detail).toMatch(detailIncludes);
+      }
+      // Field-path-as-error prose from the global default hook must not leak through.
+      expect(body.error).toBe('invalid_env_request');
+      expect(detail).not.toContain(secretPrompt);
+      expect(detail).not.toContain(secretBash);
+      expect(detail).not.toContain(secretUnknown);
+      const raw = JSON.stringify(body);
+      expect(raw).not.toContain(secretPrompt);
+      expect(raw).not.toContain(secretBash);
+      expect(raw).not.toContain(secretUnknown);
+      return body;
+    }
+
+    // Invalid ENV name
+    const badName = await app.request('/api/workflows/feature/envs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'bad name!',
+        patches: { research: { prompt: secretPrompt } },
+      }),
+    });
+    await assertInvalidEnvRequest(badName, 'ENV name');
+    expect(mockCreateEnv).not.toHaveBeenCalled();
+
+    // Unknown node patch field (value must not appear in detail)
+    mockCreateEnv.mockClear();
+    const unknownField = await app.request('/api/workflows/feature/envs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'ok-name',
+        patches: {
+          research: {
+            model: 'haiku',
+            typo: secretUnknown,
+            prompt: secretPrompt,
+            bash: secretBash,
+          },
+        },
+      }),
+    });
+    await assertInvalidEnvRequest(unknownField, /Unrecognized key/i);
+    expect(mockCreateEnv).not.toHaveBeenCalled();
+
+    // Empty per-node patch
+    mockCreateEnv.mockClear();
+    const emptyNode = await app.request('/api/workflows/feature/envs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'ok-name',
+        patches: { research: {} },
+      }),
+    });
+    await assertInvalidEnvRequest(emptyNode, 'at least one field');
+    expect(mockCreateEnv).not.toHaveBeenCalled();
+
+    // Over-256-node patch map
+    mockCreateEnv.mockClear();
+    const tooMany: Record<string, { model: string }> = {};
+    for (let i = 0; i < ENV_OVERLAY_MAX_TARGETS + 1; i += 1) {
+      tooMany[`n${i}`] = { model: 'x' };
+    }
+    const overTargets = await app.request('/api/workflows/feature/envs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'ok-name', patches: tooMany }),
+    });
+    await assertInvalidEnvRequest(overTargets, String(ENV_OVERLAY_MAX_TARGETS));
+    expect(mockCreateEnv).not.toHaveBeenCalled();
+
+    // Over-1-MiB request (prompt body is large but must not echo)
+    mockCreateEnv.mockClear();
+    const hugePrompt = `${secretPrompt}${'x'.repeat(ENV_OVERLAY_MAX_BYTES)}`;
+    const overBytes = await app.request('/api/workflows/feature/envs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'ok-name',
+        patches: { research: { prompt: hugePrompt } },
+      }),
+    });
+    await assertInvalidEnvRequest(overBytes, String(ENV_OVERLAY_MAX_BYTES));
+    expect(mockCreateEnv).not.toHaveBeenCalled();
+
+    // Empty PATCH body
+    mockUpdateEnv.mockClear();
+    const emptyPatch = await app.request('/api/workflows/feature/envs/env-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    await assertInvalidEnvRequest(emptyPatch, /name or patches/i);
+    expect(mockUpdateEnv).not.toHaveBeenCalled();
+
+    // Name conflicts remain 409 — not remapped to invalid_env_request
+    const conflict = await app.request('/api/workflows/feature/envs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'dup', patches: { research: { model: 'x' } } }),
+    });
+    expect(conflict.status).toBe(409);
+    expect(await conflict.json()).toEqual({ error: 'env_name_conflict' });
+  });
+
+  test('unrelated routes keep global validation body behavior', async () => {
+    // POST /api/codebases uses the defaultHook field-path prose shape, not invalid_env_request.
+    const res = await makeApp().request('/api/codebases', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.error).toEqual(expect.any(String));
+    expect(body.error).not.toBe('invalid_env_request');
+    expect(body.detail).toBeUndefined();
+    // Global hook joins path:message into the error string.
+    expect(String(body.error)).toMatch(/:/);
   });
 });
 
