@@ -774,6 +774,9 @@ When a `nodes:` (DAG) workflow fails, the prior run stays in the database as a c
 
 Once the row reaches a terminal status, you can resume it explicitly via the paths above. Plain `archon workflow run` never resumes implicitly.
 
+**Workflow ENV overlays on resume.** If the run was started with a console/HTTP Workflow ENV, resume and node retry reapply only the frozen `metadata.envOverlay` on that run — they never re-read the live ENV table. Editing or deleting the ENV after Start cannot change an in-flight or historical run. Missing originally-applied node ids are recorded as `latestMissingNodeIds`; ids skipped at the original Start stay skipped even if YAML later adds them. See [Workflow ENVs (overlays)](/reference/api/#workflow-envs-overlays).
+
+
 > Not to be confused with `archon workflow cleanup [days]`, which **deletes** old terminal runs (`completed`/`failed`/`cancelled`) from the database for disk hygiene. It does not transition `running` rows.
 
 **Retry one failed node**: If only one DAG node failed and its upstream work is still valid, retry that node instead of resuming the whole failed remainder:
@@ -1937,6 +1940,52 @@ re-deriving it.
 - **Static target only.** `workflow:` takes a literal workflow name — no
   `workflow: $something`. Self-reference and ancestor cycles (`A` → `B` → `A`) are rejected
   at run time, and the sub-run tree is depth-capped.
+
+---
+
+## Workflow ENV Overlays (not YAML)
+
+Workflow ENV overlays let operators compare prompt/model/provider variants of the **same** workflow without duplicating YAML files. They are an **invocation and storage** feature — not workflow-language surface. There is no `env:` field in workflow YAML, no CLI `--env`, and no chat natural-language selection. Create, edit, preview, and select ENVs from the console (or the [HTTP API](/reference/api/#workflow-envs-overlays)).
+
+### What an ENV is
+
+- **Install-wide** named row keyed by `(workflow_name, name)` — shared across projects on the install, not per-repo identity.
+- A **patch map** of top-level node ids → allowed execution fields only.
+- Selected at **Start** via optional `envId` (JSON or multipart). Start freezes a copy of the row onto the run; the run owns that snapshot forever.
+
+### Field matrix (executor behavior)
+
+| Node kind | Patchable fields |
+|-----------|------------------|
+| `prompt` | `provider`, `model`, `effort`, `thinking`, `prompt` |
+| `command` | `provider`, `model`, `effort`, `thinking` |
+| `loop` | `provider`, `model`, `effort` |
+| `loop_group` | `provider`, `model` only — **body nodes inside the group are not patch targets** |
+| `bash` | `bash` |
+| other (`script`, `approval`, `include`, …) | none |
+
+Include-expanded ids are top-level targets (for example `quality__review`). Nested `loop_group` body ids never appear as patch targets; their qualified step names (for example `group.child`) can still show up in **resolved request** metadata when those body nodes are provider turns.
+
+Not patchable: graph edges, node mode, includes, child `workflow:` / fan-out / isolation policy, command **names**, loop prompt/command text, script source, approval nested prompts, or workflow-level fields. You cannot “unset” a YAML value through an ENV — only override with a supplied field.
+
+### Bounds and storage
+
+- ≤256 targets; ≤1 MiB UTF-8 serialized patches; non-empty per-node patch objects.
+- Prompt and bash bodies in patches (and frozen run snapshots) are **plaintext** database content visible to anyone who can access the install. They are not secrets and are not encrypted.
+- Empty `{}` is a valid patch map (including as a full-document PATCH replacement).
+
+### Runtime behavior
+
+- Apply runs on a **symbol-preserving clone** of the discovered workflow. The discovery cache and on-disk YAML are never mutated.
+- Missing target ids at Start are skipped (sorted) and frozen into `skippedNodeIds`; they do not start applying later if YAML grows that id.
+- Invalid overlays (unsupported field for a node kind, unknown provider, invalid patched node, broken graph refs) fail **before isolation** with safe error codes — logs omit prompt/bash bodies.
+- Before DAG execution the engine writes a complete snapshot with latest **planned request** metadata (`resolved`) through the same path as `node_started` request fields. That is not proof of execution and not the provider-reported final model.
+- Fresh `workflow:` child runs do **not** inherit the parent ENV.
+- **No CLI selection** — use the console picker or HTTP `envId`.
+
+### `loop_group.model` note
+
+`loop_group.model` / `provider` are meaningful on ordinary YAML and on ENV overlays: the group’s provider/model/preset/tier defaults are forwarded into body-node resolution (including nested groups). Group-level `effort` / `thinking` remain unsupported. This also corrects a prior runtime gap where group `model` was parsed but not forwarded.
 
 ---
 

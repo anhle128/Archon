@@ -62,6 +62,7 @@ function run(overrides: Partial<Run> = {}): Run {
     finishedAt: '2026-09-04T10:05:00Z',
     workingPath: null,
     userMessage: 'ship it',
+    envOverlay: null,
     ...overrides,
   };
 }
@@ -210,5 +211,29 @@ describe('RunDetailHeader usage states', () => {
     expect(markup).toContain('$0.00');
     expect(markup).toContain('direct');
     expect(markup).not.toContain('legacy total');
+  });
+});
+
+describe('RunDetailHeader ENV chip', () => {
+  test('renders env: name chip for pending or complete overlay', () => {
+    const pending = renderHeader({
+      usage: usage(),
+      runOverrides: {
+        envOverlay: {
+          envId: 'e1',
+          envName: 'fast',
+          workflowName: 'archon-dev',
+          complete: false,
+          skippedNodeIds: [],
+          latestMissingNodeIds: [],
+          resolved: null,
+        },
+      },
+    });
+    expect(pending).toContain('env: fast');
+    expect(pending).toContain('data-testid="run-env-chip"');
+
+    const none = renderHeader({ usage: usage() });
+    expect(none).not.toContain('run-env-chip');
   });
 });

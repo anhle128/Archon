@@ -55,6 +55,41 @@ export interface Run {
    * affordance in the console so a sub-run isn't mistaken for an orphan top-level run.
    */
   parentRunId?: string | null;
+  /**
+   * Defensively parsed `metadata.envOverlay` (pending or complete). Null when
+   * absent or malformed — never throws; malformed keeps the rest of the run
+   * usable. Prompt/bash patch bodies are intentionally not exposed.
+   */
+  envOverlay: RunEnvOverlay | null;
+}
+
+/** One provider-turn row from a complete overlay snapshot's `resolved` map. */
+export interface RunEnvResolvedRow {
+  nodeId: string;
+  provider: string;
+  model?: string;
+  tier?: 'small' | 'medium' | 'large';
+  modelReasoningEffort?: string;
+  effort?: string;
+  /** Thinking config object when present; shape is provider-specific. */
+  thinking?: { type: string; budgetTokens?: number };
+}
+
+/**
+ * Run-owned ENV overlay metadata. Complete snapshots include `resolved` rows
+ * and `latestMissingNodeIds`; pending inserts omit them until the executor
+ * writes the complete form.
+ */
+export interface RunEnvOverlay {
+  envId: string;
+  envName: string;
+  workflowName: string;
+  /** True when `resolved` was present on the stored snapshot. */
+  complete: boolean;
+  skippedNodeIds: string[];
+  latestMissingNodeIds: string[];
+  /** Null while pending (no resolved map yet) or when the map was empty/unusable. */
+  resolved: RunEnvResolvedRow[] | null;
 }
 
 // Server shapes we read from. These track the real server schema loosely —
@@ -121,6 +156,107 @@ function readCost(meta: Record<string, unknown> | undefined): number | null {
   // never become a legacy total.
   return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : null;
 }
+function isNonEmptyString(v: unknown): v is string {
+  return typeof v === 'string' && v.length > 0;
+}
+
+function readStringArray(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  const out: string[] = [];
+  for (const item of v) {
+    if (typeof item === 'string' && item.length > 0) out.push(item);
+  }
+  return out;
+}
+
+function readThinking(v: unknown): RunEnvResolvedRow['thinking'] | undefined {
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const rec = v as Record<string, unknown>;
+  if (!isNonEmptyString(rec.type)) return undefined;
+  const thinking: { type: string; budgetTokens?: number } = { type: rec.type };
+  if (
+    typeof rec.budgetTokens === 'number' &&
+    Number.isFinite(rec.budgetTokens) &&
+    rec.budgetTokens >= 0
+  ) {
+    thinking.budgetTokens = rec.budgetTokens;
+  }
+  return thinking;
+}
+
+function readResolvedRow(nodeId: string, value: unknown): RunEnvResolvedRow | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
+  const rec = value as Record<string, unknown>;
+  if (!isNonEmptyString(rec.provider)) return null;
+  const row: RunEnvResolvedRow = { nodeId, provider: rec.provider };
+  if (isNonEmptyString(rec.model)) row.model = rec.model;
+  if (rec.tier === 'small' || rec.tier === 'medium' || rec.tier === 'large') {
+    row.tier = rec.tier;
+  }
+  if (isNonEmptyString(rec.modelReasoningEffort)) {
+    row.modelReasoningEffort = rec.modelReasoningEffort;
+  }
+  if (isNonEmptyString(rec.effort)) row.effort = rec.effort;
+  const thinking = readThinking(rec.thinking);
+  if (thinking !== undefined) row.thinking = thinking;
+  return row;
+}
+
+/**
+ * Parse `metadata.envOverlay` without importing `@archon/workflows`.
+ * Pending, complete, legacy, and malformed shapes all return safely —
+ * malformed → null (omit overlay UI; keep the rest of the run usable).
+ * Never surfaces prompt/bash patch bodies.
+ */
+export function parseRunEnvOverlay(
+  meta: Record<string, unknown> | undefined
+): RunEnvOverlay | null {
+  if (meta === undefined) return null;
+  const raw = meta.envOverlay;
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const rec = raw as Record<string, unknown>;
+  if (
+    !isNonEmptyString(rec.envId) ||
+    !isNonEmptyString(rec.envName) ||
+    !isNonEmptyString(rec.workflowName)
+  ) {
+    return null;
+  }
+
+  const skippedNodeIds = readStringArray(rec.skippedNodeIds);
+  const latestMissingNodeIds = readStringArray(rec.latestMissingNodeIds);
+
+  let resolved: RunEnvResolvedRow[] | null = null;
+  let complete = false;
+  if (rec.resolved !== undefined && rec.resolved !== null) {
+    if (typeof rec.resolved !== 'object' || Array.isArray(rec.resolved)) {
+      // Corrupt resolved map — still surface identity + warnings when present.
+      complete = true;
+      resolved = null;
+    } else {
+      complete = true;
+      const rows: RunEnvResolvedRow[] = [];
+      for (const [nodeId, value] of Object.entries(rec.resolved as Record<string, unknown>)) {
+        if (nodeId.length === 0) continue;
+        const row = readResolvedRow(nodeId, value);
+        if (row !== null) rows.push(row);
+      }
+      rows.sort((a, b) => a.nodeId.localeCompare(b.nodeId));
+      resolved = rows;
+    }
+  }
+
+  return {
+    envId: rec.envId,
+    envName: rec.envName,
+    workflowName: rec.workflowName,
+    complete,
+    skippedNodeIds,
+    latestMissingNodeIds,
+    resolved,
+  };
+}
 
 /**
  * The platform conversation id that holds this run's messages — the id the
@@ -183,5 +319,6 @@ export function toRun(raw: RawWorkflowRun): Run {
     approval: parsedApproval,
     gateResolved,
     parentRunId: raw.parent_run_id ?? null,
+    envOverlay: parseRunEnvOverlay(raw.metadata),
   };
 }

@@ -10,6 +10,7 @@ import {
 import { useNavigate, useParams } from 'react-router';
 import { useKeymap, type Binding } from '../lib/keymap';
 import { RunDetailHeader } from '../components/RunDetailHeader';
+import { WorkflowEnvResolvedTable } from '../components/WorkflowEnvResolvedTable';
 import { RunStream } from '../components/RunStream';
 import { RunActionBar } from '../components/RunActionBar';
 import { StreamToolbar, type DetailView } from '../components/StreamToolbar';
@@ -401,6 +402,9 @@ export function RunDetailPage(): ReactElement {
                     >
                       Usage report unavailable for this run. This is not zero cost.
                     </div>
+                  ) : null}
+                  {run.envOverlay !== null ? (
+                    <WorkflowEnvResolvedTable overlay={run.envOverlay} />
                   ) : null}
                   <RunStartedLine run={run} />
 

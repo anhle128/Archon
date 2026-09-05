@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { toRun, normalizeOrigin, runMessageConversationId } from './run';
+import { toRun, normalizeOrigin, runMessageConversationId, parseRunEnvOverlay } from './run';
 
 type Raw = Parameters<typeof toRun>[0];
 
@@ -321,5 +321,109 @@ describe('toRun — resolved gate (approved/rejected awaiting resume)', () => {
     );
     expect(r.approval).toEqual({ nodeId: 'gate', message: 'Approve?', completionSignaled: false });
     expect(r.gateResolved).toBeNull();
+  });
+});
+
+describe('toRun / parseRunEnvOverlay — ENV overlay metadata', () => {
+  test('absent metadata yields null envOverlay', () => {
+    const r = toRun(raw({ id: 'r1', workflow_name: 'plan', status: 'running' }));
+    expect(r.envOverlay).toBeNull();
+  });
+
+  test('pending applied form parses identity + skipped without resolved', () => {
+    const r = toRun(
+      raw({
+        id: 'r1',
+        workflow_name: 'plan',
+        status: 'running',
+        metadata: {
+          envOverlay: {
+            envId: 'e1',
+            envName: 'fast',
+            workflowName: 'plan',
+            patches: { plan: { model: 'haiku', prompt: 'SECRET_BODY' } },
+            skippedNodeIds: ['missing'],
+          },
+        },
+      })
+    );
+    expect(r.envOverlay).toEqual({
+      envId: 'e1',
+      envName: 'fast',
+      workflowName: 'plan',
+      complete: false,
+      skippedNodeIds: ['missing'],
+      latestMissingNodeIds: [],
+      resolved: null,
+    });
+    // Prompt/bash never surface on the Run primitive.
+    expect(JSON.stringify(r.envOverlay)).not.toContain('SECRET_BODY');
+    expect(JSON.stringify(r.envOverlay)).not.toContain('prompt');
+  });
+
+  test('complete snapshot sorts resolved rows and keeps warnings', () => {
+    const r = toRun(
+      raw({
+        id: 'r1',
+        workflow_name: 'plan',
+        status: 'completed',
+        metadata: {
+          envOverlay: {
+            envId: 'e1',
+            envName: 'fast',
+            workflowName: 'plan',
+            patches: {},
+            skippedNodeIds: ['gone'],
+            latestMissingNodeIds: ['plan'],
+            resolved: {
+              zeta: { provider: 'claude', model: 'sonnet', effort: 'high' },
+              alpha: {
+                provider: 'codex',
+                tier: 'large',
+                thinking: { type: 'enabled', budgetTokens: 2048 },
+              },
+            },
+          },
+        },
+      })
+    );
+    expect(r.envOverlay?.complete).toBe(true);
+    expect(r.envOverlay?.skippedNodeIds).toEqual(['gone']);
+    expect(r.envOverlay?.latestMissingNodeIds).toEqual(['plan']);
+    expect(r.envOverlay?.resolved?.map(row => row.nodeId)).toEqual(['alpha', 'zeta']);
+    expect(r.envOverlay?.resolved?.[0]).toMatchObject({
+      nodeId: 'alpha',
+      provider: 'codex',
+      tier: 'large',
+      thinking: { type: 'enabled', budgetTokens: 2048 },
+    });
+  });
+
+  test('malformed and legacy shapes never throw and yield null when unusable', () => {
+    expect(parseRunEnvOverlay(undefined)).toBeNull();
+    expect(parseRunEnvOverlay({})).toBeNull();
+    expect(parseRunEnvOverlay({ envOverlay: null })).toBeNull();
+    expect(parseRunEnvOverlay({ envOverlay: 'legacy-string' })).toBeNull();
+    expect(parseRunEnvOverlay({ envOverlay: ['array'] })).toBeNull();
+    expect(parseRunEnvOverlay({ envOverlay: { envName: 'only-name' } })).toBeNull();
+    // Corrupt resolved still keeps identity when core fields are present.
+    const partial = parseRunEnvOverlay({
+      envOverlay: {
+        envId: 'e1',
+        envName: 'fast',
+        workflowName: 'plan',
+        skippedNodeIds: 'not-array',
+        resolved: 'not-object',
+      },
+    });
+    expect(partial).toEqual({
+      envId: 'e1',
+      envName: 'fast',
+      workflowName: 'plan',
+      complete: true,
+      skippedNodeIds: [],
+      latestMissingNodeIds: [],
+      resolved: null,
+    });
   });
 });
