@@ -352,7 +352,8 @@
         "US-016"
       ],
       "priority": 17,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration after US-016. Files: packages/web/src/experiments/console/primitives/run.ts, run.test.ts, routes/RunDetailPage.tsx, routes/RunDetailPage.test.tsx. Strict pending/complete only; hybrids null; hasRunEnvOverlayUi gate."
     },
     {
       "id": "US-018",

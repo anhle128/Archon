@@ -1,5 +1,11 @@
 ## Codebase Patterns
 
+
+### Strict run-detail ENV overlay parse
+- **Where**: `packages/web/src/experiments/console/primitives/run.ts` (`parseRunEnvOverlay`)
+- **Pattern**: Accept only pending (`patches` object + `skippedNodeIds` array, no `resolved`/`latestMissingNodeIds`) or complete (both keys present, object `resolved`, array `latestMissingNodeIds`, every resolved row valid). Missing/non-object patches, non-arrays, hybrid one-of-two keys, or any invalid resolved row → `null`. Never expose patches; never manufacture `complete: true` from corrupt data.
+- **Example**: `{ envId, envName, workflowName, skippedNodeIds: 'x', resolved: 'y' }` → `null` (no chip/table)
+
 ### Defensive raw ENV patch-key rejection
 - **Where**: `packages/workflows/src/env-overlay.ts` (`assertRawPatchKeys` before `copyNodePatch`)
 - **Pattern**: Zod `.strict()` is not enough for apply — callers can bypass the schema boundary. Inspect `Object.keys(rawPatch)` against `ENV_OVERLAY_PATCH_FIELDS` *before* `copyNodePatch()` strips unknowns; fail `forbidden_field` with field name only (never values/bodies). Detached normalized copy still feeds assignment + applied/snapshot.
@@ -507,5 +513,30 @@
 **Learnings**:
 - `copyNodePatch` is an allowlist copy — unknown keys vanish before matrix checks unless raw keys are inspected first.
 - Keep error payload to code + nodeId + field name; never serialize the raw patch into `cause` or message.
+
+---
+
+## 2026-09-05 — US-017: Malformed run metadata hides ENV UI
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/primitives/run.ts` — strict pending/complete parse; hybrids and invalid resolved rows → null
+- `packages/web/src/experiments/console/primitives/run.test.ts` — malformed hybrid null matrix (patches/arrays/resolved/rows)
+- `packages/web/src/experiments/console/routes/RunDetailPage.tsx` — `hasRunEnvOverlayUi` gate for resolved table
+- `packages/web/src/experiments/console/routes/RunDetailPage.test.tsx` — malformed omits chip/table; rest of detail remains; valid complete still shows
+
+**Acceptance criteria verified**:
+- [x] run.test.ts requires null for missing/non-object patches, non-array ids, non-object resolved, invalid resolved rows
+- [x] RunDetailPage.test.tsx proves no ENV chip/table on malformed while non-ENV detail still renders
+- [x] Valid pending/complete remain covered in WorkflowEnvResolvedTable + RunDetailHeader tests
+- [x] run.ts strict pending/complete only; never exposes patch bodies; hybrids → null
+- [x] RunDetailPage ENV UI only for non-null parsed overlay (`hasRunEnvOverlayUi`)
+- [x] Malformed cannot manufacture complete:true or empty-rows copy; cannot crash/hide rest
+- [x] Focused verification: bun test run.test.ts && RunDetailPage.test.tsx && WorkflowEnvResolvedTable + RunDetailHeader
+
+**Learnings**:
+- Prior tolerant path kept identity when `resolved` was corrupt and set `complete: true` with `resolved: null` — that manufactured false "No provider-turn request rows" confidence; fail the whole overlay instead.
+- Complete form requires *both* `resolved` and `latestMissingNodeIds` keys (mirrors storedEnvOverlaySchema union); one without the other is a hybrid.
+- Console page tests avoid mock.module: export a pure gate from the page and compose header+table with `toRun` for static markup.
 
 ---
