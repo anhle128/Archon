@@ -56,6 +56,11 @@ export class WorkflowEnvCorruptRowError extends Error {
 /**
  * Map dialect unique violations to name conflicts ONLY when the identity
  * constraint is implicated. Unrelated unique errors propagate.
+ *
+ * PostgreSQL: SQLSTATE 23505 AND constraint === uq_workflow_envs_workflow_name_name
+ * only — never message prose (even if it names the constraint).
+ * SQLite: UNIQUE message must list both fully-qualified identity columns on
+ * remote_agent_workflow_envs (not bare column names or another table).
  */
 export function isWorkflowEnvNameConflict(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
@@ -63,20 +68,17 @@ export function isWorkflowEnvNameConflict(err: unknown): boolean {
   if (e.code === '23505' && e.constraint === 'uq_workflow_envs_workflow_name_name') {
     return true;
   }
-  // Postgres without .constraint sometimes embeds the name in the message.
-  if (
-    (e.code === '23505' || /duplicate key value violates unique constraint/i.test(e.message)) &&
-    /uq_workflow_envs_workflow_name_name/i.test(e.message)
-  ) {
-    return true;
-  }
   // SQLite: "UNIQUE constraint failed: remote_agent_workflow_envs.workflow_name, remote_agent_workflow_envs.name"
   if (/UNIQUE constraint failed/i.test(e.message)) {
-    const mentionsWorkflowName = /workflow_name/i.test(e.message);
-    // After stripping workflow_name, require a bare `.name` / `, name` column mention.
-    const withoutWorkflowName = e.message.replace(/workflow_name/gi, '');
-    const mentionsNameColumn = /(?:\.|,|\s)name(?:\s|$|,)/i.test(withoutWorkflowName);
-    return mentionsWorkflowName && mentionsNameColumn;
+    const listed = e.message
+      .replace(/^[\s\S]*UNIQUE constraint failed:\s*/i, '')
+      .split(',')
+      .map(part => part.trim().toLowerCase())
+      .filter(part => part.length > 0);
+    return (
+      listed.includes('remote_agent_workflow_envs.workflow_name') &&
+      listed.includes('remote_agent_workflow_envs.name')
+    );
   }
   return false;
 }

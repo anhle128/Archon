@@ -299,6 +299,7 @@ describe('workflow-envs CRUD', () => {
   });
 
   test('isWorkflowEnvNameConflict is constraint/message exact', () => {
+    // PostgreSQL: exact SQLSTATE + named identity constraint.
     expect(
       isWorkflowEnvNameConflict(
         Object.assign(new Error('duplicate key'), {
@@ -308,15 +309,43 @@ describe('workflow-envs CRUD', () => {
       )
     ).toBe(true);
 
+    // 23505 with wrong constraint — even if message names the ENV constraint.
     expect(
       isWorkflowEnvNameConflict(
-        Object.assign(new Error('duplicate key'), {
-          code: '23505',
-          constraint: 'some_other_unique',
-        })
+        Object.assign(
+          new Error(
+            'duplicate key value violates unique constraint "uq_workflow_envs_workflow_name_name"'
+          ),
+          {
+            code: '23505',
+            constraint: 'some_other_unique',
+          }
+        )
       )
     ).toBe(false);
 
+    // 23505 with constraint absent — message alone must not classify.
+    expect(
+      isWorkflowEnvNameConflict(
+        Object.assign(
+          new Error(
+            'duplicate key value violates unique constraint "uq_workflow_envs_workflow_name_name"'
+          ),
+          { code: '23505' }
+        )
+      )
+    ).toBe(false);
+
+    // Duplicate-key prose without PostgreSQL code 23505 is not a name conflict.
+    expect(
+      isWorkflowEnvNameConflict(
+        new Error(
+          'duplicate key value violates unique constraint "uq_workflow_envs_workflow_name_name"'
+        )
+      )
+    ).toBe(false);
+
+    // SQLite: both fully-qualified ENV identity columns.
     expect(
       isWorkflowEnvNameConflict(
         new Error(
@@ -325,10 +354,34 @@ describe('workflow-envs CRUD', () => {
       )
     ).toBe(true);
 
+    // Same columns, reverse order still the ENV identity pair.
+    expect(
+      isWorkflowEnvNameConflict(
+        new Error(
+          'UNIQUE constraint failed: remote_agent_workflow_envs.name, remote_agent_workflow_envs.workflow_name'
+        )
+      )
+    ).toBe(true);
+
+    // SQLite UNIQUE on ENV id alone is not a name conflict.
     expect(
       isWorkflowEnvNameConflict(
         new Error('UNIQUE constraint failed: remote_agent_workflow_envs.id')
       )
+    ).toBe(false);
+
+    // Another table that happens to have workflow_name + name columns.
+    expect(
+      isWorkflowEnvNameConflict(
+        new Error(
+          'UNIQUE constraint failed: remote_agent_other_table.workflow_name, remote_agent_other_table.name'
+        )
+      )
+    ).toBe(false);
+
+    // Bare column names without the ENV table qualifier.
+    expect(
+      isWorkflowEnvNameConflict(new Error('UNIQUE constraint failed: workflow_name, name'))
     ).toBe(false);
   });
 });
