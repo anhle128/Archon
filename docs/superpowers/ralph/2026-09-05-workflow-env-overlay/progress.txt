@@ -60,6 +60,12 @@
 - **Pattern**: Types from `@/lib/api.generated` only. Cache keys encode cwd/workflow/envId (`none` sentinel) so `useEntity` cannot apply a stale preview to a newer selection. `startRun` omits empty `envId` on JSON and multipart. None/YAML Start stays usable on list failure; selected ENV blocks Start while preview loading/error — never silent reset to YAML. Workflow change clears ENV + inputs synchronously (picker onChange + effect).
 - **Example**: `K.workflowEnvPreview(cwd, name, envId)` → `skill.previewWorkflowEnv`; `isStartBlockedBySelectedEnv({ selectedEnvId, preview, previewError })`
 
+### Console ENV manage dialog
+- **Where**: `packages/web/src/experiments/console/components/WorkflowEnvManageDialog.tsx`, `lib/workflow-env-editor.ts`
+- **Pattern**: Visual shell like EnvVarsDialog. Baseline `previewWorkflowEnv(wf, cwd, null)` supplies `targets`/`allowedFields` — never hardcode the node matrix. Summary list has no patches; `getWorkflowEnv` only on Edit. Thinking UI: unset|adaptive|enabled(+budget)|disabled. `buildPatchesFromDrafts` requires non-empty per-node patch; PATCH sends the complete map. After create/update/delete call `invalidateWorkflowEnvCaches` → list key + `workflowEnvPreview` prefix + optional detail key. Plaintext notice for prompt/bash; loop-group body non-target copy. 409 via `formatWorkflowEnvActionError(HttpError)`.
+- **Example**: `invalidateWorkflowEnvCaches(name, id)`; `NodePatchEditor` only renders `allowedFields`
+
+
 
 
 
@@ -305,5 +311,32 @@
 - Console isolation allows type-only `@/lib/api.generated` — mirror usage.ts ExactMatch drift guards.
 - `useEntity` race safety is key-identity: distinct preview keys beat AbortController for this cache model.
 - Clear ENV selection in WorkflowPicker onChange (not only useEffect) to avoid one render of new workflow + old envId.
+
+---
+
+## 2026-09-05 — US-010: Console ENV management dialog
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/lib/workflow-env-editor.ts` — pure patch build, thinking normalize, 409 format, cache invalidation targets
+- `packages/web/src/experiments/console/lib/workflow-env-editor.test.ts` — full-map PATCH, empty-node reject, thinking, conflict, invalidation keys, plaintext notice
+- `packages/web/src/experiments/console/components/WorkflowEnvManageDialog.tsx` — list/create/edit/delete dialog; server targets; NodePatchEditor
+- `packages/web/src/experiments/console/components/WorkflowEnvManageDialog.test.tsx` — allowed-field rendering, notices, closed shell
+- `packages/web/src/experiments/console/components/DraftRunCard.tsx` — Manage button + dialog open state
+- `packages/web/src/experiments/console/skills/workflowEnvs.test.ts` — create/update full-map + delete request shapes
+
+**Acceptance criteria verified**:
+- [x] Management dialog fetches baseline preview targets and allowedFields from the server
+- [x] Summary list excludes patch bodies; full ENV fetched only when opened for editing
+- [x] Editor chooses target nodes and only allowed fields; include-expanded ids as returned; loop-group body non-target note
+- [x] Non-empty patch per chosen node; thinking via schema-supported choices / budget integer
+- [x] PATCH sends complete patch map; 409 conflicts surfaced; delete confirmation; invalidate list + preview caches
+- [x] Dialog states prompt/bash are plaintext install-visible, not secrets/encrypted
+- [x] Component/helper tests cover allowed fields, full-map PATCH, conflict/delete, cache invalidation, plaintext notice
+
+**Learnings**:
+- Keep patch/thinking/error/invalidation pure in `workflow-env-editor.ts` so bun:test + renderToStaticMarkup can cover AC without RTL.
+- `invalidate('workflowEnvPreview')` matches every `workflowEnvPreview:…` key via the cache prefix rule.
+- Create skill stub must return `{ env }` — collection path is not `/envs/:id`, so the default list-shaped mock is wrong for POST.
 
 ---

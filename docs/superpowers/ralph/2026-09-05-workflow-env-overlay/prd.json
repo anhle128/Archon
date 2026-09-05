@@ -199,8 +199,8 @@
         "US-009"
       ],
       "priority": 10,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 10. Files: packages/web/src/experiments/console/components/WorkflowEnvManageDialog.tsx, WorkflowEnvManageDialog.test.tsx, lib/workflow-env-editor.ts, workflow-env-editor.test.ts, DraftRunCard.tsx, skills/workflowEnvs.test.ts."
     },
     {
       "id": "US-011",
