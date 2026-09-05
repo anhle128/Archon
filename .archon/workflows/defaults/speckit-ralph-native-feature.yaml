@@ -635,7 +635,7 @@ nodes:
       - ralph-native-preflight
     effort: xhigh
     provider: omp
-    model: anthropic/claude-sonnet-5
+    model: xai-oauth/grok-4.6
 
   - id: ralph-sync-back
     prompt: |
