@@ -64,6 +64,7 @@ import {
   assistantModelDefaults,
   buildResolvedRequestMetadata,
   resolveWorkflowModelScope,
+  type WorkflowModelScope,
 } from './node-model-resolution';
 import {
   buildEnvOverlaySnapshot,
@@ -1240,8 +1241,9 @@ function prepareExecutionEnvOverlay(
 }
 
 /**
- * Mark an already-claimed run failed after overlay/audit failure. If the status
- * write also fails, log critically and still execute nothing — never guess orphan.
+ * Mark an already-owned run failed after overlay/audit/preamble failure. Works for
+ * both `running` and `pending` (background pre-create before status→running). If the
+ * status write also fails, log critically and still execute nothing — never guess orphan.
  */
 async function failClosedAfterOverlayError(
   deps: WorkflowDeps,
@@ -1366,183 +1368,227 @@ export async function executeWorkflow(
   const executionUserId =
     activeOverlay && preCreatedRun ? (preCreatedRun.user_id ?? undefined) : userId;
 
-  // Load config once for the entire workflow execution
-  const fileConfig = await deps.loadConfig(cwd);
-  const dbEnvVars = codebaseId ? await deps.store.getCodebaseEnvVars(codebaseId) : {};
-  // Resolve a fresh bot GitHub token once at workflow start when:
-  //   (a) the codebase URL is a github.com repo, and
-  //   (b) deps.resolveBotGitHubToken is registered (App mode).
-  // Injected into envVars so bash/script subprocesses authenticate `gh` and
-  // initial `git push` via inherited GH_TOKEN. Workflows that run >1h still
-  // need the credential helper for live token rotation (handled at clone
-  // time in the GitHub adapter), but the env injection is enough for the
-  // typical <1h workflow.
-  const botGitHubEnv = await resolveBotGitHubEnvForWorkflow(deps, codebaseId);
-  const userGitHubEnv = await resolveUserGithubEnvForWorkflow(deps, executionUserId);
-  const config: WorkflowConfig = {
-    ...fileConfig,
-    // Order: file < db < bot-token < per-user. Per-codebase env vars are
-    // operator-set; the injected bot token is system-set; the per-user override
-    // wins last so a run routes through the originating human's token (or scrubs
-    // the org/bot token when they haven't connected). Empty-string values from
-    // the per-user policy scrub the corresponding key via the subprocess merge.
-    envVars: { ...fileConfig.envVars, ...dbEnvVars, ...botGitHubEnv, ...userGitHubEnv },
-  };
-  const configuredCommandFolder = config.commands.folder;
-
-  // Resolve base branch: the per-dispatch override takes priority, then repo
-  // config, then the caller-provided codebase default, then git auto-detection.
-  // The override must outrank config so `--base` reports the same branch the
-  // worktree was cut from (WorktreeProvider applies the same order).
-  // If detection fails, leave empty — substituteWorkflowVariables throws only if $BASE_BRANCH is referenced.
-  const overrideBaseBranch = callerBaseOverride?.trim();
-  const fallbackBaseBranch = callerBaseBranch?.trim();
+  // Config / profile / workflow-scope / provider eager resolution.
+  // When an active overlay owns a pre-created (or soon-created) row, every throw
+  // here must fail-closed through the executor — background dispatch only logs
+  // and must not be the path that repairs a stranded pending row (US-021).
+  let config: WorkflowConfig;
+  let configuredCommandFolder: string | undefined;
   let baseBranch: string;
-  if (overrideBaseBranch) {
-    baseBranch = overrideBaseBranch;
-  } else if (config.baseBranch) {
-    baseBranch = config.baseBranch;
-  } else if (fallbackBaseBranch) {
-    baseBranch = fallbackBaseBranch;
-  } else if (await isFolderCodebase(deps, codebaseId)) {
-    // Folder projects run on a non-git root — auto-detection can only fail and
-    // emit ERROR/WARN noise on every run (#2159). Leave empty; $BASE_BRANCH
-    // stays unresolved and throws only if a prompt actually references it.
-    baseBranch = '';
-  } else {
-    try {
-      baseBranch = await getDefaultBranch(toRepoPath(cwd));
-    } catch (error) {
-      // Intentional fallback: auto-detection failure is non-fatal.
-      // substituteWorkflowVariables throws if $BASE_BRANCH is actually referenced in a prompt.
-      getLog().warn(
-        { err: error as Error, errorType: (error as Error).constructor.name, cwd },
-        'workflow.base_branch_auto_detect_failed'
-      );
-      baseBranch = '';
-    }
-  }
-
-  const docsDir = config.docsPath ?? 'docs/';
-
-  // Per-user AI prefs (Phase 3): the originating user's tiers/aliases/default-
-  // assistant override install config (highest precedence). The dep contract is
-  // non-throwing, but a third-party deps impl might throw anyway — guard so a
-  // prefs failure can never abort a run; `{}` keeps config-only behavior.
+  let docsDir: string;
   let userAiPrefs: UserAiPrefsLayer = {};
-  if (executionUserId && deps.getUserAiPrefs) {
-    try {
-      userAiPrefs = await deps.getUserAiPrefs(executionUserId);
-    } catch (error) {
-      getLog().warn(
-        { err: error as Error, userId: executionUserId },
-        'workflow.user_ai_prefs_resolve_failed'
+  let aiProfile: ResolvedAiProfile;
+  let scope: WorkflowModelScope;
+  let resolvedProvider: string;
+  let resolvedModel: string | undefined;
+  let workflowPreset: WorkflowModelScope['preset'];
+  let providerSource: string;
+
+  try {
+    // Load config once for the entire workflow execution
+    const fileConfig = await deps.loadConfig(cwd);
+    const dbEnvVars = codebaseId ? await deps.store.getCodebaseEnvVars(codebaseId) : {};
+    // Resolve a fresh bot GitHub token once at workflow start when:
+    //   (a) the codebase URL is a github.com repo, and
+    //   (b) deps.resolveBotGitHubToken is registered (App mode).
+    // Injected into envVars so bash/script subprocesses authenticate `gh` and
+    // initial `git push` via inherited GH_TOKEN. Workflows that run >1h still
+    // need the credential helper for live token rotation (handled at clone
+    // time in the GitHub adapter), but the env injection is enough for the
+    // typical <1h workflow.
+    const botGitHubEnv = await resolveBotGitHubEnvForWorkflow(deps, codebaseId);
+    const userGitHubEnv = await resolveUserGithubEnvForWorkflow(deps, executionUserId);
+    config = {
+      ...fileConfig,
+      // Order: file < db < bot-token < per-user. Per-codebase env vars are
+      // operator-set; the injected bot token is system-set; the per-user override
+      // wins last so a run routes through the originating human's token (or scrubs
+      // the org/bot token when they haven't connected). Empty-string values from
+      // the per-user policy scrub the corresponding key via the subprocess merge.
+      envVars: { ...fileConfig.envVars, ...dbEnvVars, ...botGitHubEnv, ...userGitHubEnv },
+    };
+    configuredCommandFolder = config.commands.folder;
+
+    // Resolve base branch: the per-dispatch override takes priority, then repo
+    // config, then the caller-provided codebase default, then git auto-detection.
+    // The override must outrank config so `--base` reports the same branch the
+    // worktree was cut from (WorktreeProvider applies the same order).
+    // If detection fails, leave empty — substituteWorkflowVariables throws only if $BASE_BRANCH is referenced.
+    const overrideBaseBranch = callerBaseOverride?.trim();
+    const fallbackBaseBranch = callerBaseBranch?.trim();
+    if (overrideBaseBranch) {
+      baseBranch = overrideBaseBranch;
+    } else if (config.baseBranch) {
+      baseBranch = config.baseBranch;
+    } else if (fallbackBaseBranch) {
+      baseBranch = fallbackBaseBranch;
+    } else if (await isFolderCodebase(deps, codebaseId)) {
+      // Folder projects run on a non-git root — auto-detection can only fail and
+      // emit ERROR/WARN noise on every run (#2159). Leave empty; $BASE_BRANCH
+      // stays unresolved and throws only if a prompt actually references it.
+      baseBranch = '';
+    } else {
+      try {
+        baseBranch = await getDefaultBranch(toRepoPath(cwd));
+      } catch (error) {
+        // Intentional fallback: auto-detection failure is non-fatal.
+        // substituteWorkflowVariables throws if $BASE_BRANCH is actually referenced in a prompt.
+        getLog().warn(
+          { err: error as Error, errorType: (error as Error).constructor.name, cwd },
+          'workflow.base_branch_auto_detect_failed'
+        );
+        baseBranch = '';
+      }
+    }
+
+    docsDir = config.docsPath ?? 'docs/';
+
+    // Per-user AI prefs (Phase 3): the originating user's tiers/aliases/default-
+    // assistant override install config (highest precedence). The dep contract is
+    // non-throwing, but a third-party deps impl might throw anyway — guard so a
+    // prefs failure can never abort a run; `{}` keeps config-only behavior.
+    userAiPrefs = {};
+    if (executionUserId && deps.getUserAiPrefs) {
+      try {
+        userAiPrefs = await deps.getUserAiPrefs(executionUserId);
+      } catch (error) {
+        getLog().warn(
+          { err: error as Error, userId: executionUserId },
+          'workflow.user_ai_prefs_resolve_failed'
+        );
+      }
+    }
+    if (userAiPrefs.tiers || userAiPrefs.aliases || userAiPrefs.defaultProvider) {
+      getLog().debug(
+        {
+          userId: executionUserId,
+          tierKeys: Object.keys(userAiPrefs.tiers ?? {}),
+          aliasKeys: Object.keys(userAiPrefs.aliases ?? {}),
+          defaultProvider: userAiPrefs.defaultProvider,
+        },
+        'workflow.user_ai_prefs_applied'
       );
     }
-  }
-  if (userAiPrefs.tiers || userAiPrefs.aliases || userAiPrefs.defaultProvider) {
-    getLog().debug(
-      {
-        userId: executionUserId,
-        tierKeys: Object.keys(userAiPrefs.tiers ?? {}),
-        aliasKeys: Object.keys(userAiPrefs.aliases ?? {}),
-        defaultProvider: userAiPrefs.defaultProvider,
-      },
-      'workflow.user_ai_prefs_applied'
-    );
-  }
-  let aiProfile: ResolvedAiProfile;
-  try {
-    aiProfile = buildAiProfile(userAiPrefs.defaultProvider ?? config.assistant, {
-      repoTiers: config.tiers,
-      repoAliases: config.aliases,
-      userTiers: userAiPrefs.tiers,
-      userAliases: userAiPrefs.aliases,
-    });
-  } catch (error) {
-    // Structurally invalid STORED prefs (corrupt DB row) must not kill the run
-    // before its record exists — degrade to config-only. A broken config layer
-    // still fails fast: the rebuild below rethrows the same error.
-    getLog().error(
-      { err: error as Error, userId: executionUserId },
-      'workflow.user_ai_prefs_profile_invalid'
-    );
-    aiProfile = buildAiProfile(config.assistant, {
-      repoTiers: config.tiers,
-      repoAliases: config.aliases,
-    });
-  }
+    try {
+      aiProfile = buildAiProfile(userAiPrefs.defaultProvider ?? config.assistant, {
+        repoTiers: config.tiers,
+        repoAliases: config.aliases,
+        userTiers: userAiPrefs.tiers,
+        userAliases: userAiPrefs.aliases,
+      });
+    } catch (error) {
+      // Structurally invalid STORED prefs (corrupt DB row) must not kill the run
+      // before its record exists — degrade to config-only. A broken config layer
+      // still fails fast: the rebuild below rethrows the same error.
+      getLog().error(
+        { err: error as Error, userId: executionUserId },
+        'workflow.user_ai_prefs_profile_invalid'
+      );
+      aiProfile = buildAiProfile(config.assistant, {
+        repoTiers: config.tiers,
+        repoAliases: config.aliases,
+      });
+    }
 
-  // Resolve the workflow-level provider/model fallbacks once (used by all nodes) through
-  // the SAME pure function the dry run reports from, so `--dry-run` cannot disagree with
-  // what the run does. Everything the pure function must not do — warn the user, throw —
-  // stays here, mirroring how `resolveNodeProviderAndModel` wraps `resolveNodeModel` one
-  // level down.
-  //
-  // Note that a workflow which came through discovery carries NO workflow-level provider
-  // or model: composition collapses them onto its own nodes and removes the layer (#1764),
-  // so this normally resolves to `config.assistant`. It still has to behave correctly for
-  // a programmatic caller that hands over an unexpanded definition.
-  const scope = resolveWorkflowModelScope(
-    workflow,
-    config.assistant,
-    assistantModelDefaults(config),
-    aiProfile
-  );
-  const resolvedProvider = scope.provider;
-  const resolvedModel = scope.model;
-  const workflowPreset = scope.preset;
-  const providerSource =
-    scope.providerOrigin === 'model ref'
-      ? `model preset '${workflow.model ?? ''}'`
-      : scope.providerOrigin === 'workflow'
-        ? 'workflow definition'
-        : 'config';
+    // Resolve the workflow-level provider/model fallbacks once (used by all nodes) through
+    // the SAME pure function the dry run reports from, so `--dry-run` cannot disagree with
+    // what the run does. Everything the pure function must not do — warn the user, throw —
+    // stays here, mirroring how `resolveNodeProviderAndModel` wraps `resolveNodeModel` one
+    // level down.
+    //
+    // Note that a workflow which came through discovery carries NO workflow-level provider
+    // or model: composition collapses them onto its own nodes and removes the layer (#1764),
+    // so this normally resolves to `config.assistant`. It still has to behave correctly for
+    // a programmatic caller that hands over an unexpanded definition.
+    scope = resolveWorkflowModelScope(
+      workflow,
+      config.assistant,
+      assistantModelDefaults(config),
+      aiProfile
+    );
+    resolvedProvider = scope.provider;
+    resolvedModel = scope.model;
+    workflowPreset = scope.preset;
+    providerSource =
+      scope.providerOrigin === 'model ref'
+        ? `model preset '${workflow.model ?? ''}'`
+        : scope.providerOrigin === 'workflow'
+          ? 'workflow definition'
+          : 'config';
 
-  if (workflow.provider && workflowPreset && workflow.provider !== workflowPreset.provider) {
-    getLog().warn(
+    if (workflow.provider && workflowPreset && workflow.provider !== workflowPreset.provider) {
+      getLog().warn(
+        {
+          workflowName: workflow.name,
+          configuredProvider: workflow.provider,
+          resolvedProvider: workflowPreset.provider,
+          modelRef: workflow.model,
+        },
+        'workflow.model_provider_conflict'
+      );
+      const delivered = await safeSendMessage(
+        platform,
+        conversationId,
+        `Warning: Workflow '${workflow.name}' sets provider '${workflow.provider}' but model '${workflow.model ?? ''}' resolves to provider '${workflowPreset.provider}' — using '${workflowPreset.provider}'.`
+      );
+      if (!delivered) {
+        getLog().error(
+          { workflowName: workflow.name, conversationId },
+          'workflow.model_provider_conflict_warning_delivery_failed'
+        );
+      }
+    }
+
+    if (!isRegisteredProvider(resolvedProvider)) {
+      throw new Error(
+        `Workflow '${workflow.name}': unknown provider '${resolvedProvider}'. ` +
+          `Registered: ${getRegisteredProviders()
+            .map(p => p.id)
+            .join(', ')}`
+      );
+    }
+
+    getLog().info(
       {
         workflowName: workflow.name,
-        configuredProvider: workflow.provider,
-        resolvedProvider: workflowPreset.provider,
-        modelRef: workflow.model,
+        provider: resolvedProvider,
+        providerSource,
+        model: resolvedModel,
       },
-      'workflow.model_provider_conflict'
+      'workflow_provider_resolved'
     );
-    const delivered = await safeSendMessage(
+
+    if (configuredCommandFolder) {
+      getLog().debug({ configuredCommandFolder }, 'command_folder_configured');
+    }
+  } catch (error) {
+    if (!activeOverlay) {
+      // No-overlay behavior unchanged: surface the throw to the caller.
+      throw error;
+    }
+    const err = error as Error;
+    getLog().error(
+      {
+        err,
+        workflowName: workflow.name,
+        workflowRunId: preCreatedRun?.id,
+        envId: activeOverlay.applied.envId,
+        envName: activeOverlay.applied.envName,
+      },
+      'workflow.env_overlay_preamble_resolution_failed'
+    );
+    await failClosedAfterOverlayError(deps, preCreatedRun?.id, error);
+    // Id/name only — never patch bodies or raw config values.
+    await safeSendMessage(
       platform,
       conversationId,
-      `Warning: Workflow '${workflow.name}' sets provider '${workflow.provider}' but model '${workflow.model ?? ''}' resolves to provider '${workflowPreset.provider}' — using '${workflowPreset.provider}'.`
+      `❌ **Workflow failed**: ENV overlay '${activeOverlay.applied.envName}' (${activeOverlay.applied.envId}) could not resolve execution settings.`
     );
-    if (!delivered) {
-      getLog().error(
-        { workflowName: workflow.name, conversationId },
-        'workflow.model_provider_conflict_warning_delivery_failed'
-      );
-    }
-  }
-
-  if (!isRegisteredProvider(resolvedProvider)) {
-    throw new Error(
-      `Workflow '${workflow.name}': unknown provider '${resolvedProvider}'. ` +
-        `Registered: ${getRegisteredProviders()
-          .map(p => p.id)
-          .join(', ')}`
-    );
-  }
-
-  getLog().info(
-    {
-      workflowName: workflow.name,
-      provider: resolvedProvider,
-      providerSource,
-      model: resolvedModel,
-    },
-    'workflow_provider_resolved'
-  );
-
-  if (configuredCommandFolder) {
-    getLog().debug({ configuredCommandFolder }, 'command_folder_configured');
+    return {
+      success: false,
+      workflowRunId: preCreatedRun?.id,
+      error: err.message,
+    };
   }
 
   // Workflow run + resume state. Caller decides whether to resume by passing

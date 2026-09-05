@@ -2763,6 +2763,101 @@ describe('executeWorkflow ENV overlay ownership', () => {
     expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
   });
 
+  it('US-021: overlay-bearing pending preCreatedRun fails closed on preamble resolution throw', async () => {
+    // Broken repo alias layer (missing @) makes buildAiProfile throw after
+    // prepareExecutionEnvOverlay succeeds — before snapshot / events / DAG.
+    const failSpy = mock(async () => {});
+    const snapshotSpy = mock(async (runId: string) => makeRun({ id: runId }));
+    const store = makeStore({
+      failWorkflowRun: failSpy,
+      setWorkflowRunEnvOverlay: snapshotSpy,
+    });
+
+    const deps = makeDeps(store);
+    deps.loadConfig = mock(
+      async (): Promise<WorkflowConfig> => ({
+        assistant: 'claude',
+        assistants: { claude: {}, codex: {} },
+        baseBranch: '',
+        prRemote: 'origin',
+        commands: { folder: '' },
+        // Invalid alias key — fails fast on rebuild after prefs degrade path.
+        aliases: { fast: { provider: 'claude', model: 'haiku' } },
+      })
+    );
+
+    const base = makeWorkflow({ nodes: [{ id: 'node1', prompt: 'o' }] });
+    const applied = makeApplied({ patches: { node1: { prompt: 'p' } } });
+    const { workflow: patched } = applyEnvOverlay(base, applied.patches);
+
+    const platform = makePlatform();
+    const result = await executeWorkflow(
+      deps,
+      platform,
+      'conv-1',
+      '/tmp/repo',
+      patched,
+      'go',
+      'db',
+      {
+        preCreatedRun: makeRun({
+          id: 'pending-overlay-1',
+          status: 'pending',
+          metadata: { envOverlay: applied },
+        }),
+        priorCompletedNodes: new Map(),
+        appliedEnvOverlay: applied,
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.workflowRunId).toBe('pending-overlay-1');
+    expect(result.error).toMatch(/must start with '@'/);
+    expect(failSpy).toHaveBeenCalledTimes(1);
+    expect(failSpy).toHaveBeenCalledWith(
+      'pending-overlay-1',
+      expect.stringMatching(/must start with '@'/)
+    );
+    expect(snapshotSpy).not.toHaveBeenCalled();
+    expect(mockEmitter.emit).not.toHaveBeenCalled();
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+    // Safe user messaging: env id/name only — no patch bodies.
+    const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(c =>
+      String(c[1])
+    );
+    expect(sent.some(m => m.includes('envName') || m.includes('fast'))).toBe(true);
+    expect(sent.some(m => m.includes('env-1'))).toBe(true);
+    expect(sent.join('\n')).not.toContain('secret');
+    expect(sent.join('\n')).not.toMatch(/\bprompt\b.*overlaid|\bp\b/);
+  });
+
+  it('US-021: no-overlay preamble resolution throw still propagates (unchanged)', async () => {
+    const failSpy = mock(async () => {});
+    const store = makeStore({ failWorkflowRun: failSpy });
+    const deps = makeDeps(store);
+    deps.loadConfig = mock(
+      async (): Promise<WorkflowConfig> => ({
+        assistant: 'claude',
+        assistants: { claude: {}, codex: {} },
+        baseBranch: '',
+        prRemote: 'origin',
+        commands: { folder: '' },
+        aliases: { fast: { provider: 'claude', model: 'haiku' } },
+      })
+    );
+
+    await expect(
+      executeWorkflow(deps, makePlatform(), 'conv-1', '/tmp/repo', makeWorkflow(), 'go', 'db', {
+        preCreatedRun: makeRun({ id: 'plain-pending', status: 'pending', metadata: {} }),
+        priorCompletedNodes: new Map(),
+      })
+    ).rejects.toThrow(/must start with '@'/);
+
+    // No overlay → executor does not own fail-closed for this throw.
+    expect(failSpy).not.toHaveBeenCalled();
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+
   it('rejects corrupt stored overlay without executing', async () => {
     const failSpy = mock(async () => {});
     const store = makeStore({ failWorkflowRun: failSpy });

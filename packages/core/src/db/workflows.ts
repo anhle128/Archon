@@ -1414,10 +1414,14 @@ export async function failWorkflowRun(id: string, error: string): Promise<void> 
   const dialect = getDialect();
   let result: Awaited<ReturnType<IDatabase['query']>>;
   try {
+    // Accept both `running` (normal mid-execution fail) and `pending` (overlay-bearing
+    // background pre-create / early preamble fail-closed before status→running).
+    // Other statuses stay rejected so SIGTERM cannot clobber a paused gate, and a
+    // completed/cancelled row cannot be resurrected as failed.
     result = await pool.query(
       `UPDATE remote_agent_workflow_runs
        SET status = 'failed', completed_at = ${dialect.now()}, metadata = ${dialect.jsonMerge('metadata', 2)}
-       WHERE id = $1 AND status = 'running'`,
+       WHERE id = $1 AND status IN ('running', 'pending')`,
       [id, JSON.stringify({ error })]
     );
   } catch (dbError) {
@@ -1427,7 +1431,7 @@ export async function failWorkflowRun(id: string, error: string): Promise<void> 
   }
   if (result.rowCount === 0) {
     getLog().warn({ workflowRunId: id }, 'db.workflow_run_fail_no_match');
-    throw new Error(`Workflow run not found or not in running state (id: ${id})`);
+    throw new Error(`Workflow run not found or not in running/pending state (id: ${id})`);
   }
 }
 
