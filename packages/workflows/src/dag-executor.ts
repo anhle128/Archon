@@ -1254,7 +1254,9 @@ export async function resolveNodeProviderAndModel(
     ['skills', 'skills', node.skills !== undefined && node.skills.length > 0],
     ['agents', 'agents', node.agents !== undefined],
     ['effort', 'effortControl', declaredEffort !== undefined],
-    ['thinking', 'thinkingControl', (node.thinking ?? workflowLevelOptions.thinking) !== undefined],
+    // Consume pure-path thinkingUnsupported so preset-derived thinking warns too
+    // (node/workflow-only isSet silently missed tier/alias presets — US-036).
+    ['thinking', 'thinkingControl', request.thinkingUnsupported],
     ['maxBudgetUsd', 'costControl', node.maxBudgetUsd !== undefined],
     [
       'fallbackModel',

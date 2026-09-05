@@ -14766,6 +14766,335 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
     );
     expect(failedEvent?.[0].data?.error).toContain('does not support effortControl');
   });
+
+  it('warns once for Codex tier preset thinking with no node/workflow thinking', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'codex',
+      getCapabilities: mockCodexCapabilities,
+    }));
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const aiProfile = buildAiProfile('codex', {
+      repoTiers: {
+        large: { provider: 'codex', model: 'gpt-5.1', thinking: 'enabled' },
+      },
+    });
+
+    mockLogFn.mockClear();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'preset-thinking-codex-tier',
+        nodes: [{ id: 'step1', command: 'my-cmd', model: 'large' }],
+      },
+      makeWorkflowRun(),
+      'codex',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, assistant: 'codex' },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      aiProfile
+    );
+
+    expect(mockSendQueryDag).toHaveBeenCalled();
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
+    // Requested thinking is preserved on send options even when unsupported.
+    expect(nodeConfig.thinking).toEqual({ type: 'enabled' });
+
+    const startedEvent = store.createWorkflowEvent.mock.calls.find(
+      call => call[0].event_type === 'node_started'
+    );
+    expect(startedEvent?.[0].data?.thinking).toEqual({ type: 'enabled' });
+    expect(startedEvent?.[0].data?.provider).toBe('codex');
+
+    const capWarns = mockLogFn.mock.calls.filter(
+      (call: unknown[]) => call[1] === 'dag.unsupported_capabilities'
+    );
+    expect(capWarns.length).toBe(1);
+    const payload = capWarns[0][0] as { unsupported?: string[] };
+    expect(payload.unsupported).toEqual(['thinking']);
+
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    const warnings = sendMessage.mock.calls
+      .map(call => call[1] as string)
+      .filter(msg => typeof msg === 'string' && msg.includes('thinking'));
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toContain("doesn't support");
+  });
+
+  it('warns once for OpenCode alias preset thinking with no node/workflow thinking', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'opencode',
+      getCapabilities: () => ({ ...mockCodexCapabilities(), effortControl: false }),
+    }));
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const aiProfile = buildAiProfile('opencode', {
+      globalAliases: {
+        '@thinky': { provider: 'opencode', model: 'oc-model', thinking: { type: 'enabled' } },
+      },
+    });
+
+    mockLogFn.mockClear();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'preset-thinking-opencode-alias',
+        nodes: [{ id: 'step1', command: 'my-cmd', model: '@thinky' }],
+      },
+      makeWorkflowRun(),
+      'opencode',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, assistant: 'opencode' },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      aiProfile
+    );
+
+    expect(mockSendQueryDag).toHaveBeenCalled();
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
+    expect(nodeConfig.thinking).toEqual({ type: 'enabled' });
+
+    const capWarns = mockLogFn.mock.calls.filter(
+      (call: unknown[]) => call[1] === 'dag.unsupported_capabilities'
+    );
+    expect(capWarns.length).toBe(1);
+    expect((capWarns[0][0] as { unsupported?: string[] }).unsupported).toEqual(['thinking']);
+  });
+
+  it('warns once for Grok tier preset thinking with no node/workflow thinking', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'grok',
+      getCapabilities: () => ({
+        ...mockCodexCapabilities(),
+        effortControl: false,
+        thinkingControl: false,
+      }),
+    }));
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const aiProfile = buildAiProfile('grok', {
+      repoTiers: {
+        medium: { provider: 'grok', model: 'grok-3', thinking: 'disabled' },
+      },
+    });
+
+    mockLogFn.mockClear();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'preset-thinking-grok-tier',
+        nodes: [{ id: 'step1', command: 'my-cmd', model: 'medium' }],
+      },
+      makeWorkflowRun(),
+      'grok',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, assistant: 'grok' },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      aiProfile
+    );
+
+    expect(mockSendQueryDag).toHaveBeenCalled();
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
+    expect(nodeConfig.thinking).toEqual({ type: 'disabled' });
+
+    const capWarns = mockLogFn.mock.calls.filter(
+      (call: unknown[]) => call[1] === 'dag.unsupported_capabilities'
+    );
+    expect(capWarns.length).toBe(1);
+    expect((capWarns[0][0] as { unsupported?: string[] }).unsupported).toEqual(['thinking']);
+  });
+
+  it('does not warn for Claude preset thinking (supported provider)', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const aiProfile = buildAiProfile('claude', {
+      repoTiers: {
+        large: { provider: 'claude', model: 'claude-opus-4', thinking: 'adaptive' },
+      },
+    });
+
+    mockLogFn.mockClear();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'preset-thinking-claude-ok',
+        nodes: [{ id: 'step1', command: 'my-cmd', model: 'large' }],
+      },
+      makeWorkflowRun(),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      aiProfile
+    );
+
+    expect(mockSendQueryDag).toHaveBeenCalled();
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
+    expect(nodeConfig.thinking).toEqual({ type: 'adaptive' });
+
+    const capWarns = mockLogFn.mock.calls.filter(
+      (call: unknown[]) => call[1] === 'dag.unsupported_capabilities'
+    );
+    expect(capWarns.length).toBe(0);
+
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    const warnings = sendMessage.mock.calls
+      .map(call => call[1] as string)
+      .filter(msg => typeof msg === 'string' && msg.includes('thinking'));
+    expect(warnings).toEqual([]);
+  });
+
+  it('still warns once for explicit node thinking on Codex (unchanged control)', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'codex',
+      getCapabilities: mockCodexCapabilities,
+    }));
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+
+    mockLogFn.mockClear();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'explicit-thinking-codex',
+        nodes: [{ id: 'step1', command: 'my-cmd', provider: 'codex', thinking: 'enabled' }],
+      },
+      makeWorkflowRun(),
+      'codex',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, assistant: 'codex' }
+    );
+
+    expect(mockSendQueryDag).toHaveBeenCalled();
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
+    expect(nodeConfig.thinking).toEqual({ type: 'enabled' });
+
+    const capWarns = mockLogFn.mock.calls.filter(
+      (call: unknown[]) => call[1] === 'dag.unsupported_capabilities'
+    );
+    expect(capWarns.length).toBe(1);
+    expect((capWarns[0][0] as { unsupported?: string[] }).unsupported).toEqual(['thinking']);
+  });
+
+  it('still warns once for explicit workflow thinking on Codex (unchanged control)', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'codex',
+      getCapabilities: mockCodexCapabilities,
+    }));
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+
+    mockLogFn.mockClear();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'workflow-thinking-codex',
+        thinking: 'enabled',
+        nodes: [{ id: 'step1', command: 'my-cmd', provider: 'codex' }],
+      },
+      makeWorkflowRun(),
+      'codex',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, assistant: 'codex' }
+    );
+
+    expect(mockSendQueryDag).toHaveBeenCalled();
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
+    expect(nodeConfig.thinking).toEqual({ type: 'enabled' });
+
+    const capWarns = mockLogFn.mock.calls.filter(
+      (call: unknown[]) => call[1] === 'dag.unsupported_capabilities'
+    );
+    expect(capWarns.length).toBe(1);
+    expect((capWarns[0][0] as { unsupported?: string[] }).unsupported).toEqual(['thinking']);
+  });
 });
 
 describe('executeDagWorkflow -- cost tracking', () => {

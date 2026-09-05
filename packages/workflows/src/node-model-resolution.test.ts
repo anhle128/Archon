@@ -170,6 +170,46 @@ describe('resolveNodeExecutionRequest', () => {
     expect(request.metadata.provider).toBe('codex');
   });
 
+  test('preset-only unsupported thinking sets thinkingUnsupported and keeps requested thinking', () => {
+    // Codex has no thinkingControl; tier preset supplies thinking with no node/workflow thinking.
+    const codexProfile = buildAiProfile('codex', {
+      globalTiers: {
+        large: { provider: 'codex', model: 'gpt-5.1', thinking: 'enabled' },
+      },
+    });
+    const node: DagNode = { id: 'n', prompt: 'hi', model: 'large' };
+    const request = resolveNodeExecutionRequest(
+      node,
+      baseScope({ provider: 'codex', model: undefined }),
+      { ...assistantModels, codex: 'gpt-5.1' },
+      { aiProfile: codexProfile }
+    );
+    expect(request.thinkingUnsupported).toBe(true);
+    expect(request.metadata.thinking).toEqual({ type: 'enabled' });
+    expect(request.appliedThinking).toEqual({ type: 'enabled' });
+    expect(request.metadata.provider).toBe('codex');
+    expect(request.metadata.model).toBe('gpt-5.1');
+    expect(request.metadata.tier).toBe('large');
+  });
+
+  test('preset-only thinking on a supported provider does not set thinkingUnsupported', () => {
+    const claudeProfile = buildAiProfile('claude', {
+      globalAliases: {
+        '@think': { provider: 'claude', model: 'claude-sonnet-4', thinking: 'adaptive' },
+      },
+    });
+    const node: DagNode = { id: 'n', prompt: 'hi', model: '@think' };
+    const request = resolveNodeExecutionRequest(
+      node,
+      baseScope({ provider: 'claude', model: undefined }),
+      assistantModels,
+      { aiProfile: claudeProfile }
+    );
+    expect(request.thinkingUnsupported).toBe(false);
+    expect(request.metadata.thinking).toEqual({ type: 'adaptive' });
+    expect(request.appliedThinking).toEqual({ type: 'adaptive' });
+  });
+
   test('assistant modelReasoningEffort becomes metadata.modelReasoningEffort when no portable effort', () => {
     const node: DagNode = { id: 'n', prompt: 'hi' };
     const request = resolveNodeExecutionRequest(node, baseScope(), assistantModels, {
