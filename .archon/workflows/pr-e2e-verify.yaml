@@ -87,11 +87,37 @@ nodes:
       the checkout so the next verify pass can see them.
 
   # positive — run the crystallized Playwright specs against the real app.
+  # Captures the outcome (never hard-fails) so report-pr always runs and posts it.
   - id: run-e2e
     bash: |
-      set -euo pipefail
+      set -uo pipefail
+      mkdir -p "$ARTIFACTS_DIR"
+      # This runs in an ISOLATED WORKTREE checked out from the PR branch, which has
+      # no e2e deps, no browser, and no built web bundle — set them up first.
+      bun run build:web > "$ARTIFACTS_DIR/e2e-setup.log" 2>&1 || true
       cd e2e
-      npm run test:ui
+      npm ci >> "$ARTIFACTS_DIR/e2e-setup.log" 2>&1 || true
+      npx playwright install chromium >> "$ARTIFACTS_DIR/e2e-setup.log" 2>&1 || true
+      if npm run test:ui > "$ARTIFACTS_DIR/e2e-result.log" 2>&1; then
+        echo passed > "$ARTIFACTS_DIR/e2e-status.txt"
+      else
+        echo failed > "$ARTIFACTS_DIR/e2e-status.txt"
+      fi
+      cat "$ARTIFACTS_DIR/e2e-status.txt"
+
+  # Always report the e2e verdict back to the PR — pass means the feature works
+  # end-to-end; fail means it has issues, with the Playwright output attached.
+  - id: report-pr
+    depends_on: [run-e2e]
+    bash: |
+      set -euo pipefail
+      status=$(cat "$ARTIFACTS_DIR/e2e-status.txt" 2>/dev/null || echo unknown)
+      if [ "$status" = passed ]; then
+        gh pr comment "$ARGUMENTS" --body "✅ **E2E verify passed** — the feature works end-to-end as the user story expects (third-party coverage anchored, Playwright specs green)."
+      else
+        body=$(printf '❌ **E2E verify FAILED** — the feature has issues end-to-end. Playwright output (tail):\n\n```\n%s\n```' "$(tail -40 "$ARTIFACTS_DIR/e2e-result.log" 2>/dev/null)")
+        gh pr comment "$ARGUMENTS" --body "$body"
+      fi
 
   # exhausted — could not self-heal within max_iterations; escalate to the PR.
   - id: comment-pr
