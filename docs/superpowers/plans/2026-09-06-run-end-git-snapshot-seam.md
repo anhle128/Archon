@@ -13,7 +13,8 @@ A later writer can fill that same hook with an idempotent temp+rename snapshot u
 **Tech Stack:** Bun, strict TypeScript, Bun Test, Pino via `createLogger` from `@archon/paths`.
 
 **Spec:** `_bmad-output/planning-artifacts/epics-source-control/epics.md` Story 3.1.
-Also bind `FR9`, `NFR3`, `NFR4`, `NFR5`, SPEC CAP-8, brownfield Durable capture, and architecture spine AD-8.
+
+**Source Contracts:** `_bmad-output/specs/spec-archon-source-control/SPEC.md` CAP-8, `_bmad-output/specs/spec-archon-source-control/brownfield.md` Durable capture, and `_bmad-output/planning-artifacts/architecture/architecture-Archon-source-control-2026-09-05/ARCHITECTURE-SPINE.md` AD-8.
 
 **Issue:** [#80](https://github.com/anhle128/Archon/issues/80)
 
@@ -33,6 +34,7 @@ Also bind `FR9`, `NFR3`, `NFR4`, `NFR5`, SPEC CAP-8, brownfield Durable capture,
 - Do not use `any`.
 - Do not run `bun test` from the repository root.
 - Run package tests from that package directory.
+- Run every command block from the repository root; package-scoped commands use a subshell so later commands remain rooted correctly.
 
 ---
 
@@ -40,15 +42,15 @@ Also bind `FR9`, `NFR3`, `NFR4`, `NFR5`, SPEC CAP-8, brownfield Durable capture,
 
 - Modify `packages/workflows/src/deps.ts` to add `GitSnapshotContext` and optional `WorkflowDeps.onRunEndGitSnapshot`.
 - Modify `packages/workflows/src/executor.ts` to call the hook fail-open from `executeWorkflow`'s keep-awake `finally` after the existing running-status backstop.
-- Modify `packages/workflows/src/executor.test.ts` to cover completed, failed, cancelled, paused, missing hook, thrown hook, backstop-then-failed, and no-path-in-logs.
-- Create `packages/core/src/workflows/git-snapshot.ts` as the v1 no-op writer.
-- Create `packages/core/src/workflows/git-snapshot.test.ts` for checkout-gone, no-write, idempotence, and fail-open logging.
-- Modify `packages/core/src/workflows/store-adapter.ts` to inject the no-op from `createWorkflowDeps()`.
-- Modify `packages/core/src/workflows/store-adapter.test.ts` to assert the hook is wired.
+- Modify `packages/workflows/src/executor.test.ts` to cover terminal invokes, nonterminal and pre-DAG skips, missing rows and hooks, hook and lookup failures, successful and failed backstops, named events, and log privacy.
+- Create `packages/core/src/workflows/git-snapshot.ts` as the stable writer entry point whose v1 behavior is a no-op.
+- Create `packages/core/src/workflows/git-snapshot.test.ts` for missing paths, checkout-gone, no-write, repeat-call idempotence, named skip logs, and log privacy.
+- Modify `packages/core/src/workflows/store-adapter.ts` to inject `captureRunEndGitSnapshot` from `createWorkflowDeps()`.
+- Modify `packages/core/src/workflows/store-adapter.test.ts` to assert the hook is callable.
 - Modify `packages/core/package.json` so `git-snapshot.test.ts` runs in its own `bun test` invocation.
 - Modify `_bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml` only after the code tasks pass.
 
-Do not modify `packages/server/src/routes/api.ts`, `migrations/000_combined.sql`, SQLite schema, web UI, or `@archon/git`.
+Do not modify `packages/server/src/routes/api.ts`, `migrations/000_combined.sql`, `packages/core/src/db/adapters/sqlite.ts`, `packages/web/`, or `packages/git/`.
 
 ## Patterns to Mirror
 
@@ -60,9 +62,10 @@ Do not modify `packages/server/src/routes/api.ts`, `migrations/000_combined.sql`
 **Run-end placement** is the keep-awake `try`/`finally` in `executeWorkflow` (`packages/workflows/src/executor.ts`).
 `keepAwake.release()` is the first `finally` statement.
 The zombie-run backstop then flips leftover `running` rows to failed.
-The git-snapshot hook runs after that backstop so a backstop failure still has a terminal row.
+The git-snapshot hook runs after a successful backstop transition so a leftover `running` row is observed as `failed`.
+If the backstop write fails and the row remains `running`, the hook is skipped rather than inventing a terminal state.
 
-**Core sibling module** is `packages/core/src/workflows/usage-recorder.ts`: `createLogger`, never throw into execution, wired only through `createWorkflowDeps()`.
+**Core sibling module** is `packages/core/src/workflows/usage-recorder.ts`: it uses `createLogger` and is wired only through `createWorkflowDeps()`.
 
 **Executor tests** mock `@archon/paths`, `@archon/git`, `./dag-executor`, and use `makeStore()` / `makeDeps()` in `packages/workflows/src/executor.test.ts`.
 
@@ -82,7 +85,7 @@ export interface GitSnapshotContext {
 
 export interface WorkflowDeps {
   // existing fields unchanged
-  onRunEndGitSnapshot?: (ctx: GitSnapshotContext) => Promise<void>;
+  onRunEndGitSnapshot?: (context: GitSnapshotContext) => Promise<void>;
 }
 ```
 
@@ -116,28 +119,27 @@ The engine helper must catch every error from `getWorkflowRun` and from the hook
 It must not rethrow.
 It must not call `failWorkflowRun`.
 It must not change the `WorkflowExecutionResult` already produced by the `try`/`catch`.
+The hook implementation may throw so the executor can apply this one fail-open boundary and emit the required failure event.
 
 Log events (no paths):
 
 - Engine start: `workflow.git_snapshot_started` with `{ workflowRunId, status }`
 - Engine success: `workflow.git_snapshot_completed` with `{ workflowRunId, status }`
 - Engine failure: `workflow.git_snapshot_failed` with `{ err, workflowRunId }` and optional `status`
-- Core skip: `git_snapshot.capture_skipped` with `{ workflowRunId, reason }` where `reason` is `'missing_working_path'` or `'checkout_gone'`
-- Core v1 success: `git_snapshot.capture_completed` with `{ workflowRunId, status, reason: 'noop' }`
+- Core skip: `git_snapshot.capture_skipped` with `{ workflowRunId, reason }` where `reason` is `'missing_working_path'`, `'checkout_gone'`, or `'v1_noop'`; the `'v1_noop'` payload also includes `status`
 
 ### v1 no-op writer
 
-`noopRunEndGitSnapshot(ctx)` in `@archon/core`:
+`captureRunEndGitSnapshot(context)` in `@archon/core`:
 
-1. If `ctx.workingPath` is null or empty, log `git_snapshot.capture_skipped` with `reason: 'missing_working_path'` and return.
-2. If `existsSync(ctx.workingPath)` is false or throws, log `git_snapshot.capture_skipped` with `reason: 'checkout_gone'` and return.
-3. Otherwise log `git_snapshot.capture_completed` with `reason: 'noop'` and return.
-4. Never create files or directories under `ctx.outputRoot`.
+1. If `context.workingPath` is null or empty, log `git_snapshot.capture_skipped` with `reason: 'missing_working_path'` and return.
+2. If `existsSync(context.workingPath)` is false, log `git_snapshot.capture_skipped` with `reason: 'checkout_gone'` and return.
+3. Otherwise log `git_snapshot.capture_skipped` with `reason: 'v1_noop'` and the terminal status, then return.
+4. Never create files or directories under `context.outputRoot`.
 5. Never call git.
-6. Never throw.
 
-A later writer must replace step 3 with an idempotent temp+rename write under `ctx.outputRoot` and must still no-op when `outputRoot` is null or the checkout is gone.
-Provisional future directory, JSDoc only, not created in v1: `<outputRoot>/git-snapshot/`.
+A later writer must replace step 3 with an idempotent temp+rename write under `context.outputRoot` and must still no-op when `outputRoot` is null or the checkout is gone.
+The snapshot filename and wire format remain intentionally undecided until the later build story.
 
 ---
 
@@ -156,39 +158,17 @@ Provisional future directory, JSDoc only, not created in v1: `<outputRoot>/git-s
 
 - [ ] **Step 1: Write the failing executor tests**
 
-Add the types to `packages/workflows/src/deps.ts` first so the tests typecheck.
-Do not call the hook yet.
-
-Append this block after `getUserAiPrefs` in `WorkflowDeps`:
+Append this describe to `packages/workflows/src/executor.test.ts` immediately after the existing `describe('finally backstop')` block and before `describe('telemetry wiring')`.
+Do not change production types first; the test-local context shape keeps the red test runnable before `WorkflowDeps` owns the hook.
 
 ```ts
-/**
- * Optional CAP-8 run-end git-snapshot hook.
- * The executor calls this after DAG execution reaches a terminal status.
- * Implementations must not throw; the executor also fail-opens if they do.
- * v1 writes nothing. A later writer must be idempotent and use temp+rename
- * under `outputRoot`. Never log paths, remotes, file contents, or secrets.
- */
-onRunEndGitSnapshot?: (ctx: GitSnapshotContext) => Promise<void>;
-```
-
-Place these exported types above `WorkflowDeps`:
-
-```ts
-export type GitSnapshotTerminalStatus = 'completed' | 'failed' | 'cancelled';
-
-export interface GitSnapshotContext {
+type ExpectedGitSnapshotContext = {
   runId: string;
   workingPath: string | null;
   outputRoot: string | null;
-  status: GitSnapshotTerminalStatus;
-}
-```
+  status: 'completed' | 'failed' | 'cancelled';
+};
 
-Then append this describe to `packages/workflows/src/executor.test.ts` immediately after the existing `describe('finally backstop')` block (after the current closing of that describe, before `describe('telemetry wiring')`).
-Import `GitSnapshotContext` from `./deps` in the existing deps import.
-
-```ts
 describe('run-end git snapshot seam', () => {
   beforeEach(() => {
     mockLogFn.mockClear();
@@ -196,7 +176,7 @@ describe('run-end git snapshot seam', () => {
     mockExecuteDagWorkflow.mockImplementation(async (): Promise<string | undefined> => undefined);
   });
 
-  function snapshotRun(status: 'completed' | 'failed' | 'cancelled' | 'paused') {
+  function snapshotRun(status: WorkflowRun['status']): WorkflowRun {
     return makeRun({
       id: 'run-123',
       status,
@@ -206,7 +186,7 @@ describe('run-end git snapshot seam', () => {
   }
 
   function depsWithHook(
-    hook: (ctx: GitSnapshotContext) => Promise<void>,
+    hook: (context: ExpectedGitSnapshotContext) => Promise<void>,
     storeOverrides: Parameters<typeof makeStore>[0] = {}
   ) {
     const store = makeStore({
@@ -217,8 +197,12 @@ describe('run-end git snapshot seam', () => {
     return { store, deps: { ...makeDeps(store), onRunEndGitSnapshot: hook } };
   }
 
+  function eventCalls(eventName: string): unknown[][] {
+    return (mockLogFn.mock.calls as unknown[][]).filter(call => call[1] === eventName);
+  }
+
   it('invokes the hook once with run row fields after a completed run', async () => {
-    const hook = mock(async () => {});
+    const hook = mock(async (_context: ExpectedGitSnapshotContext): Promise<void> => {});
     const { deps } = depsWithHook(hook);
     const result = await executeWorkflow(
       deps,
@@ -237,11 +221,19 @@ describe('run-end git snapshot seam', () => {
       outputRoot: '/tmp/out-secret',
       status: 'completed',
     });
+    expect(eventCalls('workflow.git_snapshot_started')[0]?.[0]).toEqual({
+      workflowRunId: 'run-123',
+      status: 'completed',
+    });
+    expect(eventCalls('workflow.git_snapshot_completed')[0]?.[0]).toEqual({
+      workflowRunId: 'run-123',
+      status: 'completed',
+    });
   });
 
   it('invokes the hook when the run failed', async () => {
     mockExecuteDagWorkflow.mockRejectedValueOnce(new Error('dag boom'));
-    const hook = mock(async () => {});
+    const hook = mock(async (_context: ExpectedGitSnapshotContext): Promise<void> => {});
     const { deps } = depsWithHook(hook, {
       getWorkflowRun: mock(async () => snapshotRun('failed')),
       getWorkflowRunStatus: mock(async () => 'failed' as const),
@@ -261,7 +253,7 @@ describe('run-end git snapshot seam', () => {
   });
 
   it('invokes the hook when the run was cancelled', async () => {
-    const hook = mock(async () => {});
+    const hook = mock(async (_context: ExpectedGitSnapshotContext): Promise<void> => {});
     const { deps } = depsWithHook(hook, {
       getWorkflowRun: mock(async () => snapshotRun('cancelled')),
       getWorkflowRunStatus: mock(async () => 'cancelled' as const),
@@ -281,7 +273,7 @@ describe('run-end git snapshot seam', () => {
   });
 
   it('does not invoke the hook when the run paused', async () => {
-    const hook = mock(async () => {});
+    const hook = mock(async (_context: ExpectedGitSnapshotContext): Promise<void> => {});
     const { deps } = depsWithHook(hook, {
       getWorkflowRun: mock(async () => snapshotRun('paused')),
       getWorkflowRunStatus: mock(async () => 'paused' as const),
@@ -299,6 +291,44 @@ describe('run-end git snapshot seam', () => {
     expect(hook).not.toHaveBeenCalled();
   });
 
+  it('does not invoke the hook when the refreshed run is pending', async () => {
+    const hook = mock(async (_context: ExpectedGitSnapshotContext): Promise<void> => {});
+    const { deps } = depsWithHook(hook, {
+      getWorkflowRun: mock(async () => snapshotRun('pending')),
+      getWorkflowRunStatus: mock(async () => 'pending' as const),
+    });
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'test message',
+      'db-conv-1'
+    );
+    expect(result.success).toBe(false);
+    expect(hook).not.toHaveBeenCalled();
+  });
+
+  it('does not invoke the hook on a pre-DAG container-resume guard return', async () => {
+    const hook = mock(async (_context: ExpectedGitSnapshotContext): Promise<void> => {});
+    const store = makeStore();
+    const deps = { ...makeDeps(store), onRunEndGitSnapshot: hook };
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'test message',
+      'db-conv-1',
+      { preCreatedRun: makeRun({ metadata: { isolation: 'container' } }) }
+    );
+    expect(result.success).toBe(false);
+    expect(hook).not.toHaveBeenCalled();
+    expect(eventCalls('workflow.git_snapshot_started')).toHaveLength(0);
+  });
+
   it('does not invoke the hook when it is absent', async () => {
     const result = await executeWorkflow(
       makeDeps(),
@@ -310,13 +340,15 @@ describe('run-end git snapshot seam', () => {
       'db-conv-1'
     );
     expect(result.success).toBe(true);
+    expect(eventCalls('workflow.git_snapshot_started')).toHaveLength(0);
   });
 
   it('still succeeds when the hook throws', async () => {
-    const hook = mock(async () => {
+    const hook = mock(async (_context: ExpectedGitSnapshotContext): Promise<void> => {
       throw new Error('snapshot exploded');
     });
-    const { deps } = depsWithHook(hook);
+    const failWorkflowRun = mock(async (): Promise<void> => {});
+    const { deps } = depsWithHook(hook, { failWorkflowRun });
     const result = await executeWorkflow(
       deps,
       makePlatform(),
@@ -329,11 +361,71 @@ describe('run-end git snapshot seam', () => {
     expect(result.success).toBe(true);
     expect(result.workflowRunId).toBe('run-123');
     expect(hook).toHaveBeenCalledTimes(1);
+    const failed = eventCalls('workflow.git_snapshot_failed');
+    expect(failed).toHaveLength(1);
+    expect(failed[0]?.[0]).toMatchObject({
+      workflowRunId: 'run-123',
+      status: 'completed',
+    });
+    expect(eventCalls('workflow.git_snapshot_completed')).toHaveLength(0);
+    expect(failWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('preserves a successful result when the final row refresh throws', async () => {
+    let readCount = 0;
+    const hook = mock(async (_context: ExpectedGitSnapshotContext): Promise<void> => {});
+    const failWorkflowRun = mock(async (): Promise<void> => {});
+    const { deps } = depsWithHook(hook, {
+      failWorkflowRun,
+      getWorkflowRun: mock(async () => {
+        readCount += 1;
+        if (readCount === 1) return snapshotRun('completed');
+        throw new Error('snapshot row read failed');
+      }),
+    });
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'test message',
+      'db-conv-1'
+    );
+    expect(result.success).toBe(true);
+    expect(hook).not.toHaveBeenCalled();
+    expect(eventCalls('workflow.git_snapshot_failed')[0]?.[0]).toMatchObject({
+      workflowRunId: 'run-123',
+    });
+    expect(failWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('does not invoke the hook when the refreshed run row is missing', async () => {
+    let readCount = 0;
+    const hook = mock(async (_context: ExpectedGitSnapshotContext): Promise<void> => {});
+    const { deps } = depsWithHook(hook, {
+      getWorkflowRun: mock(async () => {
+        readCount += 1;
+        return readCount === 1 ? snapshotRun('completed') : null;
+      }),
+    });
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'test message',
+      'db-conv-1'
+    );
+    expect(result.success).toBe(true);
+    expect(hook).not.toHaveBeenCalled();
+    expect(eventCalls('workflow.git_snapshot_started')).toHaveLength(0);
   });
 
   it('invokes the hook as failed after the running-status backstop', async () => {
     let status: 'running' | 'failed' = 'running';
-    const hook = mock(async () => {});
+    const hook = mock(async (_context: ExpectedGitSnapshotContext): Promise<void> => {});
     const store = makeStore({
       getWorkflowRunStatus: mock(async () => status),
       failWorkflowRun: mock(async () => {
@@ -355,8 +447,32 @@ describe('run-end git snapshot seam', () => {
     expect(hook.mock.calls[0]?.[0]?.status).toBe('failed');
   });
 
+  it('does not invoke the hook when the running-status backstop write fails', async () => {
+    const hook = mock(async (_context: ExpectedGitSnapshotContext): Promise<void> => {});
+    const store = makeStore({
+      getWorkflowRunStatus: mock(async () => 'running' as const),
+      failWorkflowRun: mock(async () => {
+        throw new Error('status write failed');
+      }),
+      getWorkflowRun: mock(async () => snapshotRun('running')),
+    });
+    const deps = { ...makeDeps(store), onRunEndGitSnapshot: hook };
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'test',
+      'db-conv-1'
+    );
+    expect(result.success).toBe(false);
+    expect(hook).not.toHaveBeenCalled();
+    expect(eventCalls('workflow.git_snapshot_started')).toHaveLength(0);
+  });
+
   it('does not log workingPath or outputRoot', async () => {
-    const hook = mock(async () => {});
+    const hook = mock(async (_context: ExpectedGitSnapshotContext): Promise<void> => {});
     const { deps } = depsWithHook(hook);
     await executeWorkflow(
       deps,
@@ -379,13 +495,40 @@ describe('run-end git snapshot seam', () => {
 Run:
 
 ```bash
-cd packages/workflows && bun test src/executor.test.ts
+(cd packages/workflows && bun test src/executor.test.ts)
 ```
 
-Expected: FAIL on `invokes the hook once with run row fields after a completed run` because `onRunEndGitSnapshot` is never called.
-The paused, absent-hook, and log tests may already pass.
+Expected: FAIL because the completed-run hook call count is `0` instead of `1`, and no `workflow.git_snapshot_*` events exist.
+Confirm the failures are caused by the missing seam rather than fixture, import, or setup errors.
 
 - [ ] **Step 3: Implement the run-end invoke**
+
+In `packages/workflows/src/deps.ts`, place these exported types immediately above `WorkflowDeps`:
+
+```ts
+export type GitSnapshotTerminalStatus = 'completed' | 'failed' | 'cancelled';
+
+export interface GitSnapshotContext {
+  runId: string;
+  workingPath: string | null;
+  outputRoot: string | null;
+  status: GitSnapshotTerminalStatus;
+}
+```
+
+Append this property after `getUserAiPrefs` in `WorkflowDeps`:
+
+```ts
+  /**
+   * Optional CAP-8 run-end git-snapshot hook.
+   * The executor calls it only after DAG execution reaches a terminal status.
+   * The executor catches and logs lookup or hook failures without changing the run result.
+   * A future writer must be idempotent, use temp+rename under `outputRoot`, and never log paths, remotes, file contents, or secrets.
+   */
+  onRunEndGitSnapshot?: (context: GitSnapshotContext) => Promise<void>;
+```
+
+In `packages/workflows/src/executor.test.ts`, import `GitSnapshotContext` from `./deps`, replace every `ExpectedGitSnapshotContext` annotation with `GitSnapshotContext`, and delete the test-local type.
 
 In `packages/workflows/src/executor.ts`, add this helper immediately above `export async function executeWorkflow`.
 Import `GitSnapshotContext` from `./deps` by extending the existing `WorkflowDeps` import.
@@ -403,7 +546,8 @@ function isGitSnapshotTerminalStatus(
  * is marked failed before snapshot.
  */
 async function invokeRunEndGitSnapshot(deps: WorkflowDeps, runId: string): Promise<void> {
-  if (!deps.onRunEndGitSnapshot) {
+  const hook = deps.onRunEndGitSnapshot;
+  if (!hook) {
     return;
   }
   let run: WorkflowRun | null;
@@ -419,7 +563,7 @@ async function invokeRunEndGitSnapshot(deps: WorkflowDeps, runId: string): Promi
   const status = run.status;
   try {
     getLog().info({ workflowRunId: runId, status }, 'workflow.git_snapshot_started');
-    await deps.onRunEndGitSnapshot({
+    await hook({
       runId,
       workingPath: run.working_path ?? null,
       outputRoot: run.output_root ?? null,
@@ -460,6 +604,9 @@ Do not import `existsSync` for this feature even though `executor.ts` already im
 Gotcha: `makeStore().getWorkflowRun` defaults to `status: 'completed'`.
 Failed/cancelled/paused tests must override both `getWorkflowRun` and `getWorkflowRunStatus` so the backstop and the hook see the same status.
 
+Gotcha: do not pass `workflowRun`, `cwd`, or the already-read `finalStatus` into the helper.
+The post-backstop `getWorkflowRun` refresh is what observes a backstop transition and the durable `output_root` value.
+
 Gotcha: do not put this call in `catch` only, or failed runs that return from `catch` would snapshot while completed runs that return from `try` would not.
 `finally` covers both.
 
@@ -468,12 +615,22 @@ Gotcha: do not put this call in `catch` only, or failed runs that return from `c
 Run:
 
 ```bash
-cd packages/workflows && bun test src/executor.test.ts
+(cd packages/workflows && bun test src/executor.test.ts)
 ```
 
 Expected: PASS, including `finally backstop` and `run-end git snapshot seam`.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Type-check the workflows package**
+
+Run:
+
+```bash
+(cd packages/workflows && bun run type-check)
+```
+
+Expected: PASS with no TypeScript errors.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add packages/workflows/src/deps.ts packages/workflows/src/executor.ts packages/workflows/src/executor.test.ts
@@ -499,7 +656,7 @@ EOF
 **Interfaces:**
 
 - Consumes: `GitSnapshotContext` from `@archon/workflows/deps`.
-- Produces: `noopRunEndGitSnapshot(ctx: GitSnapshotContext): Promise<void>`.
+- Produces: `captureRunEndGitSnapshot(context: GitSnapshotContext): Promise<void>`.
 
 - [ ] **Step 1: Write the failing no-op tests**
 
@@ -519,85 +676,109 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
-import { noopRunEndGitSnapshot } from './git-snapshot';
+import { captureRunEndGitSnapshot } from './git-snapshot';
 
-function ctx(overrides: Partial<GitSnapshotContext> = {}): GitSnapshotContext {
+function context(overrides: Partial<GitSnapshotContext> = {}): GitSnapshotContext {
   return {
     runId: 'run-1',
-    workingPath: '/tmp/missing-checkout',
-    outputRoot: '/tmp/missing-output-root',
+    workingPath: null,
+    outputRoot: null,
     status: 'completed',
     ...overrides,
   };
 }
 
-describe('noopRunEndGitSnapshot', () => {
+describe('captureRunEndGitSnapshot v1', () => {
   let outputRoot: string;
+  let workingPaths: string[];
+
+  function infoEventCalls(eventName: string): [Record<string, unknown>, string][] {
+    const calls = mockLogger.info.mock.calls as unknown as [Record<string, unknown>, string][];
+    return calls.filter(call => call[1] === eventName);
+  }
 
   beforeEach(() => {
     mockLogger.info.mockClear();
     mockLogger.error.mockClear();
     mockLogger.warn.mockClear();
     outputRoot = mkdtempSync(join(tmpdir(), 'archon-git-snapshot-out-'));
+    workingPaths = [];
   });
 
   afterEach(() => {
+    for (const workingPath of workingPaths) {
+      rmSync(workingPath, { recursive: true, force: true });
+    }
     rmSync(outputRoot, { recursive: true, force: true });
   });
 
+  function makeWorkingPath(): string {
+    const workingPath = mkdtempSync(join(tmpdir(), 'archon-git-snapshot-wt-'));
+    workingPaths.push(workingPath);
+    return workingPath;
+  }
+
   test('skips when workingPath is null', async () => {
-    await noopRunEndGitSnapshot(ctx({ workingPath: null, outputRoot }));
+    await captureRunEndGitSnapshot(context({ workingPath: null, outputRoot }));
     expect(readdirSync(outputRoot)).toEqual([]);
-    expect(mockLogger.info.mock.calls.some(call => call[1] === 'git_snapshot.capture_skipped')).toBe(
-      true
-    );
+    const skip = infoEventCalls('git_snapshot.capture_skipped')[0];
+    expect(skip?.[0]).toEqual({ workflowRunId: 'run-1', reason: 'missing_working_path' });
+  });
+
+  test('skips when workingPath is empty', async () => {
+    await captureRunEndGitSnapshot(context({ workingPath: '', outputRoot }));
+    expect(readdirSync(outputRoot)).toEqual([]);
+    const skip = infoEventCalls('git_snapshot.capture_skipped')[0];
+    expect(skip?.[0]).toEqual({ workflowRunId: 'run-1', reason: 'missing_working_path' });
   });
 
   test('skips when the checkout directory is gone', async () => {
-    await noopRunEndGitSnapshot(
-      ctx({ workingPath: join(outputRoot, 'no-such-checkout'), outputRoot })
+    await captureRunEndGitSnapshot(
+      context({ workingPath: join(outputRoot, 'no-such-checkout'), outputRoot })
     );
     expect(readdirSync(outputRoot)).toEqual([]);
-    const skip = mockLogger.info.mock.calls.find(call => call[1] === 'git_snapshot.capture_skipped');
-    expect(skip?.[0]).toMatchObject({ workflowRunId: 'run-1', reason: 'checkout_gone' });
+    const skip = infoEventCalls('git_snapshot.capture_skipped')[0];
+    expect(skip?.[0]).toEqual({ workflowRunId: 'run-1', reason: 'checkout_gone' });
   });
 
-  test('writes no snapshot files when the checkout still exists', async () => {
-    const workingPath = mkdtempSync(join(tmpdir(), 'archon-git-snapshot-wt-'));
-    try {
-      writeFileSync(join(workingPath, 'README.md'), 'hello');
-      await noopRunEndGitSnapshot(ctx({ workingPath, outputRoot }));
-      await noopRunEndGitSnapshot(ctx({ workingPath, outputRoot, status: 'failed' }));
-      expect(readdirSync(outputRoot)).toEqual([]);
-      expect(readdirSync(workingPath)).toEqual(['README.md']);
-      const completed = mockLogger.info.mock.calls.filter(
-        call => call[1] === 'git_snapshot.capture_completed'
-      );
-      expect(completed).toHaveLength(2);
-      expect(completed[0]?.[0]).toMatchObject({
-        workflowRunId: 'run-1',
-        status: 'completed',
-        reason: 'noop',
-      });
-    } finally {
-      rmSync(workingPath, { recursive: true, force: true });
-    }
+  test('preserves checkout and output-root contents when the checkout exists', async () => {
+    const workingPath = makeWorkingPath();
+    writeFileSync(join(workingPath, 'README.md'), 'hello');
+    writeFileSync(join(outputRoot, 'keep.txt'), 'keep');
+    await captureRunEndGitSnapshot(context({ workingPath, outputRoot }));
+    expect(readdirSync(outputRoot)).toEqual(['keep.txt']);
+    expect(readdirSync(workingPath)).toEqual(['README.md']);
+    const skip = infoEventCalls('git_snapshot.capture_skipped')[0];
+    expect(skip?.[0]).toEqual({
+      workflowRunId: 'run-1',
+      status: 'completed',
+      reason: 'v1_noop',
+    });
+  });
+
+  test('remains a no-op across repeated terminal calls', async () => {
+    const workingPath = makeWorkingPath();
+    await captureRunEndGitSnapshot(context({ workingPath, outputRoot }));
+    await captureRunEndGitSnapshot(context({ workingPath, outputRoot, status: 'failed' }));
+    expect(readdirSync(outputRoot)).toEqual([]);
+    const skips = infoEventCalls('git_snapshot.capture_skipped').filter(
+      call => call[0].reason === 'v1_noop'
+    );
+    expect(skips).toHaveLength(2);
+    expect(skips[0]?.[0]).toMatchObject({ status: 'completed' });
+    expect(skips[1]?.[0]).toMatchObject({ status: 'failed' });
   });
 
   test('does not log workingPath or outputRoot', async () => {
-    const workingPath = mkdtempSync(join(tmpdir(), 'archon-git-snapshot-wt-'));
-    try {
-      await noopRunEndGitSnapshot(ctx({ workingPath, outputRoot }));
-      const serialized = JSON.stringify([
-        mockLogger.info.mock.calls,
-        mockLogger.error.mock.calls,
-        mockLogger.warn.mock.calls,
-      ]);
-      expect(serialized).not.toContain(workingPath);
-      expect(serialized).not.toContain(outputRoot);
-    } finally {
-      rmSync(workingPath, { recursive: true, force: true });
-    }
+    const workingPath = makeWorkingPath();
+    await captureRunEndGitSnapshot(context({ workingPath, outputRoot }));
+    const serialized = JSON.stringify([
+      mockLogger.info.mock.calls,
+      mockLogger.error.mock.calls,
+      mockLogger.warn.mock.calls,
+    ]);
+    expect(serialized).not.toContain(workingPath);
+    expect(serialized).not.toContain(outputRoot);
   });
 });
 ```
@@ -609,10 +790,11 @@ Add `&& bun test src/workflows/git-snapshot.test.ts` to `packages/core/package.j
 Run:
 
 ```bash
-cd packages/core && bun test src/workflows/git-snapshot.test.ts
+(cd packages/core && bun test src/workflows/git-snapshot.test.ts)
 ```
 
-Expected: FAIL with a module-not-found error for `./git-snapshot`.
+Expected RED: FAIL because `./git-snapshot` does not exist yet.
+Confirm that module resolution is the only setup error before continuing.
 
 - [ ] **Step 3: Write the no-op implementation**
 
@@ -628,11 +810,11 @@ Create `packages/core/src/workflows/git-snapshot.ts`:
  * - no-op when `outputRoot` is null
  * - write only under `outputRoot` via a temp file plus atomic rename
  * - keep the write idempotent across resume and retry-node
- * - never throw into workflow execution
+ * - let write errors reach the executor's fail-open logging boundary
  * - never log paths, remotes, file contents, or secrets
  * - not invent a second WorkflowDeps hook
  *
- * Provisional future directory (not created in v1): `<outputRoot>/git-snapshot/`.
+ * The snapshot filename and wire format are intentionally deferred.
  */
 import { existsSync } from 'node:fs';
 import { createLogger } from '@archon/paths';
@@ -644,32 +826,24 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-function checkoutExists(workingPath: string): boolean {
-  try {
-    return existsSync(workingPath);
-  } catch {
-    return false;
-  }
-}
-
-export async function noopRunEndGitSnapshot(ctx: GitSnapshotContext): Promise<void> {
-  if (!ctx.workingPath) {
+export async function captureRunEndGitSnapshot(context: GitSnapshotContext): Promise<void> {
+  if (!context.workingPath) {
     getLog().info(
-      { workflowRunId: ctx.runId, reason: 'missing_working_path' },
+      { workflowRunId: context.runId, reason: 'missing_working_path' },
       'git_snapshot.capture_skipped'
     );
     return;
   }
-  if (!checkoutExists(ctx.workingPath)) {
+  if (!existsSync(context.workingPath)) {
     getLog().info(
-      { workflowRunId: ctx.runId, reason: 'checkout_gone' },
+      { workflowRunId: context.runId, reason: 'checkout_gone' },
       'git_snapshot.capture_skipped'
     );
     return;
   }
   getLog().info(
-    { workflowRunId: ctx.runId, status: ctx.status, reason: 'noop' },
-    'git_snapshot.capture_completed'
+    { workflowRunId: context.runId, status: context.status, reason: 'v1_noop' },
+    'git_snapshot.capture_skipped'
   );
 }
 ```
@@ -679,12 +853,22 @@ export async function noopRunEndGitSnapshot(ctx: GitSnapshotContext): Promise<vo
 Run:
 
 ```bash
-cd packages/core && bun test src/workflows/git-snapshot.test.ts
+(cd packages/core && bun test src/workflows/git-snapshot.test.ts)
 ```
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Type-check the core package**
+
+Run:
+
+```bash
+(cd packages/core && bun run type-check)
+```
+
+Expected: PASS with no TypeScript errors.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add packages/core/src/workflows/git-snapshot.ts packages/core/src/workflows/git-snapshot.test.ts packages/core/package.json
@@ -708,18 +892,17 @@ EOF
 
 **Interfaces:**
 
-- Consumes: `noopRunEndGitSnapshot`.
-- Produces: `createWorkflowDeps().onRunEndGitSnapshot === noopRunEndGitSnapshot`.
+- Consumes: `captureRunEndGitSnapshot`.
+- Produces: a callable `createWorkflowDeps().onRunEndGitSnapshot` dependency.
 
 - [ ] **Step 1: Write the failing wiring test**
 
 In `packages/core/src/workflows/store-adapter.test.ts`, inside `describe('createWorkflowDeps')` after the existing `usageRecorder` assertion test, add:
 
 ```ts
-  test('wires onRunEndGitSnapshot to the v1 no-op writer', async () => {
-    const { noopRunEndGitSnapshot } = await import('./git-snapshot');
+  test('exposes the run-end git-snapshot hook', () => {
     const deps = createWorkflowDeps();
-    expect(deps.onRunEndGitSnapshot).toBe(noopRunEndGitSnapshot);
+    expect(typeof deps.onRunEndGitSnapshot).toBe('function');
   });
 ```
 
@@ -728,7 +911,7 @@ In `packages/core/src/workflows/store-adapter.test.ts`, inside `describe('create
 Run:
 
 ```bash
-cd packages/core && bun test src/workflows/store-adapter.test.ts
+(cd packages/core && bun test src/workflows/store-adapter.test.ts)
 ```
 
 Expected: FAIL because `onRunEndGitSnapshot` is undefined.
@@ -738,29 +921,39 @@ Expected: FAIL because `onRunEndGitSnapshot` is undefined.
 In `packages/core/src/workflows/store-adapter.ts`:
 
 ```ts
-import { noopRunEndGitSnapshot } from './git-snapshot';
+import { captureRunEndGitSnapshot } from './git-snapshot';
 ```
 
 Inside `createWorkflowDeps()`'s returned object, after `getUserAiPrefs`, add:
 
 ```ts
-    onRunEndGitSnapshot: noopRunEndGitSnapshot,
+    onRunEndGitSnapshot: captureRunEndGitSnapshot,
 ```
 
-Do not wrap the no-op in another try/catch here.
-The engine helper already fail-opens, and the no-op already does not throw.
+Do not wrap the writer in another function or try/catch here.
+The executor owns the one fail-open boundary and the `workflow.git_snapshot_failed` event.
 
 - [ ] **Step 4: Re-run the wiring test and confirm it passes**
 
 Run:
 
 ```bash
-cd packages/core && bun test src/workflows/store-adapter.test.ts
+(cd packages/core && bun test src/workflows/store-adapter.test.ts)
 ```
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Type-check the core package**
+
+Run:
+
+```bash
+(cd packages/core && bun run type-check)
+```
+
+Expected: PASS with no TypeScript errors.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add packages/core/src/workflows/store-adapter.ts packages/core/src/workflows/store-adapter.test.ts
@@ -785,24 +978,24 @@ EOF
 - Consumes: passing Task 1–3 tests.
 - Produces: sprint-status `3-1-add-the-run-end-git-snapshot-seam: done` and `epic-3: in-progress`.
 
-- [ ] **Step 1: Confirm no git-read API or snapshot write landed**
+- [ ] **Step 1: Confirm the committed scope did not expand beyond the seam**
 
 Run:
 
 ```bash
-cd packages/server && bun test src/routes 2>/dev/null | head -1
+git diff --name-only "$(git merge-base HEAD dev)" HEAD -- packages/server packages/web packages/git migrations/000_combined.sql packages/core/src/db/adapters/sqlite.ts
 ```
 
-Do not add routes.
-Confirm `packages/server/src/routes` still has no `/git/` path.
-Confirm `noopRunEndGitSnapshot` still creates no files.
+Expected: no output.
+If any path is printed, remove that out-of-scope change before continuing.
+The focused core test is the executable proof that `captureRunEndGitSnapshot` creates no snapshot files.
 
 - [ ] **Step 2: Run focused package tests**
 
 ```bash
-cd packages/workflows && bun test src/executor.test.ts
-cd packages/core && bun test src/workflows/git-snapshot.test.ts
-cd packages/core && bun test src/workflows/store-adapter.test.ts
+(cd packages/workflows && bun test src/executor.test.ts)
+(cd packages/core && bun test src/workflows/git-snapshot.test.ts)
+(cd packages/core && bun test src/workflows/store-adapter.test.ts)
 ```
 
 Expected: PASS.
@@ -810,8 +1003,8 @@ Expected: PASS.
 - [ ] **Step 3: Type-check the two packages**
 
 ```bash
-cd packages/workflows && bun run type-check
-cd packages/core && bun run type-check
+(cd packages/workflows && bun run type-check)
+(cd packages/core && bun run type-check)
 ```
 
 Expected: PASS.
@@ -828,7 +1021,15 @@ In `_bmad-output/implementation-artifacts/archon-source-control/sprint-status.ya
 Keep `epic-3-retrospective: optional`.
 Do not mark `epic-3` done until the retrospective decision is made outside this story.
 
-- [ ] **Step 5: Run repository validate**
+- [ ] **Step 5: Check the patch for whitespace errors**
+
+```bash
+git diff --check
+```
+
+Expected: no output and exit code `0`.
+
+- [ ] **Step 6: Run repository validate**
 
 ```bash
 bun run validate
@@ -836,7 +1037,7 @@ bun run validate
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit sprint-status if validate passed**
+- [ ] **Step 7: Commit sprint-status if validate passed**
 
 ```bash
 git add _bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml
@@ -854,17 +1055,21 @@ EOF
 
 | Test file | Cases | Validates |
 | --- | --- | --- |
-| `packages/workflows/src/executor.test.ts` | completed / failed / cancelled invoke; paused skip; absent hook; thrown hook; backstop-then-failed; no path logs | FR9 seam, NFR3, NFR5, run-end trigger |
-| `packages/core/src/workflows/git-snapshot.test.ts` | null workingPath; checkout gone; existing checkout writes nothing twice; no path logs | v1 no-op write, checkout-gone, idempotence |
-| `packages/core/src/workflows/store-adapter.test.ts` | `createWorkflowDeps()` wires the no-op | injection like other optional deps |
+| `packages/workflows/src/executor.test.ts` | completed / failed / cancelled invoke; paused / absent / missing-row skip; hook and row-read failures; successful and failed backstops; named events; no path logs | FR9 seam, NFR3, NFR5, run-end trigger |
+| `packages/core/src/workflows/git-snapshot.test.ts` | null / empty `workingPath`; checkout gone; existing checkout preserves both trees; repeated terminal calls; named skip reasons; no path logs | v1 no-op write, checkout-gone, idempotence, NFR5 |
+| `packages/core/src/workflows/store-adapter.test.ts` | `createWorkflowDeps()` exposes a callable hook | injection like other optional deps |
 
 ### Edge Cases Checklist
 
 - [ ] Hook missing: run still succeeds.
 - [ ] Hook throws: run still succeeds and is not marked failed by the hook.
+- [ ] Final run-row refresh throws: the existing result is preserved, the hook is skipped, and `workflow.git_snapshot_failed` is logged.
+- [ ] Final run-row refresh returns null: the hook is skipped without a start event.
 - [ ] Status `paused`: hook is not called.
 - [ ] Status leftover `running` at finally: backstop fails the run, then hook is called with `failed`.
+- [ ] Backstop status write fails and the row remains `running`: the hook is skipped.
 - [ ] `working_path` null: core no-op skips and writes nothing.
+- [ ] `working_path` empty: core no-op skips and writes nothing.
 - [ ] Checkout directory already gone: core no-op skips and writes nothing.
 - [ ] Hook called twice (retry / second terminal pass): still no files under `output_root`.
 - [ ] Child `workflow:` run: covered by each child `executeWorkflow` finally; no extra parent wiring.
@@ -875,50 +1080,32 @@ EOF
 
 ## Validation Commands
 
-1. `cd packages/workflows && bun test src/executor.test.ts`
-2. `cd packages/core && bun test src/workflows/git-snapshot.test.ts`
-3. `cd packages/core && bun test src/workflows/store-adapter.test.ts`
-4. `cd packages/workflows && bun run type-check`
-5. `cd packages/core && bun run type-check`
-6. `bun run validate`
+1. `(cd packages/workflows && bun test src/executor.test.ts)`
+2. `(cd packages/core && bun test src/workflows/git-snapshot.test.ts)`
+3. `(cd packages/core && bun test src/workflows/store-adapter.test.ts)`
+4. `(cd packages/workflows && bun run type-check)`
+5. `(cd packages/core && bun run type-check)`
+6. `git diff --name-only "$(git merge-base HEAD dev)" HEAD -- packages/server packages/web packages/git migrations/000_combined.sql packages/core/src/db/adapters/sqlite.ts` produces no output.
+7. `git diff --check`
+8. `bun run validate`
 
 ## Acceptance Criteria
 
-- [ ] `WorkflowDeps` has optional `onRunEndGitSnapshot(ctx: GitSnapshotContext)`.
-- [ ] `executeWorkflow` calls it at run-end from the keep-awake `finally` after the running-status backstop.
+- [ ] `WorkflowDeps` has optional `onRunEndGitSnapshot(context: GitSnapshotContext): Promise<void>`.
+- [ ] `GitSnapshotContext` contains `runId`, `workingPath`, `outputRoot`, and only terminal `completed | failed | cancelled` status values, with the path fields mapped from the run row rather than `cwd`.
+- [ ] `executeWorkflow` re-reads the run row and calls the hook from the keep-awake `finally` after the running-status backstop.
+- [ ] `paused`, `pending`, missing, and still-`running` rows do not invoke the hook.
+- [ ] Early returns before `keepAwake.acquire()` do not invoke the hook.
 - [ ] v1 implementation writes no name-status, diffs, `A`/`D` content, or `git log`.
-- [ ] Missing or vanished checkout no-ops.
-- [ ] Hook/write failure is logged as `workflow.git_snapshot_failed` or `git_snapshot.capture_skipped` and does not fail the run.
-- [ ] Paused runs do not invoke the hook.
+- [ ] Missing or vanished checkout logs `git_snapshot.capture_skipped` without paths and writes nothing.
+- [ ] An existing checkout logs `git_snapshot.capture_skipped` with `reason: 'v1_noop'` and writes nothing.
+- [ ] Hook success logs `workflow.git_snapshot_started` and `workflow.git_snapshot_completed` with only run ID and status.
+- [ ] Hook or run-row lookup failure logs `workflow.git_snapshot_failed` and does not change the existing workflow result or lifecycle status.
 - [ ] No new tables, process, env var, deployable, or git-read route.
 - [ ] Snapshot wire format remains unimplemented.
 - [ ] Future writer contract (idempotent temp+rename under `output_root`) is documented on the core module.
 - [ ] Focused tests above pass.
 - [ ] `_bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml` entry `3-1-add-the-run-end-git-snapshot-seam` is `done`.
-
-## Open Questions
-
-Provisional defaults are locked for this plan.
-Do not stop to ask; implement these defaults.
-
-1. **Hook name.** Story says the name is owned by implementation.
-   Default: `onRunEndGitSnapshot`.
-   Rejected: `finalize`, because container write-back and loop completion already use that word.
-
-2. **Paused runs.** CAP-8 is capture-before-teardown.
-   Default: do not invoke on `paused`.
-   The checkout is still the live source while the run can resume.
-
-3. **Early returns before DAG start.** Container-resume guard, concurrent-run guard, overlay fail-closed, and artifacts-dir failure return before `keepAwake.acquire()`.
-   Default: do not invoke there.
-   Run-end means the DAG execution window ended.
-
-4. **Future snapshot directory.** Wire format is a later build-time decision.
-   Default JSDoc path, not created: `<outputRoot>/git-snapshot/`.
-
-5. **Checkout existence check.** Architecture forbids git I/O in `@archon/workflows` for this feature.
-   Default: `existsSync(workingPath)` only inside the core no-op.
-   The engine passes the run row and does not stat.
 
 ## Risks
 
@@ -930,6 +1117,7 @@ Do not stop to ask; implement these defaults.
 | Someone implements the snapshot write in this story | Medium | High | Task 2 asserts `outputRoot` stays empty |
 | `mock.module('@archon/paths')` pollutes other core tests | Medium | High | `git-snapshot.test.ts` gets its own `bun test` invocation |
 | Backstop and hook race on status | Low | Medium | Hook re-reads the run row after `failWorkflowRun` |
+| A failed backstop leaves the row `running` | Low | High | Terminal guard skips the hook rather than inventing status; focused test locks this down |
 
 ## NOT Building
 
