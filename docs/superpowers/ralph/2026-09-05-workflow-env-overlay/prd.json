@@ -178,8 +178,8 @@
         "US-008"
       ],
       "priority": 9,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 9. Files: packages/web/src/lib/api.generated.d.ts, packages/web/src/experiments/console/skills/workflowEnvs.ts, workflowEnvs.test.ts, startRun.ts, startRun.test.ts, index.ts, store/keys.ts, lib/draft-env.ts, draft-env.test.ts, components/WorkflowEnvPicker.tsx, WorkflowEnvPreviewTable.tsx, WorkflowEnvPreviewTable.test.tsx, DraftRunCard.tsx."
     },
     {
       "id": "US-010",

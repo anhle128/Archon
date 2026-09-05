@@ -55,6 +55,11 @@
 - **Pattern**: Parse optional `envId` (JSON string or multipart plain field; empty/omitted = YAML-only; array/non-string = 400 request-shape). Load unscoped row after field parse and BEFORE file/message persistence. Missing → `400 env_not_found`; `row.workflow_name !==` decoded route name → `400 env_workflow_mismatch`; corrupt → `500 env_store_corrupt`. Re-parse `structuredClone(row.patches)` via `envPatchesSchema` into a new tree, `Object.freeze` candidate `{ envId, envName, workflowName, patches }`, pass as `HandleMessageContext.envOverlay`. Do not discover/apply YAML on Start.
 - **Example**: `extraContext.envOverlay` → orchestrator US-006 gate
 
+### Console Start ENV picker + race-safe preview
+- **Where**: `packages/web/src/experiments/console/skills/workflowEnvs.ts`, `store/keys.ts`, `lib/draft-env.ts`, `components/DraftRunCard.tsx`
+- **Pattern**: Types from `@/lib/api.generated` only. Cache keys encode cwd/workflow/envId (`none` sentinel) so `useEntity` cannot apply a stale preview to a newer selection. `startRun` omits empty `envId` on JSON and multipart. None/YAML Start stays usable on list failure; selected ENV blocks Start while preview loading/error — never silent reset to YAML. Workflow change clears ENV + inputs synchronously (picker onChange + effect).
+- **Example**: `K.workflowEnvPreview(cwd, name, envId)` → `skill.previewWorkflowEnv`; `isStartBlockedBySelectedEnv({ selectedEnvId, preview, previewError })`
+
 
 
 
@@ -271,3 +276,34 @@
 
 ---
 
+
+## 2026-09-05 — US-009: Console start picker and preview
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/lib/api.generated.d.ts` — regenerated OpenAPI types including Workflow ENV CRUD/preview
+- `packages/web/src/experiments/console/skills/workflowEnvs.ts` — generated-type skill + encoded cache/path builders
+- `packages/web/src/experiments/console/skills/workflowEnvs.test.ts` — path/key race isolation + verb request shapes
+- `packages/web/src/experiments/console/skills/startRun.ts` — optional envId JSON/multipart
+- `packages/web/src/experiments/console/skills/startRun.test.ts` — envId send/omit coverage
+- `packages/web/src/experiments/console/skills/index.ts` — export workflowEnvs
+- `packages/web/src/experiments/console/store/keys.ts` — workflowEnvs/workflowEnv/workflowEnvPreview keys
+- `packages/web/src/experiments/console/lib/draft-env.ts` + test — Start gating + workflow-change reset helpers
+- `packages/web/src/experiments/console/components/WorkflowEnvPicker.tsx` — None (YAML) default picker
+- `packages/web/src/experiments/console/components/WorkflowEnvPreviewTable.tsx` + test — resolved rows, skipped, disclaimer
+- `packages/web/src/experiments/console/components/DraftRunCard.tsx` — load/select/preview/gate/start wiring
+
+**Acceptance criteria verified**:
+- [x] Generated OpenAPI types drive ENV skills and encoded cache keys; startRun sends/omits envId for JSON and multipart
+- [x] DraftRunCard loads ENV summaries, None (YAML) default, clears ENV/preview/inputs on workflow change
+- [x] Preview keyed by cwd/workflow/env id so slower prior response cannot overwrite newer selection
+- [x] UI renders provider-turn rows, skipped-id warnings, and preview-only disclaimer
+- [x] List failure leaves None/YAML Start usable; selected ENV preview loading/failure disables Start without silent YAML reset
+- [x] Unit/component tests cover request shapes, stale key races, selection reset, disabled-on-error, preview/skipped rendering
+
+**Learnings**:
+- Console isolation allows type-only `@/lib/api.generated` — mirror usage.ts ExactMatch drift guards.
+- `useEntity` race safety is key-identity: distinct preview keys beat AbortController for this cache model.
+- Clear ENV selection in WorkflowPicker onChange (not only useEffect) to avoid one render of new workflow + old envId.
+
+---
