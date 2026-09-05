@@ -48,20 +48,81 @@ describe('workflow-env-editor thinking', () => {
     expect(thinkingToPatch({ mode: 'unset', budgetTokens: '' })).toBeUndefined();
     expect(thinkingToPatch({ mode: 'adaptive', budgetTokens: '' })).toEqual({ type: 'adaptive' });
     expect(thinkingToPatch({ mode: 'disabled', budgetTokens: '' })).toEqual({ type: 'disabled' });
+    // Blank budget omits optional budgetTokens (thinkingConfigSchema .optional()).
     expect(thinkingToPatch({ mode: 'enabled', budgetTokens: '' })).toEqual({ type: 'enabled' });
+    expect(thinkingToPatch({ mode: 'enabled', budgetTokens: '   ' })).toEqual({ type: 'enabled' });
+    // Positive integer serializes unchanged.
     expect(thinkingToPatch({ mode: 'enabled', budgetTokens: '2000' })).toEqual({
       type: 'enabled',
       budgetTokens: 2000,
     });
+    expect(thinkingToPatch({ mode: 'enabled', budgetTokens: '1' })).toEqual({
+      type: 'enabled',
+      budgetTokens: 1,
+    });
   });
 
-  test('rejects invalid budgetTokens', () => {
-    expect(() => thinkingToPatch({ mode: 'enabled', budgetTokens: '1.5' })).toThrow(
-      /non-negative integer/
+  test('rejects invalid budgetTokens including zero and non-finite', () => {
+    const positiveMsg = /positive integer/;
+    // thinkingConfigSchema: z.number().int().positive() — 0 and -0 are not positive.
+    expect(() => thinkingToPatch({ mode: 'enabled', budgetTokens: '0' })).toThrow(positiveMsg);
+    expect(() => thinkingToPatch({ mode: 'enabled', budgetTokens: '-0' })).toThrow(positiveMsg);
+    expect(() => thinkingToPatch({ mode: 'enabled', budgetTokens: '0.0' })).toThrow(positiveMsg);
+    expect(() => thinkingToPatch({ mode: 'enabled', budgetTokens: '-1' })).toThrow(positiveMsg);
+    expect(() => thinkingToPatch({ mode: 'enabled', budgetTokens: '1.5' })).toThrow(positiveMsg);
+    expect(() => thinkingToPatch({ mode: 'enabled', budgetTokens: 'NaN' })).toThrow(positiveMsg);
+    expect(() => thinkingToPatch({ mode: 'enabled', budgetTokens: 'Infinity' })).toThrow(
+      positiveMsg
     );
-    expect(() => thinkingToPatch({ mode: 'enabled', budgetTokens: '-1' })).toThrow(
-      /non-negative integer/
+    expect(() => thinkingToPatch({ mode: 'enabled', budgetTokens: '-Infinity' })).toThrow(
+      positiveMsg
     );
+    expect(() => thinkingToPatch({ mode: 'enabled', budgetTokens: 'abc' })).toThrow(positiveMsg);
+  });
+
+  test('buildPatchesFromDrafts surfaces zero-budget thinking as local error', () => {
+    const zero = buildPatchesFromDrafts(
+      [
+        draft({
+          nodeId: 'plan',
+          thinking: { mode: 'enabled', budgetTokens: '0' },
+          model: 'sonnet',
+        }),
+      ],
+      targets
+    );
+    expect(zero).toEqual({
+      ok: false,
+      error: 'thinking budgetTokens must be a positive integer',
+    });
+
+    const blank = buildPatchesFromDrafts(
+      [
+        draft({
+          nodeId: 'plan',
+          thinking: { mode: 'enabled', budgetTokens: '' },
+        }),
+      ],
+      targets
+    );
+    expect(blank).toEqual({
+      ok: true,
+      patches: { plan: { thinking: { type: 'enabled' } } },
+    });
+
+    const positive = buildPatchesFromDrafts(
+      [
+        draft({
+          nodeId: 'plan',
+          thinking: { mode: 'enabled', budgetTokens: '4096' },
+        }),
+      ],
+      targets
+    );
+    expect(positive).toEqual({
+      ok: true,
+      patches: { plan: { thinking: { type: 'enabled', budgetTokens: 4096 } } },
+    });
   });
 
   test('round-trips thinking from stored patch', () => {

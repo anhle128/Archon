@@ -554,4 +554,171 @@ describe('WorkflowEnvEditorView mounted no-op patches', () => {
       'preview boom'
     );
   });
+
+  test('create submit with zero thinking budget does not POST and keeps draft editable', async () => {
+    const createSpy = track(
+      spyOn(skill, 'createWorkflowEnv').mockImplementation(
+        async (_wf: string, body: { name: string; patches: Record<string, unknown> }) => ({
+          id: 'env-new',
+          workflowName: 'feature',
+          name: body.name,
+          patches: body.patches as WorkflowEnv['patches'],
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+          createdByUserId: null,
+        })
+      )
+    );
+
+    await act(async () => {
+      root.render(
+        createElement(EditorHarness, {
+          mode: 'create',
+          workflowName: 'feature',
+          envId: null,
+          targets,
+          targetsLoading: false,
+        })
+      );
+    });
+    await flush();
+
+    const nameInput = requireTestId(host, 'env-editor-name');
+    await act(async () => {
+      setInputValue(nameInput, 'budget-zero');
+    });
+
+    const addBtn = Array.from(host.querySelectorAll('button')).find(b =>
+      (b.textContent ?? '').includes('+ Node')
+    );
+    if (addBtn === undefined) {
+      throw new Error('missing + Node button');
+    }
+    await act(async () => {
+      asClickable(addBtn).click();
+    });
+    await flush();
+
+    // Default first target is plan (prompt) — set model + thinking enabled with budget 0.
+    const modelInput = requireTestId(host, 'env-field-model');
+    await act(async () => {
+      setInputValue(modelInput, 'sonnet');
+    });
+
+    const thinkingMode = requireTestId(host, 'env-field-thinking-mode');
+    await act(async () => {
+      setInputValue(thinkingMode, 'enabled');
+    });
+    await flush();
+
+    const budgetInput = requireTestId(host, 'env-field-thinking-budget');
+    await act(async () => {
+      setInputValue(budgetInput, '0');
+    });
+    await flush();
+
+    await act(async () => {
+      asClickable(requireTestId(host, 'env-editor-submit')).click();
+    });
+    await flush();
+
+    expect(createSpy).not.toHaveBeenCalled();
+    expect(host.querySelector('[data-testid="env-editor-error"]')?.textContent ?? '').toMatch(
+      /positive integer/i
+    );
+
+    // Draft remains editable — budget still shows 0, model still set, unrelated field editable.
+    expect((requireTestId(host, 'env-field-thinking-budget') as HTMLInputElement).value).toBe('0');
+    expect((requireTestId(host, 'env-field-model') as HTMLInputElement).value).toBe('sonnet');
+
+    await act(async () => {
+      setInputValue(requireTestId(host, 'env-field-model'), 'opus');
+    });
+    await flush();
+    expect((requireTestId(host, 'env-field-model') as HTMLInputElement).value).toBe('opus');
+    // Changing an unrelated field clears the local error (updateDraft).
+    expect(host.querySelector('[data-testid="env-editor-error"]')).toBeNull();
+    // Budget still 0 — not wiped.
+    expect((requireTestId(host, 'env-field-thinking-budget') as HTMLInputElement).value).toBe('0');
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  test('edit submit with zero thinking budget does not PATCH and keeps draft editable', async () => {
+    const existing: WorkflowEnv = {
+      id: 'env-1',
+      workflowName: 'feature',
+      name: 'was-fast',
+      patches: {
+        plan: {
+          model: 'sonnet',
+          thinking: { type: 'enabled', budgetTokens: 2048 },
+        },
+      },
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      createdByUserId: null,
+    };
+
+    track(spyOn(skill, 'getWorkflowEnv').mockResolvedValue(existing));
+    const updateSpy = track(
+      spyOn(skill, 'updateWorkflowEnv').mockImplementation(
+        async (
+          _wf: string,
+          envId: string,
+          body: { name?: string; patches?: Record<string, unknown> }
+        ) => ({
+          ...existing,
+          id: envId,
+          name: body.name ?? existing.name,
+          patches: (body.patches ?? existing.patches) as WorkflowEnv['patches'],
+          updatedAt: '2026-01-02T00:00:00.000Z',
+        })
+      )
+    );
+
+    await act(async () => {
+      root.render(
+        createElement(EditorHarness, {
+          mode: 'edit',
+          workflowName: 'feature',
+          envId: 'env-1',
+          targets,
+          targetsLoading: false,
+        })
+      );
+    });
+    await flush();
+
+    expect(host.querySelector('[data-testid="env-node-patch"]')).not.toBeNull();
+    expect((requireTestId(host, 'env-field-thinking-budget') as HTMLInputElement).value).toBe(
+      '2048'
+    );
+
+    await act(async () => {
+      setInputValue(requireTestId(host, 'env-field-thinking-budget'), '0');
+    });
+    await flush();
+
+    await act(async () => {
+      asClickable(requireTestId(host, 'env-editor-submit')).click();
+    });
+    await flush();
+
+    expect(updateSpy).not.toHaveBeenCalled();
+    expect(host.querySelector('[data-testid="env-editor-error"]')?.textContent ?? '').toMatch(
+      /positive integer/i
+    );
+
+    // Unrelated provider field still editable; budget remains 0.
+    const provider = requireTestId(host, 'env-field-provider');
+    await act(async () => {
+      setInputValue(provider, 'claude');
+    });
+    await flush();
+    expect((requireTestId(host, 'env-field-provider') as HTMLInputElement).value).toBe('claude');
+    expect((requireTestId(host, 'env-field-thinking-budget') as HTMLInputElement).value).toBe('0');
+    expect((requireTestId(host, 'env-field-model') as HTMLInputElement).value).toBe('sonnet');
+    expect(host.querySelector('[data-testid="env-editor-error"]')).toBeNull();
+    expect(updateSpy).not.toHaveBeenCalled();
+  });
 });

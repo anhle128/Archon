@@ -82,7 +82,9 @@ export function thinkingFromPatch(
 
 /**
  * Schema-supported thinking choices only: adaptive | enabled(+optional budget) | disabled.
- * Throws on non-integer / negative budget.
+ * budgetTokens matches thinkingConfigSchema: z.number().int().positive().optional() —
+ * blank omits the field; a present value must be a positive integer (0 / -0 / negative /
+ * fractional / non-finite rejected).
  */
 export function thinkingToPatch(value: ThinkingEditorValue): EnvNodePatch['thinking'] | undefined {
   if (value.mode === 'unset') return undefined;
@@ -91,8 +93,9 @@ export function thinkingToPatch(value: ThinkingEditorValue): EnvNodePatch['think
   const trimmed = value.budgetTokens.trim();
   if (trimmed.length === 0) return { type: 'enabled' };
   const n = Number(trimmed);
-  if (!Number.isInteger(n) || n < 0) {
-    throw new Error('thinking budgetTokens must be a non-negative integer');
+  // Same rule as thinkingConfigSchema enabled.budgetTokens: int + positive (not ≥0).
+  if (!Number.isInteger(n) || n <= 0) {
+    throw new Error('thinking budgetTokens must be a positive integer');
   }
   return { type: 'enabled', budgetTokens: n };
 }
