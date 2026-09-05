@@ -287,7 +287,8 @@
         "US-013"
       ],
       "priority": 14,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration after US-013. Files: packages/workflows/src/node-model-resolution.ts, packages/workflows/src/node-model-resolution.test.ts, packages/workflows/src/dag-executor.ts, packages/workflows/src/dag-executor.test.ts."
     },
     {
       "id": "US-015",

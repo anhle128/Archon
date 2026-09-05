@@ -22,8 +22,8 @@
 
 ### Shared NodeExecutionMetadata resolution
 - **Where**: `packages/workflows/src/node-model-resolution.ts`
-- **Pattern**: `resolveNodeExecutionRequest` is the pure chain + capability-aware effort/thinking used by `resolveNodeProviderAndModel`, `node_started`, ENV preview, and ENV snapshot. Callers MUST pass full `ResolveNodeExecutionOptions` (`aiProfile`, `assistants` for legacy `modelReasoningEffort`, `workflowThinking`) — never `{ aiProfile }` alone. `buildResolvedRequestMetadata` walks prompt/command/loop + nested group bodies with qualified ids (`group.child`); excludes group containers and deterministic nodes. `resolveGroupModelScope` forwards group provider/model/preset/tier while preserving outer effort.
-- **Example**: `request.metadata` === `node_started.data` request fields; body scope = `resolveGroupModelScope(group, outerScope, …)`
+- **Pattern**: `resolveNodeExecutionRequest` is the pure chain + capability-aware effort/thinking used by `resolveNodeProviderAndModel`, `node_started`, ENV preview, and ENV snapshot. Callers MUST pass full `ResolveNodeExecutionOptions` (`aiProfile`, `assistants` for legacy `modelReasoningEffort`, `workflowThinking`) — never `{ aiProfile }` alone. `buildResolvedRequestMetadata` walks prompt/command/loop + nested group bodies with qualified ids (`group.child`); excludes group containers and deterministic nodes. `resolveGroupModelScope` forwards group provider/model/preset/tier while preserving outer effort. Explicit node/workflow portable effort fails without `effortControl`; preset-only effort drops via `presetEffortDropped` + `presetEffortRejection` (dag-executor logs that structured decision — never re-call `resolvePresetEffort`).
+- **Example**: `request.metadata` === `node_started.data` request fields; body scope = `resolveGroupModelScope(group, outerScope, …)`; OpenCode tier `effort: high` → `presetEffortDropped: true`
 
 ### Workflow ENV store boundaries
 - **Where**: `packages/core/src/db/workflow-envs.ts`
@@ -428,3 +428,27 @@
 ---
 
 
+
+## 2026-09-05 — US-014: Preset effort warns while explicit effort fails
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/node-model-resolution.ts` — explicit effort-only fail-closed gate; structured `presetEffortRejection` on drop
+- `packages/workflows/src/node-model-resolution.test.ts` — OpenCode tier/alias preset drop + workflow-authored explicit fail
+- `packages/workflows/src/dag-executor.ts` — consume structured drop without second `resolvePresetEffort` call
+- `packages/workflows/src/dag-executor.test.ts` — runtime drop warning + no applied effort; workflow explicit effort still fatal
+
+**Acceptance criteria verified**:
+- [x] node-model-resolution.test.ts OpenCode tier/alias preset with effort:high returns presetEffortDropped: true
+- [x] dag-executor.test.ts dropped preset reaches warning layer and is not sent/recorded as applied effort
+- [x] Node-authored and workflow-authored explicit portable effort still throws fatal capability error
+- [x] resolveNodeExecutionRequest separates declaredEffort from preset?.effort so resolvePresetEffort is reachable
+- [x] dag-executor consumes structured presetEffortDropped/presetEffortRejection without second classifier
+- [x] Rejected preset effort consistent for pure path (Preview/snapshot) and lazy runtime
+- [x] Focused verification: bun test src/node-model-resolution.test.ts && bun test src/dag-executor.test.ts
+
+**Learnings**:
+- The US-002 unified path had incorrectly treated `declared ?? preset` as "explicit" for the fail-closed gate, so OpenCode tier aliases with effort could never reach the warn/drop branch.
+- Keep rejection details on the pure request (`presetEffortRejection`) so runtime logging cannot drift by re-classifying.
+
+---
