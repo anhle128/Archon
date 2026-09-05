@@ -17677,6 +17677,110 @@ describe('executeDagWorkflow -- loop_group node', () => {
     expect(result).toContain('iteration 2 final result');
   });
 
+  it('forwards loop_group provider/model/tier to body node_started and sendQuery', async () => {
+    // Group model/provider must reach body AI nodes (ordinary YAML and overlay).
+    // node_started request fields must equal the pure resolution metadata row.
+    mockSendQueryDag.mockImplementation(function* (
+      _prompt: string,
+      _sid: unknown,
+      _cwd: unknown,
+      opts: unknown
+    ) {
+      yield { type: 'assistant', content: 'done\nDONE' };
+      yield { type: 'result', sessionId: 'lg-model-sid', resolvedModel: { id: 'opus-actual' } };
+      void opts;
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const aiProfile = buildAiProfile('claude', {
+      globalTiers: {
+        large: { provider: 'claude', model: 'opus', effort: 'high' },
+      },
+    });
+
+    const nodes: DagNode[] = [
+      {
+        id: 'top',
+        prompt: 'outer',
+        model: 'claude-haiku-4',
+      },
+      {
+        id: 'grp',
+        model: 'large',
+        depends_on: ['top'],
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 1,
+          nodes: [{ id: 'body', prompt: 'body work' }],
+        },
+      },
+    ];
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-lg-model',
+      testDir,
+      { name: 'dag-loopgroup-model', nodes },
+      makeWorkflowRun('dag-loopgroup-model'),
+      'claude',
+      'claude-sonnet-4',
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      aiProfile
+    );
+    const bodyCall = mockSendQueryDag.mock.calls.find(call => {
+      // prompt is first arg
+      return typeof call[0] === 'string' && (call[0] as string).includes('body work');
+    });
+    expect(bodyCall).toBeDefined();
+    const bodyOpts = bodyCall?.[3] as SendQueryOptions;
+    expect(bodyOpts.model).toBe('opus');
+
+    const topCall = mockSendQueryDag.mock.calls.find(call => {
+      return typeof call[0] === 'string' && (call[0] as string).includes('outer');
+    });
+    expect(topCall).toBeDefined();
+    expect((topCall?.[3] as SendQueryOptions).model).toBe('claude-haiku-4');
+
+    const events = (store.createWorkflowEvent as Mock).mock.calls.map(c => c[0]);
+    const topStarted = events.find(
+      (e: { event_type: string; step_name?: string }) =>
+        e.event_type === 'node_started' && e.step_name === 'top'
+    );
+    const bodyStarted = events.find(
+      (e: { event_type: string; step_name?: string }) =>
+        e.event_type === 'node_started' && e.step_name === 'grp.body'
+    );
+    expect(topStarted?.data).toMatchObject({
+      provider: 'claude',
+      model: 'claude-haiku-4',
+    });
+    expect(bodyStarted?.data).toMatchObject({
+      provider: 'claude',
+      model: 'opus',
+      tier: 'large',
+      effort: 'high',
+    });
+    // Group container never gets a provider-turn node_started
+    expect(
+      events.some(
+        (e: { event_type: string; step_name?: string }) =>
+          e.event_type === 'node_started' && e.step_name === 'grp'
+      )
+    ).toBe(false);
+  });
+
   it('runs a command-backed loop node inside a loop_group body with namespaced lifecycle events', async () => {
     // A `loop:` body node may use `loop.command` like any top-level loop. The
     // command body must reach the AI, and the loop's persisted lifecycle events

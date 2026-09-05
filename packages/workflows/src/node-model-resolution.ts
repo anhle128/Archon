@@ -9,11 +9,34 @@
  * dry-run.ts instead would guarantee drift, which turns a legibility feature into an
  * actively misleading one — so both callers go through here.
  *
- * Pure: no I/O, no messaging, no registry mutation.
+ * Pure: no I/O, no messaging, no registry mutation. Capability lookups are static
+ * registry reads (same source `resolveNodeProviderAndModel` uses).
  */
-import { isLiteralSpec, resolveModelSpec, isTierName } from './model-validation';
+import {
+  getProviderCapabilities,
+  isRegisteredProvider,
+  getRegisteredProviders,
+} from '@archon/providers';
+import {
+  isLiteralSpec,
+  resolveModelSpec,
+  isTierName,
+  resolvePresetEffort,
+} from './model-validation';
 import type { ModelAliasPreset, ResolvedAiProfile, TierName } from './model-validation';
-import type { DagNode } from './schemas';
+import {
+  effortLevelSchema,
+  thinkingConfigSchema,
+  isCommandNode,
+  isLoopGroupNode,
+  isLoopNode,
+  isPromptNode,
+  type DagNode,
+  type EffortLevel,
+  type ThinkingConfig,
+  type NodeExecutionMetadata,
+  type LoopGroupNode,
+} from './schemas';
 import { readComposedMeta } from './compiled-command';
 
 /**
@@ -65,6 +88,52 @@ export interface WorkflowModelScope {
   effort: string | undefined;
   /** Where the scope's own provider came from, so a node inheriting it can say. */
   providerOrigin: ResolutionOrigin;
+}
+
+/**
+ * Pure request-resolution result shared by `resolveNodeProviderAndModel`,
+ * `node_started` serialization, ENV preview, and ENV snapshot metadata.
+ *
+ * No I/O and no messaging — capability warnings stay in the runtime layer.
+ */
+export interface NodeExecutionRequest {
+  resolution: NodeModelResolution;
+  /**
+   * Prospective provider request metadata. Byte-identical shape to the fields
+   * written on `node_started` for prompt/command/loop turns.
+   */
+  metadata: NodeExecutionMetadata;
+  /**
+   * Effort written into `nodeConfig.effort` after the capability gate and
+   * preset fill. Undefined when nothing applies (or only the legacy assistant
+   * fallback remains — that surfaces as `metadata.modelReasoningEffort`).
+   */
+  appliedEffort: string | undefined;
+  /**
+   * Thinking written into `nodeConfig.thinking` (node ?? workflow scope ??
+   * preset). Still populated when the provider lacks `thinkingControl` so
+   * `node_started` reports the requested setting while the runtime warns.
+   */
+  appliedThinking: ThinkingConfig | undefined;
+  /** True when thinking was requested but the provider cannot honor it. */
+  thinkingUnsupported: boolean;
+  /**
+   * True when a preset effort was considered but dropped (unsupported provider
+   * or unknown value). Runtime logs; pure path only reports the decision.
+   */
+  presetEffortDropped: boolean;
+}
+
+/** Options for the pure execution-request resolver beyond the model chain. */
+export interface ResolveNodeExecutionOptions {
+  aiProfile?: ResolvedAiProfile;
+  /** Workflow-level `thinking:` (or an outer group body's inherited value). */
+  workflowThinking?: ThinkingConfig;
+  /**
+   * Install `assistants:` block — used only for the legacy
+   * `modelReasoningEffort` fallback after portable effort is absent.
+   */
+  assistants?: Readonly<Record<string, Record<string, unknown> | undefined>>;
 }
 
 /**
@@ -165,6 +234,187 @@ export function resolveNodeModel(
     authoredIn: readComposedMeta(node)?.origin,
     ...(providerConflict ? { providerConflict } : {}),
   };
+}
+
+/**
+ * Pure request resolution: model chain + capability-aware effort/thinking + the
+ * serializable `NodeExecutionMetadata` that `node_started` and ENV audit share.
+ *
+ * Throws on unknown provider or explicit portable effort against a provider
+ * without `effortControl` — same fail-closed semantics as the runtime path.
+ */
+export function resolveNodeExecutionRequest(
+  node: DagNode,
+  scope: WorkflowModelScope,
+  assistantModels: Readonly<Record<string, string | undefined>>,
+  options: ResolveNodeExecutionOptions = {}
+): NodeExecutionRequest {
+  const resolution = resolveNodeModel(node, scope, assistantModels, options.aiProfile);
+  const { provider, model, tier, preset, declaredEffort } = resolution;
+
+  if (!isRegisteredProvider(provider)) {
+    throw new Error(
+      `Node '${node.id}': unknown provider '${provider}'. ` +
+        `Registered: ${getRegisteredProviders()
+          .map(p => p.id)
+          .join(', ')}`
+    );
+  }
+
+  const caps = getProviderCapabilities(provider);
+
+  // Explicit portable effort (node/workflow/preset-included requested set) must
+  // never disappear on a provider that cannot honor it. Matches
+  // resolveNodeProviderAndModel: requested = declared ?? preset.
+  const requestedEffort = declaredEffort ?? preset?.effort;
+  if (requestedEffort !== undefined && !caps.effortControl) {
+    throw new Error(
+      `Node '${node.id}' sets effort but provider '${provider}' does not support effortControl.`
+    );
+  }
+
+  // nodeConfig.effort starts as declared only when the provider can honor it.
+  let appliedEffort: string | undefined = caps.effortControl ? declaredEffort : undefined;
+  let presetEffortDropped = false;
+
+  // Preset fill — same gates as applyPresetOptions in dag-executor.
+  if (appliedEffort === undefined && declaredEffort === undefined && preset?.effort !== undefined) {
+    const decision = resolvePresetEffort(provider, preset.effort);
+    if (decision.ok) {
+      appliedEffort = preset.effort;
+    } else {
+      presetEffortDropped = true;
+    }
+  }
+
+  // Thinking: node ?? workflow scope ?? preset (when neither author surface set it).
+  let appliedThinking: ThinkingConfig | undefined =
+    node.thinking ?? options.workflowThinking ?? undefined;
+  if (appliedThinking === undefined && preset?.thinking !== undefined) {
+    appliedThinking = preset.thinking;
+  }
+  // Normalize through the schema so shorthand/`enabled` matches storage/API.
+  if (appliedThinking !== undefined) {
+    const parsed = thinkingConfigSchema.safeParse(appliedThinking);
+    if (parsed.success) appliedThinking = parsed.data;
+  }
+
+  const thinkingUnsupported = appliedThinking !== undefined && !caps.thinkingControl;
+
+  // Legacy assistant modelReasoningEffort only when no portable effort was applied.
+  const assistantCfg = options.assistants?.[provider];
+  const rawAssistantEffort =
+    typeof assistantCfg?.modelReasoningEffort === 'string'
+      ? assistantCfg.modelReasoningEffort
+      : undefined;
+  const modelReasoningEffort =
+    appliedEffort === undefined &&
+    typeof rawAssistantEffort === 'string' &&
+    rawAssistantEffort.length > 0
+      ? rawAssistantEffort
+      : undefined;
+
+  const effortParsed = effortLevelSchema.safeParse(appliedEffort);
+  const metadataEffort: EffortLevel | undefined = effortParsed.success
+    ? effortParsed.data
+    : undefined;
+
+  const metadata: NodeExecutionMetadata = {
+    provider,
+    ...(model ? { model } : {}),
+    ...(tier ? { tier } : {}),
+    ...(modelReasoningEffort ? { modelReasoningEffort } : {}),
+    ...(metadataEffort !== undefined ? { effort: metadataEffort } : {}),
+    ...(appliedThinking !== undefined ? { thinking: appliedThinking } : {}),
+  };
+
+  return {
+    resolution,
+    metadata,
+    appliedEffort,
+    appliedThinking,
+    thinkingUnsupported,
+    presetEffortDropped,
+  };
+}
+
+/**
+ * Derive the body-default scope for a `loop_group` from the group node itself.
+ *
+ * Provider/model/preset/tier come from the group (or its model ref). Outer
+ * workflow effort is preserved — group effort/thinking remain unsupported.
+ * Nested groups call this against their enclosing body scope so overrides
+ * compose recursively.
+ */
+export function resolveGroupModelScope(
+  groupNode: LoopGroupNode,
+  outerScope: WorkflowModelScope,
+  assistantModels: Readonly<Record<string, string | undefined>>,
+  aiProfile?: ResolvedAiProfile
+): WorkflowModelScope {
+  // resolveNodeModel already treats provider/model on any DagNode; loop_group
+  // carries those fields on the node base. Effort on the group is ignored by
+  // taking outerScope.effort after the call rather than resolution.declaredEffort.
+  const resolution = resolveNodeModel(groupNode, outerScope, assistantModels, aiProfile);
+  return {
+    provider: resolution.provider,
+    model: resolution.model,
+    preset: resolution.preset,
+    tier: resolution.tier,
+    effort: outerScope.effort,
+    providerOrigin: resolution.providerOrigin,
+  };
+}
+
+/**
+ * Build the whole-workflow ENV `resolved` map: every direct provider turn under
+ * the (possibly patched) definition, using persisted step-name keys
+ * (`group.child` for nested bodies). Excludes group containers and deterministic
+ * nodes. Declaration order / depth-first body order; callers may sort for UI.
+ *
+ * Throws on the first unresolvable provider-turn node (unknown provider or
+ * unsupported explicit effort) so Preview and Start fail closed the same way.
+ */
+export function buildResolvedRequestMetadata(
+  nodes: readonly DagNode[],
+  scope: WorkflowModelScope,
+  assistantModels: Readonly<Record<string, string | undefined>>,
+  options: ResolveNodeExecutionOptions & { stepNamePrefix?: string } = {}
+): Record<string, NodeExecutionMetadata> {
+  const { stepNamePrefix = '', ...execOptions } = options;
+  const resolved: Record<string, NodeExecutionMetadata> = {};
+
+  for (const node of nodes) {
+    const stepName = `${stepNamePrefix}${node.id}`;
+
+    if (isPromptNode(node) || isCommandNode(node) || isLoopNode(node)) {
+      const request = resolveNodeExecutionRequest(node, scope, assistantModels, execOptions);
+      resolved[stepName] = request.metadata;
+      continue;
+    }
+
+    if (isLoopGroupNode(node)) {
+      // Group container never calls sendQuery — no row. Body provider turns do.
+      const groupScope = resolveGroupModelScope(
+        node,
+        scope,
+        assistantModels,
+        execOptions.aiProfile
+      );
+      const nested = buildResolvedRequestMetadata(
+        node.loop_group.nodes,
+        groupScope,
+        assistantModels,
+        {
+          ...execOptions,
+          stepNamePrefix: `${stepName}.`,
+        }
+      );
+      Object.assign(resolved, nested);
+    }
+  }
+
+  return resolved;
 }
 
 /**
