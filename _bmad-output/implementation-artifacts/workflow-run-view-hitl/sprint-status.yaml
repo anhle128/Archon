@@ -1,13 +1,15 @@
 # generated: 2026-09-06 00:34:00 +0700
-# last_updated: 2026-09-06 00:34:00 +0700
+# last_updated: 2026-09-06 00:57:00 +0700
 # project: Archon
 # project_key: NOKEY
 # tracking_system: file-system
 # story_location: /Users/dale/Desktop/workspace/OceanLabs/workflow-engine/archon/_bmad-output/implementation-artifacts/workflow-run-view-hitl
 #
-# Dedicated HITL tracker (same pattern as epics-workflow-run-view-hitl).
-# Does NOT replace implementation-artifacts/sprint-status.yaml (Epics 1–4).
-# Epics source: planning-artifacts/epics-workflow-run-view-hitl/epics.md
+# Feature-scoped sprint plan for Workflow Run View HITL only.
+# Do not merge Source Control (archon-source-control) into this file.
+# Epic 5–6 here match planning-artifacts/epics-workflow-run-view-hitl/epics.md
+# (this feature has two epics; they are numbered 5 and 6 so story keys do not
+# collide with Source Control 1–3 if files ever share a folder).
 
 # STATUS DEFINITIONS:
 # ==================
@@ -30,31 +32,17 @@
 # Retrospective Status:
 #   - optional: Can be completed but not required
 #   - done: Retrospective has been completed
-#
-# Action Item Status:
-#   - open: Committed during a retrospective, not yet addressed
-#   - in-progress: Actively being worked on
-#   - done: Completed
-#
-# WORKFLOW NOTES:
-# ===============
-# - Epic transitions to 'in-progress' automatically when first story is created
-# - Stories can be worked in parallel if team capacity allows
-# - Developer typically creates next story after previous one is 'done' to incorporate learnings
-# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
-# - Retrospective appends its action items to action_items; sprint-status surfaces open ones
-# - Point bmad-create-story at this folder / this sprint-status.yaml for HITL work
 
 generated: "2026-09-06 00:34:00 +0700"
-last_updated: "2026-09-06 00:34:00 +0700"
+last_updated: "2026-09-06 00:57:00 +0700"
 project: Archon
+feature: workflow-run-view-hitl
 project_key: NOKEY
 tracking_system: file-system
 story_location: /Users/dale/Desktop/workspace/OceanLabs/workflow-engine/archon/_bmad-output/implementation-artifacts/workflow-run-view-hitl
 epics_file: /Users/dale/Desktop/workspace/OceanLabs/workflow-engine/archon/_bmad-output/planning-artifacts/epics-workflow-run-view-hitl/epics.md
 
 development_status:
-  # Workflow Run View HITL — planning-artifacts/epics-workflow-run-view-hitl/epics.md
   epic-5: backlog
   5-1-open-a-nodes-own-transcript-from-logs-legacy: backlog
   5-2-see-the-right-room-for-each-node-type-legacy: backlog

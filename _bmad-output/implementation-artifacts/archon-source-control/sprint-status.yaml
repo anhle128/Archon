@@ -7,8 +7,7 @@
 # epics: /Users/dale/Desktop/workspace/OceanLabs/workflow-engine/archon/_bmad-output/planning-artifacts/epics-source-control/epics.md
 #
 # Feature-scoped sprint plan for Archon Source Control.
-# Do not merge into implementation-artifacts/sprint-status.yaml (Workflow Commander).
-# Epic 3 in this file is the CAP-8 git-snapshot seam, not Commander Epic 3.
+# Do not merge HITL (workflow-run-view-hitl) or Workflow Commander into this file.
 
 # STATUS DEFINITIONS:
 # ==================
