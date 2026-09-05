@@ -168,6 +168,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     failOrphanedRuns: mock(async () => ({ count: 0 })),
     createWorkflowRun: mock(async () => makeRun()),
     updateWorkflowRun: mock(async () => {}),
+    setWorkflowRunEnvOverlay: mock(async (runId: string) => makeRun({ id: runId })),
     resolveApprovalGate: mock(async () => ({ resolved: true })),
     transitionPlannotatorGate: mock(
       async (input: Parameters<IWorkflowStore['transitionPlannotatorGate']>[0]) => ({

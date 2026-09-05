@@ -1,0 +1,114 @@
+## Codebase Patterns
+
+### Symbol-preserving node clone
+- **Where**: `packages/workflows/src/include-expander.ts` (`cloneNodeWithEngineMetadata`)
+- **Pattern**: `structuredClone` drops symbol keys. Re-attach `COMPOSED_NODE` and nested `COMPILED_LOOP_COMMAND` (including loop_group body recursion) after clone. Shared by include expansion and ENV overlay — do not duplicate the private symbol list.
+- **Example**: `cloneNodeWithEngineMetadata(node)` / `cloneWorkflowWithEngineMetadata(workflow)`
+
+### ENV overlay field matrix
+- **Where**: `packages/workflows/src/env-overlay.ts`
+- **Pattern**: Allowed fields follow executor behavior, not the broad base Zod object: prompt→prompt/provider/model/effort/thinking; command→provider/model/effort/thinking; loop→provider/model/effort; loop_group→provider/model; bash→bash; other→none. Missing top-level ids skip; incompatible existing ids fail closed with safe codes (no prompt/bash bodies in errors).
+- **Example**: `applyEnvOverlay(workflow, patches)` → `{ workflow, appliedPatches, missingNodeIds }`
+
+### Empty prompt/bash vs dagNodeSchema
+- **Where**: `packages/workflows/src/schemas/dag-node.ts` mode detection + `env-overlay.ts` `isEmptyBodyOnlyFailure`
+- **Pattern**: `dagNodeSchema` treats whitespace-only prompt/bash as modeCount 0 and rejects. ENV contracts still allow empty/whitespace bodies byte-for-byte — after assign, accept only those known empty-body issues; other schema failures stay `invalid_patched_node`.
+- **Example**: empty bash apply succeeds; malformed effort still fails
+
+### Zod overlay schema conventions
+- **Where**: `packages/workflows/src/schemas/env-overlay.ts`
+- **Pattern**: Import `z` from `@hono/zod-openapi`; `z.infer`; explicit `z.record(keySchema, valueSchema)`; `.strict()` documents; stored overlay union tries complete snapshot before pending applied form.
+- **Example**: `storedEnvOverlaySchema = z.union([envOverlaySnapshotSchema, appliedEnvOverlaySchema])`
+
+### Shared NodeExecutionMetadata resolution
+- **Where**: `packages/workflows/src/node-model-resolution.ts`
+- **Pattern**: `resolveNodeExecutionRequest` is the pure chain + capability-aware effort/thinking used by `resolveNodeProviderAndModel`, `node_started`, ENV preview, and ENV snapshot. `buildResolvedRequestMetadata` walks prompt/command/loop + nested group bodies with qualified ids (`group.child`); excludes group containers and deterministic nodes. `resolveGroupModelScope` forwards group provider/model/preset/tier while preserving outer effort.
+- **Example**: `request.metadata` === `node_started.data` request fields; body scope = `resolveGroupModelScope(group, outerScope, …)`
+
+### Workflow ENV store boundaries
+- **Where**: `packages/core/src/db/workflow-envs.ts`
+- **Pattern**: Normalize PG JSONB objects and SQLite JSON strings through `envPatchesSchema` before row parse. Corrupt rows throw `WorkflowEnvCorruptRowError` with id-only logs (never patch bodies). Name conflicts map only when PG `constraint === 'uq_workflow_envs_workflow_name_name'` or SQLite UNIQUE message names both identity columns. Update/delete always dual-predicate `(id, workflow_name)`; patches whole-document replace; empty `{}` allowed; empty update body rejected. List omits patches and orders `LOWER(name), name, id`.
+- **Example**: `updateWorkflowEnv(wf, id, { patches: {} })` clears the map; mismatched workflow returns null without mutating.
+
+
+
+---
+
+## 2026-09-05 — US-001: Engine overlay schemas and apply module
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/schemas/env-overlay.ts` — strict patch/candidate/applied/snapshot/resolution schemas + bounds
+- `packages/workflows/src/schemas/env-overlay.test.ts` — schema bounds, reserved keys, lifecycle union
+- `packages/workflows/src/env-overlay.ts` — pure clone/apply, field matrix, safe EnvOverlayError codes
+- `packages/workflows/src/env-overlay.test.ts` — matrix, include ids, group-body skip, isolation, graph validation
+- `packages/workflows/src/include-expander.ts` — export generalized `cloneNodeWithEngineMetadata`
+- `packages/workflows/src/compiled-command.ts` — comment names shared clone helper
+- `packages/workflows/src/schemas/index.ts` — re-export overlay schemas/types
+- `packages/workflows/package.json` — `./env-overlay` export + test segment
+
+**Acceptance criteria verified**:
+- [x] env-overlay schemas export strict Zod types via `@hono/zod-openapi` + `z.infer` + explicit record keys
+- [x] Patch validation allowlist + rejects reserved/empty keys, empty per-node patch, >256 targets, >1MiB, unknown keys; accepts long include ids and empty/whitespace prompt/bash
+- [x] Symbol-preserving clone of roots/nodes/nested groups via generalized helper
+- [x] Apply matches top-level ids only, skips missing sorted, rejects incompatible fields/unknown providers, validates nodes+graph, safe error codes without bodies
+- [x] Tests cover matrix, include ids, group-body skip, graph validation, deep-copy, ENV A/B/no-ENV isolation
+
+**Learnings**:
+- `dagNodeSchema` rejects empty/whitespace prompt/bash via mode detection even though field schemas are plain `z.string()` — ENV apply must special-case those known issues only.
+- Thinking shorthand should be normalized through `thinkingConfigSchema` in the applied map so storage/API and runtime agree.
+- Include-expanded target keys must not reuse the 64-char `safeNodeIdSchema` cap.
+
+---
+
+## 2026-09-05 — US-002: Shared request metadata and loop-group parity
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/node-model-resolution.ts` — pure `resolveNodeExecutionRequest`, `resolveGroupModelScope`, `buildResolvedRequestMetadata`
+- `packages/workflows/src/node-model-resolution.test.ts` — precedence, effort fail-closed, thinking warning semantics, nested resolved map
+- `packages/workflows/src/dag-executor.ts` — consume shared metadata for node_started; forward full group scope to body
+- `packages/workflows/src/dag-executor.test.ts` — loop_group model/tier body forwarding regression
+- `packages/workflows/package.json` — test segment includes resolution tests
+
+**Acceptance criteria verified**:
+- [x] One pure resolution result used by resolveNodeProviderAndModel, node_started, ENV preview/snapshot builders
+- [x] NodeExecutionMetadata preserves provider/model/tier/modelReasoningEffort/effort/thinking; unsupported effort fails; unsupported thinking kept with warning flag
+- [x] Resolved map covers top-level prompt/command/loop + nested group bodies with qualified ids; excludes containers/bash
+- [x] loop_group provider/model/preset/tier forwarded recursively; outer effort/thinking preserved; group effort/thinking unsupported
+- [x] Tests prove parity across precedence, rejected effort, assistant fallback, thinking, loops, nested groups
+
+**Learnings**:
+- Loop node_started previously stuffed assistant fallback into `effort`; unified path uses `modelReasoningEffort` like prompt/command.
+- Group dispatch must rebuild WorkflowModelScope (provider/model/preset/tier), not only provider — previously model/preset/tier stayed outer.
+- `registerOpencodeProvider` needed in pure unit tests for effortControl:false (not in builtins).
+
+---
+
+## 2026-09-05 — US-003: Workflow ENV database schema and CRUD store
+
+**Status**: PASSED
+**Files changed**:
+- `migrations/000_combined.sql` — table 21 after usage_ledger; index + COMMENT ON COLUMN in trailing section; inventory 21/22–25
+- `packages/core/src/db/adapters/sqlite.ts` — createSchema twin table/index
+- `packages/core/src/db/adapters/sqlite.test.ts` — MIN_NON_AUTH_COLUMNS 155→162
+- `packages/core/src/db/bundled-schema.generated.ts` — regenerated
+- `packages/core/src/schemas/workflow-env.ts` + test — name/workflow-name/row/summary schemas
+- `packages/core/src/db/workflow-envs.ts` + test — CRUD, JSON normalize, corrupt/conflict, scoping
+- `packages/core/src/schemas/index.ts`, `packages/core/src/db/index.ts`, `packages/core/package.json` — exports + test segments
+- `AGENTS.md` — 21 application tables inventory
+
+**Acceptance criteria verified**:
+- [x] Postgres remote_agent_workflow_envs after usage_ledger; unique (workflow_name, name); index/comments in final section
+- [x] SQLite createSchema mirror; inventory 21; parity floor 162; bundled schema regenerated
+- [x] Core schemas: workflow name ≤255 + isValidWorkflowName; ENV name trim 1–64 regex; envPatchesSchema; empty {} valid
+- [x] list summaries without patches ORDER BY LOWER(name), name, id; get-by-id; create; scoped update whole-doc replace; scoped delete
+- [x] JSONB/TEXT normalize; WorkflowEnvCorruptRowError id-only log; constraint/message-exact name conflict
+- [x] Tests: fresh SQLite schema, parity suite, CRUD round-trip, bounds, corrupt/summary independence, full replace, mismatch scoping
+
+**Learnings**:
+- SqliteAdapter `PRAGMA table_info(...)` returns empty via parameterized query path — use `pragma_table_info('table')` or raw bun:sqlite for introspection tests.
+- Portable UPDATE CASE flags must avoid PG-only `::int` casts so SQLite accepts the same SQL.
+- New table indexes belong in createSchema (SQLite) / trailing Indexes section (Postgres), never migrateColumns for brand-new tables.
+
+---

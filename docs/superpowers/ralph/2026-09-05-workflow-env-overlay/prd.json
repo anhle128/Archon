@@ -15,8 +15,8 @@
       "technicalNotes": "Follow plan sections Node-field compatibility, Patch validation and bounds, Clone and apply behavior, Phase 1, and Engine test matrix: docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:86-123, docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:192-205, docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:518-528, docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:607-619. Create/modify packages/workflows/src/schemas/env-overlay.ts, packages/workflows/src/env-overlay.ts, packages/workflows/src/include-expander.ts, packages/workflows/src/compiled-command.ts, schemas/index.ts, package export, and related tests listed at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:440-477.",
       "dependsOn": [],
       "priority": 1,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 1. Files: packages/workflows/src/schemas/env-overlay.ts, packages/workflows/src/schemas/env-overlay.test.ts, packages/workflows/src/env-overlay.ts, packages/workflows/src/env-overlay.test.ts, packages/workflows/src/include-expander.ts, packages/workflows/src/compiled-command.ts, packages/workflows/src/schemas/index.ts, packages/workflows/package.json."
     },
     {
       "id": "US-002",
@@ -30,10 +30,12 @@
         "Tests prove preview/snapshot rows equal node_started request fields across node/workflow/preset precedence, rejected preset effort, assistant fallback, thinking, loops, includes, and nested group scope."
       ],
       "technicalNotes": "Follow Resolved request metadata and Loop-group execution parity: docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:162-190 and docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:207-215. Modify packages/workflows/src/node-model-resolution.ts, dag-executor.ts, executor loop-group call sites, and tests named in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:472-476. This story depends on US-001 for overlay schema/apply types and must not add group effort/thinking support.",
-      "dependsOn": ["US-001"],
+      "dependsOn": [
+        "US-001"
+      ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 2. Files: packages/workflows/src/node-model-resolution.ts, packages/workflows/src/node-model-resolution.test.ts, packages/workflows/src/dag-executor.ts, packages/workflows/src/dag-executor.test.ts, packages/workflows/package.json."
     },
     {
       "id": "US-003",
@@ -50,8 +52,8 @@
       "technicalNotes": "Follow Persistence model and Store contracts for CRUD: docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:217-265, Phase 2 at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:530-539, and DB/core matrix at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:623-630. Create packages/core/src/schemas/workflow-env.ts and packages/core/src/db/workflow-envs.ts, modify migrations/000_combined.sql, packages/core/src/db/adapters/sqlite.ts, schema exports, package test scripts, bundled schema, and AGENTS inventory per docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:449-512.",
       "dependsOn": [],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 3. Files: migrations/000_combined.sql, packages/core/src/db/adapters/sqlite.ts, packages/core/src/db/adapters/sqlite.test.ts, packages/core/src/db/bundled-schema.generated.ts, packages/core/src/schemas/workflow-env.ts, packages/core/src/schemas/workflow-env.test.ts, packages/core/src/db/workflow-envs.ts, packages/core/src/db/workflow-envs.test.ts, packages/core/src/schemas/index.ts, packages/core/src/db/index.ts, packages/core/package.json, AGENTS.md."
     },
     {
       "id": "US-004",
@@ -65,7 +67,9 @@
         "Integration tests prove a second complete snapshot removes stale nested keys, preserves sibling metadata, and surfaces run-not-found as an error."
       ],
       "technicalNotes": "Follow the JSON merge baseline at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:36-38 and narrow store method requirements at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:267-275. Modify packages/workflows/src/store.ts, packages/core/src/db/workflows.ts, packages/core/src/workflows/store-adapter.ts, and concrete workflow store fixtures. Depends on US-003 for EnvOverlaySnapshot schema and DB test setup.",
-      "dependsOn": ["US-003"],
+      "dependsOn": [
+        "US-003"
+      ],
       "priority": 4,
       "passes": false,
       "notes": ""
@@ -83,7 +87,11 @@
         "Tests cover direct CLI-style resume, CLI-style node retry, web retry, child recovery, parent auto-resume, audit-write failure with no execution, and fresh child runs not inheriting the parent's overlay."
       ],
       "technicalNotes": "Follow runtime overlay types at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:126-160 and executor requirements at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:374-398. Modify packages/workflows/src/executor.ts plus test fixtures in executor.test.ts, subrun.test.ts, executor-preamble.test.ts, script-node-deps.test.ts, plannotator tests, and all concrete IWorkflowStore fixtures found by type-check. Depends on US-001 apply/clone, US-002 resolution metadata, and US-004 audit persistence.",
-      "dependsOn": ["US-001", "US-002", "US-004"],
+      "dependsOn": [
+        "US-001",
+        "US-002",
+        "US-004"
+      ],
       "priority": 5,
       "passes": false,
       "notes": ""
@@ -101,7 +109,10 @@
         "Tests spy on isolation and prove it is not called for invalid overlays while valid overlays and missing-id overlays retain current isolation behavior."
       ],
       "technicalNotes": "Follow Fresh dispatch through the orchestrator at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:356-373 and Phase 4 at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:554-564. Modify packages/core/src/orchestrator/orchestrator-agent.ts, orchestrator.ts, tests in orchestrator-agent.test.ts, orchestrator.test.ts, orchestrator-isolation.test.ts, and background handoff paths. Depends on US-001 and US-005.",
-      "dependsOn": ["US-001", "US-005"],
+      "dependsOn": [
+        "US-001",
+        "US-005"
+      ],
       "priority": 6,
       "passes": false,
       "notes": ""
@@ -119,7 +130,11 @@
         "Route tests cover auth-gated normal registration, CRUD scoping/conflicts, preview root/descendant cwd semantics, canonical mismatch, safe failures without prompt/bash echo, and OpenAPI generation for CRUD/preview while Start keeps its multipart exception."
       ],
       "technicalNotes": "Follow HTTP API CRUD and Preview at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:277-312 and docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:329-352, plus Phase 5 at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:566-575 and HTTP matrix at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:649-658. Modify packages/server/src/routes/api.ts, packages/server/src/routes/schemas/workflow-env.schemas.ts, related API tests, OpenAPI generation, and mocks. Depends on US-001, US-002, and US-003.",
-      "dependsOn": ["US-001", "US-002", "US-003"],
+      "dependsOn": [
+        "US-001",
+        "US-002",
+        "US-003"
+      ],
       "priority": 7,
       "passes": false,
       "notes": ""
@@ -137,7 +152,10 @@
         "Tests cover no-ENV, JSON ENV, multipart ENV, malformed/duplicate envId, missing id, row/path mismatch, corrupt row before side effects, and frozen-copy behavior."
       ],
       "technicalNotes": "Follow Start at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:314-328, route baseline at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:29-30, Phase 5 Start tasks at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:570-575, and HTTP Start matrix at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:651-654. Modify packages/server/src/routes/api.ts, workflow.schemas.ts, api.workflow-runs.test.ts, api.workflows.test.ts, and orchestrator handoff. Depends on US-006 and US-007.",
-      "dependsOn": ["US-006", "US-007"],
+      "dependsOn": [
+        "US-006",
+        "US-007"
+      ],
       "priority": 8,
       "passes": false,
       "notes": ""
@@ -150,12 +168,15 @@
         "Generated OpenAPI types drive new ENV skills and encoded cache keys; startRun() sends or omits envId correctly for JSON and multipart starts.",
         "DraftRunCard loads ENV summaries for the selected canonical workflow, includes None (YAML) as default, and clears ENV selection, preview, and declared input values when the workflow changes.",
         "Preview requests are keyed or cancelled by cwd/workflow/env id so a slower prior response cannot overwrite a newer selection.",
-        "UI renders provider-turn rows, skipped-id warnings, and 'Preview only — the ENV, workflow, or model profile may change before Start.'",
+        "UI renders provider-turn rows, skipped-id warnings, and 'Preview only \u2014 the ENV, workflow, or model profile may change before Start.'",
         "List failure leaves explicit None/YAML Start usable; selected ENV detail or preview loading/failure disables Start and never silently resets to YAML-only.",
         "Unit/component tests cover JSON/multipart request shapes, stale response races, selection reset, disabled-on-error behavior, and preview/skipped rendering."
       ],
       "technicalNotes": "Follow Console UX Start card at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:400-415, Phase 6 at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:577-584, and console matrix at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:660-665. Modify packages/web/src/experiments/console/skills/workflowEnvs.ts, skills/startRun.ts, store/keys.ts, WorkflowEnvPicker.tsx, WorkflowEnvPreviewTable.tsx, DraftRunCard.tsx, and tests. Depends on US-007 and US-008.",
-      "dependsOn": ["US-007", "US-008"],
+      "dependsOn": [
+        "US-007",
+        "US-008"
+      ],
       "priority": 9,
       "passes": false,
       "notes": ""
@@ -174,7 +195,9 @@
         "Component tests cover allowed-field rendering, full-map PATCH replacement, conflict/delete behavior, cache invalidation, and plaintext notice."
       ],
       "technicalNotes": "Follow Console UX Manage dialog at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:416-428 and console matrix at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:666. Create WorkflowEnvManageDialog.tsx and tests, reuse server preview targets, workflowEnvs skill, and cache keys from US-009. Depends on US-009.",
-      "dependsOn": ["US-009"],
+      "dependsOn": [
+        "US-009"
+      ],
       "priority": 10,
       "passes": false,
       "notes": ""
@@ -192,7 +215,11 @@
         "Implementation gate requires focused package tests, bun run test, bun run validate, bun run check:schema-upgrades, and manual console create/edit/select/preview/start/detail/resume/delete coverage for JSON and multipart Start paths."
       ],
       "technicalNotes": "Follow Console UX Run detail at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:429-438, Phase 7/8 at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:586-604, global acceptance at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:670-689, validation commands at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:691-747, and deployment/rollback notes at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:751-787. Modify packages/web/src/experiments/console/primitives/run.ts, RunDetailHeader.tsx, RunDetailPage.tsx, WorkflowEnvResolvedTable.tsx, docs-web API/authoring docs, generated files, and inventory. Depends on US-005, US-009, and US-010.",
-      "dependsOn": ["US-005", "US-009", "US-010"],
+      "dependsOn": [
+        "US-005",
+        "US-009",
+        "US-010"
+      ],
       "priority": 11,
       "passes": false,
       "notes": ""

@@ -168,6 +168,13 @@ class InMemoryStore implements IWorkflowStore {
     return Promise.resolve();
   };
 
+  setWorkflowRunEnvOverlay: IWorkflowStore['setWorkflowRunEnvOverlay'] = (runId, snapshot) => {
+    const r = this.runs.get(runId);
+    if (!r) throw new Error(`Workflow run not found (id: ${runId})`);
+    r.metadata = { ...r.metadata, envOverlay: structuredClone(snapshot) };
+    return Promise.resolve(this.clone(r));
+  };
+
   resolveApprovalGate: IWorkflowStore['resolveApprovalGate'] = (id, expected, metadata, events) => {
     const run = this.runs.get(id);
     const approval = run?.metadata.approval as ApprovalContext | undefined;

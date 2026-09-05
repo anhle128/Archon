@@ -15,6 +15,11 @@ import {
   TERMINAL_WORKFLOW_STATUSES,
   routeLoopRuntimeMetadataSchema,
 } from '@archon/workflows/schemas/workflow-run';
+import {
+  envOverlaySnapshotSchema,
+  type EnvOverlaySnapshot,
+} from '@archon/workflows/schemas/env-overlay';
+
 import type {
   DashboardWorkflowRun,
   ListDashboardRunsOptions,
@@ -1206,6 +1211,62 @@ export async function updateWorkflowRun(
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_run_update_failed');
     throw new Error(`Failed to update workflow run: ${err.message}`);
+  }
+}
+
+/**
+ * Replace only `metadata.envOverlay` with a complete snapshot (exact nested
+ * replacement — not `json_patch` / top-level merge). Sibling metadata keys are
+ * preserved. Audit-critical: callers fail closed if this write fails.
+ *
+ * Both dialects update then read the full row inside one transaction. SQLite
+ * never uses `UPDATE ... RETURNING`.
+ */
+export async function setWorkflowRunEnvOverlay(
+  runId: string,
+  snapshot: EnvOverlaySnapshot
+): Promise<WorkflowRun> {
+  const validated = envOverlaySnapshotSchema.parse(snapshot);
+  const snapshotJson = JSON.stringify(validated);
+  const isPostgres = getDatabaseType() === 'postgresql';
+  const metadataExpression = isPostgres
+    ? "jsonb_set(COALESCE(metadata, '{}'::jsonb), '{envOverlay}', $1::jsonb, true)"
+    : "json_set(COALESCE(metadata, '{}'), '$.envOverlay', json($1))";
+
+  try {
+    return await getDatabase().withTransaction(async query => {
+      const updateResult = await query(
+        `UPDATE remote_agent_workflow_runs
+         SET metadata = ${metadataExpression}
+         WHERE id = $2`,
+        [snapshotJson, runId]
+      );
+      if ((updateResult.rowCount ?? 0) !== 1) {
+        getLog().warn({ workflowRunId: runId }, 'db.workflow_run_env_overlay_not_found');
+        throw new Error(`Workflow run not found (id: ${runId})`);
+      }
+
+      const selectResult = await query<WorkflowRun>(
+        'SELECT * FROM remote_agent_workflow_runs WHERE id = $1',
+        [runId]
+      );
+      const row = selectResult.rows[0];
+      if (!row) {
+        getLog().error({ workflowRunId: runId }, 'db.workflow_run_env_overlay_vanished');
+        throw new Error(`Workflow run vanished after envOverlay write (id: ${runId})`);
+      }
+      return normalizeWorkflowRun(row);
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('Workflow run not found')) {
+      throw error;
+    }
+    if (error instanceof Error && error.message.startsWith('Workflow run vanished')) {
+      throw error;
+    }
+    const err = error as Error;
+    getLog().error({ err, workflowRunId: runId }, 'db.workflow_run_env_overlay_write_failed');
+    throw new Error(`Failed to set workflow run envOverlay: ${err.message}`);
   }
 }
 

@@ -43,6 +43,7 @@ import {
   getActiveWorkflowRun,
   getActiveWorkflowRunByPath,
   updateWorkflowRun,
+  setWorkflowRunEnvOverlay,
   claimWorkflowRunForNodeRetry,
   completeWorkflowRun,
   failWorkflowRun,
@@ -67,6 +68,7 @@ import {
   deleteWorkflowRun,
   WorkflowNotResumableError,
 } from './workflows';
+import type { EnvOverlaySnapshot } from '@archon/workflows/schemas/env-overlay';
 
 describe('workflows database', () => {
   beforeEach(() => {
@@ -352,6 +354,82 @@ describe('workflows database', () => {
     test('does nothing when no updates provided', async () => {
       await updateWorkflowRun('workflow-run-123', {});
 
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('setWorkflowRunEnvOverlay', () => {
+    const completeSnapshot: EnvOverlaySnapshot = {
+      envId: 'env-1',
+      envName: 'fast',
+      workflowName: 'feature-development',
+      patches: { plan: { model: 'claude-sonnet-4' } },
+      skippedNodeIds: ['gone'],
+      latestMissingNodeIds: [],
+      resolved: {
+        plan: { provider: 'claude', model: 'claude-sonnet-4' },
+        stale: { provider: 'claude', model: 'old-model' },
+      },
+    };
+
+    const secondSnapshot: EnvOverlaySnapshot = {
+      envId: 'env-1',
+      envName: 'fast',
+      workflowName: 'feature-development',
+      patches: { plan: { model: 'claude-opus-4' } },
+      skippedNodeIds: ['gone'],
+      latestMissingNodeIds: ['plan'],
+      resolved: {
+        plan: { provider: 'claude', model: 'claude-opus-4' },
+      },
+    };
+
+    test('uses jsonb_set on PostgreSQL and returns the updated run from one transaction', async () => {
+      const returned = {
+        ...mockWorkflowRun,
+        metadata: {
+          sibling: true,
+          envOverlay: secondSnapshot,
+        },
+      };
+      mockQuery
+        .mockResolvedValueOnce(createQueryResult([], 1))
+        .mockResolvedValueOnce(createQueryResult([returned]));
+
+      const result = await setWorkflowRunEnvOverlay('workflow-run-123', secondSnapshot);
+
+      expect(result).toEqual(returned);
+      const [updateSql, updateParams] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(updateSql).toContain(
+        "jsonb_set(COALESCE(metadata, '{}'::jsonb), '{envOverlay}', $1::jsonb, true)"
+      );
+      expect(updateSql).toContain('WHERE id = $2');
+      expect(updateSql).not.toContain('RETURNING');
+      expect(updateParams).toEqual([JSON.stringify(secondSnapshot), 'workflow-run-123']);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        2,
+        'SELECT * FROM remote_agent_workflow_runs WHERE id = $1',
+        ['workflow-run-123']
+      );
+      expect(mockWithTransaction).toHaveBeenCalledTimes(1);
+    });
+
+    test('throws when no run row is affected', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
+
+      await expect(setWorkflowRunEnvOverlay('missing-run', completeSnapshot)).rejects.toThrow(
+        'Workflow run not found (id: missing-run)'
+      );
+    });
+
+    test('rejects invalid snapshots before writing', async () => {
+      await expect(
+        setWorkflowRunEnvOverlay('workflow-run-123', {
+          envId: 'env-1',
+          // missing required complete fields
+          patches: {},
+        } as unknown as EnvOverlaySnapshot)
+      ).rejects.toThrow();
       expect(mockQuery).not.toHaveBeenCalled();
     });
   });

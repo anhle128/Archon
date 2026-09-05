@@ -158,6 +158,23 @@ function createMockStore(): IWorkflowStore {
     ),
     resumeApprovedGate: mock(() => Promise.resolve({ resumed: true })),
     updateWorkflowRun: mock(() => Promise.resolve()),
+    setWorkflowRunEnvOverlay: mock(() =>
+      Promise.resolve({
+        id: 'mock-run-id',
+        workflow_name: 'mock',
+        conversation_id: 'conv-mock',
+        parent_conversation_id: null,
+        codebase_id: null,
+        status: 'running' as const,
+        user_message: 'mock message',
+        metadata: {},
+        started_at: new Date(),
+        completed_at: null,
+        last_activity_at: null,
+        working_path: null,
+        parent_run_id: null,
+      })
+    ),
     resolveApprovalGate: mock(() => Promise.resolve({ resolved: true })),
     transitionPlannotatorGate: mock(
       (input: Parameters<IWorkflowStore['transitionPlannotatorGate']>[0]) =>

@@ -10,6 +10,7 @@ const mockFindResumableRun = mock(() => Promise.resolve(null));
 const mockResumeWorkflowRun = mock(() => Promise.resolve({ id: 'run-1' }));
 const mockResumeApprovedGate = mock(() => Promise.resolve({ resumed: true }));
 const mockUpdateWorkflowRun = mock(() => Promise.resolve());
+const mockSetWorkflowRunEnvOverlay = mock(() => Promise.resolve({ id: 'run-1' }));
 const mockUpdateWorkflowActivity = mock(() => Promise.resolve());
 const mockGetWorkflowRunStatus = mock(() => Promise.resolve('running'));
 const mockCompleteWorkflowRun = mock(() => Promise.resolve());
@@ -31,6 +32,7 @@ mock.module('../db/workflows', () => ({
   resumeWorkflowRun: mockResumeWorkflowRun,
   resumeApprovedGate: mockResumeApprovedGate,
   updateWorkflowRun: mockUpdateWorkflowRun,
+  setWorkflowRunEnvOverlay: mockSetWorkflowRunEnvOverlay,
   updateWorkflowActivity: mockUpdateWorkflowActivity,
   getWorkflowRunStatus: mockGetWorkflowRunStatus,
   completeWorkflowRun: mockCompleteWorkflowRun,
@@ -290,6 +292,7 @@ describe('createWorkflowStore', () => {
       'resumeWorkflowRun',
       'resumeApprovedGate',
       'updateWorkflowRun',
+      'setWorkflowRunEnvOverlay',
       'updateWorkflowActivity',
       'getWorkflowRunStatus',
       'completeWorkflowRun',
@@ -318,6 +321,26 @@ describe('createWorkflowStore', () => {
     mockGetWorkflowRunStatus.mockResolvedValueOnce('completed');
     const store = createWorkflowStore();
     const result = await store.getWorkflowRunStatus('run-123');
+
+    test('delegates setWorkflowRunEnvOverlay to DB', async () => {
+      const snapshot = {
+        envId: 'env-1',
+        envName: 'fast',
+        workflowName: 'wf',
+        patches: { plan: { model: 'm' } },
+        skippedNodeIds: [],
+        latestMissingNodeIds: [],
+        resolved: { plan: { provider: 'claude', model: 'm' } },
+      };
+      mockSetWorkflowRunEnvOverlay.mockResolvedValueOnce({
+        id: 'run-123',
+        metadata: { envOverlay: snapshot },
+      });
+      const store = createWorkflowStore();
+      const result = await store.setWorkflowRunEnvOverlay('run-123', snapshot);
+      expect(mockSetWorkflowRunEnvOverlay).toHaveBeenCalledWith('run-123', snapshot);
+      expect(result).toEqual({ id: 'run-123', metadata: { envOverlay: snapshot } });
+    });
     expect(result).toBe('completed');
     expect(mockGetWorkflowRunStatus).toHaveBeenCalledWith('run-123');
   });
