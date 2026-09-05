@@ -157,6 +157,8 @@ mock.module('@archon/git', () => ({
   toWorktreePath: (p: string) => p,
   execFileAsync: mockExecFileAsync,
   mkdirAsync: mock(async () => undefined),
+  changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
+  isGitWorkTree: mock(async () => false),
 }));
 
 import { GitHubAdapter } from './adapter';

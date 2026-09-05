@@ -110,6 +110,8 @@ const mockGetDefaultBranch = mock(async () => 'main');
 mock.module('@archon/git', () => ({
   getDefaultBranch: mockGetDefaultBranch,
   toRepoPath: mock((p: string) => p),
+  changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
+  isGitWorkTree: mock(async () => false),
 }));
 
 // --- Mock dag-executor ---

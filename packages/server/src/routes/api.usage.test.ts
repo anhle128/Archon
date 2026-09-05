@@ -182,6 +182,8 @@ mock.module('@archon/git', () => ({
   toRepoPath: (p: string) => p,
   toWorktreePath: (p: string) => p,
   findRepoRoot: mock(async () => null),
+  changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
+  isGitWorkTree: mock(async () => false),
 }));
 
 mock.module('@archon/core/db/conversations', () => ({

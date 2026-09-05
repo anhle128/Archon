@@ -9,6 +9,8 @@ const mockToWorktreePath = mock((p: string) => p);
 mock.module('@archon/git', () => ({
   worktreeExists: mockWorktreeExists,
   toWorktreePath: mockToWorktreePath,
+  changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
+  isGitWorkTree: mock(async () => false),
 }));
 
 const mockListAllActiveWithCodebase = mock(() => Promise.resolve([]));
