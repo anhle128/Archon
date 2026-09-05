@@ -184,6 +184,32 @@ export type { WorkflowNodeSession } from './workflow-node-session';
 export { nodeArtifactSchema } from './node-artifact';
 export type { NodeArtifact } from './node-artifact';
 
+// Workflow ENV overlay (invocation/storage patches)
+export {
+  ENV_OVERLAY_MAX_TARGETS,
+  ENV_OVERLAY_MAX_BYTES,
+  ENV_OVERLAY_PATCH_FIELDS,
+  envPatchTargetKeySchema,
+  envNodePatchSchema,
+  envPatchesSchema,
+  nodeExecutionMetadataSchema,
+  envOverlayCandidateSchema,
+  appliedEnvOverlaySchema,
+  envOverlaySnapshotSchema,
+  storedEnvOverlaySchema,
+} from './env-overlay';
+export type {
+  EnvOverlayPatchField,
+  EnvPatchTargetKey,
+  EnvNodePatch,
+  EnvPatches,
+  NodeExecutionMetadata,
+  EnvOverlayCandidate,
+  AppliedEnvOverlay,
+  EnvOverlaySnapshot,
+  StoredEnvOverlay,
+} from './env-overlay';
+
 // Provider usage breakdown + node_usage_recorded event payload
 export {
   modelSourceSchema,

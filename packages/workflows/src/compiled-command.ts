@@ -3,9 +3,10 @@
  * persisted workflow definitions.
  *
  * A symbol does NOT ride `structuredClone`, so every payload declared here has to be
- * re-attached by `cloneNodeForInclude` (include-expander.ts) and re-walked by BOTH
- * rewrite passes (`rewriteNodeOutputRefs`, `applyInputsMacro`). A payload that misses
- * any of the three works at one nesting level and silently vanishes at two. */
+ * re-attached by `cloneNodeWithEngineMetadata` (include-expander.ts; used by include
+ * expansion and ENV overlay cloning) and re-walked by BOTH rewrite passes
+ * (`rewriteNodeOutputRefs`, `applyInputsMacro`). A payload that misses any of the
+ * three works at one nesting level and silently vanishes at two. */
 export const COMPILED_LOOP_COMMAND = Symbol('archon.compiled-loop-command');
 
 export type CompiledLoopCommand =
