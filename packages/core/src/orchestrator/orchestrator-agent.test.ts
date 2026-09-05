@@ -3216,6 +3216,222 @@ describe('workflow dispatch routing — interactive flag', () => {
     );
     expect(preparedLogs).toHaveLength(0);
   });
+
+  test('US-034: supplied-input notice rejection still dispatches after winning resume CAS', async () => {
+    // After hydrateResumableRun wins the paused→running CAS, an informational
+    // notice must not strand the run: a rejecting adapter still hands off to
+    // executeWorkflow exactly once with the stored row (not newly supplied inputs).
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve(
+        makeWorkflowResult(true, {
+          inputs: { diff: { required: true } },
+        })
+      )
+    );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'paused-post-cas-inputs',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/paused',
+        parent_conversation_id: 'conv-1',
+        status: 'paused',
+        // Stored inputs live on the row; resume must keep these, not the request map.
+        inputs: { diff: 'stored-diff-value' },
+        metadata: {},
+      })
+    );
+    mockInspectResumableRun.mockReturnValueOnce(
+      Promise.resolve({
+        priorCompletedNodes: new Map([['default', 'done']]),
+        priorTokenUsage: { input: 1, output: 1 },
+      })
+    );
+    mockHydrateResumableRun.mockReturnValueOnce(
+      Promise.resolve({
+        preCreatedRun: {
+          id: 'paused-post-cas-inputs',
+          status: 'running',
+          working_path: '/repos/test-repo/worktrees/paused',
+          inputs: { diff: 'stored-diff-value' },
+        },
+        priorCompletedNodes: new Map([['default', 'done']]),
+        priorTokenUsage: { input: 1, output: 1 },
+      })
+    );
+    mockLogger.warn.mockClear();
+
+    const platform = makePlatform();
+    // Command ack ("ok") must succeed so dispatch reaches the post-CAS notice;
+    // only the informational resuming notice rejects (US-034 orphan hazard).
+    let sendCount = 0;
+    const sendMessage = mock(async () => {
+      sendCount += 1;
+      if (sendCount === 1) return; // commandHandler result.message
+      throw new Error('adapter transport down');
+    });
+    platform.sendMessage = sendMessage;
+
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      workflowInputs: { diff: 'secret-new-diff-must-not-apply' },
+    });
+
+    // Claim still happens before the resuming notice attempt (send #2; #1 is command ack).
+    expect(mockHydrateResumableRun).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(mockHydrateResumableRun.mock.invocationCallOrder[0]).toBeLessThan(
+      sendMessage.mock.invocationCallOrder[1]!
+    );
+    expect(mockHydrateResumableRun.mock.invocationCallOrder[0]).toBeGreaterThan(
+      sendMessage.mock.invocationCallOrder[0]!
+    );
+    // Executor owns the claimed run exactly once — notice failure is not a dispatch barrier.
+    expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+    expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    expect(callArgs[3]).toBe('/repos/test-repo/worktrees/paused');
+    const opts = callArgs[callArgs.length - 1] as {
+      preCreatedRun?: { id: string; inputs?: Record<string, string> };
+      inputs?: Record<string, string>;
+      appliedEnvOverlay?: unknown;
+    };
+    expect(opts.preCreatedRun?.id).toBe('paused-post-cas-inputs');
+    expect(opts.preCreatedRun?.inputs).toEqual({ diff: 'stored-diff-value' });
+    // Fresh-call inputs are never stamped onto a continuation opts bag.
+    expect(opts.inputs).toBeUndefined();
+    expect(opts.appliedEnvOverlay).toBeUndefined();
+
+    const warnCalls = mockLogger.warn.mock.calls.filter(
+      c => c[1] === 'orchestrator.resume_ignored_supplied_inputs_notice_failed'
+    );
+    expect(warnCalls).toHaveLength(1);
+    expect(warnCalls[0]![0]).toEqual(
+      expect.objectContaining({
+        conversationId: 'conv-1',
+        workflowRunId: 'paused-post-cas-inputs',
+        workflowName: 'test-workflow',
+      })
+    );
+    // Safe fields only — never echo supplied input values into the failure log.
+    expect(JSON.stringify(warnCalls[0])).not.toContain('secret-new-diff-must-not-apply');
+    expect(JSON.stringify(warnCalls[0])).not.toContain('stored-diff-value');
+  });
+
+  test('US-034: ignored-ENV notice rejection still dispatches stored overlay after winning resume CAS', async () => {
+    // Same orphan hazard for the ignored-ENV notice: transport failure after the
+    // winning CAS must still invoke executeWorkflow once with the stored overlay,
+    // never the request candidate.
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve({
+        success: true,
+        message: 'ok',
+        workflow: {
+          definition: makeTestWorkflow({
+            name: 'test-workflow',
+            interactive: true,
+            nodes: [{ id: 'default', command: 'ship', provider: 'claude' }],
+          }),
+          args: 'test message',
+        },
+      })
+    );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'paused-post-cas-env',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/paused',
+        parent_conversation_id: 'conv-1',
+        status: 'paused',
+        metadata: {
+          envOverlay: {
+            envId: 'env-stored',
+            envName: 'stored-env',
+            workflowName: 'test-workflow',
+            patches: { default: { model: 'from-stored' } },
+            skippedNodeIds: [],
+          },
+        },
+      })
+    );
+    mockInspectResumableRun.mockReturnValueOnce(
+      Promise.resolve({
+        priorCompletedNodes: new Map([['default', 'done']]),
+        priorTokenUsage: { input: 1, output: 1 },
+      })
+    );
+    mockHydrateResumableRun.mockReturnValueOnce(
+      Promise.resolve({
+        preCreatedRun: {
+          id: 'paused-post-cas-env',
+          status: 'running',
+          working_path: '/repos/test-repo/worktrees/paused',
+        },
+        priorCompletedNodes: new Map([['default', 'done']]),
+        priorTokenUsage: { input: 1, output: 1 },
+      })
+    );
+    mockLogger.warn.mockClear();
+
+    const platform = makePlatform();
+    let sendCount = 0;
+    const sendMessage = mock(async () => {
+      sendCount += 1;
+      if (sendCount === 1) return; // commandHandler result.message
+      throw new Error('adapter transport down');
+    });
+    platform.sendMessage = sendMessage;
+
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      envOverlay: makeEnvCandidate({
+        default: { prompt: 'secret-request-env-body-must-not-apply' },
+      }),
+    });
+    expect(mockHydrateResumableRun).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(mockHydrateResumableRun.mock.invocationCallOrder[0]).toBeLessThan(
+      sendMessage.mock.invocationCallOrder[1]!
+    );
+    expect(mockHydrateResumableRun.mock.invocationCallOrder[0]).toBeGreaterThan(
+      sendMessage.mock.invocationCallOrder[0]!
+    );
+    expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+    expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    const wf = callArgs[4] as {
+      nodes: Array<{ model?: string; prompt?: string; command?: string }>;
+    };
+    expect(wf.nodes[0]?.model).toBe('from-stored');
+    expect(wf.nodes[0]?.command).toBe('ship');
+    expect(wf.nodes[0]?.prompt).toBeUndefined();
+    const opts = callArgs[callArgs.length - 1] as {
+      preCreatedRun?: { id: string };
+      appliedEnvOverlay?: { envId: string; envName: string; patches: Record<string, unknown> };
+    };
+    expect(opts.preCreatedRun?.id).toBe('paused-post-cas-env');
+    expect(opts.appliedEnvOverlay?.envId).toBe('env-stored');
+    expect(opts.appliedEnvOverlay?.envName).toBe('stored-env');
+    expect(opts.appliedEnvOverlay?.patches).toEqual({ default: { model: 'from-stored' } });
+
+    const warnCalls = mockLogger.warn.mock.calls.filter(
+      c => c[1] === 'orchestrator.resume_ignored_supplied_env_notice_failed'
+    );
+    expect(warnCalls).toHaveLength(1);
+    expect(warnCalls[0]![0]).toEqual(
+      expect.objectContaining({
+        conversationId: 'conv-1',
+        workflowRunId: 'paused-post-cas-env',
+        workflowName: 'test-workflow',
+        ignoredEnvId: 'env-1',
+        ignoredEnvName: 'fast',
+      })
+    );
+    expect(JSON.stringify(warnCalls[0])).not.toContain('secret-request-env-body-must-not-apply');
+    expect(JSON.stringify(warnCalls[0])).not.toContain('from-stored');
+  });
 });
 
 // ─── Natural-language approval routing ──────────────────────────────────────

@@ -1149,22 +1149,39 @@ async function dispatchOrchestratorWorkflow(
       // A resume replays the inputs stamped on its own row; values supplied on THIS
       // call cannot reach it (the row already exists, so the executor's stamp never
       // fires). Say so rather than accepting them and quietly running something else.
+      //
+      // US-034: these notices stay AFTER the winning resume CAS, but delivery is
+      // best-effort. A rejecting adapter must not exit with the row already `running`
+      // and no executor owning it.
       if (options?.inputs && Object.keys(options.inputs).length > 0) {
         const ignored = Object.keys(options.inputs).sort().join(', ');
         getLog().info(
           { workflowName: workflow.name, resumableRunId: resumableRun.id, ignoredKeys: ignored },
           'orchestrator.resume_ignored_supplied_inputs'
         );
-        await platform.sendMessage(
-          conversationId,
-          `▶️ Resuming the paused run of **${workflow.name}** (\`${resumableRun.id}\`), which ` +
-            `keeps the inputs it started with — the values you supplied now (${ignored}) were ` +
-            'not applied. To run fresh with them instead, abandon that run first ' +
-            `(\`/workflow abandon ${resumableRun.id}\`) and re-invoke.`
-        );
+        await platform
+          .sendMessage(
+            conversationId,
+            `▶️ Resuming the paused run of **${workflow.name}** (\`${resumableRun.id}\`), which ` +
+              `keeps the inputs it started with — the values you supplied now (${ignored}) were ` +
+              'not applied. To run fresh with them instead, abandon that run first ' +
+              `(\`/workflow abandon ${resumableRun.id}\`) and re-invoke.`
+          )
+          .catch((sendErr: unknown) => {
+            getLog().warn(
+              {
+                err: toError(sendErr),
+                conversationId,
+                workflowRunId: resumableRun.id,
+                workflowName: workflow.name,
+              },
+              'orchestrator.resume_ignored_supplied_inputs_notice_failed'
+            );
+          });
       }
       // Continuations own their original ENV selection — a newly supplied candidate is
       // ignored with a notice when the run already has (or lacks) a frozen overlay.
+      // Same post-CAS best-effort delivery as the supplied-input notice (US-034).
       if (ignoredRequestEnvNotice) {
         getLog().info(
           {
@@ -1176,13 +1193,27 @@ async function dispatchOrchestratorWorkflow(
           },
           'orchestrator.resume_ignored_supplied_env'
         );
-        await platform.sendMessage(
-          conversationId,
-          `▶️ Resuming **${workflow.name}** (\`${resumableRun.id}\`) with its original ENV` +
-            (appliedEnvOverlay ? ` (\`${appliedEnvOverlay.envName}\`)` : ' (YAML only)') +
-            ` — the ENV you selected now (\`${ignoredRequestEnvNotice.envName}\`) was not applied. ` +
-            `To start fresh with it, abandon that run first (\`/workflow abandon ${resumableRun.id}\`) and re-invoke.`
-        );
+        await platform
+          .sendMessage(
+            conversationId,
+            `▶️ Resuming **${workflow.name}** (\`${resumableRun.id}\`) with its original ENV` +
+              (appliedEnvOverlay ? ` (\`${appliedEnvOverlay.envName}\`)` : ' (YAML only)') +
+              ` — the ENV you selected now (\`${ignoredRequestEnvNotice.envName}\`) was not applied. ` +
+              `To start fresh with it, abandon that run first (\`/workflow abandon ${resumableRun.id}\`) and re-invoke.`
+          )
+          .catch((sendErr: unknown) => {
+            getLog().warn(
+              {
+                err: toError(sendErr),
+                conversationId,
+                workflowRunId: resumableRun.id,
+                workflowName: workflow.name,
+                ignoredEnvId: ignoredRequestEnvNotice.envId,
+                ignoredEnvName: ignoredRequestEnvNotice.envName,
+              },
+              'orchestrator.resume_ignored_supplied_env_notice_failed'
+            );
+          });
       }
       await executeWorkflow(
         deps,
