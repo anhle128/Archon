@@ -50,6 +50,12 @@
 - **Pattern**: OpenAPI CRUD under `/api/workflows/{name}/envs` with camelCase wire mapper; list omits patches; create provenance via soft `resolveWebUserId` (null OK). Preview is a separate `/env-preview` route requiring `validateCwd`, discover+`resolveWorkflowName`, optional ENV identity (`400 env_not_found` / `env_workflow_mismatch`), `listEnvOverlayTargets` for editor matrix (top-level only), `applyEnvOverlay` + executor-parity `buildResolvedRequestMetadata`/`buildAiProfile` (corrupt prefs → config-only). Never echo prompt/bash in errors/responses.
 - **Example**: `GET .../env-preview?cwd=...&envId=...` → `{ preview:true, authoritative:false, targets, resolved, skippedNodeIds }`
 
+### Start route ENV freeze
+- **Where**: `packages/server/src/routes/api.ts` (`POST /api/workflows/{name}/run`)
+- **Pattern**: Parse optional `envId` (JSON string or multipart plain field; empty/omitted = YAML-only; array/non-string = 400 request-shape). Load unscoped row after field parse and BEFORE file/message persistence. Missing → `400 env_not_found`; `row.workflow_name !==` decoded route name → `400 env_workflow_mismatch`; corrupt → `500 env_store_corrupt`. Re-parse `structuredClone(row.patches)` via `envPatchesSchema` into a new tree, `Object.freeze` candidate `{ envId, envName, workflowName, patches }`, pass as `HandleMessageContext.envOverlay`. Do not discover/apply YAML on Start.
+- **Example**: `extraContext.envOverlay` → orchestrator US-006 gate
+
+
 
 
 
@@ -241,3 +247,27 @@
 - Export `listEnvOverlayTargets` from env-overlay rather than duplicating the private field matrix in server.
 
 ---
+
+## 2026-09-05 — US-008: Start route envId freeze and orchestrator handoff
+
+**Status**: PASSED
+**Files changed**:
+- `packages/server/src/routes/schemas/workflow.schemas.ts` — optional `envId` on unwired `runWorkflowBodySchema`
+- `packages/server/src/routes/api.ts` — parse envId JSON/multipart; freeze ENV before file/message side effects; hand off `envOverlay` context; route description
+- `packages/server/src/routes/api.workflow-runs.test.ts` — workflow-envs mock + no-ENV/JSON/multipart/malformed/duplicate/missing/mismatch/corrupt/frozen-copy coverage
+
+**Acceptance criteria verified**:
+- [x] Optional envId in JSON and multipart; omitted/empty = YAML-only; non-string/duplicated multipart → 400 request-shape
+- [x] When envId present, load/validate after parse and before file or run-start message persistence
+- [x] Missing → 400 env_not_found; mismatch → 400 env_workflow_mismatch; corrupt fails before side effects
+- [x] Frozen candidate has id/name/workflowName + newly allocated patches; store mutation after Start does not change context
+- [x] Route does not discover/apply YAML; compatibility errors stay on dispatch/SSE
+- [x] Tests cover no-ENV, JSON ENV, multipart ENV, malformed/duplicate, missing, mismatch, corrupt-before-side-effects, frozen-copy
+
+**Learnings**:
+- Multipart `parseBody({ all: true })` turns duplicate `envId` into an array — refuse arrays as request-shape, same as non-string JSON.
+- Start identity-checks the decoded route parameter only (no discovery/canonical rename); preview still checks both route + canonical.
+- Defer `persistUploadedFiles` until after ENV identity so missing/mismatch never leaves upload debris.
+
+---
+
