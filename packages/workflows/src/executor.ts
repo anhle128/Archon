@@ -1831,7 +1831,13 @@ export async function executeWorkflow(
         workflow.nodes,
         scope,
         assistantModelDefaults(config),
-        { aiProfile }
+        {
+          aiProfile,
+          // Same ResolveNodeExecutionOptions inputs resolveNodeProviderAndModel uses
+          // for send options / node_started — legacy assistant effort + workflow thinking.
+          assistants: config.assistants,
+          workflowThinking: workflow.thinking,
+        }
       );
       const snapshot: EnvOverlaySnapshot = buildEnvOverlaySnapshot(
         activeOverlay.applied,

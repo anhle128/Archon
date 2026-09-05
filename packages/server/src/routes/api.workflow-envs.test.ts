@@ -561,6 +561,77 @@ describe('Workflow ENV preview', () => {
     expect(res.status).toBe(404);
     expect((await res.json()).error).toBe('workflow_not_found');
   });
+
+  test('preview resolved matches runtime request metadata with assistant effort + workflow thinking', async () => {
+    // US-013: Preview must pass the same complete ResolveNodeExecutionOptions as
+    // executor snapshot / node_started (assistants + workflow thinking), not { aiProfile }.
+    mockLoadConfig.mockImplementationOnce(async () => ({
+      assistant: 'claude',
+      assistants: {
+        claude: { model: 'sonnet', modelReasoningEffort: 'xhigh' },
+      },
+      tiers: undefined,
+      aliases: undefined,
+    }));
+    mockDiscoverWorkflows.mockResolvedValueOnce({
+      workflows: [
+        makeTestWorkflowWithSource(
+          {
+            name: 'feature',
+            description: 'Feature workflow',
+            thinking: { type: 'enabled', budgetTokens: 2048 },
+            nodes: [
+              { id: 'research', prompt: 'research it' },
+              { id: 'ship', bash: 'echo ship' },
+              {
+                id: 'group',
+                loop_group: {
+                  nodes: [{ id: 'inner', prompt: 'nested' }],
+                  until: 'DONE',
+                  max_iterations: 2,
+                },
+              },
+            ],
+          },
+          'project'
+        ),
+      ],
+      errors: [],
+    });
+
+    const res = await makeApp().request(
+      '/api/workflows/feature/env-preview?cwd=' + encodeURIComponent('/tmp/project')
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      resolved: Array<{
+        nodeId: string;
+        provider: string;
+        model?: string;
+        modelReasoningEffort?: string;
+        effort?: string;
+        thinking?: { type: string; budgetTokens?: number };
+      }>;
+    };
+
+    const byId = Object.fromEntries(body.resolved.map(row => [row.nodeId, row]));
+    expect(byId.research).toMatchObject({
+      provider: 'claude',
+      model: 'sonnet',
+      modelReasoningEffort: 'xhigh',
+      thinking: { type: 'enabled', budgetTokens: 2048 },
+    });
+    expect(byId.research.effort).toBeUndefined();
+    expect(byId['group.inner']).toMatchObject({
+      provider: 'claude',
+      model: 'sonnet',
+      modelReasoningEffort: 'xhigh',
+      thinking: { type: 'enabled', budgetTokens: 2048 },
+    });
+    expect(byId['group.inner'].effort).toBeUndefined();
+    expect(byId.ship).toBeUndefined();
+    expect(byId.group).toBeUndefined();
+  });
 });
 
 describe('OpenAPI generation for ENV routes', () => {

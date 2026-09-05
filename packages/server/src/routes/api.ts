@@ -5598,6 +5598,11 @@ export function registerApiRoutes(
       try {
         resolvedMap = buildResolvedRequestMetadata(workingWorkflow.nodes, scope, assistantModels, {
           aiProfile,
+          // Mirror executor snapshot + resolveNodeProviderAndModel: legacy assistant
+          // modelReasoningEffort fallback and workflow-level thinking must not be dropped
+          // when Preview approximates from { aiProfile } alone.
+          assistants: config.assistants,
+          workflowThinking: workingWorkflow.thinking,
         });
       } catch (resolveErr) {
         const detail =

@@ -159,6 +159,12 @@ import type { IWorkflowStore } from './store';
 import type { AppliedEnvOverlay, WorkflowDefinition, WorkflowRun } from './schemas';
 import { applyEnvOverlay } from './env-overlay';
 import { isPromptNode } from './schemas';
+import {
+  assistantModelDefaults,
+  buildResolvedRequestMetadata,
+  resolveWorkflowModelScope,
+} from './node-model-resolution';
+import { buildAiProfile } from './model-validation';
 
 // --- Helpers ---
 
@@ -2777,5 +2783,116 @@ describe('executeWorkflow ENV overlay ownership', () => {
     expect(result.success).toBe(true);
     expect(store.setWorkflowRunEnvOverlay).not.toHaveBeenCalled();
     expect(mockExecuteDagWorkflow).toHaveBeenCalled();
+  });
+
+  it('snapshot resolved matches runtime node_started fields with assistant effort + workflow thinking', async () => {
+    // US-013: assistants.<provider>.modelReasoningEffort with no portable effort,
+    // plus workflow-level thinking, must reach metadata.envOverlay.resolved the same
+    // way resolveNodeProviderAndModel / node_started serialize request fields —
+    // including nested loop_group provider turns.
+    const snapshots: unknown[] = [];
+    const store = makeStore({
+      createWorkflowRun: mock(async data =>
+        makeRun({
+          id: 'parity-1',
+          metadata: { ...(data.metadata as object) },
+          user_id: data.user_id ?? null,
+        })
+      ),
+      setWorkflowRunEnvOverlay: mock(async (runId, snapshot) => {
+        snapshots.push(snapshot);
+        return makeRun({ id: runId, metadata: { envOverlay: snapshot } });
+      }),
+    });
+
+    const deps = makeDeps(store);
+    const assistants = {
+      claude: { model: 'sonnet', modelReasoningEffort: 'xhigh' },
+      codex: {},
+    };
+    deps.loadConfig = mock(
+      async (): Promise<WorkflowConfig> => ({
+        assistant: 'claude',
+        assistants,
+        baseBranch: '',
+        prRemote: 'origin',
+        commands: { folder: '' },
+      })
+    );
+
+    const base = makeWorkflow({
+      thinking: { type: 'enabled', budgetTokens: 2048 },
+      nodes: [
+        { id: 'top', prompt: 'top-turn' },
+        {
+          id: 'grp',
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 1,
+            nodes: [{ id: 'inner', prompt: 'nested-turn' }],
+          },
+        },
+      ],
+    });
+    // Overlay touches only the top prompt model — leaves effort/thinking unset so
+    // legacy assistant fallback + workflow thinking remain the only sources.
+    const applied = makeApplied({
+      patches: { top: { model: 'haiku' } },
+      skippedNodeIds: [],
+    });
+    const { workflow: patched } = applyEnvOverlay(base, applied.patches);
+
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp/repo',
+      patched,
+      'go',
+      'db',
+      { appliedEnvOverlay: applied }
+    );
+    expect(result.success).toBe(true);
+    expect(snapshots).toHaveLength(1);
+
+    const complete = snapshots[0] as {
+      resolved: Record<
+        string,
+        {
+          provider: string;
+          model?: string;
+          modelReasoningEffort?: string;
+          effort?: string;
+          thinking?: unknown;
+        }
+      >;
+    };
+
+    // Same pure inputs resolveNodeProviderAndModel uses for node_started.
+    const aiProfile = buildAiProfile('claude', {});
+    const assistantModels = assistantModelDefaults({ assistants });
+    const scope = resolveWorkflowModelScope(patched, 'claude', assistantModels, aiProfile);
+    const runtimeExpected = buildResolvedRequestMetadata(patched.nodes, scope, assistantModels, {
+      aiProfile,
+      assistants,
+      workflowThinking: patched.thinking,
+    });
+
+    expect(complete.resolved.top).toMatchObject({
+      provider: 'claude',
+      model: 'haiku',
+      modelReasoningEffort: 'xhigh',
+      thinking: { type: 'enabled', budgetTokens: 2048 },
+    });
+    expect(complete.resolved.top.effort).toBeUndefined();
+    expect(complete.resolved['grp.inner']).toMatchObject({
+      provider: 'claude',
+      model: 'sonnet',
+      modelReasoningEffort: 'xhigh',
+      thinking: { type: 'enabled', budgetTokens: 2048 },
+    });
+    expect(complete.resolved['grp.inner'].effort).toBeUndefined();
+    // Group container itself never calls sendQuery.
+    expect(complete.resolved.grp).toBeUndefined();
   });
 });
