@@ -330,7 +330,8 @@
         "US-015"
       ],
       "priority": 16,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration after US-015. Files: packages/workflows/src/env-overlay.ts, packages/workflows/src/env-overlay.test.ts. assertRawPatchKeys runs before copyNodePatch; mixed known/unknown fails forbidden_field without leaking values."
     },
     {
       "id": "US-017",

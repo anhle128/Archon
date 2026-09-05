@@ -1,5 +1,10 @@
 ## Codebase Patterns
 
+### Defensive raw ENV patch-key rejection
+- **Where**: `packages/workflows/src/env-overlay.ts` (`assertRawPatchKeys` before `copyNodePatch`)
+- **Pattern**: Zod `.strict()` is not enough for apply — callers can bypass the schema boundary. Inspect `Object.keys(rawPatch)` against `ENV_OVERLAY_PATCH_FIELDS` *before* `copyNodePatch()` strips unknowns; fail `forbidden_field` with field name only (never values/bodies). Detached normalized copy still feeds assignment + applied/snapshot.
+- **Example**: `{ model: 'x', typo: 'secret-value' }` → `forbidden_field` field=`typo`; message excludes `secret-value`
+
 ### ENV editor body presence flags
 - **Where**: `packages/web/src/experiments/console/lib/workflow-env-editor.ts` (`NodePatchDraft.promptEnabled`/`bashEnabled`)
 - **Pattern**: Omission ≠ empty string. Enabled flag includes body byte-for-byte (including `''`/whitespace); disabled omits the key. Zero drafts → valid no-op `{}`; non-empty-per-chosen-node still enforced when rows exist.
@@ -481,5 +486,26 @@
 - Empty body vs omitted field cannot share a single `string` draft slot — needs an explicit enable/presence flag (or optional), matching schema allow of `prompt: ''`.
 - Zero drafts is the only valid empty map path; a chosen node with no fields still fails closed.
 - Typing into a body field auto-enables it; unchecking clears and omits.
+
+---
+
+## 2026-09-05 — US-016: Defensive unknown patch-key rejection
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/env-overlay.ts` — `assertRawPatchKeys` validates original raw keys before `copyNodePatch`; detached normalized copy still used for assign/applied
+- `packages/workflows/src/env-overlay.test.ts` — Zod-bypass mixed `{ model, typo }` regression; secret value/body excluded from error text; known-only patch still applies
+
+**Acceptance criteria verified**:
+- [x] env-overlay.test.ts bypasses Zod with mixed raw patch `{ model: "x", typo: "secret-value" }` on existing node
+- [x] applyEnvOverlay fails `forbidden_field` with unknown field name; excludes unknown value and prompt/bash bodies
+- [x] env-overlay.ts validates original raw keys before copyNodePatch can discard them
+- [x] Detached normalized copy remains source for assignment and returned applied/snapshot data
+- [x] Mixed known/unknown cannot silently succeed; schema-validated patches unchanged
+- [x] Focused verification: `bun test src/env-overlay.test.ts src/schemas/env-overlay.test.ts`
+
+**Learnings**:
+- `copyNodePatch` is an allowlist copy — unknown keys vanish before matrix checks unless raw keys are inspected first.
+- Keep error payload to code + nodeId + field name; never serialize the raw patch into `cause` or message.
 
 ---
