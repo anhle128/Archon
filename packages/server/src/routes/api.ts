@@ -105,7 +105,11 @@ import {
   resolveWorkflowModelScope,
 } from '@archon/workflows/node-model-resolution';
 import { buildAiProfile } from '@archon/workflows/model-validation';
-import type { EnvPatches } from '@archon/workflows/schemas/env-overlay';
+import {
+  envPatchesSchema,
+  type EnvOverlayCandidate,
+  type EnvPatches,
+} from '@archon/workflows/schemas/env-overlay';
 import {
   workflowEnvWorkflowNameSchema,
   type WorkflowEnvRow,
@@ -1125,12 +1129,18 @@ const runWorkflowRoute = createRoute({
   tags: ['Workflows'],
   summary: 'Run a workflow via the orchestrator (JSON or multipart with file uploads)',
   description:
-    'Accepts `application/json` with `{ conversationId, message, inputs? }` or ' +
+    'Accepts `application/json` with `{ conversationId, message, inputs?, envId? }` or ' +
     '`multipart/form-data` with `conversationId`, `message`, an optional `inputs` field ' +
-    'holding the same map JSON-encoded, and optional file attachments (max 5 files, ' +
-    "10 MB each). `inputs` supplies values for the workflow's declared `inputs:` " +
-    '(#2554); it is validated against the declaration before any worktree, clone, or AI ' +
-    'cost, so a missing required input or an undeclared key is refused up front.',
+    'holding the same map JSON-encoded, an optional plain `envId` string, and optional ' +
+    'file attachments (max 5 files, 10 MB each). `inputs` supplies values for the ' +
+    "workflow's declared `inputs:` (#2554); it is validated against the declaration " +
+    'before any worktree, clone, or AI cost, so a missing required input or an ' +
+    'undeclared key is refused up front. An omitted or empty `envId` means YAML-only; ' +
+    'a non-empty `envId` freezes the ENV row (id/name/workflow/patches) after request ' +
+    'parse and before file or run-start message persistence, then hands the candidate ' +
+    'to the orchestrator out-of-band. Missing id → `env_not_found`; workflow mismatch → ' +
+    '`env_workflow_mismatch`. Compatibility/provider/profile/graph errors still travel ' +
+    'through the dispatch/SSE path, not as synchronous Start 400s.',
   request: {
     params: z.object({ name: z.string() }),
   },
@@ -1978,6 +1988,26 @@ export function registerApiRoutes(
       ok: true,
       inputs: entries.length > 0 ? (raw as Record<string, string>) : undefined,
     };
+  }
+
+  /**
+   * Optional Start `envId` (US-008). Omitted/null/empty → YAML-only. Multipart
+   * duplicates arrive as arrays under `parseBody({ all: true })` and are refused
+   * as request-shape errors, same as a non-string JSON value.
+   */
+  function parseOptionalEnvIdField(
+    raw: unknown
+  ): { ok: true; envId?: string } | { ok: false; error: string } {
+    if (raw === undefined || raw === null) return { ok: true };
+    if (Array.isArray(raw)) {
+      return { ok: false, error: 'envId must be a single string value' };
+    }
+    if (typeof raw !== 'string') {
+      return { ok: false, error: 'envId must be a string' };
+    }
+    const trimmed = raw.trim();
+    if (trimmed === '') return { ok: true };
+    return { ok: true, envId: trimmed };
   }
 
   /**
@@ -3914,6 +3944,8 @@ export function registerApiRoutes(
     let message: string;
     let conversationId: string;
     let workflowInputs: Record<string, string> | undefined;
+    let envId: string | undefined;
+    let pendingFileEntries: File[] = [];
     let savedFiles: AttachedFile[] = [];
     let uploadDir = '';
 
@@ -3959,28 +3991,26 @@ export function registerApiRoutes(
         workflowInputs = parsed.inputs;
       }
 
+      const envIdParsed = parseOptionalEnvIdField(body.envId);
+      if (!envIdParsed.ok) return apiError(c, 400, envIdParsed.error);
+      envId = envIdParsed.envId;
+
+      // Collect files only — persistence waits until ENV identity succeeds so a
+      // missing/mismatched/corrupt envId never leaves upload side effects.
       const rawFiles = body.files;
       const fileList: (string | File)[] = Array.isArray(rawFiles)
         ? rawFiles
         : rawFiles !== undefined
           ? [rawFiles]
           : [];
-      const fileEntries = fileList.filter((e): e is File => e instanceof File);
-
-      if (fileEntries.length > 0) {
-        const result = await persistUploadedFiles(conversationId, fileEntries);
-        if (!result.ok) {
-          return apiError(c, result.status, result.error);
-        }
-        savedFiles = result.savedFiles;
-        uploadDir = result.uploadDir;
-        getLog().info(
-          { conversationId, fileCount: savedFiles.length, workflowName },
-          'run_workflow.files_uploaded'
-        );
-      }
+      pendingFileEntries = fileList.filter((e): e is File => e instanceof File);
     } else {
-      let body: { conversationId?: unknown; message?: unknown; inputs?: unknown };
+      let body: {
+        conversationId?: unknown;
+        message?: unknown;
+        inputs?: unknown;
+        envId?: unknown;
+      };
       try {
         body = await c.req.json();
       } catch (parseErr: unknown) {
@@ -3998,6 +4028,70 @@ export function registerApiRoutes(
       workflowInputs = parsed.inputs;
       conversationId = body.conversationId;
       message = body.message;
+
+      const envIdParsed = parseOptionalEnvIdField(body.envId);
+      if (!envIdParsed.ok) return apiError(c, 400, envIdParsed.error);
+      envId = envIdParsed.envId;
+    }
+
+    // Freeze the selected ENV row before any Start side effect (files / message).
+    // Do not discover or apply YAML here — compatibility errors stay on the
+    // orchestrator/SSE path (US-008).
+    let envOverlay: EnvOverlayCandidate | undefined;
+    if (envId !== undefined) {
+      let row: WorkflowEnvRow | null;
+      try {
+        row = await workflowEnvDb.getWorkflowEnvById(envId);
+      } catch (error) {
+        if (error instanceof workflowEnvDb.WorkflowEnvCorruptRowError) {
+          getLog().error({ envId: error.envId }, 'run_workflow.env_corrupt_row');
+          return apiError(c, 500, 'env_store_corrupt');
+        }
+        getLog().error({ err: error, envId }, 'run_workflow.env_lookup_failed');
+        return apiError(c, 500, 'Failed to run workflow');
+      }
+      if (!row) {
+        return apiError(c, 400, 'env_not_found');
+      }
+      // Start identity-checks the decoded route parameter only (no discovery).
+      if (row.workflow_name !== workflowName) {
+        return apiError(c, 400, 'env_workflow_mismatch');
+      }
+
+      // Newly allocated patches tree — never retain the live row/patches reference.
+      let patches: EnvPatches;
+      try {
+        patches = envPatchesSchema.parse(structuredClone(row.patches));
+      } catch (error) {
+        getLog().error(
+          {
+            envId: row.id,
+            err: error instanceof Error ? error.message : String(error),
+          },
+          'run_workflow.env_patches_reparse_failed'
+        );
+        return apiError(c, 500, 'env_store_corrupt');
+      }
+
+      envOverlay = Object.freeze({
+        envId: row.id,
+        envName: row.name,
+        workflowName: row.workflow_name,
+        patches,
+      });
+    }
+
+    if (pendingFileEntries.length > 0) {
+      const result = await persistUploadedFiles(conversationId, pendingFileEntries);
+      if (!result.ok) {
+        return apiError(c, result.status, result.error);
+      }
+      savedFiles = result.savedFiles;
+      uploadDir = result.uploadDir;
+      getLog().info(
+        { conversationId, fileCount: savedFiles.length, workflowName },
+        'run_workflow.files_uploaded'
+      );
     }
 
     try {
@@ -4044,14 +4138,15 @@ export function registerApiRoutes(
         }
       }
 
-      // Declared inputs ride the context, never `fullMessage` — encoding them into the
-      // command string would make a supplied value indistinguishable from $ARGUMENTS
-      // and would amount to inventing a chat grammar as a side effect (#2554/#2555).
+      // Declared inputs and the frozen ENV candidate ride the context, never
+      // `fullMessage` — embedding either would invent a chat grammar and would
+      // make supplied values confusable with $ARGUMENTS (#2554/#2555/US-008).
       const fullMessage = `/workflow run ${workflowName} ${message}`;
       const extraContext: Omit<HandleMessageContext, 'isolationHints'> = {
         userId,
         ...(savedFiles.length > 0 ? { attachedFiles: savedFiles } : {}),
         ...(workflowInputs ? { workflowInputs } : {}),
+        ...(envOverlay ? { envOverlay } : {}),
       };
       const filesToCleanup = savedFiles.length > 0 ? { files: savedFiles, uploadDir } : undefined;
       const result = await dispatchToOrchestrator(

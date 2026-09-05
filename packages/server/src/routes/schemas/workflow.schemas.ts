@@ -349,6 +349,14 @@ export const runWorkflowBodySchema = z
      * field holding this object JSON-encoded (form fields can only be strings).
      */
     inputs: z.record(z.string(), z.string()).optional(),
+    /**
+     * Optional Workflow ENV id to freeze at Start (US-008). Omitted or empty
+     * means YAML-only. When set, the route loads the row, identity-checks the
+     * workflow name, schema-parses a newly allocated patches tree, and passes a
+     * frozen `EnvOverlayCandidate` out-of-band on the orchestrator context —
+     * never in the command string. Multipart sends the same plain string field.
+     */
+    envId: z.string().optional(),
   })
   .openapi('RunWorkflowBody');
 
