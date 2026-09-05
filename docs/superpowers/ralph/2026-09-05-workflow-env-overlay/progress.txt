@@ -1,5 +1,11 @@
 ## Codebase Patterns
 
+### Container preflight follows loop-group scope (US-035)
+- **Where**: `packages/workflows/src/dag-executor.ts` (`collectContainerIncompatibleProviders`)
+- **Pattern**: Preflight takes `WorkflowModelScope` + `assistantModelDefaults`, not a bare workflow provider string. For each `loop_group`, derive body scope via `resolveGroupModelScope` and recurse — never `check()` the group container (it never calls `sendQuery`). Nested groups, model-alias groups, and approval/plannotator turns inside bodies inherit that same scope so preflight matches runtime dispatch. `executeDagWorkflow` builds the outer scope from the same provider/model/preset/tier/effort fields runtime uses before the container fail-fast.
+- **Example**: outer `codex` + group `claude` + inherited prompt → empty incompatible set; group `codex` + inherited body → `codex` rejected before any node executes
+
+
 ### Post-CAS continuation notices best-effort (US-034)
 - **Where**: `packages/core/src/orchestrator/orchestrator-agent.ts` (post-`hydrateResumableRun` supplied-input + ignored-ENV notices)
 - **Pattern**: After the winning resume CAS, informational `platform.sendMessage` calls must `.catch` + `getLog().warn` with run/env ids only. A rejecting adapter must not prevent `executeWorkflow` from owning the already-`running` row. Notices stay *after* claim (losing-CAS path unchanged). Command ack send is a separate earlier await and is not best-effort.
@@ -1013,5 +1019,27 @@
 - handleMessage always awaits `platform.sendMessage(result.message)` for the command ack *before* `handleWorkflowRunCommand`; tests that reject every send must let the first ack succeed or dispatch never starts.
 - Post-CAS orphan pattern: any awaited side-effect after `hydrateResumableRun` (paused→running) must be best-effort or the row is stranded with no executor owner — same shape as `continueResolvedGateRun`'s `notify` helper.
 - Command-ack send is send #1; the resuming notice is send #2 — order assertions must compare hydrate against the notice invocation, not the first send.
+
+---
+
+## 2026-09-05 — US-035: Container preflight follows loop-group scope
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/dag-executor.ts` — `collectContainerIncompatibleProviders(nodes, scope, assistantModels, aiProfile)`; loop_group uses `resolveGroupModelScope` and skips container check; executeDagWorkflow wires matching outer preflight scope
+- `packages/workflows/src/dag-executor.test.ts` — outer codex + group claude, codex group + claude children, nested inheritance, model-alias scope, approval/plannotator inheritance, reject-before-execute + allow path
+
+**Acceptance criteria verified**:
+- [x] Controls for outer codex + group claude + inherited prompt, and group→codex with explicit claude children, both pass preflight
+- [x] Nested-group inheritance, group model-alias scope, and incompatible inherited body still reject
+- [x] Walker receives workflow scope + assistant defaults, derives loop_group scope via shared resolver, never adds provider for group container
+- [x] Approval/plannotator inside groups inherit group scope during preflight
+- [x] Preflight and runtime choose the same provider for AI turns at every group depth; dispatch-time backstop intact
+- [x] Focused verification: `bun test src/node-model-resolution.test.ts` + `bun test src/dag-executor.test.ts` (18 + 539 pass)
+
+**Learnings**:
+- Old walker checked the group container provider then visited the body with the outer workflow provider — both wrong relative to runtime `resolveGroupModelScope` + body inheritance.
+- Signature change from `(nodes, workflowProvider, aiProfile?)` to `(nodes, scope, assistantModels?, aiProfile?)` is intentional; tests build a minimal `WorkflowModelScope` helper.
+- execute-path container regression needs a real `loop_group` with `until` so the allow case can complete after preflight; reject case asserts `mockSendQueryDag` was never called.
 
 ---
