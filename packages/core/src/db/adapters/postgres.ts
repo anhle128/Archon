@@ -218,6 +218,44 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
     }
   }
 
+  /**
+   * Snapshot-isolated reads for multi-statement report queries.
+   * REPEATABLE READ holds one committed snapshot for the whole callback;
+   * default READ COMMITTED would allow concurrent commits to tear across
+   * sequential SELECTs on the same client.
+   */
+  async withSnapshotRead<T>(
+    fn: (query: <U>(sql: string, params?: unknown[]) => Promise<QueryResult<U>>) => Promise<T>
+  ): Promise<T> {
+    await this.schemaInitPromise;
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+      const txQuery = async <U>(sql: string, params?: unknown[]): Promise<QueryResult<U>> => {
+        const result = await client.query(sql, params);
+        return {
+          rows: result.rows as U[],
+          rowCount: result.rowCount ?? 0,
+        };
+      };
+      const result = await fn(txQuery);
+      await client.query('COMMIT');
+      return result;
+    } catch (e) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackError) {
+        getLog().error(
+          { err: rollbackError as Error },
+          'db.postgres_snapshot_read_rollback_failed'
+        );
+      }
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+
   async close(): Promise<void> {
     await this.pool.end();
   }

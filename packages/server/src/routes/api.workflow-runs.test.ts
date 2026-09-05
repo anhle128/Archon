@@ -383,6 +383,90 @@ mock.module('@archon/core/utils/commands', () => ({
   findMarkdownFilesRecursive: mock(async () => []),
 }));
 
+function emptyUsageMetrics() {
+  return {
+    tokensInput: null as number | null,
+    tokensOutput: null as number | null,
+    tokensReasoning: null as number | null,
+    tokensCacheRead: null as number | null,
+    tokensCacheWrite: null as number | null,
+    requests: null as number | null,
+    reportedUsd: null as number | null,
+    estimatedUsd: null as number | null,
+    recordCount: 0,
+    missingTokensInput: 0,
+    missingTokensOutput: 0,
+    missingTokensReasoning: 0,
+    missingTokensCacheRead: 0,
+    missingTokensCacheWrite: 0,
+    missingRequests: 0,
+    rowsMissingUsd: 0,
+  };
+}
+
+function emptyUsageReport(runId?: string) {
+  return {
+    scope: {
+      from: null as string | null,
+      to: null as string | null,
+      ...(runId ? { runId } : {}),
+      includesChildRollup: false as const,
+    },
+    groupBy: 'node' as const,
+    totals: emptyUsageMetrics(),
+    groups: [] as Array<{
+      dimensions: Record<string, unknown>;
+      metrics: {
+        tokensInput: number | null;
+        tokensOutput: number | null;
+        tokensReasoning: number | null;
+        tokensCacheRead: number | null;
+        tokensCacheWrite: number | null;
+        requests: number | null;
+        reportedUsd: number | null;
+        estimatedUsd: number | null;
+        recordCount: number;
+        missingTokensInput: number;
+        missingTokensOutput: number;
+        missingTokensReasoning: number;
+        missingTokensCacheRead: number;
+        missingTokensCacheWrite: number;
+        missingRequests: number;
+        rowsMissingUsd: number;
+      };
+    }>,
+    coverage: {
+      usageEventCount: 0,
+      ledgeredEventCount: 0,
+      unledgeredEventCount: 0,
+      hasRecordedUsage: false,
+      historicalBackfill: false as const,
+      filterScope: 'date-project-run-node' as const,
+    },
+  };
+}
+
+class MockUsageReportQueryError extends Error {
+  readonly code: 'validation' | 'overflow' | 'unsafe_aggregate' | 'query_failed';
+  constructor(
+    code: 'validation' | 'overflow' | 'unsafe_aggregate' | 'query_failed',
+    message: string
+  ) {
+    super(message);
+    this.name = 'UsageReportQueryError';
+    this.code = code;
+  }
+}
+
+const mockQueryUsageReport = mock(async (opts: { runId?: string; groupBy?: string } = {}) =>
+  emptyUsageReport(opts.runId)
+);
+
+mock.module('@archon/core/db/usage-report', () => ({
+  queryUsageReport: mockQueryUsageReport,
+  UsageReportQueryError: MockUsageReportQueryError,
+}));
+
 import { registerApiRoutes } from './api';
 
 // ---------------------------------------------------------------------------
@@ -1191,6 +1275,10 @@ describe('GET /api/workflows/runs/:runId', () => {
     mockGetWorkflowRun.mockReset();
     mockListWorkflowEvents.mockReset();
     mockGetConversationById.mockReset();
+    mockQueryUsageReport.mockReset();
+    mockQueryUsageReport.mockImplementation(async (opts: { runId?: string } = {}) =>
+      emptyUsageReport(opts.runId)
+    );
   });
 
   test('returns run with events for a known runId', async () => {
@@ -1822,6 +1910,98 @@ describe('GET /api/workflows/runs/:runId', () => {
 
     const body = (await response.json()) as { error: string };
     expect(body.error).toContain('Failed to get workflow run');
+  });
+
+  test('includes empty direct-run usage with hasRecordedUsage false for old runs', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_RUNNING_RUN);
+    mockListWorkflowEvents.mockImplementationOnce(async () => []);
+    mockGetConversationById.mockImplementationOnce(async () => ({
+      id: 'conv-uuid-1',
+      platform_conversation_id: 'web-conv-abc',
+    }));
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-1');
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as {
+      usage: {
+        scope: {
+          runId?: string;
+          from: string | null;
+          to: string | null;
+          includesChildRollup: boolean;
+        };
+        groupBy: string;
+        coverage: { hasRecordedUsage: boolean };
+      } | null;
+    };
+    expect(body.usage).not.toBeNull();
+    expect(body.usage?.groupBy).toBe('node');
+    expect(body.usage?.scope.runId).toBe('run-uuid-1');
+    expect(body.usage?.scope.from).toBeNull();
+    expect(body.usage?.scope.to).toBeNull();
+    expect(body.usage?.scope.includesChildRollup).toBe(false);
+    expect(body.usage?.coverage.hasRecordedUsage).toBe(false);
+
+    const [[callArgs]] = mockQueryUsageReport.mock.calls as [
+      [{ runId?: string; groupBy?: string }],
+    ][];
+    expect(callArgs).toEqual({ runId: 'run-uuid-1', groupBy: 'node' });
+  });
+
+  test('returns usage null when usage query fails without failing run detail', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_RUNNING_RUN);
+    mockListWorkflowEvents.mockImplementationOnce(async () => MOCK_EVENTS);
+    mockGetConversationById.mockImplementationOnce(async () => ({
+      id: 'conv-uuid-1',
+      platform_conversation_id: 'web-conv-abc',
+    }));
+    mockQueryUsageReport.mockImplementationOnce(async () => {
+      throw new MockUsageReportQueryError('query_failed', 'ledger unavailable');
+    });
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-1');
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as {
+      run: { id: string };
+      events: unknown[];
+      usage: null;
+    };
+    expect(body.run.id).toBe('run-uuid-1');
+    expect(body.events).toHaveLength(3);
+    expect(body.usage).toBeNull();
+  });
+
+  test('OpenAPI marks run-detail usage via NullableUsageReport without contaminating UsageReport', async () => {
+    const { app } = makeApp();
+    const document = app.getOpenAPIDocument({
+      openapi: '3.0.0',
+      info: { title: 'test', version: '0' },
+    });
+
+    const detail = document.components?.schemas?.WorkflowRunDetail as
+      | {
+          properties?: {
+            usage?: { $ref?: string; nullable?: boolean };
+          };
+        }
+      | undefined;
+    expect(detail?.properties?.usage?.$ref).toBe('#/components/schemas/NullableUsageReport');
+
+    const usageReport = document.components?.schemas?.UsageReport as
+      | { type?: string; nullable?: boolean }
+      | undefined;
+    expect(usageReport?.type).toBe('object');
+    expect(usageReport?.nullable).toBeUndefined();
+
+    const nullable = document.components?.schemas?.NullableUsageReport as
+      | { type?: string; nullable?: boolean }
+      | undefined;
+    expect(nullable?.nullable).toBe(true);
+    expect(nullable).not.toEqual(usageReport);
   });
 });
 

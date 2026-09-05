@@ -1,0 +1,4 @@
+{"ts": 1788548876389122000, "event": "budget-tripped", "weighted": 4039891, "budget": 4000000, "mode": "warn"}
+{"ts": 1788551162960149000, "event": "timeout-fired", "expired_clock": "both", "timeout_s": 5400, "mono_remaining_s": -0.647}
+{"ts": 1788551163002227000, "event": "straggler-reap", "pids": [3711, 3888, 4837, 4838, 4913, 4915, 5570, 6339, 5626, 5658]}
+{"ts": 1788551164519570000, "event": "kill-outcome", "reaped": true, "forced": [], "unreaped": []}

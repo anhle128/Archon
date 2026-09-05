@@ -11,7 +11,7 @@
  * NOT mock ./dag-executor, so it cannot share a process with executor.test.ts,
  * which does (mock.module is process-global and irreversible).
  */
-import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, mock, type Mock } from 'bun:test';
 import { mkdir, writeFile, rm, cp } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -352,7 +352,22 @@ function makeProvider() {
     }),
     sendQuery: mock(function* () {
       yield { type: 'assistant', content: 'ai-output' };
-      yield { type: 'result', sessionId: 'sess', cost: 0.01, tokens: { input: 7, output: 3 } };
+      yield {
+        type: 'result',
+        sessionId: 'sess',
+        cost: 0.01,
+        tokens: { input: 7, output: 3 },
+        usageBreakdown: [
+          {
+            provider: 'anthropic',
+            model: 'claude-test',
+            modelSource: 'reported',
+            inputTokens: 7,
+            outputTokens: 3,
+            costUsd: 0.01,
+          },
+        ],
+      };
     }),
   };
 }
@@ -360,6 +375,9 @@ function makeProvider() {
 function makeDeps(store: IWorkflowStore): WorkflowDeps {
   return {
     store,
+    usageRecorder: {
+      recordWorkflowUsage: mock(() => Promise.resolve()),
+    },
     getAgentProvider: mock(() => makeProvider()) as unknown as WorkflowDeps['getAgentProvider'],
     loadConfig: mock(
       (): Promise<WorkflowConfig> =>
@@ -552,6 +570,20 @@ nodes:
     expect(subCompleted?.data?.tokens).toEqual({ input: 7, output: 3 });
     // Child conversation is shared with the parent.
     expect(child?.conversation_id).toBe('conv-db');
+    // Child AI nodes record usage against the CHILD run id only — the parent
+    // workflow: wrapper never copies child usage into a second accounting row.
+    const usageCalls = (deps.usageRecorder.recordWorkflowUsage as Mock).mock.calls.map(
+      (c: unknown[]) => c[0] as { runId: string; stepName: string }
+    );
+    const childUsage = usageCalls.filter(c => c.runId === child!.id);
+    expect(childUsage.length).toBeGreaterThan(0);
+    expect(childUsage.every(c => c.stepName === 'work')).toBe(true);
+    const parentUsageSteps = usageCalls.filter(c => c.runId === parentRun!.id).map(c => c.stepName);
+    // Parent AI nodes (plan/after) record on the parent; never the child body or wrapper.
+    expect(parentUsageSteps).toContain('plan');
+    expect(parentUsageSteps).toContain('after');
+    expect(parentUsageSteps).not.toContain('work');
+    expect(parentUsageSteps).not.toContain('sub');
   });
 
   it('child gate → parent pauses blocked-on-child → approve child → parent auto-resumes → output threads', async () => {

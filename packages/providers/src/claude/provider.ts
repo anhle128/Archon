@@ -44,7 +44,10 @@ import type {
   TokenUsage,
   ProviderCapabilities,
   NodeConfig,
+  ModelUsageEntry,
+  UsageBreakdown,
 } from '../types';
+import { toUsageBreakdown } from '../usage-breakdown';
 import { parseClaudeConfig } from './config';
 import { CLAUDE_CAPABILITIES } from './capabilities';
 import { buildContainerSpawn } from './container-spawn';
@@ -110,21 +113,16 @@ function normalizeClaudeUsage(usage?: {
 }
 
 /**
- * Pick the concrete model that did the bulk of a turn's work from the SDK's
- * per-model usage record.
+ * Resolve a concrete terminal model id from the SDK's per-model usage record.
  *
- * More than one entry is reachable for a single turn: a subagent pinned to
- * another model via `agents:`, or a `fallbackModel` takeover. Key insertion
- * order happens to put the main model first today, but nothing in the SDK
- * guarantees it — so select by greatest output-token count (the main model
- * produces the bulk of the output) and WARN whenever the record is ambiguous,
- * so a multi-model turn is visible instead of silently collapsed.
+ * Exactly one entry → that model id. Empty/absent → undefined (caller omits
+ * `resolvedModel`). Multiple entries are reachable for one turn (subagent via
+ * `agents:`, `fallbackModel` takeover); key order and output volume are both
+ * guesses about which model was "main", so warn with the model ids and return
+ * undefined — every usage row still survives via `mapClaudeModelUsage`.
  *
  * `modelUsage` is non-optional in the SDK types but arrives over an IPC
- * boundary, so the absent/empty cases stay guarded — absence yields undefined
- * and the caller omits `resolvedModel` entirely rather than inventing a value.
- * On a tie (or output counts the SDK didn't send) the first key wins, which is
- * exactly the pre-#2314 behavior — safe, and the warning still fires.
+ * boundary, so the absent/empty cases stay guarded.
  */
 function selectResolvedModelId(
   modelUsage: Record<string, ModelUsage> | undefined
@@ -134,17 +132,48 @@ function selectResolvedModelId(
   if (entries.length === 0) return undefined;
   if (entries.length === 1) return entries[0][0];
 
-  const outputTokensOf = (usage: ModelUsage): number =>
-    Number.isFinite(usage.outputTokens) ? usage.outputTokens : 0;
-  let selected = entries[0];
-  for (const entry of entries.slice(1)) {
-    if (outputTokensOf(entry[1]) > outputTokensOf(selected[1])) selected = entry;
+  getLog().warn({ models: entries.map(([id]) => id) }, 'claude.resolved_model_ambiguous');
+  return undefined;
+}
+
+/**
+ * Map every SDK `modelUsage` entry to a normalized observation.
+ * Omits `requests` — `webSearchRequests` is not a model-call count and
+ * `costUSD` already carries authoritative cost.
+ */
+function mapClaudeModelUsage(
+  modelUsage: Record<string, ModelUsage> | undefined
+): UsageBreakdown | undefined {
+  if (!modelUsage) return undefined;
+  const entries: ModelUsageEntry[] = [];
+  for (const [model, usage] of Object.entries(modelUsage)) {
+    if (!model || model.trim() === '') continue;
+    entries.push({
+      provider: 'anthropic',
+      model,
+      modelSource: 'reported',
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      cacheReadTokens: usage.cacheReadInputTokens,
+      cacheWriteTokens: usage.cacheCreationInputTokens,
+      costUsd: usage.costUSD,
+    });
   }
-  getLog().warn(
-    { models: entries.map(([id]) => id), selected: selected[0] },
-    'claude.resolved_model_ambiguous'
-  );
-  return selected[0];
+  if (entries.length === 0) return undefined;
+  const breakdown = toUsageBreakdown(entries);
+  return breakdown.length > 0 ? breakdown : undefined;
+}
+
+function mergeUsageBreakdowns(
+  ...parts: (UsageBreakdown | undefined)[]
+): UsageBreakdown | undefined {
+  const merged: ModelUsageEntry[] = [];
+  for (const part of parts) {
+    if (!part || part.length === 0) continue;
+    merged.push(...part);
+  }
+  if (merged.length === 0) return undefined;
+  return toUsageBreakdown(merged);
 }
 
 /**
@@ -289,11 +318,29 @@ type SdkErrorCode = SDKAssistantMessageError | 'unknown';
 
 export class ClaudeApiResultError extends Error {
   readonly sdkErrorCode: SdkErrorCode;
+  /** Normalized usage observed on the failing attempt, when the SDK reported any. */
+  readonly usageBreakdown?: UsageBreakdown;
+  readonly tokens?: TokenUsage;
+  readonly cost?: number;
+  readonly sessionId?: string;
 
-  constructor(sdkErrorCode: SdkErrorCode, resultText: string) {
+  constructor(
+    sdkErrorCode: SdkErrorCode,
+    resultText: string,
+    extras?: {
+      usageBreakdown?: UsageBreakdown;
+      tokens?: TokenUsage;
+      cost?: number;
+      sessionId?: string;
+    }
+  ) {
     super(`Claude API error (${sdkErrorCode}): ${resultText}`);
     this.name = 'ClaudeApiResultError';
     this.sdkErrorCode = sdkErrorCode;
+    if (extras?.usageBreakdown) this.usageBreakdown = extras.usageBreakdown;
+    if (extras?.tokens) this.tokens = extras.tokens;
+    if (extras?.cost !== undefined) this.cost = extras.cost;
+    if (extras?.sessionId) this.sessionId = extras.sessionId;
   }
 }
 
@@ -1106,6 +1153,9 @@ async function* streamClaudeMessages(
     } else if (event.type === 'result') {
       const resultMsg = msg as SDKResultMessage;
       const resolvedModelId = selectResolvedModelId(resultMsg.modelUsage);
+      // Normalize usage before classifying an SDK result as an API failure so
+      // usage-bearing failures remain observable after retries exhaust.
+      const usageBreakdown = mapClaudeModelUsage(resultMsg.modelUsage);
       // The terminal result resolves any recorded synthetic error message.
       const syntheticError = pendingSdkError;
       pendingSdkError = undefined;
@@ -1122,7 +1172,8 @@ async function* streamClaudeMessages(
       // (primary, typed signal), or the typed terminal_reason 'api_error'
       // (secondary — catches an error result with no preceding synthetic
       // message), marks a real failure. Throw so callers fail the node/turn
-      // instead of consuming error prose as successful output.
+      // instead of consuming error prose as successful output. Usage travels
+      // on the error for retry accumulation / final isError yield.
       if (
         isSuccessWithErrorFlag &&
         (syntheticError !== undefined || resultMsg.terminal_reason === 'api_error')
@@ -1143,7 +1194,12 @@ async function* streamClaudeMessages(
           },
           'claude.result_api_error'
         );
-        throw new ClaudeApiResultError(code, text);
+        throw new ClaudeApiResultError(code, text, {
+          ...(usageBreakdown ? { usageBreakdown } : {}),
+          ...(tokens ? { tokens } : {}),
+          ...(resultMsg.total_cost_usd !== undefined ? { cost: resultMsg.total_cost_usd } : {}),
+          ...(resultMsg.session_id ? { sessionId: resultMsg.session_id } : {}),
+        });
       }
 
       // Fail-safe (never observed in practice): a synthetic error message
@@ -1195,6 +1251,7 @@ async function* streamClaudeMessages(
         ...(resultMsg.total_cost_usd !== undefined ? { cost: resultMsg.total_cost_usd } : {}),
         ...(resultMsg.stop_reason != null ? { stopReason: resultMsg.stop_reason } : {}),
         ...(resultMsg.num_turns !== undefined ? { numTurns: resultMsg.num_turns } : {}),
+        ...(usageBreakdown ? { usageBreakdown } : {}),
         ...(resolvedModelId ? { resolvedModel: { id: resolvedModelId } } : {}),
       };
     }
@@ -1394,6 +1451,9 @@ export class ClaudeProvider implements IAgentProvider {
     // can forward cancellation without accumulating per-retry listeners.
     let currentController: AbortController | undefined;
     let currentQuery: ClosableQuery | undefined;
+    // Usage from usage-bearing attempts that the outer retry consumes — carried
+    // into the eventual terminal result (success or final typed error).
+    let accumulatedUsage: UsageBreakdown | undefined;
     const onAbort = (): void => {
       currentController?.abort();
       closeQuery(currentQuery, 'request_abort');
@@ -1469,13 +1529,28 @@ export class ClaudeProvider implements IAgentProvider {
         // Claude resumes-or-errors: an invalid resume id throws (and is
         // retried/surfaced), so reaching the result stream means the prior
         // session was restored. Hence `true` whenever a resume was requested.
-        yield* withResumedOutcome(
+        // Fold any usage retained from prior retry attempts into the terminal
+        // result so spent tokens remain queryable after recovery.
+        for await (const chunk of withResumedOutcome(
           streamClaudeMessages(events, toolResultQueue),
           resumedOutcome(resumeSessionId, true)
-        );
+        )) {
+          if (chunk.type === 'result' && accumulatedUsage) {
+            const usageBreakdown = mergeUsageBreakdowns(accumulatedUsage, chunk.usageBreakdown);
+            yield {
+              ...chunk,
+              ...(usageBreakdown ? { usageBreakdown } : {}),
+            };
+          } else {
+            yield chunk;
+          }
+        }
         return;
       } catch (error) {
         const err = error as Error;
+        if (err instanceof ClaudeApiResultError) {
+          accumulatedUsage = mergeUsageBreakdowns(accumulatedUsage, err.usageBreakdown);
+        }
         const { enrichedError, errorClass, shouldRetry } = classifyAndEnrichError(
           err,
           stderrLines,
@@ -1494,6 +1569,22 @@ export class ClaudeProvider implements IAgentProvider {
         );
 
         if (!shouldRetry || attempt >= MAX_SUBPROCESS_RETRIES) {
+          // Usage-bearing typed API failures yield a terminal isError result so
+          // the executor can persist usage and then fail the node. Plain throws
+          // (no usage, or non-API failures) keep existing classification paths.
+          if (err instanceof ClaudeApiResultError && accumulatedUsage) {
+            yield {
+              type: 'result',
+              isError: true,
+              errorSubtype: err.sdkErrorCode,
+              errors: [err.message],
+              usageBreakdown: accumulatedUsage,
+              ...(err.tokens ? { tokens: err.tokens } : {}),
+              ...(err.cost !== undefined ? { cost: err.cost } : {}),
+              ...(err.sessionId ? { sessionId: err.sessionId } : {}),
+            };
+            return;
+          }
           throw enrichedError;
         }
 

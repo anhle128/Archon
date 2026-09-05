@@ -1,0 +1,16 @@
+[2026-09-05 02:07:56] bmad-loop session over token budget: 1-1-see-this-runs-uncommitted-changed-files-dev-1: weighted spend 4039891 crossed the 4000000 per-session cap (mode=warn)
+[2026-09-05 02:46:04] story token budget exceeded: 1-1-see-this-runs-uncommitted-changed-files: 9311674 weighted tokens (77997714 raw incl. cache reads) past the 2000000 `limits.max_tokens_per_story` cap — advisory: the story continues. Stop the run with `bmad-loop stop` if the spend is no longer worth it.
+[2026-09-05 02:46:04] dev retry: 1-1-see-this-runs-uncommitted-changed-files (attempt 1): dev session timeout
+[2026-09-05 02:46:04] ACTION REQUIRED: manual rollback for 1-1-see-this-runs-uncommitted-changed-files: **ACTION REQUIRED — manual recovery needed (committed work present)**
+Story **1-1-see-this-runs-uncommitted-changed-files**'s attempt was stopped with auto-rollback OFF, and it **committed work above its baseline**. **Your commits are intact at the current HEAD of `/Users/dale/Desktop/workspace/OceanLabs/workflow-engine/archon`.** They may already be integrated or pushed to a remote — do NOT reset before checking.
+  1. **Save them first** — e.g. `git -C "/Users/dale/Desktop/workspace/OceanLabs/workflow-engine/archon" branch my-rescue HEAD` (the commits are `21bb96d9c103..HEAD` there).
+  2. Check whether they are already integrated (merged, pushed to a remote, referenced by open PRs) before discarding anything.
+  3. Only if you decide to discard the attempt: `git -C "/Users/dale/Desktop/workspace/OceanLabs/workflow-engine/archon" reset --hard 21bb96d9c103`, then review/remove leftover untracked files.
+Then run `bmad-loop resume 20260905-011602-f4b8`.
+[2026-09-05 02:46:04] bmad-loop run finished: run 20260905-011602-f4b8: 0 done, 0 deferred, 0 escalated, 9,311,674 weighted tokens (77,997,714 raw incl. cache reads)
+PAUSED: **ACTION REQUIRED — manual recovery needed (committed work present)**
+Story **1-1-see-this-runs-uncommitted-changed-files**'s attempt was stopped with auto-rollback OFF, and it **committed work above its baseline**. **Your commits are intact at the current HEAD of `/Users/dale/Desktop/workspace/OceanLabs/workflow-engine/archon`.** They may already be integrated or pushed to a remote — do NOT reset before checking.
+  1. **Save them first** — e.g. `git -C "/Users/dale/Desktop/workspace/OceanLabs/workflow-engine/archon" branch my-rescue HEAD` (the commits are `21bb96d9c103..HEAD` there).
+  2. Check whether they are already integrated (merged, pushed to a remote, referenced by open PRs) before discarding anything.
+  3. Only if you decide to discard the attempt: `git -C "/Users/dale/Desktop/workspace/OceanLabs/workflow-engine/archon" reset --hard 21bb96d9c103`, then review/remove leftover untracked files.
+Then run `bmad-loop resume 20260905-011602-f4b8`.

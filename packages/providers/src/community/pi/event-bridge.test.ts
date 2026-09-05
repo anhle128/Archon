@@ -168,7 +168,14 @@ describe('buildResultChunk', () => {
   test('extracts usage from last assistant message', () => {
     const chunk = buildResultChunk([
       { role: 'user', content: [] },
-      { role: 'assistant', usage, stopReason: 'stop', content: [] },
+      {
+        role: 'assistant',
+        provider: 'anthropic',
+        model: 'claude-haiku',
+        usage,
+        stopReason: 'stop',
+        content: [],
+      },
     ]);
     expect(chunk.type).toBe('result');
     if (chunk.type === 'result') {
@@ -176,6 +183,19 @@ describe('buildResultChunk', () => {
       expect(chunk.stopReason).toBe('stop');
       expect(chunk.isError).toBeUndefined();
       expect(chunk.cost).toBe(0.01);
+      expect(chunk.usageBreakdown).toEqual([
+        {
+          provider: 'anthropic',
+          model: 'claude-haiku',
+          modelSource: 'requested',
+          inputTokens: 10,
+          outputTokens: 5,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          requests: 1,
+          costUsd: 0.01,
+        },
+      ]);
     }
   });
 
@@ -183,6 +203,7 @@ describe('buildResultChunk', () => {
     const chunk = buildResultChunk([
       {
         role: 'assistant',
+        provider: 'anthropic',
         model: 'large',
         responseModel: 'claude-opus-5',
         usage,
@@ -191,18 +212,39 @@ describe('buildResultChunk', () => {
       },
     ]);
     expect(chunk).toMatchObject({ type: 'result', resolvedModel: { id: 'claude-opus-5' } });
+    if (chunk.type === 'result') {
+      expect(chunk.usageBreakdown?.[0]).toMatchObject({
+        model: 'claude-opus-5',
+        modelSource: 'reported',
+      });
+    }
   });
 
   test('omits resolvedModel when Pi does not report a responseModel', () => {
     const chunk = buildResultChunk([
-      { role: 'assistant', model: 'large', usage, stopReason: 'stop', content: [] },
+      {
+        role: 'assistant',
+        provider: 'anthropic',
+        model: 'large',
+        usage,
+        stopReason: 'stop',
+        content: [],
+      },
     ]);
     expect(chunk).not.toHaveProperty('resolvedModel');
   });
 
   test('flags isError for stopReason=error and surfaces errorMessage', () => {
     const chunk = buildResultChunk([
-      { role: 'assistant', usage, stopReason: 'error', errorMessage: 'auth', content: [] },
+      {
+        role: 'assistant',
+        provider: 'anthropic',
+        model: 'm',
+        usage,
+        stopReason: 'error',
+        errorMessage: 'auth',
+        content: [],
+      },
     ]);
     if (chunk.type === 'result') {
       expect(chunk.isError).toBe(true);
@@ -214,7 +256,14 @@ describe('buildResultChunk', () => {
   test('does not populate errors when errorMessage is absent or empty', () => {
     // undefined errorMessage
     const chunk1 = buildResultChunk([
-      { role: 'assistant', usage, stopReason: 'error', content: [] },
+      {
+        role: 'assistant',
+        provider: 'anthropic',
+        model: 'm',
+        usage,
+        stopReason: 'error',
+        content: [],
+      },
     ]);
     if (chunk1.type === 'result') {
       expect(chunk1.isError).toBe(true);
@@ -222,7 +271,15 @@ describe('buildResultChunk', () => {
     }
     // empty string — also falsy, also excluded from errors[]
     const chunk2 = buildResultChunk([
-      { role: 'assistant', usage, stopReason: 'error', errorMessage: '', content: [] },
+      {
+        role: 'assistant',
+        provider: 'anthropic',
+        model: 'm',
+        usage,
+        stopReason: 'error',
+        errorMessage: '',
+        content: [],
+      },
     ]);
     if (chunk2.type === 'result') {
       expect(chunk2.isError).toBe(true);
@@ -232,22 +289,108 @@ describe('buildResultChunk', () => {
 
   test('flags isError for stopReason=aborted', () => {
     const chunk = buildResultChunk([
-      { role: 'assistant', usage, stopReason: 'aborted', content: [] },
+      {
+        role: 'assistant',
+        provider: 'anthropic',
+        model: 'm',
+        usage,
+        stopReason: 'aborted',
+        content: [],
+      },
     ]);
     if (chunk.type === 'result') {
       expect(chunk.isError).toBe(true);
     }
   });
 
+  test('sums every assistant message into legacy tokens and emits one observation each', () => {
+    const olderUsage = {
+      input: 1,
+      output: 2,
+      cacheRead: 3,
+      cacheWrite: 4,
+      totalTokens: 10,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.1 },
+      reasoning: 1,
+    };
+    const chunk = buildResultChunk([
+      {
+        role: 'assistant',
+        provider: 'anthropic',
+        model: 'first',
+        usage: olderUsage,
+        stopReason: 'toolUse',
+        content: [],
+      },
+      { role: 'user', content: [] },
+      {
+        role: 'assistant',
+        provider: 'openai',
+        model: 'requested',
+        responseModel: 'reported-last',
+        usage,
+        stopReason: 'stop',
+        content: [],
+      },
+    ]);
+    if (chunk.type === 'result') {
+      expect(chunk.tokens).toEqual({ input: 11, output: 7, total: 25, cost: 0.11 });
+      expect(chunk.cost).toBe(0.11);
+      expect(chunk.stopReason).toBe('stop');
+      expect(chunk.resolvedModel).toEqual({ id: 'reported-last' });
+      expect(chunk.usageBreakdown).toEqual([
+        {
+          provider: 'anthropic',
+          model: 'first',
+          modelSource: 'requested',
+          inputTokens: 1,
+          outputTokens: 2,
+          reasoningTokens: 1,
+          cacheReadTokens: 3,
+          cacheWriteTokens: 4,
+          requests: 1,
+          costUsd: 0.1,
+        },
+        {
+          provider: 'openai',
+          model: 'reported-last',
+          modelSource: 'reported',
+          inputTokens: 10,
+          outputTokens: 5,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          requests: 1,
+          costUsd: 0.01,
+        },
+      ]);
+    }
+  });
+
   test('prefers last assistant message when multiple present', () => {
     const olderUsage = { ...usage, input: 1, totalTokens: 1 };
     const chunk = buildResultChunk([
-      { role: 'assistant', usage: olderUsage, stopReason: 'stop', content: [] },
+      {
+        role: 'assistant',
+        provider: 'anthropic',
+        model: 'm',
+        usage: olderUsage,
+        stopReason: 'stop',
+        content: [],
+      },
       { role: 'user', content: [] },
-      { role: 'assistant', usage, stopReason: 'stop', content: [] },
+      {
+        role: 'assistant',
+        provider: 'anthropic',
+        model: 'm',
+        usage,
+        stopReason: 'stop',
+        content: [],
+      },
     ]);
     if (chunk.type === 'result') {
-      expect(chunk.tokens?.input).toBe(10);
+      // Legacy totals sum both messages (1+10 input).
+      expect(chunk.tokens?.input).toBe(11);
+      expect(chunk.usageBreakdown).toHaveLength(2);
     }
   });
 });
@@ -995,5 +1138,139 @@ describe('assistant chunk coalescing', () => {
     const assistantChunks = chunks.filter(c => c.type === 'assistant');
     expect(assistantChunks).toHaveLength(1);
     expect(assistantChunks[0].content).toBe('partial answer before crash');
+  });
+});
+
+describe('usageBreakdown missingness (US-017)', () => {
+  const usage = {
+    input: 10,
+    output: 5,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 15,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.01 },
+  };
+
+  test('omits missing/blank provider observations without poisoning siblings', () => {
+    const chunk = buildResultChunk([
+      {
+        role: 'assistant',
+        provider: 'anthropic',
+        model: 'first',
+        usage: {
+          input: 1,
+          output: 2,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 3,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.1 },
+        },
+        stopReason: 'toolUse',
+        content: [],
+      },
+      {
+        role: 'assistant',
+        provider: '',
+        model: 'blank-provider',
+        usage: {
+          input: 9,
+          output: 9,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 18,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.9 },
+        },
+        stopReason: 'toolUse',
+        content: [],
+      },
+      {
+        role: 'assistant',
+        // missing provider entirely
+        model: 'missing-provider',
+        usage: {
+          input: 4,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 5,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.04 },
+        },
+        stopReason: 'stop',
+        content: [],
+      },
+      {
+        role: 'assistant',
+        provider: 'openai',
+        model: 'last',
+        usage,
+        stopReason: 'stop',
+        content: [],
+      },
+    ] as unknown[]);
+
+    if (chunk.type !== 'result') throw new Error('expected result');
+    // Legacy still sums every assistant usage including untrusted-provider ones.
+    expect(chunk.tokens).toEqual({ input: 24, output: 17, total: 41, cost: 1.05 });
+    expect(chunk.cost).toBe(1.05);
+    expect(chunk.stopReason).toBe('stop');
+    expect(chunk.usageBreakdown).toEqual([
+      {
+        provider: 'anthropic',
+        model: 'first',
+        modelSource: 'requested',
+        inputTokens: 1,
+        outputTokens: 2,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        requests: 1,
+        costUsd: 0.1,
+      },
+      {
+        provider: 'openai',
+        model: 'last',
+        modelSource: 'requested',
+        inputTokens: 10,
+        outputTokens: 5,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        requests: 1,
+        costUsd: 0.01,
+      },
+    ]);
+    expect(chunk.usageBreakdown?.some(e => e.provider === 'unknown')).toBe(false);
+  });
+
+  test('known zero cost remains observable on a trusted provider', () => {
+    const chunk = buildResultChunk([
+      {
+        role: 'assistant',
+        provider: 'anthropic',
+        model: 'm',
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: 'stop',
+        content: [],
+      },
+    ]);
+    if (chunk.type !== 'result') throw new Error('expected result');
+    expect(chunk.usageBreakdown).toEqual([
+      {
+        provider: 'anthropic',
+        model: 'm',
+        modelSource: 'requested',
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        requests: 1,
+        costUsd: 0,
+      },
+    ]);
   });
 });

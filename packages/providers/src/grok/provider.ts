@@ -222,7 +222,7 @@ function exitError(exitCode: number, stderr: string): string {
 
 function transportErrorResult(
   parser: GrokEventParser,
-  subtype: 'grok_protocol_error' | 'grok_exit_nonzero',
+  subtype: 'grok_protocol_error' | 'grok_exit_nonzero' | 'grok_transport_error',
   message: string,
   resumeRequested: boolean
 ): MessageChunk {
@@ -234,6 +234,14 @@ function transportErrorResult(
     errorSubtype: subtype,
     errors: [message, ...(observed.errors ?? []).filter(error => error !== message)],
   };
+}
+
+function hasAuthoritativeUsage(result: MessageChunk): boolean {
+  return (
+    result.type === 'result' &&
+    Array.isArray(result.usageBreakdown) &&
+    result.usageBreakdown.length > 0
+  );
 }
 
 export class GrokProvider implements IAgentProvider {
@@ -271,7 +279,7 @@ export class GrokProvider implements IAgentProvider {
       resumeSessionId,
     });
     const proc = this.spawn(buildSpawnCommand(binary, args), { cwd, env });
-    const parser = new GrokEventParser();
+    const parser = new GrokEventParser(model);
     const abortSignal = requestOptions?.abortSignal;
     let processExited = false;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
@@ -344,7 +352,30 @@ export class GrokProvider implements IAgentProvider {
       const [exited, stderr] = await Promise.all([exitOutcome, stderrOutcome]);
       for (const chunk of parser.closeOutstandingTools()) yield chunk;
       if (abortSignal?.aborted) throw new Error('Query aborted');
-      if (transportError) throw transportError;
+
+      // Late I/O after the parser already accepted authoritative usage must
+      // yield one terminal isError result (not throw) so the executor can
+      // record spend before failing the node. No-usage I/O still throws.
+      const lateIoError =
+        transportError ??
+        (!exited.ok ? exited.error : undefined) ??
+        (!stderr.ok ? stderr.error : undefined);
+      if (lateIoError) {
+        const observed = parser.buildResult(resumeSessionId !== undefined ? false : undefined);
+        if (hasAuthoritativeUsage(observed)) {
+          const message = lateIoError.message;
+          yield { type: 'system', content: message };
+          yield transportErrorResult(
+            parser,
+            'grok_transport_error',
+            message,
+            resumeSessionId !== undefined
+          );
+          return;
+        }
+        throw lateIoError;
+      }
+      // lateIoError already covered both failure arms; re-check to narrow the union.
       if (!exited.ok) throw exited.error;
       if (!stderr.ok) throw stderr.error;
 

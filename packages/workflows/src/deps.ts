@@ -19,6 +19,9 @@ import type {
   ProviderCapabilities,
 } from '@archon/providers/types';
 import type { RawAliasesConfig, RawTiersConfig } from './model-validation';
+import type { IWorkflowUsageRecorder, RecordWorkflowUsageInput } from './usage';
+
+export type { IWorkflowUsageRecorder, RecordWorkflowUsageInput };
 
 // Re-export provider types so existing workflow engine consumers don't break
 export type {
@@ -116,6 +119,12 @@ export interface WorkflowDeps {
   store: IWorkflowStore;
   getAgentProvider: AgentProviderFactory;
   loadConfig: (cwd: string) => Promise<WorkflowConfig>;
+  /**
+   * Required: durable usage accounting for AI passes.
+   * Core owns the implementation (validation, pricing, event+ledger writes).
+   * Must never throw into workflow execution or mutate lifecycle state.
+   */
+  usageRecorder: IWorkflowUsageRecorder;
   /**
    * Optional: resolve a fresh GitHub bot token for the given (owner, repo).
    * Used to inject GH_TOKEN/GITHUB_TOKEN into bash/script subprocess env so

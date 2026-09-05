@@ -1,0 +1,550 @@
+/**
+ * Tests for `archon usage` — formatting, flag→query mapping, JSON stdout,
+ * coverage warning, and core query error surfaces.
+ *
+ * Injects `queryFn` so this file never opens a real DB and never needs
+ * `mock.module()` (process-global / irreversible in Bun).
+ */
+import { describe, it, expect, spyOn, beforeEach, afterEach } from 'bun:test';
+import { UsageReportQueryError, type UsageReportQuery } from '@archon/core/db/usage-report';
+import type { UsageMetrics, UsageReport } from '@archon/core/schemas/usage-report';
+import { dimensionLabel, formatUsdAmount, usageCommand, type UsageQueryFn } from './usage';
+
+function emptyMetrics(overrides: Partial<UsageMetrics> = {}): UsageMetrics {
+  return {
+    tokensInput: null,
+    tokensOutput: null,
+    tokensReasoning: null,
+    tokensCacheRead: null,
+    tokensCacheWrite: null,
+    requests: null,
+    reportedUsd: null,
+    estimatedUsd: null,
+    recordCount: 0,
+    missingTokensInput: 0,
+    missingTokensOutput: 0,
+    missingTokensReasoning: 0,
+    missingTokensCacheRead: 0,
+    missingTokensCacheWrite: 0,
+    missingRequests: 0,
+    rowsMissingUsd: 0,
+    ...overrides,
+  };
+}
+
+function sampleReport(overrides: Partial<UsageReport> = {}): UsageReport {
+  return {
+    scope: {
+      from: '2026-09-01T00:00:00.000Z',
+      to: '2026-10-01T00:00:00.000Z',
+      includesChildRollup: false,
+    },
+    groupBy: 'provider',
+    totals: emptyMetrics({
+      tokensInput: 100,
+      tokensOutput: 50,
+      requests: 2,
+      reportedUsd: 1.25,
+      estimatedUsd: 0.004,
+      recordCount: 2,
+      rowsMissingUsd: 0,
+    }),
+    groups: [
+      {
+        dimensions: { provider: 'anthropic' },
+        metrics: emptyMetrics({
+          tokensInput: 100,
+          tokensOutput: 50,
+          requests: 2,
+          reportedUsd: 1.25,
+          estimatedUsd: 0.004,
+          recordCount: 2,
+        }),
+      },
+    ],
+    coverage: {
+      usageEventCount: 2,
+      ledgeredEventCount: 2,
+      unledgeredEventCount: 0,
+      hasRecordedUsage: true,
+      historicalBackfill: false,
+      filterScope: 'date-project-run-node',
+    },
+    ...overrides,
+  };
+}
+
+describe('formatUsdAmount', () => {
+  it('renders absent, exact zero, reported, and estimated distinctly', () => {
+    expect(formatUsdAmount(null, false)).toBe('n/a');
+    expect(formatUsdAmount(undefined, true)).toBe('n/a');
+    expect(formatUsdAmount(0, false)).toBe('$0.00');
+    expect(formatUsdAmount(0, true)).toBe('≈$0.00');
+    expect(formatUsdAmount(1.5, false)).toBe('$1.50');
+    expect(formatUsdAmount(0.02, true)).toBe('≈$0.02');
+  });
+
+  it('uses up to six decimals below one cent and a floor for tinier positives', () => {
+    expect(formatUsdAmount(0.004, false)).toBe('$0.004');
+    expect(formatUsdAmount(0.000123, true)).toBe('≈$0.000123');
+    expect(formatUsdAmount(0.0000004, false)).toBe('<$0.000001');
+    expect(formatUsdAmount(0.0000004, true)).toBe('≈<$0.000001');
+  });
+
+  it('never rounds a positive cost into the zero representation', () => {
+    // Smallest positive that would become 0.00 at two decimals still stays non-zero form.
+    expect(formatUsdAmount(0.001, false)).not.toBe('$0.00');
+    expect(formatUsdAmount(0.001, false)).toBe('$0.001');
+    expect(formatUsdAmount(1e-12, false)).toBe('<$0.000001');
+  });
+});
+
+describe('dimensionLabel full grouping tuples', () => {
+  it('distinguishes groupBy=model rows that share provider/model but differ by modelSource', () => {
+    const reported = dimensionLabel(
+      {
+        dimensions: {
+          provider: 'anthropic',
+          model: 'claude-sonnet-4',
+          modelSource: 'reported',
+        },
+        metrics: emptyMetrics(),
+      },
+      'model'
+    );
+    const unknown = dimensionLabel(
+      {
+        dimensions: {
+          provider: 'anthropic',
+          model: 'claude-sonnet-4',
+          modelSource: 'unknown',
+        },
+        metrics: emptyMetrics(),
+      },
+      'model'
+    );
+
+    expect(reported).toContain('anthropic/claude-sonnet-4');
+    expect(reported).toContain('source reported');
+    expect(unknown).toContain('anthropic/claude-sonnet-4');
+    expect(unknown).toContain('unknown model source');
+    expect(reported).not.toBe(unknown);
+  });
+
+  it('distinguishes groupBy=node rows that share node id across every fixed dimension', () => {
+    const primary = dimensionLabel(
+      {
+        dimensions: {
+          runId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+          nodeId: 'implement',
+          agentProvider: 'claude',
+          provider: 'anthropic',
+          model: 'claude-sonnet-4',
+          modelSource: 'reported',
+          kind: null,
+        },
+        metrics: emptyMetrics(),
+      },
+      'node'
+    );
+    const advisor = dimensionLabel(
+      {
+        dimensions: {
+          runId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+          nodeId: 'implement',
+          agentProvider: 'codex',
+          provider: 'openai',
+          model: 'gpt-4.1-mini',
+          modelSource: 'requested',
+          kind: 'advisor',
+        },
+        metrics: emptyMetrics(),
+      },
+      'node'
+    );
+
+    expect(primary).toContain('implement');
+    expect(primary).toContain('run aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
+    expect(primary).toContain('agent claude');
+    expect(primary).toContain('anthropic/claude-sonnet-4');
+    expect(primary).toContain('source reported');
+    expect(primary).toContain('unclassified kind');
+
+    expect(advisor).toContain('implement');
+    expect(advisor).toContain('agent codex');
+    expect(advisor).toContain('openai/gpt-4.1-mini');
+    expect(advisor).toContain('source requested');
+    expect(advisor).toContain('kind advisor');
+    expect(primary).not.toBe(advisor);
+    expect(primary).not.toContain('agent codex');
+    expect(advisor).not.toContain('agent claude');
+  });
+
+  it('includes every fixed project and run dimension in human labels', () => {
+    const project = dimensionLabel(
+      {
+        dimensions: { codebaseId: 'cb-1', codebaseName: 'Archon' },
+        metrics: emptyMetrics(),
+      },
+      'project'
+    );
+    expect(project).toBe('Archon · id cb-1');
+
+    const run = dimensionLabel(
+      {
+        dimensions: {
+          runId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+          workflowName: 'feature-dev',
+          codebaseId: 'cb-1',
+        },
+        metrics: emptyMetrics(),
+      },
+      'run'
+    );
+    expect(run).toBe('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee · feature-dev · project cb-1');
+  });
+
+  it('uses explicit non-misleading labels for null/unknown/unclassified dimensions', () => {
+    const sparse = dimensionLabel(
+      {
+        dimensions: {
+          runId: undefined,
+          nodeId: null,
+          agentProvider: undefined,
+          provider: undefined,
+          model: null,
+          modelSource: undefined,
+          kind: null,
+        },
+        metrics: emptyMetrics(),
+      },
+      'node'
+    );
+
+    expect(sparse).toContain('(unknown node)');
+    expect(sparse).toContain('(unknown run)');
+    expect(sparse).toContain('(unknown agent)');
+    expect(sparse).toContain('(unknown provider)/(unknown model)');
+    expect(sparse).toContain('unknown model source');
+    expect(sparse).toContain('unclassified kind');
+  });
+});
+
+describe('usageCommand', () => {
+  let logSpy: ReturnType<typeof spyOn<Console, 'log'>>;
+  let errSpy: ReturnType<typeof spyOn<Console, 'error'>>;
+  let warnSpy: ReturnType<typeof spyOn<Console, 'warn'>>;
+  let stdoutSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    logSpy = spyOn(console, 'log').mockImplementation(() => {});
+    errSpy = spyOn(console, 'error').mockImplementation(() => {});
+    warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+    stdoutSpy = spyOn(process.stdout, 'write').mockImplementation((...args: unknown[]) => {
+      const callback = args.find(arg => typeof arg === 'function');
+      if (typeof callback === 'function') (callback as () => void)();
+      return true;
+    });
+  });
+
+  afterEach(() => {
+    logSpy.mockRestore();
+    errSpy.mockRestore();
+    warnSpy.mockRestore();
+    stdoutSpy.mockRestore();
+  });
+
+  function humanOut(): string {
+    return logSpy.mock.calls.flat().join('\n');
+  }
+
+  function jsonOut(): string {
+    return ((stdoutSpy.mock.calls[0]?.[0] as string) ?? '').trimEnd();
+  }
+
+  it('maps CLI flags onto the core query without SQL duplication', async () => {
+    let received: UsageReportQuery | undefined;
+    const queryFn: UsageQueryFn = async options => {
+      received = options;
+      return sampleReport();
+    };
+
+    const code = await usageCommand(
+      {
+        since: '2026-09-01T00:00:00.000Z',
+        until: '2026-09-02T00:00:00.000Z',
+        by: 'model',
+        codebaseId: 'cb-1',
+        agent: 'claude',
+        provider: 'anthropic',
+        model: 'sonnet',
+        kind: 'advisor',
+        runId: 'run-1',
+        node: 'plan',
+      },
+      queryFn
+    );
+
+    expect(code).toBe(0);
+    expect(received).toEqual({
+      from: '2026-09-01T00:00:00.000Z',
+      to: '2026-09-02T00:00:00.000Z',
+      groupBy: 'model',
+      codebaseId: 'cb-1',
+      agentProvider: 'claude',
+      provider: 'anthropic',
+      model: 'sonnet',
+      kind: 'advisor',
+      runId: 'run-1',
+      nodeId: 'plan',
+    });
+  });
+
+  it('rejects asymmetric --since/--until before querying', async () => {
+    let called = false;
+    const code = await usageCommand({ since: '2026-09-01T00:00:00.000Z' }, async () => {
+      called = true;
+      return sampleReport();
+    });
+    expect(code).toBe(1);
+    expect(called).toBe(false);
+    expect(errSpy.mock.calls.flat().join('\n')).toContain('--since and --until');
+  });
+
+  it('rejects date-only, locale, zone-less, invalid-offset, and calendar-rollover --since/--until', async () => {
+    const invalid = [
+      '2026-09-01',
+      '09/01/2026',
+      'Sep 1, 2026',
+      '2026-09-01T00:00:00',
+      '2026-09-01T00:00:00+0000',
+      '2026-02-29T00:00:00.000Z',
+      '2026-02-30T00:00:00.000Z',
+    ];
+    for (const bad of invalid) {
+      let called = false;
+      errSpy.mockClear();
+      const code = await usageCommand(
+        { since: bad, until: '2026-09-02T00:00:00.000Z' },
+        async () => {
+          called = true;
+          return sampleReport();
+        }
+      );
+      expect(code).toBe(1);
+      expect(called).toBe(false);
+      expect(errSpy.mock.calls.flat().join('\n')).toContain('Invalid --since');
+      expect(errSpy.mock.calls.flat().join('\n')).toContain('RFC 3339');
+    }
+
+    errSpy.mockClear();
+    let calledUntil = false;
+    const untilCode = await usageCommand(
+      { since: '2026-09-01T00:00:00.000Z', until: '2026-09-01T00:00:00' },
+      async () => {
+        calledUntil = true;
+        return sampleReport();
+      }
+    );
+    expect(untilCode).toBe(1);
+    expect(calledUntil).toBe(false);
+    expect(errSpy.mock.calls.flat().join('\n')).toContain('Invalid --until');
+  });
+
+  it('rejects sub-millisecond fractional --since/--until with an actionable precision message', async () => {
+    const rejected = [
+      '2026-09-01T00:00:00.0004Z',
+      '2026-09-01T00:00:00.0005Z',
+      '2026-09-01T00:00:00.123456Z',
+      '2026-09-01T00:00:00.123456789Z',
+    ];
+    for (const bad of rejected) {
+      let called = false;
+      errSpy.mockClear();
+      const code = await usageCommand(
+        { since: bad, until: '2026-09-02T00:00:00.000Z' },
+        async () => {
+          called = true;
+          return sampleReport();
+        }
+      );
+      expect(code).toBe(1);
+      expect(called).toBe(false);
+      const err = errSpy.mock.calls.flat().join('\n');
+      expect(err).toContain('Invalid --since');
+      expect(err).toContain('3 fractional second digits');
+    }
+
+    errSpy.mockClear();
+    let calledUntil = false;
+    const untilCode = await usageCommand(
+      { since: '2026-09-01T00:00:00.000Z', until: '2026-09-01T00:00:00.123456Z' },
+      async () => {
+        calledUntil = true;
+        return sampleReport();
+      }
+    );
+    expect(untilCode).toBe(1);
+    expect(calledUntil).toBe(false);
+    expect(errSpy.mock.calls.flat().join('\n')).toContain('Invalid --until');
+    expect(errSpy.mock.calls.flat().join('\n')).toContain('3 fractional second digits');
+  });
+
+  it('accepts 1–3 fractional digits on --since/--until', async () => {
+    const pairs: Array<[string, string]> = [
+      ['2026-09-01T00:00:00.1Z', '2026-09-01T00:00:00.2Z'],
+      ['2026-09-01T00:00:00.12Z', '2026-09-01T00:00:00.123Z'],
+      ['2026-09-01T07:00:00.5+07:00', '2026-09-01T00:00:01.000Z'],
+    ];
+    for (const [since, until] of pairs) {
+      let received: UsageReportQuery | undefined;
+      const code = await usageCommand({ since, until }, async options => {
+        received = options;
+        return sampleReport();
+      });
+      expect(code).toBe(0);
+      expect(received).toEqual({ from: since, to: until });
+    }
+  });
+
+  it('accepts Z and explicit-offset RFC 3339 --since/--until', async () => {
+    const pairs: Array<[string, string]> = [
+      ['2026-09-01T00:00:00Z', '2026-09-02T00:00:00Z'],
+      ['2026-09-01T00:00:00.000Z', '2026-09-02T00:00:00.000Z'],
+      ['2026-09-01T00:00:00+00:00', '2026-09-02T12:00:00-05:00'],
+      ['2028-02-29T00:00:00.000Z', '2028-03-01T00:00:00.000Z'],
+    ];
+    for (const [since, until] of pairs) {
+      let received: UsageReportQuery | undefined;
+      const code = await usageCommand({ since, until }, async options => {
+        received = options;
+        return sampleReport();
+      });
+      expect(code).toBe(0);
+      expect(received).toEqual({ from: since, to: until });
+    }
+  });
+
+  it('rejects invalid --by and --kind before querying', async () => {
+    expect(await usageCommand({ by: 'tokens' }, async () => sampleReport())).toBe(1);
+    expect(errSpy.mock.calls.flat().join('\n')).toContain('Invalid --by');
+
+    errSpy.mockClear();
+    expect(await usageCommand({ kind: 'primary' }, async () => sampleReport())).toBe(1);
+    expect(errSpy.mock.calls.flat().join('\n')).toContain('Invalid --kind');
+  });
+
+  it('writes exact camelCase report JSON via writeJsonLine', async () => {
+    const report = sampleReport({
+      totals: emptyMetrics({ reportedUsd: 0, estimatedUsd: null, recordCount: 1 }),
+    });
+    const code = await usageCommand({ json: true }, async () => report);
+    expect(code).toBe(0);
+    expect(JSON.parse(jsonOut())).toEqual(report);
+    // Logs must stay off stdout for --json consumers.
+    expect(logSpy).not.toHaveBeenCalled();
+  });
+
+  it('human mode distinguishes reported, estimated, zero, missing, and sub-cent values', async () => {
+    const report = sampleReport({
+      totals: emptyMetrics({
+        reportedUsd: 0,
+        estimatedUsd: 0.0004,
+        tokensInput: null,
+        tokensOutput: 10,
+        requests: 0,
+        recordCount: 3,
+        rowsMissingUsd: 1,
+      }),
+      groups: [
+        {
+          dimensions: { provider: 'openai' },
+          metrics: emptyMetrics({
+            reportedUsd: null,
+            estimatedUsd: 0,
+            tokensInput: 5,
+            recordCount: 1,
+          }),
+        },
+      ],
+    });
+
+    const code = await usageCommand({}, async () => report);
+    expect(code).toBe(0);
+    const out = humanOut();
+    expect(out).toContain('reported $0.00');
+    expect(out).toContain('estimated ≈$0.0004');
+    expect(out).toContain('in n/a');
+    expect(out).toContain('out 10');
+    expect(out).toContain('req 0');
+    expect(out).toContain('openai');
+    expect(out).toContain('reported n/a');
+    expect(out).toContain('estimated ≈$0.00');
+  });
+
+  it('prints a coverage warning when unledgeredEventCount > 0', async () => {
+    const report = sampleReport({
+      coverage: {
+        usageEventCount: 3,
+        ledgeredEventCount: 2,
+        unledgeredEventCount: 1,
+        hasRecordedUsage: true,
+        historicalBackfill: false,
+        filterScope: 'date-project-run-node',
+      },
+    });
+    expect(await usageCommand({}, async () => report)).toBe(0);
+    expect(warnSpy.mock.calls.flat().join('\n')).toContain('no ledger rows');
+  });
+
+  it('surfaces core validation/overflow errors without throwing', async () => {
+    const code = await usageCommand({}, async () => {
+      throw new UsageReportQueryError('validation', 'nodeId requires runId');
+    });
+    expect(code).toBe(1);
+    expect(errSpy.mock.calls.flat().join('\n')).toContain('nodeId requires runId');
+  });
+
+  it('defaults to an empty query so core applies UTC-month defaults', async () => {
+    let received: UsageReportQuery | undefined;
+    await usageCommand({}, async options => {
+      received = options;
+      return sampleReport();
+    });
+    expect(received).toEqual({});
+  });
+
+  it('human mode prints distinct full-tuple labels without changing --json contract', async () => {
+    const report = sampleReport({
+      groupBy: 'model',
+      groups: [
+        {
+          dimensions: {
+            provider: 'anthropic',
+            model: 'claude-sonnet-4',
+            modelSource: 'reported',
+          },
+          metrics: emptyMetrics({ reportedUsd: 0.1, recordCount: 1 }),
+        },
+        {
+          dimensions: {
+            provider: 'anthropic',
+            model: 'claude-sonnet-4',
+            modelSource: 'unknown',
+          },
+          metrics: emptyMetrics({ estimatedUsd: 0.05, recordCount: 1 }),
+        },
+      ],
+    });
+
+    expect(await usageCommand({}, async () => report)).toBe(0);
+    const human = humanOut();
+    expect(human).toContain('anthropic/claude-sonnet-4 · source reported');
+    expect(human).toContain('anthropic/claude-sonnet-4 · unknown model source');
+
+    logSpy.mockClear();
+    stdoutSpy.mockClear();
+    expect(await usageCommand({ json: true }, async () => report)).toBe(0);
+    expect(JSON.parse(jsonOut())).toEqual(report);
+  });
+});

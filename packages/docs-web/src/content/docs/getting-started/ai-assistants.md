@@ -379,6 +379,11 @@ tiers:
 ```
 
 Qoder structured output is best-effort.
+
+Qoder does **not** expose authoritative per-call usage through its CLI surface.
+Archon never fabricates token, request, model, or USD observations for Qoder —
+workflow usage reports simply omit Qoder passes that have no provider data.
+
 Archon appends the JSON schema instruction to the prompt, parses the final CLI output, and validates it before downstream nodes can read it.
 
 ## OMP CLI (Community Provider)
@@ -449,6 +454,28 @@ OMP structured output is best-effort.
 Archon appends the JSON schema instruction, parses the final assistant text, validates it, and lets the existing workflow reask loop handle schema misses.
 
 Archon's per-node `mcp`, `hooks`, `agents`, and tool-restriction fields are not translated in this version even though OMP has its own nearby features and configuration files.
+
+### Workflow usage enrichment (fail-soft)
+
+Primary stream `message_end` events already carry provider, model, token,
+cache, reasoning, and USD usage when OMP reports them.
+After the process exits, Archon may also enrich **advisor** and **task
+subagent** usage from session transcripts under the resolved session artifact
+directory:
+
+- Resume and fork are **byte-delta** safe: copied history is snapshotted before
+  spawn and only appended bytes are parsed after exit. A mid-record snapshot
+  end, changed prefix, wrong session header/cwd, symlink, path escape,
+  unsupported layout, malformed JSONL, or size bound failure **warns and omits**
+  that file — it never invents usage and never flips the node’s success/error
+  status.
+- Prompt, response, credential, and tool payload content never enter the usage
+  object or structured logs.
+- `--no-session` and unproven session layouts skip enrichment with a warning.
+
+OMP is an external binary, not a pinned package dependency; when the layout
+cannot be proven, enrichment fails closed.
+
 
 ## OpenCode (Community Provider)
 
@@ -921,6 +948,54 @@ archon ai default pi openrouter/minimax/minimax-m2 --scope user
 **How the chat model is resolved.** The provider comes from your personal default (if set), else the conversation's recorded assistant, else the install default. The model then resolves as: your `default_model` pin (only when your default provider matches the effective provider) → the configured `large` tier (yours > repo > global) → the install's `assistants.<provider>.model` (only when no `large` tier is configured anywhere) → the built-in tier default. Workflow nodes are unaffected — `model: large` keeps meaning the tier.
 
 The model-tier presets are the same ones you can hand-write in `~/.archon/config.yaml`; see [Configuration](/reference/configuration/) for the YAML format.
+
+## Workflow usage and cost tracking
+
+Archon records **workflow AI** usage only — every usage-bearing
+`IAgentProvider.sendQuery()` pass in a workflow run (including failed attempts,
+structured-output reasks, direct-loop iterations, resumes, and manual node
+retries). Direct chat turns are **out of scope** for the ledger and Cost page.
+
+### What providers report
+
+Providers emit an additive `usageBreakdown` only from SDK/CLI-observed fields.
+Archon never invents a missing model, token category, request count, or USD
+value. Known zeros survive; absent fields stay absent (never rendered as zero).
+
+| Provider | Authoritative usage notes |
+| --- | --- |
+| Claude | Per-model input/output/cache/USD from the Agent SDK; no per-model request count. Usage-bearing API failures still record accumulated usage. |
+| Codex | Input/cached-input/output/reasoning on `turn.completed`; no observed model, request count, or USD from the turn event. |
+| Grok | Aggregate tokens/USD plus per-model `modelCalls`. Multi-model totals are **not** apportioned — requests-only rows plus one unknown aggregate when needed. |
+| Pi | One observation per assistant message in the invocation; cache/reasoning/cost; `responseModel` overrides requested model when present. |
+| OpenCode | One observation per assistant message id (repeated updates replace); multi-agent rows are `subagent`. Reasoning is a subset of output (not double-counted). |
+| Copilot | One observation per `assistant.usage` event; `cost` is a billing **multiplier**, never USD. Subagent kind only from non-empty `parentToolCallId`. |
+| OMP | Primary stream usage plus fail-soft advisor/subagent transcript enrichment (see [OMP](#omp-cli-community-provider)). |
+| Qoder CLI | No fabricated breakdown — omit when the CLI exposes nothing. |
+
+### Scope, missingness, and coverage
+
+- **Direct-run scope.** Each run owns only the usage it invoked. Child
+  `workflow:` sub-runs record on the child run id; parents do not copy child
+  rows into the new ledger (legacy parent cost totals remain a separate label).
+- **No historical backfill.** Runs from older writers show
+  `hasRecordedUsage: false` / “not recorded,” never `$0`.
+  `historicalBackfill` is always `false`.
+- **Coverage is event↔ledger integrity only** (`usageEventCount`,
+  `ledgeredEventCount`, `unledgeredEventCount`). It is **not** a percentage of
+  all historical provider API calls and cannot quantify pre-feature spend.
+- A normal write commits the `node_usage_recorded` event and matching ledger
+  rows atomically. If the ledger insert fails, Archon keeps one detectable
+  event-only fallback (no estimates) and **does not** fail the workflow node.
+  Reports surface that gap via `unledgeredEventCount` and a CLI coverage
+  warning.
+- Provider-reported USD and Archon estimates are always separate. There is no
+  combined “effective total.” Operator pricing is [global-only](/reference/configuration/#pricing-global-only).
+
+- Query surfaces: [`GET /api/usage`](/reference/api/#usage),
+  [`archon usage`](/reference/cli/#usage) (`--since`/`--until`, half-open UTC),
+  run detail `usage`, and the console **Cost** page.
+
 
 ## How Assistant Selection Works
 

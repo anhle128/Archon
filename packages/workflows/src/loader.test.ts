@@ -3766,18 +3766,22 @@ nodes:
       ];
       for (const nodeId of requiredStages) expect(nodes.has(nodeId)).toBe(true);
 
+      // Accepted dual-model contract from speckit-ralph-native-feature.yaml:
+      // first native loop = xai-oauth/grok-4.5; final Speckit loop = cursor/cursor-grok-4.5.
       const paths = [
         {
           preflightId: 'ralph-native-preflight',
           conversionId: 'ralph-tasks-to-ralph',
           loopId: 'ralph-loop-run',
           syncId: 'ralph-sync-back',
+          model: 'xai-oauth/grok-4.5',
         },
         {
           preflightId: 'speckit-final-ralph-native-preflight',
           conversionId: 'speckit-final-ralph-tasks-to-ralph',
           loopId: 'speckit-final-ralph-loop-run',
           syncId: 'speckit-final-ralph-sync-back',
+          model: 'cursor/cursor-grok-4.5',
         },
       ];
 
@@ -3805,7 +3809,7 @@ nodes:
         expect(loop.depends_on).toEqual([path.preflightId]);
         expect(loop.effort).toBe('xhigh');
         expect(loop.provider).toBe('omp');
-        expect(loop.model).toBe('cursor/cursor-grok-4.5');
+        expect(loop.model).toBe(path.model);
         expect(loop.loop).toMatchObject({
           command: 'archon-speckit-ralph-iteration',
           fresh_context: true,
