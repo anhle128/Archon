@@ -171,36 +171,119 @@ function readRequiredStringArray(v: unknown): string[] | null {
   return out;
 }
 
-function readThinking(v: unknown): RunEnvResolvedRow['thinking'] | undefined {
-  if (v === null || typeof v !== 'object' || Array.isArray(v)) return undefined;
-  const rec = v as Record<string, unknown>;
-  if (!isNonEmptyString(rec.type)) return undefined;
-  const thinking: { type: string; budgetTokens?: number } = { type: rec.type };
-  if (
-    typeof rec.budgetTokens === 'number' &&
-    Number.isFinite(rec.budgetTokens) &&
-    rec.budgetTokens >= 0
-  ) {
-    thinking.budgetTokens = rec.budgetTokens;
+const PENDING_ENV_OVERLAY_KEYS: Record<string, true> = {
+  envId: true,
+  envName: true,
+  workflowName: true,
+  patches: true,
+  skippedNodeIds: true,
+};
+
+const COMPLETE_ENV_OVERLAY_KEYS: Record<string, true> = {
+  ...PENDING_ENV_OVERLAY_KEYS,
+  latestMissingNodeIds: true,
+  resolved: true,
+};
+
+const RESOLVED_ROW_KEYS: Record<string, true> = {
+  provider: true,
+  model: true,
+  tier: true,
+  modelReasoningEffort: true,
+  effort: true,
+  thinking: true,
+};
+
+const THINKING_TYPE_ONLY_KEYS: Record<string, true> = { type: true };
+const THINKING_ENABLED_KEYS: Record<string, true> = { type: true, budgetTokens: true };
+
+function hasOnlyAllowedKeys(rec: Record<string, unknown>, allowed: Record<string, true>): boolean {
+  for (const key of Object.keys(rec)) {
+    if (!allowed[key]) return false;
   }
-  return thinking;
+  return true;
+}
+
+/**
+ * Present optional non-empty string field.
+ * Absent → undefined; present-and-valid → string; present-but-invalid → null (fail closed).
+ */
+function readPresentOptionalString(
+  rec: Record<string, unknown>,
+  key: string
+): string | undefined | null {
+  if (!Object.prototype.hasOwnProperty.call(rec, key)) return undefined;
+  const v = rec[key];
+  if (typeof v === 'string' && v.length > 0) return v;
+  return null;
+}
+
+/**
+ * Thinking must match supported adaptive/enabled/disabled shapes when present.
+ * Returns null for malformed or unsupported values (fail closed — never drop silently).
+ */
+function readThinking(v: unknown): RunEnvResolvedRow['thinking'] | null {
+  if (typeof v === 'string') {
+    if (v === 'adaptive' || v === 'enabled' || v === 'disabled') {
+      return { type: v };
+    }
+    return null;
+  }
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return null;
+  const rec = v as Record<string, unknown>;
+  const type = rec.type;
+  if (type === 'adaptive' || type === 'disabled') {
+    if (!hasOnlyAllowedKeys(rec, THINKING_TYPE_ONLY_KEYS)) return null;
+    return { type };
+  }
+  if (type === 'enabled') {
+    if (!hasOnlyAllowedKeys(rec, THINKING_ENABLED_KEYS)) return null;
+    const thinking: { type: string; budgetTokens?: number } = { type: 'enabled' };
+    if (Object.prototype.hasOwnProperty.call(rec, 'budgetTokens')) {
+      const budget = rec.budgetTokens;
+      // Mirror thinkingConfigSchema: optional positive integer.
+      if (typeof budget !== 'number' || !Number.isInteger(budget) || budget <= 0) {
+        return null;
+      }
+      thinking.budgetTokens = budget;
+    }
+    return thinking;
+  }
+  return null;
 }
 
 function readResolvedRow(nodeId: string, value: unknown): RunEnvResolvedRow | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
   const rec = value as Record<string, unknown>;
+  if (!hasOnlyAllowedKeys(rec, RESOLVED_ROW_KEYS)) return null;
   if (!isNonEmptyString(rec.provider)) return null;
+
   const row: RunEnvResolvedRow = { nodeId, provider: rec.provider };
-  if (isNonEmptyString(rec.model)) row.model = rec.model;
-  if (rec.tier === 'small' || rec.tier === 'medium' || rec.tier === 'large') {
-    row.tier = rec.tier;
+
+  const model = readPresentOptionalString(rec, 'model');
+  if (model === null) return null;
+  if (model !== undefined) row.model = model;
+
+  if (Object.prototype.hasOwnProperty.call(rec, 'tier')) {
+    const tier = rec.tier;
+    if (tier !== 'small' && tier !== 'medium' && tier !== 'large') return null;
+    row.tier = tier;
   }
-  if (isNonEmptyString(rec.modelReasoningEffort)) {
-    row.modelReasoningEffort = rec.modelReasoningEffort;
+
+  const modelReasoningEffort = readPresentOptionalString(rec, 'modelReasoningEffort');
+  if (modelReasoningEffort === null) return null;
+  if (modelReasoningEffort !== undefined) row.modelReasoningEffort = modelReasoningEffort;
+
+  const effort = readPresentOptionalString(rec, 'effort');
+  if (effort === null) return null;
+  if (effort !== undefined) row.effort = effort;
+
+  if (Object.prototype.hasOwnProperty.call(rec, 'thinking')) {
+    const thinking = readThinking(rec.thinking);
+    if (thinking === null) return null;
+    row.thinking = thinking;
   }
-  if (isNonEmptyString(rec.effort)) row.effort = rec.effort;
-  const thinking = readThinking(rec.thinking);
-  if (thinking !== undefined) row.thinking = thinking;
+
   return row;
 }
 
@@ -245,6 +328,7 @@ export function parseRunEnvOverlay(
 
   // Pending applied form: no resolved key, no latestMissingNodeIds key.
   if (!hasResolvedKey && !hasLatestMissingKey) {
+    if (!hasOnlyAllowedKeys(rec, PENDING_ENV_OVERLAY_KEYS)) return null;
     return {
       envId: rec.envId,
       envName: rec.envName,
@@ -258,6 +342,7 @@ export function parseRunEnvOverlay(
 
   // Complete snapshot requires both keys; hybrids (one without the other) fail closed.
   if (!hasResolvedKey || !hasLatestMissingKey) return null;
+  if (!hasOnlyAllowedKeys(rec, COMPLETE_ENV_OVERLAY_KEYS)) return null;
 
   if (rec.resolved === null || typeof rec.resolved !== 'object' || Array.isArray(rec.resolved)) {
     return null;

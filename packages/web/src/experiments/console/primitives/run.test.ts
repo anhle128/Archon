@@ -522,4 +522,146 @@ describe('toRun / parseRunEnvOverlay — ENV overlay metadata', () => {
       })
     ).toBeNull();
   });
+
+  test('present invalid resolved-row fields and unexpected keys return null', () => {
+    const identity = {
+      envId: 'e1',
+      envName: 'fast',
+      workflowName: 'plan',
+    };
+    const completeBase = {
+      ...identity,
+      patches: {},
+      skippedNodeIds: [] as string[],
+      latestMissingNodeIds: [] as string[],
+    };
+
+    const parseResolved = (row: Record<string, unknown>) =>
+      parseRunEnvOverlay({
+        envOverlay: {
+          ...completeBase,
+          resolved: { plan: row },
+        },
+      });
+
+    // Present non-string / empty model.
+    expect(parseResolved({ provider: 'claude', model: 42 })).toBeNull();
+    expect(parseResolved({ provider: 'claude', model: '' })).toBeNull();
+    expect(parseResolved({ provider: 'claude', model: null as unknown as string })).toBeNull();
+
+    // Invalid tier (present but not small|medium|large).
+    expect(parseResolved({ provider: 'claude', tier: 'xlarge' })).toBeNull();
+    expect(parseResolved({ provider: 'claude', tier: '' })).toBeNull();
+    expect(parseResolved({ provider: 'claude', tier: 1 as unknown as string })).toBeNull();
+
+    // Invalid effort / modelReasoningEffort (present non-empty-string required).
+    expect(parseResolved({ provider: 'claude', effort: '' })).toBeNull();
+    expect(parseResolved({ provider: 'claude', effort: 3 as unknown as string })).toBeNull();
+    expect(parseResolved({ provider: 'claude', modelReasoningEffort: '' })).toBeNull();
+    expect(
+      parseResolved({ provider: 'claude', modelReasoningEffort: false as unknown as string })
+    ).toBeNull();
+
+    // Malformed / unsupported thinking.
+    expect(parseResolved({ provider: 'claude', thinking: 'nope' })).toBeNull();
+    expect(parseResolved({ provider: 'claude', thinking: { type: 'turbo' } })).toBeNull();
+    expect(
+      parseResolved({ provider: 'claude', thinking: { type: 'enabled', budgetTokens: 0 } })
+    ).toBeNull();
+    expect(
+      parseResolved({ provider: 'claude', thinking: { type: 'enabled', budgetTokens: 1.5 } })
+    ).toBeNull();
+    expect(
+      parseResolved({
+        provider: 'claude',
+        thinking: { type: 'adaptive', extra: true },
+      })
+    ).toBeNull();
+    expect(parseResolved({ provider: 'claude', thinking: null as unknown as object })).toBeNull();
+
+    // Unexpected resolved-row key.
+    expect(parseResolved({ provider: 'claude', prompt: 'SECRET' })).toBeNull();
+    expect(parseResolved({ provider: 'claude', unknownField: 'x' })).toBeNull();
+
+    // Valid optional fields still parse (control).
+    expect(
+      parseResolved({
+        provider: 'claude',
+        model: 'sonnet',
+        tier: 'medium',
+        effort: 'high',
+        thinking: { type: 'enabled', budgetTokens: 1024 },
+      })
+    ).not.toBeNull();
+    expect(
+      parseResolved({ provider: 'claude', thinking: 'adaptive' })?.resolved?.[0]
+    ).toMatchObject({
+      nodeId: 'plan',
+      provider: 'claude',
+      thinking: { type: 'adaptive' },
+    });
+  });
+
+  test('complete overlay with unexpected top-level key returns null', () => {
+    const identity = {
+      envId: 'e1',
+      envName: 'fast',
+      workflowName: 'plan',
+    };
+
+    expect(
+      parseRunEnvOverlay({
+        envOverlay: {
+          ...identity,
+          patches: {},
+          skippedNodeIds: [],
+          latestMissingNodeIds: [],
+          resolved: { plan: { provider: 'claude' } },
+          extraTop: true,
+        },
+      })
+    ).toBeNull();
+
+    // Pending form also rejects unexpected top-level keys.
+    expect(
+      parseRunEnvOverlay({
+        envOverlay: {
+          ...identity,
+          patches: {},
+          skippedNodeIds: [],
+          legacyNote: 'nope',
+        },
+      })
+    ).toBeNull();
+
+    // Valid complete/pending unchanged.
+    expect(
+      parseRunEnvOverlay({
+        envOverlay: {
+          ...identity,
+          patches: {},
+          skippedNodeIds: [],
+          latestMissingNodeIds: [],
+          resolved: { plan: { provider: 'claude', model: 'sonnet' } },
+        },
+      })
+    ).toMatchObject({
+      complete: true,
+      envName: 'fast',
+      resolved: [{ nodeId: 'plan', provider: 'claude', model: 'sonnet' }],
+    });
+    expect(
+      parseRunEnvOverlay({
+        envOverlay: {
+          ...identity,
+          patches: {},
+          skippedNodeIds: ['gone'],
+        },
+      })
+    ).toMatchObject({
+      complete: false,
+      skippedNodeIds: ['gone'],
+      resolved: null,
+    });
+  });
 });
