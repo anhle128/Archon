@@ -141,7 +141,9 @@ function selectResolvedModelId(
  * Omits `requests` — `webSearchRequests` is not a model-call count and
  * `costUSD` already carries authoritative cost.
  */
-function mapClaudeModelUsage(
+// Exported for the usage contract test: it feeds a `satisfies Record<string, ModelUsage>`
+// fixture so a change to the Claude SDK's per-model usage shape is caught at compile time.
+export function mapClaudeModelUsage(
   modelUsage: Record<string, ModelUsage> | undefined
 ): UsageBreakdown | undefined {
   if (!modelUsage) return undefined;

@@ -323,7 +323,9 @@ function classifyCodexError(
   return 'unknown';
 }
 
-function extractUsageFromCodexEvent(
+// Exported for the usage contract test: it feeds a `satisfies TurnCompletedEvent`
+// fixture so a change to the Codex SDK's usage shape is caught at compile time.
+export function extractUsageFromCodexEvent(
   event: TurnCompletedEvent,
   requestedModel: string | undefined
 ): { tokens: TokenUsage; usageBreakdown?: UsageBreakdown } {
