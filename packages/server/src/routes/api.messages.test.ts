@@ -129,6 +129,7 @@ mock.module('@archon/core/db/codebases', () => ({
 mock.module('@archon/core/db/isolation-environments', () => ({
   listByCodebase: mock(async () => []),
   updateStatus: mock(async () => {}),
+  getById: mock(async () => null),
 }));
 
 mock.module('@archon/core/db/workflows', () => ({

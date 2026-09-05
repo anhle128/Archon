@@ -1,0 +1,28 @@
+import { createRoute, z } from '@hono/zod-openapi';
+
+import { errorSchema } from '../schemas/common.schemas';
+import { gitChangesResponseSchema } from '../schemas/git.schemas';
+
+export const gitChangesRoute = createRoute({
+  method: 'get',
+  path: '/api/workflows/runs/{runId}/git/changes',
+  tags: ['Workflows'],
+  summary: "List a run's uncommitted git changes",
+  request: {
+    params: z.object({ runId: z.string().min(1) }),
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: gitChangesResponseSchema } },
+      description: 'Live changes or a CAP-6 empty envelope',
+    },
+    404: {
+      content: { 'application/json': { schema: errorSchema } },
+      description: 'Workflow run not found',
+    },
+    500: {
+      content: { 'application/json': { schema: errorSchema } },
+      description: 'Git read failed',
+    },
+  },
+});

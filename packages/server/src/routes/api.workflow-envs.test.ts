@@ -214,7 +214,7 @@ mock.module('@archon/core/db/codebases', () => ({
 }));
 
 mock.module('@archon/core/db/conversations', () => ({}));
-mock.module('@archon/core/db/isolation-environments', () => ({}));
+mock.module('@archon/core/db/isolation-environments', () => ({ getById: mock(async () => null) }));
 mock.module('@archon/core/db/workflows', () => ({}));
 mock.module('@archon/core/db/users', () => ({
   findOrCreateUserByPlatformIdentity: mock(async (_platform: string, platformUserId: string) => ({

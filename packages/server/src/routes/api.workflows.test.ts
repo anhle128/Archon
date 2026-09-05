@@ -113,7 +113,7 @@ mock.module('@archon/workflows/defaults', () => ({
 // calls naturally fail with ENOENT without needing to mock fs/promises (which would leak globally).
 
 mock.module('@archon/core/db/conversations', () => ({}));
-mock.module('@archon/core/db/isolation-environments', () => ({}));
+mock.module('@archon/core/db/isolation-environments', () => ({ getById: mock(async () => null) }));
 mock.module('@archon/core/db/workflows', () => ({}));
 mock.module('@archon/core/db/workflow-events', () => ({}));
 mock.module('@archon/core/db/messages', () => ({}));
