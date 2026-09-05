@@ -633,7 +633,7 @@ nodes:
         jq -e '[.userStories[].tasks[]? | select(.passes==false)] | length == 0' "$RLN_PRD" >/dev/null 2>&1
     depends_on:
       - ralph-native-preflight
-    effort: xhigh
+    effort: high
     provider: omp
     model: xai-oauth/grok-4.5
 
