@@ -11,6 +11,7 @@ import {
   buildEnvOverlaySnapshot,
   cloneWorkflowWithEngineMetadata,
   EnvOverlayError,
+  listEnvOverlayTargets,
   parseStoredEnvOverlay,
   restoreEnvOverlayFromStored,
   verifyAppliedEnvOverlay,
@@ -485,5 +486,53 @@ describe('ENV overlay restore / verify / snapshot', () => {
     // Detached from inputs
     snapshot.patches.p!.prompt = 'mutated';
     expect(appliedBase.patches.p?.prompt).toBe('patched');
+  });
+});
+
+describe('listEnvOverlayTargets', () => {
+  test('returns top-level matrix including bash and loop_group; excludes body ids and other kinds', () => {
+    const workflow = baseWorkflow([
+      { id: 'research', prompt: 'go' },
+      { id: 'cmd', command: 'ship' },
+      {
+        id: 'loop',
+        loop: { prompt: 'iterate', until: 'DONE', max_iterations: 2 },
+      },
+      {
+        id: 'group',
+        loop_group: {
+          nodes: [{ id: 'inner', prompt: 'nested' }],
+          until: 'DONE',
+          max_iterations: 2,
+        },
+      },
+      { id: 'sh', bash: 'echo hi' },
+      { id: 'gate', approval: true },
+    ] as DagNode[]);
+
+    const targets = listEnvOverlayTargets(workflow);
+    expect(targets.map(t => t.id)).toEqual(['research', 'cmd', 'loop', 'group', 'sh']);
+    expect(targets.find(t => t.id === 'research')?.allowedFields).toEqual([
+      'prompt',
+      'provider',
+      'model',
+      'effort',
+      'thinking',
+    ]);
+    expect(targets.find(t => t.id === 'cmd')?.allowedFields).toEqual([
+      'provider',
+      'model',
+      'effort',
+      'thinking',
+    ]);
+    expect(targets.find(t => t.id === 'loop')?.allowedFields).toEqual([
+      'provider',
+      'model',
+      'effort',
+    ]);
+    expect(targets.find(t => t.id === 'group')?.nodeType).toBe('loop_group');
+    expect(targets.find(t => t.id === 'group')?.allowedFields).toEqual(['provider', 'model']);
+    expect(targets.find(t => t.id === 'sh')?.allowedFields).toEqual(['bash']);
+    expect(targets.some(t => t.id === 'inner' || t.id === 'gate')).toBe(false);
   });
 });

@@ -101,6 +101,32 @@ function allowedFieldsFor(node: DagNode): ReadonlySet<EnvOverlayPatchField> {
   }
 }
 
+/** Top-level overlay-addressable node kinds (loop_group body ids are excluded). */
+export type EnvOverlayNodeType = NodeKindLabel;
+
+/** Console editor target: top-level node id + allowlisted fields. */
+export interface EnvOverlayTarget {
+  id: string;
+  nodeType: EnvOverlayNodeType;
+  allowedFields: EnvOverlayPatchField[];
+}
+
+/**
+ * Build the editor field-matrix for expanded top-level nodes.
+ * Includes bash and loop_group containers; omits kinds with no allowed fields
+ * and never walks sealed loop_group bodies (those are non-targets by design).
+ */
+export function listEnvOverlayTargets(workflow: WorkflowDefinition): EnvOverlayTarget[] {
+  const targets: EnvOverlayTarget[] = [];
+  for (const node of workflow.nodes) {
+    const nodeType = nodeKindLabel(node);
+    const allowedFields = [...allowedFieldsFor(node)] as EnvOverlayPatchField[];
+    if (allowedFields.length === 0) continue;
+    targets.push({ id: node.id, nodeType, allowedFields });
+  }
+  return targets;
+}
+
 const ALLOWED_FIELD_SET: ReadonlySet<string> = new Set(ENV_OVERLAY_PATCH_FIELDS);
 
 // ---------------------------------------------------------------------------

@@ -20,6 +20,7 @@ import type {
   TiersPatch,
   UserRole,
   SchemaVersionInfo,
+  UserAiPrefs,
 } from '@archon/core';
 import {
   handleMessage,
@@ -93,6 +94,23 @@ import { resolveWorkflowName } from '@archon/workflows/router';
 import { isValidCommandName, isValidWorkflowName } from '@archon/workflows/command-validation';
 import { projectLatestEffectiveNodeStates } from '@archon/workflows/retry-state';
 import { BUNDLED_WORKFLOWS, BUNDLED_COMMANDS, isBinaryBuild } from '@archon/workflows/defaults';
+import {
+  applyEnvOverlay,
+  EnvOverlayError,
+  listEnvOverlayTargets,
+} from '@archon/workflows/env-overlay';
+import {
+  assistantModelDefaults,
+  buildResolvedRequestMetadata,
+  resolveWorkflowModelScope,
+} from '@archon/workflows/node-model-resolution';
+import { buildAiProfile } from '@archon/workflows/model-validation';
+import type { EnvPatches } from '@archon/workflows/schemas/env-overlay';
+import {
+  workflowEnvWorkflowNameSchema,
+  type WorkflowEnvRow,
+  type WorkflowEnvSummary,
+} from '@archon/core/schemas/workflow-env';
 import {
   RETRYABLE_WORKFLOW_STATUSES,
   RESUMABLE_WORKFLOW_STATUSES,
@@ -382,6 +400,7 @@ import { queryUsageReport, UsageReportQueryError } from '@archon/core/db/usage-r
 import type { UsageReport } from '@archon/core/schemas/usage-report';
 import * as messageDb from '@archon/core/db/messages';
 import * as userDb from '@archon/core/db/users';
+import * as workflowEnvDb from '@archon/core/db/workflow-envs';
 import {
   abandonWorkflow,
   approveWorkflow,
@@ -420,6 +439,18 @@ import {
   resetWorkflowNodeSessionsResponseSchema,
   listArtifactsResponseSchema,
 } from './schemas/workflow.schemas';
+import {
+  workflowEnvWorkflowParamsSchema,
+  workflowEnvParamsSchema,
+  workflowEnvErrorSchema,
+  workflowEnvListResponseSchema,
+  workflowEnvDetailResponseSchema,
+  createWorkflowEnvBodySchema,
+  updateWorkflowEnvBodySchema,
+  deleteWorkflowEnvResponseSchema,
+  workflowEnvPreviewQuerySchema,
+  workflowEnvPreviewResponseSchema,
+} from './schemas/workflow-env.schemas';
 import { usageQuerySchema, usageReportResponseSchema } from './schemas/usage.schemas';
 import {
   conversationListResponseSchema,
@@ -684,6 +715,133 @@ const getCommandsRoute = createRoute({
     },
     400: jsonError('Bad request'),
     500: jsonError('Server error'),
+  },
+});
+
+/** Helper for ENV error responses that include optional safe detail. */
+function jsonEnvError(description: string): {
+  content: { 'application/json': { schema: typeof workflowEnvErrorSchema } };
+  description: string;
+} {
+  return {
+    content: { 'application/json': { schema: workflowEnvErrorSchema } },
+    description,
+  };
+}
+
+const listWorkflowEnvsRoute = createRoute({
+  method: 'get',
+  path: '/api/workflows/{name}/envs',
+  tags: ['Workflow Envs'],
+  summary: 'List named ENV overlays for a workflow',
+  request: { params: workflowEnvWorkflowParamsSchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: workflowEnvListResponseSchema } },
+      description: 'ENV summaries without patches',
+    },
+    400: jsonEnvError('Invalid workflow name'),
+    500: jsonEnvError('Server error'),
+  },
+});
+
+const getWorkflowEnvRoute = createRoute({
+  method: 'get',
+  path: '/api/workflows/{name}/envs/{envId}',
+  tags: ['Workflow Envs'],
+  summary: 'Fetch a single workflow ENV overlay',
+  request: { params: workflowEnvParamsSchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: workflowEnvDetailResponseSchema } },
+      description: 'Full ENV row',
+    },
+    400: jsonEnvError('Invalid path'),
+    404: jsonEnvError('ENV not found'),
+    500: jsonEnvError('Server error'),
+  },
+});
+
+const createWorkflowEnvRoute = createRoute({
+  method: 'post',
+  path: '/api/workflows/{name}/envs',
+  tags: ['Workflow Envs'],
+  summary: 'Create a named workflow ENV overlay',
+  request: {
+    params: workflowEnvWorkflowParamsSchema,
+    body: {
+      content: { 'application/json': { schema: createWorkflowEnvBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    201: {
+      content: { 'application/json': { schema: workflowEnvDetailResponseSchema } },
+      description: 'Created ENV',
+    },
+    400: jsonEnvError('Invalid request'),
+    409: jsonEnvError('ENV name conflict'),
+    500: jsonEnvError('Server error'),
+  },
+});
+
+const updateWorkflowEnvRoute = createRoute({
+  method: 'patch',
+  path: '/api/workflows/{name}/envs/{envId}',
+  tags: ['Workflow Envs'],
+  summary: 'Update a workflow ENV overlay (whole-document patches replace)',
+  request: {
+    params: workflowEnvParamsSchema,
+    body: {
+      content: { 'application/json': { schema: updateWorkflowEnvBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: workflowEnvDetailResponseSchema } },
+      description: 'Updated ENV',
+    },
+    400: jsonEnvError('Invalid request'),
+    404: jsonEnvError('ENV not found'),
+    409: jsonEnvError('ENV name conflict'),
+    500: jsonEnvError('Server error'),
+  },
+});
+
+const deleteWorkflowEnvRoute = createRoute({
+  method: 'delete',
+  path: '/api/workflows/{name}/envs/{envId}',
+  tags: ['Workflow Envs'],
+  summary: 'Delete a workflow ENV overlay',
+  request: { params: workflowEnvParamsSchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: deleteWorkflowEnvResponseSchema } },
+      description: 'Delete result',
+    },
+    400: jsonEnvError('Invalid path'),
+    500: jsonEnvError('Server error'),
+  },
+});
+
+const previewWorkflowEnvRoute = createRoute({
+  method: 'get',
+  path: '/api/workflows/{name}/env-preview',
+  tags: ['Workflow Envs'],
+  summary: 'Preview ENV overlay targets and resolved request metadata',
+  request: {
+    params: workflowEnvWorkflowParamsSchema,
+    query: workflowEnvPreviewQuerySchema,
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: workflowEnvPreviewResponseSchema } },
+      description: 'Non-authoritative preview',
+    },
+    400: jsonEnvError('Invalid request or overlay'),
+    404: jsonEnvError('Workflow not found'),
+    500: jsonEnvError('Server error'),
   },
 });
 
@@ -2788,6 +2946,7 @@ export function registerApiRoutes(
 
   function getRetryErrorStatus(error: unknown): 400 | 404 | 409 | 500 {
     const code = (error as { code?: unknown }).code;
+
     switch (code) {
       case 'run_not_found':
         return 404;
@@ -2945,6 +3104,48 @@ export function registerApiRoutes(
       getLog().error({ err: e as Error, invalidDate: val }, 'api.invalid_date_transform');
       return null;
     }
+  }
+
+  function toWorkflowEnvSummaryResponse(row: WorkflowEnvSummary): {
+    id: string;
+    workflowName: string;
+    name: string;
+    updatedAt: string;
+  } {
+    return {
+      id: row.id,
+      workflowName: row.workflow_name,
+      name: row.name,
+      updatedAt: toISOString(row.updated_at),
+    };
+  }
+
+  function toWorkflowEnvResponse(row: WorkflowEnvRow): {
+    id: string;
+    workflowName: string;
+    name: string;
+    updatedAt: string;
+    patches: EnvPatches;
+    createdAt: string;
+    createdByUserId: string | null;
+  } {
+    return {
+      ...toWorkflowEnvSummaryResponse(row),
+      patches: row.patches,
+      createdAt: toISOString(row.created_at),
+      createdByUserId: row.created_by_user_id,
+    };
+  }
+
+  function parseWorkflowEnvPathName(
+    name: string
+  ): { ok: true; name: string } | { ok: false; detail: string } {
+    const parsed = workflowEnvWorkflowNameSchema.safeParse(name);
+    if (!parsed.success) {
+      const detail = parsed.error.issues[0]?.message ?? 'invalid workflow name';
+      return { ok: false, detail };
+    }
+    return { ok: true, name: parsed.data };
   }
 
   function toApiConversation(row: import('@archon/core').Conversation): ApiConversation {
@@ -4976,6 +5177,377 @@ export function registerApiRoutes(
       }
     }
     return apiError(c, 404, `Workflow not found: ${name}`);
+  });
+
+  // =========================================================================
+  // Workflow ENV endpoints (install-wide overlays — no cwd required for CRUD)
+  // =========================================================================
+
+  // GET /api/workflows/{name}/envs
+  registerOpenApiRoute(listWorkflowEnvsRoute, async c => {
+    const pathName = parseWorkflowEnvPathName(c.req.param('name') ?? '');
+    if (!pathName.ok) {
+      return apiError(c, 400, 'invalid_workflow_name', pathName.detail);
+    }
+    try {
+      const rows = await workflowEnvDb.listWorkflowEnvSummaries(pathName.name);
+      return c.json({ envs: rows.map(toWorkflowEnvSummaryResponse) });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return apiError(
+          c,
+          400,
+          'invalid_workflow_name',
+          error.issues[0]?.message ?? 'invalid workflow name'
+        );
+      }
+      getLog().error(
+        {
+          err: error instanceof Error ? error : new Error(String(error)),
+          workflowName: pathName.name,
+        },
+        'workflow_env.list_failed'
+      );
+      return apiError(c, 500, 'Failed to list workflow ENVs');
+    }
+  });
+
+  // GET /api/workflows/{name}/envs/{envId}
+  registerOpenApiRoute(getWorkflowEnvRoute, async c => {
+    const pathName = parseWorkflowEnvPathName(c.req.param('name') ?? '');
+    if (!pathName.ok) {
+      return apiError(c, 400, 'invalid_workflow_name', pathName.detail);
+    }
+    const envId = c.req.param('envId') ?? '';
+    if (!envId) {
+      return apiError(c, 400, 'invalid_env_id', 'env id is required');
+    }
+    try {
+      const row = await workflowEnvDb.getWorkflowEnvById(envId);
+      if (row?.workflow_name !== pathName.name) {
+        return apiError(c, 404, 'env_not_found');
+      }
+      return c.json({ env: toWorkflowEnvResponse(row) });
+    } catch (error) {
+      if (error instanceof workflowEnvDb.WorkflowEnvCorruptRowError) {
+        getLog().error({ envId: error.envId }, 'workflow_env.corrupt_row');
+        return apiError(c, 500, 'env_store_corrupt');
+      }
+      getLog().error(
+        {
+          err: error instanceof Error ? error : new Error(String(error)),
+          workflowName: pathName.name,
+          envId,
+        },
+        'workflow_env.get_failed'
+      );
+      return apiError(c, 500, 'Failed to get workflow ENV');
+    }
+  });
+
+  // POST /api/workflows/{name}/envs
+  registerOpenApiRoute(createWorkflowEnvRoute, async c => {
+    const pathName = parseWorkflowEnvPathName(c.req.param('name') ?? '');
+    if (!pathName.ok) {
+      return apiError(c, 400, 'invalid_workflow_name', pathName.detail);
+    }
+    const body = getValidatedBody(c, createWorkflowEnvBodySchema);
+    try {
+      const userId = await resolveWebUserId(c);
+      const row = await workflowEnvDb.createWorkflowEnv({
+        workflow_name: pathName.name,
+        name: body.name,
+        patches: body.patches,
+        created_by_user_id: userId ?? null,
+      });
+      return c.json({ env: toWorkflowEnvResponse(row) }, 201);
+    } catch (error) {
+      if (error instanceof workflowEnvDb.WorkflowEnvNameConflictError) {
+        return apiError(c, 409, 'env_name_conflict');
+      }
+      if (error instanceof z.ZodError) {
+        const detail = error.issues[0]?.message ?? 'invalid request';
+        return apiError(c, 400, 'invalid_env_request', detail);
+      }
+      getLog().error(
+        {
+          err: error instanceof Error ? error : new Error(String(error)),
+          workflowName: pathName.name,
+        },
+        'workflow_env.create_failed'
+      );
+      return apiError(c, 500, 'Failed to create workflow ENV');
+    }
+  });
+
+  // PATCH /api/workflows/{name}/envs/{envId}
+  registerOpenApiRoute(updateWorkflowEnvRoute, async c => {
+    const pathName = parseWorkflowEnvPathName(c.req.param('name') ?? '');
+    if (!pathName.ok) {
+      return apiError(c, 400, 'invalid_workflow_name', pathName.detail);
+    }
+    const envId = c.req.param('envId') ?? '';
+    if (!envId) {
+      return apiError(c, 400, 'invalid_env_id', 'env id is required');
+    }
+    const body = getValidatedBody(c, updateWorkflowEnvBodySchema);
+    try {
+      const row = await workflowEnvDb.updateWorkflowEnv(pathName.name, envId, {
+        ...(body.name !== undefined ? { name: body.name } : {}),
+        ...(body.patches !== undefined ? { patches: body.patches } : {}),
+      });
+      if (!row) {
+        return apiError(c, 404, 'env_not_found');
+      }
+      return c.json({ env: toWorkflowEnvResponse(row) });
+    } catch (error) {
+      if (error instanceof workflowEnvDb.WorkflowEnvNameConflictError) {
+        return apiError(c, 409, 'env_name_conflict');
+      }
+      if (error instanceof workflowEnvDb.WorkflowEnvCorruptRowError) {
+        getLog().error({ envId: error.envId }, 'workflow_env.corrupt_row');
+        return apiError(c, 500, 'env_store_corrupt');
+      }
+      if (error instanceof z.ZodError) {
+        const detail = error.issues[0]?.message ?? 'invalid request';
+        return apiError(c, 400, 'invalid_env_request', detail);
+      }
+      if (
+        error instanceof Error &&
+        /requires at least one of name or patches/i.test(error.message)
+      ) {
+        return apiError(c, 400, 'invalid_env_request', error.message);
+      }
+      getLog().error(
+        {
+          err: error instanceof Error ? error : new Error(String(error)),
+          workflowName: pathName.name,
+          envId,
+        },
+        'workflow_env.update_failed'
+      );
+      return apiError(c, 500, 'Failed to update workflow ENV');
+    }
+  });
+
+  // DELETE /api/workflows/{name}/envs/{envId}
+  registerOpenApiRoute(deleteWorkflowEnvRoute, async c => {
+    const pathName = parseWorkflowEnvPathName(c.req.param('name') ?? '');
+    if (!pathName.ok) {
+      return apiError(c, 400, 'invalid_workflow_name', pathName.detail);
+    }
+    const envId = c.req.param('envId') ?? '';
+    if (!envId) {
+      return apiError(c, 400, 'invalid_env_id', 'env id is required');
+    }
+    try {
+      const deleted = await workflowEnvDb.deleteWorkflowEnv(pathName.name, envId);
+      return c.json({ deleted });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return apiError(
+          c,
+          400,
+          'invalid_workflow_name',
+          error.issues[0]?.message ?? 'invalid workflow name'
+        );
+      }
+      getLog().error(
+        {
+          err: error instanceof Error ? error : new Error(String(error)),
+          workflowName: pathName.name,
+          envId,
+        },
+        'workflow_env.delete_failed'
+      );
+      return apiError(c, 500, 'Failed to delete workflow ENV');
+    }
+  });
+
+  // GET /api/workflows/{name}/env-preview
+  registerOpenApiRoute(previewWorkflowEnvRoute, async c => {
+    const pathName = parseWorkflowEnvPathName(c.req.param('name') ?? '');
+    if (!pathName.ok) {
+      return apiError(c, 400, 'invalid_workflow_name', pathName.detail);
+    }
+
+    const cwd = c.req.query('cwd') ?? '';
+    if (!cwd) {
+      return apiError(c, 400, 'invalid_cwd', 'cwd is required');
+    }
+    if (!(await validateCwd(cwd))) {
+      return apiError(c, 400, 'invalid_cwd', 'cwd must match a registered codebase path');
+    }
+
+    const envIdQuery = c.req.query('envId');
+    const envId =
+      envIdQuery !== undefined && envIdQuery.trim() !== '' ? envIdQuery.trim() : undefined;
+
+    try {
+      const discovery = await discoverWorkflowsWithConfig(cwd, loadConfig);
+      let workflow: WorkflowDefinition | undefined;
+      try {
+        workflow = resolveWorkflowName(
+          pathName.name,
+          discovery.workflows.map(entry => entry.workflow)
+        );
+      } catch (resolveErr) {
+        const detail = resolveErr instanceof Error ? resolveErr.message : 'ambiguous workflow name';
+        return apiError(c, 400, 'ambiguous_workflow_name', detail);
+      }
+      if (!workflow) {
+        return apiError(c, 404, 'workflow_not_found', `Workflow not found: ${pathName.name}`);
+      }
+
+      const canonicalName = workflow.name;
+      let workingWorkflow = workflow;
+      let skippedNodeIds: string[] = [];
+      let responseEnvId: string | null = null;
+      let responseEnvName: string | null = null;
+
+      if (envId !== undefined) {
+        let row: WorkflowEnvRow | null;
+        try {
+          row = await workflowEnvDb.getWorkflowEnvById(envId);
+        } catch (error) {
+          if (error instanceof workflowEnvDb.WorkflowEnvCorruptRowError) {
+            getLog().error({ envId: error.envId }, 'workflow_env.corrupt_row');
+            return apiError(c, 500, 'env_store_corrupt');
+          }
+          throw error;
+        }
+        if (!row) {
+          return apiError(c, 400, 'env_not_found');
+        }
+        if (row.workflow_name !== pathName.name || row.workflow_name !== canonicalName) {
+          return apiError(c, 400, 'env_workflow_mismatch');
+        }
+
+        try {
+          const applied = applyEnvOverlay(workingWorkflow, row.patches);
+          workingWorkflow = applied.workflow;
+          skippedNodeIds = applied.missingNodeIds;
+        } catch (error) {
+          if (error instanceof EnvOverlayError) {
+            getLog().warn(
+              {
+                envId: row.id,
+                envName: row.name,
+                code: error.code,
+                nodeId: error.nodeId,
+                field: error.field,
+              },
+              'workflow_env.preview_apply_failed'
+            );
+            return apiError(c, 400, error.code, error.message);
+          }
+          throw error;
+        }
+
+        responseEnvId = row.id;
+        responseEnvName = row.name;
+      }
+
+      const targets = listEnvOverlayTargets(workflow);
+
+      // Mirror executor profile resolution: user prefs highest precedence,
+      // corrupt stored prefs degrade to config-only.
+      const config = await loadConfig(cwd);
+      let userAiPrefs: UserAiPrefs = {};
+      const webUserId = await resolveWebUserId(c);
+      if (webUserId) {
+        try {
+          userAiPrefs = await getUserAiPrefs(webUserId);
+        } catch (prefsErr) {
+          getLog().warn(
+            {
+              err: prefsErr instanceof Error ? prefsErr : new Error(String(prefsErr)),
+              userId: webUserId,
+            },
+            'workflow_env.preview_user_prefs_failed'
+          );
+        }
+      }
+
+      let aiProfile;
+      try {
+        aiProfile = buildAiProfile(userAiPrefs.defaultProvider ?? config.assistant, {
+          repoTiers: config.tiers,
+          repoAliases: config.aliases,
+          userTiers: userAiPrefs.tiers,
+          userAliases: userAiPrefs.aliases,
+        });
+      } catch (profileErr) {
+        getLog().error(
+          {
+            err: profileErr instanceof Error ? profileErr : new Error(String(profileErr)),
+            userId: webUserId,
+          },
+          'workflow_env.preview_user_prefs_invalid'
+        );
+        aiProfile = buildAiProfile(config.assistant, {
+          repoTiers: config.tiers,
+          repoAliases: config.aliases,
+        });
+      }
+
+      const assistantModels = assistantModelDefaults(config);
+      const scope = resolveWorkflowModelScope(
+        workingWorkflow,
+        config.assistant,
+        assistantModels,
+        aiProfile
+      );
+
+      let resolvedMap;
+      try {
+        resolvedMap = buildResolvedRequestMetadata(workingWorkflow.nodes, scope, assistantModels, {
+          aiProfile,
+        });
+      } catch (resolveErr) {
+        const detail =
+          resolveErr instanceof Error ? resolveErr.message : 'request metadata resolution failed';
+        // Never echo prompt/bash bodies — resolution errors are provider/effort messages.
+        getLog().warn(
+          {
+            err: resolveErr instanceof Error ? resolveErr : new Error(String(resolveErr)),
+            workflowName: canonicalName,
+            envId: responseEnvId,
+          },
+          'workflow_env.preview_resolution_failed'
+        );
+        return apiError(c, 400, 'env_preview_resolution_failed', detail);
+      }
+
+      const resolved = Object.entries(resolvedMap).map(([nodeId, meta]) => ({
+        nodeId,
+        ...meta,
+      }));
+
+      return c.json({
+        preview: true as const,
+        authoritative: false as const,
+        workflowName: canonicalName,
+        envId: responseEnvId,
+        envName: responseEnvName,
+        skippedNodeIds,
+        targets,
+        resolved,
+      });
+    } catch (error) {
+      if (error instanceof workflowEnvDb.WorkflowEnvCorruptRowError) {
+        getLog().error({ envId: error.envId }, 'workflow_env.corrupt_row');
+        return apiError(c, 500, 'env_store_corrupt');
+      }
+      getLog().error(
+        {
+          err: error instanceof Error ? error : new Error(String(error)),
+          workflowName: pathName.name,
+        },
+        'workflow_env.preview_failed'
+      );
+      return apiError(c, 500, 'Failed to preview workflow ENV');
+    }
   });
 
   // GET /api/commands - List available command names for the workflow node palette
