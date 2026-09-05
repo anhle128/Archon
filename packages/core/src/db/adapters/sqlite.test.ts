@@ -1484,7 +1484,7 @@ describe('SqliteAdapter', () => {
      * suite stayed green. Adjust when the schema legitimately changes size —
      * the failure names the count, so the intended value is never a guess.
      */
-    const MIN_NON_AUTH_COLUMNS = 155;
+    const MIN_NON_AUTH_COLUMNS = 162;
 
     /**
      * Archon table names declared by the Postgres migration. Body-independent
