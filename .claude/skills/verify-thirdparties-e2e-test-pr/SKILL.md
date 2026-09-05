@@ -30,7 +30,7 @@ Writing third-party e2e tests is the **implement agent's** responsibility, not t
 ## Inputs
 
 - A PR reference (number or branch).
-- Optionally, `thirdparty_e2e_requirements[]` produced by `web-automation-test-pr`. If absent, derive it: read `gh pr diff <n>` and identify which external/third-party integrations the PR adds or changes (AI provider SDKs, GitHub API, payment, external HTTP — interpret the diff; do NOT regex prose).
+- Optionally, `thirdparty_e2e_requirements[]` produced by `web-automation-test-pr`. If absent, derive it: **list the changed files with `gh pr view <n> --json files -q '.files[].path'`** — do NOT use `gh pr diff <n>`, which returns HTTP 406 on a PR over 20000 diff lines. Read the files that touch external integrations (per file: `gh pr diff <n> -- <path>`, which is scoped and stays under the cap, or read the file at the PR head ref), and identify which external/third-party integrations the PR adds or changes (AI provider SDKs, GitHub API, payment, external HTTP — interpret the source; do NOT regex prose).
 
 ## Steps
 

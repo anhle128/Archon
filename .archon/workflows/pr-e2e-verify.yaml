@@ -1,0 +1,100 @@
+name: pr-e2e-verify
+description: >-
+  For a ready PR, write and run an end-to-end user-story test (Lane B) and gate
+  on real third-party contract coverage (Lane A). A route_loop self-heals missing
+  coverage: an agent resolves the gaps, then the gate re-checks; on exhaustion it
+  comments the gaps on the PR.
+requires: [github]
+provider: claude
+
+nodes:
+  # Lane B — frame the user story, write the Playwright spec(s), list the
+  # external services the tests mock (the third-party requirements).
+  - id: plan-tests
+    depends_on: []
+    skills:
+      - web-automation-test-pr
+    prompt: |
+      The PR to verify is #$ARGUMENTS.
+      Read it: `gh pr view $ARGUMENTS` for the description, and list its changed
+      files with `gh pr view $ARGUMENTS --json files -q '.files[].path'` (do NOT
+      use `gh pr diff` — it fails with HTTP 406 on large PRs; read a file's change
+      with `gh pr diff $ARGUMENTS -- <path>` or at the head ref).
+      Follow the web-automation-test-pr skill: frame the full end-to-end user
+      story, derive the edge cases, crystallize them into Playwright spec(s)
+      under `e2e/ui/`, and list every external service the tests mock as a
+      third-party requirement.
+    output_format:
+      type: object
+      properties:
+        pr:
+          type: string
+        spec_file:
+          type: string
+        mocked_externals:
+          type: array
+          items:
+            type: string
+
+  # Lane A gate — is every mocked external anchored by a real contract test?
+  # Re-entered after each `resolve` (loop-back) via one_success on [plan-tests, resolve].
+  - id: verify
+    depends_on: [plan-tests, resolve]
+    trigger_rule: one_success
+    skills:
+      - verify-thirdparties-e2e-test-pr
+    prompt: |
+      Gate PR #$ARGUMENTS on third-party contract coverage.
+      Requirements = the mocked externals from plan-tests
+      ($plan-tests.output.mocked_externals) UNION the third-party surfaces in the
+      PR's changed files (`gh pr view $ARGUMENTS --json files -q '.files[].path'`;
+      do NOT use `gh pr diff` — HTTP 406 on large PRs). For each, check the source has a REAL
+      anchor (a recorded-real fixture, a live/contract test, or a `satisfies <SDK
+      type>` assertion) — a hand-written fixture does NOT count. Emit the verdict.
+    output_format:
+      type: object
+      properties:
+        allTicked:
+          type: boolean
+        unticked:
+          type: array
+          items:
+            type: string
+
+  # Self-heal gate. positive/exhausted are exit paths; only negative loops back.
+  - id: gate
+    depends_on: [verify]
+    route_loop:
+      condition: "$verify.output.allTicked == true"
+      max_iterations: 3
+      routes:
+        positive: run-e2e
+        negative: resolve
+        exhausted: comment-pr
+
+  # negative — an agent resolves the missing anchors, then the loop re-checks.
+  # No depends_on: activated only when the gate routes here.
+  - id: resolve
+    prompt: |
+      Third-party contract coverage is INCOMPLETE for PR #$ARGUMENTS.
+      Missing anchors: $verify.output.unticked
+
+      Resolve each one by adding a REAL anchor so the corresponding mock is tied
+      to reality: capture a recorded fixture from real provider output, or add a
+      `satisfies <SDK type>` test. You may run the provider / read on-disk output
+      to capture a real sample. NEVER fabricate a hand-written fixture — that is
+      the drift this whole gate exists to prevent. Commit the new test files into
+      the checkout so the next verify pass can see them.
+
+  # positive — run the crystallized Playwright specs against the real app.
+  - id: run-e2e
+    bash: |
+      set -euo pipefail
+      cd e2e
+      npm run test:ui
+
+  # exhausted — could not self-heal within max_iterations; escalate to the PR.
+  - id: comment-pr
+    bash: |
+      set -euo pipefail
+      gh pr comment "$ARGUMENTS" --body "PR e2e verify could not self-heal third-party contract coverage within 3 attempts. Missing anchors: $verify.output.unticked. A real anchor (recorded fixture or SDK-type assertion) must be added by the implementer before the mocked e2e tests can be trusted."
