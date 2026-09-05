@@ -156,7 +156,9 @@ import {
 import { keepAwake } from './utils/keep-awake';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
-import type { WorkflowDefinition, WorkflowRun } from './schemas';
+import type { AppliedEnvOverlay, WorkflowDefinition, WorkflowRun } from './schemas';
+import { applyEnvOverlay } from './env-overlay';
+import { isPromptNode } from './schemas';
 
 // --- Helpers ---
 
@@ -2442,5 +2444,338 @@ describe('resolveScopeArtifactsDir', () => {
     };
     expect(resolveScopeArtifactsDir(workflow, null, ROOT)).toBeUndefined();
     expect(resolveScopeArtifactsDir(workflow, undefined, ROOT)).toBeUndefined();
+  });
+});
+
+describe('executeWorkflow ENV overlay ownership', () => {
+  beforeEach(() => {
+    mockLogFn.mockClear();
+    mockExecuteDagWorkflow.mockClear();
+    mockEmitter.registerRun.mockClear();
+    mockEmitter.unregisterRun.mockClear();
+    mockEmitter.emit.mockClear();
+    mockGetDefaultBranch.mockClear();
+    mockGetDefaultBranch.mockImplementation(async () => 'main');
+    mockExecuteDagWorkflow.mockImplementation(async (): Promise<string | undefined> => undefined);
+  });
+
+  function makeApplied(overrides: Partial<AppliedEnvOverlay> = {}): AppliedEnvOverlay {
+    return {
+      envId: 'env-1',
+      envName: 'fast',
+      workflowName: 'test-workflow',
+      patches: { node1: { model: 'haiku', prompt: 'overlaid' } },
+      skippedNodeIds: ['missing-at-start'],
+      ...overrides,
+    };
+  }
+
+  it('stamps pending applied overlay on fresh foreground INSERT and writes complete snapshot before DAG', async () => {
+    const createdRuns: unknown[] = [];
+    const snapshots: unknown[] = [];
+    const store = makeStore({
+      createWorkflowRun: mock(async data => {
+        createdRuns.push(data);
+        return makeRun({
+          id: 'fresh-1',
+          metadata: { ...(data.metadata as object) },
+          user_id: data.user_id ?? null,
+        });
+      }),
+      setWorkflowRunEnvOverlay: mock(async (runId, snapshot) => {
+        snapshots.push(snapshot);
+        return makeRun({
+          id: runId,
+          metadata: { envOverlay: snapshot },
+        });
+      }),
+    });
+
+    const base = makeWorkflow({ nodes: [{ id: 'node1', prompt: 'original', model: 'sonnet' }] });
+    const applied = makeApplied();
+    const { workflow: patched } = applyEnvOverlay(base, applied.patches);
+
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-1',
+      '/tmp/repo',
+      patched,
+      'go',
+      'db-conv',
+      { appliedEnvOverlay: applied, userId: 'user-owner' }
+    );
+
+    expect(result.success).toBe(true);
+    expect(createdRuns).toHaveLength(1);
+    const insertMeta = (createdRuns[0] as { metadata: { envOverlay: AppliedEnvOverlay } }).metadata
+      .envOverlay;
+    expect(insertMeta.envId).toBe('env-1');
+    expect(insertMeta.patches.node1?.prompt).toBe('overlaid');
+    expect(insertMeta.skippedNodeIds).toEqual(['missing-at-start']);
+    // Pending form has no resolved keys yet.
+    expect('resolved' in insertMeta).toBe(false);
+
+    expect(snapshots).toHaveLength(1);
+    const complete = snapshots[0] as {
+      latestMissingNodeIds: string[];
+      resolved: Record<string, { model?: string }>;
+      patches: AppliedEnvOverlay['patches'];
+    };
+    expect(complete.latestMissingNodeIds).toEqual([]);
+    expect(complete.patches.node1?.prompt).toBe('overlaid');
+    expect(complete.resolved.node1?.model).toBe('haiku');
+
+    expect(mockEmitter.emit).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'workflow_started', runId: 'fresh-1' })
+    );
+    expect(mockExecuteDagWorkflow).toHaveBeenCalled();
+    const dagWorkflow = mockExecuteDagWorkflow.mock.calls[0]?.[4] as WorkflowDefinition;
+    expect(isPromptNode(dagWorkflow.nodes[0]) && dagWorkflow.nodes[0].prompt).toBe('overlaid');
+  });
+
+  it('restores frozen overlay from preCreatedRun metadata on resume without appliedEnvOverlay', async () => {
+    const applied = makeApplied({
+      patches: { node1: { prompt: 'frozen-resume', model: 'haiku' } },
+    });
+    const snapshots: unknown[] = [];
+    const store = makeStore({
+      setWorkflowRunEnvOverlay: mock(async (runId, snapshot) => {
+        snapshots.push(snapshot);
+        return makeRun({ id: runId, metadata: { envOverlay: snapshot } });
+      }),
+    });
+
+    const base = makeWorkflow({ nodes: [{ id: 'node1', prompt: 'yaml-now', model: 'sonnet' }] });
+    const preCreatedRun = makeRun({
+      id: 'resume-1',
+      user_id: 'run-owner',
+      metadata: {
+        envOverlay: {
+          ...applied,
+          latestMissingNodeIds: [],
+          resolved: { node1: { provider: 'claude', model: 'stale-resolved' } },
+        },
+      },
+    });
+
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-1',
+      '/tmp/repo',
+      base,
+      'resume',
+      'db-conv',
+      {
+        preCreatedRun,
+        priorCompletedNodes: new Map(),
+        // Deliberately different requester — overlay path must use run owner.
+        userId: 'requester-other',
+      }
+    );
+
+    expect(result.success).toBe(true);
+    expect(snapshots).toHaveLength(1);
+    const complete = snapshots[0] as {
+      patches: { node1?: { prompt?: string } };
+      resolved: Record<string, { model?: string }>;
+      latestMissingNodeIds: string[];
+    };
+    // Frozen patches unchanged; resolved recomputed live (not stale-resolved).
+    expect(complete.patches.node1?.prompt).toBe('frozen-resume');
+    expect(complete.resolved.node1?.model).toBe('haiku');
+    expect(complete.latestMissingNodeIds).toEqual([]);
+
+    const dagWorkflow = mockExecuteDagWorkflow.mock.calls[0]?.[4] as WorkflowDefinition;
+    expect(isPromptNode(dagWorkflow.nodes[0]) && dagWorkflow.nodes[0].prompt).toBe('frozen-resume');
+    // Source definition unchanged.
+    expect(isPromptNode(base.nodes[0]) && base.nodes[0].prompt).toBe('yaml-now');
+  });
+
+  it('records currently missing originally-applied ids without mutating frozen patches', async () => {
+    const snapshots: unknown[] = [];
+    const store = makeStore({
+      setWorkflowRunEnvOverlay: mock(async (runId, snapshot) => {
+        snapshots.push(snapshot);
+        return makeRun({ id: runId, metadata: { envOverlay: snapshot } });
+      }),
+    });
+
+    const base = makeWorkflow({
+      // node1 removed from current YAML; only other remains.
+      nodes: [{ id: 'other', prompt: 'still-here' }],
+    });
+    const preCreatedRun = makeRun({
+      id: 'resume-missing',
+      metadata: {
+        envOverlay: makeApplied({
+          patches: {
+            node1: { prompt: 'was-applied' },
+            other: { prompt: 'also-applied' },
+          },
+        }),
+      },
+    });
+
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-1',
+      '/tmp/repo',
+      base,
+      'resume',
+      'db-conv',
+      { preCreatedRun, priorCompletedNodes: new Map([['other', 'prior']]) }
+    );
+
+    expect(result.success).toBe(true);
+    const complete = snapshots[0] as {
+      patches: Record<string, { prompt?: string }>;
+      latestMissingNodeIds: string[];
+      skippedNodeIds: string[];
+    };
+    expect(complete.latestMissingNodeIds).toEqual(['node1']);
+    expect(complete.patches.node1?.prompt).toBe('was-applied');
+    expect(complete.patches.other?.prompt).toBe('also-applied');
+    expect(complete.skippedNodeIds).toEqual(['missing-at-start']);
+  });
+
+  it('uses preCreatedRun.user_id for AI prefs when overlay-bearing even if opts.userId differs', async () => {
+    const prefsCalls: string[] = [];
+    const store = makeStore({
+      setWorkflowRunEnvOverlay: mock(async (runId, snapshot) =>
+        makeRun({ id: runId, metadata: { envOverlay: snapshot } })
+      ),
+    });
+    const deps = makeDeps(store);
+    deps.getUserAiPrefs = mock(async (userId: string) => {
+      prefsCalls.push(userId);
+      return {};
+    });
+
+    const base = makeWorkflow({ nodes: [{ id: 'node1', prompt: 'x' }] });
+    const { workflow: patched } = applyEnvOverlay(base, { node1: { prompt: 'y' } });
+    const applied = makeApplied({ patches: { node1: { prompt: 'y' } } });
+
+    await executeWorkflow(deps, makePlatform(), 'conv-1', '/tmp/repo', patched, 'go', 'db', {
+      preCreatedRun: makeRun({
+        id: 'id-run',
+        user_id: 'owner-from-row',
+        metadata: { envOverlay: applied },
+      }),
+      priorCompletedNodes: new Map(),
+      appliedEnvOverlay: applied,
+      userId: 'requester',
+    });
+
+    expect(prefsCalls).toEqual(['owner-from-row']);
+  });
+
+  it('preserves opts.userId for prefs when no overlay is present', async () => {
+    const prefsCalls: string[] = [];
+    const deps = makeDeps();
+    deps.getUserAiPrefs = mock(async (userId: string) => {
+      prefsCalls.push(userId);
+      return {};
+    });
+
+    await executeWorkflow(deps, makePlatform(), 'conv-1', '/tmp/repo', makeWorkflow(), 'go', 'db', {
+      userId: 'plain-user',
+    });
+
+    expect(prefsCalls).toEqual(['plain-user']);
+  });
+
+  it('fails closed on audit write failure with no workflow_started and no DAG execution', async () => {
+    const failSpy = mock(async () => {});
+    const store = makeStore({
+      createWorkflowRun: mock(async () => makeRun({ id: 'audit-fail' })),
+      setWorkflowRunEnvOverlay: mock(async () => {
+        throw new Error('snapshot write boom');
+      }),
+      failWorkflowRun: failSpy,
+    });
+
+    const base = makeWorkflow({ nodes: [{ id: 'node1', prompt: 'o' }] });
+    const applied = makeApplied({ patches: { node1: { prompt: 'p' } } });
+    const { workflow: patched } = applyEnvOverlay(base, applied.patches);
+
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-1',
+      '/tmp/repo',
+      patched,
+      'go',
+      'db',
+      { appliedEnvOverlay: applied }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/snapshot write boom/);
+    expect(failSpy).toHaveBeenCalledWith(
+      'audit-fail',
+      expect.stringContaining('snapshot write boom')
+    );
+    expect(mockEmitter.emit).not.toHaveBeenCalled();
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('rejects corrupt stored overlay without executing', async () => {
+    const failSpy = mock(async () => {});
+    const store = makeStore({ failWorkflowRun: failSpy });
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-1',
+      '/tmp/repo',
+      makeWorkflow(),
+      'go',
+      'db',
+      {
+        preCreatedRun: makeRun({
+          id: 'bad-overlay',
+          metadata: { envOverlay: { envId: 'x', patches: {} } },
+        }),
+        priorCompletedNodes: new Map(),
+      }
+    );
+    expect(result.success).toBe(false);
+    expect(failSpy).toHaveBeenCalled();
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('fresh child create metadata does not receive parent overlay', async () => {
+    // Direct unit check of the child create path is covered in subrun tests via
+    // InMemoryStore; here we assert the executor backstop only reads the child row.
+    const store = makeStore({
+      setWorkflowRunEnvOverlay: mock(async (runId, snapshot) =>
+        makeRun({ id: runId, metadata: { envOverlay: snapshot } })
+      ),
+    });
+    const childBase = makeWorkflow({ name: 'child-wf', nodes: [{ id: 'c1', prompt: 'child' }] });
+    // Child preCreated with NO overlay must not invent one.
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-1',
+      '/tmp/repo',
+      childBase,
+      'child',
+      'db',
+      {
+        preCreatedRun: makeRun({
+          id: 'child-run',
+          workflow_name: 'child-wf',
+          parent_run_id: 'parent-with-overlay',
+          metadata: {},
+        }),
+        priorCompletedNodes: new Map(),
+      }
+    );
+    expect(result.success).toBe(true);
+    expect(store.setWorkflowRunEnvOverlay).not.toHaveBeenCalled();
+    expect(mockExecuteDagWorkflow).toHaveBeenCalled();
   });
 });

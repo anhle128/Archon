@@ -6,8 +6,16 @@ import {
   type LoopWithCompiledCommand,
   type NodeWithComposedMeta,
 } from './compiled-command';
-import { applyEnvOverlay, cloneWorkflowWithEngineMetadata, EnvOverlayError } from './env-overlay';
-import type { DagNode, EnvPatches, WorkflowDefinition } from './schemas';
+import {
+  applyEnvOverlay,
+  buildEnvOverlaySnapshot,
+  cloneWorkflowWithEngineMetadata,
+  EnvOverlayError,
+  parseStoredEnvOverlay,
+  restoreEnvOverlayFromStored,
+  verifyAppliedEnvOverlay,
+} from './env-overlay';
+import type { AppliedEnvOverlay, DagNode, EnvPatches, WorkflowDefinition } from './schemas';
 import { isBashNode, isLoopGroupNode, isPromptNode } from './schemas';
 
 beforeAll(() => {
@@ -372,5 +380,110 @@ describe('applyEnvOverlay targeting and isolation', () => {
     } catch (err) {
       expect((err as Error).message).not.toContain(secret);
     }
+  });
+});
+
+describe('ENV overlay restore / verify / snapshot', () => {
+  const appliedBase: AppliedEnvOverlay = {
+    envId: 'env-1',
+    envName: 'fast',
+    workflowName: 'overlay-demo',
+    patches: { p: { model: 'haiku', prompt: 'patched' } },
+    skippedNodeIds: ['gone'],
+  };
+
+  test('verifyAppliedEnvOverlay accepts matching patched fields and reports missing ids', () => {
+    const patched = applyEnvOverlay(
+      baseWorkflow([{ id: 'p', prompt: 'original', model: 'sonnet' }]),
+      {
+        p: { model: 'haiku', prompt: 'patched' },
+        missing: { model: 'opus' },
+      }
+    );
+    const applied: AppliedEnvOverlay = {
+      ...appliedBase,
+      patches: {
+        p: { model: 'haiku', prompt: 'patched' },
+        missing: { model: 'opus' },
+      },
+      skippedNodeIds: [],
+    };
+    expect(verifyAppliedEnvOverlay(patched.workflow, applied)).toEqual({
+      latestMissingNodeIds: ['missing'],
+    });
+  });
+
+  test('verifyAppliedEnvOverlay fails closed on workflow mismatch and field drift', () => {
+    const wf = baseWorkflow([{ id: 'p', prompt: 'patched', model: 'haiku' }]);
+    try {
+      verifyAppliedEnvOverlay(wf, { ...appliedBase, workflowName: 'other' });
+      expect.unreachable();
+    } catch (err) {
+      expect((err as EnvOverlayError).code).toBe('workflow_mismatch');
+    }
+
+    try {
+      verifyAppliedEnvOverlay(wf, {
+        ...appliedBase,
+        patches: { p: { model: 'haiku', prompt: 'DIFFERENT' } },
+      });
+      expect.unreachable();
+    } catch (err) {
+      expect((err as EnvOverlayError).code).toBe('invalid_overlay_snapshot');
+      expect((err as EnvOverlayError).field).toBe('prompt');
+      expect((err as Error).message).not.toContain('DIFFERENT');
+    }
+  });
+
+  test('restoreEnvOverlayFromStored reapplies frozen patches and keeps missing ids in latestMissingNodeIds', () => {
+    const original = baseWorkflow([
+      { id: 'p', prompt: 'original' },
+      { id: 'keep', prompt: 'stay' },
+    ]);
+    const stored = {
+      ...appliedBase,
+      patches: {
+        p: { prompt: 'from-snapshot' },
+        vanished: { model: 'opus' },
+      },
+      skippedNodeIds: ['gone'],
+      latestMissingNodeIds: [],
+      resolved: { p: { provider: 'claude', model: 'old' } },
+    };
+    const restored = restoreEnvOverlayFromStored(original, stored);
+    expect(isPromptNode(restored.workflow.nodes[0])).toBe(true);
+    if (isPromptNode(restored.workflow.nodes[0])) {
+      expect(restored.workflow.nodes[0].prompt).toBe('from-snapshot');
+    }
+    // Frozen patches retain vanished id even though it is currently missing.
+    expect(restored.applied.patches.vanished?.model).toBe('opus');
+    expect(restored.latestMissingNodeIds).toEqual(['vanished']);
+    expect(original.nodes[0] && isPromptNode(original.nodes[0]) && original.nodes[0].prompt).toBe(
+      'original'
+    );
+  });
+
+  test('parseStoredEnvOverlay rejects corrupt documents without echoing bodies', () => {
+    const secret = 'SECRET_PROMPT_BODY';
+    try {
+      parseStoredEnvOverlay({ envId: 'x', patches: { p: { prompt: secret } } });
+      expect.unreachable();
+    } catch (err) {
+      expect((err as EnvOverlayError).code).toBe('invalid_overlay_snapshot');
+      expect((err as Error).message).not.toContain(secret);
+    }
+  });
+
+  test('buildEnvOverlaySnapshot freezes patches and sorts latestMissingNodeIds', () => {
+    const snapshot = buildEnvOverlaySnapshot(appliedBase, ['z-missing', 'a-missing'], {
+      p: { provider: 'claude', model: 'haiku' },
+    });
+    expect(snapshot.latestMissingNodeIds).toEqual(['a-missing', 'z-missing']);
+    expect(snapshot.patches).toEqual(appliedBase.patches);
+    expect(snapshot.skippedNodeIds).toEqual(['gone']);
+    expect(snapshot.resolved.p?.model).toBe('haiku');
+    // Detached from inputs
+    snapshot.patches.p!.prompt = 'mutated';
+    expect(appliedBase.patches.p?.prompt).toBe('patched');
   });
 });

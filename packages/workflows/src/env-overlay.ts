@@ -17,12 +17,17 @@ import {
   isLoopNode,
   isPromptNode,
   thinkingConfigSchema,
+  type AppliedEnvOverlay,
   type DagNode,
   type EnvNodePatch,
+  type EnvOverlaySnapshot,
   type EnvPatches,
+  type NodeExecutionMetadata,
+  type StoredEnvOverlay,
   type WorkflowDefinition,
   ENV_OVERLAY_PATCH_FIELDS,
   type EnvOverlayPatchField,
+  storedEnvOverlaySchema,
 } from './schemas';
 // ---------------------------------------------------------------------------
 // Error surface
@@ -307,5 +312,167 @@ export function applyEnvOverlay(
     workflow: clone,
     appliedPatches,
     missingNodeIds,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Runtime restore / verify / snapshot (executor ownership)
+// ---------------------------------------------------------------------------
+
+function valuesEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') {
+    return false;
+  }
+  // Stable structural compare for thinking configs / plain objects.
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch {
+    return false;
+  }
+}
+
+function readNodePatchField(node: DagNode, field: EnvOverlayPatchField): unknown {
+  return (node as Record<string, unknown>)[field];
+}
+
+/**
+ * Detach a pending applied descriptor for the first run-row INSERT. Callers must
+ * not share the returned object with live ENV rows or mutable request state.
+ */
+export function cloneAppliedEnvOverlay(applied: AppliedEnvOverlay): AppliedEnvOverlay {
+  return structuredClone(applied);
+}
+
+/**
+ * Strip complete-snapshot extras down to the frozen applied descriptor.
+ * `patches` / `skippedNodeIds` stay exactly as stored.
+ */
+export function toAppliedEnvOverlay(stored: StoredEnvOverlay): AppliedEnvOverlay {
+  return {
+    envId: stored.envId,
+    envName: stored.envName,
+    workflowName: stored.workflowName,
+    patches: structuredClone(stored.patches),
+    skippedNodeIds: [...stored.skippedNodeIds],
+  };
+}
+
+/**
+ * Parse untrusted `metadata.envOverlay`. Throws `EnvOverlayError` with
+ * `invalid_overlay_snapshot` on shape failure (never echoes patch bodies).
+ */
+export function parseStoredEnvOverlay(raw: unknown): StoredEnvOverlay {
+  const parsed = storedEnvOverlaySchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new EnvOverlayError(
+      'invalid_overlay_snapshot',
+      'Stored metadata.envOverlay failed schema validation'
+    );
+  }
+  return parsed.data;
+}
+
+/**
+ * Verify a caller-supplied applied descriptor against an already-patched workflow.
+ * Returns currently missing originally-applied ids without filtering the descriptor.
+ */
+export function verifyAppliedEnvOverlay(
+  workflow: WorkflowDefinition,
+  applied: AppliedEnvOverlay
+): { latestMissingNodeIds: string[] } {
+  if (applied.workflowName !== workflow.name) {
+    throw new EnvOverlayError(
+      'workflow_mismatch',
+      `Applied ENV overlay workflow '${applied.workflowName}' does not match definition '${workflow.name}'`
+    );
+  }
+
+  const nodesById = new Map<string, DagNode>();
+  for (const node of workflow.nodes) {
+    nodesById.set(node.id, node);
+  }
+
+  const latestMissingNodeIds: string[] = [];
+
+  for (const nodeId of Object.keys(applied.patches)) {
+    const patch = applied.patches[nodeId];
+    if (patch === undefined) continue;
+
+    const node = nodesById.get(nodeId);
+    if (node === undefined) {
+      latestMissingNodeIds.push(nodeId);
+      continue;
+    }
+
+    for (const field of ENV_OVERLAY_PATCH_FIELDS) {
+      const expected = patch[field];
+      if (expected === undefined) continue;
+      const actual = readNodePatchField(node, field);
+      if (!valuesEqual(actual, expected)) {
+        throw new EnvOverlayError(
+          'invalid_overlay_snapshot',
+          `Node '${nodeId}': applied ENV overlay field '${field}' does not match the workflow definition`,
+          { nodeId, field }
+        );
+      }
+    }
+  }
+
+  latestMissingNodeIds.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return { latestMissingNodeIds };
+}
+
+export interface RestoreEnvOverlayResult {
+  /** Patched clone ready for execution. */
+  workflow: WorkflowDefinition;
+  /** Frozen applied descriptor (patches/skippedNodeIds unchanged from storage). */
+  applied: AppliedEnvOverlay;
+  /** Originally applied ids absent from the current definition, sorted. */
+  latestMissingNodeIds: string[];
+}
+
+/**
+ * Reapply a frozen run-owned overlay onto a fresh clone of the current definition.
+ * Retains stored `patches` even when some targets are temporarily missing.
+ */
+export function restoreEnvOverlayFromStored(
+  workflow: WorkflowDefinition,
+  stored: StoredEnvOverlay
+): RestoreEnvOverlayResult {
+  if (stored.workflowName !== workflow.name) {
+    throw new EnvOverlayError(
+      'workflow_mismatch',
+      `Stored ENV overlay workflow '${stored.workflowName}' does not match definition '${workflow.name}'`
+    );
+  }
+
+  const applied = toAppliedEnvOverlay(stored);
+  const result = applyEnvOverlay(workflow, applied.patches);
+  return {
+    workflow: result.workflow,
+    applied,
+    // Replay missing set becomes latestMissingNodeIds — never mutate frozen patches.
+    latestMissingNodeIds: result.missingNodeIds,
+  };
+}
+
+/**
+ * Build the complete audit snapshot written before workflow-start / DAG execution.
+ * `patches` and `skippedNodeIds` stay frozen from the original start.
+ */
+export function buildEnvOverlaySnapshot(
+  applied: AppliedEnvOverlay,
+  latestMissingNodeIds: readonly string[],
+  resolved: Record<string, NodeExecutionMetadata>
+): EnvOverlaySnapshot {
+  return {
+    envId: applied.envId,
+    envName: applied.envName,
+    workflowName: applied.workflowName,
+    patches: structuredClone(applied.patches),
+    skippedNodeIds: [...applied.skippedNodeIds],
+    latestMissingNodeIds: [...latestMissingNodeIds].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+    resolved: structuredClone(resolved),
   };
 }

@@ -10,7 +10,9 @@ import * as archonPaths from '@archon/paths';
 import { createLogger, captureWorkflowInvoked, captureWorkflowCompleted } from '@archon/paths';
 import { getDefaultBranch, toRepoPath } from '@archon/git';
 import type {
+  AppliedEnvOverlay,
   DagNode,
+  EnvOverlaySnapshot,
   WorkflowDefinition,
   WorkflowRun,
   WorkflowExecutionResult,
@@ -58,7 +60,19 @@ import { resolveGithubTokenOverrides } from './utils/github-token-policy';
 import { buildAiProfile } from './model-validation';
 import type { ResolvedAiProfile } from './model-validation';
 import type { WorkflowRetryContext } from './store';
-import { assistantModelDefaults, resolveWorkflowModelScope } from './node-model-resolution';
+import {
+  assistantModelDefaults,
+  buildResolvedRequestMetadata,
+  resolveWorkflowModelScope,
+} from './node-model-resolution';
+import {
+  buildEnvOverlaySnapshot,
+  cloneAppliedEnvOverlay,
+  EnvOverlayError,
+  parseStoredEnvOverlay,
+  restoreEnvOverlayFromStored,
+  verifyAppliedEnvOverlay,
+} from './env-overlay';
 
 /** The per-user prefs layer as returned by `WorkflowDeps.getUserAiPrefs`. */
 type UserAiPrefsLayer = Awaited<ReturnType<NonNullable<WorkflowDeps['getUserAiPrefs']>>>;
@@ -566,6 +580,13 @@ export type ExecuteWorkflowOptions = ResumePayload & {
    * Ignored on a resume: the row already carries the inputs validated at creation.
    */
   inputs?: Readonly<Record<string, string>>;
+  /**
+   * Frozen ENV overlay already applied to `workflow` by the caller (orchestrator
+   * Start path). When set, the executor verifies identity/patched-field equality
+   * and owns the pending→complete run metadata snapshot. Resume/retry callers omit
+   * this and rely on `preCreatedRun.metadata.envOverlay` instead.
+   */
+  appliedEnvOverlay?: AppliedEnvOverlay;
 };
 
 /**
@@ -1142,6 +1163,77 @@ async function maybeResumeParentRun(
   }
 }
 
+/** Live overlay state owned by one executeWorkflow attempt. */
+interface ActiveEnvOverlay {
+  applied: AppliedEnvOverlay;
+  latestMissingNodeIds: string[];
+}
+
+/**
+ * Resolve the execution workflow + frozen overlay for this attempt.
+ * - Caller-supplied `appliedEnvOverlay`: workflow is already patched; verify only.
+ * - Else stored `preCreatedRun.metadata.envOverlay`: reapply frozen patches.
+ * - Else: no overlay work.
+ */
+function prepareExecutionEnvOverlay(
+  workflow: WorkflowDefinition,
+  appliedEnvOverlay: AppliedEnvOverlay | undefined,
+  preCreatedRun: WorkflowRun | undefined
+): { workflow: WorkflowDefinition; overlay: ActiveEnvOverlay | null } {
+  if (appliedEnvOverlay) {
+    const { latestMissingNodeIds } = verifyAppliedEnvOverlay(workflow, appliedEnvOverlay);
+    return {
+      workflow,
+      overlay: {
+        applied: cloneAppliedEnvOverlay(appliedEnvOverlay),
+        latestMissingNodeIds,
+      },
+    };
+  }
+
+  const rawOverlay = preCreatedRun?.metadata?.envOverlay;
+  if (rawOverlay === undefined || rawOverlay === null) {
+    return { workflow, overlay: null };
+  }
+
+  const stored = parseStoredEnvOverlay(rawOverlay);
+  const restored = restoreEnvOverlayFromStored(workflow, stored);
+  return {
+    workflow: restored.workflow,
+    overlay: {
+      applied: restored.applied,
+      latestMissingNodeIds: restored.latestMissingNodeIds,
+    },
+  };
+}
+
+/**
+ * Mark an already-claimed run failed after overlay/audit failure. If the status
+ * write also fails, log critically and still execute nothing — never guess orphan.
+ */
+async function failClosedAfterOverlayError(
+  deps: WorkflowDeps,
+  runId: string | undefined,
+  error: unknown
+): Promise<void> {
+  if (!runId) return;
+  const err = error as Error;
+  const code = error instanceof EnvOverlayError ? error.code : err.name;
+  try {
+    await deps.store.failWorkflowRun(runId, err.message);
+  } catch (failErr: unknown) {
+    getLog().error(
+      {
+        err: failErr as Error,
+        workflowRunId: runId,
+        overlayError: err.message,
+        overlayErrorCode: code,
+      },
+      'workflow.env_overlay_fail_status_write_failed'
+    );
+  }
+}
+
 /**
  * Execute a complete DAG-based workflow.
  *
@@ -1178,6 +1270,7 @@ export async function executeWorkflow(
     container: containerCtx,
     resolveChildIsolation,
     inputs: suppliedInputs,
+    appliedEnvOverlay,
   } = opts;
 
   // Guard: a container run MUST be resumed with its container rewired (the CLI does
@@ -1203,6 +1296,44 @@ export async function executeWorkflow(
     return { success: false, workflowRunId: preCreatedRun.id, error: msg };
   }
 
+  // ENV overlay backstop: restore frozen run metadata or verify a caller-applied
+  // descriptor before config/model resolution. Absence of overlay metadata bypasses
+  // all overlay clone/snapshot work (loop_group.model forwarding is separate).
+  let activeOverlay: ActiveEnvOverlay | null = null;
+  try {
+    const prepared = prepareExecutionEnvOverlay(workflow, appliedEnvOverlay, preCreatedRun);
+    workflow = prepared.workflow;
+    activeOverlay = prepared.overlay;
+  } catch (error) {
+    const err = error as Error;
+    const code = error instanceof EnvOverlayError ? error.code : undefined;
+    getLog().error(
+      {
+        err,
+        workflowName: workflow.name,
+        workflowRunId: preCreatedRun?.id,
+        envOverlayCode: code,
+      },
+      'workflow.env_overlay_prepare_failed'
+    );
+    await failClosedAfterOverlayError(deps, preCreatedRun?.id, error);
+    await safeSendMessage(
+      platform,
+      conversationId,
+      `❌ **Workflow failed**: ENV overlay could not be applied (${code ?? 'error'}).`
+    );
+    return {
+      success: false,
+      workflowRunId: preCreatedRun?.id,
+      error: err.message,
+    };
+  }
+
+  // Overlay-bearing pre-created runs use the run row's owner for prefs/credentials
+  // and child attribution. No-overlay runs keep today's opts.userId behavior.
+  const executionUserId =
+    activeOverlay && preCreatedRun ? (preCreatedRun.user_id ?? undefined) : userId;
+
   // Load config once for the entire workflow execution
   const fileConfig = await deps.loadConfig(cwd);
   const dbEnvVars = codebaseId ? await deps.store.getCodebaseEnvVars(codebaseId) : {};
@@ -1215,7 +1346,7 @@ export async function executeWorkflow(
   // time in the GitHub adapter), but the env injection is enough for the
   // typical <1h workflow.
   const botGitHubEnv = await resolveBotGitHubEnvForWorkflow(deps, codebaseId);
-  const userGitHubEnv = await resolveUserGithubEnvForWorkflow(deps, userId);
+  const userGitHubEnv = await resolveUserGithubEnvForWorkflow(deps, executionUserId);
   const config: WorkflowConfig = {
     ...fileConfig,
     // Order: file < db < bot-token < per-user. Per-codebase env vars are
@@ -1267,17 +1398,20 @@ export async function executeWorkflow(
   // non-throwing, but a third-party deps impl might throw anyway — guard so a
   // prefs failure can never abort a run; `{}` keeps config-only behavior.
   let userAiPrefs: UserAiPrefsLayer = {};
-  if (userId && deps.getUserAiPrefs) {
+  if (executionUserId && deps.getUserAiPrefs) {
     try {
-      userAiPrefs = await deps.getUserAiPrefs(userId);
+      userAiPrefs = await deps.getUserAiPrefs(executionUserId);
     } catch (error) {
-      getLog().warn({ err: error as Error, userId }, 'workflow.user_ai_prefs_resolve_failed');
+      getLog().warn(
+        { err: error as Error, userId: executionUserId },
+        'workflow.user_ai_prefs_resolve_failed'
+      );
     }
   }
   if (userAiPrefs.tiers || userAiPrefs.aliases || userAiPrefs.defaultProvider) {
     getLog().debug(
       {
-        userId,
+        userId: executionUserId,
         tierKeys: Object.keys(userAiPrefs.tiers ?? {}),
         aliasKeys: Object.keys(userAiPrefs.aliases ?? {}),
         defaultProvider: userAiPrefs.defaultProvider,
@@ -1297,7 +1431,10 @@ export async function executeWorkflow(
     // Structurally invalid STORED prefs (corrupt DB row) must not kill the run
     // before its record exists — degrade to config-only. A broken config layer
     // still fails fast: the rebuild below rethrows the same error.
-    getLog().error({ err: error as Error, userId }, 'workflow.user_ai_prefs_profile_invalid');
+    getLog().error(
+      { err: error as Error, userId: executionUserId },
+      'workflow.user_ai_prefs_profile_invalid'
+    );
     aiProfile = buildAiProfile(config.assistant, {
       repoTiers: config.tiers,
       repoAliases: config.aliases,
@@ -1416,9 +1553,12 @@ export async function executeWorkflow(
           ...(suppliedInputs && Object.keys(suppliedInputs).length > 0
             ? { [SUBRUN_METADATA_KEYS.inputs]: { ...suppliedInputs } }
             : {}),
+          // Pending applied ENV overlay at the FIRST run-row write. The later complete
+          // snapshot replace is not the first persistence of filtered patches.
+          ...(activeOverlay ? { envOverlay: cloneAppliedEnvOverlay(activeOverlay.applied) } : {}),
         },
         parent_conversation_id: parentConversationId,
-        user_id: userId,
+        user_id: executionUserId,
       });
     } catch (error) {
       const err = error as Error;
@@ -1434,6 +1574,14 @@ export async function executeWorkflow(
       return { success: false, error: 'Database error creating workflow run' };
     }
   }
+
+  // Fresh create and preCreated paths both yield a concrete row past this point.
+  if (!workflowRun) {
+    return { success: false, error: 'Database error creating workflow run' };
+  }
+  // Capture before later reassignment (complete ENV overlay snapshot) so async
+  // catch callbacks never see a possibly-undefined binding under CFA.
+  const ownedRunId = workflowRun.id;
 
   // Path-lock guard: ensure no other workflow run holds this working_path.
   //
@@ -1596,7 +1744,7 @@ export async function executeWorkflow(
       .updateWorkflowRun(workflowRun.id, { output_root: outputRoot })
       .catch((err: Error) => {
         getLog().error(
-          { err, workflowRunId: workflowRun.id, outputRoot },
+          { err, workflowRunId: ownedRunId, outputRoot },
           'workflow.output_root_persist_failed'
         );
       });
@@ -1644,7 +1792,7 @@ export async function executeWorkflow(
       .failWorkflowRun(workflowRun.id, `Artifacts directory creation failed: ${err.message}`)
       .catch((dbErr: Error) => {
         getLog().error(
-          { err: dbErr, workflowRunId: workflowRun.id },
+          { err: dbErr, workflowRunId: ownedRunId },
           'workflow.artifacts_dir_fail_db_record_failed'
         );
       });
@@ -1667,8 +1815,66 @@ export async function executeWorkflow(
   // win over file/db/bot-github env — preserves the GitHub merge order and
   // keeps the no-key path byte-for-byte unchanged (resolveUserProviderEnvForWorkflow
   // returns {} when the feature is disabled or no userId is present).
-  const userProviderEnv = await resolveUserProviderEnvForWorkflow(deps, userId, artifactsDir);
+  const userProviderEnv = await resolveUserProviderEnvForWorkflow(
+    deps,
+    executionUserId,
+    artifactsDir
+  );
   config.envVars = { ...config.envVars, ...userProviderEnv };
+
+  // Complete ENV overlay snapshot BEFORE any workflow-start event or DAG work.
+  // Resolved metadata is rebuilt from the patched workflow + live profile; the
+  // persisted `resolved` object is never read back as execution input.
+  if (activeOverlay) {
+    try {
+      const resolved = buildResolvedRequestMetadata(
+        workflow.nodes,
+        scope,
+        assistantModelDefaults(config),
+        { aiProfile }
+      );
+      const snapshot: EnvOverlaySnapshot = buildEnvOverlaySnapshot(
+        activeOverlay.applied,
+        activeOverlay.latestMissingNodeIds,
+        resolved
+      );
+      workflowRun = await deps.store.setWorkflowRunEnvOverlay(workflowRun.id, snapshot);
+      getLog().info(
+        {
+          workflowRunId: workflowRun.id,
+          envId: snapshot.envId,
+          envName: snapshot.envName,
+          appliedCount: Object.keys(snapshot.patches).length,
+          skippedCount: snapshot.skippedNodeIds.length,
+          latestMissingCount: snapshot.latestMissingNodeIds.length,
+          resolvedCount: Object.keys(snapshot.resolved).length,
+        },
+        'workflow.env_overlay_snapshot_written'
+      );
+    } catch (error) {
+      const err = error as Error;
+      const code = error instanceof EnvOverlayError ? error.code : undefined;
+      getLog().error(
+        {
+          err,
+          workflowRunId: workflowRun.id,
+          envOverlayCode: code,
+        },
+        'workflow.env_overlay_snapshot_failed'
+      );
+      await failClosedAfterOverlayError(deps, workflowRun.id, error);
+      await sendCriticalMessage(
+        platform,
+        conversationId,
+        `❌ **Workflow failed**: ENV overlay audit write failed (${code ?? 'error'}).`
+      );
+      return {
+        success: false,
+        workflowRunId: workflowRun.id,
+        error: err.message,
+      };
+    }
+  }
 
   // Wrap execution in try-catch to ensure workflow is marked as failed on any error.
   //
