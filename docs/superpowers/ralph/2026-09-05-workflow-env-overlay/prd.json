@@ -413,7 +413,8 @@
         "US-019"
       ],
       "priority": 20,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration US-020. Files: packages/workflows/src/executor.ts (inspectResumableRun), packages/core/src/orchestrator/orchestrator-agent.ts (early inspect, post-gate claim), tests. Focused core+workflows tests green."
     },
     {
       "id": "US-021",

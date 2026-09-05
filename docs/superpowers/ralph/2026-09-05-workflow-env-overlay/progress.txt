@@ -1,6 +1,12 @@
 ## Codebase Patterns
 
 
+
+### Resume inspect vs claim split (US-020)
+- **Where**: `packages/workflows/src/executor.ts` (`inspectResumableRun` / `hydrateResumableRun`), `packages/core/src/orchestrator/orchestrator-agent.ts`
+- **Pattern**: Early ENV path selection uses read-only `inspectResumableRun` (snapshot + eligibility, no CAS). `hydrateResumableRun` claims via `resumeWorkflowRun` exactly once *after* conversation + isolation gates. Failed gates leave the run paused. inspect-null reuses null without re-inspect; concurrent claim still atomic via CAS.
+- **Example**: ENV + `updateConversation` fail → inspect called, hydrate never; IsolationBlockedError after conversation → same
+
 ### Exact ENV name-conflict classification
 - **Where**: `packages/core/src/db/workflow-envs.ts` (`isWorkflowEnvNameConflict`)
 - **Pattern**: PostgreSQL → `true` only when `code === '23505' && constraint === 'uq_workflow_envs_workflow_name_name'` (never message prose). SQLite → parse `UNIQUE constraint failed:` column list and require both fully-qualified `remote_agent_workflow_envs.workflow_name` and `remote_agent_workflow_envs.name` (order-independent). Wrong constraint, absent constraint, prose-only duplicate-key, other-table UNIQUE, bare columns → propagate.
@@ -587,5 +593,29 @@
 **Learnings**:
 - Constitution process gate was missing from the plan even though Final Design Audit existed — evidence tables must cite live paths and open lifecycle blockers, not only design intent.
 - US-019 is docs-only; do not touch implementation. Next eligible story is US-020 (depends on US-019 now green).
+
+---
+
+## 2026-09-05 — US-020: Resume claim delayed until gates pass
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/executor.ts` — export `inspectResumableRun` (read-only eligibility/snapshot); `hydrateResumableRun` claims only after inspect
+- `packages/workflows/src/executor.test.ts` — inspect never calls resumeWorkflowRun; hydrate still claims
+- `packages/core/src/orchestrator/orchestrator-agent.ts` — early ENV path uses inspect only; claim once after conversation + isolation
+- `packages/core/src/orchestrator/orchestrator-agent.test.ts` — US-020 gate-failure regressions; US-012 inspect/claim ordering
+
+**Acceptance criteria verified**:
+- [x] updateConversation failure + ENV: never hydrate/claim, no execution, run stays paused
+- [x] IsolationBlockedError + ENV: inspect ok, isolation called, never hydrate/claim, no execution
+- [x] inspectResumableRun split from hydrate CAS claim; claim after gates only
+- [x] inspect-null remains fresh start; genuine continuations still ignore request ENV
+- [x] No path between eligibility and dispatch leaves run running; concurrent CAS rejection intact
+- [x] Focused verification: core orchestrator-agent.test.ts (249 pass) + workflows executor.test.ts (97 pass)
+
+**Learnings**:
+- Early hydrate for US-012 path selection was the CAS leak — inspect is enough to choose continuation vs fresh before isolation.
+- Reuse inspect-null without re-inspect; non-null early inspect still claims once after gates (double snapshot read is fine).
+- Mock both inspect and hydrate in orchestrator tests; assert call order inspect < isolation < hydrate on success paths.
 
 ---
