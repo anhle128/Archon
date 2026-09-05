@@ -5,7 +5,7 @@ import { mkdir, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { dirname } from 'path';
 import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
-import type { WorkflowDeps, WorkflowConfig } from './deps';
+import type { WorkflowDeps, WorkflowConfig, GitSnapshotContext } from './deps';
 import * as archonPaths from '@archon/paths';
 import { createLogger, captureWorkflowInvoked, captureWorkflowCompleted } from '@archon/paths';
 import { getDefaultBranch, toRepoPath } from '@archon/git';
@@ -1268,6 +1268,50 @@ async function failClosedAfterOverlayError(
   }
 }
 
+function isGitSnapshotTerminalStatus(
+  status: WorkflowRun['status']
+): status is GitSnapshotContext['status'] {
+  return status === 'completed' || status === 'failed' || status === 'cancelled';
+}
+
+/**
+ * CAP-8 run-end seam. Fail-open: never throw, never fail the run, never log paths.
+ * Invoked only after the keep-awake finally backstop so a leftover running row
+ * is marked failed before snapshot.
+ */
+async function invokeRunEndGitSnapshot(deps: WorkflowDeps, runId: string): Promise<void> {
+  const hook = deps.onRunEndGitSnapshot;
+  if (!hook) {
+    return;
+  }
+  let run: WorkflowRun | null;
+  try {
+    run = await deps.store.getWorkflowRun(runId);
+  } catch (err) {
+    getLog().error({ err: err as Error, workflowRunId: runId }, 'workflow.git_snapshot_failed');
+    return;
+  }
+  if (!run || !isGitSnapshotTerminalStatus(run.status)) {
+    return;
+  }
+  const status = run.status;
+  try {
+    getLog().info({ workflowRunId: runId, status }, 'workflow.git_snapshot_started');
+    await hook({
+      runId,
+      workingPath: run.working_path ?? null,
+      outputRoot: run.output_root ?? null,
+      status,
+    });
+    getLog().info({ workflowRunId: runId, status }, 'workflow.git_snapshot_completed');
+  } catch (err) {
+    getLog().error(
+      { err: err as Error, workflowRunId: runId, status },
+      'workflow.git_snapshot_failed'
+    );
+  }
+}
+
 /**
  * Execute a complete DAG-based workflow.
  *
@@ -2385,6 +2429,7 @@ export async function executeWorkflow(
             getLog().error({ err, workflowRunId: runId }, 'executor.backstop_fail_failed');
           });
       }
+      await invokeRunEndGitSnapshot(deps, runId);
     }
   }
 }
