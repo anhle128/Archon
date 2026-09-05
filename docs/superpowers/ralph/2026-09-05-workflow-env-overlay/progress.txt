@@ -1,5 +1,11 @@
 ## Codebase Patterns
 
+### Post-CAS continuation notices best-effort (US-034)
+- **Where**: `packages/core/src/orchestrator/orchestrator-agent.ts` (post-`hydrateResumableRun` supplied-input + ignored-ENV notices)
+- **Pattern**: After the winning resume CAS, informational `platform.sendMessage` calls must `.catch` + `getLog().warn` with run/env ids only. A rejecting adapter must not prevent `executeWorkflow` from owning the already-`running` row. Notices stay *after* claim (losing-CAS path unchanged). Command ack send is a separate earlier await and is not best-effort.
+- **Example**: hydrate wins → notice send rejects → `orchestrator.resume_ignored_supplied_*_notice_failed` warn → `executeWorkflow` once with `...prepared` + stored overlay
+
+
 ### Post-Convergence Constitution re-check (US-033)
 - **Where**: `docs/superpowers/plans/2026-09-05-workflow-env-overlay.md` Constitution Check §D
 - **Pattern**: Preserve historical Constitution Check sections; append a dated current re-check that is the sole authoritative release-blocker list. Close prior blockers only with final symbols + focused test titles; never delete A/B evidence.
@@ -986,5 +992,26 @@
 - US-019 §B correctly recorded open lifecycle blockers at write time; do not rewrite B — append a dated current section so auditors see both history and live gate.
 - Constitution process gate (154–156) wants pre-Phase-0 + post-design + (for this feature) post-implementation re-check after convergence hardenings land.
 - Ops mixed-version resume risk stays a deployment constraint, not a residual constitution violation once code paths fail closed.
+
+---
+## 2026-09-05 — US-034: Best-effort post-claim continuation notices
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/orchestrator/orchestrator-agent.ts` — post-CAS supplied-input and ignored-ENV notices catch sendMessage failures; log safe ids only; executeWorkflow still runs
+- `packages/core/src/orchestrator/orchestrator-agent.test.ts` — regressions: notice rejection after winning hydrate CAS still dispatches once with stored inputs / stored overlay
+
+**Acceptance criteria verified**:
+- [x] supplied-input notice rejection after winning resume CAS → executeWorkflow once with stored run inputs (no fresh inputs stamp)
+- [x] ignored-ENV notice rejection after winning resume CAS → executeWorkflow once with stored overlay (request candidate not applied)
+- [x] each notice independent best-effort via catch + warn log; neither skips executor dispatch
+- [x] resuming notices stay after CAS; losing-CAS path unchanged; claim still after command ack
+- [x] no fresh workflow row / second dispatch; logs only run ids, env ids/names, safe codes — never patch/prompt/bash bodies
+- [x] Focused verification: `cd packages/core && bun test src/orchestrator/orchestrator-agent.test.ts` (255 pass)
+
+**Learnings**:
+- handleMessage always awaits `platform.sendMessage(result.message)` for the command ack *before* `handleWorkflowRunCommand`; tests that reject every send must let the first ack succeed or dispatch never starts.
+- Post-CAS orphan pattern: any awaited side-effect after `hydrateResumableRun` (paused→running) must be best-effort or the row is stranded with no executor owner — same shape as `continueResolvedGateRun`'s `notify` helper.
+- Command-ack send is send #1; the resuming notice is send #2 — order assertions must compare hydrate against the notice invocation, not the first send.
 
 ---

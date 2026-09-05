@@ -725,8 +725,8 @@
         "US-029"
       ],
       "priority": 34,
-      "passes": false,
-      "notes": "Added from Convergence 4 after all existing US-001 through US-033 stories were already passing."
+      "passes": true,
+      "notes": "Implemented in iteration after US-033. Files: packages/core/src/orchestrator/orchestrator-agent.ts, packages/core/src/orchestrator/orchestrator-agent.test.ts. Post-CAS supplied-input and ignored-ENV notices catch delivery failures; executeWorkflow still runs once with stored inputs/overlay."
     },
     {
       "id": "US-035",
