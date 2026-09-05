@@ -24,8 +24,12 @@ nodes:
       story, derive the edge cases, crystallize them into Playwright spec(s)
       under `e2e/ui/`, and list every external service the tests mock as a
       third-party requirement.
+      Write ONLY new test files (specs, helpers, fixtures) under `e2e/`. Do NOT
+      modify the workflow YAML, provider/model settings, or any other config —
+      your job is the tests, nothing else.
     output_format:
       type: object
+      required: [pr, spec_file, mocked_externals]
       properties:
         pr:
           type: string
@@ -53,6 +57,7 @@ nodes:
       type>` assertion) — a hand-written fixture does NOT count. Emit the verdict.
     output_format:
       type: object
+      required: [allTicked, unticked]
       properties:
         allTicked:
           type: boolean
