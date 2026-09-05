@@ -178,6 +178,32 @@ function copyNodePatch(patch: EnvNodePatch): EnvNodePatch {
 }
 
 /**
+ * Reject unknown keys on the *original* raw patch object before copyNodePatch
+ * can strip them. Callers that bypass Zod (or hand a loosened type) must still
+ * fail closed on mixed known/unknown keys — never silently discard `typo`.
+ * Error text includes the field name only; never the unknown value or bodies.
+ */
+function assertRawPatchKeys(nodeId: string, rawPatch: object): void {
+  const keys = Object.keys(rawPatch);
+  if (keys.length === 0) {
+    throw new EnvOverlayError(
+      'forbidden_field',
+      `Node '${nodeId}': env overlay per-node patch must include at least one field`,
+      { nodeId }
+    );
+  }
+  for (const field of keys) {
+    if (!ALLOWED_FIELD_SET.has(field)) {
+      throw new EnvOverlayError(
+        'forbidden_field',
+        `Node '${nodeId}': unknown env overlay field '${field}'`,
+        { nodeId, field }
+      );
+    }
+  }
+}
+
+/**
  * `dagNodeSchema` treats whitespace-only prompt/bash as "no mode" and rejects them.
  * ENV contracts explicitly allow empty/whitespace bodies byte-for-byte (plan §2/engine
  * matrix) — accept ONLY those known empty-body issues so real schema failures still fail.
@@ -296,8 +322,9 @@ export function applyEnvOverlay(
       continue;
     }
 
-    // Defensive copy before validation/assignment so caller mutation mid-apply
-    // cannot change what we validate or store in appliedPatches.
+    // Inspect original raw keys BEFORE copyNodePatch discards unknowns.
+    // Detached normalized copy remains the source for assignment + applied map.
+    assertRawPatchKeys(nodeId, rawPatch as object);
     const patch = copyNodePatch(rawPatch);
     assertPatchFieldsAllowed(node, patch);
 

@@ -363,6 +363,39 @@ describe('applyEnvOverlay targeting and isolation', () => {
     ).toEqual({ prompt: 'compiled-body' });
   });
 
+  test('rejects unknown raw patch keys before copyNodePatch can discard them', () => {
+    // Deliberately bypass Zod: a mixed known/unknown object would previously
+    // succeed after copyNodePatch stripped `typo`.
+    const wf = baseWorkflow([{ id: 'p', prompt: 'original', model: 'base' }]);
+    const secretValue = 'secret-value';
+    const secretBody = 'PROMPT_BODY_MUST_NOT_LEAK';
+    const rawPatches = {
+      p: { model: 'x', typo: secretValue, prompt: secretBody },
+    } as unknown as EnvPatches;
+
+    try {
+      applyEnvOverlay(wf, rawPatches);
+      expect.unreachable('mixed known/unknown raw patch must fail closed');
+    } catch (err) {
+      expect(err).toBeInstanceOf(EnvOverlayError);
+      const overlayErr = err as EnvOverlayError;
+      expect(overlayErr.code).toBe('forbidden_field');
+      expect(overlayErr.field).toBe('typo');
+      expect(overlayErr.nodeId).toBe('p');
+      expect(overlayErr.message).toContain('typo');
+      expect(overlayErr.message).not.toContain(secretValue);
+      expect(overlayErr.message).not.toContain(secretBody);
+      expect(JSON.stringify(overlayErr)).not.toContain(secretValue);
+      expect(JSON.stringify(overlayErr)).not.toContain(secretBody);
+    }
+
+    // Original workflow unchanged; schema-validated known-only patches still apply.
+    expect(isPromptNode(wf.nodes[0]!) && wf.nodes[0].model).toBe('base');
+    const ok = applyEnvOverlay(wf, { p: { model: 'x' } });
+    expect(ok.appliedPatches.p).toEqual({ model: 'x' });
+    expect(isPromptNode(ok.workflow.nodes[0]!) && ok.workflow.nodes[0].model).toBe('x');
+  });
+
   test('error messages never include prompt or bash bodies', () => {
     const secret = 'SUPER_SECRET_BODY_CONTENT_XYZ';
     const wf = baseWorkflow([{ id: 'c', command: 'build' }]);
