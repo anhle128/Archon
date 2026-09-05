@@ -223,6 +223,152 @@
       "priority": 11,
       "passes": true,
       "notes": "Implemented in final iteration. Files: packages/web/src/experiments/console/primitives/run.ts, run.test.ts, RunDetailHeader.tsx/.test.tsx, WorkflowEnvResolvedTable.tsx/.test.tsx, RunDetailPage.tsx, PreviewPage.tsx, RunsPage.tsx, packages/docs-web API + authoring guides. Generated OpenAPI/bundled schema/AGENTS inventory already current from prior stories. Gates: focused web tests, bun run test, bun run validate, bun run check:schema-upgrades OK. Manual console path covered by prior story unit tests + API contracts; PR release-note input documents loop_group.model correction in authoring docs (CHANGELOG left to release)."
+    },
+    {
+      "id": "US-012",
+      "title": "Resume ignores newly selected ENV",
+      "description": "As a dispatcher resuming a run, I want any newly selected ENV ignored before validation, so that a genuine continuation restores only its stored selection or YAML baseline.",
+      "acceptanceCriteria": [
+        "packages/core/src/orchestrator/orchestrator-agent.test.ts covers a paused resumable run with a valid stored ENV and an incompatible new request candidate; hydration returns a real resume payload and the run resumes with the stored selection plus the ignored-ENV notice.",
+        "The same test file covers a YAML-only resumable run with an incompatible new request candidate; the run resumes as YAML-only and still emits the ignored-ENV notice instead of validating the candidate.",
+        "The hydrate-null branch remains a fresh start: the request candidate is validated, incompatible fields are rejected before isolation, and the existing pre-isolation guarantee remains observable.",
+        "dispatchOrchestratorWorkflow()/resolveFreshDispatchEnvOverlay() never validates or applies a request candidate for a genuine continuation; it restores only metadata.envOverlay or YAML when no stored overlay exists.",
+        "Messages and logs for ignored or rejected ENVs contain only env ids, names, safe codes, and safe summaries; no prompt/bash bodies or patch values are emitted.",
+        "Focused verification passes: cd packages/core && bun test src/orchestrator/env-overlay-dispatch.test.ts && bun test src/orchestrator/orchestrator-agent.test.ts."
+      ],
+      "technicalNotes": "Convergence task 1 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:791-795. Modify packages/core/src/orchestrator/orchestrator-agent.ts and, only if the pure contract requires it, packages/core/src/orchestrator/env-overlay-dispatch.ts. Preserve Contract 10 continuation semantics from plan lines 362-364 and the Phase 4 pre-isolation rejection guarantee for hydrate-null fresh starts.",
+      "dependsOn": [
+        "US-006"
+      ],
+      "priority": 12,
+      "passes": false
+    },
+    {
+      "id": "US-013",
+      "title": "Complete runtime resolution context",
+      "description": "As an operator comparing ENV runs, I want Preview, snapshots, send options, and node_started fields resolved from the same full context, so that audit metadata cannot drift from runtime behavior.",
+      "acceptanceCriteria": [
+        "packages/workflows/src/executor.test.ts adds a regression using assistants.<provider>.modelReasoningEffort with no portable effort and workflow-level thinking fallback, then asserts metadata.envOverlay.resolved equals runtime node_started request fields.",
+        "packages/server/src/routes/api.workflow-envs.test.ts adds the same coverage for ENV Preview and asserts the preview response matches the unchanged Start snapshot and runtime request metadata.",
+        "packages/workflows/src/executor.ts passes every ResolveNodeExecutionOptions input used by resolveNodeProviderAndModel(), including config.assistants and effective workflow thinking, when building the snapshot resolved map.",
+        "packages/server/src/routes/api.ts passes the same complete resolution context when building Preview; it does not approximate from { aiProfile } alone.",
+        "packages/workflows/src/node-model-resolution.ts remains the single pure computation path for Preview, selected-run eager resolution, send options, and node_started serialization.",
+        "Top-level and nested loop_group provider turns include the same legacy modelReasoningEffort fallback and thinking values in Preview, stored snapshot rows, runtime send options, and persisted node_started events.",
+        "Focused verification passes: cd packages/workflows && bun test src/node-model-resolution.test.ts && bun test src/executor.test.ts && bun test src/dag-executor.test.ts; then cd ../server && bun test src/routes/api.workflow-envs.test.ts."
+      ],
+      "technicalNotes": "Convergence task 2 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:797. Modify packages/workflows/src/executor.ts and packages/server/src/routes/api.ts. Follow Authoritative Contract 4 at plan lines 177-187, Preview at lines 329-352, and executor snapshot steps at lines 388-396. Depends on the existing shared-resolution, snapshot, preview, and resume-ignore stories.",
+      "dependsOn": [
+        "US-002",
+        "US-005",
+        "US-007",
+        "US-012"
+      ],
+      "priority": 13,
+      "passes": false
+    },
+    {
+      "id": "US-014",
+      "title": "Preset effort warns while explicit effort fails",
+      "description": "As a workflow author, I want unsupported preset effort dropped with a warning while explicit portable effort still fails, so that tier aliases remain safe without weakening authored constraints.",
+      "acceptanceCriteria": [
+        "packages/workflows/src/node-model-resolution.test.ts adds a failing case for an OpenCode tier/alias preset carrying effort: high and proves the preset path returns presetEffortDropped: true.",
+        "packages/workflows/src/dag-executor.test.ts adds runtime coverage proving the dropped preset effort reaches the existing warning layer and is not sent or recorded as applied metadata.",
+        "A node-authored or workflow-authored explicit portable effort on the same provider still throws the existing fatal capability error.",
+        "resolveNodeExecutionRequest() separates explicitly declared effort from preset?.effort so the later resolvePresetEffort() decision is reachable.",
+        "packages/workflows/src/dag-executor.ts consumes the structured presetEffortDropped decision without adding a second classifier or string parser.",
+        "Rejected preset effort is consistent in Preview, selected-run eager resolution, and ordinary lazy runtime.",
+        "Focused verification passes: cd packages/workflows && bun test src/node-model-resolution.test.ts && bun test src/dag-executor.test.ts."
+      ],
+      "technicalNotes": "Convergence task 3 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:799. Modify packages/workflows/src/node-model-resolution.ts and packages/workflows/src/dag-executor.ts. Preserve Authoritative Contract 4: rejected preset effort warn/drop semantics and explicit portable effort fail-fast semantics from plan lines 179-182.",
+      "dependsOn": [
+        "US-002",
+        "US-013"
+      ],
+      "priority": 14,
+      "passes": false
+    },
+    {
+      "id": "US-015",
+      "title": "Console editor preserves empty ENV values",
+      "description": "As a console operator editing ENVs, I want no-op ENVs and explicit empty prompt/bash bodies preserved, so that the UI does not erase values that the schema allows.",
+      "acceptanceCriteria": [
+        "packages/web/src/experiments/console/lib/workflow-env-editor.test.ts round-trips zero drafts to {}, explicit prompt: \"\", explicit bash: \"\", whitespace-only bodies, and absent body fields.",
+        "packages/web/src/experiments/console/components/WorkflowEnvManageDialog.test.tsx proves create and full-map PATCH can submit patches: {}.",
+        "WorkflowEnvManageDialog tests prove an explicitly enabled empty prompt or bash body can be saved and is not dropped by the editor.",
+        "packages/web/src/experiments/console/lib/workflow-env-editor.ts represents field omission separately from field presence with an empty string.",
+        "packages/web/src/experiments/console/components/WorkflowEnvManageDialog.tsx preserves the non-empty-per-chosen-node rule while allowing a workflow with zero chosen targets to save a no-op ENV.",
+        "Create/update keep prompt: \"\", bash: \"\", and whitespace byte-for-byte; untouched body controls remain omitted from the patch map.",
+        "Focused verification passes: cd packages/web && bun test src/experiments/console/lib/workflow-env-editor.test.ts && bun test src/experiments/console/components/WorkflowEnvManageDialog.test.tsx."
+      ],
+      "technicalNotes": "Convergence task 4 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:801. Modify packages/web/src/experiments/console/lib/workflow-env-editor.ts and packages/web/src/experiments/console/components/WorkflowEnvManageDialog.tsx. Follow node-field compatibility line 104, patch validation lines 114-122, Manage dialog lines 416-427, and Console matrix lines 660-668.",
+      "dependsOn": [
+        "US-010",
+        "US-014"
+      ],
+      "priority": 15,
+      "passes": false
+    },
+    {
+      "id": "US-016",
+      "title": "Defensive unknown patch-key rejection",
+      "description": "As the workflow engine, I want applyEnvOverlay() to reject unknown raw patch keys even when a caller bypasses Zod, so that defensive validation cannot silently discard unsafe input.",
+      "acceptanceCriteria": [
+        "packages/workflows/src/env-overlay.test.ts bypasses the Zod boundary with a mixed raw patch such as { model: \"x\", typo: \"secret-value\" } on an existing node.",
+        "The regression asserts applyEnvOverlay() fails with code forbidden_field and includes the unknown field name while excluding the unknown value and all prompt/bash bodies from error text.",
+        "packages/workflows/src/env-overlay.ts validates original raw patch keys before copyNodePatch() can discard them.",
+        "The detached normalized copy remains the source for assignment to cloned nodes and for returned applied/snapshot data.",
+        "Mixed known/unknown raw patches cannot silently succeed; normal schema-validated patches behave unchanged.",
+        "Focused verification passes: cd packages/workflows && bun test src/env-overlay.test.ts src/schemas/env-overlay.test.ts."
+      ],
+      "technicalNotes": "Convergence task 5 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:803. Modify packages/workflows/src/env-overlay.ts and packages/workflows/src/env-overlay.test.ts. Follow Patch validation line 112, Clone/apply behavior lines 194-205, and Engine matrix lines 607-619.",
+      "dependsOn": [
+        "US-001",
+        "US-015"
+      ],
+      "priority": 16,
+      "passes": false
+    },
+    {
+      "id": "US-017",
+      "title": "Malformed run metadata hides ENV UI",
+      "description": "As an operator viewing run detail, I want malformed envOverlay metadata omitted instead of rendered as audit state, so that corrupted metadata cannot produce false confidence.",
+      "acceptanceCriteria": [
+        "packages/web/src/experiments/console/primitives/run.test.ts requires parseRunEnvOverlay() to return null for malformed hybrids: missing or non-object patches, non-array skippedNodeIds/latestMissingNodeIds, non-object resolved, and invalid resolved rows.",
+        "packages/web/src/experiments/console/routes/RunDetailPage.test.tsx proves malformed metadata renders no ENV chip and no resolved table while the rest of the run detail still renders.",
+        "Valid pending and complete overlay rendering remains covered in WorkflowEnvResolvedTable.test.tsx and RunDetailHeader.test.tsx.",
+        "packages/web/src/experiments/console/primitives/run.ts accepts only strict pending and complete shapes, never exposes patch bodies, and returns null for malformed or legacy hybrids.",
+        "RunDetailPage.tsx renders ENV-specific UI only for a non-null parsed overlay.",
+        "Malformed metadata cannot manufacture complete: true, cannot show a misleading \u201cNo provider-turn request rows\u201d state, and cannot crash or hide non-ENV run detail content.",
+        "Focused verification passes: cd packages/web && bun test src/experiments/console/primitives/run.test.ts && bun test src/experiments/console/routes/RunDetailPage.test.tsx && bun test src/experiments/console/components/WorkflowEnvResolvedTable.test.tsx src/experiments/console/components/RunDetailHeader.test.tsx."
+      ],
+      "technicalNotes": "Convergence task 6 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:805. Modify packages/web/src/experiments/console/primitives/run.ts and packages/web/src/experiments/console/routes/RunDetailPage.tsx. Follow runtime overlay types lines 126-160, Run detail lines 429-438, and Console matrix lines 667-668. Preserve the existing no-prompt/bash-body display rule.",
+      "dependsOn": [
+        "US-011",
+        "US-016"
+      ],
+      "priority": 17,
+      "passes": false
+    },
+    {
+      "id": "US-018",
+      "title": "Exact ENV name-conflict classification",
+      "description": "As a store maintainer, I want workflow-ENV name conflicts classified only from the exact identity constraint, so that unrelated database failures are not converted into HTTP 409s.",
+      "acceptanceCriteria": [
+        "packages/core/src/db/workflow-envs.test.ts adds negative PostgreSQL cases where code is 23505 but constraint is absent or wrong, even if the message mentions uq_workflow_envs_workflow_name_name.",
+        "The same test file covers duplicate-key prose without PostgreSQL code 23505 and verifies it is not classified as a workflow ENV name conflict.",
+        "The SQLite negative case uses a UNIQUE error from another table whose message happens to include workflow_name and name columns, and verifies it is not classified as a workflow ENV conflict.",
+        "packages/core/src/db/workflow-envs.ts returns true for PostgreSQL only when code === \"23505\" and constraint === \"uq_workflow_envs_workflow_name_name\".",
+        "SQLite classification requires the UNIQUE message to name both fully qualified ENV identity columns for remote_agent_workflow_envs.",
+        "Only the named workflow ENV identity conflict maps to WorkflowEnvNameConflictError and HTTP 409; unrelated database failures propagate through the normal error path.",
+        "Focused verification passes: cd packages/core && bun test src/db/workflow-envs.test.ts."
+      ],
+      "technicalNotes": "Convergence task 7 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:807. Modify packages/core/src/db/workflow-envs.ts and packages/core/src/db/workflow-envs.test.ts. Follow Store contracts line 263 and Database/core matrix lines 623-632. Keep CRUD semantics from US-003; this story only tightens error classification.",
+      "dependsOn": [
+        "US-003",
+        "US-017"
+      ],
+      "priority": 18,
+      "passes": false
     }
   ]
 }
