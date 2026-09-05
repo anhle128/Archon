@@ -187,7 +187,7 @@ function WorkflowEnvManageBody({ workflowName, projectCwd, onClose }: BodyProps)
             }}
           />
         ) : (
-          <EditorView
+          <WorkflowEnvEditorView
             mode={view === 'create' ? 'create' : 'edit'}
             workflowName={workflowName}
             envId={editEnvId}
@@ -348,7 +348,8 @@ function ListView({
   );
 }
 
-interface EditorViewProps {
+/** Exported for mounted create/edit tests (no-op patches, discovery gating). */
+export interface WorkflowEnvEditorViewProps {
   mode: 'create' | 'edit';
   workflowName: string;
   envId: string | null;
@@ -363,7 +364,7 @@ interface EditorViewProps {
   onSaved: (envId: string) => void;
 }
 
-function EditorView({
+export function WorkflowEnvEditorView({
   mode,
   workflowName,
   envId,
@@ -376,7 +377,7 @@ function EditorView({
   setActionError,
   onCancel,
   onSaved,
-}: EditorViewProps): ReactElement {
+}: WorkflowEnvEditorViewProps): ReactElement {
   const [name, setName] = useState('');
   const [drafts, setDrafts] = useState<NodePatchDraft[]>([]);
   const [loaded, setLoaded] = useState(mode === 'create');
@@ -432,10 +433,19 @@ function EditorView({
       setActionError('ENV name must be 1–64 chars: start with alphanumeric, then [A-Za-z0-9._-].');
       return;
     }
-    if (targetsError !== undefined || targets.length === 0) {
+    // Distinguish discovery loading/failure from successful zero-target discovery.
+    // Only loading/error block submit — empty targets is a valid no-op ENV (patches: {}).
+    if (targetsLoading) {
       setActionError(
-        targetsError?.message ??
-          'Baseline targets unavailable — cannot edit patches without server field matrix.'
+        'Baseline targets still loading — cannot save until the field matrix resolves.'
+      );
+      return;
+    }
+    if (targetsError !== undefined) {
+      setActionError(
+        targetsError.message.length > 0
+          ? targetsError.message
+          : 'Baseline targets unavailable — cannot edit patches without server field matrix.'
       );
       return;
     }
@@ -508,6 +518,7 @@ function EditorView({
           autoFocus={mode === 'create'}
           spellCheck={false}
           placeholder="fast-sonnet"
+          data-testid="env-editor-name"
           className="mt-1 w-full rounded-lg border bg-surface px-[11px] py-[9px] font-mono text-[13px] text-text-primary placeholder:text-text-tertiary focus:border-accent-bright/50 focus:outline-none focus:shadow-[0_0_0_3px_color-mix(in_oklch,var(--brand-magenta),transparent_92%)] disabled:opacity-50"
           style={{ borderColor: 'var(--border-bright)' }}
         />
@@ -539,8 +550,9 @@ function EditorView({
               className="rounded-[10px] border border-dashed border-border px-3 py-4 text-center font-mono text-[12px] text-text-tertiary"
               data-testid="env-empty-patches"
             >
-              No target nodes — saving creates a no-op ENV with patches: {}. Add a node to set
-              fields; each chosen node still needs at least one allowed field.
+              {targets.length === 0
+                ? 'No editable target nodes — saving creates a no-op ENV with patches: {}.'
+                : 'No patches yet — saving creates a no-op ENV with patches: {}. Add a node to set fields; each chosen node still needs at least one allowed field.'}
             </p>
           ) : (
             drafts.map((draft, index) => (
@@ -580,6 +592,7 @@ function EditorView({
         <button
           type="submit"
           disabled={busy || targetsLoading || targetsError !== undefined}
+          data-testid="env-editor-submit"
           className="brand-bar rounded-lg px-3.5 py-1.5 text-[12px] font-bold text-white transition-all hover:brightness-110 disabled:opacity-40"
         >
           {busy ? 'Saving…' : mode === 'create' ? 'Create' : 'Save'}
