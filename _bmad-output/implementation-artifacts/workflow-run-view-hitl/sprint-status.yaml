@@ -1,0 +1,74 @@
+# generated: 2026-09-06 00:34:00 +0700
+# last_updated: 2026-09-06 00:34:00 +0700
+# project: Archon
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: /Users/dale/Desktop/workspace/OceanLabs/workflow-engine/archon/_bmad-output/implementation-artifacts/workflow-run-view-hitl
+#
+# Dedicated HITL tracker (same pattern as epics-workflow-run-view-hitl).
+# Does NOT replace implementation-artifacts/sprint-status.yaml (Epics 1–4).
+# Epics source: planning-artifacts/epics-workflow-run-view-hitl/epics.md
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog → in-progress: Automatically when first story is created (via create-story)
+#   - in-progress → done: Manually when all stories reach 'done' status
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review (via Dev's code-review workflow)
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# Action Item Status:
+#   - open: Committed during a retrospective, not yet addressed
+#   - in-progress: Actively being worked on
+#   - done: Completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when first story is created
+# - Stories can be worked in parallel if team capacity allows
+# - Developer typically creates next story after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+# - Retrospective appends its action items to action_items; sprint-status surfaces open ones
+# - Point bmad-create-story at this folder / this sprint-status.yaml for HITL work
+
+generated: "2026-09-06 00:34:00 +0700"
+last_updated: "2026-09-06 00:34:00 +0700"
+project: Archon
+project_key: NOKEY
+tracking_system: file-system
+story_location: /Users/dale/Desktop/workspace/OceanLabs/workflow-engine/archon/_bmad-output/implementation-artifacts/workflow-run-view-hitl
+epics_file: /Users/dale/Desktop/workspace/OceanLabs/workflow-engine/archon/_bmad-output/planning-artifacts/epics-workflow-run-view-hitl/epics.md
+
+development_status:
+  # Workflow Run View HITL — planning-artifacts/epics-workflow-run-view-hitl/epics.md
+  epic-5: backlog
+  5-1-open-a-nodes-own-transcript-from-logs-legacy: backlog
+  5-2-see-the-right-room-for-each-node-type-legacy: backlog
+  5-3-open-the-same-node-room-from-the-graph-legacy: backlog
+  5-4-open-the-node-room-from-the-chat-timeline-legacy: backlog
+  5-5-inspect-a-run-as-nodes-on-command-center: backlog
+  epic-5-retrospective: optional
+
+  epic-6: backlog
+  6-1-prove-claude-and-pi-can-resume-after-askhuman: backlog
+  6-2-pause-a-run-when-the-agent-asks-without-stealing-the-approval-slot: backlog
+  6-3-answer-or-decline-the-ask-so-the-node-can-continue: backlog
+  6-4-keep-several-asks-outstanding-without-a-second-scheduler: backlog
+  6-5-answer-the-ask-in-the-legacy-node-room: backlog
+  6-6-answer-the-ask-in-the-command-center-room: backlog
+  6-7-confirm-a-permission-by-envelope-only: backlog
+  epic-6-retrospective: optional

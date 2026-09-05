@@ -1,300 +1,402 @@
 ---
 stepsCompleted:
-  [
-    'step-01-validate-prerequisites',
-    'step-02-design-epics',
-    'step-03-create-stories',
-    'step-04-final-validation',
-  ]
+  - step-01-validate-prerequisites
+  - step-02-design-epics
+  - step-03-create-stories
+  - step-04-final-validation
 inputDocuments:
   - ../prds/prd-source-control/prd.md
-  - ../prds/prd-source-control/architecture.md
   - ../prds/prd-source-control/addendum.md
+  - ../architecture/architecture-Archon-source-control-2026-09-05/ARCHITECTURE-SPINE.md
+  - ../../specs/spec-archon-source-control/SPEC.md
+  - ../../specs/spec-archon-source-control/brownfield.md
+  - ../../specs/spec-archon-source-control/viewer-rules.md
+  - ../../specs/spec-archon-source-control/architecture-diagrams.md
+  - ../../specs/spec-archon-source-control/roadmap.md
+excludedDocuments:
+  - ../prd.md
+  - ../architecture.md
+  - ../epics.md
+  - ../architecture/architecture-Archon-2026-09-05/
+  - ../ux-designs/ux-Archon-2026-08-31/
+  - ../prds/prd-source-control/architecture.md
+notes: UX 2026-09-05 DESIGN/EXPERIENCE missing; UX-DRs taken from architecture AD-5/AD-6/AD-9 and viewer-rules.md. Output is this feature folder only — do not overwrite planning-artifacts/epics.md (Workflow Commander). Party 2026-09-05: Epic 1 Changes-only (no dead History pane); Epic 2 inserts History + lane graph; Epic 3 is the CAP-8 seam. Numbering is this file's; implementation story keys should be prefixed source-control- so they do not collide with Commander 3.x in a shared sprint-status.yaml. Hunk JSON in Epic 1 already carries scope now|commit and ref. Step 4 validation passed (see Validation section).
 ---
 
 # Archon Source Control Tab - Epic Breakdown
 
 ## Overview
 
-This document provides the complete epic and story breakdown for the Archon Source Control tab, decomposing the requirements from the PRD and Architecture — plus a **standalone UX contract** (`../ux-designs/ux-Archon-2026-08-31/` DESIGN.md + EXPERIENCE.md; see UX Design Requirements) — into implementable stories.
-Feature-scoped epic directory (matches `{planning_artifacts}/*epic*/*.md`): `archon/_bmad-output/planning-artifacts/epics-source-control/` holds **only** this `epics.md`. PRD, architecture, addendum, and IR remain in `prds/prd-source-control/`. Do not reuse Epic 3 — that ID is Workflow Commander in `planning-artifacts/epics.md`. This feature's durable snapshot is **Epic 4**. Implementation tracking is the project tracker `{implementation_artifacts}/sprint-status.yaml` (not a per-feature copy); story files are `{implementation_artifacts}/{{story_key}}.md`.
+This document provides the complete epic and story breakdown for Archon Source Control, decomposing the requirements from the PRD, SPEC (CAP-1–8), and the 2026-09-05 architecture spine (AD-1–AD-9) into implementable stories.
+
+Feature-scoped directory: `_bmad-output/planning-artifacts/epics-source-control/`. This file numbers Epics **1–3**. Workflow Commander Epic 3 lives in `planning-artifacts/epics.md` (different document). HITL epics start at 5.
 
 ## Requirements Inventory
 
 ### Functional Requirements
 
-FR1: Source Control tab on the workflow-run screen with two regions — uncommitted **Changes** above a **commit-history graph** (branch/merge lanes), scoped to the run.
-FR2: Manual **Reload** control; no auto-refresh or polling.
-FR3: List changed files for the selected scope (Now, and per selected commit), each labelled `M` / `A` / `D` (other git statuses project: rename→D+A, copy→A, type-change→M, unmerged→M).
-FR4: Status-keyed diff viewer — `M` two-pane diff (red before / green after), `A`/`D` single-pane content; direction Now=`HEAD→worktree`, commit=`parent→commit`.
-FR5: Every file opens regardless of size or type — large text streams (Load more), binary renders inline (image) or offers download/hex; nothing blocks.
-FR6: Inspect any commit in history — its `M`/`A`/`D` files and content/diffs, read from the run's own branch (not base), including commits not merged to base.
-FR7: Server-resolved, run-confined, read-only access — checkout root resolved server-side from `runId`; the UI never supplies the checkout root or an absolute/filesystem path (it may pass a server-returned repo-relative path the server validates); no write/commit surface.
-FR8: Empty state when there is no readable git checkout (`working_path` null, directory absent at read time, not a git checkout, or a container-backend run).
-FR9: Durable run-end snapshot so history/diffs survive checkout cleanup — **fast-follow, not MVP** (live checkout is primary; snapshot is the fallback).
+FR1: Fourth **Source Control** tab on the **legacy** run screen (`/legacy/workflows/runs/:id`) beside Graph / Logs / Chat; two regions — uncommitted **Changes** above **commit history** — scoped to that run. Console is not a v1 surface.
+FR2: Manual **Reload** only; no auto-refresh or polling. If host content diverged since load, show "Changed on disk — Reload"; never mutate the open view under the reader.
+FR3: List changed files for the selected scope (Now, and per selected commit), each labelled exactly `M` / `A` / `D`. Projections: untracked→`A`; rename→`D`+`A`; copy→`A`; type-change/unmerged→`M`.
+FR4: One shared status-keyed viewer — `M` two-pane diff (before left / after right); `A`/`D` single-pane content, no diff coloring. Now = `HEAD → worktree`; commit = `parent → commit`. `M` is diff-only (no standalone snapshot mode).
+FR5: Every changed file opens — large text streams (Load more / Cancel); binary is not dumped as text (images inline; else download + hex peek). Nothing is blocked; usable fallback always. Thresholds: `viewer-rules.md` (first paint ~256 KB / ~2,000 lines; stream Cancel > ~1 MB; download-only > ~50 MB; NUL in first 8 KB = binary; hex peek ~4 KB).
+FR6: Inspect any commit on the run branch (including commits not merged to base `dev`); same viewer; per-commit `M`/`A`/`D` list. History is a **branch/merge lane graph** (one row per commit, `parents[]` on the log record); lane-layout renderer is a pre-build spike (`@xyflow/react` reuse vs bespoke SVG — no new dep). A plain chronological list is not an acceptable fallback.
+FR7: Server-resolved, run-confined, read-only access. Client sends `runId` + server-issued file/commit refs only — never `working_path` or an absolute path. No write / commit / stage / edit / discard chrome.
+FR8: CAP-6 empty state when there is no readable host git checkout: `working_path` null, directory absent, not a git checkout, or container-backend (`isolation_env.provider === 'container'`). Container vs `no_checkout` are distinct reasons (Reload only on `no_checkout`). Missing `isolation_env_id` is **not** CAP-6 — fall through to host dir+git. Empty Changes ("No uncommitted changes") and Empty History ("No commits yet") are **region** messages on a live checkout, not CAP-6. Git/API failure on a valid checkout is an in-region error + Reload, not CAP-6.
+FR9: Durable run-end snapshot under `output_root` so history/diffs survive checkout cleanup — **SHOULD / not v1**. Live checkout is primary; snapshot is fallback. v1 implements the `WorkflowDeps` finalize **seam** only (no write).
 
 ### NonFunctional Requirements
 
-NFR1 (Performance): fetch-on-click with explicit loading; no measurable regression to the run screen; large content streams; reads on-demand only (no polling).
-NFR2 (Security): resolve the checkout root server-side from `runId` (never client-supplied; the client may pass a server-returned repo-relative path); realpath-contain live (Now) reads under `working_path`; read commit content by validating a full commit OID from `log` then `git --literal-pathspecs ls-tree -z <oid> -- <path>` (exactly one exact entry) + `git cat-file blob <blobOid>` (no `<oid>:<path>` revision syntax; pathspec magic disabled); do NOT reject `:`, leading `-`, or glob metachars in filenames (valid — FR5 opens them; rely on `--`/argv + `--literal-pathspecs`); reject NUL / absolute / encoded-`..`; `execFileAsync`/`@archon/git`, argv-safe (no shell string); strictly read-only.
-NFR3 (Reliability): a vanished/missing checkout degrades to the Empty state (never a crash); existence decided at read time, not by run status; a CAP-8 snapshot-write failure must not mark the run failed.
-NFR4 (Compatibility): honor Archon package boundaries — `registerOpenApiRoute` (with the raw `app.get` exception for the wildcard content route); `@archon/web` consumes OpenAPI-generated types only; no SDK leakage across boundaries.
-NFR5 (Observability): server-side reads emit named structured logs (`{domain}.{action}_{state}`) and never log file contents, disallowed paths, or secrets.
-NFR6 (Privacy/secrets — residual risk): v1 ships without redaction/denylist; the Viewer can surface `.env`/keys; accepted for read-only trusted internal users, recorded for revisit.
-NFR7 (Accessibility): realizes the PRD Cross-Cutting **Accessibility** NFR — the diff carries `+`/`-` gutter markers as the non-color cue (WCAG 1.4.1; red/green tint secondary); `M`/`A`/`D` badges letter-carried; the Changes list, commit-graph, and viewer are keyboard-operable; WCAG-AA contrast verified (diff markers ≥ 4.5:1, commit-graph lanes ≥ 3:1 non-text); layout reflows/zooms without loss (tested 320px/400%; stack/unified specifics `[ASSUMPTION]`). UX contract: `../ux-designs/ux-Archon-2026-08-31/EXPERIENCE.md` (Accessibility Floor).
+NFR1 (Performance): Fetch on click with explicit loading; no measurable regression to the run screen; large content streams/virtualizes; reads on-demand only (no polling, no server-side git-result cache).
+NFR2 (Security / containment): Resolve `workflow_runs.working_path` server-side (existing column — do not add one, do not re-derive from isolation metadata); realpath it. Live reads: realpath-contain under checkout. Commit reads: `ls-tree -z` + `cat-file blob` — never `oid:path`. Reject NUL / absolute / encoded `..`. Filenames with `:`, leading `-`, or glob metacharacters MUST succeed (`--literal-pathspecs`). `execFileAsync` / `@archon/git` only — no shell-string git. Strictly read-only.
+NFR3 (Reliability): Vanished checkout → CAP-6, never a crash. Existence at read time, not run status. CAP-8 write failure logs and does not fail the run.
+NFR4 (Compatibility): `registerOpenApiRoute` for JSON; raw `app.get` only for wildcard file content (artifacts precedent). `@archon/web` consumes `api.generated.d.ts` only. No new tables in v1. No new process, env var, or deployable.
+NFR5 (Observability): Named Pino events in domain.action_state form; never log paths, remotes, file contents, or secrets.
+NFR6 (Privacy / secrets — residual risk): v1 ships without redaction/denylist; viewer can surface `.env`/keys; accepted for trusted internal users; recorded for revisit.
+NFR7 (Accessibility): Diffs carry `+`/`-` gutters; badges carry the letter `M`/`A`/`D` — never color-only (WCAG 1.4.1). Changes list, history, and viewer are keyboard-operable. Diff markers ≥ 4.5:1; if a lane graph ships, lanes ≥ 3:1 non-text and not color-only.
+NFR8 (Auth): Git routes follow run-detail and `/api/artifacts/:runId/*` — global `/api/*` gate only; no `requireWebUser`; no per-run owner ACL in v1.
 
 ### Additional Requirements
 
-- New read-only helpers in `@archon/git`: `changedFiles`, `fileDiff`, `fileAt` (via `git ls-tree` + `git cat-file blob`), `log` (today only boolean `hasUncommittedChanges` exists).
-- New `@archon/server` read-only routes: JSON (OpenAPI) for changes list / commit log / per-commit files / diff hunks (canonical hunk schema + `cursor`/`truncated` pagination); a raw wildcard route (artifacts precedent) for file content / binary with byte/line range.
-- `@archon/web` Source Control tab: two regions + status-keyed viewer, `react-diff-view` dependency, a thin tested hunk-JSON→`react-diff-view` adapter, reuse installed `highlight.js` (no Shiki), `react-resizable-panels` split, `@tanstack/react-virtual` for large content.
-- D5 container gate: resolve `run.conversation_id`→`conversation.isolation_env_id`→`isolationEnvironments.getById(envId).provider`; container (any status) → Empty state; host/worktree ignores env status.
-- D6 read-containment mechanism + tests (symlink escape, encoded traversal, invalid ref, unreachable OID, colon-filename success).
-- CAP-8 run-end snapshot hook via `WorkflowDeps` (fast-follow): idempotent, existence-checked, temp+atomic-rename under `output_root`, non-fatal on failure.
-- Spikes: (1) large diff/file performance through paged hunks + virtualization; (2) end-to-end `M`-file vertical slice to lock the hunk contract + adapter.
-- Validation tasks: read-time checkout-existence check against the real host; confirm/define child-subrun env resolution for container detection.
+- Brownfield: no starter template. Git-read helpers live in `@archon/git` (`changedFiles`, `fileDiff`, `fileAt`, `log`) on `execFileAsync`. Routes stay thin (resolve, gate, serialize). No `@archon/source-control` package.
+- Transport: JSON OpenAPI for changes / log / per-commit files / `M` hunks. Raw wildcard for file content / binary / ranges.
+- Canonical hunk JSON (not unified-diff wire): `{ path, status: "M", scope: "now"|"commit", ref, hunks, cursor, truncated }`. `ref` is `"live"` for Now (never null). `cursor` is an opaque string echoed as `?cursor=`; web must not parse it as a scroll offset. Web adapter maps to react-diff-view `HunkData`/`ChangeData` in a tested pure function. `A`/`D` use the raw content route, not the hunk endpoint.
+- Viewer stack: one new dep `react-diff-view@3.3.3`; syntax via installed `highlight.js@^11.11.1`; lists/diffs via installed `@tanstack/react-virtual@^3`. Do not add Shiki or Monaco. Count lodash runtime dep in the large-diff spike (~2 MB first-paint, ~1s rule).
+- CAP-6 envelope: HTTP 200 + `{ emptyReason: "container" | "no_checkout" }` on **every** git route (JSON and raw); never 404 for this case. Container gate on every git route including log — no "history is immutable" exemption.
+- Live git is source of truth; `workflow_events` never author the change list.
+- CAP-8 seam: `WorkflowDeps` finalize hook; idempotent; temp+rename under `output_root`; v1 does not implement the write.
+- `log` records include `parents[]` (for the lane graph). Lane-graph renderer spike is a pre-history-story blocker (PRD FR-6; not pinned in the architecture Stack table).
+- Containment tests: symlink-escape refuse; encoded `..` refuse; colon / leading-dash / glob filename SUCCESS; container top-level → CAP-6.
+- Route path seed (not locked): `/api/workflows/runs/:runId/git/{changes,log,diff}` and `/api/workflows/runs/:runId/git/file/*` — OpenAPI schemas own the final names.
+- Web folder seed: `packages/web/src/components/workflows/source-control/`.
 
 ### UX Design Requirements
 
-A standalone UX contract now exists — `../ux-designs/ux-Archon-2026-08-31/DESIGN.md` (visual identity: inherits the Archon design system; diff red/green + `+`/`-` markers, M/A/D badges, master-detail layout) and `../ux-designs/ux-Archon-2026-08-31/EXPERIENCE.md` (IA, states, interactions, **Accessibility Floor**, key flow). It supersedes the earlier "UX inline only" note. Load-bearing UX requirements map to **NFR7 (Accessibility)** and the story ACs (Story 1.2 diff markers, Story 2.1 lane graph). Deferred UX assumptions (diff tint, split ratio, row height, graph renderer, key bindings, reflow breakpoint) are in the EXPERIENCE Open Questions — build-time decisions, not v1 blockers.
+UX-DR1: Default split **30% lists / 70% viewer**, user-resizable **20–70%** via the screen's existing `ResizablePanelGroup`.
+UX-DR2: `M` two-pane diff: each pane scrolls independently (horizontal and vertical); never overflow the window. Below **900px**: stack lists-above-viewer; before-over-after.
+UX-DR3: Shared reusable viewer component (HITL reuse is COULD); do not weld it into the tab; do not import `/console`.
+UX-DR4: File-row pattern with letter-carried `M`/`A`/`D` badges; one list widget feeds both Changes and History scopes.
+UX-DR5: Loading: skeleton rows in the list immediately from metadata; viewer skeleton while bytes arrive; **Cancel** on in-flight open; **Load more** for chunked text.
+UX-DR6: Stale-content banner copy is **Changed on disk — Reload**; never rewrite the open pane underneath the reader.
+UX-DR7: CAP-6 copy is one plain sentence, no error chrome / warning icon. Container empty: **no** Reload CTA. `no_checkout`: Reload CTA. Region empties: "No uncommitted changes" / "No commits yet". API error on a live checkout: keep the list, Reload in-region — never a modal or toast stack. Never invent alarm copy ("Error:", "unsupported", "⚠️").
+UX-DR8: Image binaries render inline; non-image binaries offer download + ~4 KB hex peek — never dump binary as text.
+UX-DR9: Keyboard-operable Changes list, history, and viewer.
 
 ### FR Coverage Map
 
-- **FR1** → Epic 1 (tab + Changes region, Story 1.1) **and** Epic 2 (commit-history region, Story 2.1) — the two-region layout spans both
-- **FR2** → Epic 1 — manual Reload (no polling)
-- **FR3** → Epic 1 (uncommitted / Now list) — extended in Epic 2 (per-commit list)
-- **FR4** → Epic 1 — status-keyed viewer (M diff / A·D content); reused by Epic 2
-- **FR5** → Epic 1 — every file opens (large / binary)
-- **FR6** → Epic 2 — inspect any commit from the run checkout
-- **FR7** → Epic 1 — server-resolved, run-confined, read-only access (D5/D6)
-- **FR8** → Epic 1 — empty state + container gate
-- **FR9** → Epic 4 — durable run-end snapshot (fast-follow)
-- **NFR1–NFR7** → cross-cutting, realized primarily in Epic 1; Epic 2/4 inherit (NFR7 accessibility spans the diff viewer + the commit-history graph)
+FR1: Epic 1 (tab + Changes region) and Epic 2 (History region + lane graph). Epic 1 must not ship a dead History pane.
+FR2: Epic 1 — manual Reload, stale banner, never mutate the open view.
+FR3: Epic 1 (Now lists) and Epic 2 (per-commit lists).
+FR4: Epic 1 (Now viewer) and Epic 2 (commit viewer, same component). Epic 1 hunk JSON already includes `scope: now|commit` and `ref`.
+FR5: Epic 1 — every file opens (stream / Cancel / binary fallbacks).
+FR6: Epic 2 — inspect any run-branch commit; lane graph required; plain list is not a fallback.
+FR7: Epic 1 — server-resolved, run-confined, read-only.
+FR8: Epic 1 — CAP-6 + CTA split + region empties + NULL env is not CAP-6.
+FR9: Epic 3 — `WorkflowDeps` finalize seam only; no snapshot write in v1.
 
 ## Epic List
 
-### Epic 1: Inspect a run's uncommitted changes (v1 core)
+### Epic 1: Inspect this run's live changes
 
-Operator opens the Source Control tab on the run screen and sees the run's uncommitted changed files (M/A/D), opening any file as a diff (M) or single-pane content (A/D), read from the run's remote checkout — resolved securely server-side, every file opens, manual Reload; a run with no readable checkout (including container-backend) shows the Empty state. This vertical slice proves the whole read pattern and security containment end-to-end.
-**FRs covered:** FR1, FR2, FR3 (Now scope), FR4, FR5, FR7, FR8. **NFRs:** NFR1–NFR7.
+After this epic, an operator opens **Source Control** on a legacy run and can answer “what is uncommitted on this checkout?” — tab, Changes-only list (no History region), Reload / stale banner, Now `M`/`A`/`D`, shared viewer (diff / add / delete, large + binary), server-resolved read-only git, CAP-6 vs region empties vs in-region errors. 30/70 split arrives with the viewer; do not ship a dead 70% pane in the list-only story.
 
-### Epic 2: Browse commit history
+**FRs covered:** FR1 (tab + Changes), FR2, FR3 (Now), FR4 (Now + commit-scope types on the wire), FR5, FR7, FR8
+**UX-DRs:** UX-DR1–UX-DR9 except History-specific pieces (lane a11y, History keyboard, “No commits yet”).
+**Depends on:** nothing in this feature set. Legacy run screen already exists.
+**Enables:** Epic 2 inserts History + lane graph into this tab; Epic 3 adds the finalize seam.
+**Implementation notes:** `@archon/git` `changedFiles` / `fileDiff` / `fileAt` (not `log`) + thin routes; CAP-6 gate helper reused later by `log`; hunk JSON `{ path, status, scope, ref, hunks, cursor, truncated }` with `ref: "live"` for Now; `react-diff-view@3.3.3`; web folder `packages/web/src/components/workflows/source-control/`. No write chrome. No poll.
 
-Operator opens the commit-history region and inspects any commit's files (M/A/D) and their content/diffs (parent→commit), reusing Epic 1's viewer and git-read layer.
-**FRs covered:** FR1 (commit-history region), FR6, FR3 (per-commit scope).
+### Epic 2: Inspect this run's commit history
 
-### Epic 4: Durable run history (fast-follow)
+After this epic, the same operator sees a **History** region on that tab, walks the **run-branch lane graph**, selects any commit (including not-on-`dev`), and sees that commit’s `M`/`A`/`D` in the **same** viewer.
 
-After a run's checkout is cleaned up, its history and diffs still load from a server-written run-end snapshot under `output_root`.
-**FRs covered:** FR9.
+**FRs covered:** FR1 (History region), FR6, FR3 (commit scope), FR4 (commit scope)
+**UX-DRs:** History keyboard, “No commits yet”, lane non-text contrast (NFR7).
+**Depends on:** Epic 1 tab, viewer, git read path, CAP-6 gate helper.
+**Does not require a later epic.**
+**Implementation notes:** `log` with `parents[]`. Lane-graph spike (`@xyflow/react` reuse vs bespoke SVG — no new dep) is the first story and a blocker; a plain chronological list is not acceptable. Container gate on `log` — no “history is immutable” exemption.
 
-## Epic 1: Inspect a run's uncommitted changes (v1 core)
+### Epic 3: Keep a seam for durable git evidence
 
-Operator can see and read what a run changed but has not committed, from its remote checkout, on the run screen. Delivered as ordered vertical slices; each story is independently demonstrable and depends only on earlier stories.
+After this epic, run finalize has the **CAP-8 `WorkflowDeps` hook** (idempotent, temp+rename under `output_root`). v1 does **not** write the snapshot; a write failure must never fail the run.
 
-### Story 1.1: See this run's uncommitted changed files
+**FRs covered:** FR9
+**Depends on:** Epic 1 only if the hook needs the same git helpers; does not require Epic 2.
+**Does not require a later epic.**
+**Implementation notes:** AD-8. Write format stays a build-time decision. No new tables.
+
+## Epic 1: Inspect this run's live changes
+
+After this epic, an operator opens Source Control on a legacy run and can answer “what is uncommitted on this checkout?” History is not part of this epic.
+
+### Story 1.1: See this run's uncommitted files
 
 As an operator,
-I want to open a Source Control tab on the run screen and see the files this run changed but hasn't committed, each marked M/A/D,
-So that I can tell at a glance what the run touched — without SSH or a clone.
+I want a Source Control tab on the legacy run screen that lists this run's uncommitted files,
+So that I can tell whether the run changed the paths I expect without opening a checkout.
 
-**Requirements:** FR1 (tab + Changes region), FR2, FR3 (Now), FR7, FR8; NFR1–NFR5, NFR7 (Changes rows keyboard-operable).
+**Implements:** FR1 (tab + Changes only), FR2, FR3 (Now), FR7, FR8, NFR2, NFR5, NFR8, UX-DR4 (letter badges), UX-DR6, UX-DR7, UX-DR9 (list)
 
 **Acceptance Criteria:**
 
-**Given** a run whose remote checkout is a live host git checkout
-**When** I open the Source Control tab
-**Then** the Changes region lists the run's uncommitted paths, each badged `M`/`A`/`D`, matching the checkout's `git status`
-**And** a Reload control re-fetches on demand, with no background polling.
+**Given** I am on `/legacy/workflows/runs/:id`
+**When** I open the fourth tab beside Graph / Logs / Chat
+**Then** I see **Source Control** scoped to that run
+**And** Console is not a v1 surface
+**And** there is a **Changes** region and **no History region**
 
-**Given** a run with no readable checkout (`working_path` null, directory absent at read time, not a git checkout, or a container-backend run)
+**Given** the run has a readable host git checkout with uncommitted changes
+**When** the tab loads (fetch on click, no poll)
+**Then** Changes lists each path with exactly `M` / `A` / `D` (letter on the badge, not color-only)
+**And** untracked → `A`; rename → `D` + `A`; copy → `A`; type-change / unmerged → `M`
+**And** the list is keyboard-operable
+**And** `workflow_events` do not author the list
+
+**Given** a readable checkout with a clean worktree
+**When** the tab loads
+**Then** Changes shows **No uncommitted changes** (region empty, not CAP-6)
+
+**Given** no readable host git checkout (`working_path` null, directory missing, not a git checkout, or `isolation_env.provider === 'container'`)
+**When** any git route for this run is called
+**Then** HTTP **200** with `{ emptyReason: "container" | "no_checkout" }` (never 404 for this case)
+**And** the tab shows one plain sentence, no error chrome / warning icon
+**And** `container` has **no** Reload; `no_checkout` has Reload
+**And** missing `isolation_env_id` is **not** CAP-6 — fall through to host dir+git
+
+**Given** a valid checkout whose git/API call fails
+**When** the request errors
+**Then** the list remains
+**And** Reload is in-region (no modal, no toast)
+**And** copy is not alarm (“Error:”, “unsupported”, “⚠️”)
+
+**Given** the tab has loaded
+**When** I click Reload
+**Then** lists refetch
+**And** if host content diverged since load, I see **Changed on disk — Reload**
+**And** the open view is never rewritten underneath me
+
+**Given** the client
+**When** it requests git data
+**Then** it sends `runId` only (plus server-issued refs later); never `working_path` or an absolute path
+**And** the server reads existing `workflow_runs.working_path` (no new column, no re-derive from isolation metadata), `realpath`s it
+**And** helpers live in `@archon/git` (`changedFiles` via `execFileAsync`); routes resolve, gate, serialize
+**And** JSON uses `registerOpenApiRoute`; web types from `api.generated.d.ts` only
+**And** auth matches `/api/artifacts/:runId/*` (global `/api/*` gate; no `requireWebUser`; no per-run owner ACL)
+**And** Pino events are `domain.action_state`; no paths, remotes, contents, or secrets
+**And** tests: symlink-escape refuse; encoded `..` refuse; `:`, leading `-`, glob filenames SUCCESS; container top-level → CAP-6
+**And** no write / commit / stage / edit / discard chrome
+**And** the layout has no empty 70% viewer column — Changes is the working surface until Story 1.2
+
+### Story 1.2: Open a changed file in the shared viewer
+
+As an operator,
+I want to open a file from the Changes list in a status-keyed viewer,
+So that I can see what actually changed without leaving the run screen.
+
+**Implements:** FR4 (Now), FR7 (file reads), NFR2, NFR4, NFR7, UX-DR1–UX-DR5, UX-DR9 (viewer)
+
+**Acceptance Criteria:**
+
+**Given** Story 1.1’s tab and Now list
+**When** I select a changed file
+**Then** it opens in one shared viewer in `packages/web/src/components/workflows/source-control/`
+**And** the viewer is reusable (not welded into the tab; no `/console` import)
+**And** the list widget is reusable for a later History file-list scope
+**And** the screen split is **30% lists / 70% viewer**, resizable **20–70%** via the existing `ResizablePanelGroup`
+
+**Given** status `M`
+**When** the file opens
+**Then** I see a two-pane diff, before left / after right (`HEAD → worktree`)
+**And** each pane scrolls independently (horizontal and vertical) and does not overflow the window
+**And** gutters show `+` / `-` (not color-only)
+**And** diff markers meet contrast ≥ 4.5:1 (NFR7)
+**And** there is no standalone snapshot mode
+
+**Given** status `A` or `D`
+**When** the file opens
+**Then** I see a single pane of content with no diff coloring
+**And** `A`/`D` use the raw content route, not the hunk endpoint
+
+**Given** the `M` diff API
+**When** it returns JSON
+**Then** the body is `{ path, status: "M", scope: "now"|"commit", ref, hunks, cursor, truncated }`
+**And** Now uses `scope: "now"` and `ref: "live"` (never null)
+**And** `cursor` is an opaque string echoed as `?cursor=`; the web does not parse it as a scroll offset
+**And** a tested pure function maps hunks to react-diff-view `HunkData` / `ChangeData`
+
+**Given** below **900px**
 **When** I open the tab
-**Then** it shows the Empty state, never an error.
+**Then** lists stack above the viewer
+**And** an `M` diff stacks before-over-after
 
-**Given** any request for the list
-**When** the server serves it
-**Then** it resolves the checkout from `runId` (container gate via `conversation → isolation_env → provider` first), never from a client-supplied checkout root or absolute path.
+**Given** bytes are in flight
+**When** I open a file
+**Then** the list can skeleton from metadata
+**And** the viewer shows a skeleton
+**And** I can **Cancel** the in-flight open
+**And** the viewer is keyboard-operable
 
-**Given** a child/subrun that persists the same `conversationDbId` as its `conversation_id` (executor.ts:867-875)
-**When** the container gate runs
-**Then** a child sharing a container-backed conversation returns the Empty state before any git read, and a child under a host/worktree conversation proceeds to its own `working_path` existence/git check — the D5 FK gate applies identically to child and top-level.
+**Given** the server
+**When** it reads a path
+**Then** live reads realpath-contain under the checkout
+**And** commit-shaped blob reads (needed for `M` before-side) use `ls-tree -z` + `cat-file blob` — never `oid:path`
+**And** `--literal-pathspecs`; `fileDiff` / `fileAt` in `@archon/git`; routes stay thin
+**And** JSON via `registerOpenApiRoute`; raw `app.get` only for wildcard file content
+**And** every git route still returns CAP-6 as HTTP 200 + `emptyReason`
+**And** one new dep: `react-diff-view@3.3.3`; syntax via installed highlight.js; virtualize via installed `@tanstack/react-virtual`
+**And** do not add Shiki or Monaco
 
-**Given** the Changes list
-**When** I navigate by keyboard
-**Then** each file row is focusable and openable via keyboard (NFR7), in reading order, with no pointer required.
-
-### Story 1.2: Open a modified file as a diff
-
-As an operator,
-I want to click a modified (`M`) file and see a two-pane red/green diff,
-So that I can read exactly what changed.
-
-**Requirements:** FR4 (M diff), FR3; NFR2 (read-containment), NFR4, NFR7 (diff non-color cue + contrast).
-
-**Acceptance Criteria:**
-
-**Given** an `M` file in the Changes list
-**When** I click it
-**Then** a two-pane diff opens (red = before / green = after) for `HEAD → worktree`, rendered from server-computed hunks.
-
-**Given** the two-pane diff
-**When** it renders
-**Then** each changed line carries a `+`/`-` gutter marker as the non-color cue (WCAG 1.4.1) — color is never the only signal — and the marker meets ≥ 4.5:1 contrast (NFR7 / UX Accessibility Floor).
-
-**Given** a filename containing `:`, a leading `-`, or glob metacharacters
-**When** I open its diff
-**Then** it opens correctly (no rejection).
-
-**Given** a path that escapes the checkout via symlink or encoded traversal
-**When** it is requested
-**Then** the server refuses it (realpath-contained under `working_path`).
-
-**Given** the diff endpoint
-**When** it returns hunks
-**Then** they follow the canonical hunk JSON schema (`hunks[]` with old/new start+lines and `changes`, plus `cursor`/`truncated`), and a tested pure web adapter maps them to react-diff-view's model.
-
-**Given** a ~2 MB diff
-**When** opened via paged hunks + virtualization
-**Then** the viewer shows loading and never blocks the run screen, and measured render performance is recorded against a baseline. (The ~1s figure is Spike 1's decision heuristic in `architecture.md`, not a hard SLA — the PRD sets no SLA.)
-
-### Story 1.3: Open an added or deleted file's content
-
-As an operator,
-I want to click an added (`A`) or deleted (`D`) file and read its content in a single pane,
-So that I can see what was added or removed.
-
-**Requirements:** FR4 (A/D content); NFR2.
-
-**Acceptance Criteria:**
-
-**Given** an `A` file
-**When** I click it
-**Then** its full new content renders single-pane, no diff coloring.
-
-**Given** a `D` file
-**When** I click it
-**Then** the removed file's content renders single-pane, read via `git --literal-pathspecs ls-tree` + `cat-file blob` on the validated OID (no `<oid>:<path>` revision syntax).
-
-### Story 1.4: Open large and binary files without blocking
-
-As an operator,
-I want large and binary files to still open,
-So that no change is hidden from me.
-
-**Requirements:** FR5; NFR1.
-
-**Acceptance Criteria:**
-
-**Given** a multi-MB text file
+**Given** a file whose first 8 KB contains NUL
 **When** I open it
-**Then** it streams in chunks with a Load-more control and a skeleton + Cancel, and the tab never blocks the run screen.
+**Then** it is not dumped as text
+**And** a usable non-text fallback is enough (download-only is OK); inline image + hex peek are Story 1.3
+**And** Load more / >1 MB stream / >50 MB download-only are Story 1.3
 
-**Given** a binary file
+### Story 1.3: Open every changed file
+
+As an operator,
+I want every changed file to open or give a usable fallback,
+So that large text and binaries never block inspection or get dumped as garbage.
+
+**Implements:** FR5, NFR1, NFR6, UX-DR5 (Load more), UX-DR8
+
+**Acceptance Criteria:**
+
+**Given** Story 1.2’s viewer
+**When** I open a large text file
+**Then** first paint is about **256 KB / 2,000 lines** (tunable at build; do not invent a parallel cutoff)
+**And** I get **Load more** for the rest
+**And** for `M`, the API sends hunks plus **3 lines of context**, not the whole file
+**And** files **> ~1 MB** stream with **Cancel**
+**And** files **> ~50 MB** are download-only (still a usable fallback — nothing is blocked)
+
+**Given** a binary (NUL in the first 8 KB, git heuristic)
 **When** I open it
-**Then** it is not dumped as text — an image renders inline; other binaries offer download or a hex peek.
+**Then** it is never dumped as text
+**And** png / jpg / gif / webp / svg render **inline**
+**And** other binaries offer **download + ~4 KB hex peek**
 
-**Given** the tunable thresholds
-**When** files are opened
-**Then** text first-paints ~256 KB / ~2,000 lines then Load-more; files > ~1 MB stream with Cancel; files > ~50 MB offer download only; binary is detected by a NUL byte in the first 8 KB; the hex peek shows the first ~4 KB (defaults, tunable at build).
+**Given** lists and diffs that exceed a comfortable first paint
+**When** they render
+**Then** they virtualize (`@tanstack/react-virtual` already in 1.2)
+**And** the large-diff spike counts `react-diff-view`’s lodash runtime (~2 MB first paint / ~1s rule)
+**And** there is no polling and no server-side git-result cache
+**And** opening the tab does not measurably regress the rest of the run screen (NFR1)
 
-## Epic 2: Browse commit history
+**Given** NFR6
+**When** this story ships
+**Then** there is still no redaction/denylist (accepted residual; `.env`/keys can appear)
 
-Operator can inspect the run branch's commits and what each one did, reusing Epic 1's viewer and git-read layer. The commit history renders as a branch/merge **lane graph** (renderer spike-selected — reuse `@xyflow/react` or a bespoke SVG; no new dep — see architecture Spike 3).
+## Epic 2: Inspect this run's commit history
 
-### Story 2.1: See the run's commit history
+After this epic, an operator walks the run-branch lane graph, selects any commit, and sees that commit's files in the same viewer.
 
-As an operator,
-I want to see the commits on this run's branch,
-So that I can pick one to inspect.
-
-**Requirements:** FR1 (commit-history region — the second region of the two-region tab), FR6 (history), FR8; NFR1, NFR7 (graph keyboard-operable + lane contrast ≥ 3:1).
-
-**Acceptance Criteria:**
-
-**Given** a run with a live checkout
-**When** I open the commit-history region
-**Then** it renders the run branch's commits as a **branch/merge lane graph** (read from the run checkout, including commits not present on the base branch), one row per commit with message / author / relative time.
-
-**Given** the checkout is unavailable
-**When** I open the region
-**Then** it shows the Empty state.
-
-**Given** the Source Control tab (FR1's two-region layout)
-**When** it renders
-**Then** the commit-history region appears below the Changes region — together they complete FR1's two-region tab.
-
-**Given** the run branch contains a merge commit
-**When** the history renders
-**Then** the graph draws the branch/merge lanes correctly (multi-parent), one row per commit — lanes computed from the `log` records' `parents[]`.
-
-**Given** the commit-history graph
-**When** I navigate by keyboard
-**Then** commit rows are focusable, and I can expand/collapse a commit's files and open a file entirely by keyboard (NFR7).
-
-**Given** the rendered lane graph
-**When** it is displayed
-**Then** the lane dots/lines meet ≥ 3:1 non-text contrast against the background, and no information is conveyed by lane color alone (NFR7).
-
-> **Spike (do first — medium-risk, architecture Spike 3):** commit lane-assignment through merges + lane continuity across paged / windowed rows. Outcome must be a working topology graph — choose `@xyflow/react` reuse vs a bespoke SVG, and the windowing/pagination strategy, from the prototype (no new dep). A plain list is not an acceptable fallback (the graph is locked). Depends on the `log` record carrying `parents[]`.
-
-### Story 2.2: Inspect a commit's files and diffs
+### Story 2.1: Walk this run's commit history as a lane graph
 
 As an operator,
-I want to click any commit and see its `M`/`A`/`D` files and open their diffs/content,
-So that I can see what that commit did.
+I want to see this run checkout's commits as a branch/merge lane graph,
+So that I can find commits that never landed on `dev`, not just a flat log.
 
-**Requirements:** FR6 (inspect commit), FR3 (per-commit), FR4 (viewer reuse); NFR2.
-
-**Acceptance Criteria:**
-
-**Given** a commit in the history
-**When** I click it
-**Then** its changed files list, each badged `M`/`A`/`D`.
-
-**Given** a file within a selected commit
-**When** I open it
-**Then** `M` shows a `parent → commit` diff, `A` shows new content, `D` shows removed content (validated OID + ls-tree/cat-file), reusing the Epic 1 viewer.
-
-**Given** an invalid or unreachable commit OID, or a filename containing `:` / a leading `-` / glob metacharacters
-**When** the commit content is requested
-**Then** an invalid or unreachable OID is refused, and the literal filename opens correctly (validated OID + `--literal-pathspecs` ls-tree + cat-file).
-
-## Epic 4: Durable run history (fast-follow)
-
-A run's Source Control survives checkout cleanup via a server-written run-end snapshot.
-
-### Story 4.1: Persist a run-end snapshot
-
-As the system,
-I want to write a durable snapshot of a run's changes and history at run end,
-So that they survive checkout cleanup.
-
-**Requirements:** FR9 (write side); NFR3.
+**Implements:** FR1 (History region), FR6 (lane graph + unmerged-to-dev commits), FR8 (“No commits yet”), NFR7 (lane contrast), UX-DR7, UX-DR9 (history)
 
 **Acceptance Criteria:**
 
-**Given** a run reaching a terminal state with its checkout still present
-**When** the finalize hook runs
-**Then** it writes a snapshot (name-status `M`/`A`/`D` + per-file diff + `A`/`D` content + `log`) under `output_root` via temp write + atomic rename.
+**Given** Story 1.1–1.3's Source Control tab (Changes only so far)
+**When** this story ships
+**Then** a **History** region is inserted below Changes
+**And** a plain chronological list is **not** an acceptable fallback
+**And** this story does **not** require opening a commit’s files (Story 2.2)
 
-**Given** the hook runs more than once, or the checkout is already gone
-**When** it runs
-**Then** it is idempotent / no-ops, and a write failure logs + emits a metric but never marks the run failed.
+**Given** a readable checkout with commits
+**When** History loads
+**Then** each commit is one row driven by `log` records that include `parents[]`
+**And** I can inspect commits on the run branch that are **not** merged to base `dev`
+**And** History is keyboard-operable
+**And** lanes meet non-text contrast ≥ 3:1 and are not color-only (NFR7)
 
-### Story 4.2: Load Source Control from the snapshot after cleanup
+**Given** a readable checkout with no commits
+**When** History loads
+**Then** I see **No commits yet** (region empty, not CAP-6)
+
+**Given** CAP-6 (container / `no_checkout`)
+**When** the `log` route is called
+**Then** HTTP 200 + `{ emptyReason }` like every other git route
+**And** there is **no** “history is immutable” exemption for containers
+**And** `log` lives in `@archon/git` via `execFileAsync`; the route stays thin
+**And** JSON uses `registerOpenApiRoute`; web types from `api.generated.d.ts` only
+
+**Given** the lane-layout renderer is not pinned in the architecture Stack
+**When** implementation starts
+**Then** a pre-build spike chooses **`@xyflow/react` reuse vs bespoke SVG**
+**And** that spike adds **no new dependency**
+**And** the chosen renderer is what ships in this story — not a later polish pass
+
+### Story 2.2: Open a commit's files in the same viewer
 
 As an operator,
-I want a reaped run's Source Control to still load,
-So that its history isn't lost.
+I want to select a commit on the lane graph and see its `M` / `A` / `D` files in the shared viewer,
+So that I can inspect what that commit changed, including commits not on `dev`.
 
-**Requirements:** FR9 (read fallback); NFR3.
+**Implements:** FR3 (commit lists), FR4 (commit viewer), FR6 (inspect selected commit), FR7, UX-DR4 (same list widget both scopes)
 
 **Acceptance Criteria:**
 
-**Given** a run whose checkout was cleaned up but whose snapshot exists
-**When** I open the tab
-**Then** the changes list, commit history, and diffs load from the snapshot via the same read API.
+**Given** Story 2.1's History graph and Story 1.2's viewer
+**When** I select a commit
+**Then** the file list shows that commit's changed paths with exactly `M` / `A` / `D` and the same projections as Now
+**And** opening a file uses the **same** viewer component
+**And** `M` compares `parent → commit`; `A`/`D` show that commit's blob / parent blob via the raw content route
+**And** hunk JSON uses `scope: "commit"` and `ref` equal to the commit OID (never `"live"`)
+**And** the client sends only `runId` plus server-issued commit/file refs — never `working_path`
 
-**Given** neither a checkout nor a snapshot exists
-**When** I open the tab
-**Then** the Empty state shows.
+**Given** I then select Now / the Changes region
+**When** the list and viewer update
+**Then** scope returns to `now` / `ref: "live"`
+**And** Reload and the stale banner still apply; the open view is never mutated underneath me
+
+**Given** the server
+**When** it lists or diffs a commit
+**Then** `changedFiles` / `fileDiff` / `fileAt` accept a commit ref
+**And** blob reads stay `ls-tree -z` + `cat-file blob` — never `oid:path`
+**And** every new git route still returns CAP-6 as HTTP 200 + `emptyReason`
+**And** per-commit routes are `registerOpenApiRoute` JSON except wildcard file content
+
+## Epic 3: Keep a seam for durable git evidence
+
+After this epic, run finalize has a CAP-8 hook. v1 does not write the snapshot.
+
+### Story 3.1: Add the run-end git-snapshot seam
+
+As an operator,
+I want run finalize to expose a durable git-snapshot hook without changing run success,
+So that a later story can write history under `output_root` after checkout cleanup without inventing a second injection point.
+
+**Implements:** FR9, NFR3, NFR4 (no new tables)
+
+**Acceptance Criteria:**
+
+**Given** `WorkflowDeps` in `@archon/workflows`
+**When** this story ships
+**Then** there is an optional finalize hook for CAP-8 (name owned by the implementation; injected like other optional deps)
+**And** the executor calls it at **run-end** (the locked trigger)
+**And** v1's implementation is a **no-op write** — it does not persist name-status, diffs, A/D content, or `git log`
+
+**Given** the hook is invoked
+**When** the checkout is already gone
+**Then** it no-ops
+**And** a future writer must be idempotent and use temp+rename under the run's `output_root`
+**And** a write/hook failure is logged (`domain.action_state`) and **must not fail the run** (NFR3)
+
+**Given** v1 git read APIs
+**When** neither checkout nor snapshot exists
+**Then** they still fall through to CAP-6
+**And** no new tables, process, env var, or deployable
+**And** the snapshot wire format (JSON manifest serving the same read API) remains a build-time decision — not implemented here
+
+## Validation (step 4)
+
+- **FRs:** FR1–FR9 each appear in at least one story (see **Implements** lines). FR1 is complete only after 2.1 (History inserted; Epic 1 is Changes-only by party lock).
+- **UX-DRs:** UX-DR1–9 covered (1.1–1.3 + 2.1–2.2).
+- **Architecture:** brownfield, no starter template, no new tables in v1. Helpers created when the story needs them (`changedFiles` in 1.1; `fileDiff`/`fileAt` in 1.2; `log` in 2.1).
+- **Dependencies:** 1.1 → 1.2 → 1.3 → 2.1 → 2.2. Epic 3 (3.1) does not require Epic 2. No story waits on a later story.
+- **Known size risk:** 2.1 is spike-then-ship (lane graph). Approved; not split.
