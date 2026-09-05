@@ -9,11 +9,19 @@ import {
 } from 'react';
 import { useSearchParams } from 'react-router';
 import { WorkflowPicker } from './WorkflowPicker';
+import { WorkflowEnvPicker } from './WorkflowEnvPicker';
+import { WorkflowEnvPreviewTable } from './WorkflowEnvPreviewTable';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import * as skill from '../skills';
 import { orderWithRecommended } from '../lib/recommended';
 import { missingRequiredInputs, collectSuppliedInputs } from '../lib/workflow-inputs';
+import {
+  NONE_ENV_SELECTION,
+  clearedEnvStateOnWorkflowChange,
+  isStartBlockedBySelectedEnv,
+  envStartBlockReason,
+} from '../lib/draft-env';
 
 interface DraftRunCardProps {
   projectId: string;
@@ -86,6 +94,8 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
   // Cleared whenever the selected workflow changes so one workflow's values can never
   // be submitted against another's declaration.
   const [inputValues, setInputValues] = useState<Record<string, string>>({});
+  // Workflow ENV overlay selection. `null` = None (YAML). Cleared on workflow change.
+  const [selectedEnvId, setSelectedEnvId] = useState<string | null>(NONE_ENV_SELECTION);
 
   // Pre-fill from `?rerun=1&workflow=…&message=…` query params (set by the
   // ↻ rerun button on RecentRunRow). Reacts to searchParams so the card
@@ -154,11 +164,50 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
   const declaredInputs = sortedWorkflows.find(w => w.name === workflowName)?.inputs ?? [];
   const missingRequired = missingRequiredInputs(declaredInputs, inputValues);
 
-  // Switching workflows discards values collected for the previous one — they were
-  // typed against a different declaration and would be rejected as undeclared keys.
+  // Switching workflows discards values + ENV selection from the previous one —
+  // they were typed against a different declaration and must not leak.
   useEffect(() => {
-    setInputValues({});
+    const cleared = clearedEnvStateOnWorkflowChange();
+    setInputValues(cleared.inputValues);
+    setSelectedEnvId(cleared.selectedEnvId);
   }, [workflowName]);
+
+  // ENV summaries for the canonical selected workflow (no patch bodies).
+  const { data: envSummaries, error: envListError } = useEntity(
+    K.workflowEnvs(workflowName.length > 0 ? workflowName : '__none__'),
+    () =>
+      workflowName.length === 0
+        ? Promise.resolve([] as skill.WorkflowEnvSummary[])
+        : skill.listWorkflowEnvs(workflowName)
+  );
+
+  // Race-safe preview: cache key includes cwd + workflow + env id, so a slower
+  // prior response lands under its own key and cannot overwrite a newer selection.
+  const previewKey = K.workflowEnvPreview(
+    projectCwd,
+    workflowName.length > 0 ? workflowName : '__none__',
+    selectedEnvId
+  );
+  const {
+    data: envPreview,
+    error: envPreviewError,
+    loading: envPreviewLoading,
+  } = useEntity(previewKey, () =>
+    workflowName.length === 0
+      ? Promise.reject(new Error('no workflow selected'))
+      : skill.previewWorkflowEnv(workflowName, projectCwd, selectedEnvId)
+  );
+
+  const envBlocksStart = isStartBlockedBySelectedEnv({
+    selectedEnvId,
+    preview: envPreview,
+    previewError: envPreviewError,
+  });
+  const envBlockReason = envStartBlockReason({
+    selectedEnvId,
+    preview: envPreview,
+    previewError: envPreviewError,
+  });
 
   // Global `N` keybind: expand + open the workflow picker so the user can
   // pick a workflow without first reaching for the mouse.
@@ -211,6 +260,10 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
       );
       return;
     }
+    if (envBlocksStart) {
+      setError(envBlockReason ?? 'ENV preview not ready.');
+      return;
+    }
     setError(null);
     setSubmitting(true);
     const suppliedInputs = collectSuppliedInputs(declaredInputs, inputValues);
@@ -223,6 +276,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
         files: files.length > 0 ? files : undefined,
         // startRun already treats an empty map as "nothing supplied".
         inputs: suppliedInputs,
+        ...(selectedEnvId !== null ? { envId: selectedEnvId } : {}),
       });
       // Dispatch is fire-and-forget — the orchestrator creates the run row
       // asynchronously. Nudge the runs feed so the new card appears as soon
@@ -230,6 +284,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
       setContext('');
       setFiles([]);
       setInputValues({});
+      setSelectedEnvId(NONE_ENV_SELECTION);
       setMode('collapsed');
       invalidate('runs');
     } catch (err: unknown) {
@@ -243,6 +298,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
     setMode('collapsed');
     setFiles([]);
     setInputValues({});
+    setSelectedEnvId(NONE_ENV_SELECTION);
     setError(null);
   };
 
@@ -363,7 +419,14 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
             workflows={sortedWorkflows}
             recommendedNames={recommendedNames}
             value={workflowName}
-            onChange={setWorkflowName}
+            onChange={name => {
+              if (name !== workflowName) {
+                const cleared = clearedEnvStateOnWorkflowChange();
+                setInputValues(cleared.inputValues);
+                setSelectedEnvId(cleared.selectedEnvId);
+              }
+              setWorkflowName(name);
+            }}
             disabled={submitting}
             onClose={() => {
               requestAnimationFrame(() => {
@@ -384,6 +447,18 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
             </span>
           </button>
         </div>
+        {/* Workflow ENV overlay — None (YAML) default; list failure keeps YAML usable. */}
+        {workflowName.length > 0 ? (
+          <div className="mt-3">
+            <WorkflowEnvPicker
+              envs={envSummaries ?? []}
+              value={selectedEnvId}
+              onChange={setSelectedEnvId}
+              disabled={submitting}
+              listError={envListError !== undefined}
+            />
+          </div>
+        ) : null}
 
         {/* Declared inputs (#2554) — only for workflows that declare a signature.
             Values are validated server-side against the same contract a composing
@@ -423,6 +498,17 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
               </label>
             ))}
           </div>
+        ) : null}
+
+        {workflowName.length > 0 ? (
+          <WorkflowEnvPreviewTable
+            preview={envPreview}
+            loading={
+              envPreviewLoading || (envPreview === undefined && envPreviewError === undefined)
+            }
+            error={envPreviewError}
+            envSelected={selectedEnvId !== null}
+          />
         ) : null}
 
         {/* Body: context textarea */}
@@ -530,11 +616,16 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
             <button
               type="button"
               onClick={() => void submit()}
-              disabled={submitting || workflowName.length === 0 || missingRequired.length > 0}
+              disabled={
+                submitting ||
+                workflowName.length === 0 ||
+                missingRequired.length > 0 ||
+                envBlocksStart
+              }
               title={
                 missingRequired.length > 0
                   ? `Fill in ${missingRequired.join(', ')} first`
-                  : undefined
+                  : (envBlockReason ?? undefined)
               }
               className="brand-bar flex items-center gap-1.5 rounded-[9px] px-[15px] py-[9px] text-[13px] font-bold text-white shadow-[0_6px_18px_-8px_color-mix(in_oklch,var(--brand-magenta),transparent_30%)] transition-all hover:-translate-y-px hover:brightness-110 active:brightness-95 disabled:translate-y-0 disabled:opacity-50 disabled:shadow-none"
             >
@@ -551,6 +642,9 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
             <p className="mt-1 font-mono text-[11px] text-text-tertiary">
               needs {missingRequired.join(', ')}
             </p>
+          ) : null}
+          {error === null && envBlockReason !== null ? (
+            <p className="mt-1 font-mono text-[11px] text-text-tertiary">{envBlockReason}</p>
           ) : null}
 
           {error !== null ? <p className="mt-1 font-mono text-[11px] text-error">{error}</p> : null}

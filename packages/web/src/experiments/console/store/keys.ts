@@ -1,6 +1,11 @@
 /** Centralized cache key constructors. Refactoring key shape = one file. */
 
 import { usageCacheKey, type UsageQuery } from '../skills/usage';
+import {
+  workflowEnvsCacheKey,
+  workflowEnvCacheKey,
+  workflowEnvPreviewCacheKey,
+} from '../skills/workflowEnvs';
 
 /** A scope is either the literal 'all' or a project id. Encoded as a string. */
 export type Scope = string;
@@ -25,6 +30,17 @@ export const K = {
   countsGlobal: 'counts:global' as const,
   pendingRuns: 'pendingRuns' as const,
   envVars: (projectId: string): string => `envVars:${projectId}`,
+  /** Install-wide workflow ENV summaries (no patches). */
+  workflowEnvs: (workflowName: string): string => workflowEnvsCacheKey(workflowName),
+  /** Full workflow ENV row (includes patches) — edit path only. */
+  workflowEnv: (workflowName: string, envId: string): string =>
+    workflowEnvCacheKey(workflowName, envId),
+  /**
+   * ENV preview keyed by cwd + workflow + env id (`null` → `none`).
+   * Distinct keys keep a slower prior preview from overwriting a newer selection.
+   */
+  workflowEnvPreview: (cwd: string, workflowName: string, envId: string | null): string =>
+    workflowEnvPreviewCacheKey(cwd, workflowName, envId),
   artifacts: (runId: string): string => `artifacts:${runId}`,
   // Installation-wide settings surfaces (static keys — one row each).
   config: 'config' as const,
