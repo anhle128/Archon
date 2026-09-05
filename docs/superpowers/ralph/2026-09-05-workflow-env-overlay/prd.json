@@ -545,7 +545,8 @@
         "US-025"
       ],
       "priority": 26,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration after US-025. Files: packages/workflows/src/env-overlay.ts, packages/workflows/src/env-overlay.test.ts. assertRawPatchKeys runs before missing-node continue; missing+typo \u2192 forbidden_field without value leak; allowed-only missing still skips."
     },
     {
       "id": "US-027",
@@ -568,7 +569,8 @@
         "US-026"
       ],
       "priority": 27,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration. Files: packages/workflows/src/node-model-resolution.ts, node-model-resolution.test.ts, executor.test.ts. resolveWorkflowModelScope effort ?? modelReasoningEffort; programmatic legacy MRE parity with loader-normalized effort across scope/snapshot/node_started/appliedEffort."
     },
     {
       "id": "US-028",
@@ -588,7 +590,8 @@
         "US-027"
       ],
       "priority": 28,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in final Convergence 2 iteration. Files: packages/web/src/experiments/console/primitives/run.ts, run.test.ts. Phase 8 gates rerun: focused package tests, check:bundled-schema, check:schema-upgrades, validate (type-check/lint/format/test), git diff --check."
     }
   ]
 }

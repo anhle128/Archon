@@ -1,5 +1,22 @@
 ## Codebase Patterns
 
+### Strict present optional ENV fields (US-028)
+- **Where**: `packages/web/src/experiments/console/primitives/run.ts` (`parseRunEnvOverlay` / `readResolvedRow`)
+- **Pattern**: Absent optional keys stay optional; *present* wrong types/values fail the whole overlay (`null`). Unexpected top-level or resolved-row keys fail closed via `Record<string, true>` allowlists. Thinking accepts only adaptive|enabled|disabled (string shorthand or exact object; enabled budgetTokens positive int).
+- **Example**: `{ provider:'claude', model:42 }` → null; `{ …, extraTop:true }` complete → null; valid `{ thinking:'adaptive' }` → `{ type:'adaptive' }`
+
+
+### Programmatic modelReasoningEffort scope fallback (US-027)
+- **Where**: `packages/workflows/src/node-model-resolution.ts` (`resolveWorkflowModelScope`)
+- **Pattern**: Workflow scope effort is `workflow.effort ?? workflow.modelReasoningEffort` — same fallback as DAG `workflowLevelOptions`. Loader-normalized YAML already translates legacy MRE → `effort`; unexpanded programmatic definitions may still carry only `modelReasoningEffort`. One resolver keeps Preview/snapshot/`node_started`/provider `appliedEffort` aligned. Portable `effort` always wins when both are set.
+- **Example**: `{ modelReasoningEffort: 'high' }` → `scope.effort === 'high'` ≡ `{ effort: 'high' }`; metadata.effort + appliedEffort both `'high'`, no assistant-legacy MRE surface
+
+
+### Missing-node raw key gate (US-026)
+- **Where**: `packages/workflows/src/env-overlay.ts` (`applyEnvOverlay` loop)
+- **Pattern**: Call `assertRawPatchKeys(nodeId, rawPatch)` *before* the missing-node `continue` and before `copyNodePatch`. Deleted targets with unknown keys (`{ missing: { typo: '…' } }`) fail `forbidden_field` with field name only; allowed-only missing targets still skip into sorted `missingNodeIds`.
+- **Example**: bypass Zod `{ missing: { typo: 'secret-value' } }` → forbidden_field field=`typo`; `{ missing: { model: 'x' } }` → missingNodeIds `['missing']`
+
 ### Picker/Start mounted race harness (US-025)
 - **Where**: `packages/web/src/experiments/console/components/WorkflowEnvPicker.test.tsx`, `DraftRunCard.test.tsx`
 - **Pattern**: Mount with happy-dom + `NODE_ENV=development` + React.act. Drive controlled selects via fiber `__reactProps$*.onChange`. Deferred promises control list/preview settle order. DraftRunCard needs `MemoryRouter` for `useSearchParams`; WorkflowPicker portal needs stubbed `getBoundingClientRect` + non-zero viewport. Cache keys (`K.workflowEnvPreview(cwd, wf, envId)`) isolate stale settles — assert UI + current key, not cancelled promises.
@@ -765,5 +782,70 @@
 - Preview table copy differs by selection: selected → `Loading ENV preview…` / `Start is disabled`; None → `Loading preview…` / YAML still works.
 - DraftRunCard collapsed mode must be expanded before ENV UI appears; last-workflow localStorage stabilizes initial selection for multi-workflow race tests.
 - WorkflowPicker dropdown portals to `document.body` and needs a real bounding rect in happy-dom or `anchor` stays null and options never mount.
+
+---
+
+## 2026-09-05 — US-026: Missing-node raw patch keys rejected
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/env-overlay.ts` — `assertRawPatchKeys` before missing-node continue (extends US-016 to deleted targets)
+- `packages/workflows/src/env-overlay.test.ts` — Zod-bypass missing+typo regression + allowed-only missing skip
+
+**Acceptance criteria verified**:
+- [x] env-overlay.test.ts bypasses Zod with `{ missing: { typo: 'secret-value' } }`
+- [x] applyEnvOverlay fails forbidden_field; mentions only unknown key; no value/body leak
+- [x] Missing-node with only allowed fields succeeds and reports skipped id
+- [x] Raw key validation runs before missing-node continue and before copyNodePatch
+- [x] Valid missing-node skip + schema-validated patches unchanged
+- [x] Focused verification: `cd packages/workflows && bun test src/env-overlay.test.ts src/schemas/env-overlay.test.ts` (29 pass)
+
+**Learnings**:
+- US-016 only gated present nodes; missing-id early continue was a silent bypass for unknown keys on deleted targets.
+- Order is: assertRawPatchKeys → missing skip OR copyNodePatch+apply. Allowed missing still never enters appliedPatches.
+
+---
+
+## 2026-09-05 — US-027: Programmatic modelReasoningEffort parity
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/node-model-resolution.ts` — `resolveWorkflowModelScope` accepts legacy `modelReasoningEffort` and sets `effort: workflow.effort ?? workflow.modelReasoningEffort`
+- `packages/workflows/src/node-model-resolution.test.ts` — programmatic unexpanded MRE vs loader-normalized effort parity; portable effort wins
+- `packages/workflows/src/executor.test.ts` — ENV snapshot vs pure node_started metadata + appliedEffort provider options for programmatic MRE workflow
+
+**Acceptance criteria verified**:
+- [x] node-model-resolution.test.ts covers unexpanded programmatic workflow-level modelReasoningEffort with no portable effort
+- [x] executor.test.ts compares envOverlay snapshot row to runtime node_started fields and provider appliedEffort
+- [x] Shared workflow-scope resolver uses effort ?? modelReasoningEffort without a second resolver
+- [x] Loader-normalized YAML and programmatic legacy definitions produce the same effective effort in Preview/snapshot/node_started/provider options
+- [x] Preview and audit parity remains via node-model-resolution.ts
+- [x] Focused verification: `bun test src/node-model-resolution.test.ts` && `bun test src/executor.test.ts` && `bun test src/dag-executor.test.ts` (18+100+531 pass; run separately — mock.module isolation)
+
+**Learnings**:
+- AC's single `bun test a b c` form hits mock pollution between executor and dag-executor; package.json already splits them — run as three invocations.
+- Legacy workflow MRE is portable effort once it reaches scope (metadata.effort), not assistant-style metadata.modelReasoningEffort.
+
+---
+## 2026-09-05 — US-028: Strict run-detail ENV parser fields
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/primitives/run.ts` — fail-closed present optional field types + unexpected key rejection for pending/complete overlays and resolved rows; thinking mirrors adaptive/enabled/disabled shapes
+- `packages/web/src/experiments/console/primitives/run.test.ts` — regressions for invalid model/tier/effort/thinking, unexpected resolved-row keys, unexpected top-level keys; valid pending/complete controls
+
+**Acceptance criteria verified**:
+- [x] parseRunEnvOverlay returns null for present non-string model, invalid tier, invalid effort, malformed/unsupported thinking, unexpected resolved-row key
+- [x] complete overlay with unexpected top-level key returns null (pending extras too)
+- [x] Local web parser requires exact pending/complete shapes + resolved-row field types without importing `@archon/workflows`
+- [x] Valid pending/complete rendering unchanged; RunDetailPage omits only corrupt ENV section
+- [x] Focused verification: `cd packages/web && NODE_ENV=development bun test …run.test.ts …RunDetailPage.test.tsx …WorkflowEnvResolvedTable.test.tsx …RunDetailHeader.test.tsx` (45 pass)
+- [x] Phase 8 gates rerun on corrected tree: package focused tests + tsc, `check:bundled-schema`, `check:schema-upgrades` (with libpq PATH + local PG), `validate` components (type-check/lint/format/test), `git diff --check`
+
+**Learnings**:
+- US-017 already failed hybrids/missing provider; optional fields still silently dropped invalid present values — present-and-wrong must fail closed for audit UI.
+- Static key allowlists as `Record<string, true>` (not `Set`) and `if (!allowed[key])` avoid the unnecessary boolean-literal-compare lint.
+- `check:schema-upgrades` needs `psql` on PATH (`/opt/homebrew/opt/libpq/bin`) even when Postgres is already accepting on 127.0.0.1:5432.
+- Full-repo eslint can OOM under default Node heap; `NODE_OPTIONS=--max-old-space-size=8192` unblocks lint when needed.
 
 ---
