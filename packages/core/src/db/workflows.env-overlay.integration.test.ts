@@ -11,7 +11,9 @@
 import { afterAll, describe, expect, mock, test } from 'bun:test';
 import type { EnvOverlaySnapshot } from '@archon/workflows/schemas/env-overlay';
 
+const realArchonPaths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
+  ...realArchonPaths,
   createLogger: () => ({
     info() {},
     warn() {},
