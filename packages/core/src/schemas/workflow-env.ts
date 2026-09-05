@@ -34,11 +34,14 @@ export const workflowEnvNameSchema = z
   .max(64, 'ENV name must be 1–64 characters after trim')
   .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/, 'ENV name must match ^[A-Za-z0-9][A-Za-z0-9._-]*$');
 
-/** Full ENV row as returned from the store (snake_case columns 1:1 with DB). */
+/**
+ * Full ENV row as returned from the store (snake_case columns 1:1 with DB).
+ * Identity fields reuse the write-path schemas so corrupt stored rows fail closed.
+ */
 export const workflowEnvRowSchema = z.object({
   id: z.string().min(1),
-  workflow_name: z.string().min(1).max(255),
-  name: z.string().min(1).max(64),
+  workflow_name: workflowEnvWorkflowNameSchema,
+  name: workflowEnvNameSchema,
   patches: envPatchesSchema,
   created_at: dbTimestamp,
   updated_at: dbTimestamp,

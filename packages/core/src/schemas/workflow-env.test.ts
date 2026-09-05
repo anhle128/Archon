@@ -92,4 +92,40 @@ describe('workflowEnvRowSchema / summary', () => {
       })
     ).toThrow();
   });
+
+  test('rejects invalid stored workflow_name and name identities', () => {
+    expect(() =>
+      workflowEnvRowSchema.parse({
+        ...baseRow,
+        workflow_name: 'bad//workflow',
+      })
+    ).toThrow();
+    expect(() =>
+      workflowEnvRowSchema.parse({
+        ...baseRow,
+        name: 'has space',
+      })
+    ).toThrow();
+
+    expect(() =>
+      workflowEnvSummarySchema.parse({
+        id: baseRow.id,
+        workflow_name: 'bad//workflow',
+        name: baseRow.name,
+        created_at: baseRow.created_at,
+        updated_at: baseRow.updated_at,
+        created_by_user_id: baseRow.created_by_user_id,
+      })
+    ).toThrow();
+    expect(() =>
+      workflowEnvSummarySchema.parse({
+        id: baseRow.id,
+        workflow_name: baseRow.workflow_name,
+        name: 'has space',
+        created_at: baseRow.created_at,
+        updated_at: baseRow.updated_at,
+        created_by_user_id: baseRow.created_by_user_id,
+      })
+    ).toThrow();
+  });
 });

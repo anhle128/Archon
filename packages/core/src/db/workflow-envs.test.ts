@@ -298,6 +298,74 @@ describe('workflow-envs CRUD', () => {
     await deleteWorkflowEnv('order-wf', c.id);
   });
 
+  test('invalid stored identities fail closed on detail and summary reads', async () => {
+    // Seed via create, then corrupt identity columns outside the write path.
+    const badWorkflow = await createWorkflowEnv({
+      workflow_name: 'identity-wf',
+      name: 'ok-name',
+      patches: { n: { model: 'keep-me' } },
+      created_by_user_id: null,
+    });
+    const badName = await createWorkflowEnv({
+      workflow_name: 'identity-wf',
+      name: 'other-ok',
+      patches: { n: { model: 'also-keep' } },
+      created_by_user_id: null,
+    });
+
+    await db.query(`UPDATE remote_agent_workflow_envs SET workflow_name = $1 WHERE id = $2`, [
+      'bad//workflow',
+      badWorkflow.id,
+    ]);
+    await db.query(`UPDATE remote_agent_workflow_envs SET name = $1 WHERE id = $2`, [
+      'has space',
+      badName.id,
+    ]);
+
+    const badWorkflowErr = await getWorkflowEnvById(badWorkflow.id).then(
+      () => null,
+      (err: unknown) => err
+    );
+    expect(badWorkflowErr).toBeInstanceOf(WorkflowEnvCorruptRowError);
+    expect((badWorkflowErr as WorkflowEnvCorruptRowError).envId).toBe(badWorkflow.id);
+    expect((badWorkflowErr as Error).message).toBe(`Workflow ENV row corrupt: ${badWorkflow.id}`);
+    expect((badWorkflowErr as Error).message).not.toContain('bad//');
+    expect((badWorkflowErr as Error).message).not.toContain('keep-me');
+
+    const badNameErr = await getWorkflowEnvById(badName.id).then(
+      () => null,
+      (err: unknown) => err
+    );
+    expect(badNameErr).toBeInstanceOf(WorkflowEnvCorruptRowError);
+    expect((badNameErr as WorkflowEnvCorruptRowError).envId).toBe(badName.id);
+    expect((badNameErr as Error).message).toBe(`Workflow ENV row corrupt: ${badName.id}`);
+    expect((badNameErr as Error).message).not.toContain('has space');
+    expect((badNameErr as Error).message).not.toContain('also-keep');
+
+    // Summary path: SELECT never loads patches; corrupt patches must not be required
+    // to detect an invalid identity, and identity failure still uses id-only errors.
+    await db.query(`UPDATE remote_agent_workflow_envs SET patches = $1 WHERE id = $2`, [
+      '{not-json',
+      badName.id,
+    ]);
+
+    const listErr = await listWorkflowEnvSummaries('identity-wf').then(
+      () => null,
+      (err: unknown) => err
+    );
+    expect(listErr).toBeInstanceOf(WorkflowEnvCorruptRowError);
+    expect((listErr as WorkflowEnvCorruptRowError).envId).toBe(badName.id);
+    expect((listErr as Error).message).toBe(`Workflow ENV row corrupt: ${badName.id}`);
+    expect((listErr as Error).message).not.toContain('{not-json');
+    expect((listErr as Error).message).not.toContain('has space');
+
+    // Clean up via raw SQL — store delete validates workflow identity on the path.
+    await db.query(`DELETE FROM remote_agent_workflow_envs WHERE id = $1 OR id = $2`, [
+      badWorkflow.id,
+      badName.id,
+    ]);
+  });
+
   test('isWorkflowEnvNameConflict is constraint/message exact', () => {
     // PostgreSQL: exact SQLSTATE + named identity constraint.
     expect(
