@@ -78,8 +78,6 @@ import {
   isPersistableNode,
   readSubrunMetadata,
   isApprovalContext,
-  effortLevelSchema,
-  thinkingConfigSchema,
   routeLoopRuntimeMetadataSchema,
   inputEnvKey,
   validateProviderUsageAtBoundary,
@@ -103,7 +101,13 @@ import {
   readComposedMeta,
   type LoopWithCompiledCommand,
 } from './compiled-command';
-import { assistantModelDefaults, resolveNodeModel } from './node-model-resolution';
+import {
+  assistantModelDefaults,
+  resolveNodeExecutionRequest,
+  resolveGroupModelScope,
+  type WorkflowModelScope,
+} from './node-model-resolution';
+import type { NodeExecutionMetadata } from './schemas';
 import {
   logNodeStart,
   logNodeComplete,
@@ -135,7 +139,6 @@ import {
   isLiteralSpec,
   isTierName,
   resolveModelSpec,
-  resolvePresetEffort,
   type ModelAliasPreset,
   type ResolvedAiProfile,
   type TierName,
@@ -391,50 +394,6 @@ export interface McpFailureEntry {
   segment: string;
 }
 
-function applyPresetOptions(
-  provider: string,
-  preset: ModelAliasPreset | undefined,
-  node: DagNode,
-  workflowLevelOptions: WorkflowLevelOptions,
-  declaredEffort: string | undefined,
-  nodeConfig: NodeConfig
-): void {
-  if (!preset) return;
-
-  if (
-    preset.thinking !== undefined &&
-    node.thinking === undefined &&
-    workflowLevelOptions.thinking === undefined
-  ) {
-    nodeConfig.thinking = preset.thinking;
-  }
-
-  // An effort declared on the node or workflow outranks the preset's. Passed in
-  // rather than re-derived so this cannot disagree with the chain that builds
-  // `nodeConfig.effort` below — the two disagreeing is exactly what made an
-  // explicit `effort:` on a Codex node suppress its tier's effort and apply
-  // nothing at all (#2556).
-  if (preset.effort === undefined || declaredEffort !== undefined) return;
-
-  // Shared with the chat orchestrator's `applyPresetToRequestOptions`, so the
-  // same tier cannot mean one depth in a workflow and another in chat. The
-  // classifier returns the reason; each caller keeps its own event namespace.
-  const decision = resolvePresetEffort(provider, preset.effort);
-  if (!decision.ok) {
-    // Warn rather than silently drop it — fail-loud per the project's fail-fast
-    // guideline. `unsupported` means the resolved provider has no reasoning
-    // control at all (e.g. a `tiers:` entry sets `effort` on an OpenCode tier).
-    getLog().warn(
-      { provider, effort: preset.effort, nodeId: node.id, valid: decision.valid },
-      decision.reason === 'unsupported'
-        ? 'dag.preset_effort_unsupported'
-        : 'dag.preset_effort_unknown'
-    );
-    return;
-  }
-  nodeConfig.effort = preset.effort;
-}
-
 /**
  * Parse the SDK's "MCP server connection failed: a (status), b (status)"
  * message. Best-effort — malformed or prefix-free messages return `[]`.
@@ -515,40 +474,8 @@ type NodeExecutionResult = NodeOutput & {
   loopIterations?: number;
 };
 
-interface NodeObservabilityMetadata {
-  tier?: TierName;
-  model?: string;
-  modelReasoningEffort?: string;
-  effort?: EffortLevel;
-  thinking?: ThinkingConfig;
-}
-
-function buildNodeObservabilityMetadata(
-  _provider: string,
-  tier: string | undefined,
-  model: string | undefined,
-  nodeOptions: SendQueryOptions | undefined
-): NodeObservabilityMetadata {
-  const resolvedTier = tier && isTierName(tier) ? tier : undefined;
-  const rawEffort = nodeOptions?.nodeConfig?.effort;
-  const rawModelReasoningEffort = nodeOptions?.assistantConfig?.modelReasoningEffort;
-  const modelReasoningEffort =
-    rawEffort === undefined &&
-    typeof rawModelReasoningEffort === 'string' &&
-    rawModelReasoningEffort.length > 0
-      ? rawModelReasoningEffort
-      : undefined;
-  const effort = effortLevelSchema.safeParse(rawEffort);
-  const thinking = thinkingConfigSchema.safeParse(nodeOptions?.nodeConfig?.thinking);
-
-  return {
-    ...(resolvedTier ? { tier: resolvedTier } : {}),
-    ...(model ? { model } : {}),
-    ...(modelReasoningEffort ? { modelReasoningEffort } : {}),
-    ...(effort.success ? { effort: effort.data } : {}),
-    ...(thinking.success ? { thinking: thinking.data } : {}),
-  };
-}
+/** node_started request fields — same shape as ENV resolved metadata. */
+type NodeObservabilityMetadata = NodeExecutionMetadata;
 
 // ---------------------------------------------------------------------------
 // workflow: (sub-run) node — cross-run composition (#2121 Phase 2)
@@ -1192,6 +1119,47 @@ export function substituteLoopPrevRefs(
 // loadMcpConfig moved to @archon/providers/src/mcp/config.ts
 
 /**
+ * Deduped runtime warning when a node (or loop_group) declares one provider while
+ * its model ref resolves to another. Shared by ordinary node resolution and the
+ * group body-scope path — groups never call sendQuery, so the conflict must be
+ * reported here or it is lost once body nodes inherit the already-resolved provider.
+ */
+async function warnModelProviderConflict(
+  conflict: { declared: string; resolved: string; modelRef: string } | undefined,
+  nodeId: string,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  workflowRunId: string,
+  warnedProviderConflicts: Set<string> | undefined
+): Promise<void> {
+  if (!conflict) return;
+  const conflictKey = `${conflict.declared}|${conflict.resolved}|${conflict.modelRef}`;
+  if (warnedProviderConflicts?.has(conflictKey)) return;
+  warnedProviderConflicts?.add(conflictKey);
+  getLog().warn(
+    {
+      nodeId,
+      configuredProvider: conflict.declared,
+      resolvedProvider: conflict.resolved,
+      modelRef: conflict.modelRef,
+    },
+    'dag.model_provider_conflict'
+  );
+  const delivered = await safeSendMessage(
+    platform,
+    conversationId,
+    `Warning: Node '${nodeId}' sets provider '${conflict.declared}' but model '${conflict.modelRef}' resolves to provider '${conflict.resolved}' — using '${conflict.resolved}'.`,
+    { workflowId: workflowRunId, nodeName: nodeId }
+  );
+  if (!delivered) {
+    getLog().error(
+      { nodeId, workflowRunId },
+      'dag.model_provider_conflict_warning_delivery_failed'
+    );
+  }
+}
+
+/**
  * Resolve per-node provider and model.
  * Node-level overrides take precedence over workflow defaults.
  *
@@ -1231,79 +1199,46 @@ export async function resolveNodeProviderAndModel(
   model: string | undefined;
   tier: TierName | undefined;
   options: SendQueryOptions | undefined;
+  /** Portable effort or legacy assistant fallback — telemetry only. */
   effort?: string;
+  /** Prospective request metadata shared with ENV preview/snapshot. */
+  metadata: NodeExecutionMetadata;
+  /** Effective preset after node/workflow inheritance — used by loop_group body scope. */
+  preset: ModelAliasPreset | undefined;
 }> {
-  // The chain itself lives in node-model-resolution.ts so `workflow dry-run` reports the
-  // same answer this produces (#1764). Everything below is the part a dry run must NOT
-  // do: warn the user, throw, and build provider options.
-  const resolution = resolveNodeModel(
-    node,
-    {
-      provider: workflowProvider,
-      model: workflowModel,
-      preset: workflowPreset,
-      tier: workflowLevelOptions.workflowTier,
-      effort: workflowLevelOptions.effort ?? workflowLevelOptions.modelReasoningEffort,
-      // Only used to LABEL an inherited provider in a dry run; the executor discards it.
-      providerOrigin: 'workflow',
-    },
-    assistantModelDefaults(config),
-    aiProfile
-  );
+  // Pure chain + capability-aware effort/thinking live in node-model-resolution.ts
+  // so dry-run, ENV preview, ENV snapshot, and node_started share one answer.
+  // Everything below is the part a dry run must NOT do: warn the user and build
+  // provider options.
+  const scope: WorkflowModelScope = {
+    provider: workflowProvider,
+    model: workflowModel,
+    preset: workflowPreset,
+    tier: workflowLevelOptions.workflowTier,
+    effort: workflowLevelOptions.effort ?? workflowLevelOptions.modelReasoningEffort,
+    // Only used to LABEL an inherited provider in a dry run; the executor discards it.
+    providerOrigin: 'workflow',
+  };
+  const request = resolveNodeExecutionRequest(node, scope, assistantModelDefaults(config), {
+    aiProfile,
+    workflowThinking: workflowLevelOptions.thinking,
+    assistants: config.assistants,
+  });
+  const resolution = request.resolution;
   const { provider, model, preset: effectivePreset } = resolution;
 
-  const conflict = resolution.providerConflict;
-  const conflictKey = conflict && `${conflict.declared}|${conflict.resolved}|${conflict.modelRef}`;
-  if (conflict && conflictKey !== undefined && !warnedProviderConflicts?.has(conflictKey)) {
-    warnedProviderConflicts?.add(conflictKey);
-    getLog().warn(
-      {
-        nodeId: node.id,
-        configuredProvider: conflict.declared,
-        resolvedProvider: conflict.resolved,
-        modelRef: conflict.modelRef,
-      },
-      'dag.model_provider_conflict'
-    );
-    const delivered = await safeSendMessage(
-      platform,
-      conversationId,
-      `Warning: Node '${node.id}' sets provider '${conflict.declared}' but model '${conflict.modelRef}' resolves to provider '${conflict.resolved}' — using '${conflict.resolved}'.`,
-      { workflowId: workflowRunId, nodeName: node.id }
-    );
-    if (!delivered) {
-      getLog().error(
-        { nodeId: node.id, workflowRunId },
-        'dag.model_provider_conflict_warning_delivery_failed'
-      );
-    }
-  }
+  await warnModelProviderConflict(
+    resolution.providerConflict,
+    node.id,
+    platform,
+    conversationId,
+    workflowRunId,
+    warnedProviderConflicts
+  );
 
-  if (!isRegisteredProvider(provider)) {
-    throw new Error(
-      `Node '${node.id}': unknown provider '${provider}'. ` +
-        `Registered: ${getRegisteredProviders()
-          .map(p => p.id)
-          .join(', ')}`
-    );
-  }
-
-  // Get provider capabilities for capability warnings (static lookup, no instantiation)
+  // getProviderCapabilities is safe: resolveNodeExecutionRequest already rejected
+  // unknown providers. Static lookup, no instantiation.
   const caps = getProviderCapabilities(provider);
-  const requestedEffort =
-    node.effort ??
-    workflowLevelOptions.effort ??
-    workflowLevelOptions.modelReasoningEffort ??
-    effectivePreset?.effort;
-
-  // An explicit portable effort value must never disappear at a provider that
-  // cannot honor it. Provider legacy config is intentionally excluded here: it
-  // belongs to that provider and remains its own compatibility/default layer.
-  if (requestedEffort !== undefined && !caps.effortControl) {
-    throw new Error(
-      `Node '${node.id}' sets effort but provider '${provider}' does not support effortControl.`
-    );
-  }
 
   // `webSearchMode:` is Codex's alone — no other provider reads it, and #2556
   // decided it keeps no node-level form, making it the single workflow-level
@@ -1342,7 +1277,9 @@ export async function resolveNodeProviderAndModel(
     ['skills', 'skills', node.skills !== undefined && node.skills.length > 0],
     ['agents', 'agents', node.agents !== undefined],
     ['effort', 'effortControl', declaredEffort !== undefined],
-    ['thinking', 'thinkingControl', (node.thinking ?? workflowLevelOptions.thinking) !== undefined],
+    // Consume pure-path thinkingUnsupported so preset-derived thinking warns too
+    // (node/workflow-only isSet silently missed tier/alias presets — US-036).
+    ['thinking', 'thinkingControl', request.thinkingUnsupported],
     ['maxBudgetUsd', 'costControl', node.maxBudgetUsd !== undefined],
     [
       'fallbackModel',
@@ -1382,6 +1319,22 @@ export async function resolveNodeProviderAndModel(
     }
   }
 
+  if (request.presetEffortDropped && effectivePreset?.effort !== undefined) {
+    // Consume the pure path's structured drop — do not re-call resolvePresetEffort.
+    const rejection = request.presetEffortRejection;
+    getLog().warn(
+      {
+        provider,
+        effort: effectivePreset.effort,
+        nodeId: node.id,
+        valid: rejection?.valid,
+      },
+      rejection?.reason === 'unsupported'
+        ? 'dag.preset_effort_unsupported'
+        : 'dag.preset_effort_unknown'
+    );
+  }
+
   // Build universal base options
   const baseOptions: SendQueryOptions = {};
   if (model) baseOptions.model = model;
@@ -1419,7 +1372,9 @@ export async function resolveNodeProviderAndModel(
     baseOptions.outputFormat = { type: 'json_schema', schema: node.output_format };
   }
 
-  // Build raw nodeConfig — provider translates internally
+  // Build raw nodeConfig — provider translates internally. Effort/thinking come
+  // from the pure request so node_started metadata and sendQuery options cannot
+  // disagree.
   const nodeConfig: NodeConfig = {
     nodeId: node.id,
     mcp: node.mcp,
@@ -1431,13 +1386,8 @@ export async function resolveNodeProviderAndModel(
     pi: node.pi,
     allowed_tools: node.allowed_tools,
     denied_tools: node.denied_tools,
-    // Dropped for a provider with no reasoning control, matching what the preset
-    // path does two functions up. `capChecks` has already told the author it
-    // will be ignored; writing it anyway would make `node_started` report a
-    // depth that was never applied, and would leave declared and preset effort
-    // behaving oppositely on the same provider.
-    effort: caps.effortControl ? declaredEffort : undefined,
-    thinking: node.thinking ?? workflowLevelOptions.thinking,
+    effort: request.appliedEffort,
+    thinking: request.appliedThinking,
     sandbox: node.sandbox ?? workflowLevelOptions.sandbox,
     betas: node.betas ?? workflowLevelOptions.betas,
     output_format: node.output_format,
@@ -1449,35 +1399,16 @@ export async function resolveNodeProviderAndModel(
 
   // Pass assistantConfig from config — provider parses internally
   const assistantConfig: Record<string, unknown> = { ...(config.assistants[provider] ?? {}) };
-  applyPresetOptions(
-    provider,
-    effectivePreset,
-    node,
-    workflowLevelOptions,
-    declaredEffort,
-    nodeConfig
-  );
   // `webSearchMode:` has no node-level form and no other consumer, so the
   // workflow-level value is the only value — written only where it is read.
   if (isCodex && workflowLevelOptions.webSearchMode !== undefined) {
     assistantConfig.webSearchMode = workflowLevelOptions.webSearchMode;
   }
 
-  // There is one effort channel now, so telemetry has one place to read (#2556).
-  // `nodeConfig.effort` holds whatever will be applied — declared, or filled in
-  // from the preset just above, or absent when the provider warned and dropped
-  // it. `assistants.<provider>.modelReasoningEffort` from config.yaml never
-  // enters nodeConfig, so it stays the fallback.
-  //
-  // Providers clamp a rung their SDK lacks (`max` → `xhigh` on Codex/Copilot),
-  // and this reports the declared rung rather than the clamped one — consistent
-  // across providers, and no longer able to name a field the provider ignored,
-  // which was the #2395 failure mode.
-  const assistantEffort =
-    typeof assistantConfig.modelReasoningEffort === 'string'
-      ? assistantConfig.modelReasoningEffort
-      : undefined;
-  const resolvedEffort: string | undefined = nodeConfig.effort ?? assistantEffort;
+  // Telemetry effort: portable applied effort, else legacy assistant fallback
+  // (same as metadata.effort ?? metadata.modelReasoningEffort).
+  const resolvedEffort: string | undefined =
+    request.metadata.effort ?? request.metadata.modelReasoningEffort;
 
   const options: SendQueryOptions = {
     ...baseOptions,
@@ -1489,7 +1420,15 @@ export async function resolveNodeProviderAndModel(
   // string (e.g. "opus"). Surface `tier` when the ref was a tier keyword — from
   // the node's own `model`, or (when the node inherits the workflow-level model)
   // from the workflow tier, mirroring the effectivePreset inheritance condition.
-  return { provider, model, options, tier: resolution.tier, effort: resolvedEffort };
+  return {
+    provider,
+    model,
+    options,
+    tier: resolution.tier,
+    effort: resolvedEffort,
+    metadata: request.metadata,
+    preset: effectivePreset,
+  };
 }
 
 /** Evaluate trigger rule for a node given its upstream states */
@@ -4794,9 +4733,8 @@ async function executeLoopNode(
   configuredCommandFolder?: string,
   stepNamePrefix = '',
   execContext: ExecutionContext = { kind: 'host' },
-  resolvedModel?: string,
-  resolvedTier?: TierName,
-  resolvedEffort?: string
+  /** Prospective request metadata — same object ENV preview/snapshot use. */
+  requestMetadata?: NodeExecutionMetadata
 ): Promise<NodeExecutionResult> {
   const loop = node.loop;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -4828,11 +4766,9 @@ async function executeLoopNode(
         command: loop.command ?? null,
         // Requested-model attribution, same fields the AI-node path records
         // (#2314) — every iteration runs on this one resolved provider/model,
-        // so it belongs on the node's single _started row.
-        provider: workflowProvider,
-        model: resolvedModel,
-        tier: resolvedTier,
-        ...(resolvedEffort !== undefined ? { effort: resolvedEffort } : {}),
+        // so it belongs on the node's single _started row. Spread the shared
+        // metadata object so loop node_started equals ENV resolved rows.
+        ...(requestMetadata ?? { provider: workflowProvider }),
       },
     })
     .catch((err: Error) => {
@@ -4847,10 +4783,7 @@ async function executeLoopNode(
     runId: workflowRun.id,
     nodeId: node.id,
     nodeName: node.id,
-    provider: workflowProvider,
-    model: resolvedModel,
-    tier: resolvedTier,
-    ...(resolvedEffort !== undefined ? { effort: resolvedEffort } : {}),
+    ...(requestMetadata ?? { provider: workflowProvider }),
   });
 
   /**
@@ -6093,7 +6026,12 @@ async function executeLoopNode(
             // mirrors the AI-node path. Omitted entirely when the provider
             // reports no resolved model (e.g. Codex), never faked.
             ...(loopResolvedModel
-              ? { model_usage: { requested: resolvedModel, resolved: loopResolvedModel.id } }
+              ? {
+                  model_usage: {
+                    requested: requestMetadata?.model,
+                    resolved: loopResolvedModel.id,
+                  },
+                }
               : {}),
             // Background Agent tasks still live when any iteration's stream
             // ended (#2083) — this node's artifacts may be incomplete, even
@@ -6436,9 +6374,8 @@ async function executeApprovalNode(
 
     const {
       provider,
-      model,
-      tier,
       options: nodeOptions,
+      metadata: rejectMetadata,
     } = await resolveNodeProviderAndModel(
       syntheticNode,
       workflowProvider,
@@ -6478,7 +6415,7 @@ async function executeApprovalNode(
       undefined, // fresh session
       configuredCommandFolder,
       issueContext,
-      buildNodeObservabilityMetadata(provider, tier, model, nodeOptions),
+      rejectMetadata,
       stepNamePrefix,
       iteration
     );
@@ -6488,7 +6425,6 @@ async function executeApprovalNode(
     }
     // Fall through to re-pause at the approval gate
   }
-
   // Standard approval gate — send message and pause.
   // Resolve $nodeId.output[.field] references so the human sees concrete values
   // (parity with prompt/bash/loop/cancel nodes, which all run the same substitution).
@@ -8252,9 +8188,7 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
             const {
               provider: loopProvider,
               options: loopOptions,
-              model: resolvedLoopModel,
-              tier: resolvedLoopTier,
-              effort: resolvedLoopEffort,
+              metadata: loopMetadata,
             } = await resolveNodeProviderAndModel(
               node,
               workflowProvider,
@@ -8293,9 +8227,7 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
               configuredCommandFolder,
               stepNamePrefix,
               execContext,
-              resolvedLoopModel,
-              resolvedLoopTier,
-              resolvedLoopEffort
+              loopMetadata
             );
             // Loop nodes run every iteration on the same resolved provider, so the
             // result session (if any) is attributable to loopProvider — tag it so a
@@ -8307,25 +8239,52 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
           // (body is a sealed sub-DAG re-executed per iteration; the loop is
           // encapsulated inside this one node, keeping the outer DAG acyclic).
           if (isLoopGroupNode(node)) {
-            // Resolve provider for the group (group-level provider/model overrides are
-            // forwarded to body AI nodes; the group itself never calls sendQuery, so
-            // the resolved SendQueryOptions are not needed here).
-            const { provider: loopGroupProvider } = await resolveNodeProviderAndModel(
+            // Resolve group-level provider/model/preset/tier and forward that
+            // scope into the body. The group itself never calls sendQuery.
+            // Outer workflow effort/thinking stay on workflowLevelOptions —
+            // group effort/thinking remain unsupported.
+            const outerScope: WorkflowModelScope = {
+              provider: workflowProvider,
+              model: workflowModel,
+              preset: workflowPreset,
+              tier: workflowTier && isTierName(workflowTier) ? workflowTier : undefined,
+              effort: workflowLevelOptions.effort ?? workflowLevelOptions.modelReasoningEffort,
+              providerOrigin: 'workflow',
+            };
+            const groupScope = resolveGroupModelScope(
               node,
-              workflowProvider,
-              workflowModel,
-              config,
+              outerScope,
+              assistantModelDefaults(config),
+              aiProfile
+            );
+            // Validate group provider is registered (same fail path as body nodes).
+            if (!isRegisteredProvider(groupScope.provider)) {
+              throw new Error(
+                `Node '${node.id}': unknown provider '${groupScope.provider}'. ` +
+                  `Registered: ${getRegisteredProviders()
+                    .map(p => p.id)
+                    .join(', ')}`
+              );
+            }
+
+            // Body nodes inherit the already-resolved provider, so any
+            // group-level provider/model-ref conflict must be warned here —
+            // same deduped path as ordinary node resolution.
+            await warnModelProviderConflict(
+              groupScope.providerConflict,
+              node.id,
               platform,
               conversationId,
               workflowRun.id,
-              cwd,
-              workflowLevelOptions,
-              aiProfile,
-              workflowPreset,
-              resolveAiConfigText,
-              ctx.warnedProviderConflicts,
-              execContext
+              ctx.warnedProviderConflicts
             );
+
+            const groupLevelOptions: WorkflowLevelOptions = {
+              ...workflowLevelOptions,
+              // Body nodes that inherit the group model still surface the group's
+              // tier keyword when the group model was a tier ref.
+              workflowTier: groupScope.tier,
+            };
 
             const output = await executeLoopGroupNode(
               deps,
@@ -8334,12 +8293,12 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
               cwd,
               workflowRun,
               node,
-              loopGroupProvider,
-              workflowModel,
-              workflowLevelOptions,
+              groupScope.provider,
+              groupScope.model,
+              groupLevelOptions,
               aiProfile,
-              workflowPreset,
-              workflowTier,
+              groupScope.preset,
+              groupScope.tier,
               artifactsDir,
               stateDir,
               logDir,
@@ -8628,9 +8587,8 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
           // 4. Resolve per-node provider/model/options
           const {
             provider,
-            model,
-            tier,
             options: nodeOptions,
+            metadata: nodeMetadata,
           } = await resolveNodeProviderAndModel(
             node,
             workflowProvider,
@@ -8789,7 +8747,7 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
                 resumeSessionId,
                 configuredCommandFolder,
                 issueContext,
-                buildNodeObservabilityMetadata(provider, tier, model, nodeOptions),
+                nodeMetadata,
                 stepNamePrefix,
                 iteration
               ),
@@ -9083,14 +9041,14 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
  * Resolve the AI provider a node would use, WITHOUT the messaging/side effects
  * of `resolveNodeProviderAndModel` — just enough for the container capability
  * pre-flight. Mirrors the provider half of that resolver: `node.provider ??
- * workflowProvider`, then a model tier/alias ref may override the provider.
+ * scopeProvider`, then a model tier/alias ref may override the provider.
  */
 function resolveNodeProviderForPreflight(
   node: Pick<DagNode, 'provider' | 'model'>,
-  workflowProvider: string,
+  scopeProvider: string,
   aiProfile?: ResolvedAiProfile
 ): string {
-  let provider: string = node.provider ?? workflowProvider;
+  let provider: string = node.provider ?? scopeProvider;
   if (node.model && aiProfile) {
     const spec = resolveModelSpec(aiProfile, node.model);
     if (!isLiteralSpec(spec)) provider = spec.provider;
@@ -9100,15 +9058,19 @@ function resolveNodeProviderForPreflight(
 
 /**
  * Collect providers used by AI nodes that CANNOT run inside a container
- * (`capabilities.containerExec === false`), recursing loop_group bodies. bash/
- * script/cancel nodes are deterministic (they exec via `docker exec` directly,
- * no provider) and are skipped; an approval node counts only when it has an
- * `on_reject` reprompt (the one AI turn it can spawn). Unknown providers are
- * skipped here — they fail later with a clearer "unknown provider" error.
+ * (`capabilities.containerExec === false`), recursing loop_group bodies with
+ * the same group scope runtime dispatch derives. bash/script/cancel nodes are
+ * deterministic (they exec via `docker exec` directly, no provider) and are
+ * skipped; an approval node counts only when it has an `on_reject` reprompt
+ * (the one AI turn it can spawn). A `loop_group` container never calls
+ * `sendQuery()`, so its own provider is never collected — only body provider
+ * turns (and nested groups) are. Unknown providers are skipped here — they
+ * fail later with a clearer "unknown provider" error.
  */
 export function collectContainerIncompatibleProviders(
   nodes: readonly DagNode[],
-  workflowProvider: string,
+  scope: WorkflowModelScope,
+  assistantModels: Readonly<Record<string, string | undefined>> = {},
   aiProfile?: ResolvedAiProfile
 ): Set<string> {
   const incompatible = new Set<string>();
@@ -9116,17 +9078,18 @@ export function collectContainerIncompatibleProviders(
     if (!isRegisteredProvider(provider)) return;
     if (!getProviderCapabilities(provider).containerExec) incompatible.add(provider);
   };
-  const visit = (ns: readonly DagNode[]): void => {
+  const visit = (ns: readonly DagNode[], currentScope: WorkflowModelScope): void => {
     for (const node of ns) {
       if (isBashNode(node) || isScriptNode(node) || isCancelNode(node)) continue;
       if (isLoopGroupNode(node)) {
-        check(resolveNodeProviderForPreflight(node, workflowProvider, aiProfile));
-        visit(node.loop_group.nodes);
+        // Group container never calls sendQuery — body turns inherit groupScope.
+        const groupScope = resolveGroupModelScope(node, currentScope, assistantModels, aiProfile);
+        visit(node.loop_group.nodes, groupScope);
         continue;
       }
       if (isApprovalNode(node)) {
         if (node.approval.on_reject) {
-          check(resolveNodeProviderForPreflight(node, workflowProvider, aiProfile));
+          check(resolveNodeProviderForPreflight(node, currentScope.provider, aiProfile));
         }
         continue;
       }
@@ -9135,21 +9098,25 @@ export function collectContainerIncompatibleProviders(
           check(
             resolveNodeProviderForPreflight(
               node.plannotator_gate.prepare,
-              workflowProvider,
+              currentScope.provider,
               aiProfile
             )
           );
         }
         check(
-          resolveNodeProviderForPreflight(node.plannotator_gate.rework, workflowProvider, aiProfile)
+          resolveNodeProviderForPreflight(
+            node.plannotator_gate.rework,
+            currentScope.provider,
+            aiProfile
+          )
         );
         continue;
       }
       // command / prompt / loop → AI node
-      check(resolveNodeProviderForPreflight(node, workflowProvider, aiProfile));
+      check(resolveNodeProviderForPreflight(node, currentScope.provider, aiProfile));
     }
   };
-  visit(nodes);
+  visit(nodes, scope);
   return incompatible;
 }
 
@@ -9643,11 +9610,22 @@ export async function executeDagWorkflow(
   // Container capability fail-fast: before ANY node runs (and before any
   // container work), reject a container run whose AI nodes resolve to a provider
   // that can't spawn in-container. No silent downgrade to the host — the user
-  // asked for isolation and must get it or a clear error.
+  // asked for isolation and must get it or a clear error. Scope matches the
+  // outer WorkflowModelScope runtime loop_group dispatch builds so preflight
+  // and body turns agree on inherited providers at every group depth.
   if (execContext.kind === 'container') {
+    const preflightScope: WorkflowModelScope = {
+      provider: workflowProvider,
+      model: workflowModel,
+      preset: workflowPreset,
+      tier: workflow.model && isTierName(workflow.model) ? workflow.model : undefined,
+      effort: workflow.effort ?? workflow.modelReasoningEffort,
+      providerOrigin: 'workflow',
+    };
     const incompatible = collectContainerIncompatibleProviders(
       workflow.nodes,
-      workflowProvider,
+      preflightScope,
+      assistantModelDefaults(config),
       aiProfile
     );
     if (incompatible.size > 0) {

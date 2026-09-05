@@ -10,6 +10,7 @@ import type {
   WorkflowRunStatus,
   ApprovalContext,
   WorkflowNodeSession,
+  EnvOverlaySnapshot,
 } from './schemas';
 
 export interface PersistRouteDecisionTransitionInput {
@@ -195,7 +196,21 @@ export interface IRunTreeStore {
   getRunAncestry(runId: string): Promise<WorkflowRun[]>;
 }
 
-export interface IWorkflowStore extends IRunTreeStore {
+/**
+ * Narrow run-owned ENV overlay persistence. Inherited by `IWorkflowStore` so the
+ * engine dependency object stays one seam, without treating overlay writes as a
+ * generic metadata merge API (SQLite `json_patch` deep-merges nested objects).
+ */
+export interface IWorkflowEnvOverlayStore {
+  /**
+   * Atomically replace `metadata.envOverlay` with `snapshot` and return the
+   * complete run row. Sibling metadata keys are preserved; nested overlay keys
+   * are not deep-merged. Throws when the run id is missing.
+   */
+  setWorkflowRunEnvOverlay(runId: string, snapshot: EnvOverlaySnapshot): Promise<WorkflowRun>;
+}
+
+export interface IWorkflowStore extends IRunTreeStore, IWorkflowEnvOverlayStore {
   // Run lifecycle
   createWorkflowRun(data: {
     workflow_name: string;

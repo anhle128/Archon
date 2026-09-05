@@ -467,6 +467,72 @@ mock.module('@archon/core/db/usage-report', () => ({
   UsageReportQueryError: MockUsageReportQueryError,
 }));
 
+// Mutable ENV row used by Start freeze tests (US-008). Mutation after Start
+// must not change the frozen candidate handed to handleMessage.
+const liveEnvPatches: Record<string, Record<string, string>> = {
+  research: { model: 'haiku' },
+};
+
+const mockGetWorkflowEnvById = mock(async (envId: string) => {
+  if (envId === 'env-deploy') {
+    return {
+      id: 'env-deploy',
+      workflow_name: 'deploy',
+      name: 'staging',
+      patches: liveEnvPatches,
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-02T00:00:00.000Z',
+      created_by_user_id: null,
+    };
+  }
+  if (envId === 'env-other') {
+    return {
+      id: 'env-other',
+      workflow_name: 'other-workflow',
+      name: 'x',
+      patches: { research: { model: 'haiku' } },
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-02T00:00:00.000Z',
+      created_by_user_id: null,
+    };
+  }
+  if (envId === 'env-corrupt') {
+    throw new WorkflowEnvCorruptRowError('env-corrupt');
+  }
+  return null;
+});
+
+class WorkflowEnvCorruptRowError extends Error {
+  readonly envId: string;
+  constructor(envId: string) {
+    super(`Workflow ENV row corrupt: ${envId}`);
+    this.name = 'WorkflowEnvCorruptRowError';
+    this.envId = envId;
+  }
+}
+
+mock.module('@archon/core/db/workflow-envs', () => ({
+  listWorkflowEnvSummaries: mock(async () => []),
+  getWorkflowEnvById: mockGetWorkflowEnvById,
+  createWorkflowEnv: mock(async () => {
+    throw new Error('createWorkflowEnv not used by workflow-runs tests');
+  }),
+  updateWorkflowEnv: mock(async () => null),
+  deleteWorkflowEnv: mock(async () => false),
+  WorkflowEnvNameConflictError: class WorkflowEnvNameConflictError extends Error {
+    readonly workflowName: string;
+    readonly envName: string;
+    constructor(workflowName: string, envName: string) {
+      super(`Workflow ENV '${envName}' already exists for workflow '${workflowName}'`);
+      this.name = 'WorkflowEnvNameConflictError';
+      this.workflowName = workflowName;
+      this.envName = envName;
+    }
+  },
+  WorkflowEnvCorruptRowError,
+  isWorkflowEnvNameConflict: () => false,
+}));
+
 import { registerApiRoutes } from './api';
 
 // ---------------------------------------------------------------------------
@@ -580,6 +646,7 @@ describe('POST /api/workflows/:name/run', () => {
     mockHandleMessage.mockReset();
     mockAddMessage.mockReset();
     mockGenerateAndSetTitle.mockReset();
+    mockGetWorkflowEnvById.mockClear();
   });
 
   test('dispatches workflow run to orchestrator and returns accepted', async () => {
@@ -951,6 +1018,294 @@ describe('POST /api/workflows/:name/run', () => {
     });
     expect(response.status).toBe(400);
     expect(mockHandleMessage).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // Workflow ENV freeze at Start (US-008)
+  // -------------------------------------------------------------------------
+
+  test('omits envOverlay when no envId is supplied (YAML-only)', async () => {
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
+    mockAddMessage.mockImplementationOnce(async () => ({
+      id: 'msg-1',
+      conversation_id: MOCK_CONV.id,
+      role: 'user' as const,
+      content: 'Go',
+      metadata: '{}',
+      created_at: NOW,
+    }));
+    mockHandleMessage.mockImplementationOnce(async () => {});
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/deploy/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversationId: 'web-test-abc', message: 'Go' }),
+    });
+    expect(response.status).toBe(200);
+
+    expect(mockGetWorkflowEnvById).not.toHaveBeenCalled();
+    const ctx = mockHandleMessage.mock.calls[0][3] as Record<string, unknown>;
+    expect(ctx).not.toHaveProperty('envOverlay');
+  });
+
+  test('treats empty envId as YAML-only', async () => {
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
+    mockAddMessage.mockImplementationOnce(async () => ({
+      id: 'msg-1',
+      conversation_id: MOCK_CONV.id,
+      role: 'user' as const,
+      content: 'Go',
+      metadata: '{}',
+      created_at: NOW,
+    }));
+    mockHandleMessage.mockImplementationOnce(async () => {});
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/deploy/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversationId: 'web-test-abc', message: 'Go', envId: '' }),
+    });
+    expect(response.status).toBe(200);
+    expect(mockGetWorkflowEnvById).not.toHaveBeenCalled();
+    const ctx = mockHandleMessage.mock.calls[0][3] as Record<string, unknown>;
+    expect(ctx).not.toHaveProperty('envOverlay');
+  });
+
+  test('forwards a frozen JSON envId candidate out-of-band', async () => {
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
+    mockAddMessage.mockImplementationOnce(async () => ({
+      id: 'msg-1',
+      conversation_id: MOCK_CONV.id,
+      role: 'user' as const,
+      content: 'Deploy',
+      metadata: '{}',
+      created_at: NOW,
+    }));
+    mockHandleMessage.mockImplementationOnce(async () => {});
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/deploy/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        conversationId: 'web-test-abc',
+        message: 'Deploy',
+        envId: 'env-deploy',
+      }),
+    });
+    expect(response.status).toBe(200);
+
+    expect(mockGetWorkflowEnvById).toHaveBeenCalledWith('env-deploy');
+    expect(mockHandleMessage).toHaveBeenCalledWith(
+      expect.anything(),
+      'web-test-abc',
+      '/workflow run deploy Deploy',
+      expect.objectContaining({
+        envOverlay: {
+          envId: 'env-deploy',
+          envName: 'staging',
+          workflowName: 'deploy',
+          patches: { research: { model: 'haiku' } },
+        },
+      })
+    );
+  });
+
+  test('accepts multipart envId and freezes the same candidate shape', async () => {
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
+    mockAddMessage.mockImplementationOnce(async () => ({
+      id: 'msg-1',
+      conversation_id: MOCK_CONV.id,
+      role: 'user' as const,
+      content: 'Deploy',
+      metadata: '{}',
+      created_at: NOW,
+    }));
+    mockHandleMessage.mockImplementationOnce(async () => {});
+
+    const form = new FormData();
+    form.append('conversationId', 'web-test-abc');
+    form.append('message', 'Deploy');
+    form.append('envId', 'env-deploy');
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/deploy/run', {
+      method: 'POST',
+      body: form,
+    });
+    expect(response.status).toBe(200);
+
+    expect(mockHandleMessage).toHaveBeenCalledWith(
+      expect.anything(),
+      'web-test-abc',
+      '/workflow run deploy Deploy',
+      expect.objectContaining({
+        envOverlay: {
+          envId: 'env-deploy',
+          envName: 'staging',
+          workflowName: 'deploy',
+          patches: { research: { model: 'haiku' } },
+        },
+      })
+    );
+  });
+
+  test('returns 400 invalid_env_id for JSON envId null before lookup', async () => {
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/deploy/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        conversationId: 'web-test-abc',
+        message: 'Go',
+        envId: null,
+      }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'invalid_env_id' });
+    expect(mockGetWorkflowEnvById).not.toHaveBeenCalled();
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+    expect(mockAddMessage).not.toHaveBeenCalled();
+  });
+
+  test('returns 400 invalid_env_id when JSON envId is not a string', async () => {
+    const { app } = makeApp();
+    for (const envId of [42, true, { id: 'x' }, ['env-deploy']] as const) {
+      mockGetWorkflowEnvById.mockClear();
+      mockHandleMessage.mockClear();
+      mockAddMessage.mockClear();
+      const response = await app.request('/api/workflows/deploy/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: 'web-test-abc',
+          message: 'Go',
+          envId,
+        }),
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: 'invalid_env_id' });
+      expect(mockGetWorkflowEnvById).not.toHaveBeenCalled();
+      expect(mockHandleMessage).not.toHaveBeenCalled();
+      expect(mockAddMessage).not.toHaveBeenCalled();
+    }
+  });
+
+  test('returns 400 invalid_env_id when multipart envId is duplicated', async () => {
+    const form = new FormData();
+    form.append('conversationId', 'web-test-abc');
+    form.append('message', 'Go');
+    form.append('envId', 'env-deploy');
+    form.append('envId', 'env-other');
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/deploy/run', {
+      method: 'POST',
+      body: form,
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'invalid_env_id' });
+    expect(mockGetWorkflowEnvById).not.toHaveBeenCalled();
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+    expect(mockAddMessage).not.toHaveBeenCalled();
+  });
+
+  test('returns 400 env_not_found before message persistence', async () => {
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/deploy/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        conversationId: 'web-test-abc',
+        message: 'Go',
+        envId: 'missing-env',
+      }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'env_not_found' });
+    expect(mockGetWorkflowEnvById).toHaveBeenCalledWith('missing-env');
+    expect(mockAddMessage).not.toHaveBeenCalled();
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+  });
+
+  test('returns 400 env_workflow_mismatch before message persistence', async () => {
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/deploy/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        conversationId: 'web-test-abc',
+        message: 'Go',
+        envId: 'env-other',
+      }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'env_workflow_mismatch' });
+    expect(mockAddMessage).not.toHaveBeenCalled();
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+  });
+
+  test('returns env_store_corrupt before message persistence for a corrupt row', async () => {
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/deploy/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        conversationId: 'web-test-abc',
+        message: 'Go',
+        envId: 'env-corrupt',
+      }),
+    });
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: 'env_store_corrupt' });
+    expect(mockAddMessage).not.toHaveBeenCalled();
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+  });
+
+  test('passes a deep-frozen copy; later store mutation does not change context', async () => {
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
+    mockAddMessage.mockImplementationOnce(async () => ({
+      id: 'msg-1',
+      conversation_id: MOCK_CONV.id,
+      role: 'user' as const,
+      content: 'Deploy',
+      metadata: '{}',
+      created_at: NOW,
+    }));
+    mockHandleMessage.mockImplementationOnce(async () => {});
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/deploy/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        conversationId: 'web-test-abc',
+        message: 'Deploy',
+        envId: 'env-deploy',
+      }),
+    });
+    expect(response.status).toBe(200);
+
+    // Mutate the "store" row after Start froze the candidate.
+    liveEnvPatches.research = { model: 'mutated-after-start' };
+    (liveEnvPatches as Record<string, Record<string, string>>).extra = { prompt: 'nope' };
+
+    const ctx = mockHandleMessage.mock.calls[0][3] as {
+      envOverlay: {
+        envId: string;
+        envName: string;
+        workflowName: string;
+        patches: Record<string, Record<string, string>>;
+      };
+    };
+    expect(ctx.envOverlay.patches).toEqual({ research: { model: 'haiku' } });
+    expect(ctx.envOverlay.patches).not.toBe(liveEnvPatches);
+
+    // Restore for later tests.
+    delete (liveEnvPatches as Record<string, unknown>).extra;
+    liveEnvPatches.research = { model: 'haiku' };
   });
 });
 

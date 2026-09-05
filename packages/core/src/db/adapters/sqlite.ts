@@ -1059,6 +1059,20 @@ export class SqliteAdapter implements IDatabase {
         WHERE event_type = 'node_usage_recorded';
       CREATE INDEX IF NOT EXISTS idx_workflow_runs_codebase_id
         ON remote_agent_workflow_runs(codebase_id);
+
+      -- Workflow ENVs (named install-wide overlays)
+      CREATE TABLE IF NOT EXISTS remote_agent_workflow_envs (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        workflow_name TEXT NOT NULL,
+        name TEXT NOT NULL,
+        patches TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        created_by_user_id TEXT REFERENCES remote_agent_users(id) ON DELETE SET NULL,
+        CONSTRAINT uq_workflow_envs_workflow_name_name UNIQUE (workflow_name, name)
+      );
+      CREATE INDEX IF NOT EXISTS idx_workflow_envs_workflow_name
+        ON remote_agent_workflow_envs(workflow_name);
     `);
     getLog().info('db.sqlite_schema_initialized');
   }

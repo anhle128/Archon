@@ -15,6 +15,7 @@ export * from './startRun';
 export * from './messages';
 export * from './conversations';
 export * from './envVars';
+export * from './workflowEnvs';
 export * from './settings';
 export * from './providers';
 export * from './github';

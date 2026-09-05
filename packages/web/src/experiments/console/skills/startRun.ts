@@ -28,6 +28,11 @@ export interface StartRunArgs {
    * the server before any worktree, clone, or AI cost.
    */
   inputs?: Record<string, string>;
+  /**
+   * Selected workflow ENV overlay id. Omitted/empty → YAML-only Start.
+   * Server freezes the row before side effects (US-008).
+   */
+  envId?: string;
 }
 
 interface CreateConversationResponse {
@@ -40,6 +45,7 @@ export async function startRun({
   message,
   files,
   inputs,
+  envId,
 }: StartRunArgs): Promise<void> {
   const conv = await requestJson<CreateConversationResponse>('/api/conversations', {
     method: 'POST',
@@ -49,6 +55,7 @@ export async function startRun({
   const url = `/api/workflows/${encodeURIComponent(workflow)}/run`;
 
   const hasInputs = inputs !== undefined && Object.keys(inputs).length > 0;
+  const hasEnvId = envId !== undefined && envId.length > 0;
 
   if (files === undefined || files.length === 0) {
     await requestJson<{ accepted: boolean; status: string }>(url, {
@@ -57,6 +64,7 @@ export async function startRun({
         conversationId: conv.conversationId,
         message,
         ...(hasInputs ? { inputs } : {}),
+        ...(hasEnvId ? { envId } : {}),
       }),
     });
     return;
@@ -70,6 +78,9 @@ export async function startRun({
   // shape the multipart branch of the run route parses.
   if (hasInputs) {
     form.append('inputs', JSON.stringify(inputs));
+  }
+  if (hasEnvId) {
+    form.append('envId', envId);
   }
   for (const file of files) {
     form.append('files', file, file.name);

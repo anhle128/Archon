@@ -288,7 +288,10 @@ function pushWorkflowScopeOntoNodes(
  * byte-for-byte fast path for include-free workflows had to go.
  */
 function collapseWorkflowScope(raw: WorkflowDefinition): WorkflowDefinition {
-  const collapsed: WorkflowDefinition = { ...raw, nodes: raw.nodes.map(cloneNodeForInclude) };
+  const collapsed: WorkflowDefinition = {
+    ...raw,
+    nodes: raw.nodes.map(cloneNodeWithEngineMetadata),
+  };
   const scope = collapsed as unknown as Record<string, unknown>;
   pushWorkflowScopeOntoNodes(scope, collapsed.nodes);
   // Deleted rather than set to `undefined` so the collapsed definition has the shape a
@@ -552,9 +555,13 @@ function resolveIncludeInputs(
 
 /** structuredClone intentionally drops symbol keys; retain every engine-private
  * per-node payload (compiled loop commands, the composition record) while cloning a
- * reusable child for another include level. A payload missed here works at one nesting
- * level and silently vanishes at two. */
-function cloneNodeForInclude(node: DagNode): DagNode {
+ * node for include expansion or ENV overlay. A payload missed here works at one
+ * nesting level and silently vanishes at two — or loses composed/compiled metadata
+ * across ENV A → ENV B → no-ENV reuse of the same discovered definition.
+ *
+ * Shared by include expansion and `applyEnvOverlay`; do not duplicate the private
+ * symbol list at call sites. */
+export function cloneNodeWithEngineMetadata(node: DagNode): DagNode {
   const clone = structuredClone(node);
   const preserveEngineMetadata = (source: DagNode, target: DagNode): void => {
     const meta = readComposedMeta(source);
@@ -615,7 +622,7 @@ function inlineInclude(
 
   const namespaced = childNodes.map(cn => {
     const clone = materializeBlockCommandPrompts(
-      cloneNodeForInclude(cn),
+      cloneNodeWithEngineMetadata(cn),
       includeNode,
       child,
       commandContents,

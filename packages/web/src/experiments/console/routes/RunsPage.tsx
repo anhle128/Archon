@@ -52,6 +52,7 @@ function buildDemoRuns(scope: Scope, projectName: string | null): Run[] {
     workingPath: null,
     userMessage: '',
     finishedAt: null as string | null,
+    envOverlay: null as Run['envOverlay'],
   };
   return [
     {

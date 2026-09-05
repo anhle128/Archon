@@ -25,6 +25,7 @@ const baseRun: Omit<Run, 'id' | 'workflow' | 'status'> = {
   finishedAt: null,
   workingPath: null,
   userMessage: '',
+  envOverlay: null,
 };
 
 const SAMPLE_RUNS: Run[] = [

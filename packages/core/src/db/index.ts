@@ -23,6 +23,7 @@ export * as workflowNodeSessionDb from './workflow-node-sessions';
 export * as workflowCheckpointDb from './workflow-checkpoints';
 export * as userDb from './users';
 export * as usageDb from './usage';
+export * as workflowEnvDb from './workflow-envs';
 
 // Also export individual functions for direct imports
 export * from './conversations';
@@ -34,3 +35,4 @@ export * from './workflows';
 export * from './workflow-node-sessions';
 export * from './workflow-checkpoints';
 export * from './users';
+export * from './workflow-envs';

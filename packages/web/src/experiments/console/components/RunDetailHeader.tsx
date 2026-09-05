@@ -198,6 +198,17 @@ export function RunDetailHeader({
       {/* Workflow name */}
       <span className="text-sm font-medium text-text-primary">{run.workflow}</span>
 
+      {/* ENV overlay chip — pending or complete snapshot identity only. */}
+      {run.envOverlay !== null ? (
+        <span
+          className="rounded-full border border-border bg-surface-inset px-2 py-0.5 font-mono text-[11px] text-text-secondary"
+          title={`Workflow ENV overlay: ${run.envOverlay.envName}${run.envOverlay.complete ? '' : ' (pending snapshot)'}`}
+          data-testid="run-env-chip"
+        >
+          env: {run.envOverlay.envName}
+        </span>
+      ) : null}
+
       {/* Origin */}
       <OriginBadge origin={run.origin} />
 

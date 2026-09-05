@@ -15,6 +15,11 @@ import {
   TERMINAL_WORKFLOW_STATUSES,
   routeLoopRuntimeMetadataSchema,
 } from '@archon/workflows/schemas/workflow-run';
+import {
+  envOverlaySnapshotSchema,
+  type EnvOverlaySnapshot,
+} from '@archon/workflows/schemas/env-overlay';
+
 import type {
   DashboardWorkflowRun,
   ListDashboardRunsOptions,
@@ -1209,6 +1214,62 @@ export async function updateWorkflowRun(
   }
 }
 
+/**
+ * Replace only `metadata.envOverlay` with a complete snapshot (exact nested
+ * replacement — not `json_patch` / top-level merge). Sibling metadata keys are
+ * preserved. Audit-critical: callers fail closed if this write fails.
+ *
+ * Both dialects update then read the full row inside one transaction. SQLite
+ * never uses `UPDATE ... RETURNING`.
+ */
+export async function setWorkflowRunEnvOverlay(
+  runId: string,
+  snapshot: EnvOverlaySnapshot
+): Promise<WorkflowRun> {
+  const validated = envOverlaySnapshotSchema.parse(snapshot);
+  const snapshotJson = JSON.stringify(validated);
+  const isPostgres = getDatabaseType() === 'postgresql';
+  const metadataExpression = isPostgres
+    ? "jsonb_set(COALESCE(metadata, '{}'::jsonb), '{envOverlay}', $1::jsonb, true)"
+    : "json_set(COALESCE(metadata, '{}'), '$.envOverlay', json($1))";
+
+  try {
+    return await getDatabase().withTransaction(async query => {
+      const updateResult = await query(
+        `UPDATE remote_agent_workflow_runs
+         SET metadata = ${metadataExpression}
+         WHERE id = $2`,
+        [snapshotJson, runId]
+      );
+      if ((updateResult.rowCount ?? 0) !== 1) {
+        getLog().warn({ workflowRunId: runId }, 'db.workflow_run_env_overlay_not_found');
+        throw new Error(`Workflow run not found (id: ${runId})`);
+      }
+
+      const selectResult = await query<WorkflowRun>(
+        'SELECT * FROM remote_agent_workflow_runs WHERE id = $1',
+        [runId]
+      );
+      const row = selectResult.rows[0];
+      if (!row) {
+        getLog().error({ workflowRunId: runId }, 'db.workflow_run_env_overlay_vanished');
+        throw new Error(`Workflow run vanished after envOverlay write (id: ${runId})`);
+      }
+      return normalizeWorkflowRun(row);
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('Workflow run not found')) {
+      throw error;
+    }
+    if (error instanceof Error && error.message.startsWith('Workflow run vanished')) {
+      throw error;
+    }
+    const err = error as Error;
+    getLog().error({ err, workflowRunId: runId }, 'db.workflow_run_env_overlay_write_failed');
+    throw new Error(`Failed to set workflow run envOverlay: ${err.message}`);
+  }
+}
+
 export async function persistRouteDecisionTransition(
   input: PersistRouteDecisionTransitionInput
 ): Promise<WorkflowRun> {
@@ -1353,10 +1414,14 @@ export async function failWorkflowRun(id: string, error: string): Promise<void> 
   const dialect = getDialect();
   let result: Awaited<ReturnType<IDatabase['query']>>;
   try {
+    // Accept both `running` (normal mid-execution fail) and `pending` (overlay-bearing
+    // background pre-create / early preamble fail-closed before status→running).
+    // Other statuses stay rejected so SIGTERM cannot clobber a paused gate, and a
+    // completed/cancelled row cannot be resurrected as failed.
     result = await pool.query(
       `UPDATE remote_agent_workflow_runs
        SET status = 'failed', completed_at = ${dialect.now()}, metadata = ${dialect.jsonMerge('metadata', 2)}
-       WHERE id = $1 AND status = 'running'`,
+       WHERE id = $1 AND status IN ('running', 'pending')`,
       [id, JSON.stringify({ error })]
     );
   } catch (dbError) {
@@ -1366,7 +1431,7 @@ export async function failWorkflowRun(id: string, error: string): Promise<void> 
   }
   if (result.rowCount === 0) {
     getLog().warn({ workflowRunId: id }, 'db.workflow_run_fail_no_match');
-    throw new Error(`Workflow run not found or not in running state (id: ${id})`);
+    throw new Error(`Workflow run not found or not in running/pending state (id: ${id})`);
   }
 }
 
