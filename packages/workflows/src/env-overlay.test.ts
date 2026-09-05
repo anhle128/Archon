@@ -396,6 +396,44 @@ describe('applyEnvOverlay targeting and isolation', () => {
     expect(isPromptNode(ok.workflow.nodes[0]!) && ok.workflow.nodes[0].model).toBe('x');
   });
 
+  test('rejects unknown raw patch keys on missing targets before skip', () => {
+    // US-026: missing-node early continue must not bypass defensive key checks.
+    // Bypass Zod with a deleted target carrying an unknown field.
+    const wf = baseWorkflow([{ id: 'p', prompt: 'original', model: 'base' }]);
+    const secretValue = 'secret-value';
+    const secretBody = 'PROMPT_BODY_MUST_NOT_LEAK';
+    const rawPatches = {
+      missing: { typo: secretValue, prompt: secretBody },
+    } as unknown as EnvPatches;
+
+    try {
+      applyEnvOverlay(wf, rawPatches);
+      expect.unreachable('missing target with unknown raw key must fail closed');
+    } catch (err) {
+      expect(err).toBeInstanceOf(EnvOverlayError);
+      const overlayErr = err as EnvOverlayError;
+      expect(overlayErr.code).toBe('forbidden_field');
+      expect(overlayErr.field).toBe('typo');
+      expect(overlayErr.nodeId).toBe('missing');
+      expect(overlayErr.message).toContain('typo');
+      expect(overlayErr.message).not.toContain(secretValue);
+      expect(overlayErr.message).not.toContain(secretBody);
+      expect(JSON.stringify(overlayErr)).not.toContain(secretValue);
+      expect(JSON.stringify(overlayErr)).not.toContain(secretBody);
+    }
+
+    // Allowed-only fields on a missing target still succeed and report the skip.
+    const allowedMissing = applyEnvOverlay(wf, {
+      missing: { model: 'x', prompt: 'ok-body' },
+    });
+    expect(allowedMissing.missingNodeIds).toEqual(['missing']);
+    expect(allowedMissing.appliedPatches).toEqual({});
+    expect(isPromptNode(wf.nodes[0]!) && wf.nodes[0].model).toBe('base');
+    expect(
+      isPromptNode(allowedMissing.workflow.nodes[0]!) && allowedMissing.workflow.nodes[0].model
+    ).toBe('base');
+  });
+
   test('error messages never include prompt or bash bodies', () => {
     const secret = 'SUPER_SECRET_BODY_CONTENT_XYZ';
     const wf = baseWorkflow([{ id: 'c', command: 'build' }]);

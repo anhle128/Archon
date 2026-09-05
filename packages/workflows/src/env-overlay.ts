@@ -316,15 +316,18 @@ export function applyEnvOverlay(
     const rawPatch = patches[nodeId];
     if (rawPatch === undefined) continue;
 
+    // Validate original raw keys BEFORE missing-node skip and before copyNodePatch
+    // can discard unknowns. A deleted target with `typo` must still fail closed —
+    // missing-id skip is not a bypass for defensive field checks.
+    assertRawPatchKeys(nodeId, rawPatch as object);
+
     const node = nodesById.get(nodeId);
     if (node === undefined) {
       missingNodeIds.push(nodeId);
       continue;
     }
 
-    // Inspect original raw keys BEFORE copyNodePatch discards unknowns.
     // Detached normalized copy remains the source for assignment + applied map.
-    assertRawPatchKeys(nodeId, rawPatch as object);
     const patch = copyNodePatch(rawPatch);
     assertPatchFieldsAllowed(node, patch);
 
