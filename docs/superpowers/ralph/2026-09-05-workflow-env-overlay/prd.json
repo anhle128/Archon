@@ -768,8 +768,8 @@
         "US-014"
       ],
       "priority": 36,
-      "passes": false,
-      "notes": "Added from Convergence 4 after all existing US-001 through US-033 stories were already passing."
+      "passes": true,
+      "notes": "Implemented in iteration after US-035. Files: packages/workflows/src/dag-executor.ts, dag-executor.test.ts, node-model-resolution.test.ts. Capability warning consumes request.thinkingUnsupported; preset-only thinking warns once and keeps requested thinking."
     },
     {
       "id": "US-037",

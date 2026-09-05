@@ -1,5 +1,11 @@
 ## Codebase Patterns
 
+
+### Preset thinking warnings via thinkingUnsupported (US-036)
+- **Where**: `packages/workflows/src/dag-executor.ts` (capability warning layer in resolve/send options)
+- **Pattern**: `capChecks` thinking isSet must be `request.thinkingUnsupported`, not `(node.thinking ?? workflow.thinking)`. Pure path already folds node/workflow/preset precedence into `appliedThinking` + `thinkingUnsupported`; nodeConfig still gets `request.appliedThinking` so metadata/send stay truthful while `dag.unsupported_capabilities` fires once. Do not add a second warning mechanism for presets (unlike effort, which drops via `presetEffortDropped`).
+- **Example**: codex/opencode/grok tier or alias `{ thinking: 'enabled' }` with no node/workflow thinking → one `dag.unsupported_capabilities` + user warning; thinking remains on nodeConfig/`node_started`
+
 ### Container preflight follows loop-group scope (US-035)
 - **Where**: `packages/workflows/src/dag-executor.ts` (`collectContainerIncompatibleProviders`)
 - **Pattern**: Preflight takes `WorkflowModelScope` + `assistantModelDefaults`, not a bare workflow provider string. For each `loop_group`, derive body scope via `resolveGroupModelScope` and recurse — never `check()` the group container (it never calls `sendQuery`). Nested groups, model-alias groups, and approval/plannotator turns inside bodies inherit that same scope so preflight matches runtime dispatch. `executeDagWorkflow` builds the outer scope from the same provider/model/preset/tier/effort fields runtime uses before the container fail-fast.
@@ -1041,5 +1047,27 @@
 - Old walker checked the group container provider then visited the body with the outer workflow provider — both wrong relative to runtime `resolveGroupModelScope` + body inheritance.
 - Signature change from `(nodes, workflowProvider, aiProfile?)` to `(nodes, scope, assistantModels?, aiProfile?)` is intentional; tests build a minimal `WorkflowModelScope` helper.
 - execute-path container regression needs a real `loop_group` with `until` so the allow case can complete after preflight; reject case asserts `mockSendQueryDag` was never called.
+
+---
+## 2026-09-05 — US-036: Preset thinking warnings reach runtime
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/dag-executor.ts` — capability warning layer uses `request.thinkingUnsupported` instead of node/workflow-only isSet
+- `packages/workflows/src/node-model-resolution.test.ts` — preset-only unsupported thinking + supported Claude preset control
+- `packages/workflows/src/dag-executor.test.ts` — codex tier, opencode alias, grok tier preset thinking warn once; Claude supported control; explicit node/workflow thinking controls
+
+**Acceptance criteria verified**:
+- [x] Pure preset-only unsupported-thinking regression: thinkingUnsupported true, requested thinking in metadata + appliedThinking
+- [x] Runtime codex/opencode/grok tier or alias presets with thinking and no node/workflow thinking → dag.unsupported_capabilities exactly once
+- [x] Supported-provider and explicit node/workflow thinking controls covered and unchanged
+- [x] dag-executor consumes request.thinkingUnsupported in existing capability warning layer; requested thinking not dropped
+- [x] Every unsupported effective thinking (node/workflow/preset) warns through same path; supported produces no warning
+- [x] Focused verification: `cd packages/workflows && bun test src/node-model-resolution.test.ts && bun test src/dag-executor.test.ts` (20 + 545 pass)
+
+**Learnings**:
+- Thinking differs from effort: unsupported preset effort drops (`presetEffortDropped`); unsupported thinking stays in appliedThinking/metadata and only warns (`thinkingUnsupported`).
+- Old capChecks isSet `(node.thinking ?? workflowLevelOptions.thinking)` missed tier/alias presets entirely — pure path already had the flag, runtime just never read it.
+- Use `request.thinkingUnsupported` as the isSet (already encodes !thinkingControl); the loop's `!caps[cap]` remains a no-op double-check and keeps the table shape.
 
 ---
