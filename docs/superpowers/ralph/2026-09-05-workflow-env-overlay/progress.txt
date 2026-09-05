@@ -2,6 +2,12 @@
 
 
 
+
+### Overlay preamble fail-closed (US-021)
+- **Where**: `packages/workflows/src/executor.ts` (eager config/profile/scope/provider try/catch), `packages/core/src/db/workflows.ts` (`failWorkflowRun`)
+- **Pattern**: After `prepareExecutionEnvOverlay`, wrap config→provider resolution in try/catch. On throw with `activeOverlay`: `failClosedAfterOverlayError` + safe env id/name message + return (no throw). No-overlay rethrows. `failWorkflowRun` CAS is `status IN ('running','pending')` so background pre-create rows terminalize before status→running. Background catch stays log-only — never the repair path.
+- **Example**: pending preCreated + broken repo `aliases: { fast: … }` (missing `@`) → failWorkflowRun once, no snapshot/events/DAG; no-overlay same throw still rejects
+
 ### Resume inspect vs claim split (US-020)
 - **Where**: `packages/workflows/src/executor.ts` (`inspectResumableRun` / `hydrateResumableRun`), `packages/core/src/orchestrator/orchestrator-agent.ts`
 - **Pattern**: Early ENV path selection uses read-only `inspectResumableRun` (snapshot + eligibility, no CAS). `hydrateResumableRun` claims via `resumeWorkflowRun` exactly once *after* conversation + isolation gates. Failed gates leave the run paused. inspect-null reuses null without re-inspect; concurrent claim still atomic via CAS.
@@ -617,5 +623,30 @@
 - Early hydrate for US-012 path selection was the CAS leak — inspect is enough to choose continuation vs fresh before isolation.
 - Reuse inspect-null without re-inspect; non-null early inspect still claims once after gates (double snapshot read is fine).
 - Mock both inspect and hydrate in orchestrator tests; assert call order inspect < isolation < hydrate on success paths.
+
+---
+
+## 2026-09-05 — US-021: Overlay pre-created preamble failures become terminal
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/executor.ts` — wrap config/profile/scope/provider eager resolution in overlay fail-closed boundary; hoist userAiPrefs for workflow_started event
+- `packages/workflows/src/executor.test.ts` — pending overlay + broken repo alias fail-closed; no-overlay throw still propagates
+- `packages/core/src/db/workflows.ts` — `failWorkflowRun` accepts `pending` and `running`
+- `packages/core/src/db/workflows.test.ts` — SQL/status assertion updates
+- `packages/core/src/orchestrator/orchestrator.test.ts` — real `dispatchBackgroundWorkflow` + pending overlay row ends `failed` without catch repair
+
+**Acceptance criteria verified**:
+- [x] executor.test.ts: overlay-bearing preCreatedRun + workflow-scope resolution failure after prepareExecutionEnvOverlay, before events/DAG
+- [x] failWorkflowRun called once; no envOverlay snapshot write, workflow event, or DAG execution
+- [x] orchestrator.test.ts: background already-created pending row does not remain pending
+- [x] Config/profile/scope/provider eager resolution for active overlays inside executor fail-closed; no-overlay unchanged
+- [x] Failure path env id/name only; does not rely on background log-only catch
+- [x] Focused verification: bun test src/executor.test.ts (99 pass); bun test src/orchestrator/orchestrator.test.ts (73 pass)
+
+**Learnings**:
+- Background pre-create leaves status=`pending` until DAG start flips to running — failWorkflowRun only on `running` left pending overlay rows stranded; expand CAS to pending.
+- Hoist any locals (e.g. userAiPrefs) that workflow_started / later paths still read outside the try block.
+- Broken repo aliases (missing `@`) are a reliable post-prepare throw via buildAiProfile rebuild.
 
 ---

@@ -435,7 +435,8 @@
         "US-020"
       ],
       "priority": 21,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration US-021. Files: packages/workflows/src/executor.ts (overlay preamble fail-closed), packages/workflows/src/executor.test.ts, packages/core/src/db/workflows.ts (failWorkflowRun pending+running), packages/core/src/db/workflows.test.ts, packages/core/src/orchestrator/orchestrator.test.ts (background pending terminalization)."
     },
     {
       "id": "US-022",
