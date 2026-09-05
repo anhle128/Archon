@@ -94,11 +94,13 @@ export const deleteWorkflowEnvResponseSchema = z
   })
   .openapi('DeleteWorkflowEnvResponse');
 
-/** Preview query: required cwd, optional envId. */
+/** Preview query: required cwd; optional envId (empty string = YAML baseline). */
 export const workflowEnvPreviewQuerySchema = z
   .object({
     cwd: z.string().min(1),
-    envId: z.string().min(1).optional(),
+    // Empty string must reach the handler as YAML-only baseline (US-022).
+    // Do not use .min(1) — OpenAPI validation would 400 before baseline logic.
+    envId: z.string().optional(),
   })
   .openapi('WorkflowEnvPreviewQuery');
 

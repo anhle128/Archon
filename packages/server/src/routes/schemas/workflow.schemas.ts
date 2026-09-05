@@ -350,11 +350,12 @@ export const runWorkflowBodySchema = z
      */
     inputs: z.record(z.string(), z.string()).optional(),
     /**
-     * Optional Workflow ENV id to freeze at Start (US-008). Omitted or empty
-     * means YAML-only. When set, the route loads the row, identity-checks the
-     * workflow name, schema-parses a newly allocated patches tree, and passes a
-     * frozen `EnvOverlayCandidate` out-of-band on the orchestrator context —
-     * never in the command string. Multipart sends the same plain string field.
+     * Optional Workflow ENV id to freeze at Start (US-008/US-022). Omitted or
+     * empty string means YAML-only. Present non-strings (including JSON null)
+     * are rejected as `invalid_env_id` by the manual Start parser — this
+     * OpenAPI schema documents the happy-path string field only; Start retains
+     * the multipart/manual-parse exception. Multipart sends the same plain
+     * string field (duplicates rejected).
      */
     envId: z.string().optional(),
   })

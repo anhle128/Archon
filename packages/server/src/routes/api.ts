@@ -1136,11 +1136,13 @@ const runWorkflowRoute = createRoute({
     "workflow's declared `inputs:` (#2554); it is validated against the declaration " +
     'before any worktree, clone, or AI cost, so a missing required input or an ' +
     'undeclared key is refused up front. An omitted or empty `envId` means YAML-only; ' +
-    'a non-empty `envId` freezes the ENV row (id/name/workflow/patches) after request ' +
-    'parse and before file or run-start message persistence, then hands the candidate ' +
-    'to the orchestrator out-of-band. Missing id → `env_not_found`; workflow mismatch → ' +
-    '`env_workflow_mismatch`. Compatibility/provider/profile/graph errors still travel ' +
-    'through the dispatch/SSE path, not as synchronous Start 400s.',
+    'present non-string values (including JSON `null` and duplicated multipart fields) ' +
+    "→ `400 { error: 'invalid_env_id' }` with no ENV lookup. A non-empty string `envId` " +
+    'freezes the ENV row (id/name/workflow/patches) after request parse and before file ' +
+    'or run-start message persistence, then hands the candidate to the orchestrator ' +
+    'out-of-band. Missing id → `env_not_found`; workflow mismatch → `env_workflow_mismatch`. ' +
+    'Compatibility/provider/profile/graph errors still travel through the dispatch/SSE ' +
+    'path, not as synchronous Start 400s.',
   request: {
     params: z.object({ name: z.string() }),
   },
@@ -1991,19 +1993,21 @@ export function registerApiRoutes(
   }
 
   /**
-   * Optional Start `envId` (US-008). Omitted/null/empty → YAML-only. Multipart
-   * duplicates arrive as arrays under `parseBody({ all: true })` and are refused
-   * as request-shape errors, same as a non-string JSON value.
+   * Optional Start `envId` (US-022 / US-008). Only absence (`undefined`) or an
+   * empty/whitespace string means YAML-only. Present non-strings — including
+   * JSON `null`, numbers, objects, and multipart duplicates (arrays under
+   * `parseBody({ all: true })`) — are `invalid_env_id`. Never treat JSON null
+   * as omission.
    */
   function parseOptionalEnvIdField(
     raw: unknown
-  ): { ok: true; envId?: string } | { ok: false; error: string } {
-    if (raw === undefined || raw === null) return { ok: true };
+  ): { ok: true; envId?: string } | { ok: false; error: 'invalid_env_id' } {
+    if (raw === undefined) return { ok: true };
     if (Array.isArray(raw)) {
-      return { ok: false, error: 'envId must be a single string value' };
+      return { ok: false, error: 'invalid_env_id' };
     }
-    if (typeof raw !== 'string') {
-      return { ok: false, error: 'envId must be a string' };
+    if (raw === null || typeof raw !== 'string') {
+      return { ok: false, error: 'invalid_env_id' };
     }
     const trimmed = raw.trim();
     if (trimmed === '') return { ok: true };

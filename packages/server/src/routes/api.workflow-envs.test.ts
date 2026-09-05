@@ -486,6 +486,20 @@ describe('Workflow ENV preview', () => {
     expect(resolvedIds).not.toContain('ship');
   });
 
+  test('empty envId query returns YAML baseline without ENV lookup', async () => {
+    const res = await makeApp().request(
+      '/api/workflows/feature/env-preview?cwd=' + encodeURIComponent('/tmp/project') + '&envId='
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.preview).toBe(true);
+    expect(body.authoritative).toBe(false);
+    expect(body.workflowName).toBe('feature');
+    expect(body.envId).toBeNull();
+    expect(body.envName).toBeNull();
+    expect(mockGetEnvById).not.toHaveBeenCalled();
+  });
+
   test('descendant cwd accepted; unrelated cwd rejected', async () => {
     const ok = await makeApp().request(
       '/api/workflows/feature/env-preview?cwd=' + encodeURIComponent('/tmp/project/packages/web')

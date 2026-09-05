@@ -1152,7 +1152,7 @@ describe('POST /api/workflows/:name/run', () => {
     );
   });
 
-  test('returns 400 when JSON envId is not a string', async () => {
+  test('returns 400 invalid_env_id for JSON envId null before lookup', async () => {
     const { app } = makeApp();
     const response = await app.request('/api/workflows/deploy/run', {
       method: 'POST',
@@ -1160,18 +1160,40 @@ describe('POST /api/workflows/:name/run', () => {
       body: JSON.stringify({
         conversationId: 'web-test-abc',
         message: 'Go',
-        envId: 42,
+        envId: null,
       }),
     });
     expect(response.status).toBe(400);
-    const body = (await response.json()) as { error: string };
-    expect(body.error).toContain('envId');
+    expect(await response.json()).toEqual({ error: 'invalid_env_id' });
     expect(mockGetWorkflowEnvById).not.toHaveBeenCalled();
     expect(mockHandleMessage).not.toHaveBeenCalled();
     expect(mockAddMessage).not.toHaveBeenCalled();
   });
 
-  test('returns 400 when multipart envId is duplicated', async () => {
+  test('returns 400 invalid_env_id when JSON envId is not a string', async () => {
+    const { app } = makeApp();
+    for (const envId of [42, true, { id: 'x' }, ['env-deploy']] as const) {
+      mockGetWorkflowEnvById.mockClear();
+      mockHandleMessage.mockClear();
+      mockAddMessage.mockClear();
+      const response = await app.request('/api/workflows/deploy/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: 'web-test-abc',
+          message: 'Go',
+          envId,
+        }),
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: 'invalid_env_id' });
+      expect(mockGetWorkflowEnvById).not.toHaveBeenCalled();
+      expect(mockHandleMessage).not.toHaveBeenCalled();
+      expect(mockAddMessage).not.toHaveBeenCalled();
+    }
+  });
+
+  test('returns 400 invalid_env_id when multipart envId is duplicated', async () => {
     const form = new FormData();
     form.append('conversationId', 'web-test-abc');
     form.append('message', 'Go');
@@ -1184,8 +1206,7 @@ describe('POST /api/workflows/:name/run', () => {
       body: form,
     });
     expect(response.status).toBe(400);
-    const body = (await response.json()) as { error: string };
-    expect(body.error).toContain('envId');
+    expect(await response.json()).toEqual({ error: 'invalid_env_id' });
     expect(mockGetWorkflowEnvById).not.toHaveBeenCalled();
     expect(mockHandleMessage).not.toHaveBeenCalled();
     expect(mockAddMessage).not.toHaveBeenCalled();
