@@ -11,6 +11,7 @@ import { useSearchParams } from 'react-router';
 import { WorkflowPicker } from './WorkflowPicker';
 import { WorkflowEnvPicker } from './WorkflowEnvPicker';
 import { WorkflowEnvPreviewTable } from './WorkflowEnvPreviewTable';
+import { WorkflowEnvManageDialog } from './WorkflowEnvManageDialog';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import * as skill from '../skills';
@@ -96,6 +97,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
   const [inputValues, setInputValues] = useState<Record<string, string>>({});
   // Workflow ENV overlay selection. `null` = None (YAML). Cleared on workflow change.
   const [selectedEnvId, setSelectedEnvId] = useState<string | null>(NONE_ENV_SELECTION);
+  const [manageEnvsOpen, setManageEnvsOpen] = useState(false);
 
   // Pre-fill from `?rerun=1&workflow=…&message=…` query params (set by the
   // ↻ rerun button on RecentRunRow). Reacts to searchParams so the card
@@ -449,13 +451,35 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
         </div>
         {/* Workflow ENV overlay — None (YAML) default; list failure keeps YAML usable. */}
         {workflowName.length > 0 ? (
-          <div className="mt-3">
-            <WorkflowEnvPicker
-              envs={envSummaries ?? []}
-              value={selectedEnvId}
-              onChange={setSelectedEnvId}
+          <div className="mt-3 flex flex-wrap items-end gap-2">
+            <div className="min-w-0 flex-1">
+              <WorkflowEnvPicker
+                envs={envSummaries ?? []}
+                value={selectedEnvId}
+                onChange={setSelectedEnvId}
+                disabled={submitting}
+                listError={envListError !== undefined}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setManageEnvsOpen(true);
+              }}
               disabled={submitting}
-              listError={envListError !== undefined}
+              className="mb-[1px] shrink-0 rounded-[8px] border border-border bg-surface px-2.5 py-1.5 font-mono text-[12px] font-semibold text-text-secondary transition-colors hover:border-accent-bright/50 hover:bg-surface-hover hover:text-text-primary disabled:opacity-50"
+              title="Manage workflow ENVs"
+              aria-label="Manage workflow ENVs"
+            >
+              Manage
+            </button>
+            <WorkflowEnvManageDialog
+              workflowName={workflowName}
+              projectCwd={projectCwd}
+              open={manageEnvsOpen}
+              onClose={() => {
+                setManageEnvsOpen(false);
+              }}
             />
           </div>
         ) : null}

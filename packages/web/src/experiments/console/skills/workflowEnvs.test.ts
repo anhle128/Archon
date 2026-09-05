@@ -12,6 +12,9 @@ import {
   listWorkflowEnvs,
   previewWorkflowEnv,
   getWorkflowEnv,
+  createWorkflowEnv,
+  updateWorkflowEnv,
+  deleteWorkflowEnv,
 } from './workflowEnvs';
 
 interface Captured {
@@ -133,5 +136,66 @@ describe('workflowEnvs skill verbs', () => {
   test('previewWorkflowEnv includes envId when selected', async () => {
     await previewWorkflowEnv('feature', '/tmp/p', 'env-9');
     expect(calls[0]?.url).toContain('envId=env-9');
+  });
+
+  test('createWorkflowEnv POSTs name + complete patches map', async () => {
+    const patches = {
+      plan: { provider: 'claude', model: 'sonnet' },
+      run_bash: { bash: 'echo hi' },
+    };
+    // Collection path has no trailing /envs/:id — supply create-shaped body.
+    stubFetch(() => ({
+      env: {
+        id: 'e1',
+        workflowName: 'feature',
+        name: 'fast',
+        updatedAt: 't',
+        patches,
+        createdAt: 't',
+        createdByUserId: null,
+      },
+    }));
+    const env = await createWorkflowEnv('feature', { name: 'fast', patches });
+    expect(calls[0]?.url).toContain('/api/workflows/feature/envs');
+    expect(calls[0]?.init?.method).toBe('POST');
+    const body = JSON.parse(String(calls[0]?.init?.body)) as {
+      name: string;
+      patches: Record<string, unknown>;
+    };
+    expect(body.name).toBe('fast');
+    expect(body.patches).toEqual(patches);
+    expect(env.id).toBe('e1');
+  });
+
+  test('updateWorkflowEnv PATCHes complete patches map (not a deep delta)', async () => {
+    const patches = { plan: { model: 'only-this' } };
+    await updateWorkflowEnv('feature', 'e1', { name: 'faster', patches });
+    expect(calls[0]?.url).toContain('/api/workflows/feature/envs/e1');
+    expect(calls[0]?.init?.method).toBe('PATCH');
+    const body = JSON.parse(String(calls[0]?.init?.body)) as {
+      name: string;
+      patches: Record<string, unknown>;
+    };
+    expect(body.name).toBe('faster');
+    // Whole-document replace payload — caller supplies the full map.
+    expect(body.patches).toEqual(patches);
+    expect(Object.keys(body.patches)).toEqual(['plan']);
+  });
+
+  test('deleteWorkflowEnv DELETEs detail path', async () => {
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      calls.push({ url, init });
+      return Promise.resolve(
+        new Response(JSON.stringify({ deleted: true }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      );
+    }) as typeof fetch;
+    const res = await deleteWorkflowEnv('feature', 'e1');
+    expect(calls[0]?.url).toContain('/api/workflows/feature/envs/e1');
+    expect(calls[0]?.init?.method).toBe('DELETE');
+    expect(res.deleted).toBe(true);
   });
 });
