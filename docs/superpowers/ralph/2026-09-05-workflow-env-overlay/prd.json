@@ -221,8 +221,8 @@
         "US-010"
       ],
       "priority": 11,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in final iteration. Files: packages/web/src/experiments/console/primitives/run.ts, run.test.ts, RunDetailHeader.tsx/.test.tsx, WorkflowEnvResolvedTable.tsx/.test.tsx, RunDetailPage.tsx, PreviewPage.tsx, RunsPage.tsx, packages/docs-web API + authoring guides. Generated OpenAPI/bundled schema/AGENTS inventory already current from prior stories. Gates: focused web tests, bun run test, bun run validate, bun run check:schema-upgrades OK. Manual console path covered by prior story unit tests + API contracts; PR release-note input documents loop_group.model correction in authoring docs (CHANGELOG left to release)."
     }
   ]
 }

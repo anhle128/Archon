@@ -65,6 +65,12 @@
 - **Pattern**: Visual shell like EnvVarsDialog. Baseline `previewWorkflowEnv(wf, cwd, null)` supplies `targets`/`allowedFields` — never hardcode the node matrix. Summary list has no patches; `getWorkflowEnv` only on Edit. Thinking UI: unset|adaptive|enabled(+budget)|disabled. `buildPatchesFromDrafts` requires non-empty per-node patch; PATCH sends the complete map. After create/update/delete call `invalidateWorkflowEnvCaches` → list key + `workflowEnvPreview` prefix + optional detail key. Plaintext notice for prompt/bash; loop-group body non-target copy. 409 via `formatWorkflowEnvActionError(HttpError)`.
 - **Example**: `invalidateWorkflowEnvCaches(name, id)`; `NodePatchEditor` only renders `allowedFields`
 
+### Console run-detail ENV overlay
+- **Where**: `packages/web/src/experiments/console/primitives/run.ts` (`parseRunEnvOverlay`), `RunDetailHeader.tsx`, `WorkflowEnvResolvedTable.tsx`
+- **Pattern**: Hand-parse `metadata.envOverlay` without `@archon/workflows`. Require non-empty `envId`/`envName`/`workflowName`; never surface patches/prompt/bash. Pending = no `resolved` key; complete = object map → sorted rows. Malformed → `null` (omit chip/table; rest of run usable). Caption distinguishes planned request settings from node events / provider final models. Preview table stays non-authoritative Start-only copy.
+- **Example**: `toRun(raw).envOverlay` → chip `env: <name>` + `WorkflowEnvResolvedTable`
+
+
 
 
 
@@ -338,5 +344,38 @@
 - Keep patch/thinking/error/invalidation pure in `workflow-env-editor.ts` so bun:test + renderToStaticMarkup can cover AC without RTL.
 - `invalidate('workflowEnvPreview')` matches every `workflowEnvPreview:…` key via the cache prefix rule.
 - Create skill stub must return `{ env }` — collection path is not `/envs/:id`, so the default list-shaped mock is wrong for POST.
+
+---
+
+## 2026-09-05 — US-011: Run detail, docs, generated files, and full validation
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/primitives/run.ts` — `parseRunEnvOverlay` + `Run.envOverlay` (pending/complete/malformed-safe)
+- `packages/web/src/experiments/console/primitives/run.test.ts` — pending/complete/malformed/no-prompt coverage
+- `packages/web/src/experiments/console/components/RunDetailHeader.tsx` + test — `env: <name>` chip
+- `packages/web/src/experiments/console/components/WorkflowEnvResolvedTable.tsx` + test — resolved rows, skip/missing warnings, planned-settings caption
+- `packages/web/src/experiments/console/routes/RunDetailPage.tsx` — mount resolved table
+- `packages/web/src/experiments/console/routes/PreviewPage.tsx`, `RunsPage.tsx` — demo `envOverlay: null`
+- `packages/docs-web/src/content/docs/reference/api.md` — Workflow ENVs CRUD/preview + Start `envId` + resume freeze
+- `packages/docs-web/src/content/docs/guides/authoring-workflows.md` — ENV overlays section, field matrix, loop_group.model note, resume note
+
+**Acceptance criteria verified**:
+- [x] Defensive Run parse of pending/complete/legacy/malformed without `@archon/workflows`; malformed does not crash
+- [x] Header chip + resolved table with node/provider/model|tier/effort/thinking + skipped/latestMissing warnings
+- [x] Copy distinguishes preview vs planned request settings vs node events vs final models; no prompt/bash bodies
+- [x] API + authoring docs cover CRUD, Start JSON/multipart envId, preview, install-wide identity, matrix, include ids, group-body exclusion, resume, errors, bounds, plaintext, no CLI
+- [x] OpenAPI types, bundled schema, AGENTS inventory already current; loop_group.model correction documented for release notes (CHANGELOG untouched)
+- [x] Focused web tests + `bun run test` + `bun run validate` + `bun run check:schema-upgrades` green
+
+**Learnings**:
+- Console must reimplement overlay parsing locally — importing engine Zod would violate the web package boundary.
+- Treat `resolved` presence (even corrupt) as complete so the chip still shows while the table degrades safely.
+- `check:schema-upgrades` needs `PATH` with `psql` (`libpq`) and `PGPASSWORD=postgres` against local 5432.
+
+**PR review / release-note input** (do not edit CHANGELOG.md here):
+- Feature: Workflow ENV overlays end-to-end (engine apply, store, executor freeze, HTTP CRUD/preview/Start, console picker/manager/run detail).
+- Behavior correction: `loop_group.model` / provider defaults now forward into body-node resolution (including nested groups); group effort/thinking remain unsupported.
+- Schema: additive `remote_agent_workflow_envs` (table 21); mixed-version resume of overlay-bearing runs is unsafe — finish/abandon before rollback.
 
 ---
