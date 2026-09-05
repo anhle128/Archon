@@ -65,6 +65,6 @@ development_status:
   2-2-open-a-commits-files-in-the-same-viewer: backlog
   epic-2-retrospective: optional
 
-  epic-3: backlog
-  3-1-add-the-run-end-git-snapshot-seam: backlog
+  epic-3: in-progress
+  3-1-add-the-run-end-git-snapshot-seam: done
   epic-3-retrospective: optional
