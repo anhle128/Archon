@@ -886,16 +886,17 @@ async function dispatchOrchestratorWorkflow(
       throw err;
     }
   }
-  // Workflow ENV overlay gate (US-006 / US-012 / US-020): after input/requirement
-  // gates, before conversation mutation or isolation. Invalid overlays fail cheaply
-  // with a safe code/message and never create a worktree.
+  // Workflow ENV overlay gate (US-006 / US-012 / US-020 / US-029): after input/
+  // requirement gates, before conversation mutation or isolation. Invalid overlays
+  // fail cheaply with a safe code/message and never create a worktree.
   //
-  // Contract 10 / US-012: a *genuine* continuation never validates or applies a
-  // newly supplied request candidate — only the run-owned stored overlay (or YAML).
-  // When a request candidate is present on a would-be continuation, *inspect*
-  // eligibility read-only before isolation so hydrate-null fallthrough can still
-  // reject an incompatible candidate pre-isolation while a real resume ignores it
-  // with a notice. US-020: do NOT claim (resume CAS) here — claim exactly once
+  // Contract 10: decide genuine continuation *before* parsing, applying, or logging
+  // any stored ENV. US-029: every provisional continuation is inspected read-only
+  // first — inspect-null follows the fresh request/YAML path and ignores stale
+  // stored metadata; only a genuine continuation parses the run-owned snapshot.
+  // Request candidates are never validated/applied on genuine continuations
+  // (US-012); inspect-null fresh starts still reject incompatible candidates
+  // pre-isolation. US-020: do NOT claim (resume CAS) here — claim exactly once
   // after conversation + isolation succeed so a failed gate cannot strand the run
   // as `running`.
   let executionWorkflow: WorkflowDefinition = workflow;
@@ -905,9 +906,9 @@ async function dispatchOrchestratorWorkflow(
   // early inspect decides the prior run has nothing to resume.
   let freshOverlayPrep: DispatchEnvOverlayResult | undefined;
   /**
-   * Read-only early eligibility when a request ENV forced pre-isolation path
-   * selection. `undefined` = no early inspect; `null` = nothing to resume;
-   * object = genuine continuation (claim later).
+   * Read-only early eligibility for every provisional continuation (US-029).
+   * `undefined` = no early inspect (pure fresh / force); `null` = nothing to
+   * resume; object = genuine continuation (claim later).
    */
   let earlyResumeInspection:
     | {
@@ -917,42 +918,35 @@ async function dispatchOrchestratorWorkflow(
     | null
     | undefined;
   let didEarlyInspect = false;
+  /** True only after inspect proves a genuine continuation (not inspect-null). */
+  let isGenuineContinuation = false;
   try {
     if (willContinueExistingRun && resumableRun) {
-      // Always resolve the continuation view first (request candidate is never applied
-      // here — resolveContinuationDispatchEnvOverlay only records ignoredRequestEnv).
-      const continuation = resolveContinuationDispatchEnvOverlay(
-        workflow,
-        resumableRun.metadata?.envOverlay,
-        options?.envOverlay
-      );
+      // US-029: inspect eligibility first — never parse/log stored overlay until
+      // this read-only check says the prior run is actually worth resuming.
+      const earlyDeps = createWorkflowDeps();
+      earlyResumeInspection = await inspectResumableRun(earlyDeps, resumableRun);
+      didEarlyInspect = true;
 
-      if (options?.envOverlay) {
-        // Request candidate present: distinguish genuine resume vs inspect-null
-        // *before* isolation so an incompatible candidate cannot block a real resume
-        // but still fails closed for inspect-null fresh starts (US-012). Read-only —
-        // claim stays after conversation/isolation (US-020).
-        const earlyDeps = createWorkflowDeps();
-        earlyResumeInspection = await inspectResumableRun(earlyDeps, resumableRun);
-        didEarlyInspect = true;
-
-        if (earlyResumeInspection) {
-          // Genuine continuation — stored overlay / YAML only; request ignored.
-          executionWorkflow = continuation.workflow;
-          appliedEnvOverlay = continuation.applied;
-          ignoredRequestEnvNotice = continuation.ignoredRequestEnv;
-        } else {
-          // Inspect-null → fresh start on the same worktree: validate/apply the
-          // request candidate now (before isolation). Throws EnvOverlayError on
-          // incompatible fields — caught below.
-          freshOverlayPrep = resolveFreshDispatchEnvOverlay(workflow, options.envOverlay);
-          executionWorkflow = freshOverlayPrep.workflow;
-          appliedEnvOverlay = freshOverlayPrep.applied;
-        }
-      } else {
-        // No request candidate — continuation overlay only; claim later as today.
+      if (earlyResumeInspection) {
+        // Genuine continuation — stored overlay / YAML only; request ignored.
+        isGenuineContinuation = true;
+        const continuation = resolveContinuationDispatchEnvOverlay(
+          workflow,
+          resumableRun.metadata?.envOverlay,
+          options?.envOverlay
+        );
         executionWorkflow = continuation.workflow;
         appliedEnvOverlay = continuation.applied;
+        ignoredRequestEnvNotice = continuation.ignoredRequestEnv;
+      } else {
+        // Inspect-null → fresh start on the same worktree. Ignore any stale stored
+        // overlay (including malformed/incompatible); apply the request candidate
+        // when present, otherwise YAML-only. Throws EnvOverlayError on incompatible
+        // request fields — caught below.
+        freshOverlayPrep = resolveFreshDispatchEnvOverlay(workflow, options?.envOverlay);
+        executionWorkflow = freshOverlayPrep.workflow;
+        appliedEnvOverlay = freshOverlayPrep.applied;
       }
     } else if (options?.envOverlay) {
       // Pure fresh start (no resumable run / force): validate request before isolation.
@@ -988,7 +982,8 @@ async function dispatchOrchestratorWorkflow(
         envName: appliedEnvOverlay.envName,
         appliedNodeIds: Object.keys(appliedEnvOverlay.patches),
         skippedNodeIds: appliedEnvOverlay.skippedNodeIds,
-        continuing: willContinueExistingRun,
+        // Only genuine continuations — never inspect-null fresh starts (US-029).
+        continuing: isGenuineContinuation,
       },
       'workflow.env_overlay_prepared'
     );
@@ -1113,9 +1108,9 @@ async function dispatchOrchestratorWorkflow(
     // worth resuming — surface that and fall through to a fresh run on the same
     // worktree rather than silently restarting.
     //
-    // When a request ENV forced early *inspect* above (US-012), reuse the null
-    // decision without re-inspecting; a non-null early inspect still claims here
-    // exactly once. Concurrent claim rejection remains atomic via resume CAS.
+    // US-029 always *inspects* provisional continuations pre-isolation. Reuse a
+    // null decision without re-inspecting; a non-null early inspect still claims
+    // here exactly once. Concurrent claim rejection remains atomic via resume CAS.
     const deps = createWorkflowDeps();
     let prepared: HydratedResumableRun | null;
     if (didEarlyInspect && earlyResumeInspection === null) {
