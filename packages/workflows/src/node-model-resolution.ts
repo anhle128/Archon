@@ -358,13 +358,23 @@ export function resolveNodeExecutionRequest(
  * workflow effort is preserved — group effort/thinking remain unsupported.
  * Nested groups call this against their enclosing body scope so overrides
  * compose recursively.
+ *
+ * When the group names one provider while its `model:` alias/tier resolves to
+ * another, `providerConflict` carries the same decision `resolveNodeModel`
+ * would surface for an ordinary node. Runtime group dispatch must emit the
+ * existing `dag.model_provider_conflict` warning from this field — body nodes
+ * inherit the already-resolved provider and cannot recover the conflict.
  */
+export type ResolvedGroupModelScope = WorkflowModelScope & {
+  providerConflict?: { declared: string; resolved: string; modelRef: string };
+};
+
 export function resolveGroupModelScope(
   groupNode: LoopGroupNode,
   outerScope: WorkflowModelScope,
   assistantModels: Readonly<Record<string, string | undefined>>,
   aiProfile?: ResolvedAiProfile
-): WorkflowModelScope {
+): ResolvedGroupModelScope {
   // resolveNodeModel already treats provider/model on any DagNode; loop_group
   // carries those fields on the node base. Effort on the group is ignored by
   // taking outerScope.effort after the call rather than resolution.declaredEffort.
@@ -376,6 +386,7 @@ export function resolveGroupModelScope(
     tier: resolution.tier,
     effort: outerScope.effort,
     providerOrigin: resolution.providerOrigin,
+    ...(resolution.providerConflict ? { providerConflict: resolution.providerConflict } : {}),
   };
 }
 

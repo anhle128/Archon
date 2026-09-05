@@ -275,6 +275,108 @@ describe('resolveGroupModelScope', () => {
     expect(groupScope.preset?.effort).toBe('high');
     expect(groupScope.effort).toBe('low');
   });
+
+  test('exposes providerConflict when group provider disagrees with alias model', () => {
+    // US-037: group provider claude + alias → codex must surface the conflict
+    // decision so runtime can emit dag.model_provider_conflict (body nodes
+    // inherit the already-resolved provider and cannot recover it).
+    const profile = buildAiProfile('claude', {
+      repoAliases: {
+        '@fast': { provider: 'codex', model: 'gpt-5.5', effort: 'minimal' },
+      },
+    });
+    const group: LoopGroupNode = {
+      id: 'grp',
+      provider: 'claude',
+      model: '@fast',
+      loop_group: {
+        until: 'DONE',
+        max_iterations: 1,
+        nodes: [{ id: 'body', prompt: 'x' }],
+      },
+    };
+    const groupScope = resolveGroupModelScope(group, baseScope(), assistantModels, profile);
+    expect(groupScope.provider).toBe('codex');
+    expect(groupScope.model).toBe('gpt-5.5');
+    expect(groupScope.providerConflict).toEqual({
+      declared: 'claude',
+      resolved: 'codex',
+      modelRef: '@fast',
+    });
+    // ENV resolved map still excludes the group container.
+    const resolved = buildResolvedRequestMetadata([group], baseScope(), assistantModels, {
+      aiProfile: profile,
+    });
+    expect(resolved['grp']).toBeUndefined();
+    expect(resolved['grp.body']).toMatchObject({ provider: 'codex', model: 'gpt-5.5' });
+  });
+
+  test('nested group conflict is independent of outer matching scope', () => {
+    const profile = buildAiProfile('claude', {
+      repoAliases: {
+        '@codex-fast': { provider: 'codex', model: 'gpt-5.5' },
+        '@claude-fast': { provider: 'claude', model: 'haiku' },
+      },
+    });
+    const outer: LoopGroupNode = {
+      id: 'outer',
+      provider: 'claude',
+      model: '@claude-fast',
+      loop_group: {
+        until: 'DONE',
+        max_iterations: 1,
+        nodes: [
+          {
+            id: 'inner',
+            provider: 'claude',
+            model: '@codex-fast',
+            loop_group: {
+              until: 'OK',
+              max_iterations: 1,
+              nodes: [{ id: 'deep', prompt: 'deep' }],
+            },
+          },
+        ],
+      },
+    };
+    const outerScope = resolveGroupModelScope(outer, baseScope(), assistantModels, profile);
+    // Matching alias provider — no conflict on the outer group.
+    expect(outerScope.provider).toBe('claude');
+    expect(outerScope.model).toBe('haiku');
+    expect(outerScope.providerConflict).toBeUndefined();
+
+    const inner = outer.loop_group.nodes[0] as LoopGroupNode;
+    const innerScope = resolveGroupModelScope(inner, outerScope, assistantModels, profile);
+    expect(innerScope.provider).toBe('codex');
+    expect(innerScope.model).toBe('gpt-5.5');
+    expect(innerScope.providerConflict).toEqual({
+      declared: 'claude',
+      resolved: 'codex',
+      modelRef: '@codex-fast',
+    });
+  });
+
+  test('matching group provider and alias provider produces no conflict', () => {
+    const profile = buildAiProfile('claude', {
+      repoAliases: {
+        '@codex-main': { provider: 'codex', model: 'gpt-5.1' },
+      },
+    });
+    const group: LoopGroupNode = {
+      id: 'grp',
+      provider: 'codex',
+      model: '@codex-main',
+      loop_group: {
+        until: 'DONE',
+        max_iterations: 1,
+        nodes: [{ id: 'body', prompt: 'x' }],
+      },
+    };
+    const groupScope = resolveGroupModelScope(group, baseScope(), assistantModels, profile);
+    expect(groupScope.provider).toBe('codex');
+    expect(groupScope.model).toBe('gpt-5.1');
+    expect(groupScope.providerConflict).toBeUndefined();
+  });
 });
 
 describe('buildResolvedRequestMetadata', () => {

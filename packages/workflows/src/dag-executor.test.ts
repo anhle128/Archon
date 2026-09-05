@@ -112,6 +112,7 @@ import type { IWorkflowStore, WorkflowEventData } from './store';
 import { buildAiProfile } from './model-validation';
 import type { SendQueryOptions } from '@archon/providers/types';
 import * as plannotatorGateExecutor from './plannotator-gate-executor';
+import { applyEnvOverlay } from './env-overlay';
 
 // --- Mock helpers ---
 
@@ -1683,6 +1684,193 @@ describe('executeDagWorkflow -- tool restrictions', () => {
         )
       )
     ).toBe(true);
+  });
+
+  it('warns once when loop_group provider conflicts with alias model (no-ENV)', async () => {
+    // US-037: group dispatch must emit dag.model_provider_conflict. Body nodes
+    // inherit the already-resolved provider and cannot recover the conflict.
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'codex',
+      getCapabilities: mockCodexCapabilities,
+    }));
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'done\nDONE' };
+      yield { type: 'result', sessionId: 'lg-conflict-sid' };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const aiProfile = buildAiProfile('claude', {
+      repoAliases: {
+        '@fast': { provider: 'codex', model: 'gpt-5.5', effort: 'minimal' },
+      },
+    });
+
+    const logBaseline = mockLogFn.mock.calls.length;
+    const sendBaseline = (platform.sendMessage as Mock).mock.calls.length;
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-lg-conflict',
+      testDir,
+      {
+        name: 'dag-loopgroup-provider-conflict',
+        nodes: [
+          {
+            id: 'grp',
+            provider: 'claude',
+            model: '@fast',
+            loop_group: {
+              until: 'DONE',
+              max_iterations: 1,
+              nodes: [{ id: 'body', prompt: 'body work' }],
+            },
+          },
+        ],
+      },
+      makeWorkflowRun('dag-loopgroup-provider-conflict'),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      aiProfile
+    );
+
+    expect(mockGetAgentProviderDag.mock.calls.some(c => c[0] === 'codex')).toBe(true);
+    const bodyCall = mockSendQueryDag.mock.calls.find(
+      call => typeof call[0] === 'string' && (call[0] as string).includes('body work')
+    );
+    expect(bodyCall).toBeDefined();
+    expect((bodyCall?.[3] as SendQueryOptions).model).toBe('gpt-5.5');
+
+    const conflictMsgs = (platform.sendMessage as Mock).mock.calls
+      .slice(sendBaseline)
+      .map(c => String(c[1]))
+      .filter(m =>
+        m.includes("sets provider 'claude' but model '@fast' resolves to provider 'codex'")
+      );
+    expect(conflictMsgs).toHaveLength(1);
+    expect(conflictMsgs[0]).toContain("Node 'grp'");
+
+    const logConflicts = (mockLogFn.mock.calls as unknown[][])
+      .slice(logBaseline)
+      .filter(args => args[1] === 'dag.model_provider_conflict');
+    expect(logConflicts).toHaveLength(1);
+    expect(logConflicts[0]?.[0]).toMatchObject({
+      nodeId: 'grp',
+      configuredProvider: 'claude',
+      resolvedProvider: 'codex',
+      modelRef: '@fast',
+    });
+
+    // Group container still has no provider-turn node_started.
+    const events = (store.createWorkflowEvent as Mock).mock.calls.map(c => c[0]);
+    expect(
+      events.some(
+        (e: { event_type: string; step_name?: string }) =>
+          e.event_type === 'node_started' && e.step_name === 'grp'
+      )
+    ).toBe(false);
+    const bodyStarted = events.find(
+      (e: { event_type: string; step_name?: string }) =>
+        e.event_type === 'node_started' && e.step_name === 'grp.body'
+    );
+    expect(bodyStarted?.data).toMatchObject({ provider: 'codex', model: 'gpt-5.5' });
+  });
+
+  it('warns once for ENV-overlaid loop_group provider/model conflict', async () => {
+    // US-037 ENV path: overlay supplies the conflicting group fields; warning
+    // still fires exactly once and body turns use the alias-won provider/model.
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'codex',
+      getCapabilities: mockCodexCapabilities,
+    }));
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'done\nDONE' };
+      yield { type: 'result', sessionId: 'lg-env-conflict-sid' };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const aiProfile = buildAiProfile('claude', {
+      repoAliases: {
+        '@fast': { provider: 'codex', model: 'gpt-5.5' },
+      },
+    });
+
+    const baseNodes: DagNode[] = [
+      {
+        id: 'grp',
+        // YAML baseline has no conflict; ENV patches introduce it.
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 1,
+          nodes: [{ id: 'body', prompt: 'env body' }],
+        },
+      },
+    ];
+    const { workflow: patched } = applyEnvOverlay(
+      { name: 'dag-loopgroup-env-conflict', nodes: baseNodes },
+      { grp: { provider: 'claude', model: '@fast' } }
+    );
+
+    const logBaseline = mockLogFn.mock.calls.length;
+    const sendBaseline = (platform.sendMessage as Mock).mock.calls.length;
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-lg-env-conflict',
+      testDir,
+      patched,
+      makeWorkflowRun('dag-loopgroup-env-conflict'),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      aiProfile
+    );
+
+    const conflictMsgs = (platform.sendMessage as Mock).mock.calls
+      .slice(sendBaseline)
+      .map(c => String(c[1]))
+      .filter(m =>
+        m.includes("sets provider 'claude' but model '@fast' resolves to provider 'codex'")
+      );
+    expect(conflictMsgs).toHaveLength(1);
+
+    const logConflicts = (mockLogFn.mock.calls as unknown[][])
+      .slice(logBaseline)
+      .filter(args => args[1] === 'dag.model_provider_conflict');
+    expect(logConflicts).toHaveLength(1);
+
+    const bodyCall = mockSendQueryDag.mock.calls.find(
+      call => typeof call[0] === 'string' && (call[0] as string).includes('env body')
+    );
+    expect(bodyCall).toBeDefined();
+    expect((bodyCall?.[3] as SendQueryOptions).model).toBe('gpt-5.5');
+    expect(mockGetAgentProviderDag.mock.calls.some(c => c[0] === 'codex')).toBe(true);
   });
 
   it('warns user when Codex DAG node has denied_tools only', async () => {

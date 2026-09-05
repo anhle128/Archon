@@ -157,12 +157,13 @@ import {
 import { keepAwake } from './utils/keep-awake';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
-import type { AppliedEnvOverlay, WorkflowDefinition, WorkflowRun } from './schemas';
+import type { AppliedEnvOverlay, LoopGroupNode, WorkflowDefinition, WorkflowRun } from './schemas';
 import { applyEnvOverlay } from './env-overlay';
-import { isPromptNode } from './schemas';
+import { isLoopGroupNode, isPromptNode } from './schemas';
 import {
   assistantModelDefaults,
   buildResolvedRequestMetadata,
+  resolveGroupModelScope,
   resolveNodeExecutionRequest,
   resolveWorkflowModelScope,
 } from './node-model-resolution';
@@ -3025,6 +3026,108 @@ describe('executeWorkflow ENV overlay ownership', () => {
     expect(complete.resolved['grp.inner'].effort).toBeUndefined();
     // Group container itself never calls sendQuery.
     expect(complete.resolved.grp).toBeUndefined();
+  });
+
+  it('US-037: ENV group provider/model conflict reaches snapshot body rows without group container', async () => {
+    // Executor mocks the DAG, so the live dag.model_provider_conflict emission is
+    // covered in dag-executor.test.ts. Here the ENV ownership path must still:
+    // (1) resolve body turns to the alias-won provider/model,
+    // (2) omit the group container from resolved metadata,
+    // (3) hand the DAG a patched group that exposes providerConflict for runtime.
+    const snapshots: unknown[] = [];
+    const store = makeStore({
+      createWorkflowRun: mock(async data =>
+        makeRun({
+          id: 'grp-conflict-1',
+          metadata: { ...(data.metadata as object) },
+          user_id: data.user_id ?? null,
+        })
+      ),
+      setWorkflowRunEnvOverlay: mock(async (runId, snapshot) => {
+        snapshots.push(snapshot);
+        return makeRun({ id: runId, metadata: { envOverlay: snapshot } });
+      }),
+    });
+
+    const deps = makeDeps(store);
+    const aliases = {
+      '@fast': { provider: 'codex' as const, model: 'gpt-5.5', effort: 'minimal' as const },
+    };
+    deps.loadConfig = mock(
+      async (): Promise<WorkflowConfig> => ({
+        assistant: 'claude',
+        assistants: { claude: { model: 'sonnet' }, codex: {} },
+        aliases,
+        baseBranch: '',
+        prRemote: 'origin',
+        commands: { folder: '' },
+      })
+    );
+
+    const base = makeWorkflow({
+      nodes: [
+        {
+          id: 'grp',
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 1,
+            nodes: [{ id: 'body', prompt: 'body-turn' }],
+          },
+        },
+      ],
+    });
+    const applied = makeApplied({
+      patches: { grp: { provider: 'claude', model: '@fast' } },
+      skippedNodeIds: [],
+    });
+    const { workflow: patched } = applyEnvOverlay(base, applied.patches);
+
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp/repo',
+      patched,
+      'go',
+      'db',
+      { appliedEnvOverlay: applied }
+    );
+    expect(result.success).toBe(true);
+    expect(snapshots).toHaveLength(1);
+
+    const complete = snapshots[0] as {
+      resolved: Record<string, { provider: string; model?: string }>;
+    };
+    expect(complete.resolved.grp).toBeUndefined();
+    expect(complete.resolved['grp.body']).toMatchObject({
+      provider: 'codex',
+      model: 'gpt-5.5',
+    });
+
+    const dagWorkflow = mockExecuteDagWorkflow.mock.calls[0]?.[4] as WorkflowDefinition;
+    const grp = dagWorkflow.nodes.find(n => n.id === 'grp');
+    expect(grp).toBeDefined();
+    expect(isLoopGroupNode(grp!)).toBe(true);
+    expect(grp).toMatchObject({ provider: 'claude', model: '@fast' });
+
+    const aiProfile = buildAiProfile('claude', { repoAliases: aliases });
+    const assistantModels = assistantModelDefaults({
+      assistants: { claude: { model: 'sonnet' }, codex: {} },
+    });
+    const outerScope = resolveWorkflowModelScope(patched, 'claude', assistantModels, aiProfile);
+    const groupScope = resolveGroupModelScope(
+      grp as LoopGroupNode,
+      outerScope,
+      assistantModels,
+      aiProfile
+    );
+    expect(groupScope.providerConflict).toEqual({
+      declared: 'claude',
+      resolved: 'codex',
+      modelRef: '@fast',
+    });
+    expect(groupScope.provider).toBe('codex');
+    expect(groupScope.model).toBe('gpt-5.5');
   });
 
   it('US-027: programmatic workflow modelReasoningEffort matches loader-normalized snapshot + provider effort', async () => {

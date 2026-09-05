@@ -1119,6 +1119,47 @@ export function substituteLoopPrevRefs(
 // loadMcpConfig moved to @archon/providers/src/mcp/config.ts
 
 /**
+ * Deduped runtime warning when a node (or loop_group) declares one provider while
+ * its model ref resolves to another. Shared by ordinary node resolution and the
+ * group body-scope path — groups never call sendQuery, so the conflict must be
+ * reported here or it is lost once body nodes inherit the already-resolved provider.
+ */
+async function warnModelProviderConflict(
+  conflict: { declared: string; resolved: string; modelRef: string } | undefined,
+  nodeId: string,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  workflowRunId: string,
+  warnedProviderConflicts: Set<string> | undefined
+): Promise<void> {
+  if (!conflict) return;
+  const conflictKey = `${conflict.declared}|${conflict.resolved}|${conflict.modelRef}`;
+  if (warnedProviderConflicts?.has(conflictKey)) return;
+  warnedProviderConflicts?.add(conflictKey);
+  getLog().warn(
+    {
+      nodeId,
+      configuredProvider: conflict.declared,
+      resolvedProvider: conflict.resolved,
+      modelRef: conflict.modelRef,
+    },
+    'dag.model_provider_conflict'
+  );
+  const delivered = await safeSendMessage(
+    platform,
+    conversationId,
+    `Warning: Node '${nodeId}' sets provider '${conflict.declared}' but model '${conflict.modelRef}' resolves to provider '${conflict.resolved}' — using '${conflict.resolved}'.`,
+    { workflowId: workflowRunId, nodeName: nodeId }
+  );
+  if (!delivered) {
+    getLog().error(
+      { nodeId, workflowRunId },
+      'dag.model_provider_conflict_warning_delivery_failed'
+    );
+  }
+}
+
+/**
  * Resolve per-node provider and model.
  * Node-level overrides take precedence over workflow defaults.
  *
@@ -1186,32 +1227,14 @@ export async function resolveNodeProviderAndModel(
   const resolution = request.resolution;
   const { provider, model, preset: effectivePreset } = resolution;
 
-  const conflict = resolution.providerConflict;
-  const conflictKey = conflict && `${conflict.declared}|${conflict.resolved}|${conflict.modelRef}`;
-  if (conflict && conflictKey !== undefined && !warnedProviderConflicts?.has(conflictKey)) {
-    warnedProviderConflicts?.add(conflictKey);
-    getLog().warn(
-      {
-        nodeId: node.id,
-        configuredProvider: conflict.declared,
-        resolvedProvider: conflict.resolved,
-        modelRef: conflict.modelRef,
-      },
-      'dag.model_provider_conflict'
-    );
-    const delivered = await safeSendMessage(
-      platform,
-      conversationId,
-      `Warning: Node '${node.id}' sets provider '${conflict.declared}' but model '${conflict.modelRef}' resolves to provider '${conflict.resolved}' — using '${conflict.resolved}'.`,
-      { workflowId: workflowRunId, nodeName: node.id }
-    );
-    if (!delivered) {
-      getLog().error(
-        { nodeId: node.id, workflowRunId },
-        'dag.model_provider_conflict_warning_delivery_failed'
-      );
-    }
-  }
+  await warnModelProviderConflict(
+    resolution.providerConflict,
+    node.id,
+    platform,
+    conversationId,
+    workflowRunId,
+    warnedProviderConflicts
+  );
 
   // getProviderCapabilities is safe: resolveNodeExecutionRequest already rejected
   // unknown providers. Static lookup, no instantiation.
@@ -8243,6 +8266,18 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
                     .join(', ')}`
               );
             }
+
+            // Body nodes inherit the already-resolved provider, so any
+            // group-level provider/model-ref conflict must be warned here —
+            // same deduped path as ordinary node resolution.
+            await warnModelProviderConflict(
+              groupScope.providerConflict,
+              node.id,
+              platform,
+              conversationId,
+              workflowRun.id,
+              ctx.warnedProviderConflicts
+            );
 
             const groupLevelOptions: WorkflowLevelOptions = {
               ...workflowLevelOptions,
