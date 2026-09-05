@@ -45,6 +45,12 @@
 - **Pattern**: Frozen `EnvOverlayCandidate` rides `HandleMessageContext`/`WorkflowDispatchOptions` out-of-band (never the command string). After input/requirement gates and before conversation mutation/`validateAndResolveIsolation`: fresh → `resolveFreshDispatchEnvOverlay`; continuation → `resolveContinuationDispatchEnvOverlay` on run `metadata.envOverlay` (ignore request candidate + notify). Fail closed with safe codes. Hand off patched clone + detached `AppliedEnvOverlay` to fg `executeWorkflow` and bg `dispatchBackgroundWorkflow` (pre-create stamp already US-005). Hydrate-null fallthrough uses pre-validated request candidate, not the prior run overlay.
 - **Example**: `options.envOverlay` → apply before isolation → `executeWorkflow(..., executionWorkflow, { appliedEnvOverlay })`
 
+### HTTP Workflow ENV CRUD + preview
+- **Where**: `packages/server/src/routes/api.ts`, `packages/server/src/routes/schemas/workflow-env.schemas.ts`, `packages/workflows/src/env-overlay.ts` (`listEnvOverlayTargets`)
+- **Pattern**: OpenAPI CRUD under `/api/workflows/{name}/envs` with camelCase wire mapper; list omits patches; create provenance via soft `resolveWebUserId` (null OK). Preview is a separate `/env-preview` route requiring `validateCwd`, discover+`resolveWorkflowName`, optional ENV identity (`400 env_not_found` / `env_workflow_mismatch`), `listEnvOverlayTargets` for editor matrix (top-level only), `applyEnvOverlay` + executor-parity `buildResolvedRequestMetadata`/`buildAiProfile` (corrupt prefs → config-only). Never echo prompt/bash in errors/responses.
+- **Example**: `GET .../env-preview?cwd=...&envId=...` → `{ preview:true, authoritative:false, targets, resolved, skippedNodeIds }`
+
+
 
 
 
@@ -206,5 +212,32 @@
 - Name `validateAndResolveIsolation` mock so call-count assertions work; anonymous `mock()` inside `mock.module` cannot be cleared/asserted.
 - `unknown | undefined` trips `@typescript-eslint/no-redundant-type-constituents` — use `unknown` alone.
 - Hydrate-null fallthrough must use the request candidate (fresh row), not the prior run's stored overlay — pre-validate the candidate even when `willContinueExistingRun` so isolation is not wasted on a bad request that only surfaces after hydrate.
+
+---
+
+## 2026-09-05 — US-007: HTTP CRUD and preview API
+
+**Status**: PASSED
+**Files changed**:
+- `packages/server/src/routes/schemas/workflow-env.schemas.ts` — OpenAPI CRUD/preview request+response schemas
+- `packages/server/src/routes/api.ts` — ENV list/get/create/update/delete + env-preview handlers, camelCase mappers, stable error codes
+- `packages/server/src/routes/api.workflow-envs.test.ts` — auth gate, CRUD scoping/conflicts, preview cwd/identity/matrix, OpenAPI paths
+- `packages/server/package.json` — isolated test segment for ENV routes
+- `packages/workflows/src/env-overlay.ts` — export `listEnvOverlayTargets` field matrix helper
+- `packages/workflows/src/env-overlay.test.ts` — top-level targets exclude loop_group bodies
+- `packages/workflows/package.json` — export `./node-model-resolution` for server preview imports
+
+**Acceptance criteria verified**:
+- [x] registerOpenApiRoute + workflow-env.schemas.ts; no per-resource ACL (auth gate only)
+- [x] CRUD GET list/detail, POST 201, PATCH, DELETE with 200/201/404/409 and `{ error, detail? }`
+- [x] List omits patches; detail/create/update camelCase WorkflowEnvResponse; delete `{ deleted }`; create provenance server-resolved
+- [x] CRUD validates name/path/patch/size; no cwd or discoverability required
+- [x] Preview requires validated cwd, canonical resolve, baseline or ENV apply, targets/skips/resolved via shared metadata path
+- [x] Tests: auth gate, conflicts/scoping, preview root/descendant cwd, identity errors, no prompt/bash echo, OpenAPI CRUD/preview with Start path retained
+
+**Learnings**:
+- Preview resolution needs registered providers in tests (`registerBuiltinProviders`) or `buildResolvedRequestMetadata` fails unknown_provider with empty registry.
+- Soft header identity uses `findOrCreateUserByPlatformIdentity` — mock that symbol for create-provenance tests, not a bare findOrCreateUser.
+- Export `listEnvOverlayTargets` from env-overlay rather than duplicating the private field matrix in server.
 
 ---
