@@ -1056,6 +1056,11 @@ describe('createWorkflowDeps', () => {
     expect(typeof deps.usageRecorder.recordWorkflowUsage).toBe('function');
   });
 
+  test('exposes the run-end git-snapshot hook', () => {
+    const deps = createWorkflowDeps();
+    expect(typeof deps.onRunEndGitSnapshot).toBe('function');
+  });
+
   test('store from createWorkflowDeps has all IWorkflowStore methods', () => {
     const deps = createWorkflowDeps();
     expect(typeof deps.store.createWorkflowRun).toBe('function');
