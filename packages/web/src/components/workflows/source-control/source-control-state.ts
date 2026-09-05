@@ -28,7 +28,7 @@ export const INITIAL_SOURCE_CONTROL_STATE: SourceControlSnapshotState = {
 };
 
 export function toSourceControlSnapshot(response: GitChangesResponse): SourceControlSnapshot {
-  if (response.emptyReason !== undefined) {
+  if ('emptyReason' in response) {
     return {
       emptyReason: response.emptyReason,
       files: [],
