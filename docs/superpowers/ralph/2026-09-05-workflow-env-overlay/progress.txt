@@ -1,5 +1,15 @@
 ## Codebase Patterns
 
+### Picker/Start mounted race harness (US-025)
+- **Where**: `packages/web/src/experiments/console/components/WorkflowEnvPicker.test.tsx`, `DraftRunCard.test.tsx`
+- **Pattern**: Mount with happy-dom + `NODE_ENV=development` + React.act. Drive controlled selects via fiber `__reactProps$*.onChange`. Deferred promises control list/preview settle order. DraftRunCard needs `MemoryRouter` for `useSearchParams`; WorkflowPicker portal needs stubbed `getBoundingClientRect` + non-zero viewport. Cache keys (`K.workflowEnvPreview(cwd, wf, envId)`) isolate stale settles — assert UI + current key, not cancelled promises.
+- **Example**: switch wf-a→wf-b before A settles → UI shows only B options/preview after B resolves; late A resolve cannot reintroduce `fast-a`
+
+### Mounted ENV manager no-op patches (US-024)
+- **Where**: `packages/web/src/experiments/console/components/WorkflowEnvManageDialog.tsx` (`WorkflowEnvEditorView` onSubmit + submit disabled), tests with happy-dom
+- **Pattern**: Successful baseline discovery with `targets: []` is a valid no-op ENV — create/edit submit sends `{ patches: {} }`. Only `targetsLoading` or `targetsError` block submit (button disabled + onSubmit refuse). Export `WorkflowEnvEditorView` for mounted tests. Console `bun test` needs `NODE_ENV=development` so `react.act` exists; happy-dom is the mount harness.
+- **Example**: zero targets Create → POST `{ name, patches: {} }`; edit remove-all drafts → PATCH full `{ patches: {} }`
+
 ### invalid_env_request OpenAPI hook (US-023)
 - **Where**: `packages/server/src/routes/openapi-defaults.ts` (`workflowEnvValidationErrorHook`), `packages/server/src/routes/api.ts` (`registerOpenApiRoute` third arg)
 - **Pattern**: ENV routes pass a route-scoped OpenAPI hook so body/query/param Zod failures return `{ error: 'invalid_env_request', detail: formatSafeZodIssueDetail(error) }` instead of the global field-path-as-`error` prose. Detail uses path + schema message only. Handler-side ZodError catch reuses the same helper. Do not broaden to non-ENV routes.
@@ -709,5 +719,51 @@
 - `app.openapi(route, handler, hook)` overrides `defaultHook` per route; extend the thin `registerOpenApiRoute` wrapper with an optional third arg rather than calling `app.openapi` ad hoc.
 - Safe detail = first issue path (field names) + schema message only — never serialize request bodies or Zod `received` values into logs/responses (hook does not log).
 - Empty PATCH `{}` fails the refine before the handler; without the ENV hook it became global `": at least one of name or patches is required"` with empty path prefix.
+
+---
+
+## 2026-09-05 — US-024: Mounted ENV manager saves no-op patches
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/components/WorkflowEnvManageDialog.tsx` — export `WorkflowEnvEditorView`; submit allows zero-target no-op; loading/error still block; empty-patches copy distinguishes no targets vs no drafts
+- `packages/web/src/experiments/console/components/WorkflowEnvManageDialog.test.tsx` — mounted create/edit happy-dom flows assert POST/PATCH `{ patches: {} }`; loading/error cannot overwrite
+- `packages/web/package.json` — `happy-dom` devDep; console test leg runs with `NODE_ENV=development`
+- `bun.lock` — lockfile for happy-dom
+
+**Acceptance criteria verified**:
+- [x] Mounted create with no editable targets POSTs `{ patches: {} }`
+- [x] Mounted edit removing every patch PATCHes complete `{ patches: {} }`
+- [x] Target discovery resolved in tests (not helper-only)
+- [x] Loading/failure block submit; successful zero targets do not
+- [x] No-op ENV copy remains true; loading/error cannot overwrite accidentally
+- [x] Focused verification: `cd packages/web && NODE_ENV=development bun test src/experiments/console/components/WorkflowEnvManageDialog.test.tsx src/experiments/console/lib/workflow-env-editor.test.ts` (25 pass)
+
+**Learnings**:
+- Prior onSubmit treated `targets.length === 0` like discovery failure — contradicted schema-valid empty patches map.
+- React 19 production build does not export `act`; console component mounts need `NODE_ENV=development` before importing react.
+- happy-dom controlled inputs: drive fiber `__reactProps$*.onChange` rather than native input events.
+
+---
+
+## 2026-09-05 — US-025: Picker and start component race regressions
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/components/WorkflowEnvPicker.test.tsx` — mounted picker + async list/preview harness (None default, list failure, retained selection loading/error, stale prior-workflow isolation)
+- `packages/web/src/experiments/console/components/DraftRunCard.test.tsx` — mounted Start card with mocked skills: YAML Start omits envId, selected ENV includes envId, loading/error retain selection + disable Start, workflow change clears ENV/inputs immediately, stale preview cannot replace current
+
+**Acceptance criteria verified**:
+- [x] WorkflowEnvPicker.test.tsx exists and mounts with controlled async list/detail/preview responses
+- [x] DraftRunCard.test.tsx exists and mounts Start card with controlled async ENV responses + Start submission
+- [x] None default; list failure permits None/YAML Start; outbound Start omits envId for None and includes it when selected
+- [x] Retained selected id shows own loading/error; selected loading/error keeps selection and disables Start; workflow change resets ENV and inputs immediately
+- [x] Stale prior-workflow response cannot replace current options/preview; draft-env.test.ts remains supporting coverage
+- [x] Focused verification: `cd packages/web && NODE_ENV=development bun test src/experiments/console/components/WorkflowEnvPicker.test.tsx src/experiments/console/components/DraftRunCard.test.tsx src/experiments/console/lib/draft-env.test.ts` (12 pass)
+
+**Learnings**:
+- Preview table copy differs by selection: selected → `Loading ENV preview…` / `Start is disabled`; None → `Loading preview…` / YAML still works.
+- DraftRunCard collapsed mode must be expanded before ENV UI appears; last-workflow localStorage stabilizes initial selection for multi-workflow race tests.
+- WorkflowPicker dropdown portals to `document.body` and needs a real bounding rect in happy-dom or `anchor` stays null and options never mount.
 
 ---
