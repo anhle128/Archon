@@ -93,6 +93,16 @@ Lower priority number runs first. `dependsOn` contains only lower-priority story
 | 16 | US-016 | Defensive unknown patch-key rejection | US-001, US-015 | Convergence task 5: defensive unknown patch-key rejection (`docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:791-803`) |
 | 17 | US-017 | Malformed run metadata hides ENV UI | US-011, US-016 | Convergence task 6: malformed run-detail metadata omission (`docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:791-805`) |
 | 18 | US-018 | Exact ENV name-conflict classification | US-003, US-017 | Convergence task 7: exact ENV conflict classification (`docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:791-807`) |
+| 19 | US-019 | Plan Constitution Check evidence | - | Convergence 2 task 8 (`docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:813`) |
+| 20 | US-020 | Resume claim delayed until gates pass | US-006, US-012, US-019 | Convergence 2 task 9 (`docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:815`) |
+| 21 | US-021 | Overlay pre-created preamble failures become terminal | US-005, US-006, US-020 | Convergence 2 task 10 (`docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:817`) |
+| 22 | US-022 | Exact envId HTTP omission and type contract | US-007, US-008, US-021 | Convergence 2 task 11 (`docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:819`) |
+| 23 | US-023 | Stable ENV request validation errors | US-007, US-022 | Convergence 2 task 12 (`docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:821`) |
+| 24 | US-024 | Mounted ENV manager saves no-op patches | US-010, US-015, US-023 | Convergence 2 task 13 (`docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:823`) |
+| 25 | US-025 | Picker and start component race regressions | US-009, US-024 | Convergence 2 task 14 (`docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:825`) |
+| 26 | US-026 | Missing-node raw patch keys rejected | US-001, US-016, US-025 | Convergence 2 task 15 (`docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:827`) |
+| 27 | US-027 | Programmatic modelReasoningEffort parity | US-002, US-005, US-007, US-013, US-026 | Convergence 2 task 16 (`docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:829`) |
+| 28 | US-028 | Strict run-detail ENV parser fields | US-017, US-027 | Convergence 2 task 17 (`docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:831`) |
 
 ## User Stories
 
@@ -346,6 +356,157 @@ Acceptance criteria:
 - Focused verification passes: cd packages/core && bun test src/db/workflow-envs.test.ts.
 
 Technical notes: Convergence task 7 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:807. Modify packages/core/src/db/workflow-envs.ts and packages/core/src/db/workflow-envs.test.ts. Follow Store contracts line 263 and Database/core matrix lines 623-632. Keep CRUD semantics from US-003; this story only tightens error classification.
+
+### US-019 — Plan Constitution Check evidence
+
+As a reviewer, I want the workflow ENV implementation plan to record constitution checks before and after design, so that PR readiness is auditable from the plan itself.
+
+Acceptance criteria:
+
+- The plan appends a retrospective pre-Phase-0 Constitution Check and a current post-design re-check tied to .specify/memory/constitution.md.
+- Both checks explicitly evaluate package-layer direction, typed and OpenAPI schema rules, additive schema and generated-file handling, fail-closed lifecycle behavior, secret-safe audit metadata, focused/full validation, and intentional complexity.
+- Every evaluated gate records concrete repository evidence, any violation, its accepted-use justification, and a rollback or simplification path instead of a generic PASS.
+- Any unresolved constitutional violation is marked as a release blocker.
+- Verification includes git diff --check and a manual comparison against the constitution Plan Quality Gate.
+
+Technical notes: Convergence 2 task 8 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:813. Modify docs/superpowers/plans/2026-09-05-workflow-env-overlay.md only. Use .specify/memory/constitution.md:154-156 and .specify/memory/constitution.md:172-175 as the gate source. Do not change implementation code.
+
+### US-020 — Resume claim delayed until gates pass
+
+As a run owner, I want Archon to claim a resumable run only after conversation and isolation gates pass, so that a failed gate cannot strand the run as running.
+
+Acceptance criteria:
+
+- packages/core/src/orchestrator/orchestrator-agent.test.ts covers a paused run plus any supplied ENV id where updateConversation() fails; the run is never transitioned to running, execution is not invoked, and the original resumable state remains.
+- The same test file covers a paused run plus any supplied ENV id where isolation returns IsolationBlockedError; the run is never transitioned to running, execution is not invoked, and the original resumable state remains.
+- Read-only resume eligibility and stored snapshot inspection are split from the compare-and-set resume claim; the claim happens exactly once after conversation and isolation gates succeed.
+- The hydrate-null branch remains a fresh start, and genuine continuations still ignore newly supplied request candidates.
+- No return or throw between eligibility discovery and executor dispatch can leave a run running; concurrent claim rejection remains atomic.
+- Focused verification passes: cd packages/core && bun test src/orchestrator/orchestrator-agent.test.ts; then cd ../workflows && bun test src/executor.test.ts.
+
+Technical notes: Convergence 2 task 9 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:815. Modify packages/core/src/orchestrator/orchestrator-agent.ts and tests; update packages/workflows/src/executor.ts and executor tests only if the claim seam must move. Preserve Contract 10 continuation semantics and Convergence task 1 resume-candidate behavior.
+
+### US-021 — Overlay pre-created preamble failures become terminal
+
+As a background run owner, I want overlay-bearing pre-created runs failed when eager preamble resolution throws, so that audit failures cannot leave pending rows.
+
+Acceptance criteria:
+
+- packages/workflows/src/executor.test.ts covers an overlay-bearing preCreatedRun and a deterministic workflow-scope resolution failure after prepareExecutionEnvOverlay() but before workflow events or DAG scheduling.
+- The executor regression asserts failWorkflowRun() is called once and no envOverlay snapshot write, workflow event, or DAG node execution is emitted.
+- packages/core/src/orchestrator/orchestrator.test.ts covers background dispatch with an already-created pending row and proves the row does not remain pending after that failure.
+- Config/profile/scope/provider eager resolution for active overlays runs inside an executor-owned fail-closed boundary; no-overlay behavior is unchanged.
+- The failure path emits only env id/name/code-safe user messaging and never relies on the background caller's log-only catch to repair state.
+- Focused verification passes: cd packages/workflows && bun test src/executor.test.ts; then cd ../core && bun test src/orchestrator/orchestrator.test.ts.
+
+Technical notes: Convergence 2 task 10 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:817. Modify packages/workflows/src/executor.ts and packages/core/src/orchestrator/orchestrator.ts tests as needed. Follow Authoritative Contracts 4 and 10 plus background dispatch ordering; every exception after an overlay-bearing row exists must either return before claiming or leave the row terminally failed.
+
+### US-022 — Exact envId HTTP omission and type contract
+
+As a console/API caller, I want absent, empty, and non-string envId inputs handled exactly as documented, so that Start and Preview do not guess from malformed selection data.
+
+Acceptance criteria:
+
+- packages/server/src/routes/api.workflow-envs.test.ts proves Preview with ?envId= returns the YAML-only baseline without reading a workflow ENV row.
+- packages/server/src/routes/api.workflow-runs.test.ts proves JSON { "envId": null } and other present non-string values return 400 { error: 'invalid_env_id' } before lookup or dispatch.
+- The Preview query schema allows an empty envId to reach the baseline handler instead of failing generic validation.
+- parseOptionalEnvIdField() treats only absence and empty strings as omission; JSON null is never treated as omission.
+- Duplicate or non-string multipart envId remains rejected, and baseline/rejected cases avoid unnecessary mutable ENV lookups.
+- Checked-in web API types are regenerated or proven unchanged if the OpenAPI request shape changes.
+- Focused verification passes: cd packages/server && bun test src/routes/api.workflow-envs.test.ts && bun test src/routes/api.workflow-runs.test.ts, followed by the repository's focused generated-type check.
+
+Technical notes: Convergence 2 task 11 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:819. Modify packages/server/src/routes/api.ts and the server route tests. Follow HTTP API contract lines 304-319, Preview lines 329-352, Start lines 354-384, and Server/API matrix lines 646-659.
+
+### US-023 — Stable ENV request validation errors
+
+As an API client, I want workflow-ENV schema failures to return stable safe error bodies even when OpenAPI validation rejects before the handler.
+
+Acceptance criteria:
+
+- packages/server/src/routes/api.workflow-envs.test.ts asserts 400 { error: 'invalid_env_request', detail: <safe summary> } for invalid ENV name, unknown node patch field, empty per-node patch, over-256-node patch map, over-1-MiB request, and empty PATCH body.
+- The same tests prove prompt bodies, bash bodies, unknown-field values, and other patch values are absent from validation details and logs under these failures.
+- Route-scoped validation mapping works with registerOpenApiRoute() so request-schema failures cannot fall through to the global default hook's field-path prose.
+- Unrelated routes keep their existing validation body behavior.
+- Workflow ENV name conflicts still map only to the existing 409 conflict response.
+- Checked-in API types are regenerated only if the public schema changes.
+- Focused verification passes: cd packages/server && bun test src/routes/api.workflow-envs.test.ts.
+
+Technical notes: Convergence 2 task 12 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:821. Modify packages/server/src/routes/api.ts, packages/server/src/routes/schemas/workflow-env.schemas.ts, and route tests. Follow HTTP API contract lines 304-327, Phase 5 CRUD lines 566-570, and Server/API matrix lines 646-655. Do not broaden validation behavior outside workflow ENV routes.
+
+### US-024 — Mounted ENV manager saves no-op patches
+
+As a console operator, I want the mounted workflow ENV manager to create and replace with an empty patch map, so that no-op ENVs work in the real dialog.
+
+Acceptance criteria:
+
+- packages/web/src/experiments/console/components/WorkflowEnvManageDialog.test.tsx mounts create flow for a workflow with no editable targets and asserts POST receives { patches: {} }.
+- The same mounted test covers edit flow where every patch is removed and asserts PATCH receives the complete replacement { patches: {} }.
+- Workflow detail/target discovery loading is resolved in the tests so the assertions cover rendered dialog behavior, not only helper functions.
+- WorkflowEnvManageDialog.tsx distinguishes target discovery loading or failure from successful discovery with zero targets; only loading/failure blocks submit.
+- Dialog copy promising a no-op ENV remains true, while loading/error states still cannot overwrite an ENV accidentally.
+- Focused verification passes: cd packages/web && bun test src/experiments/console/components/WorkflowEnvManageDialog.test.tsx src/experiments/console/lib/workflow-env-editor.test.ts.
+
+Technical notes: Convergence 2 task 13 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:823. Modify packages/web/src/experiments/console/components/WorkflowEnvManageDialog.tsx and its mounted tests. Follow Convergence task 4/US-015 but replace helper-only coverage with component-level create/edit behavior.
+
+### US-025 — Picker and start component race regressions
+
+As a console operator, I want component tests for ENV picker/start wiring and workflow-switch races, so that async responses cannot launch or preview the wrong ENV.
+
+Acceptance criteria:
+
+- packages/web/src/experiments/console/components/WorkflowEnvPicker.test.tsx exists and mounts the rendered picker with controlled asynchronous list/detail/preview responses.
+- packages/web/src/experiments/console/components/DraftRunCard.test.tsx exists and mounts the rendered start card with controlled asynchronous ENV responses and Start submission.
+- Component tests prove None is the default, list failure still permits None/YAML-only Start, and outbound Start omits envId for None while including it for a selected ENV.
+- Component tests prove a retained selected id can show its own loading/error state, selected-ENV loading/error retains the selection and disables Start, and changing workflow resets ENV and inputs immediately.
+- Component tests prove a stale prior-workflow response cannot replace current options or preview; pure lib/draft-env.test.ts coverage remains only supporting coverage.
+- Focused verification passes: cd packages/web && bun test src/experiments/console/components/WorkflowEnvPicker.test.tsx src/experiments/console/components/DraftRunCard.test.tsx src/experiments/console/lib/draft-env.test.ts.
+
+Technical notes: Convergence 2 task 14 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:825. Add component-level tests for packages/web/src/experiments/console/components/WorkflowEnvPicker.tsx and DraftRunCard.tsx. Follow Preview/Start wiring lines 392-415, race/reset requirements lines 458-463, Phase 6 exit gate lines 573-584, and validation lines 729-733.
+
+### US-026 — Missing-node raw patch keys rejected
+
+As a workflow engine maintainer, I want raw patch-key validation to run before missing-node skipping, so that deleted targets cannot bypass defensive field checks.
+
+Acceptance criteria:
+
+- packages/workflows/src/env-overlay.test.ts bypasses the Zod boundary with a missing target patch such as { missing: { typo: 'secret-value' } }.
+- The regression asserts applyEnvOverlay() fails with code forbidden_field, mentions only the unknown key, and does not leak the unknown value or any prompt/bash body.
+- A missing-node patch containing only allowed fields still succeeds and reports the node in skipped ids.
+- applyEnvOverlay() validates original raw patch keys before the missing-node early continue and before copyNodePatch() can discard unknown fields.
+- Valid missing-node skip semantics and normal schema-validated patches remain unchanged.
+- Focused verification passes: cd packages/workflows && bun test src/env-overlay.test.ts src/schemas/env-overlay.test.ts.
+
+Technical notes: Convergence 2 task 15 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:827. Modify packages/workflows/src/env-overlay.ts and packages/workflows/src/env-overlay.test.ts. This extends US-016 to missing targets and must preserve skip behavior from the clone/apply contract.
+
+### US-027 — Programmatic modelReasoningEffort parity
+
+As an engine caller, I want programmatic workflows using legacy modelReasoningEffort to resolve like loader-normalized YAML, so that audit, Preview, events, and provider requests stay aligned.
+
+Acceptance criteria:
+
+- packages/workflows/src/node-model-resolution.test.ts covers an unexpanded programmatic workflow with workflow-level modelReasoningEffort and no portable effort.
+- packages/workflows/src/executor.test.ts compares that workflow's envOverlay snapshot row to runtime node_started request fields and provider request options.
+- The shared workflow-scope resolver uses workflow.effort ?? workflow.modelReasoningEffort as the fallback without adding a second resolver.
+- Loader-normalized YAML and programmatic legacy definitions produce the same effective effort in Preview, stored snapshot, node_started events, and provider request options.
+- Preview and audit parity remains routed through packages/workflows/src/node-model-resolution.ts as the single computation path.
+- Focused verification passes: cd packages/workflows && bun test src/node-model-resolution.test.ts src/executor.test.ts src/dag-executor.test.ts.
+
+Technical notes: Convergence 2 task 16 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:829. Modify packages/workflows/src/node-model-resolution.ts and packages/workflows/src/executor.ts/tests; update server Preview only if it consumes the workflow-scope resolver differently. Follow Authoritative Contract 4, Preview, and executor snapshot requirements.
+
+### US-028 — Strict run-detail ENV parser fields
+
+As a console operator, I want run-detail ENV metadata parsing to reject malformed optional fields and unknown keys, so that corrupt metadata cannot look like a valid provider-only row.
+
+Acceptance criteria:
+
+- packages/web/src/experiments/console/primitives/run.test.ts asserts parseRunEnvOverlay() returns null when a resolved row has a present non-string model, invalid tier, invalid effort, malformed or unsupported thinking, or an unexpected key.
+- The same test file asserts a complete overlay object with an unexpected top-level key returns null.
+- The local web parser requires exact pending and complete shapes plus exact resolved-row field types without importing runtime code from @archon/workflows.
+- Valid pending and complete metadata rendering remains unchanged, and run detail omits only the corrupt ENV section while preserving the rest of the run detail.
+- Focused verification passes: cd packages/web && bun test src/experiments/console/primitives/run.test.ts src/experiments/console/routes/RunDetailPage.test.tsx src/experiments/console/components/WorkflowEnvResolvedTable.test.tsx src/experiments/console/components/RunDetailHeader.test.tsx.
+- After this final Convergence 2 story, Phase 8 gates are rerun for the corrected tree, including generated checks, check:schema-upgrades, validate, and git diff --check; earlier Ralph validation claims are not reused.
+
+Technical notes: Convergence 2 task 17 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:831, plus Convergence instructions at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:793 and validation gates at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:691-747. Modify packages/web/src/experiments/console/primitives/run.ts, run.test.ts, and run-detail component tests. This extends US-017 strict malformed-metadata behavior.
 
 ## Implementation and Validation Gates
 
