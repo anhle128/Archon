@@ -144,11 +144,20 @@ const mockHydrateResumableRun = mock(
     ({
       preCreatedRun: { ...candidate, status: 'running' },
       priorCompletedNodes: new Map([['n1', 'v1']]),
+      priorTokenUsage: { input: 0, output: 0 },
+    }) as unknown
+);
+const mockInspectResumableRun = mock(
+  async (_deps: unknown, _candidate: { id: string }) =>
+    ({
+      priorCompletedNodes: new Map([['n1', 'v1']]),
+      priorTokenUsage: { input: 0, output: 0 },
     }) as unknown
 );
 mock.module('@archon/workflows/executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
   hydrateResumableRun: mockHydrateResumableRun,
+  inspectResumableRun: mockInspectResumableRun,
 }));
 
 /** Baseline capabilities the mocked registry reports. Tests that narrow this
@@ -264,15 +273,16 @@ mock.module('../db/messages', () => ({
   getRecentWorkflowResultMessages: mockGetRecentWorkflowResultMessages,
 }));
 
+class MockIsolationBlockedError extends Error {
+  public reason: string;
+  constructor(reason: string) {
+    super(reason);
+    this.reason = reason;
+    this.name = 'IsolationBlockedError';
+  }
+}
 mock.module('@archon/isolation', () => ({
-  IsolationBlockedError: class IsolationBlockedError extends Error {
-    public reason: string;
-    constructor(reason: string) {
-      super(reason);
-      this.reason = reason;
-      this.name = 'IsolationBlockedError';
-    }
-  },
+  IsolationBlockedError: MockIsolationBlockedError,
   // Loaded transitively via orchestrator-agent → child-isolation-resolver (PR-A).
   getIsolationProvider: mock(() => ({})),
   classifyIsolationError: (err: Error) => err.message,
@@ -1569,6 +1579,22 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockDispatchBackgroundWorkflow.mockClear();
     mockFindResumableRunByParentConversation.mockClear();
     mockHydrateResumableRun.mockClear();
+    mockHydrateResumableRun.mockImplementation(
+      async (_deps: unknown, candidate: { id: string }) =>
+        ({
+          preCreatedRun: { ...candidate, status: 'running' },
+          priorCompletedNodes: new Map([['n1', 'v1']]),
+          priorTokenUsage: { input: 0, output: 0 },
+        }) as unknown
+    );
+    mockInspectResumableRun.mockClear();
+    mockInspectResumableRun.mockImplementation(
+      async () =>
+        ({
+          priorCompletedNodes: new Map([['n1', 'v1']]),
+          priorTokenUsage: { input: 0, output: 0 },
+        }) as unknown
+    );
     mockUpdateWorkflowRun.mockClear();
     mockUpdateWorkflowRun.mockImplementation(() => Promise.resolve());
     mockResolveApprovalGate.mockClear();
@@ -2527,8 +2553,9 @@ describe('workflow dispatch routing — interactive flag', () => {
       envOverlay: makeEnvCandidate({ default: { model: 'from-request' } }),
     });
 
+    expect(mockInspectResumableRun).toHaveBeenCalled();
+    expect(mockHydrateResumableRun).toHaveBeenCalled();
     expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
-    expect(mockExecuteWorkflow).toHaveBeenCalled();
     const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
     const wf = callArgs[4] as { nodes: Array<{ model?: string }> };
     expect(wf.nodes[0]?.model).toBe('from-stored');
@@ -2582,7 +2609,13 @@ describe('workflow dispatch routing — interactive flag', () => {
         },
       })
     );
-    // Real resume payload (not hydrate-null).
+    // Read-only eligibility first (US-020); claim happens only after gates.
+    mockInspectResumableRun.mockReturnValueOnce(
+      Promise.resolve({
+        priorCompletedNodes: new Map([['default', 'done']]),
+        priorTokenUsage: { input: 1, output: 1 },
+      })
+    );
     mockHydrateResumableRun.mockReturnValueOnce(
       Promise.resolve({
         preCreatedRun: {
@@ -2603,7 +2636,15 @@ describe('workflow dispatch routing — interactive flag', () => {
       }),
     });
 
+    expect(mockInspectResumableRun).toHaveBeenCalled();
     expect(mockHydrateResumableRun).toHaveBeenCalled();
+    // Claim after isolation (inspect is pre-isolation path selection only).
+    expect(mockInspectResumableRun.mock.invocationCallOrder[0]).toBeLessThan(
+      mockValidateAndResolveIsolation.mock.invocationCallOrder[0]!
+    );
+    expect(mockValidateAndResolveIsolation.mock.invocationCallOrder[0]).toBeLessThan(
+      mockHydrateResumableRun.mock.invocationCallOrder[0]!
+    );
     expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
     expect(mockExecuteWorkflow).toHaveBeenCalled();
     const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
@@ -2654,6 +2695,12 @@ describe('workflow dispatch routing — interactive flag', () => {
         metadata: {},
       })
     );
+    mockInspectResumableRun.mockReturnValueOnce(
+      Promise.resolve({
+        priorCompletedNodes: new Map([['default', 'done']]),
+        priorTokenUsage: { input: 0, output: 0 },
+      })
+    );
     mockHydrateResumableRun.mockReturnValueOnce(
       Promise.resolve({
         preCreatedRun: {
@@ -2673,6 +2720,7 @@ describe('workflow dispatch routing — interactive flag', () => {
       }),
     });
 
+    expect(mockInspectResumableRun).toHaveBeenCalled();
     expect(mockHydrateResumableRun).toHaveBeenCalled();
     expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
     expect(mockExecuteWorkflow).toHaveBeenCalled();
@@ -2727,8 +2775,8 @@ describe('workflow dispatch routing — interactive flag', () => {
         },
       })
     );
-    // Nothing worth resuming → fresh-start fallthrough must validate the request.
-    mockHydrateResumableRun.mockReturnValueOnce(Promise.resolve(null));
+    // Nothing worth resuming → inspect-null fresh-start must validate the request.
+    mockInspectResumableRun.mockReturnValueOnce(Promise.resolve(null));
 
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
@@ -2737,12 +2785,136 @@ describe('workflow dispatch routing — interactive flag', () => {
       }),
     });
 
-    expect(mockHydrateResumableRun).toHaveBeenCalled();
+    expect(mockInspectResumableRun).toHaveBeenCalled();
+    // inspect-null never claims — claim only runs after successful gates.
+    expect(mockHydrateResumableRun).not.toHaveBeenCalled();
     expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
     const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
     expect(sent).toContain('field_not_supported_for_node');
     expect(sent).not.toContain('secret-hydrate-null-body');
+  });
+
+  test('US-020: updateConversation failure with ENV never claims paused run', async () => {
+    // Claim must stay after conversation + isolation. If conversation rebind fails,
+    // the paused run must remain unclaimed and execution must not start.
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve({
+        success: true,
+        message: 'ok',
+        workflow: {
+          definition: makeTestWorkflow({
+            name: 'test-workflow',
+            interactive: true,
+            nodes: [{ id: 'default', prompt: 'base', provider: 'claude' }],
+          }),
+          args: 'test message',
+        },
+      })
+    );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'paused-claim-gate-run',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/paused',
+        parent_conversation_id: 'conv-1',
+        status: 'paused',
+        metadata: {
+          envOverlay: {
+            envId: 'env-stored',
+            envName: 'stored-env',
+            workflowName: 'test-workflow',
+            patches: { default: { model: 'from-stored' } },
+            skippedNodeIds: [],
+          },
+        },
+      })
+    );
+    mockInspectResumableRun.mockReturnValueOnce(
+      Promise.resolve({
+        priorCompletedNodes: new Map([['default', 'done']]),
+        priorTokenUsage: { input: 1, output: 1 },
+      })
+    );
+    mockUpdateConversation.mockClear();
+    mockUpdateConversation.mockImplementationOnce(() =>
+      Promise.reject(new Error('conversation update failed'))
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      envOverlay: makeEnvCandidate({ default: { model: 'from-request' } }),
+    });
+
+    expect(mockInspectResumableRun).toHaveBeenCalled();
+    expect(mockHydrateResumableRun).not.toHaveBeenCalled();
+    expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+    // Restore default so later tests are not poisoned.
+    mockUpdateConversation.mockImplementation(() => Promise.resolve());
+  });
+
+  test('US-020: IsolationBlockedError with ENV never claims paused run', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve({
+        success: true,
+        message: 'ok',
+        workflow: {
+          definition: makeTestWorkflow({
+            name: 'test-workflow',
+            interactive: true,
+            nodes: [{ id: 'default', prompt: 'base', provider: 'claude' }],
+          }),
+          args: 'test message',
+        },
+      })
+    );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'paused-iso-block-run',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/paused',
+        parent_conversation_id: 'conv-1',
+        status: 'paused',
+        metadata: {
+          envOverlay: {
+            envId: 'env-stored',
+            envName: 'stored-env',
+            workflowName: 'test-workflow',
+            patches: { default: { model: 'from-stored' } },
+            skippedNodeIds: [],
+          },
+        },
+      })
+    );
+    mockInspectResumableRun.mockReturnValueOnce(
+      Promise.resolve({
+        priorCompletedNodes: new Map([['default', 'done']]),
+        priorTokenUsage: { input: 1, output: 1 },
+      })
+    );
+    mockUpdateConversation.mockClear();
+    mockUpdateConversation.mockImplementation(() => Promise.resolve());
+    mockValidateAndResolveIsolation.mockImplementationOnce(() =>
+      Promise.reject(new MockIsolationBlockedError('dirty worktree'))
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      envOverlay: makeEnvCandidate({ default: { model: 'from-request' } }),
+    });
+
+    expect(mockInspectResumableRun).toHaveBeenCalled();
+    expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
+    // Isolation blocked after conversation gate — still no claim / no execution.
+    expect(mockHydrateResumableRun).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
   });
 
   test('malformed stored resume overlay stops before isolation', async () => {

@@ -150,6 +150,7 @@ registerBuiltinProviders();
 import {
   executeWorkflow,
   hydrateResumableRun,
+  inspectResumableRun,
   resolveProjectPaths,
   resolveScopeArtifactsDir,
 } from './executor';
@@ -2024,14 +2025,48 @@ describe('telemetry wiring', () => {
 });
 
 // ───────────────────────────────────────────────────────────────────────────
-// hydrateResumableRun
+// inspectResumableRun / hydrateResumableRun
 //
 // Resume preparation is a caller-side primitive: callers look up the
 // candidate themselves (via findResumableRun or
-// findResumableRunByParentConversation) and call hydrateResumableRun to
-// turn it into the form executeWorkflow expects. The executor only consumes
-// what this returns.
+// findResumableRunByParentConversation). inspect is read-only eligibility +
+// snapshot; hydrate claims via resume CAS. The executor only consumes what
+// hydrate returns. US-020: claim must stay after conversation/isolation gates.
 // ───────────────────────────────────────────────────────────────────────────
+
+describe('inspectResumableRun', () => {
+  it('returns prior outputs without claiming the run', async () => {
+    const candidate = makeRun({ id: 'prior-failed', status: 'failed' });
+    const priorNodes = new Map([['n1', 'out1']]);
+    const store = makeStore({
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: priorNodes,
+        tokens: { input: 40, output: 4 },
+      })),
+      resumeWorkflowRun: mock(async () => {
+        throw new Error('inspect must not claim');
+      }),
+    });
+    const result = await inspectResumableRun(makeDeps(store), candidate);
+    expect(result).not.toBeNull();
+    expect(result?.priorCompletedNodes).toBe(priorNodes);
+    expect(result?.priorTokenUsage).toEqual({ input: 40, output: 4 });
+    expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('returns null without claiming when nothing is worth resuming', async () => {
+    const candidate = makeRun({ id: 'empty-prior', status: 'failed' });
+    const store = makeStore({
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: new Map(),
+        tokens: { input: 0, output: 0 },
+      })),
+    });
+    const result = await inspectResumableRun(makeDeps(store), candidate);
+    expect(result).toBeNull();
+    expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
+  });
+});
 
 describe('hydrateResumableRun', () => {
   it('returns hydrated run + prior outputs for a candidate with completed nodes', async () => {

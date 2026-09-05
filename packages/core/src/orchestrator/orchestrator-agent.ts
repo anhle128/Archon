@@ -40,7 +40,11 @@ import {
 import type { WorkspaceSyncResult } from '@archon/git';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { findWorkflow, resolveWorkflowName } from '@archon/workflows/router';
-import { executeWorkflow, hydrateResumableRun } from '@archon/workflows/executor';
+import {
+  executeWorkflow,
+  hydrateResumableRun,
+  inspectResumableRun,
+} from '@archon/workflows/executor';
 import {
   assertWorkflowRequirementsMet,
   WorkflowRequirementError,
@@ -882,24 +886,37 @@ async function dispatchOrchestratorWorkflow(
       throw err;
     }
   }
-  // Workflow ENV overlay gate (US-006 / US-012): after input/requirement gates,
-  // before conversation mutation or isolation. Invalid overlays fail cheaply with a
-  // safe code/message and never create a worktree.
+  // Workflow ENV overlay gate (US-006 / US-012 / US-020): after input/requirement
+  // gates, before conversation mutation or isolation. Invalid overlays fail cheaply
+  // with a safe code/message and never create a worktree.
   //
   // Contract 10 / US-012: a *genuine* continuation never validates or applies a
   // newly supplied request candidate — only the run-owned stored overlay (or YAML).
-  // When a request candidate is present on a would-be continuation, hydrate early
-  // (before isolation) so hydrate-null fallthrough can still reject an incompatible
-  // candidate pre-isolation while a real resume ignores it with a notice.
+  // When a request candidate is present on a would-be continuation, *inspect*
+  // eligibility read-only before isolation so hydrate-null fallthrough can still
+  // reject an incompatible candidate pre-isolation while a real resume ignores it
+  // with a notice. US-020: do NOT claim (resume CAS) here — claim exactly once
+  // after conversation + isolation succeed so a failed gate cannot strand the run
+  // as `running`.
   let executionWorkflow: WorkflowDefinition = workflow;
   let appliedEnvOverlay: AppliedEnvOverlay | undefined;
   let ignoredRequestEnvNotice: DispatchEnvOverlayResult['ignoredRequestEnv'];
-  // Fresh-path prep for pure fresh starts and for hydrate-null fallthrough after
-  // early hydrate decides the prior run has nothing to resume.
+  // Fresh-path prep for pure fresh starts and for inspect-null fallthrough after
+  // early inspect decides the prior run has nothing to resume.
   let freshOverlayPrep: DispatchEnvOverlayResult | undefined;
-  /** Set when we already claimed the run via early hydrate for ENV path selection. */
-  let earlyResumePrepared: HydratedResumableRun | null | undefined;
-  let didEarlyHydrate = false;
+  /**
+   * Read-only early eligibility when a request ENV forced pre-isolation path
+   * selection. `undefined` = no early inspect; `null` = nothing to resume;
+   * object = genuine continuation (claim later).
+   */
+  let earlyResumeInspection:
+    | {
+        priorCompletedNodes: Map<string, string>;
+        priorTokenUsage: { input: number; output: number };
+      }
+    | null
+    | undefined;
+  let didEarlyInspect = false;
   try {
     if (willContinueExistingRun && resumableRun) {
       // Always resolve the continuation view first (request candidate is never applied
@@ -911,43 +928,21 @@ async function dispatchOrchestratorWorkflow(
       );
 
       if (options?.envOverlay) {
-        // Request candidate present: distinguish genuine resume vs hydrate-null
+        // Request candidate present: distinguish genuine resume vs inspect-null
         // *before* isolation so an incompatible candidate cannot block a real resume
-        // but still fails closed for hydrate-null fresh starts (US-012).
+        // but still fails closed for inspect-null fresh starts (US-012). Read-only —
+        // claim stays after conversation/isolation (US-020).
         const earlyDeps = createWorkflowDeps();
-        try {
-          earlyResumePrepared = await hydrateResumableRun(earlyDeps, resumableRun);
-          didEarlyHydrate = true;
-        } catch (err) {
-          if (err instanceof workflowDb.WorkflowNotResumableError) {
-            getLog().info(
-              {
-                workflowName: workflow.name,
-                runId: resumableRun.id,
-                status: err.currentStatus,
-              },
-              'orchestrator.resume_lost_race'
-            );
-            await platform.sendMessage(
-              conversationId,
-              `⚠️ **${workflow.name}** is already being resumed (status: ${err.currentStatus}). ` +
-                'No action taken — follow the existing run for progress.' +
-                (deferredInputError && options?.inputs && Object.keys(options.inputs).length > 0
-                  ? `\n\nAlso note: ${deferredInputError.message}`
-                  : '')
-            );
-            return;
-          }
-          throw err;
-        }
+        earlyResumeInspection = await inspectResumableRun(earlyDeps, resumableRun);
+        didEarlyInspect = true;
 
-        if (earlyResumePrepared) {
+        if (earlyResumeInspection) {
           // Genuine continuation — stored overlay / YAML only; request ignored.
           executionWorkflow = continuation.workflow;
           appliedEnvOverlay = continuation.applied;
           ignoredRequestEnvNotice = continuation.ignoredRequestEnv;
         } else {
-          // Hydrate-null → fresh start on the same worktree: validate/apply the
+          // Inspect-null → fresh start on the same worktree: validate/apply the
           // request candidate now (before isolation). Throws EnvOverlayError on
           // incompatible fields — caught below.
           freshOverlayPrep = resolveFreshDispatchEnvOverlay(workflow, options.envOverlay);
@@ -955,7 +950,7 @@ async function dispatchOrchestratorWorkflow(
           appliedEnvOverlay = freshOverlayPrep.applied;
         }
       } else {
-        // No request candidate — continuation overlay only; hydrate later as today.
+        // No request candidate — continuation overlay only; claim later as today.
         executionWorkflow = continuation.workflow;
         appliedEnvOverlay = continuation.applied;
       }
@@ -1113,17 +1108,18 @@ async function dispatchOrchestratorWorkflow(
       },
       'orchestrator.foreground_resume_detected'
     );
-    // Hydrate the already-found candidate. If hydration returns null the
-    // prior run had nothing worth resuming (zero completed nodes, no loop
-    // gate) — surface that to the user and fall through to a fresh run on
-    // the same worktree rather than silently restarting.
+    // Hydrate (claim) the already-found candidate *after* conversation + isolation
+    // gates succeeded (US-020). If hydration returns null the prior run had nothing
+    // worth resuming — surface that and fall through to a fresh run on the same
+    // worktree rather than silently restarting.
     //
-    // When a request ENV candidate forced early hydrate above (US-012), reuse
-    // that result — resumeWorkflowRun is a CAS and must not run twice.
+    // When a request ENV forced early *inspect* above (US-012), reuse the null
+    // decision without re-inspecting; a non-null early inspect still claims here
+    // exactly once. Concurrent claim rejection remains atomic via resume CAS.
     const deps = createWorkflowDeps();
     let prepared: HydratedResumableRun | null;
-    if (didEarlyHydrate) {
-      prepared = earlyResumePrepared ?? null;
+    if (didEarlyInspect && earlyResumeInspection === null) {
+      prepared = null;
     } else {
       try {
         prepared = await hydrateResumableRun(deps, resumableRun);

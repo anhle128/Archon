@@ -590,23 +590,18 @@ export type ExecuteWorkflowOptions = ResumePayload & {
 };
 
 /**
- * Hydrate an already-located resumable `WorkflowRun` candidate into the form
- * {@link executeWorkflow} expects. Returns `null` when the candidate has no
- * completed nodes and no re-runnable gate state — nothing worth resuming.
+ * Read-only resume eligibility + prior DAG snapshot for a located candidate.
+ * Does **not** claim the run (no `resumeWorkflowRun` CAS). Callers that still
+ * need conversation/isolation gates before ownership transfer use this first,
+ * then {@link hydrateResumableRun} exactly once after those gates succeed.
  *
- * The return shape is spread-compatible with {@link ExecuteWorkflowOptions}
- * so callers can write `executeWorkflow(..., { ...hydrated, codebaseId })`.
- *
- * Throws on database errors; callers decide whether to surface or fall
- * through. The executor itself never performs this lookup — silent fallback
- * inside the executor was the cross-invocation auto-resume bug, so it stays
- * at the call site.
+ * Returns `null` when the candidate has no completed nodes and no re-runnable
+ * gate state — nothing worth resuming.
  */
-export async function hydrateResumableRun(
+export async function inspectResumableRun(
   deps: WorkflowDeps,
   candidate: WorkflowRun
 ): Promise<{
-  preCreatedRun: WorkflowRun;
   priorCompletedNodes: Map<string, string>;
   priorTokenUsage: { input: number; output: number };
 } | null> {
@@ -632,12 +627,49 @@ export async function hydrateResumableRun(
     );
     return null;
   }
+  return { priorCompletedNodes, priorTokenUsage: snapshot.tokens };
+}
+
+/**
+ * Hydrate an already-located resumable `WorkflowRun` candidate into the form
+ * {@link executeWorkflow} expects. Returns `null` when the candidate has no
+ * completed nodes and no re-runnable gate state — nothing worth resuming.
+ *
+ * Performs the compare-and-set claim (`resumeWorkflowRun`) as the final step.
+ * Callers that must keep the run paused until conversation/isolation gates
+ * pass should {@link inspectResumableRun} first and only call this after those
+ * gates succeed (US-020).
+ *
+ * The return shape is spread-compatible with {@link ExecuteWorkflowOptions}
+ * so callers can write `executeWorkflow(..., { ...hydrated, codebaseId })`.
+ *
+ * Throws on database errors; callers decide whether to surface or fall
+ * through. The executor itself never performs this lookup — silent fallback
+ * inside the executor was the cross-invocation auto-resume bug, so it stays
+ * at the call site.
+ */
+export async function hydrateResumableRun(
+  deps: WorkflowDeps,
+  candidate: WorkflowRun
+): Promise<{
+  preCreatedRun: WorkflowRun;
+  priorCompletedNodes: Map<string, string>;
+  priorTokenUsage: { input: number; output: number };
+} | null> {
+  const inspected = await inspectResumableRun(deps, candidate);
+  if (!inspected) {
+    return null;
+  }
   const preCreatedRun = await deps.store.resumeWorkflowRun(candidate.id);
   getLog().info(
-    { workflowRunId: preCreatedRun.id, priorCompletedCount: priorCompletedNodes.size },
+    { workflowRunId: preCreatedRun.id, priorCompletedCount: inspected.priorCompletedNodes.size },
     'workflow.dag_resuming'
   );
-  return { preCreatedRun, priorCompletedNodes, priorTokenUsage: snapshot.tokens };
+  return {
+    preCreatedRun,
+    priorCompletedNodes: inspected.priorCompletedNodes,
+    priorTokenUsage: inspected.priorTokenUsage,
+  };
 }
 
 /** Depth cap on the `workflow:` sub-run tree (D9). A node nested deeper fails fast. */
