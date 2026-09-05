@@ -2,6 +2,11 @@
 
 
 
+### Positive thinking budgetTokens (US-031)
+- **Where**: `packages/web/src/experiments/console/lib/workflow-env-editor.ts` (`thinkingToPatch`)
+- **Pattern**: Present `budgetTokens` must satisfy thinkingConfigSchema `z.number().int().positive()` — blank/whitespace omits the optional field; `0`/`-0`/negative/fractional/non-finite throw `thinking budgetTokens must be a positive integer`. Dialog `buildPatchesFromDrafts` surfaces the error as local `actionError` (no POST/PATCH); `updateDraft` clears error without wiping other fields.
+- **Example**: `{ mode:'enabled', budgetTokens:'0' }` → throw; `''` → `{ type:'enabled' }`; `'4096'` → `{ type:'enabled', budgetTokens:4096 }`
+
 ### Strict frozen patch document (US-030)
 - **Where**: `packages/web/src/experiments/console/primitives/run.ts` (`isValidEnvPatchesDocument` / `isValidEnvNodePatch` before pending/complete accept)
 - **Pattern**: `patches` must be a non-array object *and* mirror engine `envPatchesSchema`: target keys `[A-Za-z_][A-Za-z0-9_-]*` excluding reserved `__proto__`/`prototype`/`constructor`; per-node only provider/model/effort/thinking/prompt/bash; at least one field; provider/model trim non-empty; prompt/bash any string; thinking via same adaptive|enabled|disabled + positive budgetTokens; ≤256 targets; ≤1 MiB UTF-8 `JSON.stringify`. Never copy bodies onto `RunEnvOverlay`.
@@ -905,5 +910,28 @@
 **Learnings**:
 - Object-literal `{ __proto__: … }` sets the prototype and is invisible to `Object.keys`; reserved-key fixtures must use `JSON.parse('{"__proto__":…}')` (or defineProperty) to exercise the own-key path that stored JSON actually has.
 - US-017/028 already required object `patches`; H2 was that a non-array object with corrupt per-node content still rendered as trusted audit state.
+
+---
+
+## 2026-09-05 — US-031: Console editor rejects zero thinking budget
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/lib/workflow-env-editor.ts` — thinkingToPatch positive-int budget + schema-aligned error/comment
+- `packages/web/src/experiments/console/lib/workflow-env-editor.test.ts` — 0/-0/negative/fractional/non-finite + blank/positive + buildPatches surfaces error
+- `packages/web/src/experiments/console/components/WorkflowEnvManageDialog.test.tsx` — mounted create/edit zero-budget: no POST/PATCH, local error, draft stays editable
+
+**Acceptance criteria verified**:
+- [x] Helper regressions for budgetTokens 0 and -0 plus negative/fractional/non-finite
+- [x] Mounted create/update with zero budget: no POST/PATCH + actionable local error
+- [x] Blank budget omits optional field; positive integer serializes unchanged
+- [x] thinkingToPatch comment/error align with thinkingConfigSchema positive int
+- [x] Draft remains editable after local thinking-budget validation error
+- [x] Focused verification: NODE_ENV=development bun test workflow-env-editor + WorkflowEnvManageDialog tests
+
+**Learnings**:
+- Prior helper allowed n >= 0 ("non-negative") which diverged from engine `z.number().int().positive()` — 0 would fail server schema after client accepted it.
+- Number('-0') is -0; use `n <= 0` (not `n < 0`) so both 0 and -0 reject.
+- Dialog needed no code change: buildPatchesFromDrafts already maps thinkingToPatch throws to actionError; updateDraft already clears error without wiping drafts.
 
 ---

@@ -656,7 +656,8 @@
         "US-024"
       ],
       "priority": 31,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration after US-030. Files: packages/web/src/experiments/console/lib/workflow-env-editor.ts, workflow-env-editor.test.ts, WorkflowEnvManageDialog.test.tsx. thinkingToPatch now requires positive integer budgetTokens matching thinkingConfigSchema; mounted create/edit refuse zero budget without POST/PATCH."
     },
     {
       "id": "US-032",
