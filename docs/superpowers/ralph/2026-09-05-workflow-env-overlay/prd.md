@@ -108,6 +108,11 @@ Lower priority number runs first. `dependsOn` contains only lower-priority story
 | 31 | US-031 | Console editor rejects zero thinking budget | US-010, US-015, US-024 | Convergence 3 task 20 (`docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:927`) |
 | 32 | US-032 | Stored ENV rows use authoritative name schemas | US-003, US-018 | Convergence 3 task 21 (`docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:929`) |
 | 33 | US-033 | Post-Convergence-3 Constitution Check reconciliation | US-019, US-020, US-021, US-029, US-030, US-031, US-032 | Convergence 3 task 22 (`docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:931`) |
+| 34 | US-034 | Best-effort post-claim continuation notices | US-012, US-020, US-029 | Convergence 4 task 23 (`docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:1007`) |
+| 35 | US-035 | Container preflight follows loop-group scope | US-002, US-013 | Convergence 4 task 24 (`docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:1009`) |
+| 36 | US-036 | Preset thinking warnings reach runtime | US-002, US-013, US-014 | Convergence 4 task 25 (`docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:1011`) |
+| 37 | US-037 | Loop-group provider conflict warning preserved | US-002, US-013, US-035 | Convergence 4 task 26 (`docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:1013`) |
+| 38 | US-038 | Post-Convergence-4 Constitution Check reconciliation | US-019, US-033, US-034, US-035, US-036, US-037 | Convergence 4 task 27 (`docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:1015`) |
 
 ## User Stories
 
@@ -588,6 +593,81 @@ Acceptance criteria:
 - Verification includes git diff --check and manual comparison to .specify/memory/constitution.md lines 154-156 and 172-175 after the focused commands and Phase 8 gates complete.
 
 Technical notes: Convergence 3 task 22 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:931. Modify docs/superpowers/plans/2026-09-05-workflow-env-overlay.md only. Depends on the new Convergence 3 code/UI/store corrections and existing Constitution evidence stories. Do not implement code in this story; reconcile current plan evidence after validation is available.
+
+### US-034 — Best-effort post-claim continuation notices
+
+As a run owner, I want post-CAS informational notices to be best-effort, so that transport failures cannot strand a claimed continuation before executor handoff.
+
+Acceptance criteria:
+
+- packages/core/src/orchestrator/orchestrator-agent.test.ts covers a genuine paused continuation where supplied inputs trigger a notice, platform.sendMessage rejects immediately after the winning resume CAS, and executeWorkflow() is still invoked exactly once with the stored run inputs and stored overlay.
+- The same test file covers a genuine paused continuation where a selected request ENV triggers the ignored-ENV notice, platform.sendMessage rejects immediately after the winning resume CAS, and executeWorkflow() is still invoked exactly once with the stored run overlay rather than the request candidate.
+- Post-claim supplied-input and ignored-ENV notices are each attempted independently through the established safe-delivery/logging path; neither notice rejection can skip executor dispatch.
+- The resuming/continuation notice is not moved before the compare-and-set claim, and the concurrent losing-CAS return remains unchanged.
+- No fresh workflow row or second dispatch is created on either notice failure path; logs contain only run ids, env ids/names, and safe codes, never patch values or prompt/bash bodies.
+- Focused verification passes: cd packages/core && bun test src/orchestrator/orchestrator-agent.test.ts.
+
+Technical notes: Convergence 4 task 23 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:1007. Modify packages/core/src/orchestrator/orchestrator-agent.ts and orchestrator-agent tests only as needed. Preserve the delayed post-gate resume claim from US-020, the resume/new-ENV semantics from US-012, and the inspect-before-stored-overlay parse behavior from US-029. Do not implement production code outside this lifecycle seam.
+
+### US-035 — Container preflight follows loop-group scope
+
+As a workflow runner, I want container preflight to check actual provider turns under loop-group scope, so that valid group-scoped runs are not rejected and incompatible body turns still fail before execution.
+
+Acceptance criteria:
+
+- packages/workflows/src/dag-executor.test.ts adds controls for outer codex plus group claude plus inherited prompt, and for a group resolving to codex whose provider-turn children explicitly select claude; both must pass preflight instead of falsely rejecting the group container.
+- The same test coverage includes nested-group inheritance, group model-alias scope, and an actually incompatible inherited body provider turn that must still reject before any node executes.
+- The container preflight walker receives the effective workflow scope and assistant defaults, derives each loop_group scope through the shared pure resolver, recurses with that scope, and never adds a provider solely for a group container because the group never calls sendQuery().
+- Approval/plannotator provider turns inside groups receive the same inherited group scope during preflight that runtime dispatch applies.
+- Preflight and runtime choose the same provider for every actual AI turn at every group depth, while the existing dispatch-time container capability backstop remains intact.
+- Focused verification passes: cd packages/workflows && bun test src/node-model-resolution.test.ts && bun test src/dag-executor.test.ts.
+
+Technical notes: Convergence 4 task 24 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:1009. Modify packages/workflows/src/dag-executor.ts, packages/workflows/src/node-model-resolution.ts only if a shared scope helper must be exposed, and their focused tests. Follow Authoritative Contract 4 resolved-row traversal and Contract 6 loop_group provider/model forwarding. This story does not add ENV rows for group containers.
+
+### US-036 — Preset thinking warnings reach runtime
+
+As an operator comparing runs, I want preset-derived unsupported thinking to use the existing runtime warning path, so that requested metadata stays truthful without silently hiding provider capability gaps.
+
+Acceptance criteria:
+
+- packages/workflows/src/node-model-resolution.test.ts adds a pure preset-only unsupported-thinking regression proving request.thinkingUnsupported is set while requested thinking remains in prospective metadata and send options.
+- packages/workflows/src/dag-executor.test.ts adds runtime regressions for codex/opencode/grok tier or alias presets carrying thinking with no explicit node/workflow thinking, and proves the existing dag.unsupported_capabilities warning/log fires exactly once.
+- Supported-provider controls and explicit node/workflow thinking controls remain covered and unchanged.
+- packages/workflows/src/dag-executor.ts consumes the shared request.thinkingUnsupported decision in the existing capability warning layer without duplicating warning mechanisms or dropping the requested thinking setting.
+- Every unsupported effective thinking value, whether authored at node, workflow, or preset precedence, is represented truthfully and warns through the same safe path; supported thinking produces no warning.
+- Focused verification passes: cd packages/workflows && bun test src/node-model-resolution.test.ts && bun test src/dag-executor.test.ts.
+
+Technical notes: Convergence 4 task 25 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:1011. Modify packages/workflows/src/node-model-resolution.ts only if the existing structured decision needs export adjustment, packages/workflows/src/dag-executor.ts, and focused tests. Preserve Authoritative Contract 4: metadata records requested settings while runtime warns that unsupported thinking may be ignored.
+
+### US-037 — Loop-group provider conflict warning preserved
+
+As a workflow author, I want loop-group provider/model conflict warnings preserved while body scope forwarding is fixed, so that the ENV feature does not hide an existing loud safety signal.
+
+Acceptance criteria:
+
+- packages/workflows/src/node-model-resolution.test.ts adds shared-resolution regressions for a loop_group declaring provider claude with a model alias resolving to codex, plus nested and matching-provider controls.
+- packages/workflows/src/dag-executor.test.ts and packages/workflows/src/executor.test.ts prove no-ENV and ENV group runs emit the established deduplicated dag.model_provider_conflict log/user warning exactly once while the resolved provider/model still reach body provider turns.
+- The shared pure group resolver exposes the providerConflict decision, or a narrow companion result, so the runtime group branch can consume it through the existing safe warning layer.
+- The executor does not recompute alias policy independently and does not add a group container row to ENV resolved metadata.
+- Body scope forwarding, preview rows, snapshot rows, and node_started request fields remain unchanged except for restoring the missing warning.
+- Focused verification passes: cd packages/workflows && bun test src/node-model-resolution.test.ts && bun test src/dag-executor.test.ts && bun test src/executor.test.ts.
+
+Technical notes: Convergence 4 task 26 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:1013. Modify packages/workflows/src/node-model-resolution.ts, packages/workflows/src/dag-executor.ts, and executor/dag/node-resolution tests. Preserve the Verified Baseline's existing provider/model conflict warning and the plan rule that loop_group.model forwarding is the only intended no-ENV behavior correction.
+
+### US-038 — Post-Convergence-4 Constitution Check reconciliation
+
+As a reviewer, I want the Constitution Check reconciled after the fourth converge findings, so that the plan's authoritative blocker list agrees with the live tree before shipping.
+
+Acceptance criteria:
+
+- docs/superpowers/plans/2026-09-05-workflow-env-overlay.md appends a clearly dated post-Convergence-4 re-check after US-034 through US-037 have landed and their focused commands have been rerun.
+- The update preserves historical sections A through D and records each Convergence 4 finding's actual disposition with final symbol and focused-test evidence; it does not delete history or repeat prior Ralph counts as proof.
+- The plan has one unambiguous current blocker list; the lifecycle gate cannot read PASS while the post-CAS orphan path from US-034 remains open, and the preflight gate cannot read PASS while US-035 remains open.
+- Every remaining waiver or accepted risk includes rollback or simplification rationale, including mixed-version resume constraints and any unchanged CI-only PostgreSQL schema-upgrade leg.
+- The final shipping gate names bun run validate plus the PostgreSQL schema-upgrade CI leg, and distinguishes ordinary PR process from constitutional blockers.
+- Documentation verification passes: git diff --check -- docs/superpowers/plans/2026-09-05-workflow-env-overlay.md before the normal Phase 8 validation.
+
+Technical notes: Convergence 4 task 27 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:1015. Modify docs/superpowers/plans/2026-09-05-workflow-env-overlay.md only after US-034 through US-037 pass their focused commands. Keep the Convergence 4 section as the authoritative non-empty gap list until then; do not implement code in this story.
 
 ## Implementation and Validation Gates
 
