@@ -14660,6 +14660,111 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
     );
     expect(failedEvent?.[0].data?.error).toContain('does not support effortControl');
   });
+
+  it('drops unsupported OpenCode preset effort with warning and omits applied effort', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'opencode',
+      getCapabilities: () => ({ ...mockCodexCapabilities(), effortControl: false }),
+    }));
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const aiProfile = buildAiProfile('opencode', {
+      repoTiers: {
+        large: { provider: 'opencode', model: 'opencode-large', effort: 'high' },
+      },
+    });
+
+    mockLogFn.mockClear();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'preset-effort-drop-test',
+        nodes: [{ id: 'step1', command: 'my-cmd', model: 'large' }],
+      },
+      makeWorkflowRun(),
+      'opencode',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, assistant: 'opencode' },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      aiProfile
+    );
+
+    expect(mockSendQueryDag).toHaveBeenCalled();
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
+    expect(nodeConfig.effort).toBeUndefined();
+
+    const startedEvent = store.createWorkflowEvent.mock.calls.find(
+      call => call[0].event_type === 'node_started'
+    );
+    expect(startedEvent?.[0].data?.effort).toBeUndefined();
+    expect(startedEvent?.[0].data?.provider).toBe('opencode');
+    expect(startedEvent?.[0].data?.model).toBe('opencode-large');
+
+    const dropWarns = mockLogFn.mock.calls.filter(
+      (call: unknown[]) => call[1] === 'dag.preset_effort_unsupported'
+    );
+    expect(dropWarns.length).toBe(1);
+    const dropPayload = dropWarns[0][0];
+    expect(
+      dropPayload &&
+        typeof dropPayload === 'object' &&
+        'effort' in dropPayload &&
+        dropPayload.effort
+    ).toBe('high');
+  });
+
+  it('still fails when workflow-authored explicit effort targets OpenCode', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'opencode',
+      getCapabilities: () => ({ ...mockCodexCapabilities(), effortControl: false }),
+    }));
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'workflow-effort-opencode-fail',
+        effort: 'high',
+        nodes: [{ id: 'step1', command: 'my-cmd', provider: 'opencode' }],
+      },
+      makeWorkflowRun(),
+      'opencode',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, assistant: 'opencode' }
+    );
+
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
+    const failedEvent = store.createWorkflowEvent.mock.calls.find(
+      call => call[0].event_type === 'node_failed'
+    );
+    expect(failedEvent?.[0].data?.error).toContain('does not support effortControl');
+  });
 });
 
 describe('executeDagWorkflow -- cost tracking', () => {

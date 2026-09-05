@@ -23,7 +23,12 @@ import {
   isTierName,
   resolvePresetEffort,
 } from './model-validation';
-import type { ModelAliasPreset, ResolvedAiProfile, TierName } from './model-validation';
+import type {
+  ModelAliasPreset,
+  PresetEffortRejection,
+  ResolvedAiProfile,
+  TierName,
+} from './model-validation';
 import {
   effortLevelSchema,
   thinkingConfigSchema,
@@ -122,6 +127,11 @@ export interface NodeExecutionRequest {
    * or unknown value). Runtime logs; pure path only reports the decision.
    */
   presetEffortDropped: boolean;
+  /**
+   * Structured rejection when `presetEffortDropped` is true — same shape as
+   * `resolvePresetEffort`'s failure branch so callers log without re-classifying.
+   */
+  presetEffortRejection?: PresetEffortRejection;
 }
 
 /** Options for the pure execution-request resolver beyond the model chain. */
@@ -240,8 +250,9 @@ export function resolveNodeModel(
  * Pure request resolution: model chain + capability-aware effort/thinking + the
  * serializable `NodeExecutionMetadata` that `node_started` and ENV audit share.
  *
- * Throws on unknown provider or explicit portable effort against a provider
- * without `effortControl` — same fail-closed semantics as the runtime path.
+ * Throws on unknown provider or explicit (node/workflow) portable effort against
+ * a provider without `effortControl` — same fail-closed semantics as runtime.
+ * Preset-only effort is never fatal: it drops via `presetEffortDropped` instead.
  */
 export function resolveNodeExecutionRequest(
   node: DagNode,
@@ -263,11 +274,10 @@ export function resolveNodeExecutionRequest(
 
   const caps = getProviderCapabilities(provider);
 
-  // Explicit portable effort (node/workflow/preset-included requested set) must
-  // never disappear on a provider that cannot honor it. Matches
-  // resolveNodeProviderAndModel: requested = declared ?? preset.
-  const requestedEffort = declaredEffort ?? preset?.effort;
-  if (requestedEffort !== undefined && !caps.effortControl) {
+  // Explicit portable effort (node or workflow only) must never disappear on a
+  // provider that cannot honor it. Preset effort is NOT in this gate — tier/alias
+  // presets warn+drop via resolvePresetEffort so aliases stay usable on OpenCode.
+  if (declaredEffort !== undefined && !caps.effortControl) {
     throw new Error(
       `Node '${node.id}' sets effort but provider '${provider}' does not support effortControl.`
     );
@@ -276,6 +286,7 @@ export function resolveNodeExecutionRequest(
   // nodeConfig.effort starts as declared only when the provider can honor it.
   let appliedEffort: string | undefined = caps.effortControl ? declaredEffort : undefined;
   let presetEffortDropped = false;
+  let presetEffortRejection: PresetEffortRejection | undefined;
 
   // Preset fill — same gates as applyPresetOptions in dag-executor.
   if (appliedEffort === undefined && declaredEffort === undefined && preset?.effort !== undefined) {
@@ -284,6 +295,7 @@ export function resolveNodeExecutionRequest(
       appliedEffort = preset.effort;
     } else {
       presetEffortDropped = true;
+      presetEffortRejection = decision;
     }
   }
 
@@ -335,6 +347,7 @@ export function resolveNodeExecutionRequest(
     appliedThinking,
     thinkingUnsupported,
     presetEffortDropped,
+    ...(presetEffortRejection ? { presetEffortRejection } : {}),
   };
 }
 

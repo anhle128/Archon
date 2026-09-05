@@ -96,6 +96,62 @@ describe('resolveNodeExecutionRequest', () => {
     ).toThrow(/does not support effortControl/);
   });
 
+  test('OpenCode tier preset carrying effort:high drops with presetEffortDropped', () => {
+    const opencodeProfile = buildAiProfile('opencode', {
+      globalTiers: {
+        large: { provider: 'opencode', model: 'opencode-large', effort: 'high' },
+      },
+    });
+    const node: DagNode = { id: 'n', prompt: 'hi', model: 'large' };
+    const request = resolveNodeExecutionRequest(
+      node,
+      baseScope({ provider: 'opencode', model: undefined }),
+      { ...assistantModels, opencode: 'default-model' },
+      { aiProfile: opencodeProfile }
+    );
+    expect(request.presetEffortDropped).toBe(true);
+    expect(request.presetEffortRejection).toEqual({
+      ok: false,
+      reason: 'unsupported',
+      valid: null,
+    });
+    expect(request.appliedEffort).toBeUndefined();
+    expect(request.metadata.effort).toBeUndefined();
+    expect(request.metadata.provider).toBe('opencode');
+    expect(request.metadata.model).toBe('opencode-large');
+    expect(request.metadata.tier).toBe('large');
+  });
+
+  test('OpenCode alias preset carrying effort:high also drops without throwing', () => {
+    const opencodeProfile = buildAiProfile('opencode', {
+      globalAliases: {
+        '@fast': { provider: 'opencode', model: 'fast-model', effort: 'high' },
+      },
+    });
+    const node: DagNode = { id: 'n', prompt: 'hi', model: '@fast' };
+    const request = resolveNodeExecutionRequest(
+      node,
+      baseScope({ provider: 'opencode', model: undefined }),
+      { ...assistantModels, opencode: 'default-model' },
+      { aiProfile: opencodeProfile }
+    );
+    expect(request.presetEffortDropped).toBe(true);
+    expect(request.appliedEffort).toBeUndefined();
+    expect(request.metadata.effort).toBeUndefined();
+  });
+
+  test('workflow-authored explicit portable effort still fails on OpenCode', () => {
+    const node: DagNode = { id: 'n', prompt: 'hi', provider: 'opencode' };
+    expect(() =>
+      resolveNodeExecutionRequest(
+        node,
+        baseScope({ provider: 'opencode', effort: 'high' }),
+        assistantModels,
+        { aiProfile }
+      )
+    ).toThrow(/does not support effortControl/);
+  });
+
   test('thinking is preserved in metadata even when unsupported; flag is set', () => {
     const node: DagNode = {
       id: 'n',

@@ -139,7 +139,6 @@ import {
   isLiteralSpec,
   isTierName,
   resolveModelSpec,
-  resolvePresetEffort,
   type ModelAliasPreset,
   type ResolvedAiProfile,
   type TierName,
@@ -1296,17 +1295,16 @@ export async function resolveNodeProviderAndModel(
   }
 
   if (request.presetEffortDropped && effectivePreset?.effort !== undefined) {
-    // Mirror applyPresetOptions' fail-loud log when the pure path dropped a
-    // preset effort the provider cannot honor.
-    const decision = resolvePresetEffort(provider, effectivePreset.effort);
+    // Consume the pure path's structured drop — do not re-call resolvePresetEffort.
+    const rejection = request.presetEffortRejection;
     getLog().warn(
       {
         provider,
         effort: effectivePreset.effort,
         nodeId: node.id,
-        valid: decision.ok ? undefined : decision.valid,
+        valid: rejection?.valid,
       },
-      !decision.ok && decision.reason === 'unsupported'
+      rejection?.reason === 'unsupported'
         ? 'dag.preset_effort_unsupported'
         : 'dag.preset_effort_unknown'
     );
