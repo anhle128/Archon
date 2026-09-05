@@ -570,3 +570,22 @@
 
 ---
 
+
+## 2026-09-05 — US-019: Plan Constitution Check evidence
+
+**Status**: PASSED
+**Files changed**:
+- `docs/superpowers/plans/2026-09-05-workflow-env-overlay.md` — appended Constitution Check §A retrospective pre-Phase-0, §B post-design re-check, §C verification; Complexity Tracking; release blockers US-020/US-021
+
+**Acceptance criteria verified**:
+- [x] Plan appends retrospective pre-Phase-0 Constitution Check and current post-design re-check tied to `.specify/memory/constitution.md`
+- [x] Both checks evaluate package-layer direction, typed/OpenAPI schema rules, additive schema/generated files, fail-closed lifecycle, secret-safe audit metadata, focused/full validation, intentional complexity
+- [x] Every gate records concrete evidence, violation, accepted-use justification, rollback/simplification (not generic PASS alone)
+- [x] Unresolved constitutional violations marked as release blockers (US-020 claim-before-gates; US-021 preamble terminalization)
+- [x] Verification: `git diff --check` clean; manual comparison to constitution Plan Quality Gate (154–156, 172–175) and plan-template Constitution Check
+
+**Learnings**:
+- Constitution process gate was missing from the plan even though Final Design Audit existed — evidence tables must cite live paths and open lifecycle blockers, not only design intent.
+- US-019 is docs-only; do not touch implementation. Next eligible story is US-020 (depends on US-019 now green).
+
+---

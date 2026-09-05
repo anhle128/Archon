@@ -391,7 +391,8 @@
       "technicalNotes": "Convergence 2 task 8 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:813. Modify docs/superpowers/plans/2026-09-05-workflow-env-overlay.md only. Use .specify/memory/constitution.md:154-156 and .specify/memory/constitution.md:172-175 as the gate source. Do not change implementation code.",
       "dependsOn": [],
       "priority": 19,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration US-019. Files: docs/superpowers/plans/2026-09-05-workflow-env-overlay.md (Constitution Check sections A/B/C). git diff --check clean. Release blockers US-020/US-021 called out."
     },
     {
       "id": "US-020",
