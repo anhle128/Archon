@@ -36,6 +36,12 @@ package-lock.json
 _bmad/
 .superpowers/
 
+# Standalone e2e package — generated Playwright outputs (source is formatted by its own tooling)
+e2e/ui/reports/
+e2e/test-results/
+e2e/playwright-report/
+e2e/.tmp/
+
 # Website (Astro/Starlight - uses own formatting)
 packages/docs-web/
 
