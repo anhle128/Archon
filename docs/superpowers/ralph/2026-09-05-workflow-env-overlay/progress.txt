@@ -30,6 +30,12 @@
 - **Pattern**: Normalize PG JSONB objects and SQLite JSON strings through `envPatchesSchema` before row parse. Corrupt rows throw `WorkflowEnvCorruptRowError` with id-only logs (never patch bodies). Name conflicts map only when PG `constraint === 'uq_workflow_envs_workflow_name_name'` or SQLite UNIQUE message names both identity columns. Update/delete always dual-predicate `(id, workflow_name)`; patches whole-document replace; empty `{}` allowed; empty update body rejected. List omits patches and orders `LOWER(name), name, id`.
 - **Example**: `updateWorkflowEnv(wf, id, { patches: {} })` clears the map; mismatched workflow returns null without mutating.
 
+### Atomic run envOverlay replacement
+- **Where**: `packages/workflows/src/store.ts` (`IWorkflowEnvOverlayStore`), `packages/core/src/db/workflows.ts` (`setWorkflowRunEnvOverlay`)
+- **Pattern**: Do not use `updateWorkflowRun` / `json_patch` for nested overlay writes — SQLite deep-merges and stale `resolved` keys survive. Replace only `metadata.envOverlay` via PG `jsonb_set(..., '{envOverlay}', $1::jsonb, true)` or SQLite `json_set(..., '$.envOverlay', json($1))`; UPDATE then SELECT in one transaction; no SQLite RETURNING; rowCount !== 1 throws.
+- **Example**: `store.setWorkflowRunEnvOverlay(runId, completeSnapshot)` → full run row with siblings preserved
+
+
 
 
 ---
@@ -110,5 +116,31 @@
 - SqliteAdapter `PRAGMA table_info(...)` returns empty via parameterized query path — use `pragma_table_info('table')` or raw bun:sqlite for introspection tests.
 - Portable UPDATE CASE flags must avoid PG-only `::int` casts so SQLite accepts the same SQL.
 - New table indexes belong in createSchema (SQLite) / trailing Indexes section (Postgres), never migrateColumns for brand-new tables.
+
+---
+
+## 2026-09-05 — US-004: Atomic run envOverlay metadata replacement
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/store.ts` — `IWorkflowEnvOverlayStore` + `IWorkflowStore` extends it
+- `packages/core/src/db/workflows.ts` — `setWorkflowRunEnvOverlay` (PG jsonb_set / SQLite json_set+json, txn UPDATE+SELECT)
+- `packages/core/src/db/workflows.test.ts` — PG SQL shape, not-found, invalid snapshot unit tests
+- `packages/core/src/db/workflows.env-overlay.integration.test.ts` — real SQLite nested replace + sibling preserve + not-found; paths mock spreads real exports
+- `packages/core/src/workflows/store-adapter.ts` + test — delegates method; unnested delegation test
+- `packages/workflows` mock stores (executor/subrun/dag-executor/script-node-deps/preamble) — implement method
+- `packages/core/package.json` — isolated `bun test` segment for env-overlay integration
+
+**Acceptance criteria verified**:
+- [x] IWorkflowStore extends required IWorkflowEnvOverlayStore with setWorkflowRunEnvOverlay
+- [x] Core adapter + every concrete in-memory test store/mock implements the method
+- [x] PG jsonb_set / SQLite json_set+json replace only metadata.envOverlay
+- [x] Both dialects: one transaction UPDATE then SELECT, no SQLite RETURNING, rowCount===1 required
+- [x] Integration: second complete snapshot drops stale resolved keys, preserves siblings, run-not-found throws
+
+**Learnings**:
+- Incomplete `mock.module('@archon/paths')` factories break SqliteAdapter init when new path exports land — always spread `...realArchonPaths` like resume-cas.
+- Nested `test()` inside another test is a silent structure bug Bun rejects at runtime.
+- Never use top-level metadata merge for envOverlay; SQLite json_patch deep-merge keeps stale nested keys.
 
 ---

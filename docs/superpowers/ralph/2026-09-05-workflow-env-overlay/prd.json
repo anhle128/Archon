@@ -71,8 +71,8 @@
         "US-003"
       ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 4. Implementation landed earlier in retry-safety commit; this iteration fixed test gates. Files: packages/workflows/src/store.ts, packages/core/src/db/workflows.ts, packages/core/src/db/workflows.test.ts, packages/core/src/db/workflows.env-overlay.integration.test.ts, packages/core/src/workflows/store-adapter.ts, packages/core/src/workflows/store-adapter.test.ts, packages/workflows mock stores (executor/subrun/dag-executor/script-node-deps/preamble)."
     },
     {
       "id": "US-005",
