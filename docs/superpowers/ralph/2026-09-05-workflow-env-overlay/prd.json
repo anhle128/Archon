@@ -93,8 +93,8 @@
         "US-004"
       ],
       "priority": 5,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 5. Files: packages/workflows/src/env-overlay.ts, packages/workflows/src/env-overlay.test.ts, packages/workflows/src/executor.ts, packages/workflows/src/executor.test.ts, packages/workflows/src/subrun.test.ts, packages/core/src/orchestrator/orchestrator.ts."
     },
     {
       "id": "US-006",
