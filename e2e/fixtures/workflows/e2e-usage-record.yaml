@@ -1,0 +1,14 @@
+name: e2e-usage-record
+description: "E2E — a one-node workflow whose only AI step runs on the env-gated fake provider; it records exactly the usage passed in the run message."
+mutates_checkout: false
+
+nodes:
+  # The fake provider reads a `<<E2E_USAGE>>...<</E2E_USAGE>>` directive from the
+  # prompt and emits it as real usage. The directive arrives as the run message,
+  # so one workflow parametrizes every usage scenario. No message -> no directive
+  # -> the intentional no-usage path.
+  - id: emit-usage
+    provider: e2e-fake
+    model: e2e-fake-model
+    prompt: |
+      $ARGUMENTS

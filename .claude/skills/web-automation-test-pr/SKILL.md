@@ -1,77 +1,83 @@
 ---
 name: web-automation-test-pr
 description: >-
-  Use to plan and perform web (browser) end-to-end automation testing for a
-  Pull Request's user-facing changes. From a PR it decides WHAT to test and
-  WHAT to mock/seed, drives the running app in a browser (Playwright) to verify
-  each behavior, and crystallizes the verification into a durable Playwright
-  `.spec.ts`. This is the "Lane B" (internal system) side. It also emits the
-  list of third-party dependencies it mocked — each of which needs a real
-  third-party e2e test, which `verify-thirdparties-e2e-test-pr` then gates on.
-  Triggers: "web automation test PR", "e2e test this PR", "verify PR in browser",
-  "lane B test", "browser test PR".
+  Use to write end-to-end frontend test scenarios for a Pull Request by FIRST
+  framing the full end-to-end user story (the whole journey a user takes through
+  the real running app that exercises the changed feature), THEN deriving the
+  edge cases. It drives the REAL app (frontend + backend + the app's own
+  database) so the feature's write/record path runs for real and reads its own
+  data from the real database; it mocks ONLY external third-party services the
+  app calls out to. Each scenario states the user actions, the external(s) to
+  mock + their response, and the expected result on screen. Crystallizes each
+  into a durable Playwright `.spec.ts`, and emits the mocked externals as
+  requirements for verify-thirdparties-e2e-test-pr. Triggers: "web automation
+  test PR", "e2e test PR", "user story test", "browser test PR".
 ---
 
 # web-automation-test-pr
 
-## Responsibility (single)
+Project-agnostic: the PR (in whatever repo) is the only input. Read the repo under test to learn its stack, flows, and API shapes. This skill contains nothing specific to any one project.
 
-Produce and run the **Lane B** web-automation E2E verification for one PR:
-1. From the PR diff, decide **what user-facing behavior to test** and **what to mock/seed** (hermetic).
-2. Bring up the app, seed deterministic fixture state, and **drive a browser to verify** each behavior.
-3. **Crystallize** the passing verification into a committed Playwright `.spec.ts` (Mode B — record once, replay free forever).
-4. Emit the **third-party mock boundary**: the list of external dependencies you mocked, each becoming a third-party e2e requirement for `verify-thirdparties-e2e-test-pr` to check.
+## Responsibility — user story FIRST, then edge cases
 
-Out of scope: authoring or judging third-party contract tests themselves (that is `verify-thirdparties-e2e-test-pr` + the implement agent). Do NOT call real AI/provider/paid APIs from Lane B.
+For one PR, write E2E test scenarios in this order:
 
-## Inputs
+1. **Frame the full end-to-end USER STORY** — the complete real journey a user takes that exercises the changed feature, start to finish, through the running app. A whole flow, never a slice.
+2. **Derive the EDGE CASES** from that story — every branch, variant, mode, and failure it can take.
+3. Turn the happy-path story **and each edge case** into a concrete scenario.
 
-- A PR reference (number or branch). Read it with `gh pr diff <n>` / `gh pr view <n>`.
-- The running Archon repo at the current working directory.
+## What is REAL vs MOCKED (critical)
 
-## Core principle — hermetic, contract-anchored
+- **REAL — the whole application stack:** frontend, backend, and the app's own database. The feature's WRITE/record path must run for real (the user's actions genuinely create/record data that gets persisted), and reads come back from the real database through the real API. **Never mock the app's own API, and never shortcut-seed its database when the user story would produce that data itself.** Reading alone is not enough — the story must make the data.
+- **MOCKED — only EXTERNAL third-party services** the app calls out to (e.g. AI providers, payment gateways, email/SMS senders, external REST APIs), so the run is deterministic and free. Each mocked external becomes a requirement for `verify-thirdparties-e2e-test-pr`: the external must have a backend contract/e2e test anchoring its real response shape, or the mock is false confidence.
 
-Lane B never calls a real third-party (no real AI keys, no paid API). Every external dependency is **mocked/seeded with fixed data**. A mock is only trustworthy because a matching real third-party e2e test anchors it — so for each dependency you mock, record it as a third-party e2e requirement (handed off to `verify-thirdparties-e2e-test-pr`). Mock everything with no anchor = false confidence.
+## Step 1 — Frame the user story (end to end)
 
-## Steps
+Write the happy path as: who, does what, through which screens/actions, producing what data, ending in what they see. Trace it through the REAL flow:
+`user action → app processing (incl. the external call you will mock) → app writes/records to its DB → app reads it back → UI shows the result.`
+Read the source to get the flow right — do not guess how the feature records or serves its data.
 
-1. **Read the PR.** `gh pr diff <n>` and `gh pr view <n>`. Identify the user-facing surfaces changed (routes, pages, API endpoints, UI components). Do NOT guess — read the changed source files.
-2. **Produce the plan** — two lists plus a mock/seed plan:
-   - **Test scenarios** — concrete browser-driven checks that prove each user-facing behavior (e.g. "Cost page shows the seeded usage total for run X").
-   - **Third-party e2e requirements** — for every external dependency this PR touches that you will mock, the contract/e2e test that MUST exist to anchor that mock (assert the real dependency's response shape). This list is the input to `verify-thirdparties-e2e-test-pr`.
-   - **Mock/seed plan** — how to hermetically create the fixture state. Default tier = **seed the DB** (a fresh temp DB, real server aggregation + real UI). A runtime fake-provider does NOT exist in Archon today (`WorkflowDeps.getAgentProvider` is the seam but no fake is registered) — treat fake-provider seeding as net-new work, not a default.
-3. **Bring up the app** (isolated, prod-like, one origin):
-   ```bash
-   export ARCHON_HOME=/tmp/archon-e2e-$$
-   mkdir -p "$ARCHON_HOME"
-   bun run build:web
-   PORT=<free-port> bun run start &
-   # wait for readiness (bypasses auth gate):
-   until curl -sf "http://localhost:<free-port>/api/health" >/dev/null; do sleep 0.5; done
-   ```
-4. **Seed fixture state** via REST API (not the UI): `POST /api/codebases`, `POST /api/workflows/{name}/run`, etc. For usage/cost-style features, seed the rows the read path serves. Keep every value fixed/deterministic.
-5. **Drive the browser to verify.** Use Playwright (Playwright MCP for the live exploration). Prefer `getByTestId` / `getByRole` selectors. Verify every scenario from step 2.
-6. **Crystallize** into a durable spec under `e2e/ui/<feature>.spec.ts`, following the `e2e/` conventions (worker-scoped boot fixture, `trace:'on-first-retry'`, `screenshot:'only-on-failure'`, `[P0]/[P1]/[P2]` name tags, hermetic route-mocks/seed). Run it once headless to confirm it is green.
-7. **Tear down** always (even on failure): stop the server you started (by its recorded PID), remove the temp `ARCHON_HOME`.
+## Step 2 — Derive edge cases
+
+From the story, enumerate the branches that actually change behavior. Common axes to consider:
+
+- **Every variant the feature supports** — each option, mode, or backend it can use. Test them; don't test one and assume the rest.
+- **External response variants that change behavior** — response shapes the app handles down different code paths (e.g. one form of result vs another that triggers different processing), missing/partial fields, zero, very large values.
+- **Special or secondary passes** the feature can take within one flow.
+- **Missing / partial / fallback data**, error responses, empty vs zero, and pure client-side validation (no request fired).
+
+## Step 3 — Write each scenario
+
+Per scenario, state four things:
+- **User actions (UI)** — open / select / type / click.
+- **External(s) to mock + the exact response** (or error).
+- **What the app does for real** — the record/insert/query the story triggers.
+- **Expected result on screen.**
+
+## Step 4 — Execute + crystallize
+
+Drive the real app following the scenario, mocking only the external(s); assert the UI. Crystallize into `e2e/ui/<feature>.spec.ts` (`trace:'on-first-retry'`, `screenshot:'only-on-failure'`, `[P0]/[P1]/[P2]` name tags). Run headless once to confirm green.
 
 ## Output
 
-A structured summary:
-```
+```json
 {
   "pr": <n>,
-  "test_scenarios": [ ... ],            // what Lane B verifies in the browser
-  "thirdparty_e2e_requirements": [ ... ],// mocked deps → each needs a real third-party e2e test
-  "mock_seed_plan": "seed-db | fake-provider(net-new) | browser-mock(avoid)",
-  "spec_file": "e2e/ui/<feature>.spec.ts",
-  "result": "pass | fail",
-  "failures": [ ... ]
+  "user_story": "who does what -> produces what data -> sees what",
+  "scenarios": [
+    { "id": "S1", "prio": "P0", "kind": "happy-path | edge-case",
+      "ui_steps": ["..."],
+      "mock_external": [ { "service": "...", "response": { } } ],
+      "app_effect": "the real record/insert/query this triggers",
+      "expect_ui": ["..."] }
+  ],
+  "mocked_externals": [ "..." ],
+  "spec_file": "e2e/ui/<feature>.spec.ts"
 }
 ```
 
 ## Notes / constraints
 
-- Skill file lives at `.claude/skills/web-automation-test-pr/` so both a Claude Code Skill-tool session and an Archon workflow node (`skills: [web-automation-test-pr]`) resolve it (Claude provider searches `<cwd>/.claude/skills/`).
-- Feature-agnostic: the PR is an input; never hard-code a specific feature.
-- Manual-first: this skill is runnable by hand now; later it becomes the Lane-B execution node of the PR-verification workflow.
-- If a step can't be proven, report it — do not fabricate a passing spec.
+- Feature- and project-agnostic — read the repo under test to learn its stack, flows, and API/response shapes.
+- Don't guess: read source for the real flow, the response shapes, and how each variant records data.
+- Running the real write path without hitting a real external often needs a test double/fake for that external, injected at the app's provider/dependency seam. If the app has no such seam, that is net-new work — surface it, don't fake the data some other way.

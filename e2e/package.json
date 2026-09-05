@@ -1,0 +1,19 @@
+{
+  "name": "@archon/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "End-to-end UI tests (Playwright). Standalone on purpose — NOT a bun workspace member, so the monorepo's `bun --filter '*'` scripts never try to run Playwright or download browsers.",
+  "scripts": {
+    "test:ui": "playwright test -c playwright.config.ts ui",
+    "test:ui:p0": "playwright test -c playwright.config.ts ui --grep '\\[P0\\]'",
+    "test:ui:p1": "playwright test -c playwright.config.ts ui --grep '\\[P1\\]'",
+    "test:ui:p2": "playwright test -c playwright.config.ts ui --grep '\\[P2\\]'",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.60.0",
+    "@types/node": "20.19.39",
+    "typescript": "5.9.3"
+  }
+}

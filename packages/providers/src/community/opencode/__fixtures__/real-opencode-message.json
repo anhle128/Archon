@@ -1,0 +1,13 @@
+{
+  "id": "<redacted>",
+  "sessionID": "<redacted>",
+  "role": "assistant",
+  "parentID": "<redacted>",
+  "modelID": "gpt-5.2-chat-latest",
+  "providerID": "openai",
+  "mode": "<redacted>",
+  "path": "<redacted>",
+  "cost": 0.020678,
+  "tokens": { "input": 11760, "output": 7, "reasoning": 0, "cache": { "read": 0, "write": 0 } },
+  "finish": "<redacted>"
+}
