@@ -160,11 +160,13 @@ function isNonEmptyString(v: unknown): v is string {
   return typeof v === 'string' && v.length > 0;
 }
 
-function readStringArray(v: unknown): string[] {
-  if (!Array.isArray(v)) return [];
+/** Require a real string[] (fail closed on non-array); keep only non-empty strings. */
+function readRequiredStringArray(v: unknown): string[] | null {
+  if (!Array.isArray(v)) return null;
   const out: string[] = [];
   for (const item of v) {
-    if (typeof item === 'string' && item.length > 0) out.push(item);
+    if (typeof item !== 'string') return null;
+    if (item.length > 0) out.push(item);
   }
   return out;
 }
@@ -204,8 +206,9 @@ function readResolvedRow(nodeId: string, value: unknown): RunEnvResolvedRow | nu
 
 /**
  * Parse `metadata.envOverlay` without importing `@archon/workflows`.
- * Pending, complete, legacy, and malformed shapes all return safely —
- * malformed → null (omit overlay UI; keep the rest of the run usable).
+ * Accepts only strict pending (`AppliedEnvOverlay`) or complete
+ * (`EnvOverlaySnapshot`) shapes — never legacy/malformed hybrids.
+ * Malformed → null (omit overlay UI; keep the rest of the run usable).
  * Never surfaces prompt/bash patch bodies.
  */
 export function parseRunEnvOverlay(
@@ -224,37 +227,64 @@ export function parseRunEnvOverlay(
     return null;
   }
 
-  const skippedNodeIds = readStringArray(rec.skippedNodeIds);
-  const latestMissingNodeIds = readStringArray(rec.latestMissingNodeIds);
-
-  let resolved: RunEnvResolvedRow[] | null = null;
-  let complete = false;
-  if (rec.resolved !== undefined && rec.resolved !== null) {
-    if (typeof rec.resolved !== 'object' || Array.isArray(rec.resolved)) {
-      // Corrupt resolved map — still surface identity + warnings when present.
-      complete = true;
-      resolved = null;
-    } else {
-      complete = true;
-      const rows: RunEnvResolvedRow[] = [];
-      for (const [nodeId, value] of Object.entries(rec.resolved as Record<string, unknown>)) {
-        if (nodeId.length === 0) continue;
-        const row = readResolvedRow(nodeId, value);
-        if (row !== null) rows.push(row);
-      }
-      rows.sort((a, b) => a.nodeId.localeCompare(b.nodeId));
-      resolved = rows;
-    }
+  // patches are required on both lifecycle forms; never exposed on RunEnvOverlay.
+  if (
+    rec.patches === null ||
+    rec.patches === undefined ||
+    typeof rec.patches !== 'object' ||
+    Array.isArray(rec.patches)
+  ) {
+    return null;
   }
+
+  const skippedNodeIds = readRequiredStringArray(rec.skippedNodeIds);
+  if (skippedNodeIds === null) return null;
+
+  const hasResolvedKey = Object.prototype.hasOwnProperty.call(rec, 'resolved');
+  const hasLatestMissingKey = Object.prototype.hasOwnProperty.call(rec, 'latestMissingNodeIds');
+
+  // Pending applied form: no resolved key, no latestMissingNodeIds key.
+  if (!hasResolvedKey && !hasLatestMissingKey) {
+    return {
+      envId: rec.envId,
+      envName: rec.envName,
+      workflowName: rec.workflowName,
+      complete: false,
+      skippedNodeIds,
+      latestMissingNodeIds: [],
+      resolved: null,
+    };
+  }
+
+  // Complete snapshot requires both keys; hybrids (one without the other) fail closed.
+  if (!hasResolvedKey || !hasLatestMissingKey) return null;
+
+  if (rec.resolved === null || typeof rec.resolved !== 'object' || Array.isArray(rec.resolved)) {
+    return null;
+  }
+
+  const latestMissingNodeIds = readRequiredStringArray(rec.latestMissingNodeIds);
+  if (latestMissingNodeIds === null) return null;
+
+  const rows: RunEnvResolvedRow[] = [];
+  for (const [nodeId, value] of Object.entries(rec.resolved as Record<string, unknown>)) {
+    if (nodeId.length === 0) return null;
+    const row = readResolvedRow(nodeId, value);
+    // Any invalid resolved row fails the whole overlay — never manufacture complete:true
+    // with a silently dropped subset (false "No provider-turn request rows" confidence).
+    if (row === null) return null;
+    rows.push(row);
+  }
+  rows.sort((a, b) => a.nodeId.localeCompare(b.nodeId));
 
   return {
     envId: rec.envId,
     envName: rec.envName,
     workflowName: rec.workflowName,
-    complete,
+    complete: true,
     skippedNodeIds,
     latestMissingNodeIds,
-    resolved,
+    resolved: rows,
   };
 }
 

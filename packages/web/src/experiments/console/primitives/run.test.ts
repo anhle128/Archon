@@ -399,31 +399,127 @@ describe('toRun / parseRunEnvOverlay — ENV overlay metadata', () => {
     });
   });
 
-  test('malformed and legacy shapes never throw and yield null when unusable', () => {
+  test('malformed and legacy hybrids return null — never false audit state', () => {
     expect(parseRunEnvOverlay(undefined)).toBeNull();
     expect(parseRunEnvOverlay({})).toBeNull();
     expect(parseRunEnvOverlay({ envOverlay: null })).toBeNull();
     expect(parseRunEnvOverlay({ envOverlay: 'legacy-string' })).toBeNull();
     expect(parseRunEnvOverlay({ envOverlay: ['array'] })).toBeNull();
     expect(parseRunEnvOverlay({ envOverlay: { envName: 'only-name' } })).toBeNull();
-    // Corrupt resolved still keeps identity when core fields are present.
-    const partial = parseRunEnvOverlay({
-      envOverlay: {
-        envId: 'e1',
-        envName: 'fast',
-        workflowName: 'plan',
-        skippedNodeIds: 'not-array',
-        resolved: 'not-object',
-      },
-    });
-    expect(partial).toEqual({
+
+    const identity = {
       envId: 'e1',
       envName: 'fast',
       workflowName: 'plan',
-      complete: true,
-      skippedNodeIds: [],
-      latestMissingNodeIds: [],
-      resolved: null,
-    });
+    };
+
+    // Missing or non-object patches.
+    expect(
+      parseRunEnvOverlay({
+        envOverlay: { ...identity, skippedNodeIds: [] },
+      })
+    ).toBeNull();
+    expect(
+      parseRunEnvOverlay({
+        envOverlay: { ...identity, patches: null, skippedNodeIds: [] },
+      })
+    ).toBeNull();
+    expect(
+      parseRunEnvOverlay({
+        envOverlay: { ...identity, patches: ['not-object'], skippedNodeIds: [] },
+      })
+    ).toBeNull();
+
+    // Non-array skippedNodeIds / latestMissingNodeIds.
+    expect(
+      parseRunEnvOverlay({
+        envOverlay: { ...identity, patches: {}, skippedNodeIds: 'not-array' },
+      })
+    ).toBeNull();
+    expect(
+      parseRunEnvOverlay({
+        envOverlay: {
+          ...identity,
+          patches: {},
+          skippedNodeIds: [],
+          latestMissingNodeIds: 'not-array',
+          resolved: {},
+        },
+      })
+    ).toBeNull();
+
+    // Non-object resolved (array or scalar).
+    expect(
+      parseRunEnvOverlay({
+        envOverlay: {
+          ...identity,
+          patches: {},
+          skippedNodeIds: [],
+          latestMissingNodeIds: [],
+          resolved: 'not-object',
+        },
+      })
+    ).toBeNull();
+    expect(
+      parseRunEnvOverlay({
+        envOverlay: {
+          ...identity,
+          patches: {},
+          skippedNodeIds: [],
+          latestMissingNodeIds: [],
+          resolved: [{ provider: 'claude' }],
+        },
+      })
+    ).toBeNull();
+
+    // Invalid resolved row (missing provider) — whole overlay null, not partial complete.
+    expect(
+      parseRunEnvOverlay({
+        envOverlay: {
+          ...identity,
+          patches: {},
+          skippedNodeIds: [],
+          latestMissingNodeIds: [],
+          resolved: {
+            good: { provider: 'claude', model: 'sonnet' },
+            bad: { model: 'no-provider' },
+          },
+        },
+      })
+    ).toBeNull();
+
+    // Hybrid: resolved without latestMissingNodeIds (or vice versa).
+    expect(
+      parseRunEnvOverlay({
+        envOverlay: {
+          ...identity,
+          patches: {},
+          skippedNodeIds: [],
+          resolved: { plan: { provider: 'claude' } },
+        },
+      })
+    ).toBeNull();
+    expect(
+      parseRunEnvOverlay({
+        envOverlay: {
+          ...identity,
+          patches: {},
+          skippedNodeIds: [],
+          latestMissingNodeIds: [],
+        },
+      })
+    ).toBeNull();
+
+    // Corrupt non-array fields must not manufacture complete:true with empty resolved.
+    expect(
+      parseRunEnvOverlay({
+        envOverlay: {
+          ...identity,
+          patches: { plan: { prompt: 'SECRET_BODY' } },
+          skippedNodeIds: 'not-array',
+          resolved: 'not-object',
+        },
+      })
+    ).toBeNull();
   });
 });
