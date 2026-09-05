@@ -790,8 +790,8 @@
         "US-035"
       ],
       "priority": 37,
-      "passes": false,
-      "notes": "Added from Convergence 4 after all existing US-001 through US-033 stories were already passing."
+      "passes": true,
+      "notes": "Implemented in iteration after US-036. Files: packages/workflows/src/node-model-resolution.ts, packages/workflows/src/dag-executor.ts, packages/workflows/src/node-model-resolution.test.ts, packages/workflows/src/dag-executor.test.ts, packages/workflows/src/executor.test.ts."
     },
     {
       "id": "US-038",

@@ -1,5 +1,9 @@
 ## Codebase Patterns
 
+### Group providerConflict on resolveGroupModelScope (US-037)
+- **Where**: `packages/workflows/src/node-model-resolution.ts` (`ResolvedGroupModelScope`), `packages/workflows/src/dag-executor.ts` (`warnModelProviderConflict`)
+- **Pattern**: `resolveGroupModelScope` must forward `resolveNodeModel().providerConflict`. Runtime loop_group dispatch emits the same deduped `dag.model_provider_conflict` warning before body execution — body nodes inherit the already-resolved provider and cannot recover the conflict. Do not add a group container row to ENV `resolved` metadata.
+- **Example**: group `{ provider: 'claude', model: '@fast' }` with alias→codex → one warn + body `provider/model` = codex/gpt-5.5; matching provider+alias → no conflict
 
 ### Preset thinking warnings via thinkingUnsupported (US-036)
 - **Where**: `packages/workflows/src/dag-executor.ts` (capability warning layer in resolve/send options)
@@ -1069,5 +1073,29 @@
 - Thinking differs from effort: unsupported preset effort drops (`presetEffortDropped`); unsupported thinking stays in appliedThinking/metadata and only warns (`thinkingUnsupported`).
 - Old capChecks isSet `(node.thinking ?? workflowLevelOptions.thinking)` missed tier/alias presets entirely — pure path already had the flag, runtime just never read it.
 - Use `request.thinkingUnsupported` as the isSet (already encodes !thinkingControl); the loop's `!caps[cap]` remains a no-op double-check and keeps the table shape.
+
+---
+## 2026-09-05 — US-037: Loop-group provider conflict warning preserved
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/node-model-resolution.ts` — `ResolvedGroupModelScope` + `resolveGroupModelScope` forwards `providerConflict`
+- `packages/workflows/src/dag-executor.ts` — shared `warnModelProviderConflict`; loop_group branch emits via group scope conflict
+- `packages/workflows/src/node-model-resolution.test.ts` — conflict / nested / matching-provider pure controls + no group container row
+- `packages/workflows/src/dag-executor.test.ts` — no-ENV and ENV-overlaid group conflict warn once; body uses alias provider/model
+- `packages/workflows/src/executor.test.ts` — ENV snapshot body rows use alias-won provider; DAG workflow retains conflict fields; no group container
+
+**Acceptance criteria verified**:
+- [x] Pure shared-resolution regressions for group provider claude + alias→codex, nested, matching-provider controls
+- [x] dag-executor no-ENV and ENV group runs emit deduplicated `dag.model_provider_conflict` log/user warning once; body provider turns resolve correctly
+- [x] Pure group resolver exposes `providerConflict`; runtime consumes via existing safe warning layer
+- [x] Executor does not recompute alias policy independently; no group container ENV resolved row
+- [x] Body scope forwarding / preview / snapshot / node_started unchanged except restored warning
+- [x] Focused verification: `cd packages/workflows && bun test src/node-model-resolution.test.ts && bun test src/dag-executor.test.ts && bun test src/executor.test.ts` (23 + 547 + 101 pass)
+
+**Learnings**:
+- Group body inherits already-resolved provider, so conflict must be reported at group dispatch — body nodes cannot recover `providerConflict`.
+- Extract `warnModelProviderConflict` so ordinary nodes and loop_group share one dedupe key (`declared|resolved|modelRef`).
+- executor.test mocks `executeDagWorkflow`; ENV emission proof lives in dag-executor with `applyEnvOverlay`, while executor asserts snapshot + DAG-bound group fields expose the pure conflict decision.
 
 ---
