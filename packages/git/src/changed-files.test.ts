@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -112,5 +112,34 @@ describe('changedFiles and isGitWorkTree', () => {
   test('distinguishes a git work tree from a plain directory', async () => {
     expect(await isGitWorkTree(toWorktreePath(repoPath))).toBe(true);
     expect(await isGitWorkTree(toWorktreePath(plainPath))).toBe(false);
+  });
+
+  test('does not refresh the git index while reading changes', async () => {
+    const readOnlyRepoPath = join(root, 'read-only-repo');
+    const trackedPath = join(readOnlyRepoPath, 'tracked.ts');
+    await mkdir(readOnlyRepoPath);
+    await execFileAsync('git', ['init', readOnlyRepoPath]);
+    await execFileAsync('git', [
+      '-C',
+      readOnlyRepoPath,
+      'config',
+      'user.email',
+      'test@example.com',
+    ]);
+    await execFileAsync('git', ['-C', readOnlyRepoPath, 'config', 'user.name', 'Test User']);
+    await writeFile(trackedPath, 'unchanged\n');
+    await execFileAsync('git', ['-C', readOnlyRepoPath, 'add', '--', 'tracked.ts']);
+    await execFileAsync('git', ['-C', readOnlyRepoPath, 'commit', '-m', 'initial']);
+
+    const indexPath = join(readOnlyRepoPath, '.git', 'index');
+    const indexBefore = await readFile(indexPath);
+    const future = new Date(Date.now() + 60_000);
+    await utimes(trackedPath, future, future);
+
+    expect(await changedFiles(toWorktreePath(readOnlyRepoPath))).toEqual({
+      files: [],
+      revision: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    expect(await readFile(indexPath)).toEqual(indexBefore);
   });
 });

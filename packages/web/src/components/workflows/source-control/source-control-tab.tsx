@@ -19,7 +19,10 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
   const { data, isError, isFetching, refetch } = useQuery({
     queryKey: ['workflowRunGitChanges', runId],
     queryFn: () => getWorkflowRunGitChanges(runId),
+    retry: false,
     refetchInterval: false,
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
     staleTime: Infinity,
   });
 

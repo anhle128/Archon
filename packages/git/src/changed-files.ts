@@ -113,6 +113,7 @@ export async function changedFiles(
     '-C',
     workingPath,
     '--literal-pathspecs',
+    '--no-optional-locks',
     'status',
     '--porcelain=v1',
     '-z',

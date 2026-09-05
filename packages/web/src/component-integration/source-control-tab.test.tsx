@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test, type Mock } from 'bun:test';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import {
+  focusManager,
+  onlineManager,
+  QueryClient,
+  QueryClientProvider,
+} from '@tanstack/react-query';
 import { Window } from 'happy-dom';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -201,5 +206,36 @@ describe('SourceControlTab', () => {
 
     expect(listbox.getAttribute('aria-activedescendant')).toBe('sc-file-1');
     expect(host.querySelector('#sc-file-1')?.getAttribute('aria-selected')).toBe('true');
+  });
+
+  test('leaves retries and focus or reconnect refreshes to the Reload button', async () => {
+    queryClient.clear();
+    queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: 3, retryDelay: 0 } },
+    });
+    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation((async (): Promise<Response> => {
+      throw new Error('offline');
+    }) as unknown as typeof fetch);
+
+    await renderTab('run-1');
+    await waitFor(
+      () => host.textContent?.includes('Could not refresh changes.'),
+      'the in-region fetch failure'
+    );
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain('Reload');
+
+    focusManager.setFocused(false);
+    focusManager.setFocused(true);
+    onlineManager.setOnline(false);
+    onlineManager.setOnline(true);
+    await act(async () => {
+      await new Promise<void>(resolve => {
+        setTimeout(resolve, 0);
+      });
+    });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });
