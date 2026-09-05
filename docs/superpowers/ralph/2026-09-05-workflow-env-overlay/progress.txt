@@ -1,6 +1,12 @@
 ## Codebase Patterns
 
 
+
+### Strict frozen patch document (US-030)
+- **Where**: `packages/web/src/experiments/console/primitives/run.ts` (`isValidEnvPatchesDocument` / `isValidEnvNodePatch` before pending/complete accept)
+- **Pattern**: `patches` must be a non-array object *and* mirror engine `envPatchesSchema`: target keys `[A-Za-z_][A-Za-z0-9_-]*` excluding reserved `__proto__`/`prototype`/`constructor`; per-node only provider/model/effort/thinking/prompt/bash; at least one field; provider/model trim non-empty; prompt/bash any string; thinking via same adaptive|enabled|disabled + positive budgetTokens; ≤256 targets; ≤1 MiB UTF-8 `JSON.stringify`. Never copy bodies onto `RunEnvOverlay`.
+- **Example**: `{ plan: { prompt: 42, typo: 'x' } }` → null; `{ plan: { prompt: '', bash: '  ' } }` pending → chip without bodies; `{}` no-op OK
+
 ### Inspect before stored ENV parse (US-029)
 - **Where**: `packages/core/src/orchestrator/orchestrator-agent.ts` (`dispatchOrchestratorWorkflow` ENV gate)
 - **Pattern**: Every provisional continuation calls `inspectResumableRun` *before* `resolveContinuationDispatchEnvOverlay`. Inspect-null → `resolveFreshDispatchEnvOverlay(request|undefined)` and ignore stale `metadata.envOverlay` (malformed/incompatible included). Genuine continuation alone parses the run-owned snapshot. `workflow.env_overlay_prepared.continuing` is `isGenuineContinuation`, never bare `willContinueExistingRun`.
@@ -877,5 +883,27 @@
 - Calling resolveContinuationDispatchEnvOverlay before inspect made empty paused runs inherit corrupt metadata and block fresh starts.
 - willContinueExistingRun is only "provisional continuation candidate" — not proof of genuine resume; logging continuing must use inspect result.
 - Inspect-null with a request ENV still validates the request pre-isolation (US-012 hydrate-null guarantee preserved).
+
+---
+
+## 2026-09-05 — US-030: Strict frozen patch validation in run ENV UI
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/primitives/run.ts` — fail-closed local `isValidEnvPatchesDocument` / `isValidEnvNodePatch` mirroring engine target-key, allowed-field, non-empty, thinking, 256/1MiB contracts; wired into `parseRunEnvOverlay` before lifecycle accept
+- `packages/web/src/experiments/console/primitives/run.test.ts` — pending/complete corrupt patch matrix + valid empty map/body/include-id controls; bodies never serialize on RunEnvOverlay
+- `packages/web/src/experiments/console/routes/RunDetailPage.test.tsx` — corrupt frozen patches hide only ENV chip/table; rest of detail usable; no body leak
+
+**Acceptance criteria verified**:
+- [x] pending/complete: non-object per-node, unsafe/reserved ids, empty per-node, unknown fields, wrong types, invalid thinking incl. zero budget, >256 targets, >1MiB → null
+- [x] valid empty map + prompt/bash/whitespace bodies still parse; bodies never on RunEnvOverlay
+- [x] RunDetailPage corrupt patches hide ENV surfaces only; no prompt/bash exposure
+- [x] local validator without `@archon/workflows` import
+- [x] RunEnvOverlay / render never copies patch bodies
+- [x] Focused verification: `cd packages/web && NODE_ENV=development bun test …run.test.ts …RunDetailPage.test.tsx …WorkflowEnvResolvedTable.test.tsx …RunDetailHeader.test.tsx` (48 pass); `bun x tsc --noEmit` clean
+
+**Learnings**:
+- Object-literal `{ __proto__: … }` sets the prototype and is invisible to `Object.keys`; reserved-key fixtures must use `JSON.parse('{"__proto__":…}')` (or defineProperty) to exercise the own-key path that stored JSON actually has.
+- US-017/028 already required object `patches`; H2 was that a non-array object with corrupt per-node content still rendered as trusted audit state.
 
 ---

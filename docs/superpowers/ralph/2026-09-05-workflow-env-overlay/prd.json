@@ -634,7 +634,8 @@
         "US-028"
       ],
       "priority": 30,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration after US-029. Files: packages/web/src/experiments/console/primitives/run.ts, run.test.ts, routes/RunDetailPage.test.tsx. Local fail-closed patches validator mirrors engine target-key/allowed-field/non-empty/thinking/256/1MiB contracts without importing @archon/workflows."
     },
     {
       "id": "US-031",
