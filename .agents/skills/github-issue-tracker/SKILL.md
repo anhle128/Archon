@@ -27,6 +27,8 @@ The old `sync-github-issues.py` (batch-create with a hardcoded graph) has been
 - The user says "create issue", "open an issue", "file a ticket" for a tracked story.
 - You just finished planning/architecture for a story and want its GitHub issue.
 
+## Prerequisites
+
 - `gh` authenticated against the **target repo**. Default pack is RM-02 on `oceanlabs-holding/x10.gigo.harness-service`. Other boards pass `--repo`.
 - Run from the repo that holds the sprint-status and issue-map (paths are repo-relative).
 - `python3`.
@@ -35,6 +37,7 @@ The old `sync-github-issues.py` (batch-create with a hardcoded graph) has been
 
 ### Step 1 — Ensure the issue-map exists and is complete
 
+```
 python .agents/skills/github-issue-tracker/scripts/build_issue_map.py
 ```
 
@@ -58,6 +61,7 @@ python .agents/skills/github-issue-tracker/scripts/build_issue_map.py \
 
 ### Step 2 — Create the issue for one story
 
+```
 python .agents/skills/github-issue-tracker/scripts/create_issue.py --story <story-id>
 ```
 
@@ -99,6 +103,7 @@ python .agents/skills/github-issue-tracker/scripts/create_issue.py \
 ```
 
 ## Canonical issue shape (do not deviate)
+
 - Title: `[<tag>][Epic <N>] <story-id>: <title>` — default tag `RM-02`
 - Labels: `New Feature`, `<pack-label>` (default `rm-02`), `epic-<N>`, plus `status:ready` **only when the story's map status is `ready-for-dev` and every blocker is `done`** (derived; see status-label rule) — backlog/in-progress/review/done or a blocked story carry no `status:ready`
 - Milestone: pack `--milestone` (default `1`)
@@ -138,8 +143,8 @@ filled by create_issue; `status` mirrors sprint-status.
 - Adding a NEW story: add it to that board's `sprint-status.yaml` and to the builder SEED (RM-02 dict, or the pack `--seed` JSON: `{story_id: [title, blocked_by[]]}`), run the builder, then create the issue.
 - Editing a relationship for an already-mapped story: edit `blocked_by` in the map, then
   re-run `create_issue.py --story <id>` (idempotent) to re-wire edges.
-- Keep secrets out of issue bodies/comments (NFR-1).
-- Status label is DERIVED, not unconditional: `create_issue.py` adds `status:ready` only when the story's map status is `ready-for-dev` AND every blocker's status is `done`. Backlog / in-progress / review / done, or any open blocker, get NO `status:ready` (there is no `status:blocked` label). `reconcile_labels` enforces this on create AND adopt (it REMOVES a stale `status:ready`) and fails LOUDLY on any final-state mismatch — never a false success. Unit cases: `scripts/test_status_labels.py`.
+- Keep secrets out of issue bodies and comments.
+- Status label is DERIVED, not unconditional: `create_issue.py` adds `status:ready` only when the story's map status is `ready-for-dev` AND every blocker's status is `done`. Backlog / in-progress / review / done, or any open blocker, get NO `status:ready` (there is no `status:blocked` label). `reconcile_labels` enforces this on create AND adopt (it REMOVES a stale `status:ready`) and fails LOUDLY on any final-state mismatch — never a false success. Unit cases: `scripts/test_status_labels.py`, `scripts/test_find_existing.py`, `scripts/test_pack_flags.py`.
 - Native `blocked by` relationships are MANDATORY and are the Relationships-panel truth: wired via `addBlockedBy` (GraphQL) resolving through the map, NOT prose in the body. A "Blocked by #N" line in the body is NOT a relationship. Always create/adopt through `create_issue.py` so native edges (and reverse edges) are wired and recorded — never hand-roll `gh issue create`.
 
 ## Reconciling issues created by hand

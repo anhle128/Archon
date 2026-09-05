@@ -5,6 +5,7 @@ Run: python3 .agents/skills/github-issue-tracker/scripts/test_pack_flags.py
 """
 from __future__ import annotations
 
+import io
 import json
 import sys
 import tempfile
@@ -76,6 +77,9 @@ def test_default_body_pack_and_workflow() -> None:
     rm_body = ci.default_body("3-9-launch-writes-the-one-bind-row", 3, "Launch writes the one bind row", [])
     assert "superpower-feature" not in rm_body
     assert "- Target repository: `harness-service`" in rm_body
+    assert "(NFR-1)" not in body
+    assert "(NFR-1)" not in rm_body
+    assert "No secrets in events" not in body
 
 
 def test_set_feature_type_skips_empty_id() -> None:
@@ -94,6 +98,60 @@ def test_set_feature_type_skips_empty_id() -> None:
         ci.FEATURE_TYPE_ID = previous
 
 
+def test_main_dry_run_pack_flags() -> None:
+    names = (
+        "OWNER", "REPO", "MILESTONE", "MILESTONE_TAG", "PACK_LABEL", "EXTRA_LABELS",
+        "EPICS_PATH", "SPRINT_STATUS", "TARGET_REPO", "WORKFLOW", "FEATURE_TYPE_ID",
+    )
+    snap = {name: getattr(ci, name) for name in names}
+    story = "1-1-see-this-runs-uncommitted-files"
+    payload = {
+        "milestone": 1,
+        "stories": {
+            story: {
+                "epic": 1,
+                "title": "See this run's uncommitted files",
+                "blocked_by": [],
+                "status": "backlog",
+            }
+        },
+    }
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+        json.dump(payload, fh)
+        map_path = Path(fh.name)
+    buf = io.StringIO()
+    old_out = sys.stdout
+    try:
+        sys.stdout = buf
+        rc = ci.main([
+            "--story", story,
+            "--map", str(map_path),
+            "--repo", "anhle128/Archon",
+            "--tag", "SC",
+            "--pack-label", "archon-source-control",
+            "--epics", "_bmad-output/planning-artifacts/epics-source-control/epics.md",
+            "--sprint-status", "_bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml",
+            "--target-name", "Archon",
+            "--workflow", "superpower-feature",
+            "--milestone", "1",
+            "--feature-type-id", "",
+            "--dry-run",
+        ])
+    finally:
+        sys.stdout = old_out
+        map_path.unlink()
+        for name, value in snap.items():
+            setattr(ci, name, value)
+    assert rc == 0
+    out = buf.getvalue()
+    assert "[SC][Epic 1] 1-1-see-this-runs-uncommitted-files: See this run's uncommitted files" in out
+    assert "labels: New Feature, archon-source-control, epic-1" in out
+    assert "status:ready" not in out
+    assert "milestone 1" in out
+    assert ci.OWNER == snap["OWNER"]
+    assert ci.FEATURE_TYPE_ID == snap["FEATURE_TYPE_ID"]
+
+
 def main() -> int:
     test_load_seed_tuple_and_dict()
     print("  ok: load_seed")
@@ -103,6 +161,8 @@ def main() -> int:
     print("  ok: default_body pack/workflow")
     test_set_feature_type_skips_empty_id()
     print("  ok: set_feature_type skip")
+    test_main_dry_run_pack_flags()
+    print("  ok: main dry-run pack flags")
     print("all pack-flag unit cases passed")
     return 0
 

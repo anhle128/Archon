@@ -133,38 +133,147 @@ nodes:
         summary:
           type: string
 
-  - id: implement
-    description: Implement the repaired Superpowers plan with Grok 4.6.
-    provider: omp
-    model: "grok-4.5"
-    effort: high
-    context: fresh
-    idle_timeout: 3600000
+  - id: build-ralph-prd
+    description: Convert the Superpowers plan into a co-located Ralph PRD.
     depends_on:
       - review-fix-plan
+    provider: codex
+    effort: xhigh
+    model: gpt-5.6-terra
+    context: fresh
     prompt: |
-      Implement the repaired Superpowers plan.
+      ## Persona
 
-      Plan path:
-      $review-fix-plan.output.plan_path
+      You are a SHARP SOLUTION ARCHITECT who lives by KISS and YAGNI. You do not
+      invent work that isn't in the plan, and you do not drop work that is.
 
-      Use the Superpowers executing-plans method.
-      Use subagent-driven-development if that skill is available.
-      Use test-driven-development for code changes.
-      Treat the current Archon workspace as the isolated workspace unless repository instructions say otherwise.
-      Do not start a new brainstorm.
-      Do not create a pull request.
+      ## Headless mode — NO human is available
 
-      Read the plan, repository instructions, and all files needed for the first task before you edit.
-      Follow the plan task order unless repo facts prove a smaller correct order.
-      For each code task, write or update a failing test first, make it pass, then refactor.
-      Keep changes scoped to the plan.
-      Run the validation commands from the plan and the smallest useful targeted tests.
-      If generated files must be updated, use the repository generation command.
+      Resolve every decision yourself from the plan plus the actual codebase.
+      Do not stop to ask.
 
-      Write an implementation report to $ARTIFACTS_DIR/superpowers/implementation-report.md.
-      The report must include changed files, tests run, failures, skipped items, and any risks.
-      Return a short implementation summary.
+      ## Task
+
+      The Superpowers plan to implement is the file:
+
+        $review-fix-plan.output.plan_path
+
+      Convert that ENTIRE plan into a Ralph PRD so an in-parent project-aware
+      Ralph loop can implement it one story per iteration. Do NOT implement the
+      feature itself — only produce the PRD files.
+
+      1. Read the plan file. Confirm it exists.
+      2. Derive `<name>` as the plan filename without `.md`
+         (e.g. `docs/superpowers/plans/2026-09-02-foo.md` → `2026-09-02-foo`).
+      3. Create the Ralph directory next to the plans folder:
+         `docs/superpowers/ralph/<name>/` via `mkdir -p`. Never `.archon/ralph/`.
+      4. Break the plan into right-sized Ralph user stories — each completable in a
+         single fresh-context iteration. Map the plan's TDD structure into concrete,
+         pass/fail acceptance criteria. Order stories by dependency (lower priority
+         runs first) and set `dependsOn` to only lower-priority story ids. No cycles,
+         no forward refs.
+      5. Write `docs/superpowers/ralph/<name>/prd.md` — a self-contained context
+         document (overview / problem / solution, goals + success metrics, non-goals,
+         technical context with real file:line references drawn from the plan, and a
+         story-overview table).
+      6. Write `docs/superpowers/ralph/<name>/prd.json` using EXACTLY this schema
+         (story-level `passes`, all `false` at start):
+
+         ```json
+         {
+           "feature": "<feature name>",
+           "userStories": [
+             {
+               "id": "US-001",
+               "title": "<short title>",
+               "description": "As a..., I want..., so that...",
+               "acceptanceCriteria": ["<verifiable criterion>", "..."],
+               "technicalNotes": "<real files, patterns, and plan refs to follow>",
+               "dependsOn": [],
+               "priority": 1,
+               "passes": false,
+               "notes": ""
+             }
+           ]
+         }
+         ```
+
+      7. Verify both files exist and prd.json is valid JSON whose `userStories` is a
+         non-empty array with every story `passes: false`.
+      8. Resolve `prd_dir` with `realpath` so it is an absolute path.
+
+      Return only JSON.
+    output_format:
+      type: object
+      properties:
+        prd_dir:
+          type: string
+        slug:
+          type: string
+        feature:
+          type: string
+        story_count:
+          type: number
+      required: [prd_dir, slug, story_count]
+
+  - id: validate-prd
+    description: Record PRD dir and confirm prd.json is ready for Ralph.
+    depends_on:
+      - build-ralph-prd
+    bash: |
+      set -euo pipefail
+      PRD_DIR=$build-ralph-prd.output.prd_dir
+      if [ -z "$PRD_DIR" ] || [ ! -f "$PRD_DIR/prd.json" ]; then
+        echo "ERROR: no prd.json in build-ralph-prd prd_dir ('$PRD_DIR')." >&2
+        exit 1
+      fi
+      if [ ! -f "$PRD_DIR/prd.md" ]; then
+        echo "ERROR: prd.md not found in $PRD_DIR" >&2
+        exit 1
+      fi
+      mkdir -p "$ARTIFACTS_DIR/superpowers"
+      printf '%s\n' "$PRD_DIR" > "$ARTIFACTS_DIR/superpowers/prd-dir.txt"
+      echo "PRD_DIR=$PRD_DIR"
+      echo "BRANCH=$(git branch --show-current)"
+      TOTAL=$(jq '.userStories | length' "$PRD_DIR/prd.json")
+      DONE=$(jq '[.userStories[] | select(.passes == true)] | length' "$PRD_DIR/prd.json")
+      echo "STORIES_TOTAL=$TOTAL"
+      echo "STORIES_DONE=$DONE"
+      echo "STORIES_REMAINING=$((TOTAL - DONE))"
+
+  - id: ralph-loop-run
+    description: In-parent project-aware Ralph loop (no PR).
+    depends_on:
+      - validate-prd
+    idle_timeout: 3600000
+    provider: omp
+    effort: high
+    model: cursor/cursor-grok-4.6
+    output_format:
+      type: object
+      properties:
+        done:
+          type: boolean
+          description: true ONLY when every story in prd.json has passes true; false otherwise.
+        mode:
+          type: string
+        story_id:
+          type: string
+        note:
+          type: string
+      required:
+        - done
+    loop:
+      command: archon-ralph-project-aware-iteration
+      fresh_context: true
+      max_iterations: 35
+      until_bash: |
+        set -euo pipefail
+        PRD_FILE="$ARTIFACTS_DIR/superpowers/prd-dir.txt"
+        [ -f "$PRD_FILE" ] || exit 1
+        PRD_DIR=$(cat "$PRD_FILE")
+        [ -n "$PRD_DIR" ] && [ -f "$PRD_DIR/prd.json" ] || exit 1
+        jq -e '.userStories | type == "array" and length > 0 and all(.[]; .passes == true)' "$PRD_DIR/prd.json" >/dev/null
 
   - id: codex-final-fix
     description: Review the final code and fix defects directly with Codex.
@@ -174,7 +283,7 @@ nodes:
     context: fresh
     idle_timeout: 3600000
     depends_on:
-      - implement
+      - ralph-loop-run
     prompt: |
       Do the final Superpowers code review and fix all defects directly.
       Do not hand fixes back to Grok.

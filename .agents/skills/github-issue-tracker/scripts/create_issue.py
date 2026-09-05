@@ -97,7 +97,6 @@ Native GitHub **blocked by** edges are wired on this issue from the issue-map. P
 - [ ] Story acceptance criteria in `{EPICS_PATH}` for Story {display_num(story_id)} are satisfied
 - [ ] Focused tests / characterization evidence recorded before close
 - [ ] `sprint-status.yaml` entry for `{story_id}` moved to `done`
-- [ ] No secrets in events, logs, fixtures, or issue comments (NFR-1)
 
 ## Handoff Log
 
