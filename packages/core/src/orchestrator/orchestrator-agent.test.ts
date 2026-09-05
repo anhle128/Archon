@@ -2543,6 +2543,208 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(sent).toContain('stored-env');
   });
 
+  test('US-012: genuine resume ignores incompatible request ENV and keeps stored selection', async () => {
+    // Contract 10: a paused run with a valid stored overlay must resume with that
+    // selection even when the new request candidate is field-incompatible. The
+    // candidate is ignored with a notice — never validated/applied.
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve({
+        success: true,
+        message: 'ok',
+        workflow: {
+          definition: makeTestWorkflow({
+            name: 'test-workflow',
+            interactive: true,
+            // command node — prompt is incompatible
+            nodes: [{ id: 'default', command: 'ship', provider: 'claude' }],
+          }),
+          args: 'test message',
+        },
+      })
+    );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'paused-env-run',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/paused',
+        parent_conversation_id: 'conv-1',
+        status: 'paused',
+        metadata: {
+          envOverlay: {
+            envId: 'env-stored',
+            envName: 'stored-env',
+            workflowName: 'test-workflow',
+            patches: { default: { model: 'from-stored' } },
+            skippedNodeIds: [],
+          },
+        },
+      })
+    );
+    // Real resume payload (not hydrate-null).
+    mockHydrateResumableRun.mockReturnValueOnce(
+      Promise.resolve({
+        preCreatedRun: {
+          id: 'paused-env-run',
+          status: 'running',
+          working_path: '/repos/test-repo/worktrees/paused',
+        },
+        priorCompletedNodes: new Map([['default', 'done']]),
+        priorTokenUsage: { input: 1, output: 1 },
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      // Incompatible with command node — must NOT block resume.
+      envOverlay: makeEnvCandidate({
+        default: { prompt: 'secret-incompatible-body-must-not-echo' },
+      }),
+    });
+
+    expect(mockHydrateResumableRun).toHaveBeenCalled();
+    expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    const wf = callArgs[4] as {
+      nodes: Array<{ model?: string; prompt?: string; command?: string }>;
+    };
+    expect(wf.nodes[0]?.model).toBe('from-stored');
+    expect(wf.nodes[0]?.prompt).toBeUndefined();
+    expect(wf.nodes[0]?.command).toBe('ship');
+    const opts = callArgs[callArgs.length - 1] as {
+      appliedEnvOverlay?: { envName: string; patches: Record<string, unknown> };
+    };
+    expect(opts.appliedEnvOverlay?.envName).toBe('stored-env');
+    expect(opts.appliedEnvOverlay?.patches).toEqual({ default: { model: 'from-stored' } });
+    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
+    expect(sent).toContain('not applied');
+    expect(sent).toContain('fast');
+    expect(sent).toContain('stored-env');
+    expect(sent).not.toContain('secret-incompatible-body-must-not-echo');
+    expect(sent).not.toContain('field_not_supported_for_node');
+  });
+
+  test('US-012: YAML-only resume ignores incompatible request ENV with notice', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve({
+        success: true,
+        message: 'ok',
+        workflow: {
+          definition: makeTestWorkflow({
+            name: 'test-workflow',
+            interactive: true,
+            nodes: [{ id: 'default', command: 'ship', provider: 'claude' }],
+          }),
+          args: 'test message',
+        },
+      })
+    );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'paused-yaml-run',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/paused',
+        parent_conversation_id: 'conv-1',
+        status: 'paused',
+        // No envOverlay — YAML-only resume
+        metadata: {},
+      })
+    );
+    mockHydrateResumableRun.mockReturnValueOnce(
+      Promise.resolve({
+        preCreatedRun: {
+          id: 'paused-yaml-run',
+          status: 'running',
+          working_path: '/repos/test-repo/worktrees/paused',
+        },
+        priorCompletedNodes: new Map([['default', 'done']]),
+        priorTokenUsage: { input: 0, output: 0 },
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      envOverlay: makeEnvCandidate({
+        default: { prompt: 'secret-yaml-only-incompatible' },
+      }),
+    });
+
+    expect(mockHydrateResumableRun).toHaveBeenCalled();
+    expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    const wf = callArgs[4] as {
+      nodes: Array<{ prompt?: string; command?: string; model?: string }>;
+    };
+    expect(wf.nodes[0]?.command).toBe('ship');
+    expect(wf.nodes[0]?.prompt).toBeUndefined();
+    const opts = callArgs[callArgs.length - 1] as { appliedEnvOverlay?: unknown };
+    expect(opts.appliedEnvOverlay).toBeUndefined();
+    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
+    expect(sent).toContain('not applied');
+    expect(sent).toContain('YAML only');
+    expect(sent).toContain('fast');
+    expect(sent).not.toContain('secret-yaml-only-incompatible');
+    expect(sent).not.toContain('field_not_supported_for_node');
+  });
+
+  test('US-012: hydrate-null fresh start rejects incompatible request ENV before isolation', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve({
+        success: true,
+        message: 'ok',
+        workflow: {
+          definition: makeTestWorkflow({
+            name: 'test-workflow',
+            interactive: true,
+            nodes: [{ id: 'default', command: 'ship', provider: 'claude' }],
+          }),
+          args: 'test message',
+        },
+      })
+    );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'empty-prior-env-run',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/paused',
+        parent_conversation_id: 'conv-1',
+        status: 'paused',
+        metadata: {
+          envOverlay: {
+            envId: 'env-stored',
+            envName: 'stored-env',
+            workflowName: 'test-workflow',
+            patches: { default: { model: 'from-stored' } },
+            skippedNodeIds: [],
+          },
+        },
+      })
+    );
+    // Nothing worth resuming → fresh-start fallthrough must validate the request.
+    mockHydrateResumableRun.mockReturnValueOnce(Promise.resolve(null));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      envOverlay: makeEnvCandidate({
+        default: { prompt: 'secret-hydrate-null-body' },
+      }),
+    });
+
+    expect(mockHydrateResumableRun).toHaveBeenCalled();
+    expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
+    expect(sent).toContain('field_not_supported_for_node');
+    expect(sent).not.toContain('secret-hydrate-null-body');
+  });
+
   test('malformed stored resume overlay stops before isolation', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));

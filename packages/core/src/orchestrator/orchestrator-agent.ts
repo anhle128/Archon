@@ -731,6 +731,13 @@ function buildFailedRunResumePrompt(
   ].join('\n');
 }
 
+/** Successful hydrateResumableRun payload (null means nothing worth resuming). */
+interface HydratedResumableRun {
+  preCreatedRun: WorkflowRun;
+  priorCompletedNodes: Map<string, string>;
+  priorTokenUsage: { input: number; output: number };
+}
+
 /**
  * Dispatch a workflow after the orchestrator resolves a project.
  * Auto-attaches the project to the conversation, resolves isolation, and executes.
@@ -875,30 +882,86 @@ async function dispatchOrchestratorWorkflow(
       throw err;
     }
   }
-  // Workflow ENV overlay gate (US-006): after input/requirement gates, before
-  // conversation mutation or isolation. Invalid overlays fail cheaply with a
+  // Workflow ENV overlay gate (US-006 / US-012): after input/requirement gates,
+  // before conversation mutation or isolation. Invalid overlays fail cheaply with a
   // safe code/message and never create a worktree.
+  //
+  // Contract 10 / US-012: a *genuine* continuation never validates or applies a
+  // newly supplied request candidate — only the run-owned stored overlay (or YAML).
+  // When a request candidate is present on a would-be continuation, hydrate early
+  // (before isolation) so hydrate-null fallthrough can still reject an incompatible
+  // candidate pre-isolation while a real resume ignores it with a notice.
   let executionWorkflow: WorkflowDefinition = workflow;
   let appliedEnvOverlay: AppliedEnvOverlay | undefined;
   let ignoredRequestEnvNotice: DispatchEnvOverlayResult['ignoredRequestEnv'];
-  // Fresh-path prep kept when continuing so a hydrate-null fallthrough (new
-  // run row on the same worktree) can still use the request candidate without
-  // re-validating after isolation.
+  // Fresh-path prep for pure fresh starts and for hydrate-null fallthrough after
+  // early hydrate decides the prior run has nothing to resume.
   let freshOverlayPrep: DispatchEnvOverlayResult | undefined;
+  /** Set when we already claimed the run via early hydrate for ENV path selection. */
+  let earlyResumePrepared: HydratedResumableRun | null | undefined;
+  let didEarlyHydrate = false;
   try {
-    if (options?.envOverlay) {
-      freshOverlayPrep = resolveFreshDispatchEnvOverlay(workflow, options.envOverlay);
-    }
     if (willContinueExistingRun && resumableRun) {
+      // Always resolve the continuation view first (request candidate is never applied
+      // here — resolveContinuationDispatchEnvOverlay only records ignoredRequestEnv).
       const continuation = resolveContinuationDispatchEnvOverlay(
         workflow,
         resumableRun.metadata?.envOverlay,
         options?.envOverlay
       );
-      executionWorkflow = continuation.workflow;
-      appliedEnvOverlay = continuation.applied;
-      ignoredRequestEnvNotice = continuation.ignoredRequestEnv;
-    } else if (freshOverlayPrep) {
+
+      if (options?.envOverlay) {
+        // Request candidate present: distinguish genuine resume vs hydrate-null
+        // *before* isolation so an incompatible candidate cannot block a real resume
+        // but still fails closed for hydrate-null fresh starts (US-012).
+        const earlyDeps = createWorkflowDeps();
+        try {
+          earlyResumePrepared = await hydrateResumableRun(earlyDeps, resumableRun);
+          didEarlyHydrate = true;
+        } catch (err) {
+          if (err instanceof workflowDb.WorkflowNotResumableError) {
+            getLog().info(
+              {
+                workflowName: workflow.name,
+                runId: resumableRun.id,
+                status: err.currentStatus,
+              },
+              'orchestrator.resume_lost_race'
+            );
+            await platform.sendMessage(
+              conversationId,
+              `⚠️ **${workflow.name}** is already being resumed (status: ${err.currentStatus}). ` +
+                'No action taken — follow the existing run for progress.' +
+                (deferredInputError && options?.inputs && Object.keys(options.inputs).length > 0
+                  ? `\n\nAlso note: ${deferredInputError.message}`
+                  : '')
+            );
+            return;
+          }
+          throw err;
+        }
+
+        if (earlyResumePrepared) {
+          // Genuine continuation — stored overlay / YAML only; request ignored.
+          executionWorkflow = continuation.workflow;
+          appliedEnvOverlay = continuation.applied;
+          ignoredRequestEnvNotice = continuation.ignoredRequestEnv;
+        } else {
+          // Hydrate-null → fresh start on the same worktree: validate/apply the
+          // request candidate now (before isolation). Throws EnvOverlayError on
+          // incompatible fields — caught below.
+          freshOverlayPrep = resolveFreshDispatchEnvOverlay(workflow, options.envOverlay);
+          executionWorkflow = freshOverlayPrep.workflow;
+          appliedEnvOverlay = freshOverlayPrep.applied;
+        }
+      } else {
+        // No request candidate — continuation overlay only; hydrate later as today.
+        executionWorkflow = continuation.workflow;
+        appliedEnvOverlay = continuation.applied;
+      }
+    } else if (options?.envOverlay) {
+      // Pure fresh start (no resumable run / force): validate request before isolation.
+      freshOverlayPrep = resolveFreshDispatchEnvOverlay(workflow, options.envOverlay);
       executionWorkflow = freshOverlayPrep.workflow;
       appliedEnvOverlay = freshOverlayPrep.applied;
     }
@@ -1054,35 +1117,42 @@ async function dispatchOrchestratorWorkflow(
     // prior run had nothing worth resuming (zero completed nodes, no loop
     // gate) — surface that to the user and fall through to a fresh run on
     // the same worktree rather than silently restarting.
+    //
+    // When a request ENV candidate forced early hydrate above (US-012), reuse
+    // that result — resumeWorkflowRun is a CAS and must not run twice.
     const deps = createWorkflowDeps();
-    let prepared: Awaited<ReturnType<typeof hydrateResumableRun>>;
-    try {
-      prepared = await hydrateResumableRun(deps, resumableRun);
-    } catch (err) {
-      // resumeWorkflowRun is a compare-and-swap: if another surface (web Resume,
-      // a concurrent re-dispatch, the CLI) already claimed this run, it throws
-      // WorkflowNotResumableError. Surface a friendly note instead of leaking the
-      // raw internal string to the generic failure catch, and do NOT fall through
-      // to a fresh run — the other resumer owns the worktree (#1830 I2).
-      if (err instanceof workflowDb.WorkflowNotResumableError) {
-        getLog().info(
-          { workflowName: workflow.name, runId: resumableRun.id, status: err.currentStatus },
-          'orchestrator.resume_lost_race'
-        );
-        await platform.sendMessage(
-          conversationId,
-          `⚠️ **${workflow.name}** is already being resumed (status: ${err.currentStatus}). ` +
-            'No action taken — follow the existing run for progress.' +
-            // The gate deferred a contract violation because this looked like a
-            // continuation; losing the race means it never got surfaced anywhere else.
-            // Say it here rather than let an already-computed, actionable error die.
-            (deferredInputError && options?.inputs && Object.keys(options.inputs).length > 0
-              ? `\n\nAlso note: ${deferredInputError.message}`
-              : '')
-        );
-        return;
+    let prepared: HydratedResumableRun | null;
+    if (didEarlyHydrate) {
+      prepared = earlyResumePrepared ?? null;
+    } else {
+      try {
+        prepared = await hydrateResumableRun(deps, resumableRun);
+      } catch (err) {
+        // resumeWorkflowRun is a compare-and-swap: if another surface (web Resume,
+        // a concurrent re-dispatch, the CLI) already claimed this run, it throws
+        // WorkflowNotResumableError. Surface a friendly note instead of leaking the
+        // raw internal string to the generic failure catch, and do NOT fall through
+        // to a fresh run — the other resumer owns the worktree (#1830 I2).
+        if (err instanceof workflowDb.WorkflowNotResumableError) {
+          getLog().info(
+            { workflowName: workflow.name, runId: resumableRun.id, status: err.currentStatus },
+            'orchestrator.resume_lost_race'
+          );
+          await platform.sendMessage(
+            conversationId,
+            `⚠️ **${workflow.name}** is already being resumed (status: ${err.currentStatus}). ` +
+              'No action taken — follow the existing run for progress.' +
+              // The gate deferred a contract violation because this looked like a
+              // continuation; losing the race means it never got surfaced anywhere else.
+              // Say it here rather than let an already-computed, actionable error die.
+              (deferredInputError && options?.inputs && Object.keys(options.inputs).length > 0
+                ? `\n\nAlso note: ${deferredInputError.message}`
+                : '')
+          );
+          return;
+        }
+        throw err;
       }
-      throw err;
     }
     if (prepared) {
       // A resume replays the inputs stamped on its own row; values supplied on THIS
