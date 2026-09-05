@@ -103,6 +103,11 @@ Lower priority number runs first. `dependsOn` contains only lower-priority story
 | 26 | US-026 | Missing-node raw patch keys rejected | US-001, US-016, US-025 | Convergence 2 task 15 (`docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:827`) |
 | 27 | US-027 | Programmatic modelReasoningEffort parity | US-002, US-005, US-007, US-013, US-026 | Convergence 2 task 16 (`docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:829`) |
 | 28 | US-028 | Strict run-detail ENV parser fields | US-017, US-027 | Convergence 2 task 17 (`docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:831`) |
+| 29 | US-029 | Continuation decided before stored ENV parsing | US-006, US-012, US-020 | Convergence 3 task 18 (`docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:923`) |
+| 30 | US-030 | Strict frozen patch validation in run ENV UI | US-017, US-028 | Convergence 3 task 19 (`docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:925`) |
+| 31 | US-031 | Console editor rejects zero thinking budget | US-010, US-015, US-024 | Convergence 3 task 20 (`docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:927`) |
+| 32 | US-032 | Stored ENV rows use authoritative name schemas | US-003, US-018 | Convergence 3 task 21 (`docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:929`) |
+| 33 | US-033 | Post-Convergence-3 Constitution Check reconciliation | US-019, US-020, US-021, US-029, US-030, US-031, US-032 | Convergence 3 task 22 (`docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:931`) |
 
 ## User Stories
 
@@ -507,6 +512,82 @@ Acceptance criteria:
 - After this final Convergence 2 story, Phase 8 gates are rerun for the corrected tree, including generated checks, check:schema-upgrades, validate, and git diff --check; earlier Ralph validation claims are not reused.
 
 Technical notes: Convergence 2 task 17 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:831, plus Convergence instructions at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:793 and validation gates at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:691-747. Modify packages/web/src/experiments/console/primitives/run.ts, run.test.ts, and run-detail component tests. This extends US-017 strict malformed-metadata behavior.
+
+### US-029 — Continuation decided before stored ENV parsing
+
+As a dispatcher, I want genuine continuation decided before any stored ENV parsing or logging, so that stale metadata on an ineligible prior run cannot break a fresh start.
+
+Acceptance criteria:
+
+- packages/core/src/orchestrator/orchestrator-agent.test.ts covers a paused candidate with no completed nodes or rerunnable gate state and malformed stored metadata.envOverlay; without a request ENV it starts fresh on YAML, and with a valid request candidate it starts fresh with that candidate.
+- The same test file covers a paused inspect-null candidate whose stored overlay is incompatible with the current YAML, proving the stale stored overlay is ignored for a fresh start.
+- A genuine-continuation control proves malformed stored metadata.envOverlay still fails before conversation mutation, isolation, and the resume compare-and-set claim.
+- dispatchOrchestratorWorkflow() inspects every provisional continuation read-only before parsing, applying, or logging the stored overlay; inspect-null follows the fresh request/YAML path, while genuine continuation alone parses the run-owned snapshot.
+- resumeWorkflowRun() remains after conversation and isolation gates, concurrent-claim rejection is preserved, and the mutable workflow ENV table is not queried for continuation decisions.
+- No workflow.env_overlay_prepared log/event claims a discarded stored ENV or reports continuing: true for an inspect-null fresh start; logs and user messages never include prompt/bash bodies or patch values.
+- Focused verification passes: cd packages/core && bun test src/orchestrator/env-overlay-dispatch.test.ts && bun test src/orchestrator/orchestrator-agent.test.ts.
+
+Technical notes: Convergence 3 task 18 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:923. Modify packages/core/src/orchestrator/orchestrator-agent.ts, packages/core/src/orchestrator/orchestrator-agent.test.ts, and env-overlay-dispatch tests as needed. Follow Authoritative Contract 10 lines 360-367 and Phase 4 lines 554-564. This extends US-012 and US-020 without querying mutable ENV rows during resume.
+
+### US-030 — Strict frozen patch validation in run ENV UI
+
+As a console operator, I want run-detail ENV audit UI to accept only frozen patches that match the engine overlay contract, so that corrupt patch metadata cannot be rendered as trustworthy audit state.
+
+Acceptance criteria:
+
+- packages/web/src/experiments/console/primitives/run.test.ts covers pending and complete metadata with non-object per-node patches, unsafe or reserved target ids, empty per-node patches, unknown fields, wrong field types, invalid thinking including zero budget, over-256 targets, and over-1-MiB patches; each parses to null.
+- Valid pending and complete metadata with an empty patch map, prompt string bodies, bash string bodies, and whitespace-only bodies still parses and renders as before.
+- RunDetailPage.test.tsx proves corrupt patch metadata hides only the ENV chip/table/section, leaves the rest of the run detail usable, and never exposes prompt/bash body contents.
+- packages/web/src/experiments/console/primitives/run.ts adds a fail-closed local patch-shape validator without importing @archon/workflows; it mirrors the authoritative target-key, allowed-field, per-node non-empty, thinking, and document-bound contracts.
+- RunEnvOverlay objects, parser errors, and rendered data never copy or expose patch bodies; malformed body values cannot manufacture a valid-looking ENV chip or resolved table.
+- Focused verification passes: cd packages/web && NODE_ENV=development bun test src/experiments/console/primitives/run.test.ts src/experiments/console/routes/RunDetailPage.test.tsx src/experiments/console/components/WorkflowEnvResolvedTable.test.tsx src/experiments/console/components/RunDetailHeader.test.tsx.
+
+Technical notes: Convergence 3 task 19 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:925. Modify packages/web/src/experiments/console/primitives/run.ts, run.test.ts, RunDetailPage tests, and run-detail ENV components only as needed. Follow runtime overlay types lines 126-160, Run detail lines 429-438, Console tests lines 667-668, plus US-017 and US-028 strict malformed-metadata behavior.
+
+### US-031 — Console editor rejects zero thinking budget
+
+As a console operator editing workflow ENVs, I want invalid thinking budgets rejected before submit, so that the dialog does not send patch documents the server schema must reject.
+
+Acceptance criteria:
+
+- packages/web/src/experiments/console/lib/workflow-env-editor.test.ts adds failing-helper regressions for budgetTokens values 0 and -0, plus negative, fractional, and non-finite controls as applicable.
+- packages/web/src/experiments/console/components/WorkflowEnvManageDialog.test.tsx mounts create/update submit with a zero budget and proves no POST or PATCH occurs and an actionable local error appears.
+- Controls prove blank budget omits the optional budget field and a positive integer serializes unchanged in the patch document.
+- thinkingToPatch() enforces a positive integer budget and aligns its comment and error text with thinkingConfigSchema instead of inventing a divergent rule.
+- The rest of the ENV draft remains editable after a local thinking-budget validation error; unrelated fields are not cleared.
+- Focused verification passes: cd packages/web && NODE_ENV=development bun test src/experiments/console/lib/workflow-env-editor.test.ts src/experiments/console/components/WorkflowEnvManageDialog.test.tsx.
+
+Technical notes: Convergence 3 task 20 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:927. Modify packages/web/src/experiments/console/lib/workflow-env-editor.ts, workflow-env-editor.test.ts, WorkflowEnvManageDialog.tsx, and WorkflowEnvManageDialog.test.tsx. Follow patch validation lines 118-120, Manage dialog lines 420-427, and Console matrix line 666. This extends US-015 and US-024.
+
+### US-032 — Stored ENV rows use authoritative name schemas
+
+As a store maintainer, I want stored workflow ENV row validation to reuse the write-path workflow and ENV name schemas, so that corrupted identities cannot escape through list or detail reads.
+
+Acceptance criteria:
+
+- packages/core/src/schemas/workflow-env.test.ts adds schema regressions proving workflowEnvRowSchema rejects invalid workflow_name values such as bad//workflow and invalid name values such as has space.
+- packages/core/src/db/workflow-envs.test.ts injects SQLite rows with invalid stored workflow_name and name values and proves full-detail reads reject them with WorkflowEnvCorruptRowError carrying/logging only the row id.
+- The same database tests prove summary reads reject invalid stored identities through the summary schema while remaining independent of patch parsing and without loading patch bodies merely to validate a summary.
+- packages/core/src/schemas/workflow-env.ts composes workflowEnvRowSchema from workflowEnvWorkflowNameSchema and workflowEnvNameSchema, and the summary schema inherits those exact constraints instead of duplicating length-only strings.
+- Route/store writes and stored-row reads agree on valid identity constraints; valid Date/string timestamp behavior remains unchanged.
+- Focused verification passes: cd packages/core && bun test src/schemas/workflow-env.test.ts && bun test src/db/workflow-envs.test.ts.
+
+Technical notes: Convergence 3 task 21 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:929. Modify packages/core/src/schemas/workflow-env.ts, packages/core/src/schemas/workflow-env.test.ts, packages/core/src/db/workflow-envs.ts, and packages/core/src/db/workflow-envs.test.ts. Follow Store contracts lines 257-265 and Database/core matrix lines 627-629. This extends US-003 and US-018 corrupt-row guarantees.
+
+### US-033 — Post-Convergence-3 Constitution Check reconciliation
+
+As a reviewer, I want the implementation plan Constitution Check reconciled against the final corrected tree, so that release-blocker status reflects current evidence rather than stale audit text.
+
+Acceptance criteria:
+
+- docs/superpowers/plans/2026-09-05-workflow-env-overlay.md appends or updates a clearly dated post-Convergence-3 re-check after US-029 through US-032 have landed.
+- The re-check distinguishes historical findings from current blockers and cites final code and focused tests for every closed or still-open item, especially the delayed-CAS and pending-row fail-closed paths from US-020 and US-021.
+- The plan has one unambiguous current release-blocker list; no statement labels a verified fixed path as currently open, and any still-failing task remains explicitly blocking.
+- The final evidence covers package-layer direction, typed schemas/OpenAPI, additive database/generated-file handling, fail-closed lifecycle safety, secret-safe observability, focused and full validation, and intentional complexity.
+- The update preserves history and verdict rationale; it does not delete prior evidence or change a verdict without citing concrete repository evidence.
+- Verification includes git diff --check and manual comparison to .specify/memory/constitution.md lines 154-156 and 172-175 after the focused commands and Phase 8 gates complete.
+
+Technical notes: Convergence 3 task 22 in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:931. Modify docs/superpowers/plans/2026-09-05-workflow-env-overlay.md only. Depends on the new Convergence 3 code/UI/store corrections and existing Constitution evidence stories. Do not implement code in this story; reconcile current plan evidence after validation is available.
 
 ## Implementation and Validation Gates
 
