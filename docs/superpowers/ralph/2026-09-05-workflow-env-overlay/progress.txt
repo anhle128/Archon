@@ -40,6 +40,12 @@
 - **Pattern**: Caller-supplied `appliedEnvOverlay` → verify only (workflow already patched). Else parse `preCreatedRun.metadata.envOverlay` and reapply frozen patches. Overlay-bearing preCreated runs use `preCreatedRun.user_id` for prefs/creds; no-overlay keeps `opts.userId`. Pending applied form is stamped at first INSERT; complete snapshot with live `resolved` is written via `setWorkflowRunEnvOverlay` before any start event/DAG. Audit/prepare failure: fail-closed, no execution. Fresh children never copy parent overlay.
 - **Example**: `executeWorkflow(..., { appliedEnvOverlay })` or resume with `preCreatedRun.metadata.envOverlay` only
 
+### Orchestrator pre-isolation ENV gate
+- **Where**: `packages/core/src/orchestrator/env-overlay-dispatch.ts`, `orchestrator-agent.ts` (`dispatchOrchestratorWorkflow`)
+- **Pattern**: Frozen `EnvOverlayCandidate` rides `HandleMessageContext`/`WorkflowDispatchOptions` out-of-band (never the command string). After input/requirement gates and before conversation mutation/`validateAndResolveIsolation`: fresh → `resolveFreshDispatchEnvOverlay`; continuation → `resolveContinuationDispatchEnvOverlay` on run `metadata.envOverlay` (ignore request candidate + notify). Fail closed with safe codes. Hand off patched clone + detached `AppliedEnvOverlay` to fg `executeWorkflow` and bg `dispatchBackgroundWorkflow` (pre-create stamp already US-005). Hydrate-null fallthrough uses pre-validated request candidate, not the prior run overlay.
+- **Example**: `options.envOverlay` → apply before isolation → `executeWorkflow(..., executionWorkflow, { appliedEnvOverlay })`
+
+
 
 
 
@@ -177,3 +183,28 @@
 
 ---
 
+## 2026-09-05 — US-006: Orchestrator pre-isolation overlay gate and background handoff
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/types/index.ts` — `HandleMessageContext.envOverlay?: EnvOverlayCandidate`
+- `packages/core/src/orchestrator/env-overlay-dispatch.ts` — pure fresh/continuation overlay resolve + safe message formatter
+- `packages/core/src/orchestrator/env-overlay-dispatch.test.ts` — unit coverage for apply, skip, mismatch, resume ignore, corrupt snapshot
+- `packages/core/src/orchestrator/orchestrator-agent.ts` — pre-isolation gate; thread patched workflow + AppliedEnvOverlay to fg/bg; resume ignore notice
+- `packages/core/src/orchestrator/orchestrator-agent.test.ts` — isolation spy: invalid/mismatch stop before isolation; valid/missing-id/resume/background handoff
+- `packages/core/package.json` — isolated test segment for env-overlay-dispatch
+
+**Acceptance criteria verified**:
+- [x] HandleMessageContext and WorkflowDispatchOptions carry frozen EnvOverlayCandidate out-of-band
+- [x] dispatchOrchestratorWorkflow applies after input/requirement gates and before conversation mutation/isolation
+- [x] Continuations ignore newly supplied ENV with notice; fresh uses request; canonical mismatch fails safely
+- [x] Unsupported fields/unknown providers/invalid nodes/graph stop before isolation with safe codes (id/name/applied/skipped/error codes only in logs)
+- [x] Fg/bg receive patched clone + detached AppliedEnvOverlay; bg pre-create stamp already equivalent (US-005)
+- [x] Tests spy on isolation — not called for invalid overlays; valid and missing-id retain isolation
+
+**Learnings**:
+- Name `validateAndResolveIsolation` mock so call-count assertions work; anonymous `mock()` inside `mock.module` cannot be cleared/asserted.
+- `unknown | undefined` trips `@typescript-eslint/no-redundant-type-constituents` — use `unknown` alone.
+- Hydrate-null fallthrough must use the request candidate (fresh row), not the prior run's stored overlay — pre-validate the candidate even when `willContinueExistingRun` so isolation is not wasted on a bad request that only surfaces after hydrate.
+
+---
