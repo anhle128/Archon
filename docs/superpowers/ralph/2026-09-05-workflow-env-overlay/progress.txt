@@ -1,5 +1,11 @@
 ## Codebase Patterns
 
+### ENV editor body presence flags
+- **Where**: `packages/web/src/experiments/console/lib/workflow-env-editor.ts` (`NodePatchDraft.promptEnabled`/`bashEnabled`)
+- **Pattern**: Omission ≠ empty string. Enabled flag includes body byte-for-byte (including `''`/whitespace); disabled omits the key. Zero drafts → valid no-op `{}`; non-empty-per-chosen-node still enforced when rows exist.
+- **Example**: `draft({ nodeId: 'plan', promptEnabled: true, prompt: '' })` → `{ plan: { prompt: '' } }`
+
+
 ### Symbol-preserving node clone
 - **Where**: `packages/workflows/src/include-expander.ts` (`cloneNodeWithEngineMetadata`)
 - **Pattern**: `structuredClone` drops symbol keys. Re-attach `COMPOSED_NODE` and nested `COMPILED_LOOP_COMMAND` (including loop_group body recursion) after clone. Shared by include expansion and ENV overlay — do not duplicate the private symbol list.
@@ -450,5 +456,30 @@
 **Learnings**:
 - The US-002 unified path had incorrectly treated `declared ?? preset` as "explicit" for the fail-closed gate, so OpenCode tier aliases with effort could never reach the warn/drop branch.
 - Keep rejection details on the pure request (`presetEffortRejection`) so runtime logging cannot drift by re-classifying.
+
+---
+
+## 2026-09-05 — US-015: Console editor preserves empty ENV values
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/lib/workflow-env-editor.ts` — promptEnabled/bashEnabled distinguish omission vs empty string; zero drafts → `{}`; empty/whitespace bodies preserved byte-for-byte
+- `packages/web/src/experiments/console/lib/workflow-env-editor.test.ts` — round-trips for `{}`, empty prompt/bash, whitespace, absent bodies, draftFromPatch presence
+- `packages/web/src/experiments/console/components/WorkflowEnvManageDialog.tsx` — BodyField include toggles; empty-state documents no-op ENV; keeps non-empty-per-chosen-node
+- `packages/web/src/experiments/console/components/WorkflowEnvManageDialog.test.tsx` — create/PATCH `{}`, enabled empty body save, include checkbox rendering
+
+**Acceptance criteria verified**:
+- [x] workflow-env-editor.test.ts round-trips zero drafts → {}, explicit prompt/bash "", whitespace-only, absent bodies
+- [x] WorkflowEnvManageDialog.test.tsx proves create and full-map PATCH can submit patches: {}
+- [x] Dialog tests prove explicitly enabled empty prompt/bash saved and not dropped
+- [x] workflow-env-editor.ts represents omission separately from presence-with-empty
+- [x] Dialog keeps non-empty-per-chosen-node while zero targets save no-op ENV
+- [x] Create/update keep empty/whitespace byte-for-byte; untouched bodies omitted
+- [x] Focused verification: bun test workflow-env-editor.test.ts && bun test WorkflowEnvManageDialog.test.tsx
+
+**Learnings**:
+- Empty body vs omitted field cannot share a single `string` draft slot — needs an explicit enable/presence flag (or optional), matching schema allow of `prompt: ''`.
+- Zero drafts is the only valid empty map path; a chosen node with no fields still fails closed.
+- Typing into a body field auto-enables it; unchecking clears and omits.
 
 ---

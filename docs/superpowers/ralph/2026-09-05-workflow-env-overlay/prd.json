@@ -309,7 +309,8 @@
         "US-014"
       ],
       "priority": 15,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration after US-014. Files: packages/web/src/experiments/console/lib/workflow-env-editor.ts, packages/web/src/experiments/console/lib/workflow-env-editor.test.ts, packages/web/src/experiments/console/components/WorkflowEnvManageDialog.tsx, packages/web/src/experiments/console/components/WorkflowEnvManageDialog.test.tsx."
     },
     {
       "id": "US-016",
