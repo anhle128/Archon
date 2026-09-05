@@ -374,7 +374,8 @@
         "US-017"
       ],
       "priority": 18,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration after US-017. Files: packages/core/src/db/workflow-envs.ts, workflow-envs.test.ts. PG exact 23505+constraint only; SQLite fully-qualified remote_agent_workflow_envs identity columns; negative cases for wrong/absent constraint, prose-only, other-table UNIQUE."
     }
   ]
 }

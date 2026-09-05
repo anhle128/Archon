@@ -1,6 +1,12 @@
 ## Codebase Patterns
 
 
+### Exact ENV name-conflict classification
+- **Where**: `packages/core/src/db/workflow-envs.ts` (`isWorkflowEnvNameConflict`)
+- **Pattern**: PostgreSQL → `true` only when `code === '23505' && constraint === 'uq_workflow_envs_workflow_name_name'` (never message prose). SQLite → parse `UNIQUE constraint failed:` column list and require both fully-qualified `remote_agent_workflow_envs.workflow_name` and `remote_agent_workflow_envs.name` (order-independent). Wrong constraint, absent constraint, prose-only duplicate-key, other-table UNIQUE, bare columns → propagate.
+- **Example**: `{ code: '23505', message: '...uq_workflow_envs_workflow_name_name' }` without matching `constraint` → `false`
+
+
 ### Strict run-detail ENV overlay parse
 - **Where**: `packages/web/src/experiments/console/primitives/run.ts` (`parseRunEnvOverlay`)
 - **Pattern**: Accept only pending (`patches` object + `skippedNodeIds` array, no `resolved`/`latestMissingNodeIds`) or complete (both keys present, object `resolved`, array `latestMissingNodeIds`, every resolved row valid). Missing/non-object patches, non-arrays, hybrid one-of-two keys, or any invalid resolved row → `null`. Never expose patches; never manufacture `complete: true` from corrupt data.
@@ -540,3 +546,27 @@
 - Console page tests avoid mock.module: export a pure gate from the page and compose header+table with `toRun` for static markup.
 
 ---
+
+## 2026-09-05 — US-018: Exact ENV name-conflict classification
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/db/workflow-envs.ts` — `isWorkflowEnvNameConflict` PG exact 23505+constraint only; SQLite fully-qualified identity columns only
+- `packages/core/src/db/workflow-envs.test.ts` — negative PG wrong/absent constraint + prose-only; SQLite other-table/bare-column negatives
+
+**Acceptance criteria verified**:
+- [x] workflow-envs.test.ts PG 23505 with absent/wrong constraint (message still names uq_…) → not conflict
+- [x] Duplicate-key prose without code 23505 → not conflict
+- [x] SQLite UNIQUE from another table with workflow_name+name columns → not conflict
+- [x] workflow-envs.ts PG true only when code === "23505" && constraint === "uq_workflow_envs_workflow_name_name"
+- [x] SQLite requires both fully-qualified remote_agent_workflow_envs.workflow_name and .name
+- [x] Only named identity conflict → WorkflowEnvNameConflictError; unrelated DB errors propagate
+- [x] Focused verification: `cd packages/core && bun test src/db/workflow-envs.test.ts` (9 pass)
+
+**Learnings**:
+- Prior PG path accepted `code 23505 || duplicate-key prose` when the message mentioned the constraint name — that misclassified wrong-constraint and prose-only failures as HTTP 409.
+- Prior SQLite path matched bare `workflow_name` + `name` after stripping — any table with those column names would 409. Parse the column list and require the fully-qualified ENV table pair.
+- `listed.includes('remote_agent_workflow_envs.name')` is safe next to `.workflow_name` because includes is exact, not prefix.
+
+---
+
