@@ -9004,14 +9004,14 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
  * Resolve the AI provider a node would use, WITHOUT the messaging/side effects
  * of `resolveNodeProviderAndModel` — just enough for the container capability
  * pre-flight. Mirrors the provider half of that resolver: `node.provider ??
- * workflowProvider`, then a model tier/alias ref may override the provider.
+ * scopeProvider`, then a model tier/alias ref may override the provider.
  */
 function resolveNodeProviderForPreflight(
   node: Pick<DagNode, 'provider' | 'model'>,
-  workflowProvider: string,
+  scopeProvider: string,
   aiProfile?: ResolvedAiProfile
 ): string {
-  let provider: string = node.provider ?? workflowProvider;
+  let provider: string = node.provider ?? scopeProvider;
   if (node.model && aiProfile) {
     const spec = resolveModelSpec(aiProfile, node.model);
     if (!isLiteralSpec(spec)) provider = spec.provider;
@@ -9021,15 +9021,19 @@ function resolveNodeProviderForPreflight(
 
 /**
  * Collect providers used by AI nodes that CANNOT run inside a container
- * (`capabilities.containerExec === false`), recursing loop_group bodies. bash/
- * script/cancel nodes are deterministic (they exec via `docker exec` directly,
- * no provider) and are skipped; an approval node counts only when it has an
- * `on_reject` reprompt (the one AI turn it can spawn). Unknown providers are
- * skipped here — they fail later with a clearer "unknown provider" error.
+ * (`capabilities.containerExec === false`), recursing loop_group bodies with
+ * the same group scope runtime dispatch derives. bash/script/cancel nodes are
+ * deterministic (they exec via `docker exec` directly, no provider) and are
+ * skipped; an approval node counts only when it has an `on_reject` reprompt
+ * (the one AI turn it can spawn). A `loop_group` container never calls
+ * `sendQuery()`, so its own provider is never collected — only body provider
+ * turns (and nested groups) are. Unknown providers are skipped here — they
+ * fail later with a clearer "unknown provider" error.
  */
 export function collectContainerIncompatibleProviders(
   nodes: readonly DagNode[],
-  workflowProvider: string,
+  scope: WorkflowModelScope,
+  assistantModels: Readonly<Record<string, string | undefined>> = {},
   aiProfile?: ResolvedAiProfile
 ): Set<string> {
   const incompatible = new Set<string>();
@@ -9037,17 +9041,18 @@ export function collectContainerIncompatibleProviders(
     if (!isRegisteredProvider(provider)) return;
     if (!getProviderCapabilities(provider).containerExec) incompatible.add(provider);
   };
-  const visit = (ns: readonly DagNode[]): void => {
+  const visit = (ns: readonly DagNode[], currentScope: WorkflowModelScope): void => {
     for (const node of ns) {
       if (isBashNode(node) || isScriptNode(node) || isCancelNode(node)) continue;
       if (isLoopGroupNode(node)) {
-        check(resolveNodeProviderForPreflight(node, workflowProvider, aiProfile));
-        visit(node.loop_group.nodes);
+        // Group container never calls sendQuery — body turns inherit groupScope.
+        const groupScope = resolveGroupModelScope(node, currentScope, assistantModels, aiProfile);
+        visit(node.loop_group.nodes, groupScope);
         continue;
       }
       if (isApprovalNode(node)) {
         if (node.approval.on_reject) {
-          check(resolveNodeProviderForPreflight(node, workflowProvider, aiProfile));
+          check(resolveNodeProviderForPreflight(node, currentScope.provider, aiProfile));
         }
         continue;
       }
@@ -9056,21 +9061,25 @@ export function collectContainerIncompatibleProviders(
           check(
             resolveNodeProviderForPreflight(
               node.plannotator_gate.prepare,
-              workflowProvider,
+              currentScope.provider,
               aiProfile
             )
           );
         }
         check(
-          resolveNodeProviderForPreflight(node.plannotator_gate.rework, workflowProvider, aiProfile)
+          resolveNodeProviderForPreflight(
+            node.plannotator_gate.rework,
+            currentScope.provider,
+            aiProfile
+          )
         );
         continue;
       }
       // command / prompt / loop → AI node
-      check(resolveNodeProviderForPreflight(node, workflowProvider, aiProfile));
+      check(resolveNodeProviderForPreflight(node, currentScope.provider, aiProfile));
     }
   };
-  visit(nodes);
+  visit(nodes, scope);
   return incompatible;
 }
 
@@ -9564,11 +9573,22 @@ export async function executeDagWorkflow(
   // Container capability fail-fast: before ANY node runs (and before any
   // container work), reject a container run whose AI nodes resolve to a provider
   // that can't spawn in-container. No silent downgrade to the host — the user
-  // asked for isolation and must get it or a clear error.
+  // asked for isolation and must get it or a clear error. Scope matches the
+  // outer WorkflowModelScope runtime loop_group dispatch builds so preflight
+  // and body turns agree on inherited providers at every group depth.
   if (execContext.kind === 'container') {
+    const preflightScope: WorkflowModelScope = {
+      provider: workflowProvider,
+      model: workflowModel,
+      preset: workflowPreset,
+      tier: workflow.model && isTierName(workflow.model) ? workflow.model : undefined,
+      effort: workflow.effort ?? workflow.modelReasoningEffort,
+      providerOrigin: 'workflow',
+    };
     const incompatible = collectContainerIncompatibleProviders(
       workflow.nodes,
-      workflowProvider,
+      preflightScope,
+      assistantModelDefaults(config),
       aiProfile
     );
     if (incompatible.size > 0) {

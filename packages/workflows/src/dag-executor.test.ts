@@ -89,6 +89,7 @@ import {
   containerCommandName,
   buildSubprocessDockerArgs,
 } from './dag-executor';
+import type { WorkflowModelScope } from './node-model-resolution';
 import { writeNodeArtifact } from './artifacts-index';
 import { getWorkflowEventEmitter, type WorkflowEmitterEvent } from './event-emitter';
 import { loadMcpConfig } from '@archon/providers/mcp/config';
@@ -21693,28 +21694,40 @@ describe('collectContainerIncompatibleProviders', () => {
   const promptNode = (id: string, provider?: string): DagNode =>
     ({ id, prompt: `do ${id}`, ...(provider ? { provider } : {}) }) as unknown as DagNode;
   const bashNode = (id: string): DagNode => ({ id, bash: 'echo hi' }) as unknown as DagNode;
+  const scope = (
+    provider: string,
+    extra: Partial<WorkflowModelScope> = {}
+  ): WorkflowModelScope => ({
+    provider,
+    model: undefined,
+    preset: undefined,
+    tier: undefined,
+    effort: undefined,
+    providerOrigin: 'workflow',
+    ...extra,
+  });
 
   it('is empty when all AI nodes resolve to claude (containerExec: true)', () => {
     const nodes = [promptNode('a'), promptNode('b', 'claude'), bashNode('c')];
-    const bad = collectContainerIncompatibleProviders(nodes, 'claude');
+    const bad = collectContainerIncompatibleProviders(nodes, scope('claude'));
     expect([...bad]).toEqual([]);
   });
 
   it('flags a node whose provider lacks containerExec (codex)', () => {
     const nodes = [promptNode('a'), promptNode('b', 'codex')];
-    const bad = collectContainerIncompatibleProviders(nodes, 'claude');
+    const bad = collectContainerIncompatibleProviders(nodes, scope('claude'));
     expect([...bad]).toEqual(['codex']);
   });
 
   it('flags the workflow-level provider when a node does not override it', () => {
     const nodes = [promptNode('a')];
-    const bad = collectContainerIncompatibleProviders(nodes, 'codex');
+    const bad = collectContainerIncompatibleProviders(nodes, scope('codex'));
     expect([...bad]).toEqual(['codex']);
   });
 
   it('ignores bash/script nodes (deterministic, no provider)', () => {
     const nodes = [bashNode('a'), bashNode('b')];
-    const bad = collectContainerIncompatibleProviders(nodes, 'codex');
+    const bad = collectContainerIncompatibleProviders(nodes, scope('codex'));
     expect([...bad]).toEqual([]);
   });
 
@@ -21723,8 +21736,158 @@ describe('collectContainerIncompatibleProviders', () => {
       id: 'g',
       loop_group: { max_iterations: 2, nodes: [promptNode('inner', 'codex')] },
     } as unknown as DagNode;
-    const bad = collectContainerIncompatibleProviders([group], 'claude');
+    const bad = collectContainerIncompatibleProviders([group], scope('claude'));
     expect([...bad]).toEqual(['codex']);
+  });
+
+  it('outer codex + group claude + inherited prompt passes (group never sendQuery)', () => {
+    // Preflight used to check the group container AND visit the body with the
+    // outer workflow provider, so an inherited prompt kept outer `codex` and
+    // falsely rejected a container-safe claude body.
+    const group = {
+      id: 'g',
+      provider: 'claude',
+      loop_group: { max_iterations: 1, nodes: [promptNode('inner')] },
+    } as unknown as DagNode;
+    const bad = collectContainerIncompatibleProviders([group], scope('codex'));
+    expect([...bad]).toEqual([]);
+  });
+
+  it('group resolving to codex with explicit claude body children passes', () => {
+    // Group container provider is irrelevant — only body provider turns count.
+    const group = {
+      id: 'g',
+      provider: 'codex',
+      loop_group: {
+        max_iterations: 1,
+        nodes: [promptNode('a', 'claude'), promptNode('b', 'claude')],
+      },
+    } as unknown as DagNode;
+    const bad = collectContainerIncompatibleProviders([group], scope('claude'));
+    expect([...bad]).toEqual([]);
+  });
+
+  it('nested-group inheritance applies the inner group scope', () => {
+    const nested = {
+      id: 'outer',
+      provider: 'claude',
+      loop_group: {
+        max_iterations: 1,
+        nodes: [
+          {
+            id: 'inner',
+            provider: 'claude',
+            loop_group: {
+              max_iterations: 1,
+              nodes: [promptNode('leaf')],
+            },
+          },
+        ],
+      },
+    } as unknown as DagNode;
+    // Outer workflow is codex, but both groups select claude — leaf inherits claude.
+    expect([...collectContainerIncompatibleProviders([nested], scope('codex'))]).toEqual([]);
+
+    const nestedIncompatible = {
+      id: 'outer',
+      provider: 'claude',
+      loop_group: {
+        max_iterations: 1,
+        nodes: [
+          {
+            id: 'inner',
+            // No provider → inherits outer group claude, then body selects codex.
+            loop_group: {
+              max_iterations: 1,
+              nodes: [promptNode('leaf', 'codex')],
+            },
+          },
+        ],
+      },
+    } as unknown as DagNode;
+    expect([
+      ...collectContainerIncompatibleProviders([nestedIncompatible], scope('claude')),
+    ]).toEqual(['codex']);
+  });
+
+  it('group model-alias scope is used for inherited body turns', () => {
+    const group = {
+      id: 'g',
+      model: '@safe',
+      loop_group: { max_iterations: 1, nodes: [promptNode('inner')] },
+    } as unknown as DagNode;
+    const profile = {
+      defaultProvider: 'codex',
+      aliases: {
+        '@safe': { provider: 'claude', model: 'claude-sonnet' },
+        '@unsafe': { provider: 'codex', model: 'o3' },
+      },
+    };
+    // Outer codex + group alias → claude: body inherits claude, preflight passes.
+    expect([
+      ...collectContainerIncompatibleProviders([group], scope('codex'), {}, profile),
+    ]).toEqual([]);
+
+    const unsafeGroup = {
+      id: 'g',
+      model: '@unsafe',
+      loop_group: { max_iterations: 1, nodes: [promptNode('inner')] },
+    } as unknown as DagNode;
+    // Group alias → codex: inherited body turn is incompatible.
+    expect([
+      ...collectContainerIncompatibleProviders([unsafeGroup], scope('claude'), {}, profile),
+    ]).toEqual(['codex']);
+  });
+
+  it('incompatible inherited body provider turn still rejects before execution', () => {
+    const group = {
+      id: 'g',
+      provider: 'codex',
+      loop_group: { max_iterations: 1, nodes: [promptNode('inner')] },
+    } as unknown as DagNode;
+    const bad = collectContainerIncompatibleProviders([group], scope('claude'));
+    expect([...bad]).toEqual(['codex']);
+  });
+
+  it('approval/plannotator inside groups inherit the group scope', () => {
+    const group = {
+      id: 'g',
+      provider: 'claude',
+      loop_group: {
+        max_iterations: 1,
+        nodes: [
+          {
+            id: 'gate',
+            approval: { prompt: 'ok?', on_reject: { prompt: 'fix it' } },
+          },
+          {
+            id: 'review',
+            plannotator_gate: {
+              rework: { prompt: 'Revise it.' },
+            },
+          },
+        ],
+      },
+    } as unknown as DagNode;
+    // Outer is codex, group is claude — inherited approval/rework must not keep codex.
+    expect([...collectContainerIncompatibleProviders([group], scope('codex'))]).toEqual([]);
+
+    const incompatibleGroup = {
+      id: 'g',
+      provider: 'codex',
+      loop_group: {
+        max_iterations: 1,
+        nodes: [
+          {
+            id: 'gate',
+            approval: { prompt: 'ok?', on_reject: { prompt: 'fix it' } },
+          },
+        ],
+      },
+    } as unknown as DagNode;
+    expect([
+      ...collectContainerIncompatibleProviders([incompatibleGroup], scope('claude')),
+    ]).toEqual(['codex']);
   });
 
   it('checks both prepare and rework providers for Plannotator gates', () => {
@@ -21743,12 +21906,12 @@ describe('collectContainerIncompatibleProviders', () => {
       },
     } as unknown as DagNode;
 
-    expect([...collectContainerIncompatibleProviders([withIncompatiblePrepare], 'claude')]).toEqual(
-      ['codex']
-    );
-    expect([...collectContainerIncompatibleProviders([withIncompatibleRework], 'claude')]).toEqual([
-      'codex',
-    ]);
+    expect([
+      ...collectContainerIncompatibleProviders([withIncompatiblePrepare], scope('claude')),
+    ]).toEqual(['codex']);
+    expect([
+      ...collectContainerIncompatibleProviders([withIncompatibleRework], scope('claude')),
+    ]).toEqual(['codex']);
   });
 
   it('resolves prepare and rework model aliases before checking container compatibility', () => {
@@ -21767,9 +21930,129 @@ describe('collectContainerIncompatibleProviders', () => {
       },
     };
 
-    expect([...collectContainerIncompatibleProviders([gate], 'claude', profile)]).toEqual([
+    expect([
+      ...collectContainerIncompatibleProviders([gate], scope('claude'), {}, profile),
+    ]).toEqual(['codex']);
+  });
+});
+
+describe('executeDagWorkflow -- container preflight group scope', () => {
+  const CONTAINER_EXEC = { kind: 'container' as const, containerId: 'cid-preflight' };
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(
+      tmpdir(),
+      `dag-container-preflight-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(testDir, { recursive: true });
+    mockSendQueryDag.mockClear();
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'should not run' };
+      yield { type: 'result', sessionId: 'never' };
+    });
+  });
+
+  afterEach(async () => {
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+  });
+
+  it('rejects incompatible inherited group body before any node executes', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('preflight-reject-run');
+
+    await expect(
+      executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-preflight',
+        testDir,
+        {
+          name: 'preflight-group',
+          nodes: [
+            {
+              id: 'g',
+              provider: 'codex',
+              loop_group: {
+                max_iterations: 1,
+                nodes: [{ id: 'inner', prompt: 'inherited body turn' }],
+              },
+            } as unknown as DagNode,
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        CONTAINER_EXEC
+      )
+    ).rejects.toThrow(/Provider 'codex' cannot run inside a container/);
+
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
+  });
+
+  it('allows outer codex + group claude inherited body on container', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('preflight-allow-run');
+
+    // Group selects claude; inherited body must not keep outer codex.
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-preflight',
+      testDir,
+      {
+        name: 'preflight-group-ok',
+        nodes: [
+          {
+            id: 'g',
+            provider: 'claude',
+            loop_group: {
+              max_iterations: 1,
+              until: 'DONE',
+              nodes: [{ id: 'inner', prompt: 'say DONE' }],
+            },
+          } as unknown as DagNode,
+        ],
+      },
+      workflowRun,
       'codex',
-    ]);
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      CONTAINER_EXEC
+    );
+
+    expect(mockSendQueryDag).toHaveBeenCalled();
   });
 });
 
