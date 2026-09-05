@@ -16,7 +16,6 @@ export type GitChangedFile = z.infer<typeof gitChangedFileSchema>;
 const revisionSchema = z.string().regex(/^[a-f0-9]{64}$/);
 
 const gitReadyChangesResponseSchema = z.object({
-  emptyReason: z.never().optional(),
   files: z.array(gitChangedFileSchema),
   revision: revisionSchema,
 });
