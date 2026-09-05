@@ -204,6 +204,97 @@ function hasOnlyAllowedKeys(rec: Record<string, unknown>, allowed: Record<string
   return true;
 }
 
+/** Mirror engine ENV overlay patch bounds (no @archon/workflows import). */
+const ENV_OVERLAY_MAX_TARGETS = 256;
+const ENV_OVERLAY_MAX_BYTES = 1024 * 1024;
+
+const ENV_OVERLAY_PATCH_FIELDS: Record<string, true> = {
+  provider: true,
+  model: true,
+  effort: true,
+  thinking: true,
+  prompt: true,
+  bash: true,
+};
+
+const ENV_PATCH_TARGET_KEY_RE = /^[A-Za-z_][A-Za-z0-9_-]*$/;
+
+/**
+ * Fail-closed local mirror of envNodePatchSchema / envPatchesSchema.
+ * Validates shape only — never returns or copies patch bodies.
+ */
+function isValidEnvPatchesDocument(patches: object): boolean {
+  const rec = patches as Record<string, unknown>;
+  const keys = Object.keys(rec);
+  if (keys.length > ENV_OVERLAY_MAX_TARGETS) return false;
+
+  // Same bound the engine/store enforce: UTF-8 byte length of JSON.stringify(patches).
+  const bytes = new TextEncoder().encode(JSON.stringify(patches)).byteLength;
+  if (bytes > ENV_OVERLAY_MAX_BYTES) return false;
+
+  for (const key of keys) {
+    if (
+      key.length === 0 ||
+      !ENV_PATCH_TARGET_KEY_RE.test(key) ||
+      key === '__proto__' ||
+      key === 'prototype' ||
+      key === 'constructor'
+    ) {
+      return false;
+    }
+    if (!isValidEnvNodePatch(rec[key])) return false;
+  }
+  return true;
+}
+
+function isValidEnvNodePatch(value: unknown): boolean {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const rec = value as Record<string, unknown>;
+  if (!hasOnlyAllowedKeys(rec, ENV_OVERLAY_PATCH_FIELDS)) return false;
+
+  let hasField = false;
+
+  if (Object.prototype.hasOwnProperty.call(rec, 'provider')) {
+    hasField = true;
+    const v = rec.provider;
+    // provider: trimmed non-empty string (ENV cannot unset).
+    if (typeof v !== 'string' || v.trim().length === 0) return false;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(rec, 'model')) {
+    hasField = true;
+    const v = rec.model;
+    if (typeof v !== 'string' || v.trim().length === 0) return false;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(rec, 'effort')) {
+    hasField = true;
+    // effortLevelSchema: non-empty string (no trim).
+    if (typeof rec.effort !== 'string' || rec.effort.length === 0) return false;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(rec, 'thinking')) {
+    hasField = true;
+    // Same adaptive|enabled|disabled contract as resolved-row thinking, including
+    // positive integer budgetTokens (zero budget fails closed).
+    if (readThinking(rec.thinking) === null) return false;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(rec, 'prompt')) {
+    hasField = true;
+    // Arbitrary string preserved byte-for-byte (empty/whitespace OK).
+    if (typeof rec.prompt !== 'string') return false;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(rec, 'bash')) {
+    hasField = true;
+    if (typeof rec.bash !== 'string') return false;
+  }
+
+  // Empty per-node patch is invalid; empty document map is valid (caller).
+  return hasField;
+}
+
 /**
  * Present optional non-empty string field.
  * Absent → undefined; present-and-valid → string; present-but-invalid → null (fail closed).
@@ -311,11 +402,14 @@ export function parseRunEnvOverlay(
   }
 
   // patches are required on both lifecycle forms; never exposed on RunEnvOverlay.
+  // Fail closed when the frozen document fails the engine overlay contract —
+  // a non-array object alone is not enough (corrupt bodies must not look trusted).
   if (
     rec.patches === null ||
     rec.patches === undefined ||
     typeof rec.patches !== 'object' ||
-    Array.isArray(rec.patches)
+    Array.isArray(rec.patches) ||
+    !isValidEnvPatchesDocument(rec.patches)
   ) {
     return null;
   }

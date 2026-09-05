@@ -144,4 +144,38 @@ describe('RunDetailPage ENV surfaces', () => {
     expect(html).toContain('sonnet');
     expect(html).toContain('data-testid="run-detail-rest"');
   });
+
+  test('corrupt frozen patch metadata hides only ENV surfaces and never leaks bodies', () => {
+    const run = rawRun({
+      envOverlay: {
+        envId: 'e1',
+        envName: 'fast',
+        workflowName: 'archon-dev',
+        // Valid-looking identity + lifecycle keys, corrupt per-node patch shape.
+        patches: { plan: { prompt: 42, typo: 'SECRET_PATCH_BODY' } },
+        skippedNodeIds: [],
+        latestMissingNodeIds: [],
+        resolved: {
+          plan: { provider: 'claude', model: 'sonnet' },
+        },
+      },
+      total_cost_usd: 0.5,
+    });
+
+    expect(run.envOverlay).toBeNull();
+    expect(hasRunEnvOverlayUi(run)).toBe(false);
+
+    const html = renderRunDetailEnvSurfaces(run);
+    expect(html).not.toContain('run-env-chip');
+    expect(html).not.toContain('workflow-env-resolved-table');
+    expect(html).not.toContain('env: fast');
+    expect(html).not.toContain('sonnet');
+    expect(html).not.toContain('SECRET_PATCH_BODY');
+    expect(html).not.toContain('typo');
+    // Rest of run detail remains usable.
+    expect(html).toContain('archon-dev');
+    expect(html).toContain('ship it');
+    expect(html).toContain('data-testid="run-detail-rest"');
+    expect(html).toContain('workflow:archon-dev status:completed');
+  });
 });

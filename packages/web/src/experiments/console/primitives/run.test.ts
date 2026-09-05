@@ -664,4 +664,160 @@ describe('toRun / parseRunEnvOverlay — ENV overlay metadata', () => {
       resolved: null,
     });
   });
+
+  test('corrupt frozen patches fail closed for pending and complete overlays', () => {
+    const identity = {
+      envId: 'e1',
+      envName: 'fast',
+      workflowName: 'plan',
+    };
+    const pending = (patches: unknown) =>
+      parseRunEnvOverlay({
+        envOverlay: { ...identity, patches, skippedNodeIds: [] },
+      });
+    const complete = (patches: unknown) =>
+      parseRunEnvOverlay({
+        envOverlay: {
+          ...identity,
+          patches,
+          skippedNodeIds: [],
+          latestMissingNodeIds: [],
+          resolved: { plan: { provider: 'claude', model: 'sonnet' } },
+        },
+      });
+
+    // Non-object per-node patch.
+    expect(pending({ plan: null })).toBeNull();
+    expect(complete({ plan: 'not-object' })).toBeNull();
+    expect(pending({ plan: 42 })).toBeNull();
+    expect(complete({ plan: ['array'] })).toBeNull();
+
+    // Unsafe / reserved target ids.
+    expect(pending({ '': { model: 'x' } })).toBeNull();
+    expect(pending({ '1bad': { model: 'x' } })).toBeNull();
+    expect(pending({ 'has space': { model: 'x' } })).toBeNull();
+    // Object-literal `__proto__` sets the prototype; build reserved keys as own props.
+    expect(pending(JSON.parse('{"__proto__":{"model":"x"}}'))).toBeNull();
+    expect(complete(JSON.parse('{"prototype":{"model":"x"}}'))).toBeNull();
+    expect(complete(JSON.parse('{"constructor":{"model":"x"}}'))).toBeNull();
+
+    // Empty per-node patch.
+    expect(pending({ plan: {} })).toBeNull();
+    expect(complete({ plan: {} })).toBeNull();
+
+    // Unknown fields.
+    expect(pending({ plan: { model: 'x', typo: 'SECRET_VALUE' } })).toBeNull();
+    expect(complete({ plan: { prompt: 'ok', extra: true } })).toBeNull();
+
+    // Wrong field types.
+    expect(pending({ plan: { prompt: 42 } })).toBeNull();
+    expect(pending({ plan: { bash: { nested: true } } })).toBeNull();
+    expect(pending({ plan: { provider: '' } })).toBeNull();
+    expect(pending({ plan: { provider: '   ' } })).toBeNull();
+    expect(pending({ plan: { model: 7 } })).toBeNull();
+    expect(pending({ plan: { effort: '' } })).toBeNull();
+    expect(complete({ plan: { effort: 3 } })).toBeNull();
+
+    // Invalid thinking including zero budget.
+    expect(pending({ plan: { thinking: 'nope' } })).toBeNull();
+    expect(pending({ plan: { thinking: { type: 'enabled', budgetTokens: 0 } } })).toBeNull();
+    expect(complete({ plan: { thinking: { type: 'enabled', budgetTokens: -1 } } })).toBeNull();
+    expect(complete({ plan: { thinking: { type: 'turbo' } } })).toBeNull();
+
+    // Over-256 targets.
+    const tooMany: Record<string, { model: string }> = {};
+    for (let i = 0; i < 257; i += 1) {
+      tooMany[`n${i}`] = { model: 'x' };
+    }
+    expect(pending(tooMany)).toBeNull();
+    expect(complete(tooMany)).toBeNull();
+
+    // Over-1-MiB patches (UTF-8 JSON.stringify bound).
+    const oversizePrompt = 'x'.repeat(1024 * 1024);
+    expect(pending({ plan: { prompt: oversizePrompt } })).toBeNull();
+    expect(complete({ plan: { prompt: oversizePrompt } })).toBeNull();
+
+    // Bodies never leak through a failed parse path.
+    const leaked = pending({ plan: { prompt: 42, typo: 'SECRET_BODY_LEAK' } });
+    expect(leaked).toBeNull();
+  });
+
+  test('valid frozen patches with empty map and string bodies still parse', () => {
+    const identity = {
+      envId: 'e1',
+      envName: 'fast',
+      workflowName: 'plan',
+    };
+
+    // Empty patch map (no-op ENV) — pending and complete.
+    expect(
+      parseRunEnvOverlay({
+        envOverlay: { ...identity, patches: {}, skippedNodeIds: ['gone'] },
+      })
+    ).toMatchObject({
+      complete: false,
+      envName: 'fast',
+      skippedNodeIds: ['gone'],
+      resolved: null,
+    });
+    expect(
+      parseRunEnvOverlay({
+        envOverlay: {
+          ...identity,
+          patches: {},
+          skippedNodeIds: [],
+          latestMissingNodeIds: [],
+          resolved: { plan: { provider: 'claude' } },
+        },
+      })
+    ).toMatchObject({
+      complete: true,
+      resolved: [{ nodeId: 'plan', provider: 'claude' }],
+    });
+
+    // Prompt/bash string bodies (including empty and whitespace) remain valid
+    // but never surface on the Run primitive.
+    const withBodies = parseRunEnvOverlay({
+      envOverlay: {
+        ...identity,
+        patches: {
+          plan: { prompt: 'SECRET_PROMPT_BODY', model: 'sonnet' },
+          shell: { bash: '' },
+          pad: { prompt: '   ', bash: '\n\t' },
+          think: { thinking: { type: 'enabled', budgetTokens: 512 } },
+        },
+        skippedNodeIds: [],
+      },
+    });
+    expect(withBodies).toMatchObject({
+      complete: false,
+      envId: 'e1',
+      envName: 'fast',
+      workflowName: 'plan',
+      resolved: null,
+    });
+    const serialized = JSON.stringify(withBodies);
+    expect(serialized).not.toContain('SECRET_PROMPT_BODY');
+    expect(serialized).not.toContain('prompt');
+    expect(serialized).not.toContain('bash');
+    expect(serialized).not.toContain('patches');
+
+    // Long include-expanded target ids remain valid.
+    expect(
+      parseRunEnvOverlay({
+        envOverlay: {
+          ...identity,
+          patches: {
+            quality__review_step: { model: 'haiku' },
+          },
+          skippedNodeIds: [],
+          latestMissingNodeIds: [],
+          resolved: { quality__review_step: { provider: 'claude', model: 'haiku' } },
+        },
+      })
+    ).toMatchObject({
+      complete: true,
+      resolved: [{ nodeId: 'quality__review_step', provider: 'claude', model: 'haiku' }],
+    });
+  });
 });
