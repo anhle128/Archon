@@ -56,6 +56,15 @@ import type {
   WorkflowSource,
 } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type { AppliedEnvOverlay, EnvOverlayCandidate } from '@archon/workflows/schemas/env-overlay';
+import { EnvOverlayError } from '@archon/workflows/env-overlay';
+import {
+  formatEnvOverlayDispatchMessage,
+  resolveContinuationDispatchEnvOverlay,
+  resolveFreshDispatchEnvOverlay,
+  type DispatchEnvOverlayResult,
+} from './env-overlay-dispatch';
+
 import { isPerUserGitHubEnabled } from '../github-auth/config';
 import { getDecryptedAccessToken } from '../db/user-github-token-store';
 import { isPerUserProviderKeysEnabled } from '../credentials/config';
@@ -651,6 +660,11 @@ interface WorkflowDispatchOptions {
    * Validated at the dispatch gate before any worktree/clone/AI cost.
    */
   inputs?: Readonly<Record<string, string>>;
+  /**
+   * Frozen ENV candidate from Start (US-006). Never read from the command string.
+   * Continuations ignore a newly supplied candidate when the run already owns one.
+   */
+  envOverlay?: EnvOverlayCandidate;
 }
 
 const FAILED_RUN_PROMPT_PREVIEW_MAX = 160;
@@ -861,6 +875,66 @@ async function dispatchOrchestratorWorkflow(
       throw err;
     }
   }
+  // Workflow ENV overlay gate (US-006): after input/requirement gates, before
+  // conversation mutation or isolation. Invalid overlays fail cheaply with a
+  // safe code/message and never create a worktree.
+  let executionWorkflow: WorkflowDefinition = workflow;
+  let appliedEnvOverlay: AppliedEnvOverlay | undefined;
+  let ignoredRequestEnvNotice: DispatchEnvOverlayResult['ignoredRequestEnv'];
+  // Fresh-path prep kept when continuing so a hydrate-null fallthrough (new
+  // run row on the same worktree) can still use the request candidate without
+  // re-validating after isolation.
+  let freshOverlayPrep: DispatchEnvOverlayResult | undefined;
+  try {
+    if (options?.envOverlay) {
+      freshOverlayPrep = resolveFreshDispatchEnvOverlay(workflow, options.envOverlay);
+    }
+    if (willContinueExistingRun && resumableRun) {
+      const continuation = resolveContinuationDispatchEnvOverlay(
+        workflow,
+        resumableRun.metadata?.envOverlay,
+        options?.envOverlay
+      );
+      executionWorkflow = continuation.workflow;
+      appliedEnvOverlay = continuation.applied;
+      ignoredRequestEnvNotice = continuation.ignoredRequestEnv;
+    } else if (freshOverlayPrep) {
+      executionWorkflow = freshOverlayPrep.workflow;
+      appliedEnvOverlay = freshOverlayPrep.applied;
+    }
+  } catch (err) {
+    if (err instanceof EnvOverlayError) {
+      getLog().info(
+        {
+          workflowName: workflow.name,
+          conversationId,
+          envId: options?.envOverlay?.envId,
+          envName: options?.envOverlay?.envName,
+          code: err.code,
+          nodeId: err.nodeId,
+          field: err.field,
+        },
+        'workflow.env_overlay_rejected'
+      );
+      await platform.sendMessage(conversationId, formatEnvOverlayDispatchMessage(err));
+      return;
+    }
+    throw err;
+  }
+  if (appliedEnvOverlay) {
+    getLog().info(
+      {
+        workflowName: executionWorkflow.name,
+        conversationId,
+        envId: appliedEnvOverlay.envId,
+        envName: appliedEnvOverlay.envName,
+        appliedNodeIds: Object.keys(appliedEnvOverlay.patches),
+        skippedNodeIds: appliedEnvOverlay.skippedNodeIds,
+        continuing: willContinueExistingRun,
+      },
+      'workflow.env_overlay_prepared'
+    );
+  }
 
   // Keys the engine dropped from this workflow's YAML (#2213). Every chat and
   // console run funnels through here, so this is the one place that covers all
@@ -1028,12 +1102,33 @@ async function dispatchOrchestratorWorkflow(
             `(\`/workflow abandon ${resumableRun.id}\`) and re-invoke.`
         );
       }
+      // Continuations own their original ENV selection — a newly supplied candidate is
+      // ignored with a notice when the run already has (or lacks) a frozen overlay.
+      if (ignoredRequestEnvNotice) {
+        getLog().info(
+          {
+            workflowName: workflow.name,
+            resumableRunId: resumableRun.id,
+            ignoredEnvId: ignoredRequestEnvNotice.envId,
+            ignoredEnvName: ignoredRequestEnvNotice.envName,
+            runOwnsOverlay: Boolean(appliedEnvOverlay),
+          },
+          'orchestrator.resume_ignored_supplied_env'
+        );
+        await platform.sendMessage(
+          conversationId,
+          `▶️ Resuming **${workflow.name}** (\`${resumableRun.id}\`) with its original ENV` +
+            (appliedEnvOverlay ? ` (\`${appliedEnvOverlay.envName}\`)` : ' (YAML only)') +
+            ` — the ENV you selected now (\`${ignoredRequestEnvNotice.envName}\`) was not applied. ` +
+            `To start fresh with it, abandon that run first (\`/workflow abandon ${resumableRun.id}\`) and re-invoke.`
+        );
+      }
       await executeWorkflow(
         deps,
         platform,
         conversationId,
         resumableRun.working_path,
-        workflow,
+        executionWorkflow,
         userMessage,
         conversation.id,
         {
@@ -1045,6 +1140,8 @@ async function dispatchOrchestratorWorkflow(
           baseBranch: codebaseBaseBranch,
           resolveChildIsolation,
           ...prepared,
+          // Patched clone + detached descriptor; executor verifies rather than re-applying.
+          ...(appliedEnvOverlay ? { appliedEnvOverlay } : {}),
         }
       );
     } else {
@@ -1055,6 +1152,9 @@ async function dispatchOrchestratorWorkflow(
         await platform.sendMessage(conversationId, deferredInputError.message);
         return;
       }
+      // Fresh row: use the request candidate (pre-validated), not the prior run's overlay.
+      const freshWorkflow = freshOverlayPrep?.workflow ?? workflow;
+      const freshApplied = freshOverlayPrep?.applied;
       await platform.sendMessage(
         conversationId,
         `⚠️ Prior run for **${workflow.name}** had no completed nodes; starting fresh in the same worktree.`
@@ -1064,7 +1164,7 @@ async function dispatchOrchestratorWorkflow(
         platform,
         conversationId,
         resumableRun.working_path,
-        workflow,
+        freshWorkflow,
         userMessage,
         conversation.id,
         {
@@ -1078,10 +1178,11 @@ async function dispatchOrchestratorWorkflow(
           // This branch creates a FRESH run row (the prior run had nothing to resume),
           // so the supplied inputs still need stamping.
           inputs: resolvedInputs,
+          ...(freshApplied ? { appliedEnvOverlay: freshApplied } : {}),
         }
       );
     }
-  } else if (platform.getPlatformType() === 'web' && !workflow.interactive) {
+  } else if (platform.getPlatformType() === 'web' && !executionWorkflow.interactive) {
     // Background dispatch: web-only, non-interactive workflows with no resumable run.
     // This is the console's default path, so it is exactly where a console-supplied
     // input map must not be dropped.
@@ -1097,19 +1198,20 @@ async function dispatchOrchestratorWorkflow(
           originalMessage: userMessage,
           conversationDbId: conversation.id,
           codebaseId: codebase.id,
-          availableWorkflows: [workflow],
+          availableWorkflows: [executionWorkflow],
           isolationHints,
           userId,
           source,
           parseWarnings: options?.parseWarnings,
           inputs: resolvedInputs,
+          appliedEnvOverlay,
         },
-        workflow
+        executionWorkflow
       );
     } catch (err) {
       if (err instanceof ComposedApprovalGateError) {
         getLog().info(
-          { workflowName: workflow.name, conversationId, gate: err.gate },
+          { workflowName: executionWorkflow.name, conversationId, gate: err.gate },
           'workflow.composed_gate_undriveable'
         );
         await platform.sendMessage(conversationId, err.message);
@@ -1124,7 +1226,7 @@ async function dispatchOrchestratorWorkflow(
       platform,
       conversationId,
       cwd,
-      workflow,
+      executionWorkflow,
       userMessage,
       conversation.id,
       {
@@ -1136,6 +1238,7 @@ async function dispatchOrchestratorWorkflow(
         baseBranch: codebaseBaseBranch,
         resolveChildIsolation,
         inputs: resolvedInputs,
+        ...(appliedEnvOverlay ? { appliedEnvOverlay } : {}),
       }
     );
   }
@@ -1559,9 +1662,11 @@ export async function handleMessage(
               resumeRunId: result.workflow.resumeRunId,
               resumeRun: result.workflow.resumeRun,
               parseWarnings: result.workflow.parseWarnings,
-              // Declared inputs (#2554) arrive on the request context, not in the
-              // command text — the run route is the only caller that sets them.
+              // Declared inputs (#2554) and frozen ENV candidate (US-006) arrive on the
+              // request context, not in the command text — the run route is the only
+              // caller that sets them today.
               inputs: context?.workflowInputs,
+              envOverlay: context?.envOverlay,
             }
           );
         }

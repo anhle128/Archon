@@ -3,6 +3,7 @@
  */
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type { EnvOverlayCandidate } from '@archon/workflows/schemas/env-overlay';
 
 // MessageChunk + TokenUsage are used by IPlatformAdapter below.
 import type { MessageChunk, TokenUsage } from '@archon/providers/types';
@@ -64,6 +65,14 @@ export interface HandleMessageContext {
    * (#2555 tracks giving them one).
    */
   readonly workflowInputs?: Readonly<Record<string, string>>;
+  /**
+   * Frozen Workflow ENV candidate selected at Start (US-006/US-008).
+   *
+   * Set ONLY by the `POST /api/workflows/:name/run` route after loading the ENV
+   * row. Rides the context out-of-band — never embedded in the natural-language
+   * command string. Chat platforms leave it unset.
+   */
+  readonly envOverlay?: EnvOverlayCandidate;
 }
 
 export interface CommandResult {

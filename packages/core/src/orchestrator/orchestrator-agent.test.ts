@@ -239,9 +239,10 @@ mock.module('../services/title-generator', () => ({
   generateAndSetTitle: mockGenerateAndSetTitle,
 }));
 
+const mockValidateAndResolveIsolation = mock(() => Promise.resolve({ cwd: '/test/cwd' }));
 const mockDispatchBackgroundWorkflow = mock(() => Promise.resolve());
 mock.module('./orchestrator', () => ({
-  validateAndResolveIsolation: mock(() => Promise.resolve({ cwd: '/test/cwd' })),
+  validateAndResolveIsolation: mockValidateAndResolveIsolation,
   dispatchBackgroundWorkflow: mockDispatchBackgroundWorkflow,
 }));
 
@@ -1562,6 +1563,9 @@ describe('workflow dispatch routing — interactive flag', () => {
 
   beforeEach(() => {
     mockExecuteWorkflow.mockClear();
+    mockValidateAndResolveIsolation.mockClear();
+    mockValidateAndResolveIsolation.mockImplementation(() => Promise.resolve({ cwd: '/test/cwd' }));
+
     mockDispatchBackgroundWorkflow.mockClear();
     mockFindResumableRunByParentConversation.mockClear();
     mockHydrateResumableRun.mockClear();
@@ -2323,6 +2327,244 @@ describe('workflow dispatch routing — interactive flag', () => {
     };
     expect(opts.preCreatedRun).toBeUndefined();
     expect(opts.priorCompletedNodes).toBeUndefined();
+  });
+  // -------------------------------------------------------------------------
+  // Workflow ENV overlay gate (US-006) — pre-isolation
+  // -------------------------------------------------------------------------
+
+  function makeEnvCandidate(patches: Record<string, Record<string, string>>) {
+    return {
+      envId: 'env-1',
+      envName: 'fast',
+      workflowName: 'test-workflow',
+      patches,
+    };
+  }
+
+  test('invalid ENV overlay stops before isolation', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    // command node cannot take prompt — field_not_supported_for_node
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve(
+        makeWorkflowResult(true, {
+          // keep default command node from makeTestWorkflow
+        })
+      )
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      envOverlay: makeEnvCandidate({ default: { prompt: 'secret-body-must-not-echo' } }),
+    });
+
+    expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
+    expect(sent).toContain('field_not_supported_for_node');
+    expect(sent).not.toContain('secret-body-must-not-echo');
+  });
+
+  test('workflow name mismatch on ENV candidate stops before isolation', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      envOverlay: {
+        envId: 'env-1',
+        envName: 'fast',
+        workflowName: 'other-workflow',
+        patches: { default: { model: 'x' } },
+      },
+    });
+
+    expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
+    expect(sent).toContain('workflow_mismatch');
+  });
+
+  test('valid ENV overlay reaches isolation and threads appliedEnvOverlay to foreground', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve({
+        success: true,
+        message: 'ok',
+        workflow: {
+          definition: makeTestWorkflow({
+            name: 'test-workflow',
+            interactive: true,
+            nodes: [{ id: 'default', prompt: 'base', provider: 'claude' }],
+          }),
+          args: 'test message',
+        },
+      })
+    );
+
+    await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+      envOverlay: makeEnvCandidate({ default: { model: 'claude-sonnet-4' } }),
+    });
+
+    expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    const wf = callArgs[4] as { nodes: Array<{ model?: string }> };
+    expect(wf.nodes[0]?.model).toBe('claude-sonnet-4');
+    const opts = callArgs[callArgs.length - 1] as {
+      appliedEnvOverlay?: {
+        envId: string;
+        envName: string;
+        patches: Record<string, unknown>;
+        skippedNodeIds: string[];
+      };
+    };
+    expect(opts.appliedEnvOverlay).toEqual({
+      envId: 'env-1',
+      envName: 'fast',
+      workflowName: 'test-workflow',
+      patches: { default: { model: 'claude-sonnet-4' } },
+      skippedNodeIds: [],
+    });
+  });
+
+  test('missing-id ENV overlay still reaches isolation (skip, do not fail)', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+
+    await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+      envOverlay: makeEnvCandidate({ missing_node: { model: 'x' } }),
+    });
+
+    expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+    const opts = mockExecuteWorkflow.mock.calls[0][
+      mockExecuteWorkflow.mock.calls[0].length - 1
+    ] as {
+      appliedEnvOverlay?: { skippedNodeIds: string[]; patches: Record<string, unknown> };
+    };
+    expect(opts.appliedEnvOverlay?.skippedNodeIds).toEqual(['missing_node']);
+    expect(opts.appliedEnvOverlay?.patches).toEqual({});
+  });
+
+  test('valid ENV overlay threads appliedEnvOverlay to background dispatch', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve({
+        success: true,
+        message: 'ok',
+        workflow: {
+          definition: makeTestWorkflow({
+            name: 'test-workflow',
+            // non-interactive → background on web
+            nodes: [{ id: 'default', prompt: 'base', provider: 'claude' }],
+          }),
+          args: 'test message',
+        },
+      })
+    );
+
+    await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+      envOverlay: makeEnvCandidate({ default: { model: 'claude-haiku' } }),
+    });
+
+    expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
+    expect(mockDispatchBackgroundWorkflow).toHaveBeenCalled();
+    const ctx = mockDispatchBackgroundWorkflow.mock.calls[0][0] as {
+      appliedEnvOverlay?: { envName: string; patches: Record<string, unknown> };
+    };
+    const bgWorkflow = mockDispatchBackgroundWorkflow.mock.calls[0][1] as {
+      nodes: Array<{ model?: string }>;
+    };
+    expect(ctx.appliedEnvOverlay?.envName).toBe('fast');
+    expect(ctx.appliedEnvOverlay?.patches).toEqual({ default: { model: 'claude-haiku' } });
+    expect(bgWorkflow.nodes[0]?.model).toBe('claude-haiku');
+  });
+
+  test('continuation ignores newly supplied ENV and notifies the user', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve({
+        success: true,
+        message: 'ok',
+        workflow: {
+          definition: makeTestWorkflow({
+            name: 'test-workflow',
+            interactive: true,
+            nodes: [{ id: 'default', prompt: 'base', provider: 'claude' }],
+          }),
+          args: 'test message',
+        },
+      })
+    );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'paused-env-run',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/paused',
+        parent_conversation_id: 'conv-1',
+        status: 'paused',
+        metadata: {
+          envOverlay: {
+            envId: 'env-stored',
+            envName: 'stored-env',
+            workflowName: 'test-workflow',
+            patches: { default: { model: 'from-stored' } },
+            skippedNodeIds: [],
+          },
+        },
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      envOverlay: makeEnvCandidate({ default: { model: 'from-request' } }),
+    });
+
+    expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    const wf = callArgs[4] as { nodes: Array<{ model?: string }> };
+    expect(wf.nodes[0]?.model).toBe('from-stored');
+    const opts = callArgs[callArgs.length - 1] as {
+      appliedEnvOverlay?: { envName: string; patches: Record<string, unknown> };
+    };
+    expect(opts.appliedEnvOverlay?.envName).toBe('stored-env');
+    expect(opts.appliedEnvOverlay?.patches).toEqual({ default: { model: 'from-stored' } });
+    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
+    expect(sent).toContain('not applied');
+    expect(sent).toContain('fast');
+    expect(sent).toContain('stored-env');
+  });
+
+  test('malformed stored resume overlay stops before isolation', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'paused-bad-env',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/paused',
+        parent_conversation_id: 'conv-1',
+        status: 'paused',
+        metadata: { envOverlay: { broken: true } },
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+
+    expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
+    expect(sent).toContain('invalid_overlay_snapshot');
   });
 });
 
