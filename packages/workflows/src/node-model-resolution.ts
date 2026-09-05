@@ -439,9 +439,20 @@ export function buildResolvedRequestMetadata(
  * After the #1764 collapse a discovered workflow carries no node-affecting fields, so
  * this normally reduces to `config.assistant` — but a programmatic caller can still hand
  * over an unexpanded definition, and the fallbacks have to behave the same for it.
+ *
+ * Effort fallback mirrors the DAG executor's `workflowLevelOptions`: portable
+ * `effort` wins; legacy workflow-level `modelReasoningEffort` fills when `effort` is
+ * absent (loader-normalized YAML already translates the legacy field into `effort`, so
+ * Preview/snapshot/node_started stay aligned for both shapes).
  */
 export function resolveWorkflowModelScope(
-  workflow: { provider?: string; model?: string; effort?: string },
+  workflow: {
+    provider?: string;
+    model?: string;
+    effort?: string;
+    /** Legacy spelling; lower precedence than portable `effort`. */
+    modelReasoningEffort?: string;
+  },
   defaultAssistant: string,
   assistantModels: Readonly<Record<string, string | undefined>>,
   aiProfile?: ResolvedAiProfile
@@ -467,7 +478,7 @@ export function resolveWorkflowModelScope(
     model,
     preset,
     tier: workflow.model && isTierName(workflow.model) ? workflow.model : undefined,
-    effort: workflow.effort,
+    effort: workflow.effort ?? workflow.modelReasoningEffort,
     // The preset is checked FIRST because when one resolves, its provider is what won —
     // `provider` was reassigned from `spec.provider` above, overriding any `provider:` the
     // workflow declared (the executor warns about exactly that case). Reporting the

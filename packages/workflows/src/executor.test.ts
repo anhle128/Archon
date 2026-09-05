@@ -163,6 +163,7 @@ import { isPromptNode } from './schemas';
 import {
   assistantModelDefaults,
   buildResolvedRequestMetadata,
+  resolveNodeExecutionRequest,
   resolveWorkflowModelScope,
 } from './node-model-resolution';
 import { buildAiProfile } from './model-validation';
@@ -3024,5 +3025,134 @@ describe('executeWorkflow ENV overlay ownership', () => {
     expect(complete.resolved['grp.inner'].effort).toBeUndefined();
     // Group container itself never calls sendQuery.
     expect(complete.resolved.grp).toBeUndefined();
+  });
+
+  it('US-027: programmatic workflow modelReasoningEffort matches loader-normalized snapshot + provider effort', async () => {
+    // Unexpanded programmatic definitions may still carry legacy workflow-level
+    // modelReasoningEffort without portable effort. Snapshot resolved rows, the
+    // pure node_started metadata path, and provider nodeConfig.effort (appliedEffort)
+    // must match loader-normalized YAML that already translated the field to effort.
+    const snapshots: unknown[] = [];
+    const store = makeStore({
+      createWorkflowRun: mock(async data =>
+        makeRun({
+          id: 'legacy-mre-1',
+          metadata: { ...(data.metadata as object) },
+          user_id: data.user_id ?? null,
+        })
+      ),
+      setWorkflowRunEnvOverlay: mock(async (runId, snapshot) => {
+        snapshots.push(snapshot);
+        return makeRun({ id: runId, metadata: { envOverlay: snapshot } });
+      }),
+    });
+
+    const deps = makeDeps(store);
+    const assistants = {
+      claude: { model: 'sonnet' },
+      codex: {},
+    };
+    deps.loadConfig = mock(
+      async (): Promise<WorkflowConfig> => ({
+        assistant: 'claude',
+        assistants,
+        baseBranch: '',
+        prRemote: 'origin',
+        commands: { folder: '' },
+      })
+    );
+
+    const programmatic = makeWorkflow({
+      modelReasoningEffort: 'high',
+      nodes: [
+        { id: 'top', prompt: 'top-turn' },
+        {
+          id: 'grp',
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 1,
+            nodes: [{ id: 'inner', prompt: 'nested-turn' }],
+          },
+        },
+      ],
+    });
+    // Overlay only renames the top model so the snapshot path is exercised; effort
+    // still comes solely from the workflow-level legacy field.
+    const applied = makeApplied({
+      patches: { top: { model: 'haiku' } },
+      skippedNodeIds: [],
+    });
+    const { workflow: patched } = applyEnvOverlay(programmatic, applied.patches);
+
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp/repo',
+      patched,
+      'go',
+      'db',
+      { appliedEnvOverlay: applied }
+    );
+    expect(result.success).toBe(true);
+    expect(snapshots).toHaveLength(1);
+
+    const complete = snapshots[0] as {
+      resolved: Record<
+        string,
+        {
+          provider: string;
+          model?: string;
+          modelReasoningEffort?: string;
+          effort?: string;
+        }
+      >;
+    };
+
+    const aiProfile = buildAiProfile('claude', {});
+    const assistantModels = assistantModelDefaults({ assistants });
+    const scope = resolveWorkflowModelScope(patched, 'claude', assistantModels, aiProfile);
+    expect(scope.effort).toBe('high');
+
+    const runtimeExpected = buildResolvedRequestMetadata(patched.nodes, scope, assistantModels, {
+      aiProfile,
+      assistants,
+    });
+    expect(complete.resolved).toEqual(runtimeExpected);
+
+    // Loader-normalized twin (effort only) must produce the same effective rows.
+    const loaderTwin = makeWorkflow({
+      effort: 'high',
+      nodes: patched.nodes,
+    });
+    const twinScope = resolveWorkflowModelScope(loaderTwin, 'claude', assistantModels, aiProfile);
+    const twinResolved = buildResolvedRequestMetadata(
+      loaderTwin.nodes,
+      twinScope,
+      assistantModels,
+      { aiProfile, assistants }
+    );
+    expect(twinResolved).toEqual(complete.resolved);
+
+    // Provider request options: appliedEffort is what nodeConfig.effort / sendQuery gets.
+    const topRequest = resolveNodeExecutionRequest(patched.nodes[0]!, scope, assistantModels, {
+      aiProfile,
+      assistants,
+    });
+    expect(topRequest.metadata).toEqual(complete.resolved.top);
+    expect(topRequest.appliedEffort).toBe('high');
+    expect(topRequest.metadata.effort).toBe('high');
+    expect(topRequest.metadata.modelReasoningEffort).toBeUndefined();
+
+    expect(complete.resolved.top).toMatchObject({
+      provider: 'claude',
+      model: 'haiku',
+      effort: 'high',
+    });
+    expect(complete.resolved['grp.inner']).toMatchObject({
+      provider: 'claude',
+      model: 'sonnet',
+      effort: 'high',
+    });
   });
 });

@@ -324,6 +324,87 @@ describe('buildResolvedRequestMetadata', () => {
   });
 });
 
+describe('resolveWorkflowModelScope — legacy modelReasoningEffort', () => {
+  test('unexpanded programmatic workflow-level modelReasoningEffort becomes scope.effort', () => {
+    // Loader-normalized YAML translates modelReasoningEffort → effort before the
+    // definition is handed to the engine. Programmatic callers may still pass the
+    // legacy field alone; scope must match the DAG executor fallback so Preview /
+    // snapshot / node_started / provider options stay aligned.
+    const programmatic: WorkflowDefinition = {
+      name: 'legacy-mre',
+      description: 'unexpanded',
+      modelReasoningEffort: 'high',
+      nodes: [{ id: 'turn', prompt: 'go' }],
+    };
+    const loaderNormalized: WorkflowDefinition = {
+      name: 'legacy-mre',
+      description: 'loader-translated',
+      effort: 'high',
+      nodes: [{ id: 'turn', prompt: 'go' }],
+    };
+
+    const progScope = resolveWorkflowModelScope(programmatic, 'claude', assistantModels, aiProfile);
+    const yamlScope = resolveWorkflowModelScope(
+      loaderNormalized,
+      'claude',
+      assistantModels,
+      aiProfile
+    );
+    expect(progScope.effort).toBe('high');
+    expect(yamlScope.effort).toBe('high');
+    expect(progScope.effort).toBe(yamlScope.effort);
+
+    const progRequest = resolveNodeExecutionRequest(
+      programmatic.nodes[0]!,
+      progScope,
+      assistantModels,
+      { aiProfile }
+    );
+    const yamlRequest = resolveNodeExecutionRequest(
+      loaderNormalized.nodes[0]!,
+      yamlScope,
+      assistantModels,
+      { aiProfile }
+    );
+    // Same portable effort in metadata, appliedEffort (provider nodeConfig.effort),
+    // and no assistant-legacy modelReasoningEffort surface once portable effort wins.
+    expect(progRequest.metadata).toEqual(yamlRequest.metadata);
+    expect(progRequest.metadata.effort).toBe('high');
+    expect(progRequest.metadata.modelReasoningEffort).toBeUndefined();
+    expect(progRequest.appliedEffort).toBe('high');
+    expect(progRequest.appliedEffort).toBe(yamlRequest.appliedEffort);
+
+    const progResolved = buildResolvedRequestMetadata(
+      programmatic.nodes,
+      progScope,
+      assistantModels,
+      { aiProfile }
+    );
+    const yamlResolved = buildResolvedRequestMetadata(
+      loaderNormalized.nodes,
+      yamlScope,
+      assistantModels,
+      { aiProfile }
+    );
+    expect(progResolved).toEqual(yamlResolved);
+    expect(progResolved.turn).toMatchObject({
+      provider: 'claude',
+      model: 'claude-sonnet-4',
+      effort: 'high',
+    });
+  });
+
+  test('portable effort wins over workflow-level modelReasoningEffort', () => {
+    const scope = resolveWorkflowModelScope(
+      { effort: 'low', modelReasoningEffort: 'xhigh' },
+      'claude',
+      assistantModels,
+      aiProfile
+    );
+    expect(scope.effort).toBe('low');
+  });
+});
+
 describe('assistantModelDefaults', () => {
   test('extracts string models only', () => {
     expect(
