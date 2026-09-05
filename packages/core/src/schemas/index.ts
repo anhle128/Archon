@@ -117,6 +117,15 @@ export type {
   UsageLedgerRow,
 } from './usage-ledger';
 
+// WorkflowEnv
+export {
+  workflowEnvNameSchema,
+  workflowEnvRowSchema,
+  workflowEnvSummarySchema,
+  workflowEnvWorkflowNameSchema,
+} from './workflow-env';
+export type { EnvPatches, WorkflowEnvRow, WorkflowEnvSummary } from './workflow-env';
+
 // UsageReport
 export {
   usageDimensionsSchema,

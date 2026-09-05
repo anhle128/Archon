@@ -52,6 +52,7 @@ clearRegistry();
 registerBuiltinProviders();
 
 import { executeWorkflow, hydrateResumableRun } from './executor';
+import { applyEnvOverlay } from './env-overlay';
 import { discoverWorkflows } from './workflow-discovery';
 import { validateWorkflowResources } from './validator';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
@@ -166,6 +167,13 @@ class InMemoryStore implements IWorkflowStore {
       if (updates.metadata) r.metadata = { ...r.metadata, ...updates.metadata };
     }
     return Promise.resolve();
+  };
+
+  setWorkflowRunEnvOverlay: IWorkflowStore['setWorkflowRunEnvOverlay'] = (runId, snapshot) => {
+    const r = this.runs.get(runId);
+    if (!r) throw new Error(`Workflow run not found (id: ${runId})`);
+    r.metadata = { ...r.metadata, envOverlay: structuredClone(snapshot) };
+    return Promise.resolve(this.clone(r));
   };
 
   resolveApprovalGate: IWorkflowStore['resolveApprovalGate'] = (id, expected, metadata, events) => {
@@ -584,6 +592,71 @@ nodes:
     expect(parentUsageSteps).toContain('after');
     expect(parentUsageSteps).not.toContain('work');
     expect(parentUsageSteps).not.toContain('sub');
+  });
+
+  it('fresh child run does not inherit parent ENV overlay metadata (US-005)', async () => {
+    await writeWorkflow(
+      'child-no-env',
+      `
+name: child-no-env
+description: child
+nodes:
+  - id: work
+    prompt: "child work"
+`
+    );
+    await writeWorkflow(
+      'parent-with-env',
+      `
+name: parent-with-env
+description: parent with overlay on plan
+nodes:
+  - id: plan
+    prompt: "plan"
+  - id: sub
+    workflow: child-no-env
+    input: "from-parent"
+    depends_on: [plan]
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await discover('parent-with-env');
+    const applied = applyEnvOverlay(parent, { plan: { prompt: 'overlaid-plan' } });
+
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      applied.workflow,
+      'goal',
+      'conv-db',
+      {
+        appliedEnvOverlay: {
+          envId: 'env-parent',
+          envName: 'parent-fast',
+          workflowName: 'parent-with-env',
+          patches: applied.appliedPatches,
+          skippedNodeIds: applied.missingNodeIds,
+        },
+        userId: 'parent-owner',
+      }
+    );
+
+    expect(result.success).toBe(true);
+    const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-with-env');
+    const child = [...store.runs.values()].find(r => r.workflow_name === 'child-no-env');
+    expect(parentRun).toBeDefined();
+    expect(child).toBeDefined();
+    expect(child?.parent_run_id).toBe(parentRun?.id);
+    expect(child?.user_id).toBe('parent-owner');
+    const parentOverlay = (parentRun?.metadata as Record<string, unknown> | undefined)?.envOverlay;
+    expect(parentOverlay).toBeDefined();
+    expect((parentOverlay as { envName?: string } | undefined)?.envName).toBe('parent-fast');
+    // Child never received envOverlay on create or snapshot.
+    expect((child?.metadata as Record<string, unknown> | undefined)?.envOverlay).toBeUndefined();
   });
 
   it('child gate → parent pauses blocked-on-child → approve child → parent auto-resumes → output threads', async () => {

@@ -1,0 +1,1127 @@
+## Codebase Patterns
+
+### Post-Convergence-4 Constitution re-check (US-038)
+- **Where**: `docs/superpowers/plans/2026-09-05-workflow-env-overlay.md` Constitution Check §E
+- **Pattern**: Preserve historical Constitution Check sections A–D; append a dated post-Convergence-4 re-check that is the sole authoritative release-blocker list. Close Convergence 4 findings only with final symbols + focused test titles (not prior Ralph counts). Point C/D/Convergence 4 intros at §E without deleting gap text. Label only one “Current release blockers (authoritative)” section.
+- **Example**: §D historical after US-034–US-037; §E marks US-034–US-037 CLOSED with notice_failed / collectContainerIncompatibleProviders / thinkingUnsupported / providerConflict evidence; current blockers **None**; shipping = `bun run validate` + Postgres `check:schema-upgrades` CI
+
+### Group providerConflict on resolveGroupModelScope (US-037)
+- **Where**: `packages/workflows/src/node-model-resolution.ts` (`ResolvedGroupModelScope`), `packages/workflows/src/dag-executor.ts` (`warnModelProviderConflict`)
+- **Pattern**: `resolveGroupModelScope` must forward `resolveNodeModel().providerConflict`. Runtime loop_group dispatch emits the same deduped `dag.model_provider_conflict` warning before body execution — body nodes inherit the already-resolved provider and cannot recover the conflict. Do not add a group container row to ENV `resolved` metadata.
+- **Example**: group `{ provider: 'claude', model: '@fast' }` with alias→codex → one warn + body `provider/model` = codex/gpt-5.5; matching provider+alias → no conflict
+
+### Preset thinking warnings via thinkingUnsupported (US-036)
+- **Where**: `packages/workflows/src/dag-executor.ts` (capability warning layer in resolve/send options)
+- **Pattern**: `capChecks` thinking isSet must be `request.thinkingUnsupported`, not `(node.thinking ?? workflow.thinking)`. Pure path already folds node/workflow/preset precedence into `appliedThinking` + `thinkingUnsupported`; nodeConfig still gets `request.appliedThinking` so metadata/send stay truthful while `dag.unsupported_capabilities` fires once. Do not add a second warning mechanism for presets (unlike effort, which drops via `presetEffortDropped`).
+- **Example**: codex/opencode/grok tier or alias `{ thinking: 'enabled' }` with no node/workflow thinking → one `dag.unsupported_capabilities` + user warning; thinking remains on nodeConfig/`node_started`
+
+### Container preflight follows loop-group scope (US-035)
+- **Where**: `packages/workflows/src/dag-executor.ts` (`collectContainerIncompatibleProviders`)
+- **Pattern**: Preflight takes `WorkflowModelScope` + `assistantModelDefaults`, not a bare workflow provider string. For each `loop_group`, derive body scope via `resolveGroupModelScope` and recurse — never `check()` the group container (it never calls `sendQuery`). Nested groups, model-alias groups, and approval/plannotator turns inside bodies inherit that same scope so preflight matches runtime dispatch. `executeDagWorkflow` builds the outer scope from the same provider/model/preset/tier/effort fields runtime uses before the container fail-fast.
+- **Example**: outer `codex` + group `claude` + inherited prompt → empty incompatible set; group `codex` + inherited body → `codex` rejected before any node executes
+
+
+### Post-CAS continuation notices best-effort (US-034)
+- **Where**: `packages/core/src/orchestrator/orchestrator-agent.ts` (post-`hydrateResumableRun` supplied-input + ignored-ENV notices)
+- **Pattern**: After the winning resume CAS, informational `platform.sendMessage` calls must `.catch` + `getLog().warn` with run/env ids only. A rejecting adapter must not prevent `executeWorkflow` from owning the already-`running` row. Notices stay *after* claim (losing-CAS path unchanged). Command ack send is a separate earlier await and is not best-effort.
+- **Example**: hydrate wins → notice send rejects → `orchestrator.resume_ignored_supplied_*_notice_failed` warn → `executeWorkflow` once with `...prepared` + stored overlay
+
+
+### Post-Convergence Constitution re-check (US-033)
+- **Where**: `docs/superpowers/plans/2026-09-05-workflow-env-overlay.md` Constitution Check §D
+- **Pattern**: Preserve historical Constitution Check sections; append a dated current re-check that is the sole authoritative release-blocker list. Close prior blockers only with final symbols + focused test titles; never delete A/B evidence.
+- **Example**: B listed US-020/US-021 OPEN → §D marks CLOSED citing `inspectResumableRun`/`failWorkflowRun(... pending)` + named tests; current blockers **None**
+
+
+### Authoritative ENV identity on reads (US-032)
+- **Where**: `packages/core/src/schemas/workflow-env.ts` (`workflowEnvRowSchema` / `workflowEnvSummarySchema`)
+- **Pattern**: Row and summary schemas compose `workflowEnvWorkflowNameSchema` + `workflowEnvNameSchema` — never length-only strings. Corrupt stored identities (`bad//workflow`, `has space`) fail `WorkflowEnvCorruptRowError` with id-only message/log on get and list. Summary SELECT omits patches so identity validation never needs patch bodies.
+- **Example**: `workflow_name:'bad//workflow'` or `name:'has space'` → corrupt on get/list; `{not-json` patches alone still list OK when identity is valid
+
+### Positive thinking budgetTokens (US-031)
+- **Where**: `packages/web/src/experiments/console/lib/workflow-env-editor.ts` (`thinkingToPatch`)
+- **Pattern**: Present `budgetTokens` must satisfy thinkingConfigSchema `z.number().int().positive()` — blank/whitespace omits the optional field; `0`/`-0`/negative/fractional/non-finite throw `thinking budgetTokens must be a positive integer`. Dialog `buildPatchesFromDrafts` surfaces the error as local `actionError` (no POST/PATCH); `updateDraft` clears error without wiping other fields.
+- **Example**: `{ mode:'enabled', budgetTokens:'0' }` → throw; `''` → `{ type:'enabled' }`; `'4096'` → `{ type:'enabled', budgetTokens:4096 }`
+
+### Strict frozen patch document (US-030)
+- **Where**: `packages/web/src/experiments/console/primitives/run.ts` (`isValidEnvPatchesDocument` / `isValidEnvNodePatch` before pending/complete accept)
+- **Pattern**: `patches` must be a non-array object *and* mirror engine `envPatchesSchema`: target keys `[A-Za-z_][A-Za-z0-9_-]*` excluding reserved `__proto__`/`prototype`/`constructor`; per-node only provider/model/effort/thinking/prompt/bash; at least one field; provider/model trim non-empty; prompt/bash any string; thinking via same adaptive|enabled|disabled + positive budgetTokens; ≤256 targets; ≤1 MiB UTF-8 `JSON.stringify`. Never copy bodies onto `RunEnvOverlay`.
+- **Example**: `{ plan: { prompt: 42, typo: 'x' } }` → null; `{ plan: { prompt: '', bash: '  ' } }` pending → chip without bodies; `{}` no-op OK
+
+### Inspect before stored ENV parse (US-029)
+- **Where**: `packages/core/src/orchestrator/orchestrator-agent.ts` (`dispatchOrchestratorWorkflow` ENV gate)
+- **Pattern**: Every provisional continuation calls `inspectResumableRun` *before* `resolveContinuationDispatchEnvOverlay`. Inspect-null → `resolveFreshDispatchEnvOverlay(request|undefined)` and ignore stale `metadata.envOverlay` (malformed/incompatible included). Genuine continuation alone parses the run-owned snapshot. `workflow.env_overlay_prepared.continuing` is `isGenuineContinuation`, never bare `willContinueExistingRun`.
+- **Example**: paused + inspect-null + `{ broken: true }` stored → fresh YAML/request; paused + inspect non-null + same stored → fail closed pre-isolation
+
+### Strict present optional ENV fields (US-028)
+- **Where**: `packages/web/src/experiments/console/primitives/run.ts` (`parseRunEnvOverlay` / `readResolvedRow`)
+- **Pattern**: Absent optional keys stay optional; *present* wrong types/values fail the whole overlay (`null`). Unexpected top-level or resolved-row keys fail closed via `Record<string, true>` allowlists. Thinking accepts only adaptive|enabled|disabled (string shorthand or exact object; enabled budgetTokens positive int).
+- **Example**: `{ provider:'claude', model:42 }` → null; `{ …, extraTop:true }` complete → null; valid `{ thinking:'adaptive' }` → `{ type:'adaptive' }`
+
+
+### Programmatic modelReasoningEffort scope fallback (US-027)
+- **Where**: `packages/workflows/src/node-model-resolution.ts` (`resolveWorkflowModelScope`)
+- **Pattern**: Workflow scope effort is `workflow.effort ?? workflow.modelReasoningEffort` — same fallback as DAG `workflowLevelOptions`. Loader-normalized YAML already translates legacy MRE → `effort`; unexpanded programmatic definitions may still carry only `modelReasoningEffort`. One resolver keeps Preview/snapshot/`node_started`/provider `appliedEffort` aligned. Portable `effort` always wins when both are set.
+- **Example**: `{ modelReasoningEffort: 'high' }` → `scope.effort === 'high'` ≡ `{ effort: 'high' }`; metadata.effort + appliedEffort both `'high'`, no assistant-legacy MRE surface
+
+
+### Missing-node raw key gate (US-026)
+- **Where**: `packages/workflows/src/env-overlay.ts` (`applyEnvOverlay` loop)
+- **Pattern**: Call `assertRawPatchKeys(nodeId, rawPatch)` *before* the missing-node `continue` and before `copyNodePatch`. Deleted targets with unknown keys (`{ missing: { typo: '…' } }`) fail `forbidden_field` with field name only; allowed-only missing targets still skip into sorted `missingNodeIds`.
+- **Example**: bypass Zod `{ missing: { typo: 'secret-value' } }` → forbidden_field field=`typo`; `{ missing: { model: 'x' } }` → missingNodeIds `['missing']`
+
+### Picker/Start mounted race harness (US-025)
+- **Where**: `packages/web/src/experiments/console/components/WorkflowEnvPicker.test.tsx`, `DraftRunCard.test.tsx`
+- **Pattern**: Mount with happy-dom + `NODE_ENV=development` + React.act. Drive controlled selects via fiber `__reactProps$*.onChange`. Deferred promises control list/preview settle order. DraftRunCard needs `MemoryRouter` for `useSearchParams`; WorkflowPicker portal needs stubbed `getBoundingClientRect` + non-zero viewport. Cache keys (`K.workflowEnvPreview(cwd, wf, envId)`) isolate stale settles — assert UI + current key, not cancelled promises.
+- **Example**: switch wf-a→wf-b before A settles → UI shows only B options/preview after B resolves; late A resolve cannot reintroduce `fast-a`
+
+### Mounted ENV manager no-op patches (US-024)
+- **Where**: `packages/web/src/experiments/console/components/WorkflowEnvManageDialog.tsx` (`WorkflowEnvEditorView` onSubmit + submit disabled), tests with happy-dom
+- **Pattern**: Successful baseline discovery with `targets: []` is a valid no-op ENV — create/edit submit sends `{ patches: {} }`. Only `targetsLoading` or `targetsError` block submit (button disabled + onSubmit refuse). Export `WorkflowEnvEditorView` for mounted tests. Console `bun test` needs `NODE_ENV=development` so `react.act` exists; happy-dom is the mount harness.
+- **Example**: zero targets Create → POST `{ name, patches: {} }`; edit remove-all drafts → PATCH full `{ patches: {} }`
+
+### invalid_env_request OpenAPI hook (US-023)
+- **Where**: `packages/server/src/routes/openapi-defaults.ts` (`workflowEnvValidationErrorHook`), `packages/server/src/routes/api.ts` (`registerOpenApiRoute` third arg)
+- **Pattern**: ENV routes pass a route-scoped OpenAPI hook so body/query/param Zod failures return `{ error: 'invalid_env_request', detail: formatSafeZodIssueDetail(error) }` instead of the global field-path-as-`error` prose. Detail uses path + schema message only. Handler-side ZodError catch reuses the same helper. Do not broaden to non-ENV routes.
+- **Example**: POST patches with unknown key → 400 invalid_env_request; POST /api/codebases {} still uses global `path: message` error string
+
+
+
+
+
+### Exact envId omission vs invalid_env_id (US-022)
+- **Where**: `packages/server/src/routes/api.ts` (`parseOptionalEnvIdField`), `packages/server/src/routes/schemas/workflow-env.schemas.ts` (`workflowEnvPreviewQuerySchema`)
+- **Pattern**: Only `undefined` or empty/whitespace string omit ENV (YAML-only). JSON `null`, numbers, objects, arrays/multipart duplicates → `400 { error: 'invalid_env_id' }` with zero ENV lookups. Preview query must allow empty `envId` (`z.string().optional()`, never `.min(1)`) so OpenAPI validation does not 400 before baseline handler. openapi-typescript request shape stays `envId?: string` (minLength not encoded).
+- **Example**: `?envId=` → baseline, no getWorkflowEnvById; Start `{ envId: null }` → invalid_env_id before freeze
+
+### Overlay preamble fail-closed (US-021)
+- **Where**: `packages/workflows/src/executor.ts` (eager config/profile/scope/provider try/catch), `packages/core/src/db/workflows.ts` (`failWorkflowRun`)
+- **Pattern**: After `prepareExecutionEnvOverlay`, wrap config→provider resolution in try/catch. On throw with `activeOverlay`: `failClosedAfterOverlayError` + safe env id/name message + return (no throw). No-overlay rethrows. `failWorkflowRun` CAS is `status IN ('running','pending')` so background pre-create rows terminalize before status→running. Background catch stays log-only — never the repair path.
+- **Example**: pending preCreated + broken repo `aliases: { fast: … }` (missing `@`) → failWorkflowRun once, no snapshot/events/DAG; no-overlay same throw still rejects
+
+### Resume inspect vs claim split (US-020)
+- **Where**: `packages/workflows/src/executor.ts` (`inspectResumableRun` / `hydrateResumableRun`), `packages/core/src/orchestrator/orchestrator-agent.ts`
+- **Pattern**: Early ENV path selection uses read-only `inspectResumableRun` (snapshot + eligibility, no CAS). `hydrateResumableRun` claims via `resumeWorkflowRun` exactly once *after* conversation + isolation gates. Failed gates leave the run paused. inspect-null reuses null without re-inspect; concurrent claim still atomic via CAS.
+- **Example**: ENV + `updateConversation` fail → inspect called, hydrate never; IsolationBlockedError after conversation → same
+
+### Exact ENV name-conflict classification
+- **Where**: `packages/core/src/db/workflow-envs.ts` (`isWorkflowEnvNameConflict`)
+- **Pattern**: PostgreSQL → `true` only when `code === '23505' && constraint === 'uq_workflow_envs_workflow_name_name'` (never message prose). SQLite → parse `UNIQUE constraint failed:` column list and require both fully-qualified `remote_agent_workflow_envs.workflow_name` and `remote_agent_workflow_envs.name` (order-independent). Wrong constraint, absent constraint, prose-only duplicate-key, other-table UNIQUE, bare columns → propagate.
+- **Example**: `{ code: '23505', message: '...uq_workflow_envs_workflow_name_name' }` without matching `constraint` → `false`
+
+
+### Strict run-detail ENV overlay parse
+- **Where**: `packages/web/src/experiments/console/primitives/run.ts` (`parseRunEnvOverlay`)
+- **Pattern**: Accept only pending (`patches` object + `skippedNodeIds` array, no `resolved`/`latestMissingNodeIds`) or complete (both keys present, object `resolved`, array `latestMissingNodeIds`, every resolved row valid). Missing/non-object patches, non-arrays, hybrid one-of-two keys, or any invalid resolved row → `null`. Never expose patches; never manufacture `complete: true` from corrupt data.
+- **Example**: `{ envId, envName, workflowName, skippedNodeIds: 'x', resolved: 'y' }` → `null` (no chip/table)
+
+### Defensive raw ENV patch-key rejection
+- **Where**: `packages/workflows/src/env-overlay.ts` (`assertRawPatchKeys` before `copyNodePatch`)
+- **Pattern**: Zod `.strict()` is not enough for apply — callers can bypass the schema boundary. Inspect `Object.keys(rawPatch)` against `ENV_OVERLAY_PATCH_FIELDS` *before* `copyNodePatch()` strips unknowns; fail `forbidden_field` with field name only (never values/bodies). Detached normalized copy still feeds assignment + applied/snapshot.
+- **Example**: `{ model: 'x', typo: 'secret-value' }` → `forbidden_field` field=`typo`; message excludes `secret-value`
+
+### ENV editor body presence flags
+- **Where**: `packages/web/src/experiments/console/lib/workflow-env-editor.ts` (`NodePatchDraft.promptEnabled`/`bashEnabled`)
+- **Pattern**: Omission ≠ empty string. Enabled flag includes body byte-for-byte (including `''`/whitespace); disabled omits the key. Zero drafts → valid no-op `{}`; non-empty-per-chosen-node still enforced when rows exist.
+- **Example**: `draft({ nodeId: 'plan', promptEnabled: true, prompt: '' })` → `{ plan: { prompt: '' } }`
+
+
+### Symbol-preserving node clone
+- **Where**: `packages/workflows/src/include-expander.ts` (`cloneNodeWithEngineMetadata`)
+- **Pattern**: `structuredClone` drops symbol keys. Re-attach `COMPOSED_NODE` and nested `COMPILED_LOOP_COMMAND` (including loop_group body recursion) after clone. Shared by include expansion and ENV overlay — do not duplicate the private symbol list.
+- **Example**: `cloneNodeWithEngineMetadata(node)` / `cloneWorkflowWithEngineMetadata(workflow)`
+
+### ENV overlay field matrix
+- **Where**: `packages/workflows/src/env-overlay.ts`
+- **Pattern**: Allowed fields follow executor behavior, not the broad base Zod object: prompt→prompt/provider/model/effort/thinking; command→provider/model/effort/thinking; loop→provider/model/effort; loop_group→provider/model; bash→bash; other→none. Missing top-level ids skip; incompatible existing ids fail closed with safe codes (no prompt/bash bodies in errors).
+- **Example**: `applyEnvOverlay(workflow, patches)` → `{ workflow, appliedPatches, missingNodeIds }`
+
+### Empty prompt/bash vs dagNodeSchema
+- **Where**: `packages/workflows/src/schemas/dag-node.ts` mode detection + `env-overlay.ts` `isEmptyBodyOnlyFailure`
+- **Pattern**: `dagNodeSchema` treats whitespace-only prompt/bash as modeCount 0 and rejects. ENV contracts still allow empty/whitespace bodies byte-for-byte — after assign, accept only those known empty-body issues; other schema failures stay `invalid_patched_node`.
+- **Example**: empty bash apply succeeds; malformed effort still fails
+
+### Zod overlay schema conventions
+- **Where**: `packages/workflows/src/schemas/env-overlay.ts`
+- **Pattern**: Import `z` from `@hono/zod-openapi`; `z.infer`; explicit `z.record(keySchema, valueSchema)`; `.strict()` documents; stored overlay union tries complete snapshot before pending applied form.
+- **Example**: `storedEnvOverlaySchema = z.union([envOverlaySnapshotSchema, appliedEnvOverlaySchema])`
+
+### Shared NodeExecutionMetadata resolution
+- **Where**: `packages/workflows/src/node-model-resolution.ts`
+- **Pattern**: `resolveNodeExecutionRequest` is the pure chain + capability-aware effort/thinking used by `resolveNodeProviderAndModel`, `node_started`, ENV preview, and ENV snapshot. Callers MUST pass full `ResolveNodeExecutionOptions` (`aiProfile`, `assistants` for legacy `modelReasoningEffort`, `workflowThinking`) — never `{ aiProfile }` alone. `buildResolvedRequestMetadata` walks prompt/command/loop + nested group bodies with qualified ids (`group.child`); excludes group containers and deterministic nodes. `resolveGroupModelScope` forwards group provider/model/preset/tier while preserving outer effort. Explicit node/workflow portable effort fails without `effortControl`; preset-only effort drops via `presetEffortDropped` + `presetEffortRejection` (dag-executor logs that structured decision — never re-call `resolvePresetEffort`).
+- **Example**: `request.metadata` === `node_started.data` request fields; body scope = `resolveGroupModelScope(group, outerScope, …)`; OpenCode tier `effort: high` → `presetEffortDropped: true`
+
+### Workflow ENV store boundaries
+- **Where**: `packages/core/src/db/workflow-envs.ts`
+- **Pattern**: Normalize PG JSONB objects and SQLite JSON strings through `envPatchesSchema` before row parse. Corrupt rows throw `WorkflowEnvCorruptRowError` with id-only logs (never patch bodies). Name conflicts map only when PG `constraint === 'uq_workflow_envs_workflow_name_name'` or SQLite UNIQUE message names both identity columns. Update/delete always dual-predicate `(id, workflow_name)`; patches whole-document replace; empty `{}` allowed; empty update body rejected. List omits patches and orders `LOWER(name), name, id`.
+- **Example**: `updateWorkflowEnv(wf, id, { patches: {} })` clears the map; mismatched workflow returns null without mutating.
+
+### Atomic run envOverlay replacement
+- **Where**: `packages/workflows/src/store.ts` (`IWorkflowEnvOverlayStore`), `packages/core/src/db/workflows.ts` (`setWorkflowRunEnvOverlay`)
+- **Pattern**: Do not use `updateWorkflowRun` / `json_patch` for nested overlay writes — SQLite deep-merges and stale `resolved` keys survive. Replace only `metadata.envOverlay` via PG `jsonb_set(..., '{envOverlay}', $1::jsonb, true)` or SQLite `json_set(..., '$.envOverlay', json($1))`; UPDATE then SELECT in one transaction; no SQLite RETURNING; rowCount !== 1 throws.
+- **Example**: `store.setWorkflowRunEnvOverlay(runId, completeSnapshot)` → full run row with siblings preserved
+
+### Executor overlay ownership
+- **Where**: `packages/workflows/src/executor.ts` (`prepareExecutionEnvOverlay`, complete snapshot before `workflow_started`)
+- **Pattern**: Caller-supplied `appliedEnvOverlay` → verify only (workflow already patched). Else parse `preCreatedRun.metadata.envOverlay` and reapply frozen patches. Overlay-bearing preCreated runs use `preCreatedRun.user_id` for prefs/creds; no-overlay keeps `opts.userId`. Pending applied form is stamped at first INSERT; complete snapshot with live `resolved` is written via `setWorkflowRunEnvOverlay` before any start event/DAG using the same options as runtime (`aiProfile` + `config.assistants` + `workflow.thinking`). Audit/prepare failure: fail-closed, no execution. Fresh children never copy parent overlay.
+- **Example**: `executeWorkflow(..., { appliedEnvOverlay })` or resume with `preCreatedRun.metadata.envOverlay` only
+
+### Orchestrator pre-isolation ENV gate
+- **Where**: `packages/core/src/orchestrator/env-overlay-dispatch.ts`, `orchestrator-agent.ts` (`dispatchOrchestratorWorkflow`)
+- **Pattern**: Frozen `EnvOverlayCandidate` rides out-of-band. Fresh starts call `resolveFreshDispatchEnvOverlay` before isolation. Genuine continuations call only `resolveContinuationDispatchEnvOverlay` (request candidate never validated/applied). When a request candidate is present on a would-be continuation, hydrate early before isolation: real resume → stored/YAML + ignored-ENV notice; hydrate-null → validate request candidate pre-isolation (fail closed). Reuse early hydrate result (CAS must not run twice). Logs/messages: env id/name/codes only — never prompt/bash bodies.
+- **Example**: incompatible request on paused run → resume stored ENV + notice; hydrate-null + incompatible → reject before isolation
+
+### HTTP Workflow ENV CRUD + preview
+- **Where**: `packages/server/src/routes/api.ts`, `packages/server/src/routes/schemas/workflow-env.schemas.ts`, `packages/workflows/src/env-overlay.ts` (`listEnvOverlayTargets`)
+- **Pattern**: OpenAPI CRUD under `/api/workflows/{name}/envs` with camelCase wire mapper; list omits patches; create provenance via soft `resolveWebUserId` (null OK). Preview is a separate `/env-preview` route requiring `validateCwd`, discover+`resolveWorkflowName`, optional ENV identity (`400 env_not_found` / `env_workflow_mismatch`), `listEnvOverlayTargets` for editor matrix (top-level only), `applyEnvOverlay` + executor-parity `buildResolvedRequestMetadata` with full options (`aiProfile`, `config.assistants`, `workingWorkflow.thinking`) / `buildAiProfile` (corrupt prefs → config-only). Never echo prompt/bash in errors/responses.
+- **Example**: `GET .../env-preview?cwd=...&envId=...` → `{ preview:true, authoritative:false, targets, resolved, skippedNodeIds }`
+
+### Start route ENV freeze
+- **Where**: `packages/server/src/routes/api.ts` (`POST /api/workflows/{name}/run`)
+- **Pattern**: Parse optional `envId` (JSON string or multipart plain field; empty/omitted = YAML-only; array/non-string = 400 request-shape). Load unscoped row after field parse and BEFORE file/message persistence. Missing → `400 env_not_found`; `row.workflow_name !==` decoded route name → `400 env_workflow_mismatch`; corrupt → `500 env_store_corrupt`. Re-parse `structuredClone(row.patches)` via `envPatchesSchema` into a new tree, `Object.freeze` candidate `{ envId, envName, workflowName, patches }`, pass as `HandleMessageContext.envOverlay`. Do not discover/apply YAML on Start.
+- **Example**: `extraContext.envOverlay` → orchestrator US-006 gate
+
+### Console Start ENV picker + race-safe preview
+- **Where**: `packages/web/src/experiments/console/skills/workflowEnvs.ts`, `store/keys.ts`, `lib/draft-env.ts`, `components/DraftRunCard.tsx`
+- **Pattern**: Types from `@/lib/api.generated` only. Cache keys encode cwd/workflow/envId (`none` sentinel) so `useEntity` cannot apply a stale preview to a newer selection. `startRun` omits empty `envId` on JSON and multipart. None/YAML Start stays usable on list failure; selected ENV blocks Start while preview loading/error — never silent reset to YAML. Workflow change clears ENV + inputs synchronously (picker onChange + effect).
+- **Example**: `K.workflowEnvPreview(cwd, name, envId)` → `skill.previewWorkflowEnv`; `isStartBlockedBySelectedEnv({ selectedEnvId, preview, previewError })`
+
+### Console ENV manage dialog
+- **Where**: `packages/web/src/experiments/console/components/WorkflowEnvManageDialog.tsx`, `lib/workflow-env-editor.ts`
+- **Pattern**: Visual shell like EnvVarsDialog. Baseline `previewWorkflowEnv(wf, cwd, null)` supplies `targets`/`allowedFields` — never hardcode the node matrix. Summary list has no patches; `getWorkflowEnv` only on Edit. Thinking UI: unset|adaptive|enabled(+budget)|disabled. `buildPatchesFromDrafts` requires non-empty per-node patch; PATCH sends the complete map. After create/update/delete call `invalidateWorkflowEnvCaches` → list key + `workflowEnvPreview` prefix + optional detail key. Plaintext notice for prompt/bash; loop-group body non-target copy. 409 via `formatWorkflowEnvActionError(HttpError)`.
+- **Example**: `invalidateWorkflowEnvCaches(name, id)`; `NodePatchEditor` only renders `allowedFields`
+
+### Console run-detail ENV overlay
+- **Where**: `packages/web/src/experiments/console/primitives/run.ts` (`parseRunEnvOverlay`), `RunDetailHeader.tsx`, `WorkflowEnvResolvedTable.tsx`
+- **Pattern**: Hand-parse `metadata.envOverlay` without `@archon/workflows`. Require non-empty `envId`/`envName`/`workflowName`; never surface patches/prompt/bash. Pending = no `resolved` key; complete = object map → sorted rows. Malformed → `null` (omit chip/table; rest of run usable). Caption distinguishes planned request settings from node events / provider final models. Preview table stays non-authoritative Start-only copy.
+- **Example**: `toRun(raw).envOverlay` → chip `env: <name>` + `WorkflowEnvResolvedTable`
+
+
+
+
+
+
+
+
+
+
+---
+
+## 2026-09-05 — US-001: Engine overlay schemas and apply module
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/schemas/env-overlay.ts` — strict patch/candidate/applied/snapshot/resolution schemas + bounds
+- `packages/workflows/src/schemas/env-overlay.test.ts` — schema bounds, reserved keys, lifecycle union
+- `packages/workflows/src/env-overlay.ts` — pure clone/apply, field matrix, safe EnvOverlayError codes
+- `packages/workflows/src/env-overlay.test.ts` — matrix, include ids, group-body skip, isolation, graph validation
+- `packages/workflows/src/include-expander.ts` — export generalized `cloneNodeWithEngineMetadata`
+- `packages/workflows/src/compiled-command.ts` — comment names shared clone helper
+- `packages/workflows/src/schemas/index.ts` — re-export overlay schemas/types
+- `packages/workflows/package.json` — `./env-overlay` export + test segment
+
+**Acceptance criteria verified**:
+- [x] env-overlay schemas export strict Zod types via `@hono/zod-openapi` + `z.infer` + explicit record keys
+- [x] Patch validation allowlist + rejects reserved/empty keys, empty per-node patch, >256 targets, >1MiB, unknown keys; accepts long include ids and empty/whitespace prompt/bash
+- [x] Symbol-preserving clone of roots/nodes/nested groups via generalized helper
+- [x] Apply matches top-level ids only, skips missing sorted, rejects incompatible fields/unknown providers, validates nodes+graph, safe error codes without bodies
+- [x] Tests cover matrix, include ids, group-body skip, graph validation, deep-copy, ENV A/B/no-ENV isolation
+
+**Learnings**:
+- `dagNodeSchema` rejects empty/whitespace prompt/bash via mode detection even though field schemas are plain `z.string()` — ENV apply must special-case those known issues only.
+- Thinking shorthand should be normalized through `thinkingConfigSchema` in the applied map so storage/API and runtime agree.
+- Include-expanded target keys must not reuse the 64-char `safeNodeIdSchema` cap.
+
+---
+
+## 2026-09-05 — US-002: Shared request metadata and loop-group parity
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/node-model-resolution.ts` — pure `resolveNodeExecutionRequest`, `resolveGroupModelScope`, `buildResolvedRequestMetadata`
+- `packages/workflows/src/node-model-resolution.test.ts` — precedence, effort fail-closed, thinking warning semantics, nested resolved map
+- `packages/workflows/src/dag-executor.ts` — consume shared metadata for node_started; forward full group scope to body
+- `packages/workflows/src/dag-executor.test.ts` — loop_group model/tier body forwarding regression
+- `packages/workflows/package.json` — test segment includes resolution tests
+
+**Acceptance criteria verified**:
+- [x] One pure resolution result used by resolveNodeProviderAndModel, node_started, ENV preview/snapshot builders
+- [x] NodeExecutionMetadata preserves provider/model/tier/modelReasoningEffort/effort/thinking; unsupported effort fails; unsupported thinking kept with warning flag
+- [x] Resolved map covers top-level prompt/command/loop + nested group bodies with qualified ids; excludes containers/bash
+- [x] loop_group provider/model/preset/tier forwarded recursively; outer effort/thinking preserved; group effort/thinking unsupported
+- [x] Tests prove parity across precedence, rejected effort, assistant fallback, thinking, loops, nested groups
+
+**Learnings**:
+- Loop node_started previously stuffed assistant fallback into `effort`; unified path uses `modelReasoningEffort` like prompt/command.
+- Group dispatch must rebuild WorkflowModelScope (provider/model/preset/tier), not only provider — previously model/preset/tier stayed outer.
+- `registerOpencodeProvider` needed in pure unit tests for effortControl:false (not in builtins).
+
+---
+
+## 2026-09-05 — US-003: Workflow ENV database schema and CRUD store
+
+**Status**: PASSED
+**Files changed**:
+- `migrations/000_combined.sql` — table 21 after usage_ledger; index + COMMENT ON COLUMN in trailing section; inventory 21/22–25
+- `packages/core/src/db/adapters/sqlite.ts` — createSchema twin table/index
+- `packages/core/src/db/adapters/sqlite.test.ts` — MIN_NON_AUTH_COLUMNS 155→162
+- `packages/core/src/db/bundled-schema.generated.ts` — regenerated
+- `packages/core/src/schemas/workflow-env.ts` + test — name/workflow-name/row/summary schemas
+- `packages/core/src/db/workflow-envs.ts` + test — CRUD, JSON normalize, corrupt/conflict, scoping
+- `packages/core/src/schemas/index.ts`, `packages/core/src/db/index.ts`, `packages/core/package.json` — exports + test segments
+- `AGENTS.md` — 21 application tables inventory
+
+**Acceptance criteria verified**:
+- [x] Postgres remote_agent_workflow_envs after usage_ledger; unique (workflow_name, name); index/comments in final section
+- [x] SQLite createSchema mirror; inventory 21; parity floor 162; bundled schema regenerated
+- [x] Core schemas: workflow name ≤255 + isValidWorkflowName; ENV name trim 1–64 regex; envPatchesSchema; empty {} valid
+- [x] list summaries without patches ORDER BY LOWER(name), name, id; get-by-id; create; scoped update whole-doc replace; scoped delete
+- [x] JSONB/TEXT normalize; WorkflowEnvCorruptRowError id-only log; constraint/message-exact name conflict
+- [x] Tests: fresh SQLite schema, parity suite, CRUD round-trip, bounds, corrupt/summary independence, full replace, mismatch scoping
+
+**Learnings**:
+- SqliteAdapter `PRAGMA table_info(...)` returns empty via parameterized query path — use `pragma_table_info('table')` or raw bun:sqlite for introspection tests.
+- Portable UPDATE CASE flags must avoid PG-only `::int` casts so SQLite accepts the same SQL.
+- New table indexes belong in createSchema (SQLite) / trailing Indexes section (Postgres), never migrateColumns for brand-new tables.
+
+---
+
+## 2026-09-05 — US-004: Atomic run envOverlay metadata replacement
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/store.ts` — `IWorkflowEnvOverlayStore` + `IWorkflowStore` extends it
+- `packages/core/src/db/workflows.ts` — `setWorkflowRunEnvOverlay` (PG jsonb_set / SQLite json_set+json, txn UPDATE+SELECT)
+- `packages/core/src/db/workflows.test.ts` — PG SQL shape, not-found, invalid snapshot unit tests
+- `packages/core/src/db/workflows.env-overlay.integration.test.ts` — real SQLite nested replace + sibling preserve + not-found; paths mock spreads real exports
+- `packages/core/src/workflows/store-adapter.ts` + test — delegates method; unnested delegation test
+- `packages/workflows` mock stores (executor/subrun/dag-executor/script-node-deps/preamble) — implement method
+- `packages/core/package.json` — isolated `bun test` segment for env-overlay integration
+
+**Acceptance criteria verified**:
+- [x] IWorkflowStore extends required IWorkflowEnvOverlayStore with setWorkflowRunEnvOverlay
+- [x] Core adapter + every concrete in-memory test store/mock implements the method
+- [x] PG jsonb_set / SQLite json_set+json replace only metadata.envOverlay
+- [x] Both dialects: one transaction UPDATE then SELECT, no SQLite RETURNING, rowCount===1 required
+- [x] Integration: second complete snapshot drops stale resolved keys, preserves siblings, run-not-found throws
+
+**Learnings**:
+- Incomplete `mock.module('@archon/paths')` factories break SqliteAdapter init when new path exports land — always spread `...realArchonPaths` like resume-cas.
+- Nested `test()` inside another test is a silent structure bug Bun rejects at runtime.
+- Never use top-level metadata merge for envOverlay; SQLite json_patch deep-merge keeps stale nested keys.
+
+---
+
+## 2026-09-05 — US-005: Executor snapshot ownership and universal replay
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/env-overlay.ts` — parse/verify/restore/snapshot helpers for run-owned overlays
+- `packages/workflows/src/env-overlay.test.ts` — restore missing ids, verify drift, snapshot detach
+- `packages/workflows/src/executor.ts` — appliedEnvOverlay option, restore/verify entry, pending INSERT, complete snapshot, overlay identity
+- `packages/workflows/src/executor.test.ts` — fresh/resume/missing/identity/audit-fail/no-overlay child cases
+- `packages/workflows/src/subrun.test.ts` — child create does not inherit parent envOverlay
+- `packages/core/src/orchestrator/orchestrator.ts` — background pre-create stamps pending overlay + forwards option
+
+**Acceptance criteria verified**:
+- [x] ExecuteWorkflowOptions accepts appliedEnvOverlay; fresh foreground/fallback and background pre-create stamp pending metadata at first INSERT
+- [x] Executor restores metadata.envOverlay when caller did not apply; verifies identity/fields when appliedEnvOverlay supplied
+- [x] Overlay-bearing preCreated runs use run.user_id for prefs/creds; no-overlay keeps opts.userId
+- [x] Complete resolved snapshot atomically written before workflow_started/DAG; audit failure fails closed with no execution
+- [x] Resume records latestMissingNodeIds without mutating frozen patches; skipped ids stay skipped
+- [x] Tests: resume restore, audit-write failure, child no-inherit, identity, missing ids, pure helpers
+
+**Learnings**:
+- Reassigning `let workflowRun` after CFA-narrowing makes later `.catch` closures see `WorkflowRun | undefined` — capture `ownedRunId` before reassignment.
+- subrun.test.ts and executor.test.ts must never share a `bun test` process (`mock.module` on dag-executor).
+- Background pre-create must stamp pending overlay itself because executor never re-enters the fresh-create branch when `preCreatedRun` is set.
+
+---
+
+## 2026-09-05 — US-006: Orchestrator pre-isolation overlay gate and background handoff
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/types/index.ts` — `HandleMessageContext.envOverlay?: EnvOverlayCandidate`
+- `packages/core/src/orchestrator/env-overlay-dispatch.ts` — pure fresh/continuation overlay resolve + safe message formatter
+- `packages/core/src/orchestrator/env-overlay-dispatch.test.ts` — unit coverage for apply, skip, mismatch, resume ignore, corrupt snapshot
+- `packages/core/src/orchestrator/orchestrator-agent.ts` — pre-isolation gate; thread patched workflow + AppliedEnvOverlay to fg/bg; resume ignore notice
+- `packages/core/src/orchestrator/orchestrator-agent.test.ts` — isolation spy: invalid/mismatch stop before isolation; valid/missing-id/resume/background handoff
+- `packages/core/package.json` — isolated test segment for env-overlay-dispatch
+
+**Acceptance criteria verified**:
+- [x] HandleMessageContext and WorkflowDispatchOptions carry frozen EnvOverlayCandidate out-of-band
+- [x] dispatchOrchestratorWorkflow applies after input/requirement gates and before conversation mutation/isolation
+- [x] Continuations ignore newly supplied ENV with notice; fresh uses request; canonical mismatch fails safely
+- [x] Unsupported fields/unknown providers/invalid nodes/graph stop before isolation with safe codes (id/name/applied/skipped/error codes only in logs)
+- [x] Fg/bg receive patched clone + detached AppliedEnvOverlay; bg pre-create stamp already equivalent (US-005)
+- [x] Tests spy on isolation — not called for invalid overlays; valid and missing-id retain isolation
+
+**Learnings**:
+- Name `validateAndResolveIsolation` mock so call-count assertions work; anonymous `mock()` inside `mock.module` cannot be cleared/asserted.
+- `unknown | undefined` trips `@typescript-eslint/no-redundant-type-constituents` — use `unknown` alone.
+- Hydrate-null fallthrough must use the request candidate (fresh row), not the prior run's stored overlay — pre-validate the candidate even when `willContinueExistingRun` so isolation is not wasted on a bad request that only surfaces after hydrate.
+
+---
+
+## 2026-09-05 — US-007: HTTP CRUD and preview API
+
+**Status**: PASSED
+**Files changed**:
+- `packages/server/src/routes/schemas/workflow-env.schemas.ts` — OpenAPI CRUD/preview request+response schemas
+- `packages/server/src/routes/api.ts` — ENV list/get/create/update/delete + env-preview handlers, camelCase mappers, stable error codes
+- `packages/server/src/routes/api.workflow-envs.test.ts` — auth gate, CRUD scoping/conflicts, preview cwd/identity/matrix, OpenAPI paths
+- `packages/server/package.json` — isolated test segment for ENV routes
+- `packages/workflows/src/env-overlay.ts` — export `listEnvOverlayTargets` field matrix helper
+- `packages/workflows/src/env-overlay.test.ts` — top-level targets exclude loop_group bodies
+- `packages/workflows/package.json` — export `./node-model-resolution` for server preview imports
+
+**Acceptance criteria verified**:
+- [x] registerOpenApiRoute + workflow-env.schemas.ts; no per-resource ACL (auth gate only)
+- [x] CRUD GET list/detail, POST 201, PATCH, DELETE with 200/201/404/409 and `{ error, detail? }`
+- [x] List omits patches; detail/create/update camelCase WorkflowEnvResponse; delete `{ deleted }`; create provenance server-resolved
+- [x] CRUD validates name/path/patch/size; no cwd or discoverability required
+- [x] Preview requires validated cwd, canonical resolve, baseline or ENV apply, targets/skips/resolved via shared metadata path
+- [x] Tests: auth gate, conflicts/scoping, preview root/descendant cwd, identity errors, no prompt/bash echo, OpenAPI CRUD/preview with Start path retained
+
+**Learnings**:
+- Preview resolution needs registered providers in tests (`registerBuiltinProviders`) or `buildResolvedRequestMetadata` fails unknown_provider with empty registry.
+- Soft header identity uses `findOrCreateUserByPlatformIdentity` — mock that symbol for create-provenance tests, not a bare findOrCreateUser.
+- Export `listEnvOverlayTargets` from env-overlay rather than duplicating the private field matrix in server.
+
+---
+
+## 2026-09-05 — US-008: Start route envId freeze and orchestrator handoff
+
+**Status**: PASSED
+**Files changed**:
+- `packages/server/src/routes/schemas/workflow.schemas.ts` — optional `envId` on unwired `runWorkflowBodySchema`
+- `packages/server/src/routes/api.ts` — parse envId JSON/multipart; freeze ENV before file/message side effects; hand off `envOverlay` context; route description
+- `packages/server/src/routes/api.workflow-runs.test.ts` — workflow-envs mock + no-ENV/JSON/multipart/malformed/duplicate/missing/mismatch/corrupt/frozen-copy coverage
+
+**Acceptance criteria verified**:
+- [x] Optional envId in JSON and multipart; omitted/empty = YAML-only; non-string/duplicated multipart → 400 request-shape
+- [x] When envId present, load/validate after parse and before file or run-start message persistence
+- [x] Missing → 400 env_not_found; mismatch → 400 env_workflow_mismatch; corrupt fails before side effects
+- [x] Frozen candidate has id/name/workflowName + newly allocated patches; store mutation after Start does not change context
+- [x] Route does not discover/apply YAML; compatibility errors stay on dispatch/SSE
+- [x] Tests cover no-ENV, JSON ENV, multipart ENV, malformed/duplicate, missing, mismatch, corrupt-before-side-effects, frozen-copy
+
+**Learnings**:
+- Multipart `parseBody({ all: true })` turns duplicate `envId` into an array — refuse arrays as request-shape, same as non-string JSON.
+- Start identity-checks the decoded route parameter only (no discovery/canonical rename); preview still checks both route + canonical.
+- Defer `persistUploadedFiles` until after ENV identity so missing/mismatch never leaves upload debris.
+
+---
+
+
+## 2026-09-05 — US-009: Console start picker and preview
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/lib/api.generated.d.ts` — regenerated OpenAPI types including Workflow ENV CRUD/preview
+- `packages/web/src/experiments/console/skills/workflowEnvs.ts` — generated-type skill + encoded cache/path builders
+- `packages/web/src/experiments/console/skills/workflowEnvs.test.ts` — path/key race isolation + verb request shapes
+- `packages/web/src/experiments/console/skills/startRun.ts` — optional envId JSON/multipart
+- `packages/web/src/experiments/console/skills/startRun.test.ts` — envId send/omit coverage
+- `packages/web/src/experiments/console/skills/index.ts` — export workflowEnvs
+- `packages/web/src/experiments/console/store/keys.ts` — workflowEnvs/workflowEnv/workflowEnvPreview keys
+- `packages/web/src/experiments/console/lib/draft-env.ts` + test — Start gating + workflow-change reset helpers
+- `packages/web/src/experiments/console/components/WorkflowEnvPicker.tsx` — None (YAML) default picker
+- `packages/web/src/experiments/console/components/WorkflowEnvPreviewTable.tsx` + test — resolved rows, skipped, disclaimer
+- `packages/web/src/experiments/console/components/DraftRunCard.tsx` — load/select/preview/gate/start wiring
+
+**Acceptance criteria verified**:
+- [x] Generated OpenAPI types drive ENV skills and encoded cache keys; startRun sends/omits envId for JSON and multipart
+- [x] DraftRunCard loads ENV summaries, None (YAML) default, clears ENV/preview/inputs on workflow change
+- [x] Preview keyed by cwd/workflow/env id so slower prior response cannot overwrite newer selection
+- [x] UI renders provider-turn rows, skipped-id warnings, and preview-only disclaimer
+- [x] List failure leaves None/YAML Start usable; selected ENV preview loading/failure disables Start without silent YAML reset
+- [x] Unit/component tests cover request shapes, stale key races, selection reset, disabled-on-error, preview/skipped rendering
+
+**Learnings**:
+- Console isolation allows type-only `@/lib/api.generated` — mirror usage.ts ExactMatch drift guards.
+- `useEntity` race safety is key-identity: distinct preview keys beat AbortController for this cache model.
+- Clear ENV selection in WorkflowPicker onChange (not only useEffect) to avoid one render of new workflow + old envId.
+
+---
+
+## 2026-09-05 — US-010: Console ENV management dialog
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/lib/workflow-env-editor.ts` — pure patch build, thinking normalize, 409 format, cache invalidation targets
+- `packages/web/src/experiments/console/lib/workflow-env-editor.test.ts` — full-map PATCH, empty-node reject, thinking, conflict, invalidation keys, plaintext notice
+- `packages/web/src/experiments/console/components/WorkflowEnvManageDialog.tsx` — list/create/edit/delete dialog; server targets; NodePatchEditor
+- `packages/web/src/experiments/console/components/WorkflowEnvManageDialog.test.tsx` — allowed-field rendering, notices, closed shell
+- `packages/web/src/experiments/console/components/DraftRunCard.tsx` — Manage button + dialog open state
+- `packages/web/src/experiments/console/skills/workflowEnvs.test.ts` — create/update full-map + delete request shapes
+
+**Acceptance criteria verified**:
+- [x] Management dialog fetches baseline preview targets and allowedFields from the server
+- [x] Summary list excludes patch bodies; full ENV fetched only when opened for editing
+- [x] Editor chooses target nodes and only allowed fields; include-expanded ids as returned; loop-group body non-target note
+- [x] Non-empty patch per chosen node; thinking via schema-supported choices / budget integer
+- [x] PATCH sends complete patch map; 409 conflicts surfaced; delete confirmation; invalidate list + preview caches
+- [x] Dialog states prompt/bash are plaintext install-visible, not secrets/encrypted
+- [x] Component/helper tests cover allowed fields, full-map PATCH, conflict/delete, cache invalidation, plaintext notice
+
+**Learnings**:
+- Keep patch/thinking/error/invalidation pure in `workflow-env-editor.ts` so bun:test + renderToStaticMarkup can cover AC without RTL.
+- `invalidate('workflowEnvPreview')` matches every `workflowEnvPreview:…` key via the cache prefix rule.
+- Create skill stub must return `{ env }` — collection path is not `/envs/:id`, so the default list-shaped mock is wrong for POST.
+
+---
+
+## 2026-09-05 — US-011: Run detail, docs, generated files, and full validation
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/primitives/run.ts` — `parseRunEnvOverlay` + `Run.envOverlay` (pending/complete/malformed-safe)
+- `packages/web/src/experiments/console/primitives/run.test.ts` — pending/complete/malformed/no-prompt coverage
+- `packages/web/src/experiments/console/components/RunDetailHeader.tsx` + test — `env: <name>` chip
+- `packages/web/src/experiments/console/components/WorkflowEnvResolvedTable.tsx` + test — resolved rows, skip/missing warnings, planned-settings caption
+- `packages/web/src/experiments/console/routes/RunDetailPage.tsx` — mount resolved table
+- `packages/web/src/experiments/console/routes/PreviewPage.tsx`, `RunsPage.tsx` — demo `envOverlay: null`
+- `packages/docs-web/src/content/docs/reference/api.md` — Workflow ENVs CRUD/preview + Start `envId` + resume freeze
+- `packages/docs-web/src/content/docs/guides/authoring-workflows.md` — ENV overlays section, field matrix, loop_group.model note, resume note
+
+**Acceptance criteria verified**:
+- [x] Defensive Run parse of pending/complete/legacy/malformed without `@archon/workflows`; malformed does not crash
+- [x] Header chip + resolved table with node/provider/model|tier/effort/thinking + skipped/latestMissing warnings
+- [x] Copy distinguishes preview vs planned request settings vs node events vs final models; no prompt/bash bodies
+- [x] API + authoring docs cover CRUD, Start JSON/multipart envId, preview, install-wide identity, matrix, include ids, group-body exclusion, resume, errors, bounds, plaintext, no CLI
+- [x] OpenAPI types, bundled schema, AGENTS inventory already current; loop_group.model correction documented for release notes (CHANGELOG untouched)
+- [x] Focused web tests + `bun run test` + `bun run validate` + `bun run check:schema-upgrades` green
+
+**Learnings**:
+- Console must reimplement overlay parsing locally — importing engine Zod would violate the web package boundary.
+- Treat `resolved` presence (even corrupt) as complete so the chip still shows while the table degrades safely.
+- `check:schema-upgrades` needs `PATH` with `psql` (`libpq`) and `PGPASSWORD=postgres` against local 5432.
+
+**PR review / release-note input** (do not edit CHANGELOG.md here):
+- Feature: Workflow ENV overlays end-to-end (engine apply, store, executor freeze, HTTP CRUD/preview/Start, console picker/manager/run detail).
+- Behavior correction: `loop_group.model` / provider defaults now forward into body-node resolution (including nested groups); group effort/thinking remain unsupported.
+- Schema: additive `remote_agent_workflow_envs` (table 21); mixed-version resume of overlay-bearing runs is unsafe — finish/abandon before rollback.
+
+---
+
+## 2026-09-05 — US-012: Resume ignores newly selected ENV
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/orchestrator/orchestrator-agent.ts` — continuation never validates request ENV; early hydrate when candidate present so hydrate-null still rejects pre-isolation; named `HydratedResumableRun` type
+- `packages/core/src/orchestrator/orchestrator-agent.test.ts` — US-012 regressions: stored-ENV resume ignores incompatible request; YAML-only resume ignores with notice; hydrate-null rejects before isolation without echoing bodies
+
+**Acceptance criteria verified**:
+- [x] Paused run with valid stored ENV + incompatible request candidate resumes stored selection + ignored-ENV notice
+- [x] YAML-only resumable + incompatible request resumes YAML-only + ignored-ENV notice
+- [x] Hydrate-null remains fresh start; incompatible request rejected before isolation
+- [x] Genuine continuation never validates/applies request candidate via resolveFreshDispatchEnvOverlay
+- [x] Messages/logs contain only env ids/names/safe codes — no prompt/bash bodies
+- [x] `cd packages/core && bun test src/orchestrator/env-overlay-dispatch.test.ts && bun test src/orchestrator/orchestrator-agent.test.ts` green
+
+**Learnings**:
+- US-006 pre-validated the request candidate even on `willContinueExistingRun` so hydrate-null could reuse it after isolation; that blocked Contract 10 when the candidate was field-incompatible.
+- Fix: hydrate early *only when a request candidate is present* on a would-be continuation — distinguishes genuine resume (ignore candidate) from hydrate-null (validate before isolation) without moving every resume ahead of isolation.
+- `hydrateResumableRun` returns null *before* the resume CAS, so early null is safe; non-null claims the run and must be reused (no second hydrate).
+
+---
+
+## 2026-09-05 — US-013: Complete runtime resolution context
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/executor.ts` — snapshot `buildResolvedRequestMetadata` now receives `assistants: config.assistants` + `workflowThinking: workflow.thinking` (same as `resolveNodeProviderAndModel`)
+- `packages/workflows/src/executor.test.ts` — regression: ENV snapshot `resolved` equals pure runtime request metadata for assistant `modelReasoningEffort` + workflow thinking, including nested `loop_group` turns
+- `packages/server/src/routes/api.ts` — ENV Preview passes the same complete resolution options (not `{ aiProfile }` alone)
+- `packages/server/src/routes/api.workflow-envs.test.ts` — Preview parity coverage for legacy effort fallback + thinking on top-level and nested group bodies
+
+**Acceptance criteria verified**:
+- [x] executor.test.ts regression with assistants.<provider>.modelReasoningEffort, no portable effort, workflow-level thinking; snapshot resolved === runtime node_started request fields
+- [x] api.workflow-envs.test.ts Preview coverage matches the same assistant effort + thinking values (top-level + nested group)
+- [x] executor.ts passes every ResolveNodeExecutionOptions input used by resolveNodeProviderAndModel when building the snapshot map
+- [x] api.ts Preview uses the same complete context, not `{ aiProfile }` alone
+- [x] node-model-resolution.ts remains the single pure computation path
+- [x] Top-level and nested loop_group provider turns include the same modelReasoningEffort fallback and thinking values
+- [x] Focused verification: `bun test src/node-model-resolution.test.ts && bun test src/executor.test.ts && bun test src/dag-executor.test.ts` (workflows) + `bun test src/routes/api.workflow-envs.test.ts` (server)
+
+**Learnings**:
+- Snapshot/Preview dropping `assistants` silently omits legacy `modelReasoningEffort` while runtime `node_started` still shows it — audit drift without a hard failure.
+- Thinking schema uses camelCase `budgetTokens`, not `budget_tokens`; unknown keys are stripped by `thinkingConfigSchema`.
+- AC test commands must run as separate `bun test` invocations (mock.module pollution across executor/dag-executor).
+
+---
+
+
+
+## 2026-09-05 — US-014: Preset effort warns while explicit effort fails
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/node-model-resolution.ts` — explicit effort-only fail-closed gate; structured `presetEffortRejection` on drop
+- `packages/workflows/src/node-model-resolution.test.ts` — OpenCode tier/alias preset drop + workflow-authored explicit fail
+- `packages/workflows/src/dag-executor.ts` — consume structured drop without second `resolvePresetEffort` call
+- `packages/workflows/src/dag-executor.test.ts` — runtime drop warning + no applied effort; workflow explicit effort still fatal
+
+**Acceptance criteria verified**:
+- [x] node-model-resolution.test.ts OpenCode tier/alias preset with effort:high returns presetEffortDropped: true
+- [x] dag-executor.test.ts dropped preset reaches warning layer and is not sent/recorded as applied effort
+- [x] Node-authored and workflow-authored explicit portable effort still throws fatal capability error
+- [x] resolveNodeExecutionRequest separates declaredEffort from preset?.effort so resolvePresetEffort is reachable
+- [x] dag-executor consumes structured presetEffortDropped/presetEffortRejection without second classifier
+- [x] Rejected preset effort consistent for pure path (Preview/snapshot) and lazy runtime
+- [x] Focused verification: bun test src/node-model-resolution.test.ts && bun test src/dag-executor.test.ts
+
+**Learnings**:
+- The US-002 unified path had incorrectly treated `declared ?? preset` as "explicit" for the fail-closed gate, so OpenCode tier aliases with effort could never reach the warn/drop branch.
+- Keep rejection details on the pure request (`presetEffortRejection`) so runtime logging cannot drift by re-classifying.
+
+---
+
+## 2026-09-05 — US-015: Console editor preserves empty ENV values
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/lib/workflow-env-editor.ts` — promptEnabled/bashEnabled distinguish omission vs empty string; zero drafts → `{}`; empty/whitespace bodies preserved byte-for-byte
+- `packages/web/src/experiments/console/lib/workflow-env-editor.test.ts` — round-trips for `{}`, empty prompt/bash, whitespace, absent bodies, draftFromPatch presence
+- `packages/web/src/experiments/console/components/WorkflowEnvManageDialog.tsx` — BodyField include toggles; empty-state documents no-op ENV; keeps non-empty-per-chosen-node
+- `packages/web/src/experiments/console/components/WorkflowEnvManageDialog.test.tsx` — create/PATCH `{}`, enabled empty body save, include checkbox rendering
+
+**Acceptance criteria verified**:
+- [x] workflow-env-editor.test.ts round-trips zero drafts → {}, explicit prompt/bash "", whitespace-only, absent bodies
+- [x] WorkflowEnvManageDialog.test.tsx proves create and full-map PATCH can submit patches: {}
+- [x] Dialog tests prove explicitly enabled empty prompt/bash saved and not dropped
+- [x] workflow-env-editor.ts represents omission separately from presence-with-empty
+- [x] Dialog keeps non-empty-per-chosen-node while zero targets save no-op ENV
+- [x] Create/update keep empty/whitespace byte-for-byte; untouched bodies omitted
+- [x] Focused verification: bun test workflow-env-editor.test.ts && bun test WorkflowEnvManageDialog.test.tsx
+
+**Learnings**:
+- Empty body vs omitted field cannot share a single `string` draft slot — needs an explicit enable/presence flag (or optional), matching schema allow of `prompt: ''`.
+- Zero drafts is the only valid empty map path; a chosen node with no fields still fails closed.
+- Typing into a body field auto-enables it; unchecking clears and omits.
+
+---
+
+## 2026-09-05 — US-016: Defensive unknown patch-key rejection
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/env-overlay.ts` — `assertRawPatchKeys` validates original raw keys before `copyNodePatch`; detached normalized copy still used for assign/applied
+- `packages/workflows/src/env-overlay.test.ts` — Zod-bypass mixed `{ model, typo }` regression; secret value/body excluded from error text; known-only patch still applies
+
+**Acceptance criteria verified**:
+- [x] env-overlay.test.ts bypasses Zod with mixed raw patch `{ model: "x", typo: "secret-value" }` on existing node
+- [x] applyEnvOverlay fails `forbidden_field` with unknown field name; excludes unknown value and prompt/bash bodies
+- [x] env-overlay.ts validates original raw keys before copyNodePatch can discard them
+- [x] Detached normalized copy remains source for assignment and returned applied/snapshot data
+- [x] Mixed known/unknown cannot silently succeed; schema-validated patches unchanged
+- [x] Focused verification: `bun test src/env-overlay.test.ts src/schemas/env-overlay.test.ts`
+
+**Learnings**:
+- `copyNodePatch` is an allowlist copy — unknown keys vanish before matrix checks unless raw keys are inspected first.
+- Keep error payload to code + nodeId + field name; never serialize the raw patch into `cause` or message.
+
+---
+
+## 2026-09-05 — US-017: Malformed run metadata hides ENV UI
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/primitives/run.ts` — strict pending/complete parse; hybrids and invalid resolved rows → null
+- `packages/web/src/experiments/console/primitives/run.test.ts` — malformed hybrid null matrix (patches/arrays/resolved/rows)
+- `packages/web/src/experiments/console/routes/RunDetailPage.tsx` — `hasRunEnvOverlayUi` gate for resolved table
+- `packages/web/src/experiments/console/routes/RunDetailPage.test.tsx` — malformed omits chip/table; rest of detail remains; valid complete still shows
+
+**Acceptance criteria verified**:
+- [x] run.test.ts requires null for missing/non-object patches, non-array ids, non-object resolved, invalid resolved rows
+- [x] RunDetailPage.test.tsx proves no ENV chip/table on malformed while non-ENV detail still renders
+- [x] Valid pending/complete remain covered in WorkflowEnvResolvedTable + RunDetailHeader tests
+- [x] run.ts strict pending/complete only; never exposes patch bodies; hybrids → null
+- [x] RunDetailPage ENV UI only for non-null parsed overlay (`hasRunEnvOverlayUi`)
+- [x] Malformed cannot manufacture complete:true or empty-rows copy; cannot crash/hide rest
+- [x] Focused verification: bun test run.test.ts && RunDetailPage.test.tsx && WorkflowEnvResolvedTable + RunDetailHeader
+
+**Learnings**:
+- Prior tolerant path kept identity when `resolved` was corrupt and set `complete: true` with `resolved: null` — that manufactured false "No provider-turn request rows" confidence; fail the whole overlay instead.
+- Complete form requires *both* `resolved` and `latestMissingNodeIds` keys (mirrors storedEnvOverlaySchema union); one without the other is a hybrid.
+- Console page tests avoid mock.module: export a pure gate from the page and compose header+table with `toRun` for static markup.
+
+---
+
+## 2026-09-05 — US-018: Exact ENV name-conflict classification
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/db/workflow-envs.ts` — `isWorkflowEnvNameConflict` PG exact 23505+constraint only; SQLite fully-qualified identity columns only
+- `packages/core/src/db/workflow-envs.test.ts` — negative PG wrong/absent constraint + prose-only; SQLite other-table/bare-column negatives
+
+**Acceptance criteria verified**:
+- [x] workflow-envs.test.ts PG 23505 with absent/wrong constraint (message still names uq_…) → not conflict
+- [x] Duplicate-key prose without code 23505 → not conflict
+- [x] SQLite UNIQUE from another table with workflow_name+name columns → not conflict
+- [x] workflow-envs.ts PG true only when code === "23505" && constraint === "uq_workflow_envs_workflow_name_name"
+- [x] SQLite requires both fully-qualified remote_agent_workflow_envs.workflow_name and .name
+- [x] Only named identity conflict → WorkflowEnvNameConflictError; unrelated DB errors propagate
+- [x] Focused verification: `cd packages/core && bun test src/db/workflow-envs.test.ts` (9 pass)
+
+**Learnings**:
+- Prior PG path accepted `code 23505 || duplicate-key prose` when the message mentioned the constraint name — that misclassified wrong-constraint and prose-only failures as HTTP 409.
+- Prior SQLite path matched bare `workflow_name` + `name` after stripping — any table with those column names would 409. Parse the column list and require the fully-qualified ENV table pair.
+- `listed.includes('remote_agent_workflow_envs.name')` is safe next to `.workflow_name` because includes is exact, not prefix.
+
+---
+
+
+## 2026-09-05 — US-019: Plan Constitution Check evidence
+
+**Status**: PASSED
+**Files changed**:
+- `docs/superpowers/plans/2026-09-05-workflow-env-overlay.md` — appended Constitution Check §A retrospective pre-Phase-0, §B post-design re-check, §C verification; Complexity Tracking; release blockers US-020/US-021
+
+**Acceptance criteria verified**:
+- [x] Plan appends retrospective pre-Phase-0 Constitution Check and current post-design re-check tied to `.specify/memory/constitution.md`
+- [x] Both checks evaluate package-layer direction, typed/OpenAPI schema rules, additive schema/generated files, fail-closed lifecycle, secret-safe audit metadata, focused/full validation, intentional complexity
+- [x] Every gate records concrete evidence, violation, accepted-use justification, rollback/simplification (not generic PASS alone)
+- [x] Unresolved constitutional violations marked as release blockers (US-020 claim-before-gates; US-021 preamble terminalization)
+- [x] Verification: `git diff --check` clean; manual comparison to constitution Plan Quality Gate (154–156, 172–175) and plan-template Constitution Check
+
+**Learnings**:
+- Constitution process gate was missing from the plan even though Final Design Audit existed — evidence tables must cite live paths and open lifecycle blockers, not only design intent.
+- US-019 is docs-only; do not touch implementation. Next eligible story is US-020 (depends on US-019 now green).
+
+---
+
+## 2026-09-05 — US-020: Resume claim delayed until gates pass
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/executor.ts` — export `inspectResumableRun` (read-only eligibility/snapshot); `hydrateResumableRun` claims only after inspect
+- `packages/workflows/src/executor.test.ts` — inspect never calls resumeWorkflowRun; hydrate still claims
+- `packages/core/src/orchestrator/orchestrator-agent.ts` — early ENV path uses inspect only; claim once after conversation + isolation
+- `packages/core/src/orchestrator/orchestrator-agent.test.ts` — US-020 gate-failure regressions; US-012 inspect/claim ordering
+
+**Acceptance criteria verified**:
+- [x] updateConversation failure + ENV: never hydrate/claim, no execution, run stays paused
+- [x] IsolationBlockedError + ENV: inspect ok, isolation called, never hydrate/claim, no execution
+- [x] inspectResumableRun split from hydrate CAS claim; claim after gates only
+- [x] inspect-null remains fresh start; genuine continuations still ignore request ENV
+- [x] No path between eligibility and dispatch leaves run running; concurrent CAS rejection intact
+- [x] Focused verification: core orchestrator-agent.test.ts (249 pass) + workflows executor.test.ts (97 pass)
+
+**Learnings**:
+- Early hydrate for US-012 path selection was the CAS leak — inspect is enough to choose continuation vs fresh before isolation.
+- Reuse inspect-null without re-inspect; non-null early inspect still claims once after gates (double snapshot read is fine).
+- Mock both inspect and hydrate in orchestrator tests; assert call order inspect < isolation < hydrate on success paths.
+
+---
+
+## 2026-09-05 — US-021: Overlay pre-created preamble failures become terminal
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/executor.ts` — wrap config/profile/scope/provider eager resolution in overlay fail-closed boundary; hoist userAiPrefs for workflow_started event
+- `packages/workflows/src/executor.test.ts` — pending overlay + broken repo alias fail-closed; no-overlay throw still propagates
+- `packages/core/src/db/workflows.ts` — `failWorkflowRun` accepts `pending` and `running`
+- `packages/core/src/db/workflows.test.ts` — SQL/status assertion updates
+- `packages/core/src/orchestrator/orchestrator.test.ts` — real `dispatchBackgroundWorkflow` + pending overlay row ends `failed` without catch repair
+
+**Acceptance criteria verified**:
+- [x] executor.test.ts: overlay-bearing preCreatedRun + workflow-scope resolution failure after prepareExecutionEnvOverlay, before events/DAG
+- [x] failWorkflowRun called once; no envOverlay snapshot write, workflow event, or DAG execution
+- [x] orchestrator.test.ts: background already-created pending row does not remain pending
+- [x] Config/profile/scope/provider eager resolution for active overlays inside executor fail-closed; no-overlay unchanged
+- [x] Failure path env id/name only; does not rely on background log-only catch
+- [x] Focused verification: bun test src/executor.test.ts (99 pass); bun test src/orchestrator/orchestrator.test.ts (73 pass)
+
+**Learnings**:
+- Background pre-create leaves status=`pending` until DAG start flips to running — failWorkflowRun only on `running` left pending overlay rows stranded; expand CAS to pending.
+- Hoist any locals (e.g. userAiPrefs) that workflow_started / later paths still read outside the try block.
+- Broken repo aliases (missing `@`) are a reliable post-prepare throw via buildAiProfile rebuild.
+
+---
+
+## 2026-09-05 — US-022: Exact envId HTTP omission and type contract
+
+**Status**: PASSED
+**Files changed**:
+- `packages/server/src/routes/api.ts` — `parseOptionalEnvIdField` rejects null/non-string as `invalid_env_id`; Start description documents contract
+- `packages/server/src/routes/schemas/workflow-env.schemas.ts` — Preview query allows empty `envId` (no `.min(1)`)
+- `packages/server/src/routes/schemas/workflow.schemas.ts` — Start body docs: null is not omission
+- `packages/server/src/routes/api.workflow-envs.test.ts` — `?envId=` baseline without ENV lookup
+- `packages/server/src/routes/api.workflow-runs.test.ts` — null / non-string / duplicate multipart → exact `invalid_env_id`
+
+**Acceptance criteria verified**:
+- [x] Preview `?envId=` returns YAML-only baseline without reading a workflow ENV row
+- [x] JSON `{ "envId": null }` and other present non-strings return 400 `{ error: 'invalid_env_id' }` before lookup/dispatch
+- [x] Preview query schema allows empty envId to reach baseline handler
+- [x] parseOptionalEnvIdField treats only absence and empty strings as omission; JSON null never omission
+- [x] Duplicate/non-string multipart envId rejected; baseline/rejected cases avoid ENV lookups
+- [x] Checked-in web API types proven unchanged (`envId?: string` already; minLength not in d.ts)
+- [x] Focused verification: `bun test src/routes/api.workflow-envs.test.ts` (16 pass) && `bun test src/routes/api.workflow-runs.test.ts` (137 pass)
+
+**Learnings**:
+- Prior US-008 treated `null` as YAML-only omission — contradicts HTTP contract; present non-string must fail closed.
+- OpenAPI query `.min(1).optional()` rejects `?envId=` before the handler; empty-as-baseline needs plain `z.string().optional()`.
+- Stable error code is the machine field `invalid_env_id`, not freeform "envId must be a string" prose.
+
+---
+
+## 2026-09-05 — US-023: Stable ENV request validation errors
+
+**Status**: PASSED
+**Files changed**:
+- `packages/server/src/routes/openapi-defaults.ts` — `formatSafeZodIssueDetail`, `workflowEnvValidationErrorHook` → `{ error: 'invalid_env_request', detail }`
+- `packages/server/src/routes/api.ts` — `registerOpenApiRoute` optional hook; all ENV CRUD/preview routes use ENV hook; handler ZodError paths reuse safe detail helper
+- `packages/server/src/routes/api.workflow-envs.test.ts` — exact-body cases (invalid name, unknown field, empty node, >256 targets, >1MiB, empty PATCH) + 409 conflict preserved + unrelated route keeps global field-path shape
+
+**Acceptance criteria verified**:
+- [x] 400 `{ error: 'invalid_env_request', detail: <safe summary> }` for invalid ENV name, unknown node patch field, empty per-node patch, over-256 targets, over-1-MiB, empty PATCH body
+- [x] prompt/bash/unknown-field values absent from validation details
+- [x] Route-scoped hook via `registerOpenApiRoute` prevents global default field-path prose
+- [x] Unrelated routes keep existing validation body behavior
+- [x] ENV name conflicts still 409 `env_name_conflict`
+- [x] No public schema change — API types not regenerated
+- [x] Focused verification: `cd packages/server && bun test src/routes/api.workflow-envs.test.ts` (18 pass)
+
+**Learnings**:
+- `app.openapi(route, handler, hook)` overrides `defaultHook` per route; extend the thin `registerOpenApiRoute` wrapper with an optional third arg rather than calling `app.openapi` ad hoc.
+- Safe detail = first issue path (field names) + schema message only — never serialize request bodies or Zod `received` values into logs/responses (hook does not log).
+- Empty PATCH `{}` fails the refine before the handler; without the ENV hook it became global `": at least one of name or patches is required"` with empty path prefix.
+
+---
+
+## 2026-09-05 — US-024: Mounted ENV manager saves no-op patches
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/components/WorkflowEnvManageDialog.tsx` — export `WorkflowEnvEditorView`; submit allows zero-target no-op; loading/error still block; empty-patches copy distinguishes no targets vs no drafts
+- `packages/web/src/experiments/console/components/WorkflowEnvManageDialog.test.tsx` — mounted create/edit happy-dom flows assert POST/PATCH `{ patches: {} }`; loading/error cannot overwrite
+- `packages/web/package.json` — `happy-dom` devDep; console test leg runs with `NODE_ENV=development`
+- `bun.lock` — lockfile for happy-dom
+
+**Acceptance criteria verified**:
+- [x] Mounted create with no editable targets POSTs `{ patches: {} }`
+- [x] Mounted edit removing every patch PATCHes complete `{ patches: {} }`
+- [x] Target discovery resolved in tests (not helper-only)
+- [x] Loading/failure block submit; successful zero targets do not
+- [x] No-op ENV copy remains true; loading/error cannot overwrite accidentally
+- [x] Focused verification: `cd packages/web && NODE_ENV=development bun test src/experiments/console/components/WorkflowEnvManageDialog.test.tsx src/experiments/console/lib/workflow-env-editor.test.ts` (25 pass)
+
+**Learnings**:
+- Prior onSubmit treated `targets.length === 0` like discovery failure — contradicted schema-valid empty patches map.
+- React 19 production build does not export `act`; console component mounts need `NODE_ENV=development` before importing react.
+- happy-dom controlled inputs: drive fiber `__reactProps$*.onChange` rather than native input events.
+
+---
+
+## 2026-09-05 — US-025: Picker and start component race regressions
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/components/WorkflowEnvPicker.test.tsx` — mounted picker + async list/preview harness (None default, list failure, retained selection loading/error, stale prior-workflow isolation)
+- `packages/web/src/experiments/console/components/DraftRunCard.test.tsx` — mounted Start card with mocked skills: YAML Start omits envId, selected ENV includes envId, loading/error retain selection + disable Start, workflow change clears ENV/inputs immediately, stale preview cannot replace current
+
+**Acceptance criteria verified**:
+- [x] WorkflowEnvPicker.test.tsx exists and mounts with controlled async list/detail/preview responses
+- [x] DraftRunCard.test.tsx exists and mounts Start card with controlled async ENV responses + Start submission
+- [x] None default; list failure permits None/YAML Start; outbound Start omits envId for None and includes it when selected
+- [x] Retained selected id shows own loading/error; selected loading/error keeps selection and disables Start; workflow change resets ENV and inputs immediately
+- [x] Stale prior-workflow response cannot replace current options/preview; draft-env.test.ts remains supporting coverage
+- [x] Focused verification: `cd packages/web && NODE_ENV=development bun test src/experiments/console/components/WorkflowEnvPicker.test.tsx src/experiments/console/components/DraftRunCard.test.tsx src/experiments/console/lib/draft-env.test.ts` (12 pass)
+
+**Learnings**:
+- Preview table copy differs by selection: selected → `Loading ENV preview…` / `Start is disabled`; None → `Loading preview…` / YAML still works.
+- DraftRunCard collapsed mode must be expanded before ENV UI appears; last-workflow localStorage stabilizes initial selection for multi-workflow race tests.
+- WorkflowPicker dropdown portals to `document.body` and needs a real bounding rect in happy-dom or `anchor` stays null and options never mount.
+
+---
+
+## 2026-09-05 — US-026: Missing-node raw patch keys rejected
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/env-overlay.ts` — `assertRawPatchKeys` before missing-node continue (extends US-016 to deleted targets)
+- `packages/workflows/src/env-overlay.test.ts` — Zod-bypass missing+typo regression + allowed-only missing skip
+
+**Acceptance criteria verified**:
+- [x] env-overlay.test.ts bypasses Zod with `{ missing: { typo: 'secret-value' } }`
+- [x] applyEnvOverlay fails forbidden_field; mentions only unknown key; no value/body leak
+- [x] Missing-node with only allowed fields succeeds and reports skipped id
+- [x] Raw key validation runs before missing-node continue and before copyNodePatch
+- [x] Valid missing-node skip + schema-validated patches unchanged
+- [x] Focused verification: `cd packages/workflows && bun test src/env-overlay.test.ts src/schemas/env-overlay.test.ts` (29 pass)
+
+**Learnings**:
+- US-016 only gated present nodes; missing-id early continue was a silent bypass for unknown keys on deleted targets.
+- Order is: assertRawPatchKeys → missing skip OR copyNodePatch+apply. Allowed missing still never enters appliedPatches.
+
+---
+
+## 2026-09-05 — US-027: Programmatic modelReasoningEffort parity
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/node-model-resolution.ts` — `resolveWorkflowModelScope` accepts legacy `modelReasoningEffort` and sets `effort: workflow.effort ?? workflow.modelReasoningEffort`
+- `packages/workflows/src/node-model-resolution.test.ts` — programmatic unexpanded MRE vs loader-normalized effort parity; portable effort wins
+- `packages/workflows/src/executor.test.ts` — ENV snapshot vs pure node_started metadata + appliedEffort provider options for programmatic MRE workflow
+
+**Acceptance criteria verified**:
+- [x] node-model-resolution.test.ts covers unexpanded programmatic workflow-level modelReasoningEffort with no portable effort
+- [x] executor.test.ts compares envOverlay snapshot row to runtime node_started fields and provider appliedEffort
+- [x] Shared workflow-scope resolver uses effort ?? modelReasoningEffort without a second resolver
+- [x] Loader-normalized YAML and programmatic legacy definitions produce the same effective effort in Preview/snapshot/node_started/provider options
+- [x] Preview and audit parity remains via node-model-resolution.ts
+- [x] Focused verification: `bun test src/node-model-resolution.test.ts` && `bun test src/executor.test.ts` && `bun test src/dag-executor.test.ts` (18+100+531 pass; run separately — mock.module isolation)
+
+**Learnings**:
+- AC's single `bun test a b c` form hits mock pollution between executor and dag-executor; package.json already splits them — run as three invocations.
+- Legacy workflow MRE is portable effort once it reaches scope (metadata.effort), not assistant-style metadata.modelReasoningEffort.
+
+---
+## 2026-09-05 — US-028: Strict run-detail ENV parser fields
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/primitives/run.ts` — fail-closed present optional field types + unexpected key rejection for pending/complete overlays and resolved rows; thinking mirrors adaptive/enabled/disabled shapes
+- `packages/web/src/experiments/console/primitives/run.test.ts` — regressions for invalid model/tier/effort/thinking, unexpected resolved-row keys, unexpected top-level keys; valid pending/complete controls
+
+**Acceptance criteria verified**:
+- [x] parseRunEnvOverlay returns null for present non-string model, invalid tier, invalid effort, malformed/unsupported thinking, unexpected resolved-row key
+- [x] complete overlay with unexpected top-level key returns null (pending extras too)
+- [x] Local web parser requires exact pending/complete shapes + resolved-row field types without importing `@archon/workflows`
+- [x] Valid pending/complete rendering unchanged; RunDetailPage omits only corrupt ENV section
+- [x] Focused verification: `cd packages/web && NODE_ENV=development bun test …run.test.ts …RunDetailPage.test.tsx …WorkflowEnvResolvedTable.test.tsx …RunDetailHeader.test.tsx` (45 pass)
+- [x] Phase 8 gates rerun on corrected tree: package focused tests + tsc, `check:bundled-schema`, `check:schema-upgrades` (with libpq PATH + local PG), `validate` components (type-check/lint/format/test), `git diff --check`
+
+**Learnings**:
+- US-017 already failed hybrids/missing provider; optional fields still silently dropped invalid present values — present-and-wrong must fail closed for audit UI.
+- Static key allowlists as `Record<string, true>` (not `Set`) and `if (!allowed[key])` avoid the unnecessary boolean-literal-compare lint.
+- `check:schema-upgrades` needs `psql` on PATH (`/opt/homebrew/opt/libpq/bin`) even when Postgres is already accepting on 127.0.0.1:5432.
+- Full-repo eslint can OOM under default Node heap; `NODE_OPTIONS=--max-old-space-size=8192` unblocks lint when needed.
+
+---
+
+## 2026-09-05 — US-029: Continuation decided before stored ENV parsing
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/orchestrator/orchestrator-agent.ts` — always inspect provisional continuations before parsing/logging stored envOverlay; inspect-null uses fresh request/YAML; genuine-only parse; continuing flag from isGenuineContinuation
+- `packages/core/src/orchestrator/orchestrator-agent.test.ts` — inspect-null malformed YAML/request, inspect-null incompatible stored, genuine malformed fail-before-gates control; strengthened prior malformed control
+
+**Acceptance criteria verified**:
+- [x] inspect-null + malformed stored without request ENV starts fresh on YAML
+- [x] inspect-null + malformed stored with valid request candidate starts fresh with that candidate
+- [x] inspect-null + stored overlay incompatible with current YAML ignores stale stored row
+- [x] genuine continuation + malformed stored fails before conversation mutation, isolation, and resume CAS
+- [x] dispatch inspects every provisional continuation before parse/apply/log; inspect-null follows fresh path
+- [x] resumeWorkflowRun/hydrate remains after conversation+isolation; mutable ENV table not queried
+- [x] no env_overlay_prepared with continuing:true for inspect-null; no prompt/bash body leakage
+- [x] Focused verification: `cd packages/core && bun test src/orchestrator/env-overlay-dispatch.test.ts && bun test src/orchestrator/orchestrator-agent.test.ts` (8 + 253 pass)
+
+**Learnings**:
+- Calling resolveContinuationDispatchEnvOverlay before inspect made empty paused runs inherit corrupt metadata and block fresh starts.
+- willContinueExistingRun is only "provisional continuation candidate" — not proof of genuine resume; logging continuing must use inspect result.
+- Inspect-null with a request ENV still validates the request pre-isolation (US-012 hydrate-null guarantee preserved).
+
+---
+
+## 2026-09-05 — US-030: Strict frozen patch validation in run ENV UI
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/primitives/run.ts` — fail-closed local `isValidEnvPatchesDocument` / `isValidEnvNodePatch` mirroring engine target-key, allowed-field, non-empty, thinking, 256/1MiB contracts; wired into `parseRunEnvOverlay` before lifecycle accept
+- `packages/web/src/experiments/console/primitives/run.test.ts` — pending/complete corrupt patch matrix + valid empty map/body/include-id controls; bodies never serialize on RunEnvOverlay
+- `packages/web/src/experiments/console/routes/RunDetailPage.test.tsx` — corrupt frozen patches hide only ENV chip/table; rest of detail usable; no body leak
+
+**Acceptance criteria verified**:
+- [x] pending/complete: non-object per-node, unsafe/reserved ids, empty per-node, unknown fields, wrong types, invalid thinking incl. zero budget, >256 targets, >1MiB → null
+- [x] valid empty map + prompt/bash/whitespace bodies still parse; bodies never on RunEnvOverlay
+- [x] RunDetailPage corrupt patches hide ENV surfaces only; no prompt/bash exposure
+- [x] local validator without `@archon/workflows` import
+- [x] RunEnvOverlay / render never copies patch bodies
+- [x] Focused verification: `cd packages/web && NODE_ENV=development bun test …run.test.ts …RunDetailPage.test.tsx …WorkflowEnvResolvedTable.test.tsx …RunDetailHeader.test.tsx` (48 pass); `bun x tsc --noEmit` clean
+
+**Learnings**:
+- Object-literal `{ __proto__: … }` sets the prototype and is invisible to `Object.keys`; reserved-key fixtures must use `JSON.parse('{"__proto__":…}')` (or defineProperty) to exercise the own-key path that stored JSON actually has.
+- US-017/028 already required object `patches`; H2 was that a non-array object with corrupt per-node content still rendered as trusted audit state.
+
+---
+
+## 2026-09-05 — US-031: Console editor rejects zero thinking budget
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/lib/workflow-env-editor.ts` — thinkingToPatch positive-int budget + schema-aligned error/comment
+- `packages/web/src/experiments/console/lib/workflow-env-editor.test.ts` — 0/-0/negative/fractional/non-finite + blank/positive + buildPatches surfaces error
+- `packages/web/src/experiments/console/components/WorkflowEnvManageDialog.test.tsx` — mounted create/edit zero-budget: no POST/PATCH, local error, draft stays editable
+
+**Acceptance criteria verified**:
+- [x] Helper regressions for budgetTokens 0 and -0 plus negative/fractional/non-finite
+- [x] Mounted create/update with zero budget: no POST/PATCH + actionable local error
+- [x] Blank budget omits optional field; positive integer serializes unchanged
+- [x] thinkingToPatch comment/error align with thinkingConfigSchema positive int
+- [x] Draft remains editable after local thinking-budget validation error
+- [x] Focused verification: NODE_ENV=development bun test workflow-env-editor + WorkflowEnvManageDialog tests
+
+**Learnings**:
+- Prior helper allowed n >= 0 ("non-negative") which diverged from engine `z.number().int().positive()` — 0 would fail server schema after client accepted it.
+- Number('-0') is -0; use `n <= 0` (not `n < 0`) so both 0 and -0 reject.
+- Dialog needed no code change: buildPatchesFromDrafts already maps thinkingToPatch throws to actionError; updateDraft already clears error without wiping drafts.
+
+---
+
+## 2026-09-05 — US-032: Stored ENV rows use authoritative name schemas
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/schemas/workflow-env.ts` — row/summary compose write-path workflow + ENV name schemas
+- `packages/core/src/schemas/workflow-env.test.ts` — row/summary reject bad//workflow and has space
+- `packages/core/src/db/workflow-envs.test.ts` — injected invalid identities → WorkflowEnvCorruptRowError id-only on detail + summary
+
+**Acceptance criteria verified**:
+- [x] schema regressions: workflowEnvRowSchema rejects bad//workflow and has space
+- [x] SQLite inject: full-detail reads reject with WorkflowEnvCorruptRowError carrying/logging only row id
+- [x] summary reads reject invalid identities via summary schema; independent of patch parsing (no patch load)
+- [x] row schema composed from workflowEnvWorkflowNameSchema + workflowEnvNameSchema; summary inherits via omit
+- [x] write/read identity constraints agree; Date/string timestamps unchanged
+- [x] Focused verification: `cd packages/core && bun test src/schemas/workflow-env.test.ts && bun test src/db/workflow-envs.test.ts`
+
+**Learnings**:
+- Length-only identity on the row schema was a silent read-path weaken — write path already used authoritative schemas; compose, don't duplicate.
+- List cannot query by an invalid workflow_name (input parse rejects); corrupt workflow_name rows are caught by get-by-id, while corrupt ENV names under a valid workflow_name are caught by list parseSummaryRow.
+- Cleanup of identity-corrupted rows needs raw SQL — store delete/update scope by validated workflow_name path.
+
+---
+
+## 2026-09-05 — US-033: Post-Convergence-3 Constitution Check reconciliation
+
+**Status**: PASSED
+**Files changed**:
+- `docs/superpowers/plans/2026-09-05-workflow-env-overlay.md` — append Constitution Check §D (post-Convergence-3 re-check); preserve A–C history; supersede B open-blocker list; mark Convergence 3 task 22 DONE
+
+**Acceptance criteria verified**:
+- [x] Clearly dated post-Convergence-3 re-check after US-029–US-032
+- [x] Historical findings vs current blockers distinguished; US-020/US-021 delayed-CAS + pending fail-closed cited CLOSED with final code/tests
+- [x] One unambiguous current release-blocker list: **None**
+- [x] Final evidence covers package-layer, typed/OpenAPI, additive DB, fail-closed lifecycle, secret-safe observability, focused/full validation, intentional complexity
+- [x] History preserved; verdicts changed only with concrete repository evidence
+- [x] Verification: `git diff --check` clean; manual compare to constitution 154–156 and 172–175; focused suites + root validate legs (type-check/lint/format/test/bundled checks) green
+
+**Learnings**:
+- US-019 §B correctly recorded open lifecycle blockers at write time; do not rewrite B — append a dated current section so auditors see both history and live gate.
+- Constitution process gate (154–156) wants pre-Phase-0 + post-design + (for this feature) post-implementation re-check after convergence hardenings land.
+- Ops mixed-version resume risk stays a deployment constraint, not a residual constitution violation once code paths fail closed.
+
+---
+## 2026-09-05 — US-034: Best-effort post-claim continuation notices
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/orchestrator/orchestrator-agent.ts` — post-CAS supplied-input and ignored-ENV notices catch sendMessage failures; log safe ids only; executeWorkflow still runs
+- `packages/core/src/orchestrator/orchestrator-agent.test.ts` — regressions: notice rejection after winning hydrate CAS still dispatches once with stored inputs / stored overlay
+
+**Acceptance criteria verified**:
+- [x] supplied-input notice rejection after winning resume CAS → executeWorkflow once with stored run inputs (no fresh inputs stamp)
+- [x] ignored-ENV notice rejection after winning resume CAS → executeWorkflow once with stored overlay (request candidate not applied)
+- [x] each notice independent best-effort via catch + warn log; neither skips executor dispatch
+- [x] resuming notices stay after CAS; losing-CAS path unchanged; claim still after command ack
+- [x] no fresh workflow row / second dispatch; logs only run ids, env ids/names, safe codes — never patch/prompt/bash bodies
+- [x] Focused verification: `cd packages/core && bun test src/orchestrator/orchestrator-agent.test.ts` (255 pass)
+
+**Learnings**:
+- handleMessage always awaits `platform.sendMessage(result.message)` for the command ack *before* `handleWorkflowRunCommand`; tests that reject every send must let the first ack succeed or dispatch never starts.
+- Post-CAS orphan pattern: any awaited side-effect after `hydrateResumableRun` (paused→running) must be best-effort or the row is stranded with no executor owner — same shape as `continueResolvedGateRun`'s `notify` helper.
+- Command-ack send is send #1; the resuming notice is send #2 — order assertions must compare hydrate against the notice invocation, not the first send.
+
+---
+
+## 2026-09-05 — US-035: Container preflight follows loop-group scope
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/dag-executor.ts` — `collectContainerIncompatibleProviders(nodes, scope, assistantModels, aiProfile)`; loop_group uses `resolveGroupModelScope` and skips container check; executeDagWorkflow wires matching outer preflight scope
+- `packages/workflows/src/dag-executor.test.ts` — outer codex + group claude, codex group + claude children, nested inheritance, model-alias scope, approval/plannotator inheritance, reject-before-execute + allow path
+
+**Acceptance criteria verified**:
+- [x] Controls for outer codex + group claude + inherited prompt, and group→codex with explicit claude children, both pass preflight
+- [x] Nested-group inheritance, group model-alias scope, and incompatible inherited body still reject
+- [x] Walker receives workflow scope + assistant defaults, derives loop_group scope via shared resolver, never adds provider for group container
+- [x] Approval/plannotator inside groups inherit group scope during preflight
+- [x] Preflight and runtime choose the same provider for AI turns at every group depth; dispatch-time backstop intact
+- [x] Focused verification: `bun test src/node-model-resolution.test.ts` + `bun test src/dag-executor.test.ts` (18 + 539 pass)
+
+**Learnings**:
+- Old walker checked the group container provider then visited the body with the outer workflow provider — both wrong relative to runtime `resolveGroupModelScope` + body inheritance.
+- Signature change from `(nodes, workflowProvider, aiProfile?)` to `(nodes, scope, assistantModels?, aiProfile?)` is intentional; tests build a minimal `WorkflowModelScope` helper.
+- execute-path container regression needs a real `loop_group` with `until` so the allow case can complete after preflight; reject case asserts `mockSendQueryDag` was never called.
+
+---
+## 2026-09-05 — US-036: Preset thinking warnings reach runtime
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/dag-executor.ts` — capability warning layer uses `request.thinkingUnsupported` instead of node/workflow-only isSet
+- `packages/workflows/src/node-model-resolution.test.ts` — preset-only unsupported thinking + supported Claude preset control
+- `packages/workflows/src/dag-executor.test.ts` — codex tier, opencode alias, grok tier preset thinking warn once; Claude supported control; explicit node/workflow thinking controls
+
+**Acceptance criteria verified**:
+- [x] Pure preset-only unsupported-thinking regression: thinkingUnsupported true, requested thinking in metadata + appliedThinking
+- [x] Runtime codex/opencode/grok tier or alias presets with thinking and no node/workflow thinking → dag.unsupported_capabilities exactly once
+- [x] Supported-provider and explicit node/workflow thinking controls covered and unchanged
+- [x] dag-executor consumes request.thinkingUnsupported in existing capability warning layer; requested thinking not dropped
+- [x] Every unsupported effective thinking (node/workflow/preset) warns through same path; supported produces no warning
+- [x] Focused verification: `cd packages/workflows && bun test src/node-model-resolution.test.ts && bun test src/dag-executor.test.ts` (20 + 545 pass)
+
+**Learnings**:
+- Thinking differs from effort: unsupported preset effort drops (`presetEffortDropped`); unsupported thinking stays in appliedThinking/metadata and only warns (`thinkingUnsupported`).
+- Old capChecks isSet `(node.thinking ?? workflowLevelOptions.thinking)` missed tier/alias presets entirely — pure path already had the flag, runtime just never read it.
+- Use `request.thinkingUnsupported` as the isSet (already encodes !thinkingControl); the loop's `!caps[cap]` remains a no-op double-check and keeps the table shape.
+
+---
+## 2026-09-05 — US-037: Loop-group provider conflict warning preserved
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/node-model-resolution.ts` — `ResolvedGroupModelScope` + `resolveGroupModelScope` forwards `providerConflict`
+- `packages/workflows/src/dag-executor.ts` — shared `warnModelProviderConflict`; loop_group branch emits via group scope conflict
+- `packages/workflows/src/node-model-resolution.test.ts` — conflict / nested / matching-provider pure controls + no group container row
+- `packages/workflows/src/dag-executor.test.ts` — no-ENV and ENV-overlaid group conflict warn once; body uses alias provider/model
+- `packages/workflows/src/executor.test.ts` — ENV snapshot body rows use alias-won provider; DAG workflow retains conflict fields; no group container
+
+**Acceptance criteria verified**:
+- [x] Pure shared-resolution regressions for group provider claude + alias→codex, nested, matching-provider controls
+- [x] dag-executor no-ENV and ENV group runs emit deduplicated `dag.model_provider_conflict` log/user warning once; body provider turns resolve correctly
+- [x] Pure group resolver exposes `providerConflict`; runtime consumes via existing safe warning layer
+- [x] Executor does not recompute alias policy independently; no group container ENV resolved row
+- [x] Body scope forwarding / preview / snapshot / node_started unchanged except restored warning
+- [x] Focused verification: `cd packages/workflows && bun test src/node-model-resolution.test.ts && bun test src/dag-executor.test.ts && bun test src/executor.test.ts` (23 + 547 + 101 pass)
+
+**Learnings**:
+- Group body inherits already-resolved provider, so conflict must be reported at group dispatch — body nodes cannot recover `providerConflict`.
+- Extract `warnModelProviderConflict` so ordinary nodes and loop_group share one dedupe key (`declared|resolved|modelRef`).
+- executor.test mocks `executeDagWorkflow`; ENV emission proof lives in dag-executor with `applyEnvOverlay`, while executor asserts snapshot + DAG-bound group fields expose the pure conflict decision.
+
+---
+
+## 2026-09-05 — US-038: Post-Convergence-4 Constitution Check reconciliation
+
+**Status**: PASSED
+**Files changed**:
+- `docs/superpowers/plans/2026-09-05-workflow-env-overlay.md` — append Constitution Check §E (post-Convergence-4); mark §D historical; update C/D/Convergence 4 authority pointers; disposition note under task 27
+
+**Acceptance criteria verified**:
+- [x] Clearly dated post-Convergence-4 re-check after US-034–US-037 focused re-runs (orchestrator-agent 255; node-model-resolution 23; dag-executor 547; executor 101)
+- [x] Historical §A–§D preserved; each Convergence 4 finding disposition cites final symbols + focused tests
+- [x] One unambiguous current blocker list in §E; lifecycle cannot PASS while US-034 open; preflight cannot PASS while US-035 open — both CLOSED
+- [x] Waivers include mixed-version resume + CI-only Postgres schema-upgrades with rollback rationale
+- [x] Final shipping gate names `bun run validate` + PostgreSQL schema-upgrade CI leg; ordinary PR process ≠ constitutional blocker
+- [x] `git diff --check -- docs/superpowers/plans/2026-09-05-workflow-env-overlay.md` clean
+
+**Learnings**:
+- Mirror US-033: never rewrite historical blocker lists; append a new dated section and retarget “current” pointers.
+- Keep only one subsection titled “Current release blockers (authoritative)” so auditors cannot misread an older empty list.
+- Convergence 4 task text stays as historical gap trail even after §E closes it.
+
+---

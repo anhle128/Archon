@@ -8,7 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "type-check": "tsc --noEmit",
-    "test": "bun test src/lib/ && bun test src/stores/ && bun test src/hooks/ && bun test src/components/ && bun test src/experiments/console/",
+    "test": "bun test src/lib/ && bun test src/stores/ && bun test src/hooks/ && bun test src/components/ && NODE_ENV=development bun test src/experiments/console/",
     "generate:types": "openapi-typescript http://localhost:3090/api/openapi.json -o src/lib/api.generated.d.ts"
   },
   "dependencies": {
@@ -54,6 +54,7 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.0.0",
+    "happy-dom": "^20.14.0",
     "openapi-typescript": "^7.13.0",
     "shadcn": "^3.8.4",
     "tailwindcss": "^4.0.0",

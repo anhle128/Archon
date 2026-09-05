@@ -110,3 +110,77 @@ describe('startRun — declared inputs (#2554)', () => {
     expect(form.get('inputs')).toBeNull();
   });
 });
+
+describe('startRun — workflow ENV envId', () => {
+  beforeEach(() => {
+    stubFetch();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  test('JSON branch carries envId when selected', async () => {
+    await startRun({
+      projectId: 'p1',
+      workflow: 'feature',
+      message: 'go',
+      envId: 'env-1',
+    });
+
+    const body = JSON.parse(String(runCall().init?.body)) as Record<string, unknown>;
+    expect(body.envId).toBe('env-1');
+  });
+
+  test('JSON branch omits envId for None/YAML', async () => {
+    await startRun({ projectId: 'p1', workflow: 'feature', message: 'go' });
+
+    const body = JSON.parse(String(runCall().init?.body)) as Record<string, unknown>;
+    expect(body).not.toHaveProperty('envId');
+  });
+
+  test('JSON branch omits empty envId string', async () => {
+    await startRun({ projectId: 'p1', workflow: 'feature', message: 'go', envId: '' });
+
+    const body = JSON.parse(String(runCall().init?.body)) as Record<string, unknown>;
+    expect(body).not.toHaveProperty('envId');
+  });
+
+  test('multipart branch carries envId as a plain form field', async () => {
+    await startRun({
+      projectId: 'p1',
+      workflow: 'feature',
+      message: 'go',
+      files: [new File(['x'], 'a.txt', { type: 'text/plain' })],
+      envId: 'env-2',
+    });
+
+    const form = runCall().init?.body as FormData;
+    expect(form.get('envId')).toBe('env-2');
+  });
+
+  test('multipart branch omits envId when None', async () => {
+    await startRun({
+      projectId: 'p1',
+      workflow: 'feature',
+      message: 'go',
+      files: [new File(['x'], 'a.txt', { type: 'text/plain' })],
+    });
+
+    const form = runCall().init?.body as FormData;
+    expect(form.get('envId')).toBeNull();
+  });
+
+  test('JSON branch can combine envId with inputs', async () => {
+    await startRun({
+      projectId: 'p1',
+      workflow: 'feature',
+      message: 'go',
+      envId: 'env-1',
+      inputs: { diff: 'D1' },
+    });
+
+    const body = JSON.parse(String(runCall().init?.body)) as Record<string, unknown>;
+    expect(body).toMatchObject({ envId: 'env-1', inputs: { diff: 'D1' } });
+  });
+});

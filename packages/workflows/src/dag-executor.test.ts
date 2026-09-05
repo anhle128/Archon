@@ -89,6 +89,7 @@ import {
   containerCommandName,
   buildSubprocessDockerArgs,
 } from './dag-executor';
+import type { WorkflowModelScope } from './node-model-resolution';
 import { writeNodeArtifact } from './artifacts-index';
 import { getWorkflowEventEmitter, type WorkflowEmitterEvent } from './event-emitter';
 import { loadMcpConfig } from '@archon/providers/mcp/config';
@@ -111,6 +112,7 @@ import type { IWorkflowStore, WorkflowEventData } from './store';
 import { buildAiProfile } from './model-validation';
 import type { SendQueryOptions } from '@archon/providers/types';
 import * as plannotatorGateExecutor from './plannotator-gate-executor';
+import { applyEnvOverlay } from './env-overlay';
 
 // --- Mock helpers ---
 
@@ -158,6 +160,23 @@ function createMockStore(): IWorkflowStore {
     ),
     resumeApprovedGate: mock(() => Promise.resolve({ resumed: true })),
     updateWorkflowRun: mock(() => Promise.resolve()),
+    setWorkflowRunEnvOverlay: mock(() =>
+      Promise.resolve({
+        id: 'mock-run-id',
+        workflow_name: 'mock',
+        conversation_id: 'conv-mock',
+        parent_conversation_id: null,
+        codebase_id: null,
+        status: 'running' as const,
+        user_message: 'mock message',
+        metadata: {},
+        started_at: new Date(),
+        completed_at: null,
+        last_activity_at: null,
+        working_path: null,
+        parent_run_id: null,
+      })
+    ),
     resolveApprovalGate: mock(() => Promise.resolve({ resolved: true })),
     transitionPlannotatorGate: mock(
       (input: Parameters<IWorkflowStore['transitionPlannotatorGate']>[0]) =>
@@ -1665,6 +1684,193 @@ describe('executeDagWorkflow -- tool restrictions', () => {
         )
       )
     ).toBe(true);
+  });
+
+  it('warns once when loop_group provider conflicts with alias model (no-ENV)', async () => {
+    // US-037: group dispatch must emit dag.model_provider_conflict. Body nodes
+    // inherit the already-resolved provider and cannot recover the conflict.
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'codex',
+      getCapabilities: mockCodexCapabilities,
+    }));
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'done\nDONE' };
+      yield { type: 'result', sessionId: 'lg-conflict-sid' };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const aiProfile = buildAiProfile('claude', {
+      repoAliases: {
+        '@fast': { provider: 'codex', model: 'gpt-5.5', effort: 'minimal' },
+      },
+    });
+
+    const logBaseline = mockLogFn.mock.calls.length;
+    const sendBaseline = (platform.sendMessage as Mock).mock.calls.length;
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-lg-conflict',
+      testDir,
+      {
+        name: 'dag-loopgroup-provider-conflict',
+        nodes: [
+          {
+            id: 'grp',
+            provider: 'claude',
+            model: '@fast',
+            loop_group: {
+              until: 'DONE',
+              max_iterations: 1,
+              nodes: [{ id: 'body', prompt: 'body work' }],
+            },
+          },
+        ],
+      },
+      makeWorkflowRun('dag-loopgroup-provider-conflict'),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      aiProfile
+    );
+
+    expect(mockGetAgentProviderDag.mock.calls.some(c => c[0] === 'codex')).toBe(true);
+    const bodyCall = mockSendQueryDag.mock.calls.find(
+      call => typeof call[0] === 'string' && (call[0] as string).includes('body work')
+    );
+    expect(bodyCall).toBeDefined();
+    expect((bodyCall?.[3] as SendQueryOptions).model).toBe('gpt-5.5');
+
+    const conflictMsgs = (platform.sendMessage as Mock).mock.calls
+      .slice(sendBaseline)
+      .map(c => String(c[1]))
+      .filter(m =>
+        m.includes("sets provider 'claude' but model '@fast' resolves to provider 'codex'")
+      );
+    expect(conflictMsgs).toHaveLength(1);
+    expect(conflictMsgs[0]).toContain("Node 'grp'");
+
+    const logConflicts = (mockLogFn.mock.calls as unknown[][])
+      .slice(logBaseline)
+      .filter(args => args[1] === 'dag.model_provider_conflict');
+    expect(logConflicts).toHaveLength(1);
+    expect(logConflicts[0]?.[0]).toMatchObject({
+      nodeId: 'grp',
+      configuredProvider: 'claude',
+      resolvedProvider: 'codex',
+      modelRef: '@fast',
+    });
+
+    // Group container still has no provider-turn node_started.
+    const events = (store.createWorkflowEvent as Mock).mock.calls.map(c => c[0]);
+    expect(
+      events.some(
+        (e: { event_type: string; step_name?: string }) =>
+          e.event_type === 'node_started' && e.step_name === 'grp'
+      )
+    ).toBe(false);
+    const bodyStarted = events.find(
+      (e: { event_type: string; step_name?: string }) =>
+        e.event_type === 'node_started' && e.step_name === 'grp.body'
+    );
+    expect(bodyStarted?.data).toMatchObject({ provider: 'codex', model: 'gpt-5.5' });
+  });
+
+  it('warns once for ENV-overlaid loop_group provider/model conflict', async () => {
+    // US-037 ENV path: overlay supplies the conflicting group fields; warning
+    // still fires exactly once and body turns use the alias-won provider/model.
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'codex',
+      getCapabilities: mockCodexCapabilities,
+    }));
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'done\nDONE' };
+      yield { type: 'result', sessionId: 'lg-env-conflict-sid' };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const aiProfile = buildAiProfile('claude', {
+      repoAliases: {
+        '@fast': { provider: 'codex', model: 'gpt-5.5' },
+      },
+    });
+
+    const baseNodes: DagNode[] = [
+      {
+        id: 'grp',
+        // YAML baseline has no conflict; ENV patches introduce it.
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 1,
+          nodes: [{ id: 'body', prompt: 'env body' }],
+        },
+      },
+    ];
+    const { workflow: patched } = applyEnvOverlay(
+      { name: 'dag-loopgroup-env-conflict', nodes: baseNodes },
+      { grp: { provider: 'claude', model: '@fast' } }
+    );
+
+    const logBaseline = mockLogFn.mock.calls.length;
+    const sendBaseline = (platform.sendMessage as Mock).mock.calls.length;
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-lg-env-conflict',
+      testDir,
+      patched,
+      makeWorkflowRun('dag-loopgroup-env-conflict'),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      aiProfile
+    );
+
+    const conflictMsgs = (platform.sendMessage as Mock).mock.calls
+      .slice(sendBaseline)
+      .map(c => String(c[1]))
+      .filter(m =>
+        m.includes("sets provider 'claude' but model '@fast' resolves to provider 'codex'")
+      );
+    expect(conflictMsgs).toHaveLength(1);
+
+    const logConflicts = (mockLogFn.mock.calls as unknown[][])
+      .slice(logBaseline)
+      .filter(args => args[1] === 'dag.model_provider_conflict');
+    expect(logConflicts).toHaveLength(1);
+
+    const bodyCall = mockSendQueryDag.mock.calls.find(
+      call => typeof call[0] === 'string' && (call[0] as string).includes('env body')
+    );
+    expect(bodyCall).toBeDefined();
+    expect((bodyCall?.[3] as SendQueryOptions).model).toBe('gpt-5.5');
+    expect(mockGetAgentProviderDag.mock.calls.some(c => c[0] === 'codex')).toBe(true);
   });
 
   it('warns user when Codex DAG node has denied_tools only', async () => {
@@ -14643,6 +14849,440 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
     );
     expect(failedEvent?.[0].data?.error).toContain('does not support effortControl');
   });
+
+  it('drops unsupported OpenCode preset effort with warning and omits applied effort', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'opencode',
+      getCapabilities: () => ({ ...mockCodexCapabilities(), effortControl: false }),
+    }));
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const aiProfile = buildAiProfile('opencode', {
+      repoTiers: {
+        large: { provider: 'opencode', model: 'opencode-large', effort: 'high' },
+      },
+    });
+
+    mockLogFn.mockClear();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'preset-effort-drop-test',
+        nodes: [{ id: 'step1', command: 'my-cmd', model: 'large' }],
+      },
+      makeWorkflowRun(),
+      'opencode',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, assistant: 'opencode' },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      aiProfile
+    );
+
+    expect(mockSendQueryDag).toHaveBeenCalled();
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
+    expect(nodeConfig.effort).toBeUndefined();
+
+    const startedEvent = store.createWorkflowEvent.mock.calls.find(
+      call => call[0].event_type === 'node_started'
+    );
+    expect(startedEvent?.[0].data?.effort).toBeUndefined();
+    expect(startedEvent?.[0].data?.provider).toBe('opencode');
+    expect(startedEvent?.[0].data?.model).toBe('opencode-large');
+
+    const dropWarns = mockLogFn.mock.calls.filter(
+      (call: unknown[]) => call[1] === 'dag.preset_effort_unsupported'
+    );
+    expect(dropWarns.length).toBe(1);
+    const dropPayload = dropWarns[0][0];
+    expect(
+      dropPayload &&
+        typeof dropPayload === 'object' &&
+        'effort' in dropPayload &&
+        dropPayload.effort
+    ).toBe('high');
+  });
+
+  it('still fails when workflow-authored explicit effort targets OpenCode', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'opencode',
+      getCapabilities: () => ({ ...mockCodexCapabilities(), effortControl: false }),
+    }));
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'workflow-effort-opencode-fail',
+        effort: 'high',
+        nodes: [{ id: 'step1', command: 'my-cmd', provider: 'opencode' }],
+      },
+      makeWorkflowRun(),
+      'opencode',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, assistant: 'opencode' }
+    );
+
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
+    const failedEvent = store.createWorkflowEvent.mock.calls.find(
+      call => call[0].event_type === 'node_failed'
+    );
+    expect(failedEvent?.[0].data?.error).toContain('does not support effortControl');
+  });
+
+  it('warns once for Codex tier preset thinking with no node/workflow thinking', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'codex',
+      getCapabilities: mockCodexCapabilities,
+    }));
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const aiProfile = buildAiProfile('codex', {
+      repoTiers: {
+        large: { provider: 'codex', model: 'gpt-5.1', thinking: 'enabled' },
+      },
+    });
+
+    mockLogFn.mockClear();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'preset-thinking-codex-tier',
+        nodes: [{ id: 'step1', command: 'my-cmd', model: 'large' }],
+      },
+      makeWorkflowRun(),
+      'codex',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, assistant: 'codex' },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      aiProfile
+    );
+
+    expect(mockSendQueryDag).toHaveBeenCalled();
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
+    // Requested thinking is preserved on send options even when unsupported.
+    expect(nodeConfig.thinking).toEqual({ type: 'enabled' });
+
+    const startedEvent = store.createWorkflowEvent.mock.calls.find(
+      call => call[0].event_type === 'node_started'
+    );
+    expect(startedEvent?.[0].data?.thinking).toEqual({ type: 'enabled' });
+    expect(startedEvent?.[0].data?.provider).toBe('codex');
+
+    const capWarns = mockLogFn.mock.calls.filter(
+      (call: unknown[]) => call[1] === 'dag.unsupported_capabilities'
+    );
+    expect(capWarns.length).toBe(1);
+    const payload = capWarns[0][0] as { unsupported?: string[] };
+    expect(payload.unsupported).toEqual(['thinking']);
+
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    const warnings = sendMessage.mock.calls
+      .map(call => call[1] as string)
+      .filter(msg => typeof msg === 'string' && msg.includes('thinking'));
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toContain("doesn't support");
+  });
+
+  it('warns once for OpenCode alias preset thinking with no node/workflow thinking', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'opencode',
+      getCapabilities: () => ({ ...mockCodexCapabilities(), effortControl: false }),
+    }));
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const aiProfile = buildAiProfile('opencode', {
+      globalAliases: {
+        '@thinky': { provider: 'opencode', model: 'oc-model', thinking: { type: 'enabled' } },
+      },
+    });
+
+    mockLogFn.mockClear();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'preset-thinking-opencode-alias',
+        nodes: [{ id: 'step1', command: 'my-cmd', model: '@thinky' }],
+      },
+      makeWorkflowRun(),
+      'opencode',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, assistant: 'opencode' },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      aiProfile
+    );
+
+    expect(mockSendQueryDag).toHaveBeenCalled();
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
+    expect(nodeConfig.thinking).toEqual({ type: 'enabled' });
+
+    const capWarns = mockLogFn.mock.calls.filter(
+      (call: unknown[]) => call[1] === 'dag.unsupported_capabilities'
+    );
+    expect(capWarns.length).toBe(1);
+    expect((capWarns[0][0] as { unsupported?: string[] }).unsupported).toEqual(['thinking']);
+  });
+
+  it('warns once for Grok tier preset thinking with no node/workflow thinking', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'grok',
+      getCapabilities: () => ({
+        ...mockCodexCapabilities(),
+        effortControl: false,
+        thinkingControl: false,
+      }),
+    }));
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const aiProfile = buildAiProfile('grok', {
+      repoTiers: {
+        medium: { provider: 'grok', model: 'grok-3', thinking: 'disabled' },
+      },
+    });
+
+    mockLogFn.mockClear();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'preset-thinking-grok-tier',
+        nodes: [{ id: 'step1', command: 'my-cmd', model: 'medium' }],
+      },
+      makeWorkflowRun(),
+      'grok',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, assistant: 'grok' },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      aiProfile
+    );
+
+    expect(mockSendQueryDag).toHaveBeenCalled();
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
+    expect(nodeConfig.thinking).toEqual({ type: 'disabled' });
+
+    const capWarns = mockLogFn.mock.calls.filter(
+      (call: unknown[]) => call[1] === 'dag.unsupported_capabilities'
+    );
+    expect(capWarns.length).toBe(1);
+    expect((capWarns[0][0] as { unsupported?: string[] }).unsupported).toEqual(['thinking']);
+  });
+
+  it('does not warn for Claude preset thinking (supported provider)', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const aiProfile = buildAiProfile('claude', {
+      repoTiers: {
+        large: { provider: 'claude', model: 'claude-opus-4', thinking: 'adaptive' },
+      },
+    });
+
+    mockLogFn.mockClear();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'preset-thinking-claude-ok',
+        nodes: [{ id: 'step1', command: 'my-cmd', model: 'large' }],
+      },
+      makeWorkflowRun(),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      aiProfile
+    );
+
+    expect(mockSendQueryDag).toHaveBeenCalled();
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
+    expect(nodeConfig.thinking).toEqual({ type: 'adaptive' });
+
+    const capWarns = mockLogFn.mock.calls.filter(
+      (call: unknown[]) => call[1] === 'dag.unsupported_capabilities'
+    );
+    expect(capWarns.length).toBe(0);
+
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    const warnings = sendMessage.mock.calls
+      .map(call => call[1] as string)
+      .filter(msg => typeof msg === 'string' && msg.includes('thinking'));
+    expect(warnings).toEqual([]);
+  });
+
+  it('still warns once for explicit node thinking on Codex (unchanged control)', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'codex',
+      getCapabilities: mockCodexCapabilities,
+    }));
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+
+    mockLogFn.mockClear();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'explicit-thinking-codex',
+        nodes: [{ id: 'step1', command: 'my-cmd', provider: 'codex', thinking: 'enabled' }],
+      },
+      makeWorkflowRun(),
+      'codex',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, assistant: 'codex' }
+    );
+
+    expect(mockSendQueryDag).toHaveBeenCalled();
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
+    expect(nodeConfig.thinking).toEqual({ type: 'enabled' });
+
+    const capWarns = mockLogFn.mock.calls.filter(
+      (call: unknown[]) => call[1] === 'dag.unsupported_capabilities'
+    );
+    expect(capWarns.length).toBe(1);
+    expect((capWarns[0][0] as { unsupported?: string[] }).unsupported).toEqual(['thinking']);
+  });
+
+  it('still warns once for explicit workflow thinking on Codex (unchanged control)', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'codex',
+      getCapabilities: mockCodexCapabilities,
+    }));
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+
+    mockLogFn.mockClear();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'workflow-thinking-codex',
+        thinking: 'enabled',
+        nodes: [{ id: 'step1', command: 'my-cmd', provider: 'codex' }],
+      },
+      makeWorkflowRun(),
+      'codex',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, assistant: 'codex' }
+    );
+
+    expect(mockSendQueryDag).toHaveBeenCalled();
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
+    expect(nodeConfig.thinking).toEqual({ type: 'enabled' });
+
+    const capWarns = mockLogFn.mock.calls.filter(
+      (call: unknown[]) => call[1] === 'dag.unsupported_capabilities'
+    );
+    expect(capWarns.length).toBe(1);
+    expect((capWarns[0][0] as { unsupported?: string[] }).unsupported).toEqual(['thinking']);
+  });
 });
 
 describe('executeDagWorkflow -- cost tracking', () => {
@@ -17675,6 +18315,110 @@ describe('executeDagWorkflow -- loop_group node', () => {
     // Two iterations: iter 1 (no signal) → iter 2 (DONE signal) → complete.
     expect(callCount).toBe(2);
     expect(result).toContain('iteration 2 final result');
+  });
+
+  it('forwards loop_group provider/model/tier to body node_started and sendQuery', async () => {
+    // Group model/provider must reach body AI nodes (ordinary YAML and overlay).
+    // node_started request fields must equal the pure resolution metadata row.
+    mockSendQueryDag.mockImplementation(function* (
+      _prompt: string,
+      _sid: unknown,
+      _cwd: unknown,
+      opts: unknown
+    ) {
+      yield { type: 'assistant', content: 'done\nDONE' };
+      yield { type: 'result', sessionId: 'lg-model-sid', resolvedModel: { id: 'opus-actual' } };
+      void opts;
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const aiProfile = buildAiProfile('claude', {
+      globalTiers: {
+        large: { provider: 'claude', model: 'opus', effort: 'high' },
+      },
+    });
+
+    const nodes: DagNode[] = [
+      {
+        id: 'top',
+        prompt: 'outer',
+        model: 'claude-haiku-4',
+      },
+      {
+        id: 'grp',
+        model: 'large',
+        depends_on: ['top'],
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 1,
+          nodes: [{ id: 'body', prompt: 'body work' }],
+        },
+      },
+    ];
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-lg-model',
+      testDir,
+      { name: 'dag-loopgroup-model', nodes },
+      makeWorkflowRun('dag-loopgroup-model'),
+      'claude',
+      'claude-sonnet-4',
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      aiProfile
+    );
+    const bodyCall = mockSendQueryDag.mock.calls.find(call => {
+      // prompt is first arg
+      return typeof call[0] === 'string' && (call[0] as string).includes('body work');
+    });
+    expect(bodyCall).toBeDefined();
+    const bodyOpts = bodyCall?.[3] as SendQueryOptions;
+    expect(bodyOpts.model).toBe('opus');
+
+    const topCall = mockSendQueryDag.mock.calls.find(call => {
+      return typeof call[0] === 'string' && (call[0] as string).includes('outer');
+    });
+    expect(topCall).toBeDefined();
+    expect((topCall?.[3] as SendQueryOptions).model).toBe('claude-haiku-4');
+
+    const events = (store.createWorkflowEvent as Mock).mock.calls.map(c => c[0]);
+    const topStarted = events.find(
+      (e: { event_type: string; step_name?: string }) =>
+        e.event_type === 'node_started' && e.step_name === 'top'
+    );
+    const bodyStarted = events.find(
+      (e: { event_type: string; step_name?: string }) =>
+        e.event_type === 'node_started' && e.step_name === 'grp.body'
+    );
+    expect(topStarted?.data).toMatchObject({
+      provider: 'claude',
+      model: 'claude-haiku-4',
+    });
+    expect(bodyStarted?.data).toMatchObject({
+      provider: 'claude',
+      model: 'opus',
+      tier: 'large',
+      effort: 'high',
+    });
+    // Group container never gets a provider-turn node_started
+    expect(
+      events.some(
+        (e: { event_type: string; step_name?: string }) =>
+          e.event_type === 'node_started' && e.step_name === 'grp'
+      )
+    ).toBe(false);
   });
 
   it('runs a command-backed loop node inside a loop_group body with namespaced lifecycle events', async () => {
@@ -21467,28 +22211,40 @@ describe('collectContainerIncompatibleProviders', () => {
   const promptNode = (id: string, provider?: string): DagNode =>
     ({ id, prompt: `do ${id}`, ...(provider ? { provider } : {}) }) as unknown as DagNode;
   const bashNode = (id: string): DagNode => ({ id, bash: 'echo hi' }) as unknown as DagNode;
+  const scope = (
+    provider: string,
+    extra: Partial<WorkflowModelScope> = {}
+  ): WorkflowModelScope => ({
+    provider,
+    model: undefined,
+    preset: undefined,
+    tier: undefined,
+    effort: undefined,
+    providerOrigin: 'workflow',
+    ...extra,
+  });
 
   it('is empty when all AI nodes resolve to claude (containerExec: true)', () => {
     const nodes = [promptNode('a'), promptNode('b', 'claude'), bashNode('c')];
-    const bad = collectContainerIncompatibleProviders(nodes, 'claude');
+    const bad = collectContainerIncompatibleProviders(nodes, scope('claude'));
     expect([...bad]).toEqual([]);
   });
 
   it('flags a node whose provider lacks containerExec (codex)', () => {
     const nodes = [promptNode('a'), promptNode('b', 'codex')];
-    const bad = collectContainerIncompatibleProviders(nodes, 'claude');
+    const bad = collectContainerIncompatibleProviders(nodes, scope('claude'));
     expect([...bad]).toEqual(['codex']);
   });
 
   it('flags the workflow-level provider when a node does not override it', () => {
     const nodes = [promptNode('a')];
-    const bad = collectContainerIncompatibleProviders(nodes, 'codex');
+    const bad = collectContainerIncompatibleProviders(nodes, scope('codex'));
     expect([...bad]).toEqual(['codex']);
   });
 
   it('ignores bash/script nodes (deterministic, no provider)', () => {
     const nodes = [bashNode('a'), bashNode('b')];
-    const bad = collectContainerIncompatibleProviders(nodes, 'codex');
+    const bad = collectContainerIncompatibleProviders(nodes, scope('codex'));
     expect([...bad]).toEqual([]);
   });
 
@@ -21497,8 +22253,158 @@ describe('collectContainerIncompatibleProviders', () => {
       id: 'g',
       loop_group: { max_iterations: 2, nodes: [promptNode('inner', 'codex')] },
     } as unknown as DagNode;
-    const bad = collectContainerIncompatibleProviders([group], 'claude');
+    const bad = collectContainerIncompatibleProviders([group], scope('claude'));
     expect([...bad]).toEqual(['codex']);
+  });
+
+  it('outer codex + group claude + inherited prompt passes (group never sendQuery)', () => {
+    // Preflight used to check the group container AND visit the body with the
+    // outer workflow provider, so an inherited prompt kept outer `codex` and
+    // falsely rejected a container-safe claude body.
+    const group = {
+      id: 'g',
+      provider: 'claude',
+      loop_group: { max_iterations: 1, nodes: [promptNode('inner')] },
+    } as unknown as DagNode;
+    const bad = collectContainerIncompatibleProviders([group], scope('codex'));
+    expect([...bad]).toEqual([]);
+  });
+
+  it('group resolving to codex with explicit claude body children passes', () => {
+    // Group container provider is irrelevant — only body provider turns count.
+    const group = {
+      id: 'g',
+      provider: 'codex',
+      loop_group: {
+        max_iterations: 1,
+        nodes: [promptNode('a', 'claude'), promptNode('b', 'claude')],
+      },
+    } as unknown as DagNode;
+    const bad = collectContainerIncompatibleProviders([group], scope('claude'));
+    expect([...bad]).toEqual([]);
+  });
+
+  it('nested-group inheritance applies the inner group scope', () => {
+    const nested = {
+      id: 'outer',
+      provider: 'claude',
+      loop_group: {
+        max_iterations: 1,
+        nodes: [
+          {
+            id: 'inner',
+            provider: 'claude',
+            loop_group: {
+              max_iterations: 1,
+              nodes: [promptNode('leaf')],
+            },
+          },
+        ],
+      },
+    } as unknown as DagNode;
+    // Outer workflow is codex, but both groups select claude — leaf inherits claude.
+    expect([...collectContainerIncompatibleProviders([nested], scope('codex'))]).toEqual([]);
+
+    const nestedIncompatible = {
+      id: 'outer',
+      provider: 'claude',
+      loop_group: {
+        max_iterations: 1,
+        nodes: [
+          {
+            id: 'inner',
+            // No provider → inherits outer group claude, then body selects codex.
+            loop_group: {
+              max_iterations: 1,
+              nodes: [promptNode('leaf', 'codex')],
+            },
+          },
+        ],
+      },
+    } as unknown as DagNode;
+    expect([
+      ...collectContainerIncompatibleProviders([nestedIncompatible], scope('claude')),
+    ]).toEqual(['codex']);
+  });
+
+  it('group model-alias scope is used for inherited body turns', () => {
+    const group = {
+      id: 'g',
+      model: '@safe',
+      loop_group: { max_iterations: 1, nodes: [promptNode('inner')] },
+    } as unknown as DagNode;
+    const profile = {
+      defaultProvider: 'codex',
+      aliases: {
+        '@safe': { provider: 'claude', model: 'claude-sonnet' },
+        '@unsafe': { provider: 'codex', model: 'o3' },
+      },
+    };
+    // Outer codex + group alias → claude: body inherits claude, preflight passes.
+    expect([
+      ...collectContainerIncompatibleProviders([group], scope('codex'), {}, profile),
+    ]).toEqual([]);
+
+    const unsafeGroup = {
+      id: 'g',
+      model: '@unsafe',
+      loop_group: { max_iterations: 1, nodes: [promptNode('inner')] },
+    } as unknown as DagNode;
+    // Group alias → codex: inherited body turn is incompatible.
+    expect([
+      ...collectContainerIncompatibleProviders([unsafeGroup], scope('claude'), {}, profile),
+    ]).toEqual(['codex']);
+  });
+
+  it('incompatible inherited body provider turn still rejects before execution', () => {
+    const group = {
+      id: 'g',
+      provider: 'codex',
+      loop_group: { max_iterations: 1, nodes: [promptNode('inner')] },
+    } as unknown as DagNode;
+    const bad = collectContainerIncompatibleProviders([group], scope('claude'));
+    expect([...bad]).toEqual(['codex']);
+  });
+
+  it('approval/plannotator inside groups inherit the group scope', () => {
+    const group = {
+      id: 'g',
+      provider: 'claude',
+      loop_group: {
+        max_iterations: 1,
+        nodes: [
+          {
+            id: 'gate',
+            approval: { prompt: 'ok?', on_reject: { prompt: 'fix it' } },
+          },
+          {
+            id: 'review',
+            plannotator_gate: {
+              rework: { prompt: 'Revise it.' },
+            },
+          },
+        ],
+      },
+    } as unknown as DagNode;
+    // Outer is codex, group is claude — inherited approval/rework must not keep codex.
+    expect([...collectContainerIncompatibleProviders([group], scope('codex'))]).toEqual([]);
+
+    const incompatibleGroup = {
+      id: 'g',
+      provider: 'codex',
+      loop_group: {
+        max_iterations: 1,
+        nodes: [
+          {
+            id: 'gate',
+            approval: { prompt: 'ok?', on_reject: { prompt: 'fix it' } },
+          },
+        ],
+      },
+    } as unknown as DagNode;
+    expect([
+      ...collectContainerIncompatibleProviders([incompatibleGroup], scope('claude')),
+    ]).toEqual(['codex']);
   });
 
   it('checks both prepare and rework providers for Plannotator gates', () => {
@@ -21517,12 +22423,12 @@ describe('collectContainerIncompatibleProviders', () => {
       },
     } as unknown as DagNode;
 
-    expect([...collectContainerIncompatibleProviders([withIncompatiblePrepare], 'claude')]).toEqual(
-      ['codex']
-    );
-    expect([...collectContainerIncompatibleProviders([withIncompatibleRework], 'claude')]).toEqual([
-      'codex',
-    ]);
+    expect([
+      ...collectContainerIncompatibleProviders([withIncompatiblePrepare], scope('claude')),
+    ]).toEqual(['codex']);
+    expect([
+      ...collectContainerIncompatibleProviders([withIncompatibleRework], scope('claude')),
+    ]).toEqual(['codex']);
   });
 
   it('resolves prepare and rework model aliases before checking container compatibility', () => {
@@ -21541,9 +22447,129 @@ describe('collectContainerIncompatibleProviders', () => {
       },
     };
 
-    expect([...collectContainerIncompatibleProviders([gate], 'claude', profile)]).toEqual([
+    expect([
+      ...collectContainerIncompatibleProviders([gate], scope('claude'), {}, profile),
+    ]).toEqual(['codex']);
+  });
+});
+
+describe('executeDagWorkflow -- container preflight group scope', () => {
+  const CONTAINER_EXEC = { kind: 'container' as const, containerId: 'cid-preflight' };
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(
+      tmpdir(),
+      `dag-container-preflight-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(testDir, { recursive: true });
+    mockSendQueryDag.mockClear();
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'should not run' };
+      yield { type: 'result', sessionId: 'never' };
+    });
+  });
+
+  afterEach(async () => {
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+  });
+
+  it('rejects incompatible inherited group body before any node executes', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('preflight-reject-run');
+
+    await expect(
+      executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-preflight',
+        testDir,
+        {
+          name: 'preflight-group',
+          nodes: [
+            {
+              id: 'g',
+              provider: 'codex',
+              loop_group: {
+                max_iterations: 1,
+                nodes: [{ id: 'inner', prompt: 'inherited body turn' }],
+              },
+            } as unknown as DagNode,
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        CONTAINER_EXEC
+      )
+    ).rejects.toThrow(/Provider 'codex' cannot run inside a container/);
+
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
+  });
+
+  it('allows outer codex + group claude inherited body on container', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('preflight-allow-run');
+
+    // Group selects claude; inherited body must not keep outer codex.
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-preflight',
+      testDir,
+      {
+        name: 'preflight-group-ok',
+        nodes: [
+          {
+            id: 'g',
+            provider: 'claude',
+            loop_group: {
+              max_iterations: 1,
+              until: 'DONE',
+              nodes: [{ id: 'inner', prompt: 'say DONE' }],
+            },
+          } as unknown as DagNode,
+        ],
+      },
+      workflowRun,
       'codex',
-    ]);
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      CONTAINER_EXEC
+    );
+
+    expect(mockSendQueryDag).toHaveBeenCalled();
   });
 });
 

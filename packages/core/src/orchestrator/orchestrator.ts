@@ -51,6 +51,7 @@ import { getCodebase } from '../db/codebases';
 import { executeWorkflow } from '@archon/workflows/executor';
 import { assertComposedGateDriveable } from '@archon/workflows/utils/workflow-requirements';
 import { SUBRUN_METADATA_KEYS } from '@archon/workflows/schemas/workflow-run';
+import type { AppliedEnvOverlay } from '@archon/workflows/schemas/env-overlay';
 import type { WorkflowDefinition, WorkflowSource } from '@archon/workflows/schemas/workflow';
 import { createWorkflowDeps } from '../workflows/store-adapter';
 import { createChildWorktreeResolver } from '../workflows/child-isolation-resolver';
@@ -300,6 +301,12 @@ export interface WorkflowRoutingContext {
    * path where pre-creation failed and the executor creates the row itself.
    */
   readonly inputs?: Readonly<Record<string, string>>;
+  /**
+   * Frozen applied ENV overlay already applied to `workflow` (US-005/US-006).
+   * Stamped as pending `metadata.envOverlay` on the background pre-create INSERT
+   * and forwarded so the executor fallback INSERT is equivalent.
+   */
+  readonly appliedEnvOverlay?: AppliedEnvOverlay;
 }
 
 /**
@@ -461,6 +468,8 @@ export async function dispatchBackgroundWorkflow(
         ...(ctx.inputs && Object.keys(ctx.inputs).length > 0
           ? { [SUBRUN_METADATA_KEYS.inputs]: { ...ctx.inputs } }
           : {}),
+        // Pending applied ENV overlay at the FIRST run-row write (US-005).
+        ...(ctx.appliedEnvOverlay ? { envOverlay: structuredClone(ctx.appliedEnvOverlay) } : {}),
       },
       parent_conversation_id: ctx.conversationDbId,
       user_id: ctx.userId,
@@ -498,6 +507,7 @@ export async function dispatchBackgroundWorkflow(
             // the executor creates the row itself); otherwise the row above already
             // carries them.
             inputs: ctx.inputs,
+            appliedEnvOverlay: ctx.appliedEnvOverlay,
           }
         );
         // Surface workflow output to parent conversation as a result card

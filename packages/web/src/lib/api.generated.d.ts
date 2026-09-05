@@ -1515,7 +1515,7 @@ export interface paths {
         put?: never;
         /**
          * Run a workflow via the orchestrator (JSON or multipart with file uploads)
-         * @description Accepts `application/json` with `{ conversationId, message, inputs? }` or `multipart/form-data` with `conversationId`, `message`, an optional `inputs` field holding the same map JSON-encoded, and optional file attachments (max 5 files, 10 MB each). `inputs` supplies values for the workflow's declared `inputs:` (#2554); it is validated against the declaration before any worktree, clone, or AI cost, so a missing required input or an undeclared key is refused up front.
+         * @description Accepts `application/json` with `{ conversationId, message, inputs?, envId? }` or `multipart/form-data` with `conversationId`, `message`, an optional `inputs` field holding the same map JSON-encoded, an optional plain `envId` string, and optional file attachments (max 5 files, 10 MB each). `inputs` supplies values for the workflow's declared `inputs:` (#2554); it is validated against the declaration before any worktree, clone, or AI cost, so a missing required input or an undeclared key is refused up front. An omitted or empty `envId` means YAML-only; a non-empty `envId` freezes the ENV row (id/name/workflow/patches) after request parse and before file or run-start message persistence, then hands the candidate to the orchestrator out-of-band. Missing id → `env_not_found`; workflow mismatch → `env_workflow_mismatch`. Compatibility/provider/profile/graph errors still travel through the dispatch/SSE path, not as synchronous Start 400s.
          */
         post: {
             parameters: {
@@ -2842,6 +2842,353 @@ export interface paths {
                 };
             };
         };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workflows/{name}/envs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List named ENV overlays for a workflow */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    name: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ENV summaries without patches */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkflowEnvListResponse"];
+                    };
+                };
+                /** @description Invalid workflow name */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkflowEnvError"];
+                    };
+                };
+                /** @description Server error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkflowEnvError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Create a named workflow ENV overlay */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    name: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["CreateWorkflowEnvBody"];
+                };
+            };
+            responses: {
+                /** @description Created ENV */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkflowEnvDetailResponse"];
+                    };
+                };
+                /** @description Invalid request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkflowEnvError"];
+                    };
+                };
+                /** @description ENV name conflict */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkflowEnvError"];
+                    };
+                };
+                /** @description Server error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkflowEnvError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workflows/{name}/envs/{envId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Fetch a single workflow ENV overlay */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    name: string;
+                    envId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Full ENV row */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkflowEnvDetailResponse"];
+                    };
+                };
+                /** @description Invalid path */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkflowEnvError"];
+                    };
+                };
+                /** @description ENV not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkflowEnvError"];
+                    };
+                };
+                /** @description Server error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkflowEnvError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        /** Delete a workflow ENV overlay */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    name: string;
+                    envId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Delete result */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DeleteWorkflowEnvResponse"];
+                    };
+                };
+                /** @description Invalid path */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkflowEnvError"];
+                    };
+                };
+                /** @description Server error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkflowEnvError"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        /** Update a workflow ENV overlay (whole-document patches replace) */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    name: string;
+                    envId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["UpdateWorkflowEnvBody"];
+                };
+            };
+            responses: {
+                /** @description Updated ENV */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkflowEnvDetailResponse"];
+                    };
+                };
+                /** @description Invalid request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkflowEnvError"];
+                    };
+                };
+                /** @description ENV not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkflowEnvError"];
+                    };
+                };
+                /** @description ENV name conflict */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkflowEnvError"];
+                    };
+                };
+                /** @description Server error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkflowEnvError"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/api/workflows/{name}/env-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Preview ENV overlay targets and resolved request metadata */
+        get: {
+            parameters: {
+                query: {
+                    cwd: string;
+                    envId?: string;
+                };
+                header?: never;
+                path: {
+                    name: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Non-authoritative preview */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkflowEnvPreviewResponse"];
+                    };
+                };
+                /** @description Invalid request or overlay */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkflowEnvError"];
+                    };
+                };
+                /** @description Workflow not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkflowEnvError"];
+                    };
+                };
+                /** @description Server error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkflowEnvError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -4472,6 +4819,132 @@ export interface components {
         DeleteWorkflowResponse: {
             deleted: boolean;
             name: string;
+        };
+        WorkflowEnvListResponse: {
+            envs: components["schemas"]["WorkflowEnvSummaryResponse"][];
+        };
+        WorkflowEnvSummaryResponse: {
+            id: string;
+            workflowName: string;
+            name: string;
+            updatedAt: string;
+        };
+        WorkflowEnvError: {
+            error: string;
+            detail?: string;
+        };
+        WorkflowEnvDetailResponse: {
+            env: components["schemas"]["WorkflowEnvResponse"];
+        };
+        WorkflowEnvResponse: components["schemas"]["WorkflowEnvSummaryResponse"] & {
+            patches: {
+                [key: string]: {
+                    provider?: string;
+                    model?: string;
+                    effort?: string;
+                    thinking?: {
+                        /** @enum {string} */
+                        type: "adaptive";
+                    } | {
+                        /** @enum {string} */
+                        type: "enabled";
+                        budgetTokens?: number;
+                    } | {
+                        /** @enum {string} */
+                        type: "disabled";
+                    };
+                    prompt?: string;
+                    bash?: string;
+                };
+            };
+            createdAt: string;
+            createdByUserId: string | null;
+        };
+        CreateWorkflowEnvBody: {
+            name: string;
+            patches: {
+                [key: string]: {
+                    provider?: string;
+                    model?: string;
+                    effort?: string;
+                    thinking?: {
+                        /** @enum {string} */
+                        type: "adaptive";
+                    } | {
+                        /** @enum {string} */
+                        type: "enabled";
+                        budgetTokens?: number;
+                    } | {
+                        /** @enum {string} */
+                        type: "disabled";
+                    };
+                    prompt?: string;
+                    bash?: string;
+                };
+            };
+        };
+        UpdateWorkflowEnvBody: {
+            name?: string;
+            patches?: {
+                [key: string]: {
+                    provider?: string;
+                    model?: string;
+                    effort?: string;
+                    thinking?: {
+                        /** @enum {string} */
+                        type: "adaptive";
+                    } | {
+                        /** @enum {string} */
+                        type: "enabled";
+                        budgetTokens?: number;
+                    } | {
+                        /** @enum {string} */
+                        type: "disabled";
+                    };
+                    prompt?: string;
+                    bash?: string;
+                };
+            };
+        };
+        DeleteWorkflowEnvResponse: {
+            deleted: boolean;
+        };
+        WorkflowEnvPreviewResponse: {
+            /** @enum {boolean} */
+            preview: true;
+            /** @enum {boolean} */
+            authoritative: false;
+            workflowName: string;
+            envId: string | null;
+            envName: string | null;
+            skippedNodeIds: string[];
+            targets: components["schemas"]["WorkflowEnvPreviewTarget"][];
+            resolved: components["schemas"]["WorkflowEnvPreviewResolved"][];
+        };
+        WorkflowEnvPreviewTarget: {
+            id: string;
+            nodeType: string;
+            allowedFields: ("provider" | "model" | "effort" | "thinking" | "prompt" | "bash")[];
+        };
+        WorkflowEnvPreviewResolved: {
+            provider: string;
+            model?: string;
+            /** @enum {string} */
+            tier?: "small" | "medium" | "large";
+            modelReasoningEffort?: string;
+            effort?: string;
+            thinking?: {
+                /** @enum {string} */
+                type: "adaptive";
+            } | {
+                /** @enum {string} */
+                type: "enabled";
+                budgetTokens?: number;
+            } | {
+                /** @enum {string} */
+                type: "disabled";
+            };
+            nodeId: string;
         };
         CommandListResponse: {
             commands: components["schemas"]["CommandEntry"][];

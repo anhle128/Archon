@@ -349,6 +349,15 @@ export const runWorkflowBodySchema = z
      * field holding this object JSON-encoded (form fields can only be strings).
      */
     inputs: z.record(z.string(), z.string()).optional(),
+    /**
+     * Optional Workflow ENV id to freeze at Start (US-008/US-022). Omitted or
+     * empty string means YAML-only. Present non-strings (including JSON null)
+     * are rejected as `invalid_env_id` by the manual Start parser — this
+     * OpenAPI schema documents the happy-path string field only; Start retains
+     * the multipart/manual-parse exception. Multipart sends the same plain
+     * string field (duplicates rejected).
+     */
+    envId: z.string().optional(),
   })
   .openapi('RunWorkflowBody');
 

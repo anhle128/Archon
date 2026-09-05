@@ -10,6 +10,7 @@ import {
 import { useNavigate, useParams } from 'react-router';
 import { useKeymap, type Binding } from '../lib/keymap';
 import { RunDetailHeader } from '../components/RunDetailHeader';
+import { WorkflowEnvResolvedTable } from '../components/WorkflowEnvResolvedTable';
 import { RunStream } from '../components/RunStream';
 import { RunActionBar } from '../components/RunActionBar';
 import { StreamToolbar, type DetailView } from '../components/StreamToolbar';
@@ -23,7 +24,7 @@ import { useRunStreamSSE } from '../lib/sse';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import * as skill from '../skills';
-import { runMessageConversationId, type Run } from '../primitives/run';
+import { runMessageConversationId, type Run, type RunEnvOverlay } from '../primitives/run';
 import { foldNodeRuns, type RunEvent } from '../primitives/event';
 import type { Message } from '../primitives/message';
 import type { Project } from '../primitives/project';
@@ -109,6 +110,15 @@ function writeNodeFilter(v: string): void {
   }
 }
 
+/**
+ * ENV chip/table gate for run detail. Malformed/legacy `metadata.envOverlay`
+ * stays `null` on the Run primitive — never render false audit UI from hybrids.
+ */
+export function hasRunEnvOverlayUi(
+  run: Pick<Run, 'envOverlay'>
+): run is Pick<Run, 'envOverlay'> & { envOverlay: RunEnvOverlay } {
+  return run.envOverlay !== null;
+}
 export function RunDetailPage(): ReactElement {
   const { projectId, runId } = useParams<{ projectId: string; runId: string }>();
   const navigate = useNavigate();
@@ -401,6 +411,9 @@ export function RunDetailPage(): ReactElement {
                     >
                       Usage report unavailable for this run. This is not zero cost.
                     </div>
+                  ) : null}
+                  {hasRunEnvOverlayUi(run) ? (
+                    <WorkflowEnvResolvedTable overlay={run.envOverlay} />
                   ) : null}
                   <RunStartedLine run={run} />
 

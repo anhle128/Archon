@@ -261,6 +261,53 @@ Query parameters:
 
 Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 
+### Workflow ENVs (overlays)
+
+Named, **install-wide** overlays for a workflow. An ENV stores a bounded patch map of node execution fields. Selecting an ENV at Start freezes that row onto the run; later edits or deletes do **not** change existing runs. ENVs are not workflow-language surface and are not selectable from the CLI.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/workflows/{name}/envs` | List ENV summaries for a workflow (no patch bodies) |
+| GET | `/api/workflows/{name}/envs/{envId}` | Get one ENV including `patches` |
+| POST | `/api/workflows/{name}/envs` | Create an ENV (`201`) |
+| PATCH | `/api/workflows/{name}/envs/{envId}` | Replace name and/or the complete `patches` map |
+| DELETE | `/api/workflows/{name}/envs/{envId}` | Delete an ENV (`{ deleted: true }`) |
+| GET | `/api/workflows/{name}/env-preview` | Preview targets + resolved request metadata |
+
+**Identity.** Rows are keyed by `(workflow_name, name)` install-wide — not per project. `created_by_user_id` is provenance only (no per-resource ACL beyond the normal web API gate).
+
+**Patch document.** Each target key is a top-level node id after include expansion (for example `quality__review`). Allowed fields depend on node kind:
+
+| Node kind | Patchable fields |
+|-----------|------------------|
+| `prompt` | `provider`, `model`, `effort`, `thinking`, `prompt` |
+| `command` | `provider`, `model`, `effort`, `thinking` |
+| `loop` | `provider`, `model`, `effort` |
+| `loop_group` | `provider`, `model` (group body nodes are **not** patch targets) |
+| `bash` | `bash` |
+| other | none |
+
+Bounds: ≤256 targets, ≤1 MiB UTF-8 `JSON.stringify(patches)`, non-empty per-node patch, no reserved keys (`__proto__`, …). Empty `{}` patches are valid. Prompt/bash bodies are **plaintext** install-visible data — not secrets and not encrypted.
+
+**List / detail.** List responses omit `patches`. Detail, create, and update return camelCase `{ id, workflowName, name, patches, createdAt, updatedAt, createdByUserId }`. Name conflict → `409` with `{ error, detail? }`. Missing row → `404`. Corrupt stored patches → `500 env_store_corrupt` (id-only logs).
+
+**PATCH replacement.** `patches` on update is a whole-document replace, not a deep merge. Sending `{}` clears the map. Omitting `patches` leaves them unchanged when only renaming.
+
+**Preview.**
+
+```bash
+curl "http://localhost:3090/api/workflows/feature/env-preview?cwd=/path/to/repo&envId=optional-uuid"
+```
+
+- `cwd` is **required** and must resolve under a registered project root (root or descendant).
+- Omitting `envId` returns the YAML baseline (no overlay).
+- With `envId`, the row must belong to the route workflow name (and the discovered canonical name); otherwise `400 env_not_found` or `400 env_workflow_mismatch`.
+- Response includes `targets` (top-level nodes + `allowedFields`), `skippedNodeIds`, and `resolved` provider-turn rows through the same resolution path as runtime `node_started` request fields. `preview: true`, `authoritative: false` — the live ENV, workflow, or model profile may change before Start.
+- Errors never echo prompt/bash bodies.
+
+CRUD does **not** require `cwd` or that the workflow be currently discoverable. Preview does.
+
+
 ### Runs
 
 | Method | Path | Description |
@@ -286,13 +333,25 @@ curl -X POST http://localhost:3090/api/workflows/archon-assist/run \
   -H "Content-Type: application/json" \
   -d '{"message": "Explain the auth module", "conversationId": "conv-123"}'
 
+# JSON with a frozen Workflow ENV overlay
+curl -X POST http://localhost:3090/api/workflows/archon-assist/run \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Explain the auth module", "conversationId": "conv-123", "envId": "<env-uuid>"}'
+
 # multipart (with file attachments — max 5 files, ≤10 MB each)
 curl -X POST http://localhost:3090/api/workflows/archon-assist/run \
   -F "conversationId=conv-123" \
   -F "message=Investigate this trace" \
+  -F "envId=<env-uuid>" \
   -F "files=@stacktrace.txt" \
   -F "files=@screenshot.png"
 ```
+
+**Optional `envId`.** Omitted or empty → YAML-only (no overlay). When present, Start loads that install-wide ENV row **after** parsing fields and **before** file upload or run-start message persistence, freezes a copy of its patches onto the dispatch context, and never re-reads the live row for that run. Missing id → `400 env_not_found`; row workflow mismatch → `400 env_workflow_mismatch`; corrupt row fails before Start side effects. Compatibility / provider / graph errors from applying the overlay surface on dispatch/SSE rather than as a synchronous Start body validation (Start keeps its multipart exception and does not OpenAPI-validate the run body).
+
+There is **no** CLI `--env` flag and no chat natural-language ENV selection — console/HTTP only.
+
+**Resume / retry.** Overlay-bearing runs replay only `metadata.envOverlay` on the run row (pending form at first insert, complete resolved snapshot before DAG execution). Editing or deleting the ENV after Start has no effect. Originally skipped node ids never begin applying later; ids that disappear from YAML after Start appear in `latestMissingNodeIds` without mutating frozen patches. Fresh `workflow:` child runs do **not** inherit the parent overlay.
 
 **Supplying declared inputs.** A workflow that declares [`inputs:`](/guides/authoring-workflows/#running-a-workflow-that-declares-inputs) takes their values through an optional `inputs` map — a flat object of string values. Omit a name to take its declared `default:`.
 

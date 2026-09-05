@@ -377,6 +377,7 @@ export function createWorkflowStore(): IWorkflowStore {
     resumeWorkflowRun: workflowDb.resumeWorkflowRun,
     resumeApprovedGate: workflowDb.resumeApprovedGate,
     updateWorkflowRun: workflowDb.updateWorkflowRun,
+    setWorkflowRunEnvOverlay: workflowDb.setWorkflowRunEnvOverlay,
     resolveApprovalGate: workflowDb.resolveApprovalGate,
     transitionPlannotatorGate: workflowDb.transitionPlannotatorGate,
     updateWorkflowActivity: workflowDb.updateWorkflowActivity,

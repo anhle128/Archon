@@ -150,13 +150,24 @@ registerBuiltinProviders();
 import {
   executeWorkflow,
   hydrateResumableRun,
+  inspectResumableRun,
   resolveProjectPaths,
   resolveScopeArtifactsDir,
 } from './executor';
 import { keepAwake } from './utils/keep-awake';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
-import type { WorkflowDefinition, WorkflowRun } from './schemas';
+import type { AppliedEnvOverlay, LoopGroupNode, WorkflowDefinition, WorkflowRun } from './schemas';
+import { applyEnvOverlay } from './env-overlay';
+import { isLoopGroupNode, isPromptNode } from './schemas';
+import {
+  assistantModelDefaults,
+  buildResolvedRequestMetadata,
+  resolveGroupModelScope,
+  resolveNodeExecutionRequest,
+  resolveWorkflowModelScope,
+} from './node-model-resolution';
+import { buildAiProfile } from './model-validation';
 
 // --- Helpers ---
 
@@ -168,6 +179,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     failOrphanedRuns: mock(async () => ({ count: 0 })),
     createWorkflowRun: mock(async () => makeRun()),
     updateWorkflowRun: mock(async () => {}),
+    setWorkflowRunEnvOverlay: mock(async (runId: string) => makeRun({ id: runId })),
     resolveApprovalGate: mock(async () => ({ resolved: true })),
     transitionPlannotatorGate: mock(
       async (input: Parameters<IWorkflowStore['transitionPlannotatorGate']>[0]) => ({
@@ -2015,14 +2027,48 @@ describe('telemetry wiring', () => {
 });
 
 // ───────────────────────────────────────────────────────────────────────────
-// hydrateResumableRun
+// inspectResumableRun / hydrateResumableRun
 //
 // Resume preparation is a caller-side primitive: callers look up the
 // candidate themselves (via findResumableRun or
-// findResumableRunByParentConversation) and call hydrateResumableRun to
-// turn it into the form executeWorkflow expects. The executor only consumes
-// what this returns.
+// findResumableRunByParentConversation). inspect is read-only eligibility +
+// snapshot; hydrate claims via resume CAS. The executor only consumes what
+// hydrate returns. US-020: claim must stay after conversation/isolation gates.
 // ───────────────────────────────────────────────────────────────────────────
+
+describe('inspectResumableRun', () => {
+  it('returns prior outputs without claiming the run', async () => {
+    const candidate = makeRun({ id: 'prior-failed', status: 'failed' });
+    const priorNodes = new Map([['n1', 'out1']]);
+    const store = makeStore({
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: priorNodes,
+        tokens: { input: 40, output: 4 },
+      })),
+      resumeWorkflowRun: mock(async () => {
+        throw new Error('inspect must not claim');
+      }),
+    });
+    const result = await inspectResumableRun(makeDeps(store), candidate);
+    expect(result).not.toBeNull();
+    expect(result?.priorCompletedNodes).toBe(priorNodes);
+    expect(result?.priorTokenUsage).toEqual({ input: 40, output: 4 });
+    expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('returns null without claiming when nothing is worth resuming', async () => {
+    const candidate = makeRun({ id: 'empty-prior', status: 'failed' });
+    const store = makeStore({
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: new Map(),
+        tokens: { input: 0, output: 0 },
+      })),
+    });
+    const result = await inspectResumableRun(makeDeps(store), candidate);
+    expect(result).toBeNull();
+    expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
+  });
+});
 
 describe('hydrateResumableRun', () => {
   it('returns hydrated run + prior outputs for a candidate with completed nodes', async () => {
@@ -2441,5 +2487,775 @@ describe('resolveScopeArtifactsDir', () => {
     };
     expect(resolveScopeArtifactsDir(workflow, null, ROOT)).toBeUndefined();
     expect(resolveScopeArtifactsDir(workflow, undefined, ROOT)).toBeUndefined();
+  });
+});
+
+describe('executeWorkflow ENV overlay ownership', () => {
+  beforeEach(() => {
+    mockLogFn.mockClear();
+    mockExecuteDagWorkflow.mockClear();
+    mockEmitter.registerRun.mockClear();
+    mockEmitter.unregisterRun.mockClear();
+    mockEmitter.emit.mockClear();
+    mockGetDefaultBranch.mockClear();
+    mockGetDefaultBranch.mockImplementation(async () => 'main');
+    mockExecuteDagWorkflow.mockImplementation(async (): Promise<string | undefined> => undefined);
+  });
+
+  function makeApplied(overrides: Partial<AppliedEnvOverlay> = {}): AppliedEnvOverlay {
+    return {
+      envId: 'env-1',
+      envName: 'fast',
+      workflowName: 'test-workflow',
+      patches: { node1: { model: 'haiku', prompt: 'overlaid' } },
+      skippedNodeIds: ['missing-at-start'],
+      ...overrides,
+    };
+  }
+
+  it('stamps pending applied overlay on fresh foreground INSERT and writes complete snapshot before DAG', async () => {
+    const createdRuns: unknown[] = [];
+    const snapshots: unknown[] = [];
+    const store = makeStore({
+      createWorkflowRun: mock(async data => {
+        createdRuns.push(data);
+        return makeRun({
+          id: 'fresh-1',
+          metadata: { ...(data.metadata as object) },
+          user_id: data.user_id ?? null,
+        });
+      }),
+      setWorkflowRunEnvOverlay: mock(async (runId, snapshot) => {
+        snapshots.push(snapshot);
+        return makeRun({
+          id: runId,
+          metadata: { envOverlay: snapshot },
+        });
+      }),
+    });
+
+    const base = makeWorkflow({ nodes: [{ id: 'node1', prompt: 'original', model: 'sonnet' }] });
+    const applied = makeApplied();
+    const { workflow: patched } = applyEnvOverlay(base, applied.patches);
+
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-1',
+      '/tmp/repo',
+      patched,
+      'go',
+      'db-conv',
+      { appliedEnvOverlay: applied, userId: 'user-owner' }
+    );
+
+    expect(result.success).toBe(true);
+    expect(createdRuns).toHaveLength(1);
+    const insertMeta = (createdRuns[0] as { metadata: { envOverlay: AppliedEnvOverlay } }).metadata
+      .envOverlay;
+    expect(insertMeta.envId).toBe('env-1');
+    expect(insertMeta.patches.node1?.prompt).toBe('overlaid');
+    expect(insertMeta.skippedNodeIds).toEqual(['missing-at-start']);
+    // Pending form has no resolved keys yet.
+    expect('resolved' in insertMeta).toBe(false);
+
+    expect(snapshots).toHaveLength(1);
+    const complete = snapshots[0] as {
+      latestMissingNodeIds: string[];
+      resolved: Record<string, { model?: string }>;
+      patches: AppliedEnvOverlay['patches'];
+    };
+    expect(complete.latestMissingNodeIds).toEqual([]);
+    expect(complete.patches.node1?.prompt).toBe('overlaid');
+    expect(complete.resolved.node1?.model).toBe('haiku');
+
+    expect(mockEmitter.emit).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'workflow_started', runId: 'fresh-1' })
+    );
+    expect(mockExecuteDagWorkflow).toHaveBeenCalled();
+    const dagWorkflow = mockExecuteDagWorkflow.mock.calls[0]?.[4] as WorkflowDefinition;
+    expect(isPromptNode(dagWorkflow.nodes[0]) && dagWorkflow.nodes[0].prompt).toBe('overlaid');
+  });
+
+  it('restores frozen overlay from preCreatedRun metadata on resume without appliedEnvOverlay', async () => {
+    const applied = makeApplied({
+      patches: { node1: { prompt: 'frozen-resume', model: 'haiku' } },
+    });
+    const snapshots: unknown[] = [];
+    const store = makeStore({
+      setWorkflowRunEnvOverlay: mock(async (runId, snapshot) => {
+        snapshots.push(snapshot);
+        return makeRun({ id: runId, metadata: { envOverlay: snapshot } });
+      }),
+    });
+
+    const base = makeWorkflow({ nodes: [{ id: 'node1', prompt: 'yaml-now', model: 'sonnet' }] });
+    const preCreatedRun = makeRun({
+      id: 'resume-1',
+      user_id: 'run-owner',
+      metadata: {
+        envOverlay: {
+          ...applied,
+          latestMissingNodeIds: [],
+          resolved: { node1: { provider: 'claude', model: 'stale-resolved' } },
+        },
+      },
+    });
+
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-1',
+      '/tmp/repo',
+      base,
+      'resume',
+      'db-conv',
+      {
+        preCreatedRun,
+        priorCompletedNodes: new Map(),
+        // Deliberately different requester — overlay path must use run owner.
+        userId: 'requester-other',
+      }
+    );
+
+    expect(result.success).toBe(true);
+    expect(snapshots).toHaveLength(1);
+    const complete = snapshots[0] as {
+      patches: { node1?: { prompt?: string } };
+      resolved: Record<string, { model?: string }>;
+      latestMissingNodeIds: string[];
+    };
+    // Frozen patches unchanged; resolved recomputed live (not stale-resolved).
+    expect(complete.patches.node1?.prompt).toBe('frozen-resume');
+    expect(complete.resolved.node1?.model).toBe('haiku');
+    expect(complete.latestMissingNodeIds).toEqual([]);
+
+    const dagWorkflow = mockExecuteDagWorkflow.mock.calls[0]?.[4] as WorkflowDefinition;
+    expect(isPromptNode(dagWorkflow.nodes[0]) && dagWorkflow.nodes[0].prompt).toBe('frozen-resume');
+    // Source definition unchanged.
+    expect(isPromptNode(base.nodes[0]) && base.nodes[0].prompt).toBe('yaml-now');
+  });
+
+  it('records currently missing originally-applied ids without mutating frozen patches', async () => {
+    const snapshots: unknown[] = [];
+    const store = makeStore({
+      setWorkflowRunEnvOverlay: mock(async (runId, snapshot) => {
+        snapshots.push(snapshot);
+        return makeRun({ id: runId, metadata: { envOverlay: snapshot } });
+      }),
+    });
+
+    const base = makeWorkflow({
+      // node1 removed from current YAML; only other remains.
+      nodes: [{ id: 'other', prompt: 'still-here' }],
+    });
+    const preCreatedRun = makeRun({
+      id: 'resume-missing',
+      metadata: {
+        envOverlay: makeApplied({
+          patches: {
+            node1: { prompt: 'was-applied' },
+            other: { prompt: 'also-applied' },
+          },
+        }),
+      },
+    });
+
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-1',
+      '/tmp/repo',
+      base,
+      'resume',
+      'db-conv',
+      { preCreatedRun, priorCompletedNodes: new Map([['other', 'prior']]) }
+    );
+
+    expect(result.success).toBe(true);
+    const complete = snapshots[0] as {
+      patches: Record<string, { prompt?: string }>;
+      latestMissingNodeIds: string[];
+      skippedNodeIds: string[];
+    };
+    expect(complete.latestMissingNodeIds).toEqual(['node1']);
+    expect(complete.patches.node1?.prompt).toBe('was-applied');
+    expect(complete.patches.other?.prompt).toBe('also-applied');
+    expect(complete.skippedNodeIds).toEqual(['missing-at-start']);
+  });
+
+  it('uses preCreatedRun.user_id for AI prefs when overlay-bearing even if opts.userId differs', async () => {
+    const prefsCalls: string[] = [];
+    const store = makeStore({
+      setWorkflowRunEnvOverlay: mock(async (runId, snapshot) =>
+        makeRun({ id: runId, metadata: { envOverlay: snapshot } })
+      ),
+    });
+    const deps = makeDeps(store);
+    deps.getUserAiPrefs = mock(async (userId: string) => {
+      prefsCalls.push(userId);
+      return {};
+    });
+
+    const base = makeWorkflow({ nodes: [{ id: 'node1', prompt: 'x' }] });
+    const { workflow: patched } = applyEnvOverlay(base, { node1: { prompt: 'y' } });
+    const applied = makeApplied({ patches: { node1: { prompt: 'y' } } });
+
+    await executeWorkflow(deps, makePlatform(), 'conv-1', '/tmp/repo', patched, 'go', 'db', {
+      preCreatedRun: makeRun({
+        id: 'id-run',
+        user_id: 'owner-from-row',
+        metadata: { envOverlay: applied },
+      }),
+      priorCompletedNodes: new Map(),
+      appliedEnvOverlay: applied,
+      userId: 'requester',
+    });
+
+    expect(prefsCalls).toEqual(['owner-from-row']);
+  });
+
+  it('preserves opts.userId for prefs when no overlay is present', async () => {
+    const prefsCalls: string[] = [];
+    const deps = makeDeps();
+    deps.getUserAiPrefs = mock(async (userId: string) => {
+      prefsCalls.push(userId);
+      return {};
+    });
+
+    await executeWorkflow(deps, makePlatform(), 'conv-1', '/tmp/repo', makeWorkflow(), 'go', 'db', {
+      userId: 'plain-user',
+    });
+
+    expect(prefsCalls).toEqual(['plain-user']);
+  });
+
+  it('fails closed on audit write failure with no workflow_started and no DAG execution', async () => {
+    const failSpy = mock(async () => {});
+    const store = makeStore({
+      createWorkflowRun: mock(async () => makeRun({ id: 'audit-fail' })),
+      setWorkflowRunEnvOverlay: mock(async () => {
+        throw new Error('snapshot write boom');
+      }),
+      failWorkflowRun: failSpy,
+    });
+
+    const base = makeWorkflow({ nodes: [{ id: 'node1', prompt: 'o' }] });
+    const applied = makeApplied({ patches: { node1: { prompt: 'p' } } });
+    const { workflow: patched } = applyEnvOverlay(base, applied.patches);
+
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-1',
+      '/tmp/repo',
+      patched,
+      'go',
+      'db',
+      { appliedEnvOverlay: applied }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/snapshot write boom/);
+    expect(failSpy).toHaveBeenCalledWith(
+      'audit-fail',
+      expect.stringContaining('snapshot write boom')
+    );
+    expect(mockEmitter.emit).not.toHaveBeenCalled();
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('US-021: overlay-bearing pending preCreatedRun fails closed on preamble resolution throw', async () => {
+    // Broken repo alias layer (missing @) makes buildAiProfile throw after
+    // prepareExecutionEnvOverlay succeeds — before snapshot / events / DAG.
+    const failSpy = mock(async () => {});
+    const snapshotSpy = mock(async (runId: string) => makeRun({ id: runId }));
+    const store = makeStore({
+      failWorkflowRun: failSpy,
+      setWorkflowRunEnvOverlay: snapshotSpy,
+    });
+
+    const deps = makeDeps(store);
+    deps.loadConfig = mock(
+      async (): Promise<WorkflowConfig> => ({
+        assistant: 'claude',
+        assistants: { claude: {}, codex: {} },
+        baseBranch: '',
+        prRemote: 'origin',
+        commands: { folder: '' },
+        // Invalid alias key — fails fast on rebuild after prefs degrade path.
+        aliases: { fast: { provider: 'claude', model: 'haiku' } },
+      })
+    );
+
+    const base = makeWorkflow({ nodes: [{ id: 'node1', prompt: 'o' }] });
+    const applied = makeApplied({ patches: { node1: { prompt: 'p' } } });
+    const { workflow: patched } = applyEnvOverlay(base, applied.patches);
+
+    const platform = makePlatform();
+    const result = await executeWorkflow(
+      deps,
+      platform,
+      'conv-1',
+      '/tmp/repo',
+      patched,
+      'go',
+      'db',
+      {
+        preCreatedRun: makeRun({
+          id: 'pending-overlay-1',
+          status: 'pending',
+          metadata: { envOverlay: applied },
+        }),
+        priorCompletedNodes: new Map(),
+        appliedEnvOverlay: applied,
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.workflowRunId).toBe('pending-overlay-1');
+    expect(result.error).toMatch(/must start with '@'/);
+    expect(failSpy).toHaveBeenCalledTimes(1);
+    expect(failSpy).toHaveBeenCalledWith(
+      'pending-overlay-1',
+      expect.stringMatching(/must start with '@'/)
+    );
+    expect(snapshotSpy).not.toHaveBeenCalled();
+    expect(mockEmitter.emit).not.toHaveBeenCalled();
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+    // Safe user messaging: env id/name only — no patch bodies.
+    const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(c =>
+      String(c[1])
+    );
+    expect(sent.some(m => m.includes('envName') || m.includes('fast'))).toBe(true);
+    expect(sent.some(m => m.includes('env-1'))).toBe(true);
+    expect(sent.join('\n')).not.toContain('secret');
+    expect(sent.join('\n')).not.toMatch(/\bprompt\b.*overlaid|\bp\b/);
+  });
+
+  it('US-021: no-overlay preamble resolution throw still propagates (unchanged)', async () => {
+    const failSpy = mock(async () => {});
+    const store = makeStore({ failWorkflowRun: failSpy });
+    const deps = makeDeps(store);
+    deps.loadConfig = mock(
+      async (): Promise<WorkflowConfig> => ({
+        assistant: 'claude',
+        assistants: { claude: {}, codex: {} },
+        baseBranch: '',
+        prRemote: 'origin',
+        commands: { folder: '' },
+        aliases: { fast: { provider: 'claude', model: 'haiku' } },
+      })
+    );
+
+    await expect(
+      executeWorkflow(deps, makePlatform(), 'conv-1', '/tmp/repo', makeWorkflow(), 'go', 'db', {
+        preCreatedRun: makeRun({ id: 'plain-pending', status: 'pending', metadata: {} }),
+        priorCompletedNodes: new Map(),
+      })
+    ).rejects.toThrow(/must start with '@'/);
+
+    // No overlay → executor does not own fail-closed for this throw.
+    expect(failSpy).not.toHaveBeenCalled();
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('rejects corrupt stored overlay without executing', async () => {
+    const failSpy = mock(async () => {});
+    const store = makeStore({ failWorkflowRun: failSpy });
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-1',
+      '/tmp/repo',
+      makeWorkflow(),
+      'go',
+      'db',
+      {
+        preCreatedRun: makeRun({
+          id: 'bad-overlay',
+          metadata: { envOverlay: { envId: 'x', patches: {} } },
+        }),
+        priorCompletedNodes: new Map(),
+      }
+    );
+    expect(result.success).toBe(false);
+    expect(failSpy).toHaveBeenCalled();
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('fresh child create metadata does not receive parent overlay', async () => {
+    // Direct unit check of the child create path is covered in subrun tests via
+    // InMemoryStore; here we assert the executor backstop only reads the child row.
+    const store = makeStore({
+      setWorkflowRunEnvOverlay: mock(async (runId, snapshot) =>
+        makeRun({ id: runId, metadata: { envOverlay: snapshot } })
+      ),
+    });
+    const childBase = makeWorkflow({ name: 'child-wf', nodes: [{ id: 'c1', prompt: 'child' }] });
+    // Child preCreated with NO overlay must not invent one.
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-1',
+      '/tmp/repo',
+      childBase,
+      'child',
+      'db',
+      {
+        preCreatedRun: makeRun({
+          id: 'child-run',
+          workflow_name: 'child-wf',
+          parent_run_id: 'parent-with-overlay',
+          metadata: {},
+        }),
+        priorCompletedNodes: new Map(),
+      }
+    );
+    expect(result.success).toBe(true);
+    expect(store.setWorkflowRunEnvOverlay).not.toHaveBeenCalled();
+    expect(mockExecuteDagWorkflow).toHaveBeenCalled();
+  });
+
+  it('snapshot resolved matches runtime node_started fields with assistant effort + workflow thinking', async () => {
+    // US-013: assistants.<provider>.modelReasoningEffort with no portable effort,
+    // plus workflow-level thinking, must reach metadata.envOverlay.resolved the same
+    // way resolveNodeProviderAndModel / node_started serialize request fields —
+    // including nested loop_group provider turns.
+    const snapshots: unknown[] = [];
+    const store = makeStore({
+      createWorkflowRun: mock(async data =>
+        makeRun({
+          id: 'parity-1',
+          metadata: { ...(data.metadata as object) },
+          user_id: data.user_id ?? null,
+        })
+      ),
+      setWorkflowRunEnvOverlay: mock(async (runId, snapshot) => {
+        snapshots.push(snapshot);
+        return makeRun({ id: runId, metadata: { envOverlay: snapshot } });
+      }),
+    });
+
+    const deps = makeDeps(store);
+    const assistants = {
+      claude: { model: 'sonnet', modelReasoningEffort: 'xhigh' },
+      codex: {},
+    };
+    deps.loadConfig = mock(
+      async (): Promise<WorkflowConfig> => ({
+        assistant: 'claude',
+        assistants,
+        baseBranch: '',
+        prRemote: 'origin',
+        commands: { folder: '' },
+      })
+    );
+
+    const base = makeWorkflow({
+      thinking: { type: 'enabled', budgetTokens: 2048 },
+      nodes: [
+        { id: 'top', prompt: 'top-turn' },
+        {
+          id: 'grp',
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 1,
+            nodes: [{ id: 'inner', prompt: 'nested-turn' }],
+          },
+        },
+      ],
+    });
+    // Overlay touches only the top prompt model — leaves effort/thinking unset so
+    // legacy assistant fallback + workflow thinking remain the only sources.
+    const applied = makeApplied({
+      patches: { top: { model: 'haiku' } },
+      skippedNodeIds: [],
+    });
+    const { workflow: patched } = applyEnvOverlay(base, applied.patches);
+
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp/repo',
+      patched,
+      'go',
+      'db',
+      { appliedEnvOverlay: applied }
+    );
+    expect(result.success).toBe(true);
+    expect(snapshots).toHaveLength(1);
+
+    const complete = snapshots[0] as {
+      resolved: Record<
+        string,
+        {
+          provider: string;
+          model?: string;
+          modelReasoningEffort?: string;
+          effort?: string;
+          thinking?: unknown;
+        }
+      >;
+    };
+
+    // Same pure inputs resolveNodeProviderAndModel uses for node_started.
+    const aiProfile = buildAiProfile('claude', {});
+    const assistantModels = assistantModelDefaults({ assistants });
+    const scope = resolveWorkflowModelScope(patched, 'claude', assistantModels, aiProfile);
+    const runtimeExpected = buildResolvedRequestMetadata(patched.nodes, scope, assistantModels, {
+      aiProfile,
+      assistants,
+      workflowThinking: patched.thinking,
+    });
+
+    expect(complete.resolved.top).toMatchObject({
+      provider: 'claude',
+      model: 'haiku',
+      modelReasoningEffort: 'xhigh',
+      thinking: { type: 'enabled', budgetTokens: 2048 },
+    });
+    expect(complete.resolved.top.effort).toBeUndefined();
+    expect(complete.resolved['grp.inner']).toMatchObject({
+      provider: 'claude',
+      model: 'sonnet',
+      modelReasoningEffort: 'xhigh',
+      thinking: { type: 'enabled', budgetTokens: 2048 },
+    });
+    expect(complete.resolved['grp.inner'].effort).toBeUndefined();
+    // Group container itself never calls sendQuery.
+    expect(complete.resolved.grp).toBeUndefined();
+  });
+
+  it('US-037: ENV group provider/model conflict reaches snapshot body rows without group container', async () => {
+    // Executor mocks the DAG, so the live dag.model_provider_conflict emission is
+    // covered in dag-executor.test.ts. Here the ENV ownership path must still:
+    // (1) resolve body turns to the alias-won provider/model,
+    // (2) omit the group container from resolved metadata,
+    // (3) hand the DAG a patched group that exposes providerConflict for runtime.
+    const snapshots: unknown[] = [];
+    const store = makeStore({
+      createWorkflowRun: mock(async data =>
+        makeRun({
+          id: 'grp-conflict-1',
+          metadata: { ...(data.metadata as object) },
+          user_id: data.user_id ?? null,
+        })
+      ),
+      setWorkflowRunEnvOverlay: mock(async (runId, snapshot) => {
+        snapshots.push(snapshot);
+        return makeRun({ id: runId, metadata: { envOverlay: snapshot } });
+      }),
+    });
+
+    const deps = makeDeps(store);
+    const aliases = {
+      '@fast': { provider: 'codex' as const, model: 'gpt-5.5', effort: 'minimal' as const },
+    };
+    deps.loadConfig = mock(
+      async (): Promise<WorkflowConfig> => ({
+        assistant: 'claude',
+        assistants: { claude: { model: 'sonnet' }, codex: {} },
+        aliases,
+        baseBranch: '',
+        prRemote: 'origin',
+        commands: { folder: '' },
+      })
+    );
+
+    const base = makeWorkflow({
+      nodes: [
+        {
+          id: 'grp',
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 1,
+            nodes: [{ id: 'body', prompt: 'body-turn' }],
+          },
+        },
+      ],
+    });
+    const applied = makeApplied({
+      patches: { grp: { provider: 'claude', model: '@fast' } },
+      skippedNodeIds: [],
+    });
+    const { workflow: patched } = applyEnvOverlay(base, applied.patches);
+
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp/repo',
+      patched,
+      'go',
+      'db',
+      { appliedEnvOverlay: applied }
+    );
+    expect(result.success).toBe(true);
+    expect(snapshots).toHaveLength(1);
+
+    const complete = snapshots[0] as {
+      resolved: Record<string, { provider: string; model?: string }>;
+    };
+    expect(complete.resolved.grp).toBeUndefined();
+    expect(complete.resolved['grp.body']).toMatchObject({
+      provider: 'codex',
+      model: 'gpt-5.5',
+    });
+
+    const dagWorkflow = mockExecuteDagWorkflow.mock.calls[0]?.[4] as WorkflowDefinition;
+    const grp = dagWorkflow.nodes.find(n => n.id === 'grp');
+    expect(grp).toBeDefined();
+    expect(isLoopGroupNode(grp!)).toBe(true);
+    expect(grp).toMatchObject({ provider: 'claude', model: '@fast' });
+
+    const aiProfile = buildAiProfile('claude', { repoAliases: aliases });
+    const assistantModels = assistantModelDefaults({
+      assistants: { claude: { model: 'sonnet' }, codex: {} },
+    });
+    const outerScope = resolveWorkflowModelScope(patched, 'claude', assistantModels, aiProfile);
+    const groupScope = resolveGroupModelScope(
+      grp as LoopGroupNode,
+      outerScope,
+      assistantModels,
+      aiProfile
+    );
+    expect(groupScope.providerConflict).toEqual({
+      declared: 'claude',
+      resolved: 'codex',
+      modelRef: '@fast',
+    });
+    expect(groupScope.provider).toBe('codex');
+    expect(groupScope.model).toBe('gpt-5.5');
+  });
+
+  it('US-027: programmatic workflow modelReasoningEffort matches loader-normalized snapshot + provider effort', async () => {
+    // Unexpanded programmatic definitions may still carry legacy workflow-level
+    // modelReasoningEffort without portable effort. Snapshot resolved rows, the
+    // pure node_started metadata path, and provider nodeConfig.effort (appliedEffort)
+    // must match loader-normalized YAML that already translated the field to effort.
+    const snapshots: unknown[] = [];
+    const store = makeStore({
+      createWorkflowRun: mock(async data =>
+        makeRun({
+          id: 'legacy-mre-1',
+          metadata: { ...(data.metadata as object) },
+          user_id: data.user_id ?? null,
+        })
+      ),
+      setWorkflowRunEnvOverlay: mock(async (runId, snapshot) => {
+        snapshots.push(snapshot);
+        return makeRun({ id: runId, metadata: { envOverlay: snapshot } });
+      }),
+    });
+
+    const deps = makeDeps(store);
+    const assistants = {
+      claude: { model: 'sonnet' },
+      codex: {},
+    };
+    deps.loadConfig = mock(
+      async (): Promise<WorkflowConfig> => ({
+        assistant: 'claude',
+        assistants,
+        baseBranch: '',
+        prRemote: 'origin',
+        commands: { folder: '' },
+      })
+    );
+
+    const programmatic = makeWorkflow({
+      modelReasoningEffort: 'high',
+      nodes: [
+        { id: 'top', prompt: 'top-turn' },
+        {
+          id: 'grp',
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 1,
+            nodes: [{ id: 'inner', prompt: 'nested-turn' }],
+          },
+        },
+      ],
+    });
+    // Overlay only renames the top model so the snapshot path is exercised; effort
+    // still comes solely from the workflow-level legacy field.
+    const applied = makeApplied({
+      patches: { top: { model: 'haiku' } },
+      skippedNodeIds: [],
+    });
+    const { workflow: patched } = applyEnvOverlay(programmatic, applied.patches);
+
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp/repo',
+      patched,
+      'go',
+      'db',
+      { appliedEnvOverlay: applied }
+    );
+    expect(result.success).toBe(true);
+    expect(snapshots).toHaveLength(1);
+
+    const complete = snapshots[0] as {
+      resolved: Record<
+        string,
+        {
+          provider: string;
+          model?: string;
+          modelReasoningEffort?: string;
+          effort?: string;
+        }
+      >;
+    };
+
+    const aiProfile = buildAiProfile('claude', {});
+    const assistantModels = assistantModelDefaults({ assistants });
+    const scope = resolveWorkflowModelScope(patched, 'claude', assistantModels, aiProfile);
+    expect(scope.effort).toBe('high');
+
+    const runtimeExpected = buildResolvedRequestMetadata(patched.nodes, scope, assistantModels, {
+      aiProfile,
+      assistants,
+    });
+    expect(complete.resolved).toEqual(runtimeExpected);
+
+    // Loader-normalized twin (effort only) must produce the same effective rows.
+    const loaderTwin = makeWorkflow({
+      effort: 'high',
+      nodes: patched.nodes,
+    });
+    const twinScope = resolveWorkflowModelScope(loaderTwin, 'claude', assistantModels, aiProfile);
+    const twinResolved = buildResolvedRequestMetadata(
+      loaderTwin.nodes,
+      twinScope,
+      assistantModels,
+      { aiProfile, assistants }
+    );
+    expect(twinResolved).toEqual(complete.resolved);
+
+    // Provider request options: appliedEffort is what nodeConfig.effort / sendQuery gets.
+    const topRequest = resolveNodeExecutionRequest(patched.nodes[0]!, scope, assistantModels, {
+      aiProfile,
+      assistants,
+    });
+    expect(topRequest.metadata).toEqual(complete.resolved.top);
+    expect(topRequest.appliedEffort).toBe('high');
+    expect(topRequest.metadata.effort).toBe('high');
+    expect(topRequest.metadata.modelReasoningEffort).toBeUndefined();
+
+    expect(complete.resolved.top).toMatchObject({
+      provider: 'claude',
+      model: 'haiku',
+      effort: 'high',
+    });
+    expect(complete.resolved['grp.inner']).toMatchObject({
+      provider: 'claude',
+      model: 'sonnet',
+      effort: 'high',
+    });
   });
 });

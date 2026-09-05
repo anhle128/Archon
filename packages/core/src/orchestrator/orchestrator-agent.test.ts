@@ -144,11 +144,20 @@ const mockHydrateResumableRun = mock(
     ({
       preCreatedRun: { ...candidate, status: 'running' },
       priorCompletedNodes: new Map([['n1', 'v1']]),
+      priorTokenUsage: { input: 0, output: 0 },
+    }) as unknown
+);
+const mockInspectResumableRun = mock(
+  async (_deps: unknown, _candidate: { id: string }) =>
+    ({
+      priorCompletedNodes: new Map([['n1', 'v1']]),
+      priorTokenUsage: { input: 0, output: 0 },
     }) as unknown
 );
 mock.module('@archon/workflows/executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
   hydrateResumableRun: mockHydrateResumableRun,
+  inspectResumableRun: mockInspectResumableRun,
 }));
 
 /** Baseline capabilities the mocked registry reports. Tests that narrow this
@@ -239,9 +248,10 @@ mock.module('../services/title-generator', () => ({
   generateAndSetTitle: mockGenerateAndSetTitle,
 }));
 
+const mockValidateAndResolveIsolation = mock(() => Promise.resolve({ cwd: '/test/cwd' }));
 const mockDispatchBackgroundWorkflow = mock(() => Promise.resolve());
 mock.module('./orchestrator', () => ({
-  validateAndResolveIsolation: mock(() => Promise.resolve({ cwd: '/test/cwd' })),
+  validateAndResolveIsolation: mockValidateAndResolveIsolation,
   dispatchBackgroundWorkflow: mockDispatchBackgroundWorkflow,
 }));
 
@@ -263,15 +273,16 @@ mock.module('../db/messages', () => ({
   getRecentWorkflowResultMessages: mockGetRecentWorkflowResultMessages,
 }));
 
+class MockIsolationBlockedError extends Error {
+  public reason: string;
+  constructor(reason: string) {
+    super(reason);
+    this.reason = reason;
+    this.name = 'IsolationBlockedError';
+  }
+}
 mock.module('@archon/isolation', () => ({
-  IsolationBlockedError: class IsolationBlockedError extends Error {
-    public reason: string;
-    constructor(reason: string) {
-      super(reason);
-      this.reason = reason;
-      this.name = 'IsolationBlockedError';
-    }
-  },
+  IsolationBlockedError: MockIsolationBlockedError,
   // Loaded transitively via orchestrator-agent → child-isolation-resolver (PR-A).
   getIsolationProvider: mock(() => ({})),
   classifyIsolationError: (err: Error) => err.message,
@@ -1562,9 +1573,28 @@ describe('workflow dispatch routing — interactive flag', () => {
 
   beforeEach(() => {
     mockExecuteWorkflow.mockClear();
+    mockValidateAndResolveIsolation.mockClear();
+    mockValidateAndResolveIsolation.mockImplementation(() => Promise.resolve({ cwd: '/test/cwd' }));
+
     mockDispatchBackgroundWorkflow.mockClear();
     mockFindResumableRunByParentConversation.mockClear();
     mockHydrateResumableRun.mockClear();
+    mockHydrateResumableRun.mockImplementation(
+      async (_deps: unknown, candidate: { id: string }) =>
+        ({
+          preCreatedRun: { ...candidate, status: 'running' },
+          priorCompletedNodes: new Map([['n1', 'v1']]),
+          priorTokenUsage: { input: 0, output: 0 },
+        }) as unknown
+    );
+    mockInspectResumableRun.mockClear();
+    mockInspectResumableRun.mockImplementation(
+      async () =>
+        ({
+          priorCompletedNodes: new Map([['n1', 'v1']]),
+          priorTokenUsage: { input: 0, output: 0 },
+        }) as unknown
+    );
     mockUpdateWorkflowRun.mockClear();
     mockUpdateWorkflowRun.mockImplementation(() => Promise.resolve());
     mockResolveApprovalGate.mockClear();
@@ -2323,6 +2353,1084 @@ describe('workflow dispatch routing — interactive flag', () => {
     };
     expect(opts.preCreatedRun).toBeUndefined();
     expect(opts.priorCompletedNodes).toBeUndefined();
+  });
+  // -------------------------------------------------------------------------
+  // Workflow ENV overlay gate (US-006) — pre-isolation
+  // -------------------------------------------------------------------------
+
+  function makeEnvCandidate(patches: Record<string, Record<string, string>>) {
+    return {
+      envId: 'env-1',
+      envName: 'fast',
+      workflowName: 'test-workflow',
+      patches,
+    };
+  }
+
+  test('invalid ENV overlay stops before isolation', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    // command node cannot take prompt — field_not_supported_for_node
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve(
+        makeWorkflowResult(true, {
+          // keep default command node from makeTestWorkflow
+        })
+      )
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      envOverlay: makeEnvCandidate({ default: { prompt: 'secret-body-must-not-echo' } }),
+    });
+
+    expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
+    expect(sent).toContain('field_not_supported_for_node');
+    expect(sent).not.toContain('secret-body-must-not-echo');
+  });
+
+  test('workflow name mismatch on ENV candidate stops before isolation', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      envOverlay: {
+        envId: 'env-1',
+        envName: 'fast',
+        workflowName: 'other-workflow',
+        patches: { default: { model: 'x' } },
+      },
+    });
+
+    expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
+    expect(sent).toContain('workflow_mismatch');
+  });
+
+  test('valid ENV overlay reaches isolation and threads appliedEnvOverlay to foreground', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve({
+        success: true,
+        message: 'ok',
+        workflow: {
+          definition: makeTestWorkflow({
+            name: 'test-workflow',
+            interactive: true,
+            nodes: [{ id: 'default', prompt: 'base', provider: 'claude' }],
+          }),
+          args: 'test message',
+        },
+      })
+    );
+
+    await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+      envOverlay: makeEnvCandidate({ default: { model: 'claude-sonnet-4' } }),
+    });
+
+    expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    const wf = callArgs[4] as { nodes: Array<{ model?: string }> };
+    expect(wf.nodes[0]?.model).toBe('claude-sonnet-4');
+    const opts = callArgs[callArgs.length - 1] as {
+      appliedEnvOverlay?: {
+        envId: string;
+        envName: string;
+        patches: Record<string, unknown>;
+        skippedNodeIds: string[];
+      };
+    };
+    expect(opts.appliedEnvOverlay).toEqual({
+      envId: 'env-1',
+      envName: 'fast',
+      workflowName: 'test-workflow',
+      patches: { default: { model: 'claude-sonnet-4' } },
+      skippedNodeIds: [],
+    });
+  });
+
+  test('missing-id ENV overlay still reaches isolation (skip, do not fail)', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+
+    await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+      envOverlay: makeEnvCandidate({ missing_node: { model: 'x' } }),
+    });
+
+    expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+    const opts = mockExecuteWorkflow.mock.calls[0][
+      mockExecuteWorkflow.mock.calls[0].length - 1
+    ] as {
+      appliedEnvOverlay?: { skippedNodeIds: string[]; patches: Record<string, unknown> };
+    };
+    expect(opts.appliedEnvOverlay?.skippedNodeIds).toEqual(['missing_node']);
+    expect(opts.appliedEnvOverlay?.patches).toEqual({});
+  });
+
+  test('valid ENV overlay threads appliedEnvOverlay to background dispatch', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve({
+        success: true,
+        message: 'ok',
+        workflow: {
+          definition: makeTestWorkflow({
+            name: 'test-workflow',
+            // non-interactive → background on web
+            nodes: [{ id: 'default', prompt: 'base', provider: 'claude' }],
+          }),
+          args: 'test message',
+        },
+      })
+    );
+
+    await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+      envOverlay: makeEnvCandidate({ default: { model: 'claude-haiku' } }),
+    });
+
+    expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
+    expect(mockDispatchBackgroundWorkflow).toHaveBeenCalled();
+    const ctx = mockDispatchBackgroundWorkflow.mock.calls[0][0] as {
+      appliedEnvOverlay?: { envName: string; patches: Record<string, unknown> };
+    };
+    const bgWorkflow = mockDispatchBackgroundWorkflow.mock.calls[0][1] as {
+      nodes: Array<{ model?: string }>;
+    };
+    expect(ctx.appliedEnvOverlay?.envName).toBe('fast');
+    expect(ctx.appliedEnvOverlay?.patches).toEqual({ default: { model: 'claude-haiku' } });
+    expect(bgWorkflow.nodes[0]?.model).toBe('claude-haiku');
+  });
+
+  test('continuation ignores newly supplied ENV and notifies the user', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve({
+        success: true,
+        message: 'ok',
+        workflow: {
+          definition: makeTestWorkflow({
+            name: 'test-workflow',
+            interactive: true,
+            nodes: [{ id: 'default', prompt: 'base', provider: 'claude' }],
+          }),
+          args: 'test message',
+        },
+      })
+    );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'paused-env-run',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/paused',
+        parent_conversation_id: 'conv-1',
+        status: 'paused',
+        metadata: {
+          envOverlay: {
+            envId: 'env-stored',
+            envName: 'stored-env',
+            workflowName: 'test-workflow',
+            patches: { default: { model: 'from-stored' } },
+            skippedNodeIds: [],
+          },
+        },
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      envOverlay: makeEnvCandidate({ default: { model: 'from-request' } }),
+    });
+
+    expect(mockInspectResumableRun).toHaveBeenCalled();
+    expect(mockHydrateResumableRun).toHaveBeenCalled();
+    expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    const wf = callArgs[4] as { nodes: Array<{ model?: string }> };
+    expect(wf.nodes[0]?.model).toBe('from-stored');
+    const opts = callArgs[callArgs.length - 1] as {
+      appliedEnvOverlay?: { envName: string; patches: Record<string, unknown> };
+    };
+    expect(opts.appliedEnvOverlay?.envName).toBe('stored-env');
+    expect(opts.appliedEnvOverlay?.patches).toEqual({ default: { model: 'from-stored' } });
+    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
+    expect(sent).toContain('not applied');
+    expect(sent).toContain('fast');
+    expect(sent).toContain('stored-env');
+  });
+
+  test('US-012: genuine resume ignores incompatible request ENV and keeps stored selection', async () => {
+    // Contract 10: a paused run with a valid stored overlay must resume with that
+    // selection even when the new request candidate is field-incompatible. The
+    // candidate is ignored with a notice — never validated/applied.
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve({
+        success: true,
+        message: 'ok',
+        workflow: {
+          definition: makeTestWorkflow({
+            name: 'test-workflow',
+            interactive: true,
+            // command node — prompt is incompatible
+            nodes: [{ id: 'default', command: 'ship', provider: 'claude' }],
+          }),
+          args: 'test message',
+        },
+      })
+    );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'paused-env-run',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/paused',
+        parent_conversation_id: 'conv-1',
+        status: 'paused',
+        metadata: {
+          envOverlay: {
+            envId: 'env-stored',
+            envName: 'stored-env',
+            workflowName: 'test-workflow',
+            patches: { default: { model: 'from-stored' } },
+            skippedNodeIds: [],
+          },
+        },
+      })
+    );
+    // Read-only eligibility first (US-020); claim happens only after gates.
+    mockInspectResumableRun.mockReturnValueOnce(
+      Promise.resolve({
+        priorCompletedNodes: new Map([['default', 'done']]),
+        priorTokenUsage: { input: 1, output: 1 },
+      })
+    );
+    mockHydrateResumableRun.mockReturnValueOnce(
+      Promise.resolve({
+        preCreatedRun: {
+          id: 'paused-env-run',
+          status: 'running',
+          working_path: '/repos/test-repo/worktrees/paused',
+        },
+        priorCompletedNodes: new Map([['default', 'done']]),
+        priorTokenUsage: { input: 1, output: 1 },
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      // Incompatible with command node — must NOT block resume.
+      envOverlay: makeEnvCandidate({
+        default: { prompt: 'secret-incompatible-body-must-not-echo' },
+      }),
+    });
+
+    expect(mockInspectResumableRun).toHaveBeenCalled();
+    expect(mockHydrateResumableRun).toHaveBeenCalled();
+    // Claim after isolation (inspect is pre-isolation path selection only).
+    expect(mockInspectResumableRun.mock.invocationCallOrder[0]).toBeLessThan(
+      mockValidateAndResolveIsolation.mock.invocationCallOrder[0]!
+    );
+    expect(mockValidateAndResolveIsolation.mock.invocationCallOrder[0]).toBeLessThan(
+      mockHydrateResumableRun.mock.invocationCallOrder[0]!
+    );
+    expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    const wf = callArgs[4] as {
+      nodes: Array<{ model?: string; prompt?: string; command?: string }>;
+    };
+    expect(wf.nodes[0]?.model).toBe('from-stored');
+    expect(wf.nodes[0]?.prompt).toBeUndefined();
+    expect(wf.nodes[0]?.command).toBe('ship');
+    const opts = callArgs[callArgs.length - 1] as {
+      appliedEnvOverlay?: { envName: string; patches: Record<string, unknown> };
+    };
+    expect(opts.appliedEnvOverlay?.envName).toBe('stored-env');
+    expect(opts.appliedEnvOverlay?.patches).toEqual({ default: { model: 'from-stored' } });
+    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
+    expect(sent).toContain('not applied');
+    expect(sent).toContain('fast');
+    expect(sent).toContain('stored-env');
+    expect(sent).not.toContain('secret-incompatible-body-must-not-echo');
+    expect(sent).not.toContain('field_not_supported_for_node');
+  });
+
+  test('US-012: YAML-only resume ignores incompatible request ENV with notice', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve({
+        success: true,
+        message: 'ok',
+        workflow: {
+          definition: makeTestWorkflow({
+            name: 'test-workflow',
+            interactive: true,
+            nodes: [{ id: 'default', command: 'ship', provider: 'claude' }],
+          }),
+          args: 'test message',
+        },
+      })
+    );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'paused-yaml-run',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/paused',
+        parent_conversation_id: 'conv-1',
+        status: 'paused',
+        // No envOverlay — YAML-only resume
+        metadata: {},
+      })
+    );
+    mockInspectResumableRun.mockReturnValueOnce(
+      Promise.resolve({
+        priorCompletedNodes: new Map([['default', 'done']]),
+        priorTokenUsage: { input: 0, output: 0 },
+      })
+    );
+    mockHydrateResumableRun.mockReturnValueOnce(
+      Promise.resolve({
+        preCreatedRun: {
+          id: 'paused-yaml-run',
+          status: 'running',
+          working_path: '/repos/test-repo/worktrees/paused',
+        },
+        priorCompletedNodes: new Map([['default', 'done']]),
+        priorTokenUsage: { input: 0, output: 0 },
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      envOverlay: makeEnvCandidate({
+        default: { prompt: 'secret-yaml-only-incompatible' },
+      }),
+    });
+
+    expect(mockInspectResumableRun).toHaveBeenCalled();
+    expect(mockHydrateResumableRun).toHaveBeenCalled();
+    expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    const wf = callArgs[4] as {
+      nodes: Array<{ prompt?: string; command?: string; model?: string }>;
+    };
+    expect(wf.nodes[0]?.command).toBe('ship');
+    expect(wf.nodes[0]?.prompt).toBeUndefined();
+    const opts = callArgs[callArgs.length - 1] as { appliedEnvOverlay?: unknown };
+    expect(opts.appliedEnvOverlay).toBeUndefined();
+    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
+    expect(sent).toContain('not applied');
+    expect(sent).toContain('YAML only');
+    expect(sent).toContain('fast');
+    expect(sent).not.toContain('secret-yaml-only-incompatible');
+    expect(sent).not.toContain('field_not_supported_for_node');
+  });
+
+  test('US-012: hydrate-null fresh start rejects incompatible request ENV before isolation', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve({
+        success: true,
+        message: 'ok',
+        workflow: {
+          definition: makeTestWorkflow({
+            name: 'test-workflow',
+            interactive: true,
+            nodes: [{ id: 'default', command: 'ship', provider: 'claude' }],
+          }),
+          args: 'test message',
+        },
+      })
+    );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'empty-prior-env-run',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/paused',
+        parent_conversation_id: 'conv-1',
+        status: 'paused',
+        metadata: {
+          envOverlay: {
+            envId: 'env-stored',
+            envName: 'stored-env',
+            workflowName: 'test-workflow',
+            patches: { default: { model: 'from-stored' } },
+            skippedNodeIds: [],
+          },
+        },
+      })
+    );
+    // Nothing worth resuming → inspect-null fresh-start must validate the request.
+    mockInspectResumableRun.mockReturnValueOnce(Promise.resolve(null));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      envOverlay: makeEnvCandidate({
+        default: { prompt: 'secret-hydrate-null-body' },
+      }),
+    });
+
+    expect(mockInspectResumableRun).toHaveBeenCalled();
+    // inspect-null never claims — claim only runs after successful gates.
+    expect(mockHydrateResumableRun).not.toHaveBeenCalled();
+    expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
+    expect(sent).toContain('field_not_supported_for_node');
+    expect(sent).not.toContain('secret-hydrate-null-body');
+  });
+
+  test('US-020: updateConversation failure with ENV never claims paused run', async () => {
+    // Claim must stay after conversation + isolation. If conversation rebind fails,
+    // the paused run must remain unclaimed and execution must not start.
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve({
+        success: true,
+        message: 'ok',
+        workflow: {
+          definition: makeTestWorkflow({
+            name: 'test-workflow',
+            interactive: true,
+            nodes: [{ id: 'default', prompt: 'base', provider: 'claude' }],
+          }),
+          args: 'test message',
+        },
+      })
+    );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'paused-claim-gate-run',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/paused',
+        parent_conversation_id: 'conv-1',
+        status: 'paused',
+        metadata: {
+          envOverlay: {
+            envId: 'env-stored',
+            envName: 'stored-env',
+            workflowName: 'test-workflow',
+            patches: { default: { model: 'from-stored' } },
+            skippedNodeIds: [],
+          },
+        },
+      })
+    );
+    mockInspectResumableRun.mockReturnValueOnce(
+      Promise.resolve({
+        priorCompletedNodes: new Map([['default', 'done']]),
+        priorTokenUsage: { input: 1, output: 1 },
+      })
+    );
+    mockUpdateConversation.mockClear();
+    mockUpdateConversation.mockImplementationOnce(() =>
+      Promise.reject(new Error('conversation update failed'))
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      envOverlay: makeEnvCandidate({ default: { model: 'from-request' } }),
+    });
+
+    expect(mockInspectResumableRun).toHaveBeenCalled();
+    expect(mockHydrateResumableRun).not.toHaveBeenCalled();
+    expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+    // Restore default so later tests are not poisoned.
+    mockUpdateConversation.mockImplementation(() => Promise.resolve());
+  });
+
+  test('US-020: IsolationBlockedError with ENV never claims paused run', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve({
+        success: true,
+        message: 'ok',
+        workflow: {
+          definition: makeTestWorkflow({
+            name: 'test-workflow',
+            interactive: true,
+            nodes: [{ id: 'default', prompt: 'base', provider: 'claude' }],
+          }),
+          args: 'test message',
+        },
+      })
+    );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'paused-iso-block-run',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/paused',
+        parent_conversation_id: 'conv-1',
+        status: 'paused',
+        metadata: {
+          envOverlay: {
+            envId: 'env-stored',
+            envName: 'stored-env',
+            workflowName: 'test-workflow',
+            patches: { default: { model: 'from-stored' } },
+            skippedNodeIds: [],
+          },
+        },
+      })
+    );
+    mockInspectResumableRun.mockReturnValueOnce(
+      Promise.resolve({
+        priorCompletedNodes: new Map([['default', 'done']]),
+        priorTokenUsage: { input: 1, output: 1 },
+      })
+    );
+    mockUpdateConversation.mockClear();
+    mockUpdateConversation.mockImplementation(() => Promise.resolve());
+    mockValidateAndResolveIsolation.mockImplementationOnce(() =>
+      Promise.reject(new MockIsolationBlockedError('dirty worktree'))
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      envOverlay: makeEnvCandidate({ default: { model: 'from-request' } }),
+    });
+
+    expect(mockInspectResumableRun).toHaveBeenCalled();
+    expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
+    // Isolation blocked after conversation gate — still no claim / no execution.
+    expect(mockHydrateResumableRun).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+  });
+
+  test('malformed stored resume overlay stops before isolation', async () => {
+    // Control (pre-US-029 / genuine continuation): default inspect is non-null, so
+    // a corrupt stored snapshot still fails closed before conversation/isolation/claim.
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'paused-bad-env',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/paused',
+        parent_conversation_id: 'conv-1',
+        status: 'paused',
+        metadata: { envOverlay: { broken: true } },
+      })
+    );
+    mockUpdateConversation.mockClear();
+    mockLogger.info.mockClear();
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+
+    expect(mockInspectResumableRun).toHaveBeenCalled();
+    expect(mockUpdateConversation).not.toHaveBeenCalled();
+    expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
+    expect(mockHydrateResumableRun).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
+    expect(sent).toContain('invalid_overlay_snapshot');
+    expect(sent).not.toContain('broken');
+    const preparedLogs = mockLogger.info.mock.calls.filter(
+      c => c[1] === 'workflow.env_overlay_prepared'
+    );
+    expect(preparedLogs).toHaveLength(0);
+  });
+
+  test('US-029: inspect-null + malformed stored ENV starts fresh YAML without request', async () => {
+    // Paused candidate with nothing to resume + corrupt stored overlay must NOT
+    // fail closed — inspect-null follows the fresh YAML path and ignores stale metadata.
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve({
+        success: true,
+        message: 'ok',
+        workflow: {
+          definition: makeTestWorkflow({
+            name: 'test-workflow',
+            interactive: true,
+            nodes: [{ id: 'default', prompt: 'base-yaml', provider: 'claude' }],
+          }),
+          args: 'test message',
+        },
+      })
+    );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'empty-malformed-prior',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/paused',
+        parent_conversation_id: 'conv-1',
+        status: 'paused',
+        metadata: {
+          envOverlay: {
+            broken: true,
+            patches: { default: { prompt: 'secret-stale-body-must-not-echo' } },
+          },
+        },
+      })
+    );
+    mockInspectResumableRun.mockReturnValueOnce(Promise.resolve(null));
+    mockUpdateConversation.mockClear();
+    mockLogger.info.mockClear();
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+
+    expect(mockInspectResumableRun).toHaveBeenCalled();
+    expect(mockHydrateResumableRun).not.toHaveBeenCalled();
+    expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
+    expect(mockUpdateConversation).toHaveBeenCalled();
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    const wf = callArgs[4] as { nodes: Array<{ prompt?: string; model?: string }> };
+    expect(wf.nodes[0]?.prompt).toBe('base-yaml');
+    expect(wf.nodes[0]?.model).toBeUndefined();
+    const opts = callArgs[callArgs.length - 1] as {
+      appliedEnvOverlay?: unknown;
+      preCreatedRun?: unknown;
+    };
+    expect(opts.appliedEnvOverlay).toBeUndefined();
+    expect(opts.preCreatedRun).toBeUndefined();
+    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
+    expect(sent).toContain('no completed nodes');
+    expect(sent).not.toContain('invalid_overlay_snapshot');
+    expect(sent).not.toContain('secret-stale-body-must-not-echo');
+    const preparedLogs = mockLogger.info.mock.calls.filter(
+      c => c[1] === 'workflow.env_overlay_prepared'
+    );
+    expect(preparedLogs).toHaveLength(0);
+  });
+
+  test('US-029: inspect-null + malformed stored ENV applies valid request candidate', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve({
+        success: true,
+        message: 'ok',
+        workflow: {
+          definition: makeTestWorkflow({
+            name: 'test-workflow',
+            interactive: true,
+            nodes: [{ id: 'default', prompt: 'base-yaml', provider: 'claude' }],
+          }),
+          args: 'test message',
+        },
+      })
+    );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'empty-malformed-with-request',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/paused',
+        parent_conversation_id: 'conv-1',
+        status: 'paused',
+        metadata: { envOverlay: { broken: true } },
+      })
+    );
+    mockInspectResumableRun.mockReturnValueOnce(Promise.resolve(null));
+    mockLogger.info.mockClear();
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      envOverlay: makeEnvCandidate({ default: { model: 'from-request-fresh' } }),
+    });
+
+    expect(mockInspectResumableRun).toHaveBeenCalled();
+    expect(mockHydrateResumableRun).not.toHaveBeenCalled();
+    expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    const wf = callArgs[4] as { nodes: Array<{ model?: string; prompt?: string }> };
+    expect(wf.nodes[0]?.model).toBe('from-request-fresh');
+    expect(wf.nodes[0]?.prompt).toBe('base-yaml');
+    const opts = callArgs[callArgs.length - 1] as {
+      appliedEnvOverlay?: { envName: string; patches: Record<string, unknown> };
+      preCreatedRun?: unknown;
+    };
+    expect(opts.appliedEnvOverlay?.envName).toBe('fast');
+    expect(opts.appliedEnvOverlay?.patches).toEqual({
+      default: { model: 'from-request-fresh' },
+    });
+    expect(opts.preCreatedRun).toBeUndefined();
+    const preparedLog = mockLogger.info.mock.calls.find(
+      c => c[1] === 'workflow.env_overlay_prepared'
+    ) as [Record<string, unknown>, string] | undefined;
+    expect(preparedLog).toBeDefined();
+    expect(preparedLog![0].continuing).toBe(false);
+    expect(preparedLog![0].envName).toBe('fast');
+    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
+    expect(sent).not.toContain('invalid_overlay_snapshot');
+    expect(sent).not.toContain('not applied');
+  });
+
+  test('US-029: inspect-null ignores stored overlay incompatible with current YAML', async () => {
+    // Stored overlay targets a prompt field on a node that is now a command node —
+    // genuine resume would fail; inspect-null fresh start must ignore the stale row.
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve({
+        success: true,
+        message: 'ok',
+        workflow: {
+          definition: makeTestWorkflow({
+            name: 'test-workflow',
+            interactive: true,
+            nodes: [{ id: 'default', command: 'ship', provider: 'claude' }],
+          }),
+          args: 'test message',
+        },
+      })
+    );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'empty-incompatible-stored',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/paused',
+        parent_conversation_id: 'conv-1',
+        status: 'paused',
+        metadata: {
+          envOverlay: {
+            envId: 'env-stale',
+            envName: 'stale-env',
+            workflowName: 'test-workflow',
+            patches: { default: { prompt: 'secret-incompatible-stale-body' } },
+            skippedNodeIds: [],
+          },
+        },
+      })
+    );
+    mockInspectResumableRun.mockReturnValueOnce(Promise.resolve(null));
+    mockLogger.info.mockClear();
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      envOverlay: makeEnvCandidate({ default: { model: 'fresh-ok' } }),
+    });
+
+    expect(mockInspectResumableRun).toHaveBeenCalled();
+    expect(mockHydrateResumableRun).not.toHaveBeenCalled();
+    expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    const wf = callArgs[4] as {
+      nodes: Array<{ model?: string; prompt?: string; command?: string }>;
+    };
+    expect(wf.nodes[0]?.command).toBe('ship');
+    expect(wf.nodes[0]?.model).toBe('fresh-ok');
+    expect(wf.nodes[0]?.prompt).toBeUndefined();
+    const opts = callArgs[callArgs.length - 1] as {
+      appliedEnvOverlay?: { envName: string; patches: Record<string, unknown> };
+    };
+    expect(opts.appliedEnvOverlay?.envName).toBe('fast');
+    expect(opts.appliedEnvOverlay?.patches).toEqual({ default: { model: 'fresh-ok' } });
+    const preparedLog = mockLogger.info.mock.calls.find(
+      c => c[1] === 'workflow.env_overlay_prepared'
+    ) as [Record<string, unknown>, string] | undefined;
+    expect(preparedLog).toBeDefined();
+    expect(preparedLog![0].continuing).toBe(false);
+    expect(preparedLog![0].envName).toBe('fast');
+    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
+    expect(sent).not.toContain('field_not_supported_for_node');
+    expect(sent).not.toContain('secret-incompatible-stale-body');
+    expect(sent).not.toContain('stale-env');
+  });
+
+  test('US-029: genuine continuation with malformed stored ENV fails before gates', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve({
+        success: true,
+        message: 'ok',
+        workflow: {
+          definition: makeTestWorkflow({
+            name: 'test-workflow',
+            interactive: true,
+            nodes: [{ id: 'default', prompt: 'base', provider: 'claude' }],
+          }),
+          args: 'test message',
+        },
+      })
+    );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'paused-genuine-bad-env',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/paused',
+        parent_conversation_id: 'conv-1',
+        status: 'paused',
+        metadata: {
+          envOverlay: {
+            broken: true,
+            patches: { default: { prompt: 'secret-malformed-body' } },
+          },
+        },
+      })
+    );
+    // Explicit genuine-continuation eligibility (completed nodes present).
+    mockInspectResumableRun.mockReturnValueOnce(
+      Promise.resolve({
+        priorCompletedNodes: new Map([['default', 'done']]),
+        priorTokenUsage: { input: 1, output: 1 },
+      })
+    );
+    mockUpdateConversation.mockClear();
+    mockLogger.info.mockClear();
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+
+    expect(mockInspectResumableRun).toHaveBeenCalled();
+    // Genuine continuation alone parses the stored snapshot — fail closed before
+    // conversation mutation, isolation, and the resume CAS claim.
+    expect(mockUpdateConversation).not.toHaveBeenCalled();
+    expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
+    expect(mockHydrateResumableRun).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
+    expect(sent).toContain('invalid_overlay_snapshot');
+    expect(sent).not.toContain('secret-malformed-body');
+    const preparedLogs = mockLogger.info.mock.calls.filter(
+      c => c[1] === 'workflow.env_overlay_prepared'
+    );
+    expect(preparedLogs).toHaveLength(0);
+  });
+
+  test('US-034: supplied-input notice rejection still dispatches after winning resume CAS', async () => {
+    // After hydrateResumableRun wins the paused→running CAS, an informational
+    // notice must not strand the run: a rejecting adapter still hands off to
+    // executeWorkflow exactly once with the stored row (not newly supplied inputs).
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve(
+        makeWorkflowResult(true, {
+          inputs: { diff: { required: true } },
+        })
+      )
+    );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'paused-post-cas-inputs',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/paused',
+        parent_conversation_id: 'conv-1',
+        status: 'paused',
+        // Stored inputs live on the row; resume must keep these, not the request map.
+        inputs: { diff: 'stored-diff-value' },
+        metadata: {},
+      })
+    );
+    mockInspectResumableRun.mockReturnValueOnce(
+      Promise.resolve({
+        priorCompletedNodes: new Map([['default', 'done']]),
+        priorTokenUsage: { input: 1, output: 1 },
+      })
+    );
+    mockHydrateResumableRun.mockReturnValueOnce(
+      Promise.resolve({
+        preCreatedRun: {
+          id: 'paused-post-cas-inputs',
+          status: 'running',
+          working_path: '/repos/test-repo/worktrees/paused',
+          inputs: { diff: 'stored-diff-value' },
+        },
+        priorCompletedNodes: new Map([['default', 'done']]),
+        priorTokenUsage: { input: 1, output: 1 },
+      })
+    );
+    mockLogger.warn.mockClear();
+
+    const platform = makePlatform();
+    // Command ack ("ok") must succeed so dispatch reaches the post-CAS notice;
+    // only the informational resuming notice rejects (US-034 orphan hazard).
+    let sendCount = 0;
+    const sendMessage = mock(async () => {
+      sendCount += 1;
+      if (sendCount === 1) return; // commandHandler result.message
+      throw new Error('adapter transport down');
+    });
+    platform.sendMessage = sendMessage;
+
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      workflowInputs: { diff: 'secret-new-diff-must-not-apply' },
+    });
+
+    // Claim still happens before the resuming notice attempt (send #2; #1 is command ack).
+    expect(mockHydrateResumableRun).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(mockHydrateResumableRun.mock.invocationCallOrder[0]).toBeLessThan(
+      sendMessage.mock.invocationCallOrder[1]!
+    );
+    expect(mockHydrateResumableRun.mock.invocationCallOrder[0]).toBeGreaterThan(
+      sendMessage.mock.invocationCallOrder[0]!
+    );
+    // Executor owns the claimed run exactly once — notice failure is not a dispatch barrier.
+    expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+    expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    expect(callArgs[3]).toBe('/repos/test-repo/worktrees/paused');
+    const opts = callArgs[callArgs.length - 1] as {
+      preCreatedRun?: { id: string; inputs?: Record<string, string> };
+      inputs?: Record<string, string>;
+      appliedEnvOverlay?: unknown;
+    };
+    expect(opts.preCreatedRun?.id).toBe('paused-post-cas-inputs');
+    expect(opts.preCreatedRun?.inputs).toEqual({ diff: 'stored-diff-value' });
+    // Fresh-call inputs are never stamped onto a continuation opts bag.
+    expect(opts.inputs).toBeUndefined();
+    expect(opts.appliedEnvOverlay).toBeUndefined();
+
+    const warnCalls = mockLogger.warn.mock.calls.filter(
+      c => c[1] === 'orchestrator.resume_ignored_supplied_inputs_notice_failed'
+    );
+    expect(warnCalls).toHaveLength(1);
+    expect(warnCalls[0]![0]).toEqual(
+      expect.objectContaining({
+        conversationId: 'conv-1',
+        workflowRunId: 'paused-post-cas-inputs',
+        workflowName: 'test-workflow',
+      })
+    );
+    // Safe fields only — never echo supplied input values into the failure log.
+    expect(JSON.stringify(warnCalls[0])).not.toContain('secret-new-diff-must-not-apply');
+    expect(JSON.stringify(warnCalls[0])).not.toContain('stored-diff-value');
+  });
+
+  test('US-034: ignored-ENV notice rejection still dispatches stored overlay after winning resume CAS', async () => {
+    // Same orphan hazard for the ignored-ENV notice: transport failure after the
+    // winning CAS must still invoke executeWorkflow once with the stored overlay,
+    // never the request candidate.
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve({
+        success: true,
+        message: 'ok',
+        workflow: {
+          definition: makeTestWorkflow({
+            name: 'test-workflow',
+            interactive: true,
+            nodes: [{ id: 'default', command: 'ship', provider: 'claude' }],
+          }),
+          args: 'test message',
+        },
+      })
+    );
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'paused-post-cas-env',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/paused',
+        parent_conversation_id: 'conv-1',
+        status: 'paused',
+        metadata: {
+          envOverlay: {
+            envId: 'env-stored',
+            envName: 'stored-env',
+            workflowName: 'test-workflow',
+            patches: { default: { model: 'from-stored' } },
+            skippedNodeIds: [],
+          },
+        },
+      })
+    );
+    mockInspectResumableRun.mockReturnValueOnce(
+      Promise.resolve({
+        priorCompletedNodes: new Map([['default', 'done']]),
+        priorTokenUsage: { input: 1, output: 1 },
+      })
+    );
+    mockHydrateResumableRun.mockReturnValueOnce(
+      Promise.resolve({
+        preCreatedRun: {
+          id: 'paused-post-cas-env',
+          status: 'running',
+          working_path: '/repos/test-repo/worktrees/paused',
+        },
+        priorCompletedNodes: new Map([['default', 'done']]),
+        priorTokenUsage: { input: 1, output: 1 },
+      })
+    );
+    mockLogger.warn.mockClear();
+
+    const platform = makePlatform();
+    let sendCount = 0;
+    const sendMessage = mock(async () => {
+      sendCount += 1;
+      if (sendCount === 1) return; // commandHandler result.message
+      throw new Error('adapter transport down');
+    });
+    platform.sendMessage = sendMessage;
+
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      envOverlay: makeEnvCandidate({
+        default: { prompt: 'secret-request-env-body-must-not-apply' },
+      }),
+    });
+    expect(mockHydrateResumableRun).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(mockHydrateResumableRun.mock.invocationCallOrder[0]).toBeLessThan(
+      sendMessage.mock.invocationCallOrder[1]!
+    );
+    expect(mockHydrateResumableRun.mock.invocationCallOrder[0]).toBeGreaterThan(
+      sendMessage.mock.invocationCallOrder[0]!
+    );
+    expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+    expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    const wf = callArgs[4] as {
+      nodes: Array<{ model?: string; prompt?: string; command?: string }>;
+    };
+    expect(wf.nodes[0]?.model).toBe('from-stored');
+    expect(wf.nodes[0]?.command).toBe('ship');
+    expect(wf.nodes[0]?.prompt).toBeUndefined();
+    const opts = callArgs[callArgs.length - 1] as {
+      preCreatedRun?: { id: string };
+      appliedEnvOverlay?: { envId: string; envName: string; patches: Record<string, unknown> };
+    };
+    expect(opts.preCreatedRun?.id).toBe('paused-post-cas-env');
+    expect(opts.appliedEnvOverlay?.envId).toBe('env-stored');
+    expect(opts.appliedEnvOverlay?.envName).toBe('stored-env');
+    expect(opts.appliedEnvOverlay?.patches).toEqual({ default: { model: 'from-stored' } });
+
+    const warnCalls = mockLogger.warn.mock.calls.filter(
+      c => c[1] === 'orchestrator.resume_ignored_supplied_env_notice_failed'
+    );
+    expect(warnCalls).toHaveLength(1);
+    expect(warnCalls[0]![0]).toEqual(
+      expect.objectContaining({
+        conversationId: 'conv-1',
+        workflowRunId: 'paused-post-cas-env',
+        workflowName: 'test-workflow',
+        ignoredEnvId: 'env-1',
+        ignoredEnvName: 'fast',
+      })
+    );
+    expect(JSON.stringify(warnCalls[0])).not.toContain('secret-request-env-body-must-not-apply');
+    expect(JSON.stringify(warnCalls[0])).not.toContain('from-stored');
   });
 });
 

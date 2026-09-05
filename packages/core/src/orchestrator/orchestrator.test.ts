@@ -127,9 +127,20 @@ const mockFindWorkflow = mock((name: string, workflows: readonly WorkflowDefinit
   workflows.find(w => w.name === name)
 );
 
+const mockCreateWorkflowRun = mock(() =>
+  Promise.resolve({
+    id: 'run-1',
+    status: 'pending',
+    metadata: {},
+  })
+);
+const mockFailWorkflowRun = mock(() => Promise.resolve());
 mock.module('../workflows/store-adapter', () => ({
   createWorkflowDeps: mock(() => ({
-    store: {},
+    store: {
+      createWorkflowRun: mockCreateWorkflowRun,
+      failWorkflowRun: mockFailWorkflowRun,
+    },
     getAgentProvider: () => ({}),
     loadConfig: async () => ({}),
   })),
@@ -165,15 +176,15 @@ mock.module('../utils/worktree-sync', () => ({
   syncArchonToWorktree: mockSyncArchonToWorktree,
 }));
 
-// Orchestrator (isolation & dispatch) mocks
+// Isolation is mocked; dispatchBackgroundWorkflow stays REAL (mock.module merges —
+// omitted exports keep the live implementation) so US-021 can cover background
+// pending-row terminalization without a second test file.
 const mockValidateAndResolveIsolation = mock(() =>
   Promise.resolve({ status: 'existing', cwd: '/workspace/project', env: null })
 );
-const mockDispatchBackgroundWorkflow = mock(() => Promise.resolve());
 
 mock.module('./orchestrator', () => ({
   validateAndResolveIsolation: mockValidateAndResolveIsolation,
-  dispatchBackgroundWorkflow: mockDispatchBackgroundWorkflow,
   IsolationBlockedError: class IsolationBlockedError extends Error {
     constructor(message: string) {
       super(message);
@@ -240,12 +251,53 @@ mock.module('../db/workflows', () => ({
   updateWorkflowRun: mock(() => Promise.resolve()),
 }));
 
+// Real dispatchBackgroundWorkflow needs these (same set as orchestrator-isolation.test.ts).
+mock.module('../db/isolation-environments', () => ({
+  createIsolationStore: mock(() => ({
+    updateStatus: mock(() => Promise.resolve()),
+  })),
+}));
+mock.module('../db/user-github-token-store', () => ({
+  getUserGithubNoreplyEmail: mock(() => Promise.resolve(null)),
+}));
+mock.module('../services/cleanup-service', () => ({
+  cleanupToMakeRoom: mock(() => Promise.resolve({ removed: [] })),
+  getWorktreeStatusBreakdown: mock(() => Promise.resolve({ active: 0, stale: 0, merged: 0 })),
+  STALE_THRESHOLD_DAYS: 7,
+}));
+const mockIsolationResolve = mock(() =>
+  Promise.resolve({ status: 'none' as const, cwd: '/workspace' })
+);
+class MockIsolationResolver {
+  resolve = mockIsolationResolve;
+  constructor(_deps: unknown) {}
+}
+mock.module('@archon/isolation', () => ({
+  IsolationResolver: MockIsolationResolver,
+  IsolationBlockedError: class IsolationBlockedError extends Error {
+    constructor(
+      message: string,
+      public reason?: string
+    ) {
+      super(message);
+      this.name = 'IsolationBlockedError';
+    }
+  },
+  configureIsolation: mock(() => undefined),
+  getIsolationProvider: mock(() => ({})),
+  classifyIsolationError: (err: Error) => err.message,
+}));
+mock.module('@archon/git', () => ({
+  toBranchName: mock((branch: string) => branch),
+}));
+
 // ─── Import module under test (AFTER all mocks) ─────────────────────────────
 
 import { handleMessage, parseOrchestratorCommands } from './orchestrator-agent';
 
-// Also import wrapCommandForExecution which still lives in orchestrator.ts
-import { wrapCommandForExecution } from './orchestrator';
+// wrapCommandForExecution + real dispatchBackgroundWorkflow (not mocked above)
+import { wrapCommandForExecution, dispatchBackgroundWorkflow } from './orchestrator';
+import type { WorkflowRoutingContext } from './orchestrator';
 
 // ─── Test Fixtures ──────────────────────────────────────────────────────────
 
@@ -338,7 +390,8 @@ function clearAllMocks(): void {
   mockFindWorkflow.mockClear();
   mockSyncArchonToWorktree.mockClear();
   mockValidateAndResolveIsolation.mockClear();
-  mockDispatchBackgroundWorkflow.mockClear();
+  mockCreateWorkflowRun.mockClear();
+  mockFailWorkflowRun.mockClear();
   mockBuildOrchestratorPrompt.mockClear();
   mockBuildProjectScopedPrompt.mockClear();
   mockBuildOrchestratorSystemAppend.mockClear();
@@ -1740,5 +1793,115 @@ describe('orchestrator-agent handleMessage', () => {
 
       expect(mockGenerateAndSetTitle).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('US-021 dispatchBackgroundWorkflow overlay preamble fail-closed', () => {
+  test('already-created pending overlay row does not remain pending after preamble failure', async () => {
+    // US-021: executor fail-closes the pending pre-created row; background catch
+    // must NOT be the path that repairs state (log-only).
+    const pendingRun = {
+      id: 'pending-overlay-bg',
+      status: 'pending' as string,
+      workflow_name: 'bg-overlay',
+      metadata: {
+        envOverlay: {
+          envId: 'env-bg-1',
+          envName: 'fast',
+          workflowName: 'bg-overlay',
+          patches: { n1: { model: 'haiku' } },
+          skippedNodeIds: [] as string[],
+        },
+      },
+    };
+
+    mockCreateWorkflowRun.mockResolvedValueOnce(pendingRun);
+    mockFailWorkflowRun.mockImplementationOnce(async (id: string) => {
+      if (id === pendingRun.id) pendingRun.status = 'failed';
+    });
+
+    // Resolve when the fire-and-forget execute path finishes (incl. result card).
+    const { promise: backgroundSettled, resolve: resolveBackground } =
+      Promise.withResolvers<void>();
+
+    // Simulate fixed executor: fail-closed return (no throw) after calling store.failWorkflowRun.
+    mockExecuteWorkflow.mockImplementationOnce(
+      async (
+        deps: {
+          store: { failWorkflowRun: (id: string, error: string) => Promise<void> };
+        },
+        _platform: unknown,
+        _conv: string,
+        _cwd: string,
+        _wf: unknown,
+        _msg: string,
+        _dbId: string,
+        opts: { preCreatedRun?: { id: string; metadata?: { envOverlay?: unknown } } }
+      ) => {
+        try {
+          const run = opts.preCreatedRun;
+          expect(run?.id).toBe('pending-overlay-bg');
+          expect(run?.metadata?.envOverlay).toBeTruthy();
+          await deps.store.failWorkflowRun(run!.id, "Alias name 'fast' must start with '@'");
+          return {
+            success: false as const,
+            workflowRunId: run!.id,
+            error: "Alias name 'fast' must start with '@'",
+          };
+        } finally {
+          // Defer resolve so dispatch's post-execute result-card await can run first.
+          queueMicrotask(() => {
+            resolveBackground();
+          });
+        }
+      }
+    );
+
+    mockGetOrCreateConversation.mockResolvedValueOnce({
+      ...mockConversation,
+      id: 'worker-conv-bg',
+      platform_conversation_id: 'web-worker-bg',
+    });
+    mockGetCodebase.mockResolvedValueOnce(mockCodebase);
+
+    const platform = new MockPlatformAdapter();
+    const workflow = makeTestWorkflow({
+      name: 'bg-overlay',
+      worktree: { enabled: false },
+      nodes: [{ id: 'n1', prompt: 'x' }],
+    });
+
+    const ctx: WorkflowRoutingContext = {
+      platform,
+      conversationId: 'parent-conv',
+      cwd: '/parent/cwd',
+      originalMessage: 'run it',
+      conversationDbId: 'parent-db-id',
+      codebaseId: 'codebase-789',
+      availableWorkflows: [],
+      appliedEnvOverlay: {
+        envId: 'env-bg-1',
+        envName: 'fast',
+        workflowName: 'bg-overlay',
+        patches: { n1: { model: 'haiku' } },
+        skippedNodeIds: [],
+      },
+    };
+
+    await dispatchBackgroundWorkflow(ctx, workflow);
+    await backgroundSettled;
+    // One more turn for the result-card send after execute resolves.
+    await Promise.resolve();
+
+    expect(mockCreateWorkflowRun).toHaveBeenCalled();
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+    expect(mockFailWorkflowRun).toHaveBeenCalledWith(
+      'pending-overlay-bg',
+      expect.stringContaining("must start with '@'")
+    );
+    // Row is terminal — not left pending for the log-only catch to "fix".
+    expect(pendingRun.status).toBe('failed');
+    // Failure surface is a result card; catch path is not required for terminalization.
+    expect(platform.sendMessage).toHaveBeenCalled();
   });
 });
