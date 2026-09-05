@@ -815,8 +815,8 @@
         "US-037"
       ],
       "priority": 38,
-      "passes": false,
-      "notes": "Added from Convergence 4 after all existing US-001 through US-033 stories were already passing."
+      "passes": true,
+      "notes": "Implemented in final iteration after US-037. Files: docs/superpowers/plans/2026-09-05-workflow-env-overlay.md (\u00a7E Post-Convergence-4). Focused re-runs: orchestrator-agent 255; node-model-resolution 23; dag-executor 547; executor 101. git diff --check clean. Current blockers: None."
     }
   ]
 }

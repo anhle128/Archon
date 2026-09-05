@@ -1,5 +1,10 @@
 ## Codebase Patterns
 
+### Post-Convergence-4 Constitution re-check (US-038)
+- **Where**: `docs/superpowers/plans/2026-09-05-workflow-env-overlay.md` Constitution Check §E
+- **Pattern**: Preserve historical Constitution Check sections A–D; append a dated post-Convergence-4 re-check that is the sole authoritative release-blocker list. Close Convergence 4 findings only with final symbols + focused test titles (not prior Ralph counts). Point C/D/Convergence 4 intros at §E without deleting gap text. Label only one “Current release blockers (authoritative)” section.
+- **Example**: §D historical after US-034–US-037; §E marks US-034–US-037 CLOSED with notice_failed / collectContainerIncompatibleProviders / thinkingUnsupported / providerConflict evidence; current blockers **None**; shipping = `bun run validate` + Postgres `check:schema-upgrades` CI
+
 ### Group providerConflict on resolveGroupModelScope (US-037)
 - **Where**: `packages/workflows/src/node-model-resolution.ts` (`ResolvedGroupModelScope`), `packages/workflows/src/dag-executor.ts` (`warnModelProviderConflict`)
 - **Pattern**: `resolveGroupModelScope` must forward `resolveNodeModel().providerConflict`. Runtime loop_group dispatch emits the same deduped `dag.model_provider_conflict` warning before body execution — body nodes inherit the already-resolved provider and cannot recover the conflict. Do not add a group container row to ENV `resolved` metadata.
@@ -1097,5 +1102,26 @@
 - Group body inherits already-resolved provider, so conflict must be reported at group dispatch — body nodes cannot recover `providerConflict`.
 - Extract `warnModelProviderConflict` so ordinary nodes and loop_group share one dedupe key (`declared|resolved|modelRef`).
 - executor.test mocks `executeDagWorkflow`; ENV emission proof lives in dag-executor with `applyEnvOverlay`, while executor asserts snapshot + DAG-bound group fields expose the pure conflict decision.
+
+---
+
+## 2026-09-05 — US-038: Post-Convergence-4 Constitution Check reconciliation
+
+**Status**: PASSED
+**Files changed**:
+- `docs/superpowers/plans/2026-09-05-workflow-env-overlay.md` — append Constitution Check §E (post-Convergence-4); mark §D historical; update C/D/Convergence 4 authority pointers; disposition note under task 27
+
+**Acceptance criteria verified**:
+- [x] Clearly dated post-Convergence-4 re-check after US-034–US-037 focused re-runs (orchestrator-agent 255; node-model-resolution 23; dag-executor 547; executor 101)
+- [x] Historical §A–§D preserved; each Convergence 4 finding disposition cites final symbols + focused tests
+- [x] One unambiguous current blocker list in §E; lifecycle cannot PASS while US-034 open; preflight cannot PASS while US-035 open — both CLOSED
+- [x] Waivers include mixed-version resume + CI-only Postgres schema-upgrades with rollback rationale
+- [x] Final shipping gate names `bun run validate` + PostgreSQL schema-upgrade CI leg; ordinary PR process ≠ constitutional blocker
+- [x] `git diff --check -- docs/superpowers/plans/2026-09-05-workflow-env-overlay.md` clean
+
+**Learnings**:
+- Mirror US-033: never rewrite historical blocker lists; append a new dated section and retarget “current” pointers.
+- Keep only one subsection titled “Current release blockers (authoritative)” so auditors cannot misread an older empty list.
+- Convergence 4 task text stays as historical gap trail even after §E closes it.
 
 ---
