@@ -677,7 +677,8 @@
         "US-018"
       ],
       "priority": 32,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration after US-031. Files: packages/core/src/schemas/workflow-env.ts, workflow-env.test.ts, packages/core/src/db/workflow-envs.test.ts. workflowEnvRowSchema/summary compose write-path name schemas; corrupt identity rows fail closed with id-only WorkflowEnvCorruptRowError on detail and summary reads."
     },
     {
       "id": "US-033",
@@ -702,7 +703,8 @@
         "US-032"
       ],
       "priority": 33,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in final iteration. Files: docs/superpowers/plans/2026-09-05-workflow-env-overlay.md (\u00a7D post-Convergence-3 re-check). Current release blockers: none."
     }
   ]
 }

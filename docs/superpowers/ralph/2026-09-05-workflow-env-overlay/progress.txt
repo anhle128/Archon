@@ -1,6 +1,15 @@
 ## Codebase Patterns
 
+### Post-Convergence Constitution re-check (US-033)
+- **Where**: `docs/superpowers/plans/2026-09-05-workflow-env-overlay.md` Constitution Check §D
+- **Pattern**: Preserve historical Constitution Check sections; append a dated current re-check that is the sole authoritative release-blocker list. Close prior blockers only with final symbols + focused test titles; never delete A/B evidence.
+- **Example**: B listed US-020/US-021 OPEN → §D marks CLOSED citing `inspectResumableRun`/`failWorkflowRun(... pending)` + named tests; current blockers **None**
 
+
+### Authoritative ENV identity on reads (US-032)
+- **Where**: `packages/core/src/schemas/workflow-env.ts` (`workflowEnvRowSchema` / `workflowEnvSummarySchema`)
+- **Pattern**: Row and summary schemas compose `workflowEnvWorkflowNameSchema` + `workflowEnvNameSchema` — never length-only strings. Corrupt stored identities (`bad//workflow`, `has space`) fail `WorkflowEnvCorruptRowError` with id-only message/log on get and list. Summary SELECT omits patches so identity validation never needs patch bodies.
+- **Example**: `workflow_name:'bad//workflow'` or `name:'has space'` → corrupt on get/list; `{not-json` patches alone still list OK when identity is valid
 
 ### Positive thinking budgetTokens (US-031)
 - **Where**: `packages/web/src/experiments/console/lib/workflow-env-editor.ts` (`thinkingToPatch`)
@@ -933,5 +942,49 @@
 - Prior helper allowed n >= 0 ("non-negative") which diverged from engine `z.number().int().positive()` — 0 would fail server schema after client accepted it.
 - Number('-0') is -0; use `n <= 0` (not `n < 0`) so both 0 and -0 reject.
 - Dialog needed no code change: buildPatchesFromDrafts already maps thinkingToPatch throws to actionError; updateDraft already clears error without wiping drafts.
+
+---
+
+## 2026-09-05 — US-032: Stored ENV rows use authoritative name schemas
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/schemas/workflow-env.ts` — row/summary compose write-path workflow + ENV name schemas
+- `packages/core/src/schemas/workflow-env.test.ts` — row/summary reject bad//workflow and has space
+- `packages/core/src/db/workflow-envs.test.ts` — injected invalid identities → WorkflowEnvCorruptRowError id-only on detail + summary
+
+**Acceptance criteria verified**:
+- [x] schema regressions: workflowEnvRowSchema rejects bad//workflow and has space
+- [x] SQLite inject: full-detail reads reject with WorkflowEnvCorruptRowError carrying/logging only row id
+- [x] summary reads reject invalid identities via summary schema; independent of patch parsing (no patch load)
+- [x] row schema composed from workflowEnvWorkflowNameSchema + workflowEnvNameSchema; summary inherits via omit
+- [x] write/read identity constraints agree; Date/string timestamps unchanged
+- [x] Focused verification: `cd packages/core && bun test src/schemas/workflow-env.test.ts && bun test src/db/workflow-envs.test.ts`
+
+**Learnings**:
+- Length-only identity on the row schema was a silent read-path weaken — write path already used authoritative schemas; compose, don't duplicate.
+- List cannot query by an invalid workflow_name (input parse rejects); corrupt workflow_name rows are caught by get-by-id, while corrupt ENV names under a valid workflow_name are caught by list parseSummaryRow.
+- Cleanup of identity-corrupted rows needs raw SQL — store delete/update scope by validated workflow_name path.
+
+---
+
+## 2026-09-05 — US-033: Post-Convergence-3 Constitution Check reconciliation
+
+**Status**: PASSED
+**Files changed**:
+- `docs/superpowers/plans/2026-09-05-workflow-env-overlay.md` — append Constitution Check §D (post-Convergence-3 re-check); preserve A–C history; supersede B open-blocker list; mark Convergence 3 task 22 DONE
+
+**Acceptance criteria verified**:
+- [x] Clearly dated post-Convergence-3 re-check after US-029–US-032
+- [x] Historical findings vs current blockers distinguished; US-020/US-021 delayed-CAS + pending fail-closed cited CLOSED with final code/tests
+- [x] One unambiguous current release-blocker list: **None**
+- [x] Final evidence covers package-layer, typed/OpenAPI, additive DB, fail-closed lifecycle, secret-safe observability, focused/full validation, intentional complexity
+- [x] History preserved; verdicts changed only with concrete repository evidence
+- [x] Verification: `git diff --check` clean; manual compare to constitution 154–156 and 172–175; focused suites + root validate legs (type-check/lint/format/test/bundled checks) green
+
+**Learnings**:
+- US-019 §B correctly recorded open lifecycle blockers at write time; do not rewrite B — append a dated current section so auditors see both history and live gate.
+- Constitution process gate (154–156) wants pre-Phase-0 + post-design + (for this feature) post-implementation re-check after convergence hardenings land.
+- Ops mixed-version resume risk stays a deployment constraint, not a residual constitution violation once code paths fail closed.
 
 ---
