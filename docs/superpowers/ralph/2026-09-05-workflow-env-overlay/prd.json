@@ -1,0 +1,201 @@
+{
+  "feature": "Workflow ENV Overlay",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Engine overlay schemas and apply module",
+      "description": "As a workflow operator, I want a safe patch schema and pure symbol-preserving apply path, so that selected ENVs change only supported execution fields without mutating discovered workflows.",
+      "acceptanceCriteria": [
+        "packages/workflows/src/schemas/env-overlay.ts exports strict Zod schemas/types for patch/candidate/applied/snapshot/resolution; imports z from @hono/zod-openapi; derives types with z.infer; uses explicit record key schemas.",
+        "ENV patch validation allows only provider, model, effort, thinking, prompt, and bash; rejects reserved/empty target keys, empty per-node patch, more than 256 targets, over-1-MiB serialized patches, and unknown document keys; accepts long include-expanded ids and empty/whitespace prompt/bash strings.",
+        "packages/workflows/src/env-overlay.ts clones workflow roots, nodes, and nested groups with composed/compiled-loop metadata preserved through the generalized clone helper.",
+        "Apply matches only expanded top-level ids, skips missing ids deterministically, rejects incompatible field/node combinations and unknown providers, validates patched nodes and graph structure, and emits stable safe error codes without prompt/bash bodies.",
+        "Tests cover field matrix behavior, include id application, group-body target skipping, graph validation, deep-copy of object values, and preservation of original workflow/patch objects across ENV A, ENV B, and no-ENV reuse."
+      ],
+      "technicalNotes": "Follow plan sections Node-field compatibility, Patch validation and bounds, Clone and apply behavior, Phase 1, and Engine test matrix: docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:86-123, docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:192-205, docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:518-528, docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:607-619. Create/modify packages/workflows/src/schemas/env-overlay.ts, packages/workflows/src/env-overlay.ts, packages/workflows/src/include-expander.ts, packages/workflows/src/compiled-command.ts, schemas/index.ts, package export, and related tests listed at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:440-477.",
+      "dependsOn": [],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Shared request metadata and loop-group parity",
+      "description": "As an operator comparing runs, I want preview/snapshot metadata to match runtime node_started requests, so that request settings are auditable without approximations.",
+      "acceptanceCriteria": [
+        "packages/workflows/src/node-model-resolution.ts exposes one pure resolution result used by resolveNodeProviderAndModel(), node_started serialization, ENV preview, and ENV snapshot metadata.",
+        "NodeExecutionMetadata preserves provider, model, tier, modelReasoningEffort, effort, and thinking semantics; unsupported explicit portable effort still fails and unsupported thinking still uses the existing warning semantics.",
+        "Resolved metadata includes every direct provider turn under the patched workflow: top-level prompt/command/loop nodes and provider-turn body nodes inside nested loop_groups, using persisted qualified step names such as group.child; it excludes group containers, bash, and other deterministic nodes.",
+        "loop_group provider/model/preset/tier forwarding is fixed for ordinary YAML and overlaid group provider/model, recursively; group effort/thinking remain unsupported.",
+        "Tests prove preview/snapshot rows equal node_started request fields across node/workflow/preset precedence, rejected preset effort, assistant fallback, thinking, loops, includes, and nested group scope."
+      ],
+      "technicalNotes": "Follow Resolved request metadata and Loop-group execution parity: docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:162-190 and docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:207-215. Modify packages/workflows/src/node-model-resolution.ts, dag-executor.ts, executor loop-group call sites, and tests named in docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:472-476. This story depends on US-001 for overlay schema/apply types and must not add group effort/thinking support.",
+      "dependsOn": ["US-001"],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Workflow ENV database schema and CRUD store",
+      "description": "As an operator, I want named install-wide workflow ENVs persisted safely, so that variants survive across sessions and can be listed, edited, and deleted.",
+      "acceptanceCriteria": [
+        "PostgreSQL adds remote_agent_workflow_envs after remote_agent_usage_ledger, with id, workflow_name, name, patches, created_at, updated_at, created_by_user_id, and unique (workflow_name, name); index and column comments live in the final migration section.",
+        "SQLite createSchema() mirrors the new table/index; database inventory updates to 21 application tables; parity floor is investigated and raised to the verified post-change count; bundled schema is regenerated.",
+        "Core row/name schemas validate workflow name maximum 255, ENV name trimmed 1-64 with ^[A-Za-z0-9][A-Za-z0-9._-]*$, and patches through envPatchesSchema; empty {} patches are valid.",
+        "packages/core/src/db/workflow-envs.ts implements summary list without patches ordered by LOWER(name), name, id, get-by-id, create, workflow-scoped update with whole-document patch replacement, and workflow-scoped delete.",
+        "Store boundaries normalize PostgreSQL JSONB and SQLite JSON strings through envPatchesSchema; corrupt stored documents throw typed WorkflowEnvCorruptRowError with id-only logging; unique conflict mapping is constraint/message exact.",
+        "Core tests cover fresh SQLite, PostgreSQL parser parity, upgrade/idempotent reapply, CRUD JSON round-trip, name/bounds validation, corrupt row handling, summary independence from patch parsing, full replacement, and mismatch scoping."
+      ],
+      "technicalNotes": "Follow Persistence model and Store contracts for CRUD: docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:217-265, Phase 2 at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:530-539, and DB/core matrix at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:623-630. Create packages/core/src/schemas/workflow-env.ts and packages/core/src/db/workflow-envs.ts, modify migrations/000_combined.sql, packages/core/src/db/adapters/sqlite.ts, schema exports, package test scripts, bundled schema, and AGENTS inventory per docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:449-512.",
+      "dependsOn": [],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Atomic run envOverlay metadata replacement",
+      "description": "As the workflow engine, I want a narrow run-overlay persistence method, so that audit-critical overlay snapshots replace stale nested keys without clobbering sibling metadata.",
+      "acceptanceCriteria": [
+        "IWorkflowStore extends a new required IWorkflowEnvOverlayStore with setWorkflowRunEnvOverlay(runId, snapshot): Promise<WorkflowRun>.",
+        "Core's workflow store adapter and every concrete in-memory test store/mock implement the method.",
+        "PostgreSQL replaces only metadata.envOverlay with jsonb_set(COALESCE(metadata, '{}'::jsonb), '{envOverlay}', ...); SQLite replaces only metadata.envOverlay with json_set(COALESCE(metadata, '{}'), '$.envOverlay', json(...)).",
+        "Both dialect implementations update and read the complete run in one transaction, avoid SQLite RETURNING, require one affected row, and throw otherwise.",
+        "Integration tests prove a second complete snapshot removes stale nested keys, preserves sibling metadata, and surfaces run-not-found as an error."
+      ],
+      "technicalNotes": "Follow the JSON merge baseline at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:36-38 and narrow store method requirements at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:267-275. Modify packages/workflows/src/store.ts, packages/core/src/db/workflows.ts, packages/core/src/workflows/store-adapter.ts, and concrete workflow store fixtures. Depends on US-003 for EnvOverlaySnapshot schema and DB test setup.",
+      "dependsOn": ["US-003"],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Executor snapshot ownership and universal replay",
+      "description": "As a run owner, I want selected ENV patches frozen and replayed from run metadata, so that resume/retry never depends on mutable ENV rows.",
+      "acceptanceCriteria": [
+        "ExecuteWorkflowOptions accepts appliedEnvOverlay?: AppliedEnvOverlay; fresh foreground, background pre-create, and fallback run inserts include pending applied metadata at the first run-row write.",
+        "Executor entry restores metadata.envOverlay from a pre-created run when the caller did not already apply it; it verifies workflow identity and patched-field equality when appliedEnvOverlay is supplied.",
+        "Overlay-bearing pre-created runs derive execution identity from the run row's user_id for user AI preferences, provider/GitHub credentials, and child-run attribution; no-overlay runs preserve current opts.userId behavior.",
+        "Before workflow-start events or DAG execution, the executor builds latest resolved metadata from the patched workflow and live config/profile, atomically replaces metadata.envOverlay, swaps in the returned run row, and fails closed if resolution or audit write fails.",
+        "Resume/retry records currently missing originally applied ids in latestMissingNodeIds without mutating frozen patches; originally skipped ids never start applying later; live ENV edits/deletion after Start have no effect.",
+        "Tests cover direct CLI-style resume, CLI-style node retry, web retry, child recovery, parent auto-resume, audit-write failure with no execution, and fresh child runs not inheriting the parent's overlay."
+      ],
+      "technicalNotes": "Follow runtime overlay types at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:126-160 and executor requirements at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:374-398. Modify packages/workflows/src/executor.ts plus test fixtures in executor.test.ts, subrun.test.ts, executor-preamble.test.ts, script-node-deps.test.ts, plannotator tests, and all concrete IWorkflowStore fixtures found by type-check. Depends on US-001 apply/clone, US-002 resolution metadata, and US-004 audit persistence.",
+      "dependsOn": ["US-001", "US-002", "US-004"],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Orchestrator pre-isolation overlay gate and background handoff",
+      "description": "As a dispatcher, I want ENV application before isolation and conversation mutation, so that invalid overlays fail cheaply and safely.",
+      "acceptanceCriteria": [
+        "HandleMessageContext and WorkflowDispatchOptions carry a frozen EnvOverlayCandidate out-of-band; it is never embedded in the natural-language command string.",
+        "dispatchOrchestratorWorkflow() applies the request candidate or stored resume snapshot after declared-input/external-requirement gates and before conversation mutation or validateAndResolveIsolation().",
+        "Continuations ignore a newly supplied ENV and notify the user when the existing run owns an original selection; fresh runs use the request candidate; canonical workflow mismatch fails safely.",
+        "Unsupported fields, explicit unknown providers, invalid patched nodes, and invalid graph references stop before isolation with safe code/message; logs include only env id/name, applied ids, skipped ids, and error codes.",
+        "Foreground/background execution receives the patched clone and detached AppliedEnvOverlay; background pre-created rows are stamped with pending metadata and fallback insert remains equivalent.",
+        "Tests spy on isolation and prove it is not called for invalid overlays while valid overlays and missing-id overlays retain current isolation behavior."
+      ],
+      "technicalNotes": "Follow Fresh dispatch through the orchestrator at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:356-373 and Phase 4 at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:554-564. Modify packages/core/src/orchestrator/orchestrator-agent.ts, orchestrator.ts, tests in orchestrator-agent.test.ts, orchestrator.test.ts, orchestrator-isolation.test.ts, and background handoff paths. Depends on US-001 and US-005.",
+      "dependsOn": ["US-001", "US-005"],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "HTTP CRUD and preview API",
+      "description": "As a console client, I want typed CRUD and preview endpoints, so that ENV management and preview use server-authoritative validation and field matrices.",
+      "acceptanceCriteria": [
+        "New server routes use registerOpenApiRoute(createRoute(...), handler) and route schemas under packages/server/src/routes/schemas/workflow-env.schemas.ts; no new per-resource ACL is added.",
+        "CRUD endpoints implement GET /api/workflows/{name}/envs, GET /api/workflows/{name}/envs/{envId}, POST, PATCH, and DELETE with the specified 200/201/404/409 statuses and stable { error, detail? } bodies.",
+        "List responses omit patches; detail/create/update include camelCase WorkflowEnvResponse; delete returns { deleted }; create provenance uses the server-resolved web user or null, never request input.",
+        "CRUD validates workflow name/path/name/patch/size and does not require cwd or the workflow to be currently discoverable.",
+        "Preview implements GET /api/workflows/{name}/env-preview?cwd=<path>&envId=<optional> with required validated cwd, canonical workflow resolution, no-ENV baseline, ENV identity checks, server-side clone/apply, targets, skipped ids, and current-profile resolved metadata.",
+        "Route tests cover auth-gated normal registration, CRUD scoping/conflicts, preview root/descendant cwd semantics, canonical mismatch, safe failures without prompt/bash echo, and OpenAPI generation for CRUD/preview while Start keeps its multipart exception."
+      ],
+      "technicalNotes": "Follow HTTP API CRUD and Preview at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:277-312 and docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:329-352, plus Phase 5 at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:566-575 and HTTP matrix at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:649-658. Modify packages/server/src/routes/api.ts, packages/server/src/routes/schemas/workflow-env.schemas.ts, related API tests, OpenAPI generation, and mocks. Depends on US-001, US-002, and US-003.",
+      "dependsOn": ["US-001", "US-002", "US-003"],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-008",
+      "title": "Start route envId freeze and orchestrator handoff",
+      "description": "As a console starter, I want Start to freeze the selected ENV row before side effects, so that the run owns exactly the version the operator chose.",
+      "acceptanceCriteria": [
+        "POST /api/workflows/:name/run accepts optional envId in JSON and multipart forms; omitted or empty means YAML-only; non-string/duplicated multipart or non-string JSON values produce normal 400 request-shape errors.",
+        "When envId is present, the route loads and validates the row after parsing request fields but before file persistence or run-start message persistence.",
+        "Missing env id returns 400 { error: 'env_not_found' }; workflow mismatch returns 400 { error: 'env_workflow_mismatch' }; corrupt stored row fails before Start side effects.",
+        "The frozen candidate contains row id, row name, row workflow name, and a newly allocated parsed patches tree; later mocked store mutation cannot change the context passed downstream.",
+        "The route does not discover/apply YAML; compatibility/provider/profile/graph errors continue through dispatch/SSE rather than synchronous Start 400.",
+        "Tests cover no-ENV, JSON ENV, multipart ENV, malformed/duplicate envId, missing id, row/path mismatch, corrupt row before side effects, and frozen-copy behavior."
+      ],
+      "technicalNotes": "Follow Start at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:314-328, route baseline at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:29-30, Phase 5 Start tasks at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:570-575, and HTTP Start matrix at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:651-654. Modify packages/server/src/routes/api.ts, workflow.schemas.ts, api.workflow-runs.test.ts, api.workflows.test.ts, and orchestrator handoff. Depends on US-006 and US-007.",
+      "dependsOn": ["US-006", "US-007"],
+      "priority": 8,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-009",
+      "title": "Console start picker and preview",
+      "description": "As a console operator, I want to select None or a workflow ENV and see a race-safe preview before starting, so that I do not accidentally launch the wrong variant.",
+      "acceptanceCriteria": [
+        "Generated OpenAPI types drive new ENV skills and encoded cache keys; startRun() sends or omits envId correctly for JSON and multipart starts.",
+        "DraftRunCard loads ENV summaries for the selected canonical workflow, includes None (YAML) as default, and clears ENV selection, preview, and declared input values when the workflow changes.",
+        "Preview requests are keyed or cancelled by cwd/workflow/env id so a slower prior response cannot overwrite a newer selection.",
+        "UI renders provider-turn rows, skipped-id warnings, and 'Preview only — the ENV, workflow, or model profile may change before Start.'",
+        "List failure leaves explicit None/YAML Start usable; selected ENV detail or preview loading/failure disables Start and never silently resets to YAML-only.",
+        "Unit/component tests cover JSON/multipart request shapes, stale response races, selection reset, disabled-on-error behavior, and preview/skipped rendering."
+      ],
+      "technicalNotes": "Follow Console UX Start card at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:400-415, Phase 6 at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:577-584, and console matrix at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:660-665. Modify packages/web/src/experiments/console/skills/workflowEnvs.ts, skills/startRun.ts, store/keys.ts, WorkflowEnvPicker.tsx, WorkflowEnvPreviewTable.tsx, DraftRunCard.tsx, and tests. Depends on US-007 and US-008.",
+      "dependsOn": ["US-007", "US-008"],
+      "priority": 9,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-010",
+      "title": "Console ENV management dialog",
+      "description": "As a console operator, I want a workflow-specific ENV management dialog, so that I can create, edit, and delete patch maps using server-allowed target fields.",
+      "acceptanceCriteria": [
+        "The management dialog fetches baseline preview targets and allowedFields from the server instead of duplicating the node matrix in React.",
+        "Summary list fetching excludes patch bodies; a full ENV is fetched only when opened for editing.",
+        "The editor lets the operator choose target nodes and edit only fields in each target's allowed matrix; include-expanded ids render as returned; loop-group body ids are explained as non-targets.",
+        "UI requires a non-empty patch per chosen node and normalizes thinking through explicit schema-supported choices or validated JSON.",
+        "PATCH sends the complete patch map, not a deep delta; create/update/delete flows surface 409 conflicts, require delete confirmation, and invalidate ENV list plus affected preview cache keys.",
+        "The dialog states prompt/bash bodies are plaintext install-visible data and does not describe them as secrets or encrypted.",
+        "Component tests cover allowed-field rendering, full-map PATCH replacement, conflict/delete behavior, cache invalidation, and plaintext notice."
+      ],
+      "technicalNotes": "Follow Console UX Manage dialog at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:416-428 and console matrix at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:666. Create WorkflowEnvManageDialog.tsx and tests, reuse server preview targets, workflowEnvs skill, and cache keys from US-009. Depends on US-009.",
+      "dependsOn": ["US-009"],
+      "priority": 10,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-011",
+      "title": "Run detail, docs, generated files, and full validation",
+      "description": "As an operator reviewing a run, I want persisted ENV metadata documented and rendered accurately, so that preview, planned request metadata, node events, and final provider models are not confused.",
+      "acceptanceCriteria": [
+        "The console Run primitive defensively parses pending, complete, legacy, and malformed metadata.envOverlay without importing @archon/workflows; malformed metadata cannot crash run detail.",
+        "Run detail adds an env: <name> chip for pending/complete overlay metadata, renders latest resolved rows with node/provider/requested model or tier/effort/thinking, and shows skippedNodeIds plus latestMissingNodeIds warnings.",
+        "Run detail and table copy distinguish non-authoritative preview, latest planned request settings at start/resume, persisted node events as actual attempts, and provider-reported final models; prompt/bash bodies are never rendered.",
+        "Docs update the API and workflow-authoring references for CRUD, Start JSON/multipart, preview, install-wide identity, field matrix, include ids, loop-group body exclusion, resume semantics, error channels, size bounds, plaintext storage, and absence of CLI selection.",
+        "Generated OpenAPI types and bundled schema are refreshed; the application-table inventory is updated; PR review/release-note input calls out the loop_group.model behavior correction while leaving CHANGELOG.md to the release workflow.",
+        "Implementation gate requires focused package tests, bun run test, bun run validate, bun run check:schema-upgrades, and manual console create/edit/select/preview/start/detail/resume/delete coverage for JSON and multipart Start paths."
+      ],
+      "technicalNotes": "Follow Console UX Run detail at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:429-438, Phase 7/8 at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:586-604, global acceptance at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:670-689, validation commands at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:691-747, and deployment/rollback notes at docs/superpowers/plans/2026-09-05-workflow-env-overlay.md:751-787. Modify packages/web/src/experiments/console/primitives/run.ts, RunDetailHeader.tsx, RunDetailPage.tsx, WorkflowEnvResolvedTable.tsx, docs-web API/authoring docs, generated files, and inventory. Depends on US-005, US-009, and US-010.",
+      "dependsOn": ["US-005", "US-009", "US-010"],
+      "priority": 11,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
