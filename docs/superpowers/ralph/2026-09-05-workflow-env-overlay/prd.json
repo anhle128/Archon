@@ -613,7 +613,8 @@
         "US-020"
       ],
       "priority": 29,
-      "passes": false
+      "passes": true,
+      "notes": "Implemented in iteration after US-028. Files: packages/core/src/orchestrator/orchestrator-agent.ts, packages/core/src/orchestrator/orchestrator-agent.test.ts. Inspect-before-parse; inspect-null ignores stale stored ENV; genuine continuation still fails closed."
     },
     {
       "id": "US-030",

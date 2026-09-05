@@ -1,5 +1,11 @@
 ## Codebase Patterns
 
+
+### Inspect before stored ENV parse (US-029)
+- **Where**: `packages/core/src/orchestrator/orchestrator-agent.ts` (`dispatchOrchestratorWorkflow` ENV gate)
+- **Pattern**: Every provisional continuation calls `inspectResumableRun` *before* `resolveContinuationDispatchEnvOverlay`. Inspect-null → `resolveFreshDispatchEnvOverlay(request|undefined)` and ignore stale `metadata.envOverlay` (malformed/incompatible included). Genuine continuation alone parses the run-owned snapshot. `workflow.env_overlay_prepared.continuing` is `isGenuineContinuation`, never bare `willContinueExistingRun`.
+- **Example**: paused + inspect-null + `{ broken: true }` stored → fresh YAML/request; paused + inspect non-null + same stored → fail closed pre-isolation
+
 ### Strict present optional ENV fields (US-028)
 - **Where**: `packages/web/src/experiments/console/primitives/run.ts` (`parseRunEnvOverlay` / `readResolvedRow`)
 - **Pattern**: Absent optional keys stay optional; *present* wrong types/values fail the whole overlay (`null`). Unexpected top-level or resolved-row keys fail closed via `Record<string, true>` allowlists. Thinking accepts only adaptive|enabled|disabled (string shorthand or exact object; enabled budgetTokens positive int).
@@ -847,5 +853,29 @@
 - Static key allowlists as `Record<string, true>` (not `Set`) and `if (!allowed[key])` avoid the unnecessary boolean-literal-compare lint.
 - `check:schema-upgrades` needs `psql` on PATH (`/opt/homebrew/opt/libpq/bin`) even when Postgres is already accepting on 127.0.0.1:5432.
 - Full-repo eslint can OOM under default Node heap; `NODE_OPTIONS=--max-old-space-size=8192` unblocks lint when needed.
+
+---
+
+## 2026-09-05 — US-029: Continuation decided before stored ENV parsing
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/orchestrator/orchestrator-agent.ts` — always inspect provisional continuations before parsing/logging stored envOverlay; inspect-null uses fresh request/YAML; genuine-only parse; continuing flag from isGenuineContinuation
+- `packages/core/src/orchestrator/orchestrator-agent.test.ts` — inspect-null malformed YAML/request, inspect-null incompatible stored, genuine malformed fail-before-gates control; strengthened prior malformed control
+
+**Acceptance criteria verified**:
+- [x] inspect-null + malformed stored without request ENV starts fresh on YAML
+- [x] inspect-null + malformed stored with valid request candidate starts fresh with that candidate
+- [x] inspect-null + stored overlay incompatible with current YAML ignores stale stored row
+- [x] genuine continuation + malformed stored fails before conversation mutation, isolation, and resume CAS
+- [x] dispatch inspects every provisional continuation before parse/apply/log; inspect-null follows fresh path
+- [x] resumeWorkflowRun/hydrate remains after conversation+isolation; mutable ENV table not queried
+- [x] no env_overlay_prepared with continuing:true for inspect-null; no prompt/bash body leakage
+- [x] Focused verification: `cd packages/core && bun test src/orchestrator/env-overlay-dispatch.test.ts && bun test src/orchestrator/orchestrator-agent.test.ts` (8 + 253 pass)
+
+**Learnings**:
+- Calling resolveContinuationDispatchEnvOverlay before inspect made empty paused runs inherit corrupt metadata and block fresh starts.
+- willContinueExistingRun is only "provisional continuation candidate" — not proof of genuine resume; logging continuing must use inspect result.
+- Inspect-null with a request ENV still validates the request pre-isolation (US-012 hydrate-null guarantee preserved).
 
 ---
