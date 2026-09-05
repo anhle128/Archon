@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMockLogger } from '../test/mocks/logger';
@@ -82,6 +82,8 @@ describe('captureRunEndGitSnapshot v1', () => {
     await captureRunEndGitSnapshot(context({ workingPath, outputRoot }));
     expect(readdirSync(outputRoot)).toEqual(['keep.txt']);
     expect(readdirSync(workingPath)).toEqual(['README.md']);
+    expect(readFileSync(join(outputRoot, 'keep.txt'), 'utf8')).toBe('keep');
+    expect(readFileSync(join(workingPath, 'README.md'), 'utf8')).toBe('hello');
     const skip = infoEventCalls('git_snapshot.capture_skipped')[0];
     expect(skip?.[0]).toEqual({
       workflowRunId: 'run-1',

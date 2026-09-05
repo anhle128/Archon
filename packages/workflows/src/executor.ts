@@ -1274,6 +1274,11 @@ function isGitSnapshotTerminalStatus(
   return status === 'completed' || status === 'failed' || status === 'cancelled';
 }
 
+const safeGitSnapshotLogError = Object.freeze({
+  type: 'GitSnapshotFailure',
+  message: 'Run-end git snapshot failed; details redacted',
+});
+
 /**
  * CAP-8 run-end seam. Fail-open: never throw, never fail the run, never log paths.
  * Invoked only after the keep-awake finally backstop so a leftover running row
@@ -1287,8 +1292,11 @@ async function invokeRunEndGitSnapshot(deps: WorkflowDeps, runId: string): Promi
   let run: WorkflowRun | null;
   try {
     run = await deps.store.getWorkflowRun(runId);
-  } catch (err) {
-    getLog().error({ err: err as Error, workflowRunId: runId }, 'workflow.git_snapshot_failed');
+  } catch {
+    getLog().error(
+      { err: safeGitSnapshotLogError, workflowRunId: runId },
+      'workflow.git_snapshot_failed'
+    );
     return;
   }
   if (!run || !isGitSnapshotTerminalStatus(run.status)) {
@@ -1304,9 +1312,9 @@ async function invokeRunEndGitSnapshot(deps: WorkflowDeps, runId: string): Promi
       status,
     });
     getLog().info({ workflowRunId: runId, status }, 'workflow.git_snapshot_completed');
-  } catch (err) {
+  } catch {
     getLog().error(
-      { err: err as Error, workflowRunId: runId, status },
+      { err: safeGitSnapshotLogError, workflowRunId: runId, status },
       'workflow.git_snapshot_failed'
     );
   }
@@ -2011,6 +2019,7 @@ export async function executeWorkflow(
   // best-effort semantics). Placed HERE, not at function top, so the
   // early-return validation paths above never leak an unpaired acquire; the
   // matching release is the first statement of this try's finally.
+  let terminalChildForParentResume: WorkflowRun | null = null;
   keepAwake.acquire();
   try {
     getLog().info(
@@ -2276,27 +2285,10 @@ export async function executeWorkflow(
         finalStatus.status === 'failed' ||
         finalStatus.status === 'cancelled')
     ) {
-      await maybeResumeParentRun(
-        deps,
-        platform,
-        conversationId,
-        conversationDbId,
-        finalStatus,
-        // The parent resumes mid-DAG and may still have isolated sub-run nodes ahead
-        // of it; without this it would fail them for a missing resolver the surface
-        // did inject. Same resolver the child ran with — it is codebase-bound and the
-        // child shares the parent's codebase.
-        resolveChildIsolation
-      ).catch((err: unknown) => {
-        getLog().error(
-          {
-            err: err as Error,
-            childRunId: workflowRun.id,
-            parentRunId: finalStatus.parent_run_id,
-          },
-          'workflow.parent_auto_resume_failed'
-        );
-      });
+      // Defer parent re-entry until this child's finally has captured its run-end
+      // snapshot. Shared-checkout parents may mutate the same path as soon as they
+      // resume, so resuming here would let the child's hook observe parent state.
+      terminalChildForParentResume = finalStatus;
     }
     if (finalStatus?.status === 'completed') {
       return { success: true, workflowRunId: workflowRun.id, summary: dagSummary };
@@ -2430,6 +2422,30 @@ export async function executeWorkflow(
           });
       }
       await invokeRunEndGitSnapshot(deps, runId);
+      if (terminalChildForParentResume) {
+        const childRun = terminalChildForParentResume;
+        await maybeResumeParentRun(
+          deps,
+          platform,
+          conversationId,
+          conversationDbId,
+          childRun,
+          // The parent resumes mid-DAG and may still have isolated sub-run nodes ahead
+          // of it; without this it would fail them for a missing resolver the surface
+          // did inject. Same resolver the child ran with — it is codebase-bound and the
+          // child shares the parent's codebase.
+          resolveChildIsolation
+        ).catch((err: unknown) => {
+          getLog().error(
+            {
+              err: err as Error,
+              childRunId: runId,
+              parentRunId: childRun.parent_run_id,
+            },
+            'workflow.parent_auto_resume_failed'
+          );
+        });
+      }
     }
   }
 }

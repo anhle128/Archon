@@ -43,6 +43,7 @@ A later writer can fill that same hook with an idempotent temp+rename snapshot u
 - Modify `packages/workflows/src/deps.ts` to add `GitSnapshotContext` and optional `WorkflowDeps.onRunEndGitSnapshot`.
 - Modify `packages/workflows/src/executor.ts` to call the hook fail-open from `executeWorkflow`'s keep-awake `finally` after the existing running-status backstop.
 - Modify `packages/workflows/src/executor.test.ts` to cover terminal invokes, nonterminal and pre-DAG skips, missing rows and hooks, hook and lookup failures, successful and failed backstops, named events, and log privacy.
+- Modify `packages/workflows/src/subrun.test.ts` to prove a terminal child snapshots before it resumes a parent that shares its checkout.
 - Create `packages/core/src/workflows/git-snapshot.ts` as the stable writer entry point whose v1 behavior is a no-op.
 - Create `packages/core/src/workflows/git-snapshot.test.ts` for missing paths, checkout-gone, no-write, repeat-call idempotence, named skip logs, and log privacy.
 - Modify `packages/core/src/workflows/store-adapter.ts` to inject `captureRunEndGitSnapshot` from `createWorkflowDeps()`.
@@ -125,7 +126,7 @@ Log events (no paths):
 
 - Engine start: `workflow.git_snapshot_started` with `{ workflowRunId, status }`
 - Engine success: `workflow.git_snapshot_completed` with `{ workflowRunId, status }`
-- Engine failure: `workflow.git_snapshot_failed` with `{ err, workflowRunId }` and optional `status`
+- Engine failure: `workflow.git_snapshot_failed` with a fixed, stack-free, path-free `err` marker, `workflowRunId`, and optional `status`; never serialize or inspect the caught value
 - Core skip: `git_snapshot.capture_skipped` with `{ workflowRunId, reason }` where `reason` is `'missing_working_path'`, `'checkout_gone'`, or `'v1_noop'`; the `'v1_noop'` payload also includes `status`
 
 ### v1 no-op writer
@@ -150,6 +151,7 @@ The snapshot filename and wire format remain intentionally undecided until the l
 - Modify: `packages/workflows/src/deps.ts`
 - Modify: `packages/workflows/src/executor.ts`
 - Test: `packages/workflows/src/executor.test.ts`
+- Test: `packages/workflows/src/subrun.test.ts`
 
 **Interfaces:**
 
@@ -540,6 +542,11 @@ function isGitSnapshotTerminalStatus(
   return status === 'completed' || status === 'failed' || status === 'cancelled';
 }
 
+const safeGitSnapshotLogError = Object.freeze({
+  type: 'GitSnapshotFailure',
+  message: 'Run-end git snapshot failed; details redacted',
+});
+
 /**
  * CAP-8 run-end seam. Fail-open: never throw, never fail the run, never log paths.
  * Invoked only after the keep-awake finally backstop so a leftover running row
@@ -553,8 +560,11 @@ async function invokeRunEndGitSnapshot(deps: WorkflowDeps, runId: string): Promi
   let run: WorkflowRun | null;
   try {
     run = await deps.store.getWorkflowRun(runId);
-  } catch (err) {
-    getLog().error({ err: err as Error, workflowRunId: runId }, 'workflow.git_snapshot_failed');
+  } catch {
+    getLog().error(
+      { err: safeGitSnapshotLogError, workflowRunId: runId },
+      'workflow.git_snapshot_failed'
+    );
     return;
   }
   if (!run || !isGitSnapshotTerminalStatus(run.status)) {
@@ -570,8 +580,11 @@ async function invokeRunEndGitSnapshot(deps: WorkflowDeps, runId: string): Promi
       status,
     });
     getLog().info({ workflowRunId: runId, status }, 'workflow.git_snapshot_completed');
-  } catch (err) {
-    getLog().error({ err: err as Error, workflowRunId: runId, status }, 'workflow.git_snapshot_failed');
+  } catch {
+    getLog().error(
+      { err: safeGitSnapshotLogError, workflowRunId: runId, status },
+      'workflow.git_snapshot_failed'
+    );
   }
 }
 ```
@@ -600,6 +613,8 @@ Then replace the keep-awake `finally` body so the hook runs after the backstop, 
 Keep the existing comments above `keepAwake.release()` and the backstop.
 Do not `stat` `working_path` in the engine.
 Do not import `existsSync` for this feature even though `executor.ts` already imports it for other work.
+
+If the terminal run is a child eligible for parent auto-resume, defer `maybeResumeParentRun()` until after `invokeRunEndGitSnapshot()` finishes. A shared-checkout parent can mutate the same working tree immediately on re-entry, so the child's snapshot boundary must occur first. Lock this ordering down in `packages/workflows/src/subrun.test.ts`.
 
 Gotcha: `makeStore().getWorkflowRun` defaults to `status: 'completed'`.
 Failed/cancelled/paused tests must override both `getWorkflowRun` and `getWorkflowRunStatus` so the backstop and the hook see the same status.
@@ -1056,6 +1071,7 @@ EOF
 | Test file | Cases | Validates |
 | --- | --- | --- |
 | `packages/workflows/src/executor.test.ts` | completed / failed / cancelled invoke; paused / absent / missing-row skip; hook and row-read failures; successful and failed backstops; named events; no path logs | FR9 seam, NFR3, NFR5, run-end trigger |
+| `packages/workflows/src/subrun.test.ts` | gated child snapshots before recursive parent auto-resume on the shared checkout | per-run run-end boundary |
 | `packages/core/src/workflows/git-snapshot.test.ts` | null / empty `workingPath`; checkout gone; existing checkout preserves both trees; repeated terminal calls; named skip reasons; no path logs | v1 no-op write, checkout-gone, idempotence, NFR5 |
 | `packages/core/src/workflows/store-adapter.test.ts` | `createWorkflowDeps()` exposes a callable hook | injection like other optional deps |
 
@@ -1073,6 +1089,7 @@ EOF
 - [ ] Checkout directory already gone: core no-op skips and writes nothing.
 - [ ] Hook called twice (retry / second terminal pass): still no files under `output_root`.
 - [ ] Child `workflow:` run: covered by each child `executeWorkflow` finally; no extra parent wiring.
+- [ ] Terminal child with parent auto-resume: child hook finishes before the parent can re-enter and mutate the shared checkout.
 - [ ] Logs never include `workingPath` or `outputRoot`.
 - [ ] No `/git/` routes and no new tables.
 
@@ -1081,19 +1098,21 @@ EOF
 ## Validation Commands
 
 1. `(cd packages/workflows && bun test src/executor.test.ts)`
-2. `(cd packages/core && bun test src/workflows/git-snapshot.test.ts)`
-3. `(cd packages/core && bun test src/workflows/store-adapter.test.ts)`
-4. `(cd packages/workflows && bun run type-check)`
-5. `(cd packages/core && bun run type-check)`
-6. `git diff --name-only "$(git merge-base HEAD dev)" HEAD -- packages/server packages/web packages/git migrations/000_combined.sql packages/core/src/db/adapters/sqlite.ts` produces no output.
-7. `git diff --check`
-8. `bun run validate`
+2. `(cd packages/workflows && bun test src/subrun.test.ts)`
+3. `(cd packages/core && bun test src/workflows/git-snapshot.test.ts)`
+4. `(cd packages/core && bun test src/workflows/store-adapter.test.ts)`
+5. `(cd packages/workflows && bun run type-check)`
+6. `(cd packages/core && bun run type-check)`
+7. `git diff --name-only "$(git merge-base HEAD dev)" HEAD -- packages/server packages/web packages/git migrations/000_combined.sql packages/core/src/db/adapters/sqlite.ts` produces no output.
+8. `git diff --check`
+9. `bun run validate`
 
 ## Acceptance Criteria
 
 - [ ] `WorkflowDeps` has optional `onRunEndGitSnapshot(context: GitSnapshotContext): Promise<void>`.
 - [ ] `GitSnapshotContext` contains `runId`, `workingPath`, `outputRoot`, and only terminal `completed | failed | cancelled` status values, with the path fields mapped from the run row rather than `cwd`.
 - [ ] `executeWorkflow` re-reads the run row and calls the hook from the keep-awake `finally` after the running-status backstop.
+- [ ] A terminal child's hook completes before recursive parent auto-resume can mutate a shared checkout.
 - [ ] `paused`, `pending`, missing, and still-`running` rows do not invoke the hook.
 - [ ] Early returns before `keepAwake.acquire()` do not invoke the hook.
 - [ ] v1 implementation writes no name-status, diffs, `A`/`D` content, or `git log`.
@@ -1117,6 +1136,7 @@ EOF
 | Someone implements the snapshot write in this story | Medium | High | Task 2 asserts `outputRoot` stays empty |
 | `mock.module('@archon/paths')` pollutes other core tests | Medium | High | `git-snapshot.test.ts` gets its own `bun test` invocation |
 | Backstop and hook race on status | Low | Medium | Hook re-reads the run row after `failWorkflowRun` |
+| Parent auto-resume mutates a shared checkout before the child snapshot | Low | High | Defer parent re-entry until after the child's hook and cover the order in `subrun.test.ts` |
 | A failed backstop leaves the row `running` | Low | High | Terminal guard skips the hook rather than inventing status; focused test locks this down |
 
 ## NOT Building
