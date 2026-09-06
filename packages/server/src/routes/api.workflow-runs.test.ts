@@ -632,9 +632,37 @@ const mockResolvePendingInteraction = mock(
   }
 );
 
+const mockConfirmPendingPermission = mock(
+  async (
+    _input: unknown
+  ): Promise<{
+    interaction: MockPendingInteractionRow;
+    resumed: boolean;
+    remaining_pending: number;
+  }> => ({
+    interaction: {
+      id: 'pending-permission',
+      workflow_run_id: 'run-permission',
+      node_id: 'permission-node',
+      tool_use_id: 'tool-permission',
+      kind: 'permission',
+      status: 'answered',
+      envelope: {},
+      answer: { intent: 'allow-once' },
+      provider_session_id: 'session-permission',
+      created_at: new Date('2026-09-07T00:00:00.000Z'),
+      resolved_at: new Date('2026-09-07T00:00:01.000Z'),
+      resolved_by: 'user-permission',
+    },
+    resumed: false,
+    remaining_pending: 1,
+  })
+);
+
 mock.module('@archon/core/db/workflow-pending-interactions', () => ({
   listPendingInteractions: mockListPendingInteractions,
   resolvePendingInteraction: mockResolvePendingInteraction,
+  confirmPendingPermission: mockConfirmPendingPermission,
   PendingInteractionNotFoundError,
   PendingInteractionAlreadyResolvedError,
   PendingInteractionRunNotPausedError,

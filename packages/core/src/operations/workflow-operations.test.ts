@@ -71,9 +71,26 @@ const mockResolvePendingInteraction = mock(() =>
     remaining_pending: 1,
   })
 );
+const INTENT_SENTINEL = 'DO_NOT_LOG_PERMISSION_INTENT';
+const mockConfirmPendingPermission = mock(() =>
+  Promise.resolve({
+    interaction: makePendingInteraction({
+      kind: 'permission',
+      status: 'answered',
+      envelope: {},
+      answer: { intent: INTENT_SENTINEL },
+      resolved_at: new Date(),
+      resolved_by: 'starter-1',
+    }),
+    resumed: false,
+    remaining_pending: 1,
+  })
+);
+
 mock.module('../db/workflow-pending-interactions', () => ({
   listPendingInteractions: mockListPendingInteractions,
   resolvePendingInteraction: mockResolvePendingInteraction,
+  confirmPendingPermission: mockConfirmPendingPermission,
 }));
 
 const mockEmit = mock((_event: unknown) => undefined);
@@ -108,6 +125,10 @@ const {
   AskHumanRunNotFoundError,
   AskHumanAuthenticationRequiredError,
   AskHumanForbiddenError,
+  confirmPermission,
+  PermissionAuthenticationRequiredError,
+  PermissionForbiddenError,
+  PermissionRunNotFoundError,
 } = await import('./workflow-operations');
 
 // ---------------------------------------------------------------------------
@@ -1139,6 +1160,142 @@ describe('answerAskHuman', () => {
         actorUserId: starterId,
       })
     ).rejects.toBe(persistenceError);
+    expect(mockLogger.info).not.toHaveBeenCalled();
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+});
+
+describe('confirmPermission', () => {
+  const starterId = 'starter-1';
+  const body = { intent: INTENT_SENTINEL } as const;
+
+  beforeEach(() => {
+    mockGetWorkflowRun.mockReset();
+    mockConfirmPendingPermission.mockReset();
+    mockConfirmPendingPermission.mockResolvedValue({
+      interaction: makePendingInteraction({
+        kind: 'permission',
+        status: 'answered',
+        envelope: {},
+        answer: body,
+        resolved_at: new Date(),
+        resolved_by: starterId,
+      }),
+      resumed: false,
+      remaining_pending: 1,
+    });
+    mockEmit.mockClear();
+    mockLogger.error.mockClear();
+    mockLogger.info.mockClear();
+  });
+
+  test('requires an authenticated actor before persistence', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ user_id: starterId }));
+    await expect(
+      confirmPermission({ runId: 'run-1', callId: 'tool-1', body, actorUserId: undefined })
+    ).rejects.toBeInstanceOf(PermissionAuthenticationRequiredError);
+    expect(mockConfirmPendingPermission).not.toHaveBeenCalled();
+  });
+
+  test.each([null, 'different-user'])('rejects a run not owned by the actor: %s', async owner => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ user_id: owner }));
+    await expect(
+      confirmPermission({ runId: 'run-1', callId: 'tool-1', body, actorUserId: starterId })
+    ).rejects.toBeInstanceOf(PermissionForbiddenError);
+    expect(mockConfirmPendingPermission).not.toHaveBeenCalled();
+  });
+
+  test('throws the Permission not-found error when the run is missing', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(null);
+    await expect(
+      confirmPermission({ runId: 'missing', callId: 'tool-1', body, actorUserId: starterId })
+    ).rejects.toBeInstanceOf(PermissionRunNotFoundError);
+  });
+
+  test('redacts the database lookup error message', async () => {
+    mockGetWorkflowRun.mockRejectedValueOnce(new Error(INTENT_SENTINEL));
+    await expect(
+      confirmPermission({ runId: 'run-1', callId: 'tool-1', body, actorUserId: starterId })
+    ).rejects.toThrow('Failed to look up workflow run run-1');
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      { errorName: 'Error', runId: 'run-1' },
+      'operations.workflow_permission_lookup_failed'
+    );
+    expect(loggerAndEmitPayloads()).not.toContain(INTENT_SENTINEL);
+  });
+
+  test('passes the call id and starter id to persistence exactly once', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ user_id: starterId }));
+    await confirmPermission({ runId: 'run-1', callId: 'tool-1', body, actorUserId: starterId });
+    expect(mockConfirmPendingPermission).toHaveBeenCalledTimes(1);
+    expect(mockConfirmPendingPermission).toHaveBeenCalledWith({
+      workflow_run_id: 'run-1',
+      tool_use_id: 'tool-1',
+      answer: body,
+      resolved_by: starterId,
+    });
+  });
+
+  test('logs and emits only after the persistence promise commits', async () => {
+    const run = makePausedRun({ user_id: starterId });
+    const interaction = makePendingInteraction({
+      kind: 'permission',
+      status: 'answered',
+      envelope: {},
+      answer: body,
+      resolved_at: new Date(),
+      resolved_by: starterId,
+    });
+    mockGetWorkflowRun.mockResolvedValueOnce(run);
+    let finish!: (value: {
+      interaction: PendingInteraction;
+      resumed: boolean;
+      remaining_pending: number;
+    }) => void;
+    mockConfirmPendingPermission.mockReturnValueOnce(
+      new Promise(resolve => {
+        finish = resolve;
+      })
+    );
+    const pending = confirmPermission({
+      runId: 'run-1',
+      callId: 'tool-1',
+      body,
+      actorUserId: starterId,
+    });
+    await Promise.resolve();
+    expect(mockLogger.info).not.toHaveBeenCalled();
+    expect(mockEmit).not.toHaveBeenCalled();
+
+    finish({ interaction, resumed: true, remaining_pending: 0 });
+    const result = await pending;
+
+    expect(result).toEqual({ run, interaction, resumed: true, remainingPending: 0 });
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      {
+        workflowRunId: 'run-1',
+        nodeId: 'ask-node',
+        toolUseId: 'tool-1',
+        resumed: true,
+      },
+      'workflow.permission_resolved'
+    );
+    expect(mockEmit).toHaveBeenCalledWith({
+      type: 'interaction_resolved',
+      runId: 'run-1',
+      nodeId: 'ask-node',
+      resumed: true,
+    });
+    expect(loggerAndEmitPayloads()).not.toContain(INTENT_SENTINEL);
+  });
+
+  test('propagates a persistence error without logging or emitting', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ user_id: starterId }));
+    const error = new Error('persistence failed');
+    mockConfirmPendingPermission.mockRejectedValueOnce(error);
+    await expect(
+      confirmPermission({ runId: 'run-1', callId: 'tool-1', body, actorUserId: starterId })
+    ).rejects.toBe(error);
     expect(mockLogger.info).not.toHaveBeenCalled();
     expect(mockEmit).not.toHaveBeenCalled();
   });
