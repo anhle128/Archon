@@ -1,5 +1,10 @@
 ## Codebase Patterns
 
+### Claude Ask resume uses a provider-owned prompt and never forks
+- **Where**: `packages/providers/src/claude/provider.ts`
+- **Pattern**: `buildClaudeAskResumePrompt` formats answer/decline blocks and a continuation instruction. Non-empty `resumeInteractions` requires `resumeSessionId`, forces `forkSession: false`, skips subprocess retries, logs only `{ errorClass }` on `claude.ask_resume_failed`, and replaces isError `errors` with `Could not resume the AskHuman session`.
+- **Example**: `const queryPrompt = hasAskResume && resumeInteractions ? buildClaudeAskResumePrompt(resumeInteractions) : prompt;`
+
 ### Ask re-entry maps rows in runLayers; first stream pass only
 - **Where**: `packages/workflows/src/dag-executor.ts`
 - **Pattern**: `executeDagWorkflow` loads `listPendingInteractions` once, rejects any `pending` row, and fails on answered Ask `node_id`s missing from static DAG step names (`<loopGroupId>.<bodyNodeId>` included). `mapAnsweredAskResume` sorts by `created_at` then `id`, parses `askAnswerBodySchema`, maps decline to `{ payload: 'declined', declined: true }`, and requires one shared non-empty `provider_session_id`. Command/prompt/loop get `resumeInteractions` only on the first stream pass of the first resumed iteration, with `forkSession: false` and zero engine retries. Resume failures log `workflow.ask_resume_failed` with ids only and write `Could not resume the AskHuman session`.
@@ -271,5 +276,26 @@
 - Pass answered Ask rows through RunLayersContext into loop_group body contexts; map per node with stepNamePrefix + node.id.
 - Strip resumeInteractions on structured-output reasks by deleting the field on a copied SendQueryOptions object.
 - Provider resume throws must not go through getLog().error({ err }) or logNodeError(err.message); those serialize answer sentinels.
+
+---
+
+## 2026-09-07 — US-010: Continue Claude after AskHuman answers
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/claude/provider.ts` — export `buildClaudeAskResumePrompt`; Ask-resume branch forces no-fork, provider prompt, no subprocess retry, sanitized logs and isError errors
+- `packages/providers/src/claude/provider.test.ts` — builder, resume options, throw sanitization, isError mapping, non-Ask fork regression
+
+**Acceptance criteria verified**:
+- [x] `buildClaudeAskResumePrompt` formats answers or decline text and ends with continuation instruction
+- [x] When resumeInteractions is present, Claude requires resumeSessionId, sets options.resume, forces forkSession false, and passes the generated resume prompt instead of the executor prompt
+- [x] Resume failures bypass Claude subprocess retry, log safe error class without raw err/stderrContext, and map isError terminal result to ['Could not resume the AskHuman session'] while preserving usage/token/cost
+- [x] Non-Ask Claude queries retain existing prompt, fork, classification, and retry behavior
+- [x] bun test src/claude/provider.test.ts (154 pass) and bun test src/claude/askhuman-resume-spike.test.ts (7 pass) in packages/providers
+
+**Learnings**:
+- Override `options.stderr` on the Ask-resume path so subprocess stderr never logs answer sentinels before the catch.
+- Do not pass the raw SDK error as `cause`; Pino may serialize it later.
+- Empty `resumeInteractions` is non-Ask; only a non-empty array takes the resume branch.
 
 ---
