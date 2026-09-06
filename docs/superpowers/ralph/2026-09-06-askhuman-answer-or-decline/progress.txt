@@ -1,5 +1,10 @@
 ## Codebase Patterns
 
+### Ask hydrate skips a second resume CAS
+- **Where**: `packages/workflows/src/executor.ts`
+- **Pattern**: `inspectResumableRun` lists pending interactions after the DAG snapshot. Pending Ask rows throw `Answer or decline the Ask before resuming run <id>` and never claim. Answered Ask rows (`kind === 'ask' && status === 'answered'`) make a first-node run resumable via internal `hasAnsweredAsk`. `hydrateResumableRun` returns the candidate as `preCreatedRun` without `resumeWorkflowRun` only when `status === 'running' && hasAnsweredAsk`; failed/paused/cancelled still CAS.
+- **Example**: `const alreadyRunningFromAsk = candidate.status === 'running' && inspected.hasAnsweredAsk;`
+
 ### Ask answer route keeps real operations; auto-resume is ask-answer
 - **Where**: `packages/server/src/routes/api.ts`, `packages/server/src/routes/api.workflow-runs.test.ts`
 - **Pattern**: Import and decorate `askAnswerBodySchema.openapi('AskAnswerBody')`. Register POST `/api/workflows/runs/{runId}/ask/{requestId}/answer` via `registerOpenApiRoute`. Keep real `answerAskHuman`; mock `resolvePendingInteraction` plus typed pending errors on `@archon/core/db/workflow-pending-interactions`, and map `X-Archon-User` through `@archon/core/db/users`. `tryAutoResumeAfterGate(run, 'ask-answer', actorUserId)` only after `resumed === true`. Intermediate answers and non-web parents return 200 without dispatch.
@@ -216,5 +221,26 @@
 - Keep the real `answerAskHuman` operation under test; mock the DB CAS and users header mapping, not the operations module.
 - StrReplace on large files in this harness can truncate; patch with unique full-block replacement and assert the file grew.
 - `X-Archon-User` resolves through `findOrCreateUserByPlatformIdentity`; identity-map the header value to a deterministic user id in tests.
+
+---
+
+## 2026-09-07 — US-008: Hydrate operation-resumed AskHuman runs without second CAS
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/executor.ts` — inspect pending/answered Asks; skip resume CAS when already running with answered Ask
+- `packages/workflows/src/executor.test.ts` — first-node inspection, pending rejection, already-running hydrate, preserved failed/paused/cancelled CAS
+
+**Acceptance criteria verified**:
+- [x] inspectResumableRun inspects pending interactions; treats runs with zero completed nodes but answered Ask rows as resumable
+- [x] inspectResumableRun and hydrateResumableRun reject pending Ask rows with 'Answer or decline the Ask before resuming run <id>'
+- [x] hydrateResumableRun returns the candidate as preCreatedRun without calling store.resumeWorkflowRun when already running with answered Ask rows
+- [x] Existing failed, paused, and cancelled run resume behaviors remain intact
+- [x] bun test src/executor.test.ts in packages/workflows (122 pass)
+
+**Learnings**:
+- StrReplace on large files in this harness can truncate; patch with unique full-block replacement in Python and assert the file grew.
+- Do not return null for a pending Ask — orchestrator treats inspect-null as a fresh start. Throw the safe error instead.
+- Skip the resume CAS only for `running && hasAnsweredAsk`; a running candidate without answered Ask must still call resumeWorkflowRun.
 
 ---
