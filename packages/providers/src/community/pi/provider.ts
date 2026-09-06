@@ -10,6 +10,7 @@ import type { DefaultResourceLoader } from '@earendil-works/pi-coding-agent';
 import type { ThinkingLevel } from '@earendil-works/pi-ai';
 
 import type {
+  AskHumanControlError,
   IAgentProvider,
   MessageChunk,
   ProviderCapabilities,
@@ -736,9 +737,28 @@ export class PiProvider implements IAgentProvider {
     // In-process native tools (e.g. manage_run) via Pi customTools. Because
     // setting customTools forces noTools:'builtin' (dropping Pi's defaults), the
     // base tool set must be re-supplied alongside the native defs.
+    //
+    // AskHuman control errors must survive Pi's prompt-loop tool conversion:
+    // keep a mutable session ref (assigned after createAgentSession) and a
+    // branded-error slot, then rethrow the same instance after bridgeSession.
+    const askSessionRef: {
+      current?: { readonly sessionId: string; abort: () => unknown };
+    } = {};
+    let askControlError: AskHumanControlError | undefined;
     const nativeToolDefs =
       requestOptions?.nativeTools && requestOptions.nativeTools.length > 0
-        ? buildPiNativeToolDefinitions(requestOptions.nativeTools, piCodingAgent.defineTool)
+        ? buildPiNativeToolDefinitions(requestOptions.nativeTools, piCodingAgent.defineTool, {
+            sessionId: (): string | undefined => {
+              const sessionId = askSessionRef.current?.sessionId;
+              return typeof sessionId === 'string' && sessionId.trim() !== ''
+                ? sessionId
+                : undefined;
+            },
+            onControlError: (error: AskHumanControlError): void => {
+              askControlError = error;
+              void askSessionRef.current?.abort();
+            },
+          })
         : [];
     const baseTools =
       filteredTools ??
@@ -776,6 +796,7 @@ export class PiProvider implements IAgentProvider {
         ? { customTools: piCustomTools, noTools: 'builtin' as const }
         : {}),
     });
+    askSessionRef.current = session;
 
     // Extension models aren't in the static catalog — skip the fallback warning.
     if (modelFallbackMessage && model) {
@@ -873,13 +894,19 @@ export class PiProvider implements IAgentProvider {
         ),
         resumedOutcome(resumeSessionId, !resumeFailed)
       );
-      getLog().info({ piProvider: parsed.provider }, 'pi.prompt_completed');
     } catch (err) {
+      if (askControlError) {
+        throw askControlError;
+      }
       getLog().error({ err, piProvider: parsed.provider }, 'pi.prompt_failed');
       throw err;
     } finally {
       sem?.release();
     }
+    if (askControlError) {
+      throw askControlError;
+    }
+    getLog().info({ piProvider: parsed.provider }, 'pi.prompt_completed');
   }
 
   getType(): string {
