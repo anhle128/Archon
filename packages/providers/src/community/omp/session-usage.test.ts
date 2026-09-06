@@ -1433,7 +1433,9 @@ describe('US-033 recognize only exact OMP main transcripts', () => {
     const decoys = [
       `notes_${fx.sessionId}.jsonl`,
       `_${fx.sessionId}.jsonl`,
-      `2026-09-04T00:00:00.000Z_${fx.sessionId}.jsonl`,
+      // Colon timestamps are illegal Windows filenames; the predicate still
+      // rejects that shape in the name-only test above.
+      ...(process.platform === 'win32' ? [] : [`2026-09-04T00:00:00.000Z_${fx.sessionId}.jsonl`]),
       `2026-09-04T00-00-00Z_${fx.sessionId}.jsonl`,
       `2026-09-04_00-00-00-000Z_${fx.sessionId}.jsonl`,
     ];
@@ -1482,13 +1484,15 @@ describe('US-033 recognize only exact OMP main transcripts', () => {
       sessionHeader(fx.sessionId, fx.cwd),
       assistantLine({ model: 'decoy-bare', input: 88, output: 8, cost: 8 }),
     ]);
-    await writeTranscript(
-      path.join(fx.sessionDir, `2026-09-04T00:00:00.000Z_${fx.sessionId}.jsonl`),
-      [
-        sessionHeader(fx.sessionId, fx.cwd),
-        assistantLine({ model: 'decoy-colon', input: 1, output: 1, cost: 0.01 }),
-      ]
-    );
+    if (process.platform !== 'win32') {
+      await writeTranscript(
+        path.join(fx.sessionDir, `2026-09-04T00:00:00.000Z_${fx.sessionId}.jsonl`),
+        [
+          sessionHeader(fx.sessionId, fx.cwd),
+          assistantLine({ model: 'decoy-colon', input: 1, output: 1, cost: 0.01 }),
+        ]
+      );
+    }
 
     const found = await findMainTranscriptPath(fx.sessionDir, fx.sessionId);
     expect(found).toBe(fx.mainPath);
