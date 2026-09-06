@@ -97,8 +97,8 @@
         "US-004"
       ],
       "priority": 5,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 5. Files: packages/web/src/lib/api.ts, packages/web/src/lib/api.git-changes.test.ts, packages/web/src/lib/api.generated.d.ts."
     },
     {
       "id": "US-006",
@@ -116,8 +116,8 @@
         "US-005"
       ],
       "priority": 6,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 6. Files: packages/web/package.json, bun.lock, packages/web/src/components/workflows/source-control/git-hunk-adapter.ts, git-hunk-adapter.test.ts, syntax-highlight.tsx, syntax-highlight.test.tsx."
     },
     {
       "id": "US-007",
@@ -133,8 +133,8 @@
       "technicalNotes": "Plan Task 7 (plan:1642-1747). Current panel/list boundary is packages/web/src/components/workflows/source-control/source-control-panel.tsx:8-140. Create changed-files-list.tsx; update changed-file-row.tsx, source-control-panel.tsx/test.tsx, and the established component-integration/source-control-tab.test.tsx process. Defaults: Uncommitted changes, sc-changes-file, null selected path, no-op open callback.",
       "dependsOn": [],
       "priority": 7,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 7. Files: packages/web/src/components/workflows/source-control/changed-files-list.tsx, changed-file-row.tsx, source-control-panel.tsx/test.tsx, packages/web/src/component-integration/source-control-tab.test.tsx."
     },
     {
       "id": "US-008",
@@ -154,8 +154,8 @@
         "US-006"
       ],
       "priority": 8,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 8. Files: packages/web/src/components/workflows/source-control/source-control-diff.css, file-viewer.tsx, file-viewer.test.tsx."
     },
     {
       "id": "US-009",
@@ -177,8 +177,8 @@
         "US-008"
       ],
       "priority": 9,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 9. Files: packages/web/src/components/workflows/source-control/source-control-split.tsx, use-stacked-viewport.ts, source-control-tab.tsx, packages/web/src/component-integration/source-control-tab.test.tsx."
     },
     {
       "id": "US-010",
@@ -204,8 +204,8 @@
         "US-009"
       ],
       "priority": 10,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 10. Files: _bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml."
     }
   ]
 }

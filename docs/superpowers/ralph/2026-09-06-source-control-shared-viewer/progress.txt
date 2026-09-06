@@ -1,5 +1,70 @@
 ## Codebase Patterns
 
+### bun run lint can OOM without extra heap
+- **Where**: root `package.json` `lint` / `validate`
+- **Pattern**: `bun x eslint . --cache --max-warnings 0` can abort with V8 heap OOM (~4 GB) on a cold cache. Retry with `NODE_OPTIONS=--max-old-space-size=8192`. Not a source defect.
+- **Example**: `NODE_OPTIONS=--max-old-space-size=8192 bun run validate`
+
+### lint-staged still lints component-integration tests
+- **Where**: `packages/web/src/component-integration/source-control-tab.test.tsx`
+- **Pattern**: The web package's ESLint ignore for tests does not skip lint-staged (`eslint --no-warn-ignored`). Empty matchMedia/ResizeObserver stubs need `return undefined`, and `RequestInfo` must be narrowed before stringifying.
+- **Example**: `if (typeof input === 'string') return input; if (input instanceof URL) return input.href; return input.url;`
+
+### react-resizable-panels v4 sizes are percentage strings
+- **Where**: `packages/web/src/components/workflows/source-control/source-control-split.tsx`
+- **Pattern**: Numeric sizes are pixels. Pass `"30%"`/`"70%"` strings. Group `orientation="vertical"` stacks list above viewer (`flex-direction: column`); `"horizontal"` is the 900px+ row. Separator has `role="separator"` and `tabIndex={0}`.
+- **Example**: `<ResizablePanel defaultSize="30%" minSize="20%" maxSize="70%">`
+
+### Reload waits for the selected-file candidate before exposing stale
+- **Where**: `packages/web/src/components/workflows/source-control/source-control-tab.tsx`
+- **Pattern**: After the first snapshot, only the Reload callback dispatches `received`. If the selected path remains, finish `loadViewerFile` first, then batch list dispatch and pending-viewer update in the same turn. Stale is list pending OR pending viewer. Same Changes revision never proves content unchanged.
+- **Example**: `dispatch({ type: 'received', snapshot: candidate }); setPendingViewer({ file, state: loaded });`
+
+### happy-dom Document is not lib.dom Document
+- **Where**: `packages/web/src/components/workflows/source-control/file-viewer.test.tsx`
+- **Pattern**: `Window` from happy-dom does not satisfy TypeScript `Document`. Alias `InstanceType<typeof Window>['document']` for parse helpers.
+- **Example**: `type HappyDocument = InstanceType<typeof Window>['document']`
+
+### Split diff panes hide the opposite columns
+- **Where**: `packages/web/src/components/workflows/source-control/source-control-diff.css`
+- **Pattern**: Both trees use `viewType="split"` plus `hunksForSide`. Hide before cols 3–4 and after cols 1–2 at `col` and `.diff-line >` so normal old/new line numbers stay correct.
+- **Example**: `.sc-diff-before col:nth-child(n + 3), .sc-diff-before .diff-line > :nth-child(n + 3)`
+
+### happy-dom End-scroll needs listbox scrollHeight
+- **Where**: `packages/web/src/component-integration/source-control-tab.test.tsx`
+- **Pattern**: TanStack Virtual's last-index `align: "auto"` uses `scrollHeight - clientHeight`. Stub `offsetHeight` 280 before render so fewer than 200 options mount, then after mount patch the listbox instance `clientHeight`/`scrollHeight`/`scrollTop`/`scrollTo` (prototype `scrollTop` is shadowed). Dispatch `scroll` from `scrollTo`.
+- **Example**: `listbox.scrollHeight = 200 * 28; listbox.clientHeight = 280;` then End mounts `file-199.ts`
+
+### highlight.js splits escaped HTML tags
+- **Where**: `packages/web/src/components/workflows/source-control/syntax-highlight.test.tsx`
+- **Pattern**: `highlightAuto('<img ...>')` emits `&lt;<span class="hljs-name">img</span>`. Assert escaped text (`&lt;`) and no real `<img` element; do not require a contiguous `&lt;img` substring.
+- **Example**: `expect(html).toContain('&lt;'); expect(html).not.toContain('<img');`
+
+### react-diff-view 3.3.3 ChangeData is a disjoint union
+- **Where**: `packages/web/src/components/workflows/source-control/git-hunk-adapter.ts`
+- **Pattern**: Map insert/delete to `lineNumber` + one boolean flag, and normal to `oldLineNumber`/`newLineNumber` + `isNormal`. Do not put all three flags on every member. Side filter drops only the opposite insert/delete type and omits empty hunks.
+- **Example**: `toChangeData({ type: 'insert', content: 'new', newLine: 2 })` → `{ type: 'insert', content: 'new', lineNumber: 2, isInsert: true }`
+
+### Generate OpenAPI types from the worktree listen port
+- **Where**: `packages/web/package.json` `generate:types`
+- **Pattern**: The script hardcodes `localhost:3090`. That port is often a different checkout. Start this worktree with an explicit free `PORT`, then run `openapi-typescript http://127.0.0.1:<port>/api/openapi.json`. Do not hand-edit `api.generated.d.ts`. Blank adapter tokens so the typegen server does not poll Slack/Telegram.
+- **Example**: `PORT=3791 bun run dev:server` then `bun x openapi-typescript http://127.0.0.1:3791/api/openapi.json -o src/lib/api.generated.d.ts`
+
+### bun lib tests need a window origin stub
+- **Where**: `packages/web/src/lib/api.ts` `assertApiResponseOk`
+- **Pattern**: Non-2xx formatting uses `new URL(url, window.location.origin).pathname`. `bun test src/lib/` has no `window`. Stub `window.location.origin` in the test file. Prove 200-character truncation with a raw 201-character body, not `JSON.stringify({ error })`.
+- **Example**: `Object.assign(globalThis, { window: { location: { origin: 'http://localhost' } } })`
+
+### Omit undefined RequestInit on fetch
+- **Where**: `packages/web/src/lib/api.ts` `fetchJSON` / `getWorkflowRunGitFile`
+- **Pattern**: `fetchJSON` calls `fetch(url)` when options are undefined. Passing `undefined` as the second argument fails spies that expect one arg. Match that omit-init shape in the raw client.
+- **Example**: `options?.signal ? fetch(url, { signal: options.signal }) : fetch(url)`
+
+### Generated GitDiff hunk arrays are mutable
+- **Where**: `packages/web/src/lib/api.git-changes.test.ts` `READY_DIFF`
+- **Pattern**: `hunks: [] as const` is `readonly []` and fails `tsc` against `GitDiffHunk[]`.
+- **Example**: `hunks: [] as GitDiffHunk[]`
+
 ### Extract the raw-file wildcard from a fixed marker
 - **Where**: `packages/server/src/routes/git/file-handler.ts` `extractEncodedGitFilePath`
 - **Pattern**: Take the substring after the first `/git/file/` in `c.req.path`, then `decodeURIComponent` exactly once. Do not rebuild a prefix from the decoded `runId`.
@@ -156,5 +221,155 @@
 - GREEN gate: `( cd packages/server && bun test src/routes/api.git-changes.test.ts )`, `( cd packages/server && bun test src/routes/git/checkout-gate.test.ts )`, `( cd packages/server && bun run type-check )`.
 - US-005 regenerates `api.generated.d.ts` from a running server; the raw wildcard must stay absent from OpenAPI.
 - Rule of Three still holds: keep the file-route classifier local even though it duplicates diff-handler.
+
+---
+
+## 2026-09-06 — US-005: Add cancellable typed web clients
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/lib/api.generated.d.ts` — regenerated from this worktree's OpenAPI; includes GitDiff* schemas and omits the raw wildcard
+- `packages/web/src/lib/api.ts` — GitDiff aliases, getWorkflowRunGitDiff, gitFileUrl, getWorkflowRunGitFile; fetch omits undefined RequestInit
+- `packages/web/src/lib/api.git-changes.test.ts` — encoding, AbortSignal, CAP-6, binary cancel, ETag, and bounded non-2xx cases
+
+**Acceptance criteria verified**:
+- [x] Add RED client tests, regenerate api.generated.d.ts from a temporarily started server rather than hand-editing it, and make client tests plus web type-check pass.
+- [x] Generated types contain the diff route and GitDiffResponse/GitDiffHunk/GitDiffChange but omit the raw wildcard route.
+- [x] getWorkflowRunGitDiff URL-encodes run ID and query path, sends a non-empty cursor opaquely only, and forwards the exact AbortSignal.
+- [x] gitFileUrl encodes each git path segment but preserves slashes; raw source values are only worktree/head.
+- [x] getWorkflowRunGitFile maps CAP-6 JSON to empty without ETag, text to text plus hash, octet-stream to binary plus hash without response.text, cancels the binary body, and rejects invalid/missing non-CAP-6 ETags.
+- [x] Extract assertApiResponseOk so fetchJSON and raw calls retain the existing status, path-only URL, and 200-character bounded non-2xx behavior.
+
+**Learnings**:
+- Checkpoint `0f712724` already contained the clients and tests; this iteration regenerated types and made the bun tests type-check.
+- `generate:types` hardcodes 3090, which was another checkout without git/diff. Used `PORT=3791` and `openapi-typescript` against that origin.
+- Blank adapter tokens on the typegen server so it does not double-poll Slack/Telegram.
+- bun `src/lib` tests have no `window`; stub `window.location.origin` and use a raw 201-character body to prove truncation.
+- GREEN gate: `( cd packages/web && bun test src/lib/api.git-changes.test.ts )`, `( cd packages/web && bun run type-check )`.
+
+---
+
+## 2026-09-06 — US-006: Prepare safe diff rendering
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/package.json` — exact `react-diff-view@3.3.3` (bun add reordered existing deps alphabetically)
+- `bun.lock` — lockfile for react-diff-view and its transitive deps; lodash is not a direct web dependency
+- `packages/web/src/components/workflows/source-control/git-hunk-adapter.ts` — `toChangeData`, `toHunkData`, `hunksForSide`
+- `packages/web/src/components/workflows/source-control/git-hunk-adapter.test.ts` — union mapping, malformed line numbers, side filter
+- `packages/web/src/components/workflows/source-control/syntax-highlight.tsx` — `highlightedHtml`, `highlightDiffTokens`, `renderHighlightedToken`
+- `packages/web/src/components/workflows/source-control/syntax-highlight.test.tsx` — hljs tokens, XSS escape, line-number indexing, default-renderer delegation
+
+**Acceptance criteria verified**:
+- [x] Install exactly react-diff-view@3.3.3 as the sole new direct production dependency, update bun.lock, and do not add lodash, Shiki, Monaco, refractor, a sanitizer, or another diff library.
+- [x] Add RED tests then implement toChangeData/toHunkData/hunksForSide against react-diff-view 3.3.3's real union types; malformed required lines throw Invalid git hunk change and side filtering drops only the opposite insert/delete type.
+- [x] Add RED highlight tests then use highlight.js/lib/common public string API; normal source produces hljs tokens while attacker-controlled img markup renders escaped text with no image element in full-file and diff-token paths.
+- [x] highlightDiffTokens indexes old/new arrays from actual line numbers and renderHighlightedToken uses dangerouslySetInnerHTML only for library-produced highlighted tokens, delegating all other tokens to the dependency renderer.
+- [x] Focused adapter and highlighting tests plus web type-check pass.
+
+**Learnings**:
+- Plan Task 6 implementation shape is the source of truth.
+- GREEN gate: `( cd packages/web && bun test src/components/workflows/source-control/git-hunk-adapter.test.ts )`, `( cd packages/web && bun test src/components/workflows/source-control/syntax-highlight.test.tsx )`, `( cd packages/web && bun run type-check )`.
+- highlight.js tokenizes HTML tags, so XSS proofs should look for `&lt;` plus no `<img` element rather than a contiguous `&lt;img` substring.
+- US-008 should import `react-diff-view/style/index.css` plus local CSS; the github-dark-dimmed theme is already global.
+
+---
+
+## 2026-09-06 — US-007: Extract a virtualized changed-file list
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/source-control/changed-files-list.tsx` — reusable virtualized listbox with caller ariaLabel/idPrefix, selected vs active, Enter/Space/click open
+- `packages/web/src/components/workflows/source-control/changed-file-row.tsx` — button role=option, aria-selected, data-active, pointerdown preventDefault
+- `packages/web/src/components/workflows/source-control/source-control-panel.tsx` — replace inlined listbox; keep CAP-6/loading/stale/error/clean; re-export nextChangedFileIndex
+- `packages/web/src/components/workflows/source-control/source-control-panel.test.tsx` — caller aria/idPrefix and selected-vs-active static tests
+- `packages/web/src/component-integration/source-control-tab.test.tsx` — Enter/Space/click open and 200-file virtualization
+
+**Acceptance criteria verified**:
+- [x] Add RED panel and mounted-tab tests for caller ariaLabel/idPrefix, selected-vs-active semantics, click/Enter/Space opening, and a measured 200-file virtualized list; then make the stated panel, integration, DAG tabs, and type-check commands pass without act warnings.
+- [x] ChangedFilesList accepts caller aria label, ID prefix, files, active index/callback, selected path, list ref, and open callback; option IDs are prefix-index and aria-activedescendant is set only for a mounted option.
+- [x] Rows are button role=option controls with aria-selected for the opened file and data-active for keyboard focus; click focuses the listbox, activates then opens exactly once, and pointer-down prevents duplicate keyboard/button activation.
+- [x] Use useVirtualizer with a 28px estimate and overscan 8, relative total-size spacer, absolute translated mounted rows, and only a server-rendering all-row fallback; arrows/Home/End scroll and update active index, while Enter/Space opens the current file.
+- [x] Keep SourceControlPanel CAP-6, loading, stale, error, Reload, and clean-worktree branches unchanged; retain panel active-index clamping and re-export nextChangedFileIndex.
+
+**Learnings**:
+- Plan Task 7 implementation shape is the source of truth.
+- GREEN gate: `( cd packages/web && bun test src/components/workflows/source-control/source-control-panel.test.tsx )`, `( cd packages/web && NODE_ENV=development bun test src/component-integration/source-control-tab.test.tsx )`, `( cd packages/web && bun test src/components/workflows/source-control/dag-run-tabs.test.tsx )`, `( cd packages/web && bun run type-check )`.
+- Default option IDs are `sc-changes-file-{index}`; update existing `sc-file-*` assertions.
+- happy-dom does not compute listbox `scrollHeight`; End uses `scrollHeight - clientHeight` so the 200-file test must patch the instance after mount.
+
+---
+
+## 2026-09-06 — US-008: Render the reusable file viewer
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/source-control/source-control-diff.css` — tokenized insert/delete colors, max-content tables, opposite split-column hiding, fixed marker column
+- `packages/web/src/components/workflows/source-control/file-viewer.tsx` — status-keyed FileViewer with split Before/After diffs, highlighted text, binary download, CAP-6 copy, Cancel/Reload/Close
+- `packages/web/src/components/workflows/source-control/file-viewer.test.tsx` — one test per idle/loading/diff/text/binary/unavailable/error/XSS/layout/scroll/Close behavior
+
+**Acceptance criteria verified**:
+- [x] Add RED FileViewer tests then make viewer, hunk adapter, highlight, and web type-check commands pass.
+- [x] Implement the complete FileViewerState union: idle, loading, diff, text, binary, unavailable, and error, with native Cancel/Reload/Close controls and the exact quiet user copy.
+- [x] Modified text renders split react-diff-view trees with correctly side-filtered old/new hunks, Before/After labels, independent focusable two-axis scroll regions, plus/minus gutters, and wide side-by-side versus stacked before-over-after layout.
+- [x] Diff CSS uses existing tokens, non-wrapping max-content diff tables, fixed contrastable marker columns, and hides split columns at col and row-cell levels so normal old/new line numbers and tokens remain correct.
+- [x] Added/deleted text uses safe highlight HTML in one pre/code pane with no diff coloring; attacker content creates no element. Binary mounts no text/diff, presents only Binary file. Download to inspect. and a same-origin link.
+- [x] no_checkout and container have their distinct availability copy/Reload rule; errors retain the heading with Could not open this file. and no exception text. No branch renders Snapshot, write/History controls, Error:, unsupported, warning glyph, or console markup.
+
+**Learnings**:
+- Plan Task 8 implementation shape is the source of truth.
+- GREEN gate: `( cd packages/web && bun test src/components/workflows/source-control/file-viewer.test.tsx )`, `( cd packages/web && bun test src/components/workflows/source-control/git-hunk-adapter.test.ts )`, `( cd packages/web && bun test src/components/workflows/source-control/syntax-highlight.test.tsx )`, `( cd packages/web && bun run type-check )`.
+- React SSR escapes apostrophes as `&#x27;`; assert that form for availability copy.
+- Do not type happy-dom parse results as DOM `Document`.
+- FileViewer stays free of SourceControlTab, TanStack Query, run IDs, and console modules.
+
+---
+
+
+## 2026-09-06 — US-009: Orchestrate split and frozen viewer snapshots
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/source-control/use-stacked-viewport.ts` — SSR-safe matchMedia `(max-width: 899px)` hook
+- `packages/web/src/components/workflows/source-control/source-control-split.tsx` — 30/70 resizable group with percentage strings and no persistence
+- `packages/web/src/components/workflows/source-control/source-control-tab.tsx` — abort-safe M/A/D loader, frozen pending viewer, Escape/Cancel/Close
+- `packages/web/src/component-integration/source-control-tab.test.tsx` — mounted M/A/D, abort, CAP-6, binary, Reload, breakpoint, and separator tests
+
+**Acceptance criteria verified**:
+- [x] Add RED mounted tests to the existing isolated source-control-tab process for M/A/D routing, no working_path, cancellation/race safety, Cancel/Escape/focus, error/CAP-6/binary behavior, frozen Reload candidates, breakpoint orientation, resizable separator, and no act warnings; then make all stated source-control, API, WorkflowExecution, and type-check commands pass.
+- [x] Use an SSR-safe matchMedia hook at max-width 899px and a resizable panel group with percentage strings: list default 30%, min 20%, max 70%; viewer default 70%, min 30%, max 80%; orientation is vertical below 900 and horizontal at 900+, with no persistence.
+- [x] loadViewerFile routes M to the diff client, A to worktree raw, D to HEAD raw, and binary M through one worktree raw probe for its content hash/download URL; CAP-6 becomes unavailable and other non-abort failures become the quiet error state.
+- [x] A monotonically increasing request ID and AbortController prevent late results; abort on reselection, Reload, Cancel, Close, Escape, accepting pending data, run change, and unmount. Cancel/Close/Escape clear selection and restore listbox focus as specified.
+- [x] Keep displayed selectedFile/viewerState separate from pending viewer data and existing displayed/pending list snapshots. A Reload uses a successful refetch result only, rereads a retained selected path without replacing visible content, compares pure viewer fingerprints, and exposes stale only after matching candidate list/viewer data is ready.
+- [x] Accepting Changed on disk — Reload atomically swaps list and viewer candidates, closes when the accepted list cannot retain the selected path, and uses the candidate file object if status changes. Same list revision never proves selected content is unchanged.
+- [x] Preserve the existing infinite-stale/no-retry/no-poll/no-focus/no-reconnect query options and the WorkflowExecution mount boundary; do not send workingPath or import/modify console files.
+
+**Learnings**:
+- Plan Task 9 implementation shape is the source of truth.
+- GREEN gate: `( cd packages/web && NODE_ENV=development bun test src/component-integration/source-control-tab.test.tsx )`, `( cd packages/web && bun test src/components/workflows/source-control/ )`, `( cd packages/web && bun test src/lib/api.git-changes.test.ts )`, `( cd packages/web && bun test src/components/workflows/WorkflowExecution.test.tsx )`, `( cd packages/web && bun run type-check )`.
+- lint-staged still lints the isolated integration test; empty stubs and RequestInfo stringification fail `--no-warn-ignored`.
+- After first load, stop dispatching `received` from the query `data` effect so Reload can wait for the matching viewer candidate.
+- happy-dom `HTMLElement` is not lib.dom `HTMLElement`; assert focus via `getAttribute('role')`.
+
+---
+
+
+## 2026-09-06 — US-010: Validate scope and mark the tracker
+
+**Status**: PASSED
+**Files changed**:
+- `_bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml` — `1-2-open-a-changed-file-in-the-shared-viewer: done` only; `last_updated`, Story 1.3, and Epic 1 unchanged
+
+**Acceptance criteria verified**:
+- [x] Focused isolated tests, `bun --filter @archon/git test`, `bun --filter @archon/server test`, `bun --filter @archon/web test`, `NODE_OPTIONS=--max-old-space-size=8192 bun run validate`, and `git diff --check` all passed with 0 failures. Isolated git HTTP and mounted tab tests appear as their own Bun invocations in the package scripts.
+- [x] `dev...HEAD` has planned files plus Task 2 `@archon/git` mock factories. Forbidden console/Shiki/Monaco/refractor search has no match. Exactly one `"react-diff-view": "3.3.3"` in `packages/web/package.json`. No database/environment/process/write/History/polling additions. WorkflowExecution.tsx untouched.
+- [x] Legacy-screen manual check at `/legacy/workflows/runs/:id`: run `d1f62055ac03948939b8fafa56e36434` opened M `prd.json` (Before/After plus/minus) and A `progress.txt` (highlighted `pre`/`code`, no diff coloring). 20% (256px) through 70% (895px) list resize with no window overflow; sub-900 stacking (list above viewer, Before above After); independent two-axis pane scroll; plus/minus markers 13.03/13.06:1 against insert/delete gutters. Reload on this run `eba949b3e23e870a761a3b0eb0985918` kept old After text until `Changed on disk — Reload`. No write/History chrome. Console 404 was root `favicon.ico`, not a React error. No live D file in host checkouts; A/D routing also covered by mounted tests.
+- [x] Acceptance matrix confirmed from focused tests plus the live M/A check: literal/contained paths, ls-tree+cat-file, CAP-6, binary download, stale same-revision content, log pairing, virtual keyboard list, one exact new dependency.
+- [x] Tracker key flipped only after every gate passed.
+
+**Learnings**:
+- First `bun run validate` aborted in ESLint V8 OOM; `NODE_OPTIONS=--max-old-space-size=8192` made the same command green. Not a product-code failure.
+- Vite `loadEnv` reads repo `.env` for the API proxy, not the worktree hash port. A gitignored `PORT=` `.env` aligned server 3637 with Vite 5173 for the manual check, then was deleted.
+- Sister live run `d1f62055` had M plus A files; this Ralph run only had M. Do not fabricate D.
 
 ---
