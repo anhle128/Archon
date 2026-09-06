@@ -1,0 +1,183 @@
+{
+  "feature": "Open a Changed File in the Shared Viewer",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Confine live git file paths",
+      "description": "As an operator, I want live file reads confined to the run checkout, so that changed-file inspection cannot escape the checkout.",
+      "acceptanceCriteria": [
+        "Create RED tests in packages/git/src/git-path.test.ts, then implement packages/git/src/git-path.ts and make the focused test pass.",
+        "parseGitFilePath accepts literal relative colon, leading-dash, glob, space, newline, and ordinary paths.",
+        "parseGitFilePath throws internal GitPathError codes for empty, NUL, POSIX absolute, Windows drive/UNC absolute, and any slash-or-backslash dot-dot segment.",
+        "containLivePath realpaths the checkout and candidate, returns only a canonical candidate beneath the canonical checkout, and throws GitPathError { code: escape } for an outward symlink.",
+        "Do not catch realpath missing-file errors in containLivePath; callers must be able to distinguish them."
+      ],
+      "technicalNotes": "Plan Task 1 (docs/superpowers/plans/2026-09-06-source-control-shared-viewer.md:167). Create git-path.ts and git-path.test.ts. Follow locked path rules at plan:31-35 and implementation/test shape at plan:176-322. This is internal package API only.",
+      "dependsOn": [],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Read files and Now diffs safely",
+      "description": "As an operator, I want git-backed bytes and HEAD-to-worktree hunks, so that later routes can inspect all changed-file statuses safely.",
+      "acceptanceCriteria": [
+        "Write RED parser and real-git tests, then add the internal binary exec wrapper and file-read module; git-path and file-read focused tests plus git and root type checks pass.",
+        "fileAt returns bytes, NUL-in-first-8KB binary flag, and a changing 64-lowercase-hex SHA-256 hash for worktree and tree reads; a committed 1,048,577-byte NUL fixture returns every byte.",
+        "Tree reads use argv git --literal-pathspecs ls-tree -z TREE -- PATH followed by git cat-file blob BLOB_OID; no shell, exec, HEAD:path, oid:path, or nonliteral special path behavior is introduced.",
+        "Worktree reads preserve symlink blob semantics, realpath-constrain live targets, map missing files to internal GitFileError not_found, and distinguish invalid tree-ish as GitFileError invalid_ref.",
+        "fileDiff yields discriminated line changes and exactly Now/live/M, cursor empty, truncated false results; binary inputs yield binary true with no hunks and parser tests cover literal +++ content and no invented trailing context.",
+        "Export only fileAt, fileDiff, and their data types from @archon/git; keep errors, path helpers, parser, NUL helper, and buffer wrapper non-public.",
+        "In the same change, update exactly the 31 existing @archon/git mock.module factories listed in plan Task 2 with fileAt and fileDiff stubs, and make the specified rg inventory equal 31."
+      ],
+      "technicalNotes": "Plan Task 2 (plan:324-792); current exec wrapper is packages/git/src/exec.ts:67-78 and root exports start at packages/git/src/index.ts:1. Create file-read.ts/test.ts; update exec.ts/index.ts and the exact 31 test mocks. Use plan:101-157 for public contracts and plan:31-35 for security. Verify with the exact Task 2 commands, never bare root bun test.",
+      "dependsOn": ["US-001"],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Expose the Now diff API",
+      "description": "As an operator, I want a governed Now diff endpoint, so that the viewer can read modified-file hunks without receiving checkout details.",
+      "acceptanceCriteria": [
+        "Extend only the existing isolated api.git-changes HTTP test with RED diff cases, then make its diff, changes, checkout-gate, and server type-check commands pass.",
+        "Extract loadRunCheckout into run-checkout.ts using the existing workflow_runs.working_path and resolveRunCheckout; changes-handler reuses it and retains its response/log contract, including a second gate check after changedFiles rejects.",
+        "GET /api/workflows/runs/{runId}/git/diff has required path, optional opaque cursor, OpenAPI schemas/types for discriminated hunk changes and nonnegative hunk starts, and uses registerOpenApiRoute.",
+        "Decoded invalid paths fail with the exact invalid-path 400 before checkout/git; literal colon/dash/glob paths reach fileDiff unchanged; cursor is neither parsed nor interpreted.",
+        "The handler maps missing run, CAP-6, missing file, named path error, and opaque failure to the locked status/body; it rechecks the gate once after ready-gate fileDiff rejection and returns CAP-6 if the checkout vanished.",
+        "Each entered request emits git.diff_started and exactly one terminal event; failure logs contain only runId and stable errorType, and responses/logs never leak requested paths or checkout paths."
+      ],
+      "technicalNotes": "Plan Task 3 (plan:793-1081). Existing inline checkout gate is packages/server/src/routes/git/changes-handler.ts:1-80; schemas are packages/server/src/routes/schemas/git.schemas.ts:1-32; existing registration is packages/server/src/routes/api.ts:4949-4951. Create run-checkout.ts, path-input.ts, diff-route.ts, diff-handler.ts; modify only planned server files. The GitPathError/GitFileError structural classifier is required because those classes stay internal.",
+      "dependsOn": ["US-002"],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Serve raw changed-file bytes",
+      "description": "As an operator, I want exact text or downloadable binary file bytes, so that added, deleted, and binary files remain inspectable.",
+      "acceptanceCriteria": [
+        "Add RED raw-route cases to the existing isolated api.git-changes test and make all git HTTP and checkout-gate tests plus server type-check pass.",
+        "Register GET /api/workflows/runs/:runId/git/file/* with app.get and the plan's wildcard/OpenAPI explanatory comment; do not add requireWebUser.",
+        "Extract the wildcard from the first /git/file/ marker, decode exactly once, validate before fileAt, and preserve encoded slash, colon, dash, glob, space, and newline paths while refusing traversal, absolutes, NUL, malformed encoding, and invalid/missing source.",
+        "worktree maps to { kind: worktree } and head maps to { kind: tree, treeIsh: HEAD }; CAP-6 is JSON 200 with no ETag, missing run/file/path and opaque errors match the locked bodies, and a post-gate I/O rejection rechecks the gate once.",
+        "Text returns actual bytes as text/plain; charset=utf-8 and binary returns non-empty actual bytes as application/octet-stream with attachment filename download; both use a quoted 64-hex ETag.",
+        "Each entered request pairs git.file_started with exactly one completed/failed event using only the locked allowlisted fields and never leaks paths/messages."
+      ],
+      "technicalNotes": "Plan Task 4 (plan:1082-1206). Create packages/server/src/routes/git/file-handler.ts; modify api.ts and the existing api.git-changes.test.ts mock graph. Reuse US-003 loadRunCheckout/path-input and duplicate only the two local error classifier uses under Rule of Three.",
+      "dependsOn": ["US-003"],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Add cancellable typed web clients",
+      "description": "As a web component, I want typed and abortable diff/file clients, so that the viewer can fetch only the data required for its file status.",
+      "acceptanceCriteria": [
+        "Add RED client tests, regenerate api.generated.d.ts from a temporarily started server rather than hand-editing it, and make client tests plus web type-check pass.",
+        "Generated types contain the diff route and GitDiffResponse/GitDiffHunk/GitDiffChange but omit the raw wildcard route.",
+        "getWorkflowRunGitDiff URL-encodes run ID and query path, sends a non-empty cursor opaquely only, and forwards the exact AbortSignal.",
+        "gitFileUrl encodes each git path segment but preserves slashes; raw source values are only worktree/head.",
+        "getWorkflowRunGitFile maps CAP-6 JSON to empty without ETag, text to text plus hash, octet-stream to binary plus hash without response.text, cancels the binary body, and rejects invalid/missing non-CAP-6 ETags.",
+        "Extract assertApiResponseOk so fetchJSON and raw calls retain the existing status, path-only URL, and 200-character bounded non-2xx behavior."
+      ],
+      "technicalNotes": "Plan Task 5 (plan:1207-1397). Current shared fetch behavior is packages/web/src/lib/api.ts:64-75. Regenerate packages/web/src/lib/api.generated.d.ts with server port 3090; update api.ts and api.git-changes.test.ts only. JSON types are generated; raw wildcard types are intentionally hand-authored.",
+      "dependsOn": ["US-003", "US-004"],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Prepare safe diff rendering",
+      "description": "As an operator, I want correctly mapped and safely highlighted hunks, so that the viewer displays code accurately without markup execution.",
+      "acceptanceCriteria": [
+        "Install exactly react-diff-view@3.3.3 as the sole new direct production dependency, update bun.lock, and do not add lodash, Shiki, Monaco, refractor, a sanitizer, or another diff library.",
+        "Add RED tests then implement toChangeData/toHunkData/hunksForSide against react-diff-view 3.3.3's real union types; malformed required lines throw Invalid git hunk change and side filtering drops only the opposite insert/delete type.",
+        "Add RED highlight tests then use highlight.js/lib/common public string API; normal source produces hljs tokens while attacker-controlled img markup renders escaped text with no image element in full-file and diff-token paths.",
+        "highlightDiffTokens indexes old/new arrays from actual line numbers and renderHighlightedToken uses dangerouslySetInnerHTML only for library-produced highlighted tokens, delegating all other tokens to the dependency renderer.",
+        "Focused adapter and highlighting tests plus web type-check pass."
+      ],
+      "technicalNotes": "Plan Task 6 (plan:1398-1641). Update packages/web/package.json and bun.lock; create git-hunk-adapter.ts/test.ts and syntax-highlight.tsx/test.ts under source-control. Use generated types from US-005. The global stylesheet already supplies github-dark-dimmed; do not add another theme.",
+      "dependsOn": ["US-005"],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "Extract a virtualized changed-file list",
+      "description": "As an operator, I want a reusable keyboard-selectable changes list, so that I can open files efficiently and future scopes can reuse the same list component.",
+      "acceptanceCriteria": [
+        "Add RED panel and mounted-tab tests for caller ariaLabel/idPrefix, selected-vs-active semantics, click/Enter/Space opening, and a measured 200-file virtualized list; then make the stated panel, integration, DAG tabs, and type-check commands pass without act warnings.",
+        "ChangedFilesList accepts caller aria label, ID prefix, files, active index/callback, selected path, list ref, and open callback; option IDs are prefix-index and aria-activedescendant is set only for a mounted option.",
+        "Rows are button role=option controls with aria-selected for the opened file and data-active for keyboard focus; click focuses the listbox, activates then opens exactly once, and pointer-down prevents duplicate keyboard/button activation.",
+        "Use useVirtualizer with a 28px estimate and overscan 8, relative total-size spacer, absolute translated mounted rows, and only a server-rendering all-row fallback; arrows/Home/End scroll and update active index, while Enter/Space opens the current file.",
+        "Keep SourceControlPanel CAP-6, loading, stale, error, Reload, and clean-worktree branches unchanged; retain panel active-index clamping and re-export nextChangedFileIndex."
+      ],
+      "technicalNotes": "Plan Task 7 (plan:1642-1747). Current panel/list boundary is packages/web/src/components/workflows/source-control/source-control-panel.tsx:8-140. Create changed-files-list.tsx; update changed-file-row.tsx, source-control-panel.tsx/test.tsx, and the established component-integration/source-control-tab.test.tsx process. Defaults: Uncommitted changes, sc-changes-file, null selected path, no-op open callback.",
+      "dependsOn": [],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-008",
+      "title": "Render the reusable file viewer",
+      "description": "As an operator, I want one status-keyed viewer for modified, added, deleted, binary, unavailable, and failed reads, so that I can inspect files without leaving the run screen.",
+      "acceptanceCriteria": [
+        "Add RED FileViewer tests then make viewer, hunk adapter, highlight, and web type-check commands pass.",
+        "Implement the complete FileViewerState union: idle, loading, diff, text, binary, unavailable, and error, with native Cancel/Reload/Close controls and the exact quiet user copy.",
+        "Modified text renders split react-diff-view trees with correctly side-filtered old/new hunks, Before/After labels, independent focusable two-axis scroll regions, plus/minus gutters, and wide side-by-side versus stacked before-over-after layout.",
+        "Diff CSS uses existing tokens, non-wrapping max-content diff tables, fixed contrastable marker columns, and hides split columns at col and row-cell levels so normal old/new line numbers and tokens remain correct.",
+        "Added/deleted text uses safe highlight HTML in one pre/code pane with no diff coloring; attacker content creates no element. Binary mounts no text/diff, presents only Binary file. Download to inspect. and a same-origin link.",
+        "no_checkout and container have their distinct availability copy/Reload rule; errors retain the heading with Could not open this file. and no exception text. No branch renders Snapshot, write/History controls, Error:, unsupported, warning glyph, or console markup."
+      ],
+      "technicalNotes": "Plan Task 8 (plan:1748-1927). Create source-control-diff.css, file-viewer.tsx, and file-viewer.test.tsx. Use react-diff-view style/index.css plus local CSS, US-006's adapter/highlighter, and API types from US-005. Keep the component independent of SourceControlTab, TanStack Query, run IDs, and console modules.",
+      "dependsOn": ["US-005", "US-006"],
+      "priority": 8,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-009",
+      "title": "Orchestrate split and frozen viewer snapshots",
+      "description": "As an operator, I want an abort-safe responsive shared viewer whose list and content remain frozen until I accept a reload, so that disk changes never surprise me mid-inspection.",
+      "acceptanceCriteria": [
+        "Add RED mounted tests to the existing isolated source-control-tab process for M/A/D routing, no working_path, cancellation/race safety, Cancel/Escape/focus, error/CAP-6/binary behavior, frozen Reload candidates, breakpoint orientation, resizable separator, and no act warnings; then make all stated source-control, API, WorkflowExecution, and type-check commands pass.",
+        "Use an SSR-safe matchMedia hook at max-width 899px and a resizable panel group with percentage strings: list default 30%, min 20%, max 70%; viewer default 70%, min 30%, max 80%; orientation is vertical below 900 and horizontal at 900+, with no persistence.",
+        "loadViewerFile routes M to the diff client, A to worktree raw, D to HEAD raw, and binary M through one worktree raw probe for its content hash/download URL; CAP-6 becomes unavailable and other non-abort failures become the quiet error state.",
+        "A monotonically increasing request ID and AbortController prevent late results; abort on reselection, Reload, Cancel, Close, Escape, accepting pending data, run change, and unmount. Cancel/Close/Escape clear selection and restore listbox focus as specified.",
+        "Keep displayed selectedFile/viewerState separate from pending viewer data and existing displayed/pending list snapshots. A Reload uses a successful refetch result only, rereads a retained selected path without replacing visible content, compares pure viewer fingerprints, and exposes stale only after matching candidate list/viewer data is ready.",
+        "Accepting Changed on disk — Reload atomically swaps list and viewer candidates, closes when the accepted list cannot retain the selected path, and uses the candidate file object if status changes. Same list revision never proves selected content is unchanged.",
+        "Preserve the existing infinite-stale/no-retry/no-poll/no-focus/no-reconnect query options and the WorkflowExecution mount boundary; do not send workingPath or import/modify console files."
+      ],
+      "technicalNotes": "Plan Task 9 (plan:1928-2160). Current tab state/query boundary is packages/web/src/components/workflows/source-control/source-control-tab.tsx:13-59. Create source-control-split.tsx and use-stacked-viewport.ts; modify source-control-tab.tsx and the established integration test only. Reuse SourceControlPanel (US-007), FileViewer (US-008), and clients (US-005). Implement the plan's exact viewerFingerprint forms and candidate sequencing.",
+      "dependsOn": ["US-005", "US-007", "US-008"],
+      "priority": 9,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-010",
+      "title": "Validate scope and mark the tracker",
+      "description": "As a maintainer, I want the shared viewer marked complete only after all acceptance evidence passes, so that the tracker accurately represents a releasable Story 1.2 implementation.",
+      "acceptanceCriteria": [
+        "Run every focused test in the intended isolated process, then bun --filter @archon/git test, bun --filter @archon/server test, bun --filter @archon/web test, bun run validate, and git diff --check; all pass with no warnings, unexpected network requests, or React act warnings.",
+        "Inspect dev...HEAD scope and verify no forbidden console import or Shiki/Monaco/refractor use, exactly one react-diff-view 3.3.3 manifest entry, and no database/environment/process/write/History/polling additions.",
+        "Perform the specified legacy-screen manual check for M and A/D opening, 20–70% resize, sub-900 stacking, independent scrolling, 4.5:1 marker contrast, frozen Reload, no console errors, and no write/History controls; if no suitable live run exists, record that limitation without fabricating a run.",
+        "Confirm the full acceptance matrix: literal and contained path behavior, tree-read argv behavior, CAP-6, binary bytes/download, stale same-revision content, logs, virtual keyboard behavior, and UI dependency constraints.",
+        "Only after every gate passes, change exactly 1-2-open-a-changed-file-in-the-shared-viewer from backlog to done in sprint-status.yaml; leave last_updated, Story 1.3, and Epic 1 unchanged."
+      ],
+      "technicalNotes": "Plan Task 10 (plan:2161-2301) is the only authorization for _bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml. Follow its exact focused commands, affected-package suites, scope searches, acceptance matrix, and manual-check handling. PR handoff remains outside feature implementation but must follow plan:2312 onward when a PR is opened.",
+      "dependsOn": ["US-001", "US-002", "US-003", "US-004", "US-005", "US-006", "US-007", "US-008", "US-009"],
+      "priority": 10,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
