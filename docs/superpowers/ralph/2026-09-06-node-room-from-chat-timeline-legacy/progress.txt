@@ -1,0 +1,235 @@
+## Codebase Patterns
+
+### Web component tests need NODE_ENV=development
+- **Where**: `packages/web/package.json` `test` script
+- **Pattern**: `bun test src/components/` shares one process. Static `react` / `react-dom/server` imports load production React first, so later files that set `process.env.NODE_ENV = 'development'` still see `react.act === undefined`. Run that bun invocation with `NODE_ENV=development`.
+- **Example**: `NODE_ENV=development bun test src/components/`
+
+### Multi-hunk edits on large TSX files
+- **Where**: `packages/web/src/components/workflows/WorkflowExecution.tsx`
+- **Pattern**: Line-anchored/search-replace on this ~900-line file truncated it to ~300 lines even when applied sequentially. Apply all hunks in one in-process rewrite (read → replace → write) and verify `wc -l` afterwards.
+- **Example**: Python `text.replace(old, new, 1)` for each unique hunk, then `path.write_text(text)`.
+
+### Chat door queries and exact timeline selection
+- **Where**: `packages/web/src/components/workflows/LegacyGraphLogsPane.tsx`
+- **Pattern**: Parent queries enable only when `activeView === 'chat' && parentPlatformId !== null`. Message polling uses `runChatMessagesRefetchInterval(runStatus)` (3000 for pending/running/paused, false for terminal). `selectedTimelineEntryId` is independent of `selectedLogRowId`; Graph/Logs clicks and run changes clear it, tab switches do not. Synthetic `resolveGraphRoomRow` fallbacks keep `selectedLogRowId` null so the row-removal effect does not wipe Chat selection. `find(... )?.nodeId` does not narrow `ChatTimelineEntry` — loop and assign `nodeId` inside `kind === 'node_status'`.
+- **Example**: `setSelectedLogRowId(rowExists ? row.id : null); setSelectedTimelineEntryId(entry.id); onSelectNode(row.nodeId);`
+
+### React 19 + happy-dom controlled textarea
+- **Where**: `packages/web/src/components/workflows/LegacyGraphLogsPane.test.tsx`
+- **Pattern**: Native `HTMLTextAreaElement.prototype.value` setter + `InputEvent` does not update React 19 controlled state under happy-dom. After the native setter, invoke the fiber `onChange` via `__reactProps$`. Do not use `instanceof win.HTMLTextAreaElement` against `Element` from `querySelector` — the intersection is `never` (`ELEMENT_NODE` conflict); check `tagName` and cast. Wait until the textarea has no `disabled` attribute before submit tests — conversation query starts in `'Loading conversation…'`.
+- **Example**: `setNativeTextareaValue(textarea, value)` then `__reactProps$*.onChange({ target: { value } })`
+
+
+### Controlled run composer (no API/HITL)
+- **Where**: `packages/web/src/components/workflows/RunChatComposer.tsx`, `packages/web/src/lib/api.ts`
+- **Pattern**: Composer is fully controlled and has zero API/HITL imports. `disabled = sending || disabledReason !== null`; `disabledReason` is placeholder + form `title` only (never a second text node). `getConversation` calls `fetchJSON` with no options so `fetch(url)` is a single-arg GET — tests use `toHaveBeenCalledWith(ENCODED_URL)`.
+- **Example**: `{props.sending ? 'Sending…' : 'Send'}` and `disabled={disabled || props.value.trim().length === 0}`
+
+### Lucide icon lookup vs naming-convention
+- **Where**: `packages/web/src/components/workflows/ChatTimeline.tsx`
+- **Pattern**: `@typescript-eslint/naming-convention` rejects PascalCase locals (`Icon`). Render a mapped lucide component with `createElement(TYPE_ICONS[nodeType], props)` instead of `<Icon />`.
+- **Example**: `createElement(TYPE_ICONS[entry.nodeType], { 'aria-hidden': true, className: 'h-3.5 w-3.5 shrink-0 text-text-tertiary' })`
+
+### Timeline room resolution
+- **Where**: `packages/web/src/components/workflows/resolve-timeline-room-row.ts`
+- **Pattern**: Reverse-scan `LogRow[]` for the last exact `nodeId` + `LogRowSelection` match, then `resolveGraphRoomRow`. Throw `'Timeline node selection did not resolve a room row'` when fallback is null (public type is `LogRow | null`). `row !== undefined && row.nodeId` trips `@typescript-eslint/prefer-optional-chain` — use `if (row === undefined) continue` then compare.
+- **Example**: `selectionsEqual` returns true for `{ kind: 'node' }` once kinds match; loop/route compare `iteration` / `executionSeq`.
+
+### Chat timeline merger
+- **Where**: `packages/web/src/components/workflows/build-chat-timeline.ts`
+- **Pattern**: Pure indexed merge of user messages then node-status events; sort by `Date.parse(ensureUtc(createdAt))` (non-finite → 0), then `user` before `node_status`, then encounter index. Call `resolveNodeType` only after an event passes node-id and whitelist checks.
+- **Example**: `mapNodeEvent` returns null for every non-whitelisted `event_type`; loop/route labels reuse `build-log-rows.ts` (` ×N` / ` #N`).
+
+### WorkflowEvent union fixtures
+- **Where**: `packages/web/src/components/workflows/build-log-rows.test.ts`, `build-chat-timeline.test.ts`
+- **Pattern**: `WorkflowEventResponse` is a union (`node_routed` branch vs generic). Typed fixture builders with `Partial<WorkflowEventResponse>` keep OpenAPI fields explicit; incomplete `node_routed` rows can still use `data: {}` on the generic branch.
+- **Example**: `const event = (overrides: Partial<WorkflowEventResponse> = {}): WorkflowEventResponse => ({ id, workflow_run_id, event_type: 'node_started', step_index: null, step_name: 'review', data: {}, created_at, ...overrides })`
+
+### Awaiting is a first-class node state
+- **Where**: `packages/web/src/lib/run-graph/types.ts`, `packages/web/src/lib/types.ts`, `packages/web/src/components/workflows/build-run-graph-input.ts`
+- **Pattern**: `WorkflowStepStatus` and `NodeState` both include `'awaiting'`. Switches over those unions must handle `awaiting` or `tsc` fails with TS2366.
+- **Example**: `toNodeState` includes `case 'awaiting': return status`.
+
+---
+
+BLOCKER US-001 | gate=`cd packages/web && bun run type-check` | cause=packages/web/src/components/workflows/build-run-graph-input.ts:35 TS2366 toNodeState missing `awaiting` (present on clean base and with story) | action=committed chore(unblock) adding `case 'awaiting'` | 2026-09-06
+
+BLOCKER US-007 | gate=`bun run validate` | cause=packages/web `bun test src/components/` loaded production React so `react.act` was undefined (NodeTranscriptPane.test.tsx:285, LegacyNodeRoom.test.tsx:659; 47 fail / 221 pass; same fingerprint with US-007 present and no story code). Isolated NodeTranscriptPane.test.tsx 4 pass. | action=committed chore(unblock) `NODE_ENV=development bun test src/components/` in packages/web/package.json | 2026-09-06
+
+---
+
+## 2026-09-06 — US-001: Pure chat timeline merger
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/build-chat-timeline.ts` — pure `buildChatTimeline` merger
+- `packages/web/src/components/workflows/build-chat-timeline.test.ts` — 18 unit tests
+- `packages/web/src/components/workflows/build-run-graph-input.ts` — unblock: exhaustive `awaiting` case in `toNodeState`
+
+**Acceptance criteria verified**:
+- [x] Create `build-chat-timeline.ts` exporting `ChatTimelineNodeStatus`, `ChatTimelineEntry`, and `buildChatTimeline(input): ChatTimelineEntry[]`.
+- [x] Include parent-conversation messages only when `role === 'user'` and trimmed content is non-empty; assistant messages and blank user turns are omitted.
+- [x] Map lifecycle events `node_started`/`node_completed`/`node_failed`/`node_skipped`/`node_skipped_prior_success`/`approval_requested` with the specified status, detail, and `{ kind: 'node' }`.
+- [x] Map loop iteration events with safe integer `iteration >= 1` to running/completed/failed, detail `iteration N …`, and `{ kind: 'loop_iteration', iteration: N }`.
+- [x] Map `node_routed` with positive safe integer `execution_seq` to `routed {outcome} → {to}` and `{ kind: 'route_iteration', executionSeq }`; otherwise `{ kind: 'node' }` and `'unknown'` tokens.
+- [x] Skip events when both `step_name` and `data.nodeId` fail to yield a node ID, and skip loop events with `iteration < 1`.
+- [x] Omit `tool_called`, `tool_completed`, `workflow_artifact`, `node_awaiting`, `interaction_resolved`, and other non-whitelisted types.
+- [x] Prefer `nodeStates` name over raw id, appending ` ×N` / ` #N` for loop/route selections.
+- [x] Call injected `resolveNodeType(nodeId)` for every included node-status entry (never for user entries).
+- [x] Sort ascending by `ensureUtc` timestamp (non-finite → 0), then `user` before `node_status`, then encounter index.
+- [x] No generated entry has status `awaiting` and no generated detail contains `awaiting`.
+- [x] `bun test src/components/workflows/build-chat-timeline.test.ts` — 18 pass.
+
+**Learnings**:
+- Test files are eslint-ignored (`**/*.test.ts`); lint the production module. Comparing `ChatTimelineNodeStatus` to `'awaiting'` is a TS2367; widen to `string[]` for that assertion.
+- `packages/web` type-check was already red on base because `toNodeState` omitted `awaiting` after that status joined `WorkflowStepStatus`.
+
+---
+
+## 2026-09-06 — US-002: Timeline node status to LogRow room resolution
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/resolve-timeline-room-row.ts` — reverse-scan + graph-room fallback
+- `packages/web/src/components/workflows/resolve-timeline-room-row.test.ts` — 7 unit tests
+
+**Acceptance criteria verified**:
+- [x] Create `resolve-timeline-room-row.ts` exporting `resolveTimelineRoomRow(input): LogRow`.
+- [x] Scan `input.rows` in reverse for last `LogRow` matching `nodeId` and `selectionsEqual` (`node` / `loop_iteration` / `route_iteration`).
+- [x] Fall back to `resolveGraphRoomRow({ rows, nodeId: entry.nodeId, liveStatus })` when no exact match.
+- [x] Throw `Error('Timeline node selection did not resolve a room row')` if fallback is null.
+- [x] Tests cover ordinary last-row, loop iteration, route iteration, graph fallback, unrelated nodes, and `returned.nodeId === entry.nodeId`.
+- [x] `bun test src/components/workflows/resolve-timeline-room-row.test.ts` — 7 pass.
+
+**Learnings**:
+- Exact-match fixture from the plan (`rows[1]` loop iteration) is the regression for reverse-scan beating graph fallback (which would return the ordinary row).
+- Production `if (row !== undefined && row.nodeId …)` is equivalent but eslint wants optional chain; split into `continue` + compare so lint stays green without changing scan order.
+
+---
+
+## 2026-09-06 — US-003: Chat timeline presentational component
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/ChatTimeline.tsx` — presentational timeline: user bubbles, node-status buttons, type glyphs, status badges
+- `packages/web/src/components/workflows/ChatTimeline.test.tsx` — 9 static-markup tests
+
+**Acceptance criteria verified**:
+- [x] Create `ChatTimeline.tsx` exporting `ChatTimeline(props: ChatTimelineProps): React.ReactElement`.
+- [x] Root is `<div aria-label="Run chat timeline" className="flex h-full min-h-0 flex-col overflow-auto p-3">`.
+- [x] Render 'Loading conversation turns…' when loading is true and entries is empty.
+- [x] Render error text with className="text-error" when error is non-null while still rendering entries.
+- [x] Render 'No conversation turns or node-status entries yet.' when not loading, error is null, and entries is empty.
+- [x] User entries are non-button divs with the specified bubble classes; HTML is escaped as plain text.
+- [x] Node-status entries are `<button type="button">` calling `onSelectNodeStatus(entry)`.
+- [x] `aria-current="true"` only on the button whose id === selectedEntryId.
+- [x] Button contents in order: type glyph, label, detail, NodeRunList status badge, formatStarted(createdAt), ChevronRight.
+- [x] No form, composer, AskHuman, awaiting, or waiting-on-you chrome.
+- [x] `ChatTimeline.test.tsx` covers root label, empty/loading/error, escaping, button order, exact selection, chrome absence.
+- [x] `bun test src/components/workflows/ChatTimeline.test.tsx` — 9 pass.
+
+**Learnings**:
+- `@typescript-eslint/naming-convention` forbids PascalCase locals, so a mapped lucide component cannot be bound as `Icon`; use `createElement(TYPE_ICONS[nodeType], props)`.
+- Copy `STATUS_COLORS` from NodeRunList without `awaiting` — `ChatTimelineNodeStatus` already excludes it.
+
+---
+
+## 2026-09-06 — US-004: Regular parent-conversation API client and composer
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/lib/api.ts` — `getConversation(id)` GET wrapper immediately before `updateConversation`
+- `packages/web/src/lib/api.conversations.test.ts` — URL-encoded GET assertion for forge IDs
+- `packages/web/src/components/workflows/RunChatComposer.tsx` — controlled text-only composer, no API/HITL imports
+- `packages/web/src/components/workflows/RunChatComposer.test.tsx` — enabled, non-Web disabled, sending, error, blank-draft, no Ask chrome
+
+**Acceptance criteria verified**:
+- [x] `getConversation` in `api.ts` immediately before `updateConversation`, `fetchJSON<ConversationResponse>(\`/api/conversations/${encodeURIComponent(id)}\`)`.
+- [x] `api.conversations.test.ts` covers URL-encoded conversation ID GET.
+- [x] `RunChatComposer.tsx` exports `RunChatComposer(props: RunChatComposerProps): React.ReactElement`.
+- [x] Form `aria-label="Run conversation composer"`, textarea `aria-label="Message the run conversation"`, submit visible label `Send`.
+- [x] Enabled placeholder is `Message the run's conversation…`.
+- [x] Disabled when `sending` or `disabledReason !== null`; `disabledReason` is placeholder and form title.
+- [x] Non-null error renders `<p role="alert" className="mb-2 text-xs text-error">`.
+- [x] Submit calls `onSubmit` after `preventDefault`; submit disabled when trim is empty or composer disabled.
+- [x] No AskHuman, Decline, file attachment, or SSE controls.
+- [x] Markup tests cover enabled, disabled (non-Web), sending, error, Ask-control absence.
+- [x] `bun test src/lib/api.conversations.test.ts src/components/workflows/RunChatComposer.test.tsx` — 8 pass.
+
+**Learnings**:
+- `fetchJSON` without a second argument calls `fetch(url)` only; do not pass `{}` or the GET spy assertion fails.
+- Do not duplicate `disabledReason` as a paragraph — placeholder + `title` is the only explanation surface.
+- Insert into large `api.ts` with a line-anchored edit; a broad text replace previously truncated the file.
+
+---
+
+## 2026-09-06 — US-005: Wire Chat door into LegacyGraphLogsPane with parent queries and send
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/LegacyGraphLogsPane.tsx` — Chat left pane, parent queries, send, exact timeline selection
+- `packages/web/src/components/workflows/LegacyGraphLogsPane.test.tsx` — Chat door, polling, composer, non-Web, synthetic fallback
+- `packages/web/src/components/workflows/WorkflowExecution.tsx` — pass required parent-conversation props so the pane contract type-checks (Chat still uses ChatInterface until US-006)
+
+**Acceptance criteria verified**:
+- [x] LegacyGraphLogsPaneProps accepts activeView including 'chat' plus parentPlatformId / loadParentMessages / loadParentConversation / sendParentMessage
+- [x] runChatMessagesRefetchInterval returns 3000 for pending/running/paused and false for completed/failed/cancelled
+- [x] Parent messages query key ['runChatMessages', parentPlatformId], enabled on chat + non-null id, refetchInterval from run status, retry: false
+- [x] Parent conversation query key ['runChatConversation', parentPlatformId], staleTime Infinity, retry: false
+- [x] composerDisabledReason covers unavailable / loading / failed / non-web / null
+- [x] Submit sends trimmed text, clears draft and refetches on success, preserves draft + error on failure, invalidates send generation on runId change
+- [x] selectedTimelineEntryId clears on Graph/Logs click, run change, or external node change; preserved across tab switches
+- [x] handleNodeStatusSelect resolves row, sets selectedLogRowId only when the row exists, sets selectedTimelineEntryId, calls onSelectNode
+- [x] Left pane three-way branch: graph / logs / chat (ChatTimeline + RunChatComposer)
+- [x] LegacyGraphLogsPane.test.tsx covers Chat rendering, rooms, tab persistence, aria-current, polling, composer, non-Web, expectNoAskHumanChrome
+- [x] NODE_ENV=development bun test src/components/workflows/LegacyGraphLogsPane.test.tsx — 36 pass
+
+**Learnings**:
+- Required pane props force a WorkflowExecution call-site update in this story so package type-check stays green; keep ChatInterface until US-006.
+- `ChatTimelineEntry.find(...)?.nodeId` fails TS2339 because user entries lack nodeId; loop with kind narrowing.
+- React 19 + happy-dom: wait for composer enabled (conversation query) and drive `__reactProps$` onChange after the native value setter.
+
+---
+
+## 2026-09-06 — US-006: Mount LegacyGraphLogsPane for DAG Chat in WorkflowExecution
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/WorkflowExecution.tsx` — DAG Chat keeps the shared pane; ChatInterface and workingPath removed
+- `packages/web/src/components/workflows/WorkflowExecution.test.tsx` — table-driven body resolver; `'chat'` never returned
+
+**Acceptance criteria verified**:
+- [x] resolveWorkflowExecutionBody returns graph-logs-pane | source-control | sequential without parentPlatformId
+- [x] LegacyGraphLogsPane receives chat/graph/logs activeView plus parent conversation clients
+- [x] ChatInterface import and body === 'chat' branch removed
+- [x] workingPath removed from WorkflowRunQueryData, mapper, and local binding
+- [x] DagRunTabs still gates Chat on parentPlatformId
+- [x] Tests: DAG Chat → graph-logs-pane, non-DAG → sequential, never `'chat'`
+- [x] bun test WorkflowExecution.test.tsx dag-run-tabs.test.tsx — 8 pass
+
+**Learnings**:
+- Search-replace on WorkflowExecution.tsx truncated the file; a single Python rewrite applied all seven hunks safely.
+- ChatInterface remains on ChatPage (`/legacy/chat/:id`); only the run-view import/branch was removed.
+- Parent conversation props were already on the pane from US-005; this story only changed the activeView adapter and dropped the chat body branch.
+
+---
+
+## 2026-09-06 — US-007: Validate story and update sprint tracking
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/package.json` — unblock: `NODE_ENV=development bun test src/components/`
+- `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml` — Story 5.4 `done`; matching `last_updated` 2026-09-06 23:44:20 +0700
+
+**Acceptance criteria verified**:
+- [x] Focused Story 5.4 tests: 48 pass + LegacyGraphLogsPane 36 pass (84 total)
+- [x] `bun run validate` passed completely (type-check, lint --max-warnings 0, format, test:install, test)
+- [x] `5-4-open-the-node-room-from-the-chat-timeline-legacy: done` with synced last_updated comment + YAML field
+- [x] epic-5 and Story 5.5 remain `backlog`; tracker-only commit `chore: mark workflow run chat story done`
+
+**Learnings**:
+- `bun test src/components/` without NODE_ENV=development loads production React from static markup tests; in-file `process.env.NODE_ENV = 'development'` is too late once React is cached. Isolated NodeTranscriptPane.test.tsx still passes.
+- Hub `start` + `wait for=exit` is more reliable for `bun run validate` than a foreground shell that SIGINT'd at ~112s (exit 130) mid-test.
+
+---

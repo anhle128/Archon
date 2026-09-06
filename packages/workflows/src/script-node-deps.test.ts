@@ -38,6 +38,7 @@ mock.module('@archon/git', () => ({
   mkdirAsync: mock(async () => undefined),
   changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
   isGitWorkTree: mock(async () => false),
+  log: mock(async () => ({ commits: [], revision: '0'.repeat(64), truncated: false })),
 }));
 
 // --- Mock logger (MUST come before module-under-test imports) ---
@@ -182,6 +183,16 @@ function createMockStore(): IWorkflowStore {
       created_at: new Date(),
     }),
     listNodeMessages: async () => [],
+    insertPendingInteraction: async input => ({
+      ...input,
+      id: 'pending-1',
+      status: 'pending' as const,
+      answer: null,
+      created_at: new Date(),
+      resolved_at: null,
+      resolved_by: null,
+    }),
+    listPendingInteractions: async () => [],
   };
 }
 

@@ -124,7 +124,11 @@ import {
   isApprovalContext,
   isGateResolved,
 } from '@archon/workflows/schemas/workflow-run';
-import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
+import type {
+  NodeState,
+  WorkflowRun,
+  WorkflowRunStatus,
+} from '@archon/workflows/schemas/workflow-run';
 import type { ThinkingConfig } from '@archon/workflows/schemas/dag-node';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 import type { MessageRow } from '@archon/core/schemas/message';
@@ -142,7 +146,7 @@ function getLog(): ReturnType<typeof createLogger> {
 interface ApiWorkflowNodeState {
   nodeId: string;
   name: string;
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+  status: NodeState;
   retryEpoch: number;
   duration?: number;
   error?: string;
@@ -177,8 +181,11 @@ function projectRuntimeNodeMetadata(data: Record<string, unknown>): Partial<ApiW
   };
 }
 
-function projectApiWorkflowNodeStates(events: readonly WorkflowEventRow[]): ApiWorkflowNodeState[] {
-  const projected = projectLatestEffectiveNodeStates(events);
+function projectApiWorkflowNodeStates(
+  events: readonly WorkflowEventRow[],
+  pending?: readonly { node_id: string; status: string }[]
+): ApiWorkflowNodeState[] {
+  const projected = projectLatestEffectiveNodeStates(events, pending);
   const latestLifecycleData = new Map<string, Record<string, unknown>>();
   const runtimeMetadata = new Map<string, Partial<ApiWorkflowNodeState>>();
   for (const event of events) {
@@ -408,6 +415,7 @@ import * as messageDb from '@archon/core/db/messages';
 import * as userDb from '@archon/core/db/users';
 import * as workflowEnvDb from '@archon/core/db/workflow-envs';
 import * as workflowNodeMessageDb from '@archon/core/db/workflow-node-messages';
+import * as workflowPendingInteractionDb from '@archon/core/db/workflow-pending-interactions';
 import {
   abandonWorkflow,
   approveWorkflow,
@@ -538,6 +546,8 @@ import {
 } from './schemas/workflow.schemas';
 import { gitChangesRoute } from './git/changes-route';
 import { handleGitChanges } from './git/changes-handler';
+import { gitLogRoute } from './git/log-route';
+import { handleGitLog } from './git/log-handler';
 import { gitDiffRoute } from './git/diff-route';
 import { handleGitDiff } from './git/diff-handler';
 import { handleGitFile } from './git/file-handler';
@@ -4942,6 +4952,7 @@ export function registerApiRoutes(
         return apiError(c, 404, 'Workflow run not found');
       }
       const events = await workflowEventDb.listWorkflowEvents(runId);
+      const pendingInteractions = await workflowPendingInteractionDb.listPendingInteractions(runId);
 
       // Look up the run's conversation platform ID.
       // For web runs (parent_conversation_id set): conversation_id is the worker conversation → set worker_platform_id
@@ -4991,9 +5002,13 @@ export function registerApiRoutes(
         events,
         nodeStates: settleApiWorkflowNodeStatesForRunStatus(
           run.status,
-          projectApiWorkflowNodeStates(events)
+          projectApiWorkflowNodeStates(events, pendingInteractions)
         ),
-        pending_interactions: [],
+        pending_interactions: pendingInteractions.map(row => ({
+          ...row,
+          created_at: toISOString(row.created_at),
+          resolved_at: row.resolved_at ? toISOString(row.resolved_at) : null,
+        })),
         usage,
       });
     } catch (error) {
@@ -5005,6 +5020,11 @@ export function registerApiRoutes(
   // GET /api/workflows/runs/:runId/git/changes - Live uncommitted changes for a run
   registerOpenApiRoute(gitChangesRoute, async c => {
     return handleGitChanges(c, apiError);
+  });
+
+  // GET /api/workflows/runs/:runId/git/log - Commit history for a run checkout
+  registerOpenApiRoute(gitLogRoute, async c => {
+    return handleGitLog(c, apiError);
   });
 
   // GET /api/workflows/runs/:runId/git/diff - Now hunks for a modified file

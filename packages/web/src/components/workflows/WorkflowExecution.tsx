@@ -1,28 +1,29 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { DagNodeProgress } from './DagNodeProgress';
-import { LegacyNodeLogs } from './LegacyNodeLogs';
+import { LegacyGraphLogsPane } from './LegacyGraphLogsPane';
 import { StepLogs } from './StepLogs';
 import { WorkflowLogs } from './WorkflowLogs';
 import { WorkflowDagViewer } from './WorkflowDagViewer';
 import { ArtifactSummary } from './ArtifactSummary';
 import { WorkflowNodeRetryAction } from './WorkflowNodeRetryAction';
-import { ChatInterface } from '@/components/chat/ChatInterface';
 import { DagRunTabs, type WorkflowRunView } from './source-control/dag-run-tabs';
 import { SourceControlTab } from './source-control/source-control-tab';
-import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { useWorkflowStore } from '@/stores/workflow-store';
 import {
   approveWorkflowRun,
+  getConversation,
+  getMessages,
   getWorkflowRun,
   getWorkflowRunByWorker,
   getCodebase,
   getWorkflow,
   getWorkflowNodeMessages,
   rejectWorkflowRun,
+  sendMessage,
 } from '@/lib/api';
 import { ensureUtc, formatDurationMs } from '@/lib/format';
 import { selectInitialNode } from '@/lib/select-initial-node';
@@ -73,7 +74,6 @@ interface WorkflowRunQueryData {
   workerPlatformId: string | null;
   parentPlatformId: string | null;
   conversationPlatformId: string | null;
-  workingPath: string | null;
   codebaseId: string | null;
   events: WorkflowEventResponse[];
   nodeStates: WorkflowRunNodeState[];
@@ -233,6 +233,17 @@ export function buildWorkflowDagNodeStates(
   );
 }
 
+export type WorkflowExecutionBody = 'graph-logs-pane' | 'source-control' | 'sequential';
+
+export function resolveWorkflowExecutionBody(input: {
+  isDag: boolean;
+  activeView: WorkflowRunView;
+}): WorkflowExecutionBody {
+  if (!input.isDag) return 'sequential';
+  if (input.activeView === 'source-control') return 'source-control';
+  return 'graph-logs-pane';
+}
+
 interface WorkflowExecutionProps {
   runId: string;
 }
@@ -315,7 +326,6 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
         workerPlatformId: data.run.worker_platform_id ?? null,
         parentPlatformId: data.run.parent_platform_id ?? null,
         conversationPlatformId: data.run.conversation_platform_id ?? null,
-        workingPath: data.run.working_path ?? null,
         codebaseId: data.run.codebase_id ?? null,
         events: data.events,
         nodeStates: data.nodeStates,
@@ -334,7 +344,6 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
   const workerPlatformId = queryData?.workerPlatformId ?? null;
   const parentPlatformId = queryData?.parentPlatformId ?? null;
   const conversationPlatformId = queryData?.conversationPlatformId ?? null;
-  const workingPath = queryData?.workingPath ?? null;
   const error = queryError
     ? queryError instanceof Error
       ? queryError.message
@@ -684,8 +693,8 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
     />
   );
 
-  // Merged logs panel — Graph tab only. Detect whether the selected node has any DB events so we can show an empty-state
-  const mergedLogsPanel = (
+  // Sequential non-DAG runs keep the merged logs panel and selected-node empty state.
+  const sequentialLogsPanel = (
     <div className="flex-1 flex flex-col overflow-hidden min-h-0 h-full">
       {retryActionPanel}
       <div className="flex-1 flex flex-col overflow-hidden min-h-0">
@@ -717,82 +726,84 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
     </div>
   );
 
-  const renderBody = (): React.ReactElement => {
-    if (isDag && activeView === 'graph') {
+  const renderGraph = (input: {
+    selectedNodeId: string | null;
+    onNodeClick: (nodeId: string) => void;
+  }): ReactNode => {
+    if (dagDefinitionNodes) {
       return (
-        <ResizablePanelGroup orientation="horizontal" className="flex-1 min-h-0">
-          <ResizablePanel defaultSize={60} minSize={30}>
-            {dagDefinitionNodes ? (
-              <WorkflowDagViewer
-                dagNodes={dagDefinitionNodes}
-                liveStatus={workflow.dagNodes}
-                isRunning={isRunning}
-                currentlyExecuting={currentlyExecuting ?? undefined}
-                selectedNodeId={selectedDagNode}
-                onNodeClick={handleNodeClick}
-              />
-            ) : dagDefinitionErrorMessage ? (
-              <div className="flex flex-col items-center justify-center h-full text-text-secondary px-4 text-center">
-                <p className="text-error mb-1">Failed to load workflow graph</p>
-                <p className="text-xs mb-3">{dagDefinitionErrorMessage}</p>
-                <button
-                  type="button"
-                  onClick={(): void => {
-                    queryClient
-                      .resetQueries({
-                        queryKey: ['workflowDefinition', initialData?.workflowName, codebaseCwd],
-                      })
-                      .catch((err: unknown) => {
-                        console.error('[WorkflowExecution] Retry resetQueries failed', {
-                          workflowName: initialData?.workflowName,
-                          error: err instanceof Error ? err.message : err,
-                        });
-                      });
-                  }}
-                  className="text-xs text-primary hover:text-accent-bright transition-colors"
-                >
-                  Retry
-                </button>
-              </div>
-            ) : workflowDefPending ? (
-              <div className="flex items-center justify-center h-full text-text-secondary">
-                <span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-accent border-t-transparent mr-2" />
-                Loading graph...
-              </div>
-            ) : (
-              // Final fallback: query resolved with no nodes and no error.
-              // Covers older runs whose stored workflow has no DAG.
-              <div className="flex items-center justify-center h-full text-text-secondary px-4 text-center">
-                <p>Workflow graph unavailable for this run.</p>
-              </div>
-            )}
-          </ResizablePanel>
-          <ResizableHandle withHandle />
-          <ResizablePanel defaultSize={40} minSize={20}>
-            {mergedLogsPanel}
-          </ResizablePanel>
-        </ResizablePanelGroup>
+        <WorkflowDagViewer
+          dagNodes={dagDefinitionNodes}
+          liveStatus={workflow.dagNodes}
+          isRunning={isRunning}
+          currentlyExecuting={currentlyExecuting ?? undefined}
+          selectedNodeId={input.selectedNodeId}
+          onNodeClick={input.onNodeClick}
+        />
       );
     }
-    if (isDag && activeView === 'source-control') {
-      return <SourceControlTab key={runId} runId={runId} />;
-    }
-    if (isDag && activeView === 'chat' && parentPlatformId) {
+    if (dagDefinitionErrorMessage) {
       return (
-        <div className="flex flex-col flex-1 overflow-hidden min-h-0">
-          <ChatInterface conversationId={parentPlatformId} cwdOverride={workingPath} />
+        <div className="flex flex-col items-center justify-center h-full text-text-secondary px-4 text-center">
+          <p className="text-error mb-1">Failed to load workflow graph</p>
+          <p className="text-xs mb-3">{dagDefinitionErrorMessage}</p>
+          <button
+            type="button"
+            onClick={(): void => {
+              queryClient
+                .resetQueries({
+                  queryKey: ['workflowDefinition', initialData?.workflowName, codebaseCwd],
+                })
+                .catch((err: unknown) => {
+                  console.error('[WorkflowExecution] Retry resetQueries failed', {
+                    workflowName: initialData?.workflowName,
+                    error: err instanceof Error ? err.message : err,
+                  });
+                });
+            }}
+            className="text-xs text-primary hover:text-accent-bright transition-colors"
+          >
+            Retry
+          </button>
         </div>
       );
     }
-    if (isDag) {
+    if (workflowDefPending) {
       return (
-        <LegacyNodeLogs
+        <div className="flex items-center justify-center h-full text-text-secondary">
+          <span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-accent border-t-transparent mr-2" />
+          Loading graph...
+        </div>
+      );
+    }
+    return (
+      <div className="flex items-center justify-center h-full text-text-secondary px-4 text-center">
+        <p>Workflow graph unavailable for this run.</p>
+      </div>
+    );
+  };
+
+  const renderBody = (): React.ReactElement => {
+    const body = resolveWorkflowExecutionBody({
+      isDag,
+      activeView,
+    });
+    if (body === 'graph-logs-pane') {
+      return (
+        <LegacyGraphLogsPane
+          activeView={activeView === 'chat' ? 'chat' : activeView === 'graph' ? 'graph' : 'logs'}
+          renderGraph={renderGraph}
+          selectedNodeId={selectedDagNode}
+          onSelectNode={setSelectedDagNode}
           runId={runId}
           nodeStates={queryData?.nodeStates ?? []}
           events={queryData?.events ?? []}
           isLive={isRunning}
           loadMessages={getWorkflowNodeMessages}
-          onSelectNode={setSelectedDagNode}
+          parentPlatformId={parentPlatformId}
+          loadParentMessages={getMessages}
+          loadParentConversation={getConversation}
+          sendParentMessage={sendMessage}
           definitionNodes={dagDefinitionNodes ?? []}
           definitionPending={workflowDefPending}
           runStatus={queryData?.workflowState.status ?? workflow.status}
@@ -810,7 +821,9 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
         />
       );
     }
-    // Sequential (non-DAG) default layout keeps the merged logs panel.
+    if (body === 'source-control') {
+      return <SourceControlTab key={runId} runId={runId} />;
+    }
     return (
       <div className="flex flex-1 overflow-hidden min-h-0">
         <div className="w-64 border-r border-border overflow-auto">
@@ -820,7 +833,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
             onNodeClick={handleNodeClick}
           />
         </div>
-        {mergedLogsPanel}
+        {sequentialLogsPanel}
       </div>
     );
   };

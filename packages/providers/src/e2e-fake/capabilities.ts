@@ -27,4 +27,5 @@ export const E2E_FAKE_CAPABILITIES: ProviderCapabilities = {
   settingSources: false,
   nativeTools: false,
   containerExec: false,
+  askHuman: false,
 };

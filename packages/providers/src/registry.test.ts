@@ -39,6 +39,7 @@ function makeMockProvider(id: string): IAgentProvider {
       sandbox: false,
       nativeTools: false,
       containerExec: false,
+      askHuman: false,
     }),
     async *sendQuery() {
       yield { type: 'result' as const };
@@ -137,6 +138,7 @@ describe('registry', () => {
       expect(caps.mcp).toBe(true);
       expect(caps.hooks).toBe(true);
       expect(caps.envInjection).toBe(true);
+      expect(caps.askHuman).toBe(true);
     });
 
     test('returns Codex capabilities without instantiation', () => {
@@ -169,6 +171,15 @@ describe('registry', () => {
       const staticCaps = getProviderCapabilities('codex');
       const runtimeCaps = getAgentProvider('codex').getCapabilities();
       expect(staticCaps).toEqual(runtimeCaps);
+    });
+
+    test('only Claude and Pi advertise AskHuman', () => {
+      registerCommunityProviders();
+      const capable = getProviderInfoList()
+        .filter(info => info.capabilities.askHuman)
+        .map(info => info.id)
+        .sort();
+      expect(capable).toEqual(['claude', 'pi']);
     });
 
     test('throws UnknownProviderError for unknown type', () => {
@@ -349,6 +360,7 @@ describe('registry', () => {
       expect(caps.costControl).toBe(false);
       expect(caps.fallbackModel).toBe(false);
       expect(caps.sandbox).toBe(false);
+      expect(caps.askHuman).toBe(true);
     });
 
     test('appears in getProviderInfoList with builtIn: false', () => {

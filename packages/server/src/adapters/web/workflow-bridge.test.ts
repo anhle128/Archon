@@ -192,6 +192,21 @@ describe('mapWorkflowEvent — hook_activity (Phase 2 of #975)', () => {
   });
 });
 
+describe('mapWorkflowEvent — node_awaiting', () => {
+  test('maps live node_awaiting to workflow_status paused without approval payload', () => {
+    const event: WorkflowEmitterEvent = {
+      type: 'node_awaiting',
+      runId: 'r1',
+      nodeId: 'review',
+    };
+    const e = JSON.parse(mapWorkflowEvent(event) ?? '{}') as Record<string, unknown>;
+    expect(e).toMatchObject({ type: 'workflow_status', runId: 'r1', status: 'paused' });
+    expect(e.approval).toBeUndefined();
+    expect(e.envelope).toBeUndefined();
+    expect(e.questions).toBeUndefined();
+  });
+});
+
 describe('mapWorkflowEvent — DAG node events', () => {
   test('maps live node_started events with runtime AI metadata', () => {
     const event: WorkflowEmitterEvent = {

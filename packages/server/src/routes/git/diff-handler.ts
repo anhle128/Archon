@@ -13,7 +13,12 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-type ClassifiedGitReadError = 'invalid_path' | 'file_not_found' | 'git_read_failed';
+type ClassifiedGitReadError =
+  | 'invalid_path'
+  | 'file_not_found'
+  | 'invalid_cursor'
+  | 'stale_cursor'
+  | 'git_read_failed';
 
 function classifyGitReadError(error: unknown): ClassifiedGitReadError {
   if (typeof error !== 'object' || error === null) return 'git_read_failed';
@@ -22,12 +27,18 @@ function classifyGitReadError(error: unknown): ClassifiedGitReadError {
   if (candidate.name === 'GitFileError' && candidate.code === 'not_found') {
     return 'file_not_found';
   }
+  if (candidate.name === 'GitFileError' && candidate.code === 'invalid_cursor') {
+    return 'invalid_cursor';
+  }
+  if (candidate.name === 'GitFileError' && candidate.code === 'stale_cursor') {
+    return 'stale_cursor';
+  }
   return 'git_read_failed';
 }
 
 export async function handleGitDiff(
   c: Context,
-  apiError: (c: Context, status: 400 | 404 | 500, message: string) => Response
+  apiError: (c: Context, status: 400 | 404 | 409 | 500, message: string) => Response
 ): Promise<Response> {
   const runId = c.req.param('runId') ?? '';
   const path = c.req.query('path') ?? '';
@@ -52,7 +63,10 @@ export async function handleGitDiff(
     }
 
     try {
-      const result = await fileDiff(toWorktreePath(gate.workingPath), path);
+      const result = await fileDiff(toWorktreePath(gate.workingPath), path, {
+        cursor: c.req.query('cursor') ?? '',
+        signal: c.req.raw.signal,
+      });
       getLog().info(
         { runId, binary: result.binary, truncated: result.truncated },
         'git.diff_completed'
@@ -72,6 +86,14 @@ export async function handleGitDiff(
       if (classified === 'file_not_found') {
         getLog().info({ runId, errorType: 'file_not_found' }, 'git.diff_failed');
         return apiError(c, 404, 'File not found');
+      }
+      if (classified === 'invalid_cursor') {
+        getLog().info({ runId, errorType: 'invalid_cursor' }, 'git.diff_failed');
+        return apiError(c, 400, 'Invalid file cursor');
+      }
+      if (classified === 'stale_cursor') {
+        getLog().info({ runId, errorType: 'stale_cursor' }, 'git.diff_failed');
+        return apiError(c, 409, 'File changed');
       }
       getLog().error({ runId, errorType: 'git_read_failed' }, 'git.diff_failed');
       return apiError(c, 500, 'Could not read git diff');

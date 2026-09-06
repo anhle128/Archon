@@ -27,6 +27,7 @@ mock.module('@archon/git', () => ({
   toWorktreePath: mockToWorktreePath,
   changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
   isGitWorkTree: mock(async () => false),
+  log: mock(async () => ({ commits: [], revision: '0'.repeat(64), truncated: false })),
 }));
 
 const mockListAllActiveWithCodebase = mock(() => Promise.resolve([]));

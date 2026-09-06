@@ -323,6 +323,7 @@ mock.module('@archon/git', () => ({
   hasUncommittedChanges: mock(() => Promise.resolve(false)),
   changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
   isGitWorkTree: mock(async () => false),
+  log: mock(async () => ({ commits: [], revision: '0'.repeat(64), truncated: false })),
 }));
 
 mock.module('fs', () => ({
@@ -1430,6 +1431,32 @@ describe('discoverAllWorkflows — remote sync', () => {
       expect(sp.append).not.toContain('## Managing Workflow Runs');
       // Native-tool provider gets the manage_run tool instead.
       expect(Array.isArray(requestOptions.nativeTools)).toBe(true);
+    } finally {
+      capsMock.mockReturnValue({ ...DEFAULT_PROVIDER_CAPS });
+    }
+  });
+
+  test('project-scoped nativeTools injects manage_run and not AskHuman', async () => {
+    const providers = await import('@archon/providers');
+    const capsMock = providers.getProviderCapabilities as ReturnType<typeof mock>;
+    capsMock.mockReturnValue({ ...DEFAULT_PROVIDER_CAPS, nativeTools: true });
+    const codebase = makeCodebaseForSync();
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ ai_assistant_type: 'claude', codebase_id: 'codebase-1' }))
+    );
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
+
+    try {
+      const platform = makePlatform();
+      await handleMessage(platform, 'conv-1', 'Hello');
+
+      const requestOptions = mockSendQuery.mock.calls[0][3] as {
+        nativeTools?: { name: string }[];
+      };
+      expect(requestOptions.nativeTools?.map((t: { name: string }) => t.name)).toEqual([
+        'manage_run',
+      ]);
     } finally {
       capsMock.mockReturnValue({ ...DEFAULT_PROVIDER_CAPS });
     }

@@ -169,6 +169,12 @@ interface ApprovalPendingEvent {
   message: string;
 }
 
+interface NodeAwaitingEvent {
+  type: 'node_awaiting';
+  runId: string;
+  nodeId: string;
+}
+
 interface WorkflowCancelledEvent {
   type: 'workflow_cancelled';
   runId: string;
@@ -253,6 +259,7 @@ export type WorkflowEmitterEvent =
   | ToolStartedEvent
   | ToolCompletedEvent
   | ApprovalPendingEvent
+  | NodeAwaitingEvent
   | WorkflowCancelledEvent
   | TaskActivityEvent
   | HookActivityEvent

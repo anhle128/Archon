@@ -1,0 +1,172 @@
+{
+  "feature": "Walk This Run's Commit History as a Lane Graph",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add the public log git read",
+      "description": "As a developer, I want a read-only git log helper in @archon/git that walks HEAD and returns parsed commits with parents and a revision fingerprint, so that downstream consumers can build commit history lane graphs.",
+      "acceptanceCriteria": [
+        "Create packages/git/src/git-log.ts and failing unit tests in packages/git/src/git-log.test.ts covering parser, truncation, unborn/empty repositories, and real git commits with merges and dev sibling branches.",
+        "Implement parseGitLogZ(stdout: string): GitLogCommit[] splitting NUL-delimited records into 5-tuples (oid, parentsRaw, authorName, authorDate, subject); parse parents separated by spaces; validate full SHA-1 (40-char) or SHA-256 (64-char) lowercase hex object names without mixing lengths; throw 'Malformed git log output' on invalid format.",
+        "Implement gitLogResultFromStdout(stdout: string): GitLogResult requesting up to 501 commits (GIT_LOG_MAX_COMMITS + 1), returning at most 500 commits, setting truncated: true only when the 501st sentinel record exists, and calculating revision as SHA-256 of stdout (or stable empty SHA-256).",
+        "Implement isEmptyHistoryError(error: unknown): boolean matching unborn/empty repo errors ('does not have any commits yet', 'unknown revision or path not in the working tree', 'ambiguous argument \\'HEAD\\'').",
+        "Implement log(workingPath: RepoPath | WorktreePath): Promise<GitLogResult> using execFileAsync with exact argv ['-C', workingPath, '--no-optional-locks', 'log', '--date-order', '--format=%H%x00%P%x00%an%x00%aI%x00%s', '-z', '--max-count=501', 'HEAD'].",
+        "Export log, GIT_LOG_MAX_COMMITS, GitLogCommit, and GitLogResult from packages/git/src/index.ts.",
+        "Stub log in all 31 existing @archon/git mock factories across the codebase to prevent test leakage to live git.",
+        "Verify bun test packages/git/src/git-log.test.ts and bun --filter @archon/git test pass green."
+      ],
+      "technicalNotes": "Follow plan Task 1 at docs/superpowers/plans/2026-09-06-source-control-lane-graph.md:202-654. Consumes execFileAsync and RepoPath/WorktreePath types. Create packages/git/src/git-log.ts and packages/git/src/git-log.test.ts; modify packages/git/src/index.ts and the 31 test files with mock.module('@archon/git').",
+      "dependsOn": [],
+      "priority": 1,
+      "passes": true,
+      "notes": "Implemented in iteration 1. Files: packages/git/src/git-log.ts, packages/git/src/git-log.test.ts, packages/git/src/index.ts, and 31 @archon/git mock factories."
+    },
+    {
+      "id": "US-002",
+      "title": "Add GET /api/workflows/runs/{runId}/git/log route",
+      "description": "As an API consumer, I want an OpenAPI endpoint GET /api/workflows/runs/{runId}/git/log, so that the web client can fetch the run checkout's commit log under standard CAP-6 confinement.",
+      "acceptanceCriteria": [
+        "Add failing HTTP integration tests to packages/server/src/routes/api.git-changes.test.ts covering missing run (404), CAP-6 container (200 with emptyReason: 'container'), CAP-6 no_checkout (200 with emptyReason: 'no_checkout'), post-gate git error (500), success (200), ignored query parameters like working_path, and paired Pino events.",
+        "Update packages/server/src/routes/schemas/git.schemas.ts adding gitLogCommitSchema and gitLogResponseSchema (emptyReason optional enum 'container' | 'no_checkout', commits array, revision string, truncated boolean).",
+        "Create packages/server/src/routes/git/log-route.ts defining OpenAPI route for GET /api/workflows/runs/{runId}/git/log with 200, 404, and 500 response schemas.",
+        "Create packages/server/src/routes/git/log-handler.ts using loadRunCheckout to resolve host checkout, enforce CAP-6 container/no_checkout gate, invoke @archon/git log, recheck CAP-6 post-read on ENOENT, map unexpected errors to opaque 500, and emit paired Pino events (git.log_started paired with git.log_completed or git.log_failed).",
+        "Register the log route in packages/server/src/routes/api.ts alongside existing git routes.",
+        "Verify bun test packages/server/src/routes/api.git-changes.test.ts and bun --filter @archon/server test pass green."
+      ],
+      "technicalNotes": "Follow plan Task 2 at docs/superpowers/plans/2026-09-06-source-control-lane-graph.md:655-1002. Consumes loadRunCheckout, log, toWorktreePath. Modify packages/server/src/routes/schemas/git.schemas.ts, packages/server/src/routes/api.ts, and packages/server/src/routes/api.git-changes.test.ts; create packages/server/src/routes/git/log-route.ts and packages/server/src/routes/git/log-handler.ts.",
+      "dependsOn": [
+        "US-001"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": "Implemented in iteration 2. Files: packages/server/src/routes/schemas/git.schemas.ts, packages/server/src/routes/git/log-route.ts, packages/server/src/routes/git/log-handler.ts, packages/server/src/routes/api.ts, packages/server/src/routes/api.git-changes.test.ts."
+    },
+    {
+      "id": "US-003",
+      "title": "Generate web contract and add log client",
+      "description": "As a web developer, I want generated TypeScript types and an API client function for the git log route, so that the web frontend can invoke the endpoint with typed responses and abort signal support.",
+      "acceptanceCriteria": [
+        "Add failing client tests in packages/web/src/lib/api.git-changes.test.ts asserting getWorkflowRunGitLog GETs /api/workflows/runs/{runId}/git/log without sending working_path, properly URL-encodes runId, and forwards AbortSignal in RequestInit.",
+        "Regenerate OpenAPI types via bun --filter @archon/web generate:types into packages/web/src/lib/api.generated.d.ts confirming GitLogResponse and GitLogCommit appear in components['schemas'].",
+        "Re-export GitLogCommit and GitLogResponse types from packages/web/src/lib/api.ts.",
+        "Implement getWorkflowRunGitLog(runId: string, options?: { signal?: AbortSignal }): Promise<GitLogResponse> in packages/web/src/lib/api.ts.",
+        "Verify bun test packages/web/src/lib/api.git-changes.test.ts and bun --filter @archon/web type-check pass green."
+      ],
+      "technicalNotes": "Follow plan Task 3 at docs/superpowers/plans/2026-09-06-source-control-lane-graph.md:1003-1148. Consumes generated OpenAPI schemas. Modify packages/web/src/lib/api.ts and packages/web/src/lib/api.git-changes.test.ts; regenerate packages/web/src/lib/api.generated.d.ts.",
+      "dependsOn": [
+        "US-002"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": "Implemented in iteration 3. Files: packages/web/src/lib/api.generated.d.ts, packages/web/src/lib/api.ts, packages/web/src/lib/api.git-changes.test.ts. Unblock: chore(unblock) added awaiting to toNodeState for type-check."
+    },
+    {
+      "id": "US-004",
+      "title": "Implement Spike 3 commit lane assignment",
+      "description": "As a graph renderer, I want a pure lane-assignment function, so that branch/merge commit history is mapped into explicit lane indices and edges before virtualization.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/components/workflows/source-control/commit-lanes.test.ts with unit tests for linear history on lane 0, merge commits connecting branches, branch convergence, octopus merges, root commits with empty parents, empty commit lists, and 500-commit stability.",
+        "Implement assignCommitLanes(commits: readonly { oid: string; parents: readonly string[] }[]): LaneGraph in packages/web/src/components/workflows/source-control/commit-lanes.ts.",
+        "Process commits in git newest-first order, maintaining active reserved lanes; assign each commit to the smallest matching incoming lane, reusable null lane, or append a new lane.",
+        "Clear incoming reservations before placing parents; connect parents in git %P order, reusing existing reservations or allocating new lanes; ensure root commits leave no outgoing reservations.",
+        "Return LaneGraph containing rows: CommitLaneRow[] with { oid, lane, incomingLanes, throughLanes, parentLanes, isMerge } and laneCount (one more than max lane index seen).",
+        "Verify bun test packages/web/src/components/workflows/source-control/commit-lanes.test.ts passes green."
+      ],
+      "technicalNotes": "Follow plan Task 4 at docs/superpowers/plans/2026-09-06-source-control-lane-graph.md:1149-1443 and Spike 3 Outcome at plan:138-162. Pure function with zero DOM or React dependencies. Create packages/web/src/components/workflows/source-control/commit-lanes.ts and packages/web/src/components/workflows/source-control/commit-lanes.test.ts.",
+      "dependsOn": [
+        "US-003"
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": "Implemented in iteration 4. Files: packages/web/src/components/workflows/source-control/commit-lanes.ts, packages/web/src/components/workflows/source-control/commit-lanes.test.ts."
+    },
+    {
+      "id": "US-005",
+      "title": "Freeze History snapshots beside Changes",
+      "description": "As an operator, I want the Source Control tab to freeze displayed History snapshots and track pending updates, so that background changes do not disrupt the active commit history view.",
+      "acceptanceCriteria": [
+        "Add unit tests in packages/web/src/components/workflows/source-control/source-control-state.test.ts testing gitLogSnapshotReducer for first ready display, revision-divergent pending freeze, matching-revision no-op, and accepted reload swap.",
+        "Define GitLogSnapshot ({ emptyReason?: 'container' | 'no_checkout'; commits: GitLogCommit[]; revision: string; truncated: boolean }), GitLogSnapshotState, GitLogSnapshotAction, and INITIAL_GIT_LOG_STATE in packages/web/src/components/workflows/source-control/source-control-state.ts.",
+        "Implement toGitLogSnapshot(response: GitLogResponse): GitLogSnapshot and gitLogSnapshotReducer(state: GitLogSnapshotState, action: GitLogSnapshotAction): GitLogSnapshotState.",
+        "Retain existing Changes snapshot reducer and types completely unchanged to guarantee isolation under the Rule of Three.",
+        "Verify bun test packages/web/src/components/workflows/source-control/source-control-state.test.ts passes green."
+      ],
+      "technicalNotes": "Follow plan Task 5 at docs/superpowers/plans/2026-09-06-source-control-lane-graph.md:1444-1668. Consumes GitLogResponse from web api client. Modify packages/web/src/components/workflows/source-control/source-control-state.ts and packages/web/src/components/workflows/source-control/source-control-state.test.ts.",
+      "dependsOn": [
+        "US-003"
+      ],
+      "priority": 5,
+      "passes": true,
+      "notes": "Implemented in iteration 5. Files: packages/web/src/components/workflows/source-control/source-control-state.ts, packages/web/src/components/workflows/source-control/source-control-state.test.ts."
+    },
+    {
+      "id": "US-006",
+      "title": "Render virtualized History lane graph widget",
+      "description": "As an operator, I want a keyboard-accessible virtualized commit history listbox with bespoke SVG lanes, so that I can inspect the commit graph without performance degradation or accessibility barriers.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/components/workflows/source-control/format-commit-time.ts and format-commit-time.test.ts implementing formatCommitTime(iso: string, nowMs: number): string using Intl.RelativeTimeFormat for deltas < 30 days and UTC Intl.DateTimeFormat for older dates, returning 'Unknown time' on invalid input.",
+        "Create packages/web/src/components/workflows/source-control/commit-graph-row.tsx rendering a commit row with role='option', aria-label describing commit details (merge vs ordinary, short OID, subject, author, relative time), and inline SVG lanes (width laneCount * 12px, height 24px).",
+        "SVG draws vertical through-lines for throughLanes, top-to-node curves for incomingLanes, node-to-bottom curves for parentLanes using stroke-text-secondary, strokeWidth='1.5', and NO opacity; draws circle for ordinary commits and diamond polygon for merge commits filled with fill-text-primary.",
+        "Create packages/web/src/components/workflows/source-control/commit-history-graph.tsx implementing role='listbox', aria-label='Commit history', aria-activedescendant, virtualized with @tanstack/react-virtual (row estimate 24px, 280px initial fallback).",
+        "Export and implement nextCommitIndex(key: string, currentIndex: number, commitCount: number): number supporting ArrowUp, ArrowDown, Home, End; Enter/Space selects commit without opening files.",
+        "Create tests in packages/web/src/components/workflows/source-control/commit-history-graph.test.tsx verifying SVG topology, a11y roles/labels, keyboard navigation, and absence of opacity styles.",
+        "Verify bun test packages/web/src/components/workflows/source-control/ passes green."
+      ],
+      "technicalNotes": "Follow plan Task 6 at docs/superpowers/plans/2026-09-06-source-control-lane-graph.md:1669-2174. Consumes assignCommitLanes, GitLogCommit, and @tanstack/react-virtual. Do not import @xyflow/react. Create format-commit-time.ts, format-commit-time.test.ts, commit-graph-row.tsx, commit-history-graph.tsx, and commit-history-graph.test.tsx in packages/web/src/components/workflows/source-control/.",
+      "dependsOn": [
+        "US-004"
+      ],
+      "priority": 6,
+      "passes": true,
+      "notes": "Implemented in iteration 6. Files: packages/web/src/components/workflows/source-control/format-commit-time.ts, format-commit-time.test.ts, commit-graph-row.tsx, commit-history-graph.tsx, commit-history-graph.test.tsx."
+    },
+    {
+      "id": "US-007",
+      "title": "Insert History below Changes and integrate tab queries",
+      "description": "As an operator, I want the Source Control tab to fetch History on mount, display History below Changes on live checkouts, handle whole-tab CAP-6, and coordinate concurrent Reload, so that commit history is visible alongside uncommitted changes.",
+      "acceptanceCriteria": [
+        "Modify packages/web/src/components/workflows/source-control/source-control-panel.tsx to accept historySnapshot and historyLoadState; render h2 'Changes' above h2 'History' on live checkouts in a vertical flex column (flex-1 min-h-0 for each region).",
+        "History region renders CommitHistoryGraph, 'No commits yet' status when empty, 'Showing the newest 500 commits.' when truncated, 'Loading history' / 'Refreshing history', or 'Could not refresh history.' with in-region Reload on error.",
+        "Enforce whole-tab CAP-6: if either Changes or History reports CAP-6, the entire panel displays the quiet CAP-6 state ('container' takes precedence over 'no_checkout'), omitting the History heading and graph.",
+        "Update packages/web/src/components/workflows/source-control/source-control-panel.test.tsx verifying two-region panel, CAP-6 exclusion of History, and empty repo 'No commits yet'.",
+        "Modify packages/web/src/components/workflows/source-control/source-control-tab.tsx to add useQuery for getWorkflowRunGitLog(runId) (staleTime: Infinity, no polling); track History snapshot with gitLogSnapshotReducer; combine stale across Changes, History, and viewer; refetch both queries concurrently on Reload; track commit selection without opening files.",
+        "Update packages/web/src/component-integration/source-control-tab.test.tsx verifying mounted log query, empty history, CAP-6 whole-tab handling, concurrent reload, and commit selection without triggering file diff/content queries.",
+        "Verify NODE_ENV=development bun test packages/web/src/component-integration/source-control-tab.test.tsx passes green."
+      ],
+      "technicalNotes": "Follow plan Task 7 at docs/superpowers/plans/2026-09-06-source-control-lane-graph.md:2175-2853. Modify packages/web/src/components/workflows/source-control/source-control-panel.tsx, packages/web/src/components/workflows/source-control/source-control-panel.test.tsx, packages/web/src/components/workflows/source-control/source-control-tab.tsx, and packages/web/src/component-integration/source-control-tab.test.tsx.",
+      "dependsOn": [
+        "US-003",
+        "US-005",
+        "US-006"
+      ],
+      "priority": 7,
+      "passes": true,
+      "notes": "Implemented in iteration 7. Files: packages/web/src/components/workflows/source-control/source-control-panel.tsx, source-control-panel.test.tsx, source-control-tab.tsx, packages/web/src/component-integration/source-control-tab.test.tsx."
+    },
+    {
+      "id": "US-008",
+      "title": "Verify full acceptance gates and update sprint status",
+      "description": "As the release engineer, I want all package tests, repo validation, and sprint status verified, so that Story 2.1 is verifiably complete and ready for pull request.",
+      "acceptanceCriteria": [
+        "Run all focused tests in their isolated processes: bun test packages/git/src/git-log.test.ts, bun test packages/web/src/components/workflows/source-control/commit-lanes.test.ts, bun test packages/server/src/routes/api.git-changes.test.ts, bun test packages/web/src/lib/api.git-changes.test.ts, bun test packages/web/src/components/workflows/source-control/, and NODE_ENV=development bun test packages/web/src/component-integration/source-control-tab.test.tsx.",
+        "Run full package test suites: bun --filter @archon/git test, bun --filter @archon/server test, and bun --filter @archon/web test.",
+        "Run formatting and repository validation gates: bun run format:check, git diff --check, and bun run validate.",
+        "Confirm all 19 global acceptance matrix criteria from the plan are satisfied (two-region panel, CAP-6 omission, SVG topology, parent order, non-dev commits, SHA-1/SHA-256 support, keyboard navigation, color contrast >= 3:1 without opacity, quiet empty states, live git truth, 500 commit cap, OpenAPI types, runId-only param, no write chrome, console untouched, no new dependencies).",
+        "Update _bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml marking epic-2: in-progress and 2-1-walk-this-runs-commit-history-as-a-lane-graph: done, leaving 2-2-open-a-commits-files-in-the-same-viewer at backlog."
+      ],
+      "technicalNotes": "Follow plan Task 8 at docs/superpowers/plans/2026-09-06-source-control-lane-graph.md:2854-2964. Modify _bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml only after all gates pass.",
+      "dependsOn": [
+        "US-001",
+        "US-002",
+        "US-003",
+        "US-004",
+        "US-005",
+        "US-006",
+        "US-007"
+      ],
+      "priority": 8,
+      "passes": true,
+      "notes": "Implemented in iteration 8. Files: _bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml. Focused tests, package suites, format:check, git diff --check, and bun run validate all passed. Legacy smoke on run 5d34895e93307a3f345df852d74bd5d7 confirmed Changes above History lane graph; commit click left the viewer on Select a file to inspect."
+    }
+  ]
+}

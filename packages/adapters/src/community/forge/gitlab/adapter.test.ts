@@ -116,6 +116,7 @@ mock.module('@archon/git', () => ({
   execFileAsync: mock(async () => ({ stdout: '', stderr: '' })),
   changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
   isGitWorkTree: mock(async () => false),
+  log: mock(async () => ({ commits: [], revision: '0'.repeat(64), truncated: false })),
 }));
 
 // Mock @archon/isolation

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, spyOn, test, type Mock } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test, type Mock } from 'bun:test';
 import {
   focusManager,
   onlineManager,
@@ -9,7 +9,13 @@ import { Window } from 'happy-dom';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
-import type { GitChangedFile, GitChangesResponse, GitReadyDiffResponse } from '@/lib/api';
+import type {
+  GitChangedFile,
+  GitChangesResponse,
+  GitLogCommit,
+  GitLogResponse,
+  GitReadyDiffResponse,
+} from '@/lib/api';
 
 import { SourceControlPanel } from '../components/workflows/source-control/source-control-panel';
 import { SourceControlTab } from '../components/workflows/source-control/source-control-tab';
@@ -19,7 +25,60 @@ const REVISION_B = 'b'.repeat(64);
 const HASH_A = 'c'.repeat(64);
 const HASH_B = 'd'.repeat(64);
 
+const EMPTY_GIT_LOG: GitLogResponse = {
+  commits: [],
+  revision: REVISION_A,
+  truncated: false,
+};
+
+const HISTORY_COMMIT: GitLogCommit = {
+  oid: '1'.repeat(40),
+  parents: [],
+  authorName: 'Ada',
+  authorDate: '2026-09-06T18:09:18Z',
+  subject: 'initial history subject',
+};
+
+const FIRST_DIFF_PAGE: GitReadyDiffResponse = {
+  path: 'large.ts',
+  status: 'M',
+  scope: 'now',
+  ref: 'live',
+  cursor: 'version-one',
+  truncated: true,
+  binary: false,
+  fileFallback: false,
+  hunks: [
+    {
+      header: '@@ -1 +1 @@',
+      oldStart: 1,
+      oldLines: 1,
+      newStart: 1,
+      newLines: 1,
+      changes: [{ type: 'insert', content: 'first', newLine: 1 }],
+    },
+  ],
+};
+
+const SECOND_DIFF_PAGE: GitReadyDiffResponse = {
+  ...FIRST_DIFF_PAGE,
+  cursor: '',
+  truncated: false,
+  hunks: [
+    {
+      header: '@@ -10 +10 @@',
+      oldStart: 10,
+      oldLines: 1,
+      newStart: 10,
+      newLines: 1,
+      changes: [{ type: 'insert', content: 'second', newLine: 10 }],
+    },
+  ],
+};
+
 let stackedViewport = false;
+let createObjectUrlMock: Mock<(blob: Blob) => string>;
+let revokeObjectUrlMock: Mock<(url: string) => void>;
 
 function installHappyDom(): Window {
   const win = new Window({ url: 'https://localhost/' });
@@ -81,6 +140,8 @@ function installHappyDom(): Window {
     MouseEvent: win.MouseEvent,
     KeyboardEvent: win.KeyboardEvent,
     IS_REACT_ACT_ENVIRONMENT: true,
+    URL: win.URL,
+    Blob: win.Blob,
   };
   Object.assign(globalThis as object, globals);
   return win;
@@ -93,14 +154,37 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+function presentedFileResponse(
+  body: BodyInit | null,
+  hash: string,
+  headers: Record<string, string>
+): Response {
+  return new Response(body, {
+    status: 200,
+    headers: {
+      ETag: '"' + hash + '"',
+      'X-Archon-Git-Truncated': 'false',
+      'X-Archon-Git-Cursor': '',
+      'X-Archon-Git-Byte-Length': '1',
+      'X-Archon-Git-Media-Type': '',
+      ...headers,
+    },
+  });
+}
+
 function mockFetchResponses(responses: readonly GitChangesResponse[]): Mock<typeof fetch> {
-  let index = 0;
-  return spyOn(globalThis, 'fetch').mockImplementation((async (): Promise<Response> => {
-    const payload = responses[index];
-    if (!payload) throw new Error(`Unexpected fetch number ${String(index + 1)}`);
-    index += 1;
+  let changesIndex = 0;
+  return spyOn(globalThis, 'fetch').mockImplementation((async (
+    input: RequestInfo | URL
+  ): Promise<Response> => {
+    const url = requestUrl(input);
+    if (url.includes('/git/log')) return jsonResponse(EMPTY_GIT_LOG);
+    if (!url.includes('/git/changes')) throw new Error(`Unexpected fetch: ${url}`);
+    const payload = responses[changesIndex];
+    if (!payload) throw new Error(`Unexpected changes fetch ${String(changesIndex + 1)}`);
+    changesIndex += 1;
     return jsonResponse(payload);
-  }) as unknown as typeof fetch);
+  }) as typeof fetch);
 }
 
 function textFileResponse(text: string, hash: string): Response {
@@ -133,6 +217,7 @@ function readyDiff(path: string, before: string, after: string): GitReadyDiffRes
     cursor: '',
     truncated: false,
     binary: false,
+    fileFallback: false,
     hunks: [
       {
         header: '@@ -1,1 +1,1 @@',
@@ -158,6 +243,7 @@ function binaryDiff(path: string): GitReadyDiffResponse {
     cursor: '',
     truncated: false,
     binary: true,
+    fileFallback: true,
     hunks: [],
   };
 }
@@ -183,15 +269,25 @@ function mockGitRoutes(options: {
   ) => GitChangesResponse | Response | Promise<GitChangesResponse | Response>;
   onDiff?: (url: string, call: number, init?: RequestInit) => Response | Promise<Response>;
   onFile?: (url: string, call: number, init?: RequestInit) => Response | Promise<Response>;
+  onLog?: (
+    call: number,
+    init?: RequestInit
+  ) => GitLogResponse | Response | Promise<GitLogResponse | Response>;
 }): Mock<typeof fetch> {
   let changesCall = 0;
   let diffCall = 0;
   let fileCall = 0;
+  let logCall = 0;
   return spyOn(globalThis, 'fetch').mockImplementation((async (
     input: RequestInfo | URL,
     init?: RequestInit
   ): Promise<Response> => {
     const url = requestUrl(input);
+    if (url.includes('/git/log')) {
+      logCall += 1;
+      const result = options.onLog ? await options.onLog(logCall, init) : EMPTY_GIT_LOG;
+      return result instanceof Response ? result : jsonResponse(result);
+    }
     if (url.includes('/git/changes')) {
       changesCall += 1;
       const result = await options.onChanges(changesCall, init);
@@ -250,7 +346,7 @@ function requireButton(text: string): HTMLButtonElement {
 }
 
 function requireListbox(): HTMLElement {
-  const listbox = host.querySelector('[role="listbox"]');
+  const listbox = host.querySelector('[role="listbox"][aria-label="Uncommitted changes"]');
   if (!(listbox instanceof HTMLElement)) {
     throw new Error('Missing changed-files listbox');
   }
@@ -293,6 +389,16 @@ beforeEach(() => {
   process.env.NODE_ENV = 'development';
   stackedViewport = false;
   win = installHappyDom();
+  createObjectUrlMock = mock((_blob: Blob): string => 'blob:archon-image');
+  revokeObjectUrlMock = mock((_url: string): void => undefined);
+  Object.defineProperty(URL, 'createObjectURL', {
+    configurable: true,
+    value: createObjectUrlMock,
+  });
+  Object.defineProperty(URL, 'revokeObjectURL', {
+    configurable: true,
+    value: revokeObjectUrlMock,
+  });
   const element = win.document.createElement('div');
   win.document.body.appendChild(element);
   host = element as unknown as Element;
@@ -306,6 +412,8 @@ afterEach(async () => {
   await act(async () => {
     root.unmount();
   });
+  delete (URL as unknown as { createObjectURL?: unknown }).createObjectURL;
+  delete (URL as unknown as { revokeObjectURL?: unknown }).revokeObjectURL;
   queryClient.clear();
   fetchSpy?.mockRestore();
   fetchSpy = undefined;
@@ -326,17 +434,21 @@ describe('SourceControlTab', () => {
 
     expect(host.textContent).toContain('src/live.ts');
     expect(host.textContent).toContain('M');
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
     expect(fetchSpy).toHaveBeenCalledWith('/api/workflows/runs/run%2Fone/git/changes', {
       signal: expect.any(AbortSignal),
     });
+    expect(fetchSpy).toHaveBeenCalledWith('/api/workflows/runs/run%2Fone/git/log', {
+      signal: expect.any(AbortSignal),
+    });
+    expect(calledUrls(fetchSpy).every(url => !url.includes('working_path'))).toBe(true);
 
     await act(async () => {
       await new Promise<void>(resolve => {
         setTimeout(resolve, 0);
       });
     });
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
   test('keeps the displayed list until the divergent snapshot is accepted', async () => {
@@ -371,7 +483,7 @@ describe('SourceControlTab', () => {
     await waitFor(() => host.textContent?.includes('new.ts'), 'the accepted snapshot');
 
     expect(host.textContent).not.toContain('old.ts');
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
   });
 
   test('updates aria-activedescendant when the focused list receives ArrowDown', async () => {
@@ -416,11 +528,13 @@ describe('SourceControlTab', () => {
 
     await renderTab('run-1');
     await waitFor(
-      () => host.textContent?.includes('Could not refresh changes.'),
+      () =>
+        (host.textContent?.includes('Could not refresh changes.') ?? false) &&
+        (host.textContent?.includes('Could not refresh history.') ?? false),
       'the in-region fetch failure'
     );
 
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
     expect(host.textContent).toContain('Reload');
 
     focusManager.setFocused(false);
@@ -433,7 +547,7 @@ describe('SourceControlTab', () => {
       });
     });
 
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
   test('opens the current file with Enter or Space and a second file on click', async () => {
@@ -447,7 +561,9 @@ describe('SourceControlTab', () => {
       root.render(
         createElement(SourceControlPanel, {
           snapshot: { files: [...files], revision: REVISION_A },
+          historySnapshot: EMPTY_GIT_LOG,
           loadState: 'idle',
+          historyLoadState: 'idle',
           stale: false,
           onReload: (): void => undefined,
           onAcceptPending: (): void => undefined,
@@ -506,7 +622,9 @@ describe('SourceControlTab', () => {
       root.render(
         createElement(SourceControlPanel, {
           snapshot: { files, revision: REVISION_A },
+          historySnapshot: EMPTY_GIT_LOG,
           loadState: 'idle',
+          historyLoadState: 'idle',
           stale: false,
           onReload: (): void => undefined,
           onAcceptPending: (): void => undefined,
@@ -588,7 +706,7 @@ describe('SourceControlTab', () => {
     expect(host.textContent).toContain('After');
     expect(host.querySelector('[aria-label="Before"]')).not.toBeNull();
     expect(host.querySelector('[aria-label="After"]')).not.toBeNull();
-    expect(calledUrls(fetchSpy)).toEqual([
+    expect(calledUrls(fetchSpy).filter(url => !url.includes('/git/log'))).toEqual([
       '/api/workflows/runs/run%2Fone/git/changes',
       '/api/workflows/runs/run%2Fone/git/diff?path=src%2Fa.ts',
     ]);
@@ -877,7 +995,7 @@ describe('SourceControlTab', () => {
     await waitFor(() => host.textContent?.includes('blob.bin'), 'list');
     await clickOption('blob.bin');
     await waitFor(
-      () => (host.textContent ?? '').includes('Binary file. Download to inspect.'),
+      () => (host.textContent ?? '').includes('This file is too large to open here.'),
       'binary copy'
     );
 
@@ -886,7 +1004,7 @@ describe('SourceControlTab', () => {
     const link = host.querySelector('a');
     expect(link?.textContent).toBe('Download');
     expect(link?.getAttribute('href')).toBe(
-      '/api/workflows/runs/run-1/git/file/blob.bin?source=worktree'
+      '/api/workflows/runs/run-1/git/file/blob.bin?source=worktree&download=1'
     );
 
     const downloaded = await fetch(link?.getAttribute('href') ?? '');
@@ -1118,7 +1236,7 @@ describe('SourceControlTab', () => {
     await waitFor(() => host.textContent?.includes('same.bin'), 'binary file');
     await clickOption('same.bin');
     await waitFor(
-      () => (host.textContent ?? '').includes('Binary file. Download to inspect.'),
+      () => (host.textContent ?? '').includes('This file is too large to open here.'),
       'binary viewer'
     );
     expect(host.querySelector('a')?.getAttribute('href')).toContain('source=worktree');
@@ -1271,5 +1389,453 @@ describe('SourceControlTab', () => {
       separator.focus();
     });
     expect(win.document.activeElement?.getAttribute('role')).toBe('separator');
+  });
+
+  test('Load more appends text with the opaque cursor and leaves the Changes list unchanged', async () => {
+    fetchSpy = mockGitRoutes({
+      onChanges: () => ({
+        files: [{ path: 'big.txt', status: 'A' }],
+        revision: REVISION_A,
+      }),
+      onFile: (_url, call) =>
+        call === 1
+          ? presentedFileResponse('first\n', HASH_A, {
+              'Content-Type': 'text/plain; charset=utf-8',
+              'X-Archon-Git-Truncated': 'true',
+              'X-Archon-Git-Cursor': 'opaque+next',
+              'X-Archon-Git-Byte-Length': '13',
+              'X-Archon-Git-Presentation': 'text',
+            })
+          : presentedFileResponse('second\n', HASH_A, {
+              'Content-Type': 'text/plain; charset=utf-8',
+              'X-Archon-Git-Presentation': 'text',
+              'X-Archon-Git-Byte-Length': '13',
+            }),
+    });
+    await renderTab('run-1');
+    await waitFor(() => host.textContent?.includes('big.txt'), 'file list');
+    await clickOption('big.txt');
+    await waitFor(() => host.textContent?.includes('Load more'), 'Load more');
+    await act(async () => {
+      requireButton('Load more').click();
+    });
+    await waitFor(() => host.textContent?.includes('second'), 'second page');
+    expect(host.textContent).toContain('first');
+    expect(host.querySelectorAll('[role="option"]')).toHaveLength(1);
+    expect(calledUrls(fetchSpy).at(-1)).toContain('cursor=opaque%2Bnext');
+  });
+
+  test('Cancel during Load more aborts only the page and keeps painted text', async () => {
+    const pending = createDeferred<Response>();
+    let pageSignal: AbortSignal | undefined;
+    fetchSpy = mockGitRoutes({
+      onChanges: () => ({
+        files: [{ path: 'big.txt', status: 'A' }],
+        revision: REVISION_A,
+      }),
+      onFile: (_url, call, init) => {
+        if (call === 1) {
+          return presentedFileResponse('painted\n', HASH_A, {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'X-Archon-Git-Truncated': 'true',
+            'X-Archon-Git-Cursor': 'next',
+            'X-Archon-Git-Byte-Length': '20',
+            'X-Archon-Git-Presentation': 'text',
+          });
+        }
+        pageSignal = init?.signal ?? undefined;
+        return pending.promise;
+      },
+    });
+    await renderTab('run-1');
+    await waitFor(() => host.textContent?.includes('big.txt'), 'file list');
+    await clickOption('big.txt');
+    await waitFor(() => host.textContent?.includes('Load more'), 'Load more');
+    await act(async () => {
+      requireButton('Load more').click();
+    });
+    await waitFor(() => host.textContent?.includes('Cancel'), 'page Cancel');
+    await act(async () => {
+      requireButton('Cancel').click();
+    });
+    expect(pageSignal?.aborted).toBe(true);
+    expect(host.textContent).toContain('painted');
+    expect(host.querySelector('[aria-label="Close"]')).not.toBeNull();
+    expect(host.textContent).not.toContain('Select a file to inspect');
+  });
+
+  test('an SVG M fallback renders through img and revokes its object URL on close', async () => {
+    fetchSpy = mockGitRoutes({
+      onChanges: () => ({
+        files: [{ path: 'image.svg', status: 'M' }],
+        revision: REVISION_A,
+      }),
+      onDiff: () =>
+        jsonResponse({
+          ...readyDiff('image.svg', 'old', 'new'),
+          hunks: [],
+          fileFallback: true,
+        }),
+      onFile: () =>
+        presentedFileResponse(Buffer.from('<svg></svg>'), HASH_A, {
+          'Content-Type': 'image/svg+xml',
+          'X-Archon-Git-Presentation': 'image',
+          'X-Archon-Git-Media-Type': 'image/svg+xml',
+          'X-Archon-Git-Byte-Length': '11',
+        }),
+    });
+    await renderTab('run-1');
+    await waitFor(() => host.textContent?.includes('image.svg'), 'file list');
+    await clickOption('image.svg');
+    await waitFor(() => host.querySelector('img') !== null, 'inline image');
+    expect(host.querySelector('img')?.getAttribute('src')).toBe('blob:archon-image');
+    expect(host.querySelector('a')?.getAttribute('href')).toContain('download=1');
+    await act(async () => {
+      requireButton('Close').click();
+    });
+    expect(createObjectUrlMock).toHaveBeenCalledTimes(1);
+    expect(revokeObjectUrlMock).toHaveBeenCalledWith('blob:archon-image');
+  });
+
+  test('selecting another image revokes the prior object URL before replacing it', async () => {
+    let objectUrlIndex = 0;
+    createObjectUrlMock.mockImplementation((_blob: Blob): string => {
+      objectUrlIndex += 1;
+      return 'blob:image-' + String(objectUrlIndex);
+    });
+    fetchSpy = mockGitRoutes({
+      onChanges: () => ({
+        files: [
+          { path: 'one.png', status: 'A' },
+          { path: 'two.png', status: 'A' },
+        ],
+        revision: REVISION_A,
+      }),
+      onFile: url =>
+        presentedFileResponse(
+          Uint8Array.from([0x89, 0x50]),
+          url.includes('one.png') ? HASH_A : HASH_B,
+          {
+            'Content-Type': 'image/png',
+            'X-Archon-Git-Presentation': 'image',
+            'X-Archon-Git-Media-Type': 'image/png',
+            'X-Archon-Git-Byte-Length': '2',
+          }
+        ),
+    });
+    await renderTab('run-1');
+    await waitFor(() => host.textContent?.includes('two.png'), 'file list');
+    await clickOption('one.png');
+    await waitFor(
+      () => host.querySelector('img')?.getAttribute('src') === 'blob:image-1',
+      'first image'
+    );
+    await clickOption('two.png');
+    await waitFor(
+      () => host.querySelector('img')?.getAttribute('src') === 'blob:image-2',
+      'second image'
+    );
+    expect(revokeObjectUrlMock).toHaveBeenCalledWith('blob:image-1');
+  });
+
+  test('a NUL M fallback renders hex and Download without diff or highlighting', async () => {
+    fetchSpy = mockGitRoutes({
+      onChanges: () => ({
+        files: [{ path: 'blob.bin', status: 'M' }],
+        revision: REVISION_A,
+      }),
+      onDiff: () => jsonResponse({ ...binaryDiff('blob.bin'), fileFallback: true }),
+      onFile: () =>
+        presentedFileResponse(Uint8Array.from([0, 0x41, 0xff]), HASH_A, {
+          'Content-Type': 'application/octet-stream',
+          'X-Archon-Git-Presentation': 'hex',
+          'X-Archon-Git-Byte-Length': '3',
+        }),
+    });
+    await renderTab('run-1');
+    await waitFor(() => host.textContent?.includes('blob.bin'), 'file list');
+    await clickOption('blob.bin');
+    await waitFor(() => host.textContent?.includes('00000000'), 'hex');
+    expect(host.querySelector('[aria-label="Before"]')).toBeNull();
+    expect(host.querySelector('.hljs')).toBeNull();
+    expect(host.querySelector('a')?.getAttribute('href')).toContain('download=1');
+  });
+
+  test('a binary-to-text M fallback renders the raw worktree text', async () => {
+    fetchSpy = mockGitRoutes({
+      onChanges: () => ({
+        files: [{ path: 'became-text.txt', status: 'M' }],
+        revision: REVISION_A,
+      }),
+      onDiff: () => jsonResponse({ ...binaryDiff('became-text.txt'), fileFallback: true }),
+      onFile: () =>
+        presentedFileResponse('plain text now\n', HASH_A, {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'X-Archon-Git-Presentation': 'text',
+          'X-Archon-Git-Byte-Length': '15',
+        }),
+    });
+    await renderTab('run-1');
+    await waitFor(() => host.textContent?.includes('became-text.txt'), 'file list');
+    await clickOption('became-text.txt');
+    await waitFor(() => host.textContent?.includes('plain text now'), 'text fallback');
+    expect(host.querySelector('[aria-label="Before"]')).toBeNull();
+    expect(host.querySelector('.hljs')).not.toBeNull();
+    expect(calledUrls(fetchSpy).at(-1)).toContain('source=worktree');
+  });
+
+  test('download-only renders no pre body', async () => {
+    fetchSpy = mockGitRoutes({
+      onChanges: () => ({
+        files: [{ path: 'huge.dat', status: 'A' }],
+        revision: REVISION_A,
+      }),
+      onFile: () =>
+        presentedFileResponse(null, HASH_A, {
+          'Content-Type': 'application/octet-stream',
+          'Content-Disposition': 'attachment; filename="download"',
+          'X-Archon-Git-Presentation': 'download',
+          'X-Archon-Git-Byte-Length': '52428801',
+        }),
+    });
+    await renderTab('run-1');
+    await waitFor(() => host.textContent?.includes('huge.dat'), 'file list');
+    await clickOption('huge.dat');
+    await waitFor(
+      () => host.textContent?.includes('This file is too large to open here.'),
+      'download-only'
+    );
+    expect(host.querySelector('pre')).toBeNull();
+    expect(host.querySelector('a')?.getAttribute('href')).toContain('download=1');
+  });
+
+  test('appended diff hunks do not make an unchanged first page look stale', async () => {
+    fetchSpy = mockGitRoutes({
+      onChanges: () => ({
+        files: [{ path: 'large.ts', status: 'M' }],
+        revision: REVISION_A,
+      }),
+      onDiff: (_url, call) => jsonResponse(call === 2 ? SECOND_DIFF_PAGE : FIRST_DIFF_PAGE),
+    });
+    await renderTab('run-1');
+    await waitFor(() => host.textContent?.includes('large.ts'), 'file list');
+    await clickOption('large.ts');
+    await waitFor(() => host.textContent?.includes('Load more'), 'Load more');
+    await act(async () => {
+      requireButton('Load more').click();
+    });
+    await waitFor(() => host.textContent?.includes('second'), 'second hunk page');
+    await act(async () => {
+      requireButton('Reload').click();
+    });
+    const activeFetchSpy = fetchSpy;
+    if (!activeFetchSpy) throw new Error('Missing fetch spy');
+    await waitFor(
+      () => calledUrls(activeFetchSpy).filter(url => url.includes('/git/diff')).length === 3,
+      'fresh first hunk page'
+    );
+    expect(host.textContent).toContain('second');
+    expect(host.textContent).not.toContain('Changed on disk — Reload');
+  });
+
+  test('a stale text cursor keeps painted content and enters the existing Reload flow', async () => {
+    fetchSpy = mockGitRoutes({
+      onChanges: () => ({
+        files: [{ path: 'large.txt', status: 'A' }],
+        revision: REVISION_A,
+      }),
+      onFile: (_url, call) => {
+        if (call === 1) {
+          return presentedFileResponse('painted\n', HASH_A, {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'X-Archon-Git-Truncated': 'true',
+            'X-Archon-Git-Cursor': 'old-version',
+            'X-Archon-Git-Byte-Length': '20',
+            'X-Archon-Git-Presentation': 'text',
+          });
+        }
+        if (call === 2) {
+          return new Response(JSON.stringify({ error: 'File changed' }), {
+            status: 409,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return presentedFileResponse('fresh\n', HASH_B, {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'X-Archon-Git-Truncated': 'true',
+          'X-Archon-Git-Cursor': 'new-version',
+          'X-Archon-Git-Byte-Length': '21',
+          'X-Archon-Git-Presentation': 'text',
+        });
+      },
+    });
+    await renderTab('run-1');
+    await waitFor(() => host.textContent?.includes('large.txt'), 'file list');
+    await clickOption('large.txt');
+    await waitFor(() => host.textContent?.includes('Load more'), 'Load more');
+    await act(async () => {
+      requireButton('Load more').click();
+    });
+    await waitFor(() => host.textContent?.includes('Changed on disk — Reload'), 'stale affordance');
+    expect(host.textContent).toContain('painted');
+    expect(host.textContent).not.toContain('fresh');
+  });
+
+  test('.env remains ordinary highlighted text', async () => {
+    fetchSpy = mockGitRoutes({
+      onChanges: () => ({
+        files: [{ path: '.env', status: 'A' }],
+        revision: REVISION_A,
+      }),
+      onFile: () =>
+        presentedFileResponse('TOKEN=visible\n', HASH_A, {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'X-Archon-Git-Presentation': 'text',
+          'X-Archon-Git-Byte-Length': '14',
+        }),
+    });
+    await renderTab('run-1');
+    await waitFor(() => host.textContent?.includes('.env'), 'file list');
+    await clickOption('.env');
+    await waitFor(() => host.querySelector('.hljs') !== null, 'highlighted env');
+    expect(host.textContent).toContain('TOKEN');
+  });
+
+  test('shows a region-empty History for a ready repository with zero commits', async () => {
+    fetchSpy = mockGitRoutes({
+      onChanges: () => ({ files: [], revision: REVISION_A }),
+      onLog: () => EMPTY_GIT_LOG,
+    });
+
+    await renderTab('run-1');
+    await waitFor(() => host.textContent?.includes('No commits yet'), 'empty History');
+
+    expect(host.textContent).toContain('Changes');
+    expect(host.textContent).toContain('History');
+    expect(host.textContent).not.toContain('No worktree available');
+  });
+
+  test('treats container CAP-6 from either read as a whole-tab state', async () => {
+    fetchSpy = mockGitRoutes({
+      onChanges: () => ({ files: [], revision: REVISION_A }),
+      onLog: () => ({
+        emptyReason: 'container',
+        commits: [],
+        revision: '',
+        truncated: false,
+      }),
+    });
+
+    await renderTab('run-1');
+    await waitFor(() => host.textContent?.includes('No files to show'), 'container CAP-6');
+
+    expect(host.textContent).not.toContain('History');
+    expect(
+      Array.from(host.querySelectorAll('button')).some(button => button.textContent === 'Reload')
+    ).toBe(false);
+  });
+
+  test('operates History from the keyboard without opening a diff or file in Story 2.1', async () => {
+    const secondCommit = {
+      ...HISTORY_COMMIT,
+      oid: '2'.repeat(40),
+      subject: 'second history subject',
+    };
+    fetchSpy = mockGitRoutes({
+      onChanges: () => ({ files: [], revision: REVISION_A }),
+      onLog: () => ({
+        commits: [HISTORY_COMMIT, secondCommit],
+        revision: REVISION_A,
+        truncated: false,
+      }),
+    });
+
+    await renderTab('run-1');
+    await waitFor(() => host.textContent?.includes(HISTORY_COMMIT.subject), 'commit row');
+    const history = host.querySelector('[role="listbox"][aria-label="Commit history"]');
+    if (!(history instanceof HTMLElement)) throw new Error('Missing History listbox');
+    expect(history.getAttribute('aria-activedescendant')).toBe('sc-history-commit-0');
+
+    await act(async () => {
+      history.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    });
+    expect(history.getAttribute('aria-activedescendant')).toBe('sc-history-commit-1');
+    expect(host.querySelector('#sc-history-commit-1')?.getAttribute('aria-selected')).toBe('true');
+
+    await act(async () => {
+      history.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    });
+
+    expect(calledUrls(fetchSpy).filter(url => url.includes('/git/diff'))).toEqual([]);
+    expect(calledUrls(fetchSpy).filter(url => url.includes('/git/file/'))).toEqual([]);
+  });
+
+  test('freezes a divergent History until the shared stale action is accepted', async () => {
+    const changedCommit = {
+      ...HISTORY_COMMIT,
+      oid: '2'.repeat(40),
+      subject: 'changed history subject',
+    };
+    fetchSpy = mockGitRoutes({
+      onChanges: () => ({ files: [], revision: REVISION_A }),
+      onLog: call =>
+        call === 1
+          ? { commits: [HISTORY_COMMIT], revision: REVISION_A, truncated: false }
+          : { commits: [changedCommit], revision: REVISION_B, truncated: false },
+    });
+
+    await renderTab('run-1');
+    await waitFor(() => host.textContent?.includes(HISTORY_COMMIT.subject), 'initial History');
+    await act(async () => {
+      requireButton('Reload').click();
+    });
+    await waitFor(
+      () => host.textContent?.includes('Changed on disk — Reload'),
+      'History divergence affordance'
+    );
+
+    expect(host.textContent).toContain(HISTORY_COMMIT.subject);
+    expect(host.textContent).not.toContain(changedCommit.subject);
+
+    await act(async () => {
+      requireButton('Changed on disk — Reload').click();
+    });
+    await waitFor(() => host.textContent?.includes(changedCommit.subject), 'accepted History');
+
+    expect(calledUrls(fetchSpy).filter(url => url.includes('/git/changes'))).toHaveLength(2);
+    expect(calledUrls(fetchSpy).filter(url => url.includes('/git/log'))).toHaveLength(2);
+  });
+
+  test('a 3000-hunk response mounts only the virtual window', async () => {
+    const response: GitReadyDiffResponse = {
+      path: 'virtual.ts',
+      status: 'M',
+      scope: 'now',
+      ref: 'live',
+      cursor: '',
+      truncated: false,
+      binary: false,
+      fileFallback: false,
+      hunks: Array.from({ length: 3000 }, (_unused, index) => ({
+        header: '@@ -0,0 +' + String(index + 1) + ' @@',
+        oldStart: 0,
+        oldLines: 0,
+        newStart: index + 1,
+        newLines: 1,
+        changes: [{ type: 'insert' as const, content: 'line', newLine: index + 1 }],
+      })),
+    };
+    fetchSpy = mockGitRoutes({
+      onChanges: () => ({
+        files: [{ path: 'virtual.ts', status: 'M' }],
+        revision: REVISION_A,
+      }),
+      onDiff: () => jsonResponse(response),
+    });
+    await renderTab('run-1');
+    await waitFor(() => host.textContent?.includes('virtual.ts'), 'file list');
+    await clickOption('virtual.ts');
+    await waitFor(() => host.querySelectorAll('.sc-virtual-hunk').length > 0, 'virtual hunks');
+    expect(host.querySelectorAll('.sc-virtual-hunk').length).toBeLessThan(3000);
   });
 });

@@ -2550,6 +2550,63 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/workflows/runs/{runId}/nodes/{nodeId}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List one workflow node transcript */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    runId: string;
+                    nodeId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Workflow node transcript in sequence order */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkflowNodeMessagesResponse"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Server error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/workflows/runs/{runId}/git/changes": {
         parameters: {
             query?: never;
@@ -2576,6 +2633,62 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["GitChangesResponse"];
+                    };
+                };
+                /** @description Workflow run not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Git read failed */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workflows/runs/{runId}/git/log": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List a run checkout's commit history */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    runId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Commit log or a CAP-6 empty envelope */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["GitLogResponse"];
                     };
                 };
                 /** @description Workflow run not found */
@@ -2655,64 +2768,16 @@ export interface paths {
                         "application/json": components["schemas"]["Error"];
                     };
                 };
+                /** @description File changed */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
                 /** @description Git read failed */
-                500: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["Error"];
-                    };
-                };
-            };
-        };
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/workflows/runs/{runId}/nodes/{nodeId}/messages": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List one workflow node transcript */
-        get: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    runId: string;
-                    nodeId: string;
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Workflow node transcript in sequence order */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["WorkflowNodeMessagesResponse"];
-                    };
-                };
-                /** @description Not found */
-                404: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["Error"];
-                    };
-                };
-                /** @description Server error */
                 500: {
                     headers: {
                         [name: string]: unknown;
@@ -4842,7 +4907,7 @@ export interface components {
             nodeId: string;
             name: string;
             /** @enum {string} */
-            status: "pending" | "running" | "completed" | "failed" | "skipped";
+            status: "pending" | "running" | "completed" | "failed" | "skipped" | "awaiting";
             retryEpoch: number;
             duration?: number;
             error?: string;
@@ -4976,6 +5041,26 @@ export interface components {
         GitChangedFileStatus: "M" | "A" | "D";
         /** @enum {string} */
         GitEmptyReason: "container" | "no_checkout";
+        GitLogResponse: {
+            commits: components["schemas"]["GitLogCommit"][];
+            revision: string;
+            truncated: boolean;
+        } | {
+            emptyReason: components["schemas"]["GitEmptyReason"];
+            commits: components["schemas"]["GitLogCommit"][];
+            /** @enum {string} */
+            revision: "";
+            /** @enum {boolean} */
+            truncated: false;
+        };
+        GitLogCommit: {
+            oid: string;
+            parents: string[];
+            authorName: string;
+            /** Format: date-time */
+            authorDate: string;
+            subject: string;
+        };
         GitDiffResponse: {
             path: string;
             /** @enum {string} */
@@ -4987,6 +5072,7 @@ export interface components {
             cursor: string;
             truncated: boolean;
             binary: boolean;
+            fileFallback: boolean;
         } | {
             emptyReason: components["schemas"]["GitEmptyReason"];
         };
