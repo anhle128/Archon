@@ -43,6 +43,15 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
 }
 
+function isFileChangedError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'status' in error &&
+    (error as { status: unknown }).status === 409
+  );
+}
+
 function viewerFingerprint(state: FileViewerState): string {
   switch (state.kind) {
     case 'text':
@@ -76,7 +85,7 @@ function fromRawFile(
   source: GitFileSource,
   raw: Exclude<GitFileClientResult, { kind: 'empty' | 'text' }>
 ): LoadedViewerState {
-  const downloadHref = gitFileUrl(runId, file.path, source);
+  const downloadHref = gitFileUrl(runId, file.path, source, { download: true });
   switch (raw.kind) {
     case 'image':
       return {
@@ -115,7 +124,7 @@ async function loadViewerFile(
     if ('emptyReason' in response) {
       return { kind: 'unavailable', file, emptyReason: response.emptyReason };
     }
-    if (!response.binary) {
+    if (!response.fileFallback) {
       return {
         kind: 'diff',
         file,
@@ -191,6 +200,8 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
   const [selectedFile, setSelectedFile] = useState<GitChangedFile | null>(null);
   const [viewerState, setViewerState] = useState<FileViewerState>({ kind: 'idle' });
   const [pendingViewer, setPendingViewer] = useState<PendingViewer | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const loadingMoreRef = useRef(false);
 
   selectedFileRef.current = selectedFile;
   viewerStateRef.current = viewerState;
@@ -217,6 +228,8 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
     }
     requestRef.current.controller?.abort();
     requestRef.current.controller = null;
+    loadingMoreRef.current = false;
+    setLoadingMore(false);
   }, [queryClient]);
 
   const beginRequest = useCallback((): { id: number; signal: AbortSignal } => {
@@ -350,6 +363,102 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
     onReload();
   }, [beginRequest, isCurrent, onReload, runId, selectedFile, viewerState.kind]);
 
+  const onViewerCancel = useCallback((): void => {
+    if (loadingMoreRef.current) {
+      abortCurrent();
+      return;
+    }
+    closeViewer();
+  }, [abortCurrent, closeViewer]);
+
+  const onLoadMore = useCallback((): void => {
+    const file = selectedFileRef.current;
+    const state = viewerStateRef.current;
+    if (!file) return;
+    const pagingText = state.kind === 'text' && state.truncated && state.cursor !== '';
+    const pagingDiff =
+      state.kind === 'diff' && state.response.truncated && state.response.cursor !== '';
+    if (!pagingText && !pagingDiff) return;
+
+    const { id, signal } = beginRequest();
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+
+    void (async (): Promise<void> => {
+      const finishPage = (): void => {
+        loadingMoreRef.current = false;
+        setLoadingMore(false);
+      };
+      try {
+        if (state.kind === 'text') {
+          const source: GitFileSource = file.status === 'A' ? 'worktree' : 'head';
+          const next = await getWorkflowRunGitFile(runId, file.path, source, {
+            cursor: state.cursor,
+            signal,
+          });
+          if (!isCurrent(id, signal)) return;
+          if (next.kind !== 'text' || next.contentHash !== state.contentHash) {
+            finishPage();
+            onReload();
+            return;
+          }
+          setViewerState(current => {
+            if (current.kind !== 'text') return current;
+            return {
+              ...current,
+              text: current.text + next.text,
+              truncated: next.truncated,
+              cursor: next.cursor,
+            };
+          });
+          finishPage();
+          return;
+        }
+
+        if (state.kind !== 'diff') return;
+        const next = await getWorkflowRunGitDiff(runId, file.path, {
+          cursor: state.response.cursor,
+          signal,
+        });
+        if (!isCurrent(id, signal)) return;
+        if ('emptyReason' in next) {
+          finishPage();
+          onReload();
+          return;
+        }
+        if (
+          next.fileFallback ||
+          next.path !== state.response.path ||
+          next.ref !== state.response.ref ||
+          next.status !== state.response.status
+        ) {
+          finishPage();
+          onReload();
+          return;
+        }
+        setViewerState(current => {
+          if (current.kind !== 'diff') return current;
+          return {
+            ...current,
+            response: {
+              ...current.response,
+              hunks: [...current.response.hunks, ...next.hunks],
+              truncated: next.truncated,
+              cursor: next.cursor,
+            },
+          };
+        });
+        finishPage();
+      } catch (error: unknown) {
+        if (isAbortError(error) || !isCurrent(id, signal)) return;
+        finishPage();
+        if (isFileChangedError(error)) {
+          onReload();
+        }
+      }
+    })();
+  }, [beginRequest, isCurrent, onReload, runId]);
+
   const onAcceptPending = useCallback((): void => {
     abortCurrent();
     const pendingList = snapshotRef.current.pending;
@@ -418,9 +527,11 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
           <FileViewer
             state={viewerState}
             stacked={stacked}
-            onCancel={closeViewer}
+            loadingMore={loadingMore}
+            onCancel={onViewerCancel}
             onReload={onViewerReload}
             onClose={closeViewer}
+            onLoadMore={onLoadMore}
           />
         }
       />
