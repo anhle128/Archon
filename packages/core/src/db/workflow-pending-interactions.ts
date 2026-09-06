@@ -3,8 +3,9 @@
  *
  * Inserts the pending row and the `node_awaiting` audit event in one
  * transaction. Resolves an Ask answer in one transaction that may also resume
- * the run. Corrupt stored JSON fails closed and never logs envelope or answer
- * bodies.
+ * the run. Terminal cancel/fail callers purge remaining pending rows on the
+ * same query they used for the status CAS. Corrupt stored JSON fails closed
+ * and never logs envelope or answer bodies.
  */
 import { createLogger } from '@archon/paths';
 import { AskHumanNoStarterError } from '@archon/providers/types';
@@ -25,6 +26,7 @@ import { insertWorkflowEvent } from './workflow-events';
 import {
   resumeWorkflowRunInTransaction,
   workflowRunLockClause,
+  type WorkflowTransactionQuery,
 } from './workflow-resume-transition';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -375,4 +377,58 @@ export async function resolvePendingInteraction(
       remaining_pending: remainingPending,
     };
   });
+}
+
+/**
+ * Purge remaining pending interactions for a run that just won a cancel or
+ * fail CAS. Callers own the transaction; this must not open a nested one.
+ * Already-answered rows are left untouched. Envelope and answer bodies are
+ * never copied into the audit event.
+ */
+export async function purgePendingInteractionsInTransaction(
+  query: WorkflowTransactionQuery,
+  workflowRunId: string,
+  terminalStatus: 'failed' | 'cancelled'
+): Promise<{ purged: number }> {
+  const dialect = getDialect();
+  const pending = await query<{
+    id: string;
+    node_id: string;
+    tool_use_id: string;
+    kind: 'ask' | 'permission';
+  }>(
+    `SELECT id, node_id, tool_use_id, kind
+     FROM remote_agent_pending_interactions
+     WHERE workflow_run_id = $1 AND status = 'pending'
+     ORDER BY created_at ASC, id ASC${workflowRunLockClause()}`,
+    [workflowRunId]
+  );
+
+  let purged = 0;
+  for (const row of pending.rows) {
+    const cas = await query(
+      `UPDATE remote_agent_pending_interactions
+       SET status = 'purged',
+           resolved_at = ${dialect.now()}
+       WHERE id = $1 AND status = 'pending'`,
+      [row.id]
+    );
+    if ((cas.rowCount ?? 0) === 0) continue;
+
+    await insertWorkflowEvent(query, {
+      workflow_run_id: workflowRunId,
+      event_type: 'interaction_resolved',
+      step_name: row.node_id,
+      data: {
+        node_id: row.node_id,
+        tool_use_id: row.tool_use_id,
+        kind: row.kind,
+        purged: true,
+        resumed: false,
+        terminal_status: terminalStatus,
+      },
+    });
+    purged += 1;
+  }
+  return { purged };
 }

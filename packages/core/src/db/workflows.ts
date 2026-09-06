@@ -9,6 +9,7 @@ import {
   resumableWorkflowStatusClause,
   workflowRunLockClause,
 } from './workflow-resume-transition';
+import { purgePendingInteractionsInTransaction } from './workflow-pending-interactions';
 import type { IDatabase, SqlDialect } from './adapters/types';
 import type {
   WorkflowRun,
@@ -315,6 +316,7 @@ export async function resolveAndCancelApprovalGate(
         for (const event of events) {
           await insertWorkflowEvent(query, { workflow_run_id: id, ...event });
         }
+        await purgePendingInteractionsInTransaction(query, id, 'cancelled');
       }
       return { resolved };
     });
@@ -1336,24 +1338,29 @@ export async function completeWorkflowRun(
 
 export async function failWorkflowRun(id: string, error: string): Promise<void> {
   const dialect = getDialect();
-  let result: Awaited<ReturnType<IDatabase['query']>>;
+  let won = false;
   try {
     // Accept both `running` (normal mid-execution fail) and `pending` (overlay-bearing
     // background pre-create / early preamble fail-closed before status→running).
     // Other statuses stay rejected so SIGTERM cannot clobber a paused gate, and a
     // completed/cancelled row cannot be resurrected as failed.
-    result = await pool.query(
-      `UPDATE remote_agent_workflow_runs
-       SET status = 'failed', completed_at = ${dialect.now()}, metadata = ${dialect.jsonMerge('metadata', 2)}
-       WHERE id = $1 AND status IN ('running', 'pending')`,
-      [id, JSON.stringify({ error })]
-    );
+    won = await getDatabase().withTransaction(async query => {
+      const result = await query(
+        `UPDATE remote_agent_workflow_runs
+         SET status = 'failed', completed_at = ${dialect.now()}, metadata = ${dialect.jsonMerge('metadata', 2)}
+         WHERE id = $1 AND status IN ('running', 'pending')`,
+        [id, JSON.stringify({ error })]
+      );
+      if ((result.rowCount ?? 0) === 0) return false;
+      await purgePendingInteractionsInTransaction(query, id, 'failed');
+      return true;
+    });
   } catch (dbError) {
     const err = dbError as Error;
     getLog().error({ err }, 'db.workflow_run_mark_failed_error');
     throw new Error(`Failed to fail workflow run: ${err.message}`);
   }
-  if (result.rowCount === 0) {
+  if (!won) {
     getLog().warn({ workflowRunId: id }, 'db.workflow_run_fail_no_match');
     throw new Error(`Workflow run not found or not in running/pending state (id: ${id})`);
   }
@@ -1361,7 +1368,6 @@ export async function failWorkflowRun(id: string, error: string): Promise<void> 
 
 export async function cancelWorkflowRun(id: string): Promise<{ cancelled: boolean }> {
   const dialect = getDialect();
-  let result: Awaited<ReturnType<typeof pool.query>>;
   try {
     // Guard against re-stamping an already-finished run. Cancelling a run that
     // is 'completed' or 'cancelled' must be a no-op, not a re-write of
@@ -1370,25 +1376,29 @@ export async function cancelWorkflowRun(id: string): Promise<{ cancelled: boolea
     // to discard it), and a 'running' run stays cancellable — that is
     // cooperative cancellation, which the executor honors via its between-layer
     // status check (dag-executor).
-    result = await pool.query(
-      `UPDATE remote_agent_workflow_runs
-       SET status = 'cancelled', completed_at = ${dialect.now()}
-       WHERE id = $1 AND status NOT IN ('completed', 'cancelled')`,
-      [id]
-    );
+    return await getDatabase().withTransaction(async query => {
+      const result = await query(
+        `UPDATE remote_agent_workflow_runs
+         SET status = 'cancelled', completed_at = ${dialect.now()}
+         WHERE id = $1 AND status NOT IN ('completed', 'cancelled')`,
+        [id]
+      );
+      const cancelled = (result.rowCount ?? 0) > 0;
+      if (!cancelled) {
+        // Idempotent no-op: the run was already terminal. Returned so callers can
+        // report "nothing to cancel" instead of a false "Cancelled" (see #1830 I1).
+        // Same info level as the resume CAS-miss signal for consistency (S2).
+        getLog().info({ workflowRunId: id }, 'db.workflow_run_cancel_noop');
+        return { cancelled: false };
+      }
+      await purgePendingInteractionsInTransaction(query, id, 'cancelled');
+      return { cancelled: true };
+    });
   } catch (error) {
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_run_cancel_failed');
     throw new Error(`Failed to cancel workflow run: ${err.message}`);
   }
-  const cancelled = (result.rowCount ?? 0) > 0;
-  if (!cancelled) {
-    // Idempotent no-op: the run was already terminal. Returned so callers can
-    // report "nothing to cancel" instead of a false "Cancelled" (see #1830 I1).
-    // Same info level as the resume CAS-miss signal for consistency (S2).
-    getLog().info({ workflowRunId: id }, 'db.workflow_run_cancel_noop');
-  }
-  return { cancelled };
 }
 
 /**
@@ -1400,20 +1410,24 @@ export async function cancelWorkflowRun(id: string): Promise<{ cancelled: boolea
  * failed runs and must not change those legacy callers as a side effect.
  */
 export async function cancelRecoveryWorkflowRun(id: string): Promise<{ cancelled: boolean }> {
-  let result: Awaited<ReturnType<typeof pool.query>>;
   try {
-    result = await pool.query(
-      `UPDATE remote_agent_workflow_runs
-       SET status = 'cancelled', completed_at = ${getDialect().now()}
-       WHERE id = $1 AND status IN ('running', 'paused', 'failed')`,
-      [id]
-    );
+    return await getDatabase().withTransaction(async query => {
+      const result = await query(
+        `UPDATE remote_agent_workflow_runs
+         SET status = 'cancelled', completed_at = ${getDialect().now()}
+         WHERE id = $1 AND status IN ('running', 'paused', 'failed')`,
+        [id]
+      );
+      const cancelled = (result.rowCount ?? 0) > 0;
+      if (!cancelled) return { cancelled: false };
+      await purgePendingInteractionsInTransaction(query, id, 'cancelled');
+      return { cancelled: true };
+    });
   } catch (error) {
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_run_recovery_cancel_failed');
     throw new Error(`Failed to cancel recoverable workflow run: ${err.message}`);
   }
-  return { cancelled: (result.rowCount ?? 0) > 0 };
 }
 
 /**
@@ -1820,15 +1834,28 @@ export async function updateWorkflowActivity(id: string): Promise<void> {
 export async function failOrphanedRuns(): Promise<{ count: number }> {
   const dialect = getDialect();
   try {
-    const result = await pool.query(
-      `UPDATE remote_agent_workflow_runs
-       SET status = 'failed',
-           completed_at = ${dialect.now()},
-           metadata = ${dialect.jsonMerge('metadata', 1)}
-       WHERE status = 'running'`,
-      [JSON.stringify({ failure_reason: 'server_restart' })]
-    );
-    const count = result.rowCount ?? 0;
+    const count = await getDatabase().withTransaction(async query => {
+      const selected = await query<{ id: string }>(
+        `SELECT id FROM remote_agent_workflow_runs WHERE status = 'running'${workflowRunLockClause()}`,
+        []
+      );
+      const ids = selected.rows.map(row => row.id);
+      if (ids.length === 0) return 0;
+
+      const idPlaceholders = ids.map((_, index) => `$${index + 2}`).join(', ');
+      await query(
+        `UPDATE remote_agent_workflow_runs
+         SET status = 'failed',
+             completed_at = ${dialect.now()},
+             metadata = ${dialect.jsonMerge('metadata', 1)}
+         WHERE id IN (${idPlaceholders}) AND status = 'running'`,
+        [JSON.stringify({ failure_reason: 'server_restart' }), ...ids]
+      );
+      for (const runId of ids) {
+        await purgePendingInteractionsInTransaction(query, runId, 'failed');
+      }
+      return ids.length;
+    });
     if (count > 0) {
       getLog().info({ count }, 'db.orphaned_workflow_runs_failed');
     }

@@ -43,6 +43,7 @@ const {
   insertPendingInteraction,
   listPendingInteractions,
   resolvePendingInteraction,
+  purgePendingInteractionsInTransaction,
   PendingInteractionCorruptRowError,
   PendingInteractionAlreadyResolvedError,
   PendingInteractionRunNotPausedError,
@@ -780,5 +781,64 @@ describe('resolvePendingInteraction', () => {
     expect(JSON.stringify(errorLogs)).not.toContain(SENTINEL_QUESTION);
     expect(JSON.stringify(errorLogs)).not.toContain(SENTINEL_ANSWER);
     expect(JSON.stringify(errorLogs)).toContain((err as PendingInteractionCorruptRowError).rowId);
+  });
+});
+
+describe('purgePendingInteractionsInTransaction', () => {
+  test('purges only pending rows, leaves answers null, and writes one safe event per row', async () => {
+    await insertPendingInteraction({ ...baseInput, envelope: mixedEnvelope });
+    await insertPendingInteraction({
+      ...baseInput,
+      tool_use_id: 'toolu_2',
+      envelope: mixedEnvelope,
+    });
+    await pauseRun();
+    await resolvePendingInteraction(resolveInput({ tool_use_id: 'toolu_2' }));
+
+    const result = await db.withTransaction(query =>
+      purgePendingInteractionsInTransaction(query, 'run-1', 'cancelled')
+    );
+    expect(result).toEqual({ purged: 1 });
+
+    const rows = await db.query<{
+      tool_use_id: string;
+      status: string;
+      answer: string | null;
+      resolved_by: string | null;
+      resolved_at: string | null;
+    }>(
+      `SELECT tool_use_id, status, answer, resolved_by, resolved_at
+       FROM remote_agent_pending_interactions
+       WHERE workflow_run_id = $1
+       ORDER BY tool_use_id ASC`,
+      ['run-1']
+    );
+    const purgedRow = rows.rows.find(row => row.tool_use_id === 'toolu_1');
+    const answeredRow = rows.rows.find(row => row.tool_use_id === 'toolu_2');
+    expect(purgedRow?.status).toBe('purged');
+    expect(purgedRow?.answer).toBeNull();
+    expect(purgedRow?.resolved_by).toBeNull();
+    expect(purgedRow?.resolved_at).not.toBeNull();
+    expect(answeredRow?.status).toBe('answered');
+    expect(answeredRow?.answer).toBe(JSON.stringify(validAnswers));
+
+    const events = await resolvedEvents();
+    expect(events).toHaveLength(2);
+    const purgeEvent = events.find(
+      event => (event.data as Record<string, unknown>).purged === true
+    );
+    expect(purgeEvent?.step_name).toBe('review');
+    expect(purgeEvent?.data).toEqual({
+      node_id: 'review',
+      tool_use_id: 'toolu_1',
+      kind: 'ask',
+      purged: true,
+      resumed: false,
+      terminal_status: 'cancelled',
+    });
+    expect(JSON.stringify(events)).not.toContain(SENTINEL_QUESTION);
+    expect(JSON.stringify(events)).not.toContain(SENTINEL_ANSWER);
+    expect(JSON.stringify(errorLogs)).not.toContain(SENTINEL_QUESTION);
+    expect(JSON.stringify(errorLogs)).not.toContain(SENTINEL_ANSWER);
   });
 });
