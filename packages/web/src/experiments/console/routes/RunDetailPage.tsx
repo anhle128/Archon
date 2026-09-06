@@ -28,13 +28,15 @@ import { runMessageConversationId, type Run, type RunEnvOverlay } from '../primi
 import { foldNodeRuns, type RunEvent } from '../primitives/event';
 import type { Message } from '../primitives/message';
 import type { Project } from '../primitives/project';
-import type { ArtifactFile } from '../skills/runs';
+import type { ArtifactFile, WorkflowNodeState } from '../skills/runs';
+import type { DagNode } from '../skills/workflows';
 import type { UsageReport } from '../skills/usage';
 
 interface RunDetailView {
   run: Run;
   events: RunEvent[];
   usage: UsageReport | null;
+  nodeStates: WorkflowNodeState[];
 }
 
 /**
@@ -204,6 +206,18 @@ export function RunDetailPage(): ReactElement {
     runId !== undefined ? K.artifacts(runId) : 'noop:no-run-id',
     () =>
       runId !== undefined ? skill.listRunArtifacts(runId) : Promise.resolve([] as ArtifactFile[])
+  );
+
+  const dagCwd = project?.path;
+  const dagWorkflow = detail?.run.workflow;
+  const { data: dagNodes, error: dagError } = useEntity<DagNode[]>(
+    dagCwd !== undefined && dagWorkflow !== undefined
+      ? K.workflowDagNodes(dagCwd, dagWorkflow)
+      : 'console-run-graph:idle',
+    () =>
+      dagCwd !== undefined && dagWorkflow !== undefined
+        ? skill.getWorkflowDagNodes(dagWorkflow, dagCwd)
+        : Promise.resolve([] as DagNode[])
   );
 
   // Distinct nodes drive the node-filter dropdown — derived from the same fold
@@ -457,10 +471,12 @@ export function RunDetailPage(): ReactElement {
               <div className="px-6">{toolbar}</div>
               {project !== undefined && project !== null ? (
                 <RunGraphPanel
-                  workflowName={run.workflow}
-                  projectCwd={project.path}
-                  events={events}
-                  onNodeSelect={(nodeId): void => {
+                  nodes={dagNodes ?? []}
+                  nodeStates={detail.nodeStates}
+                  selectedNodeId={null}
+                  definitionPending={dagNodes === undefined && dagError === undefined}
+                  definitionError={dagError === undefined ? null : dagError.message}
+                  onSelectNode={(nodeId: string): void => {
                     setView('log');
                     writeView('log');
                     // Defer scroll until the log view has mounted.

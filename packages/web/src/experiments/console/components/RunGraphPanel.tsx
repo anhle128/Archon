@@ -1,113 +1,122 @@
-import { useMemo, type CSSProperties, type ReactElement } from 'react';
-import dagre from '@dagrejs/dagre';
-import { useEntity } from '../store/cache';
-import * as skill from '../skills';
+/**
+ * Console-owned SVG/HTML graph renderer over shared `@/lib/run-graph` geometry.
+ * No workflow fetching, event folding, or Dagre.
+ */
 import {
-  deriveNodeStatuses,
-  type WorkflowGraphNode,
-  type WorkflowGraphNodeWithStatus,
-  type WorkflowNodeKind,
-  type WorkflowNodeStatus,
-} from '../primitives/workflow-graph';
-import type { RunEvent } from '../primitives/event';
+  useCallback,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactElement,
+} from 'react';
 
-interface RunGraphPanelProps {
-  workflowName: string;
-  projectCwd: string;
-  events: RunEvent[];
-  /** The node the main stream should scroll to when a graph node is clicked. */
-  onNodeSelect?: (nodeId: string) => void;
+import type { LayoutRoute, RouteOutcome } from '@/lib/run-graph';
+import type { WorkflowNodeState } from '../skills/runs';
+import type { DagNode } from '../skills/workflows';
+import { buildRunGraphInput } from './graph/build-run-graph-input';
+import { fitGraphScale, graphBounds } from './graph/graph-viewport';
+import { inspectStatusLabel } from './inspect/inspect-status';
+import { nodeBodyKind, type NodeBodyKind } from './inspect/resolve-room-kind';
+
+export interface RunGraphPanelProps {
+  nodes: readonly DagNode[];
+  nodeStates: readonly WorkflowNodeState[];
+  selectedNodeId: string | null;
+  definitionPending: boolean;
+  definitionError: string | null;
+  onSelectNode: (nodeId: string) => void;
 }
 
-// Full-canvas node dimensions (design v3: 168×46). dagre positions by center.
-const NODE_W = 168;
-const NODE_H = 46;
-const RANK_SEP = 58;
-const NODE_SEP = 32;
-const PADDING = 30;
+const NODE_WIDTH = 180;
+const NODE_HEIGHT = 80;
+const ORIGIN_TRANSLATION = 64;
+const MIN_ZOOM = 0.25;
+const MAX_ZOOM = 1.5;
+const ZOOM_STEP = 0.1;
+const ARROW_MARKER_ID = 'console-run-graph-arrow';
 
-interface LaidOutNode extends WorkflowGraphNodeWithStatus {
-  x: number;
-  y: number;
+type InspectCardStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+
+function clampManualZoom(value: number): number {
+  const rounded = Math.round(value * 10) / 10;
+  if (rounded < MIN_ZOOM) return MIN_ZOOM;
+  if (rounded > MAX_ZOOM) return MAX_ZOOM;
+  return rounded;
 }
 
-interface Edge {
-  from: string;
-  to: string;
-  /** Orthogonal elbow path (design v3 connectors). */
-  d: string;
-}
-
-interface Layout {
-  nodes: LaidOutNode[];
-  edges: Edge[];
-  width: number;
-  height: number;
-}
-
-function layout(nodes: WorkflowGraphNodeWithStatus[]): Layout {
-  const g = new dagre.graphlib.Graph();
-  g.setDefaultEdgeLabel(() => ({}));
-  g.setGraph({
-    rankdir: 'TB',
-    ranksep: RANK_SEP,
-    nodesep: NODE_SEP,
-    marginx: PADDING,
-    marginy: PADDING,
-  });
-
-  for (const n of nodes) {
-    g.setNode(n.id, { width: NODE_W, height: NODE_H });
+function takenRouteStroke(outcome: RouteOutcome | undefined): string {
+  switch (outcome) {
+    case 'positive':
+      return 'var(--success)';
+    case 'negative':
+      return 'var(--accent)';
+    case 'exhausted':
+      return 'var(--error)';
+    case undefined:
+      return 'var(--accent-bright)';
   }
-  for (const n of nodes) {
-    for (const d of n.dependsOn) {
-      // Only set edges whose source exists (robust against malformed DAGs).
-      if (g.hasNode(d)) g.setEdge(d, n.id);
-    }
-  }
-
-  dagre.layout(g);
-
-  const laid: LaidOutNode[] = nodes.map(n => {
-    const pos = g.node(n.id) as { x: number; y: number } | undefined;
-    return {
-      ...n,
-      x: pos ? pos.x - NODE_W / 2 : 0,
-      y: pos ? pos.y - NODE_H / 2 : 0,
-    };
-  });
-
-  // Orthogonal elbow connectors (design v3): drop from the source's bottom
-  // center, elbow at the midpoint between ranks, into the target's top center.
-  const laidById = new Map(laid.map(n => [n.id, n]));
-  const edges: Edge[] = [];
-  for (const e of g.edges()) {
-    const a = laidById.get(e.v);
-    const b = laidById.get(e.w);
-    if (a === undefined || b === undefined) continue;
-    const ax = a.x + NODE_W / 2;
-    const ay = a.y + NODE_H;
-    const bx = b.x + NODE_W / 2;
-    const by = b.y;
-    const d =
-      ax === bx
-        ? `M${ax.toString()},${ay.toString()} V${by.toString()}`
-        : `M${ax.toString()},${ay.toString()} V${(ay + (by - ay) / 2).toString()} H${bx.toString()} V${by.toString()}`;
-    edges.push({ from: e.v, to: e.w, d });
-  }
-
-  const graph = g.graph();
-  return {
-    nodes: laid,
-    edges,
-    width: graph.width ?? 0,
-    height: graph.height ?? 0,
-  };
 }
 
-/* Status → color (design v3 .gnode tints; CSS var refs so themes can retune). */
-function statusFill(s: WorkflowNodeStatus): string {
-  switch (s) {
+function strokeForRoute(route: LayoutRoute): string {
+  if (!route.taken) {
+    return 'var(--border)';
+  }
+  switch (route.kind) {
+    case 'route':
+      return takenRouteStroke(route.outcome);
+    case 'dependency':
+    case 'conditional':
+      return 'var(--accent-bright)';
+  }
+}
+
+function isDashed(route: LayoutRoute): boolean {
+  return route.backEdge || route.kind === 'conditional';
+}
+
+function typeGlyph(kind: NodeBodyKind): string {
+  switch (kind) {
+    case 'loop':
+      return '↻';
+    case 'route_loop':
+      return '⇄';
+    case 'approval':
+      return '◈';
+    case 'plannotator_gate':
+      return '◇';
+    case 'bash':
+      return '$';
+    case 'command':
+      return '/';
+    case 'script':
+      return '⧉';
+    case 'prompt':
+      return '·';
+    case 'workflow':
+      return '⤷';
+    case 'loop_group':
+      return '⊞';
+    case 'unknown':
+      return '?';
+  }
+}
+
+function cardStatus(value: string): InspectCardStatus {
+  if (
+    value === 'pending' ||
+    value === 'running' ||
+    value === 'completed' ||
+    value === 'failed' ||
+    value === 'skipped'
+  ) {
+    return value;
+  }
+  return 'pending';
+}
+
+function statusFill(status: InspectCardStatus): string {
+  switch (status) {
     case 'running':
       return 'color-mix(in oklch, var(--running), transparent 90%)';
     case 'completed':
@@ -121,8 +130,8 @@ function statusFill(s: WorkflowNodeStatus): string {
   }
 }
 
-function statusBorder(s: WorkflowNodeStatus): string {
-  switch (s) {
+function statusBorder(status: InspectCardStatus): string {
+  switch (status) {
     case 'running':
       return 'color-mix(in oklch, var(--running), transparent 40%)';
     case 'completed':
@@ -136,9 +145,8 @@ function statusBorder(s: WorkflowNodeStatus): string {
   }
 }
 
-/* Glyph/icon color per status (design: green check-tone icon, rose on failed). */
-function statusGlyphClass(s: WorkflowNodeStatus): string {
-  switch (s) {
+function statusGlyphClass(status: InspectCardStatus): string {
+  switch (status) {
     case 'running':
       return 'text-[color:var(--running)]';
     case 'completed':
@@ -152,154 +160,231 @@ function statusGlyphClass(s: WorkflowNodeStatus): string {
   }
 }
 
-function kindGlyph(k: WorkflowNodeKind): string {
-  switch (k) {
-    case 'loop':
-      return '↻';
-    case 'route_loop':
-      return '⇄';
-    case 'approval':
-      return '◈';
-    case 'plannotator_gate':
-      return '◇';
-    case 'cancel':
-      return '⊘';
-    case 'bash':
-      return '$';
-    case 'command':
-      return '/';
-    case 'script':
-      return '⧉';
-    case 'prompt':
-      return '·';
-  }
+function GraphMessage({ children }: { children: string }): ReactElement {
+  return <div className="p-6 font-mono text-[12px] text-text-tertiary">{children}</div>;
 }
 
-/**
- * Full-canvas DAG view. Uses dagre (rankdir=TB) so parallel nodes sit side
- * by side and fan-in/out are visible. Loop nodes show a ↻ glyph; approval
- * nodes show ◈. Click a node to jump the stream to that node's transition.
- *
- * Renders as a full-width content panel — the calling layout provides the
- * outer flex container (no internal border/aside).
- */
 export function RunGraphPanel({
-  workflowName,
-  projectCwd,
-  events,
-  onNodeSelect,
+  nodes,
+  nodeStates,
+  selectedNodeId,
+  definitionPending,
+  definitionError,
+  onSelectNode,
 }: RunGraphPanelProps): ReactElement {
-  const { data: rawNodes, error } = useEntity<WorkflowGraphNode[]>(
-    `workflow-graph:${workflowName}:${projectCwd}`,
-    () => skill.getWorkflowGraph(workflowName, projectCwd)
-  );
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [scale, setScale] = useState(1);
 
-  const laid = useMemo(() => {
-    if (rawNodes === undefined) return null;
-    const withStatus = deriveNodeStatuses(rawNodes, events);
-    return layout(withStatus);
-  }, [rawNodes, events]);
+  const model = useMemo(() => buildRunGraphInput(nodes, nodeStates), [nodes, nodeStates]);
+  const bounds = useMemo(() => graphBounds(model.positions), [model.positions]);
+  const namesById = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const state of nodeStates) {
+      names.set(state.nodeId, state.name);
+    }
+    return names;
+  }, [nodeStates]);
 
-  if (error !== undefined) {
+  const handleZoomIn = useCallback((): void => {
+    setScale(current => clampManualZoom(current + ZOOM_STEP));
+  }, []);
+
+  const handleZoomOut = useCallback((): void => {
+    setScale(current => clampManualZoom(current - ZOOM_STEP));
+  }, []);
+
+  const handleFit = useCallback((): void => {
+    const scroller = scrollRef.current;
+    const viewportWidth = scroller?.clientWidth ?? 0;
+    const viewportHeight = scroller?.clientHeight ?? 0;
+    const next = fitGraphScale(viewportWidth, viewportHeight, bounds);
+    setScale(next);
+    requestAnimationFrame(() => {
+      const node = scrollRef.current;
+      if (node === null) return;
+      node.scrollLeft = Math.max(0, (node.scrollWidth - node.clientWidth) / 2);
+      node.scrollTop = Math.max(0, (node.scrollHeight - node.clientHeight) / 2);
+    });
+  }, [bounds]);
+
+  if (definitionError !== null) {
     return (
       <div className="p-6 font-mono text-[12px] text-error">
-        Could not load graph: {error.message}
+        Could not load graph: {definitionError}
       </div>
     );
   }
 
-  if (laid === null) {
-    return <div className="p-6 text-[12px] text-text-tertiary">Loading graph…</div>;
+  if (definitionPending) {
+    return <GraphMessage>Loading graph…</GraphMessage>;
   }
 
-  const { nodes, edges, width, height } = laid;
-  const svgStyle: CSSProperties = {
-    width: Math.max(width, NODE_W + PADDING * 2),
-    height: Math.max(height, NODE_H + PADDING * 2),
+  if (nodes.length === 0) {
+    return <GraphMessage>No workflow nodes to display.</GraphMessage>;
+  }
+
+  const canvasStyle: CSSProperties = {
+    width: bounds.width,
+    height: bounds.height,
+    transform: `translate(${String(ORIGIN_TRANSLATION)}px, ${String(ORIGIN_TRANSLATION)}px) scale(${String(scale)})`,
+    transformOrigin: '0 0',
+  };
+  const scrollContentStyle: CSSProperties = {
+    width: bounds.width * scale + ORIGIN_TRANSLATION,
+    height: bounds.height * scale + ORIGIN_TRANSLATION,
   };
 
   return (
-    <div
-      className="flex h-full w-full justify-center overflow-auto p-6"
-      // Dotted canvas (design v3 .rd-graph).
-      style={{
-        background:
-          'radial-gradient(circle at 1px 1px, color-mix(in oklch, white, transparent 95%) 1px, transparent 0) 0 0 / 26px 26px',
-      }}
-    >
-      <div className="relative mt-7" style={svgStyle}>
-        <svg
-          className="absolute inset-0 overflow-visible"
-          width={svgStyle.width}
-          height={svgStyle.height}
-          aria-hidden
+    <div className="relative h-full w-full">
+      <div className="absolute right-3 top-3 z-10 flex gap-1">
+        <button
+          type="button"
+          aria-label="Zoom out"
+          className="rounded-[8px] border border-border bg-surface-elevated px-2 py-1 font-mono text-[12px] text-text-secondary"
+          onClick={handleZoomOut}
         >
-          {edges.map(e => (
-            <path
-              key={`${e.from}→${e.to}`}
-              d={e.d}
-              fill="none"
-              stroke="color-mix(in oklch, white, transparent 84%)"
-              strokeWidth={1.5}
-            />
-          ))}
-        </svg>
-        {nodes.map(n => (
-          <GraphNode
-            key={n.id}
-            node={n}
-            onClick={() => {
-              onNodeSelect?.(n.id);
-            }}
-          />
-        ))}
+          −
+        </button>
+        <button
+          type="button"
+          aria-label="Zoom in"
+          className="rounded-[8px] border border-border bg-surface-elevated px-2 py-1 font-mono text-[12px] text-text-secondary"
+          onClick={handleZoomIn}
+        >
+          +
+        </button>
+        <button
+          type="button"
+          aria-label="Fit"
+          className="rounded-[8px] border border-border bg-surface-elevated px-2 py-1 font-mono text-[12px] text-text-secondary"
+          onClick={handleFit}
+        >
+          Fit
+        </button>
+      </div>
+      <div
+        ref={scrollRef}
+        data-testid="console-run-graph-scroller"
+        className="h-full w-full overflow-auto"
+        style={{
+          background:
+            'radial-gradient(circle at 1px 1px, color-mix(in oklch, white, transparent 95%) 1px, transparent 0) 0 0 / 26px 26px',
+        }}
+      >
+        <div style={scrollContentStyle}>
+          <div data-testid="console-run-graph-canvas" className="relative" style={canvasStyle}>
+            <svg
+              className="pointer-events-none absolute inset-0 overflow-visible"
+              width={bounds.width}
+              height={bounds.height}
+              aria-hidden
+            >
+              <defs>
+                <marker
+                  id={ARROW_MARKER_ID}
+                  markerWidth="8"
+                  markerHeight="8"
+                  refX="6"
+                  refY="4"
+                  orient="auto"
+                  markerUnits="strokeWidth"
+                >
+                  <path d="M0,0 L8,4 L0,8 Z" fill="context-stroke" />
+                </marker>
+              </defs>
+              {model.routes.map(route => {
+                const dash = isDashed(route) ? '5 5' : undefined;
+                return (
+                  <g key={route.edgeId}>
+                    <path
+                      data-edge-id={route.edgeId}
+                      d={route.path}
+                      fill="none"
+                      stroke={strokeForRoute(route)}
+                      strokeWidth={1.5}
+                      strokeDasharray={dash}
+                      markerEnd={`url(#${ARROW_MARKER_ID})`}
+                    />
+                    {route.label !== undefined ? (
+                      <text
+                        x={route.labelPosition.x}
+                        y={route.labelPosition.y}
+                        className="fill-text-tertiary"
+                        fontSize={11}
+                      >
+                        {route.label}
+                      </text>
+                    ) : null}
+                  </g>
+                );
+              })}
+            </svg>
+            {model.nodes.map(node => {
+              const position = model.positions[node.definition.id];
+              if (position === undefined) return null;
+              const status = cardStatus(node.nodeState);
+              const selected = selectedNodeId === node.definition.id;
+              const label = namesById.get(node.definition.id) ?? node.definition.id;
+              const dimmed = status === 'pending' || status === 'skipped';
+              const style: CSSProperties = {
+                left: position.x,
+                top: position.y,
+                width: NODE_WIDTH,
+                height: NODE_HEIGHT,
+                backgroundColor: statusFill(status),
+                borderColor: statusBorder(status),
+                boxShadow: selected
+                  ? '0 0 0 2px var(--accent-bright)'
+                  : status === 'failed'
+                    ? '0 0 0 3px color-mix(in oklch, var(--error), transparent 94%)'
+                    : undefined,
+              };
+              return (
+                <button
+                  key={node.definition.id}
+                  type="button"
+                  data-node-id={node.definition.id}
+                  aria-current={selected ? 'true' : undefined}
+                  title={`${node.definition.id} · ${nodeBodyKind(node.definition)} · ${inspectStatusLabel(node.nodeState)}`}
+                  className={`absolute flex flex-col justify-center gap-0.5 overflow-hidden rounded-[9px] border px-3 py-2 text-left transition-colors hover:brightness-110 ${
+                    status === 'running' ? 'animate-pulse' : ''
+                  } ${dimmed ? 'opacity-60' : ''}`}
+                  style={style}
+                  onClick={(): void => {
+                    onSelectNode(node.definition.id);
+                  }}
+                >
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span
+                      aria-hidden
+                      className={`shrink-0 font-mono text-[15px] font-bold leading-none ${statusGlyphClass(status)}`}
+                    >
+                      {typeGlyph(nodeBodyKind(node.definition))}
+                    </span>
+                    <span
+                      className={`min-w-0 flex-1 truncate font-mono text-[13px] font-semibold ${
+                        status === 'failed'
+                          ? 'text-error'
+                          : dimmed
+                            ? 'text-text-secondary'
+                            : 'text-text-primary'
+                      }`}
+                    >
+                      {label}
+                    </span>
+                  </span>
+                  <span className="truncate font-mono text-[11px] text-text-tertiary">
+                    {node.definition.id}
+                  </span>
+                  <span className="truncate text-[11px] text-text-secondary">
+                    {inspectStatusLabel(node.nodeState)}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </div>
     </div>
-  );
-}
-
-interface GraphNodeProps {
-  node: LaidOutNode;
-  onClick: () => void;
-}
-
-function GraphNode({ node, onClick }: GraphNodeProps): ReactElement {
-  const running = node.status === 'running';
-  const failed = node.status === 'failed';
-  const dimmed = node.status === 'pending' || node.status === 'skipped';
-  const style: CSSProperties = {
-    left: node.x,
-    top: node.y,
-    width: NODE_W,
-    height: NODE_H,
-    backgroundColor: statusFill(node.status),
-    borderColor: statusBorder(node.status),
-    boxShadow: failed ? '0 0 0 3px color-mix(in oklch, var(--error), transparent 94%)' : undefined,
-  };
-
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={`${node.id} · ${node.kind} · ${node.status}`}
-      className={`absolute flex items-center gap-2.5 overflow-hidden rounded-[9px] border px-3.5 text-left transition-colors hover:brightness-110 ${
-        running ? 'animate-pulse' : ''
-      } ${dimmed ? 'opacity-60' : ''}`}
-      style={style}
-    >
-      <span
-        aria-hidden
-        className={`shrink-0 font-mono text-[15px] font-bold leading-none ${statusGlyphClass(node.status)}`}
-      >
-        {kindGlyph(node.kind)}
-      </span>
-      <span
-        className={`min-w-0 flex-1 truncate font-mono text-[13px] font-semibold ${
-          failed ? 'text-error' : dimmed ? 'text-text-secondary' : 'text-text-primary'
-        }`}
-      >
-        {node.id}
-      </span>
-    </button>
   );
 }
