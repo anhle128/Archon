@@ -1,5 +1,5 @@
 /**
- * Logs-only composition: selectable unmerged node-run list plus one typed room.
+ * Shared Graph/Logs composition: one left navigation and one typed room.
  */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
@@ -12,17 +12,26 @@ import {
 import { readApprovalContext, type WebApprovalContext } from '@/lib/approval-context';
 import type { WorkflowRunStatus } from '@/lib/types';
 
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
+
 import { buildLogRows, type LogRow } from './build-log-rows';
 import { LegacyNodeRoom } from './LegacyNodeRoom';
 import { NodeRunList } from './NodeRunList';
+import { resolveGraphRoomRow } from './resolve-graph-room-row';
 
-export interface LegacyNodeLogsProps {
+export interface LegacyGraphLogsPaneProps {
+  activeView: 'graph' | 'logs';
+  renderGraph: (input: {
+    selectedNodeId: string | null;
+    onNodeClick: (nodeId: string) => void;
+  }) => ReactNode;
+  selectedNodeId: string | null;
+  onSelectNode: (nodeId: string | null) => void;
   runId: string;
   nodeStates: readonly WorkflowNodeStateResponse[];
   events: readonly WorkflowEventResponse[];
   isLive: boolean;
   loadMessages: typeof getWorkflowNodeMessages;
-  onSelectNode: (nodeId: string | null) => void;
   roomHeader?: ReactNode;
   roomFooter?: ReactNode;
   definitionNodes: readonly DagNode[];
@@ -99,13 +108,16 @@ function synthesizeLegacyLogNodeStates(input: {
   return next.length === input.nodeStates.length ? input.nodeStates : next;
 }
 
-export function LegacyNodeLogs({
+export function LegacyGraphLogsPane({
+  activeView,
+  renderGraph,
+  selectedNodeId,
+  onSelectNode,
   runId,
   nodeStates,
   events,
   isLive,
   loadMessages,
-  onSelectNode,
   roomHeader,
   roomFooter,
   definitionNodes,
@@ -114,54 +126,90 @@ export function LegacyNodeLogs({
   approval,
   onApprove,
   onReject,
-}: LegacyNodeLogsProps): React.ReactElement {
+}: LegacyGraphLogsPaneProps): React.ReactElement {
   const visibleNodeStates = useMemo(
     () => synthesizeLegacyLogNodeStates({ nodeStates, events, runStatus, approval }),
     [approval, events, nodeStates, runStatus]
   );
   const rows = useMemo(() => buildLogRows(visibleNodeStates, events), [events, visibleNodeStates]);
   const [selectedLogRowId, setSelectedLogRowId] = useState<string | null>(null);
-  const selectedRow = rows.find(row => row.id === selectedLogRowId) ?? null;
+  const explicitSelectedRow = rows.find(row => row.id === selectedLogRowId) ?? null;
+  const selectedRow =
+    explicitSelectedRow !== null && explicitSelectedRow.nodeId === selectedNodeId
+      ? explicitSelectedRow
+      : resolveGraphRoomRow({
+          rows,
+          nodeId: selectedNodeId,
+          liveStatus: visibleNodeStates,
+        });
   const previousRunId = useRef(runId);
+  const previousSelectedNodeId = useRef(selectedNodeId);
 
   useEffect(() => {
     const runChanged = previousRunId.current !== runId;
-    const selectedRowRemoved = selectedLogRowId !== null && selectedRow === null;
+    const selectedRowRemoved = selectedLogRowId !== null && explicitSelectedRow === null;
     previousRunId.current = runId;
     if (!runChanged && !selectedRowRemoved) return;
     setSelectedLogRowId(null);
     onSelectNode(null);
-  }, [onSelectNode, runId, selectedLogRowId, selectedRow]);
+  }, [explicitSelectedRow, onSelectNode, runId, selectedLogRowId]);
+
+  useEffect(() => {
+    const previous = previousSelectedNodeId.current;
+    previousSelectedNodeId.current = selectedNodeId;
+    if (previous === selectedNodeId || selectedLogRowId === null) return;
+    if (explicitSelectedRow !== null && explicitSelectedRow.nodeId === previous) {
+      setSelectedLogRowId(null);
+    }
+  }, [explicitSelectedRow, selectedLogRowId, selectedNodeId]);
+
+  const handleGraphNodeClick = (nodeId: string): void => {
+    setSelectedLogRowId(null);
+    onSelectNode(nodeId);
+  };
+
+  const handleLogRowSelect = (row: LogRow): void => {
+    setSelectedLogRowId(row.id);
+    onSelectNode(row.nodeId);
+  };
 
   return (
-    <div className="flex flex-1 overflow-hidden min-h-0">
-      <div className="w-64 border-r border-border overflow-auto">
-        <NodeRunList
-          rows={rows}
-          selectedRowId={selectedLogRowId}
-          onSelect={(row: LogRow): void => {
-            setSelectedLogRowId(row.id);
-            onSelectNode(row.nodeId);
-          }}
-        />
-      </div>
-      <div className="flex-1 flex flex-col overflow-hidden min-h-0 h-full">
-        {roomHeader}
-        <LegacyNodeRoom
-          runId={runId}
-          row={selectedRow}
-          isLive={isLive}
-          loadMessages={loadMessages}
-          definitionNodes={definitionNodes}
-          definitionPending={definitionPending}
-          events={events}
-          runStatus={runStatus}
-          approval={approval}
-          onApprove={onApprove}
-          onReject={onReject}
-        />
-        {roomFooter}
-      </div>
-    </div>
+    <ResizablePanelGroup orientation="horizontal" className="flex-1 min-h-0">
+      <ResizablePanel defaultSize={60} minSize={30}>
+        {activeView === 'graph' ? (
+          <div className="h-full min-h-0">
+            {renderGraph({ selectedNodeId, onNodeClick: handleGraphNodeClick })}
+          </div>
+        ) : (
+          <div className="h-full min-h-0 overflow-auto">
+            <NodeRunList
+              rows={rows}
+              selectedRowId={selectedRow?.id ?? null}
+              onSelect={handleLogRowSelect}
+            />
+          </div>
+        )}
+      </ResizablePanel>
+      <ResizableHandle withHandle />
+      <ResizablePanel defaultSize={40} minSize={20}>
+        <div className="flex h-full min-h-0 flex-col overflow-hidden">
+          {roomHeader}
+          <LegacyNodeRoom
+            runId={runId}
+            row={selectedRow}
+            isLive={isLive}
+            loadMessages={loadMessages}
+            definitionNodes={definitionNodes}
+            definitionPending={definitionPending}
+            events={events}
+            runStatus={runStatus}
+            approval={approval}
+            onApprove={onApprove}
+            onReject={onReject}
+          />
+          {roomFooter}
+        </div>
+      </ResizablePanel>
+    </ResizablePanelGroup>
   );
 }

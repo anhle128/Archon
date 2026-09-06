@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
-import { buildWorkflowDagNodeStates } from './WorkflowExecution';
+import { buildWorkflowDagNodeStates, resolveWorkflowExecutionBody } from './WorkflowExecution';
+import type { WorkflowRunView } from './source-control/dag-run-tabs';
 import type { WorkflowEventResponse } from '@/lib/api';
 
 function workflowEvent(overrides: Partial<WorkflowEventResponse>): WorkflowEventResponse {
@@ -100,5 +101,75 @@ describe('buildWorkflowDagNodeStates', () => {
     expect(nodes).toHaveLength(1);
     expect(nodes[0]?.status).toBe('running');
     expect(nodes[0]?.routeDecision).toEqual(routeDecision);
+  });
+
+  describe('resolveWorkflowExecutionBody', () => {
+    const views: WorkflowRunView[] = ['graph', 'logs', 'chat', 'source-control'];
+
+    test('DAG Graph and Logs share the graph-logs pane', () => {
+      expect(
+        resolveWorkflowExecutionBody({
+          isDag: true,
+          activeView: 'graph',
+          parentPlatformId: 'parent-1',
+        })
+      ).toBe('graph-logs-pane');
+      expect(
+        resolveWorkflowExecutionBody({
+          isDag: true,
+          activeView: 'logs',
+          parentPlatformId: 'parent-1',
+        })
+      ).toBe('graph-logs-pane');
+    });
+
+    test('DAG Source Control returns source-control', () => {
+      expect(
+        resolveWorkflowExecutionBody({
+          isDag: true,
+          activeView: 'source-control',
+          parentPlatformId: 'parent-1',
+        })
+      ).toBe('source-control');
+    });
+
+    test('DAG Chat with a parent returns chat', () => {
+      expect(
+        resolveWorkflowExecutionBody({
+          isDag: true,
+          activeView: 'chat',
+          parentPlatformId: 'parent-1',
+        })
+      ).toBe('chat');
+    });
+
+    test('DAG Chat without a parent falls back to the graph-logs pane', () => {
+      expect(
+        resolveWorkflowExecutionBody({
+          isDag: true,
+          activeView: 'chat',
+          parentPlatformId: null,
+        })
+      ).toBe('graph-logs-pane');
+    });
+
+    test('every non-DAG input returns sequential', () => {
+      for (const activeView of views) {
+        expect(
+          resolveWorkflowExecutionBody({
+            isDag: false,
+            activeView,
+            parentPlatformId: 'parent-1',
+          })
+        ).toBe('sequential');
+        expect(
+          resolveWorkflowExecutionBody({
+            isDag: false,
+            activeView,
+            parentPlatformId: null,
+          })
+        ).toBe('sequential');
+      }
+    });
   });
 });
