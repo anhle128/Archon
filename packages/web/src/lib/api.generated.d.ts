@@ -2606,6 +2606,63 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/workflows/runs/{runId}/nodes/{nodeId}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List one workflow node transcript */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    runId: string;
+                    nodeId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Workflow node transcript in sequence order */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkflowNodeMessagesResponse"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Server error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/usage": {
         parameters: {
             query?: never;
@@ -4630,6 +4687,41 @@ export interface components {
         WorkflowRunByWorkerResponse: {
             run: components["schemas"]["WorkflowRun"];
         };
+        WorkflowNodeMessagesResponse: {
+            messages: components["schemas"]["WorkflowNodeMessage"][];
+        };
+        WorkflowNodeMessage: {
+            /** @enum {string} */
+            kind: "text";
+            payload: {
+                text: string;
+            };
+            id: string;
+            seq: number;
+            created_at: string;
+        } | {
+            /** @enum {string} */
+            kind: "tool";
+            payload: {
+                name: string;
+                id: string;
+                input?: unknown;
+                output?: unknown;
+            };
+            id: string;
+            seq: number;
+            created_at: string;
+        } | {
+            /** @enum {string} */
+            kind: "status";
+            payload: {
+                state: string;
+                detail?: string;
+            };
+            id: string;
+            seq: number;
+            created_at: string;
+        };
         WorkflowRunDetail: {
             run: components["schemas"]["WorkflowRun"] & {
                 worker_platform_id?: string;
@@ -4638,6 +4730,7 @@ export interface components {
             };
             events: components["schemas"]["WorkflowEvent"][];
             nodeStates: components["schemas"]["WorkflowNodeState"][];
+            pending_interactions: components["schemas"]["PendingInteraction"][];
             usage: components["schemas"]["NullableUsageReport"];
         };
         WorkflowEvent: {
@@ -4702,6 +4795,26 @@ export interface components {
                 /** @enum {string} */
                 type: "disabled";
             };
+        };
+        PendingInteraction: {
+            id: string;
+            workflow_run_id: string;
+            node_id: string;
+            tool_use_id: string;
+            /** @enum {string} */
+            kind: "ask" | "permission";
+            /** @enum {string} */
+            status: "pending" | "answered" | "purged";
+            envelope: {
+                [key: string]: unknown;
+            };
+            answer: {
+                [key: string]: unknown;
+            } | null;
+            provider_session_id: string;
+            created_at: string;
+            resolved_at: string | null;
+            resolved_by: string | null;
         };
         NullableUsageReport: {
             scope: {

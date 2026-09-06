@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { DagNodeProgress } from './DagNodeProgress';
+import { LegacyNodeLogs } from './LegacyNodeLogs';
 import { StepLogs } from './StepLogs';
 import { WorkflowLogs } from './WorkflowLogs';
 import { WorkflowDagViewer } from './WorkflowDagViewer';
@@ -14,7 +15,13 @@ import { DagRunTabs, type WorkflowRunView } from './source-control/dag-run-tabs'
 import { SourceControlTab } from './source-control/source-control-tab';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { useWorkflowStore } from '@/stores/workflow-store';
-import { getWorkflowRun, getWorkflowRunByWorker, getCodebase, getWorkflow } from '@/lib/api';
+import {
+  getWorkflowRun,
+  getWorkflowRunByWorker,
+  getCodebase,
+  getWorkflow,
+  getWorkflowNodeMessages,
+} from '@/lib/api';
 import { ensureUtc, formatDurationMs } from '@/lib/format';
 import { selectInitialNode } from '@/lib/select-initial-node';
 import { settleRunningDagNodesForTerminalStatus } from '@/lib/workflow-utils';
@@ -23,7 +30,6 @@ import type {
   ArtifactType,
   WorkflowRunStatus,
   DagNodeState,
-  WorkflowStepStatus,
   LoopIterationInfo,
   RuntimeThinkingMetadata,
   RuntimeEffortLevel,
@@ -56,6 +62,10 @@ function formatRouteDecisionField(value: unknown, fallback: string): string {
   return fallback;
 }
 
+type WorkflowRunNodeState = NonNullable<
+  Awaited<ReturnType<typeof getWorkflowRun>>['nodeStates']
+>[number];
+
 interface WorkflowRunQueryData {
   workflowState: WorkflowState;
   workerPlatformId: string | null;
@@ -64,11 +74,8 @@ interface WorkflowRunQueryData {
   workingPath: string | null;
   codebaseId: string | null;
   events: WorkflowEventResponse[];
+  nodeStates: WorkflowRunNodeState[];
 }
-
-type WorkflowRunNodeState = NonNullable<
-  Awaited<ReturnType<typeof getWorkflowRun>>['nodeStates']
->[number];
 
 function isRuntimeModelReasoningEffort(value: unknown): value is RuntimeModelReasoningEffort {
   return typeof value === 'string' && value.length > 0;
@@ -120,40 +127,6 @@ function toDagNodeState(nodeState: WorkflowRunNodeState): DagNodeState {
     effort: nodeState.effort,
     thinking: nodeState.thinking,
   };
-}
-
-function buildDagNodeStatesFromEvents(events: WorkflowEventResponse[]): DagNodeState[] {
-  const nodeMap = new Map<string, DagNodeState>();
-  for (const e of events.filter(ev => ev.event_type.startsWith('node_'))) {
-    const nodeId = e.step_name ?? (e.data.nodeId as string) ?? '';
-    if (!nodeId) continue;
-    const status =
-      e.event_type === 'node_started'
-        ? 'running'
-        : e.event_type === 'node_completed' || e.event_type === 'node_routed'
-          ? 'completed'
-          : e.event_type === 'node_failed'
-            ? 'failed'
-            : 'skipped';
-    const existing = nodeMap.get(nodeId);
-    const runtimeMetadata = runtimeMetadataFromEventData(e.data);
-    if (!existing || status !== 'running') {
-      nodeMap.set(nodeId, {
-        ...existing,
-        nodeId,
-        name: nodeId,
-        status: status as WorkflowStepStatus,
-        duration: e.data.duration_ms as number | undefined,
-        error: e.data.error as string | undefined,
-        reason: e.data.reason as 'when_condition' | 'trigger_rule' | undefined,
-        ...runtimeMetadata,
-        routeDecision: e.event_type === 'node_routed' ? e.data : undefined,
-      });
-    } else {
-      nodeMap.set(nodeId, { ...existing, ...runtimeMetadata });
-    }
-  }
-  return Array.from(nodeMap.values());
 }
 
 function enrichDagNodesWithLoopIterations(
@@ -213,19 +186,8 @@ function enrichDagNodesWithRouteDecisions(
     const nodeId = e.step_name ?? '';
     if (!nodeId) continue;
     const existing = nodeMap.get(nodeId);
-    nodeMap.set(nodeId, {
-      ...existing,
-      nodeId,
-      name: existing?.name ?? nodeId,
-      status: 'completed',
-      duration: existing?.duration,
-      error: existing?.error,
-      reason: existing?.reason,
-      currentIteration: existing?.currentIteration,
-      maxIterations: existing?.maxIterations,
-      iterations: existing?.iterations,
-      routeDecision: e.data,
-    });
+    if (!existing) continue;
+    nodeMap.set(nodeId, { ...existing, routeDecision: e.data });
   }
   return Array.from(nodeMap.values());
 }
@@ -261,9 +223,7 @@ export function buildWorkflowDagNodeStates(
   nodeStates: WorkflowRunNodeState[] | undefined,
   events: WorkflowEventResponse[]
 ): DagNodeState[] {
-  const baseNodes = nodeStates
-    ? nodeStates.map(toDagNodeState)
-    : buildDagNodeStatesFromEvents(events);
+  const baseNodes = (nodeStates ?? []).map(toDagNodeState);
   return enrichDagNodesWithLoopProgress(
     enrichDagNodesWithLoopIterations(enrichDagNodesWithRouteDecisions(baseNodes, events), events),
     events
@@ -355,6 +315,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
         workingPath: data.run.working_path ?? null,
         codebaseId: data.run.codebase_id ?? null,
         events: data.events,
+        nodeStates: data.nodeStates,
       };
     },
     refetchInterval: (query): number | false => {
@@ -706,8 +667,8 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
     />
   );
 
-  // Logs panel — detect whether the selected node has any DB events so we can show an empty-state
-  const logsPanel = (
+  // Merged logs panel — Graph tab only. Detect whether the selected node has any DB events so we can show an empty-state
+  const mergedLogsPanel = (
     <div className="flex-1 flex flex-col overflow-hidden min-h-0 h-full">
       {retryActionPanel}
       <div className="flex-1 flex flex-col overflow-hidden min-h-0">
@@ -791,7 +752,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
           </ResizablePanel>
           <ResizableHandle withHandle />
           <ResizablePanel defaultSize={40} minSize={20}>
-            {logsPanel}
+            {mergedLogsPanel}
           </ResizablePanel>
         </ResizablePanelGroup>
       );
@@ -806,7 +767,27 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
         </div>
       );
     }
-    // Logs view: DAG "Logs" tab
+    if (isDag) {
+      return (
+        <LegacyNodeLogs
+          runId={runId}
+          nodeStates={queryData?.nodeStates ?? []}
+          events={queryData?.events ?? []}
+          isLive={isRunning}
+          loadMessages={getWorkflowNodeMessages}
+          onSelectNode={setSelectedDagNode}
+          roomHeader={retryActionPanel}
+          roomFooter={
+            isRunning || workflow.artifacts.length === 0 ? undefined : (
+              <div className="border-t border-border p-3">
+                <ArtifactSummary artifacts={workflow.artifacts} runId={runId} />
+              </div>
+            )
+          }
+        />
+      );
+    }
+    // Sequential (non-DAG) default layout keeps the merged logs panel.
     return (
       <div className="flex flex-1 overflow-hidden min-h-0">
         <div className="w-64 border-r border-border overflow-auto">
@@ -816,7 +797,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
             onNodeClick={handleNodeClick}
           />
         </div>
-        {logsPanel}
+        {mergedLogsPanel}
       </div>
     );
   };

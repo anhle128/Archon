@@ -8,7 +8,7 @@
 --     COMMENT ON COLUMN — goes in the final "Indexes and column comments"
 --     section, below every ADD COLUMN.
 --
--- 21 Application Tables (+ the 4 remote_agent_auth_* Better Auth tables, listed inline below):
+-- 22 Application Tables (+ the 4 remote_agent_auth_* Better Auth tables, listed inline below):
 --   1. remote_agent_codebases
 --   2. remote_agent_codebase_env_vars
 --   3. remote_agent_users
@@ -30,7 +30,8 @@
 --  19. remote_agent_workflow_event_delivery_attempts
 --  20. remote_agent_usage_ledger
 --  21. remote_agent_workflow_envs
---  22-25. remote_agent_auth_user / session / account / verification (PostgreSQL-only)
+--  22. remote_agent_workflow_node_messages
+--  23-26. remote_agent_auth_user / session / account / verification (PostgreSQL-only)
 --
 -- Dropped tables (via migrations):
 --   - remote_agent_command_templates (017)
@@ -737,6 +738,25 @@ COMMENT ON TABLE remote_agent_workflow_envs IS
   'Named install-wide workflow ENV overlays; identity is (workflow_name, name); patches are plaintext JSON.';
 
 -- ============================================================================
+-- Table 22: Workflow node messages (per-node transcript)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS remote_agent_workflow_node_messages (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workflow_run_id UUID NOT NULL REFERENCES remote_agent_workflow_runs(id) ON DELETE CASCADE,
+  node_id VARCHAR(255) NOT NULL,
+  seq INTEGER NOT NULL CHECK (seq >= 1),
+  kind VARCHAR(16) NOT NULL CHECK (kind IN ('text', 'tool', 'status')),
+  payload JSONB NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_workflow_node_messages_run_node_seq
+    UNIQUE (workflow_run_id, node_id, seq)
+);
+
+COMMENT ON TABLE remote_agent_workflow_node_messages IS
+  'Immutable sequenced per-node transcript rows (text/tool/status); cascade-deletes with the run.';
+
+-- ============================================================================
 -- Indexes and column comments
 -- ============================================================================
 --
@@ -939,3 +959,15 @@ COMMENT ON COLUMN remote_agent_workflow_envs.patches IS
   'Whole-document node patch map (provider/model/effort/thinking/prompt/bash); empty {} allowed; plaintext install-visible data, not secrets.';
 COMMENT ON COLUMN remote_agent_workflow_envs.created_by_user_id IS
   'Provenance only (first creator); ON DELETE SET NULL; not an access-control boundary.';
+
+-- Workflow node messages
+COMMENT ON COLUMN remote_agent_workflow_node_messages.workflow_run_id IS
+  'Owning workflow run; cascade-deletes with the run.';
+COMMENT ON COLUMN remote_agent_workflow_node_messages.node_id IS
+  'Executor stepName, including the loop-group prefix when present.';
+COMMENT ON COLUMN remote_agent_workflow_node_messages.seq IS
+  'Positive per-node sequence; UNIQUE(workflow_run_id, node_id, seq) is the lookup/order index.';
+COMMENT ON COLUMN remote_agent_workflow_node_messages.kind IS
+  'text, tool, or status.';
+COMMENT ON COLUMN remote_agent_workflow_node_messages.payload IS
+  'Discriminated JSON payload matching kind.';

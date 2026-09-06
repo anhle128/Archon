@@ -432,6 +432,23 @@ export async function getWorkflowRunGitChanges(runId: string): Promise<GitChange
   return fetchJSON(`/api/workflows/runs/${encodeURIComponent(runId)}/git/changes`);
 }
 
+export type WorkflowNodeStateResponse = components['schemas']['WorkflowNodeState'];
+export type WorkflowNodeMessageResponse = components['schemas']['WorkflowNodeMessage'];
+export type WorkflowNodeMessagesResponse = components['schemas']['WorkflowNodeMessagesResponse'];
+
+export async function getWorkflowNodeMessages(
+  runId: string,
+  nodeId: string
+): Promise<WorkflowNodeMessagesResponse> {
+  return fetchJSON(
+    '/api/workflows/runs/' +
+      encodeURIComponent(runId) +
+      '/nodes/' +
+      encodeURIComponent(nodeId) +
+      '/messages'
+  );
+}
+
 export async function getWorkflowRunByWorker(
   workerPlatformId: string
 ): Promise<components['schemas']['WorkflowRunByWorkerResponse'] | null> {
