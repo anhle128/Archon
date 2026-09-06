@@ -53,7 +53,7 @@ development_status:
 
   epic-6: in-progress
   6-1-prove-claude-and-pi-can-resume-after-askhuman: done
-  6-2-pause-a-run-when-the-agent-asks-without-stealing-the-approval-slot: backlog
+  6-2-pause-a-run-when-the-agent-asks-without-stealing-the-approval-slot: done
   6-3-answer-or-decline-the-ask-so-the-node-can-continue: backlog
   6-4-keep-several-asks-outstanding-without-a-second-scheduler: backlog
   6-5-answer-the-ask-in-the-legacy-node-room: backlog

@@ -243,7 +243,7 @@ are more current than any tree drawn here.
 
 ### Database Schema
 
-**22 application tables (all prefixed with `remote_agent_`) plus 4 PostgreSQL-only Better Auth tables:**
+**23 application tables (all prefixed with `remote_agent_`) plus 4 PostgreSQL-only Better Auth tables:**
 1. **`codebases`** - Repository/project metadata and commands (JSONB); `kind` (`'repo'`/`'folder'`, default `'repo'`) discriminates git repos from **folder projects** (non-git workspaces — multi-repo roots or plain ops folders — that run in place with named `_folder/<slug>/` storage; `repository_url`/`default_branch` are null)
 2. **`codebase_env_vars`** - Per-project env vars injected into project-scoped execution surfaces (Claude, Codex, Grok, bash/script nodes, and direct chat when codebase-scoped), managed via Web UI or `env:` in config
 3. **`users`** - Archon-internal identity (one row per human/bot); created lazily on first sight by any adapter; `role` (`'admin'`(default)`/'member'`) is the identity seam for future per-resource scoping (visibility stays open today)
@@ -266,7 +266,8 @@ are more current than any tree drawn here.
 20. **`usage_ledger`** - Normalized usage observations owned by `node_usage_recorded` workflow events (17 columns; cascade-deletes with the event; no duplicated run/node/workflow/codebase/user/source/timestamp columns)
 21. **`workflow_envs`** - Named install-wide workflow ENV overlays (`patches` JSON); `UNIQUE(workflow_name, name)`; optional `created_by_user_id` provenance only (not an ACL)
 22. **`workflow_node_messages`** - Immutable sequenced per-node transcript rows (`kind` text/tool/status, JSON `payload`); `UNIQUE(workflow_run_id, node_id, seq)` is the lookup/order index (`seq >= 1`); cascade-deletes with the run
-23–26. **`remote_agent_auth_user` / `remote_agent_auth_session` / `remote_agent_auth_account` / `remote_agent_auth_verification`** - Better Auth tables for opt-in web login (**PostgreSQL only**; always created on Postgres via the idempotent schema apply, but populated only when web auth is enabled — `DATABASE_URL` + `BETTER_AUTH_SECRET`). Owned and shaped by Better Auth (text ids, camelCase columns); Archon never queries them directly — a session maps to the canonical `users` row via `user_identities('web', <betterAuthUserId>)`
+23. **`pending_interactions`** - Structured pending AskHuman and permission rows (`kind` ask|permission, `status` pending|answered|purged, JSON `envelope`/`answer`); `UNIQUE(workflow_run_id, tool_use_id)` is the covering lookup; cascade-deletes with the run
+24–27. **`remote_agent_auth_user` / `remote_agent_auth_session` / `remote_agent_auth_account` / `remote_agent_auth_verification`** - Better Auth tables for opt-in web login (**PostgreSQL only**; always created on Postgres via the idempotent schema apply, but populated only when web auth is enabled — `DATABASE_URL` + `BETTER_AUTH_SECRET`). Owned and shaped by Better Auth (text ids, camelCase columns); Archon never queries them directly — a session maps to the canonical `users` row via `user_identities('web', <betterAuthUserId>)`
 
 **Key Patterns:**
 - Conversation ID format: Platform-specific (`thread_ts`, `chat_id`, `user/repo#123`)

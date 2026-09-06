@@ -182,6 +182,16 @@ function createMockStore(): IWorkflowStore {
       created_at: new Date(),
     }),
     listNodeMessages: async () => [],
+    insertPendingInteraction: async input => ({
+      ...input,
+      id: 'pending-1',
+      status: 'pending' as const,
+      answer: null,
+      created_at: new Date(),
+      resolved_at: null,
+      resolved_by: null,
+    }),
+    listPendingInteractions: async () => [],
   };
 }
 

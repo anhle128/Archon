@@ -9,6 +9,13 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
+type CapturedMcpTool = {
+  name: string;
+  handler: (args: Record<string, unknown>, extra?: unknown) => Promise<unknown>;
+};
+
+const capturedMcpTools: CapturedMcpTool[] = [];
+
 // Create mock query function
 const mockQuery = mock(async function* () {
   // Empty generator by default
@@ -17,11 +24,28 @@ const mockQuery = mock(async function* () {
 // Mock the claude-agent-sdk
 mock.module('@anthropic-ai/claude-agent-sdk', () => ({
   query: mockQuery,
+  tool: (
+    name: string,
+    _description: string,
+    _inputSchema: unknown,
+    handler: CapturedMcpTool['handler']
+  ): CapturedMcpTool => {
+    const def: CapturedMcpTool = { name, handler };
+    capturedMcpTools.push(def);
+    return def;
+  },
+  createSdkMcpServer: (config: unknown): unknown => config,
 }));
 
 import { ClaudeProvider, shouldPassNoEnvFile } from './provider';
 import * as claudeModule from './provider';
 import * as binaryResolver from './binary-resolver';
+import {
+  AskHumanAwaitingError,
+  AskHumanNoStarterError,
+  type NativeTool,
+  type NativeToolHandlerContext,
+} from '../types';
 
 describe('shouldPassNoEnvFile', () => {
   test('returns false when cliPath is undefined (dev mode — SDK 0.2.x resolves a native binary)', () => {
@@ -137,6 +161,7 @@ describe('ClaudeProvider', () => {
         sandbox: true,
         settingSources: true,
         nativeTools: true,
+        askHuman: true,
       });
     });
 
@@ -3265,5 +3290,184 @@ describe('usageBreakdown normalization (US-002)', () => {
     const { chunks, error } = await collect(client.sendQuery('test', '/workspace'));
     expect(error).toBeDefined();
     expect(chunks.filter(c => c.type === 'result')).toHaveLength(0);
+  });
+});
+
+const ASK_HUMAN_INPUT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    questions: {
+      type: 'array',
+      description: 'Ordered structured questions for the run starter.',
+      minItems: 1,
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          prompt: { type: 'string' },
+          selection: { type: 'string', enum: ['single', 'multi'] },
+          options: { type: 'array', items: { type: 'string' } },
+          allowOther: { type: 'boolean' },
+        },
+        required: ['id', 'prompt', 'selection', 'options', 'allowOther'],
+      },
+    },
+  },
+  required: ['questions'],
+};
+
+const VALID_QUESTIONS: Record<string, unknown> = {
+  questions: [
+    {
+      id: 'q1',
+      prompt: 'Which option?',
+      selection: 'single',
+      options: ['a', 'b'],
+      allowOther: false,
+    },
+  ],
+};
+
+function askHumanTool(handler: NativeTool['handler']): NativeTool {
+  return {
+    name: 'AskHuman',
+    description:
+      'Ask the run starter one or more structured questions. Call this tool instead of asking in prose. Wait after calling; do not guess the answer.',
+    inputSchema: ASK_HUMAN_INPUT_SCHEMA,
+    handler,
+  };
+}
+
+type ClaudeQueryCall = {
+  options: {
+    abortController: AbortController;
+    hooks?: Record<
+      string,
+      Array<{
+        matcher?: string;
+        hooks: Array<(input: unknown, toolUseID?: string) => Promise<unknown>>;
+      }>
+    >;
+  };
+};
+
+async function invokeAskHumanCallback(args: ClaudeQueryCall): Promise<void> {
+  const preToolUse = args.options.hooks?.PreToolUse ?? [];
+  for (const matcher of preToolUse) {
+    for (const hook of matcher.hooks) {
+      await hook({ tool_name: 'mcp__archon__AskHuman', tool_use_id: 'toolu_real' }, 'toolu_real');
+    }
+  }
+  const ask = capturedMcpTools.find(tool => tool.name === 'AskHuman');
+  if (!ask) {
+    throw new Error('AskHuman MCP tool was not registered');
+  }
+  await ask.handler(VALID_QUESTIONS);
+}
+
+describe('AskHuman control errors', () => {
+  let client: ClaudeProvider;
+
+  beforeEach(() => {
+    client = new ClaudeProvider({ retryBaseDelayMs: 1 });
+    mockQuery.mockClear();
+    capturedMcpTools.length = 0;
+  });
+
+  async function consume(
+    nativeHandler: NativeTool['handler'],
+    queryImpl: (args: ClaudeQueryCall) => AsyncGenerator<Record<string, unknown>>
+  ): Promise<unknown> {
+    mockQuery.mockImplementation(queryImpl);
+    try {
+      for await (const _ of client.sendQuery('test', '/workspace', undefined, {
+        nativeTools: [askHumanTool(nativeHandler)],
+      })) {
+        // consume
+      }
+      return undefined;
+    } catch (error) {
+      return error;
+    }
+  }
+
+  function scriptedQuery(
+    mode: 'abort' | 'swallow'
+  ): (args: ClaudeQueryCall) => AsyncGenerator<Record<string, unknown>> {
+    return async function* (args: ClaudeQueryCall): AsyncGenerator<Record<string, unknown>> {
+      yield { type: 'assistant', session_id: '', message: { content: [] } };
+      yield { type: 'assistant', session_id: 'sess-real', message: { content: [] } };
+      try {
+        await invokeAskHumanCallback(args);
+      } catch (error) {
+        if (mode === 'swallow') {
+          return;
+        }
+        if (args.options.abortController.signal.aborted) {
+          throw new Error('Operation aborted');
+        }
+        throw error;
+      }
+      yield { type: 'result', session_id: 'sess-real' };
+    };
+  }
+
+  test('abort-rejection rethrows the same AskHumanAwaitingError without retry', async () => {
+    const controlError = new AskHumanAwaitingError('toolu_real', 'review', 'run-1');
+    const seen: Array<NativeToolHandlerContext | undefined> = [];
+    const error = await consume(async (_input, context): Promise<string> => {
+      seen.push(context);
+      throw controlError;
+    }, scriptedQuery('abort'));
+
+    expect(error).toBe(controlError);
+    expect(seen).toEqual([{ toolUseId: 'toolu_real', sessionId: 'sess-real' }]);
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    const call = mockQuery.mock.calls[0]?.[0] as ClaudeQueryCall | undefined;
+    expect(call?.options.abortController.signal.aborted).toBe(true);
+  });
+
+  test('swallowed callback rejection still rejects sendQuery with the same AskHumanAwaitingError', async () => {
+    const controlError = new AskHumanAwaitingError('toolu_real', 'review', 'run-1');
+    const seen: Array<NativeToolHandlerContext | undefined> = [];
+    const error = await consume(async (_input, context): Promise<string> => {
+      seen.push(context);
+      throw controlError;
+    }, scriptedQuery('swallow'));
+
+    expect(error).toBe(controlError);
+    expect(seen).toEqual([{ toolUseId: 'toolu_real', sessionId: 'sess-real' }]);
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    const call = mockQuery.mock.calls[0]?.[0] as ClaudeQueryCall | undefined;
+    expect(call?.options.abortController.signal.aborted).toBe(true);
+  });
+
+  test('abort-rejection rethrows the same AskHumanNoStarterError without retry', async () => {
+    const controlError = new AskHumanNoStarterError('run-1');
+    const seen: Array<NativeToolHandlerContext | undefined> = [];
+    const error = await consume(async (_input, context): Promise<string> => {
+      seen.push(context);
+      throw controlError;
+    }, scriptedQuery('abort'));
+
+    expect(error).toBe(controlError);
+    expect(seen).toEqual([{ toolUseId: 'toolu_real', sessionId: 'sess-real' }]);
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    const call = mockQuery.mock.calls[0]?.[0] as ClaudeQueryCall | undefined;
+    expect(call?.options.abortController.signal.aborted).toBe(true);
+  });
+
+  test('normal handler errors stay SDK tool errors and do not abort', async () => {
+    const boom = new Error('tool failed');
+    const error = await consume(async (): Promise<string> => {
+      throw boom;
+    }, scriptedQuery('swallow'));
+
+    expect(error).toBeUndefined();
+    expect(error).not.toBeInstanceOf(AskHumanAwaitingError);
+    expect(error).not.toBeInstanceOf(AskHumanNoStarterError);
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    const call = mockQuery.mock.calls[0]?.[0] as ClaudeQueryCall | undefined;
+    expect(call?.options.abortController.signal.aborted).toBe(false);
   });
 });

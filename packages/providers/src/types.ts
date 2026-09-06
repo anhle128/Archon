@@ -583,15 +583,20 @@ export interface AgentRequestOptions {
  *
  * `inputSchema` is canonical JSON Schema (object). Each provider converts it to
  * its SDK's schema form. The handler is expected to return a text result rather
- * than throw — provider adapters add no safety net, so an uncaught throw would
- * surface into the agent loop. (core's `buildManageRunTool` guarantees this with
- * an outer try/catch around its dispatch.)
+ * than throw, except for branded AskHuman control errors which the provider
+ * runtime reports and rethrows. (core's `buildManageRunTool` still wraps dispatch
+ * in an outer try/catch.)
  */
+export interface NativeToolHandlerContext {
+  toolUseId?: string;
+  sessionId?: string;
+}
+
 export interface NativeTool {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
-  handler: (input: Record<string, unknown>) => Promise<string>;
+  handler: (input: Record<string, unknown>, context?: NativeToolHandlerContext) => Promise<string>;
 }
 
 /**
@@ -758,6 +763,12 @@ export interface ProviderCapabilities {
    * community providers set `false` until they implement their in-container path.
    */
   containerExec: boolean;
+  /**
+   * Whether the provider can pause a workflow turn on the in-process
+   * `AskHuman` native tool. `true` for Claude and Pi; other providers stay
+   * `false` until they implement the AskHuman converter + abort path.
+   */
+  askHuman: boolean;
 }
 
 /**
@@ -871,3 +882,23 @@ export interface IAgentProvider {
    */
   getCapabilities(): ProviderCapabilities;
 }
+
+export class AskHumanAwaitingError extends Error {
+  readonly name = 'AskHumanAwaitingError';
+  constructor(
+    readonly toolUseId: string,
+    readonly nodeId: string,
+    readonly workflowRunId: string
+  ) {
+    super(`AskHuman awaiting input for ${toolUseId}`);
+  }
+}
+
+export class AskHumanNoStarterError extends Error {
+  readonly name = 'AskHumanNoStarterError';
+  constructor(readonly workflowRunId: string) {
+    super(`AskHuman requires workflow_runs.user_id (run ${workflowRunId})`);
+  }
+}
+
+export type AskHumanControlError = AskHumanAwaitingError | AskHumanNoStarterError;

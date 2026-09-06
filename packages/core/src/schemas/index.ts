@@ -130,6 +130,10 @@ export type { EnvPatches, WorkflowEnvRow, WorkflowEnvSummary } from './workflow-
 export { workflowNodeMessageRowSchema } from './workflow-node-message';
 export type { WorkflowNodeMessageRow } from './workflow-node-message';
 
+// PendingInteraction
+export { pendingInteractionSchema, insertPendingInteractionSchema } from './pending-interaction';
+export type { PendingInteraction, InsertPendingInteractionInput } from './pending-interaction';
+
 // UsageReport
 export {
   usageDimensionsSchema,

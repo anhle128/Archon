@@ -1493,8 +1493,10 @@ export async function cancelRecoveryWorkflowRun(id: string): Promise<{ cancelled
 }
 
 /**
- * Pause a running workflow run for human approval.
- * Sets status to 'paused' and stores approval context in metadata.
+ * Pause a running workflow run.
+ * When `approvalContext` is provided, sets status to 'paused' and stores
+ * approval context in metadata. When omitted (Ask pause), sets status only
+ * and leaves metadata untouched; already-paused is idempotent success.
  * Does NOT set completed_at — the run is not finished.
  *
  * `resolved`, `completionSignaled`, and `signaledOutput` are reset to an
@@ -1507,11 +1509,27 @@ export async function cancelRecoveryWorkflowRun(id: string): Promise<{ cancelled
  */
 export async function pauseWorkflowRun(
   id: string,
-  approvalContext: ApprovalContext,
+  approvalContext?: ApprovalContext,
   extraMetadata?: Record<string, unknown>
 ): Promise<void> {
   const dialect = getDialect();
   try {
+    if (approvalContext === undefined) {
+      const result = await pool.query(
+        `UPDATE remote_agent_workflow_runs
+         SET status = 'paused'
+         WHERE id = $1 AND status = 'running'`,
+        [id]
+      );
+      if (result.rowCount !== 0) return;
+      const current = await pool.query<{ status: WorkflowRunStatus }>(
+        'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
+        [id]
+      );
+      if (current.rows[0]?.status === 'paused') return;
+      throw new Error(`Workflow run not found or not in running state (id: ${id})`);
+    }
+
     const result = await pool.query(
       `UPDATE remote_agent_workflow_runs
        SET status = 'paused', metadata = ${dialect.jsonMerge('metadata', 2)}

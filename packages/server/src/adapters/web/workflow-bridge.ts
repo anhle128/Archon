@@ -162,6 +162,15 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         },
       });
 
+    case 'node_awaiting':
+      return JSON.stringify({
+        type: 'workflow_status',
+        runId: event.runId,
+        workflowName: '',
+        status: 'paused',
+        timestamp: Date.now(),
+      });
+
     case 'workflow_cancelled':
       return JSON.stringify({
         type: 'workflow_status',
@@ -318,6 +327,7 @@ export const DASHBOARD_SOURCE_EVENT_TYPES: readonly string[] = [
   ...Object.keys(ROW_NODE_STATUS),
   'approval_requested',
   'approval_received',
+  'node_awaiting',
 ];
 
 /**
@@ -362,6 +372,19 @@ export function mapWorkflowEventRow(row: WorkflowEventRow): string | null {
         nodeId: row.step_name ?? dataStr(data, 'nodeId', 'node_id') ?? '',
         message: dataStr(data, 'message') ?? '',
       },
+    };
+    return JSON.stringify(payload);
+  }
+
+  // Ask pause → refetch so GET run can project awaiting. Status-only: no approval
+  // card, envelope, or questions in the SSE payload (Story 6.2).
+  if (row.event_type === 'node_awaiting') {
+    const payload: WorkflowStatusSsePayload = {
+      type: 'workflow_status',
+      runId,
+      workflowName: '',
+      status: 'paused',
+      timestamp,
     };
     return JSON.stringify(payload);
   }

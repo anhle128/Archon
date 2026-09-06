@@ -1,0 +1,301 @@
+{
+  "feature": "Pause a Run When the Agent Asks Without Stealing the Approval Slot",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add awaiting to node status enums and projector",
+      "description": "As a workflow observer, I want node status enums and the state projector to support awaiting, so that a paused-on-ask node is truthfully projected as awaiting instead of running or completed.",
+      "acceptanceCriteria": [
+        "packages/workflows/src/schemas/workflow-run.ts adds 'awaiting' to workflowStepStatusSchema and nodeStateSchema while keeping workflowRunStatusSchema and nodeOutputSchema free of awaiting.",
+        "Compile-time type assertion confirms NodeOutput['state'] extends NodeState without requiring NodeState to equal NodeOutput['state'].",
+        "packages/workflows/src/schemas.test.ts verifies nodeStateSchema and workflowStepStatusSchema parse 'awaiting' while nodeOutputSchema rejects it.",
+        "RetryNodeProjection.state in packages/workflows/src/retry-state.ts uses NodeState instead of NodeOutput['state'].",
+        "projectLatestEffectiveNodeStates accepts an optional pending array of { node_id: string; status: string }.",
+        "A node_awaiting event sets the node projection state to 'awaiting' without writing output.",
+        "An interaction_resolved event does not change node state and never completes the node.",
+        "Pending rows with status === 'pending' overlay 'awaiting' onto a running node, while answered pending rows do not overlay awaiting.",
+        "packages/workflows/src/retry-state.test.ts passes all new projection tests, and existing retry/step tests remain green."
+      ],
+      "technicalNotes": "Follow plan Task 1 at docs/superpowers/plans/2026-09-06-askhuman-pause-without-approval-slot.md:417-505. Modify packages/workflows/src/schemas/workflow-run.ts, packages/workflows/src/schemas.test.ts, packages/workflows/src/retry-state.ts, and packages/workflows/src/retry-state.test.ts.",
+      "dependsOn": [],
+      "priority": 1,
+      "passes": true,
+      "notes": "Implemented in iteration 1. Files: packages/workflows/src/schemas/workflow-run.ts, packages/workflows/src/schemas.test.ts, packages/workflows/src/retry-state.ts, packages/workflows/src/retry-state.test.ts, packages/server/src/routes/api.ts (ApiWorkflowNodeState.status widened so projector awaiting type-checks)."
+    },
+    {
+      "id": "US-002",
+      "title": "Make Ask pause optional-approval and idempotent",
+      "description": "As a workflow engine operator, I want pauseWorkflowRun to support Ask pause without writing metadata.approval, so that dynamic questions pause the run without touching the declared-gate approval slot.",
+      "acceptanceCriteria": [
+        "IWorkflowStore.pauseWorkflowRun in packages/workflows/src/store.ts marks approvalContext as optional: approvalContext?: ApprovalContext.",
+        "When approvalContext is undefined, packages/core/src/db/workflows.ts updates status = 'paused' without json-merging metadata.approval or any other metadata.",
+        "Ask pause is idempotent: if the UPDATE matches zero rows but the run is already paused, pauseWorkflowRun succeeds without throwing.",
+        "If the UPDATE matches zero rows and the run status is not paused (e.g. completed, failed), pauseWorkflowRun throws the existing not-running error.",
+        "When approvalContext is provided, the existing gate pause path preserves byte-for-byte behavior: writing metadata.approval with explicit-null subfields and requiring running status.",
+        "Ask pause does not emit approval_pending.",
+        "packages/core/src/db/workflows.test.ts passes tests for metadata-free Ask pause, idempotency when already paused, error on completed run, and gate pause regression."
+      ],
+      "technicalNotes": "Follow plan Task 2 at docs/superpowers/plans/2026-09-06-askhuman-pause-without-approval-slot.md:507-600. Modify packages/workflows/src/store.ts, packages/core/src/db/workflows.ts, and packages/core/src/db/workflows.test.ts.",
+      "dependsOn": [
+        "US-001"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": "Implemented in iteration 2. Files: packages/workflows/src/store.ts, packages/core/src/db/workflows.ts, packages/core/src/db/workflows.test.ts. Ask pause omits metadata.approval; already-paused is idempotent; gate pause unchanged."
+    },
+    {
+      "id": "US-003",
+      "title": "Add remote_agent_pending_interactions additively",
+      "description": "As a workflow developer, I want an additive remote_agent_pending_interactions table in SQLite and PostgreSQL, so that structured pending asks can be persisted durably.",
+      "acceptanceCriteria": [
+        "migrations/000_combined.sql defines application table 23 remote_agent_pending_interactions with exactly 12 columns: id (UUID PK), workflow_run_id (FK cascade), node_id, tool_use_id, kind (CHECK ask|permission), status (CHECK pending|answered|purged), envelope (JSONB), answer (JSONB nullable), provider_session_id, created_at, resolved_at, resolved_by.",
+        "PostgreSQL migration includes named unique constraint uq_pending_interactions_run_tool_use on (workflow_run_id, tool_use_id), table comment beside CREATE TABLE, and column comments in trailing comments section without redundant standalone indexes.",
+        "packages/core/src/db/adapters/sqlite.ts mirrors table 23 in createSchema with TEXT types, matching CHECKs, named unique constraint, and ON DELETE CASCADE; does not add to migrateColumns.",
+        "packages/core/src/db/adapters/sqlite.test.ts raises MIN_NON_AUTH_COLUMNS parity floor from 169 to 181 and verifies table columns, constraints, unique index, and foreign key cascade deletion.",
+        "bun run generate:bundled-schema regenerates packages/core/src/db/bundled-schema.generated.ts without unexpected changes, and bundled-schema.test.ts passes.",
+        "AGENTS.md documents 23 application tables and Better Auth tables 24-27."
+      ],
+      "technicalNotes": "Follow plan Task 3 at docs/superpowers/plans/2026-09-06-askhuman-pause-without-approval-slot.md:602-690. Modify migrations/000_combined.sql, packages/core/src/db/adapters/sqlite.ts, packages/core/src/db/adapters/sqlite.test.ts, AGENTS.md, and run bun run generate:bundled-schema.",
+      "dependsOn": [],
+      "priority": 3,
+      "passes": true,
+      "notes": "Implemented in iteration 3. Files: migrations/000_combined.sql, packages/core/src/db/adapters/sqlite.ts, packages/core/src/db/adapters/sqlite.test.ts, packages/core/src/db/bundled-schema.generated.ts, AGENTS.md. Table 23 has 12 columns, named unique (workflow_run_id, tool_use_id), trailing column comments, SQLite parity floor 181, Better Auth documented as 24-27."
+    },
+    {
+      "id": "US-004",
+      "title": "Insert and list pending rows in transaction with node_awaiting",
+      "description": "As a workflow executor, I want to insert pending interactions and emit node_awaiting in a single database transaction, so that pending asks and audit events are committed atomically.",
+      "acceptanceCriteria": [
+        "packages/workflows/src/schemas/pending-interaction.ts exports insertPendingInteractionSchema using pendingInteractionSchema.pick({...}).strict() with caller-assigned fields: workflow_run_id, node_id, tool_use_id, kind, envelope, provider_session_id.",
+        "insertPendingInteractionSchema rejects non-empty status and empty provider_session_id; tests pass in packages/workflows/src/schemas/pending-interaction.test.ts.",
+        "packages/providers/src/types.ts exports AskHumanAwaitingError, AskHumanNoStarterError, and AskHumanControlError.",
+        "packages/core/src/schemas/pending-interaction.ts aliases the workflow schema, and packages/core/src/schemas/index.ts re-exports it.",
+        "packages/core/src/db/workflow-pending-interactions.ts implements insertPendingInteraction in withTransaction: row lock via FOR UPDATE on PostgreSQL, throws AskHumanNoStarterError if run user_id is null, inserts pending row, calls insertWorkflowEvent for event_type 'node_awaiting' with data { node_id, tool_use_id, kind }, returns canonically parsed row.",
+        "An atomic rollback trigger aborting event inserts rolls back the pending interaction insert completely.",
+        "listPendingInteractions returns all rows for a run ordered by created_at ASC, id ASC; malformed JSON throws PendingInteractionCorruptRowError containing only row id in message without logging payload.",
+        "packages/core/src/db/index.ts exports workflowPendingInteractionDb and direct functions.",
+        "packages/core/package.json adds workflow-pending-interactions.test.ts to test suite, and tests pass."
+      ],
+      "technicalNotes": "Follow plan Task 4 at docs/superpowers/plans/2026-09-06-askhuman-pause-without-approval-slot.md:692-805. Modify packages/workflows/src/schemas/pending-interaction.ts, packages/providers/src/types.ts, packages/core/src/schemas/pending-interaction.ts, packages/core/src/db/workflow-pending-interactions.ts, packages/core/package.json.",
+      "dependsOn": [
+        "US-002",
+        "US-003"
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": "Implemented in iteration 4. Files: packages/workflows/src/schemas/pending-interaction.ts, packages/workflows/src/schemas/pending-interaction.test.ts, packages/providers/src/types.ts, packages/core/src/schemas/pending-interaction.ts, packages/core/src/schemas/index.ts, packages/core/src/db/workflow-pending-interactions.ts, packages/core/src/db/workflow-pending-interactions.test.ts, packages/core/src/db/index.ts, packages/core/package.json. Insert+node_awaiting are one transaction; null user_id throws AskHumanNoStarterError; list orders created_at ASC, id ASC."
+    },
+    {
+      "id": "US-005",
+      "title": "Expose pending ports on IWorkflowStore",
+      "description": "As a workflow store consumer, I want IWorkflowStore to expose insertPendingInteraction and listPendingInteractions, so that execution layers can interact with pending rows uniformly.",
+      "acceptanceCriteria": [
+        "packages/workflows/src/store.ts defines IWorkflowPendingInteractionStore with insertPendingInteraction and listPendingInteractions, and composes it into IWorkflowStore.",
+        "packages/core/src/workflows/store-adapter.ts implements the pending interaction store methods by delegating directly to workflow-pending-interactions DB functions.",
+        "packages/core/src/workflows/store-adapter.test.ts verifies requiredMethods includes insertPendingInteraction and listPendingInteractions with exact forwarding.",
+        "All typed IWorkflowStore doubles in packages/workflows/src/dag-executor.test.ts, executor.test.ts, executor-preamble.test.ts, script-node-deps.test.ts, and subrun.test.ts satisfy the updated interface and compile cleanly."
+      ],
+      "technicalNotes": "Follow plan Task 5 at docs/superpowers/plans/2026-09-06-askhuman-pause-without-approval-slot.md:807-882. Modify packages/workflows/src/store.ts, packages/core/src/workflows/store-adapter.ts, packages/core/src/workflows/store-adapter.test.ts, and workflow test doubles.",
+      "dependsOn": [
+        "US-004"
+      ],
+      "priority": 5,
+      "passes": true,
+      "notes": "Implemented in iteration 5. Files: packages/workflows/src/store.ts, packages/core/src/workflows/store-adapter.ts, packages/core/src/workflows/store-adapter.test.ts, packages/workflows/src/dag-executor.test.ts, packages/workflows/src/executor.test.ts, packages/workflows/src/executor-preamble.test.ts, packages/workflows/src/script-node-deps.test.ts, packages/workflows/src/subrun.test.ts. IWorkflowPendingInteractionStore composed into IWorkflowStore; adapter delegates to DB; doubles compile."
+    },
+    {
+      "id": "US-006",
+      "title": "Embed pending rows on GET run and keep messages Ask-free",
+      "description": "As an API consumer, I want GET /api/workflows/runs/:runId to return pending_interactions from the database and project awaiting node states, so that clients can observe pending questions.",
+      "acceptanceCriteria": [
+        "packages/server/src/routes/schemas/workflow.schemas.ts uses nodeStateSchema directly for workflowNodeStateSchema.status instead of a hardcoded enum.",
+        "packages/server/src/routes/api.ts fetches listPendingInteractions(runId), maps timestamps to ISO strings, returns them as pending_interactions, and passes pending rows into projectApiWorkflowNodeStates.",
+        "settleApiWorkflowNodeStatesForRunStatus preserves 'awaiting' status on paused runs without overriding it to paused or running.",
+        "GET /api/workflows/runs/:runId/nodes/:nodeId/messages never contains Ask envelopes in status payloads.",
+        "packages/server/src/routes/api.workflow-runs.test.ts passes tests verifying pending_interactions serialization, projected awaiting node state, and message isolation.",
+        "Web types in packages/web/src/lib/api.generated.d.ts are regenerated from live OpenAPI specification and include 'awaiting' in WorkflowNodeState.status."
+      ],
+      "technicalNotes": "Follow plan Task 6 at docs/superpowers/plans/2026-09-06-askhuman-pause-without-approval-slot.md:884-972. Modify packages/server/src/routes/schemas/workflow.schemas.ts, packages/server/src/routes/api.ts, packages/server/src/routes/api.workflow-runs.test.ts, and regenerate packages/web/src/lib/api.generated.d.ts.",
+      "dependsOn": [
+        "US-001",
+        "US-004",
+        "US-005"
+      ],
+      "priority": 6,
+      "passes": true,
+      "notes": "Implemented in iteration 6. Files: packages/server/src/routes/schemas/workflow.schemas.ts, packages/server/src/routes/api.ts, packages/server/src/routes/api.workflow-runs.test.ts, packages/web/src/lib/api.generated.d.ts, packages/web/src/lib/types.ts, packages/web/src/components/workflows/NodeRunList.tsx. GET run embeds pending_interactions from the table, projects awaiting, keeps messages Ask-free."
+    },
+    {
+      "id": "US-007",
+      "title": "Make node_awaiting an SSE refetch trigger",
+      "description": "As a real-time web client, I want node_awaiting events to trigger a run refetch via SSE without leaking envelope or questions payload in the event stream.",
+      "acceptanceCriteria": [
+        "WORKFLOW_EVENT_TYPES in packages/workflows/src/store.ts includes 'node_awaiting' and 'interaction_resolved'.",
+        "WorkflowEventEmitter in packages/workflows/src/event-emitter.ts adds { type: 'node_awaiting', runId: string, nodeId: string } with no card or envelope data.",
+        "DASHBOARD_SOURCE_EVENT_TYPES in packages/server/src/adapters/web/workflow-bridge.ts includes 'node_awaiting'.",
+        "mapWorkflowEventRow for poller and mapWorkflowEvent for live bridge both map node_awaiting to workflow_status with status: 'paused', omitting approval, envelope, and questions fields.",
+        "packages/workflows/src/event-emitter.test.ts, packages/server/src/adapters/web/dashboard-event-poller.test.ts, and packages/server/src/adapters/web/workflow-bridge.test.ts pass tests proving payload isolation and refetch mapping."
+      ],
+      "technicalNotes": "Follow plan Task 7 at docs/superpowers/plans/2026-09-06-askhuman-pause-without-approval-slot.md:974-1047. Modify packages/workflows/src/store.ts, packages/workflows/src/event-emitter.ts, packages/server/src/adapters/web/workflow-bridge.ts, and test suites.",
+      "dependsOn": [
+        "US-001",
+        "US-005"
+      ],
+      "priority": 7,
+      "passes": true,
+      "notes": "WORKFLOW_EVENT_TYPES includes node_awaiting and interaction_resolved. Live emitter event is { type: 'node_awaiting', runId, nodeId } with no card. DASHBOARD_SOURCE_EVENT_TYPES includes node_awaiting. Poller and live mappings emit workflow_status paused without approval/envelope/questions. Slack exhaustive switch ignores node_awaiting (no approval card). interaction_resolved is not mapped in Story 6.2."
+    },
+    {
+      "id": "US-008",
+      "title": "Convert questions[] and preserve branded tool errors at converter boundary",
+      "description": "As a provider bridge implementer, I want Claude and Pi native tool converters to support nested questions[] and propagate branded control errors, so that AskHuman input schemas are validated and control signals escape the agent loop.",
+      "acceptanceCriteria": [
+        "packages/providers/src/types.ts defines NativeToolHandlerContext with optional toolUseId and sessionId, and updates NativeTool.handler signature to (input: Record<string, unknown>, context?: NativeToolHandlerContext) => Promise<string>.",
+        "Claude buildArchonMcpServer and Pi buildPiNativeToolDefinitions accept runtime hooks (contextFor/onControlError, sessionId/onControlError).",
+        "Claude and Pi native tool converters recursively accept array-of-strings and array-of-objects schemas, enforcing minItems: 1 and required fields for ASK_HUMAN_INPUT_SCHEMA.",
+        "Converters reject unsupported types (e.g. numbers) with fail-fast unsupported type errors.",
+        "When NativeTool.handler throws AskHumanAwaitingError or AskHumanNoStarterError, onControlError receives the instance and the tool callback rejects with the exact same instance.",
+        "Normal tool errors are not reported to onControlError and remain standard SDK tool errors.",
+        "packages/providers/src/claude/native-tools.test.ts and packages/providers/src/community/pi/native-tools.test.ts pass all schema and control error tests."
+      ],
+      "technicalNotes": "Follow plan Task 8 at docs/superpowers/plans/2026-09-06-askhuman-pause-without-approval-slot.md:1049-1117. Modify packages/providers/src/types.ts, packages/providers/src/claude/native-tools.ts, and packages/providers/src/community/pi/native-tools.ts.",
+      "dependsOn": [
+        "US-004"
+      ],
+      "priority": 8,
+      "passes": true,
+      "notes": "Implemented in iteration 8. Files: packages/providers/src/types.ts, packages/providers/src/claude/native-tools.ts, packages/providers/src/claude/native-tools.test.ts, packages/providers/src/community/pi/native-tools.ts, packages/providers/src/community/pi/native-tools.test.ts. Nested questions[] conversion, NativeToolHandlerContext, runtime onControlError rethrows same instance."
+    },
+    {
+      "id": "US-009",
+      "title": "Make Claude abort and reject with the same Ask control error",
+      "description": "As a Claude provider maintainer, I want Claude sendQuery to capture the real SDK tool id and session id, abort in-flight queries on AskHuman, and rethrow the branded error instance without retrying.",
+      "acceptanceCriteria": [
+        "packages/providers/src/claude/provider.ts captures the first non-empty session_id from SDK raw messages.",
+        "A composed PreToolUse hook captures the real tool_use_id for mcp__archon__AskHuman and clears it after consumption so stale IDs are never reused.",
+        "The MCP tool callback passes the real toolUseId and sessionId into the handler context and never invents a fabricated replacement ID.",
+        "When an AskHumanControlError is caught by the runtime bridge, the attempt AbortController is aborted.",
+        "sendQuery rethrows the exact same stored control error instance before generic abort classification, rate-limit classification, or retry logic.",
+        "Checking the control slot after clean iterator exits prevents SDK swallowing from turning an Ask into a success.",
+        "packages/providers/src/claude/provider.test.ts passes tests verifying error identity, abort signal, single query execution (no retry), and real context parameters."
+      ],
+      "technicalNotes": "Follow plan Task 9 at docs/superpowers/plans/2026-09-06-askhuman-pause-without-approval-slot.md:1119-1176. Modify packages/providers/src/claude/provider.ts and packages/providers/src/claude/provider.test.ts.",
+      "dependsOn": [
+        "US-008"
+      ],
+      "priority": 9,
+      "passes": true,
+      "notes": "Implemented in iteration 9. Files: packages/providers/src/claude/provider.ts, packages/providers/src/claude/provider.test.ts. Attempt-local bridge captures session_id and PreToolUse tool_use_id; onControlError aborts and sendQuery rethrows the same AskHumanControlError before classify/retry and after clean iterator exit."
+    },
+    {
+      "id": "US-010",
+      "title": "Make Pi abort and reject with the same Ask control error",
+      "description": "As a Pi provider maintainer, I want Pi sendQuery to capture call ID and session ID, abort the agent session on AskHuman, and rethrow the branded error instance even if Pi converts tool throws internally.",
+      "acceptanceCriteria": [
+        "packages/providers/src/community/pi/provider.ts passes _toolCallId and session.sessionId to NativeTool.handler context.",
+        "Pi runtime onControlError records the exact AskHumanControlError instance and calls session.abort().",
+        "After bridgeSession returns or throws, sendQuery checks the stored control error and rethrows the original instance.",
+        "Internal tool error conversion by Pi's prompt loop does not prevent the branded error from rejecting sendQuery.",
+        "Normal tool errors continue to follow standard Pi tool-error conversion and do not abort the session.",
+        "packages/providers/src/community/pi/provider.test.ts passes tests for error identity, session.abort() call, single session creation, and normal error handling."
+      ],
+      "technicalNotes": "Follow plan Task 10 at docs/superpowers/plans/2026-09-06-askhuman-pause-without-approval-slot.md:1178-1234. Modify packages/providers/src/community/pi/provider.ts and packages/providers/src/community/pi/provider.test.ts.",
+      "dependsOn": [
+        "US-008"
+      ],
+      "priority": 10,
+      "passes": true,
+      "notes": "Implemented in iteration 10. Files: packages/providers/src/community/pi/provider.ts, packages/providers/src/community/pi/provider.test.ts. Per-session runtime supplies session.sessionId and _toolCallId; onControlError aborts and sendQuery rethrows the same AskHumanControlError after bridgeSession returns or throws."
+    },
+    {
+      "id": "US-011",
+      "title": "Add the askHuman capability axis",
+      "description": "As a platform operator, I want an explicit askHuman capability flag across all providers, so that the system knows exactly which providers support mid-turn questions.",
+      "acceptanceCriteria": [
+        "ProviderCapabilities in packages/providers/src/types.ts requires askHuman: boolean.",
+        "packages/providers/src/claude/capabilities.ts and packages/providers/src/community/pi/capabilities.ts set askHuman: true.",
+        "Codex, Grok, OpenCode, Copilot, OMP, QoderCLI, and e2e-fake set askHuman: false.",
+        "scripts/generate-capability-matrix.ts includes { key: 'askHuman', label: 'AskHuman mid-turn questions' } in AXES.",
+        "bun run generate:capability-matrix regenerates docs/reference/provider-capabilities.md, and bun run check:capability-matrix passes.",
+        "packages/providers/src/registry.test.ts and observability.test.ts assert that exactly claude and pi advertise askHuman: true."
+      ],
+      "technicalNotes": "Follow plan Task 11 at docs/superpowers/plans/2026-09-06-askhuman-pause-without-approval-slot.md:1236-1294. Modify provider capability files, scripts/generate-capability-matrix.ts, and run bun run generate:capability-matrix.",
+      "dependsOn": [
+        "US-009",
+        "US-010"
+      ],
+      "priority": 11,
+      "passes": true,
+      "notes": "Implemented in iteration 11. Files: packages/providers/src/types.ts, packages/providers/src/{claude,codex,grok,e2e-fake,community/{pi,copilot,omp,opencode,qodercli}}/capabilities.ts, scripts/generate-capability-matrix.ts, packages/docs-web/src/content/docs/reference/provider-capabilities.md, packages/providers/src/registry.test.ts, packages/providers/src/observability.test.ts, packages/providers/src/claude/provider.test.ts, packages/providers/src/codex/provider.test.ts."
+    },
+    {
+      "id": "US-012",
+      "title": "Inject AskHuman, persist, throw, and pause without completing the node",
+      "description": "As a workflow executor, I want command, prompt, and loop nodes on askHuman-capable providers to receive the AskHuman tool, persist questions, and cleanly pause the DAG when invoked.",
+      "acceptanceCriteria": [
+        "packages/workflows/src/ask-human.ts implements createAskHumanTool with name 'AskHuman', ASK_HUMAN_INPUT_SCHEMA, Zod-based questions validation, toolUseId/sessionId requirement, insertPendingInteraction call, workflow.ask_pending log (ids only), and throwing AskHumanAwaitingError.",
+        "packages/workflows/src/ask-human.test.ts passes in packages/workflows/package.json as its own Bun test invocation.",
+        "packages/workflows/src/dag-executor.ts injects AskHuman into command, prompt, and loop nodes only when getProviderCapabilities(provider).askHuman is true, omitting it for bash, script, approval, plannotator_gate, and loop_group containers.",
+        "On catching AskHumanAwaitingError, dag-executor calls pauseWorkflowRun(runId) with no approval context, sets transcript lifecycle awaiting, emits live node_awaiting, skips node_completed and node_failed events, and returns { state: 'completed', output } to cleanly halt DAG between layers.",
+        "Loop nodes preserve accumulated text and usage without calling failLoopIteration when paused on Ask.",
+        "AskHumanNoStarterError and database persist failures follow the standard node-failed path and do not pause the run.",
+        "packages/workflows/src/dag-executor.test.ts passes all injection, pause, lifecycle, and event-omission tests."
+      ],
+      "technicalNotes": "Follow plan Task 12 at docs/superpowers/plans/2026-09-06-askhuman-pause-without-approval-slot.md:1296-1473. Create packages/workflows/src/ask-human.ts and ask-human.test.ts; modify packages/workflows/src/dag-executor.ts, dag-executor.test.ts, and packages/workflows/package.json.",
+      "dependsOn": [
+        "US-002",
+        "US-005",
+        "US-007",
+        "US-011"
+      ],
+      "priority": 12,
+      "passes": true,
+      "notes": "Implemented in iteration 12. Files: packages/workflows/src/ask-human.ts, packages/workflows/src/ask-human.test.ts, packages/workflows/src/dag-executor.ts, packages/workflows/src/dag-executor.test.ts, packages/workflows/package.json. AskHuman is injected on command/prompt/loop when askHuman is true; Ask pause omits approval context, records awaiting, emits live node_awaiting, and skips node_completed/node_failed. NoStarter and persist errors take the node-failed path."
+    },
+    {
+      "id": "US-013",
+      "title": "Reject AskHuman on unsupported providers at run start and keep chat clean",
+      "description": "As a workflow operator, I want workflows specifying allowed_tools: [AskHuman] on unsupported providers to fail preflight immediately before turn 1, while chat remains free of AskHuman.",
+      "acceptanceCriteria": [
+        "packages/workflows/src/dag-executor.ts implements collectAskHumanUnsupportedProviders inspecting command, prompt, and loop nodes (including nested loop_group bodies) using WorkflowModelScope.",
+        "Preflight normalizes allowed_tools entries with entry.split('(')[0].trim() to match AskHuman, mcp__archon__AskHuman, and specifier forms like AskHuman(allow).",
+        "If allowed_tools references AskHuman and the resolved provider has askHuman === false, executeDagWorkflow throws before any node execution: AskHuman is not supported by provider '<id>'. Remove AskHuman from allowed_tools, or use claude or pi.",
+        "The same workflow without AskHuman in allowed_tools starts normally with no Ask tool injected.",
+        "Preflight runs unconditionally before node 1 and reuses WorkflowModelScope for container preflight.",
+        "packages/core/src/orchestrator/orchestrator-agent.test.ts verifies chat orchestrator still injects only manage_run and not AskHuman.",
+        "packages/workflows/src/dag-executor.test.ts passes all CAP-7 preflight tests."
+      ],
+      "technicalNotes": "Follow plan Task 13 at docs/superpowers/plans/2026-09-06-askhuman-pause-without-approval-slot.md:1475-1873. Modify packages/workflows/src/dag-executor.ts, packages/workflows/src/dag-executor.test.ts, and packages/core/src/orchestrator/orchestrator-agent.test.ts.",
+      "dependsOn": [
+        "US-011",
+        "US-012"
+      ],
+      "priority": 13,
+      "passes": true,
+      "notes": "Implemented in iteration 13. Files: packages/workflows/src/dag-executor.ts, packages/workflows/src/dag-executor.test.ts, packages/core/src/orchestrator/orchestrator-agent.test.ts. collectAskHumanUnsupportedProviders inspects command/prompt/loop and nested loop_group bodies via WorkflowModelScope. allowed_tools names are normalized with split(\"(\")[0].trim(). AskHuman/mcp__archon__AskHuman on askHuman === false throws before sendQuery. Chat still injects only manage_run."
+    },
+    {
+      "id": "US-014",
+      "title": "Validate Story 6.2 and mark sprint status done",
+      "description": "As a solution architect, I want complete regression verification across all 23 focused test suites, generators, PostgreSQL schema upgrades, and full repo validation before marking Story 6.2 done.",
+      "acceptanceCriteria": [
+        "All 23 focused package test suites specified in Task 14 Step 1 pass.",
+        "bun run generate:bundled-schema and bun run generate:capability-matrix produce no drift, and bun run check:bundled-schema and bun run check:capability-matrix pass.",
+        "DATABASE_URL=... bun run check:schema-upgrades passes against PostgreSQL locally or in CI.",
+        "bun run validate passes completely.",
+        "_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml is updated to mark 6-2-pause-a-run-when-the-agent-asks-without-stealing-the-approval-slot: done only after all gates pass.",
+        "No UI Ask cards, answer POST endpoints, or provider resume mappers are shipped in Story 6.2."
+      ],
+      "technicalNotes": "Follow plan Task 14 at docs/superpowers/plans/2026-09-06-askhuman-pause-without-approval-slot.md:1877-2036. Modify _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml.",
+      "dependsOn": [
+        "US-006",
+        "US-007",
+        "US-012",
+        "US-013"
+      ],
+      "priority": 14,
+      "passes": true,
+      "notes": "Implemented in iteration 14. Files: _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml. All Task 14 focused suites passed; generate/check bundled-schema and capability-matrix clean; check:schema-upgrades OK on archon-postgres-1; bun run validate passed with NODE_OPTIONS=--max-old-space-size=8192. No Ask cards, answer POST, or resolvePendingInteraction mapper."
+    }
+  ]
+}

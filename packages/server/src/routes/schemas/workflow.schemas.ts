@@ -4,7 +4,10 @@
 import { z } from '@hono/zod-openapi';
 import { workflowDefinitionSchema as engineWorkflowDefinitionSchema } from '@archon/workflows/schemas/workflow';
 import { effortLevelSchema, thinkingConfigSchema } from '@archon/workflows/schemas/dag-node';
-import { workflowRunSchema as engineWorkflowRunSchema } from '@archon/workflows/schemas/workflow-run';
+import {
+  nodeStateSchema,
+  workflowRunSchema as engineWorkflowRunSchema,
+} from '@archon/workflows/schemas/workflow-run';
 import {
   workflowEventRowSchema,
   routeLoopDecisionEventDataSchema,
@@ -152,7 +155,7 @@ export const workflowNodeStateSchema = z
   .object({
     nodeId: z.string(),
     name: z.string(),
-    status: z.enum(['pending', 'running', 'completed', 'failed', 'skipped']),
+    status: nodeStateSchema,
     retryEpoch: z.number().int().nonnegative(),
     duration: z.number().optional(),
     error: z.string().optional(),
