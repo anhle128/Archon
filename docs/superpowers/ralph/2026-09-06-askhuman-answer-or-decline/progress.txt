@@ -1,5 +1,10 @@
 ## Codebase Patterns
 
+### Operations own post-commit Ask signals; resume never calls resumeWorkflowRun
+- **Where**: `packages/core/src/operations/workflow-operations.ts`
+- **Pattern**: `answerAskHuman` authorizes the starter (`actorUserId` required, must equal non-null `run.user_id`, no admin override), calls `resolvePendingInteraction` once, then logs `workflow.ask_resolved` and emits identifier-only `interaction_resolved` only after that promise resolves. Return the pre-resolution run. `resumeWorkflow` lists pending rows, rejects any `pending` status, and accepts `running` only when at least one Ask row is `answered`. Do not call `resumeWorkflowRun` from either operation. Mock `../db/workflow-pending-interactions` and `@archon/workflows/event-emitter` before importing operations tests.
+- **Example**: `getLog().info({ workflowRunId, nodeId, toolUseId, declined, resumed }, 'workflow.ask_resolved')`
+
 ### Live interaction_resolved is identifier-only; persisted mapper branches on purged
 - **Where**: `packages/workflows/src/event-emitter.ts`, `packages/server/src/adapters/web/workflow-bridge.ts`, `packages/adapters/src/chat/slack/workflow-bridge.ts`
 - **Pattern**: Live `InteractionResolvedEvent` is `{ type, runId, nodeId, resumed }` only. The web live mapper emits `workflow_status` with `status: event.resumed ? 'running' : 'paused'`. The persisted mapper checks `data.purged` first (`terminal_status === 'failed'` → failed, else cancelled), then `data.resumed` (true → running, missing/unknown → paused). Add the type to `DASHBOARD_SOURCE_EVENT_TYPES`. Slack handles the case with `break` and sends no message. Never copy toolUseId/envelope/answer/questions/options/approval onto SSE.
@@ -160,5 +165,28 @@
 - Do not add interaction_resolved to ROW_WORKFLOW_STATUS; that table is a static event_type→status map and cannot branch on resumed vs purged.
 - Purge rows store both `purged: true` and `resumed: false`; check purged first or they would refetch as paused.
 - Missing persisted `resumed` must fail safe to paused, never running.
+
+---
+
+## 2026-09-06 — US-006: Own AskHuman answer and resume operations
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/operations/workflow-operations.ts` — added AskHuman typed errors, `answerAskHuman`, and Ask-aware `resumeWorkflow`
+- `packages/core/src/operations/workflow-operations.test.ts` — authorization, post-commit log/emit isolation, and resume pending/running coverage
+
+**Acceptance criteria verified**:
+- [x] workflow-operations.ts exports AskHumanRunNotFoundError, AskHumanAuthenticationRequiredError, AskHumanForbiddenError, and answerAskHuman(input): Promise<AnswerAskHumanResult>
+- [x] answerAskHuman requires actorUserId, matches it strictly against run.user_id (no admin override, unowned run rejected), and calls resolvePendingInteraction
+- [x] Logs workflow.ask_resolved with workflowRunId, nodeId, toolUseId, declined, resumed only after commit, omitting answer/envelope payloads
+- [x] Emits live interaction_resolved event after commit
+- [x] resumeWorkflow rejects any run with a pending interaction
+- [x] resumeWorkflow accepts an already-running run if it has at least one answered Ask row and zero pending rows; rejects plain running runs
+- [x] bun test src/operations/workflow-operations.test.ts in packages/core (64 pass)
+
+**Learnings**:
+- Log and emit only after the persistence promise resolves; a deferred mock is the proof, not call-order on a resolved Promise.
+- Preserve typed DB errors by rethrowing the same instance; do not map them by message text.
+- StrReplace on large files in this harness can truncate; patch with unique full-block replacement and assert the file grew.
 
 ---

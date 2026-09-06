@@ -121,8 +121,8 @@
         "US-005"
       ],
       "priority": 6,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 6. Files: packages/core/src/operations/workflow-operations.ts, packages/core/src/operations/workflow-operations.test.ts."
     },
     {
       "id": "US-007",
