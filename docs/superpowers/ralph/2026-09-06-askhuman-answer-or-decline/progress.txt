@@ -1,5 +1,10 @@
 ## Codebase Patterns
 
+### Terminal purge is query-scoped; workflows.ts calls in
+- **Where**: `packages/core/src/db/workflow-pending-interactions.ts`, `packages/core/src/db/workflows.ts`
+- **Pattern**: `purgePendingInteractionsInTransaction` takes the caller's `query` and must not open a nested transaction. It selects pending rows in store order (`created_at ASC, id ASC`), CAS-updates only `pending` → `purged` with `resolved_at`, leaves `answer`/`resolved_by` null, and writes one id-only `interaction_resolved` event. `workflows.ts` may import this helper; the reverse import is a cycle. Call purge only after a winning status CAS. `failOrphanedRuns` locks running ids first, updates that set, then purges each selected id.
+- **Example**: `await purgePendingInteractionsInTransaction(query, id, 'cancelled')`
+
 ### Query-scoped resume is shared, callers own the transaction
 - **Where**: `packages/core/src/db/workflow-resume-transition.ts`
 - **Pattern**: `resumeWorkflowRunInTransaction` takes an already-open `query`. `'standard'` keeps failed/paused/cancelled/stale-running; `'paused-ask'` matches only `status = 'paused'`. `workflow-pending-interactions.ts` must not import `workflows.ts` (cycle). Public `resumeWorkflowRun` still owns CAS-miss probe and final select.
@@ -64,5 +69,29 @@
 - SQLite `RAISE(IGNORE)` on BEFORE UPDATE is a reliable way to force a resume CAS miss inside the same transaction without mocking `executeQuery`.
 - Do not destructure snake_case schema fields into locals; eslint naming-convention requires camelCase aliases.
 - `isDecline` must be a type predicate or `answer.answers` does not narrow after the early return.
+
+---
+
+## 2026-09-06 — US-003: Purge pending interactions on terminal transitions
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/db/workflow-pending-interactions.ts` — added `purgePendingInteractionsInTransaction`
+- `packages/core/src/db/workflow-pending-interactions.test.ts` — pending-only purge + safe event assertion
+- `packages/core/src/db/workflows.ts` — cancel/fail/orphan/reject-cancel call purge after winning CAS
+- `packages/core/src/db/workflows.test.ts` — winning purge vs no-op, complete does not purge
+- `packages/core/src/db/workflows.resume-cas.integration.test.ts` — real SQLite lifecycle purge coverage
+
+**Acceptance criteria verified**:
+- [x] purgePendingInteractionsInTransaction transitions only pending rows to purged, sets resolved_at, writes one interaction_resolved event per row
+- [x] Purge events contain { node_id, tool_use_id, kind: 'ask', purged: true, resumed: false, terminal_status } and omit envelope/answer data
+- [x] cancelWorkflowRun, cancelRecoveryWorkflowRun, resolveAndCancelApprovalGate, failWorkflowRun, and failOrphanedRuns invoke purge inside the winning transaction
+- [x] No-op or non-winning status transitions do not purge rows or emit purge events
+- [x] completeWorkflowRun does not purge interactions
+- [x] bun test workflow-pending-interactions.test.ts, workflows.test.ts, workflows.resume-cas.integration.test.ts
+
+**Learnings**:
+- Keep envelope out of the purge SELECT so a corrupt stored question cannot block cancel/fail.
+- failOrphanedRuns must lock and collect running ids first, then UPDATE that locked set, then purge each selected id — a single unscoped UPDATE cannot attach per-run purge events correctly.
 
 ---

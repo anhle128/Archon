@@ -58,8 +58,8 @@
         "US-002"
       ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 3. Files: packages/core/src/db/workflow-pending-interactions.ts, packages/core/src/db/workflow-pending-interactions.test.ts, packages/core/src/db/workflows.ts, packages/core/src/db/workflows.test.ts, packages/core/src/db/workflows.resume-cas.integration.test.ts."
     },
     {
       "id": "US-004",
