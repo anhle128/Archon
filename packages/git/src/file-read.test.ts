@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
-import { access, chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'fs/promises';
+import { access, chmod, mkdir, mkdtemp, open, rm, symlink, truncate, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -328,6 +328,8 @@ describe('fileAt and fileDiff', () => {
       kind: 'tree',
       treeIsh: 'HEAD',
     });
+    expect(result.delivery).toBe('bytes');
+    if (result.delivery !== 'bytes') throw new Error('Expected bytes');
     expect(result.bytes.byteLength).toBe(NUL_FIXTURE_BYTES);
     expect(result.bytes).toEqual(nulFixture);
     expect(result.binary).toBe(true);
@@ -347,6 +349,8 @@ describe('fileAt and fileDiff', () => {
   test('tree reads use literal-pathspecs ls-tree then cat-file blob and never HEAD:path', async () => {
     const originalAsync = exec.execFileAsync;
     const originalBuffer = exec.execFileBufferAsync;
+    const childProcess = await import('child_process');
+    const originalSpawn = childProcess.spawn;
     const asyncSpy = spyOn(exec, 'execFileAsync').mockImplementation(
       (cmd: string, args: string[], options?: Parameters<typeof originalAsync>[2]) =>
         originalAsync(cmd, args, options)
@@ -355,25 +359,42 @@ describe('fileAt and fileDiff', () => {
       (cmd: string, args: string[], options?: Parameters<typeof originalBuffer>[2]) =>
         originalBuffer(cmd, args, options)
     );
+    const spawnSpy = spyOn(childProcess, 'spawn').mockImplementation(((
+      ...args: Parameters<typeof originalSpawn>
+    ) => originalSpawn(...args)) as typeof originalSpawn);
     try {
       await fileAt(toWorktreePath(repoPath), 'tracked.ts', { kind: 'tree', treeIsh: 'HEAD' });
-      const allArgs = [...asyncSpy.mock.calls, ...bufferSpy.mock.calls].map(
+      const execArgs = [...asyncSpy.mock.calls, ...bufferSpy.mock.calls].map(
         (call: readonly unknown[]) => call[1] as string[]
       );
+      const spawnArgs = spawnSpy.mock.calls
+        .filter((call: readonly unknown[]) => call[0] === 'git')
+        .map((call: readonly unknown[]) => (call[1] as string[] | undefined) ?? []);
+      const allArgs = [...execArgs, ...spawnArgs];
       const flat = allArgs.flat();
       expect(flat).toContain('--literal-pathspecs');
       expect(flat).toContain('ls-tree');
       expect(flat).toContain('cat-file');
+      expect(flat).toContain('-s');
       expect(
         allArgs.some((args: string[]) => {
           const dash = args.indexOf('--');
           return dash >= 0 && args[dash + 1] === 'tracked.ts';
         })
       ).toBe(true);
+      const sizeIndex = allArgs.findIndex(
+        (args: string[]) => args.includes('cat-file') && args.includes('-s')
+      );
+      const blobIndex = allArgs.findIndex(
+        (args: string[]) => args.includes('cat-file') && args.includes('blob')
+      );
+      expect(sizeIndex).toBeGreaterThanOrEqual(0);
+      expect(blobIndex).toBeGreaterThan(sizeIndex);
       expect(flat.some((arg: string) => arg.includes('HEAD:'))).toBe(false);
     } finally {
       asyncSpy.mockRestore();
       bufferSpy.mockRestore();
+      spawnSpy.mockRestore();
     }
   });
 
@@ -384,5 +405,145 @@ describe('fileAt and fileDiff', () => {
     await expect(
       fileAt(toWorktreePath(repoPath), 'tracked.ts', { kind: 'tree', treeIsh: 'not-a-ref' })
     ).rejects.toBeInstanceOf(GitFileError);
+  });
+
+  test('view pages a 2500-line worktree file and reconstructs it through opaque cursors', async () => {
+    const expected = Array.from(
+      { length: 2500 },
+      (_unused, index) => 'line-' + String(index) + '\n'
+    ).join('');
+    await writeFile(join(repoPath, 'big.txt'), expected);
+    const chunks: string[] = [];
+    let cursor = '';
+    do {
+      const page = await fileAt(
+        toWorktreePath(repoPath),
+        'big.txt',
+        { kind: 'worktree' },
+        { intent: 'view', cursor }
+      );
+      expect(page.delivery).toBe('bytes');
+      if (page.delivery !== 'bytes') throw new Error('Expected bytes');
+      chunks.push(Buffer.from(page.bytes).toString('utf8'));
+      cursor = page.cursor;
+      if (!page.truncated) break;
+      expect(cursor.length).toBeGreaterThan(0);
+    } while (true);
+    expect(chunks.join('')).toBe(expected);
+  });
+
+  test('view pages a tree blob without corrupting a boundary emoji', async () => {
+    const expected = 'x'.repeat(262143) + '🙂tail\n';
+    await writeFile(join(repoPath, 'emoji.txt'), expected);
+    await exec.execFileAsync('git', ['-C', repoPath, 'add', 'emoji.txt']);
+    await exec.execFileAsync('git', ['-C', repoPath, 'commit', '-m', 'emoji']);
+    const first = await fileAt(
+      toWorktreePath(repoPath),
+      'emoji.txt',
+      { kind: 'tree', treeIsh: 'HEAD' },
+      { intent: 'view' }
+    );
+    expect(first.delivery).toBe('bytes');
+    if (first.delivery !== 'bytes') throw new Error('Expected bytes');
+    const second = await fileAt(
+      toWorktreePath(repoPath),
+      'emoji.txt',
+      { kind: 'tree', treeIsh: 'HEAD' },
+      { intent: 'view', cursor: first.cursor }
+    );
+    expect(second.delivery).toBe('bytes');
+    if (second.delivery !== 'bytes') throw new Error('Expected bytes');
+    expect(
+      Buffer.concat([Buffer.from(first.bytes), Buffer.from(second.bytes)]).toString('utf8')
+    ).toBe(expected);
+  });
+
+  test('view returns only 4096 bytes for a non-image NUL blob', async () => {
+    const result = await fileAt(
+      toWorktreePath(repoPath),
+      'nul-1mb.bin',
+      { kind: 'tree', treeIsh: 'HEAD' },
+      { intent: 'view' }
+    );
+    expect(result.delivery).toBe('bytes');
+    if (result.delivery !== 'bytes') throw new Error('Expected bytes');
+    expect(result.presentation).toBe('hex');
+    expect(result.binary).toBe(true);
+    expect(result.bytes.byteLength).toBe(4096);
+    expect(result.byteLength).toBe(1_048_577);
+    expect(result.truncated).toBe(false);
+    expect(result.cursor).toBe('');
+  });
+
+  test('view classifies a 52428801-byte sparse worktree file without returning its body', async () => {
+    const path = join(repoPath, 'huge.txt');
+    await writeFile(path, 'x');
+    await truncate(path, 52_428_801);
+    const result = await fileAt(
+      toWorktreePath(repoPath),
+      'huge.txt',
+      { kind: 'worktree' },
+      { intent: 'view' }
+    );
+    expect(result.delivery).toBe('bytes');
+    if (result.delivery !== 'bytes') throw new Error('Expected bytes');
+    expect(result.presentation).toBe('download');
+    expect(result.bytes.byteLength).toBe(0);
+    expect(result.byteLength).toBe(52_428_801);
+  });
+
+  test('download intent streams a file from byte zero and preserves exact bytes', async () => {
+    await writeFile(join(repoPath, 'download.bin'), Uint8Array.from([0, 1, 2, 3]));
+    const result = await fileAt(
+      toWorktreePath(repoPath),
+      'download.bin',
+      { kind: 'worktree' },
+      { intent: 'download' }
+    );
+    expect(result.delivery).toBe('stream');
+    if (result.delivery !== 'stream') throw new Error('Expected stream');
+    expect(new Uint8Array(await new Response(result.stream).arrayBuffer())).toEqual(
+      Uint8Array.from([0, 1, 2, 3])
+    );
+  });
+
+  test('an image above 1048576 bytes uses an abortable stream instead of a full buffer', async () => {
+    const bytes = new Uint8Array(1_048_577);
+    bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+    await writeFile(join(repoPath, 'large.png'), bytes);
+    const controller = new AbortController();
+    const result = await fileAt(
+      toWorktreePath(repoPath),
+      'large.png',
+      { kind: 'worktree' },
+      { intent: 'view', signal: controller.signal }
+    );
+    expect(result.delivery).toBe('stream');
+    if (result.delivery !== 'stream') throw new Error('Expected stream');
+    const reader = result.stream.getReader();
+    const first = await reader.read();
+    expect(first.value?.byteLength).toBeGreaterThan(0);
+    controller.abort();
+    await reader.cancel();
+  });
+
+  test('a cursor becomes stale when the live file changes between pages', async () => {
+    const path = join(repoPath, 'stale.txt');
+    await writeFile(path, 'x\n'.repeat(2500));
+    const first = await fileAt(
+      toWorktreePath(repoPath),
+      'stale.txt',
+      { kind: 'worktree' },
+      { intent: 'view' }
+    );
+    await writeFile(path, 'y\n'.repeat(2500));
+    await expect(
+      fileAt(
+        toWorktreePath(repoPath),
+        'stale.txt',
+        { kind: 'worktree' },
+        { intent: 'view', cursor: first.cursor }
+      )
+    ).rejects.toMatchObject({ name: 'GitFileError', code: 'stale_cursor' });
   });
 });

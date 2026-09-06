@@ -17,7 +17,19 @@ export { execFileAsync, mkdirAsync, resolveBashPath } from './exec';
 
 // Live file bytes and Now diffs
 export { fileAt, fileDiff } from './file-read';
-export type { DiffChange, DiffHunk, FileAtResult, FileAtSource, FileDiffResult } from './file-read';
+export type {
+  DiffChange,
+  DiffHunk,
+  FileAtBytesResult,
+  FileAtIntent,
+  FileAtRequest,
+  FileAtResult,
+  FileAtSource,
+  FileAtStreamResult,
+  FileDiffRequest,
+  FileDiffResult,
+} from './file-read';
+export type { GitFilePresentation } from './viewer-limits';
 
 // Worktree operations
 export {
