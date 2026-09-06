@@ -1,98 +1,109 @@
 # Open Every Changed File Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task.
-> Steps use checkbox (`- [ ]`) syntax for tracking.
+> Steps use checkbox (<code>- [ ]</code>) syntax for tracking.
 
-**Goal:** Let an operator open every Now changed file in the existing shared viewer, with first-paint chunking, Load more, Cancel, inline images, and hex-plus-download for other binaries, so large text and binaries never block inspection or dump as garbage.
+**Goal:** Let an operator open every Now changed file in the existing shared viewer with bounded first paint, Load more, cancellable reads, inline images, a hex peek for ordinary binaries, and streamed downloads.
 
-**Architecture:** `@archon/git` keeps the only git I/O and applies the single build-tunable cutoff table from `viewer-rules.md`.
-The server stays a thin CAP-6 gate plus serializer: JSON hunk pages keep `registerOpenApiRoute`, and the existing raw wildcard file route gains opaque `cursor` / `download=1` query params plus presentation headers.
-The web trusts those headers, appends opaque cursors, virtualizes accumulated hunks, and never imports `@archon/git` or `packages/web/src/experiments/console/`.
+**Architecture:** <code>@archon/git</code> owns one build-time cutoff table, version-bound opaque cursors, bounded worktree/blob reads, streamed downloads, media classification, and streamed hunk pagination.
+The server remains the CAP-6 gate and serializer, while the web app appends opaque pages, keeps the displayed snapshot frozen, renders image bytes through a revoking object URL, and virtualizes accumulated diff hunks.
 
-**Tech Stack:** Bun 1.3, strict TypeScript, Node `execFile` / `spawn` argv arrays, Hono OpenAPI, Zod from `@hono/zod-openapi`, React 19, TanStack Query 5, installed `@tanstack/react-virtual` 3, installed `highlight.js` 11, existing `react-diff-view@3.3.3`, and Bun tests.
+**Tech Stack:** Bun 1.3, strict TypeScript, Node <code>execFile</code>/<code>spawn</code> argv arrays and Web Streams, Hono OpenAPI, Zod from <code>@hono/zod-openapi</code>, React 19, TanStack Query 5, <code>@tanstack/react-virtual</code> 3, <code>highlight.js</code> 11, <code>react-diff-view</code> 3.3.3, and Bun tests.
 
-**Spec:** `_bmad-output/planning-artifacts/epics-source-control/epics.md`, Story 1.3.
+**Spec:** <code>_bmad-output/planning-artifacts/epics-source-control/epics.md</code>, Story 1.3.
 
-**Canonical design:** `_bmad-output/specs/spec-archon-source-control/SPEC.md` CAP-7, `_bmad-output/specs/spec-archon-source-control/viewer-rules.md`, and `_bmad-output/planning-artifacts/architecture/architecture-Archon-source-control-2026-09-05/ARCHITECTURE-SPINE.md` AD-3, AD-4, and AD-5.
+**Canonical design:** <code>_bmad-output/specs/spec-archon-source-control/SPEC.md</code> CAP-7, <code>_bmad-output/specs/spec-archon-source-control/viewer-rules.md</code>, and <code>_bmad-output/planning-artifacts/architecture/architecture-Archon-source-control-2026-09-05/ARCHITECTURE-SPINE.md</code> AD-2 through AD-5.
 
-**Companion decisions:** `_bmad-output/specs/spec-archon-source-control/brownfield.md` and `_bmad-output/planning-artifacts/epics-source-control/implementation-readiness-report-2026-09-06.md`.
+**Companion decisions:** <code>_bmad-output/specs/spec-archon-source-control/brownfield.md</code> and <code>_bmad-output/planning-artifacts/epics-source-control/implementation-readiness-report-2026-09-06.md</code>.
 
-**Issue:** GitHub issue #77, tracker key `1-3-open-every-changed-file`.
+**Issue:** GitHub issue #77, tracker key <code>1-3-open-every-changed-file</code>.
 
-**Depends on:** Story 1.2 is already `done` in `_bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml`.
+**Depends on:** Story 1.2 is <code>done</code> in <code>_bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml</code>.
 
 ## Global Constraints
 
 - Story 1.3 is Now-only and must not add History, log records, commit lists, client-supplied tree-ish values, or commit OIDs to HTTP.
-- Story 1.2 already shipped the shared viewer, 30/70 split, Cancel on first open, opaque diff `cursor` query, NUL-as-binary, and download-only binary fallback.
-- This story owns hunk pagination, Load more, the 256 KB or 2,000-line first-paint cutoff, the ~1 MB "do not fetch the whole file in one viewer GET" rule, download-only above about 50 MB, inline images, and hex peek.
-- All numeric thresholds live in one module and must match `viewer-rules.md`.
-- Do not invent a parallel cutoff table in `@archon/web`.
-- The surface remains `/legacy/workflows/runs/:id`, and no file under `packages/web/src/experiments/console/` may be imported or modified.
-- The client sends only `runId`, the server-issued git-relative path, `source=worktree|head`, the fixed Now selector, an opaque cursor when one is non-empty, and optional `download=1`.
-- The server loads the existing `workflow_runs.working_path`, and it never accepts `working_path` or an absolute checkout path from the client.
-- The server must not reconstruct the checkout from isolation metadata or add a database column.
-- Every git invocation uses an argv array through `execFileAsync`, `execFileBufferAsync`, or `spawn`, and no implementation may use `exec`, a shell string, or `oid:path` syntax.
-- Tree-shaped reads use `git --literal-pathspecs ls-tree -z TREE -- PATH` followed by `git cat-file -s BLOB_OID` and `git cat-file blob BLOB_OID`.
-- A live candidate is realpathed and must remain beneath the already-realpathed checkout before bytes are read.
-- Path validation rejects an empty path, NUL, POSIX absolute paths, Windows drive or UNC paths, `.git` as the first segment, and any `..` segment after URI decoding.
-- Filenames containing a colon, a leading dash, spaces, newlines, or glob metacharacters must still work.
-- JSON routes use `registerOpenApiRoute(createRoute(...), handler)`.
-- The raw file route stays `app.get` because OpenAPI 3.0 cannot represent the wildcard path.
-- Do not regenerate `packages/web/src/lib/api.generated.d.ts` unless an OpenAPI JSON schema actually changes.
-- The raw file client stays hand-typed.
-- Auth remains the global `/api/*` gate with no `requireWebUser` call and no per-run owner ACL.
-- Both git content routes still return HTTP 200 with `{ emptyReason: "container" | "no_checkout" }` for CAP-6.
-- Modified files use only the JSON diff route for text hunks.
-- Added files use only raw `source=worktree`.
-- Deleted files use only raw `source=head`.
-- A ready Now diff always has `scope: "now"`, `ref: "live"`, and `status: "M"`.
-- `fileDiff` keeps `-U3` context and never sends a whole-file snapshot for `M`.
-- The web treats `cursor` as opaque and appends it only when non-empty.
-- The list and already-painted viewer content remain frozen until the operator explicitly accepts `Changed on disk — Reload`.
-- Load more must not rewrite the list snapshot and must not be mistaken for a stale-content event.
-- No stage, unstage, edit, discard, commit, or other write control is added.
-- Syntax highlighting stays on installed `highlight.js`.
-- Do not add Shiki, Monaco, refractor, a sanitizer dependency, a second diff library, or any new production dependency.
-- Lists already virtualize with `@tanstack/react-virtual`.
-- Diff hunks must virtualize with the same library and the same zero-height fallback already used by `changed-files-list.tsx`.
-- Pino events use `domain.action_state`, pair every started event with completed or failed, and never log checkout paths, remotes, file contents, file paths, cursors that embed a path, or path-bearing error messages.
-- Failure logs contain only `runId` and a stable `errorType`.
-- User copy is terse and non-alarming and must not introduce `Error:`, `unsupported`, or a warning glyph.
-- NFR6 remains accepted: do not add redaction or a denylist, and `.env` text must still open as text.
-- Do not add a public `@archon/git` export beyond the current `fileAt` / `fileDiff` I/O pair.
-- `mock.module()` merges omitted exports from the real module, so a new public I/O export would require stubbing all 31 existing `@archon/git` factories.
-- Continue using the existing isolated `packages/server/src/routes/api.git-changes.test.ts` process for all three git HTTP routes.
-- Continue using the existing isolated `packages/web/src/component-integration/source-control-tab.test.tsx` process for mounted viewer behavior.
-- `@archon/web` must not import `@archon/git`.
-- Every behavior change follows RED, verified RED, minimal GREEN, verified GREEN, and only then refactoring.
-- Run all command blocks from the repository root, and use a subshell for commands that must execute inside a package.
-- Do not run `bun test` from the repository root without a path.
-- Do not mark the tracker done until focused tests, affected package suites, `bun run validate`, `git diff --check`, and the manual acceptance check all pass.
+- The surface remains <code>/legacy/workflows/runs/:id</code>, and no file under <code>packages/web/src/experiments/console/</code> may be imported or modified.
+- The client sends only <code>runId</code>, a server-issued git-relative path, <code>source=worktree|head</code>, an opaque cursor when non-empty, and <code>download=1</code> for a download link.
+- The server resolves <code>workflow_runs.working_path</code>; it never accepts an absolute checkout path and never reconstructs one from isolation metadata.
+- Every git invocation uses an argv array through <code>execFileAsync</code>, <code>execFileBufferAsync</code>, or an internal <code>spawn</code> wrapper; shell-string <code>exec</code> and <code>oid:path</code> are forbidden.
+- Tree reads use <code>git --literal-pathspecs ls-tree -z TREE -- PATH</code>, <code>git cat-file -s BLOB_OID</code>, and <code>git cat-file blob BLOB_OID</code>.
+- A live candidate is realpathed and must remain under the already-realpathed checkout before a handle is opened.
+- The opened worktree handle must still match the lstat identity and metadata before its bytes or stream are returned.
+- Existing empty, NUL, absolute, Windows drive/UNC, <code>.git</code>, decoded <code>..</code>, symlink-escape, and special-filename behavior must remain covered.
+- JSON routes use <code>registerOpenApiRoute(createRoute({...}), handler)</code>.
+- The raw wildcard file route remains <code>app.get</code> because OpenAPI 3.0 cannot represent the wildcard and successful responses are not JSON.
+- Auth remains the global <code>/api/*</code> gate with no <code>requireWebUser</code> call and no per-run owner ACL.
+- CAP-6 remains HTTP 200 JSON with <code>{ emptyReason: "container" | "no_checkout" }</code> and no ETag or presentation headers.
+- A ready Now diff keeps <code>scope: "now"</code>, <code>ref: "live"</code>, <code>status: "M"</code>, and three context lines.
+- Added files use raw <code>source=worktree</code>, deleted files use raw <code>source=head</code>, and modified files use diff hunks unless <code>fileFallback</code> directs the web to raw <code>source=worktree</code>.
+- Modified SVG, other images, NUL binaries, and files over the download-only threshold must set <code>fileFallback: true</code>; <code>binary</code> remains the actual NUL heuristic and must not be overloaded to mean “use the raw route.”
+- First-paint and subsequent text/hunk pages use the same approximate 256 KiB or 2,000-line budget.
+- All files larger than 1 MiB are cancellable without a whole-file server buffer; text uses bounded pages, images use a streamed response body, diffs use a spawned incremental parser, and downloads stream.
+- Every file larger than 50 MiB is download-only, including non-image binaries; the unqualified download-only acceptance criterion takes precedence over the hex-peek criterion.
+- Images are sniffed before NUL classification so PNG, JPEG, GIF, WEBP, and SVG reach the inline image branch.
+- A non-image NUL binary at or below 50 MiB returns at most the first 4 KiB for the web-local hex formatter.
+- No viewer GET may buffer a complete file or blob larger than the body it is allowed to return.
+- Default <code>fileAt</code> full intent remains only for backward-compatible package callers and tests; the server must use <code>view</code> or <code>download</code>.
+- Opaque cursors are version-bound and route-specific so a file cursor cannot be used as a hunk cursor and a changed live file cannot be appended to an older page.
+- The web never decodes a cursor and appends it only when non-empty.
+- A stale page cursor maps to HTTP 409 <code>{ error: "File changed" }</code>; the web keeps painted content and runs the existing manual Reload comparison.
+- Invalid cursors map to HTTP 400 <code>{ error: "Invalid file cursor" }</code>.
+- Load more must not dispatch list-snapshot actions or create <code>Changed on disk — Reload</code> merely because the displayed viewer accumulated pages.
+- Cancel during the first open closes the viewer as Story 1.2 does; Cancel during Load more aborts only that page and keeps painted content.
+- The list and painted content stay frozen until the operator accepts <code>Changed on disk — Reload</code>.
+- Syntax highlighting stays on installed <code>highlight.js</code>.
+- Do not add Shiki, Monaco, refractor, a sanitizer, another diff library, or any production dependency.
+- Diff hunks use <code>@tanstack/react-virtual</code> with the existing 280-pixel initial-rect fallback pattern.
+- Image bytes render only through <code>Blob</code>, <code>URL.createObjectURL</code>, and <code>&lt;img&gt;</code>; never mount SVG markup into the DOM.
+- Object URLs are revoked when their bytes change and when the image component unmounts.
+- Pino events use <code>domain.action_state</code>, pair started with completed or failed, and never log checkout paths, remotes, file contents, file paths, cursors, or path-bearing errors.
+- Failure logs contain only <code>runId</code> and a stable <code>errorType</code>.
+- User copy remains terse and must not add <code>Error:</code>, <code>unsupported</code>, or warning glyphs.
+- NFR6 remains accepted, so <code>.env</code> opens as text and no redaction or denylist is added.
+- No new public git I/O function is added; <code>fileAt</code> and <code>fileDiff</code> remain the pair exported from <code>@archon/git</code>.
+- Type-only additions to the existing <code>fileAt</code>/<code>fileDiff</code> contract are exported from <code>packages/git/src/index.ts</code>.
+- Keep the three git HTTP routes in the isolated <code>packages/server/src/routes/api.git-changes.test.ts</code> process.
+- Keep mounted Source Control behavior in the isolated <code>packages/web/src/component-integration/source-control-tab.test.tsx</code> process.
+- Every production behavior follows RED, verified RED, minimal GREEN, verified GREEN, and refactor only while green.
+- Run command blocks from the repository root and use a subshell for package-local commands.
+- Never run an unscoped <code>bun test</code> from the repository root.
+- Do not mark the tracker done before focused tests, affected package suites, the performance spike, <code>bun run validate</code>, <code>git diff --check</code>, and manual acceptance pass.
 - Every full Markdown sentence in this plan stays on one physical line.
+
+---
 
 ## File Structure
 
-- Create `packages/git/src/viewer-limits.ts` for the single cutoff table, opaque cursors, media sniffing, hex formatting, text paging, hunk paging, and presentation choice.
-- Create `packages/git/src/viewer-limits.test.ts` for those pure functions.
-- Modify `packages/git/src/file-read.ts` so `fileDiff` paginates hunks and `fileAt` accepts an optional view/full intent without adding a new public export.
-- Modify `packages/git/src/file-read.test.ts` for pagination, bounded view reads, image sniffing, hex peek, and download-only classification.
-- Modify `packages/git/src/index.ts` only if exported types grow; do not export `viewer-limits` helpers.
-- Modify `packages/server/src/routes/git/diff-handler.ts` to pass the opaque cursor into `fileDiff`.
-- Modify `packages/server/src/routes/git/file-handler.ts` to pass view/full intent, echo presentation headers, and honor `download=1`.
-- Modify `packages/server/src/routes/api.git-changes.test.ts` for cursor pages, presentation headers, invalid cursors, and download versus view.
-- Modify `packages/web/src/lib/api.ts` and `packages/web/src/lib/api.git-changes.test.ts` for paged text, image bytes, hex bytes, and download-only results.
-- Create `packages/web/src/components/workflows/source-control/hex-peek.ts` and `hex-peek.test.ts` as a web-local formatter that mirrors the git hex format exactly.
-- Modify `packages/web/src/components/workflows/source-control/file-viewer.tsx` and `file-viewer.test.tsx` for Load more, image, hex, download-only, and virtualized hunks.
-- Modify `packages/web/src/components/workflows/source-control/source-control-tab.tsx` to append pages, keep Cancel on in-flight Load more, revoke image object URLs, and stop using whole-diff JSON as a stale fingerprint.
-- Modify `packages/web/src/component-integration/source-control-tab.test.tsx` for Load more, images, hex, download-only, and fingerprint stability.
-- Modify `_bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml` only after every acceptance gate passes.
-- Do not modify `packages/web/src/components/workflows/WorkflowExecution.tsx`.
-- Do not add a package, table, env var, process, or deployable.
+- Create <code>packages/git/src/viewer-limits.ts</code> for the one cutoff table, route-specific versioned cursors, media sniffing, presentation selection, and UTF-8-safe text page boundaries.
+- Create <code>packages/git/src/viewer-limits.test.ts</code> for cursor, classification, boundary, line-limit, byte-limit, and Unicode behavior.
+- Create <code>packages/git/src/git-stream.ts</code> for internal abortable git-stdout prefix and Web Stream adapters.
+- Create <code>packages/git/src/diff-page.ts</code> for incremental unified-diff parsing and hunk-page accumulation.
+- Create <code>packages/git/src/diff-page.test.ts</code> for exact hunk parsing and page budgets.
+- Modify <code>packages/git/src/file-read.ts</code> for bounded view reads, streamed downloads/images, version checks, raw fallbacks for modified files, and streamed diff pages.
+- Modify <code>packages/git/src/file-read.test.ts</code> for real-repository paging, streaming, fallback, cancellation, cursor, containment, and special-path coverage.
+- Modify <code>packages/git/src/index.ts</code> to export the expanded types but no new I/O function.
+- Modify <code>packages/server/src/routes/schemas/git.schemas.ts</code> to add <code>fileFallback</code> to ready diff responses.
+- Modify <code>packages/server/src/routes/git/diff-route.ts</code> to document the new HTTP 409 response.
+- Modify <code>packages/server/src/routes/git/diff-handler.ts</code> to forward cursor and request cancellation and map cursor errors.
+- Modify <code>packages/server/src/routes/git/file-handler.ts</code> to select view/download intent, forward cancellation, and serialize bytes or streams with presentation headers.
+- Modify <code>packages/server/src/routes/api.git-changes.test.ts</code> for diff fallback, cursors, 409, stream bodies, headers, and download behavior.
+- Regenerate <code>packages/web/src/lib/api.generated.d.ts</code> because the OpenAPI diff schema and response set change.
+- Modify <code>packages/web/src/lib/api.ts</code> and <code>packages/web/src/lib/api.git-changes.test.ts</code> for paged text, image bytes, hex bytes, download-only metadata, and raw response validation.
+- Create <code>packages/web/src/components/workflows/source-control/hex-peek.ts</code> and <code>hex-peek.test.ts</code> for the only hex formatter.
+- Create <code>packages/web/src/components/workflows/source-control/inline-image.tsx</code> for object-URL ownership and cleanup.
+- Create <code>packages/web/src/components/workflows/source-control/inline-image.test.tsx</code> for object-URL replacement and unmount cleanup.
+- Create <code>packages/web/src/components/workflows/source-control/virtualized-diff.tsx</code> for independent virtualized Before and After panes.
+- Modify <code>packages/web/src/components/workflows/source-control/file-viewer.tsx</code> and <code>file-viewer.test.tsx</code> for the new viewer states and controls.
+- Modify <code>packages/web/src/components/workflows/source-control/source-control-tab.tsx</code> for state mapping, append-only page loads, cancellation, stale cursors, and stable Reload fingerprints.
+- Modify <code>packages/web/src/component-integration/source-control-tab.test.tsx</code> for mounted paging, cancellation, image cleanup, fallback, virtualization, and Reload behavior.
+- Create <code>packages/web/src/component-integration/source-control-large-diff-spike.tsx</code> for the approved 2 MiB, one-second, lodash-inclusive spike.
+- Modify <code>_bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml</code> only after all acceptance gates pass.
+- Do not modify <code>packages/web/src/components/workflows/WorkflowExecution.tsx</code>, any console experiment, a database schema, a package manifest, or <code>bun.lock</code>.
 
 ## Locked Contracts
 
-The single cutoff table is:
+The only numeric cutoff module defines these build-time defaults.
 
 ~~~ts
 export const VIEWER_FIRST_PAINT_BYTES = 256 * 1024;
@@ -104,21 +115,44 @@ export const VIEWER_BINARY_PROBE_BYTES = 8 * 1024;
 export const VIEWER_DIFF_CONTEXT_LINES = 3;
 ~~~
 
-The git data contract becomes:
+The opaque cursor payload is internal and remains unpadded base64url JSON.
 
 ~~~ts
-type GitFilePresentation = 'text' | 'image' | 'hex' | 'download';
+type ViewerCursorAxis = 'o' | 'h';
+type ViewerCursorPayload =
+  | { o: number; v: string }
+  | { h: number; v: string };
 
-type FileAtIntent = 'full' | 'view';
-
-interface FileAtRequest {
-  intent?: FileAtIntent;
-  cursor?: string;
+class ViewerCursorError extends Error {
+  readonly code: 'invalid' | 'stale';
 }
 
-interface FileAtResult {
+function encodeViewerCursor(axis: ViewerCursorAxis, value: number, version: string): string;
+function decodeViewerCursor(
+  cursor: string,
+  axis: ViewerCursorAxis,
+  currentVersion: string
+): number;
+~~~
+
+An empty cursor decodes to zero.
+Non-empty cursors must contain exactly the requested axis plus a 64-lowercase-hex version, and the numeric value must be a non-negative safe integer.
+Malformed base64url, padding, non-canonical encoding, extra or missing fields, the wrong axis, and invalid numbers are <code>invalid</code>.
+A valid cursor whose version differs from the current file or diff version is <code>stale</code>.
+
+The public git data contract becomes:
+
+~~~ts
+export type GitFilePresentation = 'text' | 'image' | 'hex' | 'download';
+export type FileAtIntent = 'full' | 'view' | 'download';
+
+export type FileAtRequest =
+  | { intent?: 'full'; cursor?: never; signal?: AbortSignal }
+  | { intent: 'view'; cursor?: string; signal?: AbortSignal }
+  | { intent: 'download'; cursor?: never; signal?: AbortSignal };
+
+interface FileAtMetadata {
   path: string;
-  bytes: Uint8Array;
   binary: boolean;
   contentHash: string;
   byteLength: number;
@@ -128,7 +162,24 @@ interface FileAtResult {
   mediaType: string;
 }
 
-interface FileDiffResult {
+export interface FileAtBytesResult extends FileAtMetadata {
+  delivery: 'bytes';
+  bytes: Uint8Array;
+}
+
+export interface FileAtStreamResult extends FileAtMetadata {
+  delivery: 'stream';
+  stream: ReadableStream<Uint8Array>;
+}
+
+export type FileAtResult = FileAtBytesResult | FileAtStreamResult;
+
+export interface FileDiffRequest {
+  cursor?: string;
+  signal?: AbortSignal;
+}
+
+export interface FileDiffResult {
   path: string;
   status: 'M';
   scope: 'now';
@@ -137,68 +188,81 @@ interface FileDiffResult {
   cursor: string;
   truncated: boolean;
   binary: boolean;
+  fileFallback: boolean;
 }
 
-function fileAt(
+export function fileAt(
+  workingPath: RepoPath | WorktreePath,
+  relativePath: string,
+  source: FileAtSource,
+  request?: { intent?: 'full'; cursor?: never; signal?: AbortSignal }
+): Promise<FileAtBytesResult>;
+export function fileAt(
+  workingPath: RepoPath | WorktreePath,
+  relativePath: string,
+  source: FileAtSource,
+  request: { intent: 'download'; cursor?: never; signal?: AbortSignal }
+): Promise<FileAtStreamResult>;
+export function fileAt(
+  workingPath: RepoPath | WorktreePath,
+  relativePath: string,
+  source: FileAtSource,
+  request: { intent: 'view'; cursor?: string; signal?: AbortSignal }
+): Promise<FileAtResult>;
+export function fileAt(
   workingPath: RepoPath | WorktreePath,
   relativePath: string,
   source: FileAtSource,
   request?: FileAtRequest
 ): Promise<FileAtResult>;
 
-function fileDiff(
+export function fileDiff(
   workingPath: RepoPath | WorktreePath,
   relativePath: string,
-  cursor?: string
+  request?: FileDiffRequest
 ): Promise<FileDiffResult>;
 ~~~
 
-Omitted `fileAt` request keeps today's full-read behavior so existing full-byte tests stay valid.
-View intent never reads more than the chosen presentation requires.
-Text view pages are `min(remaining bytes, 256 KiB)` stopped earlier at 2,000 lines on a newline when one exists in the window.
-A single oversize hunk is still sent whole and never split.
-`M` diffs keep `-U3` and never include the unmodified remainder of the file.
+Default/full <code>fileAt</code> returns <code>delivery: "bytes"</code> with all bytes to preserve the existing package contract.
+View intent returns bounded bytes for text/hex/download-only metadata, bytes for images up to 1 MiB, and a stream for images above 1 MiB through 50 MiB.
+Download intent returns <code>delivery: "stream"</code> from byte zero and never accepts or applies a page cursor.
+Worktree <code>contentHash</code> is SHA-256 of source kind, device, inode, mode, size, mtime in nanoseconds, and ctime in nanoseconds from a bigint lstat that is rechecked on the opened handle.
+Tree <code>contentHash</code> is SHA-256 of source kind, blob OID, and blob byte length.
+Text pages read at most 256 KiB plus three UTF-8 boundary bytes and stop earlier after the 2,000th newline.
+Text page boundaries never split a UTF-8 code point, and concatenating every page reproduces the original decoded text.
+Hunk page size is the UTF-8 byte length of each hunk’s JSON plus its change count; the first selected hunk is never split even when it alone exceeds a budget.
+Hunk parsing is incremental, kills the child after the first hunk that does not fit, and never uses <code>execFile</code> buffering for the diff body.
 
-Presentation order is:
+Presentation selection is unambiguous.
 
-1. `byteLength > 50 MiB` and not a hex peek of a non-image binary → `download` with empty `bytes`.
-2. Image magic or SVG prefix → `image` with full bytes when `byteLength <= 50 MiB`, otherwise `download`.
-3. NUL in the first 8 KiB → `hex` with at most 4 KiB.
-4. Otherwise `text` with a first-paint page.
+1. A file larger than 50 MiB is <code>download</code> without reading a probe.
+2. At or below 50 MiB, PNG, JPEG, GIF87a/GIF89a, RIFF/WEBP, or an SVG prefix is <code>image</code>.
+3. At or below 50 MiB, a NUL in the first 8 KiB is <code>hex</code>.
+4. Every other file is <code>text</code>.
 
-Image sniffing runs before the NUL heuristic because PNG, JPEG, GIF, and WEBP headers usually contain no NUL.
-SVG without NUL is still an image when the UTF-8 prefix is `<svg` or `<?xml` plus `<svg` inside the first 8 KiB.
-Images render through `<img src={blobUrl}>`, never through inline SVG DOM.
+SVG sniffing ignores a UTF-8 BOM and leading whitespace, accepts <code>&lt;svg</code>, or accepts an XML declaration followed by <code>&lt;svg</code> within the 8 KiB probe.
+SVG bytes are never inserted with <code>dangerouslySetInnerHTML</code>.
 
-Opaque cursors are unpadded base64url JSON.
-File pages use `{"o": nextByteOffset}`.
-Hunk pages use `{"h": nextHunkIndex}`.
-Empty cursor means offset `0` or hunk index `0`.
-Garbage, missing fields, negative numbers, and non-integers are invalid.
+The ready diff JSON adds <code>fileFallback: boolean</code>.
+The web follows the raw worktree route when <code>fileFallback</code> is true.
 
-The raw file route is `GET /api/workflows/runs/:runId/git/file/*?source=worktree|head&cursor=OPAQUE_OPTIONAL&download=1_OPTIONAL`.
+The raw route is <code>GET /api/workflows/runs/:runId/git/file/*?source=worktree|head&amp;cursor=OPAQUE_OPTIONAL&amp;download=1_OPTIONAL</code>.
+Successful raw responses keep a quoted 64-hex ETag and add these headers.
 
-Successful raw responses keep `ETag: "<64-lowercase-hex-contentHash>"` and add:
+- <code>X-Archon-Git-Byte-Length: DECIMAL_FULL_SIZE</code>
+- <code>X-Archon-Git-Truncated: true|false</code>
+- <code>X-Archon-Git-Cursor: OPAQUE_OR_EMPTY</code>
+- <code>X-Archon-Git-Presentation: text|image|hex|download</code>
+- <code>X-Archon-Git-Media-Type: IMAGE_MEDIA_TYPE_OR_EMPTY</code>
 
-- `X-Archon-Git-Byte-Length: <decimal full size>`
-- `X-Archon-Git-Truncated: true|false`
-- `X-Archon-Git-Cursor: <opaque or empty>`
-- `X-Archon-Git-Presentation: text|image|hex|download`
-- `X-Archon-Git-Media-Type: image/png|image/jpeg|image/gif|image/webp|image/svg+xml|` empty otherwise
+Text uses <code>text/plain; charset=utf-8</code>, image uses the sniffed image media type, and hex/download use <code>application/octet-stream</code>.
+Only <code>download=1</code> and a download-only view set <code>Content-Disposition: attachment; filename="download"</code>.
+A streamed download also sets <code>Content-Length</code> to the full byte length.
 
-Content-Type is `text/plain; charset=utf-8` for text, the image media type for images, and `application/octet-stream` for hex and download.
-`download=1` or presentation `download` sets `Content-Disposition: attachment; filename="download"`.
-CAP-6 remains HTTP 200 JSON with no ETag and no presentation headers.
-Missing run is HTTP 404 with `{ error: "Workflow run not found" }`.
-Invalid path or source is HTTP 400 with `{ error: "Invalid file path" }` or `{ error: "Invalid file source" }`.
-Invalid cursor is HTTP 400 with `{ error: "Invalid file cursor" }`.
-Missing file is HTTP 404 with `{ error: "File not found" }`.
-Unexpected post-gate failures stay opaque HTTP 500 with `Could not read git diff` or `Could not read git file`.
-
-The web file client becomes:
+The web raw-file union is:
 
 ~~~ts
-type GitFileClientResult =
+export type GitFileClientResult =
   | { kind: 'empty'; emptyReason: GitEmptyReason }
   | {
       kind: 'text';
@@ -219,907 +283,32 @@ type GitFileClientResult =
   | { kind: 'download'; contentHash: string; byteLength: number };
 ~~~
 
-`gitFileUrl` adds `cursor` only when non-empty and adds `download=1` only when requested.
-The viewer Download link always uses `download=1` and never a cursor.
-
-## Open Questions
-
-### OQ-1 — Image detection versus the NUL heuristic
-
-PNG, JPEG, GIF, and WEBP headers usually contain no NUL, so the git 8 KiB NUL probe would otherwise dump them as highlighted text.
-**Provisional default:** sniff those magic bytes and the SVG prefix on every file, before NUL, and treat a match as an image.
-
-### OQ-2 — Hex peek above the download-only size
-
-Story 1.3 says files above about 50 MB are download-only and also says non-image binaries get a 4 KiB hex peek.
-**Provisional default:** text and images above 50 MB are download-only with no inline body.
-**Provisional default:** non-image binaries still return a 4 KiB hex peek plus Download, because that peek is 4 KiB and keeps the file inspectable.
-
-### OQ-3 — Streaming the Download body for files above 50 MB
-
-AD-2 forbids the route from assembling git argv, and a new public stream helper would poison 31 `mock.module('@archon/git')` factories.
-**Provisional default:** the viewer never inlines those files.
-**Provisional default:** `download=1` may buffer through existing `fileAt({ intent: 'full' })` for files at or under 50 MB.
-**Provisional default:** files above 50 MB are not fully read for view, and `download=1` for those sizes is allowed to use `fileAt({ intent: 'full' })` without a new public export.
-Do not build a second git I/O API in this story.
-
----
-
-### Task 1: Add the single cutoff table and pure paging helpers
-
-**Files:**
-
-- Create: `packages/git/src/viewer-limits.ts`
-- Create: `packages/git/src/viewer-limits.test.ts`
-
-**Interfaces:**
-
-- Produces the seven cutoff constants listed in Locked Contracts.
-- Produces `encodeGitCursor` / `decodeGitCursor`.
-- Produces `sniffGitMediaType(bytes: Uint8Array): string`.
-- Produces `sliceTextPage(bytes: Uint8Array, byteOffset: number): { slice: Uint8Array; nextOffset: number; truncated: boolean }`.
-- Produces `pageHunks(hunks, startIndex)` using change content bytes and change counts.
-- Produces `chooseGitFilePresentation({ byteLength, mediaType, binary })`.
-- Produces `formatGitHexPeek(bytes: Uint8Array): string`.
-
-- [ ] **Step 1: Write the failing pure tests**
-
-Create `packages/git/src/viewer-limits.test.ts` with this complete content:
-
-~~~ts
-import { describe, expect, test } from 'bun:test';
-
-import {
-  VIEWER_DIFF_CONTEXT_LINES,
-  VIEWER_DOWNLOAD_ONLY_BYTES,
-  VIEWER_FIRST_PAINT_BYTES,
-  VIEWER_FIRST_PAINT_LINES,
-  VIEWER_HEX_PEEK_BYTES,
-  VIEWER_STREAM_BYTES,
-  chooseGitFilePresentation,
-  decodeGitCursor,
-  encodeGitCursor,
-  formatGitHexPeek,
-  pageHunks,
-  sliceTextPage,
-  sniffGitMediaType,
-} from './viewer-limits';
-
-const PNG = Uint8Array.from([
-  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
-  0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
-  0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
-  0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae,
-  0x42, 0x60, 0x82,
-]);
-
-describe('viewer-limits constants', () => {
-  test('match viewer-rules.md and do not invent a parallel table', () => {
-    expect(VIEWER_FIRST_PAINT_BYTES).toBe(256 * 1024);
-    expect(VIEWER_FIRST_PAINT_LINES).toBe(2000);
-    expect(VIEWER_STREAM_BYTES).toBe(1024 * 1024);
-    expect(VIEWER_DOWNLOAD_ONLY_BYTES).toBe(50 * 1024 * 1024);
-    expect(VIEWER_HEX_PEEK_BYTES).toBe(4 * 1024);
-    expect(VIEWER_DIFF_CONTEXT_LINES).toBe(3);
-  });
-});
-
-describe('cursors', () => {
-  test('round-trips file and hunk offsets and treats empty as zero', () => {
-    expect(decodeGitCursor('')).toEqual({ o: 0, h: 0 });
-    expect(decodeGitCursor(encodeGitCursor({ o: 4096 }))).toEqual({ o: 4096, h: 0 });
-    expect(decodeGitCursor(encodeGitCursor({ h: 2 }))).toEqual({ o: 0, h: 2 });
-  });
-
-  test('rejects garbage, negatives, and non-integers', () => {
-    expect(() => decodeGitCursor('not-base64')).toThrow('Invalid file cursor');
-    expect(() => decodeGitCursor(Buffer.from('{"o":-1}', 'utf8').toString('base64url'))).toThrow(
-      'Invalid file cursor'
-    );
-    expect(() => decodeGitCursor(Buffer.from('{"h":1.5}', 'utf8').toString('base64url'))).toThrow(
-      'Invalid file cursor'
-    );
-  });
-});
-
-describe('sniffGitMediaType', () => {
-  test('detects png jpeg gif webp and svg without requiring NUL', () => {
-    expect(sniffGitMediaType(PNG)).toBe('image/png');
-    expect(sniffGitMediaType(Uint8Array.from([0xff, 0xd8, 0xff, 0xe0]))).toBe('image/jpeg');
-    expect(sniffGitMediaType(Uint8Array.from(Buffer.from('GIF89a', 'ascii')))).toBe('image/gif');
-    const webp = new Uint8Array(12);
-    webp.set(Buffer.from('RIFF', 'ascii'), 0);
-    webp.set(Buffer.from('WEBP', 'ascii'), 8);
-    expect(sniffGitMediaType(webp)).toBe('image/webp');
-    expect(sniffGitMediaType(Uint8Array.from(Buffer.from('<svg xmlns="n"></svg>\n', 'utf8')))).toBe(
-      'image/svg+xml'
-    );
-    expect(
-      sniffGitMediaType(Uint8Array.from(Buffer.from('<?xml version="1.0"?><svg></svg>', 'utf8')))
-    ).toBe('image/svg+xml');
-    expect(sniffGitMediaType(Uint8Array.from(Buffer.from('hello\n', 'utf8')))).toBe('');
-  });
-});
-
-describe('sliceTextPage', () => {
-  test('stops at 2000 lines even when under 256 KiB', () => {
-    const lines = Array.from({ length: 2500 }, (_, index) => `L${String(index)}`);
-    const bytes = Uint8Array.from(Buffer.from(lines.join('\n') + '\n', 'utf8'));
-    const page = sliceTextPage(bytes, 0);
-    expect(Buffer.from(page.slice).toString('utf8')).toContain('L1999\n');
-    expect(Buffer.from(page.slice).toString('utf8')).not.toContain('L2000\n');
-    expect(page.truncated).toBe(true);
-    expect(page.nextOffset).toBeGreaterThan(0);
-  });
-
-  test('stops at 256 KiB on the previous newline when lines are huge', () => {
-    const line = 'x'.repeat(2000) + '\n';
-    const bytes = Uint8Array.from(Buffer.from(line.repeat(200), 'utf8'));
-    const page = sliceTextPage(bytes, 0);
-    expect(page.slice.byteLength).toBeLessThanOrEqual(VIEWER_FIRST_PAINT_BYTES);
-    expect(page.truncated).toBe(true);
-    const second = sliceTextPage(bytes, page.nextOffset);
-    expect(second.slice.byteLength).toBeGreaterThan(0);
-  });
-
-  test('a short file is not truncated', () => {
-    const bytes = Uint8Array.from(Buffer.from('one\ntwo\n', 'utf8'));
-    const page = sliceTextPage(bytes, 0);
-    expect(page.truncated).toBe(false);
-    expect(page.nextOffset).toBe(bytes.byteLength);
-    expect(Buffer.from(page.slice).toString('utf8')).toBe('one\ntwo\n');
-  });
-});
-
-describe('pageHunks', () => {
-  test('always includes the first hunk and then stops at the line budget', () => {
-    const hunks = Array.from({ length: 5 }, (_, index) => ({
-      header: `@@ -${String(index + 1)} +${String(index + 1)} @@`,
-      changes: Array.from({ length: 900 }, () => ({ content: 'x' })),
-    }));
-    const first = pageHunks(hunks, 0);
-    expect(first.hunks).toHaveLength(3);
-    expect(first.truncated).toBe(true);
-    expect(first.nextIndex).toBe(3);
-    const second = pageHunks(hunks, first.nextIndex);
-    expect(second.hunks).toHaveLength(2);
-    expect(second.truncated).toBe(false);
-  });
-});
-
-describe('chooseGitFilePresentation', () => {
-  test('prefers image, then hex, then text, and download-only above 50 MiB', () => {
-    expect(
-      chooseGitFilePresentation({
-        byteLength: 100,
-        mediaType: 'image/png',
-        binary: false,
-      })
-    ).toBe('image');
-    expect(
-      chooseGitFilePresentation({
-        byteLength: VIEWER_DOWNLOAD_ONLY_BYTES + 1,
-        mediaType: 'image/png',
-        binary: false,
-      })
-    ).toBe('download');
-    expect(
-      chooseGitFilePresentation({
-        byteLength: VIEWER_DOWNLOAD_ONLY_BYTES + 1,
-        mediaType: '',
-        binary: true,
-      })
-    ).toBe('hex');
-    expect(
-      chooseGitFilePresentation({
-        byteLength: VIEWER_DOWNLOAD_ONLY_BYTES + 1,
-        mediaType: '',
-        binary: false,
-      })
-    ).toBe('download');
-    expect(chooseGitFilePresentation({ byteLength: 10, mediaType: '', binary: true })).toBe('hex');
-    expect(chooseGitFilePresentation({ byteLength: 10, mediaType: '', binary: false })).toBe('text');
-  });
-});
-
-describe('formatGitHexPeek', () => {
-  test('renders offset hex and ascii with dots for non-printables', () => {
-    const text = formatGitHexPeek(Uint8Array.from([0x00, 0x41, 0xff]));
-    expect(text).toContain('00000000');
-    expect(text).toContain('00 41 ff');
-    expect(text).toContain('|');
-    expect(text).toContain('.A.');
-  });
-});
-~~~
-
-- [ ] **Step 2: Verify RED**
-
-Run:
-
-~~~bash
-( cd packages/git && bun test src/viewer-limits.test.ts )
-~~~
-
-Expected: FAIL because `packages/git/src/viewer-limits.ts` does not exist.
-
-- [ ] **Step 3: Implement the pure module**
-
-Create `packages/git/src/viewer-limits.ts` implementing the constants and helpers so every assertion in Step 1 passes.
-`decodeGitCursor` must accept `{"o":n}`, `{"h":n}`, or both, defaulting a missing key to `0`.
-`sliceTextPage` must not split a UTF-8 code point and must prefer the last newline at or before the byte budget.
-`pageHunks` must count each change as one line and `content.length + 1` bytes, always keep a first hunk that alone exceeds the budget, and stop before adding a later hunk that would exceed either budget.
-`sniffGitMediaType` must recognize PNG, JPEG (`FF D8 FF`), GIF87a/GIF89a, RIFF/WEBP at offset 8, and SVG as specified.
-`chooseGitFilePresentation` must implement the Locked Contracts order, including hex for oversized non-image binaries.
-
-- [ ] **Step 4: Verify GREEN**
-
-Run:
-
-~~~bash
-( cd packages/git && bun test src/viewer-limits.test.ts )
-~~~
-
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-~~~bash
-git add packages/git/src/viewer-limits.ts packages/git/src/viewer-limits.test.ts
-git commit -m "$(cat <<'EOF'
-feat(sc): add source-control viewer cutoffs and paging helpers
-
-Story 1.3 needs one build-tunable cutoff table before git I/O can page large files.
-EOF
-)"
-~~~
-
----
-
-### Task 2: Page Now hunks without sending the whole file
-
-**Files:**
-
-- Modify: `packages/git/src/file-read.ts`
-- Modify: `packages/git/src/file-read.test.ts`
-
-**Interfaces:**
-
-- `FileDiffResult.cursor` becomes `string`.
-- `FileDiffResult.truncated` becomes `boolean`.
-- `fileDiff(workingPath, relativePath, cursor?: string)` pages with `pageHunks`.
-- Diff argv uses `` `-U${VIEWER_DIFF_CONTEXT_LINES}` ``.
-
-- [ ] **Step 1: Write the failing pagination tests**
-
-Append these tests inside the existing `fileAt and fileDiff` describe in `packages/git/src/file-read.test.ts`, after the current `fileDiff reports HEAD-to-worktree` test.
-
-~~~ts
-  test('fileDiff uses -U3 and pages hunks through an opaque cursor', async () => {
-    const workingPath = toWorktreePath(repoPath);
-    const originalAsync = exec.execFileAsync;
-    const asyncSpy = spyOn(exec, 'execFileAsync').mockImplementation(
-      (cmd: string, args: string[], options?: Parameters<typeof originalAsync>[2]) =>
-        originalAsync(cmd, args, options)
-    );
-    const many = Array.from({ length: 2500 }, (_, index) => `keep-${String(index)}`).join('\n');
-    await writeFile(join(repoPath, 'paged.ts'), `${many}\n`);
-    await exec.execFileAsync('git', ['-C', repoPath, 'add', 'paged.ts']);
-    await exec.execFileAsync('git', ['-C', repoPath, 'commit', '-m', 'page']);
-    const next = Array.from({ length: 2500 }, (_, index) => `chg-${String(index)}`).join('\n');
-    await writeFile(join(repoPath, 'paged.ts'), `${next}\n`);
-
-    const first = await fileDiff(workingPath, 'paged.ts');
-    expect(first.truncated).toBe(true);
-    expect(first.cursor.length).toBeGreaterThan(0);
-    expect(first.hunks.length).toBeGreaterThan(0);
-    expect(first.hunks.length).toBeLessThan(first.hunks.reduce((sum, hunk) => sum + hunk.changes.length, 0) + 1);
-    const argv = asyncSpy.mock.calls.map(call => call[1] as string[]).flat();
-    expect(argv).toContain('-U3');
-    expect(argv).not.toContain('-U0');
-
-    const second = await fileDiff(workingPath, 'paged.ts', first.cursor);
-    expect(second.hunks[0]?.header).not.toBe(first.hunks[0]?.header);
-    asyncSpy.mockRestore();
-  });
-
-  test('fileDiff rejects a garbage cursor as GitFileError invalid_cursor', async () => {
-    await expect(fileDiff(toWorktreePath(repoPath), 'tracked.ts', 'nope')).rejects.toMatchObject({
-      name: 'GitFileError',
-      code: 'invalid_cursor',
-    });
-  });
-~~~
-
-Add `'invalid_cursor'` to `GitFileErrorCode` in the test expectation by implementing it in the same GREEN step.
-Widen the existing `toMatchObject` for `tracked.ts` so `cursor` may be a string rather than only `''`.
-
-- [ ] **Step 2: Verify RED**
-
-Run:
-
-~~~bash
-( cd packages/git && bun test src/file-read.test.ts )
-~~~
-
-Expected: FAIL because `fileDiff` still returns every hunk with `cursor: ''` and `truncated: false`, and `GitFileError` has no `invalid_cursor` code.
-
-- [ ] **Step 3: Implement hunk paging**
-
-In `packages/git/src/file-read.ts`:
-- Import paging helpers and `VIEWER_DIFF_CONTEXT_LINES` from `./viewer-limits`.
-- Extend `GitFileErrorCode` with `'invalid_cursor'`.
-- Change `fileDiff` to `fileDiff(workingPath, relativePath, cursor = '')`.
-- Keep the binary probe and empty-hunk binary result.
-- Keep `--literal-pathspecs`, `--no-ext-diff`, `--no-textconv`, `--text`, and `` `-U${VIEWER_DIFF_CONTEXT_LINES}` ``.
-- Parse the unified diff, `decodeGitCursor(cursor)` to a hunk index, and return `pageHunks` with `encodeGitCursor({ h: nextIndex })` when truncated.
-- Map cursor decode failures to `new GitFileError('invalid_cursor')`.
-
-- [ ] **Step 4: Verify GREEN**
-
-Run:
-
-~~~bash
-( cd packages/git && bun test src/file-read.test.ts src/viewer-limits.test.ts )
-~~~
-
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-~~~bash
-git add packages/git/src/file-read.ts packages/git/src/file-read.test.ts
-git commit -m "$(cat <<'EOF'
-feat(sc): page Now git hunks at the viewer first-paint budget
-
-Modified files must send hunks plus three lines of context, not the whole file.
-EOF
-)"
-~~~
-
----
-
-### Task 3: Bound view reads and classify presentation
-
-**Files:**
-
-- Modify: `packages/git/src/file-read.ts`
-- Modify: `packages/git/src/file-read.test.ts`
-
-**Interfaces:**
-
-- Extend `FileAtResult` with `byteLength`, `truncated`, `cursor`, `presentation`, and `mediaType`.
-- Add optional `FileAtRequest` as the fourth `fileAt` argument.
-- Default intent `full` remains a complete byte read.
-- Intent `view` applies presentation and first-paint limits.
-- Do not export new functions from `packages/git/src/index.ts`.
-
-- [ ] **Step 1: Write the failing view-read tests**
-
-Append these tests to `packages/git/src/file-read.test.ts` in the existing real-repo describe.
-
-~~~ts
-  test('view intent pages a 2500-line added file and continues from the cursor', async () => {
-    const lines = Array.from({ length: 2500 }, (_, index) => `line-${String(index)}`);
-    await writeFile(join(repoPath, 'big.txt'), `${lines.join('\n')}\n`);
-    const first = await fileAt(toWorktreePath(repoPath), 'big.txt', { kind: 'worktree' }, { intent: 'view' });
-    expect(first.presentation).toBe('text');
-    expect(first.truncated).toBe(true);
-    expect(first.byteLength).toBeGreaterThan(first.bytes.byteLength);
-    expect(Buffer.from(first.bytes).toString('utf8')).toContain('line-0\n');
-    expect(Buffer.from(first.bytes).toString('utf8')).not.toContain('line-2000\n');
-    const second = await fileAt(
-      toWorktreePath(repoPath),
-      'big.txt',
-      { kind: 'worktree' },
-      { intent: 'view', cursor: first.cursor }
-    );
-    expect(Buffer.from(second.bytes).toString('utf8')).toContain('line-2000\n');
-  });
-
-  test('view intent classifies a PNG as image and a NUL file as hex without dumping the 1 MiB fixture', async () => {
-    await writeFile(join(repoPath, 'tiny.png'), PNG);
-    const image = await fileAt(
-      toWorktreePath(repoPath),
-      'tiny.png',
-      { kind: 'worktree' },
-      { intent: 'view' }
-    );
-    expect(image.presentation).toBe('image');
-    expect(image.mediaType).toBe('image/png');
-    expect(image.bytes).toEqual(PNG);
-
-    const hex = await fileAt(
-      toWorktreePath(repoPath),
-      'nul-1mb.bin',
-      { kind: 'tree', treeIsh: 'HEAD' },
-      { intent: 'view' }
-    );
-    expect(hex.presentation).toBe('hex');
-    expect(hex.binary).toBe(true);
-    expect(hex.bytes.byteLength).toBe(VIEWER_HEX_PEEK_BYTES);
-    expect(hex.byteLength).toBe(NUL_FIXTURE_BYTES);
-  });
-
-  test('view intent does not open a worktree file whose size exceeds 50 MiB', async () => {
-    const fsPromises = await import('fs/promises');
-    const originalLstat = fsPromises.lstat;
-    const lstatSpy = spyOn(fsPromises, 'lstat').mockImplementation(async (path, options) => {
-      const stat = await originalLstat(path, options);
-      if (String(path).endsWith('added.ts')) {
-        return { ...stat, size: VIEWER_DOWNLOAD_ONLY_BYTES + 1, isSymbolicLink: () => false, isFile: () => true };
-      }
-      return stat;
-    });
-    const openSpy = spyOn(fsPromises, 'open');
-    try {
-      const result = await fileAt(
-        toWorktreePath(repoPath),
-        'added.ts',
-        { kind: 'worktree' },
-        { intent: 'view' }
-      );
-      expect(result.presentation).toBe('download');
-      expect(result.bytes.byteLength).toBe(0);
-      expect(result.byteLength).toBe(VIEWER_DOWNLOAD_ONLY_BYTES + 1);
-      expect(openSpy).not.toHaveBeenCalled();
-    } finally {
-      lstatSpy.mockRestore();
-      openSpy.mockRestore();
-    }
-  });
-
-  test('full intent still returns every byte of the committed 1048577-byte NUL fixture', async () => {
-    const result = await fileAt(toWorktreePath(repoPath), 'nul-1mb.bin', {
-      kind: 'tree',
-      treeIsh: 'HEAD',
-    });
-    expect(result.bytes.byteLength).toBe(NUL_FIXTURE_BYTES);
-    expect(result.presentation).toBe('hex');
-  });
-~~~
-
-Define `PNG` once at the top of the test file using the same bytes as Task 1.
-Import `VIEWER_HEX_PEEK_BYTES` and `VIEWER_DOWNLOAD_ONLY_BYTES`.
-Existing full-read tests must keep passing after `FileAtResult` grows extra fields.
-
-- [ ] **Step 2: Verify RED**
-
-Run:
-
-~~~bash
-( cd packages/git && bun test src/file-read.test.ts )
-~~~
-
-Expected: FAIL because `fileAt` does not accept a fourth argument and always returns the whole file.
-
-- [ ] **Step 3: Implement bounded `fileAt`**
-
-Update `FileAtResult` and `fileAt` as locked.
-For worktree view reads, `lstat` first, classify from size plus an 8 KiB prefix when needed, and `read` only the required range through the existing inode-checked handle.
-For tree view reads, `ls-tree -z` then `git cat-file -s` on the blob OID; skip `cat-file blob` when presentation is `download`; otherwise read the blob and slice.
-If a blob is larger than 50 MiB and a 4 KiB hex prefix is required, spawn `git cat-file blob OID` with an argv array, read at most 4 KiB, and kill the child.
-Never use `oid:path`.
-`contentHash` for intent `full` remains SHA-256 of the full bytes.
-`contentHash` for intent `view` is SHA-256 of `byteLength` plus worktree `ino:mtimeMs` or the blob OID so the viewer can fingerprint without hashing a 50 MiB object.
-Symlink worktree reads stay the `readlink` target string.
-Map cursor decode failures to `GitFileError('invalid_cursor')`.
-
-Fill `presentation` / `mediaType` for intent `full` too so HTTP download can reuse the classifier without a second public API.
-
-- [ ] **Step 4: Verify GREEN**
-
-Run:
-
-~~~bash
-( cd packages/git && bun test src/file-read.test.ts src/viewer-limits.test.ts )
-( cd packages/git && bun run type-check )
-~~~
-
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-~~~bash
-git add packages/git/src/file-read.ts packages/git/src/file-read.test.ts
-git commit -m "$(cat <<'EOF'
-feat(sc): bound source-control view reads and classify file presentation
-
-Large text pages, images, hex peeks, and download-only files must not dump whole blobs into the viewer.
-EOF
-)"
-~~~
-
----
-
-### Task 4: Thread cursors and presentation through the git HTTP routes
-
-**Files:**
-
-- Modify: `packages/server/src/routes/git/diff-handler.ts`
-- Modify: `packages/server/src/routes/git/file-handler.ts`
-- Modify: `packages/server/src/routes/api.git-changes.test.ts`
-
-**Interfaces:**
-
-- Diff handler calls `fileDiff(workingPath, path, cursor)` where `cursor` is the query value or `''`.
-- File handler calls `fileAt(..., { intent: download ? 'full' : 'view', cursor })`.
-- File handler writes the locked presentation headers on successful non-CAP-6 responses.
-- `invalid_cursor` maps to HTTP 400 `{ error: "Invalid file cursor" }` on both routes.
-
-- [ ] **Step 1: Write the failing HTTP tests**
-
-In `packages/server/src/routes/api.git-changes.test.ts`, extend `FileAtResult` literals with the new fields through one helper:
-
-~~~ts
-function readyFileAt(overrides: Partial<FileAtResult> = {}): FileAtResult {
-  return {
-    path: 'x.ts',
-    bytes: TEXT_BYTES,
-    binary: false,
-    contentHash: TEXT_HASH,
-    byteLength: TEXT_BYTES.byteLength,
-    truncated: false,
-    cursor: '',
-    presentation: 'text',
-    mediaType: '',
-    ...overrides,
-  };
-}
-~~~
-
-Replace every `Promise<FileAtResult>` object with `readyFileAt(...)`.
-Update `mockFileAt` to accept a fourth request argument and `mockFileDiff` to accept a third cursor argument.
-
-Add tests:
-
-~~~ts
-test('forwards a non-empty diff cursor to fileDiff and returns the page envelope', async () => {
-  mockGetWorkflowRun.mockResolvedValue(runRow());
-  mockFileDiff.mockImplementationOnce(async (_workingPath, _path, cursor) => ({
-    path: 'src/a.ts',
-    status: 'M',
-    scope: 'now',
-    ref: 'live',
-    hunks: [
-      {
-        oldStart: 3,
-        oldLines: 1,
-        newStart: 3,
-        newLines: 1,
-        header: '@@ -3,1 +3,1 @@',
-        changes: [{ type: 'normal', content: 'tail', oldLine: 3, newLine: 3 }],
-      },
-    ],
-    cursor: '',
-    truncated: false,
-    binary: false,
-  }));
-  const app = makeApp();
-  const response = await app.request(
-    '/api/workflows/runs/run-1/git/diff?path=src/a.ts&cursor=opaque-token'
-  );
-  expect(response.status).toBe(200);
-  expect(mockFileDiff.mock.calls[0]?.[2]).toBe('opaque-token');
-  const body = await response.json();
-  expect(body.truncated).toBe(false);
-  expect(body.cursor).toBe('');
-  expectDiffLogPair('git.diff_completed');
-});
-
-test('maps invalid_cursor on diff to HTTP 400 Invalid file cursor', async () => {
-  mockGetWorkflowRun.mockResolvedValue(runRow());
-  mockFileDiff.mockRejectedValueOnce(namedError('GitFileError', 'invalid_cursor'));
-  const app = makeApp();
-  const response = await app.request('/api/workflows/runs/run-1/git/diff?path=src/a.ts&cursor=bad');
-  expect(response.status).toBe(400);
-  expect(await response.json()).toEqual({ error: 'Invalid file cursor' });
-});
-
-test('view file responses include presentation headers and do not treat hex as text/plain', async () => {
-  mockGetWorkflowRun.mockResolvedValue(runRow());
-  mockFileAt.mockResolvedValueOnce(
-    readyFileAt({
-      path: 'blob.bin',
-      bytes: Uint8Array.from([0, 1, 2, 3]),
-      binary: true,
-      presentation: 'hex',
-      truncated: false,
-      byteLength: 99,
-    })
-  );
-  const app = makeApp();
-  const response = await app.request('/api/workflows/runs/run-1/git/file/blob.bin?source=worktree');
-  expect(response.status).toBe(200);
-  expect(response.headers.get('Content-Type')).toBe('application/octet-stream');
-  expect(response.headers.get('X-Archon-Git-Presentation')).toBe('hex');
-  expect(response.headers.get('X-Archon-Git-Byte-Length')).toBe('99');
-  expect(response.headers.get('X-Archon-Git-Truncated')).toBe('false');
-  expect(Buffer.from(await response.arrayBuffer())).toEqual(Buffer.from([0, 1, 2, 3]));
-  expect(mockFileAt.mock.calls.at(-1)?.[3]).toEqual({ intent: 'view', cursor: '' });
-});
-
-test('download=1 uses full intent and attachment disposition', async () => {
-  mockGetWorkflowRun.mockResolvedValue(runRow());
-  mockFileAt.mockResolvedValueOnce(
-    readyFileAt({
-      path: 'blob.bin',
-      bytes: Uint8Array.from([0, 1, 2]),
-      binary: true,
-      presentation: 'download',
-    })
-  );
-  const app = makeApp();
-  const response = await app.request(
-    '/api/workflows/runs/run-1/git/file/blob.bin?source=worktree&download=1'
-  );
-  expect(response.status).toBe(200);
-  expect(response.headers.get('Content-Disposition')).toBe('attachment; filename="download"');
-  expect(mockFileAt.mock.calls.at(-1)?.[3]).toEqual({ intent: 'full', cursor: '' });
-});
-
-test('image view uses the sniffed media type and no attachment header', async () => {
-  mockGetWorkflowRun.mockResolvedValue(runRow());
-  mockFileAt.mockResolvedValueOnce(
-    readyFileAt({
-      path: 'tiny.png',
-      bytes: Uint8Array.from([0x89, 0x50, 0x4e, 0x47]),
-      presentation: 'image',
-      mediaType: 'image/png',
-    })
-  );
-  const app = makeApp();
-  const response = await app.request('/api/workflows/runs/run-1/git/file/tiny.png?source=worktree');
-  expect(response.headers.get('Content-Type')).toBe('image/png');
-  expect(response.headers.get('Content-Disposition')).toBeNull();
-  expect(response.headers.get('X-Archon-Git-Media-Type')).toBe('image/png');
-});
-
-test('forwards a file cursor and maps invalid_cursor to HTTP 400', async () => {
-  mockGetWorkflowRun.mockResolvedValue(runRow());
-  const app = makeApp();
-  await app.request('/api/workflows/runs/run-1/git/file/big.txt?source=worktree&cursor=abc');
-  expect(mockFileAt.mock.calls.at(-1)?.[3]).toEqual({ intent: 'view', cursor: 'abc' });
-  mockFileAt.mockRejectedValueOnce(namedError('GitFileError', 'invalid_cursor'));
-  const response = await app.request(
-    '/api/workflows/runs/run-1/git/file/big.txt?source=worktree&cursor=abc'
-  );
-  expect(response.status).toBe(400);
-  expect(await response.json()).toEqual({ error: 'Invalid file cursor' });
-});
-~~~
-
-Update the existing binary attachment test so it uses `download=1` and `presentation: 'download'`.
-Keep CAP-6 JSON tests unchanged.
-`namedError` already sets `name` and optional `code`; use that for `invalid_cursor`.
-
-- [ ] **Step 2: Verify RED**
-
-Run:
-
-~~~bash
-( cd packages/server && bun test src/routes/api.git-changes.test.ts )
-~~~
-
-Expected: FAIL because handlers ignore cursor, always call full `fileAt`, and never set presentation headers.
-
-- [ ] **Step 3: Implement the thin handler changes**
-
-`handleGitDiff` reads `c.req.query('cursor') ?? ''` and passes it to `fileDiff`.
-Classify `GitFileError` + `invalid_cursor` as HTTP 400 `Invalid file cursor` before the generic 500 path.
-Do not log the cursor or path.
-
-`handleGitFile` reads `cursor` and `download`.
-`download` is true only when the query equals `1`.
-Call `fileAt(toWorktreePath(gate.workingPath), path, source, { intent: download ? 'full' : 'view', cursor })`.
-On success, set ETag plus the locked headers.
-Body bytes come from `result.bytes`.
-Do not log presentation as if it were a path.
-CAP-6, 404, and 400 path/source behavior stay identical.
-
-- [ ] **Step 4: Verify GREEN**
-
-Run:
-
-~~~bash
-( cd packages/server && bun test src/routes/api.git-changes.test.ts )
-~~~
-
-Expected: PASS, including the older changes/diff/file containment tests.
-
-- [ ] **Step 5: Commit**
-
-~~~bash
-git add packages/server/src/routes/git/diff-handler.ts packages/server/src/routes/git/file-handler.ts packages/server/src/routes/api.git-changes.test.ts
-git commit -m "$(cat <<'EOF'
-feat(sc): page git file and diff HTTP responses
-
-The viewer needs opaque cursors and presentation headers without changing CAP-6 or containment.
-EOF
-)"
-~~~
-
----
-
-### Task 5: Teach the web git client to read paged and binary presentations
-
-**Files:**
-
-- Modify: `packages/web/src/lib/api.ts`
-- Modify: `packages/web/src/lib/api.git-changes.test.ts`
-
-**Interfaces:**
-
-- Replace `GitFileClientResult` with the locked union.
-- `getWorkflowRunGitFile(runId, path, source, options?: { cursor?: string; download?: boolean; signal?: AbortSignal })`.
-- `gitFileUrl(runId, path, source, options?: { cursor?: string; download?: boolean })`.
-
-- [ ] **Step 1: Write the failing client tests**
-
-Update `packages/web/src/lib/api.git-changes.test.ts`.
-Keep the empty-cursor diff test.
-Add file URL and result tests:
-
-~~~ts
-test('gitFileUrl adds cursor only when non-empty and download=1 only when requested', () => {
-  expect(gitFileUrl('run/one', 'src/a.ts', 'worktree')).toBe(
-    '/api/workflows/runs/run%2Fone/git/file/src/a.ts?source=worktree'
-  );
-  expect(gitFileUrl('run/one', 'src/a.ts', 'worktree', { cursor: 'ab+c' })).toBe(
-    '/api/workflows/runs/run%2Fone/git/file/src/a.ts?source=worktree&cursor=ab%2Bc'
-  );
-  expect(gitFileUrl('run/one', 'src/a.ts', 'worktree', { download: true })).toBe(
-    '/api/workflows/runs/run%2Fone/git/file/src/a.ts?source=worktree&download=1'
-  );
-});
-
-test('parses text paging headers', async () => {
-  fetchSpy = mockFetchResponse(
-    new Response('hello\n', {
-      status: 200,
-      headers: {
-        'Content-Type': 'text/plain; charset=utf-8',
-        ETag: `"${CONTENT_HASH}"`,
-        'X-Archon-Git-Presentation': 'text',
-        'X-Archon-Git-Truncated': 'true',
-        'X-Archon-Git-Cursor': 'next',
-        'X-Archon-Git-Byte-Length': '99',
-      },
-    })
-  );
-  await expect(getWorkflowRunGitFile('run/one', 'src/a.ts', 'worktree')).resolves.toEqual({
-    kind: 'text',
-    text: 'hello\n',
-    contentHash: CONTENT_HASH,
-    truncated: true,
-    cursor: 'next',
-    byteLength: 99,
-  });
-});
-
-test('parses image bytes and hex bytes and does not call response.text', async () => {
-  const bytes = new Uint8Array([0x89, 0x50]);
-  const response = new Response(bytes, {
-    status: 200,
-    headers: {
-      'Content-Type': 'image/png',
-      ETag: `"${CONTENT_HASH}"`,
-      'X-Archon-Git-Presentation': 'image',
-      'X-Archon-Git-Media-Type': 'image/png',
-      'X-Archon-Git-Byte-Length': '2',
-      'X-Archon-Git-Truncated': 'false',
-    },
-  });
-  textSpy = spyOn(response, 'text');
-  fetchSpy = mockFetchResponse(response);
-  await expect(getWorkflowRunGitFile('run/one', 'tiny.png', 'worktree')).resolves.toEqual({
-    kind: 'image',
-    bytes,
-    contentHash: CONTENT_HASH,
-    mediaType: 'image/png',
-    byteLength: 2,
-  });
-  expect(textSpy).not.toHaveBeenCalled();
-});
-
-test('download presentation cancels the body and does not parse text', async () => {
-  const cancel = mock(() => Promise.resolve());
-  const response = new Response(new Uint8Array([0, 1]), {
-    status: 200,
-    headers: {
-      'Content-Type': 'application/octet-stream',
-      ETag: `"${CONTENT_HASH}"`,
-      'X-Archon-Git-Presentation': 'download',
-      'X-Archon-Git-Byte-Length': '80',
-      'X-Archon-Git-Truncated': 'false',
-    },
-  });
-  Object.defineProperty(response, 'body', { value: { cancel } });
-  textSpy = spyOn(response, 'text');
-  fetchSpy = mockFetchResponse(response);
-  await expect(getWorkflowRunGitFile('run/one', 'huge.bin', 'worktree')).resolves.toEqual({
-    kind: 'download',
-    contentHash: CONTENT_HASH,
-    byteLength: 80,
-  });
-  expect(textSpy).not.toHaveBeenCalled();
-  expect(cancel).toHaveBeenCalledTimes(1);
-});
-~~~
-
-Replace the old binary test that cancelled every `application/octet-stream` body, because hex must read those bytes.
-
-- [ ] **Step 2: Verify RED**
-
-Run:
-
-~~~bash
-( cd packages/web && bun test src/lib/api.git-changes.test.ts )
-~~~
-
-Expected: FAIL because the client still returns `{ kind: 'binary' }` and ignores presentation headers.
-
-- [ ] **Step 3: Implement the client**
-
-Update `gitFileUrl` and `getWorkflowRunGitFile` as locked.
-Read presentation from `X-Archon-Git-Presentation`.
-If that header is missing, keep the Story 1.2 content-type fallback: JSON CAP-6, `text/plain` as complete text (`truncated: false`, `cursor: ''`, `byteLength: text.length`), `application/octet-stream` as `download` after cancelling the body.
-`byteLength` parses `X-Archon-Git-Byte-Length` as a non-negative integer and fails fast with `Invalid git file response` when absent on a presented body except CAP-6.
-Hex and image kinds use `new Uint8Array(await response.arrayBuffer())`.
-Never call `response.text()` for image, hex, or download.
-
-- [ ] **Step 4: Verify GREEN**
-
-Run:
-
-~~~bash
-( cd packages/web && bun test src/lib/api.git-changes.test.ts )
-~~~
-
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-~~~bash
-git add packages/web/src/lib/api.ts packages/web/src/lib/api.git-changes.test.ts
-git commit -m "$(cat <<'EOF'
-feat(sc): parse paged git file presentations in the web client
-
-The viewer needs text cursors, image bytes, hex bytes, and download-only results from the raw route.
-EOF
-)"
-~~~
-
----
-
-### Task 6: Render Load more, images, hex, download-only, and virtualized hunks
-
-**Files:**
-
-- Create: `packages/web/src/components/workflows/source-control/hex-peek.ts`
-- Create: `packages/web/src/components/workflows/source-control/hex-peek.test.ts`
-- Modify: `packages/web/src/components/workflows/source-control/file-viewer.tsx`
-- Modify: `packages/web/src/components/workflows/source-control/file-viewer.test.tsx`
-
-**Interfaces:**
+The viewer states carry the page cursor and a first-page Reload fingerprint.
 
 ~~~ts
 export type FileViewerState =
   | { kind: 'idle' }
   | { kind: 'loading'; file: GitChangedFile }
-  | { kind: 'diff'; file: GitChangedFile; response: GitReadyDiffResponse }
+  | {
+      kind: 'diff';
+      file: GitChangedFile;
+      response: GitReadyDiffResponse;
+      reloadFingerprint: string;
+    }
   | {
       kind: 'text';
       file: GitChangedFile;
       text: string;
       contentHash: string;
       truncated: boolean;
+      cursor: string;
     }
   | {
       kind: 'image';
       file: GitChangedFile;
       contentHash: string;
-      objectUrl: string;
+      bytes: Uint8Array;
+      mediaType: string;
       downloadHref: string;
     }
   | {
@@ -1137,7 +326,1148 @@ export type FileViewerState =
     }
   | { kind: 'unavailable'; file: GitChangedFile; emptyReason: GitEmptyReason }
   | { kind: 'error'; file: GitChangedFile };
+~~~
 
+For a truncated first diff page, <code>reloadFingerprint</code> is its opaque version-bound cursor.
+For a complete first diff page, <code>reloadFingerprint</code> is the JSON of that complete response.
+Appending pages never changes <code>reloadFingerprint</code>.
+
+## Open Questions
+
+None.
+The canonical acceptance criteria resolve image-before-NUL and the unqualified greater-than-50-MiB download-only rule, while AD-3 and CAP-7 require streamed rather than buffered downloads.
+
+---
+
+### Task 1: Add the cutoff, cursor, media, and text-page rules
+
+**Files:**
+
+- Create: <code>packages/git/src/viewer-limits.ts</code>
+- Create: <code>packages/git/src/viewer-limits.test.ts</code>
+
+**Interfaces:**
+
+- Produces the seven constants and the cursor, classification, and text-page contracts in Locked Contracts.
+- Consumes no production code outside the standard library.
+
+- [ ] **Step 1: Write failing behavior tests**
+
+Create <code>packages/git/src/viewer-limits.test.ts</code> with literal boundary values rather than assertions that merely restate exported constants.
+
+~~~ts
+import { describe, expect, test } from 'bun:test';
+
+import {
+  ViewerCursorError,
+  chooseGitFilePresentation,
+  decodeViewerCursor,
+  encodeViewerCursor,
+  sliceTextPage,
+} from './viewer-limits';
+
+const VERSION = 'a'.repeat(64);
+const FILE_CURSOR =
+  'eyJvIjo0MDk2LCJ2IjoiYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSJ9';
+
+describe('viewer cursors', () => {
+  test('encodes a canonical route-specific versioned file cursor', () => {
+    expect(encodeViewerCursor('o', 4096, VERSION)).toBe(FILE_CURSOR);
+    expect(decodeViewerCursor(FILE_CURSOR, 'o', VERSION)).toBe(4096);
+    expect(decodeViewerCursor('', 'o', VERSION)).toBe(0);
+  });
+
+  test('rejects a hunk cursor on the file route and rejects extra fields', () => {
+    const hunk = Buffer.from('{"h":2,"v":"' + VERSION + '"}', 'utf8').toString('base64url');
+    const extra = Buffer.from('{"o":2,"v":"' + VERSION + '","x":1}', 'utf8').toString('base64url');
+    expect(() => decodeViewerCursor(hunk, 'o', VERSION)).toThrow(ViewerCursorError);
+    expect(() => decodeViewerCursor(extra, 'o', VERSION)).toThrow(ViewerCursorError);
+  });
+
+  test('distinguishes malformed and stale cursors', () => {
+    try {
+      decodeViewerCursor('not+base64url', 'o', VERSION);
+      expect.unreachable('expected invalid cursor');
+    } catch (error) {
+      expect(error).toMatchObject({ name: 'ViewerCursorError', code: 'invalid' });
+    }
+    try {
+      decodeViewerCursor(FILE_CURSOR, 'o', 'b'.repeat(64));
+      expect.unreachable('expected stale cursor');
+    } catch (error) {
+      expect(error).toMatchObject({ name: 'ViewerCursorError', code: 'stale' });
+    }
+  });
+});
+
+describe('text first paint', () => {
+  test('stops after exactly 2000 newline-terminated lines', () => {
+    const raw = Array.from({ length: 2001 }, (_unused, index) => 'L' + String(index) + '\n').join('');
+    const page = sliceTextPage(Buffer.from(raw, 'utf8'), false);
+    expect(Buffer.from(page.bytes).toString('utf8').endsWith('L1999\n')).toBe(true);
+    expect(Buffer.from(page.bytes).toString('utf8')).not.toContain('L2000\n');
+    expect(page.truncated).toBe(true);
+  });
+
+  test('never exceeds 262144 bytes and does not split a UTF-8 code point', () => {
+    const raw = 'x'.repeat(262143) + '🙂tail';
+    const page = sliceTextPage(Buffer.from(raw, 'utf8'), false);
+    expect(page.bytes.byteLength).toBeLessThanOrEqual(262144);
+    expect(Buffer.from(page.bytes).toString('utf8')).not.toContain('�');
+    expect(page.consumedBytes).toBeGreaterThan(0);
+    expect(page.truncated).toBe(true);
+  });
+
+  test('returns every byte of a short final page', () => {
+    const page = sliceTextPage(Buffer.from('one\ntwo\n', 'utf8'), false);
+    expect(Buffer.from(page.bytes).toString('utf8')).toBe('one\ntwo\n');
+    expect(page.consumedBytes).toBe(8);
+    expect(page.truncated).toBe(false);
+  });
+});
+
+describe('presentation selection', () => {
+  test('makes every file above 52428800 bytes download-only before probing', () => {
+    expect(chooseGitFilePresentation(52428801, new Uint8Array([0]))).toEqual({
+      presentation: 'download',
+      binary: false,
+      mediaType: '',
+    });
+  });
+
+  test('detects each approved image before applying the NUL heuristic', () => {
+    const cases: Array<[Uint8Array, string]> = [
+      [Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0]), 'image/png'],
+      [Uint8Array.from([0xff, 0xd8, 0xff, 0]), 'image/jpeg'],
+      [Buffer.from('GIF89a\0', 'binary'), 'image/gif'],
+      [Buffer.from('RIFF0000WEBP\0', 'binary'), 'image/webp'],
+      [Buffer.from('\uFEFF  <?xml version="1.0"?>\\n<svg></svg>', 'utf8'), 'image/svg+xml'],
+    ];
+    for (const [bytes, mediaType] of cases) {
+      expect(chooseGitFilePresentation(bytes.byteLength, bytes)).toEqual({
+        presentation: 'image',
+        binary: bytes.includes(0),
+        mediaType,
+      });
+    }
+  });
+
+  test('classifies an ordinary NUL payload as hex and ordinary UTF-8 as text', () => {
+    expect(chooseGitFilePresentation(3, Uint8Array.from([1, 0, 2])).presentation).toBe('hex');
+    expect(chooseGitFilePresentation(6, Buffer.from('hello\n')).presentation).toBe('text');
+  });
+});
+~~~
+
+- [ ] **Step 2: Verify RED**
+
+Run:
+
+~~~bash
+( cd packages/git && bun test src/viewer-limits.test.ts )
+~~~
+
+Expected: FAIL because <code>viewer-limits.ts</code> does not exist.
+Fix syntax/setup errors until the tests fail only for the missing production module.
+
+- [ ] **Step 3: Implement the minimal pure rules**
+
+Create <code>packages/git/src/viewer-limits.ts</code> with the Locked Contracts signatures.
+Use <code>Buffer.byteLength</code> for UTF-8 budgets, validate canonical base64url by decoding and re-encoding, validate exact own keys, and use a byte boundary at or before byte 262144 that excludes an incomplete UTF-8 suffix.
+Use the 2,000th newline boundary before the byte boundary when it exists.
+
+~~~ts
+export interface TextPage {
+  bytes: Uint8Array;
+  consumedBytes: number;
+  truncated: boolean;
+}
+
+export interface GitFileClassification {
+  presentation: GitFilePresentation;
+  binary: boolean;
+  mediaType: string;
+}
+
+export function sliceTextPage(window: Uint8Array, hasBytesAfterWindow: boolean): TextPage;
+export function chooseGitFilePresentation(
+  byteLength: number,
+  probe: Uint8Array
+): GitFileClassification;
+~~~
+
+- [ ] **Step 4: Verify GREEN**
+
+Run:
+
+~~~bash
+( cd packages/git && bun test src/viewer-limits.test.ts )
+( cd packages/git && bun run type-check )
+~~~
+
+Expected: PASS with no warning.
+
+- [ ] **Step 5: Commit**
+
+~~~bash
+git add packages/git/src/viewer-limits.ts packages/git/src/viewer-limits.test.ts
+git commit -m "feat(sc): add bounded viewer rules and cursors"
+~~~
+
+---
+
+### Task 2: Make file views bounded and downloads abortable streams
+
+**Files:**
+
+- Create: <code>packages/git/src/git-stream.ts</code>
+- Modify: <code>packages/git/src/file-read.ts</code>
+- Modify: <code>packages/git/src/file-read.test.ts</code>
+- Modify: <code>packages/git/src/index.ts</code>
+
+**Interfaces:**
+
+- Consumes the viewer rules from Task 1.
+- Produces <code>FileAtRequest</code>, <code>FileAtResult</code>, <code>FileAtBytesResult</code>, <code>FileAtStreamResult</code>, <code>GitFilePresentation</code>, and the new <code>fileAt</code> behavior in Locked Contracts.
+- Keeps <code>git-stream.ts</code> internal to the package.
+
+- [ ] **Step 1: Add failing real-file and real-blob tests**
+
+In <code>packages/git/src/file-read.test.ts</code>, add <code>open</code> and <code>truncate</code> to the existing <code>fs/promises</code> import and append these tests inside the existing real-repository describe.
+
+~~~ts
+test('view pages a 2500-line worktree file and reconstructs it through opaque cursors', async () => {
+  const expected = Array.from({ length: 2500 }, (_unused, index) => 'line-' + String(index) + '\n').join('');
+  await writeFile(join(repoPath, 'big.txt'), expected);
+  const chunks: string[] = [];
+  let cursor = '';
+  do {
+    const page = await fileAt(
+      toWorktreePath(repoPath),
+      'big.txt',
+      { kind: 'worktree' },
+      { intent: 'view', cursor }
+    );
+    expect(page.delivery).toBe('bytes');
+    if (page.delivery !== 'bytes') throw new Error('Expected bytes');
+    chunks.push(Buffer.from(page.bytes).toString('utf8'));
+    cursor = page.cursor;
+    if (!page.truncated) break;
+    expect(cursor.length).toBeGreaterThan(0);
+  } while (true);
+  expect(chunks.join('')).toBe(expected);
+});
+
+test('view pages a tree blob without corrupting a boundary emoji', async () => {
+  const expected = 'x'.repeat(262143) + '🙂tail\n';
+  await writeFile(join(repoPath, 'emoji.txt'), expected);
+  await exec.execFileAsync('git', ['-C', repoPath, 'add', 'emoji.txt']);
+  await exec.execFileAsync('git', ['-C', repoPath, 'commit', '-m', 'emoji']);
+  const first = await fileAt(
+    toWorktreePath(repoPath),
+    'emoji.txt',
+    { kind: 'tree', treeIsh: 'HEAD' },
+    { intent: 'view' }
+  );
+  expect(first.delivery).toBe('bytes');
+  if (first.delivery !== 'bytes') throw new Error('Expected bytes');
+  const second = await fileAt(
+    toWorktreePath(repoPath),
+    'emoji.txt',
+    { kind: 'tree', treeIsh: 'HEAD' },
+    { intent: 'view', cursor: first.cursor }
+  );
+  expect(second.delivery).toBe('bytes');
+  if (second.delivery !== 'bytes') throw new Error('Expected bytes');
+  expect(Buffer.concat([Buffer.from(first.bytes), Buffer.from(second.bytes)]).toString('utf8')).toBe(expected);
+});
+
+test('view returns only 4096 bytes for a non-image NUL blob', async () => {
+  const result = await fileAt(
+    toWorktreePath(repoPath),
+    'nul-1mb.bin',
+    { kind: 'tree', treeIsh: 'HEAD' },
+    { intent: 'view' }
+  );
+  expect(result.delivery).toBe('bytes');
+  if (result.delivery !== 'bytes') throw new Error('Expected bytes');
+  expect(result.presentation).toBe('hex');
+  expect(result.binary).toBe(true);
+  expect(result.bytes.byteLength).toBe(4096);
+  expect(result.byteLength).toBe(1_048_577);
+  expect(result.truncated).toBe(false);
+  expect(result.cursor).toBe('');
+});
+
+test('view classifies a 52428801-byte sparse worktree file without returning its body', async () => {
+  const path = join(repoPath, 'huge.txt');
+  await writeFile(path, 'x');
+  await truncate(path, 52_428_801);
+  const result = await fileAt(
+    toWorktreePath(repoPath),
+    'huge.txt',
+    { kind: 'worktree' },
+    { intent: 'view' }
+  );
+  expect(result.delivery).toBe('bytes');
+  if (result.delivery !== 'bytes') throw new Error('Expected bytes');
+  expect(result.presentation).toBe('download');
+  expect(result.bytes.byteLength).toBe(0);
+  expect(result.byteLength).toBe(52_428_801);
+});
+
+test('download intent streams a file from byte zero and preserves exact bytes', async () => {
+  await writeFile(join(repoPath, 'download.bin'), Uint8Array.from([0, 1, 2, 3]));
+  const result = await fileAt(
+    toWorktreePath(repoPath),
+    'download.bin',
+    { kind: 'worktree' },
+    { intent: 'download' }
+  );
+  expect(result.delivery).toBe('stream');
+  if (result.delivery !== 'stream') throw new Error('Expected stream');
+  expect(new Uint8Array(await new Response(result.stream).arrayBuffer())).toEqual(
+    Uint8Array.from([0, 1, 2, 3])
+  );
+});
+
+test('an image above 1048576 bytes uses an abortable stream instead of a full buffer', async () => {
+  const bytes = new Uint8Array(1_048_577);
+  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+  await writeFile(join(repoPath, 'large.png'), bytes);
+  const controller = new AbortController();
+  const result = await fileAt(
+    toWorktreePath(repoPath),
+    'large.png',
+    { kind: 'worktree' },
+    { intent: 'view', signal: controller.signal }
+  );
+  expect(result.delivery).toBe('stream');
+  if (result.delivery !== 'stream') throw new Error('Expected stream');
+  const reader = result.stream.getReader();
+  const first = await reader.read();
+  expect(first.value?.byteLength).toBeGreaterThan(0);
+  controller.abort();
+  await reader.cancel();
+});
+
+test('a cursor becomes stale when the live file changes between pages', async () => {
+  const path = join(repoPath, 'stale.txt');
+  await writeFile(path, 'x\n'.repeat(2500));
+  const first = await fileAt(
+    toWorktreePath(repoPath),
+    'stale.txt',
+    { kind: 'worktree' },
+    { intent: 'view' }
+  );
+  await writeFile(path, 'y\n'.repeat(2500));
+  await expect(
+    fileAt(
+      toWorktreePath(repoPath),
+      'stale.txt',
+      { kind: 'worktree' },
+      { intent: 'view', cursor: first.cursor }
+    )
+  ).rejects.toMatchObject({ name: 'GitFileError', code: 'stale_cursor' });
+});
+~~~
+
+Keep the existing default full-read test for the 1,048,577-byte NUL fixture and update its result assertion to narrow <code>delivery === "bytes"</code>.
+Extend the existing tree-command test to require <code>cat-file -s</code> before <code>cat-file blob</code> and to keep forbidding <code>HEAD:path</code>.
+
+- [ ] **Step 2: Verify RED**
+
+Run:
+
+~~~bash
+( cd packages/git && bun test src/file-read.test.ts )
+~~~
+
+Expected: FAIL because <code>fileAt</code> has no request argument, metadata, cursor, bounded read, or stream delivery.
+
+- [ ] **Step 3: Add the internal stream adapter**
+
+Create <code>packages/git/src/git-stream.ts</code> with these internal signatures.
+
+~~~ts
+export interface GitStreamRequest {
+  workingPath: RepoPath | WorktreePath;
+  args: string[];
+  signal?: AbortSignal;
+}
+
+export function streamGitStdout(request: GitStreamRequest): ReadableStream<Uint8Array>;
+export async function readGitStdoutWindow(
+  request: GitStreamRequest,
+  skipBytes: number,
+  takeBytes: number
+): Promise<Uint8Array>;
+~~~
+
+Use <code>spawn('git', ['-C', workingPath, ...args], { stdio: ['ignore', 'pipe', 'pipe'], signal })</code>.
+The Web Stream <code>cancel()</code> path must abort or kill the child, and a non-zero exit before intentional cutoff must error the stream without exposing stderr in a public error.
+The bounded reader discards <code>skipBytes</code>, collects at most <code>takeBytes</code>, then kills the child intentionally.
+
+- [ ] **Step 4: Implement bounded <code>fileAt</code>**
+
+Refactor <code>packages/git/src/file-read.ts</code> around an internal inspected-source record.
+
+~~~ts
+interface InspectedFile {
+  path: string;
+  byteLength: number;
+  contentHash: string;
+  readWindow(offset: number, length: number, signal?: AbortSignal): Promise<Uint8Array>;
+  stream(signal?: AbortSignal): ReadableStream<Uint8Array>;
+}
+~~~
+
+For worktree files, use bigint lstat, contain, open, and compare <code>dev</code>, <code>ino</code>, <code>mode</code>, <code>size</code>, <code>mtimeNs</code>, and <code>ctimeNs</code> on the opened handle before returning a reader.
+Keep symlink content equal to its link-target bytes.
+For tree files, keep the literal <code>ls-tree -z</code> lookup, use <code>cat-file -s</code> for length, and use Task 2’s spawned helpers for bounded windows and streams.
+For view intent, inspect size first, return download-only metadata above 50 MiB without a probe, otherwise read at most 8 KiB, classify, and read only the body required by the presentation.
+For text, decode the <code>o</code> cursor against <code>contentHash</code>, read at most 256 KiB plus three bytes from that offset, and encode the next offset only when truncated.
+For hex, return at most 4 KiB.
+For images through 1 MiB, return all bytes; for larger allowed images, return a stream.
+For download intent, return a stream and ignore no bytes.
+Extend <code>GitFileErrorCode</code> with <code>invalid_cursor</code> and <code>stale_cursor</code> and map <code>ViewerCursorError.code</code> exactly.
+
+- [ ] **Step 5: Export only the expanded data types**
+
+Update the existing file-read export block in <code>packages/git/src/index.ts</code>.
+
+~~~ts
+export { fileAt, fileDiff } from './file-read';
+export type {
+  DiffChange,
+  DiffHunk,
+  FileAtBytesResult,
+  FileAtIntent,
+  FileAtRequest,
+  FileAtResult,
+  FileAtSource,
+  FileAtStreamResult,
+  FileDiffRequest,
+  FileDiffResult,
+} from './file-read';
+export type { GitFilePresentation } from './viewer-limits';
+~~~
+
+Do not export a runtime value from <code>git-stream.ts</code> or <code>viewer-limits.ts</code>, either error class, or any new I/O function from the package root.
+
+- [ ] **Step 6: Verify GREEN**
+
+Run:
+
+~~~bash
+( cd packages/git && bun test src/viewer-limits.test.ts src/file-read.test.ts )
+( cd packages/git && bun run type-check )
+~~~
+
+Expected: PASS, including existing containment, full-byte, textconv, and special-filename tests.
+
+- [ ] **Step 7: Commit**
+
+~~~bash
+git add packages/git/src/git-stream.ts packages/git/src/file-read.ts packages/git/src/file-read.test.ts packages/git/src/index.ts
+git commit -m "feat(sc): bound file views and stream downloads"
+~~~
+
+---
+
+### Task 3: Parse and page Now diffs without buffering the whole diff
+
+**Files:**
+
+- Create: <code>packages/git/src/diff-page.ts</code>
+- Create: <code>packages/git/src/diff-page.test.ts</code>
+- Modify: <code>packages/git/src/file-read.ts</code>
+- Modify: <code>packages/git/src/file-read.test.ts</code>
+
+**Interfaces:**
+
+- Consumes Task 1 cutoffs/cursors and Task 2 source inspection/streaming.
+- Produces incremental hunk parsing, <code>FileDiffRequest</code>, and <code>fileFallback</code>.
+
+- [ ] **Step 1: Write failing pure hunk-page tests**
+
+Create <code>packages/git/src/diff-page.test.ts</code>.
+
+~~~ts
+import { describe, expect, test } from 'bun:test';
+
+import { HunkPageAccumulator, parseUnifiedDiffChunks } from './diff-page';
+
+describe('incremental diff parsing', () => {
+  test('preserves a multibyte line split across stream chunks', async () => {
+    const raw = '@@ -1 +1 @@\n-old\n+🙂new\n';
+    const bytes = Buffer.from(raw, 'utf8');
+    const split = bytes.indexOf(0xf0) + 2;
+    const hunks = await parseUnifiedDiffChunks([bytes.subarray(0, split), bytes.subarray(split)]);
+    expect(hunks[0]?.changes).toEqual([
+      { type: 'delete', content: 'old', oldLine: 1 },
+      { type: 'insert', content: '🙂new', newLine: 1 },
+    ]);
+  });
+});
+
+describe('HunkPageAccumulator', () => {
+  test('stops before a later hunk that would exceed 2000 changes', () => {
+    const pager = new HunkPageAccumulator(0);
+    for (let index = 0; index < 3; index += 1) {
+      const decision = pager.push({
+        header: '@@ -1 +1 @@',
+        oldStart: 1,
+        oldLines: 900,
+        newStart: 1,
+        newLines: 900,
+        changes: Array.from({ length: 900 }, () => ({
+          type: 'normal' as const,
+          content: 'x',
+          oldLine: 1,
+          newLine: 1,
+        })),
+      });
+      if (index < 2) expect(decision).toBe('continue');
+      else expect(decision).toBe('page_full');
+    }
+    expect(pager.result()).toMatchObject({ nextIndex: 2, truncated: true });
+    expect(pager.result().hunks).toHaveLength(2);
+  });
+
+  test('keeps one oversized first hunk whole', () => {
+    const pager = new HunkPageAccumulator(0);
+    const decision = pager.push({
+      header: '@@ -1 +1 @@',
+      oldStart: 1,
+      oldLines: 0,
+      newStart: 1,
+      newLines: 1,
+      changes: [{ type: 'insert', content: 'x'.repeat(300_000), newLine: 1 }],
+    });
+    expect(decision).toBe('continue');
+    expect(pager.result().hunks).toHaveLength(1);
+  });
+
+  test('stops before a later hunk that would cross 262144 serialized bytes', () => {
+    const pager = new HunkPageAccumulator(0);
+    const hunk = {
+      header: '@@ -1 +1 @@',
+      oldStart: 1,
+      oldLines: 0,
+      newStart: 1,
+      newLines: 1,
+      changes: [{ type: 'insert' as const, content: 'x'.repeat(140_000), newLine: 1 }],
+    };
+    expect(pager.push(hunk)).toBe('continue');
+    expect(pager.push({ ...hunk, newStart: 2 })).toBe('page_full');
+    expect(pager.result().hunks).toHaveLength(1);
+    expect(pager.result()).toMatchObject({ nextIndex: 1, truncated: true });
+  });
+});
+~~~
+
+- [ ] **Step 2: Verify pure RED**
+
+Run:
+
+~~~bash
+( cd packages/git && bun test src/diff-page.test.ts )
+~~~
+
+Expected: FAIL because <code>diff-page.ts</code> does not exist.
+
+- [ ] **Step 3: Implement the incremental parser and accumulator**
+
+Create <code>packages/git/src/diff-page.ts</code>.
+Use one streaming <code>TextDecoder</code>, carry an incomplete final line between chunks, reuse the current hunk-header semantics, and emit a completed hunk only when the next header or EOF arrives.
+Stop visiting immediately when the callback returns <code>page_full</code>.
+Compute hunk bytes with <code>Buffer.byteLength(JSON.stringify(hunk), 'utf8')</code>.
+Skip exactly <code>startIndex</code> complete hunks, include the first selected hunk even when oversized, and return <code>page_full</code> before a later hunk that would exceed 262,144 bytes or 2,000 changes.
+
+~~~ts
+export type HunkPageDecision = 'continue' | 'page_full';
+
+export interface HunkPageResult {
+  hunks: DiffHunk[];
+  nextIndex: number;
+  truncated: boolean;
+}
+
+export class HunkPageAccumulator {
+  constructor(startIndex: number);
+  push(hunk: DiffHunk): HunkPageDecision;
+  finish(): void;
+  result(): HunkPageResult;
+}
+
+export async function visitUnifiedDiffChunks(
+  chunks: Iterable<Uint8Array> | AsyncIterable<Uint8Array>,
+  visit: (hunk: DiffHunk) => HunkPageDecision
+): Promise<void>;
+export async function parseUnifiedDiffChunks(
+  chunks: Iterable<Uint8Array> | AsyncIterable<Uint8Array>
+): Promise<DiffHunk[]>;
+~~~
+
+- [ ] **Step 4: Write failing real-git pagination and fallback tests**
+
+Append to <code>packages/git/src/file-read.test.ts</code>.
+
+~~~ts
+test('fileDiff streams many disjoint hunks with -U3 and a hunk cursor', async () => {
+  const original = Array.from({ length: 25_000 }, (_unused, index) => 'keep-' + String(index));
+  await writeFile(join(repoPath, 'paged.ts'), original.join('\n') + '\n');
+  await exec.execFileAsync('git', ['-C', repoPath, 'add', 'paged.ts']);
+  await exec.execFileAsync('git', ['-C', repoPath, 'commit', '-m', 'paged']);
+  const changed = [...original];
+  for (let index = 0; index < changed.length; index += 10) changed[index] = 'changed-' + String(index);
+  await writeFile(join(repoPath, 'paged.ts'), changed.join('\n') + '\n');
+
+  const first = await fileDiff(toWorktreePath(repoPath), 'paged.ts');
+  expect(first.truncated).toBe(true);
+  expect(first.cursor.length).toBeGreaterThan(0);
+  expect(first.fileFallback).toBe(false);
+  expect(first.hunks.length).toBeGreaterThan(0);
+
+  const second = await fileDiff(toWorktreePath(repoPath), 'paged.ts', { cursor: first.cursor });
+  expect(second.hunks[0]?.header).not.toBe(first.hunks[0]?.header);
+});
+
+test('fileDiff directs an SVG M file to raw worktree content without calling it binary', async () => {
+  await writeFile(join(repoPath, 'image.svg'), '<svg><text>old</text></svg>\n');
+  await exec.execFileAsync('git', ['-C', repoPath, 'add', 'image.svg']);
+  await exec.execFileAsync('git', ['-C', repoPath, 'commit', '-m', 'svg']);
+  await writeFile(join(repoPath, 'image.svg'), '<svg><text>new</text></svg>\n');
+  const result = await fileDiff(toWorktreePath(repoPath), 'image.svg');
+  expect(result.binary).toBe(false);
+  expect(result.fileFallback).toBe(true);
+  expect(result.hunks).toEqual([]);
+});
+
+test('fileDiff directs a modified file above 52428800 bytes to raw download-only fallback', async () => {
+  const path = join(repoPath, 'huge-modified.dat');
+  await writeFile(path, 'a');
+  await truncate(path, 52_428_801);
+  await exec.execFileAsync('git', ['-C', repoPath, 'add', 'huge-modified.dat']);
+  await exec.execFileAsync('git', ['-C', repoPath, 'commit', '-m', 'huge modified']);
+  const handle = await open(path, 'r+');
+  await handle.write(Buffer.from('b'), 0, 1, 0);
+  await handle.close();
+  const result = await fileDiff(toWorktreePath(repoPath), 'huge-modified.dat');
+  expect(result.fileFallback).toBe(true);
+  expect(result.hunks).toEqual([]);
+});
+
+test('fileDiff rejects a stale hunk cursor after the file changes', async () => {
+  const lines = Array.from({ length: 4000 }, (_unused, index) => 'line-' + String(index));
+  await writeFile(join(repoPath, 'stale-diff.ts'), lines.join('\n') + '\n');
+  await exec.execFileAsync('git', ['-C', repoPath, 'add', 'stale-diff.ts']);
+  await exec.execFileAsync('git', ['-C', repoPath, 'commit', '-m', 'stale diff']);
+  const changed = [...lines];
+  for (let index = 0; index < changed.length; index += 10) changed[index] = 'first-' + String(index);
+  await writeFile(join(repoPath, 'stale-diff.ts'), changed.join('\n') + '\n');
+  const first = await fileDiff(toWorktreePath(repoPath), 'stale-diff.ts');
+  expect(first.truncated).toBe(true);
+  await writeFile(join(repoPath, 'stale-diff.ts'), 'different\n'.repeat(4000));
+  await expect(
+    fileDiff(toWorktreePath(repoPath), 'stale-diff.ts', { cursor: first.cursor })
+  ).rejects.toMatchObject({ name: 'GitFileError', code: 'stale_cursor' });
+});
+~~~
+
+Update every existing <code>FileDiffResult</code> expectation to include <code>fileFallback</code>.
+Keep the current NUL test and assert <code>binary: true</code>, <code>fileFallback: true</code>, and no hunks.
+
+- [ ] **Step 5: Verify real-git RED**
+
+Run:
+
+~~~bash
+( cd packages/git && bun test src/file-read.test.ts )
+~~~
+
+Expected: FAIL because <code>fileDiff</code> still buffers with <code>execFileAsync</code>, ignores requests, and has no <code>fileFallback</code>.
+
+- [ ] **Step 6: Implement streamed <code>fileDiff</code>**
+
+Inspect both worktree and HEAD with bounded probes.
+If either side classifies as image, hex, or download, return no hunks with <code>fileFallback: true</code> and keep <code>binary</code> equal to whether either 8-KiB probe contained NUL.
+For text, derive a version hash from both inspected source hashes, decode the <code>h</code> cursor, and spawn this exact argv tail.
+
+~~~ts
+[
+  '--no-optional-locks',
+  '--literal-pathspecs',
+  'diff',
+  '--no-color',
+  '--no-ext-diff',
+  '--no-textconv',
+  '--text',
+  '-U3',
+  'HEAD',
+  '--',
+  path,
+]
+~~~
+
+Feed stdout incrementally into <code>HunkPageAccumulator</code>.
+Cancel the git stdout reader after <code>page_full</code> so <code>git-stream.ts</code> kills the child, encode <code>nextIndex</code> with axis <code>h</code>, and return an empty cursor only at EOF.
+Forward <code>request.signal</code> so an aborted HTTP request kills the diff child.
+Map invalid/stale viewer cursors to the matching <code>GitFileError</code> codes.
+
+- [ ] **Step 7: Verify GREEN**
+
+Run:
+
+~~~bash
+( cd packages/git && bun test src/viewer-limits.test.ts src/diff-page.test.ts src/file-read.test.ts )
+( cd packages/git && bun run type-check )
+~~~
+
+Expected: PASS without a max-buffer error and without running textconv.
+
+- [ ] **Step 8: Commit**
+
+~~~bash
+git add packages/git/src/diff-page.ts packages/git/src/diff-page.test.ts packages/git/src/file-read.ts packages/git/src/file-read.test.ts
+git commit -m "feat(sc): stream and page Now diff hunks"
+~~~
+
+---
+
+### Task 4: Serialize cursors, fallbacks, and streams at the HTTP boundary
+
+**Files:**
+
+- Modify: <code>packages/server/src/routes/schemas/git.schemas.ts</code>
+- Modify: <code>packages/server/src/routes/git/diff-route.ts</code>
+- Modify: <code>packages/server/src/routes/git/diff-handler.ts</code>
+- Modify: <code>packages/server/src/routes/git/file-handler.ts</code>
+- Modify: <code>packages/server/src/routes/api.git-changes.test.ts</code>
+- Regenerate: <code>packages/web/src/lib/api.generated.d.ts</code>
+
+**Interfaces:**
+
+- Consumes Task 2 and Task 3 git contracts.
+- Produces <code>fileFallback</code> in OpenAPI, HTTP 400/409 cursor mapping, raw presentation headers, and streamed bodies.
+
+- [ ] **Step 1: Update test doubles, then write failing HTTP tests**
+
+In <code>packages/server/src/routes/api.git-changes.test.ts</code>, keep <code>FileAtResult</code>, add <code>FileAtBytesResult</code>, <code>FileAtRequest</code>, and <code>FileDiffRequest</code> to the type imports, update <code>mockFileAt</code>/<code>mockFileDiff</code> to accept those request types, add <code>fileFallback: false</code> to diff fixtures, and use this byte-result helper.
+
+~~~ts
+function readyFileAt(overrides: Partial<FileAtBytesResult> = {}): FileAtBytesResult {
+  return {
+    delivery: 'bytes',
+    path: 'x.ts',
+    bytes: TEXT_BYTES,
+    binary: false,
+    contentHash: TEXT_HASH,
+    byteLength: TEXT_BYTES.byteLength,
+    truncated: false,
+    cursor: '',
+    presentation: 'text',
+    mediaType: '',
+    ...overrides,
+  };
+}
+~~~
+
+Append these boundary tests.
+
+~~~ts
+test('diff forwards cursor and request cancellation and returns fileFallback', async () => {
+  mockFileDiff.mockResolvedValueOnce({
+    path: 'image.svg',
+    status: 'M',
+    scope: 'now',
+    ref: 'live',
+    hunks: [],
+    cursor: '',
+    truncated: false,
+    binary: false,
+    fileFallback: true,
+  });
+  const response = await makeApp().request(
+    '/api/workflows/runs/run-1/git/diff?path=image.svg&cursor=opaque'
+  );
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ fileFallback: true });
+  expect(mockFileDiff.mock.calls[0]?.[2]).toMatchObject({ cursor: 'opaque' });
+  expect(mockFileDiff.mock.calls[0]?.[2]?.signal).toBeInstanceOf(AbortSignal);
+});
+
+test('diff maps invalid and stale cursors without logging cursor text', async () => {
+  mockFileDiff.mockRejectedValueOnce(namedError('GitFileError', 'invalid_cursor'));
+  let response = await makeApp().request(
+    '/api/workflows/runs/run-1/git/diff?path=x.ts&cursor=secret-invalid'
+  );
+  expect(response.status).toBe(400);
+  expect(await response.json()).toEqual({ error: 'Invalid file cursor' });
+  expect(JSON.stringify(mockLogger.info.mock.calls)).not.toContain('secret-invalid');
+
+  mockLogger.info.mockClear();
+  mockLogger.error.mockClear();
+  mockFileDiff.mockRejectedValueOnce(namedError('GitFileError', 'stale_cursor'));
+  response = await makeApp().request(
+    '/api/workflows/runs/run-1/git/diff?path=x.ts&cursor=secret-stale'
+  );
+  expect(response.status).toBe(409);
+  expect(await response.json()).toEqual({ error: 'File changed' });
+  expect(JSON.stringify(mockLogger.info.mock.calls)).not.toContain('secret-stale');
+});
+
+test('hex view returns bytes and all presentation headers without attachment', async () => {
+  mockFileAt.mockResolvedValueOnce(
+    readyFileAt({
+      path: 'blob.bin',
+      bytes: Uint8Array.from([0, 1, 2]),
+      binary: true,
+      byteLength: 99,
+      presentation: 'hex',
+    })
+  );
+  const response = await makeApp().request(
+    '/api/workflows/runs/run-1/git/file/blob.bin?source=worktree'
+  );
+  expect(response.headers.get('Content-Type')).toBe('application/octet-stream');
+  expect(response.headers.get('Content-Disposition')).toBeNull();
+  expect(response.headers.get('X-Archon-Git-Presentation')).toBe('hex');
+  expect(response.headers.get('X-Archon-Git-Byte-Length')).toBe('99');
+  expect(new Uint8Array(await response.arrayBuffer())).toEqual(Uint8Array.from([0, 1, 2]));
+  expect(mockFileAt.mock.calls.at(-1)?.[3]).toMatchObject({ intent: 'view', cursor: '' });
+});
+
+test('download=1 returns a streamed attachment with full Content-Length', async () => {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller): void {
+      controller.enqueue(Uint8Array.from([0, 1, 2]));
+      controller.close();
+    },
+  });
+  mockFileAt.mockResolvedValueOnce({
+    delivery: 'stream',
+    stream,
+    path: 'blob.bin',
+    binary: true,
+    contentHash: TEXT_HASH,
+    byteLength: 3,
+    truncated: false,
+    cursor: '',
+    presentation: 'download',
+    mediaType: '',
+  });
+  const response = await makeApp().request(
+    '/api/workflows/runs/run-1/git/file/blob.bin?source=worktree&download=1'
+  );
+  expect(response.headers.get('Content-Disposition')).toBe('attachment; filename="download"');
+  expect(response.headers.get('Content-Length')).toBe('3');
+  expect(new Uint8Array(await response.arrayBuffer())).toEqual(Uint8Array.from([0, 1, 2]));
+  expect(mockFileAt.mock.calls.at(-1)?.[3]).toMatchObject({ intent: 'download' });
+});
+
+test('file route maps stale cursor to 409 and keeps CAP-6 free of presentation headers', async () => {
+  mockFileAt.mockRejectedValueOnce(namedError('GitFileError', 'stale_cursor'));
+  const stale = await makeApp().request(
+    '/api/workflows/runs/run-1/git/file/x.ts?source=worktree&cursor=opaque'
+  );
+  expect(stale.status).toBe(409);
+  expect(await stale.json()).toEqual({ error: 'File changed' });
+
+  mockGetWorkflowRun.mockResolvedValueOnce({ ...runRow(), working_path: null });
+  const empty = await makeApp().request(
+    '/api/workflows/runs/run-1/git/file/x.ts?source=worktree'
+  );
+  expect(empty.headers.get('X-Archon-Git-Presentation')).toBeNull();
+  expect(empty.headers.get('ETag')).toBeNull();
+});
+~~~
+
+Update the existing binary attachment test so only <code>download=1</code> expects attachment behavior.
+
+- [ ] **Step 2: Verify RED**
+
+Run:
+
+~~~bash
+( cd packages/server && bun test src/routes/api.git-changes.test.ts )
+~~~
+
+Expected: FAIL because the routes omit fallback/schema/409 behavior, ignore cursor/signal, and always serialize a buffered full result.
+
+- [ ] **Step 3: Implement schema and handler changes**
+
+Add <code>fileFallback: z.boolean()</code> to <code>gitReadyDiffResponseSchema</code>.
+Add a 409 <code>errorSchema</code> response to <code>gitDiffRoute</code>.
+Change both handler callback status unions to include 409.
+Pass <code>{ cursor: c.req.query('cursor') ?? '', signal: c.req.raw.signal }</code> to <code>fileDiff</code>.
+Call <code>fileAt</code> with <code>{ intent: 'download', signal }</code> only for <code>download=1</code>, otherwise with <code>{ intent: 'view', cursor, signal }</code>.
+Serialize <code>result.bytes</code> for byte delivery and <code>result.stream</code> for stream delivery.
+Apply the Locked Contracts headers only after CAP-6 and error branches.
+Map <code>invalid_cursor</code> to 400/<code>Invalid file cursor</code> and <code>stale_cursor</code> to 409/<code>File changed</code>.
+Use stable log error types <code>invalid_cursor</code> and <code>stale_cursor</code> without logging the cursor.
+
+- [ ] **Step 4: Verify route GREEN**
+
+Run:
+
+~~~bash
+( cd packages/server && bun test src/routes/api.git-changes.test.ts )
+( cd packages/server && bun run type-check )
+~~~
+
+Expected: PASS, including all older CAP-6, containment, source, special-name, and quiet-log tests.
+
+- [ ] **Step 5: Regenerate the OpenAPI client types**
+
+In one terminal run:
+
+~~~bash
+bun run dev:server
+~~~
+
+After <code>http://localhost:3090/api/openapi.json</code> responds, run in a second terminal:
+
+~~~bash
+bun --filter @archon/web generate:types
+~~~
+
+Stop only the server started for this step.
+Confirm the generated ready diff schema includes <code>fileFallback: boolean</code> and the diff operation includes 409.
+
+- [ ] **Step 6: Commit**
+
+~~~bash
+git add packages/server/src/routes/schemas/git.schemas.ts \
+  packages/server/src/routes/git/diff-route.ts \
+  packages/server/src/routes/git/diff-handler.ts \
+  packages/server/src/routes/git/file-handler.ts \
+  packages/server/src/routes/api.git-changes.test.ts \
+  packages/web/src/lib/api.generated.d.ts
+git commit -m "feat(sc): expose paged and streamed git reads"
+~~~
+
+---
+
+### Task 5: Parse raw presentations in the web API client
+
+**Files:**
+
+- Modify: <code>packages/web/src/lib/api.ts</code>
+- Modify: <code>packages/web/src/lib/api.git-changes.test.ts</code>
+
+**Interfaces:**
+
+- Consumes Task 4 headers and generated <code>fileFallback</code>.
+- Produces the <code>GitFileClientResult</code> union and these signatures.
+
+~~~ts
+export function gitFileUrl(
+  runId: string,
+  path: string,
+  source: GitFileSource,
+  options?: { cursor?: string; download?: boolean }
+): string;
+
+export async function getWorkflowRunGitFile(
+  runId: string,
+  path: string,
+  source: GitFileSource,
+  options?: { cursor?: string; signal?: AbortSignal }
+): Promise<GitFileClientResult>;
+~~~
+
+- [ ] **Step 1: Write failing client tests**
+
+Replace the old generic binary test and append these tests in <code>packages/web/src/lib/api.git-changes.test.ts</code>.
+
+~~~ts
+test('gitFileUrl emits only non-empty cursor and requested download', () => {
+  expect(gitFileUrl('run/one', 'src/a.ts', 'worktree')).toBe(
+    '/api/workflows/runs/run%2Fone/git/file/src/a.ts?source=worktree'
+  );
+  expect(gitFileUrl('run/one', 'src/a.ts', 'worktree', { cursor: 'ab+c' })).toBe(
+    '/api/workflows/runs/run%2Fone/git/file/src/a.ts?source=worktree&cursor=ab%2Bc'
+  );
+  expect(gitFileUrl('run/one', 'src/a.ts', 'worktree', { download: true })).toBe(
+    '/api/workflows/runs/run%2Fone/git/file/src/a.ts?source=worktree&download=1'
+  );
+});
+
+test('parses text paging metadata', async () => {
+  fetchSpy = mockFetchResponse(
+    new Response('hello\n', {
+      headers: {
+        'Content-Type': 'text/plain; charset=utf-8',
+        ETag: '"' + CONTENT_HASH + '"',
+        'X-Archon-Git-Presentation': 'text',
+        'X-Archon-Git-Media-Type': '',
+        'X-Archon-Git-Truncated': 'true',
+        'X-Archon-Git-Cursor': 'next',
+        'X-Archon-Git-Byte-Length': '99',
+      },
+    })
+  );
+  await expect(getWorkflowRunGitFile('run/one', 'src/a.ts', 'worktree')).resolves.toEqual({
+    kind: 'text',
+    text: 'hello\n',
+    contentHash: CONTENT_HASH,
+    truncated: true,
+    cursor: 'next',
+    byteLength: 99,
+  });
+});
+
+test('parses an image as bytes without calling response.text', async () => {
+  const imageResponse = new Response(Uint8Array.from([0x89, 0x50]), {
+    headers: {
+      'Content-Type': 'image/png',
+      ETag: '"' + CONTENT_HASH + '"',
+      'X-Archon-Git-Presentation': 'image',
+      'X-Archon-Git-Media-Type': 'image/png',
+      'X-Archon-Git-Byte-Length': '2',
+      'X-Archon-Git-Truncated': 'false',
+      'X-Archon-Git-Cursor': '',
+    },
+  });
+  textSpy = spyOn(imageResponse, 'text');
+  fetchSpy = mockFetchResponse(imageResponse);
+  await expect(getWorkflowRunGitFile('run/one', 'tiny.png', 'worktree')).resolves.toEqual({
+    kind: 'image',
+    bytes: Uint8Array.from([0x89, 0x50]),
+    contentHash: CONTENT_HASH,
+    mediaType: 'image/png',
+    byteLength: 2,
+  });
+  expect(textSpy).not.toHaveBeenCalled();
+});
+
+test('parses a hex presentation as bytes rather than text', async () => {
+  const response = new Response(Uint8Array.from([0, 0x41, 0xff]), {
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      ETag: '"' + CONTENT_HASH + '"',
+      'X-Archon-Git-Presentation': 'hex',
+      'X-Archon-Git-Media-Type': '',
+      'X-Archon-Git-Byte-Length': '3',
+      'X-Archon-Git-Truncated': 'false',
+      'X-Archon-Git-Cursor': '',
+    },
+  });
+  textSpy = spyOn(response, 'text');
+  fetchSpy = mockFetchResponse(response);
+  await expect(getWorkflowRunGitFile('run/one', 'blob.bin', 'worktree')).resolves.toEqual({
+    kind: 'hex',
+    bytes: Uint8Array.from([0, 0x41, 0xff]),
+    contentHash: CONTENT_HASH,
+    byteLength: 3,
+  });
+  expect(textSpy).not.toHaveBeenCalled();
+});
+
+test('download-only cancels its empty body and returns metadata', async () => {
+  const cancel = mock(() => Promise.resolve());
+  const response = new Response(null, {
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      ETag: '"' + CONTENT_HASH + '"',
+      'X-Archon-Git-Presentation': 'download',
+      'X-Archon-Git-Media-Type': '',
+      'X-Archon-Git-Byte-Length': '52428801',
+      'X-Archon-Git-Truncated': 'false',
+      'X-Archon-Git-Cursor': '',
+    },
+  });
+  Object.defineProperty(response, 'body', { value: { cancel } });
+  fetchSpy = mockFetchResponse(response);
+  await expect(getWorkflowRunGitFile('run/one', 'huge.bin', 'worktree')).resolves.toEqual({
+    kind: 'download',
+    contentHash: CONTENT_HASH,
+    byteLength: 52_428_801,
+  });
+  expect(cancel).toHaveBeenCalledTimes(1);
+});
+
+test('rejects inconsistent presented headers', async () => {
+  fetchSpy = mockFetchResponse(
+    new Response('hello', {
+      headers: {
+        'Content-Type': 'text/plain',
+        ETag: '"' + CONTENT_HASH + '"',
+        'X-Archon-Git-Presentation': 'text',
+        'X-Archon-Git-Media-Type': '',
+        'X-Archon-Git-Truncated': 'true',
+        'X-Archon-Git-Cursor': '',
+        'X-Archon-Git-Byte-Length': '5',
+      },
+    })
+  );
+  await expect(getWorkflowRunGitFile('run/one', 'x.ts', 'worktree')).rejects.toThrow(
+    'Invalid git file response'
+  );
+});
+~~~
+
+Keep the Story 1.2 fallback tests for missing presentation headers, CAP-6 JSON, invalid ETag, abort-signal forwarding, special path encoding, and bounded API error text.
+
+- [ ] **Step 2: Verify RED**
+
+Run:
+
+~~~bash
+( cd packages/web && bun test src/lib/api.git-changes.test.ts )
+~~~
+
+Expected: FAIL because the client still returns <code>binary</code> and ignores presentation headers and file cursors.
+
+- [ ] **Step 3: Implement the client union and validation**
+
+Update <code>gitFileUrl</code> with <code>URLSearchParams</code>, preserving per-segment path encoding.
+Read and validate ETag, presentation, non-negative integer byte length, exact boolean truncated value, cursor consistency, media type, and content type.
+Require a non-empty cursor exactly when text is truncated.
+Use <code>response.text()</code> only for text, <code>arrayBuffer()</code> only for image/hex, and cancel the body for download-only.
+Keep the missing-presentation backward fallback: JSON CAP-6, text as an untruncated final page, and octet-stream as download-only.
+
+- [ ] **Step 4: Verify GREEN**
+
+Run:
+
+~~~bash
+( cd packages/web && bun test src/lib/api.git-changes.test.ts )
+( cd packages/web && bun run type-check )
+~~~
+
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+~~~bash
+git add packages/web/src/lib/api.ts packages/web/src/lib/api.git-changes.test.ts
+git commit -m "feat(sc): parse paged git file presentations"
+~~~
+
+---
+
+### Task 6: Render hex, images, Load more, and virtualized hunks
+
+**Files:**
+
+- Create: <code>packages/web/src/components/workflows/source-control/hex-peek.ts</code>
+- Create: <code>packages/web/src/components/workflows/source-control/hex-peek.test.ts</code>
+- Create: <code>packages/web/src/components/workflows/source-control/inline-image.tsx</code>
+- Create: <code>packages/web/src/components/workflows/source-control/inline-image.test.tsx</code>
+- Create: <code>packages/web/src/components/workflows/source-control/virtualized-diff.tsx</code>
+- Modify: <code>packages/web/src/components/workflows/source-control/file-viewer.tsx</code>
+- Modify: <code>packages/web/src/components/workflows/source-control/file-viewer.test.tsx</code>
+- Create: <code>packages/web/src/component-integration/source-control-large-diff-spike.tsx</code>
+
+**Interfaces:**
+
+- Consumes Task 5 file kinds and existing <code>git-hunk-adapter.ts</code>/<code>syntax-highlight.tsx</code>.
+- Produces the Locked Contracts viewer state plus <code>loadingMore</code> and <code>onLoadMore</code> props.
+
+~~~ts
 export interface FileViewerProps {
   state: FileViewerState;
   stacked: boolean;
@@ -1149,363 +1479,877 @@ export interface FileViewerProps {
 }
 ~~~
 
-- [ ] **Step 1: Write the failing UI tests**
+- [ ] **Step 1: Write failing formatter and viewer tests**
 
-Create `packages/web/src/components/workflows/source-control/hex-peek.test.ts`:
+Create <code>hex-peek.test.ts</code> with an exact, independently derived line.
 
 ~~~ts
-import { describe, expect, test } from 'bun:test';
+import { expect, test } from 'bun:test';
 
 import { formatHexPeek } from './hex-peek';
 
-describe('formatHexPeek', () => {
-  test('matches the git helper ascii hexdump', () => {
-    expect(formatHexPeek(Uint8Array.from([0x00, 0x41, 0xff]))).toContain('00 41 ff');
-    expect(formatHexPeek(Uint8Array.from([0x00, 0x41, 0xff]))).toContain('.A.');
-  });
+test('formats sixteen-byte rows with offset, padded hex, and printable ASCII', () => {
+  expect(formatHexPeek(Uint8Array.from([0x00, 0x41, 0xff]))).toBe(
+    '00000000  00 41 ff                                         |.A.             |'
+  );
 });
 ~~~
 
-Copy `formatGitHexPeek` byte-for-byte into `hex-peek.ts` so the web package does not import `@archon/git`.
-The two implementations must stay identical; the test above is the contract.
+Create <code>inline-image.test.tsx</code> with one mounted lifecycle test.
 
-Extend `file-viewer.test.tsx`:
-- Add `truncated: false` to existing text states.
-- Replace `kind: 'binary'` with `kind: 'hex'` and `kind: 'download'` in `STATES`.
-- Pass `onLoadMore` through `renderViewer`.
-- Add tests:
+~~~tsx
+import { afterEach, beforeEach, expect, mock, test } from 'bun:test';
+import { Window } from 'happy-dom';
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
 
-~~~ts
-  test('truncated text and diff show a Load more button and loadingMore shows Cancel', () => {
-    const text = renderViewer({
-      kind: 'text',
-      file: ADDED,
-      text: 'hello\n',
-      contentHash: 'a'.repeat(64),
-      truncated: true,
-    });
-    expect(text).toContain('>Load more<');
-    const loading = renderToStaticMarkup(
-      <FileViewer
-        state={{ kind: 'text', file: ADDED, text: 'hello\n', contentHash: 'a'.repeat(64), truncated: true }}
-        stacked={false}
-        loadingMore={true}
-        onCancel={(): void => undefined}
-        onReload={(): void => undefined}
-        onClose={(): void => undefined}
-        onLoadMore={(): void => undefined}
-      />
-    );
-    expect(loading).toContain('>Cancel<');
+import { InlineImage } from './inline-image';
+
+let win: Window;
+let host: Element;
+let root: Root | null;
+const createObjectURL = mock((_blob: Blob): string => 'blob:first');
+const revokeObjectURL = mock((_url: string): void => undefined);
+
+beforeEach(() => {
+  win = new Window({ url: 'https://localhost/' });
+  Object.assign(globalThis as object, {
+    window: win,
+    document: win.document,
+    HTMLElement: win.HTMLElement,
+    Element: win.Element,
+    Node: win.Node,
+    Blob: win.Blob,
+    URL: win.URL,
+    IS_REACT_ACT_ENVIRONMENT: true,
   });
+  createObjectURL.mockReset();
+  createObjectURL.mockReturnValueOnce('blob:first').mockReturnValueOnce('blob:second');
+  revokeObjectURL.mockReset();
+  Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL });
+  Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectURL });
+  host = win.document.createElement('div') as unknown as Element;
+  win.document.body.append(host);
+  root = createRoot(host);
+});
 
-  test('image uses an img tag with the object URL and a Download link', () => {
-    const html = renderViewer({
-      kind: 'image',
-      file: { path: 'tiny.png', status: 'A' },
-      contentHash: 'b'.repeat(64),
-      objectUrl: 'blob:tiny',
-      downloadHref: DOWNLOAD_HREF + '&download=1',
-    });
-    expect(html).toContain('<img');
-    expect(html).toContain('src="blob:tiny"');
-    expect(html).toContain('download=1');
-    expect(html).not.toContain('class="hljs"');
-  });
+afterEach(async () => {
+  if (root) await act(async () => root?.unmount());
+  win.close();
+});
 
-  test('hex shows a preformatted peek and never a highlighted source dump', () => {
-    const html = renderViewer({
-      kind: 'hex',
-      file: BINARY,
-      contentHash: 'b'.repeat(64),
-      hex: '00000000  00 41 ff                                          |.A.|',
-      downloadHref: DOWNLOAD_HREF + '&download=1',
-    });
-    expect(html).toContain('00000000');
-    expect(html).toContain('>Download<');
-    expect(html).not.toContain('class="hljs"');
-    expect(html).not.toContain('sc-diff-before');
+test('replaces and revokes object URLs when bytes change and on unmount', async () => {
+  const mountedRoot = root;
+  if (!mountedRoot) throw new Error('Missing React root');
+  await act(async () => {
+    mountedRoot.render(<InlineImage bytes={Uint8Array.from([1])} mediaType="image/png" />);
   });
-
-  test('download-only offers Download and no preformatted body', () => {
-    const html = renderViewer({
-      kind: 'download',
-      file: BINARY,
-      contentHash: 'b'.repeat(64),
-      downloadHref: DOWNLOAD_HREF + '&download=1',
-    });
-    expect(html).toContain('>Download<');
-    expect(html).toContain('This file is too large to open here.');
-    expect(html).not.toContain('<pre');
+  expect(host.querySelector('img')?.getAttribute('src')).toBe('blob:first');
+  await act(async () => {
+    mountedRoot.render(<InlineImage bytes={Uint8Array.from([2])} mediaType="image/png" />);
   });
+  expect(revokeObjectURL).toHaveBeenCalledWith('blob:first');
+  expect(host.querySelector('img')?.getAttribute('src')).toBe('blob:second');
+  await act(async () => mountedRoot.unmount());
+  root = null;
+  expect(revokeObjectURL).toHaveBeenCalledWith('blob:second');
+});
 ~~~
 
-Keep the attacker-controlled markup test.
-Keep plus/minus gutter tests.
-Quiet chrome must still forbid Stage/Edit/Discard/Commit/History/Error:/unsupported/warning glyphs.
+Update every existing text state in <code>file-viewer.test.tsx</code> with <code>truncated: false</code> and <code>cursor: ""</code>.
+Add <code>fileFallback: false</code> to <code>MARKER_HUNK_DIFF</code>, <code>LINE_TRAP_DIFF</code>, and every inline ready diff fixture required by the regenerated type.
+Update every existing diff state with <code>reloadFingerprint: JSON.stringify(response)</code>, using the fixture variable passed to that state.
+Replace the binary state with hex and download states.
+Change <code>renderViewer</code> to pass <code>onLoadMore={(): void =&gt; undefined}</code> so truncated-state tests exercise the control.
+Append these tests.
 
-- [ ] **Step 2: Verify RED**
+~~~tsx
+test('a truncated text page and truncated diff expose Load more', () => {
+  const text = renderViewer({
+    kind: 'text',
+    file: ADDED,
+    text: 'hello\n',
+    contentHash: 'a'.repeat(64),
+    truncated: true,
+    cursor: 'next',
+  });
+  expect(text).toContain('>Load more<');
+  const diff = renderViewer({
+    kind: 'diff',
+    file: MODIFIED,
+    response: { ...MARKER_HUNK_DIFF, truncated: true, cursor: 'next' },
+    reloadFingerprint: 'next',
+  });
+  expect(diff).toContain('>Load more<');
+});
+
+test('loadingMore replaces Load more with Cancel without hiding painted text', () => {
+  const html = renderToStaticMarkup(
+    <FileViewer
+      state={{
+        kind: 'text',
+        file: ADDED,
+        text: 'painted\n',
+        contentHash: 'a'.repeat(64),
+        truncated: true,
+        cursor: 'next',
+      }}
+      stacked={false}
+      loadingMore={true}
+      onCancel={(): void => undefined}
+      onReload={(): void => undefined}
+      onClose={(): void => undefined}
+      onLoadMore={(): void => undefined}
+    />
+  );
+  expect(html).toContain('painted');
+  expect(html).toContain('>Cancel<');
+  expect(html).not.toContain('>Load more<');
+});
+
+test('image state offers Download without highlighting or inline SVG markup', () => {
+  const html = renderViewer({
+    kind: 'image',
+    file: { path: 'tiny.svg', status: 'A' },
+    contentHash: 'b'.repeat(64),
+    bytes: Buffer.from('<svg><script>bad()</script></svg>'),
+    mediaType: 'image/svg+xml',
+    downloadHref: DOWNLOAD_HREF + '&download=1',
+  });
+  expect(html).toContain('>Download<');
+  expect(html).not.toContain('<script>');
+  expect(html).not.toContain('class="hljs"');
+});
+
+test('hex renders a plain preformatted peek and a download link', () => {
+  const html = renderViewer({
+    kind: 'hex',
+    file: BINARY,
+    contentHash: 'b'.repeat(64),
+    hex: '00000000  00 41 ff                                         |.A.             |',
+    downloadHref: DOWNLOAD_HREF + '&download=1',
+  });
+  expect(html).toContain('00000000');
+  expect(html).toContain('>Download<');
+  expect(html).not.toContain('class="hljs"');
+  expect(html).not.toContain('sc-diff-before');
+});
+
+test('download-only has no preformatted body', () => {
+  const html = renderViewer({
+    kind: 'download',
+    file: BINARY,
+    contentHash: 'b'.repeat(64),
+    downloadHref: DOWNLOAD_HREF + '&download=1',
+  });
+  expect(html).toContain('This file is too large to open here.');
+  expect(html).toContain('>Download<');
+  expect(html).not.toContain('<pre');
+});
+~~~
+
+Keep the attacker-markup, Before/After, gutter, responsive, quiet-copy, Reload, and Close tests.
+
+- [ ] **Step 2: Create the failing large-diff spike**
+
+Create <code>packages/web/src/component-integration/source-control-large-diff-spike.tsx</code>.
+The script must build a fixture whose hunk content is at least 2 MiB, mount <code>FileViewer</code> in happy-dom, count mounted <code>.sc-virtual-hunk</code> elements, bundle <code>file-viewer.tsx</code> with <code>Bun.build({ metafile: true, write: false })</code>, sum metafile input bytes whose path includes <code>node_modules/lodash/</code>, and print one JSON object with <code>fixtureBytes</code>, <code>renderMs</code>, <code>mountedHunks</code>, <code>totalHunks</code>, <code>bundleBytes</code>, and <code>lodashInputBytes</code>.
+Exit non-zero when fixture bytes are below 2,097,152, render time is 1,000 ms or more, all hunks mount, the bundle fails, or lodash input bytes are zero.
+
+Use this complete script body.
+
+~~~tsx
+import { Window } from 'happy-dom';
+import { join } from 'path';
+import { act } from 'react';
+import { createRoot } from 'react-dom/client';
+
+import type { GitReadyDiffResponse } from '@/lib/api';
+
+import { FileViewer } from '../components/workflows/source-control/file-viewer';
+
+class ResizeObserverStub {
+  observe(): void {
+    return undefined;
+  }
+  unobserve(): void {
+    return undefined;
+  }
+  disconnect(): void {
+    return undefined;
+  }
+}
+
+const win = new Window({ url: 'https://localhost/' });
+Object.assign(globalThis as object, {
+  window: win,
+  document: win.document,
+  self: win,
+  HTMLElement: win.HTMLElement,
+  Element: win.Element,
+  Node: win.Node,
+  MutationObserver: win.MutationObserver,
+  ResizeObserver: win.ResizeObserver ?? ResizeObserverStub,
+  requestAnimationFrame: win.requestAnimationFrame.bind(win),
+  cancelAnimationFrame: win.cancelAnimationFrame.bind(win),
+  getComputedStyle: win.getComputedStyle.bind(win),
+  IS_REACT_ACT_ENVIRONMENT: true,
+});
+
+const totalHunks = 4096;
+const content = 'x'.repeat(512);
+const fixtureBytes = Buffer.byteLength(content, 'utf8') * totalHunks;
+const response: GitReadyDiffResponse = {
+  path: 'large.ts',
+  status: 'M',
+  scope: 'now',
+  ref: 'live',
+  cursor: '',
+  truncated: false,
+  binary: false,
+  fileFallback: false,
+  hunks: Array.from({ length: totalHunks }, (_unused, index) => ({
+    header: '@@ -0,0 +' + String(index + 1) + ' @@',
+    oldStart: 0,
+    oldLines: 0,
+    newStart: index + 1,
+    newLines: 1,
+    changes: [{ type: 'insert' as const, content, newLine: index + 1 }],
+  })),
+};
+
+const host = win.document.createElement('div');
+win.document.body.append(host);
+const root = createRoot(host);
+const started = performance.now();
+await act(async () => {
+  root.render(
+    <FileViewer
+      state={{
+        kind: 'diff',
+        file: { path: 'large.ts', status: 'M' },
+        response,
+        reloadFingerprint: 'spike',
+      }}
+      stacked={false}
+      onCancel={(): void => undefined}
+      onReload={(): void => undefined}
+      onClose={(): void => undefined}
+    />
+  );
+  await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+});
+const renderMs = performance.now() - started;
+const mountedHunks = host.querySelectorAll('.sc-virtual-hunk').length;
+
+const build = await Bun.build({
+  entrypoints: [join(import.meta.dir, '../components/workflows/source-control/file-viewer.tsx')],
+  target: 'browser',
+  write: false,
+  minify: true,
+  metafile: true,
+});
+const bundleBytes = build.outputs.reduce((sum, output) => sum + output.size, 0);
+const lodashInputBytes = Object.entries(build.metafile?.inputs ?? {})
+  .filter(([path]) => path.includes('node_modules/lodash/'))
+  .reduce((sum, [, input]) => sum + input.bytes, 0);
+
+const report = {
+  fixtureBytes,
+  renderMs,
+  mountedHunks,
+  totalHunks,
+  bundleBytes,
+  lodashInputBytes,
+};
+console.log(JSON.stringify(report));
+
+await act(async () => root.unmount());
+win.close();
+
+if (
+  !build.success ||
+  fixtureBytes < 2_097_152 ||
+  renderMs >= 1000 ||
+  mountedHunks <= 0 ||
+  mountedHunks >= totalHunks ||
+  lodashInputBytes <= 0
+) {
+  process.exitCode = 1;
+}
+~~~
 
 Run:
 
 ~~~bash
-( cd packages/web && bun test src/components/workflows/source-control/file-viewer.test.tsx src/components/workflows/source-control/hex-peek.test.ts )
+( cd packages/web && NODE_ENV=development bun run src/component-integration/source-control-large-diff-spike.tsx )
 ~~~
 
-Expected: FAIL because the new states and Load more control do not exist.
+Expected: FAIL because the current viewer mounts every hunk and has no <code>.sc-virtual-hunk</code> boundary.
 
-- [ ] **Step 3: Implement the viewer**
+- [ ] **Step 3: Implement the formatter, object-URL owner, and virtualized panes**
 
-Implement `hex-peek.ts` as a copy of `formatGitHexPeek`.
-Update `FileViewerState` and `FileViewer`.
-Show `Load more` when `kind === 'text' && truncated` or `kind === 'diff' && response.truncated`.
-Show `Cancel` when `kind === 'loading'` or `loadingMore === true`.
-Image body is `<img alt="" src={objectUrl} />` plus Download.
-Hex body is `<pre><code>{hex}</code></pre>` plus Download.
-Download-only copy is exactly `This file is too large to open here.`
-Virtualize diff hunks with `useVirtualizer` the same way `changed-files-list.tsx` does, including `initialRect: { width: 0, height: 280 }` and a fallback that renders all hunks when `getVirtualItems()` is empty so `renderToStaticMarkup` tests still see Before/After content.
-Do not use `dangerouslySetInnerHTML` for SVG.
+Implement <code>formatHexPeek</code> as 16 bytes per row with an eight-digit lowercase offset, 47-character padded hex field, and 16-character printable-ASCII field.
+Do not add a second backend formatter.
 
-- [ ] **Step 4: Verify GREEN**
+Implement <code>inline-image.tsx</code> with this ownership rule.
+
+~~~tsx
+export function InlineImage(props: {
+  bytes: Uint8Array;
+  mediaType: string;
+}): ReactElement {
+  const [objectUrl, setObjectUrl] = useState('');
+  useEffect(() => {
+    const url = URL.createObjectURL(new Blob([props.bytes.slice().buffer], { type: props.mediaType }));
+    setObjectUrl(url);
+    return (): void => URL.revokeObjectURL(url);
+  }, [props.bytes, props.mediaType]);
+  return objectUrl ? <img alt="" src={objectUrl} /> : <div role="status" />;
+}
+~~~
+
+Implement <code>virtualized-diff.tsx</code> as two independently scrolling side components.
+Each side owns its own scroll ref and <code>useVirtualizer</code>, uses <code>initialRect: { width: 0, height: 280 }</code>, estimates height from the visible change count, renders only virtual items as absolutely positioned <code>.sc-virtual-hunk</code> wrappers, and falls back to all side hunks only when <code>getVirtualItems()</code> is empty for static rendering.
+Render one existing <code>Diff</code> per mounted hunk and keep existing highlighting and gutter callbacks.
+
+- [ ] **Step 4: Implement viewer states and controls**
+
+Move <code>DiffPanes</code> into <code>virtualized-diff.tsx</code>.
+Render <code>InlineImage</code> plus Download for image, plain <code>&lt;pre&gt;&lt;code&gt;</code> plus Download for hex, and exact copy <code>This file is too large to open here.</code> plus Download for download-only.
+Show Load more only for a truncated text/diff state with a non-empty cursor and a supplied callback.
+Show Cancel for the initial loading state or while <code>loadingMore</code> is true.
+Never use syntax highlighting for image or hex.
+
+- [ ] **Step 5: Verify GREEN and the accepted spike**
 
 Run:
 
 ~~~bash
 ( cd packages/web && bun test src/components/workflows/source-control/ )
+( cd packages/web && NODE_ENV=development bun run src/component-integration/source-control-large-diff-spike.tsx )
+( cd packages/web && bun run type-check )
 ~~~
 
-Expected: PASS.
+Expected: all commands PASS, the spike reports at least 2,097,152 fixture bytes, fewer mounted than total hunks, positive lodash input bytes, and <code>renderMs &lt; 1000</code>.
+If the one-second rule still fails after hunk virtualization, stop and report the measured JSON because the approved architecture makes the viewer-stack decision contingent on this spike and forbids silently adding Monaco.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ~~~bash
-git add packages/web/src/components/workflows/source-control/hex-peek.ts packages/web/src/components/workflows/source-control/hex-peek.test.ts packages/web/src/components/workflows/source-control/file-viewer.tsx packages/web/src/components/workflows/source-control/file-viewer.test.tsx
-git commit -m "$(cat <<'EOF'
-feat(sc): render paged text, images, hex peeks, and virtualized hunks
-
-Every changed file must open or show a usable fallback without dumping binaries as text.
-EOF
-)"
+git add packages/web/src/components/workflows/source-control/hex-peek.ts \
+  packages/web/src/components/workflows/source-control/hex-peek.test.ts \
+  packages/web/src/components/workflows/source-control/inline-image.tsx \
+  packages/web/src/components/workflows/source-control/inline-image.test.tsx \
+  packages/web/src/components/workflows/source-control/virtualized-diff.tsx \
+  packages/web/src/components/workflows/source-control/file-viewer.tsx \
+  packages/web/src/components/workflows/source-control/file-viewer.test.tsx \
+  packages/web/src/component-integration/source-control-large-diff-spike.tsx
+git commit -m "feat(sc): render virtualized diffs and binary previews"
 ~~~
 
 ---
 
-### Task 7: Orchestrate Load more, Cancel, and image object URLs in the tab
+### Task 7: Append pages without losing cancellation or frozen Reload behavior
 
 **Files:**
 
-- Modify: `packages/web/src/components/workflows/source-control/source-control-tab.tsx`
+- Modify: <code>packages/web/src/component-integration/source-control-tab.test.tsx</code>
+- Modify: <code>packages/web/src/components/workflows/source-control/source-control-tab.tsx</code>
 
 **Interfaces:**
 
-- `loadViewerFile` returns the new viewer kinds.
-- Diff fingerprint no longer stringifies the whole hunk array.
-- Load more appends text or hunks using the last opaque cursor.
-- Image `objectUrl` is revoked on close, selection change, run change, and unmount.
+- Consumes the Task 4 <code>fileFallback</code>, Task 5 client union, and Task 6 viewer states.
+- Produces append-only text/hunk loading, load-only cancellation, raw fallback mapping, stale-cursor Reload, and stable first-page fingerprints.
 
-- [ ] **Step 1: Write characterization assertions as mounted tests in Task 8**
+- [ ] **Step 1: Add presented-response and object-URL test helpers**
 
-This task is the production wiring those tests will exercise.
-Do not skip Task 8.
-
-While implementing, keep these invariants in `source-control-tab.tsx`:
-- `M` text still calls `getWorkflowRunGitDiff`.
-- `M` with `response.binary === true` then calls `getWorkflowRunGitFile(..., 'worktree')` and maps image/hex/download.
-- `A` uses `worktree`, `D` uses `head`.
-- `.env` text still becomes `kind: 'text'`.
-- `viewerFingerprint` for diff is `diff:${file.status}:${file.path}:${response.ref}:${response.binary}:${response.hunks[0]?.header ?? ''}`.
-- `viewerFingerprint` for text/image/hex/download uses `contentHash` only.
-- Load more uses the current state's cursor and does not dispatch list snapshot actions.
-- In-flight Load more sets `loadingMore` and reuses `beginRequest` so Cancel aborts it.
-- Download hrefs always include `download=1`.
-
-- [ ] **Step 2: Verify RED via the first new mounted test from Task 8 after writing it**
-
-Write Task 8's Load more test first if desired, then come back.
-Expected before wiring: the test cannot find `Load more` or appended text.
-
-- [ ] **Step 3: Implement tab wiring**
-
-Update `loadViewerFile` to map the new client union onto `FileViewerState`.
-For images, `URL.createObjectURL(new Blob([bytes], { type: mediaType }))`.
-For hex, `formatHexPeek(bytes)`.
-Pass `onLoadMore` and `loadingMore` into `FileViewer`.
-On Load more for text, fetch with `{ cursor }` and concatenate `text`.
-On Load more for diff, fetch with `{ cursor }` and concatenate `hunks`, replacing `cursor` / `truncated` from the new page.
-Ignore Load more results when the request id is stale or aborted.
-Revoke prior object URLs before creating a new one and on cleanup.
-
-- [ ] **Step 4: Verify GREEN after Task 8 tests exist**
-
-Run the Task 8 command.
-Expected: PASS.
-
-- [ ] **Step 5: Commit together with Task 8.**
-
----
-
-### Task 8: Mounted Load more, binary fallbacks, fingerprint stability, and the lodash spike
-
-**Files:**
-
-- Modify: `packages/web/src/component-integration/source-control-tab.test.tsx`
-- Create: `packages/web/src/components/workflows/source-control/large-diff-spike.test.ts`
-
-- [ ] **Step 1: Write the failing mounted tests**
-
-Add helpers next to `binaryFileResponse`:
+Add this helper beside the current file-response helpers.
 
 ~~~ts
 function presentedFileResponse(
-  body: BodyInit,
+  body: BodyInit | null,
   hash: string,
   headers: Record<string, string>
 ): Response {
   return new Response(body, {
     status: 200,
     headers: {
-      ETag: `"${hash}"`,
+      ETag: '"' + hash + '"',
       'X-Archon-Git-Truncated': 'false',
       'X-Archon-Git-Cursor': '',
       'X-Archon-Git-Byte-Length': '1',
+      'X-Archon-Git-Media-Type': '',
       ...headers,
     },
   });
 }
 ~~~
 
-Add tests inside `describe('SourceControlTab')`:
-
-1. Opening a 2500-line added file whose first response is truncated shows `Load more`; clicking it requests the same path with `cursor=` and appends the second page without changing the Changes list.
-2. Cancel during Load more aborts that fetch, keeps the first page, and focuses the list only if the operator also closes; Load more Cancel must not clear the first page.
-3. A PNG `A` file renders `img` and a `download=1` link, and never `hljs`.
-4. A NUL `M` file still avoids Before/After and now shows hex digits plus Download.
-5. A download-only response shows `This file is too large to open here.` and Download, with no `<pre>`.
-6. Reload that returns the same `contentHash` and first hunk header but a different later hunk page does not show `Changed on disk — Reload` merely because Load more already appended hunks.
-7. Opening `.env` still renders highlighted text, proving NFR6 has no denylist.
-
-Update the existing NUL `M` test that expects only `Binary file. Download to inspect.`; hex peek replaces that copy.
-Keep the Cancel-on-first-open test.
-
-Create `packages/web/src/components/workflows/source-control/large-diff-spike.test.ts`:
+Add <code>URL: win.URL</code> and <code>Blob: win.Blob</code> to <code>installHappyDom()</code>’s globals, then add these module variables and lifecycle lines.
 
 ~~~ts
-import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'fs';
-import { join } from 'path';
-import { renderToStaticMarkup } from 'react-dom/server';
+let createObjectUrlMock: Mock<(blob: Blob) => string>;
+let revokeObjectUrlMock: Mock<(url: string) => void>;
 
-import type { GitReadyDiffResponse } from '@/lib/api';
+// Inside beforeEach, after installHappyDom():
+createObjectUrlMock = mock((_blob: Blob): string => 'blob:archon-image');
+revokeObjectUrlMock = mock((_url: string): void => undefined);
+Object.defineProperty(URL, 'createObjectURL', {
+  configurable: true,
+  value: createObjectUrlMock,
+});
+Object.defineProperty(URL, 'revokeObjectURL', {
+  configurable: true,
+  value: revokeObjectUrlMock,
+});
 
-import { FileViewer } from './file-viewer';
+// Inside afterEach, after root.unmount():
+delete (URL as unknown as { createObjectURL?: unknown }).createObjectURL;
+delete (URL as unknown as { revokeObjectURL?: unknown }).revokeObjectURL;
+~~~
 
-describe('large-diff spike', () => {
-  test('react-diff-view still declares lodash and a 2 MB hunk payload renders', () => {
-    const manifest = JSON.parse(
-      readFileSync(join(import.meta.dir, '../../../../node_modules/react-diff-view/package.json'), 'utf8')
-    ) as { dependencies?: Record<string, string> };
-    expect(manifest.dependencies?.lodash).toBeTypeOf('string');
+- [ ] **Step 2: Write failing mounted paging and cancellation tests**
 
-    const line = 'x'.repeat(64);
-    const changes = Array.from({ length: 8000 }, (_, index) => ({
-      type: 'insert' as const,
-      content: line,
-      newLine: index + 1,
-    }));
-    const response: GitReadyDiffResponse = {
-      path: 'big.ts',
-      status: 'M',
-      scope: 'now',
-      ref: 'live',
-      cursor: '',
-      truncated: false,
-      binary: false,
-      hunks: [
-        {
-          header: '@@ -0,0 +1,8000 @@',
-          oldStart: 0,
-          oldLines: 0,
-          newStart: 1,
-          newLines: 8000,
-          changes,
-        },
-      ],
-    };
-    const html = renderToStaticMarkup(
-      <FileViewer
-        state={{ kind: 'diff', file: { path: 'big.ts', status: 'M' }, response }}
-        stacked={false}
-        onCancel={(): void => undefined}
-        onReload={(): void => undefined}
-        onClose={(): void => undefined}
-      />
-    );
-    expect(html).toContain('Before');
-    expect(html).toContain('After');
-    expect(html.length).toBeGreaterThan(1000);
+Append these tests before changing production code.
+
+~~~tsx
+test('Load more appends text with the opaque cursor and leaves the Changes list unchanged', async () => {
+  fetchSpy = mockGitRoutes({
+    onChanges: () => ({
+      files: [{ path: 'big.txt', status: 'A' }],
+      revision: REVISION_A,
+    }),
+    onFile: (_url, call) =>
+      call === 1
+        ? presentedFileResponse('first\n', HASH_A, {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'X-Archon-Git-Truncated': 'true',
+            'X-Archon-Git-Cursor': 'opaque+next',
+            'X-Archon-Git-Byte-Length': '13',
+            'X-Archon-Git-Presentation': 'text',
+          })
+        : presentedFileResponse('second\n', HASH_A, {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'X-Archon-Git-Presentation': 'text',
+            'X-Archon-Git-Byte-Length': '13',
+          }),
   });
+  await renderTab('run-1');
+  await waitFor(() => host.textContent?.includes('big.txt') === true, 'file list');
+  await clickOption('big.txt');
+  await waitFor(() => host.textContent?.includes('Load more') === true, 'Load more');
+  await act(async () => requireButton('Load more').click());
+  await waitFor(() => host.textContent?.includes('second') === true, 'second page');
+  expect(host.textContent).toContain('first');
+  expect(host.querySelectorAll('[role="option"]')).toHaveLength(1);
+  expect(calledUrls(fetchSpy).at(-1)).toContain('cursor=opaque%2Bnext');
+});
+
+test('Cancel during Load more aborts only the page and keeps painted text', async () => {
+  const pending = createDeferred<Response>();
+  let pageSignal: AbortSignal | undefined;
+  fetchSpy = mockGitRoutes({
+    onChanges: () => ({
+      files: [{ path: 'big.txt', status: 'A' }],
+      revision: REVISION_A,
+    }),
+    onFile: (_url, call, init) => {
+      if (call === 1) {
+        return presentedFileResponse('painted\n', HASH_A, {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'X-Archon-Git-Truncated': 'true',
+          'X-Archon-Git-Cursor': 'next',
+          'X-Archon-Git-Byte-Length': '20',
+          'X-Archon-Git-Presentation': 'text',
+        });
+      }
+      pageSignal = init?.signal ?? undefined;
+      return pending.promise;
+    },
+  });
+  await renderTab('run-1');
+  await waitFor(() => host.textContent?.includes('big.txt') === true, 'file list');
+  await clickOption('big.txt');
+  await waitFor(() => host.textContent?.includes('Load more') === true, 'Load more');
+  await act(async () => requireButton('Load more').click());
+  await waitFor(() => host.textContent?.includes('Cancel') === true, 'page Cancel');
+  await act(async () => requireButton('Cancel').click());
+  expect(pageSignal?.aborted).toBe(true);
+  expect(host.textContent).toContain('painted');
+  expect(host.querySelector('[aria-label="Close"]')).not.toBeNull();
+  expect(host.textContent).not.toContain('Select a file to inspect');
 });
 ~~~
 
-Do not assert a one-second wall clock; virtualization plus this render is the spike evidence that `react-diff-view` stays.
+- [ ] **Step 3: Write failing mounted fallback and cleanup tests**
 
-- [ ] **Step 2: Verify RED**
+Append separate tests for image, hex, and download-only.
 
-Run:
+~~~tsx
+test('an SVG M fallback renders through img and revokes its object URL on close', async () => {
+  fetchSpy = mockGitRoutes({
+    onChanges: () => ({
+      files: [{ path: 'image.svg', status: 'M' }],
+      revision: REVISION_A,
+    }),
+    onDiff: () =>
+      jsonResponse({
+        ...readyDiff('image.svg', 'old', 'new'),
+        hunks: [],
+        fileFallback: true,
+      }),
+    onFile: () =>
+      presentedFileResponse(Buffer.from('<svg></svg>'), HASH_A, {
+        'Content-Type': 'image/svg+xml',
+        'X-Archon-Git-Presentation': 'image',
+        'X-Archon-Git-Media-Type': 'image/svg+xml',
+        'X-Archon-Git-Byte-Length': '11',
+      }),
+  });
+  await renderTab('run-1');
+  await waitFor(() => host.textContent?.includes('image.svg') === true, 'file list');
+  await clickOption('image.svg');
+  await waitFor(() => host.querySelector('img') !== null, 'inline image');
+  expect(host.querySelector('img')?.getAttribute('src')).toBe('blob:archon-image');
+  expect(host.querySelector('a')?.getAttribute('href')).toContain('download=1');
+  await act(async () => requireButton('Close').click());
+  expect(createObjectUrlMock).toHaveBeenCalledTimes(1);
+  expect(revokeObjectUrlMock).toHaveBeenCalledWith('blob:archon-image');
+});
 
-~~~bash
-NODE_ENV=development bun test packages/web/src/component-integration/source-control-tab.test.tsx
-( cd packages/web && bun test src/components/workflows/source-control/large-diff-spike.test.ts )
+test('selecting another image revokes the prior object URL before replacing it', async () => {
+  let objectUrlIndex = 0;
+  createObjectUrlMock.mockImplementation((_blob: Blob): string => {
+    objectUrlIndex += 1;
+    return 'blob:image-' + String(objectUrlIndex);
+  });
+  fetchSpy = mockGitRoutes({
+    onChanges: () => ({
+      files: [
+        { path: 'one.png', status: 'A' },
+        { path: 'two.png', status: 'A' },
+      ],
+      revision: REVISION_A,
+    }),
+    onFile: url =>
+      presentedFileResponse(Uint8Array.from([0x89, 0x50]), url.includes('one.png') ? HASH_A : HASH_B, {
+        'Content-Type': 'image/png',
+        'X-Archon-Git-Presentation': 'image',
+        'X-Archon-Git-Media-Type': 'image/png',
+        'X-Archon-Git-Byte-Length': '2',
+      }),
+  });
+  await renderTab('run-1');
+  await waitFor(() => host.textContent?.includes('two.png') === true, 'file list');
+  await clickOption('one.png');
+  await waitFor(() => host.querySelector('img')?.getAttribute('src') === 'blob:image-1', 'first image');
+  await clickOption('two.png');
+  await waitFor(() => host.querySelector('img')?.getAttribute('src') === 'blob:image-2', 'second image');
+  expect(revokeObjectUrlMock).toHaveBeenCalledWith('blob:image-1');
+});
+
+test('a NUL M fallback renders hex and Download without diff or highlighting', async () => {
+  fetchSpy = mockGitRoutes({
+    onChanges: () => ({
+      files: [{ path: 'blob.bin', status: 'M' }],
+      revision: REVISION_A,
+    }),
+    onDiff: () => jsonResponse({ ...binaryDiff('blob.bin'), fileFallback: true }),
+    onFile: () =>
+      presentedFileResponse(Uint8Array.from([0, 0x41, 0xff]), HASH_A, {
+        'Content-Type': 'application/octet-stream',
+        'X-Archon-Git-Presentation': 'hex',
+        'X-Archon-Git-Byte-Length': '3',
+      }),
+  });
+  await renderTab('run-1');
+  await waitFor(() => host.textContent?.includes('blob.bin') === true, 'file list');
+  await clickOption('blob.bin');
+  await waitFor(() => host.textContent?.includes('00000000') === true, 'hex');
+  expect(host.querySelector('[aria-label="Before"]')).toBeNull();
+  expect(host.querySelector('.hljs')).toBeNull();
+  expect(host.querySelector('a')?.getAttribute('href')).toContain('download=1');
+});
+
+test('download-only renders no pre body', async () => {
+  fetchSpy = mockGitRoutes({
+    onChanges: () => ({
+      files: [{ path: 'huge.dat', status: 'A' }],
+      revision: REVISION_A,
+    }),
+    onFile: () =>
+      presentedFileResponse(null, HASH_A, {
+        'Content-Type': 'application/octet-stream',
+        'Content-Disposition': 'attachment; filename="download"',
+        'X-Archon-Git-Presentation': 'download',
+        'X-Archon-Git-Byte-Length': '52428801',
+      }),
+  });
+  await renderTab('run-1');
+  await waitFor(() => host.textContent?.includes('huge.dat') === true, 'file list');
+  await clickOption('huge.dat');
+  await waitFor(
+    () => host.textContent?.includes('This file is too large to open here.') === true,
+    'download-only'
+  );
+  expect(host.querySelector('pre')).toBeNull();
+  expect(host.querySelector('a')?.getAttribute('href')).toContain('download=1');
+});
 ~~~
 
-Expected: FAIL on missing Load more / image / hex behaviors until Task 7 wiring exists.
-The spike test may already pass once Task 6 virtualizes hunks; that is acceptable.
+- [ ] **Step 4: Write failing Reload, stale-cursor, privacy, and virtualization tests**
 
-- [ ] **Step 3: Finish Task 7 wiring until these tests pass**
+Add four focused tests.
+The first opens a truncated diff, loads its second page, manually reloads the unchanged first page with the same initial cursor, and asserts no <code>Changed on disk — Reload</code>.
+The second returns HTTP 409 from Load more, then returns a fresh first page with a different version-bound cursor during the automatic Reload comparison, and asserts painted content remains plus <code>Changed on disk — Reload</code>.
+The third opens <code>.env</code> as a presented text response and asserts an <code>.hljs</code> element exists.
+The fourth returns at least 3,000 one-change hunks, waits for <code>.sc-virtual-hunk</code>, and asserts the mounted wrapper count is positive and less than 3,000.
 
-- [ ] **Step 4: Verify GREEN**
+Use these literal initial diff pages so the test does not derive expected fingerprints from production code.
+
+~~~ts
+const FIRST_DIFF_PAGE: GitReadyDiffResponse = {
+  path: 'large.ts',
+  status: 'M',
+  scope: 'now',
+  ref: 'live',
+  cursor: 'version-one',
+  truncated: true,
+  binary: false,
+  fileFallback: false,
+  hunks: [{
+    header: '@@ -1 +1 @@',
+    oldStart: 1,
+    oldLines: 1,
+    newStart: 1,
+    newLines: 1,
+    changes: [{ type: 'insert', content: 'first', newLine: 1 }],
+  }],
+};
+
+const SECOND_DIFF_PAGE: GitReadyDiffResponse = {
+  ...FIRST_DIFF_PAGE,
+  cursor: '',
+  truncated: false,
+  hunks: [{
+    header: '@@ -10 +10 @@',
+    oldStart: 10,
+    oldLines: 1,
+    newStart: 10,
+    newLines: 1,
+    changes: [{ type: 'insert', content: 'second', newLine: 10 }],
+  }],
+};
+~~~
+
+Append these exact tests.
+
+~~~tsx
+test('appended diff hunks do not make an unchanged first page look stale', async () => {
+  fetchSpy = mockGitRoutes({
+    onChanges: () => ({
+      files: [{ path: 'large.ts', status: 'M' }],
+      revision: REVISION_A,
+    }),
+    onDiff: (_url, call) =>
+      jsonResponse(call === 2 ? SECOND_DIFF_PAGE : FIRST_DIFF_PAGE),
+  });
+  await renderTab('run-1');
+  await waitFor(() => host.textContent?.includes('large.ts') === true, 'file list');
+  await clickOption('large.ts');
+  await waitFor(() => host.textContent?.includes('Load more') === true, 'Load more');
+  await act(async () => requireButton('Load more').click());
+  await waitFor(() => host.textContent?.includes('second') === true, 'second hunk page');
+  await act(async () => requireButton('Reload').click());
+  const activeFetchSpy = fetchSpy;
+  if (!activeFetchSpy) throw new Error('Missing fetch spy');
+  await waitFor(
+    () => calledUrls(activeFetchSpy).filter(url => url.includes('/git/diff')).length === 3,
+    'fresh first hunk page'
+  );
+  expect(host.textContent).toContain('second');
+  expect(host.textContent).not.toContain('Changed on disk — Reload');
+});
+
+test('a stale text cursor keeps painted content and enters the existing Reload flow', async () => {
+  fetchSpy = mockGitRoutes({
+    onChanges: () => ({
+      files: [{ path: 'large.txt', status: 'A' }],
+      revision: REVISION_A,
+    }),
+    onFile: (_url, call) => {
+      if (call === 1) {
+        return presentedFileResponse('painted\n', HASH_A, {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'X-Archon-Git-Truncated': 'true',
+          'X-Archon-Git-Cursor': 'old-version',
+          'X-Archon-Git-Byte-Length': '20',
+          'X-Archon-Git-Presentation': 'text',
+        });
+      }
+      if (call === 2) {
+        return new Response(JSON.stringify({ error: 'File changed' }), {
+          status: 409,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return presentedFileResponse('fresh\n', HASH_B, {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'X-Archon-Git-Truncated': 'true',
+        'X-Archon-Git-Cursor': 'new-version',
+        'X-Archon-Git-Byte-Length': '21',
+        'X-Archon-Git-Presentation': 'text',
+      });
+    },
+  });
+  await renderTab('run-1');
+  await waitFor(() => host.textContent?.includes('large.txt') === true, 'file list');
+  await clickOption('large.txt');
+  await waitFor(() => host.textContent?.includes('Load more') === true, 'Load more');
+  await act(async () => requireButton('Load more').click());
+  await waitFor(
+    () => host.textContent?.includes('Changed on disk — Reload') === true,
+    'stale affordance'
+  );
+  expect(host.textContent).toContain('painted');
+  expect(host.textContent).not.toContain('fresh');
+});
+
+test('.env remains ordinary highlighted text', async () => {
+  fetchSpy = mockGitRoutes({
+    onChanges: () => ({
+      files: [{ path: '.env', status: 'A' }],
+      revision: REVISION_A,
+    }),
+    onFile: () =>
+      presentedFileResponse('TOKEN=visible\n', HASH_A, {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'X-Archon-Git-Presentation': 'text',
+        'X-Archon-Git-Byte-Length': '14',
+      }),
+  });
+  await renderTab('run-1');
+  await waitFor(() => host.textContent?.includes('.env') === true, 'file list');
+  await clickOption('.env');
+  await waitFor(() => host.querySelector('.hljs') !== null, 'highlighted env');
+  expect(host.textContent).toContain('TOKEN');
+});
+
+test('a 3000-hunk response mounts only the virtual window', async () => {
+  const response: GitReadyDiffResponse = {
+    path: 'virtual.ts',
+    status: 'M',
+    scope: 'now',
+    ref: 'live',
+    cursor: '',
+    truncated: false,
+    binary: false,
+    fileFallback: false,
+    hunks: Array.from({ length: 3000 }, (_unused, index) => ({
+      header: '@@ -0,0 +' + String(index + 1) + ' @@',
+      oldStart: 0,
+      oldLines: 0,
+      newStart: index + 1,
+      newLines: 1,
+      changes: [{ type: 'insert' as const, content: 'line', newLine: index + 1 }],
+    })),
+  };
+  fetchSpy = mockGitRoutes({
+    onChanges: () => ({
+      files: [{ path: 'virtual.ts', status: 'M' }],
+      revision: REVISION_A,
+    }),
+    onDiff: () => jsonResponse(response),
+  });
+  await renderTab('run-1');
+  await waitFor(() => host.textContent?.includes('virtual.ts') === true, 'file list');
+  await clickOption('virtual.ts');
+  await waitFor(() => host.querySelectorAll('.sc-virtual-hunk').length > 0, 'virtual hunks');
+  expect(host.querySelectorAll('.sc-virtual-hunk').length).toBeLessThan(3000);
+});
+~~~
+
+Keep every existing Story 1.1/1.2 mounted test.
+Update existing <code>readyDiff</code>/<code>binaryDiff</code> helpers with <code>fileFallback: false/true</code>, and update old raw fixtures with presentation headers where the new branch is under test.
+
+- [ ] **Step 5: Verify RED**
 
 Run:
 
 ~~~bash
-( cd packages/web && bun test src/lib/api.git-changes.test.ts )
+( cd packages/web && NODE_ENV=development bun test src/component-integration/source-control-tab.test.tsx )
+~~~
+
+Expected: FAIL on missing append, load-only cancellation, new fallbacks, stable fingerprint, stale-cursor Reload, or hunk virtualization behavior.
+
+- [ ] **Step 6: Implement state mapping and stable fingerprints**
+
+Map raw text with <code>cursor</code>/<code>truncated</code>, image bytes/media type, formatted hex, and download-only metadata to the Locked Contracts states.
+For <code>M</code>, fetch raw worktree content when <code>response.fileFallback</code> is true.
+Every Download href uses <code>gitFileUrl(..., { download: true })</code> and no cursor.
+For an initial truncated diff, store its first cursor as <code>reloadFingerprint</code>; for a complete diff, store its complete response JSON.
+Use <code>reloadFingerprint</code> in <code>viewerFingerprint</code> and preserve it while appending hunks.
+Keep content-hash fingerprints for text/image/hex/download.
+
+- [ ] **Step 7: Implement Load more and the two Cancel meanings**
+
+Add <code>loadingMore</code> state.
+The Load more callback must guard the selected file, state kind, <code>truncated</code>, and non-empty cursor before starting.
+For text, request the same source with the current cursor, require another text result with the same <code>contentHash</code>, append text, and replace cursor/truncated.
+For diff, request the current cursor, require the same path/ref/status with <code>fileFallback: false</code>, append hunks, replace cursor/truncated, and preserve <code>reloadFingerprint</code>.
+Use <code>beginRequest</code> so selection changes, close, run changes, unmount, and Cancel abort the request.
+When <code>loadingMore</code> is true, <code>onCancel</code> calls <code>abortCurrent()</code> and clears only <code>loadingMore</code>.
+When the viewer is in initial loading, <code>onCancel</code> keeps the existing close-and-focus behavior.
+On a status-409 page error, keep the current viewer, clear <code>loadingMore</code>, and call the existing <code>onReload</code> comparison path.
+No Load more branch may call <code>dispatch</code>.
+
+- [ ] **Step 8: Verify GREEN**
+
+Run:
+
+~~~bash
+( cd packages/web && NODE_ENV=development bun test src/component-integration/source-control-tab.test.tsx )
 ( cd packages/web && bun test src/components/workflows/source-control/ )
-NODE_ENV=development bun test packages/web/src/component-integration/source-control-tab.test.tsx
+( cd packages/web && bun test src/lib/api.git-changes.test.ts )
+( cd packages/web && bun run type-check )
 ~~~
 
-Expected: PASS.
+Expected: PASS with no React act warning.
 
-- [ ] **Step 5: Commit Task 7 and Task 8 together**
+- [ ] **Step 9: Commit**
 
 ~~~bash
-git add packages/web/src/components/workflows/source-control/source-control-tab.tsx packages/web/src/component-integration/source-control-tab.test.tsx packages/web/src/components/workflows/source-control/large-diff-spike.test.ts
-git commit -m "$(cat <<'EOF'
-feat(sc): open every Now changed file with paging and binary fallbacks
-
-Operators can Load more large text, inspect images inline, and hex-peek other binaries without leaving the run screen.
-EOF
-)"
+git add packages/web/src/component-integration/source-control-tab.test.tsx \
+  packages/web/src/components/workflows/source-control/source-control-tab.tsx
+git commit -m "feat(sc): append cancellable source-control pages"
 ~~~
 
 ---
 
-### Task 9: Run acceptance gates and update the tracker
+### Task 8: Run acceptance gates and update the tracker
 
 **Files:**
 
-- Modify: `_bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml` only after the gates pass.
+- Modify: <code>_bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml</code> only after every gate passes.
+
+**Interfaces:**
+
+- Consumes the complete implementation.
+- Produces validated Story 1.3 behavior and exactly one tracker-value change.
 
 - [ ] **Step 1: Run focused evidence**
 
 ~~~bash
-( cd packages/git && bun test src/viewer-limits.test.ts src/file-read.test.ts )
+( cd packages/git && bun test src/viewer-limits.test.ts src/diff-page.test.ts src/file-read.test.ts )
 ( cd packages/server && bun test src/routes/api.git-changes.test.ts )
 ( cd packages/web && bun test src/lib/api.git-changes.test.ts )
 ( cd packages/web && bun test src/components/workflows/source-control/ )
-NODE_ENV=development bun test packages/web/src/component-integration/source-control-tab.test.tsx
+( cd packages/web && NODE_ENV=development bun test src/component-integration/source-control-tab.test.tsx )
+( cd packages/web && NODE_ENV=development bun run src/component-integration/source-control-large-diff-spike.tsx )
 ~~~
 
-Expected: every command exits 0.
+Expected: every command exits zero, no warning appears, and the spike JSON satisfies the Locked Contracts thresholds.
 
 - [ ] **Step 2: Run affected package suites**
 
@@ -1515,7 +2359,7 @@ Expected: every command exits 0.
 ( cd packages/web && bun run test )
 ~~~
 
-Expected: every command exits 0.
+Expected: every package script exits zero in its intended process split.
 
 - [ ] **Step 3: Run the repository gate**
 
@@ -1524,39 +2368,45 @@ bun run validate
 git diff --check
 ~~~
 
-Expected: both commands exit 0.
-
-Do not mark the story done if type-check, lint with zero warnings, formatting, install smoke, generated-file checks, or any package test fails.
+Expected: both commands exit zero.
+Do not update the tracker if type-check, zero-warning lint, formatting, install smoke, generated checks, or a package test fails.
 
 - [ ] **Step 4: Inspect scope and dependency invariants**
 
 ~~~bash
-git diff --name-only
-rg -n "from ['\"].*experiments/console|Shiki|Monaco|refractor" packages/web/src/components/workflows/source-control packages/web/src/lib/api.ts
+git diff --name-only dev...HEAD
+rg -n "from ['\"].*experiments/console|Shiki|Monaco|refractor" \
+  packages/web/src/components/workflows/source-control packages/web/src/lib/api.ts
 rg -n '"react-diff-view": "3\\.3\\.3"' packages/web/package.json
-rg -n "export \\{ fileAt, fileDiff" packages/git/src/index.ts
+rg -n "^export \\{ fileAt, fileDiff \\}" packages/git/src/index.ts
+git diff --name-only dev...HEAD -- packages/web/package.json bun.lock migrations packages/core/src/db
 ~~~
 
-Expected: only planned files appear, the forbidden import search has no match, `react-diff-view` remains exactly 3.3.3, and `@archon/git` still publishes only `fileAt` and `fileDiff` as file I/O.
-Confirm no database, environment, process, package, write control, History region, polling, or denylist was added.
+Expected: only planned files appear, the forbidden import/library search has no match, the exact diff dependency remains, the root git package still exports only the existing file I/O pair, and the final manifest/database search has no output.
+Confirm no History region, polling, server git-result cache, redaction, denylist, write control, environment key, process, table, or deployable was added.
 
 - [ ] **Step 5: Confirm the acceptance matrix**
 
 | Criterion | Evidence |
 | --- | --- |
-| First paint is about 256 KB or 2,000 lines | `viewer-limits` tests and real-git view paging |
-| Load more fetches the rest with an opaque cursor | HTTP, client, and mounted tab tests |
-| `M` sends hunks plus 3 lines of context, not the whole file | `fileDiff` argv and paging tests |
-| Files above about 1 MB are not fetched whole in one viewer GET | first-paint paging plus `VIEWER_STREAM_BYTES` constant |
-| Files above about 50 MB are download-only in the viewer | `chooseGitFilePresentation`, lstat-size test, mounted download-only test |
-| PNG JPEG GIF WEBP SVG render inline | sniff tests, HTTP image headers, mounted `img` test |
-| Other binaries are hex peek plus Download, never highlighted text | hex tests and updated NUL `M` mounted test |
-| Lists and diffs virtualize | existing list tests plus virtualized DiffPanes and large-diff spike |
-| Lodash runtime of `react-diff-view` is counted | large-diff spike reads `react-diff-view/package.json` |
-| No polling and no server git-result cache | unchanged query flags and no new cache module |
-| NFR6 has no denylist | mounted `.env` still opens as text |
-| CAP-6, containment, and quiet copy still hold | existing HTTP and viewer tests |
-| No new public git I/O export | index.ts inspection |
+| First paint is at most about 256 KiB or 2,000 lines | Literal-boundary pure tests and real file/blob paging |
+| Load more reconstructs text and appends hunk pages through opaque cursors | Git, HTTP, client, and mounted tests |
+| Cursors are route-specific and reject changed live content | Cursor tests, real stale file/diff tests, HTTP 400/409 tests |
+| M uses incremental <code>-U3</code> hunks and no whole-diff buffer | Real multi-hunk test and spawned parser |
+| Modified SVG/image/binary/oversized files reach raw fallback | <code>fileFallback</code> git, schema, route, and mounted tests |
+| Files above 1 MiB remain cancellable without whole-file buffering | Bounded tree/worktree tests, abortable spawn/stream code, mounted Cancel |
+| Every file above 50 MiB is download-only | Literal classifier and real sparse-file tests |
+| Downloads stream instead of buffering | Git stream and HTTP streamed-body tests |
+| PNG/JPEG/GIF/WEBP/SVG render inline without SVG DOM insertion | Media table and mounted image test |
+| Other binaries at or below 50 MiB show 4-KiB-or-less hex plus Download | Real blob, formatter, route, and mounted tests |
+| Lists and accumulated diffs virtualize | Existing list tests, mounted hunk-count test, and spike |
+| The 2-MiB spike is under one second and counts lodash bundle input | Spike JSON |
+| Manual Reload remains frozen and page append is not false staleness | Mounted Reload/fingerprint tests |
+| Object URLs are revoked | Mounted close/selection/unmount cleanup tests |
+| No polling or git-result cache appears | Existing query flags and scope inspection |
+| NFR6 still opens <code>.env</code> | Mounted privacy-residual test |
+| CAP-6, containment, special filenames, and quiet logging remain | Existing and extended git HTTP tests |
+| No public git I/O helper or dependency was added | Root export and manifest inspection |
 
 - [ ] **Step 6: Perform the legacy-screen manual check**
 
@@ -1566,19 +2416,21 @@ Run:
 bun run dev
 ~~~
 
-Open an existing DAG run with a live host checkout at `/legacy/workflows/runs/:id`.
-Open a large text file and confirm first paint plus Load more.
-Open a PNG or JPEG and confirm it renders inline.
-Open a NUL binary and confirm hex plus Download, with no highlighted dump.
-Confirm Cancel still aborts an in-flight open.
-Confirm Reload still freezes the open view until `Changed on disk — Reload` is accepted.
-Confirm `.env` still opens.
+Open an existing DAG run with a live host checkout at <code>/legacy/workflows/runs/:id</code>.
+Open a multi-megabyte text file and confirm the skeleton, first page, Load more, and appended content.
+Cancel one in-flight Load more and confirm the first page stays open.
+Open PNG or JPEG and SVG changes and confirm each renders in <code>&lt;img&gt;</code>.
+Open a small NUL binary and confirm a hex peek plus Download with no highlighted source.
+Open a file over 50 MiB and confirm download-only copy appears immediately and its Download completes.
+Change a file between pages and confirm the old page stays painted while <code>Changed on disk — Reload</code> appears.
+Confirm <code>.env</code> still opens as highlighted text.
+Confirm the browser console has no React error and the run screen remains responsive.
 Stop only the processes started for this check.
-If no suitable live run exists, record that limitation in PR Validation and do not fabricate a run, but all automated gates must still pass.
+If no suitable live run exists, record that limitation in PR Validation and do not fabricate one, but all automated gates and the spike must still pass.
 
 - [ ] **Step 7: Update exactly one tracker value**
 
-In `_bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml`, change only:
+In <code>_bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml</code>, change only:
 
 ~~~yaml
   1-3-open-every-changed-file: backlog
@@ -1590,8 +2442,8 @@ to:
   1-3-open-every-changed-file: done
 ~~~
 
-Keep Epic 1 `in-progress` until a later retrospective.
-Do not rewrite `last_updated` unless the calendar day changed.
+Keep Epic 1 <code>in-progress</code>.
+The current <code>last_updated: 2026-09-06</code> already matches the plan date and must not be rewritten.
 
 - [ ] **Step 8: Commit the tracker update**
 
@@ -1602,19 +2454,20 @@ git commit -m "chore(sc): mark open-every-changed-file story done"
 
 ## Out of Scope
 
-- Epic 2 History, commit log, per-commit file lists, commit OIDs, and lane graph.
-- CAP-8 durable snapshot writing.
+- Epic 2 History, commit log, per-commit files, commit OIDs, and lane graph.
+- CAP-8 durable snapshot writing or fallback reads.
 - Container overlay reads.
-- Secret redaction.
-- A new public git stream API.
+- Secret redaction or a denylist.
+- A new public git I/O function or a server git-result cache.
 - Persisted split sizes.
-- A Source Control tab model for sequential non-DAG runs.
+- Source Control on sequential non-DAG runs.
+- Stage, unstage, edit, discard, commit, or any write operation.
 
 ## Pull Request Handoff
 
-Before opening a pull request, rerun `bun run validate` and copy `.github/pull_request_template.md` into the PR body.
-Target `dev`, never `main`.
+Before opening a pull request, rerun <code>bun run validate</code> and copy <code>.github/pull_request_template.md</code> into the PR body.
+Target <code>dev</code>, never <code>main</code>.
 Keep Problem and outcome, Review guidance, Solution, and Validation, and delete unused conditional sections and every instructional comment.
-Record focused RED and GREEN evidence, full validation, the manual check or its explicit live-run limitation, image/hex/download-only behavior, paging, and the lodash spike.
-Link the issue with `Closes #77`.
+Record RED/GREEN evidence, the focused and full gates, the spike JSON, the manual check or explicit live-run limitation, cursor staleness, paging, streaming downloads, image/hex/download-only behavior, and object-URL cleanup.
+Link the issue with <code>Closes #77</code>.
 Do not close the issue separately.
