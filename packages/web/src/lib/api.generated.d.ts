@@ -2395,7 +2395,7 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: {
+            requestBody: {
                 content: {
                     "application/json": components["schemas"]["PermissionConfirmBody"];
                 };

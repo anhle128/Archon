@@ -1505,6 +1505,7 @@ const confirmPermissionRoute = createRoute({
       content: {
         'application/json': { schema: permissionConfirmRequestSchema },
       },
+      required: true,
     },
   },
   responses: {

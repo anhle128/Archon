@@ -1,6 +1,6 @@
 # Confirm a Permission by Envelope Only Ralph PRD
 
-Source plan: `docs/superpowers/plans/2026-09-07-confirm-permission-envelope.md`  
+Source plan: `docs/superpowers/plans/2026-09-07-confirm-permission-envelope.md`
 Derived slug: `2026-09-07-confirm-permission-envelope`
 
 ## Overview

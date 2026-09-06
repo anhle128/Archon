@@ -4698,12 +4698,12 @@ describe('POST /api/workflows/runs/:runId/permissions/:callId/confirm', () => {
     const { app } = makeApp();
     const response = await app.request('/api/openapi.json');
     const document = (await response.json()) as {
-      paths: Record<string, unknown>;
+      paths: Record<string, { post?: { requestBody?: { required?: boolean } } } | undefined>;
       components?: { schemas?: Record<string, unknown> };
     };
-    expect(
-      document.paths['/api/workflows/runs/{runId}/permissions/{callId}/confirm']
-    ).toBeDefined();
+    const route = document.paths['/api/workflows/runs/{runId}/permissions/{callId}/confirm'];
+    expect(route).toBeDefined();
+    expect(route?.post?.requestBody?.required).toBe(true);
     expect(document.components?.schemas?.PermissionConfirmBody).toMatchObject({
       type: 'object',
       required: ['intent'],
