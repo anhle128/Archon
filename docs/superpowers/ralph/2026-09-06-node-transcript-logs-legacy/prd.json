@@ -1,0 +1,329 @@
+{
+  "feature": "Node Transcript From Logs (Legacy)",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Define engine transcript contracts",
+      "description": "As a workflow engine maintainer, I want canonical transcript and pending-interaction schemas plus a narrow store capability, so that every layer shares one type-safe contract.",
+      "acceptanceCriteria": [
+        "Create packages/workflows/src/schemas/node-message.ts with strict Zod discriminated text, tool, and status variants. Row identity requires non-empty id, workflow_run_id, node_id, positive integer seq, and Date-or-string created_at; append input omits id, seq, and created_at.",
+        "The text payload accepts only non-empty text; the tool payload accepts non-empty name and id with optional unknown input/output; the status payload accepts any non-empty state with optional detail. Tests prove kind/payload correlation and reject invalid identity while accepting a future status note.",
+        "Create packages/workflows/src/schemas/pending-interaction.ts with exactly id, workflow_run_id, node_id, tool_use_id, kind ask|permission, status pending|answered|purged, envelope Record<string, unknown>, nullable answer Record<string, unknown>, provider_session_id, created_at, resolved_at, and resolved_by. Tests reject forked enum values.",
+        "Use z from @hono/zod-openapi, z.infer for all new types, strict objects, and z.record(z.string(), z.unknown()). Re-export both modules from schemas/index.ts.",
+        "Add only IWorkflowNodeMessageStore with appendNodeMessage(input) and listNodeMessages(workflowRunId, nodeId), then compose it into IWorkflowStore at packages/workflows/src/store.ts:213 without changing existing members.",
+        "Update every concrete typed IWorkflowStore double named by the plan, including in-memory sequencing/filtering in subrun.test.ts, so workflow type checking passes. Keep intentional plannotator unknown casts unchanged.",
+        "Put both schema tests in the existing mock-safe schema invocation in packages/workflows/package.json; run their RED/GREEN sequence and the focused workflow type/test commands successfully.",
+        "Commit this slice with message feat(workflows): define node transcript contracts."
+      ],
+      "technicalNotes": "Follow packages/workflows/src/store.ts:177-213 for narrow capability composition. Create node-message.ts, node-message.test.ts, pending-interaction.ts, pending-interaction.test.ts; modify schemas/index.ts, store.ts, dag-executor.test.ts, executor.test.ts, executor-preamble.test.ts, script-node-deps.test.ts, subrun.test.ts, and package.json. This is plan Task 1.",
+      "dependsOn": [],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Add additive transcript storage schemas",
+      "description": "As an operator, I want transcript rows stored in both supported databases, so that a node transcript survives live and completed runs.",
+      "acceptanceCriteria": [
+        "Add application table 22 remote_agent_workflow_node_messages to migrations/000_combined.sql after workflow ENVs and before the trailing index/comment section. It has exactly id, workflow_run_id, node_id, seq, kind, payload, and created_at; cascade run FK; seq >= 1; kind text|tool|status; and named UNIQUE(workflow_run_id, node_id, seq).",
+        "Add the matching SQLite table to SqliteAdapter.createSchema with TEXT ids/payload/timestamps, the same checks, named unique constraint, and ON DELETE CASCADE. Do not add it to migrateColumns.",
+        "Do not create a separate index because the unique constraint covers requested lookup/order. Put PostgreSQL column comments only in the trailing Indexes and column comments section, not near the CREATE TABLE.",
+        "Raise the SQLite non-auth parity floor from 162 to 169 and add a fresh-schema test that verifies the exact seven columns, transcript index/constraint, bundled SQL named constraint, and cascade behavior.",
+        "Run bun run generate:bundled-schema; do not hand-edit packages/core/src/db/bundled-schema.generated.ts. Verify SQLite schema, migration-order, bundled-schema, and check:bundled-schema tests.",
+        "Update AGENTS.md to list 22 application tables, document workflow_node_messages sequence/cascade behavior, and renumber Better Auth tables to 23 through 26.",
+        "Commit this slice with message feat(db): add workflow node transcript table."
+      ],
+      "technicalNotes": "Insert relative to migrations/000_combined.sql:721-748 and its trailing workflow ENV comments at :930-941. Mirror after the workflow ENV table in packages/core/src/db/adapters/sqlite.ts:1063-1076. Update packages/core/src/db/adapters/sqlite.test.ts around its parity floor at :1487. This is plan Task 2 and must preserve additive-only schema rules.",
+      "dependsOn": [],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Persist ordered transcript rows safely",
+      "description": "As the workflow runtime, I want validated append and list persistence for node messages, so that transcript timelines are durable, ordered, and safe to inspect.",
+      "acceptanceCriteria": [
+        "Create core workflow-node-message schema as an alias of nodeMessageSchema with its type inferred by z.infer, and re-export it from packages/core/src/schemas/index.ts.",
+        "Create workflow-node-messages DB module with appendNodeMessage, listNodeMessages, isNodeMessageSequenceConflict, WorkflowNodeMessageCorruptRowError, and fixed-column row normalization.",
+        "Append validates input, uses a transaction to calculate MAX(seq)+1 per workflow_run_id/node_id, generates a dialect id, JSON-stringifies payload, inserts, rereads, validates the row, and returns the parsed NodeMessage.",
+        "On an adopted sequence conflict, retry exactly once in a new transaction. PostgreSQL classification requires code 23505 and uq_workflow_node_messages_run_node_seq; SQLite classification requires all three fully-qualified transcript unique columns. Unrelated unique violations must not retry.",
+        "List filters by both identity fields and orders ascending by seq. SQLite tests prove independent node sequences, ordered list, cascade deletion, concurrent Promise.all append sequences 1 and 2, and exact positive/negative conflict classifiers.",
+        "A malformed JSON payload or invalid normalized row logs only row id and a fixed reason, throws WorkflowNodeMessageCorruptRowError containing only the row id, and never logs payload content. Tests use a sentinel secret to prove redaction.",
+        "Export both a workflowNodeMessageDb namespace and direct symbols from packages/core/src/db/index.ts. Place the process-global connection mock test in its own core package test invocation and pass focused test plus type check.",
+        "Commit this slice with message feat(core): persist workflow node transcripts."
+      ],
+      "technicalNotes": "Create packages/core/src/schemas/workflow-node-message.ts, db/workflow-node-messages.ts, and db/workflow-node-messages.test.ts; modify schemas/index.ts, db/index.ts, and package.json. Follow existing db namespace style at packages/core/src/db/index.ts:22. The real SQLite test must seed foreign-key run parents. This is plan Task 3 steps 1-6.",
+      "dependsOn": [
+        "US-001",
+        "US-002"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Adapt transcript persistence to IWorkflowStore",
+      "description": "As the workflow executor, I want the core store adapter to expose transcript operations, so that it can use the narrow engine port.",
+      "acceptanceCriteria": [
+        "Mock the new workflow-node-messages DB module before importing store-adapter in its focused test.",
+        "Extend required IWorkflowStore method coverage and add tests that appendNodeMessage and listNodeMessages return the DB result and forward exact arguments.",
+        "Import the DB module as a namespace in packages/core/src/workflows/store-adapter.ts and add only the two direct pass-through methods beside workflow-node-session methods.",
+        "Pass packages/core store-adapter test and type check.",
+        "Commit the adapter work with the core transcript persistence slice if it was not already committed."
+      ],
+      "technicalNotes": "Use the factory at packages/core/src/workflows/store-adapter.ts:369-433 and its method inventory at store-adapter.test.ts:284-320. This separates plan Task 3 steps 7-10 into a fresh-context-sized story; do not add any other store port.",
+      "dependsOn": [
+        "US-003"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Add fail-open transcript append helper",
+      "description": "As a workflow executor, I want an awaited but fail-open transcript writer, so that durable logging preserves order without making workflow success depend on storage.",
+      "acceptanceCriteria": [
+        "Create appendNodeTranscript(store, input): Promise<void> in packages/workflows/src/node-transcript.ts; it awaits store.appendNodeMessage exactly once on success.",
+        "If append rejects, the helper resolves undefined and logs only workflowRunId, nodeId, kind, and safe error type under workflow.node_message_append_failed.",
+        "The helper never logs error object/message, input payload, text, tool input, tool output, or a complete payload. A rejecting-store test with a sentinel proves this.",
+        "Use a mock-isolated test shard for node-transcript.test.ts, pass its focused test and workflows type check, and leave the helper as the sole fail-open boundary.",
+        "Commit this slice with message feat(workflows): add fail-open transcript writer."
+      ],
+      "technicalNotes": "Use IWorkflowNodeMessageStore and AppendNodeMessageInput from US-001. Create node-transcript.ts and node-transcript.test.ts; update packages/workflows/package.json. The existing engine functions begin at dag-executor.ts:1737 and :4715, but do not modify them in this story. This is plan Task 4.",
+      "dependsOn": [
+        "US-001"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Record command and prompt transcripts",
+      "description": "As an operator, I want command and prompt node output captured in provider order, so that a node's transcript accurately replays its work.",
+      "acceptanceCriteria": [
+        "Extend the executor mock store to retain append inputs with sequences. Table-driven command and prompt stream tests prove the exact stored sequence started, text, tool, text, completed and exact tool payload name Read, id tool-1, input path a.ts.",
+        "A batch-delivery regression test proves an assistant text transcript row precedes a following tool row even if platform batching flushes text later, with no duplicate final-batch text row.",
+        "In executeNodeInternal, append started after scheduling node_started; append every non-empty assistant chunk before batching; append one tool row after stable/anonymous tool id selection and only when tool input exists; append completed after scheduled node_completed.",
+        "Record failed after scheduled node_failed for command-load, prompt substitution, cancellation, credit exhaustion, empty-output, and catch paths. Use exact node error strings as failed detail.",
+        "Move output-reference substitution into its existing prompt failure handling and turn provider lookup failure into the same failed NodeExecutionResult/event/emitter path so both receive a failed transcript note.",
+        "Tests cover command-load error, invalid output reference, provider lookup error, normal exactly-one completed terminal, and a rejecting transcript store that does not prevent workflow completion.",
+        "Preserve existing event/emitter order and do not record tool_result or any unsupported node type. Pass dag-executor tests and workflows type check.",
+        "Commit this slice with message feat(workflows): record agent node transcripts."
+      ],
+      "technicalNotes": "Modify packages/workflows/src/dag-executor.ts and dag-executor.test.ts. Persisted stepName is computed at dag-executor.ts:1761-1768; executeNodeInternal starts at :1737. Use appendNodeTranscript from US-005 and core adapter capability from US-004. This covers plan Task 5 steps 1-9.",
+      "dependsOn": [
+        "US-004",
+        "US-005"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "Record loop transcript lifecycles",
+      "description": "As an operator, I want loop transcript markers and chunks recorded, so that I can inspect a specific loop iteration without mixing it with another iteration.",
+      "acceptanceCriteria": [
+        "Add two-iteration loop tests proving one node-level started per invocation, iteration_started and iteration_completed markers for every iteration with decimal detail, cleaned assistant text between matching markers, and iteration_failed before node-level failed.",
+        "A finalize-on-approve resume test proves the resumed invocation records started then completed without a new iteration marker.",
+        "In executeLoopNode, append started after scheduled node_started. Ensure failLoopNode appends failed after scheduled node_failed, preserving prefixed stepName.",
+        "Append iteration_started after scheduled loop_iteration_started and iteration_completed after scheduled loop_iteration_completed, each with detail String(iteration). At both iteration failures, append iteration_failed before failLoopNode.",
+        "Append cleaned non-empty assistant chunks and immutable tool rows in provider order using the same stable/anonymous id and optional input rule as command/prompt nodes.",
+        "Append completed only after node_completed in normal completionDetected and approved finalize-on-signal success paths. Max-iteration exhaustion records failed; an interactive declared approval-gate return gets no completed row.",
+        "Do not record loop-group container output, but allow loop-group command/prompt bodies to use their existing prefixed stepName path. Pass focused executor tests and type check.",
+        "Keep the commit message feat(workflows): record agent node transcripts if it was not made by US-006."
+      ],
+      "technicalNotes": "Modify dag-executor.ts and dag-executor.test.ts only. executeLoopNode starts at packages/workflows/src/dag-executor.ts:4715; its stepName/lifecycle baseline is :4739-4764. This is plan Task 5 steps 10-16, with no generic event-plus-transcript abstraction.",
+      "dependsOn": [
+        "US-006"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-008",
+      "title": "Expose messages and empty pending embed over HTTP",
+      "description": "As a web client, I want a safe per-node transcript endpoint and an explicit empty pending-interactions field, so that Logs can read governed API data.",
+      "acceptanceCriteria": [
+        "Add OpenAPI schemas for PendingInteraction wire rows, text/tool/status transcript wire rows, non-empty run/node params, and strict WorkflowNodeMessagesResponse. Reuse engine payload schemas, omit workflow_run_id/node_id, and convert created_at to string rather than redefining payloads.",
+        "Make pending_interactions: PendingInteraction[] a required WorkflowRunDetail field and have GET run always return pending_interactions: [] without reading a pending table. Retain projectApiWorkflowNodeStates as the current lifecycle source.",
+        "Register GET /api/workflows/runs/{runId}/nodes/{nodeId}/messages through registerOpenApiRoute before GET run with documented 200, 404, and 500 responses.",
+        "The nested handler checks workflowDb.getWorkflowRun first, returns the existing 404 shape before list on a missing run, otherwise lists only the requested run/node and maps id, seq, kind, payload, and ISO created_at.",
+        "On list failure log only runId, nodeId, and error type, return the fixed message Failed to list workflow node messages, and do not expose transcript payload/error text.",
+        "Route tests cover missing run/no DB call, existing empty list, literal text/tool/status sequence, Date and string timestamp conversion, safe 500, empty GET-run embed, and OpenAPI path/schema references. Pass focused server test and type check.",
+        "Commit this slice with message feat(server): expose workflow node transcripts."
+      ],
+      "technicalNotes": "Modify packages/server/src/routes/schemas/workflow.schemas.ts, routes/api.ts, and api.workflow-runs.test.ts. Existing detail schema is workflow.schemas.ts:145-173; route declaration is api.ts:1454-1468 and handler/projection is :4878-4943. Mock only @archon/core/db/workflow-node-messages. This is plan Task 6.",
+      "dependsOn": [
+        "US-003"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-009",
+      "title": "Generate web types and transcript client",
+      "description": "As the legacy web UI, I want generated transcript response types and an encoded reader function, so that it consumes the new API contract without hand-maintained wire types.",
+      "acceptanceCriteria": [
+        "Start the isolated temporary-ARCHON_HOME server described in the plan, generate packages/web/src/lib/api.generated.d.ts from its live OpenAPI document, and stop the server. Do not hand-edit the generated file.",
+        "Generated types contain WorkflowNodeMessage, WorkflowNodeMessagesResponse, PendingInteraction, and WorkflowRunDetail.pending_interactions.",
+        "Export generated aliases WorkflowNodeStateResponse, WorkflowNodeMessageResponse, and WorkflowNodeMessagesResponse from api.ts.",
+        "Add getWorkflowNodeMessages(runId, nodeId) that uses fetchJSON and encodeURIComponent for both path identifiers.",
+        "A focused client test proves run slash encoding, node identifier handling, and exact response forwarding. Pass the test and web type check.",
+        "Commit generated types and client with message feat(web): add workflow node transcript client."
+      ],
+      "technicalNotes": "Generation command is packages/web/package.json:12. Follow api.ts fetch behavior at :64-75 and workflow run client style at :421-425. Create packages/web/src/lib/get-workflow-node-messages.test.ts and modify api.generated.d.ts only through generation plus api.ts. This is plan Task 7.",
+      "dependsOn": [
+        "US-008"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-010",
+      "title": "Build chronological log rows and preserve server lifecycle",
+      "description": "As an operator, I want Logs rows ordered by actual execution metadata while preserving server lifecycle status, so that the list is chronological without inventing state.",
+      "acceptanceCriteria": [
+        "Create buildLogRows with the exact node, loop_iteration, and route_iteration selection variants and LogRow fields required by the plan.",
+        "Tests prove normal rows use exact server status; loop and route events replace base rows; iteration completion/failure determines iteration status; route rows are completed; rows interleave by event position; latest node_started places a re-executed ordinary node; invalid iteration/execution sequence is ignored; and source order breaks ties.",
+        "Use node state name labels for normal rows, name ×iteration for loop rows, and name #executionSeq for route rows. Use event ids for repeated iteration/route row identity, with the latest lifecycle or stable node id fallback for ordinary rows.",
+        "Remove buildDagNodeStatesFromEvents. When server nodeStates is absent, buildWorkflowDagNodeStates returns no lifecycle nodes; route enrichment skips missing nodes and adds only routeDecision without changing existing server status.",
+        "Retain loop iteration/progress enrichment only for existing nodes and remove runtimeMetadataFromEventData only if it has no remaining caller.",
+        "Preserve raw nodeStates in WorkflowRunQueryData and return data.nodeStates from the query for Logs use. Pass build-log-rows and WorkflowExecution focused tests plus web type check.",
+        "Commit this slice with message fix(web): keep server node lifecycle authoritative."
+      ],
+      "technicalNotes": "Create build-log-rows.ts and build-log-rows.test.ts; modify WorkflowExecution.tsx and its test. Current invalid event fallback is WorkflowExecution.tsx:124-145 and chosen at :259-269; query result is built at :318-335. This is plan Task 8. Events are list metadata only, never a second lifecycle projector.",
+      "dependsOn": [
+        "US-009"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-011",
+      "title": "Render the selectable node-run list",
+      "description": "As an operator, I want an accessible list of chronological node runs, so that I can choose the transcript I want to inspect.",
+      "acceptanceCriteria": [
+        "Create NodeRunList accepting rows, selectedRowId, and onSelect complete LogRow.",
+        "Render a nav with aria-label Node runs and one type=button per row. The selected button has aria-current true; each exposes its label and status text.",
+        "Tests using static markup prove normal, loop multiplication-sign, and route execution labels, selected markup, visible status, and absence of merged transcript text.",
+        "Reuse existing status color classes; do not collapse a loop or route selection to only node id.",
+        "Pass NodeRunList focused test."
+      ],
+      "technicalNotes": "Create packages/web/src/components/workflows/NodeRunList.tsx and NodeRunList.test.tsx. Consume LogRow from US-010. This is plan Task 9 steps 1-4.",
+      "dependsOn": [
+        "US-010"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-012",
+      "title": "Render and slice node transcript rooms",
+      "description": "As an operator, I want an accessible transcript room that isolates a selected loop iteration, so that I can read the relevant node output.",
+      "acceptanceCriteria": [
+        "Create selectNodeRoomMessages that sorts a copy by seq. Non-loop selections return all ordered rows; a loop selection starts at matching iteration_started detail, ends at matching completed/failed detail, otherwise stops before the next iteration start or at the end; a missing start returns the full transcript.",
+        "Create NodeRoom with null, loading, error plus Retry, and empty states using exactly Select a node, Loading node transcript, Failed to load node transcript, and Node hasn't produced output.",
+        "Render ordered text through existing ReactMarkdown styling, tools as named chips with optional formatted input/output details, and statuses as visible lifecycle notes. The loaded root is role region with aria-label equal to node id plus room.",
+        "Use an exhaustive discriminated kind switch with assertNever. Do not import/render pending interactions or Ask/waiting/awaiting chrome.",
+        "Static render tests cover every room state, text/tool/status order, tool input, iteration-2 marker-bounded output, missing-marker fallback, accessible region, and prohibited UI absence.",
+        "Pass NodeRoom focused test."
+      ],
+      "technicalNotes": "Create packages/web/src/components/workflows/NodeRoom.tsx and NodeRoom.test.tsx. Consume WorkflowNodeMessageResponse from US-009 and LogRowSelection from US-010. This is plan Task 9 steps 5-9.",
+      "dependsOn": [
+        "US-009",
+        "US-010"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-013",
+      "title": "Load and live-poll selected transcripts",
+      "description": "As an operator, I want the selected room to fetch and refresh a node transcript while the run is live, so that the view remains current without needless terminal polling.",
+      "acceptanceCriteria": [
+        "Export transcriptRefetchInterval(isLive), returning 1000 when true and false otherwise.",
+        "Create NodeTranscriptPane accepting runId, nullable LogRow, isLive, and required injected loadMessages with the getWorkflowNodeMessages signature.",
+        "Use query key workflowNodeMessages/runId/row node id, enable only when a row exists, invoke loader with run and node, and use the prescribed polling policy.",
+        "Pass the full row selection to NodeRoom so changing loop iteration for the same node re-slices cached data without a second network dependency; pass retry as a voided query.refetch callback.",
+        "Mounted HappyDOM/QueryClient tests cover first fetch, same-node iteration re-render, deterministic error plus Retry recovery, and both refetch values. Clean globals, root, window, and QueryClient after every test.",
+        "Pass NodeTranscriptPane focused test."
+      ],
+      "technicalNotes": "Create packages/web/src/components/workflows/NodeTranscriptPane.tsx and NodeTranscriptPane.test.tsx. Use getWorkflowNodeMessages from US-009 and NodeRoom from US-012. This is plan Task 9 steps 10-13.",
+      "dependsOn": [
+        "US-009",
+        "US-012"
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-014",
+      "title": "Compose legacy Logs with node rooms",
+      "description": "As an operator, I want the legacy Logs tab to combine a selectable node-run list and transcript room while preserving Graph behavior, so that I can inspect node output without changing other surfaces.",
+      "acceptanceCriteria": [
+        "Create LegacyNodeLogs with runId, nodeStates, events, isLive, loadMessages, onSelectNode, optional roomHeader, and optional roomFooter. It derives rows with useMemo, owns selected row id, and renders a fixed-width NodeRunList plus one NodeTranscriptPane room column.",
+        "Selecting a row stores its id and calls onSelectNode(row.nodeId), preserving the existing retry target. Include roomHeader before and roomFooter after the room.",
+        "Use one reset effect that calls onSelectNode(null) only when an already-mounted run id changes or polling removes the selected row; reset selection without duplicate null callbacks.",
+        "Mounted composition tests prove pre-selection copy, click-to-loader/onSelect/text wiring in a single room region, and run-change reset to Select a node.",
+        "In WorkflowExecution rename the old logsPanel to mergedLogsPanel and keep it solely in the Graph branch. Replace only the DAG Logs branch with LegacyNodeLogs using raw queryData.nodeStates/events, getWorkflowNodeMessages, isRunning, setSelectedDagNode, retry panel header, and completed artifact footer.",
+        "Keep StepLogs, WorkflowLogs, tool events, graph-click scrolling, Graph rendering, and chat behavior unchanged. Pass all focused transcript, row, WorkflowExecution, and web type-check commands.",
+        "Commit UI files with message feat(web): open node transcripts from legacy logs."
+      ],
+      "technicalNotes": "Create LegacyNodeLogs.tsx and LegacyNodeLogs.test.tsx; modify WorkflowExecution.tsx. The current merged panel is WorkflowExecution.tsx:708-739, Graph uses it at :741-795, and current Logs composition is :805-817. This is plan Task 9 steps 14-18 and preserves the Graph tab exactly.",
+      "dependsOn": [
+        "US-010",
+        "US-011",
+        "US-013"
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-015",
+      "title": "Validate and mark Story 5.1 complete",
+      "description": "As a maintainer, I want complete automated and manual evidence before changing sprint status, so that the inspect-only transcript feature is not marked done prematurely.",
+      "acceptanceCriteria": [
+        "Run every focused workflows, core, server, and web test listed in plan Task 10 independently from its package directory, including schemas, transcript helper, dag executor, core persistence/schema/adapter, server route, API client, row model, all room/list/composition tests, and WorkflowExecution.",
+        "Run bun run check:schema-upgrades if DATABASE_URL or PGHOST identifies a reachable PostgreSQL service. If neither does, record that external prerequisite in validation evidence while retaining CI as the required upgrade gate.",
+        "Run bun run validate from the repository root and obtain passing bundled checks, type checks, zero-warning lint, format check, install test, package-isolated tests, and script tests.",
+        "Perform the plan's manual walkthrough with a command/prompt tool call and two-iteration loop: verify chronological unmerged Logs rows, ordered normal transcript, exact per-iteration slices, terminal replay, empty transcript copy, unchanged Graph merged panel, and absent Ask/awaiting UI.",
+        "Only after all checks pass, change only development_status.5-1-open-a-nodes-own-transcript-from-logs-legacy in _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml from backlog to done.",
+        "Commit completion evidence with message docs: mark legacy node transcript story done."
+      ],
+      "technicalNotes": "This is plan Task 10 and its Definition of Done. Do not run bun test from repo root. Treat an unavailable local PostgreSQL instance as the stated external prerequisite, not permission to skip SQLite parity, migration-order, bundled-schema, or full validation.",
+      "dependsOn": [
+        "US-001",
+        "US-002",
+        "US-003",
+        "US-004",
+        "US-005",
+        "US-006",
+        "US-007",
+        "US-008",
+        "US-009",
+        "US-010",
+        "US-011",
+        "US-012",
+        "US-013",
+        "US-014"
+      ],
+      "priority": 15,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
