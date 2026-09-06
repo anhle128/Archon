@@ -13,8 +13,13 @@ concurrency:
 jobs:
   test:
     strategy:
+      # Both legs must always report. With the default fail-fast, an ubuntu
+      # failure cancels windows, so a windows-only break stays invisible until
+      # the next round — and a cancelled leg blocks a merge once it is a
+      # required check.
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -46,8 +51,8 @@ jobs:
         run: bun run type-check
 
       # Type-aware eslint (projectService + typescript-eslint type-checked
-      # configs) exceeds Node's ~4GB default heap on a cold cache. The GHA
-      # runner aborts with V8 OOM at ~4030–4040 MB (exit 134). 8GB matches the
+      # configs) exceeds Node's ~4GB default heap on a cold cache. Both GHA
+      # runners abort with V8 OOM at ~4030–4040 MB (exit 134). 8GB matches the
       # heap that local `bun run validate` already needs; --max-warnings 0 is
       # unchanged.
       - name: Lint
@@ -59,9 +64,10 @@ jobs:
         run: bun run format:check
 
       - name: Run installer tests
-        # POSIX-shell installer only. scripts/install.sh refuses MINGW/MSYS by
-        # design (Windows users are directed to WSL2). Keep the OS gate so the
-        # step stays skipped if a Windows runner is ever re-added to the matrix.
+        # POSIX-shell installer only. scripts/install.sh refuses MINGW/MSYS by design
+        # (Windows users are directed to WSL2), and test-install.sh runs the real
+        # installer with only curl mocked — so on windows-latest `uname -s` reports
+        # MINGW64_NT, the installer exits, and `set -euo pipefail` fails the job.
         if: runner.os != 'Windows'
         run: bun run test:install
 

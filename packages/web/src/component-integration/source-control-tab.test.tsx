@@ -1118,6 +1118,74 @@ describe('SourceControlTab', () => {
     expect(host.textContent).not.toContain('second-new');
   });
 
+  test('a second reload waits for the matching pending viewer before accepting', async () => {
+    const secondDiff = createDeferred<Response>();
+    const thirdDiff = createDeferred<Response>();
+    fetchSpy = mockGitRoutes({
+      onChanges: call => {
+        if (call === 1) {
+          return { files: [{ path: 'src/a.ts', status: 'M' }], revision: REVISION_A };
+        }
+        if (call === 2) {
+          return { files: [{ path: 'src/a.ts', status: 'M' }], revision: REVISION_B };
+        }
+        return { files: [{ path: 'src/a.ts', status: 'M' }], revision: REVISION_C };
+      },
+      onDiff: (_url, call) => {
+        if (call === 1) return jsonResponse(readyDiff('src/a.ts', 'old-line', 'first-new'));
+        if (call === 2) return secondDiff.promise;
+        return thirdDiff.promise;
+      },
+    });
+
+    await renderTab('run-1');
+    await waitFor(() => host.textContent?.includes('src/a.ts'), 'list');
+    await clickOption('src/a.ts');
+    await waitFor(() => (host.textContent ?? '').includes('first-new'), 'first diff');
+
+    await act(async () => {
+      requireButton('Reload').click();
+    });
+    await act(async () => {
+      secondDiff.resolve(jsonResponse(readyDiff('src/a.ts', 'old-line', 'second-new')));
+    });
+    await waitFor(
+      () => (host.textContent ?? '').includes('Changed on disk — Reload'),
+      'first stale affordance'
+    );
+
+    await act(async () => {
+      requireButton('Reload').click();
+    });
+    const activeFetchSpy = fetchSpy;
+    if (!activeFetchSpy) throw new Error('Missing fetch spy');
+    await waitFor(
+      () =>
+        calledUrls(activeFetchSpy).filter(
+          url => url.includes('/git/changes') && !url.includes('ref=')
+        ).length === 3,
+      'second reload list'
+    );
+    expect(host.textContent).not.toContain('Changed on disk — Reload');
+    expect(host.textContent).toContain('first-new');
+    expect(host.textContent).not.toContain('second-new');
+
+    await act(async () => {
+      thirdDiff.resolve(jsonResponse(readyDiff('src/a.ts', 'old-line', 'third-new')));
+    });
+    await waitFor(
+      () => (host.textContent ?? '').includes('Changed on disk — Reload'),
+      'second stale affordance'
+    );
+    await act(async () => {
+      requireButton('Changed on disk — Reload').click();
+    });
+    await waitFor(() => (host.textContent ?? '').includes('third-new'), 'accepted latest diff');
+
+    expect(host.textContent).not.toContain('first-new');
+    expect(host.textContent).not.toContain('second-new');
+  });
+
   test('same list revision with changed selected content still shows Changed on disk — Reload', async () => {
     fetchSpy = mockGitRoutes({
       onChanges: () => ({
@@ -1217,7 +1285,7 @@ describe('SourceControlTab', () => {
     expect(host.textContent).toContain('Select a file to inspect');
   });
 
-  test('accepting a pending list with a changed status updates the selected file and mode together', async () => {
+  test('accepting a pending list with a changed status closes the viewer', async () => {
     fetchSpy = mockGitRoutes({
       onChanges: call =>
         call === 1
@@ -1245,14 +1313,18 @@ describe('SourceControlTab', () => {
     await act(async () => {
       requireButton('Changed on disk — Reload').click();
     });
-    await waitFor(() => (host.textContent ?? '').includes('now-modified'), 'modified diff');
+    await waitFor(
+      () => (host.textContent ?? '').includes('Select a file to inspect'),
+      'closed viewer after status change'
+    );
 
     expect(host.textContent).not.toContain('added-body');
-    expect(host.querySelector('[aria-label="Before"]')).not.toBeNull();
-    expect(host.querySelector('[aria-label="After"]')).not.toBeNull();
+    expect(host.textContent).not.toContain('now-modified');
+    expect(host.querySelector('[aria-label="Before"]')).toBeNull();
+    expect(host.querySelector('[aria-label="Close"]')).toBeNull();
   });
 
-  test('accepting a same-hash binary status change updates the download source', async () => {
+  test('accepting a same-hash binary status change closes the viewer', async () => {
     fetchSpy = mockGitRoutes({
       onChanges: call =>
         call === 1
@@ -1285,11 +1357,19 @@ describe('SourceControlTab', () => {
       requireButton('Changed on disk — Reload').click();
     });
 
-    expect(host.querySelector('[role="option"]')?.textContent).toContain('D');
-    expect(host.querySelector('a')?.getAttribute('href')).toContain('source=head');
+    await waitFor(
+      () => (host.textContent ?? '').includes('Select a file to inspect'),
+      'closed binary viewer after status change'
+    );
+    expect(
+      Array.from(host.querySelectorAll('[role="option"]')).some(option =>
+        (option.textContent ?? '').includes('same.binD')
+      )
+    ).toBe(true);
+    expect(host.querySelector('a')).toBeNull();
   });
 
-  test('accepting a pending list after opening another file keeps its status-keyed viewer atomic', async () => {
+  test('accepting a pending list after opening another file closes on status mismatch', async () => {
     fetchSpy = mockGitRoutes({
       onChanges: call =>
         call === 1
@@ -1312,9 +1392,6 @@ describe('SourceControlTab', () => {
         if (url.includes('first.ts') && url.includes('source=worktree')) {
           return textFileResponse('first-body', HASH_A);
         }
-        if (url.includes('second.ts') && url.includes('source=head')) {
-          return textFileResponse('deleted-body', HASH_B);
-        }
         throw new Error(`Unexpected file URL ${url}`);
       },
     });
@@ -1336,15 +1413,6 @@ describe('SourceControlTab', () => {
       () => (host.textContent ?? '').includes('modified-line'),
       'displayed status viewer'
     );
-    const activeFetchSpy = fetchSpy;
-    if (!activeFetchSpy) throw new Error('Missing fetch spy');
-    await waitFor(
-      () =>
-        calledUrls(activeFetchSpy).some(
-          url => url.includes('second.ts') && url.includes('source=head')
-        ),
-      'matching pending status viewer'
-    );
     await waitFor(
       () => (host.textContent ?? '').includes('Changed on disk — Reload'),
       'atomic stale affordance'
@@ -1353,12 +1421,17 @@ describe('SourceControlTab', () => {
       requireButton('Changed on disk — Reload').click();
     });
     await waitFor(
-      () => (host.textContent ?? '').includes('deleted-body'),
-      'accepted deleted viewer'
+      () => (host.textContent ?? '').includes('Select a file to inspect'),
+      'closed viewer after status mismatch'
     );
 
     expect(host.querySelector('[aria-label="Before"]')).toBeNull();
-    expect(host.querySelector('[role="option"][aria-selected="true"]')?.textContent).toContain('D');
+    expect(
+      Array.from(host.querySelectorAll('[role="option"]')).some(option =>
+        (option.textContent ?? '').includes('second.tsD')
+      )
+    ).toBe(true);
+    expect(host.querySelector('[role="option"][aria-selected="true"]')).toBeNull();
   });
 
   test('a mocked viewport below 900 yields list-above-viewer and before-over-after', async () => {
@@ -2228,6 +2301,77 @@ describe('SourceControlTab', () => {
     });
     await waitFor(() => host.textContent?.includes('second'), 'second hunk page');
     expect(calledUrls(fetchSpy).filter(url => url.includes('/git/diff'))).toHaveLength(2);
+  });
+
+  test('an in-flight commit reload cannot render under a newly expanded commit', async () => {
+    const secondCommit: GitLogCommit = {
+      ...CHILD_COMMIT,
+      oid: '2'.repeat(40),
+      subject: 'second commit subject',
+    };
+    const reloadedFirstCommit = createDeferred<GitChangesResponse>();
+    const secondCommitFiles = createDeferred<GitChangesResponse>();
+    fetchSpy = mockGitRoutes({
+      onChanges: () => ({ files: [], revision: REVISION_A }),
+      onLog: () => ({
+        commits: [CHILD_COMMIT, secondCommit],
+        revision: REVISION_A,
+        truncated: false,
+      }),
+      onCommitChanges: (ref, call) => {
+        if (ref === CHILD_COMMIT.oid && call === 1) {
+          return { files: [{ path: 'first-original.ts', status: 'M' }], revision: REVISION_A };
+        }
+        if (ref === CHILD_COMMIT.oid) {
+          return reloadedFirstCommit.promise;
+        }
+        if (ref === secondCommit.oid) {
+          return secondCommitFiles.promise;
+        }
+        throw new Error(`Unexpected commit changes ref: ${ref}`);
+      },
+    });
+
+    await renderTab('run/one');
+    await waitFor(() => host.textContent?.includes(CHILD_COMMIT.subject), 'commit row');
+    await act(async () => {
+      host
+        .querySelector('#sc-history-commit-0')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await waitFor(() => host.textContent?.includes('first-original.ts'), 'first commit files');
+
+    await act(async () => {
+      requireButton('Reload').click();
+    });
+    await act(async () => {
+      host
+        .querySelector('#sc-history-commit-1')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await act(async () => {
+      reloadedFirstCommit.resolve({
+        files: [{ path: 'first-reloaded.ts', status: 'M' }],
+        revision: REVISION_B,
+      });
+      await new Promise<void>(resolve => {
+        setTimeout(resolve, 0);
+      });
+    });
+
+    expect(host.textContent).toContain(secondCommit.subject);
+    expect(host.textContent).not.toContain('first-reloaded.ts');
+
+    await act(async () => {
+      secondCommitFiles.resolve({
+        files: [{ path: 'second-expanded.ts', status: 'M' }],
+        revision: REVISION_C,
+      });
+    });
+    await waitFor(() => host.textContent?.includes('second-expanded.ts'), 'second commit files');
+
+    expect(host.textContent).not.toContain('first-original.ts');
+    expect(host.textContent).not.toContain('first-reloaded.ts');
   });
 
   test('Reload freezes an open commit diff until Changed on disk is accepted', async () => {

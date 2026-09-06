@@ -37,7 +37,7 @@ export async function resolveCommitParents(
       '--quiet',
       `${parsed}^{commit}`,
     ]);
-    if (verified.stdout.trim() !== parsed) throw new Error('Malformed git commit metadata');
+    if (verified.stdout.trim() !== parsed) throw new GitCommitRefError();
   } catch (error) {
     if (hasExitCode(error, 1)) throw new GitCommitRefError();
     throw error;

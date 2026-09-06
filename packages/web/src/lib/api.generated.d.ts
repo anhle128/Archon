@@ -2614,7 +2614,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List a run's uncommitted git changes */
+        /** List a run's live or commit-scoped git changes */
         get: {
             parameters: {
                 query?: {
@@ -2628,7 +2628,7 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Live changes or a CAP-6 empty envelope */
+                /** @description Live changes, commit changes, or a CAP-6 empty envelope */
                 200: {
                     headers: {
                         [name: string]: unknown;

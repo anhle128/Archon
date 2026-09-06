@@ -36,6 +36,7 @@ describe('resolveCommitParents', () => {
   let rootOid = '';
   let childOid = '';
   let blobOid = '';
+  let tagOid = '';
   let unreachableOid = '';
 
   beforeAll(async () => {
@@ -53,6 +54,10 @@ describe('resolveCommitParents', () => {
     ).stdout.trim();
     await execFileAsync('git', ['-C', repoPath, 'commit', '--allow-empty', '-m', 'child']);
     childOid = (await execFileAsync('git', ['-C', repoPath, 'rev-parse', 'HEAD'])).stdout.trim();
+    await execFileAsync('git', ['-C', repoPath, 'tag', '-a', 'annotated', '-m', 'annotated']);
+    tagOid = (
+      await execFileAsync('git', ['-C', repoPath, 'rev-parse', 'refs/tags/annotated'])
+    ).stdout.trim();
     unreachableOid = (
       await execFileAsync('git', [
         '-C',
@@ -76,11 +81,14 @@ describe('resolveCommitParents', () => {
     expect(await resolveCommitParents(toWorktreePath(repoPath), childOid)).toEqual([rootOid]);
   });
 
-  test('rejects a missing object, a non-commit object, and an unreachable commit', async () => {
+  test('rejects a missing object, non-commit objects, and an unreachable commit', async () => {
     await expect(
       resolveCommitParents(toWorktreePath(repoPath), 'a'.repeat(40))
     ).rejects.toBeInstanceOf(GitCommitRefError);
     await expect(resolveCommitParents(toWorktreePath(repoPath), blobOid)).rejects.toBeInstanceOf(
+      GitCommitRefError
+    );
+    await expect(resolveCommitParents(toWorktreePath(repoPath), tagOid)).rejects.toBeInstanceOf(
       GitCommitRefError
     );
     await expect(

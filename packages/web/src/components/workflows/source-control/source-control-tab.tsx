@@ -30,6 +30,7 @@ import {
   INITIAL_GIT_LOG_STATE,
   INITIAL_SOURCE_CONTROL_STATE,
   gitLogSnapshotReducer,
+  sourceControlSnapshotFingerprint,
   sourceControlSnapshotReducer,
   toGitLogSnapshot,
   toSourceControlSnapshot,
@@ -48,6 +49,7 @@ interface PendingViewer {
   file: GitChangedFile;
   scope: ViewerScope;
   state: LoadedViewerState;
+  snapshotFingerprint: string | null;
 }
 
 function isAbortError(error: unknown): boolean {
@@ -203,7 +205,9 @@ function selectedFileInSnapshot(
   selected: GitChangedFile | null
 ): GitChangedFile | undefined {
   if (!selected || snapshot.emptyReason !== undefined) return undefined;
-  return snapshot.files.find(file => file.path === selected.path);
+  return snapshot.files.find(
+    file => file.path === selected.path && file.status === selected.status
+  );
 }
 
 function sameSnapshot(left: SourceControlSnapshot, right: SourceControlSnapshot): boolean {
@@ -236,13 +240,15 @@ function historyContainsOid(snapshot: GitLogSnapshot | null, oid: string): boole
 function pendingViewerMatchesFile(
   pending: PendingViewer | null,
   file: GitChangedFile | undefined,
-  scope: ViewerScope
+  scope: ViewerScope,
+  snapshotFingerprint: string
 ): boolean {
   if (!pending || !file) return false;
   return (
     pending.file.path === file.path &&
     pending.file.status === file.status &&
-    sameViewerScope(pending.scope, scope)
+    sameViewerScope(pending.scope, scope) &&
+    pending.snapshotFingerprint === snapshotFingerprint
   );
 }
 
@@ -271,6 +277,7 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
     runId: string;
     commitOid: string | null;
   } | null>(null);
+  const commitListEpochRef = useRef(0);
   const snapshotRef = useRef(snapshotState);
   snapshotRef.current = snapshotState;
   const historySnapshotRef = useRef<GitLogSnapshotState>(historySnapshotState);
@@ -330,9 +337,12 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
   } = useQuery({
     queryKey: ['workflowRunGitChanges', runId, expandedCommit?.oid ?? null],
     enabled: expandedCommit !== null,
-    queryFn: ({ signal }) => {
+    queryFn: async ({ signal }) => {
       if (expandedCommit === null) throw new Error('Missing expanded commit');
-      return getWorkflowRunGitChanges(runId, { ref: expandedCommit.oid, signal });
+      return {
+        oid: expandedCommit.oid,
+        response: await getWorkflowRunGitChanges(runId, { ref: expandedCommit.oid, signal }),
+      };
     },
     retry: false,
     refetchInterval: false,
@@ -401,6 +411,7 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
     setViewerState({ kind: 'idle' });
     setPendingViewer(null);
     setExpandedCommit(null);
+    commitListEpochRef.current += 1;
     viewerScopeRef.current = { kind: 'now' };
     setViewerScope({ kind: 'now' });
   }, [runId, abortCurrent]);
@@ -428,10 +439,11 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
 
   useEffect(() => {
     if (!commitData) return;
+    if (expandedCommitRef.current?.oid !== commitData.oid) return;
     if (commitSnapshotState.displayed !== null) return;
     dispatchCommit({
       type: 'received',
-      snapshot: toSourceControlSnapshot(commitData),
+      snapshot: toSourceControlSnapshot(commitData.response),
     });
   }, [commitData, commitSnapshotState.displayed]);
 
@@ -439,14 +451,18 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
     (file: GitChangedFile, scope: ViewerScope): void => {
       viewerScopeRef.current = scope;
       setViewerScope(scope);
-      const pendingFile =
+      const pendingSnapshot =
         scope.kind === 'now'
           ? snapshotRef.current.pending
-            ? selectedFileInSnapshot(snapshotRef.current.pending, file)
-            : undefined
           : expandedCommitRef.current?.oid === scope.oid && commitSnapshotRef.current.pending
-            ? selectedFileInSnapshot(commitSnapshotRef.current.pending, file)
+            ? commitSnapshotRef.current.pending
             : undefined;
+      const pendingFile = pendingSnapshot
+        ? selectedFileInSnapshot(pendingSnapshot, file)
+        : undefined;
+      const pendingSnapshotFingerprint = pendingSnapshot
+        ? sourceControlSnapshotFingerprint(pendingSnapshot)
+        : null;
       setPendingViewer(null);
       setSelectedFile(file);
       setViewerState({ kind: 'loading', file });
@@ -465,7 +481,12 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
         void loadViewerFile(runId, pendingFile, scope, signal).then(
           (state): void => {
             if (!isCurrent(id, signal)) return;
-            setPendingViewer({ file: pendingFile, scope, state });
+            setPendingViewer({
+              file: pendingFile,
+              scope,
+              state,
+              snapshotFingerprint: pendingSnapshotFingerprint,
+            });
           },
           (): void => undefined
         );
@@ -494,14 +515,30 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
     [onOpenScopedFile]
   );
 
-  const onToggleCommit = useCallback((commit: GitLogCommit): void => {
-    setExpandedCommit(current => (current?.oid === commit.oid ? null : commit));
-    dispatchCommit({ type: 'reset' });
-  }, []);
+  const onToggleCommit = useCallback(
+    (commit: GitLogCommit): void => {
+      const current = expandedCommitRef.current;
+      if (current !== null) {
+        void queryClient.cancelQueries({
+          queryKey: ['workflowRunGitChanges', runId, current.oid],
+          exact: true,
+        });
+      }
+      commitListEpochRef.current += 1;
+      const next = current?.oid === commit.oid ? null : commit;
+      expandedCommitRef.current = next;
+      setExpandedCommit(next);
+      dispatchCommit({ type: 'reset' });
+    },
+    [queryClient, runId]
+  );
 
   const onReload = useCallback((): void => {
     const { id, signal } = beginRequest();
+    pendingViewerRef.current = null;
+    setPendingViewer(null);
     const expanded = expandedCommitRef.current;
+    const commitListEpoch = commitListEpochRef.current;
     pendingListRequestRef.current = { id, runId, commitOid: expanded?.oid ?? null };
     void (async (): Promise<void> => {
       try {
@@ -520,9 +557,15 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
           historyResult.isSuccess && historyResult.data !== undefined
             ? toGitLogSnapshot(historyResult.data)
             : null;
+        const commitSnapshotApplies =
+          expanded !== null &&
+          expandedCommitRef.current !== null &&
+          expandedCommitRef.current.oid === expanded.oid &&
+          commitListEpochRef.current === commitListEpoch &&
+          commitResult?.data?.oid === expanded.oid;
         const commitSnapshot =
-          commitResult?.isSuccess && commitResult.data !== undefined
-            ? toSourceControlSnapshot(commitResult.data)
+          commitSnapshotApplies && commitResult?.isSuccess && commitResult.data !== undefined
+            ? toSourceControlSnapshot(commitResult.data.response)
             : null;
 
         if (nowSnapshot) dispatch({ type: 'received', snapshot: nowSnapshot });
@@ -551,14 +594,19 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
 
         const expandedNow = expandedCommitRef.current;
         let reloadFile: GitChangedFile | null = selected;
+        let reloadSnapshotFingerprint: string | null = null;
         if (scope.kind === 'now') {
-          reloadFile = pendingNow
-            ? (selectedFileInSnapshot(pendingNow, selected) ?? null)
-            : selected;
-        } else if (expandedNow !== null && scope.oid === expandedNow.oid) {
-          reloadFile = pendingCommit
-            ? (selectedFileInSnapshot(pendingCommit, selected) ?? null)
-            : selected;
+          if (pendingNow) {
+            reloadFile = selectedFileInSnapshot(pendingNow, selected) ?? null;
+            reloadSnapshotFingerprint =
+              reloadFile !== null ? sourceControlSnapshotFingerprint(pendingNow) : null;
+          }
+        } else if (expandedNow !== null && scope.oid === expandedNow.oid && commitSnapshotApplies) {
+          if (pendingCommit) {
+            reloadFile = selectedFileInSnapshot(pendingCommit, selected) ?? null;
+            reloadSnapshotFingerprint =
+              reloadFile !== null ? sourceControlSnapshotFingerprint(pendingCommit) : null;
+          }
         }
 
         if (reloadFile === null) return;
@@ -574,7 +622,12 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
         ) {
           setPendingViewer(null);
         } else {
-          setPendingViewer({ file: reloadFile, scope, state: loaded });
+          setPendingViewer({
+            file: reloadFile,
+            scope,
+            state: loaded,
+            snapshotFingerprint: reloadSnapshotFingerprint,
+          });
         }
       } catch (error: unknown) {
         if (isAbortError(error) || !isCurrent(id, signal)) return;
@@ -723,7 +776,15 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
 
     if (scope.kind === 'now' && pendingNow) {
       const matching = selectedFileInSnapshot(pendingNow, selected);
-      if (matching && !pendingViewerMatchesFile(pendingView, matching, scope)) {
+      if (
+        matching &&
+        !pendingViewerMatchesFile(
+          pendingView,
+          matching,
+          scope,
+          sourceControlSnapshotFingerprint(pendingNow)
+        )
+      ) {
         return;
       }
     }
@@ -734,7 +795,15 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
       pendingCommit
     ) {
       const matching = selectedFileInSnapshot(pendingCommit, selected);
-      if (matching && !pendingViewerMatchesFile(pendingView, matching, scope)) {
+      if (
+        matching &&
+        !pendingViewerMatchesFile(
+          pendingView,
+          matching,
+          scope,
+          sourceControlSnapshotFingerprint(pendingCommit)
+        )
+      ) {
         return;
       }
     }
@@ -842,9 +911,21 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
     pendingCommitFile !== undefined;
   const changesCanBeAccepted =
     (!pendingNowNeedsViewer ||
-      pendingViewerMatchesFile(pendingViewer, pendingNowFile, viewerScope)) &&
+      pendingViewerMatchesFile(
+        pendingViewer,
+        pendingNowFile,
+        viewerScope,
+        snapshotState.pending ? sourceControlSnapshotFingerprint(snapshotState.pending) : ''
+      )) &&
     (!pendingCommitNeedsViewer ||
-      pendingViewerMatchesFile(pendingViewer, pendingCommitFile, viewerScope));
+      pendingViewerMatchesFile(
+        pendingViewer,
+        pendingCommitFile,
+        viewerScope,
+        commitSnapshotState.pending
+          ? sourceControlSnapshotFingerprint(commitSnapshotState.pending)
+          : ''
+      ));
   const hasPending =
     snapshotState.pending !== null ||
     historySnapshotState.pending !== null ||
