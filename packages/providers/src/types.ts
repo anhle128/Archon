@@ -763,6 +763,12 @@ export interface ProviderCapabilities {
    * community providers set `false` until they implement their in-container path.
    */
   containerExec: boolean;
+  /**
+   * Whether the provider can pause a workflow turn on the in-process
+   * `AskHuman` native tool. `true` for Claude and Pi; other providers stay
+   * `false` until they implement the AskHuman converter + abort path.
+   */
+  askHuman: boolean;
 }
 
 /**

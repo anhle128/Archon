@@ -161,6 +161,7 @@ describe('ClaudeProvider', () => {
         sandbox: true,
         settingSources: true,
         nativeTools: true,
+        askHuman: true,
       });
     });
 

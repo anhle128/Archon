@@ -66,4 +66,5 @@ export const CLAUDE_CAPABILITIES: ProviderCapabilities = {
   settingSources: true, // per-node override of the SDK's settingSources option
   nativeTools: true,
   containerExec: true, // spawns the CLI in-container via spawnClaudeCodeProcess
+  askHuman: true,
 };
