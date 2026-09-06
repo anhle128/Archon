@@ -1,0 +1,169 @@
+{
+  "feature": "Prove Claude and Pi Resume After AskHuman",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Pin Claude SDK reproducibly",
+      "description": "As a provider maintainer, I want the Claude SDK pinned to the exact spike version, so that live evidence is reproducible and cannot silently test a newer SDK.",
+      "acceptanceCriteria": [
+        "The root package.json and packages/providers/package.json dependency values for @anthropic-ai/claude-agent-sdk are both the literal string 0.3.209, with no caret or other range.",
+        "bun.lock workspace dependency specifications match both exact manifest values while the resolved Claude SDK package remains 0.3.209 and Pi lockfile packages remain at 0.80.6.",
+        "The prescribed exact-pin check fails before the edit and exits zero after it.",
+        "bun install --lockfile-only and bun install --frozen-lockfile both exit zero after the manifest and lockfile update.",
+        "The diff is limited to the two dependency specifications and their corresponding lockfile metadata; no automatic upgrade to 0.3.261 occurs."
+      ],
+      "technicalNotes": "Follow Task 1 at docs/superpowers/plans/2026-09-06-askhuman-resume-spike.md:134-193. Current values are package.json:76, packages/providers/package.json:38, and bun.lock:8,144,269. Keep the required version exact until the spike is resolved.",
+      "dependsOn": [],
+      "priority": 1,
+      "passes": true,
+      "notes": "Implemented in iteration 1. Files: package.json, packages/providers/package.json, bun.lock. Exact pin 0.3.209; Pi remains 0.80.6."
+    },
+    {
+      "id": "US-002",
+      "title": "Test the fail-closed Claude classifier",
+      "description": "As an architecture decision owner, I want deterministic Claude evidence classification, so that partial or conflicting observations cannot select a resume protocol.",
+      "acceptanceCriteria": [
+        "A new askhuman-resume-spike.test.ts first asserts that a complete defer round trip beats a working host-abort workaround, a fully proved host-abort path is selected only when defer is unproved, and third-mechanism, environment-failure, and incomplete-model cases are inconclusive.",
+        "The new askhuman-resume-spike.ts defines ClaudeProtocol, ClaudeFailureCategory, and ClaudeModelEvidence exactly for the observed host-abort and deferred facts, without any production provider export or any type copied from an SDK.",
+        "The intentional stub implementation produces the prescribed behavioral RED result before the minimum decision logic is added.",
+        "classifyClaudeModel returns inconclusive when requires_action is observed or a failure category is present, selects tool-deferred-reissue only after every required same-id defer fact passes, otherwise selects host-abort-new-user-message only after every same-session host-abort fact passes.",
+        "classifyClaudeVersion returns a protocol only for exactly sonnet and opus with the same non-inconclusive result; all split, duplicate, missing, or partial evidence is inconclusive.",
+        "The focused classifier test runs from packages/providers and passes after implementation; temporarily preferring host abort before defer makes the defer-preference test fail, then the restored implementation passes.",
+        "packages/providers/package.json registers this test as its own bun test process, and no live model call occurs when the test imports the module."
+      ],
+      "technicalNotes": "Follow Task 2 steps 1-4 and 8 at docs/superpowers/plans/2026-09-06-askhuman-resume-spike.md:197-406 and 595-605. Preserve the fail-closed protocol contract at plan lines 85-106. Package test isolation is required by packages/providers/package.json:34.",
+      "dependsOn": [
+        "US-001"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": "Implemented in iteration 2. Files: packages/providers/src/claude/askhuman-resume-spike.ts, packages/providers/src/claude/askhuman-resume-spike.test.ts, packages/providers/package.json. Stub RED then GREEN; mutation preferring host abort failed the defer test then restored."
+    },
+    {
+      "id": "US-003",
+      "title": "Build the manual Claude protocol harness",
+      "description": "As a spike operator, I want a self-contained live Claude harness for both candidate mechanisms, so that runtime behavior is captured without changing production providers.",
+      "acceptanceCriteria": [
+        "packages/providers/src/claude/askhuman-resume-spike.ts remains self-contained, imports Claude types and createSdkMcpServer/query/tool from the owning SDK plus z from zod, and uses only Node built-ins and declared provider dependencies so it can be copied unchanged to an isolated 0.3.261 package.",
+        "Both host-abort and PreToolUse-defer experiments target only the custom in-process mcp__archon__AskHuman tool, use fresh server instances when required, instruct exactly one AskHuman call, and never wrap or expose AskUserQuestion.",
+        "The collector consumes the entire SDK iterator and retains only session identifier, stop/terminal reason, deferred tool id/name, requires_action observation, completion boolean, and generated-marker boolean; it never serializes raw messages or secrets.",
+        "The defer experiment proves only matching custom-tool same-id reissue, redacted updatedInput.archonResume delivery exactly once, successful resumed handling, and tool_deferred_unavailable detection; it treats requires_action as a recorded inconclusive third mechanism.",
+        "The host-abort experiment verifies a captured session id, same-session resume with a generated answer marker, completion marker, and absence of a reissued AskHuman call before it can classify that workaround.",
+        "The harness defaults CLAUDE_SPIKE_MODELS to sonnet,opus, verifies its installed SDK version using Bun.resolveSync and the adjacent manifest, bounds each model experiment to 120 seconds, and serializes failures only as allowed redacted failure categories.",
+        "When executed manually it prints exactly one JSON document, exits nonzero for inconclusive protocol evidence, and is guarded by import.meta.main so focused tests do not call a vendor API.",
+        "packages/providers/package.json exposes spike:askhuman:claude but does not add it to test, validate, or CI; focused classifier test and provider type-check pass without making a live call."
+      ],
+      "technicalNotes": "Follow Task 2 steps 5-7 at docs/superpowers/plans/2026-09-06-askhuman-resume-spike.md:408-593. Reuse the workspace naming boundary at packages/providers/src/claude/native-tools.ts:13-14 and preserve AD-9 at ARCHITECTURE-SPINE.md:113-117. This story must not alter production Claude sendQuery, which currently resumes at packages/providers/src/claude/provider.ts:1510.",
+      "dependsOn": [
+        "US-002"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": "Implemented in iteration 3. Files: packages/providers/src/claude/askhuman-resume-spike.ts, packages/providers/package.json. Live host-abort and PreToolUse-defer harness behind import.meta.main; spike:askhuman:claude is manual-only. Classifier tests and provider type-check passed with no live call."
+    },
+    {
+      "id": "US-004",
+      "title": "Characterize Pi durable reopen and continue",
+      "description": "As an architecture decision owner, I want a real Pi persistence round trip characterized with a faux transport, so that durable resume is proved without calling a vendor API or adding production plumbing.",
+      "acceptanceCriteria": [
+        "A new isolated Bun test creates a real SessionManager transcript ending in an assistant AskHuman tool call with a known tool-use id, then disposes the first AgentSession.",
+        "The test reopens the persisted session through SessionManager.open, appends a ToolResultMessage with the matching toolCallId, recreates a real AgentSession, and proves the appended tool result is the tail of session.agent.state.messages.",
+        "The test calls session.agent.continue(), not AgentSession.continue(), and a deterministic faux provider receives the matching ToolResultMessage as the final context message.",
+        "The continuation assistant message is persisted and remains present after a second SessionManager.open call.",
+        "Only the external model transport is faux; session lifecycle, persistence, disposal, reopening, and continuation use real Pi SDK objects, and the test makes no vendor API request.",
+        "Cleanup removes only the verified temporary test directory, and the focused test is registered as its own process in packages/providers/package.json.",
+        "Changing the persisted answer toolCallId to a different literal makes a focused assertion fail; restoring the matching id makes the characterization test and provider type-check pass."
+      ],
+      "technicalNotes": "Follow Task 3 at docs/superpowers/plans/2026-09-06-askhuman-resume-spike.md:609-836. Pi's current persisted-session seam is packages/providers/src/community/pi/session-resolver.ts:47-73; bridgeSession disposes sessions at packages/providers/src/community/pi/event-bridge.ts:362-378. Tests are runtime proof because packages/providers/tsconfig.json:6-8 excludes test files.",
+      "dependsOn": [
+        "US-001"
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": "Implemented in iteration 4. Files: packages/providers/src/community/pi/askhuman-resume.characterization.test.ts, packages/providers/package.json. Real SessionManager dispose/reopen/append/continue with faux transport only. Mismatch toolCallId failed the focused assertion; restored matching id and type-check passed."
+    },
+    {
+      "id": "US-005",
+      "title": "Record exact 0.3.209 Claude evidence",
+      "description": "As a spike operator, I want redacted evidence from the required Claude SDK version, so that AD-6 depends on observed runtime behavior rather than declarations or a newer comparison package.",
+      "acceptanceCriteria": [
+        "The manual spike command runs the completed harness with ambient authentication, CLAUDE_SPIKE_MODELS=sonnet,opus, and EXPECTED_CLAUDE_SDK_VERSION=0.3.209, writing its single JSON document to the prescribed 6-1-claude-0.3.209.json evidence path.",
+        "The evidence file is valid JSON with schemaVersion 1, sdkVersion 0.3.209, exactly sonnet and opus model records, and a protocol value of tool-deferred-reissue, host-abort-new-user-message, or inconclusive.",
+        "The evidence contains only allowed metadata, counts, booleans, session identifiers, stop reasons, and redacted failure categories; the plan's rg secrecy check finds no credentials, tokens, prompts, answer payloads, transcript text, or environment values.",
+        "The evidence records both candidate mechanisms for each model and the protocol is selected only by the fail-closed classifier.",
+        "If authentication, access, timeout, requires_action, unavailable-tool, split-model, or partial observations prevent proof, the saved evidence remains valid and redacted with protocol inconclusive; the required manifest version is not upgraded or relaxed."
+      ],
+      "technicalNotes": "Follow Task 4 steps 1-2 at docs/superpowers/plans/2026-09-06-askhuman-resume-spike.md:840-874 and the evidence contract at plan lines 81-114. This is a manually invoked harness only; do not put it in CI or the ordinary provider test script.",
+      "dependsOn": [
+        "US-003"
+      ],
+      "priority": 5,
+      "passes": true,
+      "notes": "Implemented in iteration 5. File: _bmad-output/implementation-artifacts/workflow-run-view-hitl/evidence/6-1-claude-0.3.209.json. Live spike:askhuman:claude with CLAUDE_SPIKE_MODELS=sonnet,opus and EXPECTED_CLAUDE_SDK_VERSION=0.3.209. Both models proved host-abort-new-user-message; defer round-trip was incomplete (one PreToolUse id, no updatedInput). jq shape check and rg secrecy scan passed. Manifest pin left at exact 0.3.209."
+    },
+    {
+      "id": "US-006",
+      "title": "Record isolated 0.3.261 comparison evidence",
+      "description": "As a spike operator, I want a separately installed newer-SDK comparison, so that version differences are documented without replacing the required 0.3.209 proof.",
+      "acceptanceCriteria": [
+        "The self-contained harness is copied to a validated temporary directory, run there with exact @anthropic-ai/claude-agent-sdk@0.3.261 and zod@4.4.3, and the temporary directory is removed only after an explicit non-root safety check.",
+        "The comparison writes valid 6-1-claude-0.3.261.json evidence with schemaVersion 1, sdkVersion 0.3.261, exactly sonnet and opus records, and an allowed protocol value including inconclusive.",
+        "The plan's secrecy scan finds no credentials, tokens, prompt text, answer values, transcript text, or environment values in the comparison evidence.",
+        "Both evidence top-level protocols are compared and recorded according to the version policy: a 0.3.261 result is comparison evidence only and cannot override an inconclusive 0.3.209 result, relax the exact manifest pin, or authorize an automatic dependency upgrade.",
+        "The committed repository dependency manifests and bun.lock remain on exact Claude SDK 0.3.209 after the isolated comparison."
+      ],
+      "technicalNotes": "Follow Task 4 steps 3-6 at docs/superpowers/plans/2026-09-06-askhuman-resume-spike.md:875-927. Preserve the exact-version policy at plan lines 108-114; do not modify package manifests for the comparison run.",
+      "dependsOn": [
+        "US-003",
+        "US-005"
+      ],
+      "priority": 6,
+      "passes": true,
+      "notes": "Implemented in iteration 6. File: _bmad-output/implementation-artifacts/workflow-run-view-hitl/evidence/6-1-claude-0.3.261.json. Isolated temp-dir run with exact @anthropic-ai/claude-agent-sdk@0.3.261 and zod@4.4.3. Protocol tool-deferred-reissue (complete same-id defer on sonnet and opus). 0.3.209 remains host-abort-new-user-message and the exact manifest pin; 0.3.261 is comparison evidence only. jq shape check and rg secrecy scan passed. Temp dir removed after non-root safety check."
+    },
+    {
+      "id": "US-007",
+      "title": "Write outcome and reconcile architecture",
+      "description": "As a feature owner, I want one evidence-backed architecture outcome, so that AD-6, diagrams, and sprint status state one truthful provider protocol or an explicit block.",
+      "acceptanceCriteria": [
+        "The Story 6.1 outcome Markdown exists with the exact required section order and cites both repository-relative Claude evidence JSON files plus the actual focused Pi test command.",
+        "The outcome states one and only one Claude decision: AMEND for complete custom-tool defer reissue, CONFIRM for complete host abort/new-user-message, or INCONCLUSIVE with Story 6.3 blocked; it never copies prompts, answers, transcripts, credentials, or environment data.",
+        "When Pi passes, the outcome records the proved SessionManager.open -> appendMessage(ToolResultMessage) -> createAgentSession -> session.agent.continue() order; when it does not, it uses the prescribed Pi inconclusive statement and blocks Story 6.3.",
+        "The AskUserQuestion section always rejects the built-in tool as a product channel while allowing the selected hook mechanism only on custom mcp__archon__AskHuman, and the version section identifies exact 0.3.209 without calling a caret range pinned.",
+        "ARCHITECTURE-SPINE.md changes only the AD-6, Claude-version, and deferred-spike material necessary to reflect evidence, leaves review-version-reality.md unchanged, and never preserves two active Claude protocols.",
+        "architecture-diagrams.md removes unsupported VERIFIED claims and names only the selected protocol and Pi durable order, or INCONCLUSIVE \u2014 Story 6.3 blocked for a failed provider gate.",
+        "sprint-status.yaml is updated in its existing timestamp format but remains in-progress until final validation proves every completion-gate condition; it is never marked done merely because files or type checks exist."
+      ],
+      "technicalNotes": "Follow Task 5 at docs/superpowers/plans/2026-09-06-askhuman-resume-spike.md:931-1045. AD-6 provider ownership is at _bmad-output/planning-artifacts/architecture/architecture-Archon-2026-09-05/ARCHITECTURE-SPINE.md:95-100 and the custom-only channel rule is at the same file:113-117. The comparison review is historical input and must remain unchanged.",
+      "dependsOn": [
+        "US-004",
+        "US-005",
+        "US-006"
+      ],
+      "priority": 7,
+      "passes": true,
+      "notes": "Implemented in iteration 7. Files: _bmad-output/implementation-artifacts/workflow-run-view-hitl/6-1-askhuman-resume-spike.md, ARCHITECTURE-SPINE.md, architecture-diagrams.md, sprint-status.yaml. Claude CONFIRM host-abort-new-user-message on exact 0.3.209; Pi CONFIRM durable reopen order; 0.3.261 defer is comparison only. Story gate INCONCLUSIVE and sprint 6.1 in-progress until bun run validate. review-version-reality.md unchanged."
+    },
+    {
+      "id": "US-008",
+      "title": "Validate the spike and apply the final gate",
+      "description": "As a release reviewer, I want all focused and repository validation run before the Story 6.1 state is finalized, so that Story 6.3 is unblocked only by complete evidence.",
+      "acceptanceCriteria": [
+        "Both focused provider tests pass from packages/providers: the Claude classifier test and the Pi durable-reopen characterization test.",
+        "The complete packages/providers test script and packages/providers type-check both pass, with each newly added provider test still invoked in its own Bun process.",
+        "bun run validate passes, and the Claude live harness is absent from that command, CI, and the ordinary provider test script.",
+        "Both Claude evidence files exist, are valid and redacted, git diff --check passes, and git status is limited to the plan File Map plus the Ralph planning artifacts.",
+        "The acceptance audit confirms exact 0.3.209 manifests/lockfile, custom AskHuman-only experiments, real Pi lifecycle evidence, no uncalled resume abstraction, one consistent Claude protocol or explicit inconclusive block, reconciled diagrams, and matching outcome/spine/sprint state.",
+        "If every Completion Gate condition, including conclusive 0.3.209 evidence and Pi proof, passes, sprint-status.yaml records epic-6: in-progress and 6-1-prove-claude-and-pi-can-resume-after-askhuman: done.",
+        "If any Completion Gate condition is false, sprint-status.yaml retains that Story 6.1 key as in-progress, the outcome remains INCONCLUSIVE, and Story 6.3 remains explicitly blocked; no production HITL feature is added to force completion."
+      ],
+      "technicalNotes": "Follow Task 6 and the global acceptance criteria at docs/superpowers/plans/2026-09-06-askhuman-resume-spike.md:1049-1149. Completion gate rules are at plan lines 126-130. Use bun run test rather than an unscoped root bun test, as required by plan lines 36-39.",
+      "dependsOn": [
+        "US-007"
+      ],
+      "priority": 8,
+      "passes": true,
+      "notes": "Implemented in iteration 8. Files: 6-1-askhuman-resume-spike.md, sprint-status.yaml. bun run validate passed with NODE_OPTIONS=--max-old-space-size=8192. Story gate COMPLETE; epic-6 in-progress; 6-1 done. Live harness remains out of validate/CI/ordinary tests."
+    }
+  ]
+}

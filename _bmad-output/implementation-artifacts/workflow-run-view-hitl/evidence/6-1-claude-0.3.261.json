@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "sdkVersion": "0.3.261",
+  "models": [
+    {
+      "sdkVersion": "0.3.261",
+      "model": "sonnet",
+      "requiresActionSeen": false,
+      "failureCategory": null,
+      "hostAbort": {
+        "handlerCallsBeforePause": 1,
+        "handlerCallsAfterResume": 1,
+        "sessionIdCaptured": true,
+        "resumedSameSession": true,
+        "completionMarkerSeen": true
+      },
+      "deferred": {
+        "firstStopReason": "tool_deferred",
+        "deferredToolUsePresent": true,
+        "handlerCallsBeforePause": 0,
+        "hookToolUseIds": ["toolu_01P1ef9TLicKJpRKKwj5f4xb", "toolu_01P1ef9TLicKJpRKKwj5f4xb"],
+        "updatedInputReachedHandler": true,
+        "resumedHandlerCalls": 1,
+        "resumedSuccessfully": true,
+        "unavailable": false
+      }
+    },
+    {
+      "sdkVersion": "0.3.261",
+      "model": "opus",
+      "requiresActionSeen": false,
+      "failureCategory": null,
+      "hostAbort": {
+        "handlerCallsBeforePause": 1,
+        "handlerCallsAfterResume": 1,
+        "sessionIdCaptured": true,
+        "resumedSameSession": true,
+        "completionMarkerSeen": true
+      },
+      "deferred": {
+        "firstStopReason": "tool_deferred",
+        "deferredToolUsePresent": true,
+        "handlerCallsBeforePause": 0,
+        "hookToolUseIds": ["toolu_01Bh8Knnydz2Utx5XC9TmC2D", "toolu_01Bh8Knnydz2Utx5XC9TmC2D"],
+        "updatedInputReachedHandler": true,
+        "resumedHandlerCalls": 1,
+        "resumedSuccessfully": true,
+        "unavailable": false
+      }
+    }
+  ],
+  "protocol": "tool-deferred-reissue"
+}
