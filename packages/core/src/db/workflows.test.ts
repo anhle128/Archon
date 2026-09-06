@@ -89,6 +89,47 @@ import {
 } from './workflows';
 import type { EnvOverlaySnapshot } from '@archon/workflows/schemas/env-overlay';
 
+const pendingAskRow = {
+  id: 'pi-1',
+  node_id: 'review',
+  tool_use_id: 'toolu_1',
+  kind: 'ask' as const,
+};
+
+function mockPendingAskThenPurge(): void {
+  mockQuery
+    .mockResolvedValueOnce(createQueryResult([pendingAskRow]))
+    .mockResolvedValueOnce(createQueryResult([], 1))
+    .mockResolvedValueOnce(createQueryResult([], 1));
+}
+
+function expectPurgedAskEvent(
+  callIndex: number,
+  terminalStatus: 'failed' | 'cancelled',
+  runId = 'workflow-run-123'
+): void {
+  expect(mockQuery.mock.calls[callIndex]?.[0] as string).toContain(
+    'FROM remote_agent_pending_interactions'
+  );
+  expect(mockQuery.mock.calls[callIndex]?.[0] as string).toContain("status = 'pending'");
+  expect(mockQuery.mock.calls[callIndex + 1]?.[0] as string).toContain("status = 'purged'");
+  expect(mockQuery.mock.calls[callIndex + 1]?.[1]).toEqual(['pi-1']);
+  const eventSql = mockQuery.mock.calls[callIndex + 2]?.[0] as string;
+  const eventParams = mockQuery.mock.calls[callIndex + 2]?.[1] as unknown[];
+  expect(eventSql).toContain('INSERT INTO remote_agent_workflow_events');
+  expect(eventParams[1]).toBe(runId);
+  expect(eventParams[2]).toBe('interaction_resolved');
+  expect(eventParams[4]).toBe('review');
+  expect(JSON.parse(String(eventParams[5]))).toEqual({
+    node_id: 'review',
+    tool_use_id: 'toolu_1',
+    kind: 'ask',
+    purged: true,
+    resumed: false,
+    terminal_status: terminalStatus,
+  });
+}
+
 describe('workflows database', () => {
   beforeEach(() => {
     mockQuery.mockReset();
@@ -822,6 +863,35 @@ describe('workflows database', () => {
       expect(mockQuery.mock.calls[2]?.[0] as string).toContain(
         'INSERT INTO remote_agent_workflow_events'
       );
+      expect(mockQuery.mock.calls[3]?.[0] as string).toContain(
+        'FROM remote_agent_pending_interactions'
+      );
+    });
+
+    test('purges pending interactions after a winning reject+cancel', async () => {
+      mockQuery
+        .mockResolvedValueOnce(
+          createQueryResult([{ ...mockWorkflowRun, status: 'paused', metadata: { approval } }])
+        )
+        .mockResolvedValueOnce(createQueryResult([], 1))
+        .mockResolvedValueOnce(createQueryResult([], 1));
+      mockPendingAskThenPurge();
+
+      const outcome = await resolveAndCancelApprovalGate(
+        'workflow-run-123',
+        { nodeId: 'review', gateId: 'gate-a' },
+        [
+          {
+            event_type: 'approval_received',
+            step_name: 'review',
+            data: { decision: 'rejected' },
+          },
+        ]
+      );
+
+      expect(outcome.resolved).toBe(true);
+      expect(mockWithTransaction).toHaveBeenCalledTimes(1);
+      expectPurgedAskEvent(3, 'cancelled');
     });
   });
 
@@ -996,6 +1066,15 @@ describe('workflows database', () => {
       ]);
     });
 
+    test('does not purge pending interactions', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+
+      await completeWorkflowRun('workflow-run-123');
+
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(String(mockQuery.mock.calls[0]?.[0])).not.toContain('pending_interactions');
+    });
+
     test('throws when rowCount is 0', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
 
@@ -1077,6 +1156,19 @@ describe('workflows database', () => {
       await expect(failWorkflowRun('workflow-run-123', 'some error')).rejects.toThrow(
         'not found or not in running/pending state'
       );
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(String(mockQuery.mock.calls[0]?.[0])).not.toContain('pending_interactions');
+    });
+
+    test('purges pending interactions after a winning fail update', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      mockPendingAskThenPurge();
+
+      await failWorkflowRun('workflow-run-123', 'Step not found: missing.md');
+
+      expect(mockWithTransaction).toHaveBeenCalledTimes(1);
+      expect(mockQuery.mock.calls[0]?.[0] as string).toContain("status = 'failed'");
+      expectPurgedAskEvent(1, 'failed');
     });
   });
 
@@ -1566,24 +1658,50 @@ describe('workflows database', () => {
 
   describe('failOrphanedRuns', () => {
     test('transitions all running runs to failed with completed_at and returns count', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 2));
+      mockQuery
+        .mockResolvedValueOnce(createQueryResult([{ id: 'orphan-a' }, { id: 'orphan-b' }]))
+        .mockResolvedValueOnce(createQueryResult([], 2));
 
       const result = await failOrphanedRuns();
 
       expect(result.count).toBe(2);
-      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(mockQuery.mock.calls[0]?.[0] as string).toContain(
+        'SELECT id FROM remote_agent_workflow_runs'
+      );
+      expect(mockQuery.mock.calls[0]?.[0] as string).toContain('FOR UPDATE');
+      const [query, params] = mockQuery.mock.calls[1] as [string, unknown[]];
       expect(query).toContain("status = 'failed'");
       expect(query).toContain('completed_at = NOW()');
+      expect(query).toContain('id IN ($2, $3)');
       expect(query).toContain("status = 'running'");
-      expect(params).toContain(JSON.stringify({ failure_reason: 'server_restart' }));
+      expect(params).toEqual([
+        JSON.stringify({ failure_reason: 'server_restart' }),
+        'orphan-a',
+        'orphan-b',
+      ]);
     });
 
     test('returns count 0 when no running runs exist', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
 
       const result = await failOrphanedRuns();
 
       expect(result.count).toBe(0);
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(String(mockQuery.mock.calls[0]?.[0])).not.toContain('pending_interactions');
+    });
+
+    test('purges pending interactions for each selected orphan before commit', async () => {
+      mockQuery
+        .mockResolvedValueOnce(createQueryResult([{ id: 'orphan-a' }]))
+        .mockResolvedValueOnce(createQueryResult([], 1));
+      mockPendingAskThenPurge();
+
+      const result = await failOrphanedRuns();
+
+      expect(result.count).toBe(1);
+      expect(mockWithTransaction).toHaveBeenCalledTimes(1);
+      expectPurgedAskEvent(2, 'failed', 'orphan-a');
     });
 
     test('throws on database error', async () => {
@@ -1842,6 +1960,20 @@ describe('workflows database', () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
 
       await expect(cancelWorkflowRun('workflow-run-123')).resolves.toEqual({ cancelled: false });
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(String(mockQuery.mock.calls[0]?.[0])).not.toContain('pending_interactions');
+    });
+
+    test('purges pending interactions after a winning cancel update', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      mockPendingAskThenPurge();
+
+      const result = await cancelWorkflowRun('workflow-run-123');
+
+      expect(result).toEqual({ cancelled: true });
+      expect(mockWithTransaction).toHaveBeenCalledTimes(1);
+      expect(mockQuery.mock.calls[0]?.[0] as string).toContain("status = 'cancelled'");
+      expectPurgedAskEvent(1, 'cancelled');
     });
 
     test('throws on database error', async () => {
@@ -1872,6 +2004,19 @@ describe('workflows database', () => {
       await expect(cancelRecoveryWorkflowRun('workflow-run-123')).resolves.toEqual({
         cancelled: false,
       });
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(String(mockQuery.mock.calls[0]?.[0])).not.toContain('pending_interactions');
+    });
+
+    test('purges pending interactions after a winning recovery cancel', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      mockPendingAskThenPurge();
+
+      const result = await cancelRecoveryWorkflowRun('workflow-run-123');
+
+      expect(result).toEqual({ cancelled: true });
+      expect(mockWithTransaction).toHaveBeenCalledTimes(1);
+      expectPurgedAskEvent(1, 'cancelled');
     });
 
     test('throws on database error', async () => {

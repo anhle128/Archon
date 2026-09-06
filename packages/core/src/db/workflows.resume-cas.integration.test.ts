@@ -72,6 +72,11 @@ const {
   claimWriteback,
   releaseWritebackClaim,
   WorkflowNotResumableError,
+  cancelWorkflowRun,
+  cancelRecoveryWorkflowRun,
+  failWorkflowRun,
+  failOrphanedRuns,
+  completeWorkflowRun,
 } = await import('./workflows');
 const { approveWorkflow, rejectWorkflow } = await import('../operations/workflow-operations');
 
@@ -1057,5 +1062,251 @@ describe('resolveAndCancelApprovalGate — atomic reject+cancel CAS (#2113)', ()
     );
     expect(approveOutcome.resolved).toBe(false);
     expect((await getWorkflowRun('rc-vs-approve'))?.status).toBe('cancelled');
+  });
+});
+
+const SENTINEL_QUESTION = 'DO_NOT_LOG_QUESTION';
+const SENTINEL_ANSWER = 'DO_NOT_LOG_ANSWER';
+
+async function seedPendingAsk(
+  runId: string,
+  toolUseId: string,
+  status: 'pending' | 'answered' = 'pending'
+): Promise<string> {
+  const id = `${runId}-${toolUseId}`;
+  await db.query(
+    `INSERT INTO remote_agent_pending_interactions
+       (id, workflow_run_id, node_id, tool_use_id, kind, status, envelope, answer, provider_session_id)
+     VALUES ($1, $2, 'review', $3, 'ask', $4, $5, $6, 'sess-1')`,
+    [
+      id,
+      runId,
+      toolUseId,
+      status,
+      JSON.stringify({ question: SENTINEL_QUESTION }),
+      status === 'answered' ? JSON.stringify({ answer: SENTINEL_ANSWER }) : null,
+    ]
+  );
+  return id;
+}
+
+async function interactionRows(
+  runId: string
+): Promise<
+  Array<{ tool_use_id: string; status: string; answer: string | null; resolved_by: string | null }>
+> {
+  const result = await db.query<{
+    tool_use_id: string;
+    status: string;
+    answer: string | null;
+    resolved_by: string | null;
+  }>(
+    `SELECT tool_use_id, status, answer, resolved_by
+     FROM remote_agent_pending_interactions
+     WHERE workflow_run_id = $1
+     ORDER BY tool_use_id ASC`,
+    [runId]
+  );
+  return result.rows;
+}
+
+async function purgeEvents(runId: string): Promise<Array<Record<string, unknown>>> {
+  const result = await db.query<{ data: string }>(
+    `SELECT data FROM remote_agent_workflow_events
+     WHERE workflow_run_id = $1 AND event_type = 'interaction_resolved'`,
+    [runId]
+  );
+  return result.rows.map(row => JSON.parse(String(row.data)) as Record<string, unknown>);
+}
+
+describe('terminal transitions purge pending interactions', () => {
+  test('cancelWorkflowRun purges pending rows and leaves answered rows', async () => {
+    await seed('cancel-purge', 'paused', "datetime('now')");
+    await seedPendingAsk('cancel-purge', 'toolu_pending');
+    await seedPendingAsk('cancel-purge', 'toolu_answered', 'answered');
+
+    expect(await cancelWorkflowRun('cancel-purge')).toEqual({ cancelled: true });
+    expect((await getWorkflowRun('cancel-purge'))?.status).toBe('cancelled');
+    const rows = await interactionRows('cancel-purge');
+    expect(rows).toEqual([
+      {
+        tool_use_id: 'toolu_answered',
+        status: 'answered',
+        answer: JSON.stringify({ answer: SENTINEL_ANSWER }),
+        resolved_by: null,
+      },
+      {
+        tool_use_id: 'toolu_pending',
+        status: 'purged',
+        answer: null,
+        resolved_by: null,
+      },
+    ]);
+    const events = await purgeEvents('cancel-purge');
+    expect(events).toEqual([
+      {
+        node_id: 'review',
+        tool_use_id: 'toolu_pending',
+        kind: 'ask',
+        purged: true,
+        resumed: false,
+        terminal_status: 'cancelled',
+      },
+    ]);
+    expect(JSON.stringify(events)).not.toContain(SENTINEL_QUESTION);
+    expect(JSON.stringify(events)).not.toContain(SENTINEL_ANSWER);
+  });
+
+  test('cancelWorkflowRun no-op does not purge', async () => {
+    await seed('cancel-noop', 'completed', "datetime('now')");
+    await seedPendingAsk('cancel-noop', 'toolu_pending');
+
+    expect(await cancelWorkflowRun('cancel-noop')).toEqual({ cancelled: false });
+    expect((await interactionRows('cancel-noop'))[0]?.status).toBe('pending');
+    expect(await purgeEvents('cancel-noop')).toEqual([]);
+  });
+
+  test('cancelRecoveryWorkflowRun purges pending rows on a winning cancel', async () => {
+    await seed('recovery-purge', 'paused', "datetime('now')");
+    await seedPendingAsk('recovery-purge', 'toolu_pending');
+
+    expect(await cancelRecoveryWorkflowRun('recovery-purge')).toEqual({ cancelled: true });
+    expect((await getWorkflowRun('recovery-purge'))?.status).toBe('cancelled');
+    expect((await interactionRows('recovery-purge'))[0]?.status).toBe('purged');
+    expect(await purgeEvents('recovery-purge')).toEqual([
+      {
+        node_id: 'review',
+        tool_use_id: 'toolu_pending',
+        kind: 'ask',
+        purged: true,
+        resumed: false,
+        terminal_status: 'cancelled',
+      },
+    ]);
+  });
+
+  test('cancelRecoveryWorkflowRun no-op does not purge', async () => {
+    await seed('recovery-noop', 'completed', "datetime('now')");
+    await seedPendingAsk('recovery-noop', 'toolu_pending');
+
+    expect(await cancelRecoveryWorkflowRun('recovery-noop')).toEqual({ cancelled: false });
+    expect((await interactionRows('recovery-noop'))[0]?.status).toBe('pending');
+    expect(await purgeEvents('recovery-noop')).toEqual([]);
+  });
+
+  test('failWorkflowRun purges pending rows on a winning fail', async () => {
+    await seed('fail-purge', 'running', "datetime('now')");
+    await seedPendingAsk('fail-purge', 'toolu_pending');
+
+    await failWorkflowRun('fail-purge', 'boom');
+    expect((await getWorkflowRun('fail-purge'))?.status).toBe('failed');
+    expect((await interactionRows('fail-purge'))[0]?.status).toBe('purged');
+    expect(await purgeEvents('fail-purge')).toEqual([
+      {
+        node_id: 'review',
+        tool_use_id: 'toolu_pending',
+        kind: 'ask',
+        purged: true,
+        resumed: false,
+        terminal_status: 'failed',
+      },
+    ]);
+  });
+
+  test('failWorkflowRun no-op does not purge', async () => {
+    await seed('fail-noop', 'paused', "datetime('now')");
+    await seedPendingAsk('fail-noop', 'toolu_pending');
+
+    await expect(failWorkflowRun('fail-noop', 'boom')).rejects.toThrow(
+      'not found or not in running/pending state'
+    );
+    expect((await interactionRows('fail-noop'))[0]?.status).toBe('pending');
+    expect(await purgeEvents('fail-noop')).toEqual([]);
+  });
+
+  test('resolveAndCancelApprovalGate purges pending rows on a winning reject', async () => {
+    await seedPausedRun('gate-purge', 'wf-gate-purge', {
+      nodeId: 'review',
+      message: 'Approve?',
+      type: 'approval',
+      resolved: null,
+    });
+    await seedPendingAsk('gate-purge', 'toolu_pending');
+
+    expect(
+      (
+        await resolveAndCancelApprovalGate('gate-purge', { nodeId: 'review' }, [
+          approvalEvent('rejected'),
+        ])
+      ).resolved
+    ).toBe(true);
+    expect((await getWorkflowRun('gate-purge'))?.status).toBe('cancelled');
+    expect((await interactionRows('gate-purge'))[0]?.status).toBe('purged');
+    expect(await purgeEvents('gate-purge')).toEqual([
+      {
+        node_id: 'review',
+        tool_use_id: 'toolu_pending',
+        kind: 'ask',
+        purged: true,
+        resumed: false,
+        terminal_status: 'cancelled',
+      },
+    ]);
+  });
+
+  test('resolveAndCancelApprovalGate no-op does not purge', async () => {
+    await seedPausedRun('gate-noop', 'wf-gate-noop', {
+      nodeId: 'review',
+      message: 'Approve?',
+      type: 'approval',
+      resolved: null,
+    });
+    await seedPendingAsk('gate-noop', 'toolu_pending');
+
+    expect(
+      (
+        await resolveAndCancelApprovalGate('gate-noop', { nodeId: 'review', gateId: 'missing' }, [
+          approvalEvent('rejected'),
+        ])
+      ).resolved
+    ).toBe(false);
+    expect((await getWorkflowRun('gate-noop'))?.status).toBe('paused');
+    expect((await interactionRows('gate-noop'))[0]?.status).toBe('pending');
+    expect(await purgeEvents('gate-noop')).toEqual([]);
+  });
+
+  test('failOrphanedRuns purges pending rows for each selected running run', async () => {
+    await seed('orphan-purge-a', 'running', "datetime('now')");
+    await seed('orphan-purge-b', 'paused', "datetime('now')");
+    await seedPendingAsk('orphan-purge-a', 'toolu_a');
+    await seedPendingAsk('orphan-purge-b', 'toolu_b');
+
+    const before = await failOrphanedRuns();
+    expect(before.count).toBeGreaterThanOrEqual(1);
+    expect((await getWorkflowRun('orphan-purge-a'))?.status).toBe('failed');
+    expect((await getWorkflowRun('orphan-purge-b'))?.status).toBe('paused');
+    expect((await interactionRows('orphan-purge-a'))[0]?.status).toBe('purged');
+    expect((await interactionRows('orphan-purge-b'))[0]?.status).toBe('pending');
+    expect(await purgeEvents('orphan-purge-a')).toEqual([
+      {
+        node_id: 'review',
+        tool_use_id: 'toolu_a',
+        kind: 'ask',
+        purged: true,
+        resumed: false,
+        terminal_status: 'failed',
+      },
+    ]);
+    expect(await purgeEvents('orphan-purge-b')).toEqual([]);
+  });
+
+  test('completeWorkflowRun does not purge pending interactions', async () => {
+    await seed('complete-no-purge', 'running', "datetime('now')");
+    await seedPendingAsk('complete-no-purge', 'toolu_pending');
+
+    await completeWorkflowRun('complete-no-purge');
+    expect((await getWorkflowRun('complete-no-purge'))?.status).toBe('completed');
+    expect((await interactionRows('complete-no-purge'))[0]?.status).toBe('pending');
+    expect(await purgeEvents('complete-no-purge')).toEqual([]);
   });
 });

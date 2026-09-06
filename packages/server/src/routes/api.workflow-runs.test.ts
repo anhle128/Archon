@@ -65,6 +65,7 @@ type MockWorkflowRun = {
   parent_conversation_id: string | null;
   codebase_id: string | null;
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+  user_id?: string | null;
   user_message: string;
   started_at: string;
   completed_at: string | null;
@@ -566,12 +567,93 @@ type MockPendingInteractionRow = {
   resolved_by: string | null;
 };
 
+class PendingInteractionNotFoundError extends Error {
+  constructor(
+    readonly workflowRunId: string,
+    readonly toolUseId: string
+  ) {
+    super(`Pending interaction not found: ${workflowRunId}/${toolUseId}`);
+    this.name = 'PendingInteractionNotFoundError';
+  }
+}
+
+class PendingInteractionAlreadyResolvedError extends Error {
+  constructor(
+    readonly workflowRunId: string,
+    readonly toolUseId: string,
+    readonly status: string
+  ) {
+    super(`Pending interaction already resolved: ${workflowRunId}/${toolUseId}`);
+    this.name = 'PendingInteractionAlreadyResolvedError';
+  }
+}
+
+class PendingInteractionRunNotPausedError extends Error {
+  constructor(
+    readonly workflowRunId: string,
+    readonly status: string
+  ) {
+    super(`Workflow run is not paused: ${workflowRunId}`);
+    this.name = 'PendingInteractionRunNotPausedError';
+  }
+}
+
+type PendingInteractionValidationCode =
+  | 'invalid_body'
+  | 'kind_not_ask'
+  | 'missing_question'
+  | 'unknown_question'
+  | 'duplicate_question'
+  | 'duplicate_envelope_id'
+  | 'invalid_single_value'
+  | 'invalid_multi_value'
+  | 'invalid_option'
+  | 'blank_other';
+
+class PendingInteractionValidationError extends Error {
+  constructor(readonly code: PendingInteractionValidationCode) {
+    super(`Pending interaction validation failed: ${code}`);
+    this.name = 'PendingInteractionValidationError';
+  }
+}
+
 const mockListPendingInteractions = mock(
   async (_runId: string) => [] as MockPendingInteractionRow[]
+);
+const mockResolvePendingInteraction = mock(
+  async (
+    _input: unknown
+  ): Promise<{
+    interaction: MockPendingInteractionRow;
+    resumed: boolean;
+    remaining_pending: number;
+  }> => {
+    throw new Error('resolvePendingInteraction mock not configured');
+  }
 );
 
 mock.module('@archon/core/db/workflow-pending-interactions', () => ({
   listPendingInteractions: mockListPendingInteractions,
+  resolvePendingInteraction: mockResolvePendingInteraction,
+  PendingInteractionNotFoundError,
+  PendingInteractionAlreadyResolvedError,
+  PendingInteractionRunNotPausedError,
+  PendingInteractionValidationError,
+}));
+
+const mockFindOrCreateUserByPlatformIdentity = mock(
+  async (_platform: string, platformUserId: string, _displayName?: string) => ({
+    id: platformUserId,
+    display_name: platformUserId,
+    email: null,
+    role: 'admin' as const,
+    created_at: new Date(),
+    updated_at: new Date(),
+  })
+);
+
+mock.module('@archon/core/db/users', () => ({
+  findOrCreateUserByPlatformIdentity: mockFindOrCreateUserByPlatformIdentity,
 }));
 
 mock.module('@archon/core/db/workflow-envs', () => ({
@@ -611,6 +693,7 @@ const MOCK_RUNNING_RUN: MockWorkflowRun = {
   parent_conversation_id: null,
   codebase_id: 'cb-uuid-1',
   status: 'running',
+  user_id: null,
   user_message: 'Deploy to staging',
   started_at: NOW,
   completed_at: null,
@@ -3004,6 +3087,8 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
     mockGetWorkflowRun.mockReset();
     mockGetConversationById.mockReset();
     mockHandleMessage.mockReset();
+    mockListPendingInteractions.mockReset();
+    mockListPendingInteractions.mockImplementation(async () => []);
   });
 
   test('returns 404 when run not found', async () => {
@@ -3144,6 +3229,39 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
     ];
     expect(platformConvId).toBe('web-plat-abc');
     expect(dispatchedMessage).toBe('/workflow resume run-cancelled-web');
+  });
+
+  test('returns 200 and dispatches resume for an Ask-resumed running run', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce({
+      ...MOCK_RUNNING_RUN,
+      id: 'run-ask-running',
+      parent_conversation_id: 'parent-conv-uuid',
+      user_message: 'Run the deploy',
+    });
+    mockListPendingInteractions.mockResolvedValueOnce([mockResolvedAskInteraction().interaction]);
+    mockGetConversationById.mockResolvedValueOnce({
+      id: 'parent-conv-uuid',
+      platform_conversation_id: 'web-plat-abc',
+      platform_type: 'web',
+    });
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-ask-running/resume', {
+      method: 'POST',
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { success: boolean; message: string };
+    expect(body.success).toBe(true);
+    expect(body.message).toContain('Resuming workflow');
+
+    const [, platformConvId, dispatchedMessage] = mockHandleMessage.mock.calls[0] as [
+      unknown,
+      string,
+      string,
+    ];
+    expect(platformConvId).toBe('web-plat-abc');
+    expect(dispatchedMessage).toBe('/workflow resume run-ask-running');
   });
 });
 
@@ -3968,6 +4086,418 @@ describe('approve/reject auto-resume', () => {
         },
       ]
     );
+  });
+});
+
+const ASK_STARTER_USER_ID = 'user-starter-1';
+const ASK_REQUEST_ID = 'toolu_ask_1';
+const ASK_ANSWER_BODY = {
+  answers: [{ questionId: 'q1', value: 'yes' }],
+};
+
+function mockAskPausedRun(overrides: Partial<MockWorkflowRun> = {}): MockWorkflowRun {
+  return {
+    ...MOCK_PAUSED_RUN,
+    id: 'run-ask-1',
+    workflow_name: 'ask-flow',
+    user_id: ASK_STARTER_USER_ID,
+    metadata: {},
+    ...overrides,
+  };
+}
+
+function mockResolvedAskInteraction(overrides?: { resumed?: boolean; remainingPending?: number }): {
+  interaction: MockPendingInteractionRow;
+  resumed: boolean;
+  remaining_pending: number;
+} {
+  return {
+    interaction: {
+      id: 'pi-ask-1',
+      workflow_run_id: 'run-ask-1',
+      node_id: 'ask-node',
+      tool_use_id: ASK_REQUEST_ID,
+      kind: 'ask',
+      status: 'answered',
+      envelope: { questions: [] },
+      answer: ASK_ANSWER_BODY,
+      provider_session_id: 'sess-ask-1',
+      created_at: NOW,
+      resolved_at: NOW,
+      resolved_by: ASK_STARTER_USER_ID,
+    },
+    resumed: overrides?.resumed ?? true,
+    remaining_pending: overrides?.remainingPending ?? 0,
+  };
+}
+
+describe('POST /api/workflows/runs/:runId/ask/:requestId/answer', () => {
+  beforeEach(() => {
+    mockGetWorkflowRun.mockReset();
+    mockResolvePendingInteraction.mockReset();
+    mockFindOrCreateUserByPlatformIdentity.mockClear();
+    mockGetConversationById.mockReset();
+    mockHandleMessage.mockReset();
+    mockResolvePendingInteraction.mockImplementation(async () => mockResolvedAskInteraction());
+  });
+
+  test('returns 200 and resolves the pending Ask with the authenticated starter id', async () => {
+    mockGetWorkflowRun.mockResolvedValue(mockAskPausedRun());
+    const { app } = makeApp();
+    const response = await app.request(
+      `/api/workflows/runs/run-ask-1/ask/${ASK_REQUEST_ID}/answer`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Archon-User': ASK_STARTER_USER_ID,
+        },
+        body: JSON.stringify(ASK_ANSWER_BODY),
+      }
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { success: boolean; message: string };
+    expect(body.success).toBe(true);
+    expect(mockResolvePendingInteraction).toHaveBeenCalledWith({
+      workflow_run_id: 'run-ask-1',
+      tool_use_id: ASK_REQUEST_ID,
+      answer: ASK_ANSWER_BODY,
+      resolved_by: ASK_STARTER_USER_ID,
+    });
+  });
+
+  test('returns 200 for a decline body', async () => {
+    mockGetWorkflowRun.mockResolvedValue(mockAskPausedRun());
+    const { app } = makeApp();
+    const response = await app.request(
+      `/api/workflows/runs/run-ask-1/ask/${ASK_REQUEST_ID}/answer`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Archon-User': ASK_STARTER_USER_ID,
+        },
+        body: JSON.stringify({ decline: true }),
+      }
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockResolvePendingInteraction).toHaveBeenCalledWith({
+      workflow_run_id: 'run-ask-1',
+      tool_use_id: ASK_REQUEST_ID,
+      answer: { decline: true },
+      resolved_by: ASK_STARTER_USER_ID,
+    });
+  });
+
+  test('returns 401 when no authenticated requester is present', async () => {
+    mockGetWorkflowRun.mockResolvedValue(mockAskPausedRun());
+    const { app } = makeApp();
+    const response = await app.request(
+      `/api/workflows/runs/run-ask-1/ask/${ASK_REQUEST_ID}/answer`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(ASK_ANSWER_BODY),
+      }
+    );
+
+    expect(response.status).toBe(401);
+    expect(mockResolvePendingInteraction).not.toHaveBeenCalled();
+  });
+
+  test('returns 401 before body validation when no authenticated requester is present', async () => {
+    mockGetWorkflowRun.mockResolvedValue(mockAskPausedRun());
+    const { app } = makeApp();
+    const response = await app.request(
+      `/api/workflows/runs/run-ask-1/ask/${ASK_REQUEST_ID}/answer`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ decline: false }),
+      }
+    );
+
+    expect(response.status).toBe(401);
+    expect(mockGetWorkflowRun).not.toHaveBeenCalled();
+    expect(mockResolvePendingInteraction).not.toHaveBeenCalled();
+  });
+
+  test('returns 401 before run lookup when no authenticated requester is present', async () => {
+    mockGetWorkflowRun.mockResolvedValue(null);
+    const { app } = makeApp();
+    const response = await app.request(
+      `/api/workflows/runs/missing-run/ask/${ASK_REQUEST_ID}/answer`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(ASK_ANSWER_BODY),
+      }
+    );
+
+    expect(response.status).toBe(401);
+    expect(mockGetWorkflowRun).not.toHaveBeenCalled();
+    expect(mockResolvePendingInteraction).not.toHaveBeenCalled();
+  });
+
+  test('returns 403 when the requester is not the run starter, including admins', async () => {
+    mockGetWorkflowRun.mockResolvedValue(mockAskPausedRun());
+    const { app } = makeApp();
+    const response = await app.request(
+      `/api/workflows/runs/run-ask-1/ask/${ASK_REQUEST_ID}/answer`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Archon-User': 'user-other-admin',
+        },
+        body: JSON.stringify(ASK_ANSWER_BODY),
+      }
+    );
+
+    expect(response.status).toBe(403);
+    expect(mockResolvePendingInteraction).not.toHaveBeenCalled();
+  });
+
+  test('returns 404 when the run is missing', async () => {
+    mockGetWorkflowRun.mockResolvedValue(null);
+    const { app } = makeApp();
+    const response = await app.request(
+      `/api/workflows/runs/missing-run/ask/${ASK_REQUEST_ID}/answer`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Archon-User': ASK_STARTER_USER_ID,
+        },
+        body: JSON.stringify(ASK_ANSWER_BODY),
+      }
+    );
+
+    expect(response.status).toBe(404);
+    expect(mockResolvePendingInteraction).not.toHaveBeenCalled();
+  });
+
+  test('returns 404 when the request id is missing', async () => {
+    mockGetWorkflowRun.mockResolvedValue(mockAskPausedRun());
+    mockResolvePendingInteraction.mockRejectedValueOnce(
+      new PendingInteractionNotFoundError('run-ask-1', 'missing-tool')
+    );
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-ask-1/ask/missing-tool/answer', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Archon-User': ASK_STARTER_USER_ID,
+      },
+      body: JSON.stringify(ASK_ANSWER_BODY),
+    });
+
+    expect(response.status).toBe(404);
+  });
+
+  test('returns 409 when the interaction is already resolved', async () => {
+    mockGetWorkflowRun.mockResolvedValue(mockAskPausedRun());
+    mockResolvePendingInteraction.mockRejectedValueOnce(
+      new PendingInteractionAlreadyResolvedError('run-ask-1', ASK_REQUEST_ID, 'answered')
+    );
+    const { app } = makeApp();
+    const response = await app.request(
+      `/api/workflows/runs/run-ask-1/ask/${ASK_REQUEST_ID}/answer`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Archon-User': ASK_STARTER_USER_ID,
+        },
+        body: JSON.stringify(ASK_ANSWER_BODY),
+      }
+    );
+
+    expect(response.status).toBe(409);
+  });
+
+  test('returns 409 when the run is not paused', async () => {
+    mockGetWorkflowRun.mockResolvedValue(mockAskPausedRun());
+    mockResolvePendingInteraction.mockRejectedValueOnce(
+      new PendingInteractionRunNotPausedError('run-ask-1', 'running')
+    );
+    const { app } = makeApp();
+    const response = await app.request(
+      `/api/workflows/runs/run-ask-1/ask/${ASK_REQUEST_ID}/answer`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Archon-User': ASK_STARTER_USER_ID,
+        },
+        body: JSON.stringify(ASK_ANSWER_BODY),
+      }
+    );
+
+    expect(response.status).toBe(409);
+  });
+
+  test('returns 400 for a mixed answers-and-decline body', async () => {
+    mockGetWorkflowRun.mockResolvedValue(mockAskPausedRun());
+    const { app } = makeApp();
+    const response = await app.request(
+      `/api/workflows/runs/run-ask-1/ask/${ASK_REQUEST_ID}/answer`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Archon-User': ASK_STARTER_USER_ID,
+        },
+        body: JSON.stringify({ answers: ASK_ANSWER_BODY.answers, decline: true }),
+      }
+    );
+
+    expect(response.status).toBe(400);
+    expect(mockResolvePendingInteraction).not.toHaveBeenCalled();
+  });
+
+  test('returns 400 for semantic envelope validation failure', async () => {
+    mockGetWorkflowRun.mockResolvedValue(mockAskPausedRun());
+    mockResolvePendingInteraction.mockRejectedValueOnce(
+      new PendingInteractionValidationError('unknown_question')
+    );
+    const { app } = makeApp();
+    const response = await app.request(
+      `/api/workflows/runs/run-ask-1/ask/${ASK_REQUEST_ID}/answer`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Archon-User': ASK_STARTER_USER_ID,
+        },
+        body: JSON.stringify(ASK_ANSWER_BODY),
+      }
+    );
+
+    expect(response.status).toBe(400);
+  });
+
+  test('returns 500 for an unexpected operation error', async () => {
+    mockGetWorkflowRun.mockResolvedValue(mockAskPausedRun());
+    mockResolvePendingInteraction.mockRejectedValueOnce(new Error('db exploded'));
+    const { app } = makeApp();
+    const response = await app.request(
+      `/api/workflows/runs/run-ask-1/ask/${ASK_REQUEST_ID}/answer`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Archon-User': ASK_STARTER_USER_ID,
+        },
+        body: JSON.stringify(ASK_ANSWER_BODY),
+      }
+    );
+
+    expect(response.status).toBe(500);
+  });
+
+  test('dispatches /workflow resume once with the actor id for a last-pending web run', async () => {
+    mockGetWorkflowRun.mockResolvedValue(
+      mockAskPausedRun({ parent_conversation_id: 'parent-conv-uuid' })
+    );
+    mockGetConversationById.mockResolvedValue({
+      id: 'parent-conv-uuid',
+      platform_conversation_id: 'web-plat-ask',
+      platform_type: 'web',
+    });
+    mockResolvePendingInteraction.mockResolvedValue(mockResolvedAskInteraction({ resumed: true }));
+
+    const { app } = makeApp();
+    const response = await app.request(
+      `/api/workflows/runs/run-ask-1/ask/${ASK_REQUEST_ID}/answer`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Archon-User': ASK_STARTER_USER_ID,
+        },
+        body: JSON.stringify(ASK_ANSWER_BODY),
+      }
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { message: string };
+    expect(body.message).toContain('Resuming workflow');
+    expect(mockHandleMessage).toHaveBeenCalledTimes(1);
+    const [, platformConvId, dispatchedMessage, extraContext] = mockHandleMessage.mock.calls[0] as [
+      unknown,
+      string,
+      string,
+      { userId?: string },
+    ];
+    expect(platformConvId).toBe('web-plat-ask');
+    expect(dispatchedMessage).toBe('/workflow resume run-ask-1');
+    expect(extraContext.userId).toBe(ASK_STARTER_USER_ID);
+  });
+
+  test('does not auto-dispatch an intermediate answer', async () => {
+    mockGetWorkflowRun.mockResolvedValue(
+      mockAskPausedRun({ parent_conversation_id: 'parent-conv-uuid' })
+    );
+    mockGetConversationById.mockResolvedValue({
+      id: 'parent-conv-uuid',
+      platform_conversation_id: 'web-plat-ask',
+      platform_type: 'web',
+    });
+    mockResolvePendingInteraction.mockResolvedValue(
+      mockResolvedAskInteraction({ resumed: false, remainingPending: 1 })
+    );
+
+    const { app } = makeApp();
+    const response = await app.request(
+      `/api/workflows/runs/run-ask-1/ask/${ASK_REQUEST_ID}/answer`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Archon-User': ASK_STARTER_USER_ID,
+        },
+        body: JSON.stringify(ASK_ANSWER_BODY),
+      }
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { message: string };
+    expect(body.message).toContain('Other interactions remain');
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+  });
+
+  test('returns 200 and skips dispatch for a non-web parent', async () => {
+    mockGetWorkflowRun.mockResolvedValue(
+      mockAskPausedRun({ parent_conversation_id: 'parent-conv-uuid' })
+    );
+    mockGetConversationById.mockResolvedValue({
+      id: 'parent-conv-uuid',
+      platform_conversation_id: 'slack-thread',
+      platform_type: 'slack',
+    });
+    mockResolvePendingInteraction.mockResolvedValue(mockResolvedAskInteraction({ resumed: true }));
+
+    const { app } = makeApp();
+    const response = await app.request(
+      `/api/workflows/runs/run-ask-1/ask/${ASK_REQUEST_ID}/answer`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Archon-User': ASK_STARTER_USER_ID,
+        },
+        body: JSON.stringify(ASK_ANSWER_BODY),
+      }
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { success: boolean; message: string };
+    expect(body.success).toBe(true);
+    expect(body.message).toContain('archon workflow resume run-ask-1');
+    expect(mockHandleMessage).not.toHaveBeenCalled();
   });
 });
 

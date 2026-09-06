@@ -25,6 +25,26 @@ export interface ResolvedSession<TSessionManager> {
   resumeFailed: boolean;
 }
 
+export interface ResolvePiSessionOptions {
+  /**
+   * When true, a missing or unlistable session throws
+   * {@link PiSessionResumeRequiredError} instead of creating a fresh session.
+   * Used for AskHuman resume so the provider never cold-starts.
+   */
+  requireExisting?: boolean;
+}
+
+/**
+ * AskHuman resume requires an existing Pi session file. Thrown instead of
+ * falling through to `SessionManager.create`.
+ */
+export class PiSessionResumeRequiredError extends Error {
+  constructor() {
+    super('Could not resume the AskHuman session');
+    this.name = 'PiSessionResumeRequiredError';
+  }
+}
+
 /**
  * Resolve a Pi `SessionManager` for a sendQuery call.
  *
@@ -47,9 +67,14 @@ export interface ResolvedSession<TSessionManager> {
 export async function resolvePiSession<TSessionManager>(
   cwd: string,
   resumeSessionId: string | undefined,
-  sessionManagerApi: PiSessionManagerApi<TSessionManager>
+  sessionManagerApi: PiSessionManagerApi<TSessionManager>,
+  options?: ResolvePiSessionOptions
 ): Promise<ResolvedSession<TSessionManager>> {
+  const requireExisting = options?.requireExisting === true;
   if (!resumeSessionId) {
+    if (requireExisting) {
+      throw new PiSessionResumeRequiredError();
+    }
     return { sessionManager: sessionManagerApi.create(cwd), resumeFailed: false };
   }
 
@@ -67,6 +92,13 @@ export async function resolvePiSession<TSessionManager>(
     // (permission denied, corrupt JSONL, etc.) must propagate so failures
     // aren't papered over as a silent "no resume, fresh session" success.
     if (!isMissingSessionDirError(err)) throw err;
+    if (requireExisting) {
+      throw new PiSessionResumeRequiredError();
+    }
+  }
+
+  if (requireExisting) {
+    throw new PiSessionResumeRequiredError();
   }
 
   return { sessionManager: sessionManagerApi.create(cwd), resumeFailed: true };

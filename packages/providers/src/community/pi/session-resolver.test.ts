@@ -10,7 +10,7 @@ const sessionManagerApi = {
   list: mockList,
 };
 
-import { resolvePiSession } from './session-resolver';
+import { PiSessionResumeRequiredError, resolvePiSession } from './session-resolver';
 
 describe('resolvePiSession', () => {
   beforeEach(() => {
@@ -103,5 +103,88 @@ describe('resolvePiSession', () => {
     expect(result.resumeFailed).toBe(false);
     expect(mockList).not.toHaveBeenCalled();
     expect(mockCreate).toHaveBeenCalled();
+  });
+});
+
+describe('resolvePiSession requireExisting', () => {
+  beforeEach(() => {
+    mockCreate.mockClear();
+    mockOpen.mockClear();
+    mockList.mockClear();
+    mockList.mockImplementation(async () => []);
+  });
+
+  test('missing id throws without create', async () => {
+    await expect(
+      resolvePiSession('/tmp/proj', undefined, sessionManagerApi, { requireExisting: true })
+    ).rejects.toBeInstanceOf(PiSessionResumeRequiredError);
+    expect(mockCreate).not.toHaveBeenCalled();
+    expect(mockList).not.toHaveBeenCalled();
+  });
+
+  test('empty id throws without create', async () => {
+    await expect(
+      resolvePiSession('/tmp/proj', '', sessionManagerApi, { requireExisting: true })
+    ).rejects.toBeInstanceOf(PiSessionResumeRequiredError);
+    expect(mockCreate).not.toHaveBeenCalled();
+    expect(mockList).not.toHaveBeenCalled();
+  });
+
+  test('ENOENT throws without create', async () => {
+    mockList.mockImplementationOnce(async () => {
+      throw Object.assign(new Error('no such directory'), { code: 'ENOENT' });
+    });
+
+    await expect(
+      resolvePiSession('/tmp/proj', 'sess-1', sessionManagerApi, { requireExisting: true })
+    ).rejects.toBeInstanceOf(PiSessionResumeRequiredError);
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  test('ENOTDIR throws without create', async () => {
+    mockList.mockImplementationOnce(async () => {
+      throw Object.assign(new Error('not a directory'), { code: 'ENOTDIR' });
+    });
+
+    await expect(
+      resolvePiSession('/tmp/proj', 'sess-1', sessionManagerApi, { requireExisting: true })
+    ).rejects.toBeInstanceOf(PiSessionResumeRequiredError);
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  test('id not found throws without create', async () => {
+    mockList.mockImplementationOnce(async () => [
+      { id: 'other', path: '/sessions/other.jsonl', cwd: '/tmp/proj' },
+    ]);
+
+    await expect(
+      resolvePiSession('/tmp/proj', 'missing-id', sessionManagerApi, { requireExisting: true })
+    ).rejects.toBeInstanceOf(PiSessionResumeRequiredError);
+    expect(mockCreate).not.toHaveBeenCalled();
+    expect(mockOpen).not.toHaveBeenCalled();
+  });
+
+  test('matching id still opens and does not create', async () => {
+    mockList.mockImplementationOnce(async () => [
+      { id: 'sess-1', path: '/sessions/sess-1.jsonl', cwd: '/tmp/proj' },
+    ]);
+
+    const result = await resolvePiSession('/tmp/proj', 'sess-1', sessionManagerApi, {
+      requireExisting: true,
+    });
+    expect(result.resumeFailed).toBe(false);
+    expect(mockOpen).toHaveBeenCalledWith('/sessions/sess-1.jsonl');
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  test('unexpected list error still propagates', async () => {
+    mockList.mockImplementationOnce(async () => {
+      throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    });
+
+    await expect(
+      resolvePiSession('/tmp/proj', 'sess-1', sessionManagerApi, { requireExisting: true })
+    ).rejects.toThrow(/permission denied/);
+    expect(mockCreate).not.toHaveBeenCalled();
   });
 });

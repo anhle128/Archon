@@ -112,6 +112,7 @@ import type {
   NodeOutput,
   WorkflowRun,
   WorkflowDefinition,
+  PendingInteraction,
 } from './schemas';
 import { dagNodeSchema, isBashNode, isLoopNode } from './schemas';
 import { discoverWorkflows } from './workflow-discovery';
@@ -267,6 +268,24 @@ function createMockStore(): IWorkflowStore {
       resolved_by: null,
     })),
     listPendingInteractions: mock(async () => []),
+    resolvePendingInteraction: mock(async input => ({
+      interaction: {
+        id: 'pending-1',
+        workflow_run_id: input.workflow_run_id,
+        node_id: 'review',
+        tool_use_id: input.tool_use_id,
+        kind: 'ask' as const,
+        status: 'answered' as const,
+        envelope: {},
+        answer: input.answer,
+        provider_session_id: 'sess-1',
+        created_at: new Date(),
+        resolved_at: new Date(),
+        resolved_by: input.resolved_by,
+      },
+      resumed: false,
+      remaining_pending: 0,
+    })),
   };
 }
 
@@ -6928,14 +6947,14 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
 
       expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
       // Accepted contract: speckit-ralph-native-feature.yaml ralph-loop-run uses
-      // omp + xai-oauth/grok-4.5 @ high (final loop: anthropic/claude-sonnet-5).
+      // omp + alibaba-token-plan/deepseek-v4-pro @ max (final loop: anthropic/claude-sonnet-5).
       const loopNode = fixture.workflow.nodes.find(node => node.id === 'ralph-loop-run');
       expect(loopNode?.provider).toBe('omp');
-      expect(loopNode?.model).toBe('xai-oauth/grok-4.5');
+      expect(loopNode?.model).toBe('alibaba-token-plan/deepseek-v4-pro');
       expect(mockGetAgentProviderDag.mock.calls[0][0]).toBe('omp');
       const options = mockSendQueryDag.mock.calls[0][3] as SendQueryOptions;
       expect(options.model).toBe(loopNode?.model);
-      expect(options.nodeConfig?.effort).toBe('high');
+      expect(options.nodeConfig?.effort).toBe('max');
       expect(store.completeWorkflowRun).toHaveBeenCalled();
       expect(store.failWorkflowRun).not.toHaveBeenCalled();
       expect(existsSync(fixture.syncMarkerPath)).toBe(true);
@@ -24976,6 +24995,58 @@ describe('executeDagWorkflow -- AskHuman pause', () => {
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
   });
 
+  it('does not advance downstream when an answer races the pause cleanup', async () => {
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(async function* (
+      _prompt: string,
+      _cwd: string,
+      _resume?: string,
+      options?: SendQueryOptions
+    ) {
+      calls += 1;
+      if (calls === 1) {
+        await invokeInjectedAskHuman(options);
+        return;
+      }
+      yield { type: 'assistant', content: 'downstream should not run' };
+    });
+
+    const store = createMockStore();
+    let status: 'running' | 'paused' = 'running';
+    store.getWorkflowRunStatus = mock(async () => status);
+    store.pauseWorkflowRun = mock(async () => {
+      status = 'running';
+    });
+    const workflowRun = makeWorkflowRun('ask-pause-race-run');
+
+    await executeDagWorkflow(
+      createMockDeps(store),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      {
+        name: 'ask-pause-race',
+        nodes: [
+          { id: 'review', prompt: 'ask the starter', allowed_tools: ['AskHuman'] },
+          { id: 'after', depends_on: ['review'], prompt: 'after' },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
+
   it('does not inject AskHuman on a Codex command node', async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
@@ -25343,5 +25414,623 @@ describe('executeDagWorkflow -- AskHuman CAP-7 preflight', () => {
       )
     ).rejects.toThrow(/AskHuman is not supported by provider 'grok'/);
     expect(mockSendQueryDag.mock.calls.length).toBe(0);
+  });
+});
+
+describe('executeDagWorkflow -- AskHuman resume re-entry', () => {
+  const ANSWER_SENTINEL = 'SENTINEL_ANSWER_ZX9';
+  const ASK_RESUME_FAILED_MESSAGE = 'Could not resume the AskHuman session';
+  const askQuestions = [
+    {
+      id: 'q1',
+      prompt: 'Ship it?',
+      selection: 'single' as const,
+      options: ['yes', 'no'],
+      allowOther: false,
+    },
+  ];
+
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `dag-ask-resume-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const commandsDir = join(testDir, '.archon', 'commands');
+    await mkdir(commandsDir, { recursive: true });
+    await writeFile(join(commandsDir, 'my-cmd.md'), 'Ask the starter about $USER_MESSAGE');
+    mockSendQueryDag.mockClear();
+    mockLogFn.mockClear();
+    mockGetAgentProviderDag.mockClear();
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+  });
+
+  afterEach(async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  function makeAnsweredAsk(
+    overrides: Partial<PendingInteraction> & { node_id: string; tool_use_id: string }
+  ): PendingInteraction {
+    return {
+      id: 'ask-row-1',
+      workflow_run_id: 'ask-resume-run',
+      kind: 'ask',
+      status: 'answered',
+      envelope: { questions: askQuestions },
+      answer: { answers: [{ questionId: 'q1', value: ANSWER_SENTINEL }] },
+      provider_session_id: 'sess-ask',
+      created_at: new Date('2026-09-06T00:00:00.000Z'),
+      resolved_at: new Date('2026-09-06T00:01:00.000Z'),
+      resolved_by: 'user-1',
+      ...overrides,
+    };
+  }
+
+  function wireAnsweredAsks(store: IWorkflowStore, rows: PendingInteraction[]): void {
+    store.listPendingInteractions = mock(async () => rows);
+  }
+
+  function storedEventTypes(store: IWorkflowStore): string[] {
+    return (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.map(
+      call => (call[0] as { event_type: string }).event_type
+    );
+  }
+
+  function payloadHasSentinel(value: unknown): boolean {
+    return JSON.stringify(value).includes(ANSWER_SENTINEL);
+  }
+
+  async function invokeDag(
+    store: IWorkflowStore,
+    nodes: DagNode[],
+    workflowRun = makeWorkflowRun('ask-resume-run'),
+    assistant: 'claude' | 'pi' = 'claude'
+  ): Promise<void> {
+    const config =
+      assistant === 'pi'
+        ? {
+            ...minimalConfig,
+            assistant: 'pi' as const,
+            assistants: { ...minimalConfig.assistants, pi: {} },
+          }
+        : minimalConfig;
+    await executeDagWorkflow(
+      createMockDeps(store),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      { name: 'ask-resume', nodes },
+      workflowRun,
+      assistant,
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      config
+    );
+  }
+
+  it('re-enters a command node with mapped resumeInteractions and no prompt leak', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'ok' };
+      yield { type: 'result', sessionId: 'sess-ask' };
+    });
+    const store = createMockStore();
+    const row = makeAnsweredAsk({ node_id: 'review', tool_use_id: 'toolu_1' });
+    wireAnsweredAsks(store, [row]);
+
+    await invokeDag(store, [{ id: 'review', command: 'my-cmd' }]);
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    const [prompt, , resumeId, options] = mockSendQueryDag.mock.calls[0] as [
+      string,
+      string,
+      string | undefined,
+      SendQueryOptions,
+    ];
+    expect(prompt).toContain('Ask the starter about');
+    expect(prompt).not.toContain(ANSWER_SENTINEL);
+    expect(resumeId).toBe('sess-ask');
+    expect(options.forkSession).toBe(false);
+    expect(options.resumeInteractions).toEqual([
+      {
+        tool_use_id: 'toolu_1',
+        payload: [{ questionId: 'q1', value: ANSWER_SENTINEL }],
+        declined: false,
+      },
+    ]);
+  });
+
+  it('maps decline to declined payload', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'ok' };
+      yield { type: 'result', sessionId: 'sess-ask' };
+    });
+    const store = createMockStore();
+    wireAnsweredAsks(store, [
+      makeAnsweredAsk({
+        node_id: 'review',
+        tool_use_id: 'toolu_declined',
+        answer: { decline: true },
+      }),
+    ]);
+
+    await invokeDag(store, [{ id: 'review', prompt: 'ask the starter' }]);
+
+    const options = mockSendQueryDag.mock.calls[0][3] as SendQueryOptions;
+    expect(options.resumeInteractions).toEqual([
+      { tool_use_id: 'toolu_declined', payload: 'declined', declined: true },
+    ]);
+  });
+
+  it('orders two rows by created_at then id', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'ok' };
+      yield { type: 'result', sessionId: 'sess-ask' };
+    });
+    const store = createMockStore();
+    wireAnsweredAsks(store, [
+      makeAnsweredAsk({
+        id: 'b',
+        node_id: 'review',
+        tool_use_id: 'toolu_second',
+        created_at: new Date('2026-09-06T00:00:02.000Z'),
+      }),
+      makeAnsweredAsk({
+        id: 'a',
+        node_id: 'review',
+        tool_use_id: 'toolu_first',
+        created_at: new Date('2026-09-06T00:00:01.000Z'),
+      }),
+    ]);
+
+    await invokeDag(store, [{ id: 'review', prompt: 'ask' }]);
+    const options = mockSendQueryDag.mock.calls[0][3] as SendQueryOptions;
+    expect(options.resumeInteractions?.map(item => item.tool_use_id)).toEqual([
+      'toolu_first',
+      'toolu_second',
+    ]);
+  });
+
+  it('keeps a shared provider session across two rows on one node', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'ok' };
+      yield { type: 'result', sessionId: 'sess-shared' };
+    });
+    const store = createMockStore();
+    wireAnsweredAsks(store, [
+      makeAnsweredAsk({
+        id: 'a',
+        node_id: 'review',
+        tool_use_id: 'toolu_a',
+        provider_session_id: 'sess-shared',
+        created_at: new Date('2026-09-06T00:00:01.000Z'),
+      }),
+      makeAnsweredAsk({
+        id: 'b',
+        node_id: 'review',
+        tool_use_id: 'toolu_b',
+        provider_session_id: 'sess-shared',
+        created_at: new Date('2026-09-06T00:00:02.000Z'),
+      }),
+    ]);
+
+    await invokeDag(store, [{ id: 'review', prompt: 'ask' }]);
+    expect(mockSendQueryDag.mock.calls[0][2]).toBe('sess-shared');
+    expect((mockSendQueryDag.mock.calls[0][3] as SendQueryOptions).resumeInteractions).toHaveLength(
+      2
+    );
+  });
+
+  it('fails safely on conflicting provider session ids', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'ok' };
+      yield { type: 'result', sessionId: 'sess-ask' };
+    });
+    const store = createMockStore();
+    wireAnsweredAsks(store, [
+      makeAnsweredAsk({
+        id: 'a',
+        node_id: 'review',
+        tool_use_id: 'toolu_a',
+        provider_session_id: 'sess-1',
+      }),
+      makeAnsweredAsk({
+        id: 'b',
+        node_id: 'review',
+        tool_use_id: 'toolu_b',
+        provider_session_id: 'sess-2',
+      }),
+    ]);
+
+    await invokeDag(store, [{ id: 'review', prompt: 'ask' }]);
+    expect(mockSendQueryDag.mock.calls.length).toBe(0);
+    expect(store.failWorkflowRun).toHaveBeenCalled();
+    expect(storedEventTypes(store)).toContain('node_failed');
+    const failed = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.find(
+      call => (call[0] as { event_type: string }).event_type === 'node_failed'
+    );
+    expect((failed?.[0] as { data: { error: string } }).data.error).toBe(ASK_RESUME_FAILED_MESSAGE);
+    expect(payloadHasSentinel(mockLogFn.mock.calls)).toBe(false);
+  });
+
+  it('fails safely on a malformed stored answer', async () => {
+    const store = createMockStore();
+    wireAnsweredAsks(store, [
+      makeAnsweredAsk({
+        node_id: 'review',
+        tool_use_id: 'toolu_bad',
+        answer: { garbage: true } as unknown as PendingInteraction['answer'],
+      }),
+    ]);
+
+    await invokeDag(store, [{ id: 'review', prompt: 'ask' }]);
+    expect(mockSendQueryDag.mock.calls.length).toBe(0);
+    expect(storedEventTypes(store)).toContain('node_failed');
+    expect(payloadHasSentinel(mockLogFn.mock.calls)).toBe(false);
+  });
+
+  it('does not attach interactions to an unrelated later node', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'ok' };
+      yield { type: 'result', sessionId: 'sess-later' };
+    });
+    const store = createMockStore();
+    wireAnsweredAsks(store, [makeAnsweredAsk({ node_id: 'review', tool_use_id: 'toolu_1' })]);
+
+    await invokeDag(store, [
+      { id: 'review', prompt: 'ask' },
+      { id: 'summarize', prompt: 'summarize without asking', depends_on: ['review'] },
+    ]);
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(2);
+    const reviewOpts = mockSendQueryDag.mock.calls[0][3] as SendQueryOptions;
+    const laterOpts = mockSendQueryDag.mock.calls[1][3] as SendQueryOptions;
+    expect(reviewOpts.resumeInteractions).toHaveLength(1);
+    expect(laterOpts.resumeInteractions).toBeUndefined();
+  });
+
+  it('re-enters two sibling asking nodes with their own interactions', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'ok' };
+      yield { type: 'result', sessionId: 'sess-ask' };
+    });
+    const store = createMockStore();
+    wireAnsweredAsks(store, [
+      makeAnsweredAsk({
+        id: 'row-a',
+        node_id: 'alpha',
+        tool_use_id: 'toolu_alpha',
+        provider_session_id: 'sess-alpha',
+      }),
+      makeAnsweredAsk({
+        id: 'row-b',
+        node_id: 'beta',
+        tool_use_id: 'toolu_beta',
+        provider_session_id: 'sess-beta',
+      }),
+    ]);
+
+    await invokeDag(store, [
+      { id: 'alpha', prompt: 'ask alpha' },
+      { id: 'beta', prompt: 'ask beta' },
+    ]);
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(2);
+    const bySession = new Map(
+      mockSendQueryDag.mock.calls.map(call => [
+        call[2] as string,
+        (call[3] as SendQueryOptions).resumeInteractions?.[0]?.tool_use_id,
+      ])
+    );
+    expect(bySession.get('sess-alpha')).toBe('toolu_alpha');
+    expect(bySession.get('sess-beta')).toBe('toolu_beta');
+  });
+
+  it('omits resumeInteractions on a structured correction pass', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'pi',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+    let n = 0;
+    mockSendQueryDag.mockImplementation(function* () {
+      n++;
+      if (n === 1) {
+        yield { type: 'result', sessionId: 'sess-ask', structuredOutput: { other: 'x' } };
+        return;
+      }
+      yield { type: 'assistant', content: 'ok' };
+      yield {
+        type: 'result',
+        sessionId: 'sess-ask',
+        structuredOutput: { verdict: 'yes' },
+      };
+    });
+    const store = createMockStore();
+    wireAnsweredAsks(store, [makeAnsweredAsk({ node_id: 'review', tool_use_id: 'toolu_1' })]);
+
+    await invokeDag(
+      store,
+      [
+        {
+          id: 'review',
+          provider: 'pi',
+          prompt: 'ask',
+          output_format: {
+            type: 'object',
+            properties: { verdict: { type: 'string' } },
+            required: ['verdict'],
+          },
+        },
+      ],
+      makeWorkflowRun('ask-resume-run'),
+      'pi'
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(2);
+    expect((mockSendQueryDag.mock.calls[0][3] as SendQueryOptions).resumeInteractions).toHaveLength(
+      1
+    );
+    expect(
+      (mockSendQueryDag.mock.calls[1][3] as SendQueryOptions).resumeInteractions
+    ).toBeUndefined();
+  });
+
+  it('gives a loop resumeInteractions only on the first pass of the first resumed iteration', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'pi',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+    let n = 0;
+    mockSendQueryDag.mockImplementation(function* () {
+      n++;
+      if (n === 1) {
+        yield { type: 'result', sessionId: 'sess-loop', structuredOutput: { other: 'x' } };
+        return;
+      }
+      if (n === 2) {
+        yield { type: 'assistant', content: 'still going' };
+        yield {
+          type: 'result',
+          sessionId: 'sess-loop',
+          structuredOutput: { verdict: 'wait' },
+        };
+        return;
+      }
+      yield { type: 'assistant', content: 'DONE' };
+      yield {
+        type: 'result',
+        sessionId: 'sess-loop',
+        structuredOutput: { verdict: 'done' },
+      };
+    });
+    const store = createMockStore();
+    wireAnsweredAsks(store, [
+      makeAnsweredAsk({
+        node_id: 'refine',
+        tool_use_id: 'toolu_loop',
+        provider_session_id: 'sess-loop',
+      }),
+    ]);
+
+    await invokeDag(
+      store,
+      [
+        {
+          id: 'refine',
+          provider: 'pi',
+          output_format: {
+            type: 'object',
+            properties: { verdict: { type: 'string' } },
+            required: ['verdict'],
+          },
+          loop: {
+            prompt: 'Do the work until DONE.',
+            until: 'DONE',
+            max_iterations: 5,
+          },
+        },
+      ],
+      makeWorkflowRun('ask-resume-run'),
+      'pi'
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(3);
+    expect(mockSendQueryDag.mock.calls[0][2]).toBe('sess-loop');
+    expect((mockSendQueryDag.mock.calls[0][3] as SendQueryOptions).forkSession).toBe(false);
+    expect((mockSendQueryDag.mock.calls[0][3] as SendQueryOptions).resumeInteractions).toEqual([
+      {
+        tool_use_id: 'toolu_loop',
+        payload: [{ questionId: 'q1', value: ANSWER_SENTINEL }],
+        declined: false,
+      },
+    ]);
+    expect(
+      (mockSendQueryDag.mock.calls[1][3] as SendQueryOptions).resumeInteractions
+    ).toBeUndefined();
+    expect(
+      (mockSendQueryDag.mock.calls[2][3] as SendQueryOptions).resumeInteractions
+    ).toBeUndefined();
+    const prompts = mockSendQueryDag.mock.calls.map(call => call[0] as string);
+    expect(prompts.every(prompt => !prompt.includes(ANSWER_SENTINEL))).toBe(true);
+  });
+
+  it('uses zero engine retries and a safe node_failed message on provider resume throw', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      throw new Error(`provider boom ${ANSWER_SENTINEL}`);
+    });
+    const store = createMockStore();
+    const rows = [makeAnsweredAsk({ node_id: 'review', tool_use_id: 'toolu_1' })];
+    wireAnsweredAsks(store, rows);
+
+    await invokeDag(store, [
+      {
+        id: 'review',
+        prompt: 'ask',
+        retry: { max_attempts: 5, delay_ms: 1000, on_error: 'all' },
+      },
+    ]);
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    expect(storedEventTypes(store)).toContain('node_failed');
+    const failed = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.find(
+      call => (call[0] as { event_type: string }).event_type === 'node_failed'
+    );
+    expect((failed?.[0] as { data: { error: string } }).data.error).toBe(ASK_RESUME_FAILED_MESSAGE);
+    const rowsAfter = await store.listPendingInteractions('ask-resume-run');
+    expect(rowsAfter[0]?.status).toBe('answered');
+    expect(mockLogFn.mock.calls.some(call => call[1] === 'workflow.ask_resume_failed')).toBe(true);
+    expect(payloadHasSentinel(mockLogFn.mock.calls)).toBe(false);
+    expect(
+      payloadHasSentinel((store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls)
+    ).toBe(false);
+    const transcript = await store.listNodeMessages('ask-resume-run', 'review');
+    expect(
+      transcript.some(
+        row =>
+          row.kind === 'status' &&
+          row.payload.state === 'failed' &&
+          row.payload.detail === ASK_RESUME_FAILED_MESSAGE
+      )
+    ).toBe(true);
+    const logPath = join(testDir, 'logs', 'ask-resume-run.jsonl');
+    if (existsSync(logPath)) {
+      expect(readFileSync(logPath, 'utf8')).not.toContain(ANSWER_SENTINEL);
+    }
+  });
+
+  it('pauses normally when the resumed turn calls AskHuman again', async () => {
+    mockSendQueryDag.mockImplementation(async function* (
+      _prompt: string,
+      _cwd: string,
+      _resume?: string,
+      options?: SendQueryOptions
+    ) {
+      const ask = options?.nativeTools?.find(tool => tool.name === 'AskHuman');
+      if (!ask) throw new Error('AskHuman was not injected');
+      await ask.handler(
+        { questions: askQuestions },
+        { toolUseId: 'toolu_2', sessionId: 'sess-ask' }
+      );
+    });
+    const store = createMockStore();
+    let status: 'running' | 'paused' = 'running';
+    store.getWorkflowRunStatus = mock(async () => status);
+    store.pauseWorkflowRun = mock(async () => {
+      status = 'paused';
+    });
+    wireAnsweredAsks(store, [makeAnsweredAsk({ node_id: 'review', tool_use_id: 'toolu_1' })]);
+
+    await invokeDag(store, [{ id: 'review', prompt: 'ask', allowed_tools: ['AskHuman'] }]);
+
+    expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(storedEventTypes(store)).not.toContain('node_failed');
+    expect(mockLogFn.mock.calls.some(call => call[1] === 'workflow.ask_resume_failed')).toBe(false);
+  });
+
+  it('rejects a run that still has a pending Ask row', async () => {
+    const store = createMockStore();
+    wireAnsweredAsks(store, [
+      {
+        ...makeAnsweredAsk({ node_id: 'review', tool_use_id: 'toolu_1' }),
+        status: 'pending',
+        answer: null,
+        resolved_at: null,
+        resolved_by: null,
+      },
+    ]);
+
+    await expect(invokeDag(store, [{ id: 'review', prompt: 'ask' }])).rejects.toThrow(
+      'Answer or decline the Ask before resuming run ask-resume-run'
+    );
+    expect(mockSendQueryDag.mock.calls.length).toBe(0);
+  });
+
+  it('fails the workflow when an answered Ask names a node missing from the DAG', async () => {
+    const store = createMockStore();
+    wireAnsweredAsks(store, [
+      makeAnsweredAsk({ node_id: 'removed-node', tool_use_id: 'toolu_missing' }),
+    ]);
+
+    await expect(invokeDag(store, [{ id: 'review', prompt: 'ask' }])).rejects.toThrow(
+      ASK_RESUME_FAILED_MESSAGE
+    );
+    expect(mockSendQueryDag.mock.calls.length).toBe(0);
+    expect(store.failWorkflowRun).toHaveBeenCalledWith('ask-resume-run', ASK_RESUME_FAILED_MESSAGE);
+    expect(mockLogFn.mock.calls.some(call => call[1] === 'workflow.ask_resume_failed')).toBe(true);
+    expect(payloadHasSentinel(mockLogFn.mock.calls)).toBe(false);
+    const rowsAfter = await store.listPendingInteractions('ask-resume-run');
+    expect(rowsAfter[0]?.status).toBe('answered');
+  });
+
+  it('ignores answered Permission rows when mapping Ask resume', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'ok' };
+      yield { type: 'result', sessionId: 'fresh' };
+    });
+    const store = createMockStore();
+    wireAnsweredAsks(store, [
+      {
+        ...makeAnsweredAsk({ node_id: 'review', tool_use_id: 'perm_1' }),
+        kind: 'permission',
+      },
+    ]);
+
+    await invokeDag(store, [{ id: 'review', prompt: 'no ask' }]);
+    expect(
+      (mockSendQueryDag.mock.calls[0][3] as SendQueryOptions).resumeInteractions
+    ).toBeUndefined();
+  });
+
+  it('matches loop_group body step names when mapping answered Asks', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'COMPLETE' };
+      yield { type: 'result', sessionId: 'sess-body' };
+    });
+    const store = createMockStore();
+    wireAnsweredAsks(store, [
+      makeAnsweredAsk({
+        node_id: 'grp.body',
+        tool_use_id: 'toolu_body',
+        provider_session_id: 'sess-body',
+      }),
+    ]);
+
+    await invokeDag(store, [
+      {
+        id: 'grp',
+        loop_group: {
+          until: 'COMPLETE',
+          max_iterations: 1,
+          nodes: [{ id: 'body', prompt: 'emit COMPLETE' }],
+        },
+      },
+    ]);
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    expect(mockSendQueryDag.mock.calls[0][2]).toBe('sess-body');
+    expect((mockSendQueryDag.mock.calls[0][3] as SendQueryOptions).resumeInteractions).toEqual([
+      {
+        tool_use_id: 'toolu_body',
+        payload: [{ questionId: 'q1', value: ANSWER_SENTINEL }],
+        declined: false,
+      },
+    ]);
   });
 });

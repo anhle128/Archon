@@ -13,7 +13,7 @@ mock.module('@archon/core/db/workflow-events', () => ({
 
 import { DashboardEventPoller } from './dashboard-event-poller';
 import type { DashboardTransport } from './dashboard-event-poller';
-import { mapWorkflowEventRow } from './workflow-bridge';
+import { DASHBOARD_SOURCE_EVENT_TYPES, mapWorkflowEventRow } from './workflow-bridge';
 
 function row(over: Partial<WorkflowEventRow>): WorkflowEventRow {
   return {
@@ -186,6 +186,67 @@ describe('mapWorkflowEventRow', () => {
     expect(e.questions).toBeUndefined();
   });
 
+  test('interaction_resolved resumed true → workflow_status running without Ask payload', () => {
+    const e = JSON.parse(
+      mapWorkflowEventRow(
+        row({
+          event_type: 'interaction_resolved',
+          step_name: 'review',
+          data: {
+            resumed: true,
+            node_id: 'review',
+            tool_use_id: 'toolu_1',
+            envelope: { questions: [{ id: 'q1' }] },
+            answer: { answers: [{ questionId: 'q1', value: 'secret' }] },
+            questions: [{ id: 'q1' }],
+            options: ['a'],
+          },
+        })
+      ) as string
+    ) as Record<string, unknown>;
+    expect(e).toMatchObject({ type: 'workflow_status', runId: 'r1', status: 'running' });
+    expect(e.toolUseId).toBeUndefined();
+    expect(e.envelope).toBeUndefined();
+    expect(e.answer).toBeUndefined();
+    expect(e.questions).toBeUndefined();
+    expect(e.options).toBeUndefined();
+    expect(e.approval).toBeUndefined();
+  });
+
+  test('interaction_resolved missing resumed → paused fail-safe without Ask payload', () => {
+    const e = JSON.parse(
+      mapWorkflowEventRow(row({ event_type: 'interaction_resolved', data: {} })) as string
+    ) as Record<string, unknown>;
+    expect(e).toMatchObject({ type: 'workflow_status', runId: 'r1', status: 'paused' });
+    expect(e.approval).toBeUndefined();
+  });
+
+  test('interaction_resolved purged cancelled → cancelled without Ask payload', () => {
+    const e = JSON.parse(
+      mapWorkflowEventRow(
+        row({
+          event_type: 'interaction_resolved',
+          data: { purged: true, terminal_status: 'cancelled', resumed: false },
+        })
+      ) as string
+    ) as Record<string, unknown>;
+    expect(e).toMatchObject({ type: 'workflow_status', runId: 'r1', status: 'cancelled' });
+    expect(e.approval).toBeUndefined();
+  });
+
+  test('interaction_resolved purged failed → failed without Ask payload', () => {
+    const e = JSON.parse(
+      mapWorkflowEventRow(
+        row({
+          event_type: 'interaction_resolved',
+          data: { purged: true, terminal_status: 'failed', resumed: false },
+        })
+      ) as string
+    ) as Record<string, unknown>;
+    expect(e).toMatchObject({ type: 'workflow_status', runId: 'r1', status: 'failed' });
+    expect(e.approval).toBeUndefined();
+  });
+
   test('approval_received → workflow_status running (clears the paused banner)', () => {
     const e = JSON.parse(mapWorkflowEventRow(row({ event_type: 'approval_received' })) as string);
     expect(e).toMatchObject({ type: 'workflow_status', status: 'running' });
@@ -218,6 +279,12 @@ describe('mapWorkflowEventRow', () => {
   });
 });
 
+describe('DASHBOARD_SOURCE_EVENT_TYPES', () => {
+  test('includes interaction_resolved in the poller allowlist', () => {
+    expect(DASHBOARD_SOURCE_EVENT_TYPES).toContain('interaction_resolved');
+  });
+});
+
 describe('DashboardEventPoller', () => {
   beforeEach(() => {
     mockListSince.mockReset();
@@ -237,6 +304,52 @@ describe('DashboardEventPoller', () => {
     expect(t.emitted).toHaveLength(1);
     expect(t.emitted[0].conv).toBe('__dashboard__');
     expect(JSON.parse(t.emitted[0].event).runId).toBe('r1');
+  });
+
+  test('interaction_resolved resumed true emits a running refetch trigger', async () => {
+    const t = makeTransport(true);
+    mockListSince.mockResolvedValueOnce([
+      row({
+        id: 'e-ask-resume',
+        event_type: 'interaction_resolved',
+        data: { resumed: true },
+      }),
+    ]);
+    const poller = new DashboardEventPoller();
+    poller.start(t, 1e9);
+    await poller.drainNow();
+    poller.stop();
+
+    expect(mockListSince.mock.calls[0]?.[2]).toContain('interaction_resolved');
+    expect(t.emitted).toHaveLength(1);
+    expect(JSON.parse(t.emitted[0].event)).toMatchObject({
+      type: 'workflow_status',
+      runId: 'r1',
+      status: 'running',
+    });
+    expect(JSON.parse(t.emitted[0].event).approval).toBeUndefined();
+  });
+
+  test('interaction_resolved purged cancelled emits a cancelled refetch trigger', async () => {
+    const t = makeTransport(true);
+    mockListSince.mockResolvedValueOnce([
+      row({
+        id: 'e-ask-purge',
+        event_type: 'interaction_resolved',
+        data: { purged: true, terminal_status: 'cancelled' },
+      }),
+    ]);
+    const poller = new DashboardEventPoller();
+    poller.start(t, 1e9);
+    await poller.drainNow();
+    poller.stop();
+
+    expect(t.emitted).toHaveLength(1);
+    expect(JSON.parse(t.emitted[0].event)).toMatchObject({
+      type: 'workflow_status',
+      runId: 'r1',
+      status: 'cancelled',
+    });
   });
 
   test('advances the cursor across seconds and only re-dedupes the newest second', async () => {

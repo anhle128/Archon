@@ -119,7 +119,6 @@ import {
 } from '@archon/core/schemas/workflow-env';
 import {
   RETRYABLE_WORKFLOW_STATUSES,
-  RESUMABLE_WORKFLOW_STATUSES,
   TERMINAL_WORKFLOW_STATUSES,
   isApprovalContext,
   isGateResolved,
@@ -418,9 +417,14 @@ import * as workflowNodeMessageDb from '@archon/core/db/workflow-node-messages';
 import * as workflowPendingInteractionDb from '@archon/core/db/workflow-pending-interactions';
 import {
   abandonWorkflow,
+  answerAskHuman,
   approveWorkflow,
+  AskHumanAuthenticationRequiredError,
+  AskHumanForbiddenError,
+  AskHumanRunNotFoundError,
   reviewOpenWorkflow,
   rejectWorkflow,
+  resumeWorkflow,
   resetWorkflowNodeSessions,
 } from '@archon/core/operations/workflow-operations';
 import { getAuth, isWebAuthEnabled, getSignupMode, isApiGateEnabled } from '../auth';
@@ -450,6 +454,7 @@ import {
   dashboardRunsQuerySchema,
   workflowRunsQuerySchema,
   approveWorkflowRunBodySchema,
+  askAnswerRequestSchema,
   rejectWorkflowRunBodySchema,
   resetWorkflowNodeSessionsParamsSchema,
   resetWorkflowNodeSessionsQuerySchema,
@@ -1445,6 +1450,38 @@ const rejectWorkflowRunRoute = createRoute({
     },
     400: jsonError('Bad request'),
     404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const answerAskHumanRoute = createRoute({
+  method: 'post',
+  path: '/api/workflows/runs/{runId}/ask/{requestId}/answer',
+  tags: ['Workflows'],
+  summary: 'Answer or decline a pending AskHuman interaction',
+  request: {
+    params: z.object({
+      runId: z.string().min(1),
+      requestId: z.string().min(1),
+    }),
+    body: {
+      content: {
+        'application/json': { schema: askAnswerRequestSchema },
+      },
+    },
+  },
+  responses: {
+    200: {
+      content: {
+        'application/json': { schema: workflowRunActionResponseSchema },
+      },
+      description: 'AskHuman answer accepted',
+    },
+    400: jsonError('Invalid AskHuman answer'),
+    401: jsonError('Authentication required'),
+    403: jsonError('Forbidden'),
+    404: jsonError('Not found'),
+    409: jsonError('Conflict'),
     500: jsonError('Server error'),
   },
 });
@@ -2841,7 +2878,7 @@ export function registerApiRoutes(
    */
   async function tryAutoResumeAfterGate(
     run: WorkflowRun,
-    action: 'approve' | 'reject' | 'review-open',
+    action: 'approve' | 'reject' | 'review-open' | 'ask-answer',
     // Identity of the user who approved/rejected the gate. The resumed chat
     // turn executes as THIS user (sender-first, #1976/#1982) — without it the
     // dispatch would fall back to the conversation creator's prefs/credentials.
@@ -2870,14 +2907,23 @@ export function registerApiRoutes(
                 'api.workflow_reject_auto_resume_skipped_non_web_parent' as const,
               failed: 'api.workflow_reject_auto_resume_failed' as const,
             }
-          : {
-              dispatched: 'api.workflow_review_open_auto_resume_dispatched' as const,
-              skippedNoPlatformConv:
-                'api.workflow_review_open_auto_resume_skipped_no_platform_conv' as const,
-              skippedNonWebParent:
-                'api.workflow_review_open_auto_resume_skipped_non_web_parent' as const,
-              failed: 'api.workflow_review_open_auto_resume_failed' as const,
-            };
+          : action === 'review-open'
+            ? {
+                dispatched: 'api.workflow_review_open_auto_resume_dispatched' as const,
+                skippedNoPlatformConv:
+                  'api.workflow_review_open_auto_resume_skipped_no_platform_conv' as const,
+                skippedNonWebParent:
+                  'api.workflow_review_open_auto_resume_skipped_non_web_parent' as const,
+                failed: 'api.workflow_review_open_auto_resume_failed' as const,
+              }
+            : {
+                dispatched: 'api.workflow_ask_answer_auto_resume_dispatched' as const,
+                skippedNoPlatformConv:
+                  'api.workflow_ask_answer_auto_resume_skipped_no_platform_conv' as const,
+                skippedNonWebParent:
+                  'api.workflow_ask_answer_auto_resume_skipped_non_web_parent' as const,
+                failed: 'api.workflow_ask_answer_auto_resume_failed' as const,
+              };
     try {
       const parentConv = await conversationDb.getConversationById(run.parent_conversation_id);
       const platformConvId = parentConv?.platform_conversation_id;
@@ -4308,13 +4354,7 @@ export function registerApiRoutes(
   registerOpenApiRoute(resumeWorkflowRunRoute, async c => {
     const runId = c.req.param('runId') ?? '';
     try {
-      const run = await workflowDb.getWorkflowRun(runId);
-      if (!run) {
-        return apiError(c, 404, 'Workflow run not found');
-      }
-      if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) {
-        return apiError(c, 400, `Cannot resume workflow in '${run.status}' status`);
-      }
+      const run = await resumeWorkflow(runId);
       // Dispatch resume by sending `/workflow resume <id>` to the parent web
       // conversation; the command handler validates the run and hands the
       // orchestrator an explicit resumeRun to hydrate. Explicit targeting (not
@@ -4355,6 +4395,16 @@ export function registerApiRoutes(
         message: `Resuming workflow: ${run.workflow_name}`,
       });
     } catch (error) {
+      if (error instanceof Error && error.message.startsWith('Workflow run not found:')) {
+        return apiError(c, 404, 'Workflow run not found');
+      }
+      if (
+        error instanceof Error &&
+        (error.message.startsWith('Answer or decline the Ask before resuming run ') ||
+          error.message.startsWith('Cannot resume run with status '))
+      ) {
+        return apiError(c, 400, error.message);
+      }
       getLog().error({ err: error, runId }, 'api.workflow_run_resume_failed');
       return apiError(c, 500, 'Failed to resume workflow run');
     }
@@ -4803,6 +4853,73 @@ export function registerApiRoutes(
     } catch (error) {
       getLog().error({ err: error, runId }, 'api.workflow_run_reject_failed');
       return apiError(c, 500, 'Failed to reject workflow run');
+    }
+  });
+
+  // Enforce Ask answer auth before OpenAPI body validation so unauthenticated
+  // callers receive 401 even when the install-wide API gate is disabled.
+  app.use('/api/workflows/runs/:runId/ask/:requestId/answer', async (c, next) => {
+    if (c.req.method !== 'POST') return next();
+    const requester = await resolveAuthContext(c);
+    if (!requester) return apiError(c, 401, 'Authentication required');
+    return next();
+  });
+
+  // POST /api/workflows/runs/:runId/ask/:requestId/answer - Answer or decline AskHuman
+  registerOpenApiRoute(answerAskHumanRoute, async c => {
+    const runId = c.req.param('runId') ?? '';
+    const requestId = c.req.param('requestId') ?? '';
+    try {
+      const requester = await resolveAuthContext(c);
+      if (!requester) {
+        return apiError(c, 401, 'Authentication required');
+      }
+      const body = getValidatedBody(c, askAnswerRequestSchema);
+      const result = await answerAskHuman({
+        runId,
+        requestId,
+        body,
+        actorUserId: requester.userId,
+      });
+
+      if (!result.resumed) {
+        return c.json({
+          success: true,
+          message: `AskHuman answer accepted: ${result.run.workflow_name}. Other interactions remain.`,
+        });
+      }
+
+      const autoResumed = await tryAutoResumeAfterGate(result.run, 'ask-answer', requester.userId);
+      return c.json({
+        success: true,
+        message: autoResumed
+          ? `AskHuman answer accepted: ${result.run.workflow_name}. Resuming workflow.`
+          : `AskHuman answer accepted: ${result.run.workflow_name}. Run \`archon workflow resume ${runId}\` from the CLI to continue, or resume it from the originating conversation.`,
+      });
+    } catch (error) {
+      if (error instanceof AskHumanAuthenticationRequiredError) {
+        return apiError(c, 401, error.message);
+      }
+      if (error instanceof AskHumanForbiddenError) {
+        return apiError(c, 403, error.message);
+      }
+      if (
+        error instanceof AskHumanRunNotFoundError ||
+        error instanceof workflowPendingInteractionDb.PendingInteractionNotFoundError
+      ) {
+        return apiError(c, 404, error.message);
+      }
+      if (
+        error instanceof workflowPendingInteractionDb.PendingInteractionAlreadyResolvedError ||
+        error instanceof workflowPendingInteractionDb.PendingInteractionRunNotPausedError
+      ) {
+        return apiError(c, 409, error.message);
+      }
+      if (error instanceof workflowPendingInteractionDb.PendingInteractionValidationError) {
+        return apiError(c, 400, error.message);
+      }
+      getLog().error({ err: error, runId, requestId }, 'api.workflow_ask_answer_failed');
+      return apiError(c, 500, 'Failed to answer AskHuman');
     }
   });
 

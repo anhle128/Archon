@@ -30,6 +30,7 @@ import type {
   OverlayChangeSummary,
   UsageBreakdown,
   NativeTool,
+  ResumeInteraction,
 } from '@archon/providers/types';
 import {
   CONTAINER_ENV_DENYLIST,
@@ -68,6 +69,7 @@ import type {
   LoopGateRunMetadata,
   ApprovalContext,
   WorkflowEvidencePolicy,
+  PendingInteraction,
 } from './schemas';
 import {
   isBashNode,
@@ -83,6 +85,7 @@ import {
   isPersistableNode,
   isCommandNode,
   isPromptNode,
+  askAnswerBodySchema,
   readSubrunMetadata,
   isApprovalContext,
   routeLoopRuntimeMetadataSchema,
@@ -1764,6 +1767,98 @@ async function pauseOnAskHuman(
   });
 }
 
+const ASK_RESUME_FAILED_MESSAGE = 'Could not resume the AskHuman session';
+
+class AskResumeFailedError extends Error {
+  readonly toolUseIds: readonly string[];
+  constructor(toolUseIds: readonly string[] = []) {
+    super(ASK_RESUME_FAILED_MESSAGE);
+    this.name = 'AskResumeFailedError';
+    this.toolUseIds = toolUseIds;
+  }
+}
+
+function logAskResumeFailed(
+  workflowRunId: string,
+  nodeId: string,
+  toolUseIds: readonly string[],
+  errorType: string
+): void {
+  getLog().error({ workflowRunId, nodeId, toolUseIds, errorType }, 'workflow.ask_resume_failed');
+}
+
+function collectStaticDagStepNames(nodes: readonly DagNode[], prefix = ''): Set<string> {
+  const names = new Set<string>();
+  for (const node of nodes) {
+    const stepName = prefix + node.id;
+    names.add(stepName);
+    if (isLoopGroupNode(node)) {
+      for (const child of collectStaticDagStepNames(node.loop_group.nodes, `${stepName}.`)) {
+        names.add(child);
+      }
+    }
+  }
+  return names;
+}
+
+function pendingCreatedAtMs(row: PendingInteraction): number {
+  const raw = row.created_at;
+  const ms = raw instanceof Date ? raw.getTime() : Date.parse(raw);
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function comparePendingInteractionOrder(a: PendingInteraction, b: PendingInteraction): number {
+  const byTime = pendingCreatedAtMs(a) - pendingCreatedAtMs(b);
+  if (byTime !== 0) return byTime;
+  return a.id.localeCompare(b.id);
+}
+
+interface MappedAskResume {
+  interactions: ResumeInteraction[];
+  sessionId: string | undefined;
+}
+
+function mapAnsweredAskResume(
+  rows: readonly PendingInteraction[],
+  stepName: string
+): MappedAskResume {
+  const matched = rows
+    .filter(row => row.kind === 'ask' && row.status === 'answered' && row.node_id === stepName)
+    .slice()
+    .sort(comparePendingInteractionOrder);
+  if (matched.length === 0) {
+    return { interactions: [], sessionId: undefined };
+  }
+  const sessionIds = new Set(matched.map(row => row.provider_session_id));
+  const sessionId = matched[0]?.provider_session_id;
+  if (sessionIds.size !== 1 || sessionId === undefined || sessionId === '') {
+    throw new AskResumeFailedError(matched.map(row => row.tool_use_id));
+  }
+  const interactions: ResumeInteraction[] = [];
+  for (const row of matched) {
+    const parsed = askAnswerBodySchema.safeParse(row.answer);
+    if (!parsed.success) {
+      throw new AskResumeFailedError(matched.map(item => item.tool_use_id));
+    }
+    if ('decline' in parsed.data) {
+      interactions.push({
+        tool_use_id: row.tool_use_id,
+        payload: 'declined',
+        declined: true,
+      });
+    } else if ('answers' in parsed.data) {
+      interactions.push({
+        tool_use_id: row.tool_use_id,
+        payload: parsed.data.answers,
+        declined: false,
+      });
+    } else {
+      throw new AskResumeFailedError(matched.map(item => item.tool_use_id));
+    }
+  }
+  return { interactions, sessionId };
+}
+
 /**
  * Execute a single DAG node. Returns NodeExecutionResult regardless of success/failure.
  * Always accumulates assistant text output (for $node_id.output substitution).
@@ -1790,7 +1885,8 @@ async function executeNodeInternal(
   issueContext?: string,
   nodeObservability?: NodeObservabilityMetadata,
   stepNamePrefix = '',
-  iteration?: number
+  iteration?: number,
+  resumeInteractions?: readonly ResumeInteraction[]
 ): Promise<NodeExecutionResult> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -2006,12 +2102,15 @@ async function executeNodeInternal(
   // Create per-node abort controller for idle timeout cleanup
   const nodeAbortController = new AbortController();
   // Fork when resuming — leaves the source session untouched so retries are safe.
-  const shouldForkSession = resumeSessionId !== undefined;
+  // AskHuman re-entry must continue the same aborted turn, so never fork.
+  const hasAskResume = resumeInteractions !== undefined && resumeInteractions.length > 0;
+  const shouldForkSession = resumeSessionId !== undefined && !hasAskResume;
   const nativeTools = nativeToolsForAskHuman(provider, deps.store, workflowRun.id, stepName);
   const nodeOptionsWithAbort: SendQueryOptions | undefined = {
     ...nodeOptions,
     abortSignal: nodeAbortController.signal,
     ...(shouldForkSession ? { forkSession: true } : {}),
+    ...(hasAskResume ? { forkSession: false, resumeInteractions } : {}),
     ...(nativeTools ? { nativeTools } : {}),
     traceContext: {
       name: 'execute-workflow-node',
@@ -2069,9 +2168,13 @@ async function executeNodeInternal(
     let passTerminalError = false;
     let passErrorSubtype: string | null = null;
     const backgroundTasks = createBackgroundTaskTracker();
+    const passOptions: SendQueryOptions = { ...(nodeOptionsWithAbort ?? {}) };
+    if (passReaskAttempt > 0) {
+      delete passOptions.resumeInteractions;
+    }
     try {
       for await (const msg of withIdleTimeout(
-        aiClient.sendQuery(attemptPrompt, cwd, attemptResumeId, nodeOptionsWithAbort),
+        aiClient.sendQuery(attemptPrompt, cwd, attemptResumeId, passOptions),
         effectiveIdleTimeout,
         () => {
           nodeIdleTimedOut = true;
@@ -3100,8 +3203,45 @@ async function executeNodeInternal(
     if (error instanceof AskHumanAwaitingError) {
       await pauseOnAskHuman(deps, workflowRun.id, node.id, recordNodeStatus);
       return {
-        state: 'completed',
+        state: 'pending',
         output: nodeOutputText,
+        costUsd: nodeCostUsd,
+        ...(nodeTokens !== undefined ? { tokens: nodeTokens } : {}),
+      };
+    }
+
+    if (resumeInteractions !== undefined && resumeInteractions.length > 0) {
+      const toolUseIds = resumeInteractions.map(item => item.tool_use_id);
+      logAskResumeFailed(workflowRun.id, stepName, toolUseIds, err.constructor.name);
+      await logNodeError(logDir, workflowRun.id, node.id, ASK_RESUME_FAILED_MESSAGE);
+      deps.store
+        .createWorkflowEvent({
+          workflow_run_id: workflowRun.id,
+          event_type: 'node_failed',
+          step_name: stepName,
+          data: withRetryEpochData(workflowRun, undefined, {
+            error: ASK_RESUME_FAILED_MESSAGE,
+            ...iterationData,
+          }),
+        })
+        .catch((persistErr: Error) => {
+          getLog().error(
+            { err: persistErr, workflowRunId: workflowRun.id, eventType: 'node_failed' },
+            'workflow_event_persist_failed'
+          );
+        });
+      emitter.emit({
+        type: 'node_failed',
+        runId: workflowRun.id,
+        nodeId: node.id,
+        nodeName: node.command ?? node.id,
+        error: ASK_RESUME_FAILED_MESSAGE,
+      });
+      await recordFailedStatus(ASK_RESUME_FAILED_MESSAGE);
+      return {
+        state: 'failed',
+        output: '',
+        error: ASK_RESUME_FAILED_MESSAGE,
         costUsd: nodeCostUsd,
         ...(nodeTokens !== undefined ? { tokens: nodeTokens } : {}),
       };
@@ -4123,7 +4263,8 @@ async function executeLoopGroupNode(
   stepNamePrefix = '',
   mutatesCheckout = false,
   execContext: ExecutionContext = { kind: 'host' },
-  runChildWorkflow?: RunChildWorkflowFn
+  runChildWorkflow?: RunChildWorkflowFn,
+  answeredAskRows: readonly PendingInteraction[] = []
 ): Promise<NodeExecutionResult> {
   const group = node.loop_group;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -4332,6 +4473,7 @@ async function executeLoopGroupNode(
       // Deliver this iteration's approval-gate free-text to body script: nodes via env
       // (never spliced into source — #2115); matches applyLoopPrevToBodyNode's skip.
       bodyLoopUserInput: userInputForIter,
+      answeredAskRows,
     };
     const bodyOutcome = await runLayers(iterCtx);
     if (bodyOutcome === 'pending') {
@@ -4855,7 +4997,9 @@ async function executeLoopNode(
   stepNamePrefix = '',
   execContext: ExecutionContext = { kind: 'host' },
   /** Prospective request metadata — same object ENV preview/snapshot use. */
-  requestMetadata?: NodeExecutionMetadata
+  requestMetadata?: NodeExecutionMetadata,
+  resumeInteractions?: readonly ResumeInteraction[],
+  askResumeSessionId?: string
 ): Promise<NodeExecutionResult> {
   const loop = node.loop;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -5200,7 +5344,12 @@ async function executeLoopNode(
     // in the gate metadata so the provider can retain loop context while
     // $LOOP_USER_INPUT carries the human's review response.
     const needsFreshSession = loop.fresh_context || i === 1;
-    const resumeSessionId = needsFreshSession ? undefined : currentSessionId;
+    const askSessionThisIteration =
+      i === startIteration && askResumeSessionId !== undefined ? askResumeSessionId : undefined;
+    const resumeSessionId =
+      askSessionThisIteration ?? (needsFreshSession ? undefined : currentSessionId);
+    const askResumeThisPass =
+      i === startIteration && resumeInteractions !== undefined && resumeInteractions.length > 0;
 
     // Stream AI response for this iteration.
     //
@@ -5334,6 +5483,9 @@ async function executeLoopNode(
           ...resolvedOptions,
           abortSignal: iterationAbortController.signal,
           ...(nativeTools ? { nativeTools } : {}),
+          ...(askResumeThisPass && reaskAttempt === 0
+            ? { forkSession: false, resumeInteractions }
+            : {}),
           traceContext: {
             name: 'execute-workflow-loop',
             sessionId: workflowRun.id,
@@ -5775,12 +5927,31 @@ async function executeLoopNode(
         if (error instanceof AskHumanAwaitingError) {
           await pauseOnAskHuman(deps, workflowRun.id, node.id, recordLoopStatus);
           return {
-            state: 'completed',
+            state: 'pending',
             output: cleanOutput,
             costUsd: loopTotalCostUsd,
             ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
             loopIterations: i,
           };
+        }
+        if (askResumeThisPass && resumeInteractions !== undefined) {
+          const errType = error instanceof Error ? error.constructor.name : 'Error';
+          logAskResumeFailed(
+            workflowRun.id,
+            stepName,
+            resumeInteractions.map(item => item.tool_use_id),
+            errType
+          );
+          return await failLoopIteration(
+            ASK_RESUME_FAILED_MESSAGE,
+            {
+              costUsd: loopTotalCostUsd,
+              ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+              loopIterations: i,
+              data: { iteration: i },
+            },
+            ASK_RESUME_FAILED_MESSAGE
+          );
         }
         const err = error as Error;
         getLog().error({ err, nodeId: node.id, iteration: i }, 'loop_node.iteration_failed');
@@ -7912,6 +8083,8 @@ interface RunLayersContext {
   totalLoopIterations: number;
   /** Prefix prepended to every persisted `step_name` ('' for top-level, '{groupId}.' for a loop_group body). */
   stepNamePrefix: string;
+  /** Answered AskHuman rows for this run, already filtered; empty when none. */
+  answeredAskRows: readonly PendingInteraction[];
   /**
    * The enclosing loop_group iteration (1-based) when these layers are a group body,
    * else undefined for the top-level DAG. Tagged into body node lifecycle event `data`
@@ -8389,6 +8562,10 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
               execContext
             );
 
+            const loopAskResume = mapAnsweredAskResume(
+              ctx.answeredAskRows,
+              stepNamePrefix + node.id
+            );
             const output = await executeLoopNode(
               deps,
               platform,
@@ -8410,7 +8587,9 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
               configuredCommandFolder,
               stepNamePrefix,
               execContext,
-              loopMetadata
+              loopMetadata,
+              loopAskResume.interactions.length > 0 ? loopAskResume.interactions : undefined,
+              loopAskResume.sessionId
             );
             // Loop nodes run every iteration on the same resolved provider, so the
             // result session (if any) is attributable to loopProvider — tag it so a
@@ -8495,7 +8674,8 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
               stepNamePrefix,
               mutatesCheckout,
               execContext,
-              ctx.runChildWorkflow
+              ctx.runChildWorkflow,
+              ctx.answeredAskRows
             );
             return { nodeId: node.id, output };
           }
@@ -8898,15 +9078,27 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
             }
           }
 
+          const askResume = mapAnsweredAskResume(ctx.answeredAskRows, stepNamePrefix + node.id);
+          if (askResume.sessionId !== undefined) {
+            resumeSessionId = askResume.sessionId;
+          }
+          const askResumeInteractions =
+            askResume.interactions.length > 0 ? askResume.interactions : undefined;
+          const retryConfig =
+            askResumeInteractions !== undefined
+              ? { maxRetries: 0, delayMs: 0, onError: 'transient' as const }
+              : getEffectiveNodeRetryConfig(node);
+
           // 6. Execute with retry for transient failures. AI nodes get the
           // default 2 transient retries; the shared loop applies the same
           // backoff + FATAL-never-retried semantics as deterministic nodes.
+          // AskHuman re-entry uses zero engine retries even when YAML says on_error: all.
           const output = await runNodeRetryLoop(
             node,
             platform,
             conversationId,
             workflowRun,
-            getEffectiveNodeRetryConfig(node),
+            retryConfig,
             () =>
               executeNodeInternal(
                 deps,
@@ -8926,13 +9118,14 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
                 ctx.nodeOutputs,
                 // Always pass the prior session ID — forkSession:true in
                 // executeNodeInternal ensures the source is never mutated, so
-                // retries can safely resume from it.
+                // retries can safely resume from it. Ask override is applied above.
                 resumeSessionId,
                 configuredCommandFolder,
                 issueContext,
                 nodeMetadata,
                 stepNamePrefix,
-                iteration
+                iteration,
+                askResumeInteractions
               ),
             { state: 'failed', output: '', error: 'Node did not execute' } as NodeExecutionResult
           );
@@ -9033,6 +9226,14 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
           return { nodeId: node.id, output, sessionProvider: provider };
         } catch (error) {
           const err = error as Error;
+          if (error instanceof AskResumeFailedError) {
+            logAskResumeFailed(
+              workflowRun.id,
+              stepNamePrefix + node.id,
+              error.toolUseIds,
+              error.name
+            );
+          }
           getLog().error({ err, nodeId: node.id }, 'dag_node_pre_execution_failed');
           deps.store
             .createWorkflowEvent({
@@ -9856,6 +10057,31 @@ export async function executeDagWorkflow(
         'Remove AskHuman from allowed_tools, or use claude or pi.'
     );
   }
+  const pendingInteractionRows = await deps.store.listPendingInteractions(workflowRun.id);
+  if (pendingInteractionRows.some(row => row.status === 'pending')) {
+    throw new Error(`Answer or decline the Ask before resuming run ${workflowRun.id}`);
+  }
+  const answeredAskRows = pendingInteractionRows.filter(
+    row => row.kind === 'ask' && row.status === 'answered'
+  );
+  if (answeredAskRows.length > 0) {
+    const staticStepNames = collectStaticDagStepNames(workflow.nodes);
+    const missing = answeredAskRows.filter(row => !staticStepNames.has(row.node_id));
+    if (missing.length > 0) {
+      logAskResumeFailed(
+        workflowRun.id,
+        missing[0]?.node_id ?? '',
+        missing.map(row => row.tool_use_id),
+        'MissingAskNode'
+      );
+      await deps.store
+        .failWorkflowRun(workflowRun.id, ASK_RESUME_FAILED_MESSAGE)
+        .catch((dbErr: Error) => {
+          getLog().error({ err: dbErr, workflowRunId: workflowRun.id }, 'dag_db_fail_failed');
+        });
+      throw new Error(ASK_RESUME_FAILED_MESSAGE);
+    }
+  }
   // Container capability fail-fast: before ANY node runs (and before any
   // container work), reject a container run whose AI nodes resolve to a provider
   // that can't spawn in-container. No silent downgrade to the host — the user
@@ -10184,16 +10410,9 @@ export async function executeDagWorkflow(
     totalTokensOut: priorTokenUsage?.output ?? 0,
     totalLoopIterations: 0,
     stepNamePrefix: '',
+    answeredAskRows,
     route: routeState,
   };
-  const runOutcome = await runLayers(runCtx);
-  if (runOutcome === 'pending') return;
-  // Pull the mutated accumulators back into local scope for the terminal tally below.
-  const totalCostUsd = runCtx.totalCostUsd;
-  const totalTokensIn = runCtx.totalTokensIn;
-  const totalTokensOut = runCtx.totalTokensOut;
-  const totalLoopIterations = runCtx.totalLoopIterations;
-
   // Container pause economics (Phase C): if a node paused the run (approval /
   // interactive gate), suspend the container so a multi-day wait costs ~0 RAM/CPU.
   // The pause happens BETWEEN layers, after node completion — the #2134 background-
@@ -10201,7 +10420,8 @@ export async function executeDagWorkflow(
   // stop would kill any live exec) — so it is safe to stop here. Resume rediscovers
   // and restarts. Terminal (failed / cancelled) runs are left for teardown, not
   // suspended. Only 'paused' triggers this.
-  if (execContext.kind === 'container' && containerCtx) {
+  const suspendContainerIfPaused = async (): Promise<boolean> => {
+    if (execContext.kind !== 'container' || !containerCtx) return false;
     const pausedStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
     if (pausedStatus === 'paused') {
       await suspendContainerForPause(
@@ -10212,9 +10432,23 @@ export async function executeDagWorkflow(
         execContext,
         workflowRun.id
       );
-      return;
+      return true;
     }
+    return false;
+  };
+
+  const runOutcome = await runLayers(runCtx);
+  if (runOutcome === 'pending') {
+    await suspendContainerIfPaused();
+    return;
   }
+  // Pull the mutated accumulators back into local scope for the terminal tally below.
+  const totalCostUsd = runCtx.totalCostUsd;
+  const totalTokensIn = runCtx.totalTokensIn;
+  const totalTokensOut = runCtx.totalTokensOut;
+  const totalLoopIterations = runCtx.totalLoopIterations;
+
+  if (await suspendContainerIfPaused()) return;
 
   /**
    * Bail out of the final completion/failure write if the run was transitioned

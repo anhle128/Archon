@@ -9,6 +9,7 @@ const LIVE_STATUSES: readonly WorkflowStepStatus[] = [
   'completed',
   'failed',
   'skipped',
+  'awaiting',
 ];
 
 function routeLoopNode(): DagNode {
@@ -100,13 +101,11 @@ describe('buildRunGraphInput', () => {
     ]);
   });
 
-  test('never maps or emits awaiting from WorkflowStepStatus', () => {
+  test('maps every WorkflowStepStatus directly', () => {
     for (const status of LIVE_STATUSES) {
       const input = buildRunGraphInput([{ id: 'a', prompt: 'n' }], [{ nodeId: 'a', status }]);
       expect(input.nodes[0]?.nodeState).toBe(status);
-      expect(input.nodes[0]?.nodeState).not.toBe('awaiting');
     }
-    expect(LIVE_STATUSES).not.toContain('awaiting');
   });
 
   test('ordinary depends_on edges become dependency edges', () => {

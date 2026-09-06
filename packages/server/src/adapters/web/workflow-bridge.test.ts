@@ -192,6 +192,21 @@ describe('mapWorkflowEvent — hook_activity (Phase 2 of #975)', () => {
   });
 });
 
+const ASK_PAYLOAD_LEAK_KEYS = [
+  'toolUseId',
+  'envelope',
+  'answer',
+  'questions',
+  'options',
+  'approval',
+] as const;
+
+function expectNoAskPayloadLeak(payload: Record<string, unknown>): void {
+  for (const key of ASK_PAYLOAD_LEAK_KEYS) {
+    expect(payload[key]).toBeUndefined();
+  }
+}
+
 describe('mapWorkflowEvent — node_awaiting', () => {
   test('maps live node_awaiting to workflow_status paused without approval payload', () => {
     const event: WorkflowEmitterEvent = {
@@ -201,9 +216,33 @@ describe('mapWorkflowEvent — node_awaiting', () => {
     };
     const e = JSON.parse(mapWorkflowEvent(event) ?? '{}') as Record<string, unknown>;
     expect(e).toMatchObject({ type: 'workflow_status', runId: 'r1', status: 'paused' });
-    expect(e.approval).toBeUndefined();
-    expect(e.envelope).toBeUndefined();
-    expect(e.questions).toBeUndefined();
+    expectNoAskPayloadLeak(e);
+  });
+});
+
+describe('mapWorkflowEvent — interaction_resolved', () => {
+  test('maps live resumed true to workflow_status running without Ask payload', () => {
+    const event: WorkflowEmitterEvent = {
+      type: 'interaction_resolved',
+      runId: 'r1',
+      nodeId: 'review',
+      resumed: true,
+    };
+    const e = JSON.parse(mapWorkflowEvent(event) ?? '{}') as Record<string, unknown>;
+    expect(e).toMatchObject({ type: 'workflow_status', runId: 'r1', status: 'running' });
+    expectNoAskPayloadLeak(e);
+  });
+
+  test('maps live resumed false to workflow_status paused without Ask payload', () => {
+    const event: WorkflowEmitterEvent = {
+      type: 'interaction_resolved',
+      runId: 'r1',
+      nodeId: 'review',
+      resumed: false,
+    };
+    const e = JSON.parse(mapWorkflowEvent(event) ?? '{}') as Record<string, unknown>;
+    expect(e).toMatchObject({ type: 'workflow_status', runId: 'r1', status: 'paused' });
+    expectNoAskPayloadLeak(e);
   });
 });
 

@@ -522,4 +522,32 @@ describe('SlackWorkflowBridge', () => {
     ) as { elements?: Array<{ text?: string }> } | undefined;
     expect(ctx?.elements?.[0]?.text).toContain('plan node crashed');
   });
+
+  test('interaction_resolved sends no Slack message', async () => {
+    const { adapter, posted, updated, reactionsAdded, triggerMap } = makeFakeAdapter();
+    triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
+    mockGetConversationId.mockReturnValue('C1:111.0');
+
+    new SlackWorkflowBridge(adapter as never).attach();
+    await dispatchEvent({
+      type: 'workflow_started',
+      runId: 'r1',
+      workflowName: 'assist',
+      conversationId: 'conv-db-uuid',
+    });
+    const postedAfterStart = posted.length;
+    const updatedAfterStart = updated.length;
+    const reactionsAfterStart = reactionsAdded.length;
+
+    await dispatchEvent({
+      type: 'interaction_resolved',
+      runId: 'r1',
+      nodeId: 'review',
+      resumed: true,
+    });
+
+    expect(posted).toHaveLength(postedAfterStart);
+    expect(updated).toHaveLength(updatedAfterStart);
+    expect(reactionsAdded).toHaveLength(reactionsAfterStart);
+  });
 });

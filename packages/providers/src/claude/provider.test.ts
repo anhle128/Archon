@@ -37,7 +37,7 @@ mock.module('@anthropic-ai/claude-agent-sdk', () => ({
   createSdkMcpServer: (config: unknown): unknown => config,
 }));
 
-import { ClaudeProvider, shouldPassNoEnvFile } from './provider';
+import { ClaudeProvider, shouldPassNoEnvFile, buildClaudeAskResumePrompt } from './provider';
 import * as claudeModule from './provider';
 import * as binaryResolver from './binary-resolver';
 import {
@@ -45,6 +45,7 @@ import {
   AskHumanNoStarterError,
   type NativeTool,
   type NativeToolHandlerContext,
+  type ResumeInteraction,
 } from '../types';
 
 describe('shouldPassNoEnvFile', () => {
@@ -3469,5 +3470,236 @@ describe('AskHuman control errors', () => {
     expect(mockQuery).toHaveBeenCalledTimes(1);
     const call = mockQuery.mock.calls[0]?.[0] as ClaudeQueryCall | undefined;
     expect(call?.options.abortController.signal.aborted).toBe(false);
+  });
+});
+
+describe('buildClaudeAskResumePrompt', () => {
+  test('formats ordered answer and decline blocks and ends with continuation instruction', () => {
+    const interactions: ResumeInteraction[] = [
+      {
+        tool_use_id: 'toolu_answer_1',
+        payload: [{ questionId: 'q1', value: 'SENTINEL_ANSWER_ZX9' }],
+        declined: false,
+      },
+      {
+        tool_use_id: 'toolu_decline_2',
+        payload: 'declined',
+        declined: true,
+      },
+    ];
+
+    const prompt = buildClaudeAskResumePrompt(interactions);
+
+    expect(prompt).toContain('AskHuman toolu_answer_1 answers:');
+    expect(prompt).toContain(JSON.stringify(interactions[0]?.payload));
+    expect(prompt).toContain('AskHuman toolu_decline_2 was declined.');
+    expect(prompt).toContain(
+      'Continue the task using these answers. Do not call AskHuman again for these tool_use_id values.'
+    );
+    expect(prompt.indexOf('toolu_answer_1')).toBeLessThan(prompt.indexOf('toolu_decline_2'));
+    expect(prompt).not.toContain('was declined.\nAskHuman toolu_answer_1');
+    expect(prompt).not.toContain('executor');
+    expect(
+      prompt.endsWith(
+        'Continue the task using these answers. Do not call AskHuman again for these tool_use_id values.'
+      )
+    ).toBe(true);
+  });
+});
+
+describe('AskHuman resume', () => {
+  const ANSWER_SENTINEL = 'SENTINEL_ANSWER_ZX9';
+  const STDERR_SENTINEL = 'SENTINEL_STDERR_ZX9';
+  const EXECUTOR_PROMPT = 'executor prompt must not leak into the Claude resume query';
+  const interactions: ResumeInteraction[] = [
+    {
+      tool_use_id: 'toolu_answer_1',
+      payload: [{ questionId: 'q1', value: ANSWER_SENTINEL }],
+      declined: false,
+    },
+    {
+      tool_use_id: 'toolu_decline_2',
+      payload: 'declined',
+      declined: true,
+    },
+  ];
+
+  let client: ClaudeProvider;
+
+  beforeEach(() => {
+    client = new ClaudeProvider({ retryBaseDelayMs: 1 });
+    mockQuery.mockClear();
+    capturedMcpTools.length = 0;
+    mockLogger.fatal.mockClear();
+    mockLogger.error.mockClear();
+    mockLogger.warn.mockClear();
+    mockLogger.info.mockClear();
+    mockLogger.debug.mockClear();
+    mockLogger.trace.mockClear();
+  });
+
+  function loggerPayload(): string {
+    return JSON.stringify([
+      ...mockLogger.fatal.mock.calls,
+      ...mockLogger.error.mock.calls,
+      ...mockLogger.warn.mock.calls,
+      ...mockLogger.info.mock.calls,
+      ...mockLogger.debug.mock.calls,
+      ...mockLogger.trace.mock.calls,
+    ]);
+  }
+
+  test('requires resumeSessionId, forces forkSession false, and sends the builder prompt', async () => {
+    mockQuery.mockImplementation(async function* () {
+      yield { type: 'result', session_id: 'sess-ask' };
+    });
+
+    const expectedPrompt = buildClaudeAskResumePrompt(interactions);
+    const chunks = [];
+    for await (const chunk of client.sendQuery(EXECUTOR_PROMPT, '/workspace', 'sess-ask', {
+      forkSession: true,
+      nativeTools: [askHumanTool(async () => 'ok')],
+      resumeInteractions: interactions,
+    })) {
+      chunks.push(chunk);
+    }
+
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    const call = mockQuery.mock.calls[0]?.[0] as {
+      prompt: string;
+      options: {
+        resume?: string;
+        forkSession?: boolean;
+        mcpServers?: Record<string, unknown>;
+      };
+    };
+    expect(call.prompt).toBe(expectedPrompt);
+    expect(call.prompt).not.toContain(EXECUTOR_PROMPT);
+    expect(call.options.resume).toBe('sess-ask');
+    expect(call.options.forkSession).toBe(false);
+    expect(call.options.mcpServers).toHaveProperty('archon');
+    expect(capturedMcpTools.some(tool => tool.name === 'AskHuman')).toBe(true);
+    expect(chunks.find(c => c.type === 'result')).toMatchObject({ resumed: true });
+  });
+
+  test('throws a safe error without retry when the SDK throws a sentinel and stderr leaks another', async () => {
+    mockQuery.mockImplementation(async function* (args: {
+      options: { stderr?: (data: string) => void };
+    }) {
+      args.options.stderr?.(`fatal: ${STDERR_SENTINEL}\n`);
+      throw new Error(`process crashed: ${ANSWER_SENTINEL}`);
+    });
+
+    let thrown: unknown;
+    try {
+      for await (const _ of client.sendQuery(EXECUTOR_PROMPT, '/workspace', 'sess-ask', {
+        resumeInteractions: interactions,
+      })) {
+        // consume
+      }
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toBe('Could not resume the AskHuman session');
+    expect((thrown as Error).cause).toBeUndefined();
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    const payload = loggerPayload();
+    expect(payload).not.toContain(ANSWER_SENTINEL);
+    expect(payload).not.toContain(STDERR_SENTINEL);
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      { errorClass: expect.any(String) },
+      'claude.ask_resume_failed'
+    );
+  });
+
+  test('maps isError terminal results to the safe message while preserving usage', async () => {
+    mockQuery.mockImplementation(async function* () {
+      yield {
+        type: 'result',
+        session_id: 'sess-ask',
+        is_error: true,
+        subtype: 'error_during_execution',
+        errors: [`sdk failed: ${ANSWER_SENTINEL}`],
+        usage: { input_tokens: 11, output_tokens: 7, total_tokens: 18 },
+        total_cost_usd: 0.012,
+        modelUsage: {
+          'claude-sonnet-4-6': {
+            inputTokens: 11,
+            outputTokens: 7,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            webSearchRequests: 0,
+            costUSD: 0.012,
+          },
+        },
+      };
+    });
+
+    const chunks = [];
+    for await (const chunk of client.sendQuery(EXECUTOR_PROMPT, '/workspace', 'sess-ask', {
+      resumeInteractions: interactions,
+    })) {
+      chunks.push(chunk);
+    }
+
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    expect(chunks[0]).toMatchObject({
+      type: 'result',
+      isError: true,
+      errorSubtype: 'error_during_execution',
+      errors: ['Could not resume the AskHuman session'],
+      tokens: { input: 11, output: 7, total: 18 },
+      cost: 0.012,
+    });
+    expect(chunks[0]?.usageBreakdown?.[0]).toMatchObject({
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      inputTokens: 11,
+      outputTokens: 7,
+      costUsd: 0.012,
+    });
+    expect(JSON.stringify(chunks)).not.toContain(ANSWER_SENTINEL);
+    expect(loggerPayload()).not.toContain(ANSWER_SENTINEL);
+  });
+
+  test('non-Ask resume keeps the executor prompt and requested forkSession', async () => {
+    mockQuery.mockImplementation(async function* () {
+      yield { type: 'result', session_id: 'sess-plain' };
+    });
+
+    for await (const _ of client.sendQuery(EXECUTOR_PROMPT, '/workspace', 'sess-plain', {
+      forkSession: true,
+    })) {
+      // consume
+    }
+
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    expect(mockQuery).toHaveBeenCalledWith({
+      prompt: EXECUTOR_PROMPT,
+      options: expect.objectContaining({
+        resume: 'sess-plain',
+        forkSession: true,
+      }),
+    });
+  });
+
+  test('throws a safe error without calling query when resumeSessionId is missing', async () => {
+    let thrown: unknown;
+    try {
+      for await (const _ of client.sendQuery(EXECUTOR_PROMPT, '/workspace', undefined, {
+        resumeInteractions: interactions,
+      })) {
+        // consume
+      }
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toBe('Could not resume the AskHuman session');
+    expect(mockQuery).not.toHaveBeenCalled();
+    expect(loggerPayload()).not.toContain(ANSWER_SENTINEL);
   });
 });
