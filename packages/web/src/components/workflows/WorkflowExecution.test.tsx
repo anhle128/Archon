@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 
-import { buildWorkflowDagNodeStates, resolveWorkflowExecutionBody } from './WorkflowExecution';
+import {
+  buildWorkflowDagNodeStates,
+  resolveWorkflowExecutionBody,
+  type WorkflowExecutionBody,
+} from './WorkflowExecution';
 import type { WorkflowRunView } from './source-control/dag-run-tabs';
 import type { WorkflowEventResponse } from '@/lib/api';
 
@@ -106,69 +110,24 @@ describe('buildWorkflowDagNodeStates', () => {
   describe('resolveWorkflowExecutionBody', () => {
     const views: WorkflowRunView[] = ['graph', 'logs', 'chat', 'source-control'];
 
-    test('DAG Graph and Logs share the graph-logs pane', () => {
-      expect(
-        resolveWorkflowExecutionBody({
-          isDag: true,
-          activeView: 'graph',
-          parentPlatformId: 'parent-1',
-        })
-      ).toBe('graph-logs-pane');
-      expect(
-        resolveWorkflowExecutionBody({
-          isDag: true,
-          activeView: 'logs',
-          parentPlatformId: 'parent-1',
-        })
-      ).toBe('graph-logs-pane');
-    });
-
-    test('DAG Source Control returns source-control', () => {
-      expect(
-        resolveWorkflowExecutionBody({
-          isDag: true,
-          activeView: 'source-control',
-          parentPlatformId: 'parent-1',
-        })
-      ).toBe('source-control');
-    });
-
-    test('DAG Chat with a parent returns chat', () => {
-      expect(
-        resolveWorkflowExecutionBody({
-          isDag: true,
-          activeView: 'chat',
-          parentPlatformId: 'parent-1',
-        })
-      ).toBe('chat');
-    });
-
-    test('DAG Chat without a parent falls back to the graph-logs pane', () => {
-      expect(
-        resolveWorkflowExecutionBody({
-          isDag: true,
-          activeView: 'chat',
-          parentPlatformId: null,
-        })
-      ).toBe('graph-logs-pane');
+    test('every DAG inspect view shares the pane and source control stays separate', () => {
+      const expected: Record<WorkflowRunView, WorkflowExecutionBody> = {
+        graph: 'graph-logs-pane',
+        logs: 'graph-logs-pane',
+        chat: 'graph-logs-pane',
+        'source-control': 'source-control',
+      };
+      for (const activeView of views) {
+        expect(resolveWorkflowExecutionBody({ isDag: true, activeView })).toBe(
+          expected[activeView]
+        );
+      }
+      expect(Object.values(expected)).not.toContain('chat');
     });
 
     test('every non-DAG input returns sequential', () => {
       for (const activeView of views) {
-        expect(
-          resolveWorkflowExecutionBody({
-            isDag: false,
-            activeView,
-            parentPlatformId: 'parent-1',
-          })
-        ).toBe('sequential');
-        expect(
-          resolveWorkflowExecutionBody({
-            isDag: false,
-            activeView,
-            parentPlatformId: null,
-          })
-        ).toBe('sequential');
+        expect(resolveWorkflowExecutionBody({ isDag: false, activeView })).toBe('sequential');
       }
     });
   });
