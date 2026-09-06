@@ -16,12 +16,15 @@ import { SourceControlTab } from './source-control/source-control-tab';
 import { useWorkflowStore } from '@/stores/workflow-store';
 import {
   approveWorkflowRun,
+  getConversation,
+  getMessages,
   getWorkflowRun,
   getWorkflowRunByWorker,
   getCodebase,
   getWorkflow,
   getWorkflowNodeMessages,
   rejectWorkflowRun,
+  sendMessage,
 } from '@/lib/api';
 import { ensureUtc, formatDurationMs } from '@/lib/format';
 import { selectInitialNode } from '@/lib/select-initial-node';
@@ -804,6 +807,10 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
           events={queryData?.events ?? []}
           isLive={isRunning}
           loadMessages={getWorkflowNodeMessages}
+          parentPlatformId={parentPlatformId}
+          loadParentMessages={getMessages}
+          loadParentConversation={getConversation}
+          sendParentMessage={sendMessage}
           definitionNodes={dagDefinitionNodes ?? []}
           definitionPending={workflowDefPending}
           runStatus={queryData?.workflowState.status ?? workflow.status}

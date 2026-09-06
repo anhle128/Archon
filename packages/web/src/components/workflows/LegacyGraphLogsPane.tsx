@@ -1,11 +1,14 @@
 /**
- * Shared Graph/Logs composition: one left navigation and one typed room.
+ * Shared Graph/Logs/Chat composition: one left navigation and one typed room.
  */
+import { useQuery } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import {
   getWorkflowNodeMessages,
+  type ConversationResponse,
   type DagNode,
+  type MessageResponse,
   type WorkflowEventResponse,
   type WorkflowNodeStateResponse,
 } from '@/lib/api';
@@ -14,13 +17,18 @@ import type { WorkflowRunStatus } from '@/lib/types';
 
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 
+import { buildChatTimeline, type ChatTimelineEntry } from './build-chat-timeline';
 import { buildLogRows, type LogRow } from './build-log-rows';
+import { ChatTimeline } from './ChatTimeline';
 import { LegacyNodeRoom } from './LegacyNodeRoom';
 import { NodeRunList } from './NodeRunList';
 import { resolveGraphRoomRow } from './resolve-graph-room-row';
+import { resolveRoomKind } from './resolve-room-kind';
+import { resolveTimelineRoomRow } from './resolve-timeline-room-row';
+import { RunChatComposer } from './RunChatComposer';
 
 export interface LegacyGraphLogsPaneProps {
-  activeView: 'graph' | 'logs';
+  activeView: 'graph' | 'logs' | 'chat';
   renderGraph: (input: {
     selectedNodeId: string | null;
     onNodeClick: (nodeId: string) => void;
@@ -32,6 +40,13 @@ export interface LegacyGraphLogsPaneProps {
   events: readonly WorkflowEventResponse[];
   isLive: boolean;
   loadMessages: typeof getWorkflowNodeMessages;
+  parentPlatformId: string | null;
+  loadParentMessages: (conversationId: string) => Promise<MessageResponse[]>;
+  loadParentConversation: (conversationId: string) => Promise<ConversationResponse>;
+  sendParentMessage: (
+    conversationId: string,
+    message: string
+  ) => Promise<{ accepted: boolean; status: string }>;
   roomHeader?: ReactNode;
   roomFooter?: ReactNode;
   definitionNodes: readonly DagNode[];
@@ -40,6 +55,19 @@ export interface LegacyGraphLogsPaneProps {
   approval: unknown;
   onApprove: () => Promise<void>;
   onReject: (reason?: string) => Promise<void>;
+}
+
+export function runChatMessagesRefetchInterval(status: WorkflowRunStatus): 3000 | false {
+  switch (status) {
+    case 'pending':
+    case 'running':
+    case 'paused':
+      return 3000;
+    case 'completed':
+    case 'failed':
+    case 'cancelled':
+      return false;
+  }
 }
 
 function isSelectablePauseContext(context: WebApprovalContext): boolean {
@@ -118,6 +146,10 @@ export function LegacyGraphLogsPane({
   events,
   isLive,
   loadMessages,
+  parentPlatformId,
+  loadParentMessages,
+  loadParentConversation,
+  sendParentMessage,
   roomHeader,
   roomFooter,
   definitionNodes,
@@ -133,6 +165,11 @@ export function LegacyGraphLogsPane({
   );
   const rows = useMemo(() => buildLogRows(visibleNodeStates, events), [events, visibleNodeStates]);
   const [selectedLogRowId, setSelectedLogRowId] = useState<string | null>(null);
+  const [selectedTimelineEntryId, setSelectedTimelineEntryId] = useState<string | null>(null);
+  const [chatDraft, setChatDraft] = useState('');
+  const [chatSending, setChatSending] = useState(false);
+  const [chatSendError, setChatSendError] = useState<string | null>(null);
+  const sendGeneration = useRef(0);
   const explicitSelectedRow = rows.find(row => row.id === selectedLogRowId) ?? null;
   const selectedRow =
     explicitSelectedRow !== null && explicitSelectedRow.nodeId === selectedNodeId
@@ -145,50 +182,185 @@ export function LegacyGraphLogsPane({
   const previousRunId = useRef(runId);
   const previousSelectedNodeId = useRef(selectedNodeId);
 
+  const parentMessagesQuery = useQuery({
+    queryKey: ['runChatMessages', parentPlatformId],
+    enabled: activeView === 'chat' && parentPlatformId !== null,
+    queryFn: async (): Promise<MessageResponse[]> => {
+      if (parentPlatformId === null) throw new Error('Parent conversation is unavailable');
+      return loadParentMessages(parentPlatformId);
+    },
+    retry: false,
+    refetchInterval: runChatMessagesRefetchInterval(runStatus),
+  });
+
+  const parentConversationQuery = useQuery({
+    queryKey: ['runChatConversation', parentPlatformId],
+    enabled: activeView === 'chat' && parentPlatformId !== null,
+    queryFn: async (): Promise<ConversationResponse> => {
+      if (parentPlatformId === null) throw new Error('Parent conversation is unavailable');
+      return loadParentConversation(parentPlatformId);
+    },
+    retry: false,
+    staleTime: Infinity,
+  });
+
+  const composerDisabledReason =
+    parentPlatformId === null
+      ? 'Conversation unavailable.'
+      : parentConversationQuery.fetchStatus === 'fetching' &&
+          parentConversationQuery.data === undefined
+        ? 'Loading conversation…'
+        : parentConversationQuery.isError
+          ? 'Unable to load conversation details.'
+          : parentConversationQuery.data?.platform_type !== 'web'
+            ? 'Continuing chats from other platforms in the Web UI is coming soon'
+            : null;
+
+  const chatEntries = useMemo(
+    () =>
+      buildChatTimeline({
+        messages: parentMessagesQuery.data ?? [],
+        events,
+        nodeStates: visibleNodeStates,
+        resolveNodeType: (nodeId: string) =>
+          resolveRoomKind(nodeId, definitionNodes, events, approval).nodeType,
+      }),
+    [approval, definitionNodes, events, parentMessagesQuery.data, visibleNodeStates]
+  );
+
+  let selectedTimelineNodeId: string | null = null;
+  for (const entry of chatEntries) {
+    if (entry.kind === 'node_status' && entry.id === selectedTimelineEntryId) {
+      selectedTimelineNodeId = entry.nodeId;
+      break;
+    }
+  }
+
+  const parentMessagesError = parentMessagesQuery.isError
+    ? parentMessagesQuery.error instanceof Error
+      ? parentMessagesQuery.error.message
+      : 'Failed to load conversation turns.'
+    : null;
+
   useEffect(() => {
     const runChanged = previousRunId.current !== runId;
     const selectedRowRemoved = selectedLogRowId !== null && explicitSelectedRow === null;
     previousRunId.current = runId;
+    if (runChanged) {
+      sendGeneration.current += 1;
+      setChatDraft('');
+      setChatSending(false);
+      setChatSendError(null);
+    }
     if (!runChanged && !selectedRowRemoved) return;
     setSelectedLogRowId(null);
+    setSelectedTimelineEntryId(null);
     onSelectNode(null);
   }, [explicitSelectedRow, onSelectNode, runId, selectedLogRowId]);
 
   useEffect(() => {
     const previous = previousSelectedNodeId.current;
     previousSelectedNodeId.current = selectedNodeId;
-    if (previous === selectedNodeId || selectedLogRowId === null) return;
+    if (previous === selectedNodeId) return;
     if (explicitSelectedRow !== null && explicitSelectedRow.nodeId === previous) {
       setSelectedLogRowId(null);
     }
-  }, [explicitSelectedRow, selectedLogRowId, selectedNodeId]);
+    if (selectedTimelineNodeId === previous) {
+      setSelectedTimelineEntryId(null);
+    }
+  }, [explicitSelectedRow, selectedNodeId, selectedTimelineNodeId]);
 
   const handleGraphNodeClick = (nodeId: string): void => {
     setSelectedLogRowId(null);
+    setSelectedTimelineEntryId(null);
     onSelectNode(nodeId);
   };
 
   const handleLogRowSelect = (row: LogRow): void => {
     setSelectedLogRowId(row.id);
+    setSelectedTimelineEntryId(null);
     onSelectNode(row.nodeId);
   };
+
+  const handleNodeStatusSelect = (
+    entry: Extract<ChatTimelineEntry, { kind: 'node_status' }>
+  ): void => {
+    const row = resolveTimelineRoomRow({
+      rows,
+      entry,
+      liveStatus: visibleNodeStates,
+    });
+    const rowExists = rows.some(candidate => candidate.id === row.id);
+    setSelectedLogRowId(rowExists ? row.id : null);
+    setSelectedTimelineEntryId(entry.id);
+    onSelectNode(row.nodeId);
+  };
+
+  const handleChatSubmit = (): void => {
+    const message = chatDraft.trim();
+    if (parentPlatformId === null || message.length === 0 || composerDisabledReason !== null) {
+      return;
+    }
+    const generation = ++sendGeneration.current;
+    setChatSending(true);
+    setChatSendError(null);
+    void sendParentMessage(parentPlatformId, message)
+      .then((): void => {
+        if (sendGeneration.current !== generation) return;
+        setChatDraft('');
+        void parentMessagesQuery.refetch();
+      })
+      .catch((error: unknown): void => {
+        if (sendGeneration.current !== generation) return;
+        setChatSendError(error instanceof Error ? error.message : 'Failed to send message.');
+      })
+      .finally((): void => {
+        if (sendGeneration.current === generation) setChatSending(false);
+      });
+  };
+
+  const leftPane =
+    activeView === 'graph' ? (
+      <div className="h-full min-h-0">
+        {renderGraph({ selectedNodeId, onNodeClick: handleGraphNodeClick })}
+      </div>
+    ) : activeView === 'logs' ? (
+      <div className="h-full min-h-0 overflow-auto">
+        <NodeRunList
+          rows={rows}
+          selectedRowId={selectedRow?.id ?? null}
+          onSelect={handleLogRowSelect}
+        />
+      </div>
+    ) : (
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="min-h-0 flex-1">
+          <ChatTimeline
+            entries={chatEntries}
+            selectedEntryId={selectedTimelineEntryId}
+            onSelectNodeStatus={handleNodeStatusSelect}
+            loading={
+              parentMessagesQuery.fetchStatus === 'fetching' &&
+              parentMessagesQuery.data === undefined
+            }
+            error={parentMessagesError}
+          />
+        </div>
+        <RunChatComposer
+          value={chatDraft}
+          onValueChange={setChatDraft}
+          onSubmit={handleChatSubmit}
+          sending={chatSending}
+          disabledReason={composerDisabledReason}
+          error={chatSendError}
+        />
+      </div>
+    );
 
   return (
     <ResizablePanelGroup orientation="horizontal" className="flex-1 min-h-0">
       <ResizablePanel defaultSize={60} minSize={30}>
-        {activeView === 'graph' ? (
-          <div className="h-full min-h-0">
-            {renderGraph({ selectedNodeId, onNodeClick: handleGraphNodeClick })}
-          </div>
-        ) : (
-          <div className="h-full min-h-0 overflow-auto">
-            <NodeRunList
-              rows={rows}
-              selectedRowId={selectedRow?.id ?? null}
-              onSelect={handleLogRowSelect}
-            />
-          </div>
-        )}
+        {leftPane}
       </ResizablePanel>
       <ResizableHandle withHandle />
       <ResizablePanel defaultSize={40} minSize={20}>
