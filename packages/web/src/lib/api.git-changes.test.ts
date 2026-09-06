@@ -5,7 +5,12 @@ import {
   getWorkflowRunGitDiff,
   getWorkflowRunGitFile,
   gitFileUrl,
+  type GitDiffHunk,
 } from './api';
+
+Object.assign(globalThis, {
+  window: { location: { origin: 'http://localhost' } },
+});
 
 const REVISION = 'a'.repeat(64);
 const CONTENT_HASH = 'b'.repeat(64);
@@ -15,7 +20,7 @@ const READY_DIFF = {
   status: 'M' as const,
   scope: 'now' as const,
   ref: 'live',
-  hunks: [] as const,
+  hunks: [] as GitDiffHunk[],
   cursor: '',
   truncated: false,
   binary: false,
@@ -193,7 +198,12 @@ describe('getWorkflowRunGitFile', () => {
 
   test('retains bounded path-only API errors for non-2xx responses', async () => {
     const longBody = 'x'.repeat(201);
-    fetchSpy = mockFetchResponse(jsonResponse({ error: longBody }, 404));
+    fetchSpy = mockFetchResponse(
+      new Response(longBody, {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
 
     try {
       await getWorkflowRunGitFile('run/one', 'src/a.ts', 'worktree');

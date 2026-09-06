@@ -488,7 +488,7 @@ export async function getWorkflowRunGitFile(
   options?: { signal?: AbortSignal }
 ): Promise<GitFileClientResult> {
   const url = gitFileUrl(runId, path, source);
-  const response = await fetch(url, options?.signal ? { signal: options.signal } : undefined);
+  const response = await (options?.signal ? fetch(url, { signal: options.signal }) : fetch(url));
   await assertApiResponseOk(response, url);
   const contentType = response.headers.get('Content-Type') ?? '';
   if (contentType.includes('application/json')) {
