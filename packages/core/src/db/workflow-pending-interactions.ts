@@ -2,20 +2,22 @@
  * Database operations for pending AskHuman / permission interactions.
  *
  * Inserts the pending row and the `node_awaiting` audit event in one
- * transaction. Resolves an Ask answer in one transaction that may also resume
- * the run. Terminal cancel/fail callers purge remaining pending rows on the
- * same query they used for the status CAS. Corrupt stored JSON fails closed
- * and never logs envelope or answer bodies.
+ * transaction. Resolves an Ask answer or Permission confirmation in one
+ * transaction that may also resume the run. Terminal cancel/fail callers purge
+ * remaining pending rows on the same query they used for the status CAS.
+ * Corrupt stored JSON fails closed and never logs envelope or answer bodies.
  */
 import { createLogger } from '@archon/paths';
 import { AskHumanNoStarterError } from '@archon/providers/types';
 import {
   askHumanQuestionSchema,
+  confirmPendingPermissionInputSchema,
   insertPendingInteractionSchema,
   pendingInteractionSchema,
   resolvePendingInteractionInputSchema,
   type AskAnswerBody,
   type AskHumanQuestion,
+  type ConfirmPendingPermissionInput,
   type InsertPendingInteractionInput,
   type PendingInteraction,
   type ResolvePendingInteractionInput,
@@ -80,6 +82,7 @@ export class PendingInteractionRunNotPausedError extends Error {
 export type PendingInteractionValidationCode =
   | 'invalid_body'
   | 'kind_not_ask'
+  | 'kind_not_permission'
   | 'missing_question'
   | 'unknown_question'
   | 'duplicate_question'
@@ -364,6 +367,111 @@ export async function resolvePendingInteraction(
         tool_use_id: toolUseId,
         kind: 'ask',
         declined: isDecline(answer),
+        resumed,
+      },
+    });
+
+    const resolvedRows = await query<Record<string, unknown>>(
+      `SELECT ${COLUMNS} FROM remote_agent_pending_interactions WHERE id = $1`,
+      [current.id]
+    );
+    const resolvedRow = resolvedRows.rows[0];
+    if (!resolvedRow) {
+      throw new Error(`Pending interaction vanished after resolve: ${current.id}`);
+    }
+    return {
+      interaction: parsePendingInteractionRow(resolvedRow),
+      resumed,
+      remaining_pending: remainingPending,
+    };
+  });
+}
+
+export async function confirmPendingPermission(
+  input: ConfirmPendingPermissionInput
+): Promise<ResolvePendingInteractionResult> {
+  const parsedInput = confirmPendingPermissionInputSchema.safeParse(input);
+  if (!parsedInput.success) throwValidation('invalid_body');
+
+  const workflowRunId = parsedInput.data.workflow_run_id;
+  const toolUseId = parsedInput.data.tool_use_id;
+  const answer = parsedInput.data.answer;
+  const resolvedBy = parsedInput.data.resolved_by;
+  const db = getDatabase();
+  const dialect = getDialect();
+  const lockSuffix = workflowRunLockClause();
+
+  return db.withTransaction(async query => {
+    const runResult = await query<{ status: string }>(
+      `SELECT status FROM remote_agent_workflow_runs WHERE id = $1${lockSuffix}`,
+      [workflowRunId]
+    );
+    const run = runResult.rows[0];
+    if (!run) {
+      throw new PendingInteractionNotFoundError(workflowRunId, toolUseId);
+    }
+
+    const interactionResult = await query<Record<string, unknown>>(
+      `SELECT ${COLUMNS}
+       FROM remote_agent_pending_interactions
+       WHERE workflow_run_id = $1 AND tool_use_id = $2${lockSuffix}`,
+      [workflowRunId, toolUseId]
+    );
+    const rawInteraction = interactionResult.rows[0];
+    if (!rawInteraction) {
+      throw new PendingInteractionNotFoundError(workflowRunId, toolUseId);
+    }
+    const current = parsePendingInteractionRow(rawInteraction);
+    if (current.status !== 'pending') {
+      throw new PendingInteractionAlreadyResolvedError(workflowRunId, toolUseId, current.status);
+    }
+    if (run.status !== 'paused') {
+      throw new PendingInteractionRunNotPausedError(workflowRunId, run.status);
+    }
+    if (current.kind !== 'permission') throwValidation('kind_not_permission');
+
+    const cas = await query(
+      `UPDATE remote_agent_pending_interactions
+       SET status = 'answered',
+           answer = $2,
+           resolved_at = ${dialect.now()},
+           resolved_by = $3
+       WHERE id = $1 AND status = 'pending'`,
+      [current.id, JSON.stringify(answer), resolvedBy]
+    );
+    if (cas.rowCount === 0) {
+      throw new PendingInteractionAlreadyResolvedError(workflowRunId, toolUseId, current.status);
+    }
+
+    const remainingResult = await query<{ remaining: number | string }>(
+      `SELECT COUNT(*) AS remaining
+       FROM remote_agent_pending_interactions
+       WHERE workflow_run_id = $1 AND status = 'pending'`,
+      [workflowRunId]
+    );
+    const remainingPending = Number(remainingResult.rows[0]?.remaining ?? 0);
+    let resumed = false;
+    if (remainingPending === 0) {
+      const resumeResult = await resumeWorkflowRunInTransaction(
+        query,
+        workflowRunId,
+        dialect,
+        'paused-ask'
+      );
+      if (!resumeResult.resumed) {
+        throw new PendingInteractionRunNotPausedError(workflowRunId, run.status);
+      }
+      resumed = true;
+    }
+
+    await insertWorkflowEvent(query, {
+      workflow_run_id: workflowRunId,
+      event_type: 'interaction_resolved',
+      step_name: current.node_id,
+      data: {
+        node_id: current.node_id,
+        tool_use_id: toolUseId,
+        kind: 'permission',
         resumed,
       },
     });
