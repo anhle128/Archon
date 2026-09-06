@@ -11,6 +11,7 @@ import {
   type NativeToolHandlerContext,
 } from '@archon/providers/types';
 import { z } from '@hono/zod-openapi';
+import { askHumanQuestionSchema } from './schemas/pending-interaction';
 import type { IWorkflowStore } from './store';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -41,14 +42,6 @@ export const ASK_HUMAN_INPUT_SCHEMA: Record<string, unknown> = {
   },
   required: ['questions'],
 };
-
-const askHumanQuestionSchema = z.object({
-  id: z.string(),
-  prompt: z.string(),
-  selection: z.enum(['single', 'multi']),
-  options: z.array(z.string()),
-  allowOther: z.boolean(),
-});
 
 const askHumanHandlerInputSchema = z.object({
   questions: z.array(askHumanQuestionSchema).min(1),
