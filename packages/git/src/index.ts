@@ -15,6 +15,10 @@ export { toRepoPath, toBranchName, toWorktreePath } from './types';
 // Process and filesystem wrappers
 export { execFileAsync, mkdirAsync, resolveBashPath } from './exec';
 
+// Live file bytes and Now diffs
+export { fileAt, fileDiff } from './file-read';
+export type { DiffChange, DiffHunk, FileAtResult, FileAtSource, FileDiffResult } from './file-read';
+
 // Worktree operations
 export {
   getWorktreeBase,
