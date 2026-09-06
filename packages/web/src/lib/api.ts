@@ -438,8 +438,47 @@ export type GitDiffChange = components['schemas']['GitDiffChange'];
 export type GitFileSource = 'worktree' | 'head';
 export type GitFileClientResult =
   | { kind: 'empty'; emptyReason: GitEmptyReason }
-  | { kind: 'binary'; contentHash: string }
-  | { kind: 'text'; text: string; contentHash: string };
+  | {
+      kind: 'text';
+      text: string;
+      contentHash: string;
+      truncated: boolean;
+      cursor: string;
+      byteLength: number;
+    }
+  | {
+      kind: 'image';
+      bytes: Uint8Array;
+      contentHash: string;
+      mediaType: string;
+      byteLength: number;
+    }
+  | { kind: 'hex'; bytes: Uint8Array; contentHash: string; byteLength: number }
+  | { kind: 'download'; contentHash: string; byteLength: number };
+
+const GIT_FILE_PRESENTATIONS = ['text', 'image', 'hex', 'download'] as const;
+type GitFilePresentation = (typeof GIT_FILE_PRESENTATIONS)[number];
+
+function isGitFilePresentation(value: string): value is GitFilePresentation {
+  return (GIT_FILE_PRESENTATIONS as readonly string[]).includes(value);
+}
+
+function invalidGitFileResponse(): never {
+  throw new Error('Invalid git file response');
+}
+
+function parseNonNegativeInteger(value: string): number | undefined {
+  if (!/^(0|[1-9][0-9]*)$/.test(value)) return undefined;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) return undefined;
+  return parsed;
+}
+
+function parseExactBoolean(value: string): boolean | undefined {
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return undefined;
+}
 
 export async function getWorkflowRunGitChanges(
   runId: string,
@@ -464,18 +503,26 @@ export async function getWorkflowRunGitDiff(
   );
 }
 
-export function gitFileUrl(runId: string, path: string, source: GitFileSource): string {
+export function gitFileUrl(
+  runId: string,
+  path: string,
+  source: GitFileSource,
+  options?: { cursor?: string; download?: boolean }
+): string {
   const encodedPath = path
     .split('/')
     .map(segment => encodeURIComponent(segment))
     .join('/');
+  const params = new URLSearchParams({ source });
+  if (options?.cursor) params.set('cursor', options.cursor);
+  if (options?.download) params.set('download', '1');
   return (
     '/api/workflows/runs/' +
     encodeURIComponent(runId) +
     '/git/file/' +
     encodedPath +
-    '?source=' +
-    encodeURIComponent(source)
+    '?' +
+    params.toString()
   );
 }
 
@@ -483,19 +530,63 @@ function contentHashFromEtag(response: Response): string {
   const etag = response.headers.get('ETag') ?? '';
   const match = /^(?:"([a-f0-9]{64})"|([a-f0-9]{64}))$/.exec(etag);
   const contentHash = match?.[1] ?? match?.[2];
-  if (!contentHash) throw new Error('Invalid git file response');
+  if (!contentHash) invalidGitFileResponse();
   return contentHash;
 }
 
-export async function getWorkflowRunGitFile(
-  runId: string,
-  path: string,
-  source: GitFileSource,
-  options?: { signal?: AbortSignal }
-): Promise<GitFileClientResult> {
-  const url = gitFileUrl(runId, path, source);
-  const response = await (options?.signal ? fetch(url, { signal: options.signal }) : fetch(url));
-  await assertApiResponseOk(response, url);
+async function parsePresentedGitFile(response: Response): Promise<GitFileClientResult> {
+  const presentationRaw = response.headers.get('X-Archon-Git-Presentation') ?? '';
+  if (!isGitFilePresentation(presentationRaw)) invalidGitFileResponse();
+  const contentHash = contentHashFromEtag(response);
+  const byteLength = parseNonNegativeInteger(
+    response.headers.get('X-Archon-Git-Byte-Length') ?? ''
+  );
+  if (byteLength === undefined) invalidGitFileResponse();
+  const truncated = parseExactBoolean(response.headers.get('X-Archon-Git-Truncated') ?? '');
+  if (truncated === undefined) invalidGitFileResponse();
+  const cursor = response.headers.get('X-Archon-Git-Cursor') ?? '';
+  const mediaType = response.headers.get('X-Archon-Git-Media-Type') ?? '';
+  const contentType = response.headers.get('Content-Type') ?? '';
+
+  if (presentationRaw === 'text') {
+    if (truncated !== (cursor !== '')) invalidGitFileResponse();
+    if (mediaType !== '' || !contentType.includes('text/plain')) invalidGitFileResponse();
+    return {
+      kind: 'text',
+      text: await response.text(),
+      contentHash,
+      truncated,
+      cursor,
+      byteLength,
+    };
+  }
+  if (truncated || cursor !== '') invalidGitFileResponse();
+  if (presentationRaw === 'image') {
+    if (mediaType === '' || !contentType.includes(mediaType)) invalidGitFileResponse();
+    return {
+      kind: 'image',
+      bytes: new Uint8Array(await response.arrayBuffer()),
+      contentHash,
+      mediaType,
+      byteLength,
+    };
+  }
+  if (mediaType !== '' || !contentType.includes('application/octet-stream')) {
+    invalidGitFileResponse();
+  }
+  if (presentationRaw === 'hex') {
+    return {
+      kind: 'hex',
+      bytes: new Uint8Array(await response.arrayBuffer()),
+      contentHash,
+      byteLength,
+    };
+  }
+  await response.body?.cancel();
+  return { kind: 'download', contentHash, byteLength };
+}
+
+async function parseLegacyGitFile(response: Response): Promise<GitFileClientResult> {
   const contentType = response.headers.get('Content-Type') ?? '';
   if (contentType.includes('application/json')) {
     const body: unknown = await response.json();
@@ -507,17 +598,42 @@ export async function getWorkflowRunGitFile(
     ) {
       return { kind: 'empty', emptyReason: body.emptyReason };
     }
-    throw new Error('Invalid git file response');
+    invalidGitFileResponse();
   }
   const contentHash = contentHashFromEtag(response);
   if (contentType.includes('application/octet-stream')) {
+    const headerLength = parseNonNegativeInteger(response.headers.get('Content-Length') ?? '');
     await response.body?.cancel();
-    return { kind: 'binary', contentHash };
+    return { kind: 'download', contentHash, byteLength: headerLength ?? 0 };
   }
   if (contentType.includes('text/plain')) {
-    return { kind: 'text', text: await response.text(), contentHash };
+    const text = await response.text();
+    const headerLength = parseNonNegativeInteger(response.headers.get('Content-Length') ?? '');
+    return {
+      kind: 'text',
+      text,
+      contentHash,
+      truncated: false,
+      cursor: '',
+      byteLength: headerLength ?? new TextEncoder().encode(text).byteLength,
+    };
   }
-  throw new Error('Invalid git file response');
+  invalidGitFileResponse();
+}
+
+export async function getWorkflowRunGitFile(
+  runId: string,
+  path: string,
+  source: GitFileSource,
+  options?: { cursor?: string; signal?: AbortSignal }
+): Promise<GitFileClientResult> {
+  const url = gitFileUrl(runId, path, source, { cursor: options?.cursor });
+  const response = await (options?.signal ? fetch(url, { signal: options.signal }) : fetch(url));
+  await assertApiResponseOk(response, url);
+  if (response.headers.get('X-Archon-Git-Presentation') !== null) {
+    return parsePresentedGitFile(response);
+  }
+  return parseLegacyGitFile(response);
 }
 
 export type WorkflowNodeStateResponse = components['schemas']['WorkflowNodeState'];

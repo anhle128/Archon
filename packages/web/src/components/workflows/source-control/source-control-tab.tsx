@@ -74,7 +74,7 @@ async function loadViewerFile(
     if (raw.kind === 'empty') {
       return { kind: 'unavailable', file, emptyReason: raw.emptyReason };
     }
-    if (raw.kind !== 'binary') throw new Error('Invalid binary git file response');
+    if (raw.kind === 'text') throw new Error('Invalid binary git file response');
     return {
       kind: 'binary',
       file,
@@ -88,19 +88,19 @@ async function loadViewerFile(
   if (response.kind === 'empty') {
     return { kind: 'unavailable', file, emptyReason: response.emptyReason };
   }
-  if (response.kind === 'binary') {
+  if (response.kind === 'text') {
     return {
-      kind: 'binary',
+      kind: 'text',
       file,
+      text: response.text,
       contentHash: response.contentHash,
-      downloadHref: gitFileUrl(runId, file.path, source),
     };
   }
   return {
-    kind: 'text',
+    kind: 'binary',
     file,
-    text: response.text,
     contentHash: response.contentHash,
+    downloadHref: gitFileUrl(runId, file.path, source),
   };
 }
 
