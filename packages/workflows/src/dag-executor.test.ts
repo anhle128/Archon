@@ -12378,6 +12378,49 @@ describe('executeDagWorkflow -- retry checkpoints', () => {
     }
   }, 30_000);
 
+  it('skips checkpointing when cwd is not a git repository', async () => {
+    const testDir = join(
+      tmpdir(),
+      `dag-nongit-checkpoint-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(testDir, { recursive: true });
+    const upsertCheckpoint = mock(
+      async (data: Parameters<NonNullable<IWorkflowStore['upsertWorkflowNodeCheckpoint']>>[0]) => ({
+        ...data,
+        created_at: new Date(),
+      })
+    );
+    const store = createMockStore();
+    store.upsertWorkflowNodeCheckpoint = upsertCheckpoint;
+
+    try {
+      await executeDagWorkflow(
+        createMockDeps(store),
+        createMockPlatform(),
+        'conv-dag',
+        testDir,
+        {
+          name: 'dag-nongit-checkpoint-test',
+          nodes: [{ id: 'echo-node', bash: 'printf folder-ok > marker.txt' }],
+        },
+        makeWorkflowRun('nongit-checkpoint-run'),
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      expect(upsertCheckpoint).not.toHaveBeenCalled();
+      expect(await readFile(join(testDir, 'marker.txt'), 'utf8')).toBe('folder-ok');
+    } finally {
+      await rm(testDir, { recursive: true, force: true });
+    }
+  });
+
   it('skips checkpointing when mutates_checkout is false', async () => {
     const testDir = join(
       tmpdir(),
