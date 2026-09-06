@@ -3,7 +3,7 @@ import type { Context } from 'hono';
 import { fileAt, toWorktreePath, type FileAtResult, type FileAtSource } from '@archon/git';
 import { createLogger } from '@archon/paths';
 
-import { isValidGitFilePath } from './path-input';
+import { isValidGitFilePath, isValidGitObjectId } from './path-input';
 import { loadRunCheckout } from './run-checkout';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -15,6 +15,7 @@ function getLog(): ReturnType<typeof createLogger> {
 
 type ClassifiedGitReadError =
   | 'invalid_path'
+  | 'invalid_ref'
   | 'file_not_found'
   | 'invalid_cursor'
   | 'stale_cursor'
@@ -24,6 +25,10 @@ function classifyGitReadError(error: unknown): ClassifiedGitReadError {
   if (typeof error !== 'object' || error === null) return 'git_read_failed';
   const candidate = error as { name?: unknown; code?: unknown };
   if (candidate.name === 'GitPathError') return 'invalid_path';
+  if (candidate.name === 'GitCommitRefError') return 'invalid_ref';
+  if (candidate.name === 'GitFileError' && candidate.code === 'invalid_ref') {
+    return 'invalid_ref';
+  }
   if (candidate.name === 'GitFileError' && candidate.code === 'not_found') {
     return 'file_not_found';
   }
@@ -85,12 +90,17 @@ export async function handleGitFile(
   }
 
   const sourceQuery = c.req.query('source') ?? '';
-  if (sourceQuery !== 'worktree' && sourceQuery !== 'head') {
+  let source: FileAtSource;
+  if (sourceQuery === 'worktree') {
+    source = { kind: 'worktree' };
+  } else if (sourceQuery === 'head') {
+    source = { kind: 'tree', treeIsh: 'HEAD' };
+  } else if (isValidGitObjectId(sourceQuery)) {
+    source = { kind: 'tree', treeIsh: sourceQuery };
+  } else {
     getLog().info({ runId, errorType: 'invalid_source' }, 'git.file_failed');
     return apiError(c, 400, 'Invalid file source');
   }
-  const source: FileAtSource =
-    sourceQuery === 'worktree' ? { kind: 'worktree' } : { kind: 'tree', treeIsh: 'HEAD' };
   const download = c.req.query('download') === '1';
   const signal = c.req.raw.signal;
 
@@ -132,6 +142,10 @@ export async function handleGitFile(
       if (classified === 'invalid_path') {
         getLog().info({ runId, errorType: 'invalid_path' }, 'git.file_failed');
         return apiError(c, 400, 'Invalid file path');
+      }
+      if (classified === 'invalid_ref') {
+        getLog().info({ runId, errorType: 'invalid_ref' }, 'git.file_failed');
+        return apiError(c, 400, 'Invalid commit ref');
       }
       if (classified === 'file_not_found') {
         getLog().info({ runId, errorType: 'file_not_found' }, 'git.file_failed');

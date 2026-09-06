@@ -6,6 +6,7 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 
 import type { ConversationLockManager } from '@archon/core';
 import type {
+  ChangedFilesRequest,
   ChangedFilesResult,
   FileAtBytesResult,
   FileAtRequest,
@@ -29,7 +30,7 @@ const mockGetConversationById = mock(
 );
 const mockGetById = mock(async (_id: string): Promise<{ provider: string } | null> => null);
 const mockChangedFiles = mock(
-  async (_workingPath: string): Promise<ChangedFilesResult> => ({
+  async (_workingPath: string, _request?: ChangedFilesRequest): Promise<ChangedFilesResult> => ({
     files: [],
     revision: REVISION,
   })
@@ -1215,4 +1216,203 @@ test('git log returns CAP-6 when the checkout vanishes during the read', async (
     truncated: false,
   });
   expectGitLogPair('git.log_completed', { runId: 'run-1', emptyReason: 'no_checkout' });
+});
+
+const COMMIT = '1'.repeat(40);
+
+test('Now changes omit the second changedFiles argument', async () => {
+  mockGetWorkflowRun.mockResolvedValue(runRow());
+  const response = await makeApp().request('/api/workflows/runs/run-1/git/changes');
+  expect(response.status).toBe(200);
+  expect(mockChangedFiles.mock.calls[0]?.length).toBe(1);
+});
+
+test('commit changes pass the server-issued ref into changedFiles', async () => {
+  mockGetWorkflowRun.mockResolvedValue(runRow());
+  mockChangedFiles.mockResolvedValueOnce({
+    files: [{ path: 'src/a.ts', status: 'M' }],
+    revision: REVISION,
+  });
+  const response = await makeApp().request(`/api/workflows/runs/run-1/git/changes?ref=${COMMIT}`);
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({
+    files: [{ path: 'src/a.ts', status: 'M' }],
+    revision: REVISION,
+  });
+  expect(mockChangedFiles).toHaveBeenCalledWith(expect.any(String), { commit: COMMIT });
+});
+
+test('rejects a non-object-name changes ref before git', async () => {
+  const response = await makeApp().request('/api/workflows/runs/run-1/git/changes?ref=HEAD');
+  expect(response.status).toBe(400);
+  expect(await response.json()).toEqual({ error: 'Invalid commit ref' });
+  expect(mockChangedFiles).not.toHaveBeenCalled();
+  expect(mockGetWorkflowRun).not.toHaveBeenCalled();
+  expect(mockLogger.info.mock.calls).toEqual([
+    [{ runId: 'run-1' }, 'git.changes_started'],
+    [{ runId: 'run-1', errorType: 'invalid_ref' }, 'git.changes_failed'],
+  ]);
+});
+
+test('rejects an explicitly empty changes ref instead of treating it as Now', async () => {
+  const response = await makeApp().request('/api/workflows/runs/run-1/git/changes?ref=');
+  expect(response.status).toBe(400);
+  expect(await response.json()).toEqual({ error: 'Invalid commit ref' });
+  expect(mockChangedFiles).not.toHaveBeenCalled();
+  expect(mockGetWorkflowRun).not.toHaveBeenCalled();
+});
+
+test('commit CAP-6 still short-circuits changes before git', async () => {
+  mockGetWorkflowRun.mockResolvedValue({ ...runRow(), working_path: null });
+  const response = await makeApp().request(`/api/workflows/runs/run-1/git/changes?ref=${COMMIT}`);
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({
+    emptyReason: 'no_checkout',
+    files: [],
+    revision: '',
+  });
+  expect(mockChangedFiles).not.toHaveBeenCalled();
+});
+
+test('maps GitCommitRefError from changedFiles to Invalid commit ref', async () => {
+  mockGetWorkflowRun.mockResolvedValue(runRow());
+  mockChangedFiles.mockRejectedValueOnce(namedError('GitCommitRefError', 'invalid_ref'));
+  const response = await makeApp().request(`/api/workflows/runs/run-1/git/changes?ref=${COMMIT}`);
+  expect(response.status).toBe(400);
+  expect(await response.json()).toEqual({ error: 'Invalid commit ref' });
+  expect(JSON.stringify(mockLogger.info.mock.calls)).not.toContain(COMMIT);
+  expect(JSON.stringify(mockLogger.error.mock.calls)).not.toContain(COMMIT);
+  expect(mockLogger.info.mock.calls.at(-1)).toEqual([
+    { runId: 'run-1', errorType: 'invalid_ref' },
+    'git.changes_failed',
+  ]);
+});
+
+test('commit diff passes commit into fileDiff and serializes scope commit', async () => {
+  mockGetWorkflowRun.mockResolvedValue(runRow());
+  mockFileDiff.mockResolvedValueOnce({
+    path: 'src/a.ts',
+    status: 'M',
+    scope: 'commit',
+    ref: COMMIT,
+    hunks: [],
+    cursor: '',
+    truncated: false,
+    binary: false,
+    fileFallback: false,
+  });
+  const response = await makeApp().request(
+    `/api/workflows/runs/run-1/git/diff?path=src%2Fa.ts&ref=${COMMIT}`
+  );
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ scope: 'commit', ref: COMMIT, status: 'M' });
+  expect(mockFileDiff).toHaveBeenCalledWith(expect.any(String), 'src/a.ts', {
+    cursor: '',
+    signal: expect.anything(),
+    commit: COMMIT,
+  });
+});
+
+test('Now diff omits commit from fileDiff', async () => {
+  mockGetWorkflowRun.mockResolvedValue(runRow());
+  await makeApp().request('/api/workflows/runs/run-1/git/diff?path=src%2Fa.ts');
+  const request = mockFileDiff.mock.calls[0]?.[2] as { commit?: string } | undefined;
+  expect(request?.commit).toBeUndefined();
+});
+
+test('rejects a malformed diff ref before checkout lookup', async () => {
+  const response = await makeApp().request(
+    '/api/workflows/runs/run-1/git/diff?path=src%2Fa.ts&ref=HEAD'
+  );
+  expect(response.status).toBe(400);
+  expect(await response.json()).toEqual({ error: 'Invalid commit ref' });
+  expect(mockFileDiff).not.toHaveBeenCalled();
+  expect(mockGetWorkflowRun).not.toHaveBeenCalled();
+  expect(expectDiffLogPair('git.diff_failed').errorType).toBe('invalid_ref');
+});
+
+test('rejects an explicitly empty diff ref instead of treating it as Now', async () => {
+  const response = await makeApp().request(
+    '/api/workflows/runs/run-1/git/diff?path=src%2Fa.ts&ref='
+  );
+  expect(response.status).toBe(400);
+  expect(await response.json()).toEqual({ error: 'Invalid commit ref' });
+  expect(mockFileDiff).not.toHaveBeenCalled();
+  expect(mockGetWorkflowRun).not.toHaveBeenCalled();
+});
+
+test('commit CAP-6 short-circuits diff before fileDiff', async () => {
+  mockGetWorkflowRun.mockResolvedValue({ ...runRow(), working_path: null });
+  const response = await makeApp().request(
+    `/api/workflows/runs/run-1/git/diff?path=src%2Fa.ts&ref=${COMMIT}`
+  );
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ emptyReason: 'no_checkout' });
+  expect(mockFileDiff).not.toHaveBeenCalled();
+});
+
+test('maps GitCommitRefError from fileDiff to Invalid commit ref', async () => {
+  mockGetWorkflowRun.mockResolvedValue(runRow());
+  mockFileDiff.mockRejectedValueOnce(namedError('GitCommitRefError', 'invalid_ref'));
+  const response = await makeApp().request(
+    `/api/workflows/runs/run-1/git/diff?path=src%2Fa.ts&ref=${COMMIT}`
+  );
+  expect(response.status).toBe(400);
+  expect(await response.json()).toEqual({ error: 'Invalid commit ref' });
+});
+
+test('maps source=full-oid to a tree fileAt read', async () => {
+  mockGetWorkflowRun.mockResolvedValue(runRow());
+  const response = await makeApp().request(
+    `/api/workflows/runs/run-1/git/file/src%2Fa.ts?source=${COMMIT}`
+  );
+  expect(response.status).toBe(200);
+  expect(mockFileAt).toHaveBeenCalledWith(
+    expect.any(String),
+    'src/a.ts',
+    { kind: 'tree', treeIsh: COMMIT },
+    expect.anything()
+  );
+});
+
+test('commit CAP-6 short-circuits raw file reads before fileAt', async () => {
+  mockGetWorkflowRun.mockResolvedValue({ ...runRow(), working_path: null });
+  const response = await makeApp().request(
+    `/api/workflows/runs/run-1/git/file/src%2Fa.ts?source=${COMMIT}`
+  );
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ emptyReason: 'no_checkout' });
+  expect(mockFileAt).not.toHaveBeenCalled();
+});
+
+test('still rejects source=HEAD as an invalid file source', async () => {
+  const response = await makeApp().request(
+    '/api/workflows/runs/run-1/git/file/src%2Fa.ts?source=HEAD'
+  );
+  expect(response.status).toBe(400);
+  expect(await response.json()).toEqual({ error: 'Invalid file source' });
+  expect(mockFileAt).not.toHaveBeenCalled();
+});
+
+test('maps GitFileError invalid_ref on a commit source to Invalid commit ref', async () => {
+  mockGetWorkflowRun.mockResolvedValue(runRow());
+  mockFileAt.mockRejectedValueOnce(namedError('GitFileError', 'invalid_ref'));
+  const response = await makeApp().request(
+    `/api/workflows/runs/run-1/git/file/src%2Fa.ts?source=${COMMIT}`
+  );
+  expect(response.status).toBe(400);
+  expect(await response.json()).toEqual({ error: 'Invalid commit ref' });
+});
+
+test('maps GitCommitRefError on an unreachable commit source to Invalid commit ref', async () => {
+  mockGetWorkflowRun.mockResolvedValue(runRow());
+  mockFileAt.mockRejectedValueOnce(namedError('GitCommitRefError', 'invalid_ref'));
+  const response = await makeApp().request(
+    `/api/workflows/runs/run-1/git/file/src%2Fa.ts?source=${COMMIT}`
+  );
+  expect(response.status).toBe(400);
+  expect(await response.json()).toEqual({ error: 'Invalid commit ref' });
+  expect(expectFileLogPair('git.file_failed').errorType).toBe('invalid_ref');
+  expect(JSON.stringify(mockLogger.info.mock.calls)).not.toContain(COMMIT);
+  expect(JSON.stringify(mockLogger.error.mock.calls)).not.toContain(COMMIT);
 });

@@ -10,11 +10,18 @@ export const gitChangesRoute = createRoute({
   summary: "List a run's uncommitted git changes",
   request: {
     params: z.object({ runId: z.string().min(1) }),
+    query: z.object({
+      ref: z.string().optional(),
+    }),
   },
   responses: {
     200: {
       content: { 'application/json': { schema: gitChangesResponseSchema } },
       description: 'Live changes or a CAP-6 empty envelope',
+    },
+    400: {
+      content: { 'application/json': { schema: errorSchema } },
+      description: 'Invalid commit ref',
     },
     404: {
       content: { 'application/json': { schema: errorSchema } },
