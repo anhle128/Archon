@@ -1,0 +1,170 @@
+{
+  "feature": "Node Room From Chat Timeline (Legacy)",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Pure chat timeline merger",
+      "description": "As an operator, I want parent-conversation user turns and qualifying run lifecycle events merged chronologically into timeline entries, so that the run Chat tab shows user inputs and node status progressions without assistant clutter or transcript spam.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/components/workflows/build-chat-timeline.ts exporting ChatTimelineNodeStatus, ChatTimelineEntry, and buildChatTimeline(input): ChatTimelineEntry[].",
+        "Include parent-conversation messages only when role === 'user' and trimmed content is non-empty; assistant messages and blank user turns are omitted.",
+        "Map lifecycle events node_started to status 'running' and detail 'started'; node_completed to status 'completed' and detail 'completed'; node_failed to status 'failed' and detail 'failed'; node_skipped and node_skipped_prior_success to status 'skipped' and detail 'skipped'; approval_requested to status 'running' and detail 'gate requested' with selection { kind: 'node' }.",
+        "Map loop iteration events loop_iteration_started, loop_iteration_completed, and loop_iteration_failed with safe integer iteration >= 1 to running/completed/failed status, detail 'iteration N started/completed/failed', and selection { kind: 'loop_iteration', iteration: N }.",
+        "Map node_routed with positive safe integer execution_seq to status 'completed', detail 'routed {outcome} \u2192 {to}', and selection { kind: 'route_iteration', executionSeq }; fall back to selection { kind: 'node' } and 'unknown' tokens if execution_seq is missing or invalid.",
+        "Skip events when both step_name and data.nodeId fail to yield a non-empty string node ID, and skip loop events with iteration < 1.",
+        "Omit tool_called, tool_completed, workflow_artifact, node_awaiting, interaction_resolved, and all other non-whitelisted event types.",
+        "Set node label preferring nodeStates name for that nodeId over the raw id, appending ' \u00d7N' for loop_iteration and ' #N' for route_iteration.",
+        "Resolve nodeType by calling the injected resolveNodeType(nodeId) for every included node-status entry (never called for user entries).",
+        "Sort entries ascending by ensureUtc timestamp (non-finite treated as 0), breaking ties with kind === 'user' before 'node_status', then encounter index.",
+        "Ensure no generated entry has status 'awaiting' and no generated detail contains 'awaiting'.",
+        "Create packages/web/src/components/workflows/build-chat-timeline.test.ts covering all 18 specified unit test cases, passing with bun test src/components/workflows/build-chat-timeline.test.ts."
+      ],
+      "technicalNotes": "Follow docs/superpowers/plans/2026-09-06-node-room-from-chat-timeline-legacy.md:145-222, 459-684. Consumes MessageResponse, WorkflowEventResponse, WorkflowNodeStateResponse from @/lib/api, LogRowSelection from ./build-log-rows, NodeBodyKind from ./resolve-room-kind, and ensureUtc from @/lib/format. Pure function without React dependencies.",
+      "dependsOn": [],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Timeline node status to LogRow room resolution",
+      "description": "As an operator, I want clicking a timeline node-status entry to resolve to the exact matching LogRow, so that the Chat door opens the identical per-type node room as Logs and Graph.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/components/workflows/resolve-timeline-room-row.ts exporting resolveTimelineRoomRow(input: { rows: readonly LogRow[]; entry: Extract<ChatTimelineEntry, { kind: 'node_status' }>; liveStatus: readonly GraphRoomLiveStatus[]; }): LogRow.",
+        "Scan input.rows in reverse to find the last LogRow whose nodeId equals entry.nodeId and whose selection matches entry.selection via selectionsEqual (handling 'node', 'loop_iteration' by iteration, and 'route_iteration' by executionSeq).",
+        "If no exact row matches, fall back to resolveGraphRoomRow({ rows: input.rows, nodeId: input.entry.nodeId, liveStatus: input.liveStatus }).",
+        "Throw an explicit Error ('Timeline node selection did not resolve a room row') if resolveGraphRoomRow returns null, ensuring the function always returns a non-null LogRow.",
+        "Create packages/web/src/components/workflows/resolve-timeline-room-row.test.ts covering ordinary rows, loop iteration matching, route iteration matching, graph room fallback, ignoring unrelated nodes, and verifying returned nodeId === entry.nodeId.",
+        "Passes with bun test src/components/workflows/resolve-timeline-room-row.test.ts."
+      ],
+      "technicalNotes": "Follow docs/superpowers/plans/2026-09-06-node-room-from-chat-timeline-legacy.md:223-244, 685-825. Consumes LogRow from ./build-log-rows, ChatTimelineEntry from ./build-chat-timeline, GraphRoomLiveStatus and resolveGraphRoomRow from ./resolve-graph-room-row. Pure function without state.",
+      "dependsOn": [
+        "US-001"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Chat timeline presentational component",
+      "description": "As an operator, I want an accessible presentational timeline in the Chat left pane, so that I can review chronological user bubbles and clickable node-status buttons with accurate type glyphs and active status highlights.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/components/workflows/ChatTimeline.tsx exporting ChatTimeline(props: ChatTimelineProps): React.ReactElement.",
+        "Root element is <div aria-label=\"Run chat timeline\" className=\"flex h-full min-h-0 flex-col overflow-auto p-3\">.",
+        "Render 'Loading conversation turns\u2026' when loading is true and entries is empty.",
+        "Render error text with className=\"text-error\" when error is non-null while still rendering entries.",
+        "Render 'No conversation turns or node-status entries yet.' when not loading, error is null, and entries is empty.",
+        "Render user entries as non-button <div> elements with classes 'ml-auto max-w-[80%] rounded-lg bg-accent/20 px-3 py-2 text-sm text-text-primary whitespace-pre-wrap', escaping HTML content as plain text.",
+        "Render node-status entries as <button type=\"button\"> elements calling onSelectNodeStatus(entry) when clicked.",
+        "Assign aria-current=\"true\" to the node-status button whose id === selectedEntryId (and only that button).",
+        "Render node-status button contents in exact order: node-type icon (Zap for command, FileText for prompt, RefreshCw for loop, Terminal for bash/script, Eye for approval/plannotator_gate, Workflow for workflow, GitBranch for route_loop, Box for loop_group, Bot for unknown; aria-hidden=\"true\", h-3.5 w-3.5 shrink-0 text-text-tertiary), node label, detail, status badge matching NodeRunList classes, formatStarted(createdAt), and ChevronRight icon (h-3 w-3 text-text-tertiary).",
+        "Ensure ChatTimeline contains no <form>, no composer inputs, and no AskHuman, awaiting, or waiting-on-you chrome.",
+        "Create packages/web/src/components/workflows/ChatTimeline.test.tsx using renderToStaticMarkup covering root label, empty state, loading state, error display, user plain-text escaping, button markup and ordering, exact aria-current=\"true\" selection, and absence of AskHuman / awaiting chrome.",
+        "Passes with bun test src/components/workflows/ChatTimeline.test.tsx."
+      ],
+      "technicalNotes": "Follow docs/superpowers/plans/2026-09-06-node-room-from-chat-timeline-legacy.md:245-278, 826-969. Presentational only; no internal data fetching or state. Use message:${entry.id} and event:${entry.id} as React keys.",
+      "dependsOn": [
+        "US-001"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Regular parent-conversation API client and composer",
+      "description": "As an operator, I want a text-only parent-conversation composer with typed conversation fetching, so that I can continue messaging the parent conversation from the run view without exposing pending interaction or Ask controls.",
+      "acceptanceCriteria": [
+        "Add export async function getConversation(id: string): Promise<ConversationResponse> in packages/web/src/lib/api.ts immediately before updateConversation, calling fetchJSON<ConversationResponse>(`/api/conversations/${encodeURIComponent(id)}`).",
+        "Update packages/web/src/lib/api.conversations.test.ts to test getConversation with URL-encoded conversation ID verification.",
+        "Create packages/web/src/components/workflows/RunChatComposer.tsx exporting RunChatComposer(props: RunChatComposerProps): React.ReactElement.",
+        "Render <form aria-label=\"Run conversation composer\"> with <textarea aria-label=\"Message the run conversation\"> and submit button with visible label 'Send'.",
+        "When enabled, textarea placeholder is 'Message the run\\'s conversation\u2026'.",
+        "When disabled (props.sending === true or props.disabledReason !== null), disable textarea and submit button, and set props.disabledReason as placeholder and form title.",
+        "Render <p role=\"alert\" className=\"mb-2 text-xs text-error\">{props.error}</p> when error is non-null.",
+        "Submit calls props.onSubmit() on form submit event; disable submit button if props.value.trim().length === 0 or if composer is disabled.",
+        "Ensure no AskHuman, Decline, file attachment, or SSE interaction controls are present.",
+        "Create packages/web/src/components/workflows/RunChatComposer.test.tsx using renderToStaticMarkup testing enabled, disabled (non-Web reason), sending, error states, and verifying absence of Ask controls.",
+        "Passes with bun test src/lib/api.conversations.test.ts src/components/workflows/RunChatComposer.test.tsx."
+      ],
+      "technicalNotes": "Follow docs/superpowers/plans/2026-09-06-node-room-from-chat-timeline-legacy.md:279-314, 970-1131. Controlled component with zero API dependencies, consuming only RunChatComposerProps.",
+      "dependsOn": [],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Wire Chat door into LegacyGraphLogsPane with parent queries and send",
+      "description": "As an operator, I want LegacyGraphLogsPane to host the Chat timeline and composer as a third door into the shared node room, so that Graph, Logs, and Chat share selection and live node rooms without switching tabs.",
+      "acceptanceCriteria": [
+        "Extend LegacyGraphLogsPaneProps in packages/web/src/components/workflows/LegacyGraphLogsPane.tsx to accept activeView: 'graph' | 'logs' | 'chat', parentPlatformId: string | null, loadParentMessages: (conversationId: string) => Promise<MessageResponse[]>, loadParentConversation: (conversationId: string) => Promise<ConversationResponse>, and sendParentMessage: (conversationId: string, message: string) => Promise<{ accepted: boolean; status: string }>.",
+        "Export runChatMessagesRefetchInterval(status: WorkflowRunStatus): 3000 | false returning 3000 for 'pending', 'running', 'paused', and false for 'completed', 'failed', 'cancelled'.",
+        "Query parent messages via useQuery with key ['runChatMessages', parentPlatformId], enabled when activeView === 'chat' && parentPlatformId !== null, refetchInterval from runChatMessagesRefetchInterval(runStatus), and retry: false.",
+        "Query parent conversation via useQuery with key ['runChatConversation', parentPlatformId], enabled when activeView === 'chat' && parentPlatformId !== null, staleTime: Infinity, and retry: false.",
+        "Derive composerDisabledReason: 'Conversation unavailable.' if parentPlatformId === null; 'Loading conversation\u2026' if fetching; 'Unable to load conversation details.' if query fails; 'Continuing chats from other platforms in the Web UI is coming soon' if platform_type !== 'web'; otherwise null.",
+        "Manage chatDraft, chatSending, and chatSendError state; on submit, call sendParentMessage, clear draft and refetch parentMessagesQuery on success; preserve draft and display error on failure; invalidate pending send generations on runId changes.",
+        "Manage selectedTimelineEntryId state; clear it on Graph click, Logs click, run change, or external node selection change; preserve it across tab switches between Graph, Logs, and Chat.",
+        "Implement handleNodeStatusSelect: resolve room row with resolveTimelineRoomRow, set selectedLogRowId if row exists in rows (or null if synthetic fallback), set selectedTimelineEntryId(entry.id), and call onSelectNode(row.nodeId).",
+        "Render left pane with three-way branch: 'graph' renders renderGraph, 'logs' renders NodeRunList, 'chat' renders ChatTimeline inside min-h-0 flex-1 and RunChatComposer at bottom.",
+        "Update packages/web/src/components/workflows/LegacyGraphLogsPane.test.tsx covering Chat view rendering, room opening, tab switching persistence, exact status selection aria-current=\"true\", parent-message polling and errors, composer submit/clear/error, non-Web guard, and expectNoAskHumanChrome.",
+        "Passes with NODE_ENV=development bun test src/components/workflows/LegacyGraphLogsPane.test.tsx."
+      ],
+      "technicalNotes": "Follow docs/superpowers/plans/2026-09-06-node-room-from-chat-timeline-legacy.md:315-407, 1132-1439. Consumes ChatTimeline, RunChatComposer, buildChatTimeline, resolveTimelineRoomRow, resolveRoomKind, and injected parent conversation handlers. Preserves single LegacyNodeRoom instance across all three tabs.",
+      "dependsOn": [
+        "US-001",
+        "US-002",
+        "US-003",
+        "US-004"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Mount LegacyGraphLogsPane for DAG Chat in WorkflowExecution",
+      "description": "As an operator, I want WorkflowExecution to keep LegacyGraphLogsPane mounted when viewing DAG Chat, so that Chat uses the unified timeline and room shell while dropping ChatInterface.",
+      "acceptanceCriteria": [
+        "Update resolveWorkflowExecutionBody in packages/web/src/components/workflows/WorkflowExecution.tsx to return WorkflowExecutionBody = 'graph-logs-pane' | 'source-control' | 'sequential' without taking parentPlatformId (returns 'sequential' for non-DAG, 'source-control' for source-control view, 'graph-logs-pane' for graph, logs, and chat views).",
+        "In WorkflowExecution.tsx, pass activeView={activeView === 'chat' ? 'chat' : activeView === 'graph' ? 'graph' : 'logs'}, parentPlatformId={parentPlatformId}, loadParentConversation={getConversation}, loadParentMessages={getMessages}, and sendParentMessage={sendMessage} to LegacyGraphLogsPane.",
+        "Remove ChatInterface import and the body === 'chat' branch from WorkflowExecution.tsx.",
+        "Remove unused workingPath property from WorkflowRunQueryData, its query mapper, and its local variable binding.",
+        "Preserve DagRunTabs gating so Chat tab renders only when parentPlatformId is present.",
+        "Update packages/web/src/components/workflows/WorkflowExecution.test.tsx verifying DAG Chat returns 'graph-logs-pane', non-DAG returns 'sequential', and 'chat' is never returned as a body view.",
+        "Passes with bun test src/components/workflows/WorkflowExecution.test.tsx src/components/workflows/source-control/dag-run-tabs.test.tsx."
+      ],
+      "technicalNotes": "Follow docs/superpowers/plans/2026-09-06-node-room-from-chat-timeline-legacy.md:408-431, 1440-1565. Preserves standalone /legacy/chat/:id route and ChatInterface component intact.",
+      "dependsOn": [
+        "US-005"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "Validate story and update sprint tracking",
+      "description": "As a maintainer, I want full suite validation and updated sprint status, so that Story 5.4 is verifiably complete and tracked as done.",
+      "acceptanceCriteria": [
+        "Run all focused Story 5.4 tests together in packages/web: bun test src/lib/api.conversations.test.ts src/components/workflows/build-chat-timeline.test.ts src/components/workflows/resolve-timeline-room-row.test.ts src/components/workflows/ChatTimeline.test.tsx src/components/workflows/RunChatComposer.test.tsx src/components/workflows/WorkflowExecution.test.tsx and NODE_ENV=development bun test src/components/workflows/LegacyGraphLogsPane.test.tsx.",
+        "Run repository validation from root: bun run validate passing completely (type-check, lint --max-warnings 0, etc.).",
+        "Update _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml marking 5-4-open-the-node-room-from-the-chat-timeline-legacy: done and syncing both the leading # last_updated: comment and last_updated: YAML field with the current timestamp.",
+        "Verify epic-5 and Story 5.5 remain in their current state (backlog), and commit the tracker change cleanly."
+      ],
+      "technicalNotes": "Follow docs/superpowers/plans/2026-09-06-node-room-from-chat-timeline-legacy.md:1566-1611. Follow pre-PR validation rules. Do not run bun test from repository root.",
+      "dependsOn": [
+        "US-001",
+        "US-002",
+        "US-003",
+        "US-004",
+        "US-005",
+        "US-006"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
