@@ -3767,7 +3767,7 @@ nodes:
       for (const nodeId of requiredStages) expect(nodes.has(nodeId)).toBe(true);
 
       // Accepted dual-model contract from speckit-ralph-native-feature.yaml:
-      // first native loop = xai-oauth/grok-4.5 @ high; final Speckit loop =
+      // first native loop = alibaba-token-plan/deepseek-v4-pro @ max; final Speckit loop =
       // anthropic/claude-sonnet-5 @ xhigh.
       const paths = [
         {
@@ -3775,8 +3775,8 @@ nodes:
           conversionId: 'ralph-tasks-to-ralph',
           loopId: 'ralph-loop-run',
           syncId: 'ralph-sync-back',
-          model: 'xai-oauth/grok-4.5',
-          effort: 'high',
+          model: 'alibaba-token-plan/deepseek-v4-pro',
+          effort: 'max',
         },
         {
           preflightId: 'speckit-final-ralph-native-preflight',
