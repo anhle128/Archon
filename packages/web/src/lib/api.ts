@@ -178,6 +178,10 @@ export async function createConversation(
   });
 }
 
+export async function getConversation(id: string): Promise<ConversationResponse> {
+  return fetchJSON<ConversationResponse>(`/api/conversations/${encodeURIComponent(id)}`);
+}
+
 export async function updateConversation(
   id: string,
   updates: { title?: string }

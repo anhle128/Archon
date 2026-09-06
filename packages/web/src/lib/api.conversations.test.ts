@@ -1,5 +1,10 @@
 import { describe, test, expect, afterEach, spyOn } from 'bun:test';
-import { updateConversation, deleteConversation } from './api';
+import {
+  updateConversation,
+  deleteConversation,
+  getConversation,
+  type ConversationResponse,
+} from './api';
 
 // Regression tests for URL-encoding of platform conversation IDs in the web API
 // client. Forge platform IDs (GitHub/Gitea) contain `/` and `#` characters
@@ -26,6 +31,36 @@ let fetchSpy: ReturnType<typeof mockFetchSuccess> | undefined;
 afterEach(() => {
   fetchSpy?.mockRestore();
   fetchSpy = undefined;
+});
+
+describe('getConversation — forge platform IDs with slashes and hashes', () => {
+  test('GETs the URL-encoded conversation ID', async () => {
+    const conversation: ConversationResponse = {
+      id: 'conversation-1',
+      platform_type: 'web',
+      platform_conversation_id: FORGE_ID,
+      codebase_id: null,
+      cwd: null,
+      isolation_env_id: null,
+      ai_assistant_type: 'claude',
+      title: null,
+      hidden: false,
+      deleted_at: null,
+      last_activity_at: null,
+      user_id: null,
+      created_at: '2026-09-06T00:00:00.000Z',
+      updated_at: '2026-09-06T00:00:00.000Z',
+    };
+    fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify(conversation), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+
+    expect(await getConversation(FORGE_ID)).toEqual(conversation);
+    expect(fetchSpy).toHaveBeenCalledWith(ENCODED_URL);
+  });
 });
 
 describe('updateConversation — forge platform IDs with slashes and hashes', () => {
