@@ -22,8 +22,8 @@
       "technicalNotes": "Follow docs/superpowers/plans/2026-09-06-node-room-from-chat-timeline-legacy.md:145-222, 459-684. Consumes MessageResponse, WorkflowEventResponse, WorkflowNodeStateResponse from @/lib/api, LogRowSelection from ./build-log-rows, NodeBodyKind from ./resolve-room-kind, and ensureUtc from @/lib/format. Pure function without React dependencies.",
       "dependsOn": [],
       "priority": 1,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 1. Files: packages/web/src/components/workflows/build-chat-timeline.ts, packages/web/src/components/workflows/build-chat-timeline.test.ts. 18 tests passing."
     },
     {
       "id": "US-002",
@@ -42,8 +42,8 @@
         "US-001"
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 2. Files: packages/web/src/components/workflows/resolve-timeline-room-row.ts, packages/web/src/components/workflows/resolve-timeline-room-row.test.ts. 7 tests passing."
     },
     {
       "id": "US-003",
@@ -68,8 +68,8 @@
         "US-001"
       ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 3. Files: packages/web/src/components/workflows/ChatTimeline.tsx, packages/web/src/components/workflows/ChatTimeline.test.tsx. 9 tests passing."
     },
     {
       "id": "US-004",
@@ -91,8 +91,8 @@
       "technicalNotes": "Follow docs/superpowers/plans/2026-09-06-node-room-from-chat-timeline-legacy.md:279-314, 970-1131. Controlled component with zero API dependencies, consuming only RunChatComposerProps.",
       "dependsOn": [],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 4. Files: packages/web/src/lib/api.ts, packages/web/src/lib/api.conversations.test.ts, packages/web/src/components/workflows/RunChatComposer.tsx, packages/web/src/components/workflows/RunChatComposer.test.tsx. 8 tests passing."
     },
     {
       "id": "US-005",
@@ -119,8 +119,8 @@
         "US-004"
       ],
       "priority": 5,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 5. Files: packages/web/src/components/workflows/LegacyGraphLogsPane.tsx, packages/web/src/components/workflows/LegacyGraphLogsPane.test.tsx, packages/web/src/components/workflows/WorkflowExecution.tsx. NODE_ENV=development bun test src/components/workflows/LegacyGraphLogsPane.test.tsx \u2014 36 pass."
     },
     {
       "id": "US-006",
@@ -140,8 +140,8 @@
         "US-005"
       ],
       "priority": 6,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 6. Files: packages/web/src/components/workflows/WorkflowExecution.tsx, packages/web/src/components/workflows/WorkflowExecution.test.tsx. bun test WorkflowExecution.test.tsx dag-run-tabs.test.tsx — 8 pass."
     },
     {
       "id": "US-007",
@@ -163,8 +163,8 @@
         "US-006"
       ],
       "priority": 7,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 7. Focused Story 5.4 tests 84 pass. bun run validate passed after chore(unblock) NODE_ENV=development on packages/web component tests. Files: packages/web/package.json, _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml."
     }
   ]
 }
