@@ -44,6 +44,8 @@ mock.module('@archon/paths', () => ({
 mock.module('@archon/git', () => ({
   getDefaultBranch: mock(async () => 'main'),
   toRepoPath: mock((p: string) => p),
+  changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
+  isGitWorkTree: mock(async () => false),
 }));
 
 // --- Bootstrap provider registry (load-time isRegisteredProvider checks) ---
@@ -699,6 +701,11 @@ nodes:
 
     const store = new InMemoryStore();
     const deps = makeDeps(store);
+    const snapshotOrder: string[] = [];
+    deps.onRunEndGitSnapshot = async ({ runId }): Promise<void> => {
+      const run = await store.getWorkflowRun(runId);
+      if (run) snapshotOrder.push(run.workflow_name);
+    };
     const parent = await discover('parent-gated');
 
     // First drive: parent runs, child pauses at its gate, parent pauses on child.
@@ -751,6 +758,7 @@ nodes:
       e => e.event_type === 'node_completed' && e.step_name === 'sub'
     );
     expect(subCompleted?.data?.node_output).toBe('ai-output');
+    expect(snapshotOrder).toEqual(['child-gated', 'parent-gated']);
   });
 
   it('a throw during the parent auto-resume pass lands the parent in failed, never wedged at running', async () => {

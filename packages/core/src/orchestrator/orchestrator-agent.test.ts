@@ -305,6 +305,8 @@ mock.module('@archon/git', () => ({
   getCurrentBranch: mock(() => Promise.resolve(null)),
   countCommitsAhead: mock(() => Promise.resolve(0)),
   hasUncommittedChanges: mock(() => Promise.resolve(false)),
+  changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
+  isGitWorkTree: mock(async () => false),
 }));
 
 mock.module('fs', () => ({

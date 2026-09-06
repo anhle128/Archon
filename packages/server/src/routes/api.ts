@@ -532,6 +532,8 @@ import {
   dashboardWorkflowRunSchema,
   workflowRunStatusSchema,
 } from './schemas/workflow.schemas';
+import { gitChangesRoute } from './git/changes-route';
+import { handleGitChanges } from './git/changes-handler';
 
 // Read app version: use build-time constant in binary, package.json in dev
 let appVersion = 'unknown';
@@ -4941,6 +4943,11 @@ export function registerApiRoutes(
       getLog().error({ err: error }, 'get_workflow_run_failed');
       return apiError(c, 500, 'Failed to get workflow run');
     }
+  });
+
+  // GET /api/workflows/runs/:runId/git/changes - Live uncommitted changes for a run
+  registerOpenApiRoute(gitChangesRoute, async c => {
+    return handleGitChanges(c, apiError);
   });
 
   // GET /api/usage - Installation usage/cost report (direct runs only)

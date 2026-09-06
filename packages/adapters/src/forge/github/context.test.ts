@@ -95,6 +95,8 @@ mock.module('@archon/git', () => ({
   addSafeDirectory: mock(async () => undefined),
   toRepoPath: (p: string) => p,
   toBranchName: (n: string) => n,
+  changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
+  isGitWorkTree: mock(async () => false),
 }));
 
 mock.module('@archon/core/db/conversations', () => ({

@@ -110,6 +110,8 @@ const mockGetDefaultBranch = mock(async () => 'main');
 mock.module('@archon/git', () => ({
   getDefaultBranch: mockGetDefaultBranch,
   toRepoPath: mock((p: string) => p),
+  changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
+  isGitWorkTree: mock(async () => false),
 }));
 
 // --- Mock dag-executor ---
@@ -155,7 +157,7 @@ import {
   resolveScopeArtifactsDir,
 } from './executor';
 import { keepAwake } from './utils/keep-awake';
-import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
+import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig, GitSnapshotContext } from './deps';
 import type { IWorkflowStore } from './store';
 import type { AppliedEnvOverlay, LoopGroupNode, WorkflowDefinition, WorkflowRun } from './schemas';
 import { applyEnvOverlay } from './env-overlay';
@@ -1698,6 +1700,432 @@ describe('finally backstop', () => {
       c => typeof c[1] === 'string' && (c[1] as string).includes('exited without finalizing')
     );
     expect(backstopCall).toBeUndefined();
+  });
+});
+
+describe('run-end git snapshot seam', () => {
+  beforeEach(() => {
+    mockLogFn.mockClear();
+    mockExecuteDagWorkflow.mockClear();
+    mockExecuteDagWorkflow.mockImplementation(async (): Promise<string | undefined> => undefined);
+  });
+
+  function snapshotRun(status: WorkflowRun['status']): WorkflowRun {
+    return makeRun({
+      id: 'run-123',
+      status,
+      working_path: '/tmp/wt-secret',
+      output_root: '/tmp/out-secret',
+    });
+  }
+
+  function depsWithHook(
+    hook: (context: GitSnapshotContext) => Promise<void>,
+    storeOverrides: Parameters<typeof makeStore>[0] = {}
+  ) {
+    const store = makeStore({
+      getWorkflowRun: mock(async () => snapshotRun('completed')),
+      getWorkflowRunStatus: mock(async () => 'completed' as const),
+      ...storeOverrides,
+    });
+    return { store, deps: { ...makeDeps(store), onRunEndGitSnapshot: hook } };
+  }
+
+  function eventCalls(eventName: string): unknown[][] {
+    return (mockLogFn.mock.calls as unknown[][]).filter(call => call[1] === eventName);
+  }
+
+  it('invokes the hook once with run row fields after a completed run', async () => {
+    const hook = mock(async (_context: GitSnapshotContext): Promise<void> => {});
+    const { deps } = depsWithHook(hook);
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'test message',
+      'db-conv-1'
+    );
+    expect(result.success).toBe(true);
+    expect(hook).toHaveBeenCalledTimes(1);
+    expect(hook.mock.calls[0]?.[0]).toEqual({
+      runId: 'run-123',
+      workingPath: '/tmp/wt-secret',
+      outputRoot: '/tmp/out-secret',
+      status: 'completed',
+    });
+    expect(eventCalls('workflow.git_snapshot_started')[0]?.[0]).toEqual({
+      workflowRunId: 'run-123',
+      status: 'completed',
+    });
+    expect(eventCalls('workflow.git_snapshot_completed')[0]?.[0]).toEqual({
+      workflowRunId: 'run-123',
+      status: 'completed',
+    });
+  });
+
+  it('invokes the hook when the run failed', async () => {
+    mockExecuteDagWorkflow.mockRejectedValueOnce(new Error('dag boom'));
+    const hook = mock(async (_context: GitSnapshotContext): Promise<void> => {});
+    const { deps } = depsWithHook(hook, {
+      getWorkflowRun: mock(async () => snapshotRun('failed')),
+      getWorkflowRunStatus: mock(async () => 'failed' as const),
+    });
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'test message',
+      'db-conv-1'
+    );
+    expect(result.success).toBe(false);
+    expect(hook).toHaveBeenCalledTimes(1);
+    expect(hook.mock.calls[0]?.[0]?.status).toBe('failed');
+  });
+
+  it('invokes the hook when the run was cancelled', async () => {
+    const hook = mock(async (_context: GitSnapshotContext): Promise<void> => {});
+    const { deps } = depsWithHook(hook, {
+      getWorkflowRun: mock(async () => snapshotRun('cancelled')),
+      getWorkflowRunStatus: mock(async () => 'cancelled' as const),
+    });
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'test message',
+      'db-conv-1'
+    );
+    expect(result.success).toBe(false);
+    expect(hook).toHaveBeenCalledTimes(1);
+    expect(hook.mock.calls[0]?.[0]?.status).toBe('cancelled');
+  });
+
+  it('does not invoke the hook when the run paused', async () => {
+    const hook = mock(async (_context: GitSnapshotContext): Promise<void> => {});
+    const { deps } = depsWithHook(hook, {
+      getWorkflowRun: mock(async () => snapshotRun('paused')),
+      getWorkflowRunStatus: mock(async () => 'paused' as const),
+    });
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'test message',
+      'db-conv-1'
+    );
+    expect(result.paused).toBe(true);
+    expect(hook).not.toHaveBeenCalled();
+  });
+
+  it('does not invoke the hook when the refreshed run is pending', async () => {
+    const hook = mock(async (_context: GitSnapshotContext): Promise<void> => {});
+    const { deps } = depsWithHook(hook, {
+      getWorkflowRun: mock(async () => snapshotRun('pending')),
+      getWorkflowRunStatus: mock(async () => 'pending' as const),
+    });
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'test message',
+      'db-conv-1'
+    );
+    expect(result.success).toBe(false);
+    expect(hook).not.toHaveBeenCalled();
+  });
+
+  it('does not invoke the hook on a pre-DAG container-resume guard return', async () => {
+    const hook = mock(async (_context: GitSnapshotContext): Promise<void> => {});
+    const store = makeStore();
+    const deps = { ...makeDeps(store), onRunEndGitSnapshot: hook };
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'test message',
+      'db-conv-1',
+      { preCreatedRun: makeRun({ metadata: { isolation: 'container' } }) }
+    );
+    expect(result.success).toBe(false);
+    expect(hook).not.toHaveBeenCalled();
+    expect(eventCalls('workflow.git_snapshot_started')).toHaveLength(0);
+  });
+
+  it('does not invoke the hook when it is absent', async () => {
+    const result = await executeWorkflow(
+      makeDeps(),
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'test message',
+      'db-conv-1'
+    );
+    expect(result.success).toBe(true);
+    expect(eventCalls('workflow.git_snapshot_started')).toHaveLength(0);
+  });
+
+  it('still succeeds when the hook throws', async () => {
+    const hook = mock(async (_context: GitSnapshotContext): Promise<void> => {
+      const error = new Error(
+        'snapshot exploded at /tmp/wt-secret into /tmp/out-secret with token ghp_private'
+      ) as Error & { code: string };
+      error.code = 'SECRET_TOKEN_ABC123';
+      throw error;
+    });
+    const failWorkflowRun = mock(async (): Promise<void> => {});
+    const { deps } = depsWithHook(hook, { failWorkflowRun });
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'test message',
+      'db-conv-1'
+    );
+    expect(result.success).toBe(true);
+    expect(result.workflowRunId).toBe('run-123');
+    expect(hook).toHaveBeenCalledTimes(1);
+    const failed = eventCalls('workflow.git_snapshot_failed');
+    expect(failed).toHaveLength(1);
+    expect(failed[0]?.[0]).toMatchObject({
+      workflowRunId: 'run-123',
+      status: 'completed',
+    });
+    const loggedError = (
+      failed[0]?.[0] as { err?: { type?: string; message?: string; stack?: string } } | undefined
+    )?.err;
+    expect(loggedError).toEqual({
+      type: 'GitSnapshotFailure',
+      message: 'Run-end git snapshot failed; details redacted',
+    });
+    expect(loggedError?.stack).toBeUndefined();
+    const serializedFailure = JSON.stringify(failed);
+    expect(serializedFailure).not.toContain('/tmp/wt-secret');
+    expect(serializedFailure).not.toContain('/tmp/out-secret');
+    expect(serializedFailure).not.toContain('ghp_private');
+    expect(serializedFailure).not.toContain('SECRET_TOKEN_ABC123');
+    expect(eventCalls('workflow.git_snapshot_completed')).toHaveLength(0);
+    expect(failWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('preserves a successful result when the final row refresh throws', async () => {
+    let readCount = 0;
+    const hook = mock(async (_context: GitSnapshotContext): Promise<void> => {});
+    const failWorkflowRun = mock(async (): Promise<void> => {});
+    const { deps } = depsWithHook(hook, {
+      failWorkflowRun,
+      getWorkflowRun: mock(async () => {
+        readCount += 1;
+        if (readCount === 1) return snapshotRun('completed');
+        throw new Error('snapshot row read failed for /tmp/wt-secret with ghp_private');
+      }),
+    });
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'test message',
+      'db-conv-1'
+    );
+    expect(result.success).toBe(true);
+    expect(hook).not.toHaveBeenCalled();
+    expect(eventCalls('workflow.git_snapshot_failed')[0]?.[0]).toMatchObject({
+      workflowRunId: 'run-123',
+    });
+    const failed = eventCalls('workflow.git_snapshot_failed');
+    const loggedError = (
+      failed[0]?.[0] as { err?: { type?: string; message?: string; stack?: string } } | undefined
+    )?.err;
+    expect(loggedError).toEqual({
+      type: 'GitSnapshotFailure',
+      message: 'Run-end git snapshot failed; details redacted',
+    });
+    expect(loggedError?.stack).toBeUndefined();
+    const serializedFailure = JSON.stringify(failed);
+    expect(serializedFailure).not.toContain('/tmp/wt-secret');
+    expect(serializedFailure).not.toContain('ghp_private');
+    expect(failWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('contains a hostile thrown value without inspecting it or changing the result', async () => {
+    const hostile = new Proxy(
+      {},
+      {
+        has: () => {
+          throw new Error('/tmp/wt-secret ghp_private');
+        },
+        get: () => {
+          throw new Error('/tmp/out-secret SECRET_TOKEN_ABC123');
+        },
+      }
+    );
+    const hook = mock(async (_context: GitSnapshotContext): Promise<void> => {
+      throw hostile;
+    });
+    const { deps } = depsWithHook(hook);
+
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'test message',
+      'db-conv-1'
+    );
+
+    expect(result.success).toBe(true);
+    const failed = eventCalls('workflow.git_snapshot_failed');
+    expect(failed).toHaveLength(1);
+    expect(failed[0]?.[0]).toEqual({
+      err: {
+        type: 'GitSnapshotFailure',
+        message: 'Run-end git snapshot failed; details redacted',
+      },
+      workflowRunId: 'run-123',
+      status: 'completed',
+    });
+  });
+
+  it('waits for the hook to finish before resolving the workflow', async () => {
+    let markHookStarted!: () => void;
+    let releaseHook!: () => void;
+    const hookStarted = new Promise<void>(resolve => {
+      markHookStarted = resolve;
+    });
+    const hookRelease = new Promise<void>(resolve => {
+      releaseHook = resolve;
+    });
+    const hook = mock(async (_context: GitSnapshotContext): Promise<void> => {
+      markHookStarted();
+      await hookRelease;
+    });
+    const { deps } = depsWithHook(hook);
+    let settled = false;
+    const execution = executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'test message',
+      'db-conv-1'
+    ).finally(() => {
+      settled = true;
+    });
+
+    await hookStarted;
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    releaseHook();
+    const result = await execution;
+    expect(result.success).toBe(true);
+    expect(settled).toBe(true);
+  });
+
+  it('does not invoke the hook when the refreshed run row is missing', async () => {
+    let readCount = 0;
+    const hook = mock(async (_context: GitSnapshotContext): Promise<void> => {});
+    const { deps } = depsWithHook(hook, {
+      getWorkflowRun: mock(async () => {
+        readCount += 1;
+        return readCount === 1 ? snapshotRun('completed') : null;
+      }),
+    });
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'test message',
+      'db-conv-1'
+    );
+    expect(result.success).toBe(true);
+    expect(hook).not.toHaveBeenCalled();
+    expect(eventCalls('workflow.git_snapshot_started')).toHaveLength(0);
+  });
+
+  it('invokes the hook as failed after the running-status backstop', async () => {
+    let status: 'running' | 'failed' = 'running';
+    const hook = mock(async (_context: GitSnapshotContext): Promise<void> => {});
+    const store = makeStore({
+      getWorkflowRunStatus: mock(async () => status),
+      failWorkflowRun: mock(async () => {
+        status = 'failed';
+      }),
+      getWorkflowRun: mock(async () => snapshotRun(status)),
+    });
+    const deps = { ...makeDeps(store), onRunEndGitSnapshot: hook };
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'test',
+      'db-conv-1'
+    );
+    expect(hook).toHaveBeenCalledTimes(1);
+    expect(hook.mock.calls[0]?.[0]?.status).toBe('failed');
+  });
+
+  it('does not invoke the hook when the running-status backstop write fails', async () => {
+    const hook = mock(async (_context: GitSnapshotContext): Promise<void> => {});
+    const store = makeStore({
+      getWorkflowRunStatus: mock(async () => 'running' as const),
+      failWorkflowRun: mock(async () => {
+        throw new Error('status write failed');
+      }),
+      getWorkflowRun: mock(async () => snapshotRun('running')),
+    });
+    const deps = { ...makeDeps(store), onRunEndGitSnapshot: hook };
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'test',
+      'db-conv-1'
+    );
+    expect(result.success).toBe(false);
+    expect(hook).not.toHaveBeenCalled();
+    expect(eventCalls('workflow.git_snapshot_started')).toHaveLength(0);
+  });
+
+  it('does not log workingPath or outputRoot', async () => {
+    const hook = mock(async (_context: GitSnapshotContext): Promise<void> => {});
+    const { deps } = depsWithHook(hook);
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'test message',
+      'db-conv-1'
+    );
+    const serialized = JSON.stringify(mockLogFn.mock.calls);
+    expect(serialized).not.toContain('/tmp/wt-secret');
+    expect(serialized).not.toContain('/tmp/out-secret');
   });
 });
 

@@ -87,6 +87,8 @@ mock.module('@archon/git', () => ({
   isWorktreePath: mockIsWorktreePath,
   toRepoPath: (p: string) => p,
   toBranchName: (b: string) => b,
+  changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
+  isGitWorkTree: mock(async () => false),
 }));
 
 // Mock @archon/core so we can assert handleMessage call args (e.g. userId propagation)

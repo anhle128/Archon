@@ -64,6 +64,8 @@ mock.module('@archon/git', () => ({
   isCommitAncestorOfHead: mockIsCommitAncestorOfHead,
   createRetrySafetyRef: mockCreateRetrySafetyRef,
   resetTrackedFilesToCommit: mockResetTrackedFilesToCommit,
+  changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
+  isGitWorkTree: mock(async () => false),
 }));
 
 const mockQuery = mock(async () => createQueryResult([]));

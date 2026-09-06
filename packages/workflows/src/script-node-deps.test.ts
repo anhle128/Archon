@@ -20,6 +20,8 @@ const mockExecFileAsync = mock(
 mock.module('@archon/git', () => ({
   execFileAsync: mockExecFileAsync,
   mkdirAsync: mock(async () => undefined),
+  changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
+  isGitWorkTree: mock(async () => false),
 }));
 
 // --- Mock logger (MUST come before module-under-test imports) ---

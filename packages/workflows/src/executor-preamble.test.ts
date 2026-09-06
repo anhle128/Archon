@@ -42,6 +42,8 @@ mock.module('@archon/paths', () => ({
 mock.module('@archon/git', () => ({
   getDefaultBranch: mock(async () => 'main'),
   toRepoPath: mock((p: string) => p),
+  changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
+  isGitWorkTree: mock(async () => false),
 }));
 
 // ---------------------------------------------------------------------------

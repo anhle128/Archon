@@ -11,6 +11,8 @@ mock.module('@archon/git', () => ({
   countCommitsAhead: mockCountCommitsAhead,
   hasUncommittedChanges: mockHasUncommittedChanges,
   toRepoPath: (p: string) => p,
+  changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
+  isGitWorkTree: mock(async () => false),
 }));
 
 mock.module('@archon/paths', () => ({

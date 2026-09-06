@@ -62,3 +62,4 @@ CONTRIBUTING.md
 _bmad-output/**/*.html
 _bmad-output/**/.working/
 _bmad-output/**/*.memlog.md
+_bmad-output/specs/spec-workflow-run-view-hitl/ux-mockup/

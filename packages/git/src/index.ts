@@ -44,6 +44,20 @@ export {
   getLastCommitDate,
 } from './branch';
 
+// Changed files (live uncommitted status)
+export {
+  changedFiles,
+  isGitWorkTree,
+  parsePorcelainV1Z,
+  projectChangedFiles,
+} from './changed-files';
+export type {
+  ChangedFile,
+  ChangedFileStatus,
+  ChangedFilesResult,
+  PorcelainEntry,
+} from './changed-files';
+
 // Forge detection
 export { detectForge } from './forge';
 export type { ForgeType, ForgeInfo } from './forge';

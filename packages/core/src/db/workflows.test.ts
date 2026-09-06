@@ -34,6 +34,8 @@ mock.module('./connection', () => ({
 
 mock.module('@archon/git', () => ({
   deleteRetryRefsByRunId: mockDeleteRetryRefsByRunId,
+  changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
+  isGitWorkTree: mock(async () => false),
 }));
 
 import {

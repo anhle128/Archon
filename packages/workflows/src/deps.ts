@@ -112,6 +112,19 @@ export interface WorkflowConfig {
 export type AgentProviderFactory = (provider: string) => IAgentProvider;
 
 // ---------------------------------------------------------------------------
+// CAP-8 run-end git snapshot seam
+// ---------------------------------------------------------------------------
+
+export type GitSnapshotTerminalStatus = 'completed' | 'failed' | 'cancelled';
+
+export interface GitSnapshotContext {
+  runId: string;
+  workingPath: string | null;
+  outputRoot: string | null;
+  status: GitSnapshotTerminalStatus;
+}
+
+// ---------------------------------------------------------------------------
 // WorkflowDeps — the single injection point
 // ---------------------------------------------------------------------------
 
@@ -194,4 +207,11 @@ export interface WorkflowDeps {
     aliases?: RawAliasesConfig;
     defaultProvider?: string;
   }>;
+  /**
+   * Optional CAP-8 run-end git-snapshot hook.
+   * The executor calls it only after DAG execution reaches a terminal status.
+   * The executor catches and logs lookup or hook failures without changing the run result.
+   * A future writer must be idempotent, use temp+rename under `outputRoot`, and never log paths, remotes, file contents, or secrets.
+   */
+  onRunEndGitSnapshot?: (context: GitSnapshotContext) => Promise<void>;
 }
