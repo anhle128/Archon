@@ -1,25 +1,126 @@
 name: pr-e2e-verify
 description: >-
-  For a ready PR, write and run an end-to-end user-story test (Lane B) and gate
-  on real third-party contract coverage (Lane A). A route_loop self-heals missing
-  coverage: an agent resolves the gaps, then the gate re-checks; on exhaustion it
-  comments the gaps on the PR.
+  For a ready PR, check out the PR head in an isolated worktree, write and run
+  an end-to-end user-story test (Lane B), and gate on real third-party contract
+  coverage (Lane A). A route_loop self-heals missing coverage: an agent resolves
+  the gaps, then the gate re-checks; on exhaustion it comments the gaps on the PR.
 requires: [github]
 provider: claude
+worktree:
+  enabled: true
+mutates_checkout: true
 
 nodes:
+  # Resolve the PR number/repo from $ARGUMENTS (URL or number). Same contract
+  # as harness-validate-feature-pr: an explicit GitHub PR URL wins.
+  - id: fetch-pr
+    bash: |
+      set -euo pipefail
+
+      PR_REPO=""
+      PR_URL=$(printf '%s\n' "$ARGUMENTS" | grep -oE 'https://github.com/[^/]+/[^/]+/pull/[0-9]+' | head -1 || true)
+      if [ -n "$PR_URL" ]; then
+        PR_REPO=$(printf '%s\n' "$PR_URL" | sed -E 's|https://github.com/([^/]+/[^/]+)/pull/[0-9]+|\1|')
+      fi
+      if [ -z "$PR_REPO" ]; then
+        PR_REPO=$(gh repo view "$(git remote get-url "$PR_REMOTE")" --json nameWithOwner -q .nameWithOwner)
+      fi
+      if [ -z "$PR_REPO" ]; then
+        echo "ERROR: could not resolve the PR target repository" >&2
+        exit 1
+      fi
+
+      PR_NUMBER=$(printf '%s\n' "$ARGUMENTS" | grep -oE '/pull/[0-9]+' | grep -oE '[0-9]+' | head -1 || true)
+      if [ -z "$PR_NUMBER" ]; then
+        PR_NUMBER=$(printf '%s\n' "$ARGUMENTS" | grep -oE '[0-9]+' | head -1 || true)
+      fi
+      if [ -z "$PR_NUMBER" ]; then
+        HEAD_BRANCH=$(git branch --show-current)
+        ORIGIN_REPO=$(gh repo view "$(git remote get-url origin)" --json nameWithOwner -q .nameWithOwner)
+        ORIGIN_OWNER=${ORIGIN_REPO%%/*}
+        if [ "$ORIGIN_REPO" = "$PR_REPO" ]; then
+          PR_HEAD="$HEAD_BRANCH"
+        else
+          PR_HEAD="${ORIGIN_OWNER}:$HEAD_BRANCH"
+        fi
+        PR_NUMBER=$(gh pr list --repo "$PR_REPO" --head "$PR_HEAD" --state open --json number -q '.[0].number' || true)
+      fi
+      if [ "$PR_NUMBER" = "null" ]; then
+        PR_NUMBER=""
+      fi
+
+      if [ -z "$PR_NUMBER" ]; then
+        echo "ERROR: No PR number found in arguments: $ARGUMENTS" >&2
+        exit 1
+      fi
+
+      echo "$PR_NUMBER" > "$ARTIFACTS_DIR/.pr-number"
+      echo "$PR_REPO" > "$ARTIFACTS_DIR/.pr-repo"
+
+      gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json number,title,body,url,headRefName,baseRefName,files,additions,deletions,changedFiles,state,author,labels,isDraft
+
+  # Move the engine-owned worktree onto the PR head. Isolation starts from the
+  # project's default branch (often dev); without this, later nodes read the
+  # wrong tree. Pattern copied from harness-validate-feature-pr resolve-paths.
+  - id: resolve-paths
+    depends_on: [fetch-pr]
+    bash: |
+      set -euo pipefail
+      CANONICAL_REPO=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null | sed 's|/\.git$||')
+      WORKTREE_PATH=$(pwd)
+
+      PR_NUMBER=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-number")
+      PR_REPO=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-repo")
+      PR_HEAD=$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json headRefName -q '.headRefName')
+      PR_BASE=$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json baseRefName -q '.baseRefName')
+      PR_HEAD_SHA=$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json headRefOid -q .headRefOid)
+      PR_HEAD_SHA=$(printf '%s' "$PR_HEAD_SHA" | tr -d '[:space:]')
+
+      PR_GIT_URL=$(gh repo view "$PR_REPO" --json sshUrl -q .sshUrl)
+      if [ -z "$PR_GIT_URL" ] || [ "$PR_GIT_URL" = "null" ]; then
+        PR_GIT_URL=$(gh repo view "$PR_REPO" --json url -q .url)
+      fi
+      echo "Fetching PR #$PR_NUMBER head $PR_HEAD_SHA from $PR_REPO ($PR_GIT_URL)"
+      git fetch --force "$PR_GIT_URL" "pull/${PR_NUMBER}/head:refs/archon/pr-head"
+      if ! git cat-file -e "${PR_HEAD_SHA}^{commit}" 2>/dev/null; then
+        git fetch --force "$PR_GIT_URL" "$PR_HEAD_SHA" || git fetch --force "$PR_REMOTE" "$PR_HEAD_SHA"
+      fi
+      git checkout --force --detach "$PR_HEAD_SHA"
+      LOCAL_SHA=$(git rev-parse HEAD)
+
+      echo "$CANONICAL_REPO" > "$ARTIFACTS_DIR/.canonical-repo"
+      echo "$WORKTREE_PATH" > "$ARTIFACTS_DIR/.worktree-path"
+      echo "$PR_HEAD" > "$ARTIFACTS_DIR/.feature-branch"
+      echo "$PR_HEAD" > "$ARTIFACTS_DIR/.pr-head"
+      echo "$PR_BASE" > "$ARTIFACTS_DIR/.pr-base"
+      echo "$PR_HEAD_SHA" > "$ARTIFACTS_DIR/.pr-head-sha"
+      echo "$LOCAL_SHA" > "$ARTIFACTS_DIR/.local-head-sha"
+      if [ "$PR_HEAD_SHA" != "$LOCAL_SHA" ]; then
+        echo "ERROR: failed to check out PR head: HEAD ($LOCAL_SHA) != PR head ($PR_HEAD_SHA)" >&2
+        exit 1
+      fi
+
+      echo "CANONICAL_REPO=$CANONICAL_REPO"
+      echo "WORKTREE_PATH=$WORKTREE_PATH"
+      echo "FEATURE_BRANCH=$PR_HEAD (detached at $PR_HEAD_SHA)"
+      echo "PR_HEAD=$PR_HEAD"
+      echo "PR_BASE=$PR_BASE"
+
   # Lane B — frame the user story, write the Playwright spec(s), list the
   # external services the tests mock (the third-party requirements).
   - id: plan-tests
-    depends_on: []
+    depends_on: [resolve-paths]
     skills:
       - web-automation-test-pr
     prompt: |
       The PR to verify is #$ARGUMENTS.
-      Read it: `gh pr view $ARGUMENTS` for the description, and list its changed
+      This worktree is already detached at the PR head SHA (see $resolve-paths.output).
+      Read files from the current checkout. Do NOT switch to the project's default
+      branch (dev/main).
+      Read the PR: `gh pr view $ARGUMENTS` for the description, and list its changed
       files with `gh pr view $ARGUMENTS --json files -q '.files[].path'` (do NOT
       use `gh pr diff` — it fails with HTTP 406 on large PRs; read a file's change
-      with `gh pr diff $ARGUMENTS -- <path>` or at the head ref).
+      with `gh pr diff $ARGUMENTS -- <path>` or at HEAD).
       Follow the web-automation-test-pr skill: frame the full end-to-end user
       story, derive the edge cases, crystallize them into Playwright spec(s)
       under `e2e/ui/`, and list every external service the tests mock as a
@@ -27,6 +128,9 @@ nodes:
       Write ONLY new test files (specs, helpers, fixtures) under `e2e/`. Do NOT
       modify the workflow YAML, provider/model settings, or any other config —
       your job is the tests, nothing else.
+    provider: claude
+    model: "claude-opus-4-8[1M]"
+    effort: high
     output_format:
       type: object
       required: [pr, spec_file, mocked_externals]
@@ -49,12 +153,16 @@ nodes:
       - verify-thirdparties-e2e-test-pr
     prompt: |
       Gate PR #$ARGUMENTS on third-party contract coverage.
+      This worktree is already detached at the PR head. Read the current checkout.
       Requirements = the mocked externals from plan-tests
       ($plan-tests.output.mocked_externals) UNION the third-party surfaces in the
       PR's changed files (`gh pr view $ARGUMENTS --json files -q '.files[].path'`;
       do NOT use `gh pr diff` — HTTP 406 on large PRs). For each, check the source has a REAL
       anchor (a recorded-real fixture, a live/contract test, or a `satisfies <SDK
       type>` assertion) — a hand-written fixture does NOT count. Emit the verdict.
+    provider: codex
+    model: "gpt-5.6-sol"
+    effort: xhigh
     output_format:
       type: object
       required: [allTicked, unticked]
@@ -84,12 +192,17 @@ nodes:
       Third-party contract coverage is INCOMPLETE for PR #$ARGUMENTS.
       Missing anchors: $verify.output.unticked
 
-      Resolve each one by adding a REAL anchor so the corresponding mock is tied
+      This worktree is already detached at the PR head. Resolve each missing
+      anchor there. Resolve each one by adding a REAL anchor so the corresponding mock is tied
       to reality: capture a recorded fixture from real provider output, or add a
       `satisfies <SDK type>` test. You may run the provider / read on-disk output
       to capture a real sample. NEVER fabricate a hand-written fixture — that is
       the drift this whole gate exists to prevent. Commit the new test files into
       the checkout so the next verify pass can see them.
+    provider: grok
+    model: "grok-4.5"
+    effort: high
+    
 
   # positive — run the crystallized Playwright specs against the real app.
   # Captures the outcome (never hard-fails) so report-pr always runs and posts it.
@@ -97,8 +210,8 @@ nodes:
     bash: |
       set -uo pipefail
       mkdir -p "$ARTIFACTS_DIR"
-      # This runs in an ISOLATED WORKTREE checked out from the PR branch, which has
-      # no e2e deps, no browser, and no built web bundle — set them up first.
+      # Isolated worktree already detached at the PR head — no e2e deps, no
+      # browser, and no built web bundle until we set them up.
       bun run build:web > "$ARTIFACTS_DIR/e2e-setup.log" 2>&1 || true
       cd e2e
       npm ci >> "$ARTIFACTS_DIR/e2e-setup.log" 2>&1 || true
@@ -110,19 +223,98 @@ nodes:
       fi
       cat "$ARTIFACTS_DIR/e2e-status.txt"
 
-  # Always report the e2e verdict back to the PR — pass means the feature works
-  # end-to-end; fail means it has issues, with the Playwright output attached.
-  - id: report-pr
+  # Persist the authored evidence durably: commit the test files the run wrote
+  # and push them onto the PR head branch, so the PR carries a real commit — not
+  # just a verdict comment. The engine's per-node auto-checkpoints keep the spec
+  # only on a detached HEAD that garbage-collects at worktree teardown, so
+  # without this step the evidence never reaches the PR. Non-fatal: a push
+  # failure still leaves a local commit and the full log in report-pr.
+  - id: commit-evidence
     depends_on: [run-e2e]
     bash: |
-      set -euo pipefail
-      status=$(cat "$ARTIFACTS_DIR/e2e-status.txt" 2>/dev/null || echo unknown)
-      if [ "$status" = passed ]; then
-        gh pr comment "$ARGUMENTS" --body "✅ **E2E verify passed** — the feature works end-to-end as the user story expects (third-party coverage anchored, Playwright specs green)."
-      else
-        body=$(printf '❌ **E2E verify FAILED** — the feature has issues end-to-end. Playwright output (tail):\n\n```\n%s\n```' "$(tail -40 "$ARTIFACTS_DIR/e2e-result.log" 2>/dev/null)")
-        gh pr comment "$ARGUMENTS" --body "$body"
+      set -uo pipefail
+      PR_NUMBER=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-number")
+      PR_REPO=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-repo")
+      PR_HEAD=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-head")
+      PR_HEAD_SHA=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-head-sha")
+
+      # Reuse the PR head's committer identity so the evidence commit is not
+      # authored by an anonymous default.
+      git config user.email "$(git log -1 --format='%ae' 2>/dev/null || echo archon@local)" 2>/dev/null || true
+      git config user.name "$(git log -1 --format='%an' 2>/dev/null || echo archon)" 2>/dev/null || true
+
+      # Unwind the engine's per-node auto-checkpoints back to the PR head, keeping
+      # the working tree, so the evidence lands as ONE clean, well-named commit.
+      git reset -q "$PR_HEAD_SHA" || true
+
+      # Stage ONLY the test SOURCE the run authored (git ignores node_modules and
+      # test-results). Never `git add -A` — that would sweep build output onto the PR.
+      git add -- e2e/ui e2e/lib e2e/fixtures 2>/dev/null || true
+      git add -- e2e/playwright.config.ts e2e/package.json e2e/bun.lock 2>/dev/null || true
+      # Self-heal (resolve) may add provider contract anchors — stage only tests/fixtures.
+      git ls-files -o -m --exclude-standard -- 'packages/*' 2>/dev/null \
+        | grep -E '(\.test\.ts$|/__fixtures__/)' \
+        | while IFS= read -r f; do git add -- "$f"; done || true
+
+      if git diff --cached --quiet; then
+        echo "none" > "$ARTIFACTS_DIR/.evidence-status"
+        echo "no new evidence files to commit"
+        exit 0
       fi
+
+      git commit -q -m "test(e2e): pr-e2e-verify evidence for PR #$PR_NUMBER"
+      EVID_SHA=$(git rev-parse --short HEAD)
+
+      PR_GIT_URL=$(gh repo view "$PR_REPO" --json sshUrl -q .sshUrl 2>/dev/null || true)
+      if [ -z "$PR_GIT_URL" ] || [ "$PR_GIT_URL" = "null" ]; then
+        PR_GIT_URL=$(gh repo view "$PR_REPO" --json url -q .url 2>/dev/null || true)
+      fi
+
+      if [ -n "$PR_GIT_URL" ] && git push "$PR_GIT_URL" "HEAD:refs/heads/$PR_HEAD" > "$ARTIFACTS_DIR/.evidence-push.log" 2>&1; then
+        echo "pushed $EVID_SHA" > "$ARTIFACTS_DIR/.evidence-status"
+        echo "evidence pushed: $EVID_SHA -> $PR_REPO@$PR_HEAD"
+      else
+        echo "local $EVID_SHA" > "$ARTIFACTS_DIR/.evidence-status"
+        echo "evidence committed locally ($EVID_SHA); push failed (see .evidence-push.log)"
+      fi
+
+  # Always report the e2e verdict back to the PR — pass means the feature works
+  # end-to-end; fail means it has issues. The full Playwright output and the
+  # evidence commit sha are attached so the PR carries the proof, not just a tick.
+  - id: report-pr
+    depends_on: [commit-evidence]
+    bash: |
+      set -euo pipefail
+      PR_NUMBER=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-number")
+      PR_REPO=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-repo")
+      status=$(cat "$ARTIFACTS_DIR/e2e-status.txt" 2>/dev/null || echo unknown)
+      evid=$(cat "$ARTIFACTS_DIR/.evidence-status" 2>/dev/null || echo unknown)
+      # Cap the embedded log so a verbose failure cannot exceed GitHub's comment limit.
+      log=$(tail -c 40000 "$ARTIFACTS_DIR/e2e-result.log" 2>/dev/null || echo "(no e2e output captured)")
+
+      case "$evid" in
+        pushed\ *) evid_line="📌 Evidence committed & pushed to this branch: \`${evid#pushed }\`" ;;
+        local\ *)  evid_line="📌 Evidence committed locally as \`${evid#local }\` — push to the PR branch failed (no write access?). Full test output below." ;;
+        none)      evid_line="ℹ️ No new test files to commit — the evidence is already on the branch." ;;
+        *)         evid_line="⚠️ Evidence commit status unknown." ;;
+      esac
+
+      body_file="$ARTIFACTS_DIR/.report-body.md"
+      if [ "$status" = passed ]; then
+        {
+          printf '✅ **E2E verify passed** — the feature works end-to-end as the user story expects (third-party coverage anchored, Playwright specs green).\n\n'
+          printf '%s\n\n' "$evid_line"
+          printf '<details><summary>Playwright output</summary>\n\n```\n%s\n```\n</details>\n' "$log"
+        } > "$body_file"
+      else
+        {
+          printf '❌ **E2E verify FAILED** — the feature has issues end-to-end.\n\n'
+          printf '%s\n\n' "$evid_line"
+          printf '<details open><summary>Playwright output</summary>\n\n```\n%s\n```\n</details>\n' "$log"
+        } > "$body_file"
+      fi
+
+      gh pr comment "$PR_NUMBER" --repo "$PR_REPO" --body-file "$body_file"
 
   # exhausted — could not self-heal within max_iterations; escalate to the PR.
   - id: comment-pr
