@@ -62,9 +62,13 @@ Stories 6.5 and 6.6 own Ask cards.
 - Transactional event writes use `insertWorkflowEvent` inside `withTransaction`.
 - `WORKFLOW_EVENT_TYPES` does not include `node_awaiting` or `interaction_resolved`.
 - `nodeStateSchema`, `workflowStepStatusSchema`, and server `workflowNodeStateSchema.status` are `pending|running|completed|failed|skipped`.
+- `workflow-run.ts` currently asserts that `NodeOutput['state']` and `NodeState` are equal in both directions, so adding the projection-only `awaiting` state requires narrowing that assertion to `NodeOutput['state'] extends NodeState`.
+- `ApiWorkflowNodeState.status` in `packages/server/src/routes/api.ts` repeats the five-state union independently of the OpenAPI schema.
 - `projectLatestEffectiveNodeStates` in `packages/workflows/src/retry-state.ts` ignores unknown event types and does not read pending rows.
 - `NativeTool.handler` is `(input) => Promise<string>` with no context argument.
 - Claude `buildArchonMcpServer` and Pi `buildPiNativeToolDefinitions` await the handler with no try/catch, so a throw becomes a tool error inside the agent loop.
+- Claude's `PreToolUse` hook exposes the real SDK `tool_use_id`, as demonstrated by `packages/providers/src/claude/askhuman-resume-spike.ts`; the MCP callback itself does not expose that id.
+- Pi's native-tool `execute` callback receives the real tool-call id as its first argument, and `session.sessionId` exists before `session.prompt()`.
 - Converters accept only a flat object of string / string-enum / boolean fields.
 - `dag-executor` never sets `SendQueryOptions.nativeTools`.
 - Chat orchestrator injects only `manage_run` when `capabilities.nativeTools` is true.
@@ -81,7 +85,8 @@ Stories 6.5 and 6.6 own Ask cards.
 
 ### Engine contracts
 
-- Modify `packages/workflows/src/schemas/workflow-run.ts` to add `awaiting` to `workflowStepStatusSchema` and `nodeStateSchema`.
+- Modify `packages/workflows/src/schemas/workflow-run.ts` to add `awaiting` to `workflowStepStatusSchema` and `nodeStateSchema` while keeping `NodeOutput['state']` a strict subset of `NodeState`.
+- Modify `packages/workflows/src/schemas.test.ts` to prove the two status schemas accept `awaiting` and `nodeOutputSchema` rejects it.
 - Modify `packages/workflows/src/schemas/pending-interaction.ts` to add `insertPendingInteractionSchema`.
 - Modify `packages/workflows/src/schemas/pending-interaction.test.ts` for the insert schema.
 - Modify `packages/workflows/src/store.ts` to add `node_awaiting` and `interaction_resolved`, optionalize `pauseWorkflowRun`, and compose `IWorkflowPendingInteractionStore`.
@@ -114,26 +119,30 @@ Stories 6.5 and 6.6 own Ask cards.
 
 ### Providers
 
-- Modify `packages/providers/src/types.ts` to add `AskHumanAwaitingError`, `AskHumanNoStarterError`, optional `NativeToolHandlerContext`, and `sessionIdSink`.
-- Modify `packages/providers/src/claude/native-tools.ts` to convert AskHuman `questions[]` and reject branded errors out of `sendQuery`.
+- Modify `packages/providers/src/types.ts` to add `AskHumanAwaitingError`, `AskHumanNoStarterError`, and optional `NativeToolHandlerContext` while keeping `NativeTool.handler` on `Promise<string>`.
+- Modify `packages/providers/src/claude/native-tools.ts` to convert AskHuman `questions[]`, pass handler context, and report only branded control errors through a provider-local bridge.
 - Modify `packages/providers/src/claude/native-tools.test.ts` for nested schema and branded-error reject.
-- Modify `packages/providers/src/claude/provider.ts` to wire the branded-error abort path and write `sessionIdSink`.
-- Modify `packages/providers/src/community/pi/native-tools.ts` with the same converter and reject rules.
+- Modify `packages/providers/src/claude/provider.ts` to capture the real SDK tool-use id and session id, abort on a branded control error, and rethrow the same instance before generic abort classification or retry.
+- Modify `packages/providers/src/claude/provider.test.ts` for provider-level same-instance rejection, real id/session context, abort, and no retry.
+- Modify `packages/providers/src/community/pi/native-tools.ts` with the same converter, context, and branded-control reporting rules.
 - Modify `packages/providers/src/community/pi/native-tools.test.ts` for the same cases.
-- Modify `packages/providers/src/community/pi/provider.ts` to reject branded errors and write `sessionIdSink`.
-- Modify every `capabilities.ts` under `packages/providers/src/` so `askHuman` is a required `ProviderCapabilities` field and is true only for Claude and Pi.
-- Modify capability object literals in provider tests that type-check against `ProviderCapabilities`.
+- Modify `packages/providers/src/community/pi/provider.ts` to populate provider-local context from `_toolCallId` and `session.sessionId`, abort, and rethrow a branded error even if Pi converts the tool throw internally.
+- Modify `packages/providers/src/community/pi/provider.test.ts` for provider-level same-instance rejection, real id/session context, abort, and no normal-error promotion.
+- Modify `packages/providers/src/claude/capabilities.ts` and `packages/providers/src/community/pi/capabilities.ts` to set `askHuman: true`.
+- Modify `packages/providers/src/codex/capabilities.ts`, `packages/providers/src/grok/capabilities.ts`, `packages/providers/src/community/copilot/capabilities.ts`, `packages/providers/src/community/omp/capabilities.ts`, `packages/providers/src/community/opencode/capabilities.ts`, `packages/providers/src/community/qodercli/capabilities.ts`, and `packages/providers/src/e2e-fake/capabilities.ts` to set `askHuman: false`.
+- Modify `packages/providers/src/registry.test.ts` and `packages/providers/src/observability.test.ts` for the required capability field and the exact capable-provider set.
 - Modify `scripts/generate-capability-matrix.ts` to add the `askHuman` axis.
 - Modify `packages/docs-web/src/content/docs/reference/provider-capabilities.md` only through `bun run generate:capability-matrix`.
 
 ### HTTP, SSE, chat
 
-- Modify `packages/server/src/routes/schemas/workflow.schemas.ts` to add `awaiting` to `workflowNodeStateSchema.status`.
-- Modify `packages/server/src/routes/api.ts` to list pending rows and pass them into the projector.
+- Modify `packages/server/src/routes/schemas/workflow.schemas.ts` to reuse `nodeStateSchema` for `workflowNodeStateSchema.status`.
+- Modify `packages/server/src/routes/api.ts` to type `ApiWorkflowNodeState.status` as `NodeState`, list pending rows, serialize their dates, and pass them into the projector.
 - Modify `packages/server/src/routes/api.workflow-runs.test.ts` to mock the new DB module and cover embed, awaiting, and empty messages.
-- Modify `packages/server/src/adapters/web/workflow-bridge.ts` and `dashboard-event-poller.ts` so `node_awaiting` is a refetch trigger without an envelope.
-- Modify `packages/server/src/adapters/web/dashboard-event-poller.test.ts` and `workflow-bridge.test.ts` for that mapping.
+- Modify `packages/server/src/adapters/web/workflow-bridge.ts` so live and persisted `node_awaiting` events are refetch triggers without an envelope.
+- Modify `packages/server/src/adapters/web/dashboard-event-poller.test.ts` and `packages/server/src/adapters/web/workflow-bridge.test.ts` for persisted and live mapping.
 - Modify `packages/workflows/src/event-emitter.ts` to add a live `node_awaiting` event with `runId` and `nodeId` only.
+- Modify `packages/workflows/src/event-emitter.test.ts` to prove the new event is deliverable without card data.
 - Modify `packages/core/src/orchestrator/orchestrator-agent.test.ts` so chat still injects only `manage_run`.
 - Regenerate `packages/web/src/lib/api.generated.d.ts` from a live server after the OpenAPI status enum changes.
 
@@ -174,14 +183,18 @@ Do not add a second index.
 ### Store ports
 
 ```ts
-export interface InsertPendingInteractionInput {
-  workflow_run_id: string;
-  node_id: string;
-  tool_use_id: string;
-  kind: 'ask' | 'permission';
-  envelope: Record<string, unknown>;
-  provider_session_id: string;
-}
+export const insertPendingInteractionSchema = pendingInteractionSchema
+  .pick({
+    workflow_run_id: true,
+    node_id: true,
+    tool_use_id: true,
+    kind: true,
+    envelope: true,
+    provider_session_id: true,
+  })
+  .strict();
+
+export type InsertPendingInteractionInput = z.infer<typeof insertPendingInteractionSchema>;
 
 export interface IWorkflowPendingInteractionStore {
   insertPendingInteraction(input: InsertPendingInteractionInput): Promise<PendingInteraction>;
@@ -197,13 +210,17 @@ pauseWorkflowRun(
 
 `insertPendingInteraction` must, in one `withTransaction`:
 
-1. `SELECT user_id, status FROM remote_agent_workflow_runs WHERE id = $1` with the same dialect lock as `rowLockClause()` in `packages/core/src/db/workflows.ts` (` FOR UPDATE` on PostgreSQL, empty on SQLite).
-2. Throw `AskHumanNoStarterError` if `user_id` is null, without inserting.
-3. Insert the row with `status = 'pending'`, `answer = null`, `resolved_at = null`, `resolved_by = null`.
-4. `insertWorkflowEvent` with `event_type: 'node_awaiting'`, `step_name: node_id`, and `data: { node_id, tool_use_id, kind }` only.
-5. Return the inserted row.
+1. Parse the caller input with `insertPendingInteractionSchema` before opening the transaction.
+2. `SELECT user_id, status FROM remote_agent_workflow_runs WHERE id = $1` with a local `getDatabaseType() === 'postgresql' ? ' FOR UPDATE' : ''` clause because `rowLockClause()` in `packages/core/src/db/workflows.ts` is private.
+3. Throw a normal `Error` if no run row exists.
+4. Throw `AskHumanNoStarterError` if the existing run's `user_id` is null, without inserting.
+5. Insert the row with `status = 'pending'`, `answer = null`, `resolved_at = null`, `resolved_by = null`.
+6. Call `insertWorkflowEvent` with the transaction query, `event_type: 'node_awaiting'`, `step_name: node_id`, and `data: { node_id, tool_use_id, kind }` only.
+7. Select and parse the inserted row through the canonical row schema, converting SQLite JSON strings for `envelope` and `answer` before parsing.
+8. Return the parsed row.
 
 `listPendingInteractions` returns every row for the run ordered by `created_at` ascending, then `id` ascending.
+Corrupt or malformed stored JSON throws `PendingInteractionCorruptRowError` with only the row id in its message and never logs `envelope` or `answer` bodies.
 Do not add `resolvePendingInteraction`.
 
 ### Ask pause
@@ -218,6 +235,7 @@ Do not emit `approval_pending` for Ask.
 
 `RetryNodeProjection.state` uses `NodeState`, which now includes `awaiting`.
 Do not add `awaiting` to `nodeOutputSchema`.
+Replace the two-way `AssertNodeOutputCoversNodeState` compile assertion with a one-way `AssertNodeOutputStateIsNodeState` assertion so every executable `NodeOutput` state must be a `NodeState`, while projection-only `awaiting` is allowed outside `NodeOutput`.
 An asking node still returns `{ state: 'completed', output }` so the between-layer paused check halts the DAG, matching `executeApprovalNode`.
 
 ```ts
@@ -233,7 +251,7 @@ Event rules in order:
 - `node_awaiting` sets `state: 'awaiting'` and does not write output.
 - `interaction_resolved` does not change state and never completes the node.
 
-After events, every `pending` row with `status === 'pending'` forces that `node_id` to `awaiting` if the event state is not already `failed` or `skipped`.
+After events, every pending row with `status === 'pending'` forces that `node_id` to `awaiting`, matching AD-7 exactly.
 `GET` run passes `listPendingInteractions` into this overlay.
 `settleApiWorkflowNodeStatesForRunStatus` must not rewrite `awaiting` on a paused run.
 
@@ -249,6 +267,7 @@ export const ASK_HUMAN_INPUT_SCHEMA: Record<string, unknown> = {
     questions: {
       type: 'array',
       description: 'Ordered structured questions for the run starter.',
+      minItems: 1,
       items: {
         type: 'object',
         properties: {
@@ -266,14 +285,18 @@ export const ASK_HUMAN_INPUT_SCHEMA: Record<string, unknown> = {
 };
 ```
 
-Description is exactly: `Ask the run starter one or more structured questions. Call this tool instead of asking in prose. Wait after calling; do not guess the answer.`
+Description is exactly the following single string:
+
+```text
+Ask the run starter one or more structured questions. Call this tool instead of asking in prose. Wait after calling; do not guess the answer.
+```
 
 Handler algorithm:
 
 1. Validate `questions` as a non-empty array of the fields above.
 2. Invalid input throws a normal `Error`, which remains a tool error.
 3. `toolUseId` comes from `NativeToolHandlerContext.toolUseId`.
-4. `provider_session_id` comes from `context.sessionId` or `sessionIdSink.current`.
+4. `provider_session_id` comes from `context.sessionId`.
 5. Missing `toolUseId` or empty session id throws a normal `Error`.
 6. Call `insertPendingInteraction` with `kind: 'ask'` and `envelope: { questions }`.
 7. Log `workflow.ask_pending` with `workflowRunId`, `nodeId`, `toolUseId`, and `kind` only.
@@ -306,14 +329,45 @@ export class AskHumanNoStarterError extends Error {
     super(`AskHuman requires workflow_runs.user_id (run ${workflowRunId})`);
   }
 }
+
+export type AskHumanControlError = AskHumanAwaitingError | AskHumanNoStarterError;
 ```
 
 `NativeTool.handler` is `(input: Record<string, unknown>, context?: NativeToolHandlerContext) => Promise<string>`.
-Claude and Pi wrappers catch `AskHumanAwaitingError` and `AskHumanNoStarterError`, abort the in-flight query, and reject `sendQuery` with the same instance.
-Other handler throws remain tool errors.
-If Claude's MCP callback has no tool-use id, the wrapper generates `crypto.randomUUID()` and passes it as `toolUseId`.
-Pi passes execute `_toolCallId`.
-Providers copy every discovered SDK session id into `SendQueryOptions.sessionIdSink.current` before tool dispatch when possible.
+Do not add a public `sessionIdSink` to `SendQueryOptions`; each provider owns a mutable per-attempt native-tool bridge because session discovery and abort control are provider concerns.
+Use these local converter boundaries, with the runtime optional only to preserve existing non-Ask tests and callers:
+
+```ts
+interface ClaudeNativeToolRuntime {
+  contextFor(toolName: string): NativeToolHandlerContext;
+  onControlError(error: AskHumanControlError): void;
+}
+
+buildArchonMcpServer(
+  nativeTools: NativeTool[],
+  runtime?: ClaudeNativeToolRuntime
+): McpSdkServerConfigWithInstance;
+
+interface PiNativeToolRuntime {
+  sessionId(): string | undefined;
+  onControlError(error: AskHumanControlError): void;
+}
+
+buildPiNativeToolDefinitions(
+  nativeTools: NativeTool[],
+  defineTool: PiDefineTool,
+  runtime?: PiNativeToolRuntime
+): ToolDefinition[];
+```
+
+The Claude bridge stores the first non-empty `session_id` seen on any raw SDK message and the real `tool_use_id` from a `PreToolUse` hook matched to `mcp__archon__AskHuman`.
+The Claude callback consumes that captured id, passes `{ toolUseId, sessionId }` to the handler, and never invents a replacement id.
+If the Claude callback runs without the matching hook id or a non-empty session id, the AskHuman handler throws a normal tool error and persists nothing.
+The Pi wrapper passes `_toolCallId` and the already-created `session.sessionId` as handler context.
+When either wrapper catches `AskHumanAwaitingError` or `AskHumanNoStarterError`, it stores the same instance in its provider-local bridge and aborts the in-flight SDK operation.
+Claude checks the bridge before generic aborted-query classification and before retry, and checks it again after a swallowed/clean iterator exit.
+Pi checks the bridge after `bridgeSession` returns or throws, so a branded error still rejects `sendQuery` if Pi converted the tool rejection into an internal tool result.
+Other handler throws are not stored in the control bridge and remain ordinary SDK tool errors.
 
 Converters must accept, fail-fast otherwise:
 
@@ -330,7 +384,9 @@ Do not add `resumeInteractions` in this story.
 Inject `AskHuman` onto `command`, `prompt`, and `loop` sendQuery options when `getProviderCapabilities(provider).askHuman` is true.
 Do not inject for bash, script, approval, plannotator_gate, workflow, route_loop, or loop_group containers.
 Loop-group body command/prompt/loop nodes enter the existing executors and therefore receive the tool.
-On `AskHumanAwaitingError`, call `pauseWorkflowRun(runId)` with no approval context, skip `node_completed` and `node_failed`, skip `approval_pending`, and return `{ state: 'completed', output: nodeOutputText }`.
+On `AskHumanAwaitingError`, handle the class before the existing abort/cancel and generic-error branches, call `pauseWorkflowRun(runId)` with no approval context, record a transcript lifecycle status of `awaiting`, emit live `node_awaiting`, skip `node_completed` and `node_failed`, skip `approval_pending`, and return `{ state: 'completed', output: nodeOutputText }`.
+The command/prompt catch returns the text accumulated before the Ask.
+The loop catch returns the text accumulated in the current iteration plus usage accumulated before the Ask and must not call `failLoopIteration`.
 On `AskHumanNoStarterError`, take the existing node-failed path and do not pause.
 Do not resume.
 
@@ -339,56 +395,32 @@ Do not resume.
 Before any node runs, walk every `command` / `prompt` / `loop` node, including nested `loop_group` bodies, using the same scope inheritance as `collectContainerIncompatibleProviders`.
 If `allowed_tools` contains `AskHuman` or `mcp__archon__AskHuman` after stripping a `Name(specifier)` suffix, and the resolved provider has `askHuman === false`, throw before the first turn:
 
-`AskHuman is not supported by provider '<id>'. Remove AskHuman from allowed_tools, or use claude or pi.`
+```text
+AskHuman is not supported by provider '<id>'. Remove AskHuman from allowed_tools, or use claude or pi.
+```
 
 The same workflow without that `allowed_tools` entry starts and has no Ask tool.
+Build the `WorkflowModelScope` once near the start of `executeDagWorkflow`, run the AskHuman preflight unconditionally, and reuse that scope for the conditional container preflight.
 Do not fail identity-less CLI runs at start.
 
 ### SSE
 
 `node_awaiting` maps to `workflow_status` with `status: 'paused'` and no `approval` field and no envelope.
 Add `node_awaiting` to `DASHBOARD_SOURCE_EVENT_TYPES`.
+Both `mapWorkflowEvent` for the in-process emitter and `mapWorkflowEventRow` for the dashboard poller must produce the same refetch-only shape.
 Live emitter payload is `{ type: 'node_awaiting', runId, nodeId }` only.
 
 ---
 
-## Open Questions With Binding Provisional Defaults
+## Resolved Decisions
 
-### Q1: How does Claude MCP supply `tool_use_id` to the in-process tool callback?
-
-**Provisional default:** Pass the SDK tool-use id when the callback exposes it.
-Otherwise generate `crypto.randomUUID()` in the Claude wrapper.
-Pi always uses `_toolCallId`.
-Story 6.3 Claude resume is a new user message and does not reissue AskHuman, so a generated request id is a valid pending-row identity on `0.3.209`.
-
-### Q2: What if `provider_session_id` is still empty when AskHuman persists?
-
-**Provisional default:** Fail persist with a normal `Error`, not `AskHumanAwaitingError`.
-Do not write an empty session id.
-Providers must copy session ids into `sessionIdSink` from the earliest SDK event that carries one.
-
-### Q3: Does GET embed return answered and purged rows?
-
-**Provisional default:** Return every row for the run ordered by `created_at`, then `id`.
-The projector overlays only `status === 'pending'`.
-Story 6.5 filters cards.
-
-### Q4: Should Ask pause clear a leftover `metadata.approval` from an earlier gate in the same run?
-
-**Provisional default:** Do not clear it.
-Not writing the slot is the Story 6.2 rule.
-Clearing would mutate declared-gate state.
-
-### Q5: What if local PostgreSQL is unavailable?
-
-**Provisional default:** Always run SQLite parity, migration-order, and bundled-schema checks.
-Run `bun run check:schema-upgrades` when `DATABASE_URL` or `PGHOST` identifies a reachable PostgreSQL instance.
-CI remains the required PostgreSQL upgrade gate.
-
-### Q6: Does `allowed_tools: [mcp__archon__AskHuman]` also trip CAP-7?
-
-**Provisional default:** Yes.
-Treat both `AskHuman` and `mcp__archon__AskHuman` as explicit AskHuman names after specifier stripping.
+- Claude uses the real `PreToolUse.tool_use_id`; it never fabricates a pending-interaction id.
+- Missing tool id or provider session id is a normal tool error and persists nothing.
+- GET run returns pending, answered, and purged rows in store order, while the projector overlays only pending rows.
+- Ask pause preserves any existing `metadata.approval` value by not touching metadata at all.
+- Both `AskHuman` and `mcp__archon__AskHuman`, including a trailing permission-rule specifier, count as explicit CAP-7 names.
+- PostgreSQL upgrade verification is mandatory before completion; if the local prerequisite is unavailable, the implementer must leave sprint status unchanged and obtain the CI result before marking the story done.
+- No product or repository decision remains open for Story 6.2.
 
 ---
 
@@ -397,6 +429,7 @@ Treat both `AskHuman` and `mcp__archon__AskHuman` as explicit AskHuman names aft
 **Files:**
 
 - Modify: `packages/workflows/src/schemas/workflow-run.ts`.
+- Test: `packages/workflows/src/schemas.test.ts`.
 - Modify: `packages/workflows/src/retry-state.ts`.
 - Test: `packages/workflows/src/retry-state.test.ts`.
 
@@ -406,6 +439,16 @@ Treat both `AskHuman` and `mcp__archon__AskHuman` as explicit AskHuman names aft
 - Produces: `NodeState` including `'awaiting'`; `projectLatestEffectiveNodeStates(events, pending?)`.
 
 - [ ] **Step 1: Write the failing projector tests.**
+
+Add this contract test to `packages/workflows/src/schemas.test.ts` and import `nodeOutputSchema`, `nodeStateSchema`, and `workflowStepStatusSchema` from `./schemas`:
+
+```ts
+test('awaiting is a projection state and not an executable NodeOutput state', () => {
+  expect(nodeStateSchema.parse('awaiting')).toBe('awaiting');
+  expect(workflowStepStatusSchema.parse('awaiting')).toBe('awaiting');
+  expect(nodeOutputSchema.safeParse({ state: 'awaiting', output: '' }).success).toBe(false);
+});
+```
 
 Append to `packages/workflows/src/retry-state.test.ts`:
 
@@ -443,16 +486,6 @@ test('answered pending rows do not overlay awaiting', () => {
   expect(states.get('review')?.state).toBe('running');
 });
 
-test('pending overlay does not replace failed or skipped', () => {
-  const failed = projectLatestEffectiveNodeStates(
-    [
-      { event_type: 'node_started', step_name: 'review', data: {} },
-      { event_type: 'node_failed', step_name: 'review', data: { error: 'boom' } },
-    ],
-    [{ node_id: 'review', status: 'pending' }]
-  );
-  expect(failed.get('review')?.state).toBe('failed');
-});
 ```
 
 - [ ] **Step 2: Run the tests and verify they fail.**
@@ -460,6 +493,7 @@ test('pending overlay does not replace failed or skipped', () => {
 Run:
 
 ```bash
+(cd packages/workflows && bun test src/schemas.test.ts)
 (cd packages/workflows && bun test src/retry-state.test.ts)
 ```
 
@@ -490,6 +524,14 @@ export const nodeStateSchema = z.enum([
 ```
 
 Do not add `awaiting` to `workflowRunStatusSchema` or `nodeOutputSchema`.
+Replace the compile-only assertion at the bottom of `workflow-run.ts` with:
+
+```ts
+type AssertNodeOutputStateIsNodeState = NodeOutput['state'] extends NodeState ? true : never;
+const nodeOutputStateIsNodeState: AssertNodeOutputStateIsNodeState = true;
+void nodeOutputStateIsNodeState;
+```
+
 Change `RetryNodeProjection.state` from `NodeOutput['state']` to `NodeState`.
 Implement the event and pending overlay rules in the authoritative contract.
 Import `NodeState` from `./schemas`.
@@ -510,7 +552,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit.**
 
 ```bash
-git add packages/workflows/src/schemas/workflow-run.ts packages/workflows/src/retry-state.ts packages/workflows/src/retry-state.test.ts
+git add packages/workflows/src/schemas/workflow-run.ts packages/workflows/src/schemas.test.ts packages/workflows/src/retry-state.ts packages/workflows/src/retry-state.test.ts
 git commit -m "feat(workflows): project awaiting from node_awaiting and pending rows"
 ```
 
@@ -534,10 +576,10 @@ git commit -m "feat(workflows): project awaiting from node_awaiting and pending 
 Append inside `describe('pauseWorkflowRun')` in `packages/core/src/db/workflows.test.ts`:
 
 ```ts
-test('Ask pause sets paused and does not write metadata.approval', async () => {
+test('Ask pause sets paused and does not write metadata', async () => {
   mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
 
-  await pauseWorkflowRun('workflow-run-123');
+  await pauseWorkflowRun('workflow-run-123', undefined, { source: 'ask' });
 
   const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
   expect(query).toContain("status = 'paused'");
@@ -594,6 +636,24 @@ Expected: FAIL because the second argument is required and every pause writes `m
 
 Change `IWorkflowStore.pauseWorkflowRun` in `packages/workflows/src/store.ts` to `approvalContext?: ApprovalContext`.
 In `packages/core/src/db/workflows.ts`, branch on `approvalContext === undefined` using the Ask pause contract.
+The new branch is structurally:
+
+```ts
+if (approvalContext === undefined) {
+  const result = await pool.query(
+    "UPDATE remote_agent_workflow_runs SET status = 'paused' WHERE id = $1 AND status = 'running'",
+    [id]
+  );
+  if (result.rowCount !== 0) return;
+  const current = await pool.query<{ status: WorkflowRunStatus }>(
+    'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
+    [id]
+  );
+  if (current.rows[0]?.status === 'paused') return;
+  throw new Error(`Workflow run not found or not in running state (id: ${id})`);
+}
+```
+
 Keep the existing approval json-merge path byte-for-byte when context is provided, including the current throw on zero rows without a paused fallback.
 
 - [ ] **Step 4: Re-run the pause tests.**
@@ -655,8 +715,65 @@ test('pending interactions table mirrors the Postgres contract', async () => {
       'workflow_run_id',
     ].sort()
   );
-  expect(getSchemaSQL()).toContain('uq_pending_interactions_run_tool_use');
-  expect(getSchemaSQL()).toContain('remote_agent_pending_interactions');
+
+  await db.query(
+    `INSERT INTO remote_agent_conversations
+       (id, platform_type, platform_conversation_id)
+     VALUES ($1, $2, $3)`,
+    ['conv-1', 'cli', 'conv-1']
+  );
+  await db.query(
+    `INSERT INTO remote_agent_workflow_runs
+       (id, workflow_name, conversation_id, user_message, status)
+     VALUES ($1, $2, $3, $4, $5)`,
+    ['run-1', 'test', 'conv-1', 'go', 'running']
+  );
+  const insert = [
+    'pending-1',
+    'run-1',
+    'review',
+    'toolu_1',
+    'ask',
+    'pending',
+    JSON.stringify({ questions: [] }),
+    'sess-1',
+  ];
+  await db.query(
+    `INSERT INTO remote_agent_pending_interactions
+       (id, workflow_run_id, node_id, tool_use_id, kind, status, envelope, provider_session_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    insert
+  );
+  await expect(
+    db.query(
+      `INSERT INTO remote_agent_pending_interactions
+         (id, workflow_run_id, node_id, tool_use_id, kind, status, envelope, provider_session_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      ['pending-2', ...insert.slice(1)]
+    )
+  ).rejects.toThrow();
+  await expect(
+    db.query(
+      `INSERT INTO remote_agent_pending_interactions
+         (id, workflow_run_id, node_id, tool_use_id, kind, status, envelope, provider_session_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      ['pending-3', 'run-1', 'review', 'toolu_3', 'other', 'pending', '{}', 'sess-1']
+    )
+  ).rejects.toThrow();
+  await expect(
+    db.query(
+      `INSERT INTO remote_agent_pending_interactions
+         (id, workflow_run_id, node_id, tool_use_id, kind, status, envelope, provider_session_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      ['pending-4', 'run-1', 'review', 'toolu_4', 'ask', 'open', '{}', 'sess-1']
+    )
+  ).rejects.toThrow();
+  await db.query('DELETE FROM remote_agent_workflow_runs WHERE id = $1', ['run-1']);
+  const remaining = await db.query<{ count: number }>(
+    'SELECT COUNT(*) AS count FROM remote_agent_pending_interactions',
+    []
+  );
+  expect(Number(remaining.rows[0]?.count)).toBe(0);
 });
 ```
 
@@ -671,6 +788,7 @@ Run:
 ```
 
 Expected: FAIL because the table does not exist and the parity floor is still 169.
+The constraint and cascade assertions remain in the test after GREEN; they are behavior checks, not source-text checks.
 
 - [ ] **Step 3: Add the table in both dialects.**
 
@@ -723,6 +841,7 @@ git commit -m "feat(db): add remote_agent_pending_interactions"
 - Test: `packages/core/src/db/workflow-pending-interactions.test.ts`.
 - Modify: `packages/core/src/db/index.ts`.
 - Modify: `packages/core/package.json`.
+- Modify: `packages/providers/src/types.ts`.
 
 **Interfaces:**
 
@@ -731,12 +850,15 @@ git commit -m "feat(db): add remote_agent_pending_interactions"
 
 - [ ] **Step 1: Add insert schema tests first.**
 
-Append to `packages/workflows/src/schemas/pending-interaction.test.ts`:
+Extend the existing import in `packages/workflows/src/schemas/pending-interaction.test.ts`, then append these cases:
 
 ```ts
-import { insertPendingInteractionSchema } from './pending-interaction';
+import {
+  insertPendingInteractionSchema,
+  pendingInteractionSchema,
+} from './pending-interaction';
 
-test('insert schema omits store-assigned fields and defaults pending', () => {
+test('insert schema accepts only caller-assigned fields', () => {
   const parsed = insertPendingInteractionSchema.parse({
     workflow_run_id: 'run-1',
     node_id: 'review',
@@ -746,6 +868,9 @@ test('insert schema omits store-assigned fields and defaults pending', () => {
     provider_session_id: 'sess-1',
   });
   expect(parsed.kind).toBe('ask');
+  expect(
+    insertPendingInteractionSchema.safeParse({ ...parsed, status: 'pending' }).success
+  ).toBe(false);
 });
 
 test('insert schema rejects empty provider_session_id', () => {
@@ -762,18 +887,33 @@ test('insert schema rejects empty provider_session_id', () => {
 });
 ```
 
-Define `insertPendingInteractionSchema` as a strict object with the `InsertPendingInteractionInput` fields and `z.infer`.
-Export `InsertPendingInteractionInput` from that infer.
+Do not add the schema implementation before observing RED.
+
+Run:
+
+```bash
+(cd packages/workflows && bun test src/schemas/pending-interaction.test.ts)
+```
+
+Expected: FAIL because the insert schema is not exported.
 
 - [ ] **Step 2: Write failing DB tests in an isolated file.**
 
-Create `packages/core/src/db/workflow-pending-interactions.test.ts` using the same `mock.module('./connection')` pattern as `workflow-node-messages.test.ts`.
-Cover these behaviors with explicit SQL assertions:
+Create `packages/core/src/db/workflow-pending-interactions.test.ts` against a real `new SqliteAdapter(':memory:')` and use the exact top-level `mock.module('./connection')` wiring from `workflow-node-messages.test.ts` so the production module receives that adapter, dialect, and database type.
+Seed a user, a conversation, and a running workflow run with that `user_id` through SQL in `beforeEach`.
+Retain the logger capture pattern from `workflow-node-messages.test.ts` so secret redaction is observable.
+Cover all of these behaviors through the public store functions and real rows:
 
-1. No-starter: first SELECT returns `{ user_id: null }`, no INSERT, throws `AskHumanNoStarterError`.
-2. Happy path: SELECT `{ user_id: 'user-1' }`, INSERT pending row, `insertWorkflowEvent` equivalent INSERT into `remote_agent_workflow_events` with `event_type = 'node_awaiting'` and data lacking envelope/answer, all inside `withTransaction`.
-3. List orders by `created_at` ascending.
-4. Unique violation on `(workflow_run_id, tool_use_id)` throws rather than updating.
+1. Insert returns a canonical pending row, and the table has exactly one `node_awaiting` event whose `step_name` is the node id and whose parsed `data` is exactly `{ node_id, tool_use_id, kind }` with no envelope, question, or answer.
+2. A run whose `user_id` is null throws `AskHumanNoStarterError` and leaves both pending and event tables empty.
+3. A missing run throws a normal `Error`, not `AskHumanNoStarterError`, and leaves both tables empty.
+4. Install a temporary SQLite trigger that aborts `remote_agent_workflow_events` inserts, call `insertPendingInteraction`, prove the pending insert rolled back, and drop the trigger in `finally`; this is the atomicity assertion.
+5. After setting the seeded run to `paused`, inserting another row with a different tool id succeeds; this proves already-paused runs can accumulate concurrent pending asks.
+6. Reusing `(workflow_run_id, tool_use_id)` throws and leaves the original row unchanged.
+7. `listPendingInteractions` orders equal or different timestamps by `created_at ASC, id ASC`.
+8. A malformed envelope JSON row and a schema-invalid JSON row each throw `PendingInteractionCorruptRowError` whose message contains only the row id; captured logs must not contain the sentinel question or answer.
+
+Do not replace these with SQL-string assertions, because the story depends on transaction rollback, constraints, canonical parsing, and redaction behavior.
 
 - [ ] **Step 3: Run the new tests and verify they fail.**
 
@@ -791,24 +931,31 @@ Expected: FAIL because the module does not exist.
 
 - [ ] **Step 4: Implement the DB module.**
 
+Define `insertPendingInteractionSchema` with `pendingInteractionSchema.pick({...}).strict()` exactly as shown in the Store ports contract.
+Export `InsertPendingInteractionInput` only as `z.infer<typeof insertPendingInteractionSchema>`; do not hand-write a parallel interface.
 Create `packages/core/src/db/workflow-pending-interactions.ts` implementing the insert transaction contract.
-Add `AskHumanNoStarterError` and `AskHumanAwaitingError` to `packages/providers/src/types.ts` using the exact classes in Authoritative Contracts if they are not already present.
+Add `AskHumanNoStarterError`, `AskHumanAwaitingError`, and `AskHumanControlError` to `packages/providers/src/types.ts` using the exact declarations in Authoritative Contracts.
 Import `AskHumanNoStarterError` from `@archon/providers/types`.
-Lock the run row with the same dialect clause as `rowLockClause()` in `packages/core/src/db/workflows.ts`.
+Parse the input before opening `pool.withTransaction`, then use only its transaction-scoped query for the lock, pending insert, `insertWorkflowEvent`, and inserted-row read.
+Build the lock suffix locally as `getDatabaseType() === 'postgresql' ? ' FOR UPDATE' : ''`; do not import the private `rowLockClause()` from `workflows.ts`.
+Use `getDialect().generateUuid()` for the row id.
 Alias the engine schema from `packages/core/src/schemas/pending-interaction.ts` as `export { pendingInteractionSchema, insertPendingInteractionSchema, type PendingInteraction, type InsertPendingInteractionInput } from '@archon/workflows/schemas/pending-interaction';`.
 Export namespaced `workflowPendingInteractionDb` and direct functions from `packages/core/src/db/index.ts` beside the node-message exports.
-Never log `envelope` or `answer`.
+Convert SQLite JSON text before canonical parsing, preserve the adapter's accepted date-or-string timestamp values, and throw `PendingInteractionCorruptRowError(rowId)` on JSON or schema corruption.
+Log only the corrupt row id and never log `envelope` or `answer`.
 
 - [ ] **Step 5: Re-run the isolated DB tests.**
 
 Run the command from Step 3.
 
 Expected: PASS.
+Also re-run `(cd packages/workflows && bun test src/schemas/pending-interaction.test.ts)`.
 
 - [ ] **Step 6: Refactor while green.**
 
 Do not add behavior.
 Re-run the command from Step 3.
+Re-run the schema test from Step 1.
 Expected: PASS.
 
 - [ ] **Step 7: Commit.**
@@ -842,6 +989,9 @@ git commit -m "feat(core): persist pending interactions with node_awaiting"
 
 In `packages/core/src/workflows/store-adapter.test.ts`, extend `requiredMethods` with `'insertPendingInteraction'` and `'listPendingInteractions'`.
 Add a mock.module for `../db/workflow-pending-interactions` before the adapter import, matching the node-messages mock.
+Define `mockInsertPendingInteraction` and `mockListPendingInteractions`, then add behavior tests beside the existing node-message delegation tests.
+The insert test must pass a complete `InsertPendingInteractionInput`, assert the DB mock received the same object, and assert the adapter returns the same row object.
+The list test must call with `run-1`, assert exact argument forwarding, and assert the adapter returns the same ordered array.
 
 - [ ] **Step 2: Run the adapter test and verify it fails.**
 
@@ -869,6 +1019,7 @@ Do not add `resolvePendingInteraction`.
 Wire pass-throughs in `createWorkflowStore()`.
 Add in-memory implementations to every typed `IWorkflowStore` double listed in Files.
 `subrun.test.ts` `InMemoryStore` should store rows in an array and return them for the run.
+Keep the adapter methods as direct delegations; do not add policy or parsing at this boundary.
 
 - [ ] **Step 4: Re-run adapter and workflow store-double tests.**
 
@@ -876,7 +1027,11 @@ Run:
 
 ```bash
 (cd packages/core && bun test src/workflows/store-adapter.test.ts)
-(cd packages/workflows && bun test src/executor.test.ts src/executor-preamble.test.ts src/script-node-deps.test.ts src/subrun.test.ts)
+(cd packages/workflows && bun test src/dag-executor.test.ts)
+(cd packages/workflows && bun test src/executor.test.ts)
+(cd packages/workflows && bun test src/executor-preamble.test.ts)
+(cd packages/workflows && bun test src/script-node-deps.test.ts)
+(cd packages/workflows && bun test src/subrun.test.ts)
 ```
 
 Expected: PASS, including TypeScript compile of the doubles.
@@ -913,14 +1068,15 @@ git commit -m "feat(workflows): add pending interaction store ports"
 - [ ] **Step 1: Write the failing GET-run tests.**
 
 In `packages/server/src/routes/api.workflow-runs.test.ts` add `mock.module('@archon/core/db/workflow-pending-interactions', () => ({ listPendingInteractions: mockListPendingInteractions }))`.
+Reset `mockListPendingInteractions` to `[]` in the existing GET-run `beforeEach` so unrelated route cases remain isolated.
 Replace the Story 5.1 test that expects a hardcoded empty array without a table with tests that:
 
-1. Return listed rows through `pending_interactions`.
+1. Return listed rows through `pending_interactions`, with `created_at` and non-null `resolved_at` serialized as ISO strings and null `resolved_at` preserved.
 2. Project `awaiting` when events include `node_started` plus a pending row for that node.
 3. Keep `GET /api/workflows/runs/:runId/nodes/:nodeId/messages` free of Ask envelopes in `status` payloads.
 4. Keep OpenAPI `pending_interactions` required and `WorkflowNodeState.status` enum including `awaiting`.
 
-Add `awaiting` to `workflowNodeStateSchema.status` in the same task's implementation step, not by forking `pendingInteractionSchema`.
+The OpenAPI test must inspect the emitted `WorkflowNodeState` schema instead of only parsing the local Zod schema.
 
 - [ ] **Step 2: Run the workflow-runs tests and verify the new cases fail.**
 
@@ -936,13 +1092,27 @@ Expected: FAIL on embed contents and awaiting status.
 
 Change `projectApiWorkflowNodeStates` to accept pending rows and pass `{ node_id, status }` into `projectLatestEffectiveNodeStates`.
 Call `listPendingInteractions(runId)` in the GET-run handler and return those rows as `pending_interactions`.
+Map every pending row to the API shape with `created_at: toISOString(row.created_at)` and `resolved_at: row.resolved_at ? toISOString(row.resolved_at) : null` before returning it.
+Import `NodeState` for `ApiWorkflowNodeState.status`, and use `nodeStateSchema` directly for `workflowNodeStateSchema.status` instead of repeating a six-value enum.
 Do not read pending data from transcript messages.
 Do not rewrite `awaiting` in `settleApiWorkflowNodeStatesForRunStatus`.
 
 - [ ] **Step 4: Re-run the route tests and regenerate web types.**
 
 Run the command from Step 2.
-Then start the server long enough to run `bun --filter @archon/web generate:types` against that live OpenAPI document.
+In terminal A, start the server from the repository root:
+
+```bash
+bun run dev:server
+```
+
+After the server reports port 3090 ready, run this in terminal B from the repository root:
+
+```bash
+bun --filter @archon/web generate:types
+```
+
+Stop terminal A after generation completes.
 Do not hand-edit `api.generated.d.ts`.
 
 Expected: route tests PASS and generated `WorkflowNodeState` status includes `awaiting`.
@@ -968,9 +1138,10 @@ git commit -m "feat(server): embed pending interactions and awaiting node state"
 
 - Modify: `packages/workflows/src/store.ts`.
 - Modify: `packages/workflows/src/event-emitter.ts`.
+- Test: `packages/workflows/src/event-emitter.test.ts`.
 - Modify: `packages/server/src/adapters/web/workflow-bridge.ts`.
 - Test: `packages/server/src/adapters/web/dashboard-event-poller.test.ts`.
-- Modify: `packages/server/src/adapters/web/workflow-bridge.test.ts` if live mapping is tested there.
+- Test: `packages/server/src/adapters/web/workflow-bridge.test.ts`.
 
 **Interfaces:**
 
@@ -995,15 +1166,20 @@ test('node_awaiting → workflow_status paused without approval payload', () => 
 });
 ```
 
+In `packages/server/src/adapters/web/workflow-bridge.test.ts`, add the equivalent assertion for `mapWorkflowEvent({ type: 'node_awaiting', runId: 'r1', nodeId: 'review' })`.
+In `packages/workflows/src/event-emitter.test.ts`, subscribe to the run, emit `{ type: 'node_awaiting', runId: 'r1', nodeId: 'review' }`, and assert the listener receives that exact payload with no envelope or questions.
+
 - [ ] **Step 2: Run the poller tests and verify they fail.**
 
 Run:
 
 ```bash
+(cd packages/workflows && bun test src/event-emitter.test.ts)
 (cd packages/server && bun test src/adapters/web/dashboard-event-poller.test.ts)
+(cd packages/server && bun test src/adapters/web/workflow-bridge.test.ts)
 ```
 
-Expected: FAIL because `node_awaiting` is unmapped.
+Expected: FAIL because the live event type and both mappings do not exist.
 
 - [ ] **Step 3: Add event types and mapping.**
 
@@ -1012,8 +1188,9 @@ Add live emitter event `{ type: 'node_awaiting'; runId: string; nodeId: string }
 Do not put `node_awaiting` in `ROW_WORKFLOW_STATUS` because that map cannot express `paused`.
 Add a special case in `mapWorkflowEventRow` beside `approval_requested` that emits `workflow_status` with `status: 'paused'` and omits `approval`, `envelope`, and `questions`.
 Append `'node_awaiting'` to `DASHBOARD_SOURCE_EVENT_TYPES`.
+Add the equivalent special case in `mapWorkflowEvent` for the live event.
 Do not map a card payload.
-Do not map `interaction_resolved` beyond allowing the type name.
+Do not emit or map `interaction_resolved` in Story 6.2; Story 6.3 owns that refetch path when it writes the event.
 
 - [ ] **Step 4: Re-run the poller tests.**
 
@@ -1030,140 +1207,225 @@ Expected: PASS.
 - [ ] **Step 6: Commit.**
 
 ```bash
-git add packages/workflows/src/store.ts packages/workflows/src/event-emitter.ts packages/server/src/adapters/web/workflow-bridge.ts packages/server/src/adapters/web/dashboard-event-poller.test.ts packages/server/src/adapters/web/workflow-bridge.test.ts
+git add packages/workflows/src/store.ts packages/workflows/src/event-emitter.ts packages/workflows/src/event-emitter.test.ts packages/server/src/adapters/web/workflow-bridge.ts packages/server/src/adapters/web/dashboard-event-poller.test.ts packages/server/src/adapters/web/workflow-bridge.test.ts
 git commit -m "feat(server): treat node_awaiting as an SSE refetch trigger"
 ```
 
 ---
 
-### Task 8: Reject branded Ask errors and convert `questions[]`
+### Task 8: Convert `questions[]` and preserve branded tool errors at the converter boundary
 
 **Files:**
 
 - Modify: `packages/providers/src/types.ts`.
 - Modify: `packages/providers/src/claude/native-tools.ts`.
 - Test: `packages/providers/src/claude/native-tools.test.ts`.
-- Modify: `packages/providers/src/claude/provider.ts`.
 - Modify: `packages/providers/src/community/pi/native-tools.ts`.
 - Test: `packages/providers/src/community/pi/native-tools.test.ts`.
-- Modify: `packages/providers/src/community/pi/provider.ts`.
 
 **Interfaces:**
 
-- Consumes: current flat converters and uncaught handler throws.
-- Produces: nested AskHuman schema conversion, `NativeToolHandlerContext`, `sessionIdSink`, branded `sendQuery` reject.
+- Consumes: flat JSON-schema converters and `NativeTool.handler(input)`.
+- Produces: nested AskHuman schema conversion and `NativeTool.handler(input, context?)` while retaining `Promise<string>`.
 
-- [ ] **Step 1: Write failing converter and branded-error tests.**
+- [ ] **Step 1: Write failing converter and callback tests.**
 
-Use this AskHuman schema fixture in both native-tools test files:
+Use the exact `ASK_HUMAN_INPUT_SCHEMA` fixture from the Authoritative Contracts in both native-tools test files.
+Extend the Claude SDK mock so `tool()` captures the registered callback and `createSdkMcpServer()` preserves the tool list.
+Use Pi's existing `defineTool` seam to capture the `execute` callback.
+Add these cases in both files:
 
-```ts
-const ASK_SCHEMA: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    questions: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          id: { type: 'string' },
-          prompt: { type: 'string' },
-          selection: { type: 'string', enum: ['single', 'multi'] },
-          options: { type: 'array', items: { type: 'string' } },
-          allowOther: { type: 'boolean' },
-        },
-        required: ['id', 'prompt', 'selection', 'options', 'allowOther'],
-      },
-    },
-  },
-  required: ['questions'],
-};
-```
-
-Add tests:
-
-1. `buildArchonMcpServer` / `buildPiNativeToolDefinitions` accepts `ASK_SCHEMA`.
-2. Number fields still throw `/unsupported type/`.
-3. A handler that throws `AskHumanAwaitingError` causes the wrapper execute/tool callback to reject with the same instance rather than returning `{ content: [{ type: 'text', text: ... }] }`.
-
-For test 3, export a small helper if that is the only way to invoke the wrapped handler without the SDK.
-Otherwise invoke the mapped tool execute/callback directly if the SDK `tool()` returns a callable.
+1. The converter accepts `questions[]`, validates a valid nested value, rejects an empty questions array through `minItems: 1`, and rejects a question missing a required field.
+2. A schema containing a number at the top level or inside a question still throws `/unsupported type/`.
+3. The callback passes the supplied `{ toolUseId, sessionId }` to the NativeTool handler.
+4. When a handler throws `AskHumanAwaitingError` or `AskHumanNoStarterError`, the local `onControlError` callback receives that exact instance and the tool callback rejects with the same instance.
+5. A normal handler error rejects normally and is never reported to `onControlError`.
 
 - [ ] **Step 2: Run the native-tools tests and verify they fail.**
-
-Run:
 
 ```bash
 (cd packages/providers && bun test src/claude/native-tools.test.ts)
 (cd packages/providers && bun test src/community/pi/native-tools.test.ts)
 ```
 
-Expected: FAIL on nested schema and branded-error stringifying.
+Expected: FAIL because nested arrays, handler context, and branded-control reporting do not exist.
 
-- [ ] **Step 3: Implement types, converters, and reject path.**
+- [ ] **Step 3: Implement the narrow converter contracts.**
 
-Add to `packages/providers/src/types.ts`:
+Add `NativeToolHandlerContext` and the optional context parameter from the Provider wrappers contract to `packages/providers/src/types.ts`.
+Do not add a session sink or another public field to `SendQueryOptions`.
+Extend each converter only for array-of-strings and array-of-objects whose fields recursively use the approved string, string-enum, boolean, or array-of-strings subset.
+Preserve `minItems` on arrays when the canonical schema declares it.
+Keep the Claude file on its documented direct `zod` import and keep the Pi file on TypeBox.
+Give each build function a narrow provider-supplied runtime argument that returns context for the invocation and accepts a branded control error.
+The Pi execution path must use its `_toolCallId`; the Claude context is populated by the provider in Task 9.
+Catch only `AskHumanAwaitingError` and `AskHumanNoStarterError` to call `onControlError(error)`, then rethrow the same instance.
+Let every other error follow the existing SDK tool-error behavior.
 
-- `AskHumanAwaitingError` and `AskHumanNoStarterError` as specified, or keep the Task 4 definitions if they already exist.
-- `NativeToolHandlerContext`.
-- `handler: (input: Record<string, unknown>, context?: NativeToolHandlerContext) => Promise<string>`.
-- `sessionIdSink?: { current?: string }` on `SendQueryOptions`.
-Do not add `askHuman` to `ProviderCapabilities` in this task.
-
-Extend both converters to accept array-of-strings and array-of-objects whose fields are string, string-enum, boolean, or array-of-strings.
-In both wrappers:
-
-```ts
-try {
-  const text = await spec.handler(args as Record<string, unknown>, {
-    toolUseId,
-    sessionId: sessionIdSink?.current,
-  });
-  return { content: [{ type: 'text', text }] };
-} catch (err) {
-  if (err instanceof AskHumanAwaitingError || err instanceof AskHumanNoStarterError) {
-    throw err;
-  }
-  throw err;
-}
-```
-
-Claude `sendQuery` must abort the query abort controller when those classes escape the MCP callback and rethrow them out of the generator.
-Pi `sendQuery` must let those classes reject the generator rather than converting them to tool-result text.
-Copy SDK session ids into `sessionIdSink.current` when first seen.
-If Claude's callback has no tool-use id, pass `crypto.randomUUID()`.
-Pi passes `_toolCallId`.
-Keep `manage_run` on `Promise<string>` with an ignored second argument.
-
-- [ ] **Step 4: Re-run native-tools tests.**
+- [ ] **Step 4: Re-run the converter tests.**
 
 Run the commands from Step 2.
 
-Expected: PASS.
-Existing flat manage_run converter tests still PASS.
+Expected: PASS, including all existing flat `manage_run` conversion cases.
 
 - [ ] **Step 5: Refactor while green.**
 
-Do not add behavior.
+Keep the recursive converters small and fail-fast without introducing a general JSON Schema implementation.
 Re-run the commands from Step 2.
+
 Expected: PASS.
 
 - [ ] **Step 6: Commit.**
 
 ```bash
-git add packages/providers/src/types.ts packages/providers/src/claude/native-tools.ts packages/providers/src/claude/native-tools.test.ts packages/providers/src/claude/provider.ts packages/providers/src/community/pi/native-tools.ts packages/providers/src/community/pi/native-tools.test.ts packages/providers/src/community/pi/provider.ts
-git commit -m "feat(providers): reject AskHuman awaiting errors without stringifying"
+git add packages/providers/src/types.ts packages/providers/src/claude/native-tools.ts packages/providers/src/claude/native-tools.test.ts packages/providers/src/community/pi/native-tools.ts packages/providers/src/community/pi/native-tools.test.ts
+git commit -m "feat(providers): pass AskHuman context through native tool converters"
 ```
 
 ---
 
-### Task 9: Add the `askHuman` capability axis
+### Task 9: Make Claude abort and reject with the same Ask control error
+
+**Files:**
+
+- Modify: `packages/providers/src/claude/provider.ts`.
+- Test: `packages/providers/src/claude/provider.test.ts`.
+
+**Interfaces:**
+
+- Consumes: Claude raw-message `session_id`, `PreToolUse.tool_use_id`, and Task 8's converter runtime.
+- Produces: one-attempt `sendQuery` rejection with the original branded error.
+
+- [ ] **Step 1: Write the failing provider-level tests.**
+
+Extend the Claude SDK mock in `provider.test.ts` with capturing `tool()` and `createSdkMcpServer()` functions.
+Make the scripted `query()` yield a message with `session_id: 'sess-real'`, invoke the registered `PreToolUse` hook with `tool_name: 'mcp__archon__AskHuman'` and `tool_use_id: 'toolu_real'`, then invoke the captured MCP callback.
+Use a NativeTool handler that asserts context equals `{ toolUseId: 'toolu_real', sessionId: 'sess-real' }` and throws a pre-created `AskHumanAwaitingError`.
+Simulate both SDK outcomes seen in the spike: iterator abort rejection and a clean iterator exit after the callback rejection is swallowed.
+In both cases, consume `sendQuery` and assert the rejection is `toBe(controlError)`, the SDK abort signal is aborted, and `query` is called once even when retry count permits more attempts.
+Add a `AskHumanNoStarterError` case with the same identity/no-retry assertions.
+Add a normal handler-error case in which the SDK mock catches the callback rejection, then assert the provider does not throw either Ask control class and does not take the control-error abort path.
+
+- [ ] **Step 2: Run the Claude provider test and verify it fails.**
+
+```bash
+(cd packages/providers && bun test src/claude/provider.test.ts)
+```
+
+Expected: FAIL because the provider neither captures the real tool id nor prioritizes the branded error over abort/retry handling.
+
+- [ ] **Step 3: Implement the per-attempt Claude bridge.**
+
+Create the mutable bridge inside each `sendQuery` attempt, with slots for the first non-empty SDK `session_id`, the pending AskHuman `tool_use_id`, and the branded control error.
+Compose a `PreToolUse` hook with existing hooks so only `mcp__archon__AskHuman` records its real `tool_use_id` and all existing hook behavior remains intact.
+On every raw SDK message, capture the first non-empty `session_id` before mapping the message.
+Build the MCP server with a runtime that consumes the captured Ask id for the Ask callback, supplies the captured session id, stores branded errors, and aborts the attempt controller.
+Clear the captured Ask id when `contextFor('AskHuman')` consumes it so a later callback cannot reuse a stale SDK id.
+Never generate or substitute a tool id.
+Before generic abort classification, rate-limit classification, or retry, throw the stored control error.
+Check once more after a clean iterator exit so SDK swallowing cannot turn an Ask into successful completion.
+
+- [ ] **Step 4: Re-run the Claude provider test.**
+
+Run the command from Step 2.
+
+Expected: PASS.
+
+- [ ] **Step 5: Refactor while green.**
+
+Keep the bridge attempt-local and preserve the existing hook composition order.
+Re-run the command from Step 2.
+
+Expected: PASS.
+
+- [ ] **Step 6: Commit.**
+
+```bash
+git add packages/providers/src/claude/provider.ts packages/providers/src/claude/provider.test.ts
+git commit -m "feat(providers): surface Claude AskHuman control errors"
+```
+
+---
+
+### Task 10: Make Pi abort and reject with the same Ask control error
+
+**Files:**
+
+- Modify: `packages/providers/src/community/pi/provider.ts`.
+- Test: `packages/providers/src/community/pi/provider.test.ts`.
+
+**Interfaces:**
+
+- Consumes: Pi `_toolCallId`, `session.sessionId`, and Task 8's converter runtime.
+- Produces: `sendQuery` rejection with the original branded error even when Pi swallows the tool rejection.
+
+- [ ] **Step 1: Write the failing Pi provider-level tests.**
+
+Extend the existing Pi `defineTool` mock so the test can invoke the AskHuman custom tool from inside `mockPrompt`.
+Pass a NativeTool whose handler asserts `{ toolUseId: 'call-real', sessionId: 'mock-session-uuid' }` and throws a pre-created `AskHumanAwaitingError`.
+Have `mockPrompt` catch the custom tool rejection and resolve, matching Pi's tool-error conversion behavior.
+Consume `sendQuery` and assert the final error is `toBe(controlError)`, `session.abort()` ran, and `createAgentSession` ran once.
+Repeat for `AskHumanNoStarterError`.
+Add a normal handler-error case in which `mockPrompt` catches the callback rejection, then assert `sendQuery` has no stored Ask control error and the provider does not take the control-error abort path after `bridgeSession` returns.
+
+- [ ] **Step 2: Run the Pi provider test and verify it fails.**
+
+```bash
+(cd packages/providers && bun test src/community/pi/provider.test.ts)
+```
+
+Expected: FAIL because Pi's current custom-tool path does not retain a branded error outside the SDK callback.
+
+- [ ] **Step 3: Implement the per-session Pi bridge.**
+
+Create a mutable control-error slot before building custom tool definitions.
+Pass a runtime that closes over an initially undefined session reference into `buildPiNativeToolDefinitions`.
+After `createAgentSession` returns, assign that session reference before `bridgeSession` or `session.prompt()` can run, so `sessionId()` reads the real non-empty `session.sessionId`.
+Make `onControlError` store the exact error and call `void session.abort()` through the same reference.
+Pass `_toolCallId` directly from the custom tool callback.
+After `bridgeSession` returns or throws, check the control slot before classifying or returning, and throw the stored instance.
+Do not change how normal tool errors are represented.
+
+- [ ] **Step 4: Re-run the Pi provider test.**
+
+Run the command from Step 2.
+
+Expected: PASS.
+
+- [ ] **Step 5: Refactor while green.**
+
+Keep the bridge local to one `sendQuery` session and preserve existing dispose/abort ownership in `bridgeSession`.
+Re-run the command from Step 2.
+
+Expected: PASS.
+
+- [ ] **Step 6: Commit.**
+
+```bash
+git add packages/providers/src/community/pi/provider.ts packages/providers/src/community/pi/provider.test.ts
+git commit -m "feat(providers): surface Pi AskHuman control errors"
+```
+
+---
+
+### Task 11: Add the `askHuman` capability axis
 
 **Files:**
 
 - Modify: `packages/providers/src/types.ts` to add `askHuman: boolean` on `ProviderCapabilities`.
-- Modify: every `packages/providers/src/**/capabilities.ts`.
-- Modify: provider tests that construct `ProviderCapabilities` literals.
+- Modify: `packages/providers/src/claude/capabilities.ts`.
+- Modify: `packages/providers/src/codex/capabilities.ts`.
+- Modify: `packages/providers/src/grok/capabilities.ts`.
+- Modify: `packages/providers/src/community/copilot/capabilities.ts`.
+- Modify: `packages/providers/src/community/omp/capabilities.ts`.
+- Modify: `packages/providers/src/community/opencode/capabilities.ts`.
+- Modify: `packages/providers/src/community/pi/capabilities.ts`.
+- Modify: `packages/providers/src/community/qodercli/capabilities.ts`.
+- Modify: `packages/providers/src/e2e-fake/capabilities.ts`.
+- Test: `packages/providers/src/registry.test.ts`.
+- Test: `packages/providers/src/observability.test.ts`.
+- Test: `packages/providers/src/claude/provider.test.ts`.
+- Test: `packages/providers/src/community/pi/provider.test.ts`.
 - Modify: `scripts/generate-capability-matrix.ts`.
 - Modify: `packages/docs-web/src/content/docs/reference/provider-capabilities.md` via generator only.
 
@@ -1172,7 +1434,30 @@ git commit -m "feat(providers): reject AskHuman awaiting errors without stringif
 - Consumes: `ProviderCapabilities` without `askHuman`.
 - Produces: `askHuman: true` only for Claude and Pi.
 
-- [ ] **Step 1: Add the field and verify the matrix totality guard fails.**
+- [ ] **Step 1: Write the failing registry behavior test.**
+
+Add this test to `packages/providers/src/registry.test.ts`:
+
+```ts
+test('only Claude and Pi advertise AskHuman', () => {
+  registerCommunityProviders();
+  const capable = getProviderInfoList()
+    .filter(info => info.capabilities.askHuman)
+    .map(info => info.id)
+    .sort();
+  expect(capable).toEqual(['claude', 'pi']);
+});
+```
+
+Run:
+
+```bash
+(cd packages/providers && bun test src/registry.test.ts)
+```
+
+Expected: FAIL because no provider advertises `askHuman`.
+
+- [ ] **Step 2: Add the typed capability field and verify totality also fails.**
 
 Add `askHuman: boolean` to `ProviderCapabilities` in `packages/providers/src/types.ts` and do not yet add `AXES` or capability object fields.
 
@@ -1184,41 +1469,43 @@ bun run check:capability-matrix
 
 Expected: FAIL because `askHuman` is missing from `AXES` or from provider objects.
 
-- [ ] **Step 2: Set the flags and add the axis.**
+- [ ] **Step 3: Set every flag and add the axis.**
 
 Set `askHuman: true` in `packages/providers/src/claude/capabilities.ts` and `packages/providers/src/community/pi/capabilities.ts`.
 Set `askHuman: false` in Codex, Grok, OpenCode, Copilot, OMP, QoderCLI, and e2e-fake capabilities.
 Add `{ key: 'askHuman', label: 'AskHuman mid-turn questions' }` to `AXES`.
-Update every test literal that is typed as `ProviderCapabilities`, including `observability.test.ts` and `registry.test.ts`.
+Update the typed capability helper literals in `observability.test.ts` and `registry.test.ts`.
+Add `askHuman` expectations to the existing Claude and Pi capability assertions, but do not mechanically edit unrelated provider snapshots that compile from their production constants.
 
-- [ ] **Step 3: Regenerate the matrix and re-check.**
+- [ ] **Step 4: Run the behavior test, regenerate the matrix, and re-check.**
 
 Run:
 
 ```bash
+(cd packages/providers && bun test src/registry.test.ts src/observability.test.ts)
 bun run generate:capability-matrix
 bun run check:capability-matrix
 ```
 
 Expected: PASS, with Claude and Pi true and every other provider false.
 
-- [ ] **Step 4: Refactor while green.**
+- [ ] **Step 5: Refactor while green.**
 
 Do not add behavior.
-Re-run `bun run check:capability-matrix`.
+Re-run the commands from Step 4.
 Expected: PASS.
 
-- [ ] **Step 5: Commit.**
+- [ ] **Step 6: Commit.**
 
 ```bash
 git add packages/providers/src/types.ts packages/providers/src/claude/capabilities.ts packages/providers/src/community/pi/capabilities.ts packages/providers/src/codex/capabilities.ts packages/providers/src/grok/capabilities.ts packages/providers/src/community/opencode/capabilities.ts packages/providers/src/community/copilot/capabilities.ts packages/providers/src/community/omp/capabilities.ts packages/providers/src/community/qodercli/capabilities.ts packages/providers/src/e2e-fake/capabilities.ts scripts/generate-capability-matrix.ts packages/docs-web/src/content/docs/reference/provider-capabilities.md
-git add packages/providers/src/observability.test.ts packages/providers/src/registry.test.ts packages/providers/src/claude/provider.test.ts packages/providers/src/codex/provider.test.ts packages/providers/src/community/pi/provider.test.ts
+git add packages/providers/src/observability.test.ts packages/providers/src/registry.test.ts packages/providers/src/claude/provider.test.ts packages/providers/src/community/pi/provider.test.ts
 git commit -m "feat(providers): add askHuman capability axis"
 ```
 
 ---
 
-### Task 10: Inject AskHuman, persist, throw, and pause without completing the node
+### Task 12: Inject AskHuman, persist, throw, and pause without completing the node
 
 **Files:**
 
@@ -1238,10 +1525,27 @@ git commit -m "feat(providers): add askHuman capability axis"
 Create `packages/workflows/src/ask-human.test.ts`:
 
 ```ts
-import { describe, expect, test, mock } from 'bun:test';
-import { AskHumanAwaitingError, AskHumanNoStarterError } from '@archon/providers/types';
-import { createAskHumanTool, ASK_HUMAN_INPUT_SCHEMA } from './ask-human';
+import { beforeEach, describe, expect, test, mock } from 'bun:test';
+import { AskHumanAwaitingError } from '@archon/providers/types';
 import type { IWorkflowStore } from './store';
+
+const infoLogs: unknown[][] = [];
+mock.module('@archon/paths', () => ({
+  createLogger: () => ({
+    info: (...args: unknown[]) => infoLogs.push(args),
+    warn() {},
+    error() {},
+    debug() {},
+    trace() {},
+    fatal() {},
+  }),
+}));
+
+const { createAskHumanTool, ASK_HUMAN_INPUT_SCHEMA } = await import('./ask-human');
+
+beforeEach(() => {
+  infoLogs.length = 0;
+});
 
 const questions = [
   {
@@ -1277,6 +1581,8 @@ describe('AskHuman tool', () => {
       workflowRunId: 'run-1',
       nodeId: 'review',
     });
+    expect(tool.name).toBe('AskHuman');
+    expect(tool.inputSchema).toBe(ASK_HUMAN_INPUT_SCHEMA);
     await expect(
       tool.handler({ questions }, { toolUseId: 'toolu_1', sessionId: 'sess-1' })
     ).rejects.toBeInstanceOf(AskHumanAwaitingError);
@@ -1288,12 +1594,27 @@ describe('AskHuman tool', () => {
       envelope: { questions },
       provider_session_id: 'sess-1',
     });
+    expect(JSON.stringify(infoLogs)).toContain('workflow.ask_pending');
+    expect(JSON.stringify(infoLogs)).toContain('toolu_1');
+    expect(JSON.stringify(infoLogs)).not.toContain('Ship it?');
   });
 
   test('does not stringify invalid questions as awaiting', async () => {
     const s = store();
     const tool = createAskHumanTool({ store: s, workflowRunId: 'run-1', nodeId: 'review' });
     await expect(tool.handler({ questions: 'nope' }, { toolUseId: 'toolu_1', sessionId: 'sess-1' })).rejects.not.toBeInstanceOf(
+      AskHumanAwaitingError
+    );
+    expect(s.insertPendingInteraction).not.toHaveBeenCalled();
+  });
+
+  test('requires the real tool-use id and provider session id', async () => {
+    const s = store();
+    const tool = createAskHumanTool({ store: s, workflowRunId: 'run-1', nodeId: 'review' });
+    await expect(tool.handler({ questions }, { sessionId: 'sess-1' })).rejects.not.toBeInstanceOf(
+      AskHumanAwaitingError
+    );
+    await expect(tool.handler({ questions }, { toolUseId: 'toolu_1' })).rejects.not.toBeInstanceOf(
       AskHumanAwaitingError
     );
     expect(s.insertPendingInteraction).not.toHaveBeenCalled();
@@ -1318,29 +1639,32 @@ Expected: FAIL because `ask-human.ts` does not exist.
 Create `packages/workflows/src/ask-human.ts` with `ASK_HUMAN_INPUT_SCHEMA`, name `AskHuman`, the exact description in the authoritative contract, and the persist-then-throw algorithm.
 If `insertPendingInteraction` throws `AskHumanNoStarterError`, rethrow it unchanged.
 Log `workflow.ask_pending` with ids only.
+Use a Zod runtime schema for the handler input so `questions` is non-empty and every nested field and enum is checked before persistence; derive its TypeScript type with `z.infer`.
 
 - [ ] **Step 4: Write failing executor tests, then implement injection.**
 
-In `packages/workflows/src/dag-executor.test.ts` add tests that use a `sendQuery` mock which calls `options.nativeTools[0].handler` with valid questions and the context `{ toolUseId: 'toolu_1', sessionId: 'sess-1' }`, then ends without a result if the handler throws:
+In `packages/workflows/src/dag-executor.test.ts`, add tests that use a provider fake whose `sendQuery` calls the injected NativeTool handler with valid questions and `{ toolUseId: 'toolu_1', sessionId: 'sess-1' }`.
+Cover command and prompt nodes on Claude with a table-driven test, and assert `insertPendingInteraction` receives the exact row input.
+For each asking node, assert `pauseWorkflowRun` is called with the run id as its only argument, the node return state is `completed`, the transcript gets lifecycle `{ state: 'awaiting' }`, and the live emitter receives only `{ type: 'node_awaiting', runId, nodeId }`.
+Assert no `node_completed`, `node_failed`, `approval_requested`, or `approval_pending` event is written and no approval context is created.
+Add a Codex command case asserting `nativeTools` is absent or empty.
+Add a generic persist-error case and an `AskHumanNoStarterError` case asserting the normal node-failed path runs and `pauseWorkflowRun` does not.
+Add a Pi loop case in which text and usage arrive before the Ask, then assert the loop returns completed with that accumulated text/usage, does not call `failLoopIteration`, and pauses without completing or failing the node.
 
-1. Claude command node: `insertPendingInteraction` called, `pauseWorkflowRun` called with only the run id, no `node_completed` event, no `approval` context, node return state `completed`.
-2. Codex command node: `nativeTools` is undefined/empty.
-3. `AskHumanNoStarterError` from insert: node fails, `pauseWorkflowRun` not called.
-4. Loop node on Pi: same pause-without-approval behavior as (1).
-
-Implement a helper in `dag-executor.ts` that, when `getProviderCapabilities(provider).askHuman` is true, sets:
+Implement one helper in `dag-executor.ts` that returns the workflow-owned AskHuman tool only when `getProviderCapabilities(provider).askHuman` is true:
 
 ```ts
-sessionIdSink: { current: resumeSessionId },
-nativeTools: [
-  createAskHumanTool({ store: deps.store, workflowRunId: workflowRun.id, nodeId: stepName }),
-],
+const nativeTools = capabilities.askHuman
+  ? [createAskHumanTool({ store: deps.store, workflowRunId: workflowRun.id, nodeId: stepName })]
+  : undefined;
 ```
 
-Attach that helper on the command/prompt path in `executeNodeInternal` and the loop sendQuery path in `executeLoopNode`.
-Catch `AskHumanAwaitingError` before the generic node-failed catch, pause without approval, emit live `node_awaiting` with runId and nodeId only, and return `{ state: 'completed', output: nodeOutputText }`.
-Do not write `node_completed` or `node_failed` on that path.
-Catch `AskHumanNoStarterError` with the existing failed path.
+Pass that value on command and prompt sends inside `executeNodeInternal` and on loop sends inside `executeLoopNode`.
+Do not add a public session bridge option; Claude and Pi populate NativeTool context in Tasks 9 and 10.
+In the command/prompt catch, handle `AskHumanAwaitingError` before the existing abort/cancel classifier and generic failed branch.
+In the loop catch, handle it before `failLoopIteration`, preserving the current iteration's accumulated text and usage.
+On the Ask path, pause without approval, append lifecycle `awaiting`, emit live `node_awaiting`, and return `{ state: 'completed', output: nodeOutputText }` without writing terminal or approval events.
+Let `AskHumanNoStarterError` and every other persistence error use the existing failed path.
 
 - [ ] **Step 5: Run handler and executor tests.**
 
@@ -1369,7 +1693,7 @@ git commit -m "feat(workflows): persist AskHuman and pause without the approval 
 
 ---
 
-### Task 11: Reject AskHuman on unsupported providers at run start and keep chat clean
+### Task 13: Reject AskHuman on unsupported providers at run start and keep chat clean
 
 **Files:**
 
@@ -1383,6 +1707,12 @@ git commit -m "feat(workflows): persist AskHuman and pause without the approval 
 - Produces: CAP-7 start throw; chat still injects only `manage_run`.
 
 - [ ] **Step 1: Write failing CAP-7 and chat tests.**
+
+First add table-driven unit cases for exported `collectAskHumanUnsupportedProviders`, using the existing preflight fixture builders.
+Cover a top-level provider, inherited workflow provider, nested `loop_group` provider inheritance, group model scope, and a model alias resolved through `WorkflowModelScope`.
+Across those scopes, prove all of these name rules: `AskHuman`, `mcp__archon__AskHuman`, and `AskHuman(allow)` match after `entry.split('(')[0].trim()`, while `denied_tools: ['AskHuman']`, unrelated tools, and workflows without explicit `allowed_tools` do not match.
+Include command, prompt, and loop nodes, and prove a Claude or Pi resolved provider is not reported.
+Expect unsupported provider ids to be returned once in deterministic sorted order.
 
 Executor tests:
 
@@ -1505,17 +1835,21 @@ Run:
 (cd packages/core && bun test src/orchestrator/orchestrator-agent.test.ts)
 ```
 
-Expected: FAIL on Codex AskHuman starting a turn.
+Expected: the new collector and executor cases FAIL because no start-blocking AskHuman preflight exists, while the chat characterization case already PASSES.
 
 - [ ] **Step 3: Implement CAP-7 preflight.**
 
 Add `collectAskHumanUnsupportedProviders` that visits command/prompt/loop nodes and nested loop_group bodies.
-Reuse `resolveNodeProviderForPreflight` and group scope inheritance.
+Reuse `resolveNodeProviderForPreflight`, `resolveGroupModelScope`, and the passed `WorkflowModelScope`; do not reimplement provider/model/alias inheritance.
+Normalize only entries in `allowed_tools` with `entry.split('(')[0].trim()` and compare the result to the two exact AskHuman names.
+Ignore `denied_tools` and implicit model behavior.
 If `allowed_tools` contains `AskHuman` or `mcp__archon__AskHuman` and `askHuman === false`, throw:
 
-`AskHuman is not supported by provider '<id>'. Remove AskHuman from allowed_tools, or use claude or pi.`
+```text
+AskHuman is not supported by provider '<id>'. Remove AskHuman from allowed_tools, or use claude or pi.
+```
 
-Call it at the start of `executeWorkflow` / `runDag` before any node, beside the containerExec preflight.
+Build the outer `WorkflowModelScope` once near the start of `executeDagWorkflow`, call the Ask collector unconditionally before any node or `sendQuery`, and reuse the same scope in the conditional container-exec preflight.
 Do not change load-time validator warnings into errors.
 Do not add AskHuman to `orchestrator-agent.ts`.
 
@@ -1540,7 +1874,7 @@ git commit -m "feat(workflows): reject AskHuman on providers that cannot ask"
 
 ---
 
-### Task 12: Validate the story and mark sprint status done
+### Task 14: Validate the story and mark sprint status done
 
 **Files:**
 
@@ -1554,34 +1888,62 @@ git commit -m "feat(workflows): reject AskHuman on providers that cannot ask"
 - [ ] **Step 1: Run focused package tests.**
 
 ```bash
+(cd packages/workflows && bun test src/schemas.test.ts)
 (cd packages/workflows && bun test src/retry-state.test.ts)
 (cd packages/workflows && bun test src/ask-human.test.ts)
 (cd packages/workflows && bun test src/schemas/pending-interaction.test.ts)
 (cd packages/workflows && bun test src/dag-executor.test.ts)
+(cd packages/workflows && bun test src/event-emitter.test.ts)
+(cd packages/workflows && bun test src/executor.test.ts)
+(cd packages/workflows && bun test src/executor-preamble.test.ts)
+(cd packages/workflows && bun test src/script-node-deps.test.ts)
+(cd packages/workflows && bun test src/subrun.test.ts)
 (cd packages/core && bun test src/db/workflows.test.ts)
 (cd packages/core && bun test src/db/workflow-pending-interactions.test.ts)
 (cd packages/core && bun test src/db/adapters/sqlite.test.ts src/db/migration-statement-order.test.ts)
+(cd packages/core && bun test src/db/bundled-schema.test.ts)
 (cd packages/core && bun test src/workflows/store-adapter.test.ts)
 (cd packages/core && bun test src/orchestrator/orchestrator-agent.test.ts)
 (cd packages/providers && bun test src/claude/native-tools.test.ts)
 (cd packages/providers && bun test src/community/pi/native-tools.test.ts)
+(cd packages/providers && bun test src/claude/provider.test.ts)
+(cd packages/providers && bun test src/community/pi/provider.test.ts)
+(cd packages/providers && bun test src/registry.test.ts)
+(cd packages/providers && bun test src/observability.test.ts)
 (cd packages/server && bun test src/routes/api.workflow-runs.test.ts)
 (cd packages/server && bun test src/adapters/web/dashboard-event-poller.test.ts)
 (cd packages/server && bun test src/adapters/web/workflow-bridge.test.ts)
 ```
 
 Expected: all PASS.
+Keep `workflow-pending-interactions.test.ts` and each provider mock-heavy file in its own Bun process exactly as shown; do not combine them into another test file's process.
 
-- [ ] **Step 2: Run schema upgrade check when PostgreSQL is reachable.**
+- [ ] **Step 2: Regenerate and check generated artifacts.**
 
 ```bash
-bun run check:schema-upgrades
+bun run generate:bundled-schema
+bun run generate:capability-matrix
+bun run check:bundled-schema
+bun run check:capability-matrix
 ```
 
-If neither `DATABASE_URL` nor `PGHOST` identifies a reachable PostgreSQL, record that missing prerequisite and rely on CI.
-Do not skip SQLite parity.
+Expected: generators produce no unexplained drift and both checks PASS.
+If either generator changes a tracked artifact, commit that generated change with its owning task before continuing.
 
-- [ ] **Step 3: Run full validate.**
+- [ ] **Step 3: Prove additive PostgreSQL upgrades.**
+
+Start the repository's PostgreSQL service if an external test database is not already configured:
+
+```bash
+docker-compose --profile with-db up -d postgres
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/remote_coding_agent bun run check:schema-upgrades
+```
+
+If `POSTGRES_PASSWORD` was overridden, use the matching password in `DATABASE_URL`.
+Expected: every shipped schema baseline upgrades, reapplies idempotently, and matches a fresh database except the one documented constraint exception enforced by the script.
+This gate is mandatory; if Docker and an external PostgreSQL are both unavailable, leave sprint status unchanged until the repository CI `check:schema-upgrades` job passes for the implementation branch.
+
+- [ ] **Step 4: Run full validation.**
 
 ```bash
 bun run validate
@@ -1589,7 +1951,7 @@ bun run validate
 
 Expected: PASS, including `check:bundled-schema` and `check:capability-matrix`.
 
-- [ ] **Step 4: Confirm Story 6.2 acceptance criteria.**
+- [ ] **Step 5: Confirm Story 6.2 acceptance criteria.**
 
 - Table exists on SQLite and Postgres, additive, comments trailing.
 - `pendingInteractionSchema` remains the server source.
@@ -1600,10 +1962,13 @@ Expected: PASS, including `check:bundled-schema` and `check:capability-matrix`.
 - Run status stays `paused`.
 - AskHuman injects on Claude/Pi command/prompt/loop with no YAML field.
 - Handler persists then throws `AskHumanAwaitingError`.
-- Wrappers reject `sendQuery` and do not stringify that class.
+- Claude and Pi wrappers reject `sendQuery` with the same branded instance, abort the SDK operation, and do not retry or stringify it.
+- Claude stores the real PreToolUse tool id and a real SDK session id; Pi passes the real execute call id and session id.
+- Missing tool or session ids persist nothing and are never replaced with fabricated ids.
 - Converters accept `questions[]`.
 - `askHuman` is true only for Claude and Pi.
 - `NativeTool.handler` is still `Promise<string>`.
+- `SendQueryOptions` has no public session-id sink.
 - Chat orchestrator does not inject AskHuman.
 - `AskUserQuestion` is not wrapped.
 - GET run embeds pending rows and projects `awaiting`.
@@ -1615,11 +1980,12 @@ Expected: PASS, including `check:bundled-schema` and `check:capability-matrix`.
 - The same workflow without that entry starts with no Ask tool.
 - `workflow.ask_pending` is logged without answer bodies.
 
-- [ ] **Step 5: Mark sprint status done and commit.**
+- [ ] **Step 6: Mark sprint status done and commit.**
 
 Set `6-2-pause-a-run-when-the-agent-asks-without-stealing-the-approval-slot: done` in `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml`.
 Update `last_updated`.
 Do not mark later 6.x stories done.
+Do not perform this step unless both Step 3 and Step 4 passed.
 
 ```bash
 git add _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml
@@ -1631,7 +1997,8 @@ git commit -m "chore: mark workflow-run-view-hitl story 6.2 done"
 ## Acceptance Criteria
 
 - [ ] Story 6.2 acceptance criteria in `_bmad-output/planning-artifacts/epics-workflow-run-view-hitl/epics.md` are satisfied.
-- [ ] Focused tests listed in Task 12 exist and pass.
+- [ ] Focused tests listed in Task 14 exist and pass.
+- [ ] `bun run check:schema-upgrades` passes against PostgreSQL locally or in the implementation branch's required CI job.
 - [ ] `bun run validate` passes.
 - [ ] `6-2-pause-a-run-when-the-agent-asks-without-stealing-the-approval-slot` is `done` only after the criteria above pass.
 - [ ] No Ask card, answer POST, or provider resume mapper shipped.
@@ -1639,13 +2006,29 @@ git commit -m "chore: mark workflow-run-view-hitl story 6.2 done"
 ## Validation Commands
 
 ```bash
-(cd packages/workflows && bun test src/retry-state.test.ts src/ask-human.test.ts src/schemas/pending-interaction.test.ts src/dag-executor.test.ts)
-(cd packages/core && bun test src/db/workflows.test.ts src/db/workflow-pending-interactions.test.ts src/db/adapters/sqlite.test.ts src/db/migration-statement-order.test.ts src/workflows/store-adapter.test.ts src/orchestrator/orchestrator-agent.test.ts)
-(cd packages/providers && bun test src/claude/native-tools.test.ts && bun test src/community/pi/native-tools.test.ts)
-(cd packages/server && bun test src/routes/api.workflow-runs.test.ts src/adapters/web/dashboard-event-poller.test.ts src/adapters/web/workflow-bridge.test.ts)
+(cd packages/workflows && bun test src/schemas.test.ts)
+(cd packages/workflows && bun test src/retry-state.test.ts)
+(cd packages/workflows && bun test src/schemas/pending-interaction.test.ts)
+(cd packages/workflows && bun test src/ask-human.test.ts)
+(cd packages/workflows && bun test src/dag-executor.test.ts)
+(cd packages/workflows && bun test src/event-emitter.test.ts)
+(cd packages/core && bun test src/db/workflows.test.ts)
+(cd packages/core && bun test src/db/workflow-pending-interactions.test.ts)
+(cd packages/core && bun test src/db/adapters/sqlite.test.ts src/db/migration-statement-order.test.ts)
+(cd packages/core && bun test src/db/bundled-schema.test.ts)
+(cd packages/core && bun test src/workflows/store-adapter.test.ts)
+(cd packages/core && bun test src/orchestrator/orchestrator-agent.test.ts)
+(cd packages/providers && bun test src/claude/native-tools.test.ts)
+(cd packages/providers && bun test src/community/pi/native-tools.test.ts)
+(cd packages/providers && bun test src/claude/provider.test.ts)
+(cd packages/providers && bun test src/community/pi/provider.test.ts)
+(cd packages/providers && bun test src/registry.test.ts src/observability.test.ts)
+(cd packages/server && bun test src/routes/api.workflow-runs.test.ts)
+(cd packages/server && bun test src/adapters/web/dashboard-event-poller.test.ts)
+(cd packages/server && bun test src/adapters/web/workflow-bridge.test.ts)
 bun run generate:bundled-schema
 bun run generate:capability-matrix
-bun run check:schema-upgrades
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/remote_coding_agent bun run check:schema-upgrades
 bun run validate
 ```
 
