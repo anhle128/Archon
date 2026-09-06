@@ -16,8 +16,8 @@
       "technicalNotes": "Plan Task 1 (docs/superpowers/plans/2026-09-06-source-control-every-changed-file.md:342-516). Create packages/git/src/viewer-limits.ts and packages/git/src/viewer-limits.test.ts. Pure rules and algorithms; consumes standard library only. Locked contracts at plan:109-143.",
       "dependsOn": [],
       "priority": 1,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 1. Files: packages/git/src/viewer-limits.ts, packages/git/src/viewer-limits.test.ts."
     },
     {
       "id": "US-002",
@@ -37,8 +37,8 @@
         "US-001"
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 2. Files: packages/git/src/git-stream.ts, packages/git/src/file-read.ts, packages/git/src/file-read.test.ts, packages/git/src/index.ts."
     },
     {
       "id": "US-003",
@@ -58,8 +58,8 @@
         "US-002"
       ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 3. Files: packages/git/src/diff-page.ts, packages/git/src/diff-page.test.ts, packages/git/src/file-read.ts, packages/git/src/file-read.test.ts, packages/git/src/git-stream.ts."
     },
     {
       "id": "US-004",
@@ -79,8 +79,8 @@
         "US-003"
       ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 4. Files: packages/server/src/routes/schemas/git.schemas.ts, packages/server/src/routes/git/diff-route.ts, packages/server/src/routes/git/diff-handler.ts, packages/server/src/routes/git/file-handler.ts, packages/server/src/routes/api.git-changes.test.ts, packages/web/src/lib/api.generated.d.ts."
     },
     {
       "id": "US-005",
@@ -99,8 +99,8 @@
         "US-004"
       ],
       "priority": 5,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 5. Files: packages/web/src/lib/api.ts, packages/web/src/lib/api.git-changes.test.ts, packages/web/src/components/workflows/source-control/source-control-tab.tsx."
     },
     {
       "id": "US-006",
@@ -118,8 +118,8 @@
         "US-005"
       ],
       "priority": 6,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 6. Files: packages/web/src/components/workflows/source-control/hex-peek.ts, hex-peek.test.ts, inline-image.tsx, inline-image.test.tsx, virtualized-diff.tsx, file-viewer.tsx, file-viewer.test.tsx, source-control-tab.tsx; packages/web/src/component-integration/source-control-large-diff-spike.tsx, source-control-tab.test.tsx; packages/web/package.json."
     },
     {
       "id": "US-007",
@@ -139,8 +139,8 @@
         "US-006"
       ],
       "priority": 7,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 7. Files: packages/web/src/components/workflows/source-control/source-control-tab.tsx, packages/web/src/component-integration/source-control-tab.test.tsx."
     },
     {
       "id": "US-008",
@@ -165,8 +165,8 @@
         "US-007"
       ],
       "priority": 8,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 8. Files: _bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml. Focused tests, package suites, bun run validate, and git diff --check all exited 0. Spike {fixtureBytes:2097152,renderMs:110.9155,mountedHunks:8,totalHunks:4096,lodashInputBytes:545267}. Live legacy-screen check skipped: no suitable DAG run with a live host checkout in this worktree."
     }
   ]
 }
