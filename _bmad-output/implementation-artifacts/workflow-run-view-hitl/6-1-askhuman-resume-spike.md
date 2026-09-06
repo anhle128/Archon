@@ -73,5 +73,5 @@ Isolated SDK `0.3.261` produced `tool-deferred-reissue` as comparison evidence o
 
 ## Story gate
 
-INCONCLUSIVE: Story 6.3 continue stays blocked.
-Claude exact `0.3.209` and Pi `0.80.6` each have one evidenced protocol, but the Completion Gate also requires `bun run validate` before Story 6.1 may be marked done.
+COMPLETE: Story 6.1 is complete.
+Claude exact `0.3.209` proved host-abort-new-user-message on sonnet and opus, Pi `0.80.6` proved the durable reopen order, both evidence files are redacted and valid, AD-6 and the diagrams agree, and `bun run validate` passed.

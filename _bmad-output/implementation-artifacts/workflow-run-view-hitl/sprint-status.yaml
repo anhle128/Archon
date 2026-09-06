@@ -1,5 +1,5 @@
 # generated: 2026-09-06 00:34:00 +0700
-# last_updated: 2026-09-06 14:08:00 +0700
+# last_updated: 2026-09-06 14:29:08 +0700
 # project: Archon
 # project_key: NOKEY
 # tracking_system: file-system
@@ -34,7 +34,7 @@
 #   - done: Retrospective has been completed
 
 generated: "2026-09-06 00:34:00 +0700"
-last_updated: "2026-09-06 14:08:00 +0700"
+last_updated: "2026-09-06 14:29:08 +0700"
 project: Archon
 feature: workflow-run-view-hitl
 project_key: NOKEY
@@ -52,7 +52,7 @@ development_status:
   epic-5-retrospective: optional
 
   epic-6: in-progress
-  6-1-prove-claude-and-pi-can-resume-after-askhuman: in-progress
+  6-1-prove-claude-and-pi-can-resume-after-askhuman: done
   6-2-pause-a-run-when-the-agent-asks-without-stealing-the-approval-slot: backlog
   6-3-answer-or-decline-the-ask-so-the-node-can-continue: backlog
   6-4-keep-several-asks-outstanding-without-a-second-scheduler: backlog
