@@ -18,6 +18,22 @@ const mockExecFileAsync = mock(
 );
 
 mock.module('@archon/git', () => ({
+  fileAt: mock(async () => ({
+    path: 'x.ts',
+    bytes: new Uint8Array(),
+    binary: false,
+    contentHash: '0'.repeat(64),
+  })),
+  fileDiff: mock(async () => ({
+    path: 'x.ts',
+    status: 'M' as const,
+    scope: 'now' as const,
+    ref: 'live' as const,
+    hunks: [],
+    cursor: '' as const,
+    truncated: false as const,
+    binary: false,
+  })),
   execFileAsync: mockExecFileAsync,
   mkdirAsync: mock(async () => undefined),
   changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
@@ -55,6 +71,7 @@ import type { IWorkflowStore } from './store';
 // --- Helpers ---
 
 function createMockStore(): IWorkflowStore {
+  let nodeMessageSeq = 0;
   return {
     createWorkflowRun: mock(() =>
       Promise.resolve({
@@ -158,6 +175,13 @@ function createMockStore(): IWorkflowStore {
     ),
     getCodebase: mock(() => Promise.resolve(null)),
     getCodebaseEnvVars: mock(() => Promise.resolve({})),
+    appendNodeMessage: async input => ({
+      ...input,
+      id: `node-message-${String(++nodeMessageSeq)}`,
+      seq: nodeMessageSeq,
+      created_at: new Date(),
+    }),
+    listNodeMessages: async () => [],
   };
 }
 

@@ -85,23 +85,41 @@ describe('changedFiles and isGitWorkTree', () => {
   });
 
   afterAll(async () => {
-    await rm(root, { recursive: true, force: true });
+    try {
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    } catch (error) {
+      // Windows: a timed-out git child can keep the temp tree busy (EBUSY).
+      if ((error as NodeJS.ErrnoException).code !== 'EBUSY') throw error;
+    }
   });
 
   test('lists special filenames and changes the revision when porcelain changes', async () => {
-    await writeFile(join(repoPath, ':colon.ts'), 'x\n');
-    await writeFile(join(repoPath, '-dash.ts'), 'x\n');
-    await writeFile(join(repoPath, 'foo*.ts'), 'x\n');
-    await writeFile(join(repoPath, 'line\nbreak.ts'), 'x\n');
+    // `: *` and newline are reserved/illegal in Windows filenames. Path
+    // parsing still covers those names in git-path.test.ts without touching disk.
+    const portableSpecials = [
+      { name: '-dash.ts', path: '-dash.ts' },
+      { name: 'path with space.ts', path: 'path with space.ts' },
+    ];
+    const posixOnlySpecials =
+      process.platform === 'win32'
+        ? []
+        : [
+            { name: ':colon.ts', path: ':colon.ts' },
+            { name: 'foo*.ts', path: 'foo*.ts' },
+            { name: 'line\nbreak.ts', path: 'line\nbreak.ts' },
+          ];
+
+    for (const file of [...portableSpecials, ...posixOnlySpecials]) {
+      await writeFile(join(repoPath, file.name), 'x\n');
+    }
 
     const first = await changedFiles(toWorktreePath(repoPath));
 
-    expect(first.files).toEqual([
-      { path: '-dash.ts', status: 'A' },
-      { path: ':colon.ts', status: 'A' },
-      { path: 'foo*.ts', status: 'A' },
-      { path: 'line\nbreak.ts', status: 'A' },
-    ]);
+    expect(first.files).toEqual(
+      [...portableSpecials, ...posixOnlySpecials]
+        .map(file => ({ path: file.path, status: 'A' as const }))
+        .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+    );
     expect(first.revision).toMatch(/^[a-f0-9]{64}$/);
 
     await writeFile(join(repoPath, 'z-new.ts'), 'x\n');
@@ -114,32 +132,45 @@ describe('changedFiles and isGitWorkTree', () => {
     expect(await isGitWorkTree(toWorktreePath(plainPath))).toBe(false);
   });
 
-  test('does not refresh the git index while reading changes', async () => {
-    const readOnlyRepoPath = join(root, 'read-only-repo');
-    const trackedPath = join(readOnlyRepoPath, 'tracked.ts');
-    await mkdir(readOnlyRepoPath);
-    await execFileAsync('git', ['init', readOnlyRepoPath]);
-    await execFileAsync('git', [
-      '-C',
-      readOnlyRepoPath,
-      'config',
-      'user.email',
-      'test@example.com',
-    ]);
-    await execFileAsync('git', ['-C', readOnlyRepoPath, 'config', 'user.name', 'Test User']);
-    await writeFile(trackedPath, 'unchanged\n');
-    await execFileAsync('git', ['-C', readOnlyRepoPath, 'add', '--', 'tracked.ts']);
-    await execFileAsync('git', ['-C', readOnlyRepoPath, 'commit', '-m', 'initial']);
+  describe('does not refresh the git index while reading changes', () => {
+    let readOnlyRepoPath = '';
+    let trackedPath = '';
+    let indexPath = '';
 
-    const indexPath = join(readOnlyRepoPath, '.git', 'index');
-    const indexBefore = await readFile(indexPath);
-    const future = new Date(Date.now() + 60_000);
-    await utimes(trackedPath, future, future);
-
-    expect(await changedFiles(toWorktreePath(readOnlyRepoPath))).toEqual({
-      files: [],
-      revision: expect.stringMatching(/^[a-f0-9]{64}$/),
+    // Fixture setup is in beforeAll so the timed test is only utimes + status.
+    // Six git spawns in the test body exceeded Bun's 5000 ms default on
+    // windows-latest under parallel package load (5016 ms).
+    beforeAll(async () => {
+      readOnlyRepoPath = join(root, 'read-only-repo');
+      trackedPath = join(readOnlyRepoPath, 'tracked.ts');
+      indexPath = join(readOnlyRepoPath, '.git', 'index');
+      await mkdir(readOnlyRepoPath);
+      await execFileAsync('git', ['init', '-b', 'main', readOnlyRepoPath]);
+      await writeFile(trackedPath, 'unchanged\n');
+      await execFileAsync('git', ['-C', readOnlyRepoPath, 'add', '--', 'tracked.ts']);
+      await execFileAsync('git', [
+        '-C',
+        readOnlyRepoPath,
+        '-c',
+        'user.email=test@example.com',
+        '-c',
+        'user.name=Test User',
+        'commit',
+        '-m',
+        'initial',
+      ]);
     });
-    expect(await readFile(indexPath)).toEqual(indexBefore);
+
+    test('leaves the index bytes unchanged after a racy mtime', async () => {
+      const indexBefore = await readFile(indexPath);
+      const future = new Date(Date.now() + 60_000);
+      await utimes(trackedPath, future, future);
+
+      expect(await changedFiles(toWorktreePath(readOnlyRepoPath))).toEqual({
+        files: [],
+        revision: expect.stringMatching(/^[a-f0-9]{64}$/),
+      });
+      expect(await readFile(indexPath)).toEqual(indexBefore);
+    });
   });
 });

@@ -744,7 +744,7 @@ describe('PostgreSQL schema convergence — remote_agent_workflow_provider_bindi
     const realCombinedSql = readFileSync(
       resolve(import.meta.dir, '../../../../../migrations/000_combined.sql'),
       'utf8'
-    );
+    ).replace(/\r\n/g, '\n');
 
     const issued: string[] = [];
     mockClient = {
@@ -817,7 +817,7 @@ describe('PostgreSQL schema convergence — workflow event outbox (Story 3.5)', 
     const realCombinedSql = readFileSync(
       resolve(import.meta.dir, '../../../../../migrations/000_combined.sql'),
       'utf8'
-    );
+    ).replace(/\r\n/g, '\n');
 
     expect(realCombinedSql).toContain('signing_secret  TEXT');
     expect(realCombinedSql).toContain(

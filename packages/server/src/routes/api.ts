@@ -13,6 +13,7 @@ import { existsSync, readFileSync } from 'fs';
 import { normalize, join, sep, basename, dirname, resolve } from 'path';
 import { randomUUID } from 'crypto';
 import type { Context } from 'hono';
+import { requestLogPath } from '../request-log-path';
 import type {
   ConversationLockManager,
   AttachedFile,
@@ -406,6 +407,7 @@ import type { UsageReport } from '@archon/core/schemas/usage-report';
 import * as messageDb from '@archon/core/db/messages';
 import * as userDb from '@archon/core/db/users';
 import * as workflowEnvDb from '@archon/core/db/workflow-envs';
+import * as workflowNodeMessageDb from '@archon/core/db/workflow-node-messages';
 import {
   abandonWorkflow,
   approveWorkflow,
@@ -434,6 +436,8 @@ import {
   retryWorkflowNodeBodySchema,
   retryWorkflowNodePreviewResponseSchema,
   retryWorkflowNodeResponseSchema,
+  workflowNodeMessagesParamsSchema,
+  workflowNodeMessagesResponseSchema,
   dashboardRunsResponseSchema,
   dashboardRunsQuerySchema,
   workflowRunsQuerySchema,
@@ -534,6 +538,9 @@ import {
 } from './schemas/workflow.schemas';
 import { gitChangesRoute } from './git/changes-route';
 import { handleGitChanges } from './git/changes-handler';
+import { gitDiffRoute } from './git/diff-route';
+import { handleGitDiff } from './git/diff-handler';
+import { handleGitFile } from './git/file-handler';
 
 // Read app version: use build-time constant in binary, package.json in dev
 let appVersion = 'unknown';
@@ -1329,6 +1336,22 @@ const retryWorkflowNodeRoute = createRoute({
   },
 });
 
+const getWorkflowNodeMessagesRoute = createRoute({
+  method: 'get',
+  path: '/api/workflows/runs/{runId}/nodes/{nodeId}/messages',
+  tags: ['Workflows'],
+  summary: 'List one workflow node transcript',
+  request: { params: workflowNodeMessagesParamsSchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: workflowNodeMessagesResponseSchema } },
+      description: 'Workflow node transcript in sequence order',
+    },
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
 const abandonWorkflowRunRoute = createRoute({
   method: 'post',
   path: '/api/workflows/runs/{runId}/abandon',
@@ -2099,7 +2122,10 @@ export function registerApiRoutes(
         // — it returns undefined rather than throwing. The /api/* gate maps that
         // undefined to a 401 (fail-closed); requireWebUser is the strict variant
         // that distinguishes a backend 503 from a missing identity.
-        getLog().warn({ err: err as Error, path: c.req.path }, 'web.session_resolve_failed');
+        getLog().warn(
+          { err: err as Error, path: requestLogPath(c.req.path) },
+          'web.session_resolve_failed'
+        );
       }
     }
 
@@ -2115,7 +2141,7 @@ export function registerApiRoutes(
       // failed (e.g. DB outage). Fall back to NULL attribution rather than
       // failing the request. headerPresent distinguishes this from "no header".
       getLog().warn(
-        { err: err as Error, headerPresent: true, path: c.req.path },
+        { err: err as Error, headerPresent: true, path: requestLogPath(c.req.path) },
         'web.user_resolve_failed'
       );
       return undefined;
@@ -4877,6 +4903,36 @@ export function registerApiRoutes(
     }
   });
 
+  // GET /api/workflows/runs/:runId/nodes/:nodeId/messages - One node transcript
+  registerOpenApiRoute(getWorkflowNodeMessagesRoute, async c => {
+    const runId = c.req.param('runId') ?? '';
+    const nodeId = c.req.param('nodeId') ?? '';
+    try {
+      const run = await workflowDb.getWorkflowRun(runId);
+      if (!run) return apiError(c, 404, 'Workflow run not found');
+      const rows = await workflowNodeMessageDb.listNodeMessages(runId, nodeId);
+      return c.json({
+        messages: rows.map(row => ({
+          id: row.id,
+          seq: row.seq,
+          kind: row.kind,
+          payload: row.payload,
+          created_at: toISOString(row.created_at),
+        })),
+      });
+    } catch (error) {
+      getLog().error(
+        {
+          runId,
+          nodeId,
+          errorType: error instanceof Error ? error.name : typeof error,
+        },
+        'workflow_node_messages_list_failed'
+      );
+      return apiError(c, 500, 'Failed to list workflow node messages');
+    }
+  });
+
   // GET /api/workflows/runs/:runId - Get run details with events
   registerOpenApiRoute(getWorkflowRunRoute, async c => {
     try {
@@ -4937,6 +4993,7 @@ export function registerApiRoutes(
           run.status,
           projectApiWorkflowNodeStates(events)
         ),
+        pending_interactions: [],
         usage,
       });
     } catch (error) {
@@ -4948,6 +5005,19 @@ export function registerApiRoutes(
   // GET /api/workflows/runs/:runId/git/changes - Live uncommitted changes for a run
   registerOpenApiRoute(gitChangesRoute, async c => {
     return handleGitChanges(c, apiError);
+  });
+
+  // GET /api/workflows/runs/:runId/git/diff - Now hunks for a modified file
+  registerOpenApiRoute(gitDiffRoute, async c => {
+    return handleGitDiff(c, apiError);
+  });
+
+  // GET /api/workflows/runs/:runId/git/file/*
+  // The wildcard carries a server-issued git-relative path and is decoded exactly once.
+  // NUL, absolute paths, and any slash or backslash ".." segment are rejected after decoding.
+  // OpenAPI 3.0 cannot represent this wildcard, and successful responses are raw bytes.
+  app.get('/api/workflows/runs/:runId/git/file/*', async c => {
+    return handleGitFile(c, apiError);
   });
 
   // GET /api/usage - Installation usage/cost report (direct runs only)

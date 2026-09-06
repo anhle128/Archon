@@ -108,6 +108,22 @@ mock.module('@archon/paths', () => ({
 // --- Mock git ---
 const mockGetDefaultBranch = mock(async () => 'main');
 mock.module('@archon/git', () => ({
+  fileAt: mock(async () => ({
+    path: 'x.ts',
+    bytes: new Uint8Array(),
+    binary: false,
+    contentHash: '0'.repeat(64),
+  })),
+  fileDiff: mock(async () => ({
+    path: 'x.ts',
+    status: 'M' as const,
+    scope: 'now' as const,
+    ref: 'live' as const,
+    hunks: [],
+    cursor: '' as const,
+    truncated: false as const,
+    binary: false,
+  })),
   getDefaultBranch: mockGetDefaultBranch,
   toRepoPath: mock((p: string) => p),
   changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
@@ -174,6 +190,7 @@ import { buildAiProfile } from './model-validation';
 // --- Helpers ---
 
 function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
+  let nodeMessageSeq = 0;
   return {
     getActiveWorkflowRunByPath: mock(async () => null),
     findChildRuns: mock(async () => []),
@@ -217,6 +234,13 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     resumeApprovedGate: mock(async () => ({ resumed: true })),
     getCodebase: mock(async () => null),
     getCodebaseEnvVars: mock(async () => ({})),
+    appendNodeMessage: async input => ({
+      ...input,
+      id: `node-message-${String(++nodeMessageSeq)}`,
+      seq: nodeMessageSeq,
+      created_at: new Date(),
+    }),
+    listNodeMessages: async () => [],
     ...overrides,
   };
 }

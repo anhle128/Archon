@@ -190,11 +190,13 @@ function storagePathsForRootFake(root: string): {
 }
 
 const mockCaptureApprovalResolved = mock(() => undefined);
+const mockApiLogError = mock(() => undefined);
+
 mock.module('@archon/paths', () => ({
   captureApprovalResolved: mockCaptureApprovalResolved,
   createLogger: () => ({
     fatal: mock(() => undefined),
-    error: mock(() => undefined),
+    error: mockApiLogError,
     warn: mock(() => undefined),
     info: mock(() => undefined),
     debug: mock(() => undefined),
@@ -228,6 +230,22 @@ mock.module('@archon/paths', () => ({
 mockAllWorkflowModules();
 
 mock.module('@archon/git', () => ({
+  fileAt: mock(async () => ({
+    path: 'x.ts',
+    bytes: new Uint8Array(),
+    binary: false,
+    contentHash: '0'.repeat(64),
+  })),
+  fileDiff: mock(async () => ({
+    path: 'x.ts',
+    status: 'M' as const,
+    scope: 'now' as const,
+    ref: 'live' as const,
+    hunks: [],
+    cursor: '' as const,
+    truncated: false as const,
+    binary: false,
+  })),
   removeWorktree: mock(async () => {}),
   toRepoPath: (p: string) => p,
   toWorktreePath: (p: string) => p,
@@ -513,6 +531,24 @@ class WorkflowEnvCorruptRowError extends Error {
     this.envId = envId;
   }
 }
+
+const mockListNodeMessages = mock(
+  async (_runId: string, _nodeId: string) => [] as MockNodeMessageRow[]
+);
+
+type MockNodeMessageRow = {
+  id: string;
+  workflow_run_id: string;
+  node_id: string;
+  seq: number;
+  kind: 'text' | 'tool' | 'status';
+  payload: Record<string, unknown>;
+  created_at: Date | string;
+};
+
+mock.module('@archon/core/db/workflow-node-messages', () => ({
+  listNodeMessages: mockListNodeMessages,
+}));
 
 mock.module('@archon/core/db/workflow-envs', () => ({
   listWorkflowEnvSummaries: mock(async () => []),
@@ -2360,6 +2396,217 @@ describe('GET /api/workflows/runs/:runId', () => {
       | undefined;
     expect(nullable?.nullable).toBe(true);
     expect(nullable).not.toEqual(usageReport);
+  });
+
+  test('returns pending_interactions as an empty array without a pending table', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_RUNNING_RUN);
+    mockListWorkflowEvents.mockImplementationOnce(async () => MOCK_EVENTS);
+    mockGetConversationById.mockImplementationOnce(async () => ({
+      id: 'conv-uuid-1',
+      platform_conversation_id: 'web-conv-abc',
+    }));
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-1');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { pending_interactions: unknown };
+    expect(body.pending_interactions).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: GET /api/workflows/runs/:runId/nodes/:nodeId/messages
+// ---------------------------------------------------------------------------
+
+describe('GET /api/workflows/runs/:runId/nodes/:nodeId/messages', () => {
+  beforeEach(() => {
+    mockGetWorkflowRun.mockReset();
+    mockListNodeMessages.mockReset();
+    mockApiLogError.mockReset();
+    mockListNodeMessages.mockImplementation(async () => []);
+  });
+
+  test('returns 404 for a missing run without listing messages', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => null);
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/unknown-run-id/nodes/plan/messages');
+    expect(response.status).toBe(404);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('not found');
+    expect(mockListNodeMessages).not.toHaveBeenCalled();
+  });
+
+  test('returns an empty messages array for an existing run with no rows', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_RUNNING_RUN);
+    mockListNodeMessages.mockImplementationOnce(async () => []);
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-1/nodes/plan/messages');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { messages: unknown[] };
+    expect(body).toEqual({ messages: [] });
+    expect(mockListNodeMessages).toHaveBeenCalledTimes(1);
+    expect(mockListNodeMessages.mock.calls[0]).toEqual(['run-uuid-1', 'plan']);
+  });
+
+  test('returns literal text, tool, and status rows in DB sequence without identity columns', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_RUNNING_RUN);
+    mockListNodeMessages.mockImplementationOnce(async () => [
+      {
+        id: 'msg-text',
+        workflow_run_id: 'run-uuid-1',
+        node_id: 'plan',
+        seq: 1,
+        kind: 'text',
+        payload: { text: 'hello' },
+        created_at: '2026-01-01T00:00:00.000Z',
+      },
+      {
+        id: 'msg-tool',
+        workflow_run_id: 'run-uuid-1',
+        node_id: 'plan',
+        seq: 2,
+        kind: 'tool',
+        payload: { name: 'Read', id: 'tool-1', input: { path: 'a.ts' } },
+        created_at: '2026-01-01T00:00:01.000Z',
+      },
+      {
+        id: 'msg-status',
+        workflow_run_id: 'run-uuid-1',
+        node_id: 'plan',
+        seq: 3,
+        kind: 'status',
+        payload: { state: 'completed' },
+        created_at: '2026-01-01T00:00:02.000Z',
+      },
+    ]);
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-1/nodes/plan/messages');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      messages: Array<Record<string, unknown>>;
+    };
+    expect(body.messages).toEqual([
+      {
+        id: 'msg-text',
+        seq: 1,
+        kind: 'text',
+        payload: { text: 'hello' },
+        created_at: '2026-01-01T00:00:00.000Z',
+      },
+      {
+        id: 'msg-tool',
+        seq: 2,
+        kind: 'tool',
+        payload: { name: 'Read', id: 'tool-1', input: { path: 'a.ts' } },
+        created_at: '2026-01-01T00:00:01.000Z',
+      },
+      {
+        id: 'msg-status',
+        seq: 3,
+        kind: 'status',
+        payload: { state: 'completed' },
+        created_at: '2026-01-01T00:00:02.000Z',
+      },
+    ]);
+    expect(body.messages.every(row => !('workflow_run_id' in row))).toBe(true);
+    expect(body.messages.every(row => !('node_id' in row))).toBe(true);
+  });
+
+  test('converts Date created_at to ISO while leaving string timestamps unchanged', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_RUNNING_RUN);
+    mockListNodeMessages.mockImplementationOnce(async () => [
+      {
+        id: 'msg-date',
+        workflow_run_id: 'run-uuid-1',
+        node_id: 'plan',
+        seq: 1,
+        kind: 'text',
+        payload: { text: 'from-date' },
+        created_at: new Date('2026-03-04T05:06:07.000Z'),
+      },
+      {
+        id: 'msg-string',
+        workflow_run_id: 'run-uuid-1',
+        node_id: 'plan',
+        seq: 2,
+        kind: 'text',
+        payload: { text: 'from-string' },
+        created_at: '2026-03-04T05:06:08.000Z',
+      },
+    ]);
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-1/nodes/plan/messages');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      messages: Array<{ created_at: string }>;
+    };
+    expect(body.messages.map(row => row.created_at)).toEqual([
+      '2026-03-04T05:06:07.000Z',
+      '2026-03-04T05:06:08.000Z',
+    ]);
+  });
+
+  test('returns a safe 500 without embedding transcript payload or error text', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_RUNNING_RUN);
+    mockListNodeMessages.mockImplementationOnce(async () => {
+      throw new Error('DO_NOT_LOG transcript payload {"text":"secret-row"}');
+    });
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-1/nodes/plan/messages');
+    expect(response.status).toBe(500);
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body).toEqual({ error: 'Failed to list workflow node messages' });
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain('DO_NOT_LOG');
+    expect(serialized).not.toContain('secret-row');
+
+    const listFailed = mockApiLogError.mock.calls.find(
+      call => call[1] === 'workflow_node_messages_list_failed'
+    );
+    expect(listFailed).toBeDefined();
+    expect(listFailed?.[0]).toEqual({
+      runId: 'run-uuid-1',
+      nodeId: 'plan',
+      errorType: 'Error',
+    });
+    const logged = JSON.stringify(listFailed);
+    expect(logged).not.toContain('DO_NOT_LOG');
+    expect(logged).not.toContain('secret-row');
+  });
+
+  test('OpenAPI documents the nested messages path and required pending_interactions', async () => {
+    const { app } = makeApp();
+    const document = app.getOpenAPIDocument({
+      openapi: '3.0.0',
+      info: { title: 'test', version: '0' },
+    });
+
+    const pathItem = document.paths?.['/api/workflows/runs/{runId}/nodes/{nodeId}/messages'];
+    expect(pathItem?.get).toBeDefined();
+    const okSchema = pathItem?.get?.responses?.['200']?.content?.['application/json']?.schema as
+      | { $ref?: string }
+      | undefined;
+    expect(okSchema?.$ref).toBe('#/components/schemas/WorkflowNodeMessagesResponse');
+    expect(pathItem?.get?.responses?.['404']).toBeDefined();
+    expect(pathItem?.get?.responses?.['500']).toBeDefined();
+
+    const detail = document.components?.schemas?.WorkflowRunDetail as
+      | {
+          required?: string[];
+          properties?: {
+            pending_interactions?: { items?: { $ref?: string }; type?: string };
+          };
+        }
+      | undefined;
+    expect(detail?.required).toContain('pending_interactions');
+    expect(detail?.properties?.pending_interactions?.items?.$ref).toBe(
+      '#/components/schemas/PendingInteraction'
+    );
   });
 });
 

@@ -152,6 +152,12 @@ mock.module('../db/workflow-node-sessions', () => ({
   setWorkflowNodeSession: mock(() => Promise.resolve()),
   deleteWorkflowNodeSessions: mock(() => Promise.resolve()),
 }));
+const mockAppendNodeMessage = mock(() => Promise.resolve({ id: 'msg-1' }));
+const mockListNodeMessages = mock(() => Promise.resolve([]));
+mock.module('../db/workflow-node-messages', () => ({
+  appendNodeMessage: mockAppendNodeMessage,
+  listNodeMessages: mockListNodeMessages,
+}));
 
 class TestTransformError extends Error {
   readonly code: string;
@@ -311,10 +317,51 @@ describe('createWorkflowStore', () => {
       'getLatestWorkflowNodeCheckpoint',
       'getCodebase',
       'getCodebaseEnvVars',
+      'appendNodeMessage',
+      'listNodeMessages',
     ];
     for (const method of requiredMethods) {
       expect(typeof store[method]).toBe('function');
     }
+  });
+
+  test('delegates appendNodeMessage to DB and returns the result', async () => {
+    const input = {
+      workflow_run_id: 'run-1',
+      node_id: 'review',
+      kind: 'text' as const,
+      payload: { text: 'hello' },
+    };
+    const row = {
+      ...input,
+      id: 'msg-1',
+      seq: 1,
+      created_at: '2026-09-06T00:00:00.000Z',
+    };
+    mockAppendNodeMessage.mockResolvedValueOnce(row);
+    const store = createWorkflowStore();
+    const result = await store.appendNodeMessage(input);
+    expect(mockAppendNodeMessage).toHaveBeenCalledWith(input);
+    expect(result).toEqual(row);
+  });
+
+  test('delegates listNodeMessages to DB and returns the result', async () => {
+    const rows = [
+      {
+        id: 'msg-1',
+        workflow_run_id: 'run-1',
+        node_id: 'review',
+        seq: 1,
+        kind: 'text' as const,
+        payload: { text: 'hello' },
+        created_at: '2026-09-06T00:00:00.000Z',
+      },
+    ];
+    mockListNodeMessages.mockResolvedValueOnce(rows);
+    const store = createWorkflowStore();
+    const result = await store.listNodeMessages('run-1', 'review');
+    expect(mockListNodeMessages).toHaveBeenCalledWith('run-1', 'review');
+    expect(result).toEqual(rows);
   });
 
   test('delegates getWorkflowRunStatus to DB and returns typed status', async () => {

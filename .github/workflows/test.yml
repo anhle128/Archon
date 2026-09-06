@@ -50,7 +50,14 @@ jobs:
       - name: Type check
         run: bun run type-check
 
+      # Type-aware eslint (projectService + typescript-eslint type-checked
+      # configs) exceeds Node's ~4GB default heap on a cold cache. Both GHA
+      # runners abort with V8 OOM at ~4030–4040 MB (exit 134). 8GB matches the
+      # heap that local `bun run validate` already needs; --max-warnings 0 is
+      # unchanged.
       - name: Lint
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: bun run lint --max-warnings 0
 
       - name: Check formatting

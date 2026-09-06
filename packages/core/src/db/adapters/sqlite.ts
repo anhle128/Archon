@@ -1073,6 +1073,19 @@ export class SqliteAdapter implements IDatabase {
       );
       CREATE INDEX IF NOT EXISTS idx_workflow_envs_workflow_name
         ON remote_agent_workflow_envs(workflow_name);
+
+      -- Workflow node messages (per-node transcript)
+      CREATE TABLE IF NOT EXISTS remote_agent_workflow_node_messages (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        workflow_run_id TEXT NOT NULL REFERENCES remote_agent_workflow_runs(id) ON DELETE CASCADE,
+        node_id TEXT NOT NULL,
+        seq INTEGER NOT NULL CHECK (seq >= 1),
+        kind TEXT NOT NULL CHECK (kind IN ('text', 'tool', 'status')),
+        payload TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        CONSTRAINT uq_workflow_node_messages_run_node_seq
+          UNIQUE (workflow_run_id, node_id, seq)
+      );
     `);
     getLog().info('db.sqlite_schema_initialized');
   }

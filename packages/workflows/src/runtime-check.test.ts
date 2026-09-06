@@ -9,6 +9,22 @@ const mockExecFileAsync = mock(
 );
 
 mock.module('@archon/git', () => ({
+  fileAt: mock(async () => ({
+    path: 'x.ts',
+    bytes: new Uint8Array(),
+    binary: false,
+    contentHash: '0'.repeat(64),
+  })),
+  fileDiff: mock(async () => ({
+    path: 'x.ts',
+    status: 'M' as const,
+    scope: 'now' as const,
+    ref: 'live' as const,
+    hunks: [],
+    cursor: '' as const,
+    truncated: false as const,
+    binary: false,
+  })),
   execFileAsync: mockExecFileAsync,
   changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
   isGitWorkTree: mock(async () => false),

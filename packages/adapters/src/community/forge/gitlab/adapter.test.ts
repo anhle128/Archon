@@ -91,6 +91,22 @@ mock.module('@archon/core', () => ({
 
 // Mock @archon/git
 mock.module('@archon/git', () => ({
+  fileAt: mock(async () => ({
+    path: 'x.ts',
+    bytes: new Uint8Array(),
+    binary: false,
+    contentHash: '0'.repeat(64),
+  })),
+  fileDiff: mock(async () => ({
+    path: 'x.ts',
+    status: 'M' as const,
+    scope: 'now' as const,
+    ref: 'live' as const,
+    hunks: [],
+    cursor: '' as const,
+    truncated: false as const,
+    binary: false,
+  })),
   cloneRepository: mock(async () => ({ ok: true })),
   syncRepository: mock(async () => ({ ok: true })),
   addSafeDirectory: mock(async () => undefined),

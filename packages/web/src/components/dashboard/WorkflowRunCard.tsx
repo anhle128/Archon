@@ -18,6 +18,7 @@ import {
   Pause,
 } from 'lucide-react';
 import type { DashboardRunResponse } from '@/lib/api';
+import { getPlannotatorReviewUrl } from '@/lib/approval-context';
 import { cn } from '@/lib/utils';
 import { ideUri } from '@/lib/ide-uri';
 import { formatDuration } from '@/lib/format';
@@ -115,23 +116,6 @@ function isValidNodeCounts(value: unknown): value is NodeCounts {
   );
 }
 
-function getPlannotatorReviewUrl(run: DashboardRunResponse): string | null {
-  if (run.status !== 'paused') return null;
-
-  const approval = run.metadata.approval;
-  if (typeof approval !== 'object' || approval === null) return null;
-
-  const { type, reviewUrl } = approval as Record<string, unknown>;
-  if (type !== 'plannotator_gate' || typeof reviewUrl !== 'string') return null;
-
-  try {
-    const url = new URL(reviewUrl);
-    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null;
-  } catch {
-    return null;
-  }
-}
-
 function NodeCountsSummary({ counts }: { counts: NodeCounts }): React.ReactElement {
   const hasFailures = counts.failed > 0 || counts.skipped > 0;
   return (
@@ -190,7 +174,10 @@ export function WorkflowRunCard({
       ? run.user_message
       : run.user_message.slice(0, 80) + '…'
     : null;
-  const plannotatorReviewUrl = getPlannotatorReviewUrl(run);
+  const plannotatorReviewUrl = getPlannotatorReviewUrl({
+    status: run.status,
+    approval: run.metadata.approval,
+  });
 
   return (
     <div className="rounded-lg border border-border bg-surface p-4 space-y-3">

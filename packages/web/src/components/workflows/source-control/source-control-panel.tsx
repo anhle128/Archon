@@ -1,7 +1,11 @@
-import { useEffect, useState, type KeyboardEvent, type ReactElement } from 'react';
+import { useEffect, useState, type ReactElement, type Ref } from 'react';
 
-import { ChangedFileRow } from './changed-file-row';
+import type { GitChangedFile } from '@/lib/api';
+
+import { ChangedFilesList } from './changed-files-list';
 import type { SourceControlSnapshot } from './source-control-state';
+
+export { nextChangedFileIndex } from './changed-files-list';
 
 export type SourceControlLoadState = 'idle' | 'loading' | 'error';
 
@@ -11,15 +15,11 @@ export interface SourceControlPanelProps {
   stale: boolean;
   onReload: () => void;
   onAcceptPending: () => void;
-}
-
-export function nextChangedFileIndex(key: string, currentIndex: number, fileCount: number): number {
-  if (fileCount <= 0) return 0;
-  if (key === 'ArrowDown') return Math.min(fileCount - 1, currentIndex + 1);
-  if (key === 'ArrowUp') return Math.max(0, currentIndex - 1);
-  if (key === 'Home') return 0;
-  if (key === 'End') return fileCount - 1;
-  return Math.min(fileCount - 1, Math.max(0, currentIndex));
+  onOpenFile?: (file: GitChangedFile) => void;
+  selectedPath?: string | null;
+  ariaLabel?: string;
+  idPrefix?: string;
+  listRef?: Ref<HTMLDivElement | null>;
 }
 
 export function SourceControlPanel(props: SourceControlPanelProps): ReactElement {
@@ -61,20 +61,6 @@ export function SourceControlPanel(props: SourceControlPanelProps): ReactElement
       </div>
     );
   }
-
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
-    if (
-      event.key === 'ArrowDown' ||
-      event.key === 'ArrowUp' ||
-      event.key === 'Home' ||
-      event.key === 'End' ||
-      event.key === 'Enter' ||
-      event.key === ' '
-    ) {
-      event.preventDefault();
-    }
-    setActiveIndex(nextChangedFileIndex(event.key, clampedActiveIndex, files.length));
-  };
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -118,23 +104,18 @@ export function SourceControlPanel(props: SourceControlPanelProps): ReactElement
       ) : null}
 
       {files.length > 0 ? (
-        <div
-          role="listbox"
-          aria-label="Uncommitted changes"
-          aria-activedescendant={`sc-file-${String(clampedActiveIndex)}`}
-          tabIndex={0}
-          onKeyDown={onKeyDown}
-          className="min-h-0 flex-1 overflow-auto p-2"
-        >
-          {files.map((file, index) => (
-            <ChangedFileRow
-              key={`${file.status}:${file.path}`}
-              id={`sc-file-${String(index)}`}
-              file={file}
-              active={index === clampedActiveIndex}
-            />
-          ))}
-        </div>
+        <ChangedFilesList
+          files={files}
+          activeIndex={clampedActiveIndex}
+          onActiveIndexChange={(index: number): void => {
+            setActiveIndex(index);
+          }}
+          selectedPath={props.selectedPath}
+          onOpenFile={props.onOpenFile}
+          ariaLabel={props.ariaLabel}
+          idPrefix={props.idPrefix}
+          listRef={props.listRef}
+        />
       ) : null}
     </div>
   );

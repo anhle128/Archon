@@ -1484,7 +1484,7 @@ describe('SqliteAdapter', () => {
      * suite stayed green. Adjust when the schema legitimately changes size —
      * the failure names the count, so the intended value is never a guess.
      */
-    const MIN_NON_AUTH_COLUMNS = 162;
+    const MIN_NON_AUTH_COLUMNS = 169;
 
     /**
      * Archon table names declared by the Postgres migration. Body-independent
@@ -1692,6 +1692,17 @@ describe('SqliteAdapter', () => {
       db = createTestDb();
       expect(raw_pragma(currentDbPath, 'remote_agent_workflow_runs')).toContain('output_root');
       expect(getSchemaSQL()).toContain('output_root');
+    });
+
+    test('workflow node messages table mirrors the Postgres contract', async () => {
+      db = createTestDb();
+      expect(raw_pragma(currentDbPath, 'remote_agent_workflow_node_messages').sort()).toEqual(
+        ['created_at', 'id', 'kind', 'node_id', 'payload', 'seq', 'workflow_run_id'].sort()
+      );
+      const indexes = raw_indexes(currentDbPath);
+      expect(indexes.some(name => name.includes('workflow_node_messages'))).toBe(true);
+      expect(getSchemaSQL()).toContain('uq_workflow_node_messages_run_node_seq');
+      expect(getSchemaSQL()).toContain('ON DELETE CASCADE');
     });
   });
 

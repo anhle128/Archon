@@ -20,7 +20,7 @@ import { BUNDLED_SCHEMA_SQL } from './bundled-schema.generated';
 
 describe('provider binding bundled schema marker (Story 3.1)', () => {
   test('getSchemaSQL() (source-build disk read) contains the new table', () => {
-    const sql = getSchemaSQL();
+    const sql = getSchemaSQL().replace(/\r\n/g, '\n');
     expect(sql).toContain('CREATE TABLE IF NOT EXISTS remote_agent_workflow_provider_bindings');
     expect(sql).toContain('transform        TEXT');
     expect(sql).toContain("delivery_headers TEXT NOT NULL DEFAULT '{}'");
@@ -49,7 +49,7 @@ describe('provider binding bundled schema marker (Story 3.1)', () => {
 
 describe('workflow event outbox bundled schema marker (Story 3.5)', () => {
   test('getSchemaSQL() (source-build disk read) contains the outbox tables and private signing secret column', () => {
-    const sql = getSchemaSQL();
+    const sql = getSchemaSQL().replace(/\r\n/g, '\n');
     expect(sql).toContain("event_types     TEXT NOT NULL DEFAULT '[]'");
     expect(sql).toContain('signing_secret  TEXT');
     expect(sql).toContain('CREATE TABLE IF NOT EXISTS remote_agent_workflow_event_outbox');

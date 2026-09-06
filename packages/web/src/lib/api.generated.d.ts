@@ -2606,6 +2606,131 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/workflows/runs/{runId}/git/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read a run's Now git hunks for a modified file */
+        get: {
+            parameters: {
+                query: {
+                    path: string;
+                    cursor?: string;
+                };
+                header?: never;
+                path: {
+                    runId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Ready Now hunks or a CAP-6 empty envelope */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["GitDiffResponse"];
+                    };
+                };
+                /** @description Invalid file path */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Workflow run or file not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Git read failed */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workflows/runs/{runId}/nodes/{nodeId}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List one workflow node transcript */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    runId: string;
+                    nodeId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Workflow node transcript in sequence order */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkflowNodeMessagesResponse"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Server error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/usage": {
         parameters: {
             query?: never;
@@ -4630,6 +4755,41 @@ export interface components {
         WorkflowRunByWorkerResponse: {
             run: components["schemas"]["WorkflowRun"];
         };
+        WorkflowNodeMessagesResponse: {
+            messages: components["schemas"]["WorkflowNodeMessage"][];
+        };
+        WorkflowNodeMessage: {
+            /** @enum {string} */
+            kind: "text";
+            payload: {
+                text: string;
+            };
+            id: string;
+            seq: number;
+            created_at: string;
+        } | {
+            /** @enum {string} */
+            kind: "tool";
+            payload: {
+                name: string;
+                id: string;
+                input?: unknown;
+                output?: unknown;
+            };
+            id: string;
+            seq: number;
+            created_at: string;
+        } | {
+            /** @enum {string} */
+            kind: "status";
+            payload: {
+                state: string;
+                detail?: string;
+            };
+            id: string;
+            seq: number;
+            created_at: string;
+        };
         WorkflowRunDetail: {
             run: components["schemas"]["WorkflowRun"] & {
                 worker_platform_id?: string;
@@ -4638,6 +4798,7 @@ export interface components {
             };
             events: components["schemas"]["WorkflowEvent"][];
             nodeStates: components["schemas"]["WorkflowNodeState"][];
+            pending_interactions: components["schemas"]["PendingInteraction"][];
             usage: components["schemas"]["NullableUsageReport"];
         };
         WorkflowEvent: {
@@ -4702,6 +4863,26 @@ export interface components {
                 /** @enum {string} */
                 type: "disabled";
             };
+        };
+        PendingInteraction: {
+            id: string;
+            workflow_run_id: string;
+            node_id: string;
+            tool_use_id: string;
+            /** @enum {string} */
+            kind: "ask" | "permission";
+            /** @enum {string} */
+            status: "pending" | "answered" | "purged";
+            envelope: {
+                [key: string]: unknown;
+            };
+            answer: {
+                [key: string]: unknown;
+            } | null;
+            provider_session_id: string;
+            created_at: string;
+            resolved_at: string | null;
+            resolved_by: string | null;
         };
         NullableUsageReport: {
             scope: {
@@ -4795,6 +4976,45 @@ export interface components {
         GitChangedFileStatus: "M" | "A" | "D";
         /** @enum {string} */
         GitEmptyReason: "container" | "no_checkout";
+        GitDiffResponse: {
+            path: string;
+            /** @enum {string} */
+            status: "M";
+            /** @enum {string} */
+            scope: "now" | "commit";
+            ref: string;
+            hunks: components["schemas"]["GitDiffHunk"][];
+            cursor: string;
+            truncated: boolean;
+            binary: boolean;
+        } | {
+            emptyReason: components["schemas"]["GitEmptyReason"];
+        };
+        GitDiffHunk: {
+            oldStart: number;
+            oldLines: number;
+            newStart: number;
+            newLines: number;
+            header: string;
+            changes: components["schemas"]["GitDiffChange"][];
+        };
+        GitDiffChange: {
+            /** @enum {string} */
+            type: "normal";
+            content: string;
+            oldLine: number;
+            newLine: number;
+        } | {
+            /** @enum {string} */
+            type: "insert";
+            content: string;
+            newLine: number;
+        } | {
+            /** @enum {string} */
+            type: "delete";
+            content: string;
+            oldLine: number;
+        };
         UsageReport: {
             scope: {
                 from: string | null;
