@@ -1,173 +1,264 @@
-# Inspect a Run as Nodes on Command Center Implementation Plan
+# Feature Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task by task.
-> Track progress with the checkbox steps below.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task.
+> Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Give `/console` the same inspect contract as legacy Stories 5.1–5.4: unmerged node-run Logs, a graph that calls `packages/web/src/lib/run-graph` `layout()`, per-type rooms, and a node-status click that opens that room, all in console's own shell and without AskHuman chrome.
+**Goal:** Make the experimental console run detail an inspect-first command center where the chronological Log and node-centric Graph open one persistent, type-aware node room, without adding Epic 6 human-input controls.
 
-**Architecture:** Keep Command Center log-first.
-StreamToolbar stays `Log | Graph | Artifacts`.
-Log and Graph share one right-hand console-owned room.
-Do not add a Chat tab.
-Do not import legacy React or `@/lib/api` functions.
-Duplicate the inspect kernel under `packages/web/src/experiments/console/inspect/`.
-The only production-web runtime import is `layout` plus types from `@/lib/run-graph`.
-Type-only imports from `@/lib/api.generated` remain allowed.
+**Architecture:** Keep console production code isolated under `packages/web/src/experiments/console/**`, consume only generated API types plus the sanctioned `@/lib/run-graph` geometry library, and project the server's run detail into one inspect model shared by Log, Graph, and the room.
+The page owns URL-backed node selection and the existing persisted Log filter, the inspect pane owns the workflow-definition query and persistent split layout, and the room owns agent-message polling only when an agent node is selected.
 
-**Tech Stack:** Bun, strict TypeScript, React 19, console `useEntity` cache, happy-dom, react-dom/client, react-dom/server, and bun:test.
+**Tech Stack:** Bun, TypeScript, React, React Router, Tailwind CSS, generated OpenAPI component types, `@/lib/run-graph`, Happy DOM, and `bun:test`.
 
-**Spec:** `_bmad-output/planning-artifacts/epics-workflow-run-view-hitl/epics.md`, Story 5.5, together with `_bmad-output/specs/spec-workflow-run-view-hitl/SPEC.md`, `_bmad-output/specs/spec-workflow-run-view-hitl/ux-design.md`, `_bmad-output/specs/spec-workflow-run-view-hitl/ux-mockup/console.html`, and `_bmad-output/planning-artifacts/architecture/architecture-Archon-2026-09-05/ARCHITECTURE-SPINE.md`.
+**Spec:** GitHub issue `#85`; `_bmad-output/specs/spec-workflow-run-view-hitl/SPEC.md`; `_bmad-output/planning-artifacts/epics-workflow-run-view-hitl/epics.md`, especially Story 5.5 and UX-DR1 through UX-DR7; `_bmad-output/specs/spec-workflow-run-view-hitl/ux-design.md`; and `_bmad-output/planning-artifacts/ux-design-workflow-run-view-hitl/README.md` plus `mockup.html`.
 
 ## Global Constraints
 
-- Story 5.5 implements FR1, FR2, FR3 timeline-and-status-click, FR8 console inspect, UX-DR1–UX-DR4, UX-DR7, and NFR4 only.
-- Ask cards, empty Ask slots, `awaiting` copy, and "waiting on you" remain Epic 6.
-- Console must not import `@/components`, `@/stores`, `@/contexts`, `@/routes`, `@/hooks`, `@tanstack/react-query`, or `@/lib/api` functions.
-- Console must not import any file under `packages/web/src/components/`.
-- The only sanctioned production-web runtime import is `@/lib/run-graph`.
-- Type-only `import type { components } from '@/lib/api.generated'` is allowed.
-- Unified render means the same envelope, states, validity, and copy, not a shared React NodePanel.
-- GET run `pending_interactions` must not be rendered.
-- Surfaces must not rebuild node lifecycle from raw events.
-- Use GET run `nodeStates` from `projectLatestEffectiveNodeStates`.
-- Agent rooms read `GET /api/workflows/runs/:runId/nodes/:nodeId/messages` only.
-- Bash and script rooms must not fetch node messages.
-- Existing design tokens and dependencies are sufficient.
-- Do not add a package.
-- All new and modified TypeScript remains strict, fully annotated, and free of `any`.
-- Every production behavior follows RED, GREEN, refactor, then a focused commit.
-- Run focused tests from `packages/web`.
-- Never run `bun test` from the repository root.
-- Console tests must not use `mock.module()`.
+- Preserve `StreamToolbar` as the Log node filter with its `All nodes` option because the approved UX explicitly says the toolbar is unchanged.
+- Keep the Log chronological and unmerged, with one selectable divider for every ordinary node run, loop iteration, and route decision.
+- Treat the Graph as an additional view and never replace or merge the Log.
+- Mount exactly one node-room component beside either Log or Graph so selection and transcript state survive a view switch.
+- Keep Artifacts full width and outside the node-room split layout.
+- Do not add an Ask card, input composer, pending-interaction slot, `node_awaiting` presentation, or “Waiting on you” chrome in this story.
+- Preserve tool messages in an agent transcript, including an `AskHuman` tool invocation if the server returned one, because Epic 6 will later replace that transcript item with an interactive card.
+- Render backend `awaiting` state as ordinary `running` inspect chrome until Epic 6 implements the interaction UI.
+- Use `GET /api/workflows/runs/:runId/nodes/:nodeId/messages` only for agent rooms and poll it every second only while the run is `running` or `paused`.
+- Do not import legacy React components, stores, contexts, routes, hooks, React Query, or runtime functions from `@/lib/api` into console production code.
+- The only allowed production-web runtime import for this feature is `@/lib/run-graph`; imports from `@/lib/api.generated` must remain type-only.
+- Do not introduce shared React components between the legacy and console shells.
+- Do not change server routes, generated API declarations, workflow YAML semantics, database schemas, or provider behavior.
+- Use complete TypeScript annotations and do not introduce `any`.
+- Do not use `mock.module()` in the new tests because its process-wide cache replacement is not restored by Bun.
+- Run focused tests from `packages/web`, and run the repository-wide suite only through `bun run validate` from the repository root.
+- Run every `git add` and `git commit` command from the repository root.
+- Keep every task independently reviewable and commit only the files named by that task.
 
----
+## Acceptance Criteria
 
-**Story authority:** `_bmad-output/planning-artifacts/epics-workflow-run-view-hitl/epics.md`, Story 5.5, FR1, FR2, FR3 (timeline), FR8, UX-DR1–UX-DR4, UX-DR7, NFR4.
+- AC1: A live or completed console run can show both `Log` and `Graph`, and switching between them does not close or remount the selected node room.
+- AC2: The Log remains chronological and unmerged, and every ordinary node run, loop iteration, and route decision has its own selectable row.
+- AC3: Clicking a Log row, Graph node, or node-status timeline entry resolves the same node selection and opens the correct room type.
+- AC4: Agent rooms show chronological text, tool entries with input and output, and status transitions from the node-messages endpoint.
+- AC5: Bash and script rooms show captured stdout and exit status; declared approval rooms show approval context and the existing approve/reject controls; workflow rooms link to the child run; route-loop rooms show route and controller data; loop-group rooms summarize child progress; and completed data remains replayable.
+- AC6: No Ask card, composer, pending-interaction slot, `awaiting` label, or waiting-on-you treatment is rendered by the console inspect implementation.
+- AC7: Console production code obeys NFR4 isolation, with generated types and `@/lib/run-graph` as the only stated exceptions.
+- AC8: Existing run lifecycle actions, SSE refresh, Log filtering, usage expansion, artifact browsing, approval actions, and environment display continue to work.
+- AC9: A run-status entry in the console chat timeline deep-links to `/console/p/:projectId/r/:runId?node=:nodeId` when a current or approval node is known.
+- AC10: Focused console tests and `bun run validate` pass before Story 5.5 and Epic 5 are marked done.
 
-**Approved design authority:** `_bmad-output/specs/spec-workflow-run-view-hitl/SPEC.md` CAP-1, CAP-2, and CAP-3 inspect slices, `_bmad-output/specs/spec-workflow-run-view-hitl/ux-design.md` Direction A plus Command Center surface fit, `_bmad-output/specs/spec-workflow-run-view-hitl/ux-mockup/console.html`, `_bmad-output/specs/spec-workflow-run-view-hitl/ux-mockup/console-app.js`, `_bmad-output/planning-artifacts/architecture/architecture-Archon-2026-09-05/ARCHITECTURE-SPINE.md` AD-3, AD-4, and AD-7 reads, and `_bmad-output/specs/spec-workflow-run-view-hitl/brownfield.md` console isolation.
+## Specification Traceability
 
-**Issue:** https://github.com/anhle128/Archon/issues/85
+| Requirement | Planned proof |
+| --- | --- |
+| FR1 and UX-DR1, unmerged Log plus Graph | Tasks 3, 6, 7, and 8 |
+| FR2 and UX-DR4, type-aware rooms | Tasks 2, 4, and 5 |
+| FR3 and UX-DR7, timeline status opens room | Tasks 4, 5, 10, and 11 |
+| FR8 and UX-DR3, thin shell-specific renderers | Tasks 5 and 9 |
+| FR11, messages and projected node states | Tasks 1, 3, and 5 |
+| NFR4, console isolation | Task 11 |
+| Story 5.5 replay and no premature HITL | Tasks 5, 10, and 11 |
+| Regression safety and completion evidence | Task 12 |
 
-## Scope and Non-Goals
+## File Structure
 
-- Implement only Story 5.5 on Command Center `/console/p/:projectId/r/:runId`.
-- Keep legacy `WorkflowExecution` inspect from Stories 5.1–5.4 unchanged.
-- Show unmerged Logs where each loop or `route_loop` iteration is its own row.
-- Show a graph that calls `layout()` from `@/lib/run-graph`.
-- Keep Logs.
-- Treat the graph as additional, not a replacement.
-- Clicking a Logs divider, a graph node, or a `?node=` deep-link opens the same per-type room.
-- `command` / `prompt` / `loop` rooms render the GET messages timeline.
-- Other types match Story 5.2 chrome: stdout, declared gate, child-run link, route controller, loop-group container.
-- A completed agent node replays the same transcript.
-- Keep StreamToolbar as `Log | Graph | Artifacts`.
-- Do not add a Chat view to run detail.
-- Do not import `LegacyNodeRoom` or any other legacy React inspect component.
-- Do not extract a second shared `@/lib/*` inspect module.
-- Do not render Ask cards, empty Ask slots, or awaiting chrome.
-- Do not render `pending_interactions`.
-- Do not change the engine, database, API routes, workflow schemas, workflow YAML, provider behavior, CLI, chat orchestrator, or `manage_run`.
-- Do not regenerate `packages/web/src/lib/api.generated.d.ts`.
-- Do not add a frontend dependency.
-- Do not import dagre from the inspect graph path.
-- Artifacts tab behavior stays as today except it must not gain Ask chrome.
-- Keep the existing paused declared-gate `ApprovalPanel` on the Log column.
-- Also render declared-gate chrome inside the gate room.
-- Do not wire Reply or `ChatComposer` as an Ask path.
-- Sequential non-DAG runs are out of scope for this story.
-- Do not introduce the TypeScript `any` type.
-- Do not update sprint tracking until all focused and repository validation succeeds.
+### Create
 
-## Verified Repository Baseline
+- `packages/web/src/experiments/console/skills/runs.node-messages.test.ts` verifies the run-detail and node-message client contracts.
+- `packages/web/src/experiments/console/skills/workflows.dag-nodes.test.ts` verifies the workflow-definition node client contract.
+- `packages/web/src/experiments/console/components/inspect/read-approval-context.ts` performs the console-local, typed approval-context parse.
+- `packages/web/src/experiments/console/components/inspect/read-approval-context.test.ts` locks the parser's accepted and rejected shapes.
+- `packages/web/src/experiments/console/components/inspect/inspect-status.ts` contains the no-premature-HITL display policy.
+- `packages/web/src/experiments/console/components/inspect/inspect-status.test.ts` proves `awaiting` is presented as `running`.
+- `packages/web/src/experiments/console/components/inspect/build-log-rows.ts` produces ordinary, loop-iteration, and route-decision rows from projected and raw events.
+- `packages/web/src/experiments/console/components/inspect/build-log-rows.test.ts` characterizes row identity, order, status, and selection metadata.
+- `packages/web/src/experiments/console/components/inspect/synthesize-log-node-states.ts` adds only deterministic fallback states required for incomplete historical payloads.
+- `packages/web/src/experiments/console/components/inspect/synthesize-log-node-states.test.ts` characterizes fallback-state precedence.
+- `packages/web/src/experiments/console/components/inspect/build-console-log-entries.ts` joins selectable rows to existing divider metadata without duplicating node usage.
+- `packages/web/src/experiments/console/components/inspect/build-console-log-entries.test.ts` verifies timestamps, duration, and one-time usage placement.
+- `packages/web/src/experiments/console/components/inspect/resolve-room-kind.ts` maps a DAG node body to an inspect room kind.
+- `packages/web/src/experiments/console/components/inspect/resolve-room-kind.test.ts` covers every supported node body.
+- `packages/web/src/experiments/console/components/inspect/select-room-data.ts` extracts stdout, gate, child-run, route, and loop-group data from typed event payloads.
+- `packages/web/src/experiments/console/components/inspect/select-room-data.test.ts` proves deterministic selection and malformed-payload behavior.
+- `packages/web/src/experiments/console/components/inspect/select-node-room-messages.ts` orders node messages and slices a selected loop iteration without dropping generic tool history.
+- `packages/web/src/experiments/console/components/inspect/select-node-room-messages.test.ts` characterizes ordinary, route, closed-iteration, and open-iteration transcript selection.
+- `packages/web/src/experiments/console/components/inspect/console-inspect-selection.ts` parses deep links and resolves the initial and current inspect selection.
+- `packages/web/src/experiments/console/components/inspect/console-inspect-selection.test.ts` verifies deep-link, live-node, approval-node, and replay selection precedence.
+- `packages/web/src/experiments/console/components/ConsoleNodeRoom.tsx` renders the console-owned room shell and all room variants.
+- `packages/web/src/experiments/console/components/ConsoleNodeRoom.test.tsx` verifies room dispatch, polling policy, transcript order, and absence of Epic 6 UI.
+- `packages/web/src/experiments/console/components/graph/build-run-graph-input.ts` adapts generated DAG nodes and projected states to `@/lib/run-graph`.
+- `packages/web/src/experiments/console/components/graph/build-run-graph-input.test.ts` verifies status precedence and edge metadata.
+- `packages/web/src/experiments/console/components/graph/graph-viewport.ts` computes diagram bounds and fit scale.
+- `packages/web/src/experiments/console/components/graph/graph-viewport.test.ts` verifies empty, oversized, and undersized diagrams.
+- `packages/web/src/experiments/console/components/RunGraphPanel.test.tsx` verifies selection, arrows, labels, and viewport controls.
+- `packages/web/src/experiments/console/components/ConsoleInspectPane.tsx` owns the persistent Log-or-Graph plus room split layout.
+- `packages/web/src/experiments/console/components/ConsoleInspectPane.test.tsx` verifies a single room remains mounted across view switches.
+- `packages/web/src/experiments/console/components/console-run-href.ts` creates encoded run-detail deep links with optional node selection.
+- `packages/web/src/experiments/console/components/console-run-href.test.ts` verifies links with and without node ids.
+- `packages/web/src/experiments/console/test/install-happy-dom.ts` installs and restores a minimal DOM for the new mounted component suites.
+- `packages/web/src/experiments/console/console-isolation.test.ts` enforces NFR4 and the Story 5.5 no-premature-HITL boundary.
 
-- `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml:50-51` marks Story 5.4 done and Story 5.5 backlog.
-- Issue 85 requires the Story 5.5 acceptance criteria, focused test evidence, and the sprint-status transition before close.
-- `packages/web/src/experiments/console/ConsoleApp.tsx` mounts run detail at `p/:projectId/r/:runId`.
-- `packages/web/src/experiments/console/routes/RunDetailPage.tsx:132-133` uses exclusive `DetailView = 'log' | 'graph' | 'artifacts'`.
-- `packages/web/src/experiments/console/routes/RunDetailPage.tsx:401-481` renders merged `RunStream` on Log, dagre `RunGraphPanel` on Graph, and `ArtifactPanel` on Artifacts.
-- `packages/web/src/experiments/console/routes/RunDetailPage.tsx:463-470` currently switches to Log and scrolls `#node-transition-${nodeId}` on a graph click.
-- `packages/web/src/experiments/console/components/StreamToolbar.tsx:3` has no Chat tab.
-- `packages/web/src/experiments/console/components/RunStream.tsx:231` folds one divider per `nodeId` through `foldNodeRuns`.
-- `packages/web/src/experiments/console/primitives/event.ts:427-477` collapses iterations, which contradicts FR1.
-- `packages/web/src/experiments/console/components/RunGraphPanel.tsx:2-12,48-106` layouts with `@dagrejs/dagre` and does not import `@/lib/run-graph`.
-- `packages/web/src/experiments/console/skills/runs.ts:66-76` maps GET run through `toRun` and `toRunEvent` and drops `nodeStates` and raw events.
-- `packages/web/src/lib/api.generated.d.ts:4858-4867` already has `events`, `nodeStates`, and `pending_interactions` on `WorkflowRunDetail`.
-- Console has no `listNodeMessages` skill.
-- `packages/web/src/lib/api.ts:659-669` is the banned legacy client for the same messages route.
-- `packages/web/src/lib/run-graph/index.ts:1-13` exports `layout` and the layout types.
-- `packages/web/src/lib/run-graph/constants.ts:1-2` uses `NODE_WIDTH = 180` and `NODE_HEIGHT = 80`.
-- `eslint.config.mjs:116-154` bans console imports from production UI modules, `@/lib/api`, and `@tanstack/react-query`, and does not ban `@/lib/run-graph`.
-- `packages/web/src/experiments/console/README.md:38-40` restates isolation and omits the run-graph exception.
-- `packages/web/package.json:11` runs `NODE_ENV=development bun test src/experiments/console/` as part of the package test script.
+### Modify
 
-## Design Decisions
+- `packages/web/src/experiments/console/store/keys.ts` adds collision-safe cache keys for node messages and workflow DAG nodes.
+- `packages/web/src/experiments/console/skills/runs.ts` retains raw events, projected node states, and raw approval data and adds the node-message request.
+- `packages/web/src/experiments/console/skills/workflows.ts` exposes generated DAG nodes without weakening the existing graph client.
+- `packages/web/src/experiments/console/components/NodeDivider.tsx` makes the node identity/status region selectable without nesting its existing usage button.
+- `packages/web/src/experiments/console/components/NodeDivider.test.tsx` verifies selection, `aria-current`, and usage expansion.
+- `packages/web/src/experiments/console/components/RunStream.tsx` interleaves selectable log entries while preserving the existing node filter and message windows.
+- `packages/web/src/experiments/console/components/RunStream.test.tsx` verifies unmerged row rendering and filter behavior.
+- `packages/web/src/experiments/console/components/RunGraphPanel.tsx` becomes a shell-owned renderer over `@/lib/run-graph` with no internal API query or event projector.
+- `packages/web/src/experiments/console/routes/RunDetailPage.tsx` separates Log filtering from inspect selection, owns the `?node=` state, and hosts the inspect pane.
+- `packages/web/src/experiments/console/routes/RunDetailPage.test.tsx` keeps existing run-detail regressions and adds deep-link selection coverage.
+- `packages/web/src/experiments/console/components/ConsoleWorkflowResultCard.tsx` deep-links a chat timeline result entry to its current node when present.
+- `packages/web/src/experiments/console/components/WorkflowDock.tsx` deep-links running and paused status entries to the current or declared approval node.
+- `packages/web/src/experiments/console/README.md` documents the inspect boundary, sanctioned geometry import, and Epic 6 exclusion.
+- `eslint.config.mjs` updates the existing console-isolation comment to name `@/lib/run-graph` as the one runtime exception without weakening any rule.
+- `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml` marks Story 5.5 and Epic 5 done only after all validation passes.
 
-1. Keep Command Center log-first.
-Approved UX Surface Fit forbids a Chat tab on `/console`.
-The in-page node-status timeline is the unmerged Log divider list.
-The chat-surface analog is `?node=` on the run URL.
+## Task 1: Extend the Typed Console Data Boundary
 
-2. Duplicate the inspect kernel under `experiments/console/inspect/`.
-NFR4 allows only `run-graph` plus generated types.
-A second shared `@/lib` module would amend the constitution.
+**Files:**
 
-3. Use GET run `nodeStates` as lifecycle.
-Do not call `deriveNodeStatuses` or `foldNodeRuns` for inspect rows.
+- Create: `packages/web/src/experiments/console/skills/runs.node-messages.test.ts`
+- Create: `packages/web/src/experiments/console/skills/workflows.dag-nodes.test.ts`
+- Modify: `packages/web/src/experiments/console/store/keys.ts`
+- Modify: `packages/web/src/experiments/console/skills/runs.ts`
+- Modify: `packages/web/src/experiments/console/skills/workflows.ts`
 
-4. Keep raw `WorkflowEvent` rows beside the existing `RunEvent[]` stream.
-`toRunEvent` loses loop-iteration and route-iteration metadata that `buildLogRows` needs.
+**Consumes:** Generated `components['schemas']` declarations, the existing `requestJson` wrapper, and the current run and workflow endpoints.
 
-5. Graph clicks stay on Graph and open the room.
-Switching to Log would change the panel's meaning.
+**Produces:** `ConsoleRunDetail`, `WorkflowEvent`, `WorkflowNodeState`, `WorkflowNodeMessage`, `WorkflowNodeMessagesResponse`, `DagNode`, `listNodeMessages`, `getWorkflowDagNodes`, `K.nodeMessages`, and `K.workflowDagNodes`.
 
-6. The toolbar node control becomes a room selector, not a stream filter.
-All unmerged rows stay visible.
-The selected divider has `aria-current="true"`.
-
-7. Pass `awaiting` through to `layout()` so taken-path stays on-path.
-Map `awaiting` to the visible label `running` in inspect chrome so `expectNoAskHumanChrome` cannot see the word `awaiting`.
-
-8. Keep the existing Log-column declared-gate `ApprovalPanel`.
-Also render declared-gate chrome in the gate room.
-That preserves today's paused approve path while matching Story 5.2.
-
-9. Auto-select the running node, else the paused approval node, else the first log row.
-Honor `?node=` over auto-select.
-
-10. Size console graph cards at 180 by 80 so `layout()` routes align.
-Do not keep the 168 by 46 dagre box.
-
-## Authoritative Interfaces
-
-Use these generated aliases in every inspect module.
+- [ ] Write `runs.node-messages.test.ts` with a local `spyOn(globalThis, 'fetch')`, a unique run/node id per test, and cleanup that restores the spy.
+- [ ] Assert that `getRun('run/1')` requests `/api/workflows/runs/run%2F1`, returns `rawEvents`, `nodeStates`, and raw `approval`, while its existing `events`, `run`, and `usage` fields remain populated.
+- [ ] Assert that `listNodeMessages('run/1', 'node a')` requests `/api/workflows/runs/run%2F1/nodes/node%20a/messages` and returns `text`, `tool`, and `status` entries without reshaping them.
+- [ ] Assert that a non-2xx response from either request rejects through `requestJson` instead of returning an empty fallback.
+- [ ] Run `bun test src/experiments/console/skills/runs.node-messages.test.ts` from `packages/web` and confirm the new exports fail to resolve.
+- [ ] Add generated aliases and the expanded detail contract to `skills/runs.ts` with this exact shape.
 
 ```ts
-import type { components } from '@/lib/api.generated';
-
-export type DagNode = components['schemas']['DagNode'];
 export type WorkflowEvent = components['schemas']['WorkflowEvent'];
 export type WorkflowNodeState = components['schemas']['WorkflowNodeState'];
 export type WorkflowNodeMessage = components['schemas']['WorkflowNodeMessage'];
 export type WorkflowNodeMessagesResponse = components['schemas']['WorkflowNodeMessagesResponse'];
-```
 
-### Inspect status label
-
-Create `packages/web/src/experiments/console/inspect/inspect-status.ts`.
-
-```ts
-export type InspectChromeStatus = Exclude<WorkflowNodeState['status'], 'awaiting'>;
-
-export function inspectStatusLabel(status: WorkflowNodeState['status']): InspectChromeStatus {
-  return status === 'awaiting' ? 'running' : status;
+export interface ConsoleRunDetail {
+  run: Run;
+  events: RunEvent[];
+  rawEvents: WorkflowEvent[];
+  nodeStates: WorkflowNodeState[];
+  approval: unknown;
+  usage: RunDetailResponse['usage'];
 }
 ```
 
-Never render the strings `AskHuman`, `awaiting`, or `waiting-on-you` in inspect chrome.
+- [ ] Change `getRun` to return `Promise<ConsoleRunDetail>` while preserving the current `toRun(response.run)`, `response.events.map(toRunEvent)`, and nullable usage behavior.
+- [ ] Set `rawEvents` to the untouched `response.events`, set `nodeStates` to `response.nodeStates`, and set `approval` to `response.run.metadata.approval ?? null` before the existing presentation adapters run.
+- [ ] Add `listNodeMessages` as an encoded `requestJson<WorkflowNodeMessagesResponse>` call to the exact node-messages endpoint.
+- [ ] Add collision-safe keys whose segments are individually encoded.
 
-### Log rows
+```ts
+nodeMessages: (runId: string, nodeId: string): string =>
+  `run-node-messages:${encodeURIComponent(runId)}:${encodeURIComponent(nodeId)}`,
+workflowDagNodes: (cwd: string | undefined, workflowName: string): string =>
+  `workflow-dag-nodes:${encodeURIComponent(cwd ?? '')}:${encodeURIComponent(workflowName)}`,
+```
 
-Create `packages/web/src/experiments/console/inspect/build-log-rows.ts` with this exact contract, copied from `packages/web/src/components/workflows/build-log-rows.ts:9-143`.
+- [ ] Write `workflows.dag-nodes.test.ts` and assert that `getWorkflowDagNodes('deploy/workflow', '/repo path')` requests `/api/workflows?cwd=%2Frepo%20path`, finds the exact workflow name in the list response, and returns its generated `nodes` array unchanged.
+- [ ] Assert a missing exact workflow name rejects with `Workflow not found: deploy/workflow`, matching the existing graph-client behavior instead of returning an empty definition.
+- [ ] Run `bun test src/experiments/console/skills/workflows.dag-nodes.test.ts` from `packages/web` and confirm `getWorkflowDagNodes` is missing.
+- [ ] Import `components` type-only in `skills/workflows.ts`, export `type DagNode = components['schemas']['DagNode']`, type `RawWorkflow.nodes` as `DagNode[]`, and add `getWorkflowDagNodes(workflowName, cwd)` without changing `getWorkflowGraph`.
+- [ ] Run `bun test src/experiments/console/skills/runs.node-messages.test.ts src/experiments/console/skills/workflows.dag-nodes.test.ts` from `packages/web` and confirm all boundary tests pass.
+- [ ] Run `bun x prettier --write src/experiments/console/store/keys.ts src/experiments/console/skills/runs.ts src/experiments/console/skills/workflows.ts src/experiments/console/skills/runs.node-messages.test.ts src/experiments/console/skills/workflows.dag-nodes.test.ts` from `packages/web`.
+- [ ] Run `git add packages/web/src/experiments/console/store/keys.ts packages/web/src/experiments/console/skills/runs.ts packages/web/src/experiments/console/skills/workflows.ts packages/web/src/experiments/console/skills/runs.node-messages.test.ts packages/web/src/experiments/console/skills/workflows.dag-nodes.test.ts && git commit -m "feat(web): expose console run inspect data"` from the repository root.
+
+## Task 2: Establish Approval and Inspect-Status Policy
+
+**Files:**
+
+- Create: `packages/web/src/experiments/console/components/inspect/read-approval-context.ts`
+- Create: `packages/web/src/experiments/console/components/inspect/read-approval-context.test.ts`
+- Create: `packages/web/src/experiments/console/components/inspect/inspect-status.ts`
+- Create: `packages/web/src/experiments/console/components/inspect/inspect-status.test.ts`
+
+**Consumes:** `unknown` approval JSON, generated node-state strings, and the approved Epic 5 boundary.
+
+**Produces:** `ApprovalContext`, `readApprovalContext`, `getPlannotatorReviewUrl`, `inspectStatus`, `inspectStatusLabel`, and `isInspectRunLive`.
+
+- [ ] Write table-driven parser tests for `null`, arrays, missing `nodeId`, missing `message`, wrong scalar types, every accepted context type, child-run data, plannotator data, and resolved decisions.
+- [ ] Run `bun test src/experiments/console/components/inspect/read-approval-context.test.ts` from `packages/web` and confirm the module is missing.
+- [ ] Implement an object guard and this exact public contract without casts to `any`.
+
+```ts
+export type ApprovalContextType =
+  | 'approval'
+  | 'plannotator_gate'
+  | 'child_workflow'
+  | 'interactive_loop'
+  | 'writeback';
+
+export interface ApprovalContext {
+  nodeId: string;
+  message: string;
+  type?: ApprovalContextType;
+  childRunId?: string;
+  document?: string;
+  reviewUrl?: string | null;
+  resolved?: 'approved' | 'rejected' | null;
+}
+
+export function readApprovalContext(value: unknown): ApprovalContext | null;
+export function getPlannotatorReviewUrl(input: { status: string; approval: unknown }): string | null;
+```
+
+- [ ] Require string `nodeId` and `message`, allow only the five declared context types, retain only correctly typed optional fields, and return `null` for an invalid type or resolved value.
+- [ ] Accept plannotator review links only when the run is paused and the parsed URL uses `http:` or `https:`.
+- [ ] Write status tests proving `pending`, `running`, `completed`, `failed`, and `skipped` pass through, typed `awaiting` maps to `running`, arbitrary transcript status strings pass through except `awaiting`, and only `running` and `paused` runs are live for polling.
+- [ ] Run `bun test src/experiments/console/components/inspect/inspect-status.test.ts` from `packages/web` and confirm the module is missing.
+- [ ] Implement the exact status policy.
+
+```ts
+export type InspectStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+
+export function inspectStatus(value: string): InspectStatus {
+  if (value === 'awaiting') return 'running';
+  if (value === 'pending' || value === 'running' || value === 'completed' || value === 'failed' || value === 'skipped') return value;
+  return 'pending';
+}
+
+export function inspectStatusLabel(value: string): string {
+  return value === 'awaiting' ? 'running' : value;
+}
+
+export function isInspectRunLive(status: string): boolean {
+  return status === 'running' || status === 'paused';
+}
+```
+
+- [ ] Run `bun test src/experiments/console/components/inspect/read-approval-context.test.ts src/experiments/console/components/inspect/inspect-status.test.ts` from `packages/web` and confirm all tests pass.
+- [ ] Run `bun x prettier --write src/experiments/console/components/inspect/read-approval-context.ts src/experiments/console/components/inspect/read-approval-context.test.ts src/experiments/console/components/inspect/inspect-status.ts src/experiments/console/components/inspect/inspect-status.test.ts` from `packages/web`.
+- [ ] Run `git add packages/web/src/experiments/console/components/inspect/read-approval-context.ts packages/web/src/experiments/console/components/inspect/read-approval-context.test.ts packages/web/src/experiments/console/components/inspect/inspect-status.ts packages/web/src/experiments/console/components/inspect/inspect-status.test.ts && git commit -m "feat(web): define console inspect status policy"` from the repository root.
+
+## Task 3: Build the Unmerged Log Projection
+
+**Files:**
+
+- Create: `packages/web/src/experiments/console/components/inspect/build-log-rows.ts`
+- Create: `packages/web/src/experiments/console/components/inspect/build-log-rows.test.ts`
+- Create: `packages/web/src/experiments/console/components/inspect/synthesize-log-node-states.ts`
+- Create: `packages/web/src/experiments/console/components/inspect/synthesize-log-node-states.test.ts`
+- Create: `packages/web/src/experiments/console/components/inspect/build-console-log-entries.ts`
+- Create: `packages/web/src/experiments/console/components/inspect/build-console-log-entries.test.ts`
+
+**Consumes:** Generated `WorkflowEvent` and `WorkflowNodeState`, console `RunEvent`, existing `foldNodeRuns`, parsed approval context, and the existing `NodeRun` divider data.
+
+**Produces:** Stable `LogRow` identities, deterministic fallback states, and `ConsoleLogEntry` values that retain current duration and usage presentation.
+
+- [ ] Define tests for an ordinary node, two iterations of one loop node, two route decisions from one route-loop node, event-array ordering, and events with missing optional data.
+- [ ] Assert that iterations and route decisions remain separate rows and that their ids are the originating raw event ids.
+- [ ] Assert that the ordinary row for a loop or route-loop node is suppressed when specific iteration or route rows exist, so the Log does not double-count one execution.
+- [ ] Run `bun test src/experiments/console/components/inspect/build-log-rows.test.ts` from `packages/web` and confirm the module is missing.
+- [ ] Implement this exact row contract and sort by source event-array order, then projected-state index, because the API event array is the chronological audit order.
 
 ```ts
 export type LogRowSelection =
@@ -185,53 +276,77 @@ export interface LogRow {
   selection: LogRowSelection;
 }
 
-export function buildLogRows(
-  nodeStates: readonly WorkflowNodeState[],
-  events: readonly WorkflowEvent[]
-): LogRow[];
+export function buildLogRows(nodeStates: readonly WorkflowNodeState[], events: readonly WorkflowEvent[]): LogRow[];
 ```
 
-Rules:
-
-- Server `nodeStates` remain the lifecycle source.
-- Loop-iteration events with a safe integer `iteration >= 1` emit one row per iteration labelled `{name} ×{n}`.
-- `node_routed` events with a safe integer `execution_seq >= 1` emit one row per sequence labelled `{name} #{seq}`.
-- Otherwise emit one ordinary `{ kind: 'node' }` row whose id is the latest `node_started` event id, else the latest lifecycle event id, else `node:{nodeId}`.
-- Lifecycle event types are `node_started`, `node_completed`, `node_failed`, `node_skipped`, `node_skipped_prior_success`, and `approval_requested`.
-- Sort by `order` then `sourceIndex`.
-
-### Synthetic node states
-
-Create `packages/web/src/experiments/console/inspect/synthesize-log-node-states.ts` from `LegacyGraphLogsPane.tsx:107-137`.
+- [ ] Use explicit event-type branches for loop starts/completions/failures and `node_routed`; do not infer event intent from prose.
+- [ ] Group loop rows by positive safe-integer `data.iteration` and route rows by positive safe-integer `data.execution_seq`, preserving the first matching event's id and order while later events update loop status.
+- [ ] For an ordinary state, anchor to its last `node_started` event, otherwise its last node lifecycle or declared `approval_requested` event, otherwise use the fallback id `node:${state.nodeId}` after all event-backed rows.
+- [ ] Write fallback-state tests for missing loop-group projection, a paused declared approval, a paused child workflow, existing projected-state precedence, ordinary raw lifecycle events, and interactive-loop approval data.
+- [ ] Run `bun test src/experiments/console/components/inspect/synthesize-log-node-states.test.ts` from `packages/web` and confirm the module is missing.
+- [ ] Implement `synthesizeLogNodeStates(nodeStates, events, runStatus, approval)` so existing projected states always win and synthetic states are added only for missing node ids represented by loop-iteration metadata or a selectable declared pause.
+- [ ] Treat only `loop_iteration_started`, `loop_iteration_completed`, `loop_iteration_failed`, and `approval_requested` with `gateType` equal to `approval` or `plannotator_gate` as selectable synthetic events.
+- [ ] Resolve a synthetic event node id from non-empty `step_name` first and then a non-empty string `data.nodeId`, and ignore the event if neither exists.
+- [ ] Treat only approval context with absent type, `approval`, `plannotator_gate`, or `child_workflow` as a selectable paused fallback, and explicitly exclude `interactive_loop` and `writeback` from this Epic 5 projector.
+- [ ] Assert ordinary `node_started` or terminal raw events never create a second lifecycle projector because authoritative `nodeStates` owns ordinary status.
+- [ ] Write console-log-entry tests with existing `foldNodeRuns` fixtures and assert row timestamp, duration, cost, turns, stop reason, skip metadata, and one-time usage placement.
+- [ ] Run `bun test src/experiments/console/components/inspect/build-console-log-entries.test.ts` from `packages/web` and confirm the module is missing.
+- [ ] Implement this exact adapter contract.
 
 ```ts
-export function synthesizeLogNodeStates(input: {
-  nodeStates: readonly WorkflowNodeState[];
-  events: readonly WorkflowEvent[];
-  runStatus: 'running' | 'paused' | 'failed' | 'completed' | 'cancelled';
-  approval: unknown;
-}): readonly WorkflowNodeState[];
+export interface ConsoleLogEntry {
+  row: LogRow;
+  displayStatus: InspectStatus;
+  startedAt: string;
+  durationMs: number | null;
+  costUsd: number | null;
+  numTurns: number | null;
+  stopReason: string | null;
+  skipReason: string | null;
+  skipExpr: string | null;
+  showNodeUsage: boolean;
+}
+
+export interface BuildConsoleLogEntriesInput {
+  rows: readonly LogRow[];
+  rawEvents: readonly WorkflowEvent[];
+  nodeRuns: readonly NodeRun[];
+  runStartedAt: string;
+}
+
+export function buildConsoleLogEntries(input: BuildConsoleLogEntriesInput): ConsoleLogEntry[];
 ```
 
-Add a synthetic `{ nodeId, name: nodeId, status, retryEpoch: 0 }` when the projector has no row for:
+- [ ] For ordinary rows, use the matching folded node run for metadata and use the raw event timestamp before the folded start timestamp.
+- [ ] For loop rows, use the matching iteration start event and terminal event, and accept only finite non-negative numeric terminal duration.
+- [ ] For route rows, match `row.selection.executionSeq`, use the route event timestamp, and leave unavailable duration metadata null.
+- [ ] Set `showNodeUsage` only on the final chronological row for a node id so cumulative ledger data appears once even when a node has multiple rows.
+- [ ] Use `runStartedAt` only as the final timestamp fallback so every divider has a stable timeline anchor.
+- [ ] Run `bun test src/experiments/console/components/inspect/build-log-rows.test.ts src/experiments/console/components/inspect/synthesize-log-node-states.test.ts src/experiments/console/components/inspect/build-console-log-entries.test.ts` from `packages/web` and confirm all projection tests pass.
+- [ ] Run `bun x prettier --write src/experiments/console/components/inspect/build-log-rows.ts src/experiments/console/components/inspect/build-log-rows.test.ts src/experiments/console/components/inspect/synthesize-log-node-states.ts src/experiments/console/components/inspect/synthesize-log-node-states.test.ts src/experiments/console/components/inspect/build-console-log-entries.ts src/experiments/console/components/inspect/build-console-log-entries.test.ts` from `packages/web`.
+- [ ] Run `git add packages/web/src/experiments/console/components/inspect/build-log-rows.ts packages/web/src/experiments/console/components/inspect/build-log-rows.test.ts packages/web/src/experiments/console/components/inspect/synthesize-log-node-states.ts packages/web/src/experiments/console/components/inspect/synthesize-log-node-states.test.ts packages/web/src/experiments/console/components/inspect/build-console-log-entries.ts packages/web/src/experiments/console/components/inspect/build-console-log-entries.test.ts && git commit -m "feat(web): project unmerged console run rows"` from the repository root.
 
-- `loop_iteration_*` events, using `running` / `completed` / `failed`
-- `approval_requested`, using `running`
-- a paused selectable approval context `nodeId`, using `running`
+## Task 4: Resolve Room Types, Data, and Selection
 
-Use the console copy of `readApprovalContext` described below.
-Do not synthesize from `node_awaiting`.
+**Files:**
 
-### Approval context
+- Create: `packages/web/src/experiments/console/components/inspect/resolve-room-kind.ts`
+- Create: `packages/web/src/experiments/console/components/inspect/resolve-room-kind.test.ts`
+- Create: `packages/web/src/experiments/console/components/inspect/select-room-data.ts`
+- Create: `packages/web/src/experiments/console/components/inspect/select-room-data.test.ts`
+- Create: `packages/web/src/experiments/console/components/inspect/select-node-room-messages.ts`
+- Create: `packages/web/src/experiments/console/components/inspect/select-node-room-messages.test.ts`
+- Create: `packages/web/src/experiments/console/components/inspect/console-inspect-selection.ts`
+- Create: `packages/web/src/experiments/console/components/inspect/console-inspect-selection.test.ts`
 
-Create `packages/web/src/experiments/console/inspect/read-approval-context.ts` as a local copy of `packages/web/src/lib/approval-context.ts`.
-Do not import `@/lib/approval-context`.
+**Consumes:** Generated `DagNode`, `WorkflowEvent`, and `WorkflowNodeState`, `LogRow`, parsed approval context, and `URLSearchParams`.
 
-Export `readApprovalContext` and `getPlannotatorReviewUrl` with the same shapes and URL protocol guard.
+**Produces:** Exhaustive room dispatch, deterministic per-room selectors, and URL/live/replay selection precedence.
 
-### Room kind
-
-Create `packages/web/src/experiments/console/inspect/resolve-room-kind.ts` from `packages/web/src/components/workflows/resolve-room-kind.ts`.
+- [ ] Write one room-kind test for each prompt or command agent body, bash, script, approval, plannotator, workflow, route-loop, loop-group, recursively qualified loop-group child, and unknown body.
+- [ ] Add definition-missing tests for approval metadata, child-workflow metadata, `node_routed`, bash/script lifecycle metadata, workflow lifecycle metadata, declared-gate events, and the safe agent fallback.
+- [ ] Run `bun test src/experiments/console/components/inspect/resolve-room-kind.test.ts` from `packages/web` and confirm the module is missing.
+- [ ] Implement the exact union and resolver.
 
 ```ts
 export type NodeBodyKind =
@@ -255,6 +370,7 @@ export interface RoomResolution {
   definitionNode: DagNode | null;
 }
 
+export function nodeBodyKind(node: DagNode): NodeBodyKind;
 export function resolveRoomKind(
   nodeId: string,
   definitionNodes: readonly DagNode[],
@@ -263,260 +379,348 @@ export function resolveRoomKind(
 ): RoomResolution;
 ```
 
-Definition-first `nodeBodyKind` order: `route_loop`, `loop_group`, `loop`, `plannotator_gate`, `approval`, `bash`, `script`, `workflow`, `command`, `prompt`, else `unknown`.
-Walk nested `loop_group.nodes` with qualified ids `prefix.id`.
-Fallback order when no definition node exists: matching approval `child_workflow` → workflow room; matching approval or plannotator gate → gate room; any `node_routed` for that id → route_loop; latest start/complete/fail with `data.type` bash or script → stdout; latest complete/fail with `data.type` workflow → workflow; latest `approval_requested` with `gateType` → gate; else agent / unknown.
-
-### Graph row
-
-Create `packages/web/src/experiments/console/inspect/resolve-graph-room-row.ts` from `packages/web/src/components/workflows/resolve-graph-room-row.ts:5-43`.
+- [ ] Identify node bodies by their schema keys rather than by parsing labels or prompts, recursively qualify loop-group children with dot-separated ids, and let definition data outrank metadata fallback.
+- [ ] Return an agent room with `nodeType: 'unknown'` only after approval and event fallbacks fail, so historical agent transcripts remain inspectable when a definition is unavailable.
+- [ ] Write selector tests for interleaved events from two nodes, two iterations of one loop, two route decisions, a workflow child run, a declared approval, and malformed payload objects.
+- [ ] Run `bun test src/experiments/console/components/inspect/select-room-data.test.ts` from `packages/web` and confirm the module is missing.
+- [ ] Implement explicit typed readers and these exports, returning `null` or an empty array when a required typed field is absent.
 
 ```ts
-export interface GraphRoomLiveStatus {
-  nodeId: string;
-  name: string;
-  status: WorkflowNodeState['status'];
+export interface StdoutView {
+  text: string | null;
+  status: LogRow['status'];
+  exitCode: 0 | null;
+  truncated: boolean;
+  originalBytes: number | null;
+  failedDetail: string | null;
 }
 
-export function resolveGraphRoomRow(input: {
-  rows: readonly LogRow[];
-  nodeId: string | null;
-  liveStatus: readonly GraphRoomLiveStatus[];
-}): LogRow | null;
-```
-
-Prefer the last ordinary `{ kind: 'node' }` row for that id, else the last matching row, else a synthetic `node:{nodeId}` row.
-
-### Room data
-
-Create `packages/web/src/experiments/console/inspect/select-room-data.ts` from `packages/web/src/components/workflows/select-room-data.ts` with the same exported view types and functions: `StdoutView`, `GateChrome`, `ChildRunRef`, `RouteDecisionView`, `LoopGroupChrome`, `selectNodeStdout`, `selectGateChrome`, `selectChildRun`, `selectRouteDecision`, and `selectLoopGroupChrome`.
-Replace `@/lib/api` imports with the generated aliases above.
-Replace `@/lib/approval-context` with the local inspect copy.
-
-### Transcript slice
-
-Create `packages/web/src/experiments/console/inspect/select-node-room-messages.ts` from `packages/web/src/components/workflows/NodeRoom.tsx:86-116`.
-
-```ts
-export function selectNodeRoomMessages(
-  messages: readonly WorkflowNodeMessage[],
-  selection: LogRowSelection
-): WorkflowNodeMessage[];
-```
-
-Sort by `seq`.
-For `loop_iteration`, slice from `status.payload.state === 'iteration_started'` with `detail === String(n)` through the matching completed or failed status, else the next `iteration_started`, else the remainder.
-Other selections return the full ordered list.
-
-### Graph input
-
-Create `packages/web/src/experiments/console/inspect/build-run-graph-input.ts` from `packages/web/src/components/workflows/build-run-graph-input.ts`.
-
-```ts
-import { layout, type LayoutEdge, type LayoutNode, type LayoutResult } from '@/lib/run-graph';
-
-export const ROUTE_LOOP_OUTCOMES = ['positive', 'negative', 'exhausted'] as const;
-
-export interface RunGraphInput {
-  nodes: LayoutNode[];
-  edges: LayoutEdge[];
+export interface GateChrome {
+  gateType: 'approval' | 'plannotator_gate';
+  message: string;
+  document: string | null;
+  decision: 'approved' | 'rejected' | null;
+  canDecide: boolean;
+  showInactiveNotice: boolean;
+  reviewUrl: string | null;
 }
 
-export function buildRunGraphInput(
-  dagNodes: readonly DagNode[],
-  liveStatus: readonly { nodeId: string; status: WorkflowNodeState['status'] }[]
-): RunGraphInput;
-
-export function layoutRunGraph(
-  dagNodes: readonly DagNode[],
-  liveStatus: readonly { nodeId: string; status: WorkflowNodeState['status'] }[]
-): LayoutResult {
-  return layout(buildRunGraphInput(dagNodes, liveStatus));
-}
-```
-
-Missing live status is `pending`.
-Pass `awaiting` through to `layout()` unchanged.
-Skip `depends_on` edges whose source already lists the target as a route-loop target.
-Conditional `when` edges are `kind: 'conditional'` with the `when` string as `label`.
-Route edges use reversed `ROUTE_LOOP_OUTCOMES` and unique ids when a base id already exists.
-
-Do not import `@/lib/api` `ROUTE_LOOP_OUTCOMES`.
-
-### Skills
-
-Update `packages/web/src/experiments/console/skills/runs.ts`.
-
-```ts
-export function nodeMessagesPath(runId: string, nodeId: string): string {
-  return (
-    '/api/workflows/runs/' +
-    encodeURIComponent(runId) +
-    '/nodes/' +
-    encodeURIComponent(nodeId) +
-    '/messages'
-  );
+export interface ChildRunRef {
+  childRunId: string | null;
+  fanOut: boolean;
+  output: string | null;
+  paused: boolean;
+  message: string | null;
+  status: LogRow['status'];
 }
 
-export async function listNodeMessages(
-  runId: string,
-  nodeId: string
-): Promise<WorkflowNodeMessagesResponse> {
-  return requestJson(nodeMessagesPath(runId, nodeId));
+export interface RouteDecisionView {
+  outcome: string | null;
+  to: string | null;
+  condition: string | null;
+  conditionResult: string | null;
+  attempt: string | null;
+  executionSeq: string | null;
+  negativeCount: string | null;
+  maxIterations: string | null;
 }
-```
 
-Change `getRun` to also return:
+export interface LoopGroupBodyNode {
+  id: string;
+  qualifiedId: string;
+  dependsOn: string[];
+}
 
-```ts
-{
-  run: Run;
-  events: RunEvent[];
-  rawEvents: WorkflowEvent[];
-  nodeStates: WorkflowNodeState[];
+export interface LoopGroupBodyState extends LoopGroupBodyNode {
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+}
+
+export interface LoopGroupIterationView {
+  iteration: number;
+  status: 'running' | 'completed' | 'failed';
+  body: LoopGroupBodyState[];
+}
+
+export interface LoopGroupChrome {
+  body: LoopGroupBodyNode[];
+  iterations: LoopGroupIterationView[];
+  selectedIteration: number | null;
+}
+
+export interface GateChromeInput {
+  definitionNode: DagNode | null;
+  events: readonly WorkflowEvent[];
+  row: LogRow;
   approval: unknown;
-  usage: RunDetailResponse['usage'];
+  runStatus: RunStatus;
+  gateType: 'approval' | 'plannotator_gate';
 }
+
+export interface ChildRunInput {
+  events: readonly WorkflowEvent[];
+  approval: unknown;
+  row: LogRow;
+  runStatus: RunStatus;
+}
+
+export interface LoopGroupChromeInput {
+  definitionNode: DagNode | null;
+  events: readonly WorkflowEvent[];
+  row: LogRow;
+}
+
+export function selectNodeStdout(events: readonly WorkflowEvent[], row: LogRow): StdoutView;
+export function selectGateChrome(input: GateChromeInput): GateChrome;
+export function selectChildRun(input: ChildRunInput): ChildRunRef;
+export function selectRouteDecision(events: readonly WorkflowEvent[], row: LogRow): RouteDecisionView | null;
+export function selectLoopGroupChrome(input: LoopGroupChromeInput): LoopGroupChrome;
 ```
 
-`events` remains `res.events.map(toRunEvent)` for `RunStream`.
-`rawEvents` is `res.events`.
-`nodeStates` is `res.nodeStates`.
-`approval` is `res.run.metadata?.approval ?? null`.
-If the generated `WorkflowRun` type does not expose `metadata`, read it from the same local raw run shape `toRun` already uses.
-Do not return or render `pending_interactions`.
-
-Add `getWorkflowDagNodes` to `packages/web/src/experiments/console/skills/workflows.ts`.
-Use `GET /api/workflows?cwd=` and filter by workflow name, matching `getWorkflowGraph`.
-Return `match.workflow.nodes ?? []` typed as `DagNode[]`.
-Do not use `GET /api/workflows/:name` for this, because that route does not recurse into subfoldered workflows.
-
-### Cache keys
-
-Add to `packages/web/src/experiments/console/store/keys.ts`:
+- [ ] Import the existing console `RunStatus` type into the selector module and do not redeclare its status union.
+- [ ] Anchor terminal-event selection at `row.id`, validate finite or safe-integer scalar fields, expose stdout truncation metadata, and never throw on malformed event data.
+- [ ] Match route data by `row.selection.executionSeq`, match loop-group data by selected iteration, and keep fan-out child workflows summarized rather than linking one arbitrary child.
+- [ ] Write `select-node-room-messages.test.ts` with reversed sequence input, ordinary and route selections, a closed loop iteration, an open loop iteration ending at the next start, and a missing iteration marker.
+- [ ] Run `bun test src/experiments/console/components/inspect/select-node-room-messages.test.ts` from `packages/web` and confirm the module is missing.
+- [ ] Implement `selectNodeRoomMessages(messages: readonly WorkflowNodeMessage[], selection: LogRowSelection): WorkflowNodeMessage[]` by sorting a shallow array on `seq`, returning all messages for non-loop rows, and slicing loop rows from matching `iteration_started` through the matching terminal marker or the next iteration start.
+- [ ] Return the complete ordered transcript when the selected iteration marker is absent so incomplete historical data remains replayable.
+- [ ] Write selection tests proving valid `?node=` wins, an invalid query falls back to the first inspect-running node, a declared approval is next, the first log row is last, and an empty run selects nothing.
+- [ ] Assert that `selectedLogRowId` is retained only when it belongs to the selected node and that graph selection clears the row-specific selection.
+- [ ] Run `bun test src/experiments/console/components/inspect/console-inspect-selection.test.ts` from `packages/web` and confirm the module is missing.
+- [ ] Implement these pure helpers without reading browser globals.
 
 ```ts
-nodeMessages: (runId: string, nodeId: string): string =>
-  `nodeMessages:${encodeURIComponent(runId)}:${encodeURIComponent(nodeId)}`,
-workflowDagNodes: (cwd: string, name: string): string =>
-  `workflowDagNodes:${encodeURIComponent(cwd)}:${encodeURIComponent(name)}`,
+export interface InspectSelection {
+  nodeId: string | null;
+  logRowId: string | null;
+}
+
+export function readNodeSearchParam(search: string): string | null;
+export function resolveInitialInspectSelection(input: {
+  requestedNodeId: string | null;
+  nodeStates: readonly WorkflowNodeState[];
+  rows: readonly LogRow[];
+  approvalNodeId: string | null;
+}): InspectSelection;
+export function selectInspectNode(nodeId: string, rowId: string | null): InspectSelection;
 ```
 
-### Room chrome
+- [ ] Run `bun test src/experiments/console/components/inspect/resolve-room-kind.test.ts src/experiments/console/components/inspect/select-room-data.test.ts src/experiments/console/components/inspect/select-node-room-messages.test.ts src/experiments/console/components/inspect/console-inspect-selection.test.ts` from `packages/web` and confirm all resolver tests pass.
+- [ ] Run `bun x prettier --write src/experiments/console/components/inspect/resolve-room-kind.ts src/experiments/console/components/inspect/resolve-room-kind.test.ts src/experiments/console/components/inspect/select-room-data.ts src/experiments/console/components/inspect/select-room-data.test.ts src/experiments/console/components/inspect/select-node-room-messages.ts src/experiments/console/components/inspect/select-node-room-messages.test.ts src/experiments/console/components/inspect/console-inspect-selection.ts src/experiments/console/components/inspect/console-inspect-selection.test.ts` from `packages/web`.
+- [ ] Run `git add packages/web/src/experiments/console/components/inspect/resolve-room-kind.ts packages/web/src/experiments/console/components/inspect/resolve-room-kind.test.ts packages/web/src/experiments/console/components/inspect/select-room-data.ts packages/web/src/experiments/console/components/inspect/select-room-data.test.ts packages/web/src/experiments/console/components/inspect/select-node-room-messages.ts packages/web/src/experiments/console/components/inspect/select-node-room-messages.test.ts packages/web/src/experiments/console/components/inspect/console-inspect-selection.ts packages/web/src/experiments/console/components/inspect/console-inspect-selection.test.ts && git commit -m "feat(web): resolve console node rooms"` from the repository root.
 
-Create `packages/web/src/experiments/console/components/rooms/ConsoleNodeRoom.tsx`.
+## Task 5: Render the Console-Owned Node Room
+
+**Files:**
+
+- Create: `packages/web/src/experiments/console/test/install-happy-dom.ts`
+- Create: `packages/web/src/experiments/console/components/ConsoleNodeRoom.tsx`
+- Create: `packages/web/src/experiments/console/components/ConsoleNodeRoom.test.tsx`
+
+**Consumes:** `LogRow`, generated DAG nodes and node messages, projected node state, room selectors, `ApprovalPanel`, `useEntity`, and an injected typed message loader.
+
+**Produces:** A single console-owned `ConsoleNodeRoom` that renders every Story 5.5 room without Epic 6 interaction UI.
+
+- [ ] Add `installHappyDom()` and `restoreHappyDom()` test helpers that capture prior global property descriptors, create a `Window` at `https://localhost/`, and restore or delete every installed key in `afterEach`.
+- [ ] Install `window`, `document`, `self`, DOM element constructors including `SVGElement`, `navigator`, `location`, storage, `getComputedStyle`, animation-frame functions, `MutationObserver`, DOM event constructors, and `IS_REACT_ACT_ENVIRONMENT`, matching the needs of React 19 and the graph renderer.
+- [ ] Write component tests using an injected `loadMessages` function rather than `mock.module()`.
+- [ ] Verify an agent room renders text, tool input and output, and status entries in server sequence order, and verify selected loop rows show only that iteration when markers exist.
+- [ ] Verify switching the selected agent node rekeys the request and that selecting bash, approval, workflow, route-loop, or loop-group nodes does not call `loadMessages`.
+- [ ] Verify an unknown node body uses the agent fallback and loads its replayable transcript after definition loading finishes.
+- [ ] Verify a live agent room schedules a 1,000 ms refresh and a completed room does not schedule refresh by spying on and restoring `globalThis.setInterval` and `globalThis.clearInterval`, without waiting on wall-clock time.
+- [ ] Verify backend `awaiting` status displays as `running` and that no composer, Ask card, pending-interaction slot, or waiting-on-you label is present.
+- [ ] Verify bash/script output and truncation metadata, declared-gate controls and decision state, encoded child-run link, fan-out summary, route decision, and loop-group progress.
+- [ ] Run `NODE_ENV=development bun test src/experiments/console/components/ConsoleNodeRoom.test.tsx` from `packages/web` and confirm the component is missing.
+- [ ] Implement this exact public interface.
 
 ```ts
 export interface ConsoleNodeRoomProps {
-  runId: string;
+  run: Run;
   projectId: string;
-  row: LogRow | null;
-  isLive: boolean;
+  nodeId: string | null;
+  selectedRow: LogRow | null;
   definitionNodes: readonly DagNode[];
   definitionPending: boolean;
+  nodeStates: readonly WorkflowNodeState[];
   events: readonly WorkflowEvent[];
-  runStatus: Run['status'];
   approval: unknown;
-  run: Run;
+  isLive: boolean;
+  loadMessages: (runId: string, nodeId: string) => Promise<WorkflowNodeMessagesResponse>;
+  onClose: () => void;
+}
+```
+
+- [ ] Call `resolveRoomKind(nodeId, definitionNodes, events, approval)` so recursively qualified definitions win and event metadata provides deterministic historical fallback.
+- [ ] While the definition query is pending and resolution is the unknown agent fallback, render a loading room instead of prematurely requesting messages.
+- [ ] Keep the room header stable across all kinds with node label, node id, inspect status, selected iteration or route label, and a close button wired to `onClose`.
+- [ ] Key the `useEntity` query with `K.nodeMessages(run.id, nodeId)` only for agent rooms and use a stable no-op key plus `Promise.resolve({ messages: [] })` for every inactive branch.
+- [ ] Use an effect that calls `refetch()` every 1,000 ms only when `isLive` and the resolved room kind is `agent`, and clear the interval on every dependency change and unmount.
+- [ ] Render agent messages with exhaustive branches for `text`, `tool`, and `status`; render text with the package's installed Markdown plugins, and use `JSON.stringify(value, null, 2)` for structured tool input and output.
+- [ ] Pass messages through `selectNodeRoomMessages` and map only the visible status label `awaiting` to `running`, preserving iteration marker strings and details.
+- [ ] Surface node-message loading errors with a Retry button that calls the query's `refetch()`.
+- [ ] Render stdout in a `<pre>` with explicit empty and failure messages, truncation/original-byte metadata, and the selector's success exit code.
+- [ ] Render gate message, document, decision, safe plannotator review link, inactive notice, and the existing console `ApprovalPanel` only when `GateChrome.canDecide` is true.
+- [ ] Render workflow child links as `/console/p/${encodeURIComponent(projectId)}/r/${encodeURIComponent(childRunId)}`, show fan-out and output summaries, and show an explicit not-started message when no child run exists.
+- [ ] Render the selected route decision fields and loop-group iterations in chronological order and mark only the `selectedRow.selection` item as selected.
+- [ ] Render a definition-loading message while pending and use the agent fallback for an unknown body after loading settles.
+- [ ] Do not read or render `pending_interactions`, and do not add state or callbacks for user input.
+- [ ] Run `NODE_ENV=development bun test src/experiments/console/components/ConsoleNodeRoom.test.tsx` from `packages/web` and confirm all room tests pass.
+- [ ] Run `bun x prettier --write src/experiments/console/test/install-happy-dom.ts src/experiments/console/components/ConsoleNodeRoom.tsx src/experiments/console/components/ConsoleNodeRoom.test.tsx` from `packages/web`.
+- [ ] Run `git add packages/web/src/experiments/console/test/install-happy-dom.ts packages/web/src/experiments/console/components/ConsoleNodeRoom.tsx packages/web/src/experiments/console/components/ConsoleNodeRoom.test.tsx && git commit -m "feat(web): render console node inspect rooms"` from the repository root.
+
+## Task 6: Adapt the DAG to the Shared Run-Graph Layout
+
+**Files:**
+
+- Create: `packages/web/src/experiments/console/components/graph/build-run-graph-input.ts`
+- Create: `packages/web/src/experiments/console/components/graph/build-run-graph-input.test.ts`
+- Create: `packages/web/src/experiments/console/components/graph/graph-viewport.ts`
+- Create: `packages/web/src/experiments/console/components/graph/graph-viewport.test.ts`
+
+**Consumes:** Generated `DagNode` and `WorkflowNodeState`, local inspect-status policy, and the public `@/lib/run-graph` types and functions.
+
+**Produces:** One typed graph input projection and deterministic fit calculations with no second event-state projector.
+
+- [ ] Write graph-input tests for simple dependencies, conditional edges, route labels, loop back-edges, duplicate projected states, and awaiting-state normalization.
+- [ ] Run `bun test src/experiments/console/components/graph/build-run-graph-input.test.ts` from `packages/web` and confirm the module is missing.
+- [ ] Implement this exact contract and call the public `layout` function from `@/lib/run-graph`.
+
+```ts
+export interface ConsoleGraphNode {
+  definition: DagNode;
+  nodeState: NodeState;
 }
 
-export function ConsoleNodeRoom(props: ConsoleNodeRoomProps): React.ReactElement;
+export interface ConsoleGraphModel {
+  nodes: ConsoleGraphNode[];
+  edges: LayoutEdge[];
+  positions: Record<string, Point>;
+  routes: LayoutRoute[];
+}
+
+export function buildRunGraphInput(nodes: readonly DagNode[], nodeStates: readonly WorkflowNodeState[]): ConsoleGraphModel;
 ```
 
-Placeholder copy is exactly `Select a node`.
-Loading copy is exactly `Loading node room` when `definitionPending && definitionNode === null && kind === 'agent' && nodeType === 'unknown'`.
-The region is `<section role="region" aria-label={nodeId + ' room'}>`.
-Header shows `row.label`, the type label below, and `inspectStatusLabel(row.status)`.
-
-Type labels:
+- [ ] Use projected `nodeStates` as the only live status authority, with the final state for a duplicated node id winning deterministically.
+- [ ] Normalize `awaiting` to `running` before passing status to the layout library.
+- [ ] Declare a console-local `['positive', 'negative', 'exhausted'] as const` because generated OpenAPI declarations are type-only and cannot supply the legacy runtime constant.
+- [ ] Emit dependency, conditional, and three route edges from typed DAG fields without interpreting prompt text, suppress a duplicate dependency edge to a route target, and let `layout` identify back-edges.
+- [ ] Give each edge the base id `${source}->${target}` and append `:${outcome}` only when a route target would otherwise collide, so repeated route targets remain distinct and deterministic.
+- [ ] Return `layout({ nodes: layoutNodes, edges })` positions and routes so the renderer receives the library-computed labels and taken state.
+- [ ] Write viewport tests for no positions, one node, a diagram larger than its viewport, and a diagram smaller than its viewport.
+- [ ] Run `bun test src/experiments/console/components/graph/graph-viewport.test.ts` from `packages/web` and confirm the module is missing.
+- [ ] Implement diagram bounds using the shared layout's current 180 by 80 node footprint plus 64 pixels of canvas padding on every side so the current 46-pixel back-edge gutter and route labels do not clip.
 
 ```ts
-const TYPE_LABELS: Record<NodeBodyKind, string> = {
-  command: 'Command',
-  prompt: 'Prompt',
-  loop: 'Loop',
-  bash: 'Bash',
-  script: 'Script',
-  approval: 'Approval',
-  plannotator_gate: 'Plannotator gate',
-  workflow: 'Workflow',
-  route_loop: 'Route loop',
-  loop_group: 'Loop group',
-  unknown: 'Agent',
-};
+export interface GraphBounds {
+  width: number;
+  height: number;
+}
+
+export function graphBounds(positions: Readonly<Record<string, Point>>): GraphBounds;
+export function fitGraphScale(viewportWidth: number, viewportHeight: number, bounds: GraphBounds, padding?: number): number;
 ```
 
-Dispatch:
+- [ ] Clamp fit scale to `0.25 <= scale <= 1.0`, return `1` for empty or non-positive dimensions, and include 24 pixels of default padding on every side.
+- [ ] Run `bun test src/experiments/console/components/graph/build-run-graph-input.test.ts src/experiments/console/components/graph/graph-viewport.test.ts` from `packages/web` and confirm all graph-model tests pass.
+- [ ] Run `bun x prettier --write src/experiments/console/components/graph/build-run-graph-input.ts src/experiments/console/components/graph/build-run-graph-input.test.ts src/experiments/console/components/graph/graph-viewport.ts src/experiments/console/components/graph/graph-viewport.test.ts` from `packages/web`.
+- [ ] Run `git add packages/web/src/experiments/console/components/graph/build-run-graph-input.ts packages/web/src/experiments/console/components/graph/build-run-graph-input.test.ts packages/web/src/experiments/console/components/graph/graph-viewport.ts packages/web/src/experiments/console/components/graph/graph-viewport.test.ts && git commit -m "feat(web): adapt console DAG to run graph"` from the repository root.
 
-- `agent` → transcript from `skill.listNodeMessages` via `useEntity(K.nodeMessages(runId, row.nodeId))`, poll every 1000 ms while `isLive`, slice with `selectNodeRoomMessages`.
-- `stdout` → `selectNodeStdout`; do not fetch messages.
-- `gate` → `selectGateChrome`; if `canDecide`, render existing `ApprovalPanel` with `run`; otherwise show message, optional document, decision, inactive notice, and review URL.
-- `workflow` → `selectChildRun`; link to `/console/p/${projectId}/r/${childRunId}` when `childRunId` is non-null; fan-out shows `Fan-out child runs` and does not inline child transcripts.
-- `route_loop` → `selectRouteDecision` fields.
-- `loop_group` → body node ids and iteration accordion from `selectLoopGroupChrome`.
+## Task 7: Replace the Console Graph Renderer
 
-Transcript item kinds:
+**Files:**
 
-- `text` → `{payload.text}` in `whitespace-pre-wrap`
-- `tool` → name chip plus optional input/output
-- `status` → `{payload.state}` plus optional detail, never treated as an Ask card
+- Modify: `packages/web/src/experiments/console/components/RunGraphPanel.tsx`
+- Create: `packages/web/src/experiments/console/components/RunGraphPanel.test.tsx`
 
-Empty transcript copy is exactly `No transcript yet.`
-Error copy is the error message plus a `Retry` button that calls `refetch`.
-Loading copy is exactly `Loading transcript…`.
+**Consumes:** `ConsoleGraphModel`, generated DAG nodes and projected states, graph viewport helpers, and a node-selection callback.
 
-`isLive` is `run.status === 'running' || run.status === 'paused'`.
+**Produces:** A console-owned SVG/HTML graph renderer with pan, zoom, fit, labels, arrows, live status, and selection.
 
-### Log dividers
-
-Keep `NodeDivider` usage and cost expansion.
-Add these props:
-
-```ts
-selected?: boolean;
-onSelect?: () => void;
-rowId: string;
-```
-
-When `onSelect` is provided, the heading is `<button type="button">` with `aria-current={selected ? 'true' : undefined}`.
-`id` remains `node-transition-${rowId}` so iteration rows do not collide.
-Extend visible status to `'pending' | 'running' | 'completed' | 'failed' | 'skipped'`.
-Pass `inspectStatusLabel(row.status)` into that prop.
-
-Replace `foldNodeRuns` inside `RunStream` inspect usage with `buildLogRows(synthesizedNodeStates, rawEvents)`.
-Keep conversation messages, tool pairing, and system rows as log-first content under those dividers.
-Do not hide rows when a node is selected.
-Stop using `selectedNodeId === 'all'` as a filter.
-
-### Graph panel
-
-Replace dagre `layout()` in `RunGraphPanel.tsx`.
-New props:
+- [ ] Write component tests that pass data directly and never mock the workflow skill.
+- [ ] Assert that all nodes and route labels render, taken and untaken edges have distinct styling, back-edges are dashed, arrow markers exist, and the selected node has `aria-current="true"`.
+- [ ] Assert that a node click calls `onSelectNode(nodeId)` without changing the active view.
+- [ ] Assert that zoom-in, zoom-out, and fit controls update the transform and that the scroll container remains the panning surface, with explicit non-zero `clientWidth` and `clientHeight` stubs for Happy DOM.
+- [ ] Assert that a definition error and an empty definition have distinct visible messages.
+- [ ] Run `NODE_ENV=development bun test src/experiments/console/components/RunGraphPanel.test.tsx` from `packages/web` and confirm the old props fail the new assertions.
+- [ ] Replace the internal `useEntity`, workflow query, Dagre layout, and raw-event state derivation with this exact interface.
 
 ```ts
 export interface RunGraphPanelProps {
-  dagNodes: readonly DagNode[];
-  liveStatus: readonly { nodeId: string; status: WorkflowNodeState['status'] }[];
+  nodes: readonly DagNode[];
+  nodeStates: readonly WorkflowNodeState[];
   selectedNodeId: string | null;
-  onNodeSelect: (nodeId: string) => void;
+  definitionPending: boolean;
+  definitionError: string | null;
+  onSelectNode: (nodeId: string) => void;
 }
 ```
 
-Call `layoutRunGraph(dagNodes, liveStatus)`.
-Render each `LayoutRoute.path` as an SVG path.
-Taken routes use `var(--running)` stroke.
-Untaken routes use `var(--border)`.
-Draw a filled triangle marker at the target port.
-Render node cards at `positions[id]` with width 180 and height 80.
-Selected node gets a 2px `var(--accent)` ring.
-Click calls `onNodeSelect(node.id)` and does not change `DetailView`.
-SVG overflow scrolls.
-Include a Fit control that resets scroll to origin.
-Do not import `@dagrejs/dagre` from this file after the change.
+- [ ] Memoize `buildRunGraphInput(nodes, nodeStates)` and use the returned positions and routes as the sole geometry authority.
+- [ ] Render routes in SVG with `markerEnd`, dashed conditional or back-edge styling, route labels at `labelPosition`, and a muted stroke for untaken routes.
+- [ ] Render SVG routes and node cards inside the same canvas transform with a 64-pixel origin translation, then render nodes at the exact shared positions with local 180 by 80 dimensions, `nodeBodyKind` for the visible type glyph, label, id, inspect status, and selection ring.
+- [ ] Clamp manual zoom to `0.25 <= scale <= 1.5` in 0.1 increments.
+- [ ] Implement panning with the native overflow scroll container and implement Fit by applying `fitGraphScale`, sizing the transformed canvas, and centering it after the next animation frame.
+- [ ] Keep the renderer free of workflow fetching, event folding, and imports from legacy components or Dagre.
+- [ ] Run `NODE_ENV=development bun test src/experiments/console/components/RunGraphPanel.test.tsx` from `packages/web` and confirm all renderer tests pass.
+- [ ] Run `bun x prettier --write src/experiments/console/components/RunGraphPanel.tsx src/experiments/console/components/RunGraphPanel.test.tsx` from `packages/web`.
+- [ ] Run `git add packages/web/src/experiments/console/components/RunGraphPanel.tsx packages/web/src/experiments/console/components/RunGraphPanel.test.tsx && git commit -m "feat(web): render inspectable console run graph"` from the repository root.
 
-### Inspect pane
+## Task 8: Make Every Log Row Selectable
 
-Create `packages/web/src/experiments/console/components/ConsoleInspectPane.tsx`.
+**Files:**
+
+- Modify: `packages/web/src/experiments/console/components/NodeDivider.tsx`
+- Modify: `packages/web/src/experiments/console/components/NodeDivider.test.tsx`
+- Modify: `packages/web/src/experiments/console/components/RunStream.tsx`
+- Modify: `packages/web/src/experiments/console/components/RunStream.test.tsx`
+
+**Consumes:** `ConsoleLogEntry`, existing `NodeRun` message-window folding, current node filter, usage ledger, and a row-selection callback.
+
+**Produces:** Chronological selectable dividers without changing the existing `All nodes` filter semantics or usage expansion.
+
+- [ ] Extend `NodeDivider.test.tsx` to assert that clicking the node identity/status control calls `onSelect(rowId, nodeId)`, selected rows expose `aria-current="true"`, and the existing usage-expansion control remains separately operable.
+- [ ] Run `NODE_ENV=development bun test src/experiments/console/components/NodeDivider.test.tsx` from `packages/web` and confirm the new props are missing.
+- [ ] Add `rowId`, `selected`, and `onSelect` props to `NodeDivider`, allow the normalized `pending` display status, and give its root `id={`node-transition-${rowId}`}`.
+- [ ] Turn the timestamp, row label, leader, and status into one full-width selection button with `aria-current={selected ? 'true' : undefined}`.
+- [ ] Move usage expansion to an adjacent chevron-only button with an explicit accessible label so no interactive element is nested and both actions remain keyboard-operable.
+- [ ] Preserve current duration, cost, turns, stop reason, skip reason, skip expression, ledger report, and run-wide coverage behavior.
+- [ ] Extend `RunStream.test.tsx` with ordinary, two-iteration, and two-route fixtures and assert five distinct dividers appear in chronological order.
+- [ ] Assert that choosing a row reports its row id and node id while filtering to one node still hides other node rows and messages and `All nodes` restores them.
+- [ ] Assert cumulative node usage is rendered only for the row whose `showNodeUsage` is true.
+- [ ] Run `NODE_ENV=development bun test src/experiments/console/components/RunStream.test.tsx` from `packages/web` and confirm the new fixtures fail.
+- [ ] Replace only the divider source in `RunStream` with this extended prop contract.
+
+```ts
+logEntries: readonly ConsoleLogEntry[];
+selectedLogRowId: string | null;
+onSelectLogRow: (rowId: string, nodeId: string) => void;
+```
+
+- [ ] Keep `selectedNodeId: string` as the existing persisted Log filter and retain the existing message windows built by `foldNodeRuns(events)`.
+- [ ] Filter `logEntries` by `row.nodeId` when the Log filter is not `all`, merge their divider items into the existing timestamped timeline, and preserve stable source-order tie breaking.
+- [ ] Pass `entry.displayStatus`, pass node usage only when `entry.showNodeUsage` is true, and pass the adapter's other metadata directly to `NodeDivider`.
+- [ ] Run `NODE_ENV=development bun test src/experiments/console/components/NodeDivider.test.tsx src/experiments/console/components/RunStream.test.tsx` from `packages/web` and confirm both suites pass.
+- [ ] Run `bun x prettier --write src/experiments/console/components/NodeDivider.tsx src/experiments/console/components/NodeDivider.test.tsx src/experiments/console/components/RunStream.tsx src/experiments/console/components/RunStream.test.tsx` from `packages/web`.
+- [ ] Run `git add packages/web/src/experiments/console/components/NodeDivider.tsx packages/web/src/experiments/console/components/NodeDivider.test.tsx packages/web/src/experiments/console/components/RunStream.tsx packages/web/src/experiments/console/components/RunStream.test.tsx && git commit -m "feat(web): select unmerged console log rows"` from the repository root.
+
+## Task 9: Compose One Persistent Inspect Pane
+
+**Files:**
+
+- Create: `packages/web/src/experiments/console/components/ConsoleInspectPane.tsx`
+- Create: `packages/web/src/experiments/console/components/ConsoleInspectPane.test.tsx`
+
+**Consumes:** `RunStream`, `RunGraphPanel`, `ConsoleNodeRoom`, workflow DAG-node skill, `useEntity`, projected inspect rows, and injected header/footer content.
+
+**Produces:** One responsive split layout where Log and Graph share one mounted room instance.
+
+- [ ] Write a component harness whose parent can switch `view` from `log` to `graph` while preserving the same selected node.
+- [ ] Capture the room region element, switch the harness view, and assert the post-switch region is the same DOM node and the transcript loader call count did not reset.
+- [ ] Assert clicking either a divider or graph node invokes the same `onSelectNode` callback.
+- [ ] Assert the Log receives the existing filter separately from inspect selection and Artifacts is not accepted as a pane view.
+- [ ] Assert workflow-definition loading and error states reach both graph and room without returning an empty silent fallback.
+- [ ] Run `NODE_ENV=development bun test src/experiments/console/components/ConsoleInspectPane.test.tsx` from `packages/web` and confirm the component is missing.
+- [ ] Implement this exact interface.
 
 ```ts
 export interface ConsoleInspectPaneProps {
@@ -524,865 +728,161 @@ export interface ConsoleInspectPaneProps {
   run: Run;
   projectId: string;
   projectCwd: string;
-  rawEvents: readonly WorkflowEvent[];
-  nodeStates: readonly WorkflowNodeState[];
-  approval: unknown;
-  messages: Message[];
-  showToolCalls: boolean;
-  showSystem: boolean;
-  usage: UsageReport | null;
-  selectedNodeId: string | null;
-  selectedLogRowId: string | null;
-  onSelectNode: (nodeId: string | null) => void;
-  onSelectLogRowId: (rowId: string | null) => void;
-  toolbar: React.ReactNode;
-  logHeader: React.ReactNode;
-}
-```
-
-Layout for Log and Graph:
-
-```text
-flex min-h-0 flex-1
-  left: min-w-0 flex-1  (Log stream or Graph)
-  aside: w-[380px] shrink-0 border-l border-border  (ConsoleNodeRoom)
-```
-
-Selection rules, matching `LegacyGraphLogsPane`:
-
-- If `selectedLogRowId` matches a row whose `nodeId === selectedNodeId`, that row is selected.
-- Else `resolveGraphRoomRow({ rows, nodeId: selectedNodeId, liveStatus })`.
-- Graph click clears `selectedLogRowId` and sets `selectedNodeId`.
-- Divider click sets both ids.
-- Run id change clears both.
-
-Always mount one `ConsoleNodeRoom`.
-
-### Run detail
-
-`RunDetailPage` loads `getRun`, `getWorkflowDagNodes`, messages, artifacts, and SSE as today.
-Pass `rawEvents`, `nodeStates`, and `approval` into `ConsoleInspectPane`.
-Read `useSearchParams().get('node')` once the run is loaded.
-If that node id is non-empty, select it.
-Else auto-select: first `nodeStates` entry with `inspectStatusLabel(status) === 'running'`, else paused `run.approval?.nodeId`, else first `buildLogRows` row, else null.
-
-`isLive` uses running or paused.
-
-Do not switch view to `log` on graph click.
-
-Keep Artifacts full width with no room dock.
-
-Keep Log-column `ApprovalPanel` when `run.status === 'paused'` and `run.approval` is set.
-
-Keep `RunActionBar`.
-
-Change StreamToolbar node `<select>` `aria-label` to `Select node`.
-Remove the `All nodes` option.
-The value is `selectedNodeId ?? ''`.
-Choosing a node calls `onSelectNode` and clears `selectedLogRowId`.
-Show the selector on both Log and Graph.
-
-### Deep link
-
-`ActiveRunCard` navigates to `/console/p/${projectId}/r/${runId}` and appends `?node=${encodeURIComponent(run.currentNode)}` when `currentNode` is a non-empty string.
-
-`ConsoleWorkflowResultCard` "Open run →" does the same from `data.run.currentNode`.
-
-Do not invent node chips from `pending_interactions`.
-
-## File Map
-
-| File | Action | Justification |
-| --- | --- | --- |
-| `packages/web/src/experiments/console/skills/runs.ts` | UPDATE | Return nodeStates, rawEvents, approval; add listNodeMessages |
-| `packages/web/src/experiments/console/skills/runs.node-messages.test.ts` | CREATE | Encoded messages path and getRun extras |
-| `packages/web/src/experiments/console/skills/workflows.ts` | UPDATE | getWorkflowDagNodes via list endpoint |
-| `packages/web/src/experiments/console/skills/workflows.test.ts` | UPDATE | Encoded list filter contract |
-| `packages/web/src/experiments/console/store/keys.ts` | UPDATE | nodeMessages and workflowDagNodes keys |
-| `packages/web/src/experiments/console/inspect/inspect-status.ts` | CREATE | Chrome label mapping |
-| `packages/web/src/experiments/console/inspect/inspect-status.test.ts` | CREATE | awaiting → running |
-| `packages/web/src/experiments/console/inspect/build-log-rows.ts` | CREATE | Unmerged rows |
-| `packages/web/src/experiments/console/inspect/build-log-rows.test.ts` | CREATE | Iteration and route rows |
-| `packages/web/src/experiments/console/inspect/synthesize-log-node-states.ts` | CREATE | Pause/gate synthetic states |
-| `packages/web/src/experiments/console/inspect/synthesize-log-node-states.test.ts` | CREATE | Synthetic coverage |
-| `packages/web/src/experiments/console/inspect/read-approval-context.ts` | CREATE | Local approval parser |
-| `packages/web/src/experiments/console/inspect/read-approval-context.test.ts` | CREATE | Parser and review URL |
-| `packages/web/src/experiments/console/inspect/resolve-room-kind.ts` | CREATE | Per-type dispatch |
-| `packages/web/src/experiments/console/inspect/resolve-room-kind.test.ts` | CREATE | Definition and fallback |
-| `packages/web/src/experiments/console/inspect/resolve-graph-room-row.ts` | CREATE | Graph click → row |
-| `packages/web/src/experiments/console/inspect/resolve-graph-room-row.test.ts` | CREATE | Ordinary vs iteration vs synthetic |
-| `packages/web/src/experiments/console/inspect/select-room-data.ts` | CREATE | Stdout/gate/child/route/group views |
-| `packages/web/src/experiments/console/inspect/select-room-data.test.ts` | CREATE | Selector contracts |
-| `packages/web/src/experiments/console/inspect/select-node-room-messages.ts` | CREATE | Loop transcript slice |
-| `packages/web/src/experiments/console/inspect/select-node-room-messages.test.ts` | CREATE | Seq sort and slice |
-| `packages/web/src/experiments/console/inspect/build-run-graph-input.ts` | CREATE | DagNode → layout() |
-| `packages/web/src/experiments/console/inspect/build-run-graph-input.test.ts` | CREATE | Edges and awaiting taken-path |
-| `packages/web/src/experiments/console/components/rooms/ConsoleNodeRoom.tsx` | CREATE | Per-type dispatcher |
-| `packages/web/src/experiments/console/components/rooms/ConsoleNodeRoom.test.tsx` | CREATE | Chrome, GET messages, no Ask |
-| `packages/web/src/experiments/console/components/NodeDivider.tsx` | UPDATE | Button + aria-current |
-| `packages/web/src/experiments/console/components/RunStream.tsx` | UPDATE | Unmerged buildLogRows |
-| `packages/web/src/experiments/console/components/RunStream.test.tsx` | UPDATE | Iteration rows stay unmerged |
-| `packages/web/src/experiments/console/components/RunGraphPanel.tsx` | UPDATE | layout() SVG shell |
-| `packages/web/src/experiments/console/components/RunGraphPanel.test.tsx` | CREATE | Click stays on graph, taken path |
-| `packages/web/src/experiments/console/components/ConsoleInspectPane.tsx` | CREATE | Shared room dock |
-| `packages/web/src/experiments/console/components/ConsoleInspectPane.test.tsx` | CREATE | Three-door same room |
-| `packages/web/src/experiments/console/components/StreamToolbar.tsx` | UPDATE | Selector, no All-nodes filter |
-| `packages/web/src/experiments/console/routes/RunDetailPage.tsx` | UPDATE | Host pane, ?node=, auto-select |
-| `packages/web/src/experiments/console/routes/RunDetailPage.test.tsx` | UPDATE | Query param and isolation smoke |
-| `packages/web/src/experiments/console/components/ActiveRunCard.tsx` | UPDATE | ?node= deep-link |
-| `packages/web/src/experiments/console/components/ConsoleWorkflowResultCard.tsx` | UPDATE | ?node= deep-link |
-| `packages/web/src/experiments/console/inspect/isolation.test.ts` | CREATE | Import-ban characterization |
-| `packages/web/src/experiments/console/README.md` | UPDATE | Document run-graph exception |
-| `eslint.config.mjs` | UPDATE | Comment the sanctioned exception |
-| `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml` | UPDATE | Mark 5.5 done after validation |
-
-Do not modify `packages/web/src/components/workflows/*`.
-Do not modify `packages/web/src/lib/run-graph/` internals.
-Do not modify engine or API packages.
-
-## Step-by-Step Tasks
-
-### Task 1: UPDATE console run and workflow skills
-
-**Files:**
-
-- Update `packages/web/src/experiments/console/skills/runs.ts`.
-- Create `packages/web/src/experiments/console/skills/runs.node-messages.test.ts`.
-- Update `packages/web/src/experiments/console/skills/workflows.ts`.
-- Update `packages/web/src/experiments/console/skills/workflows.test.ts`.
-- Update `packages/web/src/experiments/console/store/keys.ts`.
-
-- [ ] **Step 1: Write the failing tests.**
-
-In `runs.node-messages.test.ts`:
-
-1. `nodeMessagesPath('run/1', 'node a')` equals `/api/workflows/runs/run%2F1/nodes/node%20a/messages`.
-2. `listNodeMessages` GETs that path with `credentials: 'same-origin'` and returns `{ messages }`.
-3. `getRun` stubbed with a `WorkflowRunDetail` body returns `nodeStates`, `rawEvents` with original `event_type`s, `events` mapped through `toRunEvent`, `approval` from `metadata.approval`, and does not expose `pending_interactions` on the result object.
-
-In `workflows.test.ts`:
-
-4. `getWorkflowDagNodes('my flow', '/repo')` GETs `/api/workflows?cwd=%2Frepo` and returns the matching workflow's `nodes` array.
-5. Missing name throws `Workflow not found: my flow`.
-
-Stub `globalThis.fetch` like `workflows.test.ts`.
-Do not implement production yet.
-
-- [ ] **Step 2: Run the tests and confirm they fail.**
-
-```bash
-cd packages/web && bun test src/experiments/console/skills/runs.node-messages.test.ts src/experiments/console/skills/workflows.test.ts
-```
-
-Expected: fail because `nodeMessagesPath`, `listNodeMessages`, and `getWorkflowDagNodes` do not exist, and `getRun` does not return the new fields.
-
-- [ ] **Step 3: Implement the minimum production change.**
-
-Add the functions and `getRun` extras described in Authoritative Interfaces.
-Add the two cache key helpers.
-Do not fetch node messages from `getRun`.
-
-- [ ] **Step 4: Re-run the tests and confirm they pass.**
-
-Run the same command as Step 2.
-
-- [ ] **Step 5: Refactor only while green.**
-
-Re-run the same command.
-
-- [ ] **Step 6: Commit Task 1.**
-
-```bash
-git add packages/web/src/experiments/console/skills/runs.ts packages/web/src/experiments/console/skills/runs.node-messages.test.ts packages/web/src/experiments/console/skills/workflows.ts packages/web/src/experiments/console/skills/workflows.test.ts packages/web/src/experiments/console/store/keys.ts
-git commit -m "feat(web): expose console inspect run and node-message skills"
-```
-
-### Task 2: CREATE log-row kernel
-
-**Files:**
-
-- Create `packages/web/src/experiments/console/inspect/inspect-status.ts`.
-- Create `packages/web/src/experiments/console/inspect/inspect-status.test.ts`.
-- Create `packages/web/src/experiments/console/inspect/build-log-rows.ts`.
-- Create `packages/web/src/experiments/console/inspect/build-log-rows.test.ts`.
-- Create `packages/web/src/experiments/console/inspect/synthesize-log-node-states.ts`.
-- Create `packages/web/src/experiments/console/inspect/synthesize-log-node-states.test.ts`.
-
-- [ ] **Step 1: Write the failing tests.**
-
-`inspect-status.test.ts`:
-
-1. `pending`, `running`, `completed`, `failed`, and `skipped` round-trip.
-2. `awaiting` becomes `running`.
-
-`build-log-rows.test.ts` uses generated-shaped fixtures:
-
-1. Empty states and events yield `[]`.
-2. One ordinary node uses `node_started` id and projector status.
-3. Loop iterations 1 and 2 become two rows labelled `Review ×1` and `Review ×2`.
-4. `node_routed` with `execution_seq: 4` becomes `Review #4` with `{ kind: 'route_iteration', executionSeq: 4 }`.
-5. Invalid `iteration: 0` does not emit a loop row.
-6. Sort is chronological by first qualifying event.
-
-`synthesize-log-node-states.test.ts`:
-
-7. Existing projector rows are unchanged.
-8. `approval_requested` for a missing node adds `{ status: 'running', retryEpoch: 0 }`.
-9. Paused approval `{ nodeId: 'gate', message: 'Go?' }` adds `gate`.
-10. `node_awaiting` does not add a row.
-
-- [ ] **Step 2: Run the tests and confirm they fail.**
-
-```bash
-cd packages/web && bun test src/experiments/console/inspect/inspect-status.test.ts src/experiments/console/inspect/build-log-rows.test.ts src/experiments/console/inspect/synthesize-log-node-states.test.ts
-```
-
-Expected: fail because the modules cannot be resolved.
-
-- [ ] **Step 3: Implement the minimum production modules.**
-
-Copy the `buildLogRows` algorithm from `packages/web/src/components/workflows/build-log-rows.ts:24-143`.
-Access event payload fields through a local `eventData(event)` that returns `Record<string, unknown>` after an `isRecord` check.
-Do not import `@/lib/api`.
-
-- [ ] **Step 4: Re-run the tests and confirm they pass.**
-
-Run the same command as Step 2.
-
-- [ ] **Step 5: Refactor only while green.**
-
-Re-run the same command.
-
-- [ ] **Step 6: Commit Task 2.**
-
-```bash
-git add packages/web/src/experiments/console/inspect/inspect-status.ts packages/web/src/experiments/console/inspect/inspect-status.test.ts packages/web/src/experiments/console/inspect/build-log-rows.ts packages/web/src/experiments/console/inspect/build-log-rows.test.ts packages/web/src/experiments/console/inspect/synthesize-log-node-states.ts packages/web/src/experiments/console/inspect/synthesize-log-node-states.test.ts
-git commit -m "feat(web): build unmerged console inspect log rows"
-```
-
-### Task 3: CREATE room-kind resolver
-
-**Files:**
-
-- Create `packages/web/src/experiments/console/inspect/read-approval-context.ts`.
-- Create `packages/web/src/experiments/console/inspect/read-approval-context.test.ts`.
-- Create `packages/web/src/experiments/console/inspect/resolve-room-kind.ts`.
-- Create `packages/web/src/experiments/console/inspect/resolve-room-kind.test.ts`.
-
-- [ ] **Step 1: Write the failing tests.**
-
-Approval context:
-
-1. `{ nodeId, message }` parses.
-2. Invalid `type` returns null.
-3. `getPlannotatorReviewUrl` accepts `https://` and rejects `javascript:`.
-
-Room kind:
-
-4. Definition `bash` → stdout / bash.
-5. Definition nested `loop_group.nodes` resolves `group.child`.
-6. No definition plus `child_workflow` approval → workflow.
-7. No definition plus `node_routed` → route_loop.
-8. No definition plus `data.type: 'script'` on `node_completed` → stdout / script.
-9. No definition plus `approval_requested` `gateType: 'plannotator_gate'` → gate.
-10. Else agent / unknown.
-
-- [ ] **Step 2: Run the tests and confirm they fail.**
-
-```bash
-cd packages/web && bun test src/experiments/console/inspect/read-approval-context.test.ts src/experiments/console/inspect/resolve-room-kind.test.ts
-```
-
-- [ ] **Step 3: Implement the minimum production modules.**
-
-Copy `packages/web/src/lib/approval-context.ts` and `packages/web/src/components/workflows/resolve-room-kind.ts`.
-Change imports only as specified.
-
-- [ ] **Step 4: Re-run the tests and confirm they pass.**
-
-- [ ] **Step 5: Refactor only while green.**
-
-- [ ] **Step 6: Commit Task 3.**
-
-```bash
-git add packages/web/src/experiments/console/inspect/read-approval-context.ts packages/web/src/experiments/console/inspect/read-approval-context.test.ts packages/web/src/experiments/console/inspect/resolve-room-kind.ts packages/web/src/experiments/console/inspect/resolve-room-kind.test.ts
-git commit -m "feat(web): resolve console node room kinds"
-```
-
-### Task 4: CREATE graph-row resolver
-
-**Files:**
-
-- Create `packages/web/src/experiments/console/inspect/resolve-graph-room-row.ts`.
-- Create `packages/web/src/experiments/console/inspect/resolve-graph-room-row.test.ts`.
-
-- [ ] **Step 1: Write the failing tests.**
-
-1. Null nodeId returns null.
-2. Prefer last ordinary row over an earlier iteration row.
-3. If only iteration rows exist, return the last matching iteration row.
-4. If no rows exist, return synthetic `node:{id}` with live name/status or `pending`.
-
-- [ ] **Step 2: Run the tests and confirm they fail.**
-
-```bash
-cd packages/web && bun test src/experiments/console/inspect/resolve-graph-room-row.test.ts
-```
-
-- [ ] **Step 3: Implement the minimum production module.**
-
-Copy `packages/web/src/components/workflows/resolve-graph-room-row.ts:11-43`.
-
-- [ ] **Step 4: Re-run the tests and confirm they pass.**
-
-- [ ] **Step 5: Refactor only while green.**
-
-- [ ] **Step 6: Commit Task 4.**
-
-```bash
-git add packages/web/src/experiments/console/inspect/resolve-graph-room-row.ts packages/web/src/experiments/console/inspect/resolve-graph-room-row.test.ts
-git commit -m "feat(web): map console graph clicks onto log rows"
-```
-
-### Task 5: CREATE room data selectors
-
-**Files:**
-
-- Create `packages/web/src/experiments/console/inspect/select-room-data.ts`.
-- Create `packages/web/src/experiments/console/inspect/select-room-data.test.ts`.
-
-- [ ] **Step 1: Write the failing tests.**
-
-1. Stdout uses `node_output` from the row-scoped `node_completed` event and `exitCode: 0`.
-2. Failed stdout sets `text: null` and `failedDetail` from `data.error`.
-3. Truncation copies `node_output_truncated` and `node_output_original_bytes`.
-4. Gate `canDecide` is true only when paused, matching `nodeId`, compatible type, and unresolved.
-5. Child pause with `type: 'child_workflow'` returns `paused: true` and `childRunId`.
-6. Completed workflow node returns `data.child_run_id`.
-7. Fan-out `data.fan_out === true` returns `fanOut: true` and `childRunId: null`.
-8. Route iteration 4 returns outcome/to/condition from that `node_routed` event.
-9. Loop group builds qualified body ids and per-iteration body statuses.
-
-- [ ] **Step 2: Run the tests and confirm they fail.**
-
-```bash
-cd packages/web && bun test src/experiments/console/inspect/select-room-data.test.ts
-```
-
-- [ ] **Step 3: Implement the minimum production module.**
-
-Copy `packages/web/src/components/workflows/select-room-data.ts` with local inspect imports.
-
-- [ ] **Step 4: Re-run the tests and confirm they pass.**
-
-- [ ] **Step 5: Refactor only while green.**
-
-- [ ] **Step 6: Commit Task 5.**
-
-```bash
-git add packages/web/src/experiments/console/inspect/select-room-data.ts packages/web/src/experiments/console/inspect/select-room-data.test.ts
-git commit -m "feat(web): select console per-type room data"
-```
-
-### Task 6: CREATE transcript slicer
-
-**Files:**
-
-- Create `packages/web/src/experiments/console/inspect/select-node-room-messages.ts`.
-- Create `packages/web/src/experiments/console/inspect/select-node-room-messages.test.ts`.
-
-- [ ] **Step 1: Write the failing tests.**
-
-1. Ordinary selection returns messages sorted by `seq` even if input is unsorted.
-2. Loop iteration 2 slices from `iteration_started` detail `"2"` through `iteration_completed` detail `"2"`.
-3. Missing start marker returns the full ordered list.
-4. Unsupported kinds are not present in fixtures; do not add a fourth kind.
-
-- [ ] **Step 2: Run the tests and confirm they fail.**
-
-```bash
-cd packages/web && bun test src/experiments/console/inspect/select-node-room-messages.test.ts
-```
-
-- [ ] **Step 3: Implement the minimum production module.**
-
-Copy `packages/web/src/components/workflows/NodeRoom.tsx:86-116`.
-
-- [ ] **Step 4: Re-run the tests and confirm they pass.**
-
-- [ ] **Step 5: Refactor only while green.**
-
-- [ ] **Step 6: Commit Task 6.**
-
-```bash
-git add packages/web/src/experiments/console/inspect/select-node-room-messages.ts packages/web/src/experiments/console/inspect/select-node-room-messages.test.ts
-git commit -m "feat(web): slice console node transcripts by iteration"
-```
-
-### Task 7: CREATE run-graph adapter
-
-**Files:**
-
-- Create `packages/web/src/experiments/console/inspect/build-run-graph-input.ts`.
-- Create `packages/web/src/experiments/console/inspect/build-run-graph-input.test.ts`.
-
-- [ ] **Step 1: Write the failing tests.**
-
-1. Isolated node with no status is `pending`.
-2. `depends_on` becomes a `dependency` edge.
-3. Non-empty `when` becomes a `conditional` edge labelled with that string.
-4. `route_loop.routes` emit `route` edges with outcomes and skip duplicate depends_on to those targets.
-5. `layoutRunGraph` with target status `awaiting` marks that inbound route `taken: true`.
-6. Target `pending` or `skipped` is not taken.
-7. The module imports `layout` from `@/lib/run-graph`.
-
-- [ ] **Step 2: Run the tests and confirm they fail.**
-
-```bash
-cd packages/web && bun test src/experiments/console/inspect/build-run-graph-input.test.ts
-```
-
-- [ ] **Step 3: Implement the minimum production module.**
-
-Copy `packages/web/src/components/workflows/build-run-graph-input.ts` with local `ROUTE_LOOP_OUTCOMES` and generated `DagNode`.
-
-- [ ] **Step 4: Re-run the tests and confirm they pass.**
-
-- [ ] **Step 5: Refactor only while green.**
-
-- [ ] **Step 6: Commit Task 7.**
-
-```bash
-git add packages/web/src/experiments/console/inspect/build-run-graph-input.ts packages/web/src/experiments/console/inspect/build-run-graph-input.test.ts
-git commit -m "feat(web): adapt console DAGs onto run-graph layout"
-```
-
-### Task 8: CREATE ConsoleNodeRoom
-
-**Files:**
-
-- Create `packages/web/src/experiments/console/components/rooms/ConsoleNodeRoom.tsx`.
-- Create `packages/web/src/experiments/console/components/rooms/ConsoleNodeRoom.test.tsx`.
-
-**Gotcha:** Set `process.env.NODE_ENV = 'development'` before importing React, then install happy-dom before `createRoot`, copying `installHappyDom` from `packages/web/src/experiments/console/components/DraftRunCard.test.tsx:26-69`.
-Do not use `mock.module()`.
-Stub `skill.listNodeMessages` with `spyOn`.
-
-- [ ] **Step 1: Write the failing tests.**
-
-1. `row === null` renders `Select a node` and no region.
-2. Command row with messages renders `aria-label="review room"`, text, a tool chip, and a status note in seq order.
-3. Completed command replay shows the same items while `isLive` is false.
-4. Bash row shows stdout and does not call `listNodeMessages`.
-5. Approval row shows declared message and, when `canDecide`, the existing approve control.
-6. Workflow row with `child_run_id` links to `/console/p/proj-1/r/child-1`.
-7. Route iteration row shows `positive` and the target id.
-8. Loop-group row lists qualified body ids.
-9. Host text does not contain `AskHuman`, `awaiting`, or `waiting-on-you`, including when projector status is `awaiting`.
-10. Visible status text for an awaiting row is `running`.
-
-- [ ] **Step 2: Run the tests and confirm they fail.**
-
-```bash
-cd packages/web && NODE_ENV=development bun test src/experiments/console/components/rooms/ConsoleNodeRoom.test.tsx
-```
-
-- [ ] **Step 3: Implement the minimum production component.**
-
-Follow Authoritative Interfaces.
-Poll with `useEffect` + `setInterval(1000)` calling `refetch` only when `isLive` and `row` is an agent row.
-Clear the interval on unmount.
-
-- [ ] **Step 4: Re-run the tests and confirm they pass.**
-
-- [ ] **Step 5: Refactor only while green.**
-
-- [ ] **Step 6: Commit Task 8.**
-
-```bash
-git add packages/web/src/experiments/console/components/rooms/ConsoleNodeRoom.tsx packages/web/src/experiments/console/components/rooms/ConsoleNodeRoom.test.tsx
-git commit -m "feat(web): render console per-type node rooms"
-```
-
-### Task 9: UPDATE unmerged Log dividers
-
-**Files:**
-
-- Update `packages/web/src/experiments/console/components/NodeDivider.tsx`.
-- Update `packages/web/src/experiments/console/components/RunStream.tsx`.
-- Update `packages/web/src/experiments/console/components/RunStream.test.tsx`.
-
-Change `RunStream` props to:
-
-```ts
-export interface RunStreamProps {
   messages: Message[];
   events: RunEvent[];
-  rawEvents: readonly WorkflowEvent[];
-  nodeStates: readonly WorkflowNodeState[];
-  approval: unknown;
-  runStatus: Run['status'];
+  rawEvents: WorkflowEvent[];
+  nodeStates: WorkflowNodeState[];
+  logEntries: ConsoleLogEntry[];
+  usage: UsageReport | null;
+  streamNodeFilter: string;
+  selectedNodeId: string | null;
+  selectedLogRowId: string | null;
   showToolCalls: boolean;
   showSystem: boolean;
-  selectedRowId: string | null;
-  onSelectRow: (row: LogRow) => void;
-  usage: UsageReport | null;
+  logHeader: ReactNode;
+  logFooter: ReactNode;
+  logScrollRef: RefObject<HTMLDivElement | null>;
+  onSelectNode: (nodeId: string, rowId?: string) => void;
+  onCloseRoom: () => void;
+  loadDefinition: (workflowName: string, cwd: string) => Promise<DagNode[]>;
+  loadMessages: (runId: string, nodeId: string) => Promise<WorkflowNodeMessagesResponse>;
 }
 ```
 
-- [ ] **Step 1: Write the failing tests.**
+- [ ] Load definition nodes through `useEntity(K.workflowDagNodes(projectCwd, run.workflow), () => loadDefinition(run.workflow, projectCwd))`.
+- [ ] Surface the query error as text in the graph while allowing the room to use deterministic event metadata fallback.
+- [ ] Resolve `selectedRow` by exact `selectedLogRowId` and selected node id, falling back to the most recent row for the selected node.
+- [ ] Render the Log or Graph in one left column and render exactly one `ConsoleNodeRoom` as the stable right sibling.
+- [ ] Pass `onCloseRoom` to `ConsoleNodeRoom.onClose` and do not conditionally replace the room component when `view` changes.
+- [ ] Use `flex-col lg:flex-row`; give the room a top border and bounded mobile height below the content, then a 380-pixel right column with a left border at large widths.
+- [ ] Keep the Log scroll ref on the Log content and let the Graph own its own scroll viewport.
+- [ ] Run `NODE_ENV=development bun test src/experiments/console/components/ConsoleInspectPane.test.tsx` from `packages/web` and confirm all composition tests pass.
+- [ ] Run `bun x prettier --write src/experiments/console/components/ConsoleInspectPane.tsx src/experiments/console/components/ConsoleInspectPane.test.tsx` from `packages/web`.
+- [ ] Run `git add packages/web/src/experiments/console/components/ConsoleInspectPane.tsx packages/web/src/experiments/console/components/ConsoleInspectPane.test.tsx && git commit -m "feat(web): compose persistent console inspect pane"` from the repository root.
 
-1. Two loop-iteration events render two dividers `plan ×1` and `plan ×2`.
-2. Clicking `plan ×2` calls `onSelectRow` with `{ selection: { kind: 'loop_iteration', iteration: 2 } }`.
-3. Selected divider has `aria-current="true"`.
-4. A `route_loop` `#2` row is not merged into `#1`.
-5. Markup contains neither `AskHuman` nor `awaiting`.
-
-Keep existing `pairToolEvents` tests passing by updating `RunStream` call sites in that file.
-
-- [ ] **Step 2: Run the tests and confirm they fail.**
-
-```bash
-cd packages/web && NODE_ENV=development bun test src/experiments/console/components/RunStream.test.tsx
-```
-
-- [ ] **Step 3: Implement the minimum production change.**
-
-Build rows from `synthesizeLogNodeStates` + `buildLogRows`.
-Render a `NodeDivider` per row.
-Keep message and tool entries.
-Do not filter entries by selected node.
-
-- [ ] **Step 4: Re-run the tests and confirm they pass.**
-
-- [ ] **Step 5: Refactor only while green.**
-
-- [ ] **Step 6: Commit Task 9.**
-
-```bash
-git add packages/web/src/experiments/console/components/NodeDivider.tsx packages/web/src/experiments/console/components/RunStream.tsx packages/web/src/experiments/console/components/RunStream.test.tsx
-git commit -m "feat(web): show unmerged console log node-run rows"
-```
-
-### Task 10: UPDATE RunGraphPanel to layout()
+## Task 10: Integrate URL Selection Without Breaking Log Filtering
 
 **Files:**
 
-- Update `packages/web/src/experiments/console/components/RunGraphPanel.tsx`.
-- Create `packages/web/src/experiments/console/components/RunGraphPanel.test.tsx`.
+- Modify: `packages/web/src/experiments/console/routes/RunDetailPage.tsx`
+- Modify: `packages/web/src/experiments/console/routes/RunDetailPage.test.tsx`
 
-- [ ] **Step 1: Write the failing tests.**
+**Consumes:** Expanded `ConsoleRunDetail`, log projection helpers, selection helpers, `ConsoleInspectPane`, existing `StreamToolbar`, existing artifacts view, SSE invalidation, and local-storage filter behavior.
 
-1. The module source contains `@/lib/run-graph` and does not contain `@dagrejs/dagre`.
-2. Rendering two nodes and a taken edge produces an SVG `path` whose `d` matches `layoutRunGraph(...).routes[0].path`.
-3. Clicking a node button calls `onNodeSelect` with that id.
-4. Selected node has `aria-current="true"`.
-5. Markup contains neither `AskHuman` nor `awaiting` even when live status is `awaiting`.
+**Produces:** URL-backed inspect selection, unchanged Log filtering, one shared room, and completed-run replay.
 
-- [ ] **Step 2: Run the tests and confirm they fail.**
-
-```bash
-cd packages/web && NODE_ENV=development bun test src/experiments/console/components/RunGraphPanel.test.tsx
-```
-
-- [ ] **Step 3: Implement the minimum production change.**
-
-Remove dagre.
-Use 180 by 80 cards at `layout()` positions.
-Keep console SVG, not React Flow.
-
-- [ ] **Step 4: Re-run the tests and confirm they pass.**
-
-- [ ] **Step 5: Refactor only while green.**
-
-- [ ] **Step 6: Commit Task 10.**
-
-```bash
-git add packages/web/src/experiments/console/components/RunGraphPanel.tsx packages/web/src/experiments/console/components/RunGraphPanel.test.tsx
-git commit -m "feat(web): render console run graph from run-graph layout"
-```
-
-### Task 11: CREATE inspect pane and wire RunDetailPage
-
-**Files:**
-
-- Create `packages/web/src/experiments/console/components/ConsoleInspectPane.tsx`.
-- Create `packages/web/src/experiments/console/components/ConsoleInspectPane.test.tsx`.
-- Update `packages/web/src/experiments/console/components/StreamToolbar.tsx`.
-- Update `packages/web/src/experiments/console/routes/RunDetailPage.tsx`.
-- Update `packages/web/src/experiments/console/routes/RunDetailPage.test.tsx`.
-
-- [ ] **Step 1: Write the failing tests.**
-
-`ConsoleInspectPane.test.tsx` with happy-dom:
-
-1. Log divider click and graph click for `review` leave one `aria-label="review room"` and do not unmount it when switching `view` from `log` to `graph`.
-2. Graph click does not render a Log tab as the left pane.
-3. Loop divider `×2` keeps that iteration row selected after switching to Graph and back to Log.
-4. `?node=` is not this component's job; pass `selectedNodeId` in.
-5. Host text contains neither `AskHuman` nor `awaiting` nor `waiting-on-you`.
-6. Bash divider does not trigger `listNodeMessages`.
-7. Command divider does.
-
-`RunDetailPage.test.tsx`:
-
-8. Export `resolveConsoleInspectSelection({ nodeStates, approval, searchNode, rows })` and test: searchNode wins; else running; else paused approval nodeId; else first row; else null.
-9. `parseConsoleInspectSearch(search: string)` reads `node` and ignores unknown keys.
-
-Add `resolveConsoleInspectSelection` and `parseConsoleInspectSearch` in `RunDetailPage.tsx` so the page can be tested without mounting every hook.
-
-StreamToolbar:
-
-10. There is no `All nodes` option.
-11. `aria-label` is `Select node`.
-12. There is still no Chat tab.
-
-- [ ] **Step 2: Run the tests and confirm they fail.**
-
-```bash
-cd packages/web && NODE_ENV=development bun test src/experiments/console/components/ConsoleInspectPane.test.tsx src/experiments/console/routes/RunDetailPage.test.tsx
-```
-
-- [ ] **Step 3: Implement the minimum production change.**
-
-Host `ConsoleInspectPane` for `view === 'log' || view === 'graph'`.
-Load definition through `useEntity(K.workflowDagNodes(project.path, run.workflow), () => skill.getWorkflowDagNodes(run.workflow, project.path))`.
-If that loader throws, treat definition as `[]` and `definitionPending` false after error.
-Artifacts stays full width.
-Keep Log-column `ApprovalPanel` for declared gates.
-Read `useSearchParams` for `node`.
+- [ ] Extend `RunDetailPage.test.tsx` with a memory-router entry containing `?node=review` and assert the review room is selected after the detail and definition promises resolve.
+- [ ] Mount the page with `installHappyDom`, use unique cache ids, stub `globalThis.fetch` by the exact project, run-detail, artifact-list, and workflow-list URLs, and return `conversation_platform_id: null` so the test does not construct an `EventSource`.
+- [ ] Restore fetch and invalidate every unique cache key in `afterEach` so this integration coverage does not leak state into another console test.
+- [ ] Assert an invalid query falls back according to `resolveInitialInspectSelection`, switching Log to Graph retains the room, selecting a graph node updates `?node=`, and closing the room removes only the `node` parameter.
+- [ ] Assert the `All nodes` option still controls Log filtering and does not close or change the selected room.
+- [ ] Assert Artifacts remains full width, and returning to Log restores the selected room.
+- [ ] Keep the existing environment, lifecycle action, and error-state assertions in the suite.
+- [ ] Run `NODE_ENV=development bun test src/experiments/console/routes/RunDetailPage.test.tsx` from `packages/web` and confirm the new behavior fails.
+- [ ] Replace the page-local narrow `RunDetailView` with the exported `ConsoleRunDetail` type so raw events, projected states, approval metadata, and nullable usage stay type-checked at the query boundary.
+- [ ] Rename the current filter state and storage helpers from `selectedNodeId` to `streamNodeFilter` without changing its storage key, `all` default, or option-reset behavior.
+- [ ] Add separate `InspectSelection` state, read `location.search` with `readNodeSearchParam`, and keep a ref containing the run id whose initial selection has already been applied.
+- [ ] Derive `inspectNodeStates`, `logRows`, and `logEntries` once with `useMemo` in this order.
 
 ```ts
-export function parseConsoleInspectSearch(search: string): string | null {
-  const node = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search).get('node');
-  if (node === null) return null;
-  const trimmed = node.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
-
-export function resolveConsoleInspectSelection(input: {
-  searchNode: string | null;
-  nodeStates: readonly WorkflowNodeState[];
-  approvalNodeId: string | null;
-  rows: readonly LogRow[];
-}): string | null {
-  if (input.searchNode !== null && input.nodeStates.some(state => state.nodeId === input.searchNode)) {
-    return input.searchNode;
-  }
-  if (input.searchNode !== null && input.rows.some(row => row.nodeId === input.searchNode)) {
-    return input.searchNode;
-  }
-  const running = input.nodeStates.find(state => inspectStatusLabel(state.status) === 'running');
-  if (running !== undefined) return running.nodeId;
-  if (input.approvalNodeId !== null) return input.approvalNodeId;
-  return input.rows[0]?.nodeId ?? null;
-}
+const inspectNodeStates = synthesizeLogNodeStates(detail.nodeStates, detail.rawEvents, detail.run.status, detail.approval);
+const logRows = buildLogRows(inspectNodeStates, detail.rawEvents);
+const logEntries = buildConsoleLogEntries({ rows: logRows, rawEvents: detail.rawEvents, nodeRuns, runStartedAt: detail.run.startedAt });
 ```
 
-- [ ] **Step 4: Re-run the tests and confirm they pass.**
+- [ ] Initialize selection once after each new run id loads with `resolveInitialInspectSelection`, using `readApprovalContext(detail.approval)?.nodeId ?? null`, so SSE detail refreshes cannot reopen a room the user closed.
+- [ ] Add a separate effect that honors a later non-null valid `?node=` value without treating removal of the parameter as a request to auto-select again.
+- [ ] On a Log-row click, store both node id and row id; on a Graph-node click, store the node id and clear row id; on room close, clear both.
+- [ ] Update `?node=` with `navigate({ search }, { replace: true })` while preserving unrelated search parameters and encoding through `URLSearchParams`.
+- [ ] Keep the existing Log autoscroll effect tied to `logScrollRef` and do not autoscroll the Graph or room.
+- [ ] Render `StreamToolbar` once with `streamNodeFilter` and its unchanged callback, render Artifacts through the existing full-width branch, and render `ConsoleInspectPane` only for Log and Graph.
+- [ ] Preserve the current `Loading project…` branch and do not mount the pane or issue a definition query until `project.path` is available.
+- [ ] Pass `skill.getWorkflowDagNodes` and `skill.listNodeMessages` explicitly to the pane so component tests do not need module replacement.
+- [ ] Preserve the current run-start, environment, run-finish, usage, and declared-approval blocks as `logHeader` and `logFooter` content.
+- [ ] Preserve SSE invalidation and lifecycle actions exactly; node-message freshness remains the room's live polling responsibility.
+- [ ] Run `NODE_ENV=development bun test src/experiments/console/routes/RunDetailPage.test.tsx` from `packages/web` and confirm all run-detail tests pass.
+- [ ] Run `bun x prettier --write src/experiments/console/routes/RunDetailPage.tsx src/experiments/console/routes/RunDetailPage.test.tsx` from `packages/web`.
+- [ ] Run `git add packages/web/src/experiments/console/routes/RunDetailPage.tsx packages/web/src/experiments/console/routes/RunDetailPage.test.tsx && git commit -m "feat(web): integrate console run node inspection"` from the repository root.
 
-Also run:
-
-```bash
-cd packages/web && NODE_ENV=development bun test src/experiments/console/components/RunStream.test.tsx src/experiments/console/components/RunGraphPanel.test.tsx src/experiments/console/components/rooms/ConsoleNodeRoom.test.tsx
-```
-
-- [ ] **Step 5: Refactor only while green.**
-
-- [ ] **Step 6: Commit Task 11.**
-
-```bash
-git add packages/web/src/experiments/console/components/ConsoleInspectPane.tsx packages/web/src/experiments/console/components/ConsoleInspectPane.test.tsx packages/web/src/experiments/console/components/StreamToolbar.tsx packages/web/src/experiments/console/routes/RunDetailPage.tsx packages/web/src/experiments/console/routes/RunDetailPage.test.tsx
-git commit -m "feat(web): dock console inspect rooms on log and graph"
-```
-
-### Task 12: Deep-link, isolation, validate, and tracker
+## Task 11: Deep-Link Timeline Status and Lock the Isolation Boundary
 
 **Files:**
 
-- Update `packages/web/src/experiments/console/components/ActiveRunCard.tsx`.
-- Update `packages/web/src/experiments/console/components/ConsoleWorkflowResultCard.tsx`.
-- Create `packages/web/src/experiments/console/inspect/isolation.test.ts`.
-- Update `packages/web/src/experiments/console/README.md`.
-- Update `eslint.config.mjs`.
-- Update `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml` only after validation.
+- Create: `packages/web/src/experiments/console/components/console-run-href.ts`
+- Create: `packages/web/src/experiments/console/components/console-run-href.test.ts`
+- Create: `packages/web/src/experiments/console/console-isolation.test.ts`
+- Modify: `packages/web/src/experiments/console/components/ConsoleWorkflowResultCard.tsx`
+- Modify: `packages/web/src/experiments/console/components/WorkflowDock.tsx`
+- Modify: `packages/web/src/experiments/console/README.md`
+- Modify: `eslint.config.mjs`
 
-- [ ] **Step 1: Write the failing tests.**
+**Consumes:** Console run ids, project ids, current-node ids, source-file imports, and the accepted NFR4 exception.
 
-Export `consoleRunHref(projectId: string, runId: string, nodeId: string | null | undefined): string` from a tiny helper `packages/web/src/experiments/console/inspect/console-run-href.ts`.
+**Produces:** Encoded node deep links from chat status entries and executable isolation/no-premature-HITL checks.
 
-1. Without node: `/console/p/p1/r/r1`.
-2. With `review`: `/console/p/p1/r/r1?node=review`.
-3. Encodes spaces in node ids.
+- [ ] Write link-helper tests for reserved characters in project, run, and node ids, plus a null node id.
+- [ ] Run `bun test src/experiments/console/components/console-run-href.test.ts` from `packages/web` and confirm the module is missing.
+- [ ] Implement the exact helper.
 
-`isolation.test.ts` reads these production files as text and asserts:
-
-- none contain `@/components`
-- none contain `@tanstack/react-query`
-- none contain `from '@/lib/api'`
-- `build-run-graph-input.ts` and `RunGraphPanel.tsx` contain `@/lib/run-graph`
-- none contain `AskHuman`
-
-File list: every new or updated `.ts`/`.tsx` under `inspect/`, `components/rooms/`, `ConsoleInspectPane.tsx`, `RunGraphPanel.tsx`, `RunStream.tsx`, `RunDetailPage.tsx`.
-
-- [ ] **Step 2: Run the tests and confirm they fail.**
-
-```bash
-cd packages/web && bun test src/experiments/console/inspect/isolation.test.ts src/experiments/console/inspect/console-run-href.test.ts
+```ts
+export function consoleRunHref(projectId: string, runId: string, nodeId: string | null): string {
+  const base = `/console/p/${encodeURIComponent(projectId)}/r/${encodeURIComponent(runId)}`;
+  return nodeId === null ? base : `${base}?${new URLSearchParams({ node: nodeId }).toString()}`;
+}
 ```
 
-- [ ] **Step 3: Implement the minimum production change.**
+- [ ] Replace the run-detail href in `ConsoleWorkflowResultCard` with `consoleRunHref(run.projectId, run.id, run.currentNode ?? null)` while preserving its existing content and completed replay behavior.
+- [ ] Replace running-run and paused-approval hrefs in `WorkflowDock` with the helper, using `run.currentNode ?? null` for running status and `run.approval?.nodeId ?? run.currentNode ?? null` for paused status.
+- [ ] Write `console-isolation.test.ts` to recursively inspect production `.ts` and `.tsx` files under `src/experiments/console`, excluding tests.
+- [ ] Assert no production file imports `@/components`, legacy stores, contexts, routes, hooks, `@tanstack/react-query`, or runtime values from `@/lib/api` or `@/lib/api.generated`.
+- [ ] Allow type-only imports from `@/lib/api.generated` and runtime imports from exactly `@/lib/run-graph`.
+- [ ] Normalize source whitespace, then assert `ConsoleWorkflowResultCard.tsx` and both `WorkflowDock.tsx` status-card branches import and call `consoleRunHref` with the planned current-node or approval-node expression so the pure link test also has wiring proof.
+- [ ] Assert the new inspect and room production files contain none of the production identifiers `pending_interactions`, `AskCard`, or `ChatComposer`, and none of the user-facing strings `Waiting on you` or `awaiting` outside `inspect-status.ts`.
+- [ ] Do not reject the literal `AskHuman` inside generic transcript data because tool history must remain replayable.
+- [ ] Run `bun test src/experiments/console/console-isolation.test.ts src/experiments/console/components/console-run-href.test.ts` from `packages/web` and confirm the checks pass.
+- [ ] Update the console README with the Log-filter versus inspect-selection distinction, the shared geometry exception, node-message polling rule, and explicit handoff of interactive Ask UI to Epic 6.
+- [ ] Update only the explanatory comment beside the existing ESLint console-isolation rules; do not broaden an import pattern or disable a rule.
+- [ ] Run `bun x prettier --write src/experiments/console/components/console-run-href.ts src/experiments/console/components/console-run-href.test.ts src/experiments/console/console-isolation.test.ts src/experiments/console/components/ConsoleWorkflowResultCard.tsx src/experiments/console/components/WorkflowDock.tsx src/experiments/console/README.md` from `packages/web`.
+- [ ] Run `bun x prettier --write eslint.config.mjs` from the repository root.
+- [ ] Run `NODE_ENV=development bun test src/experiments/console/` from `packages/web` and confirm the complete console suite passes.
+- [ ] Run `git add packages/web/src/experiments/console/components/console-run-href.ts packages/web/src/experiments/console/components/console-run-href.test.ts packages/web/src/experiments/console/console-isolation.test.ts packages/web/src/experiments/console/components/ConsoleWorkflowResultCard.tsx packages/web/src/experiments/console/components/WorkflowDock.tsx packages/web/src/experiments/console/README.md eslint.config.mjs && git commit -m "feat(web): deep-link console run status entries"` from the repository root.
 
-Add the helper and use it from `ActiveRunCard` and `ConsoleWorkflowResultCard`.
-Document the run-graph exception in README and in an eslint comment above the console `no-restricted-imports` block.
-Do not broaden or tighten the eslint patterns in a way that breaks existing `@/lib/api.generated` type imports.
+## Task 12: Validate, Record Evidence, and Close the Epic
 
-- [ ] **Step 4: Re-run focused tests.**
+**Files:**
 
-```bash
-cd packages/web && bun test src/experiments/console/inspect/
-cd packages/web && NODE_ENV=development bun test src/experiments/console/components/rooms/ConsoleNodeRoom.test.tsx src/experiments/console/components/ConsoleInspectPane.test.tsx src/experiments/console/components/RunGraphPanel.test.tsx src/experiments/console/components/RunStream.test.tsx src/experiments/console/routes/RunDetailPage.test.tsx
-```
+- Modify: `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml`
 
-- [ ] **Step 5: Run repository validation.**
+**Consumes:** The completed implementation, focused console test output, repository validation output, issue `#85`, and the sprint tracker.
 
-From the repository root:
+**Produces:** Reproducible completion evidence and tracker state that changes only after green validation.
 
-```bash
-bun run type-check
-bun run lint --max-warnings 0
-bun run validate
-```
+- [ ] Run `NODE_ENV=development bun test src/experiments/console/` from `packages/web` and retain the passing test count and command for the PR Validation section.
+- [ ] Run `bun run validate` from the repository root and fix failures in the task that introduced them rather than weakening validation.
+- [ ] Record the focused command, `bun run validate`, test counts, and outcomes in the pull request's `Validation` section before closing issue `#85`.
+- [ ] Change `5-5-inspect-a-run-as-nodes-on-command-center` from `backlog` to `done` in `sprint-status.yaml`.
+- [ ] Change `epic-5` from `backlog` to `done` only after confirming Stories 5.1 through 5.5 are all `done`.
+- [ ] Preserve every Epic 6 status exactly as found because interactive Ask UI is outside this story.
+- [ ] Run `bun run format:check` from the repository root after the tracker edit.
+- [ ] Run `git diff --check` from the repository root and confirm it reports no whitespace errors.
+- [ ] Inspect `git diff --stat` and `git status --short` and confirm no generated API file, server route, schema, workflow YAML engine file, or unrelated user file changed.
+- [ ] Commit the tracker-only change with `git add _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml && git commit -m "docs: complete workflow run inspect epic"`.
 
-Do not run `bun test` from the repository root.
+## Final Verification Checklist
 
-- [ ] **Step 6: Mark the story done and commit Task 12.**
+- [ ] `StreamToolbar` still presents `All nodes` and remains a Log filter rather than a room selector.
+- [ ] The Log displays distinct ordinary, loop-iteration, and route-decision rows in chronological order.
+- [ ] Log-row, Graph-node, and status-entry selection converge on one URL-backed node id.
+- [ ] One room instance stays mounted when switching between Log and Graph.
+- [ ] Agent message loading occurs only for an agent room and stops polling when the run becomes terminal.
+- [ ] Completed transcripts and non-agent room data remain replayable without a live server stream.
+- [ ] `awaiting` is presented as `running`, and no Ask card, composer, pending-interaction slot, or waiting-on-you treatment exists.
+- [ ] Usage appears once per node even when the node produces multiple Log rows.
+- [ ] Artifacts remain full width, and existing approval, lifecycle, environment, filtering, and SSE behavior remains intact.
+- [ ] Console production imports pass both ESLint isolation and the dedicated source-boundary test.
+- [ ] The PR uses `.github/pull_request_template.md`, includes `Closes #85`, and records focused and full validation evidence.
 
-In `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml` set `5-5-inspect-a-run-as-nodes-on-command-center` to `done`.
-Set `epic-5` to `done` because 5.1–5.5 are then all done.
-Update both `last_updated` comments/values to the implementer's current local timestamp in the existing `+0700` format if that is still the file's zone, otherwise use the actual local offset.
-Do not touch Epic 6 keys.
+## Implementation Handoff
 
-```bash
-git add packages/web/src/experiments/console/inspect/console-run-href.ts packages/web/src/experiments/console/inspect/console-run-href.test.ts packages/web/src/experiments/console/inspect/isolation.test.ts packages/web/src/experiments/console/components/ActiveRunCard.tsx packages/web/src/experiments/console/components/ConsoleWorkflowResultCard.tsx packages/web/src/experiments/console/README.md eslint.config.mjs _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml
-git commit -m "feat(web): deep-link console inspect rooms and mark story 5.5 done"
-```
-
-## Testing Strategy
-
-### Tests to Write
-
-| Test File | Test Cases | Validates |
-| --- | --- | --- |
-| `skills/runs.node-messages.test.ts` | Encoded GET path, getRun extras | FR11 messages GET + projector states |
-| `skills/workflows.test.ts` | List-endpoint DAG nodes | Definition for rooms/graph |
-| `inspect/build-log-rows.test.ts` | Ordinary, loop, route rows | FR1 unmerged Logs |
-| `inspect/synthesize-log-node-states.test.ts` | Gate/loop synthetics, no node_awaiting | Selectable pauses |
-| `inspect/resolve-room-kind.test.ts` | Taxonomy and fallbacks | FR2 / UX-DR4 |
-| `inspect/resolve-graph-room-row.test.ts` | Ordinary vs iteration vs synthetic | Graph door |
-| `inspect/select-room-data.test.ts` | Stdout, gate, child, route, group | Story 5.2 chrome |
-| `inspect/select-node-room-messages.test.ts` | Seq order and iteration slice | FR2 replay |
-| `inspect/build-run-graph-input.test.ts` | Edges and awaiting taken-path | UX-DR2 / AD-4 |
-| `rooms/ConsoleNodeRoom.test.tsx` | Per-type chrome, GET messages, no Ask | FR2, FR8, A+ |
-| `RunStream.test.tsx` | Unmerged clickable dividers | FR1, UX-DR7 log timeline |
-| `RunGraphPanel.test.tsx` | layout() paths, click, no dagre | FR1 graph door |
-| `ConsoleInspectPane.test.tsx` | One room, three doors, no tab switch | FR8, UX-DR3, UX-DR7 |
-| `RunDetailPage.test.tsx` | `?node=` and auto-select | Chat deep-link |
-| `inspect/isolation.test.ts` | NFR4 import bans | NFR4 |
-
-### Edge Cases Checklist
-
-- [ ] Definition fetch fails; event fallback still opens stdout/gate/workflow rooms.
-- [ ] Historical completed agent node replays GET messages without polling.
-- [ ] Paused declared gate remains approvable from the Log-column panel and from the gate room.
-- [ ] Graph click does not change `DetailView` to `log`.
-- [ ] Switching Log ↔ Graph preserves the selected room instance.
-- [ ] Loop iteration selected from Logs survives a Graph visit.
-- [ ] `?node=` for an unknown id falls through to auto-select.
-- [ ] CLI runs without parent chat still inspect from Logs and Graph.
-- [ ] `pending_interactions: [{ anything }]` is ignored.
-- [ ] Projector `awaiting` does not print `awaiting`.
-- [ ] Fan-out workflow node does not inline child transcripts.
-- [ ] Artifacts tab has no room dock and no Ask chrome.
-
-## Validation Commands
-
-From `packages/web`:
-
-```bash
-bun test src/experiments/console/skills/runs.node-messages.test.ts
-bun test src/experiments/console/inspect/
-NODE_ENV=development bun test src/experiments/console/components/rooms/ConsoleNodeRoom.test.tsx
-NODE_ENV=development bun test src/experiments/console/components/RunStream.test.tsx
-NODE_ENV=development bun test src/experiments/console/components/RunGraphPanel.test.tsx
-NODE_ENV=development bun test src/experiments/console/components/ConsoleInspectPane.test.tsx
-NODE_ENV=development bun test src/experiments/console/routes/RunDetailPage.test.tsx
-```
-
-From the repository root:
-
-```bash
-bun run type-check
-bun run lint --max-warnings 0
-bun run validate
-```
-
-Do not run `bun test` from the repository root.
-
-## Acceptance Criteria
-
-- [ ] Opening a live or historical DAG run on `/console` shows unmerged Logs where a loop or `route_loop` iteration is its own row.
-- [ ] The same run shows a graph whose positions and routes come from `packages/web/src/lib/run-graph` `layout()`.
-- [ ] Logs remain as a first-class Log tab; the graph is additional.
-- [ ] Clicking a Logs divider opens the per-type room for that node-run.
-- [ ] Clicking a graph node opens the same room without switching the left pane to Log.
-- [ ] Opening `/console/p/:projectId/r/:runId?node=:nodeId` opens that node's room.
-- [ ] `command` / `prompt` / `loop` rooms render GET `/api/workflows/runs/:runId/nodes/:nodeId/messages` as text, tool, and status items in `seq` order.
-- [ ] A completed agent node shows that same transcript as replay.
-- [ ] Bash/script rooms show stdout and do not fetch node messages.
-- [ ] Approval/plannotator rooms show declared-gate chrome, not AskHuman.
-- [ ] Workflow rooms link the child run and do not inline the child transcript.
-- [ ] Route-loop rooms show controller chrome.
-- [ ] Loop-group rooms show container chrome.
-- [ ] There is exactly one room instance on Log/Graph.
-- [ ] There is no Chat tab on run detail.
-- [ ] There is no Ask card, empty Ask slot, or awaiting chrome.
-- [ ] Console inspect files do not import `@/components`, `@/lib/api` functions, or `@tanstack/react-query`.
-- [ ] The only production-web runtime import is `@/lib/run-graph`.
-- [ ] Focused tests above pass.
-- [ ] `bun run validate` passes.
-- [ ] `5-5-inspect-a-run-as-nodes-on-command-center` is `done` in `sprint-status.yaml`.
-
-## Risks
-
-| Risk | Likelihood | Impact | Mitigation |
-| --- | --- | --- | --- |
-| Duplicated inspect kernel drifts from legacy | Med | Med | Copy algorithms verbatim and keep characterization tests aligned with Stories 5.1–5.4 |
-| `expectNoAskHumanChrome` fails on projector `awaiting` | High | High | Map chrome labels through `inspectStatusLabel`; never print `awaiting` |
-| Graph click regression back to Log scroll | Med | High | Pane test asserts Graph remains the left view |
-| `getRun` shape change breaks existing `Awaited<ReturnType<typeof getRun>>` callers | Med | Low | Only add fields; keep `run`, `events`, and `usage` |
-| List-endpoint DAG nodes miss `route_loop` / `loop_group` | Med | High | Type nodes as generated `DagNode` and test those kinds in `resolve-room-kind` |
-| Polling node messages without react-query double-fetches | Low | Low | One `useEntity` key per run/node plus a 1000 ms interval only while live |
-| Removing stream node-filter surprises operators | Low | Low | All rows stay visible; selector only opens the room |
-
-## Open Questions
-
-1. Does Command Center need a Chat tab of user turns plus node-status chips?
-Provisional default: no.
-Approved UX Surface Fit keeps `Log | Graph | Artifacts`.
-The Log divider list is the in-page node-status timeline.
-`?node=` is the chat-surface door.
-
-2. Should inspect helpers move into a second sanctioned `@/lib` module?
-Provisional default: no.
-NFR4 names only `run-graph`.
-Duplicate under `experiments/console/inspect/`.
-
-3. Should the Log-column declared-gate `ApprovalPanel` be removed once the gate room exists?
-Provisional default: keep both.
-RunActionBar is empty while paused, so removing the column panel would hide approve on Artifacts.
-
-4. Should the toolbar node dropdown keep filtering the stream?
-Provisional default: no.
-It selects the room.
-All unmerged rows stay visible.
+Use `superpowers:subagent-driven-development` when separate task commits can be reviewed between tasks, or use `superpowers:executing-plans` for one sequential implementation session.
+Do not start Task 12 tracker changes until Tasks 1 through 11 are implemented and all validation is green.
