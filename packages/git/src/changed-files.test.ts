@@ -85,7 +85,12 @@ describe('changedFiles and isGitWorkTree', () => {
   });
 
   afterAll(async () => {
-    await rm(root, { recursive: true, force: true });
+    try {
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    } catch (error) {
+      // Windows: a timed-out git child can keep the temp tree busy (EBUSY).
+      if ((error as NodeJS.ErrnoException).code !== 'EBUSY') throw error;
+    }
   });
 
   test('lists special filenames and changes the revision when porcelain changes', async () => {
@@ -127,32 +132,45 @@ describe('changedFiles and isGitWorkTree', () => {
     expect(await isGitWorkTree(toWorktreePath(plainPath))).toBe(false);
   });
 
-  test('does not refresh the git index while reading changes', async () => {
-    const readOnlyRepoPath = join(root, 'read-only-repo');
-    const trackedPath = join(readOnlyRepoPath, 'tracked.ts');
-    await mkdir(readOnlyRepoPath);
-    await execFileAsync('git', ['init', readOnlyRepoPath]);
-    await execFileAsync('git', [
-      '-C',
-      readOnlyRepoPath,
-      'config',
-      'user.email',
-      'test@example.com',
-    ]);
-    await execFileAsync('git', ['-C', readOnlyRepoPath, 'config', 'user.name', 'Test User']);
-    await writeFile(trackedPath, 'unchanged\n');
-    await execFileAsync('git', ['-C', readOnlyRepoPath, 'add', '--', 'tracked.ts']);
-    await execFileAsync('git', ['-C', readOnlyRepoPath, 'commit', '-m', 'initial']);
+  describe('does not refresh the git index while reading changes', () => {
+    let readOnlyRepoPath = '';
+    let trackedPath = '';
+    let indexPath = '';
 
-    const indexPath = join(readOnlyRepoPath, '.git', 'index');
-    const indexBefore = await readFile(indexPath);
-    const future = new Date(Date.now() + 60_000);
-    await utimes(trackedPath, future, future);
-
-    expect(await changedFiles(toWorktreePath(readOnlyRepoPath))).toEqual({
-      files: [],
-      revision: expect.stringMatching(/^[a-f0-9]{64}$/),
+    // Fixture setup is in beforeAll so the timed test is only utimes + status.
+    // Six git spawns in the test body exceeded Bun's 5000 ms default on
+    // windows-latest under parallel package load (5016 ms).
+    beforeAll(async () => {
+      readOnlyRepoPath = join(root, 'read-only-repo');
+      trackedPath = join(readOnlyRepoPath, 'tracked.ts');
+      indexPath = join(readOnlyRepoPath, '.git', 'index');
+      await mkdir(readOnlyRepoPath);
+      await execFileAsync('git', ['init', '-b', 'main', readOnlyRepoPath]);
+      await writeFile(trackedPath, 'unchanged\n');
+      await execFileAsync('git', ['-C', readOnlyRepoPath, 'add', '--', 'tracked.ts']);
+      await execFileAsync('git', [
+        '-C',
+        readOnlyRepoPath,
+        '-c',
+        'user.email=test@example.com',
+        '-c',
+        'user.name=Test User',
+        'commit',
+        '-m',
+        'initial',
+      ]);
     });
-    expect(await readFile(indexPath)).toEqual(indexBefore);
+
+    test('leaves the index bytes unchanged after a racy mtime', async () => {
+      const indexBefore = await readFile(indexPath);
+      const future = new Date(Date.now() + 60_000);
+      await utimes(trackedPath, future, future);
+
+      expect(await changedFiles(toWorktreePath(readOnlyRepoPath))).toEqual({
+        files: [],
+        revision: expect.stringMatching(/^[a-f0-9]{64}$/),
+      });
+      expect(await readFile(indexPath)).toEqual(indexBefore);
+    });
   });
 });

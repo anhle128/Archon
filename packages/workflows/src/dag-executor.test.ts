@@ -8,6 +8,7 @@ import {
   mock,
   spyOn,
   setSystemTime,
+  setDefaultTimeout,
   type Mock,
 } from 'bun:test';
 import { mkdir, writeFile, rm, readFile } from 'fs/promises';
@@ -24,6 +25,15 @@ import {
 import { basename, join } from 'node:path';
 import { tmpdir } from 'os';
 import * as git from '@archon/git';
+
+// Windows process creation is far dearer than Linux (no fork; Git-Bash). The
+// first real bash-node executeDagWorkflow in this file hit 5765 ms on
+// windows-latest under parallel package load — Bun's 5000 ms default. Keep
+// the Linux alarm; only widen the Windows budget (same precedent as
+// plannotator-gate-executor.test.ts).
+if (process.platform === 'win32') {
+  setDefaultTimeout(20_000);
+}
 
 // --- Mock logger (MUST come before imports of modules under test) ---
 
