@@ -55,6 +55,7 @@ import type { IWorkflowStore } from './store';
 // --- Helpers ---
 
 function createMockStore(): IWorkflowStore {
+  let nodeMessageSeq = 0;
   return {
     createWorkflowRun: mock(() =>
       Promise.resolve({
@@ -158,6 +159,13 @@ function createMockStore(): IWorkflowStore {
     ),
     getCodebase: mock(() => Promise.resolve(null)),
     getCodebaseEnvVars: mock(() => Promise.resolve({})),
+    appendNodeMessage: async input => ({
+      ...input,
+      id: `node-message-${String(++nodeMessageSeq)}`,
+      seq: nodeMessageSeq,
+      created_at: new Date(),
+    }),
+    listNodeMessages: async () => [],
   };
 }
 

@@ -92,6 +92,7 @@ import { executeWorkflow } from './executor';
 // ---------------------------------------------------------------------------
 
 function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
+  let nodeMessageSeq = 0;
   return {
     getActiveWorkflowRunByPath: mock(async () => null),
     failOrphanedRuns: mock(async () => ({ count: 0 })),
@@ -133,6 +134,13 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     resumeApprovedGate: mock(async () => ({ resumed: true })),
     getCodebase: mock(async () => null),
     getCodebaseEnvVars: mock(async () => ({})),
+    appendNodeMessage: async input => ({
+      ...input,
+      id: `node-message-${String(++nodeMessageSeq)}`,
+      seq: nodeMessageSeq,
+      created_at: new Date(),
+    }),
+    listNodeMessages: async () => [],
     ...overrides,
   };
 }

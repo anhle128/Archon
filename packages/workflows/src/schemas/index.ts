@@ -245,3 +245,7 @@ export type {
 
 // DagWorkflow — alias kept for backward compatibility
 export type { WorkflowDefinition as DagWorkflow } from './workflow';
+
+// Per-node transcript rows + pending-interaction embed contract
+export * from './node-message';
+export * from './pending-interaction';

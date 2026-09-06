@@ -117,6 +117,7 @@ import { applyEnvOverlay } from './env-overlay';
 // --- Mock helpers ---
 
 function createMockStore(): IWorkflowStore {
+  let nodeMessageSeq = 0;
   return {
     createWorkflowRun: mock(() =>
       Promise.resolve({
@@ -230,6 +231,13 @@ function createMockStore(): IWorkflowStore {
     getWorkflowNodeSession: mock(() => Promise.resolve(null)),
     upsertWorkflowNodeSession: mock(() => Promise.resolve()),
     deleteWorkflowNodeSessions: mock(() => Promise.resolve({ deleted: 0 })),
+    appendNodeMessage: async input => ({
+      ...input,
+      id: `node-message-${String(++nodeMessageSeq)}`,
+      seq: nodeMessageSeq,
+      created_at: new Date(),
+    }),
+    listNodeMessages: async () => [],
   };
 }
 

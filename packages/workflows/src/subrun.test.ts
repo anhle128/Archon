@@ -59,6 +59,7 @@ import { discoverWorkflows } from './workflow-discovery';
 import { validateWorkflowResources } from './validator';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
+import type { NodeMessage } from './schemas/node-message';
 import type { ApprovalContext, WorkflowRun } from './schemas/workflow-run';
 import type { WorkflowDefinition } from './schemas/workflow';
 import type {
@@ -85,6 +86,8 @@ class InMemoryStore implements IWorkflowStore {
   runs = new Map<string, WorkflowRun>();
   events: StoreEvent[] = [];
   private seq = 0;
+  private nodeMessages: NodeMessage[] = [];
+  private nodeMessageId = 0;
 
   private clone(r: WorkflowRun): WorkflowRun {
     return { ...r, metadata: { ...r.metadata } };
@@ -322,6 +325,29 @@ class InMemoryStore implements IWorkflowStore {
   deleteWorkflowNodeSessions = (): Promise<{ deleted: number }> => Promise.resolve({ deleted: 0 });
   findResumableRun = (): Promise<null> => Promise.resolve(null);
   failOrphanedRuns = (): Promise<{ count: number }> => Promise.resolve({ count: 0 });
+
+  appendNodeMessage: IWorkflowStore['appendNodeMessage'] = input => {
+    const seq =
+      this.nodeMessages
+        .filter(m => m.workflow_run_id === input.workflow_run_id && m.node_id === input.node_id)
+        .reduce((max, m) => Math.max(max, m.seq), 0) + 1;
+    const row: NodeMessage = {
+      ...input,
+      id: `node-message-${String(++this.nodeMessageId)}`,
+      seq,
+      created_at: new Date(),
+    };
+    this.nodeMessages.push(row);
+    return Promise.resolve({ ...row });
+  };
+
+  listNodeMessages = (workflowRunId: string, nodeId: string): Promise<NodeMessage[]> =>
+    Promise.resolve(
+      this.nodeMessages
+        .filter(m => m.workflow_run_id === workflowRunId && m.node_id === nodeId)
+        .sort((a, b) => a.seq - b.seq)
+        .map(m => ({ ...m }))
+    );
 
   // --- test helpers ---
   /** Mimic approveWorkflow for a standard approval gate: write node_completed for

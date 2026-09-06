@@ -12,6 +12,7 @@ import type {
   WorkflowNodeSession,
   EnvOverlaySnapshot,
 } from './schemas';
+import type { AppendNodeMessageInput, NodeMessage } from './schemas/node-message';
 
 export interface PersistRouteDecisionTransitionInput {
   workflow_run_id: string;
@@ -210,7 +211,18 @@ export interface IWorkflowEnvOverlayStore {
   setWorkflowRunEnvOverlay(runId: string, snapshot: EnvOverlaySnapshot): Promise<WorkflowRun>;
 }
 
-export interface IWorkflowStore extends IRunTreeStore, IWorkflowEnvOverlayStore {
+/**
+ * Immutable per-node transcript persistence. Inherited by `IWorkflowStore` so
+ * the engine dependency object stays one seam; callers that only append or
+ * list transcript rows can depend on this capability alone.
+ */
+export interface IWorkflowNodeMessageStore {
+  appendNodeMessage(input: AppendNodeMessageInput): Promise<NodeMessage>;
+  listNodeMessages(workflowRunId: string, nodeId: string): Promise<NodeMessage[]>;
+}
+
+export interface IWorkflowStore
+  extends IRunTreeStore, IWorkflowEnvOverlayStore, IWorkflowNodeMessageStore {
   // Run lifecycle
   createWorkflowRun(data: {
     workflow_name: string;
