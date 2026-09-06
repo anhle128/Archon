@@ -81,8 +81,8 @@
         "US-003"
       ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 4. Files: packages/web/src/lib/api.generated.d.ts, packages/web/src/lib/api.ts, packages/web/src/lib/api.git-changes.test.ts."
     },
     {
       "id": "US-005",

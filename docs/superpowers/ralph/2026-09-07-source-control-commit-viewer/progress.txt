@@ -1,5 +1,15 @@
 ## Codebase Patterns
 
+### Regenerate OpenAPI types from a worktree-specific port
+- **Where**: `packages/web/package.json` `generate:types`, `packages/web/src/lib/api.generated.d.ts`
+- **Pattern**: `generate:types` is hardcoded to `http://localhost:3090/api/openapi.json`. When 3090 is already bound, start this worktree's server on a free port and run `bun x openapi-typescript http://localhost:<port>/api/openapi.json -o src/lib/api.generated.d.ts`. Never hand-edit the generated file. Confirm `ref` on `/git/changes` and `/git/diff`.
+- **Example**: `PORT=39079 bun run dev:server` then `bun x openapi-typescript http://localhost:39079/api/openapi.json -o src/lib/api.generated.d.ts`
+
+### Locked GitFileSource union needs a redundant-constituents disable
+- **Where**: `packages/web/src/lib/api.ts` `GitFileSource`
+- **Pattern**: `'worktree' | 'head' | string` is the locked contract; it trips `@typescript-eslint/no-redundant-type-constituents` the same way `'live' | string` does. Keep the union and disable the next line.
+- **Example**: `// eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents -- locked GitFileSource contract`
+
 ### Validate HTTP ref before checkout lookup
 - **Where**: `packages/server/src/routes/git/changes-handler.ts`, `diff-handler.ts`, `file-handler.ts`
 - **Pattern**: `c.req.query('ref') !== undefined` plus `isValidGitObjectId` rejects empty `ref=` and `HEAD` before `loadRunCheckout`. Now listing must call `changedFiles(path)` with one argument. Map `GitCommitRefError` / `GitFileError` `invalid_ref` to HTTP 400 `{ error: 'Invalid commit ref' }` and log `{ runId, errorType: 'invalid_ref' }` without the OID.
@@ -107,5 +117,27 @@
 - Empty `ref=` is `''`, not undefined — only an absent query parameter selects Now.
 - Now `changedFiles` must be invoked with one argument; a trailing `undefined` fails `mock.calls[0].length === 1`.
 - Do not log the commit OID on `invalid_ref` paths.
+
+---
+
+## 2026-09-07 — US-004: Web git clients and generated types
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/lib/api.generated.d.ts` — regenerated; `ref` on git changes/diff plus 400 Invalid commit ref
+- `packages/web/src/lib/api.ts` — `assertCommitRef`, `GitFileSource` includes full object names, clients send optional `ref`
+- `packages/web/src/lib/api.git-changes.test.ts` — ref encoding, invalid-ref assertion, gitFileUrl commit source
+
+**Acceptance criteria verified**:
+- [x] Regenerate packages/web/src/lib/api.generated.d.ts from the running server OpenAPI document; verify ref appears in GET /api/workflows/runs/{runId}/git/changes and /git/diff query parameters.
+- [x] In packages/web/src/lib/api.ts, define GitFileSource as 'worktree' | 'head' | string; implement assertCommitRef validating FULL_GIT_OBJECT_ID_RE.
+- [x] Update getWorkflowRunGitChanges(runId, options?) to accept { ref?: string; signal?: AbortSignal } and validate ref before request.
+- [x] Update getWorkflowRunGitDiff(runId, path, options?) to accept { cursor?: string; ref?: string; signal?: AbortSignal } and validate ref before request.
+- [x] Update gitFileUrl to validate source with assertCommitRef when source is not 'worktree' or 'head'.
+- [x] Pass client unit tests in packages/web/src/lib/api.git-changes.test.ts covering ref encoding, invalid ref assertion, and signal forwarding.
+
+**Learnings**:
+- Port 3090 was already bound; generate types from this worktree's server on 39079 with openapi-typescript, then stop only that server.
+- `'worktree' | 'head' | string` needs the same redundant-constituents disable as `'live' | string`.
 
 ---
