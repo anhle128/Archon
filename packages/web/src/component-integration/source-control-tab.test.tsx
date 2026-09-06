@@ -9,7 +9,13 @@ import { Window } from 'happy-dom';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
-import type { GitChangedFile, GitChangesResponse, GitReadyDiffResponse } from '@/lib/api';
+import type {
+  GitChangedFile,
+  GitChangesResponse,
+  GitLogCommit,
+  GitLogResponse,
+  GitReadyDiffResponse,
+} from '@/lib/api';
 
 import { SourceControlPanel } from '../components/workflows/source-control/source-control-panel';
 import { SourceControlTab } from '../components/workflows/source-control/source-control-tab';
@@ -18,6 +24,20 @@ const REVISION_A = 'a'.repeat(64);
 const REVISION_B = 'b'.repeat(64);
 const HASH_A = 'c'.repeat(64);
 const HASH_B = 'd'.repeat(64);
+
+const EMPTY_GIT_LOG: GitLogResponse = {
+  commits: [],
+  revision: REVISION_A,
+  truncated: false,
+};
+
+const HISTORY_COMMIT: GitLogCommit = {
+  oid: '1'.repeat(40),
+  parents: [],
+  authorName: 'Ada',
+  authorDate: '2026-09-06T18:09:18Z',
+  subject: 'initial history subject',
+};
 
 const FIRST_DIFF_PAGE: GitReadyDiffResponse = {
   path: 'large.ts',
@@ -153,13 +173,18 @@ function presentedFileResponse(
 }
 
 function mockFetchResponses(responses: readonly GitChangesResponse[]): Mock<typeof fetch> {
-  let index = 0;
-  return spyOn(globalThis, 'fetch').mockImplementation((async (): Promise<Response> => {
-    const payload = responses[index];
-    if (!payload) throw new Error(`Unexpected fetch number ${String(index + 1)}`);
-    index += 1;
+  let changesIndex = 0;
+  return spyOn(globalThis, 'fetch').mockImplementation((async (
+    input: RequestInfo | URL
+  ): Promise<Response> => {
+    const url = requestUrl(input);
+    if (url.includes('/git/log')) return jsonResponse(EMPTY_GIT_LOG);
+    if (!url.includes('/git/changes')) throw new Error(`Unexpected fetch: ${url}`);
+    const payload = responses[changesIndex];
+    if (!payload) throw new Error(`Unexpected changes fetch ${String(changesIndex + 1)}`);
+    changesIndex += 1;
     return jsonResponse(payload);
-  }) as unknown as typeof fetch);
+  }) as typeof fetch);
 }
 
 function textFileResponse(text: string, hash: string): Response {
@@ -244,15 +269,25 @@ function mockGitRoutes(options: {
   ) => GitChangesResponse | Response | Promise<GitChangesResponse | Response>;
   onDiff?: (url: string, call: number, init?: RequestInit) => Response | Promise<Response>;
   onFile?: (url: string, call: number, init?: RequestInit) => Response | Promise<Response>;
+  onLog?: (
+    call: number,
+    init?: RequestInit
+  ) => GitLogResponse | Response | Promise<GitLogResponse | Response>;
 }): Mock<typeof fetch> {
   let changesCall = 0;
   let diffCall = 0;
   let fileCall = 0;
+  let logCall = 0;
   return spyOn(globalThis, 'fetch').mockImplementation((async (
     input: RequestInfo | URL,
     init?: RequestInit
   ): Promise<Response> => {
     const url = requestUrl(input);
+    if (url.includes('/git/log')) {
+      logCall += 1;
+      const result = options.onLog ? await options.onLog(logCall, init) : EMPTY_GIT_LOG;
+      return result instanceof Response ? result : jsonResponse(result);
+    }
     if (url.includes('/git/changes')) {
       changesCall += 1;
       const result = await options.onChanges(changesCall, init);
@@ -311,7 +346,7 @@ function requireButton(text: string): HTMLButtonElement {
 }
 
 function requireListbox(): HTMLElement {
-  const listbox = host.querySelector('[role="listbox"]');
+  const listbox = host.querySelector('[role="listbox"][aria-label="Uncommitted changes"]');
   if (!(listbox instanceof HTMLElement)) {
     throw new Error('Missing changed-files listbox');
   }
@@ -399,17 +434,21 @@ describe('SourceControlTab', () => {
 
     expect(host.textContent).toContain('src/live.ts');
     expect(host.textContent).toContain('M');
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
     expect(fetchSpy).toHaveBeenCalledWith('/api/workflows/runs/run%2Fone/git/changes', {
       signal: expect.any(AbortSignal),
     });
+    expect(fetchSpy).toHaveBeenCalledWith('/api/workflows/runs/run%2Fone/git/log', {
+      signal: expect.any(AbortSignal),
+    });
+    expect(calledUrls(fetchSpy).every(url => !url.includes('working_path'))).toBe(true);
 
     await act(async () => {
       await new Promise<void>(resolve => {
         setTimeout(resolve, 0);
       });
     });
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
   test('keeps the displayed list until the divergent snapshot is accepted', async () => {
@@ -444,7 +483,7 @@ describe('SourceControlTab', () => {
     await waitFor(() => host.textContent?.includes('new.ts'), 'the accepted snapshot');
 
     expect(host.textContent).not.toContain('old.ts');
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
   });
 
   test('updates aria-activedescendant when the focused list receives ArrowDown', async () => {
@@ -489,11 +528,13 @@ describe('SourceControlTab', () => {
 
     await renderTab('run-1');
     await waitFor(
-      () => host.textContent?.includes('Could not refresh changes.'),
+      () =>
+        (host.textContent?.includes('Could not refresh changes.') ?? false) &&
+        (host.textContent?.includes('Could not refresh history.') ?? false),
       'the in-region fetch failure'
     );
 
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
     expect(host.textContent).toContain('Reload');
 
     focusManager.setFocused(false);
@@ -506,7 +547,7 @@ describe('SourceControlTab', () => {
       });
     });
 
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
   test('opens the current file with Enter or Space and a second file on click', async () => {
@@ -520,7 +561,9 @@ describe('SourceControlTab', () => {
       root.render(
         createElement(SourceControlPanel, {
           snapshot: { files: [...files], revision: REVISION_A },
+          historySnapshot: EMPTY_GIT_LOG,
           loadState: 'idle',
+          historyLoadState: 'idle',
           stale: false,
           onReload: (): void => undefined,
           onAcceptPending: (): void => undefined,
@@ -579,7 +622,9 @@ describe('SourceControlTab', () => {
       root.render(
         createElement(SourceControlPanel, {
           snapshot: { files, revision: REVISION_A },
+          historySnapshot: EMPTY_GIT_LOG,
           loadState: 'idle',
+          historyLoadState: 'idle',
           stale: false,
           onReload: (): void => undefined,
           onAcceptPending: (): void => undefined,
@@ -661,7 +706,7 @@ describe('SourceControlTab', () => {
     expect(host.textContent).toContain('After');
     expect(host.querySelector('[aria-label="Before"]')).not.toBeNull();
     expect(host.querySelector('[aria-label="After"]')).not.toBeNull();
-    expect(calledUrls(fetchSpy)).toEqual([
+    expect(calledUrls(fetchSpy).filter(url => !url.includes('/git/log'))).toEqual([
       '/api/workflows/runs/run%2Fone/git/changes',
       '/api/workflows/runs/run%2Fone/git/diff?path=src%2Fa.ts',
     ]);
@@ -1654,6 +1699,111 @@ describe('SourceControlTab', () => {
     await clickOption('.env');
     await waitFor(() => host.querySelector('.hljs') !== null, 'highlighted env');
     expect(host.textContent).toContain('TOKEN');
+  });
+
+  test('shows a region-empty History for a ready repository with zero commits', async () => {
+    fetchSpy = mockGitRoutes({
+      onChanges: () => ({ files: [], revision: REVISION_A }),
+      onLog: () => EMPTY_GIT_LOG,
+    });
+
+    await renderTab('run-1');
+    await waitFor(() => host.textContent?.includes('No commits yet'), 'empty History');
+
+    expect(host.textContent).toContain('Changes');
+    expect(host.textContent).toContain('History');
+    expect(host.textContent).not.toContain('No worktree available');
+  });
+
+  test('treats container CAP-6 from either read as a whole-tab state', async () => {
+    fetchSpy = mockGitRoutes({
+      onChanges: () => ({ files: [], revision: REVISION_A }),
+      onLog: () => ({
+        emptyReason: 'container',
+        commits: [],
+        revision: '',
+        truncated: false,
+      }),
+    });
+
+    await renderTab('run-1');
+    await waitFor(() => host.textContent?.includes('No files to show'), 'container CAP-6');
+
+    expect(host.textContent).not.toContain('History');
+    expect(
+      Array.from(host.querySelectorAll('button')).some(button => button.textContent === 'Reload')
+    ).toBe(false);
+  });
+
+  test('operates History from the keyboard without opening a diff or file in Story 2.1', async () => {
+    const secondCommit = {
+      ...HISTORY_COMMIT,
+      oid: '2'.repeat(40),
+      subject: 'second history subject',
+    };
+    fetchSpy = mockGitRoutes({
+      onChanges: () => ({ files: [], revision: REVISION_A }),
+      onLog: () => ({
+        commits: [HISTORY_COMMIT, secondCommit],
+        revision: REVISION_A,
+        truncated: false,
+      }),
+    });
+
+    await renderTab('run-1');
+    await waitFor(() => host.textContent?.includes(HISTORY_COMMIT.subject), 'commit row');
+    const history = host.querySelector('[role="listbox"][aria-label="Commit history"]');
+    if (!(history instanceof HTMLElement)) throw new Error('Missing History listbox');
+    expect(history.getAttribute('aria-activedescendant')).toBe('sc-history-commit-0');
+
+    await act(async () => {
+      history.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    });
+    expect(history.getAttribute('aria-activedescendant')).toBe('sc-history-commit-1');
+    expect(host.querySelector('#sc-history-commit-1')?.getAttribute('aria-selected')).toBe('true');
+
+    await act(async () => {
+      history.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    });
+
+    expect(calledUrls(fetchSpy).filter(url => url.includes('/git/diff'))).toEqual([]);
+    expect(calledUrls(fetchSpy).filter(url => url.includes('/git/file/'))).toEqual([]);
+  });
+
+  test('freezes a divergent History until the shared stale action is accepted', async () => {
+    const changedCommit = {
+      ...HISTORY_COMMIT,
+      oid: '2'.repeat(40),
+      subject: 'changed history subject',
+    };
+    fetchSpy = mockGitRoutes({
+      onChanges: () => ({ files: [], revision: REVISION_A }),
+      onLog: call =>
+        call === 1
+          ? { commits: [HISTORY_COMMIT], revision: REVISION_A, truncated: false }
+          : { commits: [changedCommit], revision: REVISION_B, truncated: false },
+    });
+
+    await renderTab('run-1');
+    await waitFor(() => host.textContent?.includes(HISTORY_COMMIT.subject), 'initial History');
+    await act(async () => {
+      requireButton('Reload').click();
+    });
+    await waitFor(
+      () => host.textContent?.includes('Changed on disk — Reload'),
+      'History divergence affordance'
+    );
+
+    expect(host.textContent).toContain(HISTORY_COMMIT.subject);
+    expect(host.textContent).not.toContain(changedCommit.subject);
+
+    await act(async () => {
+      requireButton('Changed on disk — Reload').click();
+    });
+    await waitFor(() => host.textContent?.includes(changedCommit.subject), 'accepted History');
+
+    expect(calledUrls(fetchSpy).filter(url => url.includes('/git/changes'))).toHaveLength(2);
+    expect(calledUrls(fetchSpy).filter(url => url.includes('/git/log'))).toHaveLength(2);
   });
 
   test('a 3000-hunk response mounts only the virtual window', async () => {
