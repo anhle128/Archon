@@ -44,7 +44,7 @@ epics_file: /Users/dale/Desktop/workspace/OceanLabs/workflow-engine/archon/_bmad
 
 development_status:
   epic-5: backlog
-  5-1-open-a-nodes-own-transcript-from-logs-legacy: backlog
+  5-1-open-a-nodes-own-transcript-from-logs-legacy: done
   5-2-see-the-right-room-for-each-node-type-legacy: backlog
   5-3-open-the-same-node-room-from-the-graph-legacy: backlog
   5-4-open-the-node-room-from-the-chat-timeline-legacy: backlog
