@@ -9,14 +9,16 @@ import { createLogger } from '@archon/paths';
 import type { DefaultResourceLoader } from '@earendil-works/pi-coding-agent';
 import type { ThinkingLevel, ToolResultMessage } from '@earendil-works/pi-ai';
 
-import type {
-  AskHumanControlError,
-  IAgentProvider,
-  MessageChunk,
-  ProviderCapabilities,
-  ResumeInteraction,
-  SendQueryOptions,
-  SystemPromptInput,
+import {
+  AskHumanNoStarterError,
+  AskHumanPauseFailedError,
+  type AskHumanControlError,
+  type IAgentProvider,
+  type MessageChunk,
+  type ProviderCapabilities,
+  type ResumeInteraction,
+  type SendQueryOptions,
+  type SystemPromptInput,
 } from '../../types';
 
 import { PI_CAPABILITIES } from './capabilities';
@@ -81,6 +83,10 @@ class Semaphore {
 }
 
 let piSemaphore: Semaphore | undefined;
+
+function isAskHumanFailureControlError(error: AskHumanControlError): boolean {
+  return error instanceof AskHumanNoStarterError || error instanceof AskHumanPauseFailedError;
+}
 
 /**
  * Write a minimal package.json to a stable tmpdir and set `PI_PACKAGE_DIR`
@@ -906,7 +912,9 @@ export class PiProvider implements IAgentProvider {
                 : undefined;
             },
             onControlError: (error: AskHumanControlError): void => {
-              askControlError = error;
+              if (!askControlError || !isAskHumanFailureControlError(askControlError)) {
+                askControlError = error;
+              }
               void askSessionRef.current?.abort();
             },
           })

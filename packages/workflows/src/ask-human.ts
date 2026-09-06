@@ -8,6 +8,7 @@
 import { createLogger } from '@archon/paths';
 import {
   AskHumanAwaitingError,
+  AskHumanPauseFailedError,
   type NativeTool,
   type NativeToolHandlerContext,
 } from '@archon/providers/types';
@@ -53,6 +54,10 @@ type AskHumanHandlerInput = z.infer<typeof askHumanHandlerInputSchema>;
 const ASK_HUMAN_DESCRIPTION =
   'Ask the run starter one or more structured questions. Call this tool instead of asking in prose. Wait after calling; do not guess the answer.';
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export interface CreateAskHumanToolInput {
   store: IWorkflowStore;
   workflowRunId: string;
@@ -96,7 +101,20 @@ export function createAskHumanTool(input: CreateAskHumanToolInput): NativeTool {
 
       getLog().info({ workflowRunId, nodeId, toolUseId, kind: 'ask' }, 'workflow.ask_pending');
 
-      await store.pauseWorkflowRun(workflowRunId);
+      try {
+        await store.pauseWorkflowRun(workflowRunId);
+      } catch (error) {
+        getLog().error(
+          {
+            workflowRunId,
+            nodeId,
+            toolUseId,
+            errorType: error instanceof Error ? error.constructor.name : typeof error,
+          },
+          'workflow.ask_pause_failed'
+        );
+        throw new AskHumanPauseFailedError(toolUseId, nodeId, workflowRunId, errorMessage(error));
+      }
 
       throw new AskHumanAwaitingError(toolUseId, nodeId, workflowRunId);
     },

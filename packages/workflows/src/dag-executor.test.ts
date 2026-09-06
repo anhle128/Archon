@@ -122,7 +122,11 @@ import { OutputRefError } from './output-ref';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore, WorkflowEventData } from './store';
 import { buildAiProfile } from './model-validation';
-import { AskHumanNoStarterError, type SendQueryOptions } from '@archon/providers/types';
+import {
+  AskHumanNoStarterError,
+  AskHumanPauseFailedError,
+  type SendQueryOptions,
+} from '@archon/providers/types';
 import * as plannotatorGateExecutor from './plannotator-gate-executor';
 import { applyEnvOverlay } from './env-overlay';
 
@@ -25249,6 +25253,62 @@ describe('executeDagWorkflow -- AskHuman pause', () => {
     expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
     expect(store.failWorkflowRun).toHaveBeenCalled();
     expect(storedEventTypes(store)).toContain('node_failed');
+  });
+
+  it('fails the node on post-persist pause errors without completing or awaiting it', async () => {
+    const store = createMockStore();
+    store.pauseWorkflowRun = mock(async () => {
+      throw new Error('pause failed');
+    });
+    mockSendQueryDag.mockImplementation(async function* (
+      _prompt: string,
+      _cwd: string,
+      _resume?: string,
+      options?: SendQueryOptions
+    ) {
+      await invokeInjectedAskHuman(options);
+    });
+    const workflowRun = makeWorkflowRun('ask-pause-fail-run');
+
+    await executeDagWorkflow(
+      createMockDeps(store),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      { name: 'ask-pause-fail', nodes: [{ id: 'review', prompt: 'ask' }] },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(store.insertPendingInteraction).toHaveBeenCalledTimes(1);
+    expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.failWorkflowRun).toHaveBeenCalled();
+    const rows = await store.listNodeMessages(workflowRun.id, 'review');
+    expect(rows.some(row => row.kind === 'status' && row.payload.state === 'failed')).toBe(true);
+    expect(rows.some(row => row.kind === 'status' && row.payload.state === 'awaiting')).toBe(false);
+    expect(rows.some(row => row.kind === 'status' && row.payload.state === 'completed')).toBe(
+      false
+    );
+    expect(storedEventTypes(store)).toContain('node_failed');
+    expect(storedEventTypes(store)).not.toContain('node_completed');
+    const failedEvent = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls
+      .map(call => call[0] as { event_type: string; data?: { error?: string } })
+      .find(event => event.event_type === 'node_failed');
+    const expectedError = new AskHumanPauseFailedError(
+      'toolu_1',
+      'review',
+      workflowRun.id,
+      'pause failed'
+    ).message;
+    expect(failedEvent?.data?.error).toContain(expectedError);
+    expect(failedEvent?.data?.error).not.toBe('Cancelled by user');
   });
 
   it('pauses a Pi loop on AskHuman while keeping accumulated text and usage', async () => {

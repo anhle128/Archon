@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test, mock } from 'bun:test';
-import { AskHumanAwaitingError } from '@archon/providers/types';
+import { AskHumanAwaitingError, AskHumanPauseFailedError } from '@archon/providers/types';
 import type { IWorkflowStore } from './store';
 
 const infoLogs: unknown[][] = [];
@@ -100,6 +100,21 @@ describe('AskHuman tool', () => {
       tool.handler({ questions: 'nope' }, { toolUseId: 'toolu_1', sessionId: 'sess-1' })
     ).rejects.not.toBeInstanceOf(AskHumanAwaitingError);
     expect(s.insertPendingInteraction).not.toHaveBeenCalled();
+  });
+
+  test('converts post-persist pause failures into AskHuman control errors', async () => {
+    const s = store({
+      pauseWorkflowRun: mock(async () => {
+        throw new Error('database busy');
+      }),
+    });
+    const tool = createAskHumanTool({ store: s, workflowRunId: 'run-1', nodeId: 'review' });
+    await expect(
+      tool.handler({ questions }, { toolUseId: 'toolu_1', sessionId: 'sess-1' })
+    ).rejects.toBeInstanceOf(AskHumanPauseFailedError);
+    expect(s.insertPendingInteraction).toHaveBeenCalledTimes(1);
+    expect(s.pauseWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(infoLogs)).not.toContain('Ship it?');
   });
 
   test('requires the real tool-use id and provider session id', async () => {

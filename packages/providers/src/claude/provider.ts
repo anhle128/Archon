@@ -37,18 +37,20 @@ import {
   type SDKResultMessage,
   type ModelUsage,
 } from '@anthropic-ai/claude-agent-sdk';
-import type {
-  IAgentProvider,
-  SendQueryOptions,
-  MessageChunk,
-  TokenUsage,
-  ProviderCapabilities,
-  NodeConfig,
-  ModelUsageEntry,
-  UsageBreakdown,
-  NativeToolHandlerContext,
-  AskHumanControlError,
-  ResumeInteraction,
+import {
+  AskHumanNoStarterError,
+  AskHumanPauseFailedError,
+  type AskHumanControlError,
+  type IAgentProvider,
+  type MessageChunk,
+  type ModelUsageEntry,
+  type NodeConfig,
+  type NativeToolHandlerContext,
+  type ProviderCapabilities,
+  type ResumeInteraction,
+  type SendQueryOptions,
+  type TokenUsage,
+  type UsageBreakdown,
 } from '../types';
 import { toUsageBreakdown } from '../usage-breakdown';
 import { parseClaudeConfig } from './config';
@@ -962,8 +964,19 @@ function buildToolCaptureHooks(toolResultQueue: ToolResultEntry[]): Options['hoo
 
 interface ClaudeAskBridge {
   sessionId?: string;
-  pendingAskToolUseId?: string;
+  pendingAskToolUseIds?: string[];
   controlError?: AskHumanControlError;
+}
+
+function isAskHumanFailureControlError(error: AskHumanControlError): boolean {
+  return error instanceof AskHumanNoStarterError || error instanceof AskHumanPauseFailedError;
+}
+
+function recordAskHumanControlError(bridge: ClaudeAskBridge, error: AskHumanControlError): void {
+  if (bridge.controlError && isAskHumanFailureControlError(bridge.controlError)) {
+    return;
+  }
+  bridge.controlError = error;
 }
 
 /**
@@ -1005,7 +1018,7 @@ function composeAskHumanPreToolUseHook(options: Options, bridge: ClaudeAskBridge
           typeof toolUseId === 'string' &&
           toolUseId.trim() !== ''
         ) {
-          bridge.pendingAskToolUseId = toolUseId;
+          (bridge.pendingAskToolUseIds ??= []).push(toolUseId);
         }
         return { continue: true };
       }) as HookCallback,
@@ -1033,8 +1046,10 @@ function createClaudeAskRuntime(
         context.sessionId = bridge.sessionId;
       }
       if (toolName === 'AskHuman') {
-        const toolUseId = bridge.pendingAskToolUseId;
-        bridge.pendingAskToolUseId = undefined;
+        const toolUseId = bridge.pendingAskToolUseIds?.shift();
+        if (bridge.pendingAskToolUseIds?.length === 0) {
+          bridge.pendingAskToolUseIds = undefined;
+        }
         if (toolUseId !== undefined) {
           context.toolUseId = toolUseId;
         }
@@ -1042,7 +1057,7 @@ function createClaudeAskRuntime(
       return context;
     },
     onControlError: (error: AskHumanControlError): void => {
-      bridge.controlError = error;
+      recordAskHumanControlError(bridge, error);
       controller.abort();
     },
   };

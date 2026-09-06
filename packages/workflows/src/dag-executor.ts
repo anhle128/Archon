@@ -42,6 +42,7 @@ import {
   CONTAINER_ENV_DENYLIST,
   AskHumanAwaitingError,
   AskHumanNoStarterError,
+  AskHumanPauseFailedError,
 } from '@archon/providers/types';
 import type { ContainerRunContext } from './container-context';
 import { WRITEBACK_GATE_NODE_ID } from './container-context';
@@ -643,7 +644,7 @@ export const CANCEL_CHECK_INTERVAL_MS = 10_000;
  * - `running`: the normal case → continue.
  * - `paused`: a concurrent approval or AskHuman node in the same topological layer has
  *   transitioned the run to paused. The streaming node should finish its own
- *   output; workflow progression is gated by the approval node, not by tearing
+ *   output; workflow progression is gated by the paused node, not by tearing
  *   down unrelated in-flight streams.
  * - `null` (run deleted), `cancelled`, `failed`, `completed`, or any other
  *   state → abort the stream.
@@ -3268,7 +3269,8 @@ async function executeNodeInternal(
     if (
       nodeAbortController.signal.aborted &&
       !nodeIdleTimedOut &&
-      !(error instanceof AskHumanNoStarterError)
+      !(error instanceof AskHumanNoStarterError) &&
+      !(error instanceof AskHumanPauseFailedError)
     ) {
       getLog().info({ nodeId: node.id }, 'dag_node_cancelled_via_abort');
       await recordFailedStatus('Cancelled by user');
