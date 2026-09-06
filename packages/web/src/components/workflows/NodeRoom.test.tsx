@@ -150,21 +150,34 @@ describe('selectNodeRoomMessages', () => {
 
 describe('NodeRoom', () => {
   test('renders every room state, ordered kinds, iteration slice, region, and no prohibited chrome', () => {
-    expect(visibleText(renderRoom({ nodeId: null, selection: null }))).toBe('Select a node');
-    expect(visibleText(renderRoom({ isPending: true, messages: undefined }))).toBe(
-      'Loading node transcript'
-    );
+    const unselected = renderRoom({ nodeId: null, selection: null });
+    expect(visibleText(unselected)).toBe('Select a node');
+    expect(unselected).not.toContain('role="region"');
+
+    const loading = renderRoom({ isPending: true, messages: undefined });
+    expect(visibleText(loading)).toBe('Loading node transcript');
+    expect(loading).toContain('role="region"');
+    expect(loading).toContain('aria-label="review room"');
+    expect(loading.split('role="region"').length - 1).toBe(1);
 
     const errorMarkup = renderRoom({ error: new Error('boom'), messages: undefined });
     expect(errorMarkup).toContain('Failed to load node transcript');
     expect(errorMarkup).toContain('type="button"');
     expect(errorMarkup).toContain('Retry');
+    expect(errorMarkup).toContain('role="region"');
+    expect(errorMarkup).toContain('aria-label="review room"');
+    expect(errorMarkup.split('role="region"').length - 1).toBe(1);
 
-    expect(visibleText(renderRoom({ messages: [] }))).toBe("Node hasn't produced output");
+    const empty = renderRoom({ messages: [] });
+    expect(visibleText(empty)).toBe("Node hasn't produced output");
+    expect(empty).toContain('role="region"');
+    expect(empty).toContain('aria-label="review room"');
+    expect(empty.split('role="region"').length - 1).toBe(1);
 
     const loaded = renderRoom();
     expect(loaded).toContain('role="region"');
     expect(loaded).toContain('aria-label="review room"');
+    expect(loaded.split('role="region"').length - 1).toBe(1);
     expect(loaded).toContain('first');
     expect(loaded).toContain('Read');
     expect(visibleText(loaded)).toContain('"path": "a.ts"');
