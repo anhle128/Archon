@@ -1,16 +1,23 @@
-import { createElement } from 'react';
-import { describe, test, expect } from 'bun:test';
+import { act, createElement } from 'react';
+import { createRoot } from 'react-dom/client';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
   aggregateUsageMetrics,
   collectUsageByNode,
   pairToolEvents,
+  RunStream,
   sumNullableMetric,
 } from './RunStream';
 import { buildNodeLedgerUsageReport, NodeDivider } from './NodeDivider';
-import { toRunEvent } from '../primitives/event';
+import { foldNodeRuns, toRunEvent } from '../primitives/event';
+import type { Message } from '../primitives/message';
 import type { UsageMetrics, UsageReport, UsageReportGroup } from '../skills/usage';
+import type { WorkflowEvent, WorkflowNodeState } from '../skills/runs';
 import { StreamContextProvider } from '../lib/stream-context';
+import { buildConsoleLogEntries } from './inspect/build-console-log-entries';
+import { buildLogRows } from './inspect/build-log-rows';
+import { installHappyDom, restoreHappyDom } from '../test/install-happy-dom';
 
 type Raw = Parameters<typeof toRunEvent>[0];
 
@@ -347,8 +354,11 @@ describe('NodeDivider legacy cost zero', () => {
       createElement(StreamContextProvider, {
         value: { runStartedAt: '2026-06-05T10:00:00Z' },
         children: createElement(NodeDivider, {
+          rowId: 'step',
           nodeId: 'step',
           nodeName: 'step',
+          selected: false,
+          onSelect: (): void => undefined,
           status: 'completed',
           durationMs: 1000,
           timestamp: '2026-06-05T10:00:01Z',
@@ -391,5 +401,297 @@ describe('NodeDivider legacy cost zero', () => {
     expect(markup).toContain('&lt;$0.000001');
     // Exact zero form is `$0.00` with a word/space boundary after — not the floor prefix.
     expect(markup).not.toMatch(/\$0\.00(?!\d)/);
+  });
+});
+
+const RUN_STARTED = '2026-06-05T10:00:00Z';
+
+function nodeState(
+  overrides: Pick<WorkflowNodeState, 'nodeId' | 'name' | 'status'>
+): WorkflowNodeState {
+  return { retryEpoch: 0, ...overrides };
+}
+
+function workflowEvent(overrides: {
+  id: string;
+  event_type: string;
+  step_name: string;
+  created_at: string;
+  data?: Record<string, unknown>;
+}): WorkflowEvent {
+  return {
+    id: overrides.id,
+    workflow_run_id: 'r1',
+    event_type: overrides.event_type,
+    step_index: null,
+    step_name: overrides.step_name,
+    data: overrides.data ?? {},
+    created_at: overrides.created_at,
+  };
+}
+
+function routeEvent(id: string, executionSeq: number, created_at: string): WorkflowEvent {
+  return workflowEvent({
+    id,
+    event_type: 'node_routed',
+    step_name: 'router',
+    created_at,
+    data: {
+      sources: ['review'],
+      outcome: 'negative',
+      to: 'fix',
+      execution_seq: executionSeq,
+    },
+  });
+}
+
+function assistantMessage(id: string, content: string, timestamp: string): Message {
+  return {
+    id,
+    role: 'assistant',
+    content,
+    timestamp,
+    toolCalls: [],
+    error: null,
+    category: null,
+    dispatch: null,
+    workflowResult: null,
+  };
+}
+
+function fiveDividerFixture(): {
+  logEntries: ReturnType<typeof buildConsoleLogEntries>;
+  runEvents: ReturnType<typeof toRunEvent>[];
+  messages: Message[];
+  usage: UsageReport;
+} {
+  const rawEvents: WorkflowEvent[] = [
+    workflowEvent({
+      id: 'plan-start',
+      event_type: 'node_started',
+      step_name: 'plan',
+      created_at: '2026-06-05T10:00:01Z',
+      data: { name: 'Plan' },
+    }),
+    workflowEvent({
+      id: 'plan-done',
+      event_type: 'node_completed',
+      step_name: 'plan',
+      created_at: '2026-06-05T10:00:02Z',
+      data: {
+        name: 'Plan',
+        duration_ms: 1000,
+        cost_usd: 0.5,
+        num_turns: 2,
+        stop_reason: 'end_turn',
+      },
+    }),
+    workflowEvent({
+      id: 'loop-start',
+      event_type: 'node_started',
+      step_name: 'loop',
+      created_at: '2026-06-05T10:00:03Z',
+      data: { name: 'Loop' },
+    }),
+    workflowEvent({
+      id: 'loop-i1-start',
+      event_type: 'loop_iteration_started',
+      step_name: 'loop',
+      created_at: '2026-06-05T10:00:03Z',
+      data: { iteration: 1 },
+    }),
+    workflowEvent({
+      id: 'loop-i1-done',
+      event_type: 'loop_iteration_completed',
+      step_name: 'loop',
+      created_at: '2026-06-05T10:00:03.500Z',
+      data: { iteration: 1, duration: 2000 },
+    }),
+    workflowEvent({
+      id: 'router-start',
+      event_type: 'node_started',
+      step_name: 'router',
+      created_at: '2026-06-05T10:00:04Z',
+      data: { name: 'Router' },
+    }),
+    routeEvent('route-1', 1, '2026-06-05T10:00:04Z'),
+    routeEvent('route-2', 2, '2026-06-05T10:00:07Z'),
+    workflowEvent({
+      id: 'loop-i2-start',
+      event_type: 'loop_iteration_started',
+      step_name: 'loop',
+      created_at: '2026-06-05T10:00:09Z',
+      data: { iteration: 2 },
+    }),
+  ];
+  const runEvents = rawEvents.map(toRunEvent);
+  const logEntries = buildConsoleLogEntries({
+    rows: buildLogRows(
+      [
+        nodeState({ nodeId: 'plan', name: 'Plan', status: 'completed' }),
+        nodeState({ nodeId: 'loop', name: 'Loop', status: 'running' }),
+        nodeState({ nodeId: 'router', name: 'Router', status: 'running' }),
+      ],
+      rawEvents
+    ),
+    rawEvents,
+    nodeRuns: foldNodeRuns(runEvents),
+    runStartedAt: RUN_STARTED,
+  });
+  const loopGroup = group(
+    { nodeId: 'loop', provider: 'anthropic', model: 'sonnet', modelSource: 'reported' },
+    { reportedUsd: 1.25, estimatedUsd: 1.4, recordCount: 2 }
+  );
+  return {
+    logEntries,
+    runEvents,
+    messages: [
+      assistantMessage('plan-prose', 'plan output', '2026-06-05T10:00:01.500Z'),
+      assistantMessage('router-prose', 'router output', '2026-06-05T10:00:05Z'),
+    ],
+    usage: nodeReport([loopGroup]),
+  };
+}
+
+function renderStreamMarkup(args: {
+  selectedNodeId?: string;
+  selectedLogRowId?: string | null;
+  onSelectLogRow?: (rowId: string, nodeId: string) => void;
+}): string {
+  const fixture = fiveDividerFixture();
+  return renderToStaticMarkup(
+    createElement(StreamContextProvider, {
+      value: { runStartedAt: RUN_STARTED },
+      children: createElement(RunStream, {
+        messages: fixture.messages,
+        events: fixture.runEvents,
+        showToolCalls: false,
+        showSystem: true,
+        selectedNodeId: args.selectedNodeId ?? 'all',
+        usage: fixture.usage,
+        logEntries: fixture.logEntries,
+        selectedLogRowId: args.selectedLogRowId ?? null,
+        onSelectLogRow: args.onSelectLogRow ?? ((): void => undefined),
+      }),
+    })
+  );
+}
+
+function dividerIds(markup: string): string[] {
+  return [...markup.matchAll(/id="node-transition-([^"]+)"/g)].map(match => match[1] ?? '');
+}
+
+describe('RunStream selectable unmerged log rows', () => {
+  test('ordinary, two-iteration, and two-route rows render as five chronological dividers', () => {
+    const markup = renderStreamMarkup({});
+    expect(dividerIds(markup)).toEqual([
+      'plan-start',
+      'loop-i1-start',
+      'route-1',
+      'route-2',
+      'loop-i2-start',
+    ]);
+    expect(markup).toContain('Plan');
+    expect(markup).toContain('Loop ×1');
+    expect(markup).toContain('Router #1');
+    expect(markup).toContain('Router #2');
+    expect(markup).toContain('Loop ×2');
+    expect(markup).toContain('plan output');
+    expect(markup).toContain('router output');
+    expect(markup).toContain('completed');
+    expect(markup).toContain('00:01');
+    expect(markup).toContain('2t');
+    expect(markup).toContain('end_turn');
+  });
+
+  test('filtering to one node hides other node rows and messages; All nodes restores them', () => {
+    const filtered = renderStreamMarkup({ selectedNodeId: 'plan' });
+    expect(dividerIds(filtered)).toEqual(['plan-start']);
+    expect(filtered).toContain('plan output');
+    expect(filtered).not.toContain('Loop ×1');
+    expect(filtered).not.toContain('Router #1');
+    expect(filtered).not.toContain('router output');
+
+    const restored = renderStreamMarkup({ selectedNodeId: 'all' });
+    expect(dividerIds(restored)).toHaveLength(5);
+    expect(restored).toContain('plan output');
+    expect(restored).toContain('router output');
+    expect(restored).toContain('Loop ×2');
+  });
+
+  test('cumulative node usage renders only on the showNodeUsage row', () => {
+    const markup = renderStreamMarkup({});
+    const loopOne = markup.slice(
+      markup.indexOf('id="node-transition-loop-i1-start"'),
+      markup.indexOf('id="node-transition-route-1"')
+    );
+    const loopTwo = markup.slice(markup.indexOf('id="node-transition-loop-i2-start"'));
+    expect(loopOne).toContain('Loop ×1');
+    expect(loopOne).not.toContain('$1.25');
+    expect(loopOne).not.toContain('Show usage breakdown for this node');
+    expect(loopTwo).toContain('Loop ×2');
+    expect(loopTwo).toContain('$1.25');
+    expect(loopTwo).toContain('Show usage breakdown for this node');
+  });
+});
+
+describe('RunStream row selection', () => {
+  let win: ReturnType<typeof installHappyDom>;
+  let host: Element;
+  let root: ReturnType<typeof createRoot>;
+
+  beforeEach(() => {
+    win = installHappyDom();
+    const el = win.document.createElement('div');
+    win.document.body.appendChild(el);
+    host = el as unknown as Element;
+    root = createRoot(host);
+  });
+
+  afterEach(async () => {
+    await act(async () => {
+      root.unmount();
+    });
+    win.close();
+    restoreHappyDom();
+  });
+
+  test('choosing a row reports its row id and node id', async () => {
+    const fixture = fiveDividerFixture();
+    const selected: [string, string][] = [];
+    await act(async () => {
+      root.render(
+        createElement(StreamContextProvider, {
+          value: { runStartedAt: RUN_STARTED },
+          children: createElement(RunStream, {
+            messages: fixture.messages,
+            events: fixture.runEvents,
+            showToolCalls: false,
+            showSystem: false,
+            selectedNodeId: 'all',
+            usage: fixture.usage,
+            logEntries: fixture.logEntries,
+            selectedLogRowId: 'route-1',
+            onSelectLogRow: (rowId: string, nodeId: string): void => {
+              selected.push([rowId, nodeId]);
+            },
+          }),
+        })
+      );
+    });
+
+    const routeOne = host.querySelector('#node-transition-route-1');
+    if (!(routeOne instanceof HTMLElement)) {
+      throw new Error('route-1 row');
+    }
+    expect(routeOne.querySelector('[aria-current="true"]')).not.toBeNull();
+    const identity = routeOne.querySelector('button');
+    if (!(identity instanceof HTMLButtonElement)) {
+      throw new Error('route-1 identity');
+    }
+    await act(async () => {
+      identity.click();
+    });
+    expect(selected).toEqual([['route-1', 'router']]);
   });
 });
