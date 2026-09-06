@@ -2612,6 +2612,32 @@ describe('inspectResumableRun', () => {
     );
     expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
   });
+
+  it('rejects a still-pending Permission without claiming the run', async () => {
+    const candidate = makeRun({ id: 'run-1', status: 'paused' });
+    const store = makeStore({
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: new Map(),
+        tokens: { input: 0, output: 0 },
+      })),
+      listPendingInteractions: mock(async () => [
+        makeAskRow({
+          kind: 'permission',
+          status: 'pending',
+          answer: null,
+          resolved_at: null,
+          resolved_by: null,
+        }),
+      ]),
+      resumeWorkflowRun: mock(async () => {
+        throw new Error('inspect must not claim');
+      }),
+    });
+    await expect(inspectResumableRun(makeDeps(store), candidate)).rejects.toThrow(
+      'Answer or decline the Ask before resuming run run-1'
+    );
+    expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
+  });
 });
 
 describe('hydrateResumableRun', () => {
@@ -2769,6 +2795,32 @@ describe('hydrateResumableRun', () => {
       ]),
       resumeWorkflowRun: mock(async () => {
         throw new Error('hydrate must not claim a pending Ask');
+      }),
+    });
+    await expect(hydrateResumableRun(makeDeps(store), candidate)).rejects.toThrow(
+      'Answer or decline the Ask before resuming run run-1'
+    );
+    expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('rejects a still-pending Permission without calling resumeWorkflowRun', async () => {
+    const candidate = makeRun({ id: 'run-1', status: 'paused' });
+    const store = makeStore({
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: new Map([['n1', 'out1']]),
+        tokens: { input: 0, output: 0 },
+      })),
+      listPendingInteractions: mock(async () => [
+        makeAskRow({
+          kind: 'permission',
+          status: 'pending',
+          answer: null,
+          resolved_at: null,
+          resolved_by: null,
+        }),
+      ]),
+      resumeWorkflowRun: mock(async () => {
+        throw new Error('hydrate must not claim a pending Permission');
       }),
     });
     await expect(hydrateResumableRun(makeDeps(store), candidate)).rejects.toThrow(

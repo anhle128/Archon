@@ -147,6 +147,11 @@ export async function insertPendingInteraction(
     if (run.user_id == null) {
       throw new AskHumanNoStarterError(parsed.workflow_run_id);
     }
+    if (run.status !== 'running' && run.status !== 'paused') {
+      throw new Error(
+        `Cannot create pending interaction for workflow run ${parsed.workflow_run_id} with status '${run.status}'`
+      );
+    }
 
     const id = dialect.generateUuid();
     await query(

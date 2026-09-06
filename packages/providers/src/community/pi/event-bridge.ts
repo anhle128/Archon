@@ -340,7 +340,9 @@ export function mapPiEvent(event: AgentSessionEvent, redactErrorDetails = false)
       return [
         {
           type: 'system',
-          content: `⚠️ retry ${event.attempt}/${event.maxAttempts}: ${event.errorMessage}`,
+          content: redactErrorDetails
+            ? `⚠️ retry ${event.attempt}/${event.maxAttempts}: Could not resume the AskHuman session`
+            : `⚠️ retry ${event.attempt}/${event.maxAttempts}: ${event.errorMessage}`,
         },
       ];
     default:

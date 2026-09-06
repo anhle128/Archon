@@ -1,6 +1,6 @@
 # Answer or Decline the Ask Implementation PRD
 
-Source plan: `docs/superpowers/plans/2026-09-06-askhuman-answer-or-decline.md`  
+Source plan: `docs/superpowers/plans/2026-09-06-askhuman-answer-or-decline.md`
 Derived slug: `2026-09-06-askhuman-answer-or-decline`
 
 ## Overview

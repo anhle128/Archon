@@ -187,6 +187,30 @@ describe('insertPendingInteraction', () => {
     expect(Number(events.rows[0]?.count)).toBe(0);
   });
 
+  test('rejects terminal and pre-start runs and inserts nothing', async () => {
+    for (const status of ['pending', 'completed', 'failed', 'cancelled'] as const) {
+      await db.query('UPDATE remote_agent_workflow_runs SET status = $1 WHERE id = $2', [
+        status,
+        'run-1',
+      ]);
+
+      await expect(insertPendingInteraction(baseInput)).rejects.toThrow(
+        `Cannot create pending interaction for workflow run run-1 with status '${status}'`
+      );
+
+      const pending = await db.query<{ count: number }>(
+        'SELECT COUNT(*) AS count FROM remote_agent_pending_interactions',
+        []
+      );
+      const events = await db.query<{ count: number }>(
+        'SELECT COUNT(*) AS count FROM remote_agent_workflow_events',
+        []
+      );
+      expect(Number(pending.rows[0]?.count)).toBe(0);
+      expect(Number(events.rows[0]?.count)).toBe(0);
+    }
+  });
+
   test('rolls back the pending insert when the node_awaiting event insert aborts', async () => {
     await db.query(`
       CREATE TRIGGER abort_workflow_events BEFORE INSERT ON remote_agent_workflow_events

@@ -24995,6 +24995,58 @@ describe('executeDagWorkflow -- AskHuman pause', () => {
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
   });
 
+  it('does not advance downstream when an answer races the pause cleanup', async () => {
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(async function* (
+      _prompt: string,
+      _cwd: string,
+      _resume?: string,
+      options?: SendQueryOptions
+    ) {
+      calls += 1;
+      if (calls === 1) {
+        await invokeInjectedAskHuman(options);
+        return;
+      }
+      yield { type: 'assistant', content: 'downstream should not run' };
+    });
+
+    const store = createMockStore();
+    let status: 'running' | 'paused' = 'running';
+    store.getWorkflowRunStatus = mock(async () => status);
+    store.pauseWorkflowRun = mock(async () => {
+      status = 'running';
+    });
+    const workflowRun = makeWorkflowRun('ask-pause-race-run');
+
+    await executeDagWorkflow(
+      createMockDeps(store),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      {
+        name: 'ask-pause-race',
+        nodes: [
+          { id: 'review', prompt: 'ask the starter', allowed_tools: ['AskHuman'] },
+          { id: 'after', depends_on: ['review'], prompt: 'after' },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
+
   it('does not inject AskHuman on a Codex command node', async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,

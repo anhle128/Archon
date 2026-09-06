@@ -514,6 +514,27 @@ describe('mapPiEvent', () => {
     }
   });
 
+  test('auto_retry_start redacts error details in continue mode', () => {
+    const chunks = mapPiEvent(
+      {
+        type: 'auto_retry_start',
+        attempt: 1,
+        maxAttempts: 3,
+        delayMs: 1000,
+        errorMessage: 'failed with SENTINEL_ASK_ANSWER',
+      },
+      true
+    );
+
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].type).toBe('system');
+    if (chunks[0].type === 'system') {
+      expect(chunks[0].content).toContain('retry 1/3');
+      expect(chunks[0].content).toContain('Could not resume the AskHuman session');
+      expect(chunks[0].content).not.toContain('SENTINEL_ASK_ANSWER');
+    }
+  });
+
   test('agent_end → result chunk', () => {
     const usage = {
       input: 5,

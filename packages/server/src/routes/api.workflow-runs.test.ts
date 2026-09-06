@@ -3087,6 +3087,8 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
     mockGetWorkflowRun.mockReset();
     mockGetConversationById.mockReset();
     mockHandleMessage.mockReset();
+    mockListPendingInteractions.mockReset();
+    mockListPendingInteractions.mockImplementation(async () => []);
   });
 
   test('returns 404 when run not found', async () => {
@@ -3227,6 +3229,39 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
     ];
     expect(platformConvId).toBe('web-plat-abc');
     expect(dispatchedMessage).toBe('/workflow resume run-cancelled-web');
+  });
+
+  test('returns 200 and dispatches resume for an Ask-resumed running run', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce({
+      ...MOCK_RUNNING_RUN,
+      id: 'run-ask-running',
+      parent_conversation_id: 'parent-conv-uuid',
+      user_message: 'Run the deploy',
+    });
+    mockListPendingInteractions.mockResolvedValueOnce([mockResolvedAskInteraction().interaction]);
+    mockGetConversationById.mockResolvedValueOnce({
+      id: 'parent-conv-uuid',
+      platform_conversation_id: 'web-plat-abc',
+      platform_type: 'web',
+    });
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-ask-running/resume', {
+      method: 'POST',
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { success: boolean; message: string };
+    expect(body.success).toBe(true);
+    expect(body.message).toContain('Resuming workflow');
+
+    const [, platformConvId, dispatchedMessage] = mockHandleMessage.mock.calls[0] as [
+      unknown,
+      string,
+      string,
+    ];
+    expect(platformConvId).toBe('web-plat-abc');
+    expect(dispatchedMessage).toBe('/workflow resume run-ask-running');
   });
 });
 
@@ -4169,6 +4204,40 @@ describe('POST /api/workflows/runs/:runId/ask/:requestId/answer', () => {
     );
 
     expect(response.status).toBe(401);
+    expect(mockResolvePendingInteraction).not.toHaveBeenCalled();
+  });
+
+  test('returns 401 before body validation when no authenticated requester is present', async () => {
+    mockGetWorkflowRun.mockResolvedValue(mockAskPausedRun());
+    const { app } = makeApp();
+    const response = await app.request(
+      `/api/workflows/runs/run-ask-1/ask/${ASK_REQUEST_ID}/answer`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ decline: false }),
+      }
+    );
+
+    expect(response.status).toBe(401);
+    expect(mockGetWorkflowRun).not.toHaveBeenCalled();
+    expect(mockResolvePendingInteraction).not.toHaveBeenCalled();
+  });
+
+  test('returns 401 before run lookup when no authenticated requester is present', async () => {
+    mockGetWorkflowRun.mockResolvedValue(null);
+    const { app } = makeApp();
+    const response = await app.request(
+      `/api/workflows/runs/missing-run/ask/${ASK_REQUEST_ID}/answer`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(ASK_ANSWER_BODY),
+      }
+    );
+
+    expect(response.status).toBe(401);
+    expect(mockGetWorkflowRun).not.toHaveBeenCalled();
     expect(mockResolvePendingInteraction).not.toHaveBeenCalled();
   });
 

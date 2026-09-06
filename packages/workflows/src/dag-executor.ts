@@ -3203,7 +3203,7 @@ async function executeNodeInternal(
     if (error instanceof AskHumanAwaitingError) {
       await pauseOnAskHuman(deps, workflowRun.id, node.id, recordNodeStatus);
       return {
-        state: 'completed',
+        state: 'pending',
         output: nodeOutputText,
         costUsd: nodeCostUsd,
         ...(nodeTokens !== undefined ? { tokens: nodeTokens } : {}),
@@ -5927,7 +5927,7 @@ async function executeLoopNode(
         if (error instanceof AskHumanAwaitingError) {
           await pauseOnAskHuman(deps, workflowRun.id, node.id, recordLoopStatus);
           return {
-            state: 'completed',
+            state: 'pending',
             output: cleanOutput,
             costUsd: loopTotalCostUsd,
             ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
@@ -10413,14 +10413,6 @@ export async function executeDagWorkflow(
     answeredAskRows,
     route: routeState,
   };
-  const runOutcome = await runLayers(runCtx);
-  if (runOutcome === 'pending') return;
-  // Pull the mutated accumulators back into local scope for the terminal tally below.
-  const totalCostUsd = runCtx.totalCostUsd;
-  const totalTokensIn = runCtx.totalTokensIn;
-  const totalTokensOut = runCtx.totalTokensOut;
-  const totalLoopIterations = runCtx.totalLoopIterations;
-
   // Container pause economics (Phase C): if a node paused the run (approval /
   // interactive gate), suspend the container so a multi-day wait costs ~0 RAM/CPU.
   // The pause happens BETWEEN layers, after node completion — the #2134 background-
@@ -10428,7 +10420,8 @@ export async function executeDagWorkflow(
   // stop would kill any live exec) — so it is safe to stop here. Resume rediscovers
   // and restarts. Terminal (failed / cancelled) runs are left for teardown, not
   // suspended. Only 'paused' triggers this.
-  if (execContext.kind === 'container' && containerCtx) {
+  const suspendContainerIfPaused = async (): Promise<boolean> => {
+    if (execContext.kind !== 'container' || !containerCtx) return false;
     const pausedStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
     if (pausedStatus === 'paused') {
       await suspendContainerForPause(
@@ -10439,9 +10432,23 @@ export async function executeDagWorkflow(
         execContext,
         workflowRun.id
       );
-      return;
+      return true;
     }
+    return false;
+  };
+
+  const runOutcome = await runLayers(runCtx);
+  if (runOutcome === 'pending') {
+    await suspendContainerIfPaused();
+    return;
   }
+  // Pull the mutated accumulators back into local scope for the terminal tally below.
+  const totalCostUsd = runCtx.totalCostUsd;
+  const totalTokensIn = runCtx.totalTokensIn;
+  const totalTokensOut = runCtx.totalTokensOut;
+  const totalLoopIterations = runCtx.totalLoopIterations;
+
+  if (await suspendContainerIfPaused()) return;
 
   /**
    * Bail out of the final completion/failure write if the run was transitioned

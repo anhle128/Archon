@@ -9283,6 +9283,7 @@ describe('workflowResumeCommand — JSON envelope mode (Story 3.3d)', () => {
     stdoutSpy = spyOnJsonStdout();
     mockLogger.error.mockClear();
     const codebaseDb = await import('@archon/core/db/codebases');
+    const pendingDb = await import('@archon/core/db/workflow-pending-interactions');
     (codebaseDb.getCodebase as ReturnType<typeof mock>).mockReset();
     (codebaseDb.getCodebase as ReturnType<typeof mock>).mockImplementation(() =>
       Promise.resolve({
@@ -9292,6 +9293,10 @@ describe('workflowResumeCommand — JSON envelope mode (Story 3.3d)', () => {
         default_cwd: '/tmp/repo',
         commands: {},
       })
+    );
+    (pendingDb.listPendingInteractions as ReturnType<typeof mock>).mockReset();
+    (pendingDb.listPendingInteractions as ReturnType<typeof mock>).mockImplementation(() =>
+      Promise.resolve([])
     );
   });
 
@@ -9357,6 +9362,46 @@ describe('workflowResumeCommand — JSON envelope mode (Story 3.3d)', () => {
     expect(envelope.success).toBe(true);
     const result = envelope.result as Record<string, unknown>;
     expect(result.operation).toBe('resume');
+    expect(result.resumable).toBe(true);
+    expect(result.executed).toBe(false);
+  });
+
+  it('emits workflow.resume success envelope for an Ask-resumed running run', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const pendingDb = await import('@archon/core/db/workflow-pending-interactions');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-resume-ask',
+      workflow_name: 'implement',
+      status: 'running',
+      working_path: '/tmp/wt',
+      codebase_id: null,
+      metadata: {},
+    });
+    (pendingDb.listPendingInteractions as ReturnType<typeof mock>).mockResolvedValueOnce([
+      {
+        id: 'ask-1',
+        workflow_run_id: 'run-resume-ask',
+        node_id: 'ask',
+        tool_use_id: 'tool-1',
+        kind: 'ask',
+        status: 'answered',
+        envelope: {},
+        answer: { answers: [{ questionId: 'q1', value: 'yes' }] },
+        provider_session_id: 'sess-1',
+        created_at: new Date(),
+        resolved_at: new Date(),
+        resolved_by: 'user-1',
+      },
+    ]);
+
+    await workflowResumeCommand('run-resume-ask', true);
+
+    const envelope = JSON.parse(firstJsonPayload(stdoutSpy)) as Record<string, unknown>;
+    expect(envelope.command).toBe('workflow.resume');
+    expect(envelope.success).toBe(true);
+    const result = envelope.result as Record<string, unknown>;
+    expect(result.operation).toBe('resume');
+    expect(result.state).toBe('running');
     expect(result.resumable).toBe(true);
     expect(result.executed).toBe(false);
   });

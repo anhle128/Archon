@@ -70,7 +70,6 @@ import type {
   WorkflowWithSource,
 } from '@archon/workflows/schemas/workflow';
 import {
-  RESUMABLE_WORKFLOW_STATUSES,
   RETRYABLE_WORKFLOW_STATUSES,
   TERMINAL_WORKFLOW_STATUSES,
   workflowRunStatusSchema,
@@ -467,6 +466,33 @@ function classifyRecoveryParentError(err: unknown): ClassifiedRecoveryError {
     exitCode: EXIT_SOFTWARE,
     details: { reason: 'unexpected_failure' },
   };
+}
+
+function asResumeValidationRecoveryError(error: unknown, runId: string): unknown {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.startsWith('Workflow run not found:')) {
+    return new RecoveryParentError(
+      'unexpected_state',
+      `Cannot resume run with status 'unknown'. Run '${runId}' does not exist.`,
+      { reason: 'run_not_found' }
+    );
+  }
+
+  const statusMatch = /^Cannot resume run with status '([^']+)'/.exec(message);
+  if (statusMatch) {
+    return new RecoveryParentError('unexpected_state', message, {
+      reason: 'run_not_resumable',
+      state: statusMatch[1],
+    });
+  }
+
+  if (message.startsWith('Answer or decline the Ask before resuming run ')) {
+    return new RecoveryParentError('unexpected_state', message, {
+      reason: 'pending_interaction',
+    });
+  }
+
+  return error;
 }
 
 export function classifyRunError(err: unknown): ClassifiedError {
@@ -3633,21 +3659,9 @@ export async function workflowResumeCommand(
     };
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
-      const run = await workflowDb.getWorkflowRun(resolvedId);
-      if (!run) {
-        throw new RecoveryParentError(
-          'unexpected_state',
-          `Cannot resume run with status 'unknown'. Run '${resolvedId}' does not exist.`,
-          { reason: 'run_not_found' }
-        );
-      }
-      if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) {
-        throw new RecoveryParentError(
-          'unexpected_state',
-          `Cannot resume run with status '${run.status}'. Only failed or paused runs can be resumed.`,
-          { reason: 'run_not_resumable', state: run.status }
-        );
-      }
+      const run = await resumeWorkflowOp(resolvedId).catch((error: unknown) => {
+        throw asResumeValidationRecoveryError(error, resolvedId);
+      });
       if (!run.working_path) {
         throw new RecoveryParentError(
           'unexpected_state',

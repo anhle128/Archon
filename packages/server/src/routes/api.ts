@@ -119,7 +119,6 @@ import {
 } from '@archon/core/schemas/workflow-env';
 import {
   RETRYABLE_WORKFLOW_STATUSES,
-  RESUMABLE_WORKFLOW_STATUSES,
   TERMINAL_WORKFLOW_STATUSES,
   isApprovalContext,
   isGateResolved,
@@ -425,6 +424,7 @@ import {
   AskHumanRunNotFoundError,
   reviewOpenWorkflow,
   rejectWorkflow,
+  resumeWorkflow,
   resetWorkflowNodeSessions,
 } from '@archon/core/operations/workflow-operations';
 import { getAuth, isWebAuthEnabled, getSignupMode, isApiGateEnabled } from '../auth';
@@ -4354,13 +4354,7 @@ export function registerApiRoutes(
   registerOpenApiRoute(resumeWorkflowRunRoute, async c => {
     const runId = c.req.param('runId') ?? '';
     try {
-      const run = await workflowDb.getWorkflowRun(runId);
-      if (!run) {
-        return apiError(c, 404, 'Workflow run not found');
-      }
-      if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) {
-        return apiError(c, 400, `Cannot resume workflow in '${run.status}' status`);
-      }
+      const run = await resumeWorkflow(runId);
       // Dispatch resume by sending `/workflow resume <id>` to the parent web
       // conversation; the command handler validates the run and hands the
       // orchestrator an explicit resumeRun to hydrate. Explicit targeting (not
@@ -4401,6 +4395,16 @@ export function registerApiRoutes(
         message: `Resuming workflow: ${run.workflow_name}`,
       });
     } catch (error) {
+      if (error instanceof Error && error.message.startsWith('Workflow run not found:')) {
+        return apiError(c, 404, 'Workflow run not found');
+      }
+      if (
+        error instanceof Error &&
+        (error.message.startsWith('Answer or decline the Ask before resuming run ') ||
+          error.message.startsWith('Cannot resume run with status '))
+      ) {
+        return apiError(c, 400, error.message);
+      }
       getLog().error({ err: error, runId }, 'api.workflow_run_resume_failed');
       return apiError(c, 500, 'Failed to resume workflow run');
     }
@@ -4852,18 +4856,30 @@ export function registerApiRoutes(
     }
   });
 
+  // Enforce Ask answer auth before OpenAPI body validation so unauthenticated
+  // callers receive 401 even when the install-wide API gate is disabled.
+  app.use('/api/workflows/runs/:runId/ask/:requestId/answer', async (c, next) => {
+    if (c.req.method !== 'POST') return next();
+    const requester = await resolveAuthContext(c);
+    if (!requester) return apiError(c, 401, 'Authentication required');
+    return next();
+  });
+
   // POST /api/workflows/runs/:runId/ask/:requestId/answer - Answer or decline AskHuman
   registerOpenApiRoute(answerAskHumanRoute, async c => {
     const runId = c.req.param('runId') ?? '';
     const requestId = c.req.param('requestId') ?? '';
     try {
       const requester = await resolveAuthContext(c);
+      if (!requester) {
+        return apiError(c, 401, 'Authentication required');
+      }
       const body = getValidatedBody(c, askAnswerRequestSchema);
       const result = await answerAskHuman({
         runId,
         requestId,
         body,
-        actorUserId: requester?.userId,
+        actorUserId: requester.userId,
       });
 
       if (!result.resumed) {
@@ -4873,7 +4889,7 @@ export function registerApiRoutes(
         });
       }
 
-      const autoResumed = await tryAutoResumeAfterGate(result.run, 'ask-answer', requester?.userId);
+      const autoResumed = await tryAutoResumeAfterGate(result.run, 'ask-answer', requester.userId);
       return c.json({
         success: true,
         message: autoResumed

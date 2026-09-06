@@ -591,8 +591,8 @@ export type ExecuteWorkflowOptions = ResumePayload & {
   appliedEnvOverlay?: AppliedEnvOverlay;
 };
 
-function isPendingAsk(row: PendingInteraction): boolean {
-  return row.kind === 'ask' && row.status === 'pending';
+function isPendingInteraction(row: PendingInteraction): boolean {
+  return row.status === 'pending';
 }
 
 function isAnsweredAsk(row: PendingInteraction): boolean {
@@ -605,7 +605,7 @@ function isAnsweredAsk(row: PendingInteraction): boolean {
  * need conversation/isolation gates before ownership transfer use this first,
  * then {@link hydrateResumableRun} exactly once after those gates succeed.
  *
- * Throws when any Ask row is still `pending`. Returns `null` when the candidate
+ * Throws when any interaction row is still `pending`. Returns `null` when the candidate
  * has no completed nodes, no re-runnable gate state, and no answered Ask —
  * nothing worth resuming. Answered Ask rows make a first-node run resumable
  * even with an empty completed-node map.
@@ -621,7 +621,7 @@ export async function inspectResumableRun(
   const snapshot = await deps.store.getDagResumeSnapshot(candidate.id);
   const priorCompletedNodes = snapshot.completedNodeOutputs;
   const interactions = await deps.store.listPendingInteractions(candidate.id);
-  if (interactions.some(isPendingAsk)) {
+  if (interactions.some(isPendingInteraction)) {
     throw new Error(`Answer or decline the Ask before resuming run ${candidate.id}`);
   }
   const hasAnsweredAsk = interactions.some(isAnsweredAsk);
