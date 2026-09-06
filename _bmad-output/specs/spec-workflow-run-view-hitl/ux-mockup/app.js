@@ -24,7 +24,7 @@ function el(tag, cls, text) {
   return e;
 }
 function esc(s) {
-  return s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  return s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 }
 function md(s) {
   return esc(s)
@@ -120,12 +120,18 @@ const DEP_EDGES = [
 const ROUTE_EDGES = [
   ['speckit-converge-gate', 'cargo-clean-before-pr', { route: 'positive', label: 'PASS' }],
   ['speckit-converge-gate', 'speckit-converge-review-gate', { route: 'negative', label: 'FAIL' }],
-  ['speckit-converge-gate', 'speckit-final-ralph-tasks-to-ralph', { route: 'exhausted', label: 'exhausted' }],
+  [
+    'speckit-converge-gate',
+    'speckit-final-ralph-tasks-to-ralph',
+    { route: 'exhausted', label: 'exhausted' },
+  ],
 ];
 
 // the retry loop: review-gate feeds back into ralph-tasks-to-ralph (one_success join).
 // Declared as a normal dependency in the YAML; the layout detects it as a back-edge.
-const LOOPBACK_EDGES = [['speckit-converge-review-gate', 'ralph-tasks-to-ralph', { join: 'one_success', loopback: true }]];
+const LOOPBACK_EDGES = [
+  ['speckit-converge-review-gate', 'ralph-tasks-to-ralph', { join: 'one_success', loopback: true }],
+];
 
 const ASKS = {
   clarify: {
@@ -218,7 +224,11 @@ const GAP_Y = 46;
 
 function computeLayout() {
   const ids = NODES.map(n => n.id);
-  const allEdges = [...DEP_EDGES, ...ROUTE_EDGES, ...LOOPBACK_EDGES].map(([from, to, meta]) => ({ from, to, meta: meta || {} }));
+  const allEdges = [...DEP_EDGES, ...ROUTE_EDGES, ...LOOPBACK_EDGES].map(([from, to, meta]) => ({
+    from,
+    to,
+    meta: meta || {},
+  }));
 
   // 1. cycle-break: DFS, edge to a grey (on-stack) node = back-edge
   const adj = new Map(ids.map(id => [id, []]));
@@ -291,7 +301,9 @@ function computeLayout() {
   layers.forEach((l, i) => {
     const layerW = l.length * (NODE_W + GAP_X) - GAP_X;
     const x0 = (fullW - layerW) / 2;
-    l.forEach((id, k) => pos.set(id, { x: x0 + k * (NODE_W + GAP_X), y: i * (NODE_H + GAP_Y), layer: i }));
+    l.forEach((id, k) =>
+      pos.set(id, { x: x0 + k * (NODE_W + GAP_X), y: i * (NODE_H + GAP_Y), layer: i })
+    );
   });
 
   return {
@@ -388,7 +400,10 @@ function edgePath(e) {
   const dx = x2 - x1;
   const dl = b.layer - a.layer;
   const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-  g.setAttribute('class', 'edge-g' + (e.meta.route ? ' eg-route-' + e.meta.route : '') + (e.meta.when ? ' eg-cond' : ''));
+  g.setAttribute(
+    'class',
+    'edge-g' + (e.meta.route ? ' eg-route-' + e.meta.route : '') + (e.meta.when ? ' eg-cond' : '')
+  );
   g.dataset.from = e.from;
   g.dataset.to = e.to;
   const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
@@ -440,10 +455,7 @@ function backEdgePath(e) {
   g.dataset.from = e.from;
   g.dataset.to = e.to;
   const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  p.setAttribute(
-    'd',
-    `M${x1},${y1} C${lane},${y1} ${lane},${y2} ${x2 - 4},${y2}`
-  );
+  p.setAttribute('d', `M${x1},${y1} C${lane},${y1} ${lane},${y2} ${x2 - 4},${y2}`);
   p.setAttribute('class', 'edge');
   p.setAttribute('marker-end', 'url(#arr-loop)');
   g.appendChild(p);
@@ -558,7 +570,14 @@ function paintGraphNode(id) {
   const card = qs('.gnode[data-node="' + id + '"]');
   if (!card) return;
   const ns = state.nodeStatus[id] || { status: 'pending' };
-  card.classList.remove('status-pending', 'status-running', 'status-awaiting', 'status-completed', 'status-failed', 'status-skipped');
+  card.classList.remove(
+    'status-pending',
+    'status-running',
+    'status-awaiting',
+    'status-completed',
+    'status-failed',
+    'status-skipped'
+  );
   card.classList.add('status-' + ns.status);
   const d = nodeDef(id);
   const rs = runsOf(id);
@@ -573,12 +592,15 @@ function paintGraphNode(id) {
     text += ' · ran ' + rs.length + '×';
   }
   qs('.gn-status', card).textContent = text;
-  qs('.gn-iter', card).textContent = d.kind === 'loop' && ns.status === 'running' ? '↻ ' + rs[rs.length - 1].iter : '';
+  qs('.gn-iter', card).textContent =
+    d.kind === 'loop' && ns.status === 'running' ? '↻ ' + rs[rs.length - 1].iter : '';
   paintEdges();
 }
 
 function paintGraphSelection() {
-  qsa('.gnode').forEach(c => c.classList.toggle('selected', state.panelOpen && c.dataset.node === state.selected));
+  qsa('.gnode').forEach(c =>
+    c.classList.toggle('selected', state.panelOpen && c.dataset.node === state.selected)
+  );
 }
 
 // ---------- run lifecycle ----------
@@ -656,7 +678,14 @@ function renderLogsRow(r) {
 function paintLogsRow(r) {
   const row = qs('#logrun-' + r.hid);
   if (!row) return;
-  row.classList.remove('status-pending', 'status-running', 'status-awaiting', 'status-completed', 'status-failed', 'status-skipped');
+  row.classList.remove(
+    'status-pending',
+    'status-running',
+    'status-awaiting',
+    'status-completed',
+    'status-failed',
+    'status-skipped'
+  );
   row.classList.add('status-' + r.status);
   let text = STATUS_TEXT[r.status];
   if (r.status === 'awaiting' && ASKS[r.nodeId]) {
@@ -665,7 +694,8 @@ function paintLogsRow(r) {
   }
   if (r.status === 'awaiting' && GATES[r.nodeId]) text += ' — live review';
   if (r.status === 'completed' && state.answers[r.nodeId]) text += ' — answer delivered';
-  if (r.status === 'completed' && state.gateDecisions[r.nodeId]) text += ' — ' + state.gateDecisions[r.nodeId];
+  if (r.status === 'completed' && state.gateDecisions[r.nodeId])
+    text += ' — ' + state.gateDecisions[r.nodeId];
   qs('.lr-status', row).textContent = text;
   qs('.lr-dur', row).textContent = r.durMs ? fmtDur(r.durMs) : '';
 }
@@ -720,7 +750,10 @@ function renderPanel() {
 
   const meta = el('div', 'ph-meta');
   if (r) {
-    let m = 'started ' + fmtClock(Math.floor((r.startMs - state.t0) / 1000)) + (r.durMs ? ' · ' + fmtDur(r.durMs) : ' · running…');
+    let m =
+      'started ' +
+      fmtClock(Math.floor((r.startMs - state.t0) / 1000)) +
+      (r.durMs ? ' · ' + fmtDur(r.durMs) : ' · running…');
     if (r.passDetail) m += ' · ' + r.passDetail;
     meta.textContent = m;
   } else {
@@ -738,7 +771,10 @@ function renderPanel() {
       const c = el('button', 'iter-chip' + (viewing ? ' viewing' : ''), label);
       c.type = 'button';
       c.disabled = viewing;
-      c.title = 'started ' + fmtClock(Math.floor((run.startMs - state.t0) / 1000)) + (run.passDetail ? ' · ' + run.passDetail : '');
+      c.title =
+        'started ' +
+        fmtClock(Math.floor((run.startMs - state.t0) / 1000)) +
+        (run.passDetail ? ' · ' + run.passDetail : '');
       c.addEventListener('click', () => {
         state.panelRun[id] = run.hid;
         renderPanel();
@@ -940,7 +976,7 @@ function askCard(nodeId) {
     const opts = el('div', 'ask-opts');
     for (const opt of q.options) {
       const label = el('label', 'ask-opt');
-        const input = document.createElement('input');
+      const input = document.createElement('input');
       input.type = q.kind === 'single' ? 'radio' : 'checkbox';
       input.name = 'ask-' + nodeId + '-' + q.id;
       input.value = opt;
@@ -975,8 +1011,8 @@ function askCard(nodeId) {
       if (picked.length === 0) {
         card.classList.add('ask-invalid');
         setTimeout(() => card.classList.remove('ask-invalid'), 600);
-      return;
-    }
+        return;
+      }
       lines.push('**' + q.text + '** → ' + picked.join(', '));
     }
     state.answers[nodeId] = { lines };
@@ -995,7 +1031,8 @@ function askCard(nodeId) {
     at(2600, () => {
       if (!card.isConnected || state.answers[nodeId]) return;
       const radioNames = new Set([...card.querySelectorAll('input[type=radio]')].map(r => r.name));
-      for (const name of radioNames) card.querySelector('input[type=radio][name="' + name + '"]')?.click();
+      for (const name of radioNames)
+        card.querySelector('input[type=radio][name="' + name + '"]')?.click();
       const cbs = [...card.querySelectorAll('input[type=checkbox]')];
       if (cbs.length) cbs[0].click();
       submit.click();
@@ -1047,13 +1084,18 @@ function gateCard(nodeId) {
 
   if (state.view === 'teammate') {
     approve.disabled = annotate.disabled = true;
-    foot.appendChild(el('span', 'ask-note', 'Owner only — teammates may close without ending the session'));
+    foot.appendChild(
+      el('span', 'ask-note', 'Owner only — teammates may close without ending the session')
+    );
   }
 
   approve.addEventListener('click', () => {
     state.gateDecisions[nodeId] = 'approved';
     const r = latestRun(nodeId);
-    addItem(r, { kind: 'answer', text: 'Approved' + (comment.value ? ' — “' + comment.value + '”' : '') });
+    addItem(r, {
+      kind: 'answer',
+      text: 'Approved' + (comment.value ? ' — “' + comment.value + '”' : ''),
+    });
     setRunStatus(r, 'completed');
     chatNodeEntry(r, 'approved' + (comment.value ? ' — “' + comment.value + '”' : ''));
     card.replaceWith(gateCard(nodeId));
@@ -1062,7 +1104,11 @@ function gateCard(nodeId) {
   annotate.addEventListener('click', () => {
     state.gateDecisions[nodeId] = 'annotations sent';
     const r = latestRun(nodeId);
-    addItem(r, { kind: 'answer', text: 'Annotations sent — rework applied' + (comment.value ? ': “' + comment.value + '”' : '') });
+    addItem(r, {
+      kind: 'answer',
+      text:
+        'Annotations sent — rework applied' + (comment.value ? ': “' + comment.value + '”' : ''),
+    });
     setRunStatus(r, 'completed');
     chatNodeEntry(r, 'annotations sent — rework applied');
     card.replaceWith(gateCard(nodeId));
@@ -1108,24 +1154,60 @@ function quick(r, items, doneNote) {
 }
 
 function simulate() {
-  addChat({ kind: 'user', who: 'dale', text: 'speckit ralph native — https://github.com/oceanlabs-holding/x10.gigo.harness-service/issues/123' });
+  addChat({
+    kind: 'user',
+    who: 'dale',
+    text: 'speckit ralph native — https://github.com/oceanlabs-holding/x10.gigo.harness-service/issues/123',
+  });
 
   at(300, () => {
     const r = startRun('setup');
-    quick(r, [{ kind: 'bash', cmd: 'setup', out: ['FEATURE_SLUG=attach-first-writer', 'HEAD=5139f867', 'Starting Step 1 of 7: Generating feature specification...'] }]);
+    quick(r, [
+      {
+        kind: 'bash',
+        cmd: 'setup',
+        out: [
+          'FEATURE_SLUG=attach-first-writer',
+          'HEAD=5139f867',
+          'Starting Step 1 of 7: Generating feature specification...',
+        ],
+      },
+    ]);
   });
 
   at(1200, () => {
     const r = startRun('specify');
-    addItem(r, { kind: 'msg', role: 'assistant', text: 'Reading the issue + origin context, spawning sub-agents for the harness contract.' });
-    at(500, () => addItem(r, { kind: 'tool', name: 'Read', summary: 'harness API contract', output: 'docs/harness-api.md — 214 lines' }));
-    at(900, () => addItem(r, { kind: 'tool', name: 'Write', summary: 'specs/014-attach-first-writer/spec.md', output: 'spec written (FR-001…FR-014)' }));
+    addItem(r, {
+      kind: 'msg',
+      role: 'assistant',
+      text: 'Reading the issue + origin context, spawning sub-agents for the harness contract.',
+    });
+    at(500, () =>
+      addItem(r, {
+        kind: 'tool',
+        name: 'Read',
+        summary: 'harness API contract',
+        output: 'docs/harness-api.md — 214 lines',
+      })
+    );
+    at(900, () =>
+      addItem(r, {
+        kind: 'tool',
+        name: 'Write',
+        summary: 'specs/014-attach-first-writer/spec.md',
+        output: 'spec written (FR-001…FR-014)',
+      })
+    );
     at(1500, () => setRunStatus(r, 'completed'));
   });
 
   at(2900, () => {
     const r = startRun('clarify');
-    addItem(r, { kind: 'msg', role: 'assistant', text: 'Spec drafted. Two things need your call before I lock the clarification file.' });
+    addItem(r, {
+      kind: 'msg',
+      role: 'assistant',
+      text: 'Spec drafted. Two things need your call before I lock the clarification file.',
+    });
     at(800, () => {
       setRunStatus(r, 'awaiting');
       chatNodeEntry(r, 'is awaiting input — AskHuman — 2 questions');
@@ -1142,13 +1224,27 @@ function continueAfterClarify() {
   at(1400, () => {
     const r = startRun('clarify-respond');
     quick(r, [
-      { kind: 'msg', role: 'assistant', text: 'Drafting answers — KISS/YAGNI stance, skipping non-problems.' },
-      { kind: 'tool', name: 'Edit', summary: 'clarification-questions.md', output: '3 answers drafted' },
+      {
+        kind: 'msg',
+        role: 'assistant',
+        text: 'Drafting answers — KISS/YAGNI stance, skipping non-problems.',
+      },
+      {
+        kind: 'tool',
+        name: 'Edit',
+        summary: 'clarification-questions.md',
+        output: '3 answers drafted',
+      },
     ]);
   });
   at(3000, () => {
     const r = startRun('clarify-gate');
-    addItem(r, { kind: 'tool', name: 'Write', summary: 'visual/speckit-clarify-explainer.html', output: 'explainer written (18 KB)' });
+    addItem(r, {
+      kind: 'tool',
+      name: 'Write',
+      summary: 'visual/speckit-clarify-explainer.html',
+      output: 'explainer written (18 KB)',
+    });
     at(600, () => {
       setRunStatus(r, 'awaiting');
       chatNodeEntry(r, 'is awaiting decision — live Plannotator review');
@@ -1161,24 +1257,50 @@ function continueAfterGate(gateId) {
   if (gateId === 'clarify-gate') {
     at(400, () => {
       const r = startRun('clarify-apply');
-      quick(r, [{ kind: 'bash', cmd: '$speckit-clarifybatch --apply', out: ['3 answers applied to spec.md'] }]);
+      quick(r, [
+        {
+          kind: 'bash',
+          cmd: '$speckit-clarifybatch --apply',
+          out: ['3 answers applied to spec.md'],
+        },
+      ]);
     });
     at(1400, () => {
       const r = startRun('red-team');
-      addItem(r, { kind: 'msg', role: 'assistant', text: 'Adversarial pass over the spec — probing FR-003 writer-attach ordering.' });
-      at(500, () => addItem(r, { kind: 'tool', name: 'Write', summary: 'red-team-findings-2026-09-05-01.md', output: '5 findings (2 spec-fix, 1 new-OQ)' }));
+      addItem(r, {
+        kind: 'msg',
+        role: 'assistant',
+        text: 'Adversarial pass over the spec — probing FR-003 writer-attach ordering.',
+      });
+      at(500, () =>
+        addItem(r, {
+          kind: 'tool',
+          name: 'Write',
+          summary: 'red-team-findings-2026-09-05-01.md',
+          output: '5 findings (2 spec-fix, 1 new-OQ)',
+        })
+      );
       at(1100, () => setRunStatus(r, 'completed'));
     });
     at(3000, () => {
       const r = startRun('red-team-respond');
       quick(r, [
-        { kind: 'msg', role: 'assistant', text: 'Verifying each finding against the spec before proposing resolutions.' },
+        {
+          kind: 'msg',
+          role: 'assistant',
+          text: 'Verifying each finding against the spec before proposing resolutions.',
+        },
         { kind: 'tool', name: 'Edit', summary: 'findings Status column', output: '5/5 resolved' },
       ]);
     });
     at(4600, () => {
       const r = startRun('red-team-gate');
-      addItem(r, { kind: 'tool', name: 'Write', summary: 'visual/speckit-red-team-explainer.html', output: 'explainer written (22 KB)' });
+      addItem(r, {
+        kind: 'tool',
+        name: 'Write',
+        summary: 'visual/speckit-red-team-explainer.html',
+        output: 'explainer written (22 KB)',
+      });
       at(600, () => {
         setRunStatus(r, 'awaiting');
         chatNodeEntry(r, 'is awaiting decision — live Plannotator review');
@@ -1190,18 +1312,62 @@ function continueAfterGate(gateId) {
 
   if (gateId === 'red-team-gate') {
     const chain = [
-      ['red-team-apply', [{ kind: 'bash', cmd: '/speckit.red-team.apply --allow-historical-edits', out: ['2 spec-fixes applied, 1 OQ appended'] }]],
-      ['plan', [
-        { kind: 'msg', role: 'assistant', text: 'Writing plan.md — phases, contracts, test strategy.' },
-        { kind: 'tool', name: 'Write', summary: 'plan.md', output: 'plan written' },
-      ]],
-      ['tasks', [{ kind: 'tool', name: 'Write', summary: 'tasks.md', output: '23 tasks across 4 stories' }]],
-      ['analyze', [
-        { kind: 'msg', role: 'assistant', text: 'Cross-checking spec ↔ plan ↔ tasks consistency.' },
-        { kind: 'tool', name: 'Write', summary: 'analyze-findings-2026-09-05-01.md', output: '2 findings' },
-      ]],
-      ['analyze-respond', [{ kind: 'tool', name: 'Edit', summary: 'findings resolutions', output: '2/2 resolved (1 spec-fix, 1 skipped)' }]],
-      ['analyze-apply', [{ kind: 'bash', cmd: '$speckit-analyzebatch --apply', out: ['1 spec-fix applied'] }]],
+      [
+        'red-team-apply',
+        [
+          {
+            kind: 'bash',
+            cmd: '/speckit.red-team.apply --allow-historical-edits',
+            out: ['2 spec-fixes applied, 1 OQ appended'],
+          },
+        ],
+      ],
+      [
+        'plan',
+        [
+          {
+            kind: 'msg',
+            role: 'assistant',
+            text: 'Writing plan.md — phases, contracts, test strategy.',
+          },
+          { kind: 'tool', name: 'Write', summary: 'plan.md', output: 'plan written' },
+        ],
+      ],
+      [
+        'tasks',
+        [{ kind: 'tool', name: 'Write', summary: 'tasks.md', output: '23 tasks across 4 stories' }],
+      ],
+      [
+        'analyze',
+        [
+          {
+            kind: 'msg',
+            role: 'assistant',
+            text: 'Cross-checking spec ↔ plan ↔ tasks consistency.',
+          },
+          {
+            kind: 'tool',
+            name: 'Write',
+            summary: 'analyze-findings-2026-09-05-01.md',
+            output: '2 findings',
+          },
+        ],
+      ],
+      [
+        'analyze-respond',
+        [
+          {
+            kind: 'tool',
+            name: 'Edit',
+            summary: 'findings resolutions',
+            output: '2/2 resolved (1 spec-fix, 1 skipped)',
+          },
+        ],
+      ],
+      [
+        'analyze-apply',
+        [{ kind: 'bash', cmd: '$speckit-analyzebatch --apply', out: ['1 spec-fix applied'] }],
+      ],
     ];
     let t = 400;
     for (const [id, items] of chain) {
@@ -1222,30 +1388,53 @@ function startRalphPass(pass) {
   const detail = pass === 1 ? 'pass 1' : 'pass 2 — after reviewed tasks';
   at(0, () => {
     const r = startRun('ralph-tasks-to-ralph', { passDetail: detail });
-    quick(r, [{ kind: 'bash', cmd: 'tasks-to-prd.sh', out: ['ralph-prd.json written — ' + (pass === 1 ? '3' : '4') + ' user stories'] }]);
+    quick(r, [
+      {
+        kind: 'bash',
+        cmd: 'tasks-to-prd.sh',
+        out: ['ralph-prd.json written — ' + (pass === 1 ? '3' : '4') + ' user stories'],
+      },
+    ]);
   });
   at(900, () => {
     const r = startRun('ralph-native-preflight', { passDetail: detail });
-    quick(r, [{ kind: 'bash', cmd: 'preflight', out: ['PRD valid — stories: ' + (pass === 1 ? 3 : 4)] }]);
+    quick(r, [
+      { kind: 'bash', cmd: 'preflight', out: ['PRD valid — stories: ' + (pass === 1 ? 3 : 4)] },
+    ]);
   });
   at(1800, () => runRalphIterations(pass, pass === 1 ? 3 : 2));
 }
 
 function runRalphIterations(pass, count) {
   const detail = pass === 1 ? 'pass 1' : 'pass 2 — after reviewed tasks';
-  const stories = pass === 1 ? ['US-1 attach endpoint', 'US-2 writer ordering', 'US-3 regression tests'] : ['US-4 converge-added tasks', 'final green pass'];
+  const stories =
+    pass === 1
+      ? ['US-1 attach endpoint', 'US-2 writer ordering', 'US-3 regression tests']
+      : ['US-4 converge-added tasks', 'final green pass'];
   let i = 0;
   const next = () => {
     const r = startRun('ralph-loop-run', { passDetail: detail });
     chatNodeEntry(r, 'started — ' + stories[i]);
     addItem(r, { kind: 'sys', text: 'until_bash: all userStories completed && all tasks pass' });
-    at(400, () => addItem(r, { kind: 'msg', role: 'assistant', text: 'Implementing **' + stories[i] + '**.' }));
-    at(800, () => addItem(r, { kind: 'tool', name: 'Edit', summary: 'src/writer/attach.ts', output: (pass === 1 ? 18 + i * 9 : 11) + ' insertions' }));
+    at(400, () =>
+      addItem(r, { kind: 'msg', role: 'assistant', text: 'Implementing **' + stories[i] + '**.' })
+    );
+    at(800, () =>
+      addItem(r, {
+        kind: 'tool',
+        name: 'Edit',
+        summary: 'src/writer/attach.ts',
+        output: (pass === 1 ? 18 + i * 9 : 11) + ' insertions',
+      })
+    );
     at(1200, () =>
       addItem(r, {
         kind: 'bash',
         cmd: 'bun run test:ralph',
-        out: i + 1 < count || pass === 2 ? ['story tasks passing', 'exit 0'] : ['2 tasks still failing', 'exit 1'],
+        out:
+          i + 1 < count || pass === 2
+            ? ['story tasks passing', 'exit 0']
+            : ['2 tasks still failing', 'exit 1'],
       })
     );
     at(1700, () => {
@@ -1262,16 +1451,29 @@ function runRalphIterations(pass, count) {
 function afterRalphLoop(pass) {
   const detail = pass === 1 ? 'pass 1' : 'pass 2';
   const r = startRun('ralph-sync-back', { passDetail: detail });
-  quick(r, [{ kind: 'tool', name: 'Edit', summary: 'tasks.md checkboxes', output: 'progress synced' }]);
+  quick(r, [
+    { kind: 'tool', name: 'Edit', summary: 'tasks.md checkboxes', output: 'progress synced' },
+  ]);
   at(1100, () => {
     const c = startRun('speckit-converge', { passDetail: detail });
-    addItem(c, { kind: 'msg', role: 'assistant', text: 'Convergence check — scanning for gaps between spec and implementation.' });
+    addItem(c, {
+      kind: 'msg',
+      role: 'assistant',
+      text: 'Convergence check — scanning for gaps between spec and implementation.',
+    });
     at(600, () => {
       if (pass === 1) {
-        addItem(c, { kind: 'tool', name: 'Edit', summary: 'tasks.md', output: '+2 tasks (error-path coverage)' });
+        addItem(c, {
+          kind: 'tool',
+          name: 'Edit',
+          summary: 'tasks.md',
+          output: '+2 tasks (error-path coverage)',
+        });
         setRunStatus(c, 'completed');
         chatNodeEntry(c, 'gate: **FAIL** — 2 tasks added');
-        at(400, () => routeDecision('negative', "gate == 'FAIL' → review added tasks before retry", 1));
+        at(400, () =>
+          routeDecision('negative', "gate == 'FAIL' → review added tasks before retry", 1)
+        );
       } else {
         addItem(c, { kind: 'sys', text: 'no gaps found' });
         setRunStatus(c, 'completed');
@@ -1284,7 +1486,13 @@ function afterRalphLoop(pass) {
 
 function routeDecision(route, note, pass) {
   const r = startRun('speckit-converge-gate', { passDetail: 'decision ' + pass });
-  addItem(r, { kind: 'sys', text: "condition: $speckit-converge.output.gate == 'PASS' · max_iterations 3 · decision " + pass + ' of 3' });
+  addItem(r, {
+    kind: 'sys',
+    text:
+      "condition: $speckit-converge.output.gate == 'PASS' · max_iterations 3 · decision " +
+      pass +
+      ' of 3',
+  });
   at(400, () => {
     addItem(r, { kind: 'route', route, text: note });
     setRunStatus(r, 'completed');
@@ -1292,8 +1500,13 @@ function routeDecision(route, note, pass) {
     if (route === 'negative') {
       at(500, () => {
         const g = startRun('speckit-converge-review-gate');
-        addItem(g, { kind: 'tool', name: 'Read', summary: 'tasks.md', output: 'handing tasks.md to live review' });
-  at(600, () => {
+        addItem(g, {
+          kind: 'tool',
+          name: 'Read',
+          summary: 'tasks.md',
+          output: 'handing tasks.md to live review',
+        });
+        at(600, () => {
           setRunStatus(g, 'awaiting');
           chatNodeEntry(g, 'is awaiting decision — review added tasks');
           addChat({ kind: 'gate', nodeId: 'speckit-converge-review-gate' });
@@ -1307,19 +1520,28 @@ function routeDecision(route, note, pass) {
       });
       at(1500, () => {
         const r2 = startRun('update-bmad-sprint-status');
-        quick(r2, [{ kind: 'tool', name: 'Edit', summary: 'sprint-status.yaml', output: 'story 014 → done' }]);
+        quick(r2, [
+          { kind: 'tool', name: 'Edit', summary: 'sprint-status.yaml', output: 'story 014 → done' },
+        ]);
       });
       at(2600, () => {
         const r2 = startRun('create-pull-request');
         addItem(r2, { kind: 'msg', role: 'command', text: '/archon-create-pr' });
-        at(500, () => addItem(r2, { kind: 'tool', name: 'Bash', summary: 'gh pr create', output: 'PR #129 opened — attach-first-writer' }));
+        at(500, () =>
+          addItem(r2, {
+            kind: 'tool',
+            name: 'Bash',
+            summary: 'gh pr create',
+            output: 'PR #129 opened — attach-first-writer',
+          })
+        );
         at(1100, () => {
           setRunStatus(r2, 'completed');
           chatNodeEntry(r2, 'opened PR #129');
           finishRun('completed');
-    });
-  });
-}
+        });
+      });
+    }
   });
 }
 
@@ -1336,7 +1558,9 @@ function finishRun(status) {
     kind: 'sys',
     text:
       status === 'completed'
-        ? 'Run completed — ' + state.runs.length + ' node runs, 1 ask answered, 3 gates approved, 1 retry loop'
+        ? 'Run completed — ' +
+          state.runs.length +
+          ' node runs, 1 ask answered, 3 gates approved, 1 retry loop'
         : 'Run failed',
   });
 }
@@ -1370,7 +1594,9 @@ function bindChrome() {
     if (!text) return;
     input.value = '';
     addChat({ kind: 'user', who: state.view === 'teammate' ? 'teammate' : 'dale', text });
-    at(600, () => addChat({ kind: 'sys', text: "Message queued — the run's agent sees it on the next resume." }));
+    at(600, () =>
+      addChat({ kind: 'sys', text: "Message queued — the run's agent sees it on the next resume." })
+    );
   });
 
   const handle = qs('#split-handle');
@@ -1404,7 +1630,8 @@ function replay() {
   state.gateDecisions = {};
   state.convergePass = 0;
 
-  qs('#logs-list').innerHTML = '<div class="logs-empty">No node runs yet — the run is starting…</div>';
+  qs('#logs-list').innerHTML =
+    '<div class="logs-empty">No node runs yet — the run is starting…</div>';
   qs('#chat-stream').innerHTML = '';
   qs('#panel-header').innerHTML = '';
   qs('#panel-body').innerHTML = '';
@@ -1425,7 +1652,8 @@ function replay() {
 function boot() {
   bindChrome();
   bindViewport();
-  qs('#logs-list').innerHTML = '<div class="logs-empty">No node runs yet — the run is starting…</div>';
+  qs('#logs-list').innerHTML =
+    '<div class="logs-empty">No node runs yet — the run is starting…</div>';
   buildGraph();
   fitGraph();
   setInterval(() => {

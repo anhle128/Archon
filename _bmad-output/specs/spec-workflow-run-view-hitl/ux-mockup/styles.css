@@ -387,8 +387,7 @@ button {
   min-height: 0;
   position: relative;
   cursor: grab;
-  background:
-    radial-gradient(circle, oklch(0.2 0.008 260) 1px, transparent 1px) 0 0 / 26px 26px;
+  background: radial-gradient(circle, oklch(0.2 0.008 260) 1px, transparent 1px) 0 0 / 26px 26px;
 }
 
 #graph-pane.panning {
@@ -571,7 +570,9 @@ button {
   border-radius: var(--radius);
   padding: 7px 10px;
   cursor: pointer;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
 }
 
 .gnode.kind-bash {
@@ -600,7 +601,9 @@ button {
 
 .gnode.selected {
   border-color: var(--accent-bright);
-  box-shadow: 0 0 0 1px var(--accent-bright), 0 4px 18px oklch(0.1 0.02 260 / 0.5);
+  box-shadow:
+    0 0 0 1px var(--accent-bright),
+    0 4px 18px oklch(0.1 0.02 260 / 0.5);
 }
 
 .gn-head {
