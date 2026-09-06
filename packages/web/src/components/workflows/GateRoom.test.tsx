@@ -268,6 +268,7 @@ describe('GateRoom actions', () => {
       chrome: chrome({ canDecide: true }),
       onApprove: async (): Promise<void> => undefined,
     });
+    expect(host.textContent).toContain('Waiting for approval');
     expect(findButton('Approve')).toBeInstanceOf(HTMLButtonElement);
     expect(findButton('Reject')).toBeInstanceOf(HTMLButtonElement);
   });

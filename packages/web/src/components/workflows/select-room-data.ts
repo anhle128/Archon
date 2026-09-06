@@ -137,6 +137,13 @@ function gateDecision(
   row: LogRow,
   matching: ReturnType<typeof readApprovalContext>
 ): 'approved' | 'rejected' | null {
+  const contextDecision =
+    matching?.resolved === 'approved' || matching?.resolved === 'rejected'
+      ? matching.resolved
+      : null;
+  const rowAnchored = events.some(event => event.id === row.id);
+  if (!rowAnchored && matching !== null) return contextDecision;
+
   const scoped = eventsForRow(events, row);
   for (let index = scoped.length - 1; index >= 0; index -= 1) {
     const event = scoped[index];
@@ -144,8 +151,7 @@ function gateDecision(
     const decision = eventData(event).approval_decision;
     if (decision === 'approved' || decision === 'rejected') return decision;
   }
-  const resolved = matching?.resolved;
-  return resolved === 'approved' || resolved === 'rejected' ? resolved : null;
+  return contextDecision;
 }
 
 function bodyLifecycleStatus(eventType: string): LoopGroupBodyState['status'] | null {
@@ -153,6 +159,13 @@ function bodyLifecycleStatus(eventType: string): LoopGroupBodyState['status'] | 
   if (eventType === 'node_completed') return 'completed';
   if (eventType === 'node_failed') return 'failed';
   if (eventType === 'node_skipped' || eventType === 'node_skipped_prior_success') return 'skipped';
+  return null;
+}
+
+function loopIterationStatus(eventType: string): LoopGroupIterationView['status'] | null {
+  if (eventType === 'loop_iteration_started') return 'running';
+  if (eventType === 'loop_iteration_completed') return 'completed';
+  if (eventType === 'loop_iteration_failed') return 'failed';
   return null;
 }
 
@@ -224,7 +237,7 @@ export function selectGateChrome(input: {
   const unresolved = approvalContext?.resolved === undefined || approvalContext.resolved === null;
   const canDecide = ownsActiveSlot && unresolved;
   const reviewUrl =
-    approvalContext?.nodeId === row.nodeId
+    gateType === 'plannotator_gate' && approvalContext?.nodeId === row.nodeId
       ? getPlannotatorReviewUrl({ status: runStatus, approval })
       : null;
   const declaredMessage = declaredGateMessage(definitionNode, gateType);
@@ -326,9 +339,18 @@ export function selectLoopGroupChrome(input: {
   }
   const bodyIds = new Set(body.map(node => node.qualifiedId));
   const lastByIteration = new Map<number, Map<string, LoopGroupBodyState['status']>>();
+  const iterationStatusByIteration = new Map<number, LoopGroupIterationView['status']>();
   for (const event of events) {
     const iteration = safePositiveInteger(eventData(event).iteration);
     if (iteration === null) continue;
+
+    if (event.step_name === row.nodeId) {
+      const iterationStatus = loopIterationStatus(event.event_type);
+      if (iterationStatus !== null) {
+        iterationStatusByIteration.set(iteration, iterationStatus);
+      }
+    }
+
     const qualifiedId = event.step_name;
     if (qualifiedId === null || !bodyIds.has(qualifiedId)) continue;
     const status = bodyLifecycleStatus(event.event_type);
@@ -337,7 +359,11 @@ export function selectLoopGroupChrome(input: {
     statuses.set(qualifiedId, status);
     lastByIteration.set(iteration, statuses);
   }
-  const iterations = [...lastByIteration.keys()]
+  const iterationNumbers = new Set([
+    ...iterationStatusByIteration.keys(),
+    ...lastByIteration.keys(),
+  ]);
+  const iterations = [...iterationNumbers]
     .sort((left, right) => left - right)
     .map(iteration => {
       const statuses = lastByIteration.get(iteration) ?? new Map();
@@ -348,7 +374,7 @@ export function selectLoopGroupChrome(input: {
       }));
       return {
         iteration,
-        status: iterationStatusFromBody(iterationBody),
+        status: iterationStatusByIteration.get(iteration) ?? iterationStatusFromBody(iterationBody),
         body: iterationBody,
       };
     });

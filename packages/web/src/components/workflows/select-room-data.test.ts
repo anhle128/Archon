@@ -250,6 +250,24 @@ describe('selectGateChrome', () => {
     }
   });
 
+  test('suppresses Plannotator links for incompatible gate selections', () => {
+    expect(
+      selectGateChrome({
+        definitionNode: { id: 'review', approval: { message: 'Ship?' } },
+        events: [workflowEvent({ id: 'gate-start', step_name: 'review' })],
+        row: GATE_ROW,
+        approval: {
+          nodeId: 'review',
+          message: 'Review the plan',
+          type: 'plannotator_gate',
+          reviewUrl: 'https://plannotator.example/run-1',
+        },
+        runStatus: 'paused',
+        gateType: 'approval',
+      }).reviewUrl
+    ).toBeNull();
+  });
+
   test('reads a completed gate decision from the selected attempt', () => {
     const completedRow: LogRow = { ...GATE_ROW, status: 'completed' };
     const events = [
@@ -305,6 +323,27 @@ describe('selectGateChrome', () => {
       showInactiveNotice: false,
       reviewUrl: null,
     });
+  });
+
+  test('does not leak stale decisions into a metadata-only active pause', () => {
+    const metadataOnlyRow: LogRow = { ...GATE_ROW, id: 'node:review' };
+    expect(
+      selectGateChrome({
+        definitionNode: { id: 'review', approval: { message: 'Ship?' } },
+        events: [
+          workflowEvent({
+            id: 'done-old',
+            step_name: 'review',
+            event_type: 'node_completed',
+            data: { approval_decision: 'rejected' },
+          }),
+        ],
+        row: metadataOnlyRow,
+        approval: { nodeId: 'review', message: 'Ship?', type: 'approval' },
+        runStatus: 'paused',
+        gateType: 'approval',
+      }).decision
+    ).toBeNull();
   });
 });
 
@@ -593,6 +632,46 @@ describe('selectLoopGroupChrome', () => {
           body: [
             { id: 'body', qualifiedId: 'group.body', dependsOn: [], status: 'completed' },
             { id: 'check', qualifiedId: 'group.check', dependsOn: ['body'], status: 'failed' },
+          ],
+        },
+      ],
+      selectedIteration: 2,
+    });
+  });
+
+  test('keeps container iteration history before body lifecycle arrives', () => {
+    const events = [
+      workflowEvent({
+        id: 'iter-2-start',
+        step_name: 'group',
+        event_type: 'loop_iteration_started',
+        data: { iteration: 2 },
+      }),
+      workflowEvent({
+        id: 'iter-2-done',
+        step_name: 'group',
+        event_type: 'loop_iteration_completed',
+        data: { iteration: 2 },
+      }),
+    ];
+    expect(
+      selectLoopGroupChrome({
+        definitionNode: GROUP_NODE,
+        events,
+        row: GROUP_ROW,
+      })
+    ).toEqual({
+      body: [
+        { id: 'body', qualifiedId: 'group.body', dependsOn: [] },
+        { id: 'check', qualifiedId: 'group.check', dependsOn: ['body'] },
+      ],
+      iterations: [
+        {
+          iteration: 2,
+          status: 'completed',
+          body: [
+            { id: 'body', qualifiedId: 'group.body', dependsOn: [], status: 'pending' },
+            { id: 'check', qualifiedId: 'group.check', dependsOn: ['body'], status: 'pending' },
           ],
         },
       ],

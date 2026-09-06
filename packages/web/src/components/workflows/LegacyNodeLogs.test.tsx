@@ -467,6 +467,123 @@ describe('LegacyNodeLogs', () => {
     expectNoAskHumanChrome(host);
   });
 
+  test('active approval pauses remain selectable without lifecycle node state', async () => {
+    const calls: [string, string][] = [];
+    const loadMessages = async (
+      requestRunId: string,
+      nodeId: string
+    ): Promise<WorkflowNodeMessagesResponse> => {
+      calls.push([requestRunId, nodeId]);
+      return { messages: [] };
+    };
+    await act(async () => {
+      renderLogs({
+        runId: 'run-1',
+        nodeStates: [],
+        events: [],
+        definitionNodes: [{ id: 'review', approval: { message: 'Ship?' } }],
+        definitionPending: false,
+        runStatus: 'paused',
+        approval: { nodeId: 'review', message: 'Ship?', type: 'approval' },
+        loadMessages,
+        onSelectNode: (): void => undefined,
+      });
+    });
+    await clickRow('review');
+    await flushUntil(host, 'approval row from metadata', () =>
+      (host.textContent ?? '').includes('Ship?')
+    );
+
+    const buttons = Array.from(host.querySelectorAll('button')).map(
+      button => button.textContent ?? ''
+    );
+    expect(buttons.some(text => text === 'Approve')).toBe(true);
+    expect(buttons.some(text => text.includes('Reject'))).toBe(true);
+    expect(calls).toEqual([]);
+    expect(host.querySelector('[aria-label="review room"]')).not.toBeNull();
+    expectNoAskHumanChrome(host);
+  });
+
+  test('active Plannotator pauses remain selectable without lifecycle node state', async () => {
+    const calls: [string, string][] = [];
+    const loadMessages = async (
+      requestRunId: string,
+      nodeId: string
+    ): Promise<WorkflowNodeMessagesResponse> => {
+      calls.push([requestRunId, nodeId]);
+      return { messages: [] };
+    };
+    await act(async () => {
+      renderLogs({
+        runId: 'run-1',
+        nodeStates: [],
+        events: [],
+        definitionNodes: [
+          { id: 'review', plannotator_gate: { document: 'plan.md', rework: { prompt: 'Fix' } } },
+        ],
+        definitionPending: false,
+        runStatus: 'paused',
+        approval: {
+          nodeId: 'review',
+          message: 'Review the plan',
+          type: 'plannotator_gate',
+          document: 'plan.md',
+          reviewUrl: 'https://plannotator.example/run-1',
+        },
+        loadMessages,
+        onSelectNode: (): void => undefined,
+      });
+    });
+    await clickRow('review');
+    await flushUntil(host, 'plannotator row from metadata', () =>
+      (host.textContent ?? '').includes('Open Plannotator')
+    );
+
+    expect(host.querySelector('a[href="https://plannotator.example/run-1"]')).not.toBeNull();
+    expect(calls).toEqual([]);
+    expect(host.querySelector('[aria-label="review room"]')).not.toBeNull();
+    expectNoAskHumanChrome(host);
+  });
+
+  test('active child workflow pauses remain selectable without lifecycle node state', async () => {
+    const calls: [string, string][] = [];
+    const loadMessages = async (
+      requestRunId: string,
+      nodeId: string
+    ): Promise<WorkflowNodeMessagesResponse> => {
+      calls.push([requestRunId, nodeId]);
+      return { messages: [] };
+    };
+    await act(async () => {
+      renderLogs({
+        runId: 'run-1',
+        nodeStates: [],
+        events: [],
+        definitionNodes: [{ id: 'child', workflow: 'review-child' }],
+        definitionPending: false,
+        runStatus: 'paused',
+        approval: {
+          nodeId: 'child',
+          message: 'Sub-run is paused awaiting review',
+          type: 'child_workflow',
+          childRunId: 'child-run-1',
+        },
+        loadMessages,
+        onSelectNode: (): void => undefined,
+      });
+    });
+    await clickRow('child');
+    await flushUntil(host, 'child workflow row from metadata', () =>
+      (host.textContent ?? '').includes('Open child run')
+    );
+
+    expect(host.querySelector('a[href="/legacy/workflows/runs/child-run-1"]')).not.toBeNull();
+    expect(calls).toEqual([]);
+    expect(host.querySelector('[aria-label="child room"]')).not.toBeNull();
+    expect(host.textContent).not.toContain('AskHuman');
+    expect(host.textContent).not.toContain('waiting-on-you');
+  });
+
   test('clicking a workflow row renders Open child run and does not call loadMessages', async () => {
     const calls: [string, string][] = [];
     const loadMessages = async (
@@ -661,6 +778,52 @@ describe('LegacyNodeLogs', () => {
     expect(host.textContent).toContain('×2 failed');
     expect(host.querySelectorAll('details[open]')).toHaveLength(1);
     expect(host.querySelector('details[open]')?.textContent).toContain('×2 failed');
+    expect(calls).toEqual([]);
+    expect(host.querySelector('[aria-label="group room"]')).not.toBeNull();
+    expectNoAskHumanChrome(host);
+  });
+
+  test('active loop-group iterations remain selectable before group terminal state exists', async () => {
+    const calls: [string, string][] = [];
+    const loadMessages = async (
+      requestRunId: string,
+      nodeId: string
+    ): Promise<WorkflowNodeMessagesResponse> => {
+      calls.push([requestRunId, nodeId]);
+      return { messages: [] };
+    };
+    await act(async () => {
+      renderLogs({
+        runId: 'run-1',
+        nodeStates: [],
+        events: [
+          workflowEvent({
+            id: 'iter-1-start',
+            step_name: 'group',
+            event_type: 'loop_iteration_started',
+            data: { iteration: 1 },
+          }),
+          workflowEvent({
+            id: 'body-1-done',
+            step_name: 'group.body',
+            event_type: 'node_completed',
+            data: { iteration: 1 },
+          }),
+        ],
+        definitionNodes: [GROUP_NODE],
+        definitionPending: false,
+        runStatus: 'running',
+        approval: null,
+        loadMessages,
+        onSelectNode: (): void => undefined,
+      });
+    });
+    await clickRow('group ×1');
+    await flushUntil(host, 'loop group row from iteration events', () =>
+      (host.textContent ?? '').includes('Body nodes')
+    );
+
+    expect(host.textContent).toContain('×1 running');
     expect(calls).toEqual([]);
     expect(host.querySelector('[aria-label="group room"]')).not.toBeNull();
     expectNoAskHumanChrome(host);

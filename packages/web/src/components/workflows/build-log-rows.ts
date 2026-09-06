@@ -2,7 +2,7 @@
  * Chronological Logs rows for the legacy node-run list.
  *
  * Server-projected nodeStates remain the lifecycle source. Workflow events
- * only describe loop and route-loop executions as list metadata.
+ * only describe loop, route-loop, and approval-gate executions as list metadata.
  */
 import type { WorkflowEventResponse, WorkflowNodeStateResponse } from '@/lib/api';
 
@@ -94,6 +94,7 @@ export function buildLogRows(
     'node_failed',
     'node_skipped',
     'node_skipped_prior_success',
+    'approval_requested',
   ]);
   const rows: LogRow[] = [];
   nodeStates.forEach((state, sourceIndex) => {

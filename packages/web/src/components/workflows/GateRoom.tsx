@@ -46,6 +46,9 @@ export function GateRoom({
             {chrome.decision === 'approved' ? 'Approved' : 'Rejected'}
           </p>
         )}
+        {chrome.canDecide && chrome.decision === null && (
+          <p className="text-sm text-text-secondary">Waiting for approval</p>
+        )}
         <p className="text-sm text-text-primary">{chrome.message}</p>
         {chrome.document !== null && (
           <pre className="overflow-x-auto whitespace-pre-wrap bg-surface-inset p-3 font-mono text-sm text-text-primary">
