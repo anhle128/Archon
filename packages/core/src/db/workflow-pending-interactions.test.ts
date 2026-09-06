@@ -46,6 +46,7 @@ const {
   purgePendingInteractionsInTransaction,
   PendingInteractionCorruptRowError,
   PendingInteractionAlreadyResolvedError,
+  PendingInteractionNotFoundError,
   PendingInteractionRunNotPausedError,
   PendingInteractionValidationError,
 } = await import('./workflow-pending-interactions');
@@ -482,6 +483,115 @@ describe('resolvePendingInteraction', () => {
     const events = await resolvedEvents();
     expect(events).toHaveLength(1);
     expect(events[0]?.data).toMatchObject({ resumed: false, declined: false });
+  });
+
+  test('keeps two Ask nodes blocked until the last run-wide pending row is answered', async () => {
+    await insertPendingInteraction({
+      ...baseInput,
+      node_id: 'alpha',
+      tool_use_id: 'toolu_alpha',
+      envelope: mixedEnvelope,
+    });
+    await insertPendingInteraction({
+      ...baseInput,
+      node_id: 'beta',
+      tool_use_id: 'toolu_beta',
+      envelope: mixedEnvelope,
+    });
+    await pauseRun();
+
+    const first = await resolvePendingInteraction(resolveInput({ tool_use_id: 'toolu_alpha' }));
+    expect(first.resumed).toBe(false);
+    expect(first.remaining_pending).toBe(1);
+    expect(await runStatus()).toBe('paused');
+
+    const halfway = await listPendingInteractions('run-1');
+    expect(
+      halfway
+        .map(row => ({ nodeId: row.node_id, status: row.status }))
+        .sort((left, right) => left.nodeId.localeCompare(right.nodeId))
+    ).toEqual([
+      { nodeId: 'alpha', status: 'answered' },
+      { nodeId: 'beta', status: 'pending' },
+    ]);
+
+    const last = await resolvePendingInteraction(resolveInput({ tool_use_id: 'toolu_beta' }));
+    expect(last.resumed).toBe(true);
+    expect(last.remaining_pending).toBe(0);
+    expect(await runStatus()).toBe('running');
+  });
+
+  test('counts a pending permission interaction when an Ask answer is resolved', async () => {
+    await insertPendingInteraction({
+      ...baseInput,
+      node_id: 'alpha',
+      tool_use_id: 'toolu_ask',
+      envelope: mixedEnvelope,
+    });
+    await insertPendingInteraction({
+      ...baseInput,
+      node_id: 'beta',
+      tool_use_id: 'toolu_permission',
+      kind: 'permission',
+      envelope: { intent: 'write repository files' },
+    });
+    await pauseRun();
+
+    const result = await resolvePendingInteraction(resolveInput({ tool_use_id: 'toolu_ask' }));
+
+    expect(result.resumed).toBe(false);
+    expect(result.remaining_pending).toBe(1);
+    expect(await runStatus()).toBe('paused');
+    const listed = await listPendingInteractions('run-1');
+    expect(listed.find(row => row.tool_use_id === 'toolu_permission')).toMatchObject({
+      tool_use_id: 'toolu_permission',
+      kind: 'permission',
+      status: 'pending',
+    });
+  });
+
+  test('resolves a child Ask only through the child workflow run id', async () => {
+    await seedRun({
+      runId: 'child-run-1',
+      userId: 'child-user-1',
+      conversationId: 'child-conversation-1',
+    });
+    await db.query('UPDATE remote_agent_workflow_runs SET parent_run_id = $1 WHERE id = $2', [
+      'run-1',
+      'child-run-1',
+    ]);
+    await insertPendingInteraction({
+      ...baseInput,
+      workflow_run_id: 'child-run-1',
+      node_id: 'child-review',
+      tool_use_id: 'toolu_child',
+      envelope: mixedEnvelope,
+    });
+    await pauseRun('run-1');
+    await pauseRun('child-run-1');
+
+    await expect(
+      resolvePendingInteraction(
+        resolveInput({
+          workflow_run_id: 'run-1',
+          tool_use_id: 'toolu_child',
+        })
+      )
+    ).rejects.toBeInstanceOf(PendingInteractionNotFoundError);
+    expect((await listPendingInteractions('child-run-1'))[0]?.status).toBe('pending');
+
+    const result = await resolvePendingInteraction(
+      resolveInput({
+        workflow_run_id: 'child-run-1',
+        tool_use_id: 'toolu_child',
+        resolved_by: 'child-user-1',
+      })
+    );
+
+    expect(result.resumed).toBe(true);
+    expect(result.remaining_pending).toBe(0);
+    expect(await runStatus('child-run-1')).toBe('running');
+    expect(await runStatus('run-1')).toBe('paused');
   });
 
   test('rolls back the answer when the interaction-resolved event insert fails', async () => {
