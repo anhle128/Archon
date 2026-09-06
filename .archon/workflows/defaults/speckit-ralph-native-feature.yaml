@@ -843,10 +843,10 @@ nodes:
 
   - id: create-pull-request
     command: archon-create-pr
-    provider: codex
-    effort: medium
     depends_on: [update-bmad-sprint-status]
     context: fresh
-    model: gpt-5.6-terra
+    provider: omp
+    model: cursor/gemini-3.8-flash  
+    effort: hight
     idle_timeout: 900000
     output_type: pull-request

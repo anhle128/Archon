@@ -656,10 +656,10 @@ nodes:
 
   - id: create-pull-request
     command: archon-create-pr
-    provider: codex
-    effort: medium
+    provider: omp
+    model: cursor/gemini-3.8-flash  
+    effort: hight
     depends_on: [update-bmad-sprint-status]
     context: fresh
-    model: gpt-5.6-terra
     idle_timeout: 900000
     output_type: pull-request
