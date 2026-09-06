@@ -3,6 +3,7 @@ import { getWorkflowNodeMessages } from '@/lib/api';
 import type { WorkflowRunStatus } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
+import { nodeStatusLabel } from './awaiting-chrome';
 import type { LogRow } from './build-log-rows';
 import { ChildWorkflowRoom } from './ChildWorkflowRoom';
 import { GateRoom } from './GateRoom';
@@ -52,7 +53,7 @@ const TYPE_LABELS: Record<NodeBodyKind, string> = {
 const STATUS_COLORS: Record<LogRow['status'], string> = {
   pending: 'bg-accent/20 text-accent',
   running: 'bg-accent/20 text-accent',
-  awaiting: 'bg-accent/20 text-accent',
+  awaiting: 'bg-warning/20 text-warning',
   completed: 'bg-success/20 text-success',
   failed: 'bg-error/20 text-error',
   skipped: 'bg-surface text-text-secondary',
@@ -91,7 +92,7 @@ export function LegacyNodeRoom({
         {waitingForDefinition ? 'Loading' : TYPE_LABELS[resolution.nodeType]}
       </span>
       <span className={cn('rounded-full px-2 py-0.5 text-xs', STATUS_COLORS[row.status])}>
-        {row.status}
+        {nodeStatusLabel(row.status)}
       </span>
     </div>
   );

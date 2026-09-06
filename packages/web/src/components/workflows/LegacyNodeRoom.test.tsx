@@ -552,6 +552,60 @@ describe('LegacyNodeRoom static rooms', () => {
     expect(markup).toContain('aria-label="group room"');
     expect(requests).toHaveLength(0);
   });
+
+  test('renders awaiting header with warning tokens and waiting on you', () => {
+    const { requests, loadMessages } = createLoadMessages();
+    const bashDef: readonly DagNode[] = [{ id: 'setup', bash: 'echo ready' }];
+    const bashEvents = [
+      workflowEvent({ id: 'start-setup', step_name: 'setup', event_type: 'node_started' }),
+    ];
+
+    const awaitingMarkup = renderStatic({
+      row: row({
+        id: 'start-setup',
+        nodeId: 'setup',
+        label: 'Setup',
+        status: 'awaiting',
+      }),
+      loadMessages,
+      definitionNodes: bashDef,
+      events: bashEvents,
+    });
+    expect(awaitingMarkup).toContain('waiting on you');
+    expect(awaitingMarkup).toContain('text-warning');
+    expect(awaitingMarkup).not.toContain('>awaiting<');
+
+    const runningMarkup = renderStatic({
+      row: row({
+        id: 'start-setup',
+        nodeId: 'setup',
+        label: 'Setup',
+        status: 'running',
+      }),
+      loadMessages,
+      definitionNodes: bashDef,
+      events: bashEvents,
+    });
+    expect(runningMarkup).toContain('running');
+    expect(runningMarkup).toContain('text-accent');
+    expect(runningMarkup).not.toContain('waiting on you');
+
+    const failedMarkup = renderStatic({
+      row: row({
+        id: 'start-setup',
+        nodeId: 'setup',
+        label: 'Setup',
+        status: 'failed',
+      }),
+      loadMessages,
+      definitionNodes: bashDef,
+      events: bashEvents,
+    });
+    expect(failedMarkup).toContain('failed');
+    expect(failedMarkup).toContain('text-error');
+    expect(failedMarkup).not.toContain('waiting on you');
+    expect(requests).toHaveLength(0);
+  });
 });
 
 describe('LegacyNodeRoom dispatcher', () => {
