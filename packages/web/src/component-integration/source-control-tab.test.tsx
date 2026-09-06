@@ -9,8 +9,9 @@ import { Window } from 'happy-dom';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
-import type { GitChangesResponse } from '@/lib/api';
+import type { GitChangedFile, GitChangesResponse } from '@/lib/api';
 
+import { SourceControlPanel } from '../components/workflows/source-control/source-control-panel';
 import { SourceControlTab } from '../components/workflows/source-control/source-control-tab';
 
 const REVISION_A = 'a'.repeat(64);
@@ -198,14 +199,15 @@ describe('SourceControlTab', () => {
     if (!(listbox instanceof HTMLElement)) {
       throw new Error('Missing changed-files listbox');
     }
-    expect(listbox.getAttribute('aria-activedescendant')).toBe('sc-file-0');
+    expect(listbox.getAttribute('aria-activedescendant')).toBe('sc-changes-file-0');
 
     await act(async () => {
       listbox.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
     });
 
-    expect(listbox.getAttribute('aria-activedescendant')).toBe('sc-file-1');
-    expect(host.querySelector('#sc-file-1')?.getAttribute('aria-selected')).toBe('true');
+    expect(listbox.getAttribute('aria-activedescendant')).toBe('sc-changes-file-1');
+    expect(host.querySelector('#sc-changes-file-1')?.getAttribute('data-active')).toBe('true');
+    expect(host.querySelector('#sc-changes-file-1')?.getAttribute('aria-selected')).toBe('false');
   });
 
   test('leaves retries and focus or reconnect refreshes to the Reload button', async () => {
@@ -237,5 +239,137 @@ describe('SourceControlTab', () => {
     });
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  test('opens the current file with Enter or Space and a second file on click', async () => {
+    const opened: GitChangedFile[] = [];
+    const files: readonly GitChangedFile[] = [
+      { path: 'one.ts', status: 'M' },
+      { path: 'two.ts', status: 'A' },
+    ];
+
+    await act(async () => {
+      root.render(
+        createElement(SourceControlPanel, {
+          snapshot: { files: [...files], revision: REVISION_A },
+          loadState: 'idle',
+          stale: false,
+          onReload: (): void => undefined,
+          onAcceptPending: (): void => undefined,
+          onOpenFile: (file: GitChangedFile): void => {
+            opened.push(file);
+          },
+        })
+      );
+    });
+
+    const listbox = host.querySelector('[role="listbox"]');
+    if (!(listbox instanceof HTMLElement)) {
+      throw new Error('Missing changed-files listbox');
+    }
+    const firstRow = host.querySelector('#sc-changes-file-0');
+    const secondRow = host.querySelector('#sc-changes-file-1');
+    if (!(firstRow instanceof HTMLElement) || !(secondRow instanceof HTMLButtonElement)) {
+      throw new Error('Missing changed-file options');
+    }
+
+    await act(async () => {
+      firstRow.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    });
+    await act(async () => {
+      firstRow.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+    });
+    await act(async () => {
+      secondRow.click();
+    });
+
+    expect(opened).toEqual([files[0], files[0], files[1]]);
+    expect(win.document.activeElement?.getAttribute('role')).toBe('listbox');
+    expect(secondRow.getAttribute('data-active')).toBe('true');
+  });
+
+  test('virtualizes a 200-file list inside a 280-pixel listbox', async () => {
+    Object.defineProperty(win.HTMLElement.prototype, 'offsetHeight', {
+      configurable: true,
+      get(this: { getAttribute: (name: string) => string | null }): number {
+        return this.getAttribute('role') === 'listbox' ? 280 : 28;
+      },
+    });
+    Object.defineProperty(win.HTMLElement.prototype, 'offsetWidth', {
+      configurable: true,
+      get(this: { getAttribute: (name: string) => string | null }): number {
+        return this.getAttribute('role') === 'listbox' ? 400 : 320;
+      },
+    });
+
+    const files: GitChangedFile[] = Array.from({ length: 200 }, (_, index) => ({
+      path: `file-${String(index)}.ts`,
+      status: 'M' as const,
+    }));
+
+    await act(async () => {
+      root.render(
+        createElement(SourceControlPanel, {
+          snapshot: { files, revision: REVISION_A },
+          loadState: 'idle',
+          stale: false,
+          onReload: (): void => undefined,
+          onAcceptPending: (): void => undefined,
+        })
+      );
+    });
+
+    await waitFor(() => {
+      const count = host.querySelectorAll('[role="option"]').length;
+      return count > 0 && count < 200;
+    }, 'a virtualized subset of options');
+
+    expect(host.textContent).toContain('file-0.ts');
+    expect(host.textContent).not.toContain('file-199.ts');
+
+    const listbox = host.querySelector('[role="listbox"]');
+    if (!(listbox instanceof HTMLElement)) {
+      throw new Error('Missing changed-files listbox');
+    }
+
+    let scrollTop = 0;
+    Object.defineProperty(listbox, 'clientHeight', {
+      configurable: true,
+      get(): number {
+        return 280;
+      },
+    });
+    Object.defineProperty(listbox, 'scrollHeight', {
+      configurable: true,
+      get(): number {
+        return 200 * 28;
+      },
+    });
+    Object.defineProperty(listbox, 'scrollTop', {
+      configurable: true,
+      get(): number {
+        return scrollTop;
+      },
+      set(value: number): void {
+        scrollTop = value;
+      },
+    });
+    listbox.scrollTo = ((arg?: ScrollToOptions | number, y?: number): void => {
+      if (typeof arg === 'number') {
+        listbox.scrollTop = y ?? 0;
+      } else if (arg && typeof arg.top === 'number') {
+        listbox.scrollTop = arg.top;
+      }
+      listbox.dispatchEvent(new Event('scroll'));
+    }) as HTMLElement['scrollTo'];
+
+    await act(async () => {
+      listbox.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
+    });
+    await waitFor(
+      () => (host.textContent ?? '').includes('file-199.ts'),
+      'the later virtualized path'
+    );
+    expect(host.querySelectorAll('[role="option"]').length).toBeLessThan(200);
   });
 });

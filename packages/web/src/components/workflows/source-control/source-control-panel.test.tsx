@@ -34,7 +34,7 @@ describe('SourceControlPanel', () => {
 
     expect(html).toContain('Changes');
     expect(html).toContain('role="listbox"');
-    expect(html).toContain('aria-activedescendant="sc-file-0"');
+    expect(html).toContain('aria-activedescendant="sc-changes-file-0"');
     expect(html).toContain('>M<');
     expect(html).toContain('>A<');
     expect(html).toContain('>D<');
@@ -111,5 +111,44 @@ describe('SourceControlPanel', () => {
     expect(nextChangedFileIndex('Home', 2, 3)).toBe(0);
     expect(nextChangedFileIndex('End', 0, 3)).toBe(2);
     expect(nextChangedFileIndex('Enter', 1, 3)).toBe(1);
+  });
+
+  test('applies caller ariaLabel and idPrefix to the listbox and option IDs', () => {
+    const html = renderPanel({
+      snapshot: {
+        files: [{ path: 'src/a.ts', status: 'M' }],
+        revision: 'a'.repeat(64),
+      },
+      ariaLabel: 'History files',
+      idPrefix: 'sc-history-file',
+    });
+
+    expect(html).toContain('aria-label="History files"');
+    expect(html).toContain('id="sc-history-file-0"');
+    expect(html).toContain('aria-activedescendant="sc-history-file-0"');
+  });
+
+  test('uses aria-selected for the opened file and data-active for keyboard focus', () => {
+    const html = renderPanel({
+      snapshot: {
+        files: [
+          { path: 'src/a.ts', status: 'M' },
+          { path: 'new.ts', status: 'A' },
+        ],
+        revision: 'a'.repeat(64),
+      },
+      selectedPath: 'new.ts',
+    });
+
+    const activeStart = html.indexOf('id="sc-changes-file-0"');
+    const selectedStart = html.indexOf('id="sc-changes-file-1"');
+    const activeOption = html.slice(activeStart, html.indexOf('</button>', activeStart));
+    const selectedOption = html.slice(selectedStart, html.indexOf('</button>', selectedStart));
+
+    expect(html).toContain('aria-activedescendant="sc-changes-file-0"');
+    expect(activeOption).toContain('data-active="true"');
+    expect(activeOption).toContain('aria-selected="false"');
+    expect(selectedOption).toContain('data-active="false"');
+    expect(selectedOption).toContain('aria-selected="true"');
   });
 });
