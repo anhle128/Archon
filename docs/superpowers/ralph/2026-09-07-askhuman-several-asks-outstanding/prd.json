@@ -1,0 +1,131 @@
+{
+  "feature": "Keep Several Asks Outstanding Without a Second Scheduler",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Characterize pending-row node projection for mixed rows and sibling nodes",
+      "description": "As a workflow observer, I want the node state projector to project awaiting accurately when multiple Ask rows exist, so that a node stays awaiting while any of its rows is pending and sibling nodes without pending rows remain unaffected.",
+      "acceptanceCriteria": [
+        "Append same-node mixed-row characterization test to packages/workflows/src/retry-state.test.ts verifying projectLatestEffectiveNodeStates keeps a node awaiting when one row is answered and another is pending without requiring a node_awaiting event.",
+        "Append sibling-ownership characterization test to packages/workflows/src/retry-state.test.ts verifying projectLatestEffectiveNodeStates overlays awaiting only onto the sibling node that owns a pending Ask row, while the other sibling with answered rows remains running.",
+        "Focused test cd packages/workflows && bun test src/retry-state.test.ts passes with all projector tests green.",
+        "Changes are committed cleanly with commit message 'test(workflows): cover multiple pending ask projections'."
+      ],
+      "technicalNotes": "Follow Task 1 of plan docs/superpowers/plans/2026-09-07-askhuman-several-asks-outstanding.md:90-162. Modify packages/workflows/src/retry-state.test.ts. Read-only packages/workflows/src/retry-state.ts.",
+      "dependsOn": [],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Characterize run-wide Ask resolution, multi-kind blockers, and run ownership in SQLite",
+      "description": "As a database layer consumer, I want resolvePendingInteraction in real SQLite to track run-wide pending counts and enforce run-id ownership, so that the workflow run resumes only when the very last pending row of any kind is answered and child asks cannot be resolved via parent runs.",
+      "acceptanceCriteria": [
+        "Import PendingInteractionNotFoundError into packages/core/src/db/workflow-pending-interactions.test.ts destructured import.",
+        "Add test 'keeps two Ask nodes blocked until the last run-wide pending row is answered' asserting first answer returns resumed: false, remaining_pending: 1, run status 'paused', and second answer returns resumed: true, remaining_pending: 0, run status 'running'.",
+        "Add test 'counts a pending permission interaction when an Ask answer is resolved' proving resolvePendingInteraction counts pending rows of kind 'permission' and does not resume the run.",
+        "Add test 'resolves a child Ask only through the child workflow run id' proving resolving with parent workflow_run_id throws PendingInteractionNotFoundError, child row remains pending, and resolving with child run id resumes child without mutating parent run status.",
+        "Focused test cd packages/core && bun test src/db/workflow-pending-interactions.test.ts passes in its own process.",
+        "Changes are committed cleanly with commit message 'test(core): cover run-wide ask resolution'."
+      ],
+      "technicalNotes": "Follow Task 2 of plan docs/superpowers/plans/2026-09-07-askhuman-several-asks-outstanding.md:165-350. Modify packages/core/src/db/workflow-pending-interactions.test.ts. Read-only packages/core/src/db/workflow-pending-interactions.ts and packages/core/src/db/workflows.ts.",
+      "dependsOn": [
+        "US-001"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Characterize concurrent DAG Ask scheduling and update executor comments",
+      "description": "As a workflow executor maintainer, I want DAG scheduling to handle multiple concurrent Ask invocations, in-flight streaming siblings, and repeated Asks from one node without scheduling deadlocks, so that the run pauses safely while letting already-started sibling streams finish.",
+      "acceptanceCriteria": [
+        "Generalize Ask test helpers in packages/workflows/src/dag-executor.test.ts: implement deferred(), wireAskPause(store, onPause) asserting pauseWorkflowRun is called without approval context and throws if run is not running/paused, invokeInjectedAskHuman(options, toolUseId, sessionId), and executeAskDag(store, workflowRun, nodes).",
+        "Add test 'persists a second sibling Ask after the first Ask has paused the run' proving both Ask rows are inserted, pauseWorkflowRun is called twice with the run id, mockSendQueryDag is called twice, and no node_completed events are emitted for the asking nodes.",
+        "Add test 'lets an already-started sibling finish streaming after another node pauses the run' proving the sibling yields assistant text and result after the first pause, beta messages record text and completed status, exactly one node_completed event is stored, and downstream layers do not start.",
+        "Add test 'persists two Ask calls from one node before unwinding it as awaiting' using Promise.allSettled in fake provider, proving two tool use ids are inserted, pauseWorkflowRun is called twice, and review node records status awaiting without completed or failed.",
+        "Update stale comments in packages/workflows/src/dag-executor.ts in shouldContinueStreamingForStatus, executeNodeInternal, and loop-node event loop to clarify that concurrent approval or AskHuman nodes can transition the run.",
+        "Focused test cd packages/workflows && bun test src/dag-executor.test.ts passes.",
+        "Changes are committed cleanly with commit message 'test(workflows): cover concurrent ask scheduling'."
+      ],
+      "technicalNotes": "Follow Task 3 of plan docs/superpowers/plans/2026-09-07-askhuman-several-asks-outstanding.md:353-635. Modify packages/workflows/src/dag-executor.test.ts and comments in packages/workflows/src/dag-executor.ts. Do not alter executor logic.",
+      "dependsOn": [
+        "US-001"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Repair stateful sub-run test double and characterize child run Ask ownership",
+      "description": "As a sub-run test maintainer, I want InMemoryStore.pauseWorkflowRun to match production SQLite behavior by omitting metadata.approval on Ask-only pauses, so that sub-run end-to-end tests truthfully prove child Ask ownership and parent pause propagation.",
+      "acceptanceCriteria": [
+        "Add failing test 'keeps approval metadata absent for an Ask-only pause in the stateful test store' in packages/workflows/src/subrun.test.ts and verify it fails under cd packages/workflows && bun test src/subrun.test.ts.",
+        "Repair InMemoryStore.pauseWorkflowRun in packages/workflows/src/subrun.test.ts to only write metadata.approval when approvalContext is not undefined, mirroring production workflows.ts.",
+        "Verify test passes after minimal test-double repair.",
+        "Add exact type-only import import type { SendQueryOptions } from '@archon/providers/types' in subrun.test.ts.",
+        "Add end-to-end test 'stores an Ask on the child run and pauses its parent without copying the row' defining child-asks and parent-of-ask workflows, executing with userId, and verifying: result is paused, childRun has parent_run_id pointing to parent, childRun has status paused with no approval metadata, parentRun has status paused with approval metadata of type child_workflow, childRun owns the pending ask interaction, parentRun has zero pending interactions, and child-review node has no node_completed event.",
+        "Focused test cd packages/workflows && bun test src/subrun.test.ts passes in its own process.",
+        "Changes are committed cleanly with commit message 'test(workflows): cover child run ask ownership'."
+      ],
+      "technicalNotes": "Follow Task 4 of plan docs/superpowers/plans/2026-09-07-askhuman-several-asks-outstanding.md:637-862. Modify packages/workflows/src/subrun.test.ts. Execute the red-green cycle on the test double before adding the child e2e scenario.",
+      "dependsOn": [
+        "US-001",
+        "US-002",
+        "US-003"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Characterize run-detail API read model with multiple outstanding Ask rows",
+      "description": "As an API client developer, I want GET /api/workflows/runs/:runId to return all sibling and same-node pending interaction rows and project all pending owners as awaiting, so that the web UI receives truthful data for run chrome and node room rendering.",
+      "acceptanceCriteria": [
+        "Add test 'embeds sibling and same-node Ask rows while projecting every pending owner as awaiting' in packages/server/src/routes/api.workflow-runs.test.ts.",
+        "Verify mockListPendingInteractions is called with run-uuid-1 and returns three rows: review answered, review pending, and beta pending.",
+        "Assert response status is 200, body.run.status is 'paused', body.pending_interactions contains all three rows in correct statuses, and body.nodeStates projects both review and beta nodes with status 'awaiting'.",
+        "Focused test cd packages/server && bun test src/routes/api.workflow-runs.test.ts passes.",
+        "Changes are committed cleanly with commit message 'test(server): cover several outstanding asks'."
+      ],
+      "technicalNotes": "Follow Task 5 of plan docs/superpowers/plans/2026-09-07-askhuman-several-asks-outstanding.md:865-1002. Modify packages/server/src/routes/api.workflow-runs.test.ts. Read-only packages/server/src/routes/api.ts and schemas.",
+      "dependsOn": [
+        "US-001",
+        "US-002"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Run full validation matrix, resolve tracking conflicts, and mark Story 6.4 done",
+      "description": "As an Archon engineer, I want all package-isolated test suites and root validation to pass, and sprint-status.yaml to be cleanly resolved and marked done, so that Story 6.4 is completely verified and ready for PR review.",
+      "acceptanceCriteria": [
+        "Run focused regression matrix in package-isolated processes: retry-state.test.ts, workflow-pending-interactions.test.ts, workflows.test.ts, workflow-operations.test.ts, dag-executor.test.ts, subrun.test.ts, and api.workflow-runs.test.ts all pass.",
+        "git diff --check reports no whitespace or patch errors.",
+        "bun run validate passes cleanly from repository root with zero errors and zero ESLint warnings.",
+        "Resolve the two registered conflicts in _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml using @theirs (preserving the 2026-09-07 01:23:49 +0700 timestamp from commit c25ea00c).",
+        "Capture current timestamp and update sprint-status.yaml to mark 6-4-keep-several-asks-outstanding-without-a-second-scheduler: done while keeping epic-6 in-progress.",
+        "Verify sprint-status.yaml has no conflict markers (rg check exits 1), passes bun x prettier --check, and passes git diff --check.",
+        "Commit sprint tracking update with commit message 'chore(planning): mark AskHuman several asks done'.",
+        "Prepare PR handoff using .github/pull_request_template.md referencing Closes #89."
+      ],
+      "technicalNotes": "Follow Task 6 of plan docs/superpowers/plans/2026-09-07-askhuman-several-asks-outstanding.md:1005-1090. Modify _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml only after all test and validation gates pass.",
+      "dependsOn": [
+        "US-001",
+        "US-002",
+        "US-003",
+        "US-004",
+        "US-005"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
