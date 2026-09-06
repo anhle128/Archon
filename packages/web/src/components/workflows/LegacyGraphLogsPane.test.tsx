@@ -4,7 +4,9 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { Window } from 'happy-dom';
 
 import type {
+  ConversationResponse,
   DagNode,
+  MessageResponse,
   WorkflowEventResponse,
   WorkflowNodeMessagesResponse,
   WorkflowNodeStateResponse,
@@ -23,6 +25,46 @@ const notifyManager = reactQuery.notifyManager;
 const createRoot = reactDomClient.createRoot;
 
 const CREATED_AT = '2026-09-06T00:00:00.000Z';
+
+const PARENT_CONVERSATION: ConversationResponse = {
+  id: 'conversation-1',
+  platform_type: 'web',
+  platform_conversation_id: 'parent-1',
+  codebase_id: null,
+  cwd: null,
+  isolation_env_id: null,
+  ai_assistant_type: 'claude',
+  title: 'Parent',
+  hidden: false,
+  deleted_at: null,
+  last_activity_at: null,
+  user_id: 'user-1',
+  created_at: CREATED_AT,
+  updated_at: CREATED_AT,
+};
+
+interface ParentConversationOverrides {
+  parentPlatformId?: string | null;
+  loadParentMessages?: (conversationId: string) => Promise<MessageResponse[]>;
+  loadParentConversation?: (conversationId: string) => Promise<ConversationResponse>;
+  sendParentMessage?: (
+    conversationId: string,
+    message: string
+  ) => Promise<{ accepted: boolean; status: string }>;
+}
+
+function parentMessage(overrides: Partial<MessageResponse> = {}): MessageResponse {
+  return {
+    id: 'message-1',
+    conversation_id: 'parent-1',
+    role: 'user',
+    content: 'Ship it',
+    metadata: '{}',
+    user_id: 'user-1',
+    created_at: CREATED_AT,
+    ...overrides,
+  };
+}
 
 const REVIEW_STATE: WorkflowNodeStateResponse = {
   nodeId: 'review',
@@ -290,20 +332,22 @@ describe('LegacyGraphLogsPane', () => {
     );
   }
 
-  function PaneHarness(props: {
-    activeView?: 'graph' | 'logs';
-    runId: string;
-    nodeStates: readonly WorkflowNodeStateResponse[];
-    events: readonly WorkflowEventResponse[];
-    definitionNodes: readonly DagNode[];
-    definitionPending: boolean;
-    runStatus: WorkflowRunStatus;
-    approval: unknown;
-    loadMessages: (runId: string, nodeId: string) => Promise<WorkflowNodeMessagesResponse>;
-    onSelectNode: (nodeId: string | null) => void;
-    onApprove?: () => Promise<void>;
-    onReject?: (reason?: string) => Promise<void>;
-  }): React.ReactElement {
+  function PaneHarness(
+    props: {
+      activeView?: 'graph' | 'logs' | 'chat';
+      runId: string;
+      nodeStates: readonly WorkflowNodeStateResponse[];
+      events: readonly WorkflowEventResponse[];
+      definitionNodes: readonly DagNode[];
+      definitionPending: boolean;
+      runStatus: WorkflowRunStatus;
+      approval: unknown;
+      loadMessages: (runId: string, nodeId: string) => Promise<WorkflowNodeMessagesResponse>;
+      onSelectNode: (nodeId: string | null) => void;
+      onApprove?: () => Promise<void>;
+      onReject?: (reason?: string) => Promise<void>;
+    } & ParentConversationOverrides
+  ): React.ReactElement {
     const [selectedNodeId, setSelectedNodeId] = react.useState<string | null>(null);
     return createElement(legacyGraphLogsPane.LegacyGraphLogsPane, {
       activeView: props.activeView ?? 'logs',
@@ -314,6 +358,17 @@ describe('LegacyGraphLogsPane', () => {
       events: props.events,
       isLive: false,
       loadMessages: props.loadMessages,
+      parentPlatformId: props.parentPlatformId === undefined ? 'parent-1' : props.parentPlatformId,
+      loadParentMessages: props.loadParentMessages ?? (async (): Promise<MessageResponse[]> => []),
+      loadParentConversation:
+        props.loadParentConversation ??
+        (async (): Promise<ConversationResponse> => PARENT_CONVERSATION),
+      sendParentMessage:
+        props.sendParentMessage ??
+        (async (): Promise<{ accepted: boolean; status: string }> => ({
+          accepted: true,
+          status: 'accepted',
+        })),
       onSelectNode: (nodeId: string | null): void => {
         setSelectedNodeId(nodeId);
         props.onSelectNode(nodeId);
@@ -327,20 +382,22 @@ describe('LegacyGraphLogsPane', () => {
     });
   }
 
-  function renderLogs(args: {
-    activeView?: 'graph' | 'logs';
-    runId: string;
-    nodeStates: readonly WorkflowNodeStateResponse[];
-    events: readonly WorkflowEventResponse[];
-    definitionNodes: readonly DagNode[];
-    definitionPending: boolean;
-    runStatus: WorkflowRunStatus;
-    approval: unknown;
-    loadMessages: (runId: string, nodeId: string) => Promise<WorkflowNodeMessagesResponse>;
-    onSelectNode: (nodeId: string | null) => void;
-    onApprove?: () => Promise<void>;
-    onReject?: (reason?: string) => Promise<void>;
-  }): void {
+  function renderLogs(
+    args: {
+      activeView?: 'graph' | 'logs' | 'chat';
+      runId: string;
+      nodeStates: readonly WorkflowNodeStateResponse[];
+      events: readonly WorkflowEventResponse[];
+      definitionNodes: readonly DagNode[];
+      definitionPending: boolean;
+      runStatus: WorkflowRunStatus;
+      approval: unknown;
+      loadMessages: (runId: string, nodeId: string) => Promise<WorkflowNodeMessagesResponse>;
+      onSelectNode: (nodeId: string | null) => void;
+      onApprove?: () => Promise<void>;
+      onReject?: (reason?: string) => Promise<void>;
+    } & ParentConversationOverrides
+  ): void {
     root.render(
       createElement(
         reactQuery.QueryClientProvider,
@@ -359,6 +416,41 @@ describe('LegacyGraphLogsPane', () => {
       button.click();
     });
     return button;
+  }
+
+  function requireComposerTextarea(node: Element | null): {
+    disabled: boolean;
+    value: string;
+    placeholder: string;
+    dispatchEvent: (event: unknown) => boolean;
+  } {
+    if (node?.tagName !== 'TEXTAREA') throw new Error('missing run composer');
+    return node as unknown as {
+      disabled: boolean;
+      value: string;
+      placeholder: string;
+      dispatchEvent: (event: unknown) => boolean;
+    };
+  }
+
+  function requireComposerForm(node: Element | null): {
+    dispatchEvent: (event: unknown) => boolean;
+  } {
+    if (node?.tagName !== 'FORM') throw new Error('missing run composer form');
+    return node as unknown as { dispatchEvent: (event: unknown) => boolean };
+  }
+
+  function requireComposerButton(node: Element | null): { disabled: boolean } {
+    if (node?.tagName !== 'BUTTON') throw new Error('missing send button');
+    return node as unknown as { disabled: boolean };
+  }
+
+  function setNativeTextareaValue(element: object, value: string): void {
+    const descriptor = Object.getOwnPropertyDescriptor(win.HTMLTextAreaElement.prototype, 'value');
+    if (descriptor === undefined || typeof descriptor.set !== 'function') {
+      throw new Error('missing textarea value setter');
+    }
+    descriptor.set.call(element, value);
   }
 
   async function clickGraph(testId: string): Promise<void> {
@@ -1336,5 +1428,629 @@ describe('LegacyGraphLogsPane', () => {
     });
     await flush();
     expectNoAskHumanChrome(host);
+  });
+
+  test('chat view renders the timeline instead of Node runs or the injected graph', async () => {
+    await act(async () => {
+      renderLogs({
+        activeView: 'chat',
+        runId: 'run-1',
+        nodeStates: SHARED_BASH_COMMAND.nodeStates,
+        events: SHARED_BASH_COMMAND.events,
+        definitionNodes: SHARED_BASH_COMMAND.definitionNodes,
+        definitionPending: false,
+        runStatus: 'completed',
+        approval: null,
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({ messages: [] }),
+        onSelectNode: (): void => undefined,
+      });
+    });
+    await flushUntil(
+      host,
+      'chat timeline',
+      () => host.querySelector('[aria-label="Run chat timeline"]') !== null
+    );
+    expect(host.querySelector('[aria-label="Node runs"]')).toBeNull();
+    expect(host.querySelector('[data-testid="injected-graph"]')).toBeNull();
+    expect(host.querySelector('[aria-label="Run chat timeline"]')).not.toBeNull();
+  });
+
+  test('injected parent user message appears in the timeline and is not a button', async () => {
+    await act(async () => {
+      renderLogs({
+        activeView: 'chat',
+        runId: 'run-1',
+        nodeStates: SHARED_BASH_COMMAND.nodeStates,
+        events: SHARED_BASH_COMMAND.events,
+        definitionNodes: SHARED_BASH_COMMAND.definitionNodes,
+        definitionPending: false,
+        runStatus: 'completed',
+        approval: null,
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({ messages: [] }),
+        loadParentMessages: async (): Promise<MessageResponse[]> => [
+          parentMessage({ content: 'operator follow-up' }),
+        ],
+        onSelectNode: (): void => undefined,
+      });
+    });
+    await flushUntil(host, 'parent user turn', () =>
+      (host.textContent ?? '').includes('operator follow-up')
+    );
+    const bubble = Array.from(host.querySelectorAll('div')).find(
+      candidate => (candidate.textContent ?? '') === 'operator follow-up'
+    );
+    expect(bubble).not.toBeUndefined();
+    expect(bubble instanceof win.HTMLButtonElement).toBe(false);
+  });
+
+  test('a node_started event for setup appears as a node-status button', async () => {
+    await act(async () => {
+      renderLogs({
+        activeView: 'chat',
+        runId: 'run-1',
+        nodeStates: SHARED_BASH_COMMAND.nodeStates,
+        events: SHARED_BASH_COMMAND.events,
+        definitionNodes: SHARED_BASH_COMMAND.definitionNodes,
+        definitionPending: false,
+        runStatus: 'completed',
+        approval: null,
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({ messages: [] }),
+        onSelectNode: (): void => undefined,
+      });
+    });
+    await flushUntil(host, 'setup started button', () =>
+      Array.from(host.querySelectorAll('button')).some(button =>
+        (button.textContent ?? '').includes('started')
+      )
+    );
+    const started = Array.from(host.querySelectorAll('button')).find(
+      button =>
+        (button.textContent ?? '').includes('Setup') &&
+        (button.textContent ?? '').includes('started')
+    );
+    expect(started).not.toBeUndefined();
+  });
+
+  test('clicking a setup node-status button opens the bash room without loadMessages', async () => {
+    const calls: [string, string][] = [];
+    await act(async () => {
+      renderLogs({
+        activeView: 'chat',
+        runId: 'run-1',
+        nodeStates: SHARED_BASH_COMMAND.nodeStates,
+        events: SHARED_BASH_COMMAND.events,
+        definitionNodes: SHARED_BASH_COMMAND.definitionNodes,
+        definitionPending: false,
+        runStatus: 'completed',
+        approval: null,
+        loadMessages: async (
+          requestRunId: string,
+          nodeId: string
+        ): Promise<WorkflowNodeMessagesResponse> => {
+          calls.push([requestRunId, nodeId]);
+          return { messages: [] };
+        },
+        onSelectNode: (): void => undefined,
+      });
+    });
+    await flushUntil(
+      host,
+      'chat timeline',
+      () => host.querySelector('[aria-label="Run chat timeline"]') !== null
+    );
+    await clickRow('started');
+    await flushUntil(
+      host,
+      'setup room from chat',
+      () => host.querySelector('[aria-label="setup room"]') !== null
+    );
+    expect(host.querySelector('[aria-label="setup room"]')).not.toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  test('clicking a command node-status button for review loads messages once', async () => {
+    const calls: [string, string][] = [];
+    await act(async () => {
+      renderLogs({
+        activeView: 'chat',
+        runId: 'run-1',
+        nodeStates: SHARED_BASH_COMMAND.nodeStates,
+        events: SHARED_BASH_COMMAND.events,
+        definitionNodes: SHARED_BASH_COMMAND.definitionNodes,
+        definitionPending: false,
+        runStatus: 'running',
+        approval: null,
+        loadMessages: async (
+          requestRunId: string,
+          nodeId: string
+        ): Promise<WorkflowNodeMessagesResponse> => {
+          calls.push([requestRunId, nodeId]);
+          return {
+            messages: [
+              {
+                id: 'm1',
+                seq: 1,
+                kind: 'text',
+                payload: { text: 'hello from review' },
+                created_at: CREATED_AT,
+              },
+            ],
+          };
+        },
+        onSelectNode: (): void => undefined,
+      });
+    });
+    await flushUntil(
+      host,
+      'chat timeline',
+      () => host.querySelector('[aria-label="Run chat timeline"]') !== null
+    );
+    await clickRow('Review');
+    await flushUntil(host, 'review room from chat', () =>
+      (host.textContent ?? '').includes('hello from review')
+    );
+    expect(host.querySelector('[aria-label="review room"]')).not.toBeNull();
+    expect(calls).toEqual([['run-1', 'review']]);
+  });
+
+  test('clicking a loop-iteration node-status button preserves that iteration', async () => {
+    await act(async () => {
+      renderLogs({
+        activeView: 'chat',
+        runId: 'run-1',
+        nodeStates: [{ nodeId: 'group', name: 'Group', status: 'failed', retryEpoch: 0 }],
+        events: LOOP_EVENTS,
+        definitionNodes: [GROUP_NODE],
+        definitionPending: false,
+        runStatus: 'failed',
+        approval: null,
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({ messages: [] }),
+        onSelectNode: (): void => undefined,
+      });
+    });
+    await flushUntil(
+      host,
+      'chat timeline',
+      () => host.querySelector('[aria-label="Run chat timeline"]') !== null
+    );
+    await clickRow('Group ×1');
+    await flushUntil(host, 'preserve iteration 1 from chat', () =>
+      (host.textContent ?? '').includes('Body nodes')
+    );
+    expect(host.querySelector('details[open]')?.textContent).toContain('×1 completed');
+  });
+
+  test('graph bash room survives Chat then Logs without fetching node messages', async () => {
+    const calls: [string, string][] = [];
+    const paneArgs = {
+      runId: 'run-1',
+      nodeStates: SHARED_BASH_COMMAND.nodeStates,
+      events: SHARED_BASH_COMMAND.events,
+      definitionNodes: SHARED_BASH_COMMAND.definitionNodes,
+      definitionPending: false,
+      runStatus: 'completed' as const,
+      approval: null,
+      loadMessages: async (
+        requestRunId: string,
+        nodeId: string
+      ): Promise<WorkflowNodeMessagesResponse> => {
+        calls.push([requestRunId, nodeId]);
+        return { messages: [] };
+      },
+      onSelectNode: (): void => undefined,
+    };
+    await act(async () => {
+      renderLogs({ ...paneArgs, activeView: 'graph' });
+    });
+    await clickGraph('graph-setup');
+    await flushUntil(host, 'graph bash stdout', () => (host.textContent ?? '').includes('ready'));
+    const room = host.querySelector('[aria-label="setup room"]');
+    expect(room).not.toBeNull();
+    expect(calls).toEqual([]);
+
+    await act(async () => {
+      renderLogs({ ...paneArgs, activeView: 'chat' });
+    });
+    await flushUntil(
+      host,
+      'chat after graph',
+      () => host.querySelector('[aria-label="Run chat timeline"]') !== null
+    );
+    expect(host.querySelector('[aria-label="setup room"]')).toBe(room);
+
+    await act(async () => {
+      renderLogs({ ...paneArgs, activeView: 'logs' });
+    });
+    await flush();
+    expect(host.querySelector('[aria-label="setup room"]')).toBe(room);
+    expect(calls).toEqual([]);
+  });
+
+  test('opens the command room from the exact completed status and preserves it across tabs', async () => {
+    const calls: [string, string][] = [];
+    const paneArgs = {
+      runId: 'run-1',
+      nodeStates: [REVIEW_STATE],
+      events: [
+        REVIEW_STARTED,
+        workflowEvent({
+          id: 'complete-review',
+          event_type: 'node_completed',
+          step_name: 'review',
+          created_at: '2026-09-06T00:00:02.000Z',
+        }),
+      ],
+      definitionNodes: [{ id: 'review', command: 'review' }] satisfies readonly DagNode[],
+      definitionPending: false,
+      runStatus: 'completed' as const,
+      approval: null,
+      loadMessages: async (
+        requestRunId: string,
+        nodeId: string
+      ): Promise<WorkflowNodeMessagesResponse> => {
+        calls.push([requestRunId, nodeId]);
+        return { messages: [] };
+      },
+      loadParentMessages: async (): Promise<MessageResponse[]> => [],
+      onSelectNode: (): void => undefined,
+    };
+    await act(async () => {
+      renderLogs({ ...paneArgs, activeView: 'chat' });
+    });
+    await flushUntil(
+      host,
+      'chat timeline',
+      () => host.querySelector('[aria-label="Run chat timeline"]') !== null
+    );
+    await clickRow('completed');
+    const room = host.querySelector('[aria-label="review room"]');
+    expect(room).not.toBeNull();
+    expect(calls).toEqual([['run-1', 'review']]);
+    expect(host.querySelectorAll('[aria-current="true"]')).toHaveLength(1);
+    expect(host.querySelector('[aria-current="true"]')?.textContent).toContain('completed');
+
+    await act(async () => {
+      renderLogs({ ...paneArgs, activeView: 'graph' });
+    });
+    expect(host.querySelector('[aria-label="review room"]')).toBe(room);
+    await act(async () => {
+      renderLogs({ ...paneArgs, activeView: 'chat' });
+    });
+    expect(host.querySelector('[aria-label="review room"]')).toBe(room);
+    expect(host.querySelector('[aria-current="true"]')?.textContent).toContain('completed');
+    expect(calls).toEqual([['run-1', 'review']]);
+  });
+
+  test('clicking the user bubble does not change the selected room and does not call loadMessages', async () => {
+    const calls: [string, string][] = [];
+    await act(async () => {
+      renderLogs({
+        activeView: 'chat',
+        runId: 'run-1',
+        nodeStates: SHARED_BASH_COMMAND.nodeStates,
+        events: SHARED_BASH_COMMAND.events,
+        definitionNodes: SHARED_BASH_COMMAND.definitionNodes,
+        definitionPending: false,
+        runStatus: 'completed',
+        approval: null,
+        loadMessages: async (
+          requestRunId: string,
+          nodeId: string
+        ): Promise<WorkflowNodeMessagesResponse> => {
+          calls.push([requestRunId, nodeId]);
+          return { messages: [] };
+        },
+        loadParentMessages: async (): Promise<MessageResponse[]> => [
+          parentMessage({ content: 'operator follow-up' }),
+        ],
+        onSelectNode: (): void => undefined,
+      });
+    });
+    await flushUntil(host, 'parent user turn', () =>
+      (host.textContent ?? '').includes('operator follow-up')
+    );
+    expect(host.querySelector('[aria-label="setup room"]')).toBeNull();
+    const bubble = Array.from(host.querySelectorAll('div')).find(
+      candidate => (candidate.textContent ?? '') === 'operator follow-up'
+    );
+    if (bubble === undefined) throw new Error('missing user bubble');
+    await act(async () => {
+      (bubble as HTMLElement).click();
+    });
+    await flush();
+    expect(host.querySelector('[aria-label="setup room"]')).toBeNull();
+    expect(host.querySelector('[aria-label="review room"]')).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  test('parent-message query errors still render node-status buttons', async () => {
+    await act(async () => {
+      renderLogs({
+        activeView: 'chat',
+        runId: 'run-1',
+        nodeStates: SHARED_BASH_COMMAND.nodeStates,
+        events: SHARED_BASH_COMMAND.events,
+        definitionNodes: SHARED_BASH_COMMAND.definitionNodes,
+        definitionPending: false,
+        runStatus: 'completed',
+        approval: null,
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({ messages: [] }),
+        loadParentMessages: async (): Promise<MessageResponse[]> => {
+          throw new Error('conversation turns exploded');
+        },
+        onSelectNode: (): void => undefined,
+      });
+    });
+    await flushUntil(host, 'parent message error', () =>
+      (host.textContent ?? '').includes('conversation turns exploded')
+    );
+    expect(host.querySelector('.text-error')?.textContent).toContain('conversation turns exploded');
+    const started = Array.from(host.querySelectorAll('button')).find(button =>
+      (button.textContent ?? '').includes('started')
+    );
+    expect(started).not.toBeUndefined();
+  });
+
+  test('a disabled parent-message query does not display a permanent loading state', async () => {
+    await act(async () => {
+      renderLogs({
+        activeView: 'chat',
+        parentPlatformId: null,
+        runId: 'run-1',
+        nodeStates: [],
+        events: [],
+        definitionNodes: [],
+        definitionPending: false,
+        runStatus: 'completed',
+        approval: null,
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({ messages: [] }),
+        onSelectNode: (): void => undefined,
+      });
+    });
+    await flush();
+    expect(host.textContent).not.toContain('Loading conversation turns…');
+    expect(host.textContent).toContain('No conversation turns or node-status entries yet.');
+  });
+
+  test('polls parent turns for every non-terminal run status', () => {
+    expect(legacyGraphLogsPane.runChatMessagesRefetchInterval('pending')).toBe(3000);
+    expect(legacyGraphLogsPane.runChatMessagesRefetchInterval('running')).toBe(3000);
+    expect(legacyGraphLogsPane.runChatMessagesRefetchInterval('paused')).toBe(3000);
+    expect(legacyGraphLogsPane.runChatMessagesRefetchInterval('completed')).toBe(false);
+    expect(legacyGraphLogsPane.runChatMessagesRefetchInterval('failed')).toBe(false);
+    expect(legacyGraphLogsPane.runChatMessagesRefetchInterval('cancelled')).toBe(false);
+  });
+
+  test('chat view renders exactly one regular composer and no AskHuman chrome', async () => {
+    await act(async () => {
+      renderLogs({
+        activeView: 'chat',
+        runId: 'run-1',
+        nodeStates: SHARED_BASH_COMMAND.nodeStates,
+        events: SHARED_BASH_COMMAND.events,
+        definitionNodes: SHARED_BASH_COMMAND.definitionNodes,
+        definitionPending: false,
+        runStatus: 'completed',
+        approval: null,
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({ messages: [] }),
+        onSelectNode: (): void => undefined,
+      });
+    });
+    await flushUntil(
+      host,
+      'chat composer',
+      () => host.querySelector('[aria-label="Run conversation composer"]') !== null
+    );
+    expect(host.querySelectorAll('[aria-label="Run conversation composer"]')).toHaveLength(1);
+    expectNoAskHumanChrome(host);
+  });
+
+  test('submitting trimmed composer text sends once, clears the draft, and shows the persisted turn', async () => {
+    const sendCalls: [string, string][] = [];
+    let messages: MessageResponse[] = [];
+    await act(async () => {
+      renderLogs({
+        activeView: 'chat',
+        runId: 'run-1',
+        nodeStates: [],
+        events: [],
+        definitionNodes: [],
+        definitionPending: false,
+        runStatus: 'completed',
+        approval: null,
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({ messages: [] }),
+        loadParentMessages: async (): Promise<MessageResponse[]> => messages,
+        sendParentMessage: async (
+          conversationId: string,
+          message: string
+        ): Promise<{ accepted: boolean; status: string }> => {
+          sendCalls.push([conversationId, message]);
+          messages = [
+            parentMessage({
+              id: 'sent-1',
+              content: message,
+              created_at: '2026-09-06T00:00:03.000Z',
+            }),
+          ];
+          return { accepted: true, status: 'accepted' };
+        },
+        onSelectNode: (): void => undefined,
+      });
+    });
+    await flushUntil(host, 'enabled composer', () => {
+      const candidate = host.querySelector('[aria-label="Message the run conversation"]');
+      return candidate !== null && !candidate.hasAttribute('disabled');
+    });
+    const textarea = requireComposerTextarea(
+      host.querySelector('[aria-label="Message the run conversation"]')
+    );
+    await act(async () => {
+      setNativeTextareaValue(textarea, '  follow up  ');
+      textarea.dispatchEvent(new win.InputEvent('input', { bubbles: true, data: '  follow up  ' }));
+      const propsKey = Object.keys(textarea).find(key => key.startsWith('__reactProps$'));
+      if (propsKey !== undefined) {
+        const props = (textarea as unknown as Record<string, unknown>)[propsKey];
+        if (props !== null && typeof props === 'object' && 'onChange' in props) {
+          const onChange = (props as { onChange?: (event: { target: { value: string } }) => void })
+            .onChange;
+          onChange?.({ target: { value: '  follow up  ' } });
+        }
+      }
+    });
+    const form = requireComposerForm(
+      host.querySelector('[aria-label="Run conversation composer"]')
+    );
+    await act(async () =>
+      form.dispatchEvent(new win.Event('submit', { bubbles: true, cancelable: true }))
+    );
+    await flushUntil(host, 'sent turn', () => (host.textContent ?? '').includes('follow up'));
+    expect(sendCalls).toEqual([['parent-1', 'follow up']]);
+    expect(textarea.value).toBe('');
+  });
+
+  test('a failed send preserves the draft and renders the thrown message without changing the room', async () => {
+    await act(async () => {
+      renderLogs({
+        activeView: 'chat',
+        runId: 'run-1',
+        nodeStates: SHARED_BASH_COMMAND.nodeStates,
+        events: SHARED_BASH_COMMAND.events,
+        definitionNodes: SHARED_BASH_COMMAND.definitionNodes,
+        definitionPending: false,
+        runStatus: 'completed',
+        approval: null,
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({ messages: [] }),
+        sendParentMessage: async (): Promise<{ accepted: boolean; status: string }> => {
+          throw new Error('send exploded');
+        },
+        onSelectNode: (): void => undefined,
+      });
+    });
+    await flushUntil(host, 'enabled composer', () => {
+      const candidate = host.querySelector('[aria-label="Message the run conversation"]');
+      return candidate !== null && !candidate.hasAttribute('disabled');
+    });
+    const textarea = requireComposerTextarea(
+      host.querySelector('[aria-label="Message the run conversation"]')
+    );
+    await act(async () => {
+      setNativeTextareaValue(textarea, 'keep me');
+      textarea.dispatchEvent(new win.InputEvent('input', { bubbles: true, data: 'keep me' }));
+      const propsKey = Object.keys(textarea).find(key => key.startsWith('__reactProps$'));
+      if (propsKey !== undefined) {
+        const props = (textarea as unknown as Record<string, unknown>)[propsKey];
+        if (props !== null && typeof props === 'object' && 'onChange' in props) {
+          const onChange = (props as { onChange?: (event: { target: { value: string } }) => void })
+            .onChange;
+          onChange?.({ target: { value: 'keep me' } });
+        }
+      }
+    });
+    const form = requireComposerForm(
+      host.querySelector('[aria-label="Run conversation composer"]')
+    );
+    await act(async () =>
+      form.dispatchEvent(new win.Event('submit', { bubbles: true, cancelable: true }))
+    );
+    await flushUntil(host, 'send error', () => (host.textContent ?? '').includes('send exploded'));
+    expect(textarea.value).toBe('keep me');
+    expect(host.querySelector('[aria-label="setup room"]')).toBeNull();
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('send exploded');
+  });
+
+  test('a non-Web parent conversation disables the composer and never sends', async () => {
+    const sendCalls: [string, string][] = [];
+    await act(async () => {
+      renderLogs({
+        activeView: 'chat',
+        runId: 'run-1',
+        nodeStates: [],
+        events: [],
+        definitionNodes: [],
+        definitionPending: false,
+        runStatus: 'completed',
+        approval: null,
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({ messages: [] }),
+        loadParentConversation: async (): Promise<ConversationResponse> => ({
+          ...PARENT_CONVERSATION,
+          platform_type: 'slack',
+        }),
+        sendParentMessage: async (
+          conversationId: string,
+          message: string
+        ): Promise<{ accepted: boolean; status: string }> => {
+          sendCalls.push([conversationId, message]);
+          return { accepted: true, status: 'accepted' };
+        },
+        onSelectNode: (): void => undefined,
+      });
+    });
+    await flushUntil(
+      host,
+      'non-web composer',
+      () =>
+        host
+          .querySelector('[aria-label="Message the run conversation"]')
+          ?.hasAttribute('disabled') === true
+    );
+    const textarea = requireComposerTextarea(
+      host.querySelector('[aria-label="Message the run conversation"]')
+    );
+    const submit = requireComposerButton(
+      host.querySelector('[aria-label="Run conversation composer"] button[type="submit"]')
+    );
+    expect(textarea.disabled).toBe(true);
+    expect(submit.disabled).toBe(true);
+    expect(textarea.placeholder).toBe(
+      'Continuing chats from other platforms in the Web UI is coming soon'
+    );
+    const form = requireComposerForm(
+      host.querySelector('[aria-label="Run conversation composer"]')
+    );
+    await act(async () =>
+      form.dispatchEvent(new win.Event('submit', { bubbles: true, cancelable: true }))
+    );
+    await flush();
+    expect(sendCalls).toEqual([]);
+  });
+
+  test('a status without a persisted LogRow opens the synthetic fallback room and keeps timeline selection', async () => {
+    await act(async () => {
+      renderLogs({
+        activeView: 'chat',
+        runId: 'run-1',
+        nodeStates: [],
+        events: [
+          workflowEvent({
+            id: 'start-ghost',
+            step_name: 'ghost',
+            event_type: 'node_started',
+            data: { type: 'bash' },
+          }),
+        ],
+        definitionNodes: [{ id: 'ghost', bash: 'echo hi' }],
+        definitionPending: false,
+        runStatus: 'running',
+        approval: null,
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({ messages: [] }),
+        onSelectNode: (): void => undefined,
+      });
+    });
+    await flushUntil(
+      host,
+      'ghost timeline',
+      () => host.querySelector('[aria-label="Run chat timeline"]') !== null
+    );
+    await clickRow('started');
+    await flushUntil(
+      host,
+      'ghost synthetic room',
+      () => host.querySelector('[aria-label="ghost room"]') !== null
+    );
+    expect(host.querySelector('[aria-label="ghost room"]')).not.toBeNull();
+    expect(host.querySelector('[aria-current="true"]')?.textContent).toContain('started');
+    await flush();
+    expect(host.querySelector('[aria-label="ghost room"]')).not.toBeNull();
+    expect(host.querySelector('[aria-current="true"]')?.textContent).toContain('started');
   });
 });

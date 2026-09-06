@@ -10,18 +10,20 @@ import { WorkflowLogs } from './WorkflowLogs';
 import { WorkflowDagViewer } from './WorkflowDagViewer';
 import { ArtifactSummary } from './ArtifactSummary';
 import { WorkflowNodeRetryAction } from './WorkflowNodeRetryAction';
-import { ChatInterface } from '@/components/chat/ChatInterface';
 import { DagRunTabs, type WorkflowRunView } from './source-control/dag-run-tabs';
 import { SourceControlTab } from './source-control/source-control-tab';
 import { useWorkflowStore } from '@/stores/workflow-store';
 import {
   approveWorkflowRun,
+  getConversation,
+  getMessages,
   getWorkflowRun,
   getWorkflowRunByWorker,
   getCodebase,
   getWorkflow,
   getWorkflowNodeMessages,
   rejectWorkflowRun,
+  sendMessage,
 } from '@/lib/api';
 import { ensureUtc, formatDurationMs } from '@/lib/format';
 import { selectInitialNode } from '@/lib/select-initial-node';
@@ -72,7 +74,6 @@ interface WorkflowRunQueryData {
   workerPlatformId: string | null;
   parentPlatformId: string | null;
   conversationPlatformId: string | null;
-  workingPath: string | null;
   codebaseId: string | null;
   events: WorkflowEventResponse[];
   nodeStates: WorkflowRunNodeState[];
@@ -232,16 +233,14 @@ export function buildWorkflowDagNodeStates(
   );
 }
 
-export type WorkflowExecutionBody = 'graph-logs-pane' | 'source-control' | 'chat' | 'sequential';
+export type WorkflowExecutionBody = 'graph-logs-pane' | 'source-control' | 'sequential';
 
 export function resolveWorkflowExecutionBody(input: {
   isDag: boolean;
   activeView: WorkflowRunView;
-  parentPlatformId: string | null;
 }): WorkflowExecutionBody {
   if (!input.isDag) return 'sequential';
   if (input.activeView === 'source-control') return 'source-control';
-  if (input.activeView === 'chat' && input.parentPlatformId !== null) return 'chat';
   return 'graph-logs-pane';
 }
 
@@ -327,7 +326,6 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
         workerPlatformId: data.run.worker_platform_id ?? null,
         parentPlatformId: data.run.parent_platform_id ?? null,
         conversationPlatformId: data.run.conversation_platform_id ?? null,
-        workingPath: data.run.working_path ?? null,
         codebaseId: data.run.codebase_id ?? null,
         events: data.events,
         nodeStates: data.nodeStates,
@@ -346,7 +344,6 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
   const workerPlatformId = queryData?.workerPlatformId ?? null;
   const parentPlatformId = queryData?.parentPlatformId ?? null;
   const conversationPlatformId = queryData?.conversationPlatformId ?? null;
-  const workingPath = queryData?.workingPath ?? null;
   const error = queryError
     ? queryError instanceof Error
       ? queryError.message
@@ -790,12 +787,11 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
     const body = resolveWorkflowExecutionBody({
       isDag,
       activeView,
-      parentPlatformId,
     });
     if (body === 'graph-logs-pane') {
       return (
         <LegacyGraphLogsPane
-          activeView={activeView === 'graph' ? 'graph' : 'logs'}
+          activeView={activeView === 'chat' ? 'chat' : activeView === 'graph' ? 'graph' : 'logs'}
           renderGraph={renderGraph}
           selectedNodeId={selectedDagNode}
           onSelectNode={setSelectedDagNode}
@@ -804,6 +800,10 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
           events={queryData?.events ?? []}
           isLive={isRunning}
           loadMessages={getWorkflowNodeMessages}
+          parentPlatformId={parentPlatformId}
+          loadParentMessages={getMessages}
+          loadParentConversation={getConversation}
+          sendParentMessage={sendMessage}
           definitionNodes={dagDefinitionNodes ?? []}
           definitionPending={workflowDefPending}
           runStatus={queryData?.workflowState.status ?? workflow.status}
@@ -823,13 +823,6 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
     }
     if (body === 'source-control') {
       return <SourceControlTab key={runId} runId={runId} />;
-    }
-    if (body === 'chat' && parentPlatformId) {
-      return (
-        <div className="flex flex-col flex-1 overflow-hidden min-h-0">
-          <ChatInterface conversationId={parentPlatformId} cwdOverride={workingPath} />
-        </div>
-      );
     }
     return (
       <div className="flex flex-1 overflow-hidden min-h-0">
