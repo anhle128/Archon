@@ -46,6 +46,8 @@ import type {
   NodeConfig,
   ModelUsageEntry,
   UsageBreakdown,
+  NativeToolHandlerContext,
+  AskHumanControlError,
 } from '../types';
 import { toUsageBreakdown } from '../usage-breakdown';
 import { parseClaudeConfig } from './config';
@@ -957,6 +959,94 @@ function buildToolCaptureHooks(toolResultQueue: ToolResultEntry[]): Options['hoo
   };
 }
 
+interface ClaudeAskBridge {
+  sessionId?: string;
+  pendingAskToolUseId?: string;
+  controlError?: AskHumanControlError;
+}
+
+/**
+ * Capture the first non-empty SDK `session_id` before stream mapping.
+ * Forwards `close` so first-event timeout still closes the live query.
+ */
+function captureFirstSessionId<T>(
+  events: ClosableAsyncGenerator<T>,
+  bridge: ClaudeAskBridge
+): ClosableAsyncGenerator<T> {
+  const wrapped = (async function* (): AsyncGenerator<T> {
+    for await (const msg of events) {
+      if (bridge.sessionId === undefined) {
+        const sessionId = (msg as { session_id?: unknown }).session_id;
+        if (typeof sessionId === 'string' && sessionId.trim() !== '') {
+          bridge.sessionId = sessionId;
+        }
+      }
+      yield msg;
+    }
+  })() as ClosableAsyncGenerator<T>;
+  if (events.close) {
+    wrapped.close = (): void => {
+      events.close?.();
+    };
+  }
+  return wrapped;
+}
+
+function composeAskHumanPreToolUseHook(options: Options, bridge: ClaudeAskBridge): void {
+  const captureMatcher: HookCallbackMatcher = {
+    matcher: 'mcp__archon__AskHuman',
+    hooks: [
+      (async (input: Record<string, unknown>): Promise<{ continue: true }> => {
+        const toolName = (input as { tool_name?: string }).tool_name;
+        const toolUseId = (input as { tool_use_id?: string }).tool_use_id;
+        if (
+          toolName === 'mcp__archon__AskHuman' &&
+          typeof toolUseId === 'string' &&
+          toolUseId.trim() !== ''
+        ) {
+          bridge.pendingAskToolUseId = toolUseId;
+        }
+        return { continue: true };
+      }) as HookCallback,
+    ],
+  };
+  if (!options.hooks) {
+    (options as Record<string, unknown>).hooks = {};
+  }
+  const hooksMap = options.hooks as Record<string, HookCallbackMatcher[] | undefined>;
+  const existingPre = hooksMap.PreToolUse ?? [];
+  hooksMap.PreToolUse = [captureMatcher, ...existingPre];
+}
+
+function createClaudeAskRuntime(
+  bridge: ClaudeAskBridge,
+  controller: AbortController
+): {
+  contextFor: (toolName: string) => NativeToolHandlerContext;
+  onControlError: (error: AskHumanControlError) => void;
+} {
+  return {
+    contextFor: (toolName: string): NativeToolHandlerContext => {
+      const context: NativeToolHandlerContext = {};
+      if (bridge.sessionId !== undefined) {
+        context.sessionId = bridge.sessionId;
+      }
+      if (toolName === 'AskHuman') {
+        const toolUseId = bridge.pendingAskToolUseId;
+        bridge.pendingAskToolUseId = undefined;
+        if (toolUseId !== undefined) {
+          context.toolUseId = toolUseId;
+        }
+      }
+      return context;
+    },
+    onControlError: (error: AskHumanControlError): void => {
+      bridge.controlError = error;
+      controller.abort();
+    },
+  };
+}
+
 // ─── Stream Normalizer ───────────────────────────────────────────────────
 
 /**
@@ -1473,6 +1563,7 @@ export class ClaudeProvider implements IAgentProvider {
       const toolResultQueue: ToolResultEntry[] = [];
       const controller = new AbortController();
       currentController = controller;
+      const askBridge: ClaudeAskBridge = {};
 
       // 1. Build SDK options (env and cliPath pre-computed above)
       const options = buildBaseClaudeOptions(
@@ -1496,9 +1587,13 @@ export class ClaudeProvider implements IAgentProvider {
       //     server, mirroring the file-based mcp branch. Merge so a nodeConfig
       //     mcp config and native tools can coexist.
       if (requestOptions?.nativeTools && requestOptions.nativeTools.length > 0) {
-        const server = buildArchonMcpServer(requestOptions.nativeTools);
+        const server = buildArchonMcpServer(
+          requestOptions.nativeTools,
+          createClaudeAskRuntime(askBridge, controller)
+        );
         options.mcpServers = { ...(options.mcpServers ?? {}), [ARCHON_TOOL_SERVER]: server };
         options.allowedTools = [...(options.allowedTools ?? []), `mcp__${ARCHON_TOOL_SERVER}__*`];
+        composeAskHumanPreToolUseHook(options, askBridge);
         getLog().info(
           { count: requestOptions.nativeTools.length },
           'claude.native_tools_registered'
@@ -1525,7 +1620,12 @@ export class ClaudeProvider implements IAgentProvider {
           options.env as Record<string, string>,
           options.model
         );
-        const events = withFirstMessageTimeout(rawEvents, controller, timeoutMs, diagnostics);
+        const events = withFirstMessageTimeout(
+          captureFirstSessionId(rawEvents, askBridge),
+          controller,
+          timeoutMs,
+          diagnostics
+        );
 
         // 5. Stream normalized events
         // Claude resumes-or-errors: an invalid resume id throws (and is
@@ -1547,8 +1647,14 @@ export class ClaudeProvider implements IAgentProvider {
             yield chunk;
           }
         }
+        if (askBridge.controlError) {
+          throw askBridge.controlError;
+        }
         return;
       } catch (error) {
+        if (askBridge.controlError) {
+          throw askBridge.controlError;
+        }
         const err = error as Error;
         if (err instanceof ClaudeApiResultError) {
           accumulatedUsage = mergeUsageBreakdowns(accumulatedUsage, err.usageBreakdown);
