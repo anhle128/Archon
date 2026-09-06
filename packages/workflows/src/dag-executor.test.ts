@@ -118,6 +118,7 @@ import { applyEnvOverlay } from './env-overlay';
 
 function createMockStore(): IWorkflowStore {
   let nodeMessageSeq = 0;
+  const nodeMessages: Awaited<ReturnType<IWorkflowStore['appendNodeMessage']>>[] = [];
   return {
     createWorkflowRun: mock(() =>
       Promise.resolve({
@@ -231,13 +232,20 @@ function createMockStore(): IWorkflowStore {
     getWorkflowNodeSession: mock(() => Promise.resolve(null)),
     upsertWorkflowNodeSession: mock(() => Promise.resolve()),
     deleteWorkflowNodeSessions: mock(() => Promise.resolve({ deleted: 0 })),
-    appendNodeMessage: async input => ({
-      ...input,
-      id: `node-message-${String(++nodeMessageSeq)}`,
-      seq: nodeMessageSeq,
-      created_at: new Date(),
-    }),
-    listNodeMessages: async () => [],
+    appendNodeMessage: async input => {
+      const row = {
+        ...input,
+        id: `node-message-${String(++nodeMessageSeq)}`,
+        seq: nodeMessageSeq,
+        created_at: new Date(),
+      };
+      nodeMessages.push(row);
+      return row;
+    },
+    listNodeMessages: async (workflowRunId, nodeId) =>
+      nodeMessages
+        .filter(row => row.workflow_run_id === workflowRunId && row.node_id === nodeId)
+        .sort((a, b) => a.seq - b.seq),
   };
 }
 
@@ -24124,5 +24132,233 @@ describe('executeDagWorkflow -- superseded plannotator supervisor', () => {
     ).toBe(false);
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
+  });
+});
+
+describe('executeDagWorkflow -- command and prompt transcripts', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `dag-transcript-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const commandsDir = join(testDir, '.archon', 'commands');
+    await mkdir(commandsDir, { recursive: true });
+    await writeFile(join(commandsDir, 'my-cmd.md'), 'Command prompt for $USER_MESSAGE');
+
+    mockSendQueryDag.mockClear();
+    mockGetAgentProviderDag.mockClear();
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+  });
+
+  afterEach(async () => {
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  function transcriptTimeline(
+    rows: Awaited<ReturnType<IWorkflowStore['listNodeMessages']>>
+  ): string[] {
+    return rows.map(row => (row.kind === 'status' ? row.payload.state : row.kind));
+  }
+
+  async function runNodes(
+    store: IWorkflowStore,
+    nodes: DagNode[],
+    workflowRun: WorkflowRun = makeWorkflowRun()
+  ): Promise<WorkflowRun> {
+    await executeDagWorkflow(
+      createMockDeps(store),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      { name: 'transcript-test', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+    return workflowRun;
+  }
+
+  it.each([
+    { kind: 'command', node: { id: 'agent', command: 'my-cmd' } },
+    { kind: 'prompt', node: { id: 'agent', prompt: 'Inspect a.ts' } },
+  ])('records $kind stream as started, text, tool, text, completed', async ({ node }) => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'Reading file.' };
+      yield {
+        type: 'tool',
+        toolName: 'Read',
+        toolCallId: 'tool-1',
+        toolInput: { path: 'a.ts' },
+      };
+      yield {
+        type: 'tool_result',
+        toolName: 'Read',
+        toolCallId: 'tool-1',
+        toolOutcome: 'success',
+      };
+      yield { type: 'assistant', content: 'Done reading.' };
+      yield { type: 'result', sessionId: 'transcript-session' };
+    });
+
+    const store = createMockStore();
+    const workflowRun = await runNodes(store, [node]);
+    const rows = await store.listNodeMessages(workflowRun.id, 'agent');
+
+    expect(transcriptTimeline(rows)).toEqual(['started', 'text', 'tool', 'text', 'completed']);
+    expect(rows.every(row => row.workflow_run_id === workflowRun.id)).toBe(true);
+    expect(rows.every(row => row.node_id === 'agent')).toBe(true);
+    const toolRow = rows.find(row => row.kind === 'tool');
+    expect(toolRow?.payload).toEqual({ name: 'Read', id: 'tool-1', input: { path: 'a.ts' } });
+    expect(
+      rows.filter(row => row.kind === 'status' && row.payload.state === 'completed')
+    ).toHaveLength(1);
+  });
+
+  it('records assistant text before a later-flushed batch tool row without duplicating it', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'Reading file.' };
+      yield {
+        type: 'tool',
+        toolName: 'Read',
+        toolCallId: 'tool-1',
+        toolInput: { path: 'a.ts' },
+      };
+      yield { type: 'result', sessionId: 'batch-session' };
+    });
+
+    const store = createMockStore();
+    const workflowRun = await runNodes(store, [{ id: 'agent', prompt: 'Inspect a.ts' }]);
+    const rows = await store.listNodeMessages(workflowRun.id, 'agent');
+
+    expect(transcriptTimeline(rows)).toEqual(['started', 'text', 'tool', 'completed']);
+    expect(rows.filter(row => row.kind === 'text')).toHaveLength(1);
+    expect(rows.find(row => row.kind === 'text')?.payload).toEqual({ text: 'Reading file.' });
+  });
+
+  it('records started then failed with the command-load error', async () => {
+    const store = createMockStore();
+    const workflowRun = await runNodes(store, [{ id: 'missing', command: 'no-such-cmd' }]);
+    const rows = await store.listNodeMessages(workflowRun.id, 'missing');
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const failedEvent = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { event_type: string; step_name: string }).event_type === 'node_failed' &&
+        (call[0] as { step_name: string }).step_name === 'missing'
+    );
+    expect(failedEvent).toBeDefined();
+    const errorMsg = (failedEvent![0] as { data: { error: string } }).data.error;
+    expect(errorMsg).toContain('Command prompt not found: no-such-cmd.md');
+    expect(transcriptTimeline(rows)).toEqual(['started', 'failed']);
+    expect(rows[1]?.kind === 'status' ? rows[1].payload.detail : undefined).toBe(errorMsg);
+  });
+
+  it('records started then failed with the exact OutputRefError for an invalid field ref', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: '{"verdict":"review"}' };
+      yield {
+        type: 'result',
+        sessionId: 'producer-session',
+        structuredOutput: { verdict: 'review' },
+      };
+    });
+
+    const store = createMockStore();
+    const workflowRun = await runNodes(store, [
+      {
+        id: 'producer',
+        prompt: 'decide',
+        output_format: {
+          type: 'object',
+          properties: { verdict: { type: 'string' } },
+          required: ['verdict'],
+        },
+        retry: { max_attempts: 0 },
+      },
+      {
+        id: 'consumer',
+        prompt: 'Use $producer.output.nonexistent',
+        depends_on: ['producer'],
+        retry: { max_attempts: 0 },
+      },
+    ]);
+
+    const expected = new OutputRefError('producer', 'nonexistent', 'not-in-schema').message;
+    const rows = await store.listNodeMessages(workflowRun.id, 'consumer');
+    expect(transcriptTimeline(rows)).toEqual(['started', 'failed']);
+    expect(rows[1]?.kind === 'status' ? rows[1].payload.detail : undefined).toBe(expected);
+  });
+
+  it('records started then failed with the provider lookup error', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => {
+      throw new Error('provider lookup failed');
+    });
+
+    const store = createMockStore();
+    const workflowRun = await runNodes(store, [{ id: 'agent', prompt: 'Inspect a.ts' }]);
+    const rows = await store.listNodeMessages(workflowRun.id, 'agent');
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const failedEvent = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { event_type: string; step_name: string }).event_type === 'node_failed' &&
+        (call[0] as { step_name: string }).step_name === 'agent'
+    );
+    expect(failedEvent).toBeDefined();
+    expect((failedEvent![0] as { data: { error: string } }).data.error).toBe(
+      'provider lookup failed'
+    );
+    expect(transcriptTimeline(rows)).toEqual(['started', 'failed']);
+    expect(rows[1]?.kind === 'status' ? rows[1].payload.detail : undefined).toBe(
+      'provider lookup failed'
+    );
+  });
+
+  it('records exactly one completed terminal on a normal command node', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'All done.' };
+      yield { type: 'result', sessionId: 'ok-session' };
+    });
+
+    const store = createMockStore();
+    const workflowRun = await runNodes(store, [{ id: 'agent', command: 'my-cmd' }]);
+    const rows = await store.listNodeMessages(workflowRun.id, 'agent');
+    expect(transcriptTimeline(rows)).toEqual(['started', 'text', 'completed']);
+    expect(
+      rows.filter(row => row.kind === 'status' && row.payload.state === 'completed')
+    ).toHaveLength(1);
+  });
+
+  it('still completes the workflow when transcript append rejects', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'All done.' };
+      yield { type: 'result', sessionId: 'ok-session' };
+    });
+
+    const store = createMockStore();
+    store.appendNodeMessage = async () => {
+      throw new Error('DO_NOT_LOG');
+    };
+
+    await runNodes(store, [{ id: 'agent', prompt: 'Inspect a.ts' }]);
+    expect(store.completeWorkflowRun).toHaveBeenCalled();
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('does not record transcript rows for bash nodes', async () => {
+    const store = createMockStore();
+    const workflowRun = await runNodes(store, [{ id: 'stats', bash: 'echo hi' }]);
+    expect(await store.listNodeMessages(workflowRun.id, 'stats')).toEqual([]);
   });
 });

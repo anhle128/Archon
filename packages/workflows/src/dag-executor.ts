@@ -135,6 +135,7 @@ import {
   safeSendMessage,
   type SendMessageContext,
 } from './executor-shared';
+import { appendNodeTranscript } from './node-transcript';
 import {
   isLiteralSpec,
   isTierName,
@@ -1767,6 +1768,16 @@ async function executeNodeInternal(
   // multi-iteration runs are disaggregatable in the event log.
   const iterationData = iteration !== undefined ? { iteration } : {};
 
+  const recordNodeStatus = async (state: string, detail?: string): Promise<void> => {
+    await appendNodeTranscript(deps.store, {
+      workflow_run_id: workflowRun.id,
+      node_id: stepName,
+      kind: 'status',
+      payload: { state, ...(detail !== undefined ? { detail } : {}) },
+    });
+  };
+  const recordFailedStatus = (error: string): Promise<void> => recordNodeStatus('failed', error);
+
   const configuredMcpNames = await loadConfiguredMcpServerNames(node.mcp, cwd);
 
   getLog().info({ nodeId: node.id, provider }, 'dag_node_started');
@@ -1813,6 +1824,8 @@ async function executeNodeInternal(
     ...(nodeObservability?.thinking ? { thinking: nodeObservability.thinking } : {}),
   });
 
+  await recordNodeStatus('started');
+
   // Load prompt
   let rawPrompt: string;
   if (node.command !== undefined) {
@@ -1841,6 +1854,7 @@ async function executeNodeInternal(
         nodeName: node.command,
         error: errMsg,
       });
+      await recordFailedStatus(errMsg);
       return { state: 'failed', output: '', error: errMsg };
     }
     rawPrompt = promptResult.content;
@@ -1860,6 +1874,7 @@ async function executeNodeInternal(
 
   // Standard variable substitution
   let substitutedPrompt: string;
+  let finalPrompt: string;
   try {
     substitutedPrompt = buildPromptWithContext(
       rawPrompt,
@@ -1872,6 +1887,7 @@ async function executeNodeInternal(
       `dag node '${node.id}' prompt`,
       { stateDir, prRemote, inputs: resolveRunInputs(workflowRun) }
     );
+    finalPrompt = substituteNodeOutputRefs(substitutedPrompt, nodeOutputs);
   } catch (error) {
     const err = error as Error;
     getLog().error({ nodeId: node.id, error: err.message }, 'dag.node_prompt_substitution_failed');
@@ -1906,13 +1922,40 @@ async function executeNodeInternal(
       `Node '${node.id}' failed: ${err.message}`,
       nodeContext
     );
+    await recordFailedStatus(err.message);
     return { state: 'failed', output: '', error: err.message };
   }
 
-  // Substitute upstream node output references
-  const finalPrompt = substituteNodeOutputRefs(substitutedPrompt, nodeOutputs);
-
-  const aiClient = deps.getAgentProvider(provider);
+  let aiClient: ReturnType<typeof deps.getAgentProvider>;
+  try {
+    aiClient = deps.getAgentProvider(provider);
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ nodeId: node.id, error: err.message }, 'dag.node_provider_lookup_failed');
+    await logNodeError(logDir, workflowRun.id, node.id, err.message);
+    deps.store
+      .createWorkflowEvent({
+        workflow_run_id: workflowRun.id,
+        event_type: 'node_failed',
+        step_name: stepName,
+        data: withRetryEpochData(workflowRun, undefined, { error: err.message, ...iterationData }),
+      })
+      .catch((persistErr: Error) => {
+        getLog().error(
+          { err: persistErr, workflowRunId: workflowRun.id, eventType: 'node_failed' },
+          'workflow_event_persist_failed'
+        );
+      });
+    emitter.emit({
+      type: 'node_failed',
+      runId: workflowRun.id,
+      nodeId: node.id,
+      nodeName: node.command ?? node.id,
+      error: err.message,
+    });
+    await recordFailedStatus(err.message);
+    return { state: 'failed', output: '', error: err.message };
+  }
   const streamingMode = platform.getStreamingMode();
 
   let nodeOutputText = ''; // Always accumulate regardless of streaming mode
@@ -2052,6 +2095,12 @@ async function executeNodeInternal(
         }
 
         if (msg.type === 'assistant' && msg.content) {
+          await appendNodeTranscript(deps.store, {
+            workflow_run_id: workflowRun.id,
+            node_id: stepName,
+            kind: 'text',
+            payload: { text: msg.content },
+          });
           nodeOutputText += msg.content; // ALWAYS capture for $node_id.output
           if (streamingMode === 'stream' || msg.flush) {
             // `flush` chunks (e.g. Pi notify() emitting a plannotator review URL)
@@ -2112,6 +2161,17 @@ async function executeNodeInternal(
           }
           runningTools.set(toolCallId, { toolName: msg.toolName, startedAt: now });
           if (!msg.toolCallId) lastAnonymousToolCallId = toolCallId;
+
+          await appendNodeTranscript(deps.store, {
+            workflow_run_id: workflowRun.id,
+            node_id: stepName,
+            kind: 'tool',
+            payload: {
+              name: msg.toolName,
+              id: toolCallId,
+              ...(msg.toolInput !== undefined ? { input: msg.toolInput } : {}),
+            },
+          });
 
           // Emit tool_started for the current tool (fire-and-forget)
           getWorkflowEventEmitter().emit({
@@ -2819,6 +2879,8 @@ async function executeNodeInternal(
         error: 'Cancelled by user',
       });
 
+      await recordFailedStatus('Cancelled by user');
+
       // Clean up throttle entries
       lastNodeCancelCheck.delete(`${workflowRun.id}:${node.id}`);
       lastNodeActivityUpdate.delete(`${workflowRun.id}:${node.id}`);
@@ -2867,6 +2929,8 @@ async function executeNodeInternal(
         error: creditError,
       });
 
+      await recordFailedStatus(creditError);
+
       lastNodeCancelCheck.delete(`${workflowRun.id}:${node.id}`);
       lastNodeActivityUpdate.delete(`${workflowRun.id}:${node.id}`);
 
@@ -2907,6 +2971,8 @@ async function executeNodeInternal(
         nodeName: node.command ?? node.id,
         error: emptyError,
       });
+
+      await recordFailedStatus(emptyError);
 
       lastNodeCancelCheck.delete(`${workflowRun.id}:${node.id}`);
       lastNodeActivityUpdate.delete(`${workflowRun.id}:${node.id}`);
@@ -2967,6 +3033,8 @@ async function executeNodeInternal(
       ...(nodeNumTurns !== undefined ? { numTurns: nodeNumTurns } : {}),
     });
 
+    await recordNodeStatus('completed');
+
     // Clean up throttle entries on completion
     lastNodeCancelCheck.delete(`${workflowRun.id}:${node.id}`);
     lastNodeActivityUpdate.delete(`${workflowRun.id}:${node.id}`);
@@ -2996,6 +3064,7 @@ async function executeNodeInternal(
     // If the abort was triggered by user cancel (not idle timeout), classify as cancel
     if (nodeAbortController.signal.aborted && !nodeIdleTimedOut) {
       getLog().info({ nodeId: node.id }, 'dag_node_cancelled_via_abort');
+      await recordFailedStatus('Cancelled by user');
       return {
         state: 'failed',
         output: nodeOutputText,
@@ -3029,6 +3098,8 @@ async function executeNodeInternal(
       nodeName: node.command ?? node.id,
       error: err.message,
     });
+
+    await recordFailedStatus(err.message);
 
     return {
       state: 'failed',
