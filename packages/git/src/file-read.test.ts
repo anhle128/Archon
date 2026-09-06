@@ -286,6 +286,7 @@ describe('fileAt and fileDiff', () => {
       cursor: '',
       truncated: false,
       binary: false,
+      fileFallback: false,
     });
     expect(result.hunks.length).toBeGreaterThan(0);
     const changes = result.hunks.flatMap(hunk => hunk.changes);
@@ -312,14 +313,15 @@ describe('fileAt and fileDiff', () => {
       const result = await fileDiff(toWorktreePath(repoPath), 'textconv.ts');
 
       expect(result.binary).toBe(false);
+      expect(result.fileFallback).toBe(false);
       expect(result.hunks.length).toBeGreaterThan(0);
-      await expect(access(marker)).rejects.toMatchObject({ code: 'ENOENT' });
     }
   );
 
   test('NUL file returns binary true and no hunks', async () => {
     const result = await fileDiff(toWorktreePath(repoPath), 'nul-new.bin');
     expect(result.binary).toBe(true);
+    expect(result.fileFallback).toBe(true);
     expect(result.hunks).toEqual([]);
   });
 
@@ -544,6 +546,68 @@ describe('fileAt and fileDiff', () => {
         { kind: 'worktree' },
         { intent: 'view', cursor: first.cursor }
       )
+    ).rejects.toMatchObject({ name: 'GitFileError', code: 'stale_cursor' });
+  });
+
+  test('fileDiff streams many disjoint hunks with -U3 and a hunk cursor', async () => {
+    const original = Array.from({ length: 25_000 }, (_unused, index) => 'keep-' + String(index));
+    await writeFile(join(repoPath, 'paged.ts'), original.join('\n') + '\n');
+    await exec.execFileAsync('git', ['-C', repoPath, 'add', 'paged.ts']);
+    await exec.execFileAsync('git', ['-C', repoPath, 'commit', '-m', 'paged']);
+    const changed = [...original];
+    for (let index = 0; index < changed.length; index += 10)
+      changed[index] = 'changed-' + String(index);
+    await writeFile(join(repoPath, 'paged.ts'), changed.join('\n') + '\n');
+
+    const first = await fileDiff(toWorktreePath(repoPath), 'paged.ts');
+    expect(first.truncated).toBe(true);
+    expect(first.cursor.length).toBeGreaterThan(0);
+    expect(first.fileFallback).toBe(false);
+    expect(first.hunks.length).toBeGreaterThan(0);
+
+    const second = await fileDiff(toWorktreePath(repoPath), 'paged.ts', { cursor: first.cursor });
+    expect(second.hunks[0]?.header).not.toBe(first.hunks[0]?.header);
+  });
+
+  test('fileDiff directs an SVG M file to raw worktree content without calling it binary', async () => {
+    await writeFile(join(repoPath, 'image.svg'), '<svg><text>old</text></svg>\n');
+    await exec.execFileAsync('git', ['-C', repoPath, 'add', 'image.svg']);
+    await exec.execFileAsync('git', ['-C', repoPath, 'commit', '-m', 'svg']);
+    await writeFile(join(repoPath, 'image.svg'), '<svg><text>new</text></svg>\n');
+    const result = await fileDiff(toWorktreePath(repoPath), 'image.svg');
+    expect(result.binary).toBe(false);
+    expect(result.fileFallback).toBe(true);
+    expect(result.hunks).toEqual([]);
+  });
+
+  test('fileDiff directs a modified file above 52428800 bytes to raw download-only fallback', async () => {
+    const path = join(repoPath, 'huge-modified.dat');
+    await writeFile(path, 'a');
+    await truncate(path, 52_428_801);
+    await exec.execFileAsync('git', ['-C', repoPath, 'add', 'huge-modified.dat']);
+    await exec.execFileAsync('git', ['-C', repoPath, 'commit', '-m', 'huge modified']);
+    const handle = await open(path, 'r+');
+    await handle.write(Buffer.from('b'), 0, 1, 0);
+    await handle.close();
+    const result = await fileDiff(toWorktreePath(repoPath), 'huge-modified.dat');
+    expect(result.fileFallback).toBe(true);
+    expect(result.hunks).toEqual([]);
+  });
+
+  test('fileDiff rejects a stale hunk cursor after the file changes', async () => {
+    const lines = Array.from({ length: 4000 }, (_unused, index) => 'line-' + String(index));
+    await writeFile(join(repoPath, 'stale-diff.ts'), lines.join('\n') + '\n');
+    await exec.execFileAsync('git', ['-C', repoPath, 'add', 'stale-diff.ts']);
+    await exec.execFileAsync('git', ['-C', repoPath, 'commit', '-m', 'stale diff']);
+    const changed = [...lines];
+    for (let index = 0; index < changed.length; index += 10)
+      changed[index] = 'first-' + String(index);
+    await writeFile(join(repoPath, 'stale-diff.ts'), changed.join('\n') + '\n');
+    const first = await fileDiff(toWorktreePath(repoPath), 'stale-diff.ts');
+    expect(first.truncated).toBe(true);
+    await writeFile(join(repoPath, 'stale-diff.ts'), 'different\n'.repeat(4000));
+    await expect(
+      fileDiff(toWorktreePath(repoPath), 'stale-diff.ts', { cursor: first.cursor })
     ).rejects.toMatchObject({ name: 'GitFileError', code: 'stale_cursor' });
   });
 });

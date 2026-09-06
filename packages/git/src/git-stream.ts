@@ -6,6 +6,7 @@ export interface GitStreamRequest {
   workingPath: RepoPath | WorktreePath;
   args: string[];
   signal?: AbortSignal;
+  acceptExitCodes?: number[];
 }
 
 function opaqueStreamError(): Error {
@@ -98,7 +99,8 @@ export function streamGitStdout(request: GitStreamRequest): ReadableStream<Uint8
         fail();
       });
       child.on('close', (code: number | null) => {
-        if (intentionalStop || code === 0) {
+        const accepted = request.acceptExitCodes ?? [0];
+        if (intentionalStop || (code !== null && accepted.includes(code))) {
           finish();
           return;
         }

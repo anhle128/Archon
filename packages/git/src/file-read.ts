@@ -15,26 +15,22 @@ import {
   sliceTextPage,
   ViewerCursorError,
   VIEWER_BINARY_PROBE_BYTES,
+  VIEWER_DIFF_CONTEXT_LINES,
   VIEWER_DOWNLOAD_ONLY_BYTES,
   VIEWER_FIRST_PAINT_BYTES,
   VIEWER_HEX_PEEK_BYTES,
   VIEWER_STREAM_BYTES,
   type GitFilePresentation,
+  type ViewerCursorAxis,
 } from './viewer-limits';
+import {
+  HunkPageAccumulator,
+  visitUnifiedDiffChunks,
+  type DiffHunk,
+  type HunkPageDecision,
+} from './diff-page';
 
-export type DiffChange =
-  | { type: 'normal'; content: string; oldLine: number; newLine: number }
-  | { type: 'insert'; content: string; newLine: number }
-  | { type: 'delete'; content: string; oldLine: number };
-
-export interface DiffHunk {
-  oldStart: number;
-  oldLines: number;
-  newStart: number;
-  newLines: number;
-  header: string;
-  changes: DiffChange[];
-}
+export type { DiffChange, DiffHunk } from './diff-page';
 
 export type FileAtIntent = 'full' | 'view' | 'download';
 
@@ -77,9 +73,10 @@ export interface FileDiffResult {
   scope: 'now';
   ref: 'live';
   hunks: DiffHunk[];
-  cursor: '';
-  truncated: false;
+  cursor: string;
+  truncated: boolean;
   binary: boolean;
+  fileFallback: boolean;
 }
 
 export type FileAtSource = { kind: 'worktree' } | { kind: 'tree'; treeIsh: string };
@@ -418,15 +415,23 @@ function streamResult(
   };
 }
 
-function decodeOffsetCursor(cursor: string | undefined, contentHash: string): number {
+function decodeAxisCursor(
+  cursor: string | undefined,
+  axis: ViewerCursorAxis,
+  version: string
+): number {
   try {
-    return decodeViewerCursor(cursor ?? '', 'o', contentHash);
+    return decodeViewerCursor(cursor ?? '', axis, version);
   } catch (error) {
     if (error instanceof ViewerCursorError) {
       throw new GitFileError(error.code === 'stale' ? 'stale_cursor' : 'invalid_cursor');
     }
     throw error;
   }
+}
+
+function decodeOffsetCursor(cursor: string | undefined, contentHash: string): number {
+  return decodeAxisCursor(cursor, 'o', contentHash);
 }
 
 export function hasNulInFirst8k(bytes: Uint8Array): boolean {
@@ -553,63 +558,104 @@ export async function fileAt(
   return bytesResult(inspected, classification, page.bytes, page.truncated, cursor);
 }
 
-async function probeBinary(
+function needsRawFallback(classification: ReturnType<typeof chooseGitFilePresentation>): boolean {
+  return classification.presentation !== 'text';
+}
+
+async function inspectHead(
   workingPath: RepoPath | WorktreePath,
-  path: string,
-  source: FileAtSource
-): Promise<boolean> {
+  path: string
+): Promise<InspectedFile | undefined> {
   try {
-    return (await fileAt(workingPath, path, source)).binary;
+    return await inspectTree(workingPath, path, 'HEAD');
   } catch (error) {
-    if (error instanceof GitPathError) throw error;
-    if (error instanceof GitFileError && error.code === 'not_found') return false;
+    if (error instanceof GitFileError && error.code === 'not_found') return undefined;
     throw error;
   }
 }
 
-export async function fileDiff(
-  workingPath: RepoPath | WorktreePath,
-  relativePath: string
-): Promise<FileDiffResult> {
-  const path = parseGitFilePath(relativePath);
-  const binary =
-    (await probeBinary(workingPath, path, { kind: 'worktree' })) ||
-    (await probeBinary(workingPath, path, { kind: 'tree', treeIsh: 'HEAD' }));
-  if (binary) {
-    return {
-      path,
-      status: 'M',
-      scope: 'now',
-      ref: 'live',
-      hunks: [],
-      cursor: '',
-      truncated: false,
-      binary: true,
-    };
-  }
-  const diff = await exec.execFileAsync('git', [
-    '-C',
-    workingPath,
-    '--no-optional-locks',
-    '--literal-pathspecs',
-    'diff',
-    '--no-color',
-    '--no-ext-diff',
-    '--no-textconv',
-    '--text',
-    '-U3',
-    'HEAD',
-    '--',
-    path,
-  ]);
+function rawFallbackResult(path: string, binary: boolean): FileDiffResult {
   return {
     path,
     status: 'M',
     scope: 'now',
     ref: 'live',
-    hunks: parseUnifiedDiff(diff.stdout),
+    hunks: [],
     cursor: '',
     truncated: false,
+    binary,
+    fileFallback: true,
+  };
+}
+
+async function* readStreamChunks(reader: {
+  read: () => Promise<{ done: boolean; value?: Uint8Array }>;
+}): AsyncIterable<Uint8Array> {
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done || value === undefined) return;
+    yield value;
+  }
+}
+
+export async function fileDiff(
+  workingPath: RepoPath | WorktreePath,
+  relativePath: string,
+  request?: FileDiffRequest
+): Promise<FileDiffResult> {
+  const path = parseGitFilePath(relativePath);
+  const signal = request?.signal;
+  throwIfAborted(signal);
+
+  const worktree = await inspectWorktree(workingPath, path);
+  const worktreeClass = await classifyInspected(worktree, signal);
+  const head = await inspectHead(workingPath, path);
+  const headClass = head === undefined ? undefined : await classifyInspected(head, signal);
+  if (needsRawFallback(worktreeClass) || (headClass !== undefined && needsRawFallback(headClass))) {
+    return rawFallbackResult(path, worktreeClass.binary || (headClass?.binary ?? false));
+  }
+
+  const version = hashIdentity([worktree.contentHash, head?.contentHash ?? '']);
+  const startIndex = decodeAxisCursor(request?.cursor, 'h', version);
+  const pager = new HunkPageAccumulator(startIndex);
+  const stream = streamGitStdout({
+    workingPath,
+    args: [
+      '--no-optional-locks',
+      '--literal-pathspecs',
+      'diff',
+      '--no-color',
+      '--no-ext-diff',
+      '--no-textconv',
+      '--text',
+      `-U${String(VIEWER_DIFF_CONTEXT_LINES)}`,
+      'HEAD',
+      '--',
+      path,
+    ],
+    signal,
+    acceptExitCodes: [0, 1],
+  });
+  const reader = stream.getReader();
+  try {
+    await visitUnifiedDiffChunks(readStreamChunks(reader), (hunk: DiffHunk): HunkPageDecision => {
+      return pager.push(hunk);
+    });
+  } finally {
+    if (pager.result().truncated) await reader.cancel();
+    else reader.releaseLock();
+  }
+  pager.finish();
+  const page = pager.result();
+  return {
+    path,
+    status: 'M',
+    scope: 'now',
+    ref: 'live',
+    hunks: page.hunks,
+    cursor: page.truncated ? encodeViewerCursor('h', page.nextIndex, version) : '',
+    truncated: page.truncated,
     binary: false,
+    fileFallback: false,
   };
 }
