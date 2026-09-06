@@ -24,6 +24,7 @@ const READY_DIFF = {
   cursor: '',
   truncated: false,
   binary: false,
+  fileFallback: false,
 };
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -137,6 +138,18 @@ describe('gitFileUrl', () => {
     expect(gitFileUrl('run-1', 'a.ts', 'worktree')).not.toContain('source=added');
     expect(gitFileUrl('run-1', 'a.ts', 'head')).not.toContain('source=deleted');
   });
+
+  test('gitFileUrl emits only non-empty cursor and requested download', () => {
+    expect(gitFileUrl('run/one', 'src/a.ts', 'worktree')).toBe(
+      '/api/workflows/runs/run%2Fone/git/file/src/a.ts?source=worktree'
+    );
+    expect(gitFileUrl('run/one', 'src/a.ts', 'worktree', { cursor: 'ab+c' })).toBe(
+      '/api/workflows/runs/run%2Fone/git/file/src/a.ts?source=worktree&cursor=ab%2Bc'
+    );
+    expect(gitFileUrl('run/one', 'src/a.ts', 'worktree', { download: true })).toBe(
+      '/api/workflows/runs/run%2Fone/git/file/src/a.ts?source=worktree&download=1'
+    );
+  });
 });
 
 describe('getWorkflowRunGitFile', () => {
@@ -155,13 +168,16 @@ describe('getWorkflowRunGitFile', () => {
       kind: 'text',
       text: 'hello\n',
       contentHash: CONTENT_HASH,
+      truncated: false,
+      cursor: '',
+      byteLength: 6,
     });
     expect(fetchSpy).toHaveBeenCalledWith(
       '/api/workflows/runs/run%2Fone/git/file/src/a.ts?source=worktree'
     );
   });
 
-  test('returns binary plus hash without calling response.text and cancels the body', async () => {
+  test('returns download metadata for octet-stream when presentation headers are missing', async () => {
     const bytes = new Uint8Array([0, 1, 2]);
     const cancel = mock(() => Promise.resolve());
     const response = new Response(bytes, {
@@ -178,11 +194,125 @@ describe('getWorkflowRunGitFile', () => {
     fetchSpy = mockFetchResponse(response);
 
     await expect(getWorkflowRunGitFile('run/one', 'bin.dat', 'head')).resolves.toEqual({
-      kind: 'binary',
+      kind: 'download',
       contentHash: CONTENT_HASH,
+      byteLength: 0,
     });
     expect(textSpy).not.toHaveBeenCalled();
     expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  test('parses text paging metadata', async () => {
+    fetchSpy = mockFetchResponse(
+      new Response('hello\n', {
+        headers: {
+          'Content-Type': 'text/plain; charset=utf-8',
+          ETag: '"' + CONTENT_HASH + '"',
+          'X-Archon-Git-Presentation': 'text',
+          'X-Archon-Git-Media-Type': '',
+          'X-Archon-Git-Truncated': 'true',
+          'X-Archon-Git-Cursor': 'next',
+          'X-Archon-Git-Byte-Length': '99',
+        },
+      })
+    );
+    await expect(getWorkflowRunGitFile('run/one', 'src/a.ts', 'worktree')).resolves.toEqual({
+      kind: 'text',
+      text: 'hello\n',
+      contentHash: CONTENT_HASH,
+      truncated: true,
+      cursor: 'next',
+      byteLength: 99,
+    });
+  });
+
+  test('parses an image as bytes without calling response.text', async () => {
+    const imageResponse = new Response(Uint8Array.from([0x89, 0x50]), {
+      headers: {
+        'Content-Type': 'image/png',
+        ETag: '"' + CONTENT_HASH + '"',
+        'X-Archon-Git-Presentation': 'image',
+        'X-Archon-Git-Media-Type': 'image/png',
+        'X-Archon-Git-Byte-Length': '2',
+        'X-Archon-Git-Truncated': 'false',
+        'X-Archon-Git-Cursor': '',
+      },
+    });
+    textSpy = spyOn(imageResponse, 'text');
+    fetchSpy = mockFetchResponse(imageResponse);
+    await expect(getWorkflowRunGitFile('run/one', 'tiny.png', 'worktree')).resolves.toEqual({
+      kind: 'image',
+      bytes: Uint8Array.from([0x89, 0x50]),
+      contentHash: CONTENT_HASH,
+      mediaType: 'image/png',
+      byteLength: 2,
+    });
+    expect(textSpy).not.toHaveBeenCalled();
+  });
+
+  test('parses a hex presentation as bytes rather than text', async () => {
+    const response = new Response(Uint8Array.from([0, 0x41, 0xff]), {
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        ETag: '"' + CONTENT_HASH + '"',
+        'X-Archon-Git-Presentation': 'hex',
+        'X-Archon-Git-Media-Type': '',
+        'X-Archon-Git-Byte-Length': '3',
+        'X-Archon-Git-Truncated': 'false',
+        'X-Archon-Git-Cursor': '',
+      },
+    });
+    textSpy = spyOn(response, 'text');
+    fetchSpy = mockFetchResponse(response);
+    await expect(getWorkflowRunGitFile('run/one', 'blob.bin', 'worktree')).resolves.toEqual({
+      kind: 'hex',
+      bytes: Uint8Array.from([0, 0x41, 0xff]),
+      contentHash: CONTENT_HASH,
+      byteLength: 3,
+    });
+    expect(textSpy).not.toHaveBeenCalled();
+  });
+
+  test('download-only cancels its empty body and returns metadata', async () => {
+    const cancel = mock(() => Promise.resolve());
+    const response = new Response(null, {
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        ETag: '"' + CONTENT_HASH + '"',
+        'X-Archon-Git-Presentation': 'download',
+        'X-Archon-Git-Media-Type': '',
+        'X-Archon-Git-Byte-Length': '52428801',
+        'X-Archon-Git-Truncated': 'false',
+        'X-Archon-Git-Cursor': '',
+      },
+    });
+    Object.defineProperty(response, 'body', { value: { cancel } });
+    fetchSpy = mockFetchResponse(response);
+    await expect(getWorkflowRunGitFile('run/one', 'huge.bin', 'worktree')).resolves.toEqual({
+      kind: 'download',
+      contentHash: CONTENT_HASH,
+      byteLength: 52_428_801,
+    });
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  test('rejects inconsistent presented headers', async () => {
+    fetchSpy = mockFetchResponse(
+      new Response('hello', {
+        headers: {
+          'Content-Type': 'text/plain',
+          ETag: '"' + CONTENT_HASH + '"',
+          'X-Archon-Git-Presentation': 'text',
+          'X-Archon-Git-Media-Type': '',
+          'X-Archon-Git-Truncated': 'true',
+          'X-Archon-Git-Cursor': '',
+          'X-Archon-Git-Byte-Length': '5',
+        },
+      })
+    );
+    await expect(getWorkflowRunGitFile('run/one', 'x.ts', 'worktree')).rejects.toThrow(
+      'Invalid git file response'
+    );
   });
 
   test('maps CAP-6 JSON to empty without requiring an ETag', async () => {

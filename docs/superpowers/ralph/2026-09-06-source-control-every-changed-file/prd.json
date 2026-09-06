@@ -1,0 +1,172 @@
+{
+  "feature": "Open Every Changed File",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add viewer limits, cursors, media detection, and text page boundaries",
+      "description": "As an operator, I want bounded first paint cutoffs, opaque version-bound cursors, media classification, and UTF-8 safe text page boundaries, so that opening large changed files does not freeze the viewer or split multi-byte characters.",
+      "acceptanceCriteria": [
+        "Create RED tests in packages/git/src/viewer-limits.test.ts, implement packages/git/src/viewer-limits.ts, and make focused tests and git package type-check pass.",
+        "Define seven locked cutoff constants: VIEWER_FIRST_PAINT_BYTES (256 KiB), VIEWER_FIRST_PAINT_LINES (2000), VIEWER_STREAM_BYTES (1 MiB), VIEWER_DOWNLOAD_ONLY_BYTES (50 MiB), VIEWER_HEX_PEEK_BYTES (4 KiB), VIEWER_BINARY_PROBE_BYTES (8 KiB), and VIEWER_DIFF_CONTEXT_LINES (3).",
+        "Implement encodeViewerCursor and decodeViewerCursor with unpadded base64url JSON; enforce route-specific axes ('o' for offset, 'h' for hunk) and 64-hex version string.",
+        "Distinguish malformed/invalid cursors (ViewerCursorError { code: 'invalid' }) from stale cursors (ViewerCursorError { code: 'stale' }); an empty cursor decodes to 0.",
+        "sliceTextPage stops after 2,000 newline-terminated lines or at most 256 KiB plus boundary bytes; never splits a UTF-8 code point, and short final pages return full bytes with truncated: false.",
+        "chooseGitFilePresentation classifies files above 50 MiB as download without probing; sniffs PNG, JPEG, GIF87a/89a, WEBP, and SVG (with BOM or XML declaration) as image before the NUL heuristic; classifies remaining NUL in first 8 KiB as hex; and all others as text."
+      ],
+      "technicalNotes": "Plan Task 1 (docs/superpowers/plans/2026-09-06-source-control-every-changed-file.md:342-516). Create packages/git/src/viewer-limits.ts and packages/git/src/viewer-limits.test.ts. Pure rules and algorithms; consumes standard library only. Locked contracts at plan:109-143.",
+      "dependsOn": [],
+      "priority": 1,
+      "passes": true,
+      "notes": "Implemented in iteration 1. Files: packages/git/src/viewer-limits.ts, packages/git/src/viewer-limits.test.ts."
+    },
+    {
+      "id": "US-002",
+      "title": "Make file views bounded and downloads abortable streams",
+      "description": "As an operator, I want worktree and tree file reads to respect viewer cutoffs and download requests to stream, so that large files and downloads do not buffer entirely in server memory.",
+      "acceptanceCriteria": [
+        "Add failing real-file and real-blob tests in packages/git/src/file-read.test.ts, implement packages/git/src/git-stream.ts, update packages/git/src/file-read.ts and packages/git/src/index.ts, and pass focused tests and git type check.",
+        "Implement internal git-stream.ts spawning git with argv arrays, providing streamGitStdout (abortable ReadableStream<Uint8Array>) and readGitStdoutWindow (collecting up to takeBytes after skipping skipBytes and terminating the child).",
+        "Worktree reads check bigint lstat, contain the path, open the file, and re-verify dev, ino, mode, size, mtimeNs, ctimeNs on the handle before returning a reader; symlinks return link target bytes.",
+        "Tree reads inspect size first with cat-file -s, avoid whole-blob buffering, and use spawned helpers for bounded windows and streams; no HEAD:path or shell exec.",
+        "fileAt accepts FileAtRequest with intent: 'full' | 'view' | 'download': full returns all bytes for backwards compatibility; view returns at most 256 KiB/2000 lines for text, at most 4 KiB for hex, all bytes for images <= 1 MiB, stream for images > 1 MiB, and metadata only for files > 50 MiB; download returns delivery: 'stream' from byte zero without accepting a cursor.",
+        "Opaque text cursors (axis 'o') are validated against contentHash; stale files throw GitFileError { code: 'stale_cursor' }, and malformed cursors throw GitFileError { code: 'invalid_cursor' }.",
+        "Export expanded types (FileAtRequest, FileAtResult, FileAtBytesResult, FileAtStreamResult, FileAtIntent, GitFilePresentation) from packages/git/src/index.ts without exporting new runtime I/O functions."
+      ],
+      "technicalNotes": "Plan Task 2 (docs/superpowers/plans/2026-09-06-source-control-every-changed-file.md:519-775). Create packages/git/src/git-stream.ts; modify packages/git/src/file-read.ts, packages/git/src/file-read.test.ts, and packages/git/src/index.ts. Locked contracts at plan:146-235.",
+      "dependsOn": [
+        "US-001"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": "Implemented in iteration 2. Files: packages/git/src/git-stream.ts, packages/git/src/file-read.ts, packages/git/src/file-read.test.ts, packages/git/src/index.ts."
+    },
+    {
+      "id": "US-003",
+      "title": "Parse and page Now diffs without buffering the whole diff",
+      "description": "As an operator, I want modified file diffs parsed incrementally and paged with hunk cursors, so that large diffs do not exceed Node buffer limits and special modified files fall back to raw view.",
+      "acceptanceCriteria": [
+        "Create failing pure parser/accumulator tests in packages/git/src/diff-page.test.ts and real-git tests in packages/git/src/file-read.test.ts; implement packages/git/src/diff-page.ts and update file-read.ts; pass all git tests.",
+        "Implement visitUnifiedDiffChunks and parseUnifiedDiffChunks streaming UTF-8 chunks across multibyte line boundaries without losing context or lines.",
+        "Implement HunkPageAccumulator to accumulate diff hunks up to 262,144 serialized JSON bytes or 2,000 changes; keep an oversized first hunk whole; signal page_full before a later hunk that would exceed limits.",
+        "fileDiff inspects both worktree and HEAD with bounded probes; if either side is image, hex, or download (>50 MiB), returns hunks: [], fileFallback: true, and binary set according to whether NUL was present.",
+        "For text diffs, spawn git diff with argv ['--no-optional-locks', '--literal-pathspecs', 'diff', '--no-color', '--no-ext-diff', '--no-textconv', '--text', '-U3', 'HEAD', '--', path] and feed stdout incrementally into accumulator.",
+        "Kill the diff child process immediately upon page_full or abort signal; encode next hunk index into opaque cursor (axis 'h') with version hash derived from both sides.",
+        "Reject stale hunk cursors with GitFileError { code: 'stale_cursor' } and malformed cursors with GitFileError { code: 'invalid_cursor' }."
+      ],
+      "technicalNotes": "Plan Task 3 (docs/superpowers/plans/2026-09-06-source-control-every-changed-file.md:778-1036). Create packages/git/src/diff-page.ts and packages/git/src/diff-page.test.ts; modify packages/git/src/file-read.ts and packages/git/src/file-read.test.ts. Locked contracts at plan:178-193 and 233-235.",
+      "dependsOn": [
+        "US-002"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": "Implemented in iteration 3. Files: packages/git/src/diff-page.ts, packages/git/src/diff-page.test.ts, packages/git/src/file-read.ts, packages/git/src/file-read.test.ts, packages/git/src/git-stream.ts."
+    },
+    {
+      "id": "US-004",
+      "title": "Serialize cursors, fallbacks, and streams at the HTTP boundary",
+      "description": "As an operator, I want the server diff and raw file routes to serialize presentation headers, stream bodies, and map cursor staleness, so that web clients receive bounded responses with accurate metadata.",
+      "acceptanceCriteria": [
+        "Update packages/server/src/routes/api.git-changes.test.ts with failing boundary tests; implement changes in packages/server/src/routes/schemas/git.schemas.ts, diff-route.ts, diff-handler.ts, and file-handler.ts; pass isolated HTTP tests.",
+        "Add fileFallback: z.boolean() to gitReadyDiffResponseSchema; add 409 errorSchema response to gitDiffRoute.",
+        "diff-handler forwards cursor and request abort signal to fileDiff; maps invalid_cursor to HTTP 400 ({ error: 'Invalid file cursor' }) and stale_cursor to HTTP 409 ({ error: 'File changed' }) without logging cursor content; logs use stable error types.",
+        "file-handler calls fileAt with intent: 'download' only when download=1 query param is present; otherwise calls with intent: 'view' and optional cursor; forwards cancellation signal.",
+        "Stream bodies are returned directly via Web Stream; download=1 sets Content-Disposition: attachment; filename=\"download\" and Content-Length: full_size; non-download hex views return bytes without attachment disposition.",
+        "Successful raw responses return quoted 64-hex ETag and presentation headers: X-Archon-Git-Byte-Length, X-Archon-Git-Truncated, X-Archon-Git-Cursor, X-Archon-Git-Presentation, X-Archon-Git-Media-Type; CAP-6 responses omit these presentation headers.",
+        "Regenerate packages/web/src/lib/api.generated.d.ts using bun --filter @archon/web generate:types and verify fileFallback and 409 response appear in the generated types."
+      ],
+      "technicalNotes": "Plan Task 4 (docs/superpowers/plans/2026-09-06-source-control-every-changed-file.md:1039-1250). Modify server routes and schemas; update api.git-changes.test.ts; regenerate api.generated.d.ts. Ensure no secret or cursor values are logged in Pino events. HTTP headers at plan:250-261.",
+      "dependsOn": [
+        "US-003"
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": "Implemented in iteration 4. Files: packages/server/src/routes/schemas/git.schemas.ts, packages/server/src/routes/git/diff-route.ts, packages/server/src/routes/git/diff-handler.ts, packages/server/src/routes/git/file-handler.ts, packages/server/src/routes/api.git-changes.test.ts, packages/web/src/lib/api.generated.d.ts."
+    },
+    {
+      "id": "US-005",
+      "title": "Parse raw presentations in the web API client",
+      "description": "As a web component, I want the web API client to parse presentation headers into a discriminated GitFileClientResult union and support cursor-based paging, so that the viewer can handle text, image, hex, and download modes cleanly.",
+      "acceptanceCriteria": [
+        "Write failing client tests in packages/web/src/lib/api.git-changes.test.ts; update packages/web/src/lib/api.ts; pass client tests and web type-check.",
+        "Update gitFileUrl to accept cursor and download options, outputting query params only when non-empty, preserving per-segment path encoding.",
+        "getWorkflowRunGitFile parses and validates response headers into GitFileClientResult: text (text, contentHash, truncated, cursor, byteLength), image (bytes, contentHash, mediaType, byteLength), hex (bytes, contentHash, byteLength), download (contentHash, byteLength), or empty (emptyReason).",
+        "Use response.text() only for text presentations; use response.arrayBuffer() for image and hex; cancel response.body without reading for download-only presentations.",
+        "Validate presentation headers: require non-empty cursor exactly when text is truncated; reject inconsistent headers with Invalid git file response.",
+        "Maintain backwards fallback for responses missing presentation headers (JSON CAP-6, text as untruncated final page, octet-stream as download-only)."
+      ],
+      "technicalNotes": "Plan Task 5 (docs/superpowers/plans/2026-09-06-source-control-every-changed-file.md:1253-1449). Modify packages/web/src/lib/api.ts and packages/web/src/lib/api.git-changes.test.ts. Locked union at plan:265-284.",
+      "dependsOn": [
+        "US-004"
+      ],
+      "priority": 5,
+      "passes": true,
+      "notes": "Implemented in iteration 5. Files: packages/web/src/lib/api.ts, packages/web/src/lib/api.git-changes.test.ts, packages/web/src/components/workflows/source-control/source-control-tab.tsx."
+    },
+    {
+      "id": "US-006",
+      "title": "Render hex, images, Load more, and virtualized hunks",
+      "description": "As an operator, I want safe inline image rendering, a formatted hex peek, virtualized diff hunks, and a Load more control, so that large diffs and non-text files render smoothly without DOM bloat or XSS risks.",
+      "acceptanceCriteria": [
+        "Create hex-peek.ts and hex-peek.test.ts implementing formatHexPeek (16 bytes per row: 8-digit lowercase hex offset, two-space gap, 47-char padded hex bytes, two-space gap, 16-char printable ASCII bounded by vertical bars).",
+        "Create inline-image.tsx and inline-image.test.tsx managing URL.createObjectURL and URL.revokeObjectURL on byte change and unmount; render images via <img> without DOM injection or syntax highlighting.",
+        "Create virtualized-diff.tsx with independent Before and After virtualized panes using @tanstack/react-virtual with initialRect: { width: 0, height: 280 }, estimating row height from change count and rendering .sc-virtual-hunk wrappers.",
+        "Update file-viewer.tsx and file-viewer.test.tsx: handle text, diff, image, hex, download states; render Load more for truncated text or diff states with non-empty cursor; render Cancel button when loadingMore or initial loading.",
+        "Create and run packages/web/src/component-integration/source-control-large-diff-spike.tsx: verify 2+ MiB diff renders in <1000 ms in happy-dom, virtualizes hunks (mounted < total), and bundles lodash input bytes > 0."
+      ],
+      "technicalNotes": "Plan Task 6 (docs/superpowers/plans/2026-09-06-source-control-every-changed-file.md:1452-1850). Create hex-peek.ts, hex-peek.test.ts, inline-image.tsx, inline-image.test.tsx, virtualized-diff.tsx, source-control-large-diff-spike.tsx; modify file-viewer.tsx and file-viewer.test.tsx. Props contract at plan:1471-1480.",
+      "dependsOn": [
+        "US-005"
+      ],
+      "priority": 6,
+      "passes": true,
+      "notes": "Implemented in iteration 6. Files: packages/web/src/components/workflows/source-control/hex-peek.ts, hex-peek.test.ts, inline-image.tsx, inline-image.test.tsx, virtualized-diff.tsx, file-viewer.tsx, file-viewer.test.tsx, source-control-tab.tsx; packages/web/src/component-integration/source-control-large-diff-spike.tsx, source-control-tab.test.tsx; packages/web/package.json."
+    },
+    {
+      "id": "US-007",
+      "title": "Append pages without losing cancellation or frozen Reload behavior",
+      "description": "As an operator, I want clicking Load more to append text or diff hunks without changing the frozen changes list or causing false staleness, and I want page cancellation separate from closing the viewer.",
+      "acceptanceCriteria": [
+        "Add failing mounted tests in packages/web/src/component-integration/source-control-tab.test.tsx; update packages/web/src/components/workflows/source-control/source-control-tab.tsx; pass mounted tab tests.",
+        "For modified (M) files, route to raw worktree fetch when diffResponse.fileFallback is true; route download links to gitFileUrl(..., { download: true }).",
+        "Maintain stable reloadFingerprint: for truncated diffs, use first cursor; for complete diffs, use JSON of first response; preserve fingerprint across appended pages so accumulating hunks does not trigger Changed on disk \u2014 Reload.",
+        "Implement onLoadMore in tab: validate selected file, request next page with opaque cursor, require identical contentHash (text) or matching metadata (diff), append text/hunks, and update cursor/truncated.",
+        "Distinguish cancellation: Cancel during initial file open closes the viewer; Cancel during Load more aborts only that page's in-flight request and keeps painted content visible.",
+        "When Load more receives HTTP 409 (File changed), keep currently painted content, clear loadingMore, and trigger the existing manual Changed on disk \u2014 Reload comparison.",
+        "Verify .env still opens as ordinary highlighted text without denylist/redaction (NFR6)."
+      ],
+      "technicalNotes": "Plan Task 7 (docs/superpowers/plans/2026-09-06-source-control-every-changed-file.md:1853-2327). Modify packages/web/src/components/workflows/source-control/source-control-tab.tsx and packages/web/src/component-integration/source-control-tab.test.tsx.",
+      "dependsOn": [
+        "US-006"
+      ],
+      "priority": 7,
+      "passes": true,
+      "notes": "Implemented in iteration 7. Files: packages/web/src/components/workflows/source-control/source-control-tab.tsx, packages/web/src/component-integration/source-control-tab.test.tsx."
+    },
+    {
+      "id": "US-008",
+      "title": "Run acceptance gates and update the tracker",
+      "description": "As an operator, I want every focused test, package suite, repository gate, scope invariant, and manual legacy-screen verification to pass before marking Story 1.3 done in sprint status.",
+      "acceptanceCriteria": [
+        "Run focused evidence commands across git, server, and web packages and ensure every test exits zero with no warnings: viewer-limits.test.ts, diff-page.test.ts, file-read.test.ts, api.git-changes.test.ts, hex-peek.test.ts, inline-image.test.tsx, file-viewer.test.tsx, source-control-tab.test.tsx, and the large diff spike script.",
+        "Run package-level test suites: bun run test in packages/git, packages/server, and packages/web; all pass.",
+        "Run repository validation: bun run validate and git diff --check exit zero.",
+        "Inspect git diff and scope invariants: verify no forbidden console imports, no Shiki/Monaco/refractor additions, exact react-diff-view@3.3.3 dependency, no added public git I/O functions, no database schema changes, and no unnecessary manifest changes.",
+        "Verify acceptance matrix covering first paint limits, Load more pagination, route-specific cursors, incremental diff parsing, raw fallback, cancellation, 50 MiB download threshold, streamed downloads, inline images, hex peek, diff virtualization, and quiet logging.",
+        "Update _bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml: change 1-3-open-every-changed-file: backlog to done without altering dates or epic status."
+      ],
+      "technicalNotes": "Plan Task 8 (docs/superpowers/plans/2026-09-06-source-control-every-changed-file.md:2330-2454). This is the final verification and tracker update story. Only US-008 is authorized to edit sprint-status.yaml.",
+      "dependsOn": [
+        "US-001",
+        "US-002",
+        "US-003",
+        "US-004",
+        "US-005",
+        "US-006",
+        "US-007"
+      ],
+      "priority": 8,
+      "passes": true,
+      "notes": "Implemented in iteration 8. Files: _bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml. Focused tests, package suites, bun run validate, and git diff --check all exited 0. Spike {fixtureBytes:2097152,renderMs:110.9155,mountedHunks:8,totalHunks:4096,lodashInputBytes:545267}. Live legacy-screen check skipped: no suitable DAG run with a live host checkout in this worktree."
+    }
+  ]
+}

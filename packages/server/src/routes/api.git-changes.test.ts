@@ -5,7 +5,15 @@ import { join } from 'path';
 import { OpenAPIHono } from '@hono/zod-openapi';
 
 import type { ConversationLockManager } from '@archon/core';
-import type { ChangedFilesResult, FileAtResult, FileAtSource, FileDiffResult } from '@archon/git';
+import type {
+  ChangedFilesResult,
+  FileAtBytesResult,
+  FileAtRequest,
+  FileAtResult,
+  FileAtSource,
+  FileDiffRequest,
+  FileDiffResult,
+} from '@archon/git';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 
 import type { WebAdapter } from '../adapters/web';
@@ -29,16 +37,36 @@ const mockIsGitWorkTree = mock(async (_workingPath: string): Promise<boolean> =>
 const TEXT_BYTES = Uint8Array.from([0x68, 0x69, 0x0a]);
 const TEXT_HASH = 'a'.repeat(64);
 
-const mockFileAt = mock(
-  async (_workingPath: string, _path: string, _source: FileAtSource): Promise<FileAtResult> => ({
+function readyFileAt(overrides: Partial<FileAtBytesResult> = {}): FileAtBytesResult {
+  return {
+    delivery: 'bytes',
     path: 'x.ts',
     bytes: TEXT_BYTES,
     binary: false,
     contentHash: TEXT_HASH,
-  })
+    byteLength: TEXT_BYTES.byteLength,
+    truncated: false,
+    cursor: '',
+    presentation: 'text',
+    mediaType: '',
+    ...overrides,
+  };
+}
+
+const mockFileAt = mock(
+  async (
+    _workingPath: string,
+    _path: string,
+    _source: FileAtSource,
+    _request?: FileAtRequest
+  ): Promise<FileAtResult> => readyFileAt()
 );
 const mockFileDiff = mock(
-  async (_workingPath: string, _path: string): Promise<FileDiffResult> => ({
+  async (
+    _workingPath: string,
+    _path: string,
+    _request?: FileDiffRequest
+  ): Promise<FileDiffResult> => ({
     path: 'x.ts',
     status: 'M',
     scope: 'now',
@@ -47,6 +75,7 @@ const mockFileDiff = mock(
     cursor: '',
     truncated: false,
     binary: false,
+    fileFallback: false,
   })
 );
 
@@ -213,14 +242,7 @@ beforeEach(async () => {
     async (): Promise<ChangedFilesResult> => ({ files: [], revision: REVISION })
   );
   mockIsGitWorkTree.mockImplementation(async (): Promise<boolean> => true);
-  mockFileAt.mockImplementation(
-    async (): Promise<FileAtResult> => ({
-      path: 'x.ts',
-      bytes: TEXT_BYTES,
-      binary: false,
-      contentHash: TEXT_HASH,
-    })
-  );
+  mockFileAt.mockImplementation(async (): Promise<FileAtResult> => readyFileAt());
   mockFileDiff.mockImplementation(
     async (): Promise<FileDiffResult> => ({
       path: 'x.ts',
@@ -231,6 +253,7 @@ beforeEach(async () => {
       cursor: '',
       truncated: false,
       binary: false,
+      fileFallback: false,
     })
   );
   mockLogger.fatal.mockClear();
@@ -366,6 +389,7 @@ test('returns a ready Now hunk response from the canonical checkout', async () =
     cursor: '',
     truncated: false,
     binary: false,
+    fileFallback: false,
   });
   const response = await makeApp().request(
     '/api/workflows/runs/run-1/git/diff?path=src%2Fa.ts&cursor=opaque-token&working_path=%2Fetc'
@@ -380,7 +404,11 @@ test('returns a ready Now hunk response from the canonical checkout', async () =
     truncated: false,
     binary: false,
   });
-  expect(mockFileDiff).toHaveBeenCalledWith(canonical, 'src/a.ts');
+  expect(mockFileDiff).toHaveBeenCalledWith(
+    canonical,
+    'src/a.ts',
+    expect.objectContaining({ cursor: 'opaque-token' })
+  );
   expect(expectDiffLogPair('git.diff_completed')).toEqual({
     runId: 'run-1',
     binary: false,
@@ -450,7 +478,11 @@ test('forwards a colon path to fileDiff unchanged', async () => {
   const canonical = await realpath(checkoutDir);
   const response = await makeApp().request('/api/workflows/runs/run-1/git/diff?path=%3Acolon.ts');
   expect(response.status).toBe(200);
-  expect(mockFileDiff).toHaveBeenCalledWith(canonical, ':colon.ts');
+  expect(mockFileDiff).toHaveBeenCalledWith(
+    canonical,
+    ':colon.ts',
+    expect.objectContaining({ cursor: '' })
+  );
   expectDiffLogPair('git.diff_completed');
 });
 
@@ -458,7 +490,11 @@ test('forwards a leading-dash path to fileDiff unchanged', async () => {
   const canonical = await realpath(checkoutDir);
   const response = await makeApp().request('/api/workflows/runs/run-1/git/diff?path=-dash.ts');
   expect(response.status).toBe(200);
-  expect(mockFileDiff).toHaveBeenCalledWith(canonical, '-dash.ts');
+  expect(mockFileDiff).toHaveBeenCalledWith(
+    canonical,
+    '-dash.ts',
+    expect.objectContaining({ cursor: '' })
+  );
   expectDiffLogPair('git.diff_completed');
 });
 
@@ -466,7 +502,11 @@ test('forwards a glob path to fileDiff unchanged', async () => {
   const canonical = await realpath(checkoutDir);
   const response = await makeApp().request('/api/workflows/runs/run-1/git/diff?path=src%2F%2A.ts');
   expect(response.status).toBe(200);
-  expect(mockFileDiff).toHaveBeenCalledWith(canonical, 'src/*.ts');
+  expect(mockFileDiff).toHaveBeenCalledWith(
+    canonical,
+    'src/*.ts',
+    expect.objectContaining({ cursor: '' })
+  );
   expectDiffLogPair('git.diff_completed');
 });
 
@@ -586,7 +626,12 @@ test('forwards an encoded slash path to fileAt unchanged', async () => {
     '/api/workflows/runs/run-1/git/file/src%2Fa.ts?source=worktree'
   );
   expect(response.status).toBe(200);
-  expect(mockFileAt).toHaveBeenCalledWith(canonical, 'src/a.ts', { kind: 'worktree' });
+  expect(mockFileAt).toHaveBeenCalledWith(
+    canonical,
+    'src/a.ts',
+    { kind: 'worktree' },
+    expect.objectContaining({ intent: 'view', cursor: '' })
+  );
   expectFileLogPair('git.file_completed');
 });
 
@@ -596,7 +641,12 @@ test('forwards a colon path to fileAt unchanged', async () => {
     '/api/workflows/runs/run-1/git/file/%3Acolon.ts?source=worktree'
   );
   expect(response.status).toBe(200);
-  expect(mockFileAt).toHaveBeenCalledWith(canonical, ':colon.ts', { kind: 'worktree' });
+  expect(mockFileAt).toHaveBeenCalledWith(
+    canonical,
+    ':colon.ts',
+    { kind: 'worktree' },
+    expect.objectContaining({ intent: 'view', cursor: '' })
+  );
   expectFileLogPair('git.file_completed');
 });
 
@@ -606,7 +656,12 @@ test('forwards a leading-dash path to fileAt unchanged', async () => {
     '/api/workflows/runs/run-1/git/file/-dash.ts?source=worktree'
   );
   expect(response.status).toBe(200);
-  expect(mockFileAt).toHaveBeenCalledWith(canonical, '-dash.ts', { kind: 'worktree' });
+  expect(mockFileAt).toHaveBeenCalledWith(
+    canonical,
+    '-dash.ts',
+    { kind: 'worktree' },
+    expect.objectContaining({ intent: 'view', cursor: '' })
+  );
   expectFileLogPair('git.file_completed');
 });
 
@@ -616,7 +671,12 @@ test('forwards a glob path to fileAt unchanged', async () => {
     '/api/workflows/runs/run-1/git/file/src%2F%2A.ts?source=worktree'
   );
   expect(response.status).toBe(200);
-  expect(mockFileAt).toHaveBeenCalledWith(canonical, 'src/*.ts', { kind: 'worktree' });
+  expect(mockFileAt).toHaveBeenCalledWith(
+    canonical,
+    'src/*.ts',
+    { kind: 'worktree' },
+    expect.objectContaining({ intent: 'view', cursor: '' })
+  );
   expectFileLogPair('git.file_completed');
 });
 
@@ -626,7 +686,12 @@ test('forwards a space path to fileAt unchanged', async () => {
     '/api/workflows/runs/run-1/git/file/my%20file.ts?source=worktree'
   );
   expect(response.status).toBe(200);
-  expect(mockFileAt).toHaveBeenCalledWith(canonical, 'my file.ts', { kind: 'worktree' });
+  expect(mockFileAt).toHaveBeenCalledWith(
+    canonical,
+    'my file.ts',
+    { kind: 'worktree' },
+    expect.objectContaining({ intent: 'view', cursor: '' })
+  );
   expectFileLogPair('git.file_completed');
 });
 
@@ -636,7 +701,12 @@ test('forwards a newline path to fileAt unchanged', async () => {
     '/api/workflows/runs/run-1/git/file/foo%0Abar.ts?source=worktree'
   );
   expect(response.status).toBe(200);
-  expect(mockFileAt).toHaveBeenCalledWith(canonical, 'foo\nbar.ts', { kind: 'worktree' });
+  expect(mockFileAt).toHaveBeenCalledWith(
+    canonical,
+    'foo\nbar.ts',
+    { kind: 'worktree' },
+    expect.objectContaining({ intent: 'view', cursor: '' })
+  );
   expectFileLogPair('git.file_completed');
 });
 
@@ -723,7 +793,12 @@ test('maps source=worktree to a worktree fileAt read', async () => {
     '/api/workflows/runs/run-1/git/file/src%2Fa.ts?source=worktree'
   );
   expect(response.status).toBe(200);
-  expect(mockFileAt).toHaveBeenCalledWith(canonical, 'src/a.ts', { kind: 'worktree' });
+  expect(mockFileAt).toHaveBeenCalledWith(
+    canonical,
+    'src/a.ts',
+    { kind: 'worktree' },
+    expect.objectContaining({ intent: 'view', cursor: '' })
+  );
   expectFileLogPair('git.file_completed');
 });
 
@@ -733,10 +808,15 @@ test('maps source=head to a HEAD tree fileAt read', async () => {
     '/api/workflows/runs/run-1/git/file/src%2Fa.ts?source=head'
   );
   expect(response.status).toBe(200);
-  expect(mockFileAt).toHaveBeenCalledWith(canonical, 'src/a.ts', {
-    kind: 'tree',
-    treeIsh: 'HEAD',
-  });
+  expect(mockFileAt).toHaveBeenCalledWith(
+    canonical,
+    'src/a.ts',
+    {
+      kind: 'tree',
+      treeIsh: 'HEAD',
+    },
+    expect.objectContaining({ intent: 'view', cursor: '' })
+  );
   expectFileLogPair('git.file_completed');
 });
 
@@ -822,15 +902,18 @@ test('returns exact text bytes with the quoted content-hash ETag', async () => {
 
 test('returns exact non-empty binary bytes as an attachment', async () => {
   mockFileAt.mockImplementationOnce(
-    async (): Promise<FileAtResult> => ({
-      path: 'x.bin',
-      bytes: Uint8Array.from([0, 1, 2]),
-      binary: true,
-      contentHash: 'b'.repeat(64),
-    })
+    async (): Promise<FileAtResult> =>
+      readyFileAt({
+        path: 'x.bin',
+        bytes: Uint8Array.from([0, 1, 2]),
+        binary: true,
+        contentHash: 'b'.repeat(64),
+        byteLength: 3,
+        presentation: 'download',
+      })
   );
   const response = await makeApp().request(
-    '/api/workflows/runs/run-1/git/file/x.bin?source=worktree'
+    '/api/workflows/runs/run-1/git/file/x.bin?source=worktree&download=1'
   );
   expect(response.status).toBe(200);
   expect(response.headers.get('Content-Type')).toBe('application/octet-stream');
@@ -883,4 +966,108 @@ test('returns an opaque 500 for a path-bearing file error', async () => {
   expect(serializedLogs).not.toContain(checkoutDir);
   expect(serializedLogs).not.toContain('src/leaked.ts');
   expect(expectFileLogPair('git.file_failed').errorType).toBe('git_read_failed');
+});
+
+test('diff forwards cursor and request cancellation and returns fileFallback', async () => {
+  mockFileDiff.mockResolvedValueOnce({
+    path: 'image.svg',
+    status: 'M',
+    scope: 'now',
+    ref: 'live',
+    hunks: [],
+    cursor: '',
+    truncated: false,
+    binary: false,
+    fileFallback: true,
+  });
+  const response = await makeApp().request(
+    '/api/workflows/runs/run-1/git/diff?path=image.svg&cursor=opaque'
+  );
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ fileFallback: true });
+  expect(mockFileDiff.mock.calls[0]?.[2]).toMatchObject({ cursor: 'opaque' });
+  expect(mockFileDiff.mock.calls[0]?.[2]?.signal).toBeInstanceOf(AbortSignal);
+});
+
+test('diff maps invalid and stale cursors without logging cursor text', async () => {
+  mockFileDiff.mockRejectedValueOnce(namedError('GitFileError', 'invalid_cursor'));
+  let response = await makeApp().request(
+    '/api/workflows/runs/run-1/git/diff?path=x.ts&cursor=secret-invalid'
+  );
+  expect(response.status).toBe(400);
+  expect(await response.json()).toEqual({ error: 'Invalid file cursor' });
+  expect(JSON.stringify(mockLogger.info.mock.calls)).not.toContain('secret-invalid');
+
+  mockLogger.info.mockClear();
+  mockLogger.error.mockClear();
+  mockFileDiff.mockRejectedValueOnce(namedError('GitFileError', 'stale_cursor'));
+  response = await makeApp().request(
+    '/api/workflows/runs/run-1/git/diff?path=x.ts&cursor=secret-stale'
+  );
+  expect(response.status).toBe(409);
+  expect(await response.json()).toEqual({ error: 'File changed' });
+  expect(JSON.stringify(mockLogger.info.mock.calls)).not.toContain('secret-stale');
+});
+
+test('hex view returns bytes and all presentation headers without attachment', async () => {
+  mockFileAt.mockResolvedValueOnce(
+    readyFileAt({
+      path: 'blob.bin',
+      bytes: Uint8Array.from([0, 1, 2]),
+      binary: true,
+      byteLength: 99,
+      presentation: 'hex',
+    })
+  );
+  const response = await makeApp().request(
+    '/api/workflows/runs/run-1/git/file/blob.bin?source=worktree'
+  );
+  expect(response.headers.get('Content-Type')).toBe('application/octet-stream');
+  expect(response.headers.get('Content-Disposition')).toBeNull();
+  expect(response.headers.get('X-Archon-Git-Presentation')).toBe('hex');
+  expect(response.headers.get('X-Archon-Git-Byte-Length')).toBe('99');
+  expect(new Uint8Array(await response.arrayBuffer())).toEqual(Uint8Array.from([0, 1, 2]));
+  expect(mockFileAt.mock.calls.at(-1)?.[3]).toMatchObject({ intent: 'view', cursor: '' });
+});
+
+test('download=1 returns a streamed attachment with full Content-Length', async () => {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller): void {
+      controller.enqueue(Uint8Array.from([0, 1, 2]));
+      controller.close();
+    },
+  });
+  mockFileAt.mockResolvedValueOnce({
+    delivery: 'stream',
+    stream,
+    path: 'blob.bin',
+    binary: true,
+    contentHash: TEXT_HASH,
+    byteLength: 3,
+    truncated: false,
+    cursor: '',
+    presentation: 'download',
+    mediaType: '',
+  });
+  const response = await makeApp().request(
+    '/api/workflows/runs/run-1/git/file/blob.bin?source=worktree&download=1'
+  );
+  expect(response.headers.get('Content-Disposition')).toBe('attachment; filename="download"');
+  expect(response.headers.get('Content-Length')).toBe('3');
+  expect(new Uint8Array(await response.arrayBuffer())).toEqual(Uint8Array.from([0, 1, 2]));
+  expect(mockFileAt.mock.calls.at(-1)?.[3]).toMatchObject({ intent: 'download' });
+});
+
+test('file route maps stale cursor to 409 and keeps CAP-6 free of presentation headers', async () => {
+  mockFileAt.mockRejectedValueOnce(namedError('GitFileError', 'stale_cursor'));
+  const stale = await makeApp().request(
+    '/api/workflows/runs/run-1/git/file/x.ts?source=worktree&cursor=opaque'
+  );
+  expect(stale.status).toBe(409);
+  expect(await stale.json()).toEqual({ error: 'File changed' });
+
+  mockGetWorkflowRun.mockResolvedValueOnce({ ...runRow(), working_path: null });
+  const empty = await makeApp().request('/api/workflows/runs/run-1/git/file/x.ts?source=worktree');
+  expect(empty.headers.get('X-Archon-Git-Presentation')).toBeNull();
+  expect(empty.headers.get('ETag')).toBeNull();
 });
