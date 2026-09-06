@@ -7,6 +7,7 @@ import { countTerminalNodes } from '../primitives/event';
 import type { RunStatus } from '../lib/run-status';
 import { statusLabel } from '../lib/run-status';
 import { formatElapsed, elapsedSince, formatCost } from '../lib/format';
+import { consoleRunHref } from './console-run-href';
 
 interface ConsoleWorkflowResultCardProps {
   runId: string;
@@ -180,7 +181,8 @@ export function ConsoleWorkflowResultCard({
             <button
               type="button"
               onClick={(): void => {
-                void navigate(`/console/p/${run.projectId}/r/${runId}`);
+                if (run.projectId === null) return;
+                void navigate(consoleRunHref(run.projectId, run.id, run.currentNode ?? null));
               }}
               className="ml-auto text-[11px] text-text-secondary transition-colors hover:text-text-primary"
             >
