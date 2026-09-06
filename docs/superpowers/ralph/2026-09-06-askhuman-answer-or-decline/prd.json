@@ -186,8 +186,8 @@
         "US-008"
       ],
       "priority": 9,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 9. Files: packages/workflows/src/dag-executor.ts, packages/workflows/src/dag-executor.test.ts."
     },
     {
       "id": "US-010",

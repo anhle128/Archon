@@ -1,5 +1,10 @@
 ## Codebase Patterns
 
+### Ask re-entry maps rows in runLayers; first stream pass only
+- **Where**: `packages/workflows/src/dag-executor.ts`
+- **Pattern**: `executeDagWorkflow` loads `listPendingInteractions` once, rejects any `pending` row, and fails on answered Ask `node_id`s missing from static DAG step names (`<loopGroupId>.<bodyNodeId>` included). `mapAnsweredAskResume` sorts by `created_at` then `id`, parses `askAnswerBodySchema`, maps decline to `{ payload: 'declined', declined: true }`, and requires one shared non-empty `provider_session_id`. Command/prompt/loop get `resumeInteractions` only on the first stream pass of the first resumed iteration, with `forkSession: false` and zero engine retries. Resume failures log `workflow.ask_resume_failed` with ids only and write `Could not resume the AskHuman session`.
+- **Example**: `const askResume = mapAnsweredAskResume(ctx.answeredAskRows, stepNamePrefix + node.id);`
+
 ### Ask hydrate skips a second resume CAS
 - **Where**: `packages/workflows/src/executor.ts`
 - **Pattern**: `inspectResumableRun` lists pending interactions after the DAG snapshot. Pending Ask rows throw `Answer or decline the Ask before resuming run <id>` and never claim. Answered Ask rows (`kind === 'ask' && status === 'answered'`) make a first-node run resumable via internal `hasAnsweredAsk`. `hydrateResumableRun` returns the candidate as `preCreatedRun` without `resumeWorkflowRun` only when `status === 'running' && hasAnsweredAsk`; failed/paused/cancelled still CAS.
@@ -242,5 +247,29 @@
 - StrReplace on large files in this harness can truncate; patch with unique full-block replacement in Python and assert the file grew.
 - Do not return null for a pending Ask — orchestrator treats inspect-null as a fresh start. Throw the safe error instead.
 - Skip the resume CAS only for `running && hasAnsweredAsk`; a running candidate without answered Ask must still call resumeWorkflowRun.
+
+---
+
+## 2026-09-07 — US-009: Re-enter AskHuman nodes with resume interactions
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/dag-executor.ts` — load pending rows, map ordered resumeInteractions, session override, first-pass-only options, sanitized resume failure
+- `packages/workflows/src/dag-executor.test.ts` — command/prompt/loop mapping, retry isolation, repeated Ask pause, missing-node, loop-group body prefix
+
+**Acceptance criteria verified**:
+- [x] executeDagWorkflow loads pending interactions; rejects pending rows; verifies answered node_ids against static DAG step names
+- [x] runLayers maps answered Ask rows for stepNamePrefix + node.id into ResumeInteraction[] in store order; decline maps to 'declined'
+- [x] provider_session_id overrides sequential and persist_session cursors
+- [x] Command/prompt get resumeInteractions on first stream pass only; loops on first pass of first resumed iteration
+- [x] forkSession false, zero engine retries, answers never appended to the prompt
+- [x] Resume failure writes node_failed with 'Could not resume the AskHuman session', logs workflow.ask_resume_failed with ids only, no answer sentinels
+- [x] A new AskHumanAwaitingError during the continued turn pauses normally
+- [x] bun test src/dag-executor.test.ts in packages/workflows (602 pass)
+
+**Learnings**:
+- Pass answered Ask rows through RunLayersContext into loop_group body contexts; map per node with stepNamePrefix + node.id.
+- Strip resumeInteractions on structured-output reasks by deleting the field on a copied SendQueryOptions object.
+- Provider resume throws must not go through getLog().error({ err }) or logNodeError(err.message); those serialize answer sentinels.
 
 ---
