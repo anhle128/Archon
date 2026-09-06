@@ -48,6 +48,7 @@ import type {
   UsageBreakdown,
   NativeToolHandlerContext,
   AskHumanControlError,
+  ResumeInteraction,
 } from '../types';
 import { toUsageBreakdown } from '../usage-breakdown';
 import { parseClaudeConfig } from './config';
@@ -1055,7 +1056,8 @@ function createClaudeAskRuntime(
  */
 async function* streamClaudeMessages(
   events: AsyncGenerator,
-  toolResultQueue: ToolResultEntry[]
+  toolResultQueue: ToolResultEntry[],
+  sanitizeAskResume = false
 ): AsyncGenerator<MessageChunk> {
   // Synthetic error message recorded while waiting for the terminal result to
   // confirm it (#1797). Detection is two-signal: the typed wrapper `error`
@@ -1099,7 +1101,10 @@ async function* streamClaudeMessages(
           .map(b => b.text)
           .join('\n');
         pendingSdkError = { code: message.error, text };
-        getLog().warn({ errorCode: message.error, text }, 'claude.synthetic_error_message');
+        getLog().warn(
+          sanitizeAskResume ? { errorCode: message.error } : { errorCode: message.error, text },
+          'claude.synthetic_error_message'
+        );
         // Withhold the error prose from the output stream — yielding it is
         // what poisons downstream $node.output. If the terminal result
         // contradicts (no is_error), the text is yielded late as a fail-safe.
@@ -1282,7 +1287,7 @@ async function* streamClaudeMessages(
             errorCode: code,
             terminalReason: resultMsg.terminal_reason,
             apiErrorStatus: resultMsg.api_error_status,
-            text,
+            ...(sanitizeAskResume ? {} : { text }),
           },
           'claude.result_api_error'
         );
@@ -1318,7 +1323,7 @@ async function* streamClaudeMessages(
             sessionId: resultMsg.session_id,
             errorSubtype: resultMsg.subtype,
             stopReason: resultMsg.stop_reason,
-            errors: sdkErrors,
+            ...(sanitizeAskResume ? {} : { errors: sdkErrors }),
           },
           'claude.result_is_error'
         );
@@ -1354,7 +1359,9 @@ async function* streamClaudeMessages(
   // SDK ends every turn with a result, so this is an abnormal end (#1797).
   if (pendingSdkError !== undefined) {
     getLog().error(
-      { errorCode: pendingSdkError.code, text: pendingSdkError.text },
+      sanitizeAskResume
+        ? { errorCode: pendingSdkError.code }
+        : { errorCode: pendingSdkError.code, text: pendingSdkError.text },
       'claude.synthetic_error_stream_ended'
     );
     throw new ClaudeApiResultError(pendingSdkError.code, pendingSdkError.text);
@@ -1442,6 +1449,24 @@ function classifyAndEnrichError(
   enrichedError.cause = error;
   const shouldRetry = errorClass === 'rate_limit' || errorClass === 'crash';
   return { enrichedError, errorClass, shouldRetry };
+}
+
+const ASK_RESUME_FAILED_MESSAGE = 'Could not resume the AskHuman session';
+
+/**
+ * Provider-owned user message that continues a Claude session after AskHuman
+ * answers or declines. Never includes the executor prompt.
+ */
+export function buildClaudeAskResumePrompt(interactions: readonly ResumeInteraction[]): string {
+  const blocks = interactions.map(interaction =>
+    interaction.declined
+      ? 'AskHuman ' + interaction.tool_use_id + ' was declined.'
+      : 'AskHuman ' + interaction.tool_use_id + ' answers:\n' + JSON.stringify(interaction.payload)
+  );
+  return (
+    blocks.join('\n\n') +
+    '\n\nContinue the task using these answers. Do not call AskHuman again for these tool_use_id values.'
+  );
 }
 
 // ─── Claude Provider ───────────────────────────────────────────────────────
@@ -1554,7 +1579,20 @@ export class ClaudeProvider implements IAgentProvider {
       requestOptions.abortSignal.addEventListener('abort', onAbort, { once: true });
     }
 
-    for (let attempt = 0; attempt <= MAX_SUBPROCESS_RETRIES; attempt++) {
+    const resumeInteractions = requestOptions?.resumeInteractions;
+    const hasAskResume = (resumeInteractions?.length ?? 0) > 0;
+    if (hasAskResume) {
+      const sessionId = resumeSessionId?.trim() ?? '';
+      if (sessionId === '') {
+        getLog().error({ errorClass: 'missing_session' }, 'claude.ask_resume_failed');
+        throw new Error(ASK_RESUME_FAILED_MESSAGE);
+      }
+    }
+    const queryPrompt =
+      hasAskResume && resumeInteractions ? buildClaudeAskResumePrompt(resumeInteractions) : prompt;
+    const maxSubprocessRetries = hasAskResume ? 0 : MAX_SUBPROCESS_RETRIES;
+
+    for (let attempt = 0; attempt <= maxSubprocessRetries; attempt++) {
       if (requestOptions?.abortSignal?.aborted) {
         throw new Error('Query aborted');
       }
@@ -1601,6 +1639,14 @@ export class ClaudeProvider implements IAgentProvider {
       }
 
       // 3. Set session resume
+      if (hasAskResume) {
+        options.forkSession = false;
+        options.stderr = (data: string): void => {
+          const output = data.trim();
+          if (!output) return;
+          stderrLines.push(output);
+        };
+      }
       if (resumeSessionId) {
         options.resume = resumeSessionId;
         getLog().debug(
@@ -1613,7 +1659,7 @@ export class ClaudeProvider implements IAgentProvider {
 
       try {
         // 4. Run query with first-event timeout protection
-        const rawEvents = query({ prompt, options });
+        const rawEvents = query({ prompt: queryPrompt, options });
         currentQuery = rawEvents;
         const timeoutMs = getFirstEventTimeoutMs();
         const diagnostics = buildFirstEventHangDiagnostics(
@@ -1634,17 +1680,21 @@ export class ClaudeProvider implements IAgentProvider {
         // Fold any usage retained from prior retry attempts into the terminal
         // result so spent tokens remain queryable after recovery.
         for await (const chunk of withResumedOutcome(
-          streamClaudeMessages(events, toolResultQueue),
+          streamClaudeMessages(events, toolResultQueue, hasAskResume),
           resumedOutcome(resumeSessionId, true)
         )) {
-          if (chunk.type === 'result' && accumulatedUsage) {
-            const usageBreakdown = mergeUsageBreakdowns(accumulatedUsage, chunk.usageBreakdown);
+          const sanitized =
+            hasAskResume && chunk.type === 'result' && chunk.isError
+              ? { ...chunk, errors: [ASK_RESUME_FAILED_MESSAGE] }
+              : chunk;
+          if (sanitized.type === 'result' && accumulatedUsage) {
+            const usageBreakdown = mergeUsageBreakdowns(accumulatedUsage, sanitized.usageBreakdown);
             yield {
-              ...chunk,
+              ...sanitized,
               ...(usageBreakdown ? { usageBreakdown } : {}),
             };
           } else {
-            yield chunk;
+            yield sanitized;
           }
         }
         if (askBridge.controlError) {
@@ -1656,6 +1706,27 @@ export class ClaudeProvider implements IAgentProvider {
           throw askBridge.controlError;
         }
         const err = error as Error;
+        if (hasAskResume) {
+          if (err instanceof ClaudeApiResultError) {
+            accumulatedUsage = mergeUsageBreakdowns(accumulatedUsage, err.usageBreakdown);
+            if (accumulatedUsage) {
+              yield {
+                type: 'result',
+                isError: true,
+                errorSubtype: err.sdkErrorCode,
+                errors: [ASK_RESUME_FAILED_MESSAGE],
+                usageBreakdown: accumulatedUsage,
+                ...(err.tokens ? { tokens: err.tokens } : {}),
+                ...(err.cost !== undefined ? { cost: err.cost } : {}),
+                ...(err.sessionId ? { sessionId: err.sessionId } : {}),
+              };
+              return;
+            }
+          }
+          const errorClass = classifySubprocessError(err.message, stderrLines.join('\n'));
+          getLog().error({ errorClass }, 'claude.ask_resume_failed');
+          throw new Error(ASK_RESUME_FAILED_MESSAGE);
+        }
         if (err instanceof ClaudeApiResultError) {
           accumulatedUsage = mergeUsageBreakdowns(accumulatedUsage, err.usageBreakdown);
         }
