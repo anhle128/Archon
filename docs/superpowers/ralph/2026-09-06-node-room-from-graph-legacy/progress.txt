@@ -1,0 +1,252 @@
+## Codebase Patterns
+
+### Shared Graph/Logs room pane
+- **Where**: `packages/web/src/components/workflows/LegacyGraphLogsPane.tsx`, `resolve-graph-room-row.ts`, `WorkflowExecution.tsx`
+- **Pattern**: Keep `selectedLogRowId` for iteration-specific Logs clicks. Displayed row is that explicit row only while it exists and belongs to `selectedNodeId`; otherwise `resolveGraphRoomRow`. Graph clicks always clear the explicit row first. One `ResizablePanelGroup` (60/40) hosts either `renderGraph` or `NodeRunList` on the left and a single `LegacyNodeRoom` on the right. `resolveWorkflowExecutionBody` returns `graph-logs-pane` for DAG Graph, Logs, and Chat-without-parent.
+- **Example**: `activeView={activeView === 'graph' ? 'graph' : 'logs'}`
+
+### React Flow view model from pure layout
+- **Where**: `packages/web/src/components/workflows/build-workflow-dag-view-model.ts`, `RunGraphRouteEdge.tsx`, `WorkflowDagViewer.tsx`
+- **Pattern**: Call `layoutRunGraph` once. Copy `resolveExecutionNodeDisplay` plus live metadata onto `ExecutionFlowNode`. Each route becomes `type: 'runGraphRoute'` with `data.route`, `MarkerType.ArrowClosed`, and `animated` only when the target status is `running`. Register `edgeTypes` at module scope. Stroke from taken/kind/outcome; dash when `backEdge || kind === 'conditional'`. Do not import dagre into the viewer.
+- **Example**: `const edgeTypes: EdgeTypes = { runGraphRoute: RunGraphRouteEdge };`
+
+### Workflow-to-layout adapter
+- **Where**: `packages/web/src/components/workflows/build-run-graph-input.ts`
+- **Pattern**: Keep DagNode/`ROUTE_LOOP_OUTCOMES` imports out of `run-graph/`. Map live `WorkflowStepStatus` with an exhaustive switch so `awaiting` cannot leak. Emit route edges via `[...ROUTE_LOOP_OUTCOMES].reverse()` (exhausted, negative, positive). First free id is `${source}->${target}`; collisions use `${source}->${target}:${outcome}`.
+- **Example**: `return layout(buildRunGraphInput(dagNodes, liveStatus));`
+
+### Cubic SVG path formatter
+- **Where**: `packages/web/src/lib/run-graph/routes.ts`
+- **Pattern**: Every route is one cubic `M x y C x y x y x y` string. Classify in order: omit if either endpoint lacks a position, self-edge (left→top gutter), `backEdgeIds` (left→left flank), else forward. Short forward uses top port when layer span ≤ 1 or |center dx| ≤ SIDE_PORT_THRESHOLD. Copy optional `label`/`outcome` only when defined so missing keys stay absent.
+- **Example**: `` `M ${start.x} ${start.y} C ${control1.x} ${control1.y} ${control2.x} ${control2.y} ${end.x} ${end.y}` ``
+
+### Narrow public layout API
+- **Where**: `packages/web/src/lib/run-graph/index.ts`
+- **Pattern**: `layout` is the only runtime export. Public contracts are `export type` only. Downstream stories import `layout` from `./index` or `@/lib/run-graph`, not `buildRoutes`/`computePositions`.
+- **Example**: `export { layout } from './layout';`
+
+### layout last-state-wins
+- **Where**: `packages/web/src/lib/run-graph/layout.ts`
+- **Pattern**: Forward every node id to `computePositions` (first appearance wins position). Overwrite `states[id]` while iterating so the last duplicate `nodeState` classifies `taken`.
+- **Example**: `states[node.id] = node.nodeState;`
+
+### Fail-fast Map lookups
+- **Where**: `packages/web/src/lib/run-graph/positions.ts`
+- **Pattern**: `@typescript-eslint/no-non-null-assertion` forbids `map.get(k)!`. Use a typed helper that throws if the key is missing. Do not `?? 0` — that hides a missing entry.
+- **Example**: `requiredMapValue(layer, id)`
+
+### Barycenter empty-neighbor rule
+- **Where**: `packages/web/src/lib/run-graph/positions.ts`
+- **Pattern**: Two complete sweeps (top-down predecessors, then bottom-up successors). A node with no neighbors in that direction keeps its current layer index; equal barycenters break on original first-seen index. The ux-mockup returns `0` for empty neighbors — do not copy that.
+- **Example**: `if (neighbors.length === 0) return requiredMapValue(positionInLayer, id);`
+
+### Pure run-graph module
+- **Where**: `packages/web/src/lib/run-graph/`
+- **Pattern**: Zero-dependency TypeScript. No React, DOM, `@xyflow/react`, `@dagrejs/dagre`, or `@/lib/api` imports. Types live in `types.ts`; numeric layout values live in `constants.ts`.
+- **Example**: `export const SIDE_PORT_THRESHOLD = NODE_WIDTH * 0.75;` (equals 135)
+
+### Exhaustive NodeState switches
+- **Where**: `packages/web/src/lib/run-graph/taken-path.ts`
+- **Pattern**: Switch on `NodeState | undefined` with explicit true/false cases so adding a state is a compile error.
+- **Example**: `isEdgeTaken` delegates to `isOnPath(targetState)` (target-started rule).
+
+### Web unit tests
+- **Where**: `packages/web/src/lib/*.test.ts`
+- **Pattern**: `import { describe, expect, test } from 'bun:test'`. Run scoped with `( cd packages/web && bun test src/lib/run-graph/<file>.test.ts )`.
+- **Gotcha**: This worktree has no `node_modules` until `bun install`; `bun test` of pure files still runs, but `tsc`/`eslint` fail without the install.
+
+---
+
+## 2026-09-06 — US-001: Pure run-graph contracts, constants, and taken-path classifier
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/lib/run-graph/types.ts` — NodeState, RouteOutcome, LayoutEdgeKind, LayoutNode, LayoutEdge, Point, PortSide, LayoutRoute, LayoutResult, LayoutInput
+- `packages/web/src/lib/run-graph/constants.ts` — NODE_WIDTH 180, NODE_HEIGHT 80, NODE_SEP 40, RANK_SEP 80, SIDE_PORT_THRESHOLD 135, BACK_EDGE_GUTTER 46
+- `packages/web/src/lib/run-graph/taken-path.ts` — isOnPath / isEdgeTaken
+- `packages/web/src/lib/run-graph/taken-path.test.ts` — all NodeState values plus undefined and target-started delegation
+
+**Acceptance criteria verified**:
+- [x] types.ts defines NodeState, RouteOutcome, LayoutEdgeKind, LayoutNode, LayoutEdge, Point, PortSide, LayoutRoute, LayoutResult, LayoutInput
+- [x] constants.ts exports NODE_WIDTH = 180, NODE_HEIGHT = 80, NODE_SEP = 40, RANK_SEP = 80, SIDE_PORT_THRESHOLD = 135 (NODE_WIDTH * 0.75), BACK_EDGE_GUTTER = 46
+- [x] taken-path.ts implements isOnPath and isEdgeTaken
+- [x] isOnPath true only for running, completed, failed, awaiting; false for pending, skipped, undefined
+- [x] isEdgeTaken delegates to isOnPath(targetState)
+- [x] zero imports from react, @xyflow/react, @dagrejs/dagre, @/lib/api, or window/document
+- [x] `( cd packages/web && bun test src/lib/run-graph/taken-path.test.ts )` — 4 pass
+
+**Learnings**:
+- Prettier collapses the NodeState union onto one line; keep that formatting.
+- Do not add `index.ts` or `layout()` until US-003.
+
+---
+
+## 2026-09-06 — US-002: Cycle-safe layered positions
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/lib/run-graph/positions.ts` — computePositions: first-seen dedupe, DFS back edges, longest-path layers, two barycenter sweeps, centered top-left coordinates
+- `packages/web/src/lib/run-graph/positions.test.ts` — empty, single node, duplicate IDs, missing endpoints, fork centering, a->d/b->c reorder, retry loop, two-node cycle, determinism
+
+**Acceptance criteria verified**:
+- [x] computePositions(nodeIds, edges) returns positions, layers, and backEdgeIds
+- [x] Deduplicate node IDs preserving first appearance; ignore edges with missing endpoints
+- [x] Adjacency in input edge order; DFS marks self-edges and gray-ancestor edges as back edges
+- [x] Back edges excluded from longest-path layering; targetLayer = max(targetLayer, sourceLayer + 1) in topological order
+- [x] Two complete barycenter sweeps; empty neighbors keep current position; ties use first-seen index
+- [x] Layers centered with NODE_WIDTH + NODE_SEP (220) and NODE_HEIGHT + RANK_SEP (160); top-left coordinates
+- [x] Never inspects node states; repeated calls are byte-for-byte identical
+- [x] `( cd packages/web && bun test src/lib/run-graph/positions.test.ts )` — 9 pass
+
+**Learnings**:
+- ESLint forbids `!` on Map.get; throw via requiredMapValue instead of coalescing to 0.
+- The ux-mockup barycenter returns 0 for isolated neighbors; the plan requires keeping the current index.
+- Do not add `index.ts` or `layout()` until US-003.
+
+---
+
+## 2026-09-06 — US-003: Cubic routes and public layout function
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/lib/run-graph/routes.ts` — buildRoutes: cubic SVG paths for short/long forward, left-flank back edges, and self-edge gutters
+- `packages/web/src/lib/run-graph/routes.test.ts` — ports, exact path strings, label positions, omitted endpoints, kind/label/outcome, taken flags
+- `packages/web/src/lib/run-graph/layout.ts` — layout() combines computePositions + buildRoutes; last duplicate state wins
+- `packages/web/src/lib/run-graph/layout.test.ts` — empty, state-independent positions, taken path, retry back route, duplicate ids, public export
+- `packages/web/src/lib/run-graph/index.ts` — only runtime export is layout plus type-only contracts
+
+**Acceptance criteria verified**:
+- [x] buildRoutes generates cubic SVG paths in `M x y C x y x y x y` format
+- [x] Short forward edges leave bottom-center and enter top-center with bend = max(18, dy * 0.45)
+- [x] Long forward edges enter left-center (target right) or right-center (target left) with sourceBend/targetBend formulas
+- [x] Non-self back edges are left-to-left through min(x) - BACK_EDGE_GUTTER
+- [x] Self-edges start left-center, end top-center, upper-left gutter lane
+- [x] labelPosition set per geometry; kind defaults to dependency; label and outcome preserved
+- [x] taken from isOnPath(target state); backEdge from backEdgeIds; missing endpoints omit the route
+- [x] layout(input) returns positions + routes
+- [x] index.ts exports layout as the only runtime value plus the listed types
+- [x] `( cd packages/web && bun test src/lib/run-graph/routes.test.ts src/lib/run-graph/layout.test.ts )` — 17 pass
+- [x] Import audit: no react, @xyflow/react, @dagrejs/dagre, @/lib/api, window, or document
+
+**Learnings**:
+- Assert exact path strings from the constants and port math rather than re-deriving inside tests with a shared helper.
+- `Object.keys(import * as runGraph)` is `['layout']` because type exports erase at runtime.
+- Prettier nested the self/back/forward ternary; keep that formatting.
+
+---
+
+## 2026-09-06 — US-004: Adapt workflow definitions to shared run-graph input
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/build-run-graph-input.ts` — buildRunGraphInput + layoutRunGraph adapter from DagNode/live status to LayoutInput
+- `packages/web/src/components/workflows/build-run-graph-input.test.ts` — definition order, last-status-wins, pending default, no awaiting, conditional edges, route_loop order/suppression/collisions, skipped taken-path
+
+**Acceptance criteria verified**:
+- [x] build-run-graph-input.ts exports buildRunGraphInput and layoutRunGraph
+- [x] Definition order preserved; last matching live status wins; missing status is pending
+- [x] Exhaustive WorkflowStepStatus switch never maps or emits awaiting
+- [x] Ordinary depends_on → `${dependency}->${node.id}`; non-empty when → kind conditional + label
+- [x] route_loop suppresses controller-to-target deps; edges emit exhausted, negative, positive with kind route
+- [x] Target collisions use `${source}->${target}:${outcome}`
+- [x] layoutRunGraph passes adapter output to layout()
+- [x] `( cd packages/web && bun test src/components/workflows/build-run-graph-input.test.ts src/lib/dag-layout.test.ts )` — 27 pass
+- [x] `( cd packages/web && bun run type-check )` — pass
+- [x] eslint on build-run-graph-input.ts --max-warnings 0 — pass
+- [x] prettier --check on adapter files — pass
+- [x] No react, @xyflow/react, or @dagrejs/dagre imports in the adapter
+
+**Learnings**:
+- Import ROUTE_LOOP_OUTCOMES and RouteLoopConfig from @/lib/api; do not redeclare them in the adapter.
+- Keep the adapter in components/workflows, not run-graph, because it depends on API types.
+- Component `*.test.ts` files are eslint-ignored; lint the production `.ts` file only (`--no-warn-ignored` if a test path is passed).
+- dag-layout.ts must stay untouched — builder callers keep using dagre.
+
+---
+
+## 2026-09-06 — US-005: Render shared routes in legacy React Flow viewer
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/RunGraphRouteEdge.tsx` — BaseEdge renderer with token strokes and dashed back/conditional routes
+- `packages/web/src/components/workflows/RunGraphRouteEdge.test.tsx` — path, token, dash, and empty-path markup assertions
+- `packages/web/src/components/workflows/build-workflow-dag-view-model.ts` — layoutRunGraph to ExecutionFlowNode/RunGraphFlowEdge mapping
+- `packages/web/src/components/workflows/build-workflow-dag-view-model.test.ts` — positions, metadata, taken/animation, skipped, markers, retry back edge
+- `packages/web/src/components/workflows/WorkflowDagViewer.tsx` — module-scope edgeTypes, one memoized view-model call, keep pan/zoom/controls/chip/click
+
+**Acceptance criteria verified**:
+- [x] RunGraphRouteEdge.tsx exports RunGraphRouteEdge and RunGraphFlowEdge
+- [x] BaseEdge uses route.path, labelX, labelY, label, and markerEnd without geometry math
+- [x] Untaken border; taken dependency/conditional accent-bright; positive success; negative accent; exhausted error; back/conditional dashed
+- [x] buildWorkflowDagViewModel maps positions from layoutRunGraph and copies display/live fields
+- [x] Edges are type runGraphRoute, animated only when the target is running
+- [x] WorkflowDagViewer registers edgeTypes at module scope and keeps fit/pan/zoom/controls/chip/onNodeClick
+- [x] `( cd packages/web && bun test src/components/workflows/build-workflow-dag-view-model.test.ts src/components/workflows/RunGraphRouteEdge.test.tsx )` — 14 pass
+- [x] `( cd packages/web && bun run type-check )` — pass
+- [x] eslint --max-warnings 0 on production files — pass
+- [x] prettier --check on story files — pass
+
+**Learnings**:
+- Prettier collapses the RunGraphRouteEdge signature onto one line.
+- Copy optional route.label onto the React Flow edge only when defined.
+- EdgeProps.markerEnd is the resolved marker URL string; the view model stores `{ type: MarkerType.ArrowClosed }`.
+- dag-layout.ts stays for the builder; the execution viewer must not call dagNodesToReactFlow.
+
+---
+
+## 2026-09-06 — US-006: Share one room between Graph and Logs with unified selection
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/resolve-graph-room-row.ts` — canonical graph-node to LogRow resolver with pending synthesis
+- `packages/web/src/components/workflows/resolve-graph-room-row.test.ts` — null selection, ordinary-over-iteration, last iteration, other nodes ignored, live/pending synthesis, last live status
+- `packages/web/src/components/workflows/LegacyGraphLogsPane.tsx` — git mv from LegacyNodeLogs; shared 60/40 pane and one LegacyNodeRoom
+- `packages/web/src/components/workflows/LegacyGraphLogsPane.test.tsx` — Story 5.2 cases kept; graph navigation, DOM preservation, iteration vs canonical row, run-id reset
+- `packages/web/src/components/workflows/WorkflowExecution.tsx` — resolveWorkflowExecutionBody; DAG Graph/Logs share the pane; sequential keeps merged logs
+- `packages/web/src/components/workflows/WorkflowExecution.test.tsx` — Graph/Logs/chat/source-control/sequential selector assertions
+
+**Acceptance criteria verified**:
+- [x] resolveGraphRoomRow returns null for null nodeId, prefers last ordinary row, else last match, else synthetic pending/live row
+- [x] LegacyNodeLogs moved via git mv to LegacyGraphLogsPane with renamed export
+- [x] One ResizablePanelGroup; graph left nav vs NodeRunList; single LegacyNodeRoom on the right
+- [x] Graph clicks clear selectedLogRowId; Logs clicks keep iteration row ids
+- [x] Switching Graph/Logs preserves selected node and room DOM; command messages are not refetched
+- [x] resolveWorkflowExecutionBody maps DAG Graph/Logs (and chat without parent) to graph-logs-pane
+- [x] DAG Graph no longer mounts merged WorkflowLogs; sequential keeps sequentialLogsPanel
+- [x] Neither Graph nor Logs contains AskHuman, awaiting, or waiting-on-you chrome
+- [x] `( cd packages/web && bun test src/components/workflows/WorkflowExecution.test.tsx src/components/workflows/resolve-graph-room-row.test.ts )` — 16 pass
+- [x] `( cd packages/web && NODE_ENV=development bun test src/components/workflows/LegacyGraphLogsPane.test.tsx )` — 19 pass
+- [x] `( cd packages/web && bun run type-check )` — pass
+- [x] eslint --max-warnings 0 on production files — pass
+- [x] prettier --check on story files — pass
+
+**Learnings**:
+- Pane tests need a harness that owns selectedNodeId so Logs clicks and Graph clicks both update the parent selection.
+- react-resizable-panels still mounts children in happy-dom when the host has explicit width/height.
+- Do not use StrReplace on huge WorkflowExecution.tsx in this environment; it can truncate the file.
+
+---
+
+## 2026-09-06 — US-007: Validate story and update sprint tracking
+
+**Status**: PASSED
+**Files changed**:
+- `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml` — 5-3-open-the-same-node-room-from-the-graph-legacy backlog → done; last_updated 2026-09-06 21:39:39 +0700
+
+**Acceptance criteria verified**:
+- [x] `( cd packages/web && bun test src/lib/run-graph/taken-path.test.ts src/lib/run-graph/positions.test.ts src/lib/run-graph/routes.test.ts src/lib/run-graph/layout.test.ts )` — 30 pass
+- [x] `( cd packages/web && bun test src/components/workflows/build-run-graph-input.test.ts src/components/workflows/build-workflow-dag-view-model.test.ts src/components/workflows/RunGraphRouteEdge.test.tsx src/components/workflows/resolve-graph-room-row.test.ts src/lib/dag-layout.test.ts )` — 48 pass
+- [x] `( cd packages/web && NODE_ENV=development bun test src/components/workflows/LegacyGraphLogsPane.test.tsx )` — 19 pass
+- [x] `( cd packages/web && NODE_ENV=development bun test src/components/workflows/LegacyNodeRoom.test.tsx src/components/workflows/NodeTranscriptPane.test.tsx src/components/workflows/NodeRoom.test.tsx )` — 22 pass
+- [x] `( cd packages/web && bun test src/components/workflows/WorkflowExecution.test.tsx src/components/workflows/source-control/dag-run-tabs.test.tsx src/components/workflows/build-log-rows.test.ts )` — 21 pass
+- [x] `( cd packages/web && bun run type-check )` — pass
+- [x] `bun run lint --max-warnings 0` — pass
+- [x] `bun run validate` — pass (before and after sprint-status edit)
+- [x] Story 5.3 marked done; generated, epic statuses, other stories, and metadata paths unchanged
+- [x] `git diff --check` and `bun run format:check` — pass
+
+**Learnings**:
+- Update sprint tracking only after the full validation suite is green.
+- Ralph tracking files stay uncommitted; the story commit is sprint-status.yaml only.
+
+---

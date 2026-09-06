@@ -155,6 +155,12 @@ const mockCreateGrepTool = mock((_cwd: string) => ({ __piTool: 'grep' }));
 const mockCreateFindTool = mock((_cwd: string) => ({ __piTool: 'find' }));
 const mockCreateLsTool = mock((_cwd: string) => ({ __piTool: 'ls' }));
 
+type CapturedPiToolDef = {
+  name: string;
+  execute: (toolCallId: string, params: unknown, ...rest: unknown[]) => Promise<unknown>;
+};
+const capturedPiToolDefs: CapturedPiToolDef[] = [];
+
 mock.module('@earendil-works/pi-coding-agent', () => ({
   createAgentSession: mockCreateAgentSession,
   AuthStorage: { create: mockAuthCreate },
@@ -180,14 +186,22 @@ mock.module('@earendil-works/pi-coding-agent', () => ({
   createGrepTool: mockCreateGrepTool,
   createFindTool: mockCreateFindTool,
   createLsTool: mockCreateLsTool,
-  // Value import required by ./native-tools (added when manage_run native tools
-  // were wired into Pi). These tests don't pass nativeTools, so it's never
-  // called — but the static `import { defineTool }` needs the binding to exist.
-  defineTool: mock((def: unknown) => def),
+  // Capture registered custom tools so AskHuman tests can invoke `execute`
+  // from inside mockPrompt (Pi converts tool throws internally).
+  defineTool: mock((def: CapturedPiToolDef) => {
+    capturedPiToolDefs.push(def);
+    return def;
+  }),
 }));
 
 // Import AFTER mocks are set — module resolution freezes the mocks.
 import { ARCHON_PI_ANTHROPIC_OAUTH_SYSTEM_PROMPT, PiProvider } from './provider';
+import {
+  AskHumanAwaitingError,
+  AskHumanNoStarterError,
+  type NativeTool,
+  type NativeToolHandlerContext,
+} from '../../types';
 import { PI_CAPABILITIES } from './capabilities';
 // Same module instance the provider dynamic-imports, so clearing this cache
 // resets the loader the provider reuses across calls (issue #1877).
@@ -262,6 +276,7 @@ describe('PiProvider', () => {
     mockSettingsManagerGetProjectSettings.mockReset();
     mockSettingsManagerGetProjectSettings.mockImplementation(() => ({}));
     capturedListener = undefined;
+    capturedPiToolDefs.length = 0;
     scriptedEvents.length = 0;
     fileCreds = {};
     runtimeOverrides = {};
@@ -2521,6 +2536,122 @@ describe('PiProvider', () => {
         }),
         'pi.extension_provider_reapply_failed'
       );
+    });
+  });
+
+  describe('AskHuman control errors', () => {
+    const ASK_HUMAN_INPUT_SCHEMA: Record<string, unknown> = {
+      type: 'object',
+      properties: {
+        questions: {
+          type: 'array',
+          description: 'Ordered structured questions for the run starter.',
+          minItems: 1,
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              prompt: { type: 'string' },
+              selection: { type: 'string', enum: ['single', 'multi'] },
+              options: { type: 'array', items: { type: 'string' } },
+              allowOther: { type: 'boolean' },
+            },
+            required: ['id', 'prompt', 'selection', 'options', 'allowOther'],
+          },
+        },
+      },
+      required: ['questions'],
+    };
+
+    const VALID_QUESTIONS = {
+      questions: [
+        {
+          id: 'q1',
+          prompt: 'Which option?',
+          selection: 'single' as const,
+          options: ['a', 'b'],
+          allowOther: false,
+        },
+      ],
+    };
+
+    function askHumanTool(handler: NativeTool['handler']): NativeTool {
+      return {
+        name: 'AskHuman',
+        description:
+          'Ask the run starter one or more structured questions. Call this tool instead of asking in prose. Wait after calling; do not guess the answer.',
+        inputSchema: ASK_HUMAN_INPUT_SCHEMA,
+        handler,
+      };
+    }
+
+    async function invokeCapturedAskHuman(toolCallId = 'call-real'): Promise<void> {
+      const ask = capturedPiToolDefs.find(def => def.name === 'AskHuman');
+      if (!ask) {
+        throw new Error('AskHuman custom tool was not registered');
+      }
+      await ask.execute(toolCallId, VALID_QUESTIONS, undefined, undefined, undefined);
+    }
+
+    async function consumeAskQuery(handler: NativeTool['handler']): Promise<Error | undefined> {
+      process.env.GEMINI_API_KEY = 'sk-test';
+      resetScript(scriptedAgentEnd());
+      mockPrompt.mockImplementationOnce(async () => {
+        try {
+          await invokeCapturedAskHuman();
+        } catch {
+          // Pi's prompt loop converts tool throws into tool-result messages.
+        }
+        for (const ev of scriptedEvents) capturedListener?.(ev);
+      });
+      const { error } = await consume(
+        new PiProvider().sendQuery('hi', '/tmp', undefined, {
+          model: 'google/gemini-2.5-pro',
+          nativeTools: [askHumanTool(handler)],
+        })
+      );
+      return error;
+    }
+
+    test('rethrows the same AskHumanAwaitingError, aborts the session, and does not recreate the session', async () => {
+      const controlError = new AskHumanAwaitingError('call-real', 'review', 'run-1');
+      const seen: Array<NativeToolHandlerContext | undefined> = [];
+      const error = await consumeAskQuery(async (_input, context): Promise<string> => {
+        seen.push(context);
+        throw controlError;
+      });
+
+      expect(error).toBe(controlError);
+      expect(seen).toEqual([{ toolUseId: 'call-real', sessionId: 'mock-session-uuid' }]);
+      expect(mockAbort).toHaveBeenCalledTimes(1);
+      expect(mockCreateAgentSession).toHaveBeenCalledTimes(1);
+    });
+
+    test('rethrows the same AskHumanNoStarterError, aborts the session, and does not recreate the session', async () => {
+      const controlError = new AskHumanNoStarterError('run-1');
+      const seen: Array<NativeToolHandlerContext | undefined> = [];
+      const error = await consumeAskQuery(async (_input, context): Promise<string> => {
+        seen.push(context);
+        throw controlError;
+      });
+
+      expect(error).toBe(controlError);
+      expect(seen).toEqual([{ toolUseId: 'call-real', sessionId: 'mock-session-uuid' }]);
+      expect(mockAbort).toHaveBeenCalledTimes(1);
+      expect(mockCreateAgentSession).toHaveBeenCalledTimes(1);
+    });
+
+    test('normal handler errors stay Pi tool errors and do not abort the session', async () => {
+      const boom = new Error('tool failed');
+      const error = await consumeAskQuery(async (): Promise<string> => {
+        throw boom;
+      });
+
+      expect(error).toBeUndefined();
+      expect(error).not.toBeInstanceOf(AskHumanAwaitingError);
+      expect(error).not.toBeInstanceOf(AskHumanNoStarterError);
+      expect(mockAbort).not.toHaveBeenCalled();
+      expect(mockCreateAgentSession).toHaveBeenCalledTimes(1);
     });
   });
 });

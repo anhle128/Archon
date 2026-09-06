@@ -251,6 +251,7 @@ mock.module('@archon/git', () => ({
   toWorktreePath: (p: string) => p,
   changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
   isGitWorkTree: mock(async () => false),
+  log: mock(async () => ({ commits: [], revision: '0'.repeat(64), truncated: false })),
 }));
 
 mock.module('@archon/core/db/conversations', () => ({
@@ -548,6 +549,29 @@ type MockNodeMessageRow = {
 
 mock.module('@archon/core/db/workflow-node-messages', () => ({
   listNodeMessages: mockListNodeMessages,
+}));
+
+type MockPendingInteractionRow = {
+  id: string;
+  workflow_run_id: string;
+  node_id: string;
+  tool_use_id: string;
+  kind: 'ask' | 'permission';
+  status: 'pending' | 'answered' | 'purged';
+  envelope: Record<string, unknown>;
+  answer: Record<string, unknown> | null;
+  provider_session_id: string;
+  created_at: Date | string;
+  resolved_at: Date | string | null;
+  resolved_by: string | null;
+};
+
+const mockListPendingInteractions = mock(
+  async (_runId: string) => [] as MockPendingInteractionRow[]
+);
+
+mock.module('@archon/core/db/workflow-pending-interactions', () => ({
+  listPendingInteractions: mockListPendingInteractions,
 }));
 
 mock.module('@archon/core/db/workflow-envs', () => ({
@@ -1673,6 +1697,8 @@ describe('GET /api/workflows/runs/:runId', () => {
     mockQueryUsageReport.mockImplementation(async (opts: { runId?: string } = {}) =>
       emptyUsageReport(opts.runId)
     );
+    mockListPendingInteractions.mockReset();
+    mockListPendingInteractions.mockImplementation(async () => []);
   });
 
   test('returns run with events for a known runId', async () => {
@@ -2398,19 +2424,129 @@ describe('GET /api/workflows/runs/:runId', () => {
     expect(nullable).not.toEqual(usageReport);
   });
 
-  test('returns pending_interactions as an empty array without a pending table', async () => {
+  test('serializes listed pending_interactions with ISO timestamps and null resolved_at', async () => {
     mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_RUNNING_RUN);
     mockListWorkflowEvents.mockImplementationOnce(async () => MOCK_EVENTS);
     mockGetConversationById.mockImplementationOnce(async () => ({
       id: 'conv-uuid-1',
       platform_conversation_id: 'web-conv-abc',
     }));
+    mockListPendingInteractions.mockImplementationOnce(async () => [
+      {
+        id: 'pend-open',
+        workflow_run_id: 'run-uuid-1',
+        node_id: 'review',
+        tool_use_id: 'toolu_open',
+        kind: 'ask',
+        status: 'pending',
+        envelope: { questions: [{ prompt: 'Need a decision' }] },
+        answer: null,
+        provider_session_id: 'sess-1',
+        created_at: new Date('2026-09-06T00:00:00.000Z'),
+        resolved_at: null,
+        resolved_by: null,
+      },
+      {
+        id: 'pend-done',
+        workflow_run_id: 'run-uuid-1',
+        node_id: 'review',
+        tool_use_id: 'toolu_done',
+        kind: 'ask',
+        status: 'answered',
+        envelope: { questions: [{ prompt: 'Already answered' }] },
+        answer: { answers: ['ship it'] },
+        provider_session_id: 'sess-1',
+        created_at: '2026-09-06T00:00:01.000Z',
+        resolved_at: new Date('2026-09-06T00:01:00.000Z'),
+        resolved_by: 'user-1',
+      },
+    ]);
 
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/run-uuid-1');
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { pending_interactions: unknown };
-    expect(body.pending_interactions).toEqual([]);
+    const body = (await response.json()) as { pending_interactions: unknown[] };
+    expect(mockListPendingInteractions).toHaveBeenCalledWith('run-uuid-1');
+    expect(body.pending_interactions).toEqual([
+      {
+        id: 'pend-open',
+        workflow_run_id: 'run-uuid-1',
+        node_id: 'review',
+        tool_use_id: 'toolu_open',
+        kind: 'ask',
+        status: 'pending',
+        envelope: { questions: [{ prompt: 'Need a decision' }] },
+        answer: null,
+        provider_session_id: 'sess-1',
+        created_at: '2026-09-06T00:00:00.000Z',
+        resolved_at: null,
+        resolved_by: null,
+      },
+      {
+        id: 'pend-done',
+        workflow_run_id: 'run-uuid-1',
+        node_id: 'review',
+        tool_use_id: 'toolu_done',
+        kind: 'ask',
+        status: 'answered',
+        envelope: { questions: [{ prompt: 'Already answered' }] },
+        answer: { answers: ['ship it'] },
+        provider_session_id: 'sess-1',
+        created_at: '2026-09-06T00:00:01.000Z',
+        resolved_at: '2026-09-06T00:01:00.000Z',
+        resolved_by: 'user-1',
+      },
+    ]);
+  });
+
+  test('projects awaiting from a pending row on a paused run without rewriting to paused or running', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => ({
+      ...MOCK_RUNNING_RUN,
+      status: 'paused',
+    }));
+    mockListWorkflowEvents.mockImplementationOnce(async () => [
+      {
+        id: 'evt-review-start',
+        workflow_run_id: 'run-uuid-1',
+        event_type: 'node_started',
+        step_index: null,
+        step_name: 'review',
+        data: { node_id: 'review', provider: 'claude' },
+        created_at: NOW,
+      },
+    ]);
+    mockGetConversationById.mockImplementationOnce(async () => ({
+      id: 'conv-uuid-1',
+      platform_conversation_id: 'web-conv-abc',
+    }));
+    mockListPendingInteractions.mockImplementationOnce(async () => [
+      {
+        id: 'pend-review',
+        workflow_run_id: 'run-uuid-1',
+        node_id: 'review',
+        tool_use_id: 'toolu_1',
+        kind: 'ask',
+        status: 'pending',
+        envelope: { questions: [{ prompt: 'Need a decision' }] },
+        answer: null,
+        provider_session_id: 'sess-1',
+        created_at: '2026-09-06T00:00:00.000Z',
+        resolved_at: null,
+        resolved_by: null,
+      },
+    ]);
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-1');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      run: { status: string };
+      nodeStates: Array<{ nodeId: string; status: string; retryEpoch: number; provider?: string }>;
+    };
+    expect(body.run.status).toBe('paused');
+    expect(body.nodeStates).toEqual([
+      { nodeId: 'review', name: 'review', status: 'awaiting', retryEpoch: 0, provider: 'claude' },
+    ]);
   });
 });
 
@@ -2424,6 +2560,8 @@ describe('GET /api/workflows/runs/:runId/nodes/:nodeId/messages', () => {
     mockListNodeMessages.mockReset();
     mockApiLogError.mockReset();
     mockListNodeMessages.mockImplementation(async () => []);
+    mockListPendingInteractions.mockReset();
+    mockListPendingInteractions.mockImplementation(async () => []);
   });
 
   test('returns 404 for a missing run without listing messages', async () => {
@@ -2579,6 +2717,59 @@ describe('GET /api/workflows/runs/:runId/nodes/:nodeId/messages', () => {
     expect(logged).not.toContain('secret-row');
   });
 
+  test('never puts Ask envelopes into status message payloads', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_RUNNING_RUN);
+    mockListPendingInteractions.mockImplementationOnce(async () => [
+      {
+        id: 'pend-review',
+        workflow_run_id: 'run-uuid-1',
+        node_id: 'review',
+        tool_use_id: 'toolu_1',
+        kind: 'ask',
+        status: 'pending',
+        envelope: { questions: [{ prompt: 'secret-ask-envelope' }] },
+        answer: null,
+        provider_session_id: 'sess-1',
+        created_at: '2026-09-06T00:00:00.000Z',
+        resolved_at: null,
+        resolved_by: null,
+      },
+    ]);
+    mockListNodeMessages.mockImplementationOnce(async () => [
+      {
+        id: 'msg-status',
+        workflow_run_id: 'run-uuid-1',
+        node_id: 'review',
+        seq: 1,
+        kind: 'status',
+        payload: { state: 'awaiting' },
+        created_at: '2026-09-06T00:00:02.000Z',
+      },
+    ]);
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-1/nodes/review/messages');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      messages: Array<{ kind: string; payload: Record<string, unknown> }>;
+    };
+    expect(body.messages).toEqual([
+      {
+        id: 'msg-status',
+        seq: 1,
+        kind: 'status',
+        payload: { state: 'awaiting' },
+        created_at: '2026-09-06T00:00:02.000Z',
+      },
+    ]);
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain('secret-ask-envelope');
+    expect(serialized).not.toContain('questions');
+    expect(serialized).not.toContain('envelope');
+    expect(body.messages[0]?.payload.envelope).toBeUndefined();
+    expect(body.messages[0]?.payload.questions).toBeUndefined();
+  });
+
   test('OpenAPI documents the nested messages path and required pending_interactions', async () => {
     const { app } = makeApp();
     const document = app.getOpenAPIDocument({
@@ -2607,6 +2798,18 @@ describe('GET /api/workflows/runs/:runId/nodes/:nodeId/messages', () => {
     expect(detail?.properties?.pending_interactions?.items?.$ref).toBe(
       '#/components/schemas/PendingInteraction'
     );
+
+    const nodeState = document.components?.schemas?.WorkflowNodeState as
+      | { properties?: { status?: { enum?: string[] } } }
+      | undefined;
+    expect(nodeState?.properties?.status?.enum).toEqual([
+      'pending',
+      'running',
+      'completed',
+      'failed',
+      'skipped',
+      'awaiting',
+    ]);
   });
 });
 

@@ -57,11 +57,11 @@ development_status:
   epic-1: in-progress
   1-1-see-this-runs-uncommitted-files: done
   1-2-open-a-changed-file-in-the-shared-viewer: done
-  1-3-open-every-changed-file: backlog
+  1-3-open-every-changed-file: done
   epic-1-retrospective: optional
 
-  epic-2: backlog
-  2-1-walk-this-runs-commit-history-as-a-lane-graph: backlog
+  epic-2: in-progress
+  2-1-walk-this-runs-commit-history-as-a-lane-graph: done
   2-2-open-a-commits-files-in-the-same-viewer: backlog
   epic-2-retrospective: optional
 

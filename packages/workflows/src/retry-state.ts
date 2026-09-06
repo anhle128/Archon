@@ -1,4 +1,4 @@
-import type { DagNode, NodeOutput } from './schemas';
+import type { DagNode, NodeState } from './schemas';
 import { isRouteLoopNode } from './schemas';
 
 export const RETRY_EVENT_TYPES = [
@@ -17,7 +17,7 @@ export interface RetryProjectionEvent {
 
 export interface RetryNodeProjection {
   node_id: string;
-  state: NodeOutput['state'];
+  state: NodeState;
   retry_epoch: number;
   output: string;
   error?: string;
@@ -90,7 +90,8 @@ export function getRetryInvalidatedNodeIds(
 }
 
 export function projectLatestEffectiveNodeStates(
-  events: readonly RetryProjectionEvent[]
+  events: readonly RetryProjectionEvent[],
+  pending?: readonly { node_id: string; status: string }[]
 ): Map<string, RetryNodeProjection> {
   const states = new Map<string, RetryNodeProjection>();
 
@@ -164,7 +165,38 @@ export function projectLatestEffectiveNodeStates(
         output: '',
         reason: typeof data.reason === 'string' ? data.reason : undefined,
       });
+      continue;
     }
+
+    if (event.event_type === 'node_awaiting') {
+      const existing = states.get(nodeId);
+      states.set(nodeId, {
+        node_id: nodeId,
+        state: 'awaiting',
+        retry_epoch: existing?.retry_epoch ?? retryEpoch,
+        output: existing?.output ?? '',
+        ...(existing?.error !== undefined ? { error: existing.error } : {}),
+        ...(existing?.reason !== undefined ? { reason: existing.reason } : {}),
+      });
+      continue;
+    }
+
+    if (event.event_type === 'interaction_resolved') {
+      continue;
+    }
+  }
+
+  for (const row of pending ?? []) {
+    if (row.status !== 'pending') continue;
+    const existing = states.get(row.node_id);
+    states.set(row.node_id, {
+      node_id: row.node_id,
+      state: 'awaiting',
+      retry_epoch: existing?.retry_epoch ?? 0,
+      output: existing?.output ?? '',
+      ...(existing?.error !== undefined ? { error: existing.error } : {}),
+      ...(existing?.reason !== undefined ? { reason: existing.reason } : {}),
+    });
   }
 
   return states;

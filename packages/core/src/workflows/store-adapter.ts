@@ -12,6 +12,7 @@ import * as workflowEventDb from '../db/workflow-events';
 import * as workflowEventOutboxDb from '../db/workflow-event-outbox';
 import * as workflowNodeSessionDb from '../db/workflow-node-sessions';
 import * as workflowNodeMessageDb from '../db/workflow-node-messages';
+import * as workflowPendingInteractionDb from '../db/workflow-pending-interactions';
 import * as workflowCheckpointDb from '../db/workflow-checkpoints';
 import * as codebaseDb from '../db/codebases';
 import * as envVarDb from '../db/env-vars';
@@ -435,6 +436,9 @@ export function createWorkflowStore(): IWorkflowStore {
     appendNodeMessage: input => workflowNodeMessageDb.appendNodeMessage(input),
     listNodeMessages: (workflowRunId, nodeId) =>
       workflowNodeMessageDb.listNodeMessages(workflowRunId, nodeId),
+    insertPendingInteraction: input => workflowPendingInteractionDb.insertPendingInteraction(input),
+    listPendingInteractions: workflowRunId =>
+      workflowPendingInteractionDb.listPendingInteractions(workflowRunId),
   };
 }
 

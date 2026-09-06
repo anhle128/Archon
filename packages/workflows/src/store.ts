@@ -13,6 +13,10 @@ import type {
   EnvOverlaySnapshot,
 } from './schemas';
 import type { AppendNodeMessageInput, NodeMessage } from './schemas/node-message';
+import type {
+  InsertPendingInteractionInput,
+  PendingInteraction,
+} from './schemas/pending-interaction';
 
 export interface PersistRouteDecisionTransitionInput {
   workflow_run_id: string;
@@ -137,6 +141,10 @@ export const WORKFLOW_EVENT_TYPES = [
   // internal audit event; not mapped to external outbox or dashboard SSE sources.
   // Payload schema: packages/workflows/src/schemas/usage-breakdown.ts.
   'node_usage_recorded',
+  // AskHuman pause (Story 6.2). `interaction_resolved` is reserved for Story 6.3;
+  // do not map it to SSE in this story.
+  'node_awaiting',
+  'interaction_resolved',
 ] as const;
 
 export type WorkflowEventType = (typeof WORKFLOW_EVENT_TYPES)[number];
@@ -221,8 +229,22 @@ export interface IWorkflowNodeMessageStore {
   listNodeMessages(workflowRunId: string, nodeId: string): Promise<NodeMessage[]>;
 }
 
+/**
+ * Pending AskHuman / permission row persistence. Inherited by `IWorkflowStore`
+ * so the engine dependency object stays one seam; callers that only insert or
+ * list pending rows can depend on this capability alone.
+ */
+export interface IWorkflowPendingInteractionStore {
+  insertPendingInteraction(input: InsertPendingInteractionInput): Promise<PendingInteraction>;
+  listPendingInteractions(workflowRunId: string): Promise<PendingInteraction[]>;
+}
+
 export interface IWorkflowStore
-  extends IRunTreeStore, IWorkflowEnvOverlayStore, IWorkflowNodeMessageStore {
+  extends
+    IRunTreeStore,
+    IWorkflowEnvOverlayStore,
+    IWorkflowNodeMessageStore,
+    IWorkflowPendingInteractionStore {
   // Run lifecycle
   createWorkflowRun(data: {
     workflow_name: string;
@@ -295,14 +317,14 @@ export interface IWorkflowStore
   completeWorkflowRun(id: string, metadata?: Record<string, unknown>): Promise<void>;
   failWorkflowRun(id: string, error: string): Promise<void>;
   /**
-   * Pause a running run for human review, stamping the approval context. Optional
-   * `extraMetadata` is folded into the SAME atomic metadata write (e.g. the
-   * container write-back gate's `pending_writeback` marker) so there is never a
-   * paused-without-marker window.
+   * Pause a running run. When `approvalContext` is provided, stamp it (and optional
+   * `extraMetadata`) into metadata in the SAME atomic write so there is never a
+   * paused-without-marker window. When omitted (Ask pause), set status to paused
+   * without touching metadata; already-paused is idempotent success.
    */
   pauseWorkflowRun(
     id: string,
-    approvalContext: ApprovalContext,
+    approvalContext?: ApprovalContext,
     extraMetadata?: Record<string, unknown>
   ): Promise<void>;
 

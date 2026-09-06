@@ -22,6 +22,9 @@ import {
   routeOutcomeSchema,
   workflowRunSchema,
   workflowRunMetadataSchema,
+  nodeOutputSchema,
+  nodeStateSchema,
+  workflowStepStatusSchema,
   inputEnvKey,
   readSubrunMetadata,
   modelUsageEntrySchema,
@@ -2415,4 +2418,10 @@ describe('node_completed and run metadata stay free of usage breakdown', () => {
       expect(parsed.data).not.toHaveProperty('usage');
     }
   });
+});
+
+test('awaiting is a projection state and not an executable NodeOutput state', () => {
+  expect(nodeStateSchema.parse('awaiting')).toBe('awaiting');
+  expect(workflowStepStatusSchema.parse('awaiting')).toBe('awaiting');
+  expect(nodeOutputSchema.safeParse({ state: 'awaiting', output: '' }).success).toBe(false);
 });

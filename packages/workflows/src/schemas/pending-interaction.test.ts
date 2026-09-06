@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { pendingInteractionSchema } from './pending-interaction';
+import { insertPendingInteractionSchema, pendingInteractionSchema } from './pending-interaction';
 
 const valid = {
   id: 'pending-1',
@@ -25,4 +25,32 @@ describe('pendingInteractionSchema', () => {
     expect(pendingInteractionSchema.safeParse({ ...valid, kind: 'question' }).success).toBe(false);
     expect(pendingInteractionSchema.safeParse({ ...valid, status: 'open' }).success).toBe(false);
   });
+});
+
+test('insert schema accepts only caller-assigned fields', () => {
+  const parsed = insertPendingInteractionSchema.parse({
+    workflow_run_id: 'run-1',
+    node_id: 'review',
+    tool_use_id: 'toolu_1',
+    kind: 'ask',
+    envelope: { questions: [] },
+    provider_session_id: 'sess-1',
+  });
+  expect(parsed.kind).toBe('ask');
+  expect(insertPendingInteractionSchema.safeParse({ ...parsed, status: 'pending' }).success).toBe(
+    false
+  );
+});
+
+test('insert schema rejects empty provider_session_id', () => {
+  expect(
+    insertPendingInteractionSchema.safeParse({
+      workflow_run_id: 'run-1',
+      node_id: 'review',
+      tool_use_id: 'toolu_1',
+      kind: 'ask',
+      envelope: { questions: [] },
+      provider_session_id: '',
+    }).success
+  ).toBe(false);
 });

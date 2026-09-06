@@ -170,6 +170,22 @@ describe('mapWorkflowEventRow', () => {
     expect(e.approval).toMatchObject({ nodeId: 'gate', message: 'ok?' });
   });
 
+  test('node_awaiting → workflow_status paused without approval payload', () => {
+    const e = JSON.parse(
+      mapWorkflowEventRow(
+        row({
+          event_type: 'node_awaiting',
+          step_name: 'review',
+          data: { node_id: 'review', tool_use_id: 'toolu_1', kind: 'ask' },
+        })
+      ) as string
+    );
+    expect(e).toMatchObject({ type: 'workflow_status', runId: 'r1', status: 'paused' });
+    expect(e.approval).toBeUndefined();
+    expect(e.envelope).toBeUndefined();
+    expect(e.questions).toBeUndefined();
+  });
+
   test('approval_received → workflow_status running (clears the paused banner)', () => {
     const e = JSON.parse(mapWorkflowEventRow(row({ event_type: 'approval_received' })) as string);
     expect(e).toMatchObject({ type: 'workflow_status', status: 'running' });

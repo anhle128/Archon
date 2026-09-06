@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 
-import { buildWorkflowDagNodeStates } from './WorkflowExecution';
+import {
+  buildWorkflowDagNodeStates,
+  resolveWorkflowExecutionBody,
+  type WorkflowExecutionBody,
+} from './WorkflowExecution';
+import type { WorkflowRunView } from './source-control/dag-run-tabs';
 import type { WorkflowEventResponse } from '@/lib/api';
 
 function workflowEvent(overrides: Partial<WorkflowEventResponse>): WorkflowEventResponse {
@@ -100,5 +105,30 @@ describe('buildWorkflowDagNodeStates', () => {
     expect(nodes).toHaveLength(1);
     expect(nodes[0]?.status).toBe('running');
     expect(nodes[0]?.routeDecision).toEqual(routeDecision);
+  });
+
+  describe('resolveWorkflowExecutionBody', () => {
+    const views: WorkflowRunView[] = ['graph', 'logs', 'chat', 'source-control'];
+
+    test('every DAG inspect view shares the pane and source control stays separate', () => {
+      const expected: Record<WorkflowRunView, WorkflowExecutionBody> = {
+        graph: 'graph-logs-pane',
+        logs: 'graph-logs-pane',
+        chat: 'graph-logs-pane',
+        'source-control': 'source-control',
+      };
+      for (const activeView of views) {
+        expect(resolveWorkflowExecutionBody({ isDag: true, activeView })).toBe(
+          expected[activeView]
+        );
+      }
+      expect(Object.values(expected)).not.toContain('chat');
+    });
+
+    test('every non-DAG input returns sequential', () => {
+      for (const activeView of views) {
+        expect(resolveWorkflowExecutionBody({ isDag: false, activeView })).toBe('sequential');
+      }
+    });
   });
 });

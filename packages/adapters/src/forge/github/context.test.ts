@@ -113,6 +113,7 @@ mock.module('@archon/git', () => ({
   toBranchName: (n: string) => n,
   changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
   isGitWorkTree: mock(async () => false),
+  log: mock(async () => ({ commits: [], revision: '0'.repeat(64), truncated: false })),
 }));
 
 mock.module('@archon/core/db/conversations', () => ({

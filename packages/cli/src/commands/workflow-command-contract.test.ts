@@ -132,6 +132,7 @@ mock.module('@archon/git', () => ({
   execFileAsync: mock(() => Promise.resolve({ stdout: '.git\n', stderr: '' })),
   changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
   isGitWorkTree: mock(async () => false),
+  log: mock(async () => ({ commits: [], revision: '0'.repeat(64), truncated: false })),
 }));
 mock.module('@archon/core/db/conversations', () => ({
   getOrCreateConversation: mock(() => Promise.resolve({ id: 'conv-contract' })),

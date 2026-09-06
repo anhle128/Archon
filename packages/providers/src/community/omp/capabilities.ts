@@ -21,4 +21,5 @@ export const OMP_CAPABILITIES: ProviderCapabilities = {
   settingSources: false,
   nativeTools: false,
   containerExec: false,
+  askHuman: false,
 };

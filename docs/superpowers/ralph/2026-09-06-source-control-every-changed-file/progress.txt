@@ -1,0 +1,269 @@
+## Codebase Patterns
+### Load more dual Cancel and frozen fingerprints
+- **Where**: `packages/web/src/components/workflows/source-control/source-control-tab.tsx`
+- **Pattern**: `abortCurrent` clears `loadingMore`. Cancel during a page aborts only that request; Cancel during initial loading still closes. Append text/hunks in place; never `dispatch` from Load more. HTTP 409 keeps painted content and calls the existing `onReload` comparison. Truncated diffs freeze `reloadFingerprint` as the first cursor; complete diffs freeze first-response JSON.
+- **Example**: `reloadFingerprint: response.truncated && response.cursor !== '' ? response.cursor : JSON.stringify(response)`
+
+### Happy-dom virtualizer height floor
+- **Where**: `packages/web/src/components/workflows/source-control/virtualized-diff.tsx` (`observePaneRect`)
+- **Pattern**: happy-dom `getBoundingClientRect()` is 0×0, so the default ResizeObserver would replace `initialRect: { width: 0, height: 280 }` with an empty viewport and mount every hunk. Floor measured height to 280. Import `Diff` from `react-diff-view/esm/index.js` so `Bun.build` metafile lists `node_modules/lodash/` (the packaged `es/index.js` inlines lodash).
+- **Example**: `height: Math.max(Math.round(rect.height), 280)`
+
+### FileViewerState locked kinds
+- **Where**: `packages/web/src/components/workflows/source-control/file-viewer.tsx`
+- **Pattern**: `binary` is gone. Text carries `truncated`+`cursor`; diff carries `reloadFingerprint`; image/hex/download replace the old binary state. Load more shows only for truncated text/diff with a non-empty cursor and `onLoadMore`; Cancel shows for initial loading or `loadingMore`.
+- **Example**: `{ kind: 'diff', file, response, reloadFingerprint: response.truncated && response.cursor ? response.cursor : JSON.stringify(response) }`
+
+### Web GitFileClientResult presentations
+- **Where**: `packages/web/src/lib/api.ts` (`gitFileUrl`, `getWorkflowRunGitFile`)
+- **Pattern**: `gitFileUrl` emits `cursor`/`download=1` only when set, using `URLSearchParams` after per-segment path encoding. Presented responses (`X-Archon-Git-Presentation`) require ETag, non-negative `Byte-Length`, exact `true`/`false` truncated, and a non-empty cursor exactly when text is truncated. `response.text()` is text-only; `arrayBuffer()` is image/hex; download cancels `response.body` without reading. Missing presentation headers keep the Story 1.2 fallback (JSON CAP-6, text as an untruncated final page, octet-stream as download-only).
+- **Example**: `gitFileUrl(runId, path, 'worktree', { cursor: 'ab+c', download: true })`
+
+### HTTP git cursor and presentation boundary
+- **Where**: `packages/server/src/routes/git/diff-handler.ts`, `packages/server/src/routes/git/file-handler.ts`
+- **Pattern**: `invalid_cursor` → HTTP 400 `{ error: 'Invalid file cursor' }`; `stale_cursor` → HTTP 409 `{ error: 'File changed' }`. Logs only `{ runId, errorType }`. Presentation headers and ETag are set only after CAP-6/error branches. `download=1` uses `intent: 'download'` plus attachment + `Content-Length`; other requests use `intent: 'view'` with optional cursor. Stream delivery returns `result.stream` as the Response body.
+- **Example**: `fileAt(workingPath, path, source, { intent: 'download', signal: c.req.raw.signal })`
+
+### Incremental unified diff paging
+- **Where**: `packages/git/src/diff-page.ts`, `packages/git/src/file-read.ts`
+- **Pattern**: Stream `git diff` stdout through one `TextDecoder` plus a pending incomplete line. `HunkPageAccumulator` skips `startIndex` hunks, keeps the first selected hunk even when oversized, and returns `page_full` before a later hunk that would exceed 256 KiB serialized JSON or 2,000 changes. `fileDiff` cancels the git-stream reader on `page_full` so the child is killed. Version hash is SHA-256 of both worktree and HEAD identity hashes; hunk cursors use axis `h`.
+- **Example**: `visitUnifiedDiffChunks(chunks, hunk => pager.push(hunk))` then `encodeViewerCursor('h', page.nextIndex, version)`
+
+### git-stream acceptExitCodes
+- **Where**: `packages/git/src/git-stream.ts`
+- **Pattern**: `streamGitStdout` defaults to treating only exit 0 as success. `git diff` exits 1 when hunks exist, so callers pass `acceptExitCodes: [0, 1]`. Cancel still sets `intentionalStop` and kills the child.
+- **Example**: `streamGitStdout({ workingPath, args: ['diff', ...], acceptExitCodes: [0, 1] })`
+
+### Modified non-text diffs fall back
+- **Where**: `packages/git/src/file-read.ts` (`fileDiff`)
+- **Pattern**: Inspect worktree and HEAD with bounded probes. If either side is image, hex, or download, return `hunks: []`, `fileFallback: true`, and `binary` from whether a probe contained NUL. SVG is image + `binary: false`.
+- **Example**: `fileDiff(workingPath, 'image.svg')` → `{ fileFallback: true, binary: false, hunks: [] }`
+
+
+### Git package error classes
+- **Where**: `packages/git/src/git-path.ts`, `packages/git/src/file-read.ts`, `packages/git/src/viewer-limits.ts`
+- **Pattern**: Domain errors extend `Error`, set `this.name`, and expose a readonly `code` union. Callers distinguish branches via `code`, not message text.
+- **Example**: `class ViewerCursorError extends Error { readonly code: 'invalid' | 'stale' }`
+
+### Locked viewer cutoffs
+- **Where**: `packages/git/src/viewer-limits.ts`
+- **Pattern**: First-paint, stream, download-only, hex peek, binary probe, and diff context are exported numeric constants. Downstream stories must import these rather than restating literals.
+- **Example**: `VIEWER_FIRST_PAINT_BYTES = 256 * 1024`, `VIEWER_DOWNLOAD_ONLY_BYTES = 50 * 1024 * 1024`
+
+### Opaque viewer cursors
+- **Where**: `packages/git/src/viewer-limits.ts` (`encodeViewerCursor` / `decodeViewerCursor`)
+- **Pattern**: Unpadded base64url JSON with exactly one axis key (`o` or `h`) plus `v` (64 lowercase hex). Canonicalize by decode-then-re-encode. Empty cursor → 0. Wrong axis / extra fields / padding → `invalid`. Version mismatch → `stale`.
+- **Example**: `encodeViewerCursor('o', 4096, 'a'.repeat(64))`
+
+### InspectedFile + internal git-stream
+- **Where**: `packages/git/src/file-read.ts`, `packages/git/src/git-stream.ts`
+- **Pattern**: `fileAt` inspects size first, then reads only the window the presentation needs. Tree blobs use `ls-tree` + `cat-file -s` then spawned `cat-file blob` via internal `streamGitStdout` / `readGitStdoutWindow`. `git-stream.ts` is package-internal — never re-export from `index.ts`.
+- **Example**: `fileAt(path, rel, source, { intent: 'view', cursor })` vs `{ intent: 'download' }` returning `delivery: 'stream'`
+
+### fileAt overloads stay full-read compatible
+- **Where**: `packages/git/src/file-read.ts`
+- **Pattern**: Default/omitted request is `intent: 'full'` and returns `FileAtBytesResult` (all bytes). HTTP handlers that call `fileAt(workingPath, path, source)` keep compiling against `.bytes`. View/download are extra overloads.
+- **Example**: `fileAt(workingPath, path, { kind: 'worktree' })` → bytes
+
+---
+
+## 2026-09-06 — US-001: Add viewer limits, cursors, media detection, and text page boundaries
+
+**Status**: PASSED
+**Files changed**:
+- `packages/git/src/viewer-limits.ts` — cutoff constants, cursors, UTF-8 text pages, presentation sniffer
+- `packages/git/src/viewer-limits.test.ts` — RED-then-GREEN focused behavior tests
+
+**Acceptance criteria verified**:
+- [x] Create RED tests in packages/git/src/viewer-limits.test.ts, implement packages/git/src/viewer-limits.ts, and make focused tests and git package type-check pass.
+- [x] Define seven locked cutoff constants: VIEWER_FIRST_PAINT_BYTES (256 KiB), VIEWER_FIRST_PAINT_LINES (2000), VIEWER_STREAM_BYTES (1 MiB), VIEWER_DOWNLOAD_ONLY_BYTES (50 MiB), VIEWER_HEX_PEEK_BYTES (4 KiB), VIEWER_BINARY_PROBE_BYTES (8 KiB), and VIEWER_DIFF_CONTEXT_LINES (3).
+- [x] Implement encodeViewerCursor and decodeViewerCursor with unpadded base64url JSON; enforce route-specific axes ('o' for offset, 'h' for hunk) and 64-hex version string.
+- [x] Distinguish malformed/invalid cursors (ViewerCursorError { code: 'invalid' }) from stale cursors (ViewerCursorError { code: 'stale' }); an empty cursor decodes to 0.
+- [x] sliceTextPage stops after 2,000 newline-terminated lines or at most 256 KiB plus boundary bytes; never splits a UTF-8 code point, and short final pages return full bytes with truncated: false.
+- [x] chooseGitFilePresentation classifies files above 50 MiB as download without probing; sniffs PNG, JPEG, GIF87a/89a, WEBP, and SVG (with BOM or XML declaration) as image before the NUL heuristic; classifies remaining NUL in first 8 KiB as hex; and all others as text.
+
+**Learnings**:
+- `packages/git` type-check needs workspace `bun install` (`bun-types`); tests can run before that.
+- ESLint ignores `*.test.ts` in this package — lint only the production module; do not pass the test file or `--max-warnings 0` fails on ignore warnings.
+- Presentation sniffer must classify images before the NUL heuristic; image fixtures that contain `0x00` still return `presentation: 'image'` with `binary: true`.
+
+---
+
+## 2026-09-06 — US-002: Make file views bounded and downloads abortable streams
+
+**Status**: PASSED
+**Files changed**:
+- `packages/git/src/git-stream.ts` — abortable `streamGitStdout` and bounded `readGitStdoutWindow`
+- `packages/git/src/file-read.ts` — InspectedFile, view/download/full intents, cursor mapping, bigint identity recheck
+- `packages/git/src/file-read.test.ts` — real-file/real-blob paging, hex peek, sparse download-only, stream, stale cursor
+- `packages/git/src/index.ts` — export expanded fileAt types; GitFilePresentation type-only
+
+**Acceptance criteria verified**:
+- [x] Add failing real-file and real-blob tests in packages/git/src/file-read.test.ts, implement packages/git/src/git-stream.ts, update packages/git/src/file-read.ts and packages/git/src/index.ts, and pass focused tests and git type check.
+- [x] Implement internal git-stream.ts spawning git with argv arrays, providing streamGitStdout (abortable ReadableStream<Uint8Array>) and readGitStdoutWindow (collecting up to takeBytes after skipping skipBytes and terminating the child).
+- [x] Worktree reads check bigint lstat, contain the path, open the file, and re-verify dev, ino, mode, size, mtimeNs, ctimeNs on the handle before returning a reader; symlinks return link target bytes.
+- [x] Tree reads inspect size first with cat-file -s, avoid whole-blob buffering, and use spawned helpers for bounded windows and streams; no HEAD:path or shell exec.
+- [x] fileAt accepts FileAtRequest with intent: 'full' | 'view' | 'download': full returns all bytes for backwards compatibility; view returns at most 256 KiB/2000 lines for text, at most 4 KiB for hex, all bytes for images <= 1 MiB, stream for images > 1 MiB, and metadata only for files > 50 MiB; download returns delivery: 'stream' from byte zero without accepting a cursor.
+- [x] Opaque text cursors (axis 'o') are validated against contentHash; stale files throw GitFileError { code: 'stale_cursor' }, and malformed cursors throw GitFileError { code: 'invalid_cursor' }.
+- [x] Export expanded types (FileAtRequest, FileAtResult, FileAtBytesResult, FileAtStreamResult, FileAtIntent, GitFilePresentation) from packages/git/src/index.ts without exporting new runtime I/O functions.
+
+**Learnings**:
+- Existing tests access `.bytes` on the default full-read overload; keep that overload returning `FileAtBytesResult` so callers do not need a delivery narrow.
+- ESLint `@typescript-eslint/array-type` forbids `Array<T>` — use `T[]`.
+- lint-staged runs eslint --fix and prettier on commit; do not also stage tracking files in the feature commit.
+- `git-stream.ts` must stay unexported from the package root; spawn spies in tests must cover `child_process.spawn`, not only `execFileAsync`.
+
+---
+
+## 2026-09-06 — US-003: Parse and page Now diffs without buffering the whole diff
+
+**Status**: PASSED
+**Files changed**:
+- `packages/git/src/diff-page.ts` — incremental UTF-8 chunk parser, `HunkPageAccumulator`
+- `packages/git/src/diff-page.test.ts` — multibyte split, 2000-change cap, oversized first hunk, 262144-byte cap
+- `packages/git/src/file-read.ts` — streamed `fileDiff`, `fileFallback`, hunk cursors, dual-side probes
+- `packages/git/src/file-read.test.ts` — paging, SVG fallback, 50 MiB fallback, stale hunk cursor, `fileFallback` expectations
+- `packages/git/src/git-stream.ts` — optional `acceptExitCodes` so `git diff` exit 1 is not a stream error
+
+**Acceptance criteria verified**:
+- [x] Create failing pure parser/accumulator tests in packages/git/src/diff-page.test.ts and real-git tests in packages/git/src/file-read.test.ts; implement packages/git/src/diff-page.ts and update file-read.ts; pass all git tests.
+- [x] Implement visitUnifiedDiffChunks and parseUnifiedDiffChunks streaming UTF-8 chunks across multibyte line boundaries without losing context or lines.
+- [x] Implement HunkPageAccumulator to accumulate diff hunks up to 262,144 serialized JSON bytes or 2,000 changes; keep an oversized first hunk whole; signal page_full before a later hunk that would exceed limits.
+- [x] fileDiff inspects both worktree and HEAD with bounded probes; if either side is image, hex, or download (>50 MiB), returns hunks: [], fileFallback: true, and binary set according to whether NUL was present.
+- [x] For text diffs, spawn git diff with argv ['--no-optional-locks', '--literal-pathspecs', 'diff', '--no-color', '--no-ext-diff', '--no-textconv', '--text', '-U3', 'HEAD', '--', path] and feed stdout incrementally into accumulator.
+- [x] Kill the diff child process immediately upon page_full or abort signal; encode next hunk index into opaque cursor (axis 'h') with version hash derived from both sides.
+- [x] Reject stale hunk cursors with GitFileError { code: 'stale_cursor' } and malformed cursors with GitFileError { code: 'invalid_cursor' }.
+
+**Learnings**:
+- `git diff` exits 1 when the worktree differs; `streamGitStdout` must accept that code or every real diff stream errors after the last byte.
+- `fileFallback` is orthogonal to `binary`: SVG modified files are image fallback with `binary: false`; NUL files are hex fallback with `binary: true`.
+- Diff types now live in `diff-page.ts` and are re-exported from `file-read.ts` so the parser does not create a runtime import cycle.
+
+---
+
+## 2026-09-06 — US-004: Serialize cursors, fallbacks, and streams at the HTTP boundary
+
+**Status**: PASSED
+**Files changed**:
+- `packages/server/src/routes/schemas/git.schemas.ts` — `fileFallback: z.boolean()` on the ready diff schema
+- `packages/server/src/routes/git/diff-route.ts` — 409 `errorSchema` (`File changed`)
+- `packages/server/src/routes/git/diff-handler.ts` — cursor + abort signal to `fileDiff`; 400/409 cursor mapping without logging cursor text
+- `packages/server/src/routes/git/file-handler.ts` — `intent: 'view'|'download'`, Web Stream bodies, presentation headers, attachment only for download
+- `packages/server/src/routes/api.git-changes.test.ts` — boundary tests for fallback, cursors, hex view, streamed download, CAP-6 header omission
+- `packages/web/src/lib/api.generated.d.ts` — regenerated; `fileFallback` and 409 on the diff operation
+
+**Acceptance criteria verified**:
+- [x] Update packages/server/src/routes/api.git-changes.test.ts with failing boundary tests; implement changes in packages/server/src/routes/schemas/git.schemas.ts, diff-route.ts, diff-handler.ts, and file-handler.ts; pass isolated HTTP tests.
+- [x] Add fileFallback: z.boolean() to gitReadyDiffResponseSchema; add 409 errorSchema response to gitDiffRoute.
+- [x] diff-handler forwards cursor and request abort signal to fileDiff; maps invalid_cursor to HTTP 400 ({ error: 'Invalid file cursor' }) and stale_cursor to HTTP 409 ({ error: 'File changed' }) without logging cursor content; logs use stable error types.
+- [x] file-handler calls fileAt with intent: 'download' only when download=1 query param is present; otherwise calls with intent: 'view' and optional cursor; forwards cancellation signal.
+- [x] Stream bodies are returned directly via Web Stream; download=1 sets Content-Disposition: attachment; filename="download" and Content-Length: full_size; non-download hex views return bytes without attachment disposition.
+- [x] Successful raw responses return quoted 64-hex ETag and presentation headers: X-Archon-Git-Byte-Length, X-Archon-Git-Truncated, X-Archon-Git-Cursor, X-Archon-Git-Presentation, X-Archon-Git-Media-Type; CAP-6 responses omit these presentation headers.
+- [x] Regenerate packages/web/src/lib/api.generated.d.ts using bun --filter @archon/web generate:types and verify fileFallback and 409 response appear in the generated types.
+
+**Learnings**:
+- Existing `toHaveBeenCalledWith` path-forwarding assertions must include the new request argument (`cursor`/`intent`/`signal`) or they fail once handlers pass it.
+- `HeadersInit` is not in the server tsconfig; use `Record<string, string>` for presentation header maps.
+- `generate:types` is hardcoded to localhost:3090; when that port is occupied, regenerate with `openapi-typescript http://127.0.0.1:<worktree-port>/api/openapi.json -o src/lib/api.generated.d.ts`.
+- The binary attachment test must request `download=1`; hex/binary views without that query no longer set Content-Disposition.
+
+---
+
+## 2026-09-06 — US-005: Parse raw presentations in the web API client
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/lib/api.ts` — GitFileClientResult union, gitFileUrl query options, presented/legacy parsers
+- `packages/web/src/lib/api.git-changes.test.ts` — paging, image/hex/download, inconsistent headers, missing-header fallback
+- `packages/web/src/components/workflows/source-control/source-control-tab.tsx` — map image/hex/download onto existing binary viewer state
+
+**Acceptance criteria verified**:
+- [x] Write failing client tests in packages/web/src/lib/api.git-changes.test.ts; update packages/web/src/lib/api.ts; pass client tests and web type-check.
+- [x] Update gitFileUrl to accept cursor and download options, outputting query params only when non-empty, preserving per-segment path encoding.
+- [x] getWorkflowRunGitFile parses and validates response headers into GitFileClientResult: text (text, contentHash, truncated, cursor, byteLength), image (bytes, contentHash, mediaType, byteLength), hex (bytes, contentHash, byteLength), download (contentHash, byteLength), or empty (emptyReason).
+- [x] Use response.text() only for text presentations; use response.arrayBuffer() for image and hex; cancel response.body without reading for download-only presentations.
+- [x] Validate presentation headers: require non-empty cursor exactly when text is truncated; reject inconsistent headers with Invalid git file response.
+- [x] Maintain backwards fallback for responses missing presentation headers (JSON CAP-6, text as untruncated final page, octet-stream as download-only).
+
+**Learnings**:
+- `GitFileClientResult` no longer has `kind: 'binary'`; `loadViewerFile` must treat image/hex/download as the existing binary viewer state until US-006 adds dedicated rendering.
+- US-004 made `fileFallback` required on `GitReadyDiffResponse`. Web type-check failed on HEAD fixtures; fixed as `chore(unblock): add fileFallback to git fixtures blocking web type-check`.
+- `StrReplace` truncated large TSX/test files in this worktree; use line-anchored `edit` or exact-string Python replacements instead.
+
+BLOCKER US-005 | gate=`(cd packages/web && bun run type-check)` | cause=TS2741/TS2769 fileFallback missing in GitReadyDiffResponse fixtures (file-viewer.test.tsx:17,42; source-control-tab.test.tsx:128,153; api.git-changes.test.ts READY_DIFF) on both story tree and clean US-004 HEAD | action=committed chore(unblock) adding fileFallback: false (true for binaryDiff) | 2026-09-06
+
+---
+
+## 2026-09-06 — US-006: Render hex, images, Load more, and virtualized hunks
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/source-control/hex-peek.ts` — 16-byte hex peek formatter
+- `packages/web/src/components/workflows/source-control/hex-peek.test.ts` — exact three-byte row fixture
+- `packages/web/src/components/workflows/source-control/inline-image.tsx` — create/revoke object URLs
+- `packages/web/src/components/workflows/source-control/inline-image.test.tsx` — mounted byte-change and unmount revoke
+- `packages/web/src/components/workflows/source-control/virtualized-diff.tsx` — independent Before/After virtualizers, `.sc-virtual-hunk`
+- `packages/web/src/components/workflows/source-control/file-viewer.tsx` — image/hex/download/Load more/Cancel
+- `packages/web/src/components/workflows/source-control/file-viewer.test.tsx` — truncated Load more, image/hex/download states
+- `packages/web/src/component-integration/source-control-large-diff-spike.tsx` — 2 MiB / 4096-hunk render spike
+- `packages/web/src/components/workflows/source-control/source-control-tab.tsx` — map GitFileClientResult onto locked viewer states
+- `packages/web/src/component-integration/source-control-tab.test.tsx` — download-only copy for legacy octet-stream
+- `packages/web/package.json` — NODE_ENV=development for `src/components/` tests (mounted `act`)
+
+**Acceptance criteria verified**:
+- [x] Create hex-peek.ts and hex-peek.test.ts implementing formatHexPeek (16 bytes per row: 8-digit lowercase hex offset, two-space gap, 47-char padded hex bytes, two-space gap, 16-char printable ASCII bounded by vertical bars).
+- [x] Create inline-image.tsx and inline-image.test.tsx managing URL.createObjectURL and URL.revokeObjectURL on byte change and unmount; render images via <img> without DOM injection or syntax highlighting.
+- [x] Create virtualized-diff.tsx with independent Before and After virtualized panes using @tanstack/react-virtual with initialRect: { width: 0, height: 280 }, estimating row height from change count and rendering .sc-virtual-hunk wrappers.
+- [x] Update file-viewer.tsx and file-viewer.test.tsx: handle text, diff, image, hex, download states; render Load more for truncated text or diff states with non-empty cursor; render Cancel button when loadingMore or initial loading.
+- [x] Create and run packages/web/src/component-integration/source-control-large-diff-spike.tsx: verify 2+ MiB diff renders in <1000 ms in happy-dom, virtualizes hunks (mounted < total), and bundles lodash input bytes > 0.
+
+**Learnings**:
+- happy-dom reports 0×0 for laid-out panes; without a 280px height floor the virtualizer empties and the static fallback mounts every hunk (43s spike).
+- `react-diff-view` `module` entry (`es/index.js`) inlines lodash; the spike's `node_modules/lodash/` metafile probe needs the unbundled `esm/index.js` import.
+- `bun test src/components/` needs development React when a mounted test imports `act` and `NODE_ENV=production`.
+- FileViewerState cutover requires mapping image/hex/download in `source-control-tab.tsx` or web type-check fails; US-007 still owns `fileFallback` routing, `download: true` hrefs, and dual Cancel.
+
+---
+
+## 2026-09-06 — US-007: Append pages without losing cancellation or frozen Reload behavior
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/source-control/source-control-tab.tsx` — fileFallback routing, download=1 hrefs, onLoadMore append, dual Cancel, 409 → onReload
+- `packages/web/src/component-integration/source-control-tab.test.tsx` — mounted paging, fallback, stale cursor, .env, 3000-hunk virtualization tests
+
+**Acceptance criteria verified**:
+- [x] Add failing mounted tests in packages/web/src/component-integration/source-control-tab.test.tsx; update packages/web/src/components/workflows/source-control/source-control-tab.tsx; pass mounted tab tests.
+- [x] For modified (M) files, route to raw worktree fetch when diffResponse.fileFallback is true; route download links to gitFileUrl(..., { download: true }).
+- [x] Maintain stable reloadFingerprint: for truncated diffs, use first cursor; for complete diffs, use JSON of first response; preserve fingerprint across appended pages so accumulating hunks does not trigger Changed on disk — Reload.
+- [x] Implement onLoadMore in tab: validate selected file, request next page with opaque cursor, require identical contentHash (text) or matching metadata (diff), append text/hunks, and update cursor/truncated.
+- [x] Distinguish cancellation: Cancel during initial file open closes the viewer; Cancel during Load more aborts only that page's in-flight request and keeps painted content visible.
+- [x] When Load more receives HTTP 409 (File changed), keep currently painted content, clear loadingMore, and trigger the existing manual Changed on disk — Reload comparison.
+- [x] Verify .env still opens as ordinary highlighted text without denylist/redaction (NFR6).
+
+**Learnings**:
+- Plan tests use `=== true` and `act(async () => requireButton(...).click())`; eslint `--fix` rewrites those to match existing tab tests (`includes(...)` and braced `act`).
+- `StrReplace` still truncates this large test file — use exact-string Python replacements.
+- `bun test src/components/workflows/source-control/` needs `NODE_ENV=development` for mounted `act` (same as the web package test script).
+
+---
+
+## 2026-09-06 — US-008: Run acceptance gates and update the tracker
+
+**Status**: PASSED
+**Files changed**:
+- `_bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml` — `1-3-open-every-changed-file: backlog` → `done` (epic-1 stays in-progress; last_updated unchanged)
+
+**Acceptance criteria verified**:
+- [x] Focused evidence: git viewer-limits/diff-page/file-read (44 pass), server api.git-changes (55), web api.git-changes (18), source-control components (48), source-control-tab (37), spike JSON `{"fixtureBytes":2097152,"renderMs":110.9155,"mountedHunks":8,"totalHunks":4096,"bundleBytes":325216,"lodashInputBytes":545267}`
+- [x] Package suites: packages/git, packages/server, packages/web all exit 0
+- [x] `bun run validate` and `git diff --check` exit 0 (type-check, lint --max-warnings 0, prettier, test:install, full test)
+- [x] Scope: no Shiki/Monaco/refractor/console imports; `react-diff-view` stays 3.3.3; `export { fileAt, fileDiff }` only public file I/O pair; no bun.lock/migrations/db changes; web package.json only adds NODE_ENV=development for mounted component tests
+- [x] Acceptance matrix covered by focused/package tests plus spike; live `/legacy/workflows/runs/:id` check not run — no suitable live host-checkout DAG run in this worktree
+- [x] Tracker `1-3-open-every-changed-file` set to done
+
+**Learnings**:
+- Plan Step 6 allows recording a live-run limitation instead of fabricating a checkout.
+- `bun run validate` is the authoritative repo gate; package `bun run test` plus focused commands already cover Story 1.3 before that.
+
+---

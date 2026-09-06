@@ -62,6 +62,7 @@ mock.module('@archon/git', () => ({
   toRepoPath: mock((p: string) => p),
   changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
   isGitWorkTree: mock(async () => false),
+  log: mock(async () => ({ commits: [], revision: '0'.repeat(64), truncated: false })),
 }));
 
 // --- Bootstrap provider registry (load-time isRegisteredProvider checks) ---
@@ -76,6 +77,7 @@ import { validateWorkflowResources } from './validator';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
 import type { NodeMessage } from './schemas/node-message';
+import type { PendingInteraction } from './schemas/pending-interaction';
 import type { ApprovalContext, WorkflowRun } from './schemas/workflow-run';
 import type { WorkflowDefinition } from './schemas/workflow';
 import type {
@@ -104,6 +106,8 @@ class InMemoryStore implements IWorkflowStore {
   private seq = 0;
   private nodeMessages: NodeMessage[] = [];
   private nodeMessageId = 0;
+  private pendingInteractions: PendingInteraction[] = [];
+  private pendingId = 0;
 
   private clone(r: WorkflowRun): WorkflowRun {
     return { ...r, metadata: { ...r.metadata } };
@@ -363,6 +367,25 @@ class InMemoryStore implements IWorkflowStore {
         .filter(m => m.workflow_run_id === workflowRunId && m.node_id === nodeId)
         .sort((a, b) => a.seq - b.seq)
         .map(m => ({ ...m }))
+    );
+
+  insertPendingInteraction: IWorkflowStore['insertPendingInteraction'] = input => {
+    const row: PendingInteraction = {
+      ...input,
+      id: `pending-${String(++this.pendingId)}`,
+      status: 'pending',
+      answer: null,
+      created_at: new Date(),
+      resolved_at: null,
+      resolved_by: null,
+    };
+    this.pendingInteractions.push(row);
+    return Promise.resolve({ ...row });
+  };
+
+  listPendingInteractions = (workflowRunId: string): Promise<PendingInteraction[]> =>
+    Promise.resolve(
+      this.pendingInteractions.filter(r => r.workflow_run_id === workflowRunId).map(r => ({ ...r }))
     );
 
   // --- test helpers ---

@@ -28,6 +28,10 @@ export const gitDiffRoute = createRoute({
       content: { 'application/json': { schema: errorSchema } },
       description: 'Workflow run or file not found',
     },
+    409: {
+      content: { 'application/json': { schema: errorSchema } },
+      description: 'File changed',
+    },
     500: {
       content: { 'application/json': { schema: errorSchema } },
       description: 'Git read failed',

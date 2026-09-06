@@ -25,6 +25,7 @@ export * as userDb from './users';
 export * as usageDb from './usage';
 export * as workflowEnvDb from './workflow-envs';
 export * as workflowNodeMessageDb from './workflow-node-messages';
+export * as workflowPendingInteractionDb from './workflow-pending-interactions';
 
 // Also export individual functions for direct imports
 export * from './conversations';
@@ -38,3 +39,4 @@ export * from './workflow-checkpoints';
 export * from './users';
 export * from './workflow-envs';
 export * from './workflow-node-messages';
+export * from './workflow-pending-interactions';

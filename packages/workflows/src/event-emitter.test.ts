@@ -685,6 +685,27 @@ describe('WorkflowEventEmitter', () => {
   // NodeStartedEvent optional model fields (provider/model/tier/effort)
   // -------------------------------------------------------------------------
 
+  describe('NodeAwaitingEvent', () => {
+    it('delivers node_awaiting with runId and nodeId and no envelope or questions', () => {
+      const emitter = getWorkflowEventEmitter();
+      const received: WorkflowEmitterEvent[] = [];
+      emitter.subscribe(e => received.push(e));
+
+      const event: WorkflowEmitterEvent = {
+        type: 'node_awaiting',
+        runId: 'r1',
+        nodeId: 'review',
+      };
+      emitter.emit(event);
+
+      expect(received).toHaveLength(1);
+      expect(received[0]).toEqual({ type: 'node_awaiting', runId: 'r1', nodeId: 'review' });
+      expect(received[0]).toBe(event);
+      expect(received[0]).not.toHaveProperty('envelope');
+      expect(received[0]).not.toHaveProperty('questions');
+    });
+  });
+
   describe('NodeStartedEvent — optional model fields', () => {
     it('passes through an event with no provider/model/tier/effort (bash/script-like)', () => {
       const emitter = getWorkflowEventEmitter();

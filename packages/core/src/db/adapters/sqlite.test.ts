@@ -1484,7 +1484,7 @@ describe('SqliteAdapter', () => {
      * suite stayed green. Adjust when the schema legitimately changes size —
      * the failure names the count, so the intended value is never a guess.
      */
-    const MIN_NON_AUTH_COLUMNS = 169;
+    const MIN_NON_AUTH_COLUMNS = 181;
 
     /**
      * Archon table names declared by the Postgres migration. Body-independent
@@ -1703,6 +1703,85 @@ describe('SqliteAdapter', () => {
       expect(indexes.some(name => name.includes('workflow_node_messages'))).toBe(true);
       expect(getSchemaSQL()).toContain('uq_workflow_node_messages_run_node_seq');
       expect(getSchemaSQL()).toContain('ON DELETE CASCADE');
+    });
+
+    test('pending interactions table mirrors the Postgres contract', async () => {
+      db = createTestDb();
+      expect(raw_pragma(currentDbPath, 'remote_agent_pending_interactions').sort()).toEqual(
+        [
+          'answer',
+          'created_at',
+          'envelope',
+          'id',
+          'kind',
+          'node_id',
+          'provider_session_id',
+          'resolved_at',
+          'resolved_by',
+          'status',
+          'tool_use_id',
+          'workflow_run_id',
+        ].sort()
+      );
+
+      await db.query(
+        `INSERT INTO remote_agent_conversations
+           (id, platform_type, platform_conversation_id)
+         VALUES ($1, $2, $3)`,
+        ['conv-1', 'cli', 'conv-1']
+      );
+      await db.query(
+        `INSERT INTO remote_agent_workflow_runs
+           (id, workflow_name, conversation_id, user_message, status)
+         VALUES ($1, $2, $3, $4, $5)`,
+        ['run-1', 'test', 'conv-1', 'go', 'running']
+      );
+      const insert = [
+        'pending-1',
+        'run-1',
+        'review',
+        'toolu_1',
+        'ask',
+        'pending',
+        JSON.stringify({ questions: [] }),
+        'sess-1',
+      ];
+      await db.query(
+        `INSERT INTO remote_agent_pending_interactions
+           (id, workflow_run_id, node_id, tool_use_id, kind, status, envelope, provider_session_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        insert
+      );
+      await expect(
+        db.query(
+          `INSERT INTO remote_agent_pending_interactions
+             (id, workflow_run_id, node_id, tool_use_id, kind, status, envelope, provider_session_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          ['pending-2', ...insert.slice(1)]
+        )
+      ).rejects.toThrow();
+      await expect(
+        db.query(
+          `INSERT INTO remote_agent_pending_interactions
+             (id, workflow_run_id, node_id, tool_use_id, kind, status, envelope, provider_session_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          ['pending-3', 'run-1', 'review', 'toolu_3', 'other', 'pending', '{}', 'sess-1']
+        )
+      ).rejects.toThrow();
+      await expect(
+        db.query(
+          `INSERT INTO remote_agent_pending_interactions
+             (id, workflow_run_id, node_id, tool_use_id, kind, status, envelope, provider_session_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          ['pending-4', 'run-1', 'review', 'toolu_4', 'ask', 'open', '{}', 'sess-1']
+        )
+      ).rejects.toThrow();
+      await db.query('DELETE FROM remote_agent_workflow_runs WHERE id = $1', ['run-1']);
+      const remaining = await db.query<{ count: number }>(
+        'SELECT COUNT(*) AS count FROM remote_agent_pending_interactions',
+        []
+      );
+      expect(Number(remaining.rows[0]?.count)).toBe(0);
     });
   });
 

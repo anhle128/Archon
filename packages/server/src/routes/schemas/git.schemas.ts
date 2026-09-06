@@ -74,6 +74,7 @@ const gitReadyDiffResponseSchema = z.object({
   cursor: z.string(),
   truncated: z.boolean(),
   binary: z.boolean(),
+  fileFallback: z.boolean(),
 });
 
 const gitEmptyDiffResponseSchema = z.object({
@@ -84,3 +85,34 @@ export const gitDiffResponseSchema = z
   .union([gitReadyDiffResponseSchema, gitEmptyDiffResponseSchema])
   .openapi('GitDiffResponse');
 export type GitDiffResponse = z.infer<typeof gitDiffResponseSchema>;
+
+const gitObjectIdSchema = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
+
+export const gitLogCommitSchema = z
+  .object({
+    oid: gitObjectIdSchema,
+    parents: z.array(gitObjectIdSchema),
+    authorName: z.string(),
+    authorDate: z.string().datetime({ offset: true }),
+    subject: z.string(),
+  })
+  .openapi('GitLogCommit');
+export type GitLogCommit = z.infer<typeof gitLogCommitSchema>;
+
+const gitReadyLogResponseSchema = z.object({
+  commits: z.array(gitLogCommitSchema),
+  revision: revisionSchema,
+  truncated: z.boolean(),
+});
+
+const gitEmptyLogResponseSchema = z.object({
+  emptyReason: gitEmptyReasonSchema,
+  commits: z.array(gitLogCommitSchema).max(0),
+  revision: z.literal(''),
+  truncated: z.literal(false),
+});
+
+export const gitLogResponseSchema = z
+  .union([gitReadyLogResponseSchema, gitEmptyLogResponseSchema])
+  .openapi('GitLogResponse');
+export type GitLogResponse = z.infer<typeof gitLogResponseSchema>;

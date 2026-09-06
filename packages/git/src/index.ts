@@ -17,7 +17,19 @@ export { execFileAsync, mkdirAsync, resolveBashPath } from './exec';
 
 // Live file bytes and Now diffs
 export { fileAt, fileDiff } from './file-read';
-export type { DiffChange, DiffHunk, FileAtResult, FileAtSource, FileDiffResult } from './file-read';
+export type {
+  DiffChange,
+  DiffHunk,
+  FileAtBytesResult,
+  FileAtIntent,
+  FileAtRequest,
+  FileAtResult,
+  FileAtSource,
+  FileAtStreamResult,
+  FileDiffRequest,
+  FileDiffResult,
+} from './file-read';
+export type { GitFilePresentation } from './viewer-limits';
 
 // Worktree operations
 export {
@@ -61,6 +73,10 @@ export type {
   ChangedFilesResult,
   PorcelainEntry,
 } from './changed-files';
+
+// Commit log (run-branch history)
+export { GIT_LOG_MAX_COMMITS, log } from './git-log';
+export type { GitLogCommit, GitLogResult } from './git-log';
 
 // Forge detection
 export { detectForge } from './forge';

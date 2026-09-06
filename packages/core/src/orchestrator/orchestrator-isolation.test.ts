@@ -159,6 +159,7 @@ mock.module('@archon/git', () => ({
   toBranchName: mock((branch: string) => branch),
   changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
   isGitWorkTree: mock(async () => false),
+  log: mock(async () => ({ commits: [], revision: '0'.repeat(64), truncated: false })),
 }));
 
 mock.module('./prompt-builder', () => ({
