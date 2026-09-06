@@ -1,5 +1,5 @@
 # generated: 2026-09-06 00:34:00 +0700
-# last_updated: 2026-09-06 20:43:00 +0700
+# last_updated: 2026-09-06 21:39:39 +0700
 # project: Archon
 # project_key: NOKEY
 # tracking_system: file-system
@@ -34,7 +34,7 @@
 #   - done: Retrospective has been completed
 
 generated: "2026-09-06 00:34:00 +0700"
-last_updated: "2026-09-06 20:43:00 +0700"
+last_updated: "2026-09-06 21:39:39 +0700"
 project: Archon
 feature: workflow-run-view-hitl
 project_key: NOKEY
@@ -46,7 +46,7 @@ development_status:
   epic-5: backlog
   5-1-open-a-nodes-own-transcript-from-logs-legacy: done
   5-2-see-the-right-room-for-each-node-type-legacy: done
-  5-3-open-the-same-node-room-from-the-graph-legacy: backlog
+  5-3-open-the-same-node-room-from-the-graph-legacy: done
   5-4-open-the-node-room-from-the-chat-timeline-legacy: backlog
   5-5-inspect-a-run-as-nodes-on-command-center: backlog
   epic-5-retrospective: optional

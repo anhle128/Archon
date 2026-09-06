@@ -7,22 +7,23 @@ import {
   Controls,
   MiniMap,
 } from '@xyflow/react';
-import type { Edge, NodeTypes } from '@xyflow/react';
+import type { EdgeTypes, NodeTypes } from '@xyflow/react';
 import type { DagNodeState, RuntimeNodeMetadata, WorkflowStepStatus } from '@/lib/types';
 import type { DagNode } from '@/lib/api';
-import { dagNodesToReactFlow, resolveExecutionNodeDisplay } from '@/lib/dag-layout';
 import { formatDurationMs } from '@/lib/format';
+import { buildWorkflowDagViewModel } from './build-workflow-dag-view-model';
 import {
   executionDagNode,
   formatRuntimeMetadata,
-  type ExecutionFlowNode,
   type ExecutionNodeData,
 } from './ExecutionDagNode';
+import { RunGraphRouteEdge } from './RunGraphRouteEdge';
 
 import '@xyflow/react/dist/style.css';
 
-// Defined at module scope — prevents ReactFlow from remounting nodes on every render
+// Defined at module scope — prevents ReactFlow from remounting nodes/edges on every render
 const nodeTypes: NodeTypes = { executionNode: executionDagNode };
+const edgeTypes: EdgeTypes = { runGraphRoute: RunGraphRouteEdge };
 
 const STATUS_MINIMAP_COLORS: Partial<Record<WorkflowStepStatus, string>> = {
   completed: 'var(--success)',
@@ -31,13 +32,6 @@ const STATUS_MINIMAP_COLORS: Partial<Record<WorkflowStepStatus, string>> = {
   skipped: 'var(--text-tertiary)',
 };
 const DEFAULT_MINIMAP_COLOR = 'var(--surface-elevated)';
-
-const EDGE_STROKE_BY_STATUS: Partial<Record<WorkflowStepStatus, string>> = {
-  completed: 'var(--success)',
-  running: 'var(--accent-bright)',
-  failed: 'var(--error)',
-};
-const DEFAULT_EDGE_STROKE = 'var(--border)';
 
 interface WorkflowDagViewerProps {
   dagNodes: readonly DagNode[];
@@ -56,68 +50,15 @@ export function WorkflowDagViewer({
   selectedNodeId,
   onNodeClick,
 }: WorkflowDagViewerProps): React.ReactElement {
-  // Compute topology layout ONCE from the workflow definition.
-  // Only re-layout when the definition changes (node/edge count), not on status updates.
-  const { baseNodes, edges: layoutedEdges } = useMemo(() => {
-    const { nodes, edges } = dagNodesToReactFlow(dagNodes);
-    return { baseNodes: nodes, edges };
-  }, [dagNodes]);
-
-  // Build a status lookup map from live SSE/REST data
-  const statusMap = useMemo(() => {
-    const map = new Map<string, DagNodeState>();
-    for (const node of liveStatus) {
-      map.set(node.nodeId, node);
-    }
-    return map;
-  }, [liveStatus]);
-
-  // Overlay live status onto the topology nodes.
-  // Creates new node objects only for nodes whose status changed (React.memo handles the rest).
-  const nodes: ExecutionFlowNode[] = useMemo(() => {
-    return baseNodes.map(node => {
-      const live = statusMap.get(node.id);
-      // baseNodes is derived from dagNodes, so this find should always succeed
-      const dagNode = dagNodes.find(dn => dn.id === node.id);
-      const display = dagNode ? resolveExecutionNodeDisplay(dagNode) : node.data;
-      return {
-        ...node,
-        type: 'executionNode',
-        data: {
-          ...node.data,
-          ...display,
-          status: live?.status,
-          duration: live?.duration,
-          error: live?.error,
-          selected: node.id === selectedNodeId,
-          currentIteration: live?.currentIteration,
-          maxIterations: live?.maxIterations,
-          expectedIterations: live?.expectedIterations,
-          routeDecision: live?.routeDecision,
-          provider: live?.provider,
-          model: live?.model,
-          tier: live?.tier,
-          modelReasoningEffort: live?.modelReasoningEffort,
-          effort: live?.effort,
-          thinking: live?.thinking,
-        },
-      } as ExecutionFlowNode;
-    });
-  }, [baseNodes, statusMap, dagNodes, selectedNodeId]);
-
-  // Color edges based on target node status
-  const edges: Edge[] = useMemo(() => {
-    return layoutedEdges.map(edge => {
-      const targetStatus = statusMap.get(edge.target)?.status;
-      const stroke = (targetStatus && EDGE_STROKE_BY_STATUS[targetStatus]) ?? DEFAULT_EDGE_STROKE;
-      return {
-        ...edge,
-        animated: targetStatus === 'running',
-        // ReactFlow SVG edges require inline style for stroke — className cannot target SVG stroke.
-        style: { stroke, strokeWidth: 1.5 },
-      };
-    });
-  }, [layoutedEdges, statusMap]);
+  const { nodes, edges } = useMemo(
+    () =>
+      buildWorkflowDagViewModel({
+        dagNodes,
+        liveStatus,
+        selectedNodeId: selectedNodeId ?? null,
+      }),
+    [dagNodes, liveStatus, selectedNodeId]
+  );
 
   const executingMetadata = currentlyExecuting ? formatRuntimeMetadata(currentlyExecuting) : null;
 
@@ -143,6 +84,7 @@ export function WorkflowDagViewer({
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
           nodesDraggable={false}
           nodesConnectable={false}
           elementsSelectable={true}

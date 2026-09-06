@@ -15,7 +15,7 @@ import type { Root } from 'react-dom/client';
 const react = await import('react');
 const reactQuery = await import('@tanstack/react-query');
 const reactDomClient = await import('react-dom/client');
-const legacyNodeLogs = await import('./LegacyNodeLogs');
+const legacyGraphLogsPane = await import('./LegacyGraphLogsPane');
 
 const act = react.act;
 const createElement = react.createElement;
@@ -205,7 +205,7 @@ function expectNoAskHumanChrome(host: Element): void {
   expect(text).not.toContain('waiting-on-you');
 }
 
-describe('LegacyNodeLogs', () => {
+describe('LegacyGraphLogsPane', () => {
   let win: Window;
   let host: Element;
   let root: Root;
@@ -221,6 +221,8 @@ describe('LegacyNodeLogs', () => {
     win = installHappyDom();
     const el = win.document.createElement('div');
     win.document.body.appendChild(el);
+    el.style.width = '1200px';
+    el.style.height = '800px';
     host = el as unknown as Element;
     root = createRoot(host);
     queryClient = new reactQuery.QueryClient({
@@ -245,7 +247,88 @@ describe('LegacyNodeLogs', () => {
     });
   });
 
+  function defaultRenderGraph(input: {
+    selectedNodeId: string | null;
+    onNodeClick: (nodeId: string) => void;
+  }): React.ReactElement {
+    return createElement(
+      'div',
+      { 'data-testid': 'injected-graph' },
+      createElement(
+        'button',
+        {
+          type: 'button',
+          'data-testid': 'graph-setup',
+          onClick: (): void => {
+            input.onNodeClick('setup');
+          },
+        },
+        'graph:setup'
+      ),
+      createElement(
+        'button',
+        {
+          type: 'button',
+          'data-testid': 'graph-review',
+          onClick: (): void => {
+            input.onNodeClick('review');
+          },
+        },
+        'graph:review'
+      ),
+      createElement(
+        'button',
+        {
+          type: 'button',
+          'data-testid': 'graph-group',
+          onClick: (): void => {
+            input.onNodeClick('group');
+          },
+        },
+        'graph:group'
+      )
+    );
+  }
+
+  function PaneHarness(props: {
+    activeView?: 'graph' | 'logs';
+    runId: string;
+    nodeStates: readonly WorkflowNodeStateResponse[];
+    events: readonly WorkflowEventResponse[];
+    definitionNodes: readonly DagNode[];
+    definitionPending: boolean;
+    runStatus: WorkflowRunStatus;
+    approval: unknown;
+    loadMessages: (runId: string, nodeId: string) => Promise<WorkflowNodeMessagesResponse>;
+    onSelectNode: (nodeId: string | null) => void;
+    onApprove?: () => Promise<void>;
+    onReject?: (reason?: string) => Promise<void>;
+  }): React.ReactElement {
+    const [selectedNodeId, setSelectedNodeId] = react.useState<string | null>(null);
+    return createElement(legacyGraphLogsPane.LegacyGraphLogsPane, {
+      activeView: props.activeView ?? 'logs',
+      renderGraph: defaultRenderGraph,
+      selectedNodeId,
+      runId: props.runId,
+      nodeStates: props.nodeStates,
+      events: props.events,
+      isLive: false,
+      loadMessages: props.loadMessages,
+      onSelectNode: (nodeId: string | null): void => {
+        setSelectedNodeId(nodeId);
+        props.onSelectNode(nodeId);
+      },
+      definitionNodes: props.definitionNodes,
+      definitionPending: props.definitionPending,
+      runStatus: props.runStatus,
+      approval: props.approval,
+      onApprove: props.onApprove ?? (async (): Promise<void> => undefined),
+      onReject: props.onReject ?? (async (): Promise<void> => undefined),
+    });
+  }
+
   function renderLogs(args: {
+    activeView?: 'graph' | 'logs';
     runId: string;
     nodeStates: readonly WorkflowNodeStateResponse[];
     events: readonly WorkflowEventResponse[];
@@ -262,20 +345,7 @@ describe('LegacyNodeLogs', () => {
       createElement(
         reactQuery.QueryClientProvider,
         { client: queryClient },
-        createElement(legacyNodeLogs.LegacyNodeLogs, {
-          runId: args.runId,
-          nodeStates: args.nodeStates,
-          events: args.events,
-          isLive: false,
-          loadMessages: args.loadMessages,
-          onSelectNode: args.onSelectNode,
-          definitionNodes: args.definitionNodes,
-          definitionPending: args.definitionPending,
-          runStatus: args.runStatus,
-          approval: args.approval,
-          onApprove: args.onApprove ?? (async (): Promise<void> => undefined),
-          onReject: args.onReject ?? (async (): Promise<void> => undefined),
-        })
+        createElement(PaneHarness, args)
       )
     );
   }
@@ -289,6 +359,14 @@ describe('LegacyNodeLogs', () => {
       button.click();
     });
     return button;
+  }
+
+  async function clickGraph(testId: string): Promise<void> {
+    const button = host.querySelector(`[data-testid="${testId}"]`);
+    if (button === null) throw new Error(`missing ${testId}`);
+    await act(async () => {
+      (button as HTMLElement).click();
+    });
   }
 
   test('wires pre-selection copy, click-to-loader, and run-change reset', async () => {
@@ -895,6 +973,368 @@ describe('LegacyNodeLogs', () => {
     expect(host.querySelectorAll('[aria-label="Node runs"]')).toHaveLength(1);
     expect(host.querySelectorAll('[role="region"]')).toHaveLength(1);
     expect(host.querySelector('[aria-label="review room"]')).not.toBeNull();
+    expectNoAskHumanChrome(host);
+  });
+
+  const SHARED_BASH_COMMAND = {
+    nodeStates: [
+      { nodeId: 'setup', name: 'Setup', status: 'completed' as const, retryEpoch: 0 },
+      REVIEW_STATE,
+    ],
+    events: [
+      workflowEvent({
+        id: 'start-setup',
+        step_name: 'setup',
+        event_type: 'node_started',
+        data: { type: 'bash' },
+      }),
+      workflowEvent({
+        id: 'done-setup',
+        step_name: 'setup',
+        event_type: 'node_completed',
+        data: { type: 'bash', node_output: 'ready' },
+      }),
+      REVIEW_STARTED,
+    ],
+    definitionNodes: [
+      { id: 'setup', bash: 'echo ready' },
+      { id: 'review', command: 'review' },
+    ] as const,
+  };
+
+  const LOOP_EVENTS: WorkflowEventResponse[] = [
+    workflowEvent({
+      id: 'iter-1-start',
+      step_name: 'group',
+      event_type: 'loop_iteration_started',
+      data: { iteration: 1 },
+    }),
+    workflowEvent({
+      id: 'iter-1-done',
+      step_name: 'group',
+      event_type: 'loop_iteration_completed',
+      data: { iteration: 1 },
+    }),
+    workflowEvent({
+      id: 'iter-2-start',
+      step_name: 'group',
+      event_type: 'loop_iteration_started',
+      data: { iteration: 2 },
+    }),
+    workflowEvent({
+      id: 'iter-2-fail',
+      step_name: 'group',
+      event_type: 'loop_iteration_failed',
+      data: { iteration: 2 },
+    }),
+    workflowEvent({
+      id: 'body-1-done',
+      step_name: 'group.body',
+      event_type: 'node_completed',
+      data: { iteration: 1 },
+    }),
+    workflowEvent({
+      id: 'check-1-done',
+      step_name: 'group.check',
+      event_type: 'node_completed',
+      data: { iteration: 1 },
+    }),
+    workflowEvent({
+      id: 'body-2-done',
+      step_name: 'group.body',
+      event_type: 'node_completed',
+      data: { iteration: 2 },
+    }),
+    workflowEvent({
+      id: 'check-2-fail',
+      step_name: 'group.check',
+      event_type: 'node_failed',
+      data: { iteration: 2, error: 'check failed' },
+    }),
+  ];
+
+  test('graph mode renders the injected graph navigation and no Node runs list', async () => {
+    await act(async () => {
+      renderLogs({
+        activeView: 'graph',
+        runId: 'run-1',
+        nodeStates: SHARED_BASH_COMMAND.nodeStates,
+        events: SHARED_BASH_COMMAND.events,
+        definitionNodes: SHARED_BASH_COMMAND.definitionNodes,
+        definitionPending: false,
+        runStatus: 'completed',
+        approval: null,
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({ messages: [] }),
+        onSelectNode: (): void => undefined,
+      });
+    });
+    await flush();
+    expect(host.querySelector('[data-testid="injected-graph"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Node runs"]')).toBeNull();
+    expectNoAskHumanChrome(host);
+  });
+
+  test('clicking an injected graph-node button opens the same bash room without loading messages', async () => {
+    const calls: [string, string][] = [];
+    const loadMessages = async (
+      requestRunId: string,
+      nodeId: string
+    ): Promise<WorkflowNodeMessagesResponse> => {
+      calls.push([requestRunId, nodeId]);
+      return { messages: [] };
+    };
+    await act(async () => {
+      renderLogs({
+        activeView: 'graph',
+        runId: 'run-1',
+        nodeStates: SHARED_BASH_COMMAND.nodeStates,
+        events: SHARED_BASH_COMMAND.events,
+        definitionNodes: SHARED_BASH_COMMAND.definitionNodes,
+        definitionPending: false,
+        runStatus: 'completed',
+        approval: null,
+        loadMessages,
+        onSelectNode: (): void => undefined,
+      });
+    });
+    await clickGraph('graph-setup');
+    await flushUntil(host, 'graph bash stdout', () => (host.textContent ?? '').includes('ready'));
+    expect(calls).toEqual([]);
+    expect(host.querySelector('[aria-label="setup room"]')).not.toBeNull();
+    expectNoAskHumanChrome(host);
+  });
+
+  test('clicking an injected command node loads only that node messages', async () => {
+    const calls: [string, string][] = [];
+    const loadMessages = async (
+      requestRunId: string,
+      nodeId: string
+    ): Promise<WorkflowNodeMessagesResponse> => {
+      calls.push([requestRunId, nodeId]);
+      return {
+        messages: [
+          {
+            id: 'm1',
+            seq: 1,
+            kind: 'text',
+            payload: { text: 'hello from review' },
+            created_at: CREATED_AT,
+          },
+        ],
+      };
+    };
+    await act(async () => {
+      renderLogs({
+        activeView: 'graph',
+        runId: 'run-1',
+        nodeStates: SHARED_BASH_COMMAND.nodeStates,
+        events: SHARED_BASH_COMMAND.events,
+        definitionNodes: SHARED_BASH_COMMAND.definitionNodes,
+        definitionPending: false,
+        runStatus: 'running',
+        approval: null,
+        loadMessages,
+        onSelectNode: (): void => undefined,
+      });
+    });
+    await clickGraph('graph-review');
+    await flushUntil(host, 'graph command transcript', () =>
+      (host.textContent ?? '').includes('hello from review')
+    );
+    expect(calls).toEqual([['run-1', 'review']]);
+    expect(host.querySelector('[aria-label="review room"]')).not.toBeNull();
+    expectNoAskHumanChrome(host);
+  });
+
+  test('switching from Graph to Logs preserves the room DOM node and does not refetch', async () => {
+    const calls: [string, string][] = [];
+    const loadMessages = async (
+      requestRunId: string,
+      nodeId: string
+    ): Promise<WorkflowNodeMessagesResponse> => {
+      calls.push([requestRunId, nodeId]);
+      return {
+        messages: [
+          {
+            id: 'm1',
+            seq: 1,
+            kind: 'text',
+            payload: { text: 'hello from review' },
+            created_at: CREATED_AT,
+          },
+        ],
+      };
+    };
+    const paneArgs = {
+      runId: 'run-1',
+      nodeStates: SHARED_BASH_COMMAND.nodeStates,
+      events: SHARED_BASH_COMMAND.events,
+      definitionNodes: SHARED_BASH_COMMAND.definitionNodes,
+      definitionPending: false,
+      runStatus: 'running' as const,
+      approval: null,
+      loadMessages,
+      onSelectNode: (): void => undefined,
+    };
+    await act(async () => {
+      renderLogs({ ...paneArgs, activeView: 'graph' });
+    });
+    await clickGraph('graph-review');
+    await flushUntil(host, 'graph command before switch', () =>
+      (host.textContent ?? '').includes('hello from review')
+    );
+    const room = host.querySelector('[aria-label="review room"]');
+    expect(room).not.toBeNull();
+    expect(calls).toEqual([['run-1', 'review']]);
+
+    await act(async () => {
+      renderLogs({ ...paneArgs, activeView: 'logs' });
+    });
+    await flush();
+    expect(host.querySelector('[aria-label="review room"]')).toBe(room);
+    expect(calls).toEqual([['run-1', 'review']]);
+    const selectedRow = Array.from(host.querySelectorAll('button')).find(button =>
+      (button.textContent ?? '').includes('Review')
+    );
+    expect(selectedRow?.getAttribute('aria-current')).toBe('true');
+    expectNoAskHumanChrome(host);
+  });
+
+  test('clicking a loop iteration row preserves that iteration selection', async () => {
+    await act(async () => {
+      renderLogs({
+        activeView: 'logs',
+        runId: 'run-1',
+        nodeStates: [{ nodeId: 'group', name: 'Group', status: 'failed', retryEpoch: 0 }],
+        events: LOOP_EVENTS,
+        definitionNodes: [GROUP_NODE],
+        definitionPending: false,
+        runStatus: 'failed',
+        approval: null,
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({ messages: [] }),
+        onSelectNode: (): void => undefined,
+      });
+    });
+    await clickRow('Group ×1');
+    await flushUntil(host, 'preserve iteration 1', () =>
+      (host.textContent ?? '').includes('Body nodes')
+    );
+    expect(host.querySelector('details[open]')?.textContent).toContain('×1 completed');
+    const first = Array.from(host.querySelectorAll('button')).find(button =>
+      (button.textContent ?? '').includes('Group ×1')
+    );
+    expect(first?.getAttribute('aria-current')).toBe('true');
+  });
+
+  test('clicking the same loop node in Graph resolves the canonical last iteration row', async () => {
+    const paneArgs = {
+      runId: 'run-1',
+      nodeStates: [{ nodeId: 'group', name: 'Group', status: 'failed' as const, retryEpoch: 0 }],
+      events: LOOP_EVENTS,
+      definitionNodes: [GROUP_NODE],
+      definitionPending: false,
+      runStatus: 'failed' as const,
+      approval: null,
+      loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({ messages: [] }),
+      onSelectNode: (): void => undefined,
+    };
+    await act(async () => {
+      renderLogs({ ...paneArgs, activeView: 'logs' });
+    });
+    await clickRow('Group ×1');
+    await flushUntil(host, 'iteration 1 before graph', () =>
+      (host.querySelector('details[open]')?.textContent ?? '').includes('×1 completed')
+    );
+
+    await act(async () => {
+      renderLogs({ ...paneArgs, activeView: 'graph' });
+    });
+    await clickGraph('graph-group');
+    await flushUntil(host, 'canonical last iteration', () =>
+      (host.querySelector('details[open]')?.textContent ?? '').includes('×2 failed')
+    );
+    expect(host.querySelector('details[open]')?.textContent).not.toContain('×1 completed');
+
+    await act(async () => {
+      renderLogs({ ...paneArgs, activeView: 'logs' });
+    });
+    await flush();
+    const last = Array.from(host.querySelectorAll('button')).find(button =>
+      (button.textContent ?? '').includes('Group ×2')
+    );
+    expect(last?.getAttribute('aria-current')).toBe('true');
+    expectNoAskHumanChrome(host);
+  });
+
+  test('a run-id change from Graph clears selection and reports null once', async () => {
+    const selected: (string | null)[] = [];
+    await act(async () => {
+      renderLogs({
+        activeView: 'graph',
+        runId: 'run-1',
+        nodeStates: SHARED_BASH_COMMAND.nodeStates,
+        events: SHARED_BASH_COMMAND.events,
+        definitionNodes: SHARED_BASH_COMMAND.definitionNodes,
+        definitionPending: false,
+        runStatus: 'completed',
+        approval: null,
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({ messages: [] }),
+        onSelectNode: (nodeId: string | null): void => {
+          selected.push(nodeId);
+        },
+      });
+    });
+    await clickGraph('graph-setup');
+    await flushUntil(host, 'graph setup selected', () =>
+      (host.textContent ?? '').includes('ready')
+    );
+    expect(selected).toEqual(['setup']);
+
+    await act(async () => {
+      renderLogs({
+        activeView: 'graph',
+        runId: 'run-2',
+        nodeStates: [],
+        events: [],
+        definitionNodes: [],
+        definitionPending: false,
+        runStatus: 'completed',
+        approval: null,
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({ messages: [] }),
+        onSelectNode: (nodeId: string | null): void => {
+          selected.push(nodeId);
+        },
+      });
+    });
+    await flushUntil(host, 'graph run-change reset', () =>
+      (host.textContent ?? '').includes('Select a node')
+    );
+    expect(selected).toEqual(['setup', null]);
+    expect(host.querySelectorAll('[role="region"]')).toHaveLength(0);
+    expectNoAskHumanChrome(host);
+  });
+
+  test('neither Graph nor Logs contains AskHuman awaiting or waiting-on-you copy', async () => {
+    const paneArgs = {
+      runId: 'run-1',
+      nodeStates: SHARED_BASH_COMMAND.nodeStates,
+      events: SHARED_BASH_COMMAND.events,
+      definitionNodes: SHARED_BASH_COMMAND.definitionNodes,
+      definitionPending: false,
+      runStatus: 'completed' as const,
+      approval: null,
+      loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({ messages: [] }),
+      onSelectNode: (): void => undefined,
+    };
+    await act(async () => {
+      renderLogs({ ...paneArgs, activeView: 'graph' });
+    });
+    await flush();
+    expectNoAskHumanChrome(host);
+    await act(async () => {
+      renderLogs({ ...paneArgs, activeView: 'logs' });
+    });
+    await flush();
     expectNoAskHumanChrome(host);
   });
 });
