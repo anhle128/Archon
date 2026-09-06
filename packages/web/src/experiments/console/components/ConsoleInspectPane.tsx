@@ -33,6 +33,7 @@ export interface ConsoleInspectPaneProps {
   events: RunEvent[];
   rawEvents: WorkflowEvent[];
   nodeStates: WorkflowNodeState[];
+  approval: unknown;
   logEntries: ConsoleLogEntry[];
   usage: UsageReport | null;
   streamNodeFilter: string;
@@ -80,6 +81,7 @@ export function ConsoleInspectPane({
   events,
   rawEvents,
   nodeStates,
+  approval,
   logEntries,
   usage,
   streamNodeFilter,
@@ -159,7 +161,7 @@ export function ConsoleInspectPane({
           definitionPending={definitionPending}
           nodeStates={nodeStates}
           events={rawEvents}
-          approval={run.approval ?? null}
+          approval={approval}
           isLive={isInspectRunLive(run.status)}
           loadMessages={loadMessages}
           onClose={onCloseRoom}

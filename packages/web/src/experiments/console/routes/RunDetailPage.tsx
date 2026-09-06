@@ -546,6 +546,7 @@ export function RunDetailPage(): ReactElement {
                 events={events}
                 rawEvents={detail.rawEvents}
                 nodeStates={inspectNodeStates}
+                approval={detail.approval}
                 logEntries={logEntries}
                 usage={detail.usage}
                 streamNodeFilter={streamNodeFilter}

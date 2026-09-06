@@ -292,6 +292,7 @@ describe('ConsoleInspectPane', () => {
       events: RAW_EVENTS.map(toRunEvent),
       rawEvents: RAW_EVENTS,
       nodeStates: NODE_STATES,
+      approval: null,
       logEntries: LOG_ENTRIES,
       usage: null,
       streamNodeFilter: 'all',
@@ -439,6 +440,47 @@ describe('ConsoleInspectPane', () => {
     });
     await flushUntil('first loop row', () => (host.textContent ?? '').includes('×1'));
     expect(host.textContent).toContain('Loop ×1');
+  });
+
+  test('passes raw approval metadata to the room', async () => {
+    const calls: [string, string][] = [];
+    await act(async () => {
+      renderPane({
+        view: 'log',
+        run: run({
+          status: 'paused',
+          approval: {
+            nodeId: 'child',
+            message: 'normalized approval message',
+            completionSignaled: false,
+          },
+        }),
+        selectedNodeId: 'child',
+        selectedLogRowId: null,
+        nodeStates: [
+          ...NODE_STATES,
+          nodeState({ nodeId: 'child', name: 'Child workflow', status: 'running' }),
+        ],
+        approval: {
+          nodeId: 'child',
+          message: 'Child workflow is paused',
+          type: 'child_workflow',
+          childRunId: 'child/run',
+        },
+        loadMessages: (runId: string, nodeId: string): Promise<WorkflowNodeMessagesResponse> => {
+          calls.push([runId, nodeId]);
+          return Promise.resolve({ messages: [] });
+        },
+      });
+    });
+    await flushUntil('child workflow room', () =>
+      (host.textContent ?? '').includes('Child workflow is paused')
+    );
+
+    expect(host.textContent).toContain('Child run');
+    expect(host.textContent).toContain('Open child run');
+    expect(host.textContent).not.toContain('Approval required');
+    expect(calls).toEqual([]);
   });
 
   test('definition loading and errors reach the graph while the room uses event fallback', async () => {

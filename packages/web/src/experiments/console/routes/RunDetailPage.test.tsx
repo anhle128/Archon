@@ -9,6 +9,7 @@ import { RunDetailHeader } from '../components/RunDetailHeader';
 import { WorkflowEnvResolvedTable } from '../components/WorkflowEnvResolvedTable';
 import { toRun, type Run } from '../primitives/run';
 import type { RunDetailResponse, WorkflowEvent, WorkflowNodeState } from '../skills/runs';
+import type { DagNode } from '../skills/workflows';
 import { invalidate } from '../store/cache';
 import { installHappyDom, restoreHappyDom } from '../test/install-happy-dom';
 import { hasRunEnvOverlayUi, RunDetailPage } from './RunDetailPage';
@@ -296,7 +297,10 @@ describe('RunDetailPage inspect selection', () => {
     return host.querySelector('[data-testid="location-search"]')?.textContent ?? '';
   }
 
-  function runPayload(status: RunDetailResponse['run']['status']): RunDetailResponse['run'] {
+  function runPayload(
+    status: RunDetailResponse['run']['status'],
+    metadata: Record<string, unknown> = {}
+  ): RunDetailResponse['run'] {
     return {
       id: runId,
       workflow_name: workflow,
@@ -305,7 +309,7 @@ describe('RunDetailPage inspect selection', () => {
       codebase_id: projectId,
       status,
       user_message: 'inspect this run',
-      metadata: {},
+      metadata,
       started_at: CREATED_AT,
       completed_at: status === 'running' || status === 'paused' ? null : '2026-09-07T10:02:00.000Z',
       last_activity_at: CREATED_AT,
@@ -355,6 +359,10 @@ describe('RunDetailPage inspect selection', () => {
     options: {
       status?: RunDetailResponse['run']['status'];
       runError?: boolean;
+      metadata?: Record<string, unknown>;
+      nodeStates?: WorkflowNodeState[];
+      events?: WorkflowEvent[];
+      workflowNodes?: DagNode[];
     } = {}
   ): void {
     const detailStatus = options.status ?? 'running';
@@ -381,9 +389,9 @@ describe('RunDetailPage inspect selection', () => {
         }
         return Promise.resolve(
           jsonResponse({
-            run: runPayload(detailStatus),
-            events: eventsFor(runId),
-            nodeStates: NODE_STATES,
+            run: runPayload(detailStatus, options.metadata),
+            events: options.events ?? eventsFor(runId),
+            nodeStates: options.nodeStates ?? NODE_STATES,
             pending_interactions: [],
             usage: null,
           } satisfies RunDetailResponse)
@@ -400,7 +408,7 @@ describe('RunDetailPage inspect selection', () => {
                 workflow: {
                   name: workflow,
                   description: 'inspect',
-                  nodes: [
+                  nodes: options.workflowNodes ?? [
                     { id: 'review', prompt: 'Review the change.' },
                     { id: 'build', prompt: 'Build the change.', depends_on: ['review'] },
                   ],
@@ -492,6 +500,43 @@ describe('RunDetailPage inspect selection', () => {
     expect(host.textContent).toContain('inspect this run');
     expect(locationSearch()).toContain('node=review');
     expect(locationSearch()).toContain('keep=1');
+  });
+
+  test('paused Plannotator detail forwards raw approval review metadata to the room', async () => {
+    stubPageFetch({
+      status: 'paused',
+      metadata: {
+        approval: {
+          nodeId: 'review',
+          message: 'Review the generated plan',
+          type: 'plannotator_gate',
+          document: 'Review session document',
+          reviewUrl: 'https://plannotator.example/review',
+        },
+      },
+      nodeStates: [nodeState({ nodeId: 'review', name: 'Review', status: 'running' })],
+      workflowNodes: [
+        {
+          id: 'review',
+          plannotator_gate: {
+            message: 'Review plan in Plannotator',
+            document: 'plan.md',
+            rework: { prompt: 'Apply review feedback.' },
+          },
+        },
+      ],
+    });
+    await act(async () => {
+      renderPage('?node=review');
+    });
+    await flushUntil('plannotator link', () =>
+      (host.textContent ?? '').includes('Open Plannotator')
+    );
+
+    expect(host.textContent).toContain('Review plan in Plannotator');
+    expect(host.textContent).toContain('Review session document');
+    expect(host.querySelector('a[href="https://plannotator.example/review"]')).not.toBeNull();
+    expect(host.textContent).not.toContain(REVIEW_TEXT);
   });
 
   test('an invalid ?node= query falls back to the inspect-running node', async () => {
