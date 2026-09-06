@@ -2617,7 +2617,9 @@ export interface paths {
         /** List a run's uncommitted git changes */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    ref?: string;
+                };
                 header?: never;
                 path: {
                     runId: string;
@@ -2633,6 +2635,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["GitChangesResponse"];
+                    };
+                };
+                /** @description Invalid commit ref */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
                     };
                 };
                 /** @description Workflow run not found */
@@ -2726,12 +2737,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Read a run's Now git hunks for a modified file */
+        /** Read a run's Now or commit git hunks for a modified file */
         get: {
             parameters: {
                 query: {
                     path: string;
                     cursor?: string;
+                    ref?: string;
                 };
                 header?: never;
                 path: {
@@ -2741,7 +2753,7 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Ready Now hunks or a CAP-6 empty envelope */
+                /** @description Ready Now or commit hunks or a CAP-6 empty envelope */
                 200: {
                     headers: {
                         [name: string]: unknown;
@@ -2750,7 +2762,7 @@ export interface paths {
                         "application/json": components["schemas"]["GitDiffResponse"];
                     };
                 };
-                /** @description Invalid file path */
+                /** @description Invalid file path or Invalid commit ref */
                 400: {
                     headers: {
                         [name: string]: unknown;
