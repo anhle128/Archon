@@ -109,6 +109,8 @@ mock.module('@archon/git', () => ({
   removeWorktree: mock(async () => {}),
   toRepoPath: (p: string) => p,
   toWorktreePath: (p: string) => p,
+  changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
+  isGitWorkTree: mock(async () => false),
 }));
 
 mock.module('@archon/core/db/conversations', () => ({
@@ -139,6 +141,7 @@ mock.module('@archon/core/db/codebases', () => ({
 mock.module('@archon/core/db/isolation-environments', () => ({
   listByCodebase: mock(async () => []),
   updateStatus: mock(async () => {}),
+  getById: mock(async () => null),
 }));
 
 const mockGetRunningWorkflows = mock(

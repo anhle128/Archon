@@ -89,6 +89,8 @@ mock.module('@archon/git', () => ({
   toBranchName: mock((b: string) => b),
   worktreeExists: mock(() => Promise.resolve(true)),
   getUniqueCommitCount: mockGetUniqueCommitCount,
+  changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
+  isGitWorkTree: mock(async () => false),
 }));
 
 mock.module('@archon/isolation', () => ({

@@ -25,6 +25,8 @@ mock.module('@archon/git', () => ({
   toRepoPath: (p: string) => p,
   toBranchName: (b: string) => b,
   toWorktreePath: (p: string) => p,
+  changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
+  isGitWorkTree: mock(async () => false),
 }));
 
 // Mock isolation provider

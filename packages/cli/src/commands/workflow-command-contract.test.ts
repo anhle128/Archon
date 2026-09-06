@@ -114,6 +114,8 @@ mock.module('@archon/git', () => ({
   getDefaultBranch: mock(() => Promise.resolve('dev')),
   isAncestorOf: mock(() => Promise.resolve(true)),
   execFileAsync: mock(() => Promise.resolve({ stdout: '.git\n', stderr: '' })),
+  changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
+  isGitWorkTree: mock(async () => false),
 }));
 mock.module('@archon/core/db/conversations', () => ({
   getOrCreateConversation: mock(() => Promise.resolve({ id: 'conv-contract' })),

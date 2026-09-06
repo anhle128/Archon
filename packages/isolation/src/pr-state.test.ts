@@ -26,6 +26,8 @@ mock.module('@archon/git', () => ({
   execFileAsync: mockExecFileAsync,
   toRepoPath: (p: string) => p,
   toBranchName: (b: string) => b,
+  changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
+  isGitWorkTree: mock(async () => false),
 }));
 
 import { getPrState, type PrState } from './pr-state';

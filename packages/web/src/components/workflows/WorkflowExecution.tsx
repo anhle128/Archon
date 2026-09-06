@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router';
-import { MessageSquare } from 'lucide-react';
+
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { DagNodeProgress } from './DagNodeProgress';
@@ -10,7 +10,8 @@ import { WorkflowDagViewer } from './WorkflowDagViewer';
 import { ArtifactSummary } from './ArtifactSummary';
 import { WorkflowNodeRetryAction } from './WorkflowNodeRetryAction';
 import { ChatInterface } from '@/components/chat/ChatInterface';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { DagRunTabs, type WorkflowRunView } from './source-control/dag-run-tabs';
+import { SourceControlTab } from './source-control/source-control-tab';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { useWorkflowStore } from '@/stores/workflow-store';
 import { getWorkflowRun, getWorkflowRunByWorker, getCodebase, getWorkflow } from '@/lib/api';
@@ -298,7 +299,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
   const [codebaseName, setCodebaseName] = useState<string | null>(null);
   const [codebaseCwd, setCodebaseCwd] = useState<string | null>(null);
   const [workerRunId, setWorkerRunId] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<'graph' | 'logs' | 'chat'>('graph');
+  const [activeView, setActiveView] = useState<WorkflowRunView>('graph');
   // Increments on every user-initiated node click to trigger scroll in WorkflowLogs
   const [nodeScrollTrigger, setNodeScrollTrigger] = useState(0);
   // Track which codebaseId we've already fetched to avoid stale re-fetches during runId transitions
@@ -795,6 +796,9 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
         </ResizablePanelGroup>
       );
     }
+    if (isDag && activeView === 'source-control') {
+      return <SourceControlTab key={runId} runId={runId} />;
+    }
     if (isDag && activeView === 'chat' && parentPlatformId) {
       return (
         <div className="flex flex-col flex-1 overflow-hidden min-h-0">
@@ -858,23 +862,11 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
       {/* View tabs — only for DAG workflows */}
       {isDag && (
         <div className="flex items-center px-4 py-1.5 border-b border-border">
-          <Tabs
-            value={activeView}
-            onValueChange={(v): void => {
-              setActiveView(v as typeof activeView);
-            }}
-          >
-            <TabsList>
-              <TabsTrigger value="graph">Graph</TabsTrigger>
-              <TabsTrigger value="logs">Logs</TabsTrigger>
-              {parentPlatformId && (
-                <TabsTrigger value="chat">
-                  <MessageSquare className="h-3 w-3 mr-1" />
-                  Chat
-                </TabsTrigger>
-              )}
-            </TabsList>
-          </Tabs>
+          <DagRunTabs
+            activeView={activeView}
+            parentPlatformId={parentPlatformId}
+            onValueChange={setActiveView}
+          />
         </div>
       )}
 

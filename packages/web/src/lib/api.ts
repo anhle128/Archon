@@ -62,7 +62,7 @@ export interface HealthResponse {
 }
 
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(url, options);
+  const res = await (options === undefined ? fetch(url) : fetch(url, options));
   if (!res.ok) {
     const body = await res.text();
     const truncated = body.length > 200 ? body.slice(0, 200) + '...' : body;
@@ -422,6 +422,14 @@ export async function getWorkflowRun(
   runId: string
 ): Promise<components['schemas']['WorkflowRunDetail']> {
   return fetchJSON(`/api/workflows/runs/${encodeURIComponent(runId)}`);
+}
+
+export type GitChangesResponse = components['schemas']['GitChangesResponse'];
+export type GitChangedFile = components['schemas']['GitChangedFile'];
+export type GitEmptyReason = components['schemas']['GitEmptyReason'];
+
+export async function getWorkflowRunGitChanges(runId: string): Promise<GitChangesResponse> {
+  return fetchJSON(`/api/workflows/runs/${encodeURIComponent(runId)}/git/changes`);
 }
 
 export async function getWorkflowRunByWorker(

@@ -98,6 +98,8 @@ mock.module('@archon/git', () => ({
   toBranchName: mock((b: string) => b),
   isWorktreePath: mock(async () => false),
   execFileAsync: mock(async () => ({ stdout: '', stderr: '' })),
+  changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
+  isGitWorkTree: mock(async () => false),
 }));
 
 // Mock @archon/isolation

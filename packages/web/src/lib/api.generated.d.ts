@@ -1515,7 +1515,7 @@ export interface paths {
         put?: never;
         /**
          * Run a workflow via the orchestrator (JSON or multipart with file uploads)
-         * @description Accepts `application/json` with `{ conversationId, message, inputs?, envId? }` or `multipart/form-data` with `conversationId`, `message`, an optional `inputs` field holding the same map JSON-encoded, an optional plain `envId` string, and optional file attachments (max 5 files, 10 MB each). `inputs` supplies values for the workflow's declared `inputs:` (#2554); it is validated against the declaration before any worktree, clone, or AI cost, so a missing required input or an undeclared key is refused up front. An omitted or empty `envId` means YAML-only; a non-empty `envId` freezes the ENV row (id/name/workflow/patches) after request parse and before file or run-start message persistence, then hands the candidate to the orchestrator out-of-band. Missing id → `env_not_found`; workflow mismatch → `env_workflow_mismatch`. Compatibility/provider/profile/graph errors still travel through the dispatch/SSE path, not as synchronous Start 400s.
+         * @description Accepts `application/json` with `{ conversationId, message, inputs?, envId? }` or `multipart/form-data` with `conversationId`, `message`, an optional `inputs` field holding the same map JSON-encoded, an optional plain `envId` string, and optional file attachments (max 5 files, 10 MB each). `inputs` supplies values for the workflow's declared `inputs:` (#2554); it is validated against the declaration before any worktree, clone, or AI cost, so a missing required input or an undeclared key is refused up front. An omitted or empty `envId` means YAML-only; present non-string values (including JSON `null` and duplicated multipart fields) → `400 { error: 'invalid_env_id' }` with no ENV lookup. A non-empty string `envId` freezes the ENV row (id/name/workflow/patches) after request parse and before file or run-start message persistence, then hands the candidate to the orchestrator out-of-band. Missing id → `env_not_found`; workflow mismatch → `env_workflow_mismatch`. Compatibility/provider/profile/graph errors still travel through the dispatch/SSE path, not as synchronous Start 400s.
          */
         post: {
             parameters: {
@@ -2532,6 +2532,62 @@ export interface paths {
                     };
                 };
                 /** @description Server error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workflows/runs/{runId}/git/changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List a run's uncommitted git changes */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    runId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Live changes or a CAP-6 empty envelope */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["GitChangesResponse"];
+                    };
+                };
+                /** @description Workflow run not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Git read failed */
                 500: {
                     headers: {
                         [name: string]: unknown;
@@ -4722,6 +4778,23 @@ export interface components {
                 filterScope: "date-project-run-node";
             };
         } | null;
+        GitChangesResponse: {
+            files: components["schemas"]["GitChangedFile"][];
+            revision: string;
+        } | {
+            emptyReason: components["schemas"]["GitEmptyReason"];
+            files: components["schemas"]["GitChangedFile"][];
+            /** @enum {string} */
+            revision: "";
+        };
+        GitChangedFile: {
+            path: string;
+            status: components["schemas"]["GitChangedFileStatus"];
+        };
+        /** @enum {string} */
+        GitChangedFileStatus: "M" | "A" | "D";
+        /** @enum {string} */
+        GitEmptyReason: "container" | "no_checkout";
         UsageReport: {
             scope: {
                 from: string | null;

@@ -104,6 +104,8 @@ mock.module('@archon/git', () => ({
   toRepoPath: (p: string) => p,
   toWorktreePath: (p: string) => p,
   findRepoRoot: mockFindRepoRoot,
+  changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
+  isGitWorkTree: mock(async () => false),
 }));
 
 mock.module('@archon/core/db/conversations', () => ({
@@ -133,6 +135,7 @@ mock.module('@archon/core/db/codebases', () => ({
 mock.module('@archon/core/db/isolation-environments', () => ({
   listByCodebase: mockListByCodebase,
   updateStatus: mockUpdateStatus,
+  getById: mock(async () => null),
 }));
 
 mock.module('@archon/core/db/workflows', () => ({
