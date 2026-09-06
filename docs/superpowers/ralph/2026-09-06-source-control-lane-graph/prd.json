@@ -18,8 +18,8 @@
       "technicalNotes": "Follow plan Task 1 at docs/superpowers/plans/2026-09-06-source-control-lane-graph.md:202-654. Consumes execFileAsync and RepoPath/WorktreePath types. Create packages/git/src/git-log.ts and packages/git/src/git-log.test.ts; modify packages/git/src/index.ts and the 31 test files with mock.module('@archon/git').",
       "dependsOn": [],
       "priority": 1,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 1. Files: packages/git/src/git-log.ts, packages/git/src/git-log.test.ts, packages/git/src/index.ts, and 31 @archon/git mock factories."
     },
     {
       "id": "US-002",
@@ -38,8 +38,8 @@
         "US-001"
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 2. Files: packages/server/src/routes/schemas/git.schemas.ts, packages/server/src/routes/git/log-route.ts, packages/server/src/routes/git/log-handler.ts, packages/server/src/routes/api.ts, packages/server/src/routes/api.git-changes.test.ts."
     },
     {
       "id": "US-003",
@@ -57,8 +57,8 @@
         "US-002"
       ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 3. Files: packages/web/src/lib/api.generated.d.ts, packages/web/src/lib/api.ts, packages/web/src/lib/api.git-changes.test.ts. Unblock: chore(unblock) added awaiting to toNodeState for type-check."
     },
     {
       "id": "US-004",
@@ -77,8 +77,8 @@
         "US-003"
       ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 4. Files: packages/web/src/components/workflows/source-control/commit-lanes.ts, packages/web/src/components/workflows/source-control/commit-lanes.test.ts."
     },
     {
       "id": "US-005",
@@ -96,8 +96,8 @@
         "US-003"
       ],
       "priority": 5,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 5. Files: packages/web/src/components/workflows/source-control/source-control-state.ts, packages/web/src/components/workflows/source-control/source-control-state.test.ts."
     },
     {
       "id": "US-006",
@@ -117,8 +117,8 @@
         "US-004"
       ],
       "priority": 6,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 6. Files: packages/web/src/components/workflows/source-control/format-commit-time.ts, format-commit-time.test.ts, commit-graph-row.tsx, commit-history-graph.tsx, commit-history-graph.test.tsx."
     },
     {
       "id": "US-007",
@@ -140,8 +140,8 @@
         "US-006"
       ],
       "priority": 7,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 7. Files: packages/web/src/components/workflows/source-control/source-control-panel.tsx, source-control-panel.test.tsx, source-control-tab.tsx, packages/web/src/component-integration/source-control-tab.test.tsx."
     },
     {
       "id": "US-008",
@@ -165,8 +165,8 @@
         "US-007"
       ],
       "priority": 8,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 8. Files: _bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml. Focused tests, package suites, format:check, git diff --check, and bun run validate all passed. Legacy smoke on run 5d34895e93307a3f345df852d74bd5d7 confirmed Changes above History lane graph; commit click left the viewer on Select a file to inspect."
     }
   ]
 }
