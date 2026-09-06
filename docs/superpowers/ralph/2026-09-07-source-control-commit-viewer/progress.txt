@@ -1,5 +1,10 @@
 ## Codebase Patterns
 
+### Ralph loop model assertions follow the YAML fixture
+- **Where**: `packages/workflows/src/dag-executor.test.ts`, `packages/workflows/src/loader.test.ts`
+- **Pattern**: Native Ralph fixture tests load `.archon/workflows/defaults/speckit-ralph-native-feature.yaml`. When that YAML's `ralph-loop-run` model/effort changes, update the loader dual-model contract and the dag-executor native Ralph completion assertion together. Do not keep a stale grok/high comment.
+- **Example**: `expect(loopNode?.model).toBe('alibaba-token-plan/deepseek-v4-pro'); expect(options.nodeConfig?.effort).toBe('max');`
+
 ### Compute Reload pending from incoming snapshots, not refs
 - **Where**: `packages/web/src/components/workflows/source-control/source-control-tab.tsx` `onReload`
 - **Pattern**: `dispatch` does not update `snapshotRef` until the next render. Compute each reducer's pending with `pendingAfterReceive(current, incoming, same)` in the same turn as the three `Promise.all` refetches, then load `pendingViewer` from that pending file. Include `commitSnapshotState.pending` in `hasPending` and gate acceptance on a matching scoped viewer.
@@ -245,5 +250,29 @@
 - After dispatch, snapshot refs still hold the pre-reload state until render; derive pending in-memory from the incoming snapshots.
 - Do not cancel ordinary commit expansion from abortCurrent; only cancel `['workflowRunGitChanges', runId, commitOid]` when that oid was stored on a Reload pendingListRequest.
 - Return-to-Now is only the Changes opener (`onOpenFile` → `{ kind: 'now' }`); collapsing History must not reset viewer scope.
+
+---
+
+## 2026-09-07 — US-008: Acceptance gates and sprint status
+
+**Status**: PASSED
+**Files changed**:
+- `_bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml` — 2-2-open-a-commits-files-in-the-same-viewer: done, epic-2: done, last_updated: 2026-09-07
+- `packages/workflows/src/dag-executor.test.ts` — unblock: native Ralph loop model/effort match YAML
+- `packages/workflows/src/loader.test.ts` — unblock: dual-model contract match YAML
+
+**Acceptance criteria verified**:
+- [x] Focused tests: git-oid/changed-files/file-read (53), server git-changes+checkout-gate (85), web api.git-changes (26), commit-history-graph+panel (24), source-control-tab (51); all exit 0
+- [x] Package test scripts: packages/git, packages/server, packages/web all exit 0
+- [x] bun run format:check, git diff --check, bun run validate all exit 0
+- [x] Acceptance matrix covered by those suites: inline expand, reachability, special paths, FileViewer reuse, M parent→commit, A/D blobs, binary fallback, Return-to-Now, frozen Reload, keyboard isolation, no console/WorkflowExecution contamination
+- [x] No new package-root I/O exports in packages/git/src/index.ts; bun.lock unmodified vs merge-base
+- [x] sprint-status.yaml updated
+
+**Learnings**:
+- `bun run validate` failed first on a pre-existing workflows fixture assertion (`dag-executor.test.ts:6934` expected `xai-oauth/grok-4.5`, YAML has `alibaba-token-plan/deepseek-v4-pro` @ `max`). Unblock commit aligned tests to the YAML; story files were never dirty.
+- Manual `/legacy/workflows/runs/:id` browser smoke was not started; this worktree is the live Ralph run checkout. Automated suites are the UI evidence.
+
+BLOCKER US-008 | gate=`bun run validate` | cause=packages/workflows/src/dag-executor.test.ts:6934 expect(loopNode?.model).toBe("xai-oauth/grok-4.5") received "alibaba-token-plan/deepseek-v4-pro"; same fingerprint on clean base; culprit outside story (YAML already updated) | action=chore(unblock): align dag-executor + loader native Ralph assertions to speckit-ralph-native-feature.yaml model/effort | 2026-09-07
 
 ---
