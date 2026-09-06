@@ -246,6 +246,38 @@ describe('buildLogRows', () => {
     ]);
   });
 
+  test('approval requests anchor gate rows when no node_started event exists', () => {
+    const rows = buildLogRows(
+      [nodeState({ nodeId: 'review', name: 'Review', status: 'running' })],
+      [
+        workflowEvent({
+          id: 'done-old',
+          event_type: 'node_completed',
+          step_name: 'review',
+          data: { approval_decision: 'rejected' },
+        }),
+        workflowEvent({
+          id: 'gate-new',
+          event_type: 'approval_requested',
+          step_name: 'review',
+          data: { gateType: 'approval', nodeId: 'review', message: 'Try again?' },
+        }),
+      ]
+    );
+
+    expect(rows).toEqual([
+      {
+        id: 'gate-new',
+        nodeId: 'review',
+        label: 'Review',
+        status: 'running',
+        order: 1,
+        sourceIndex: 0,
+        selection: { kind: 'node' },
+      },
+    ]);
+  });
+
   test('invalid iteration numbers and execution_seq values are ignored', () => {
     const rows = buildLogRows(
       [

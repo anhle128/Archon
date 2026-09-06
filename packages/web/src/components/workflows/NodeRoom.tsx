@@ -115,11 +115,29 @@ export function selectNodeRoomMessages(
   return ordered.slice(start, nextStartOffset >= 0 ? start + nextStartOffset + 1 : undefined);
 }
 
-function RoomPlaceholder({ children }: { children: string }): React.ReactElement {
+export function RoomPlaceholder({ children }: { children: string }): React.ReactElement {
   return (
     <div className="flex flex-1 items-center justify-center px-4 text-center text-sm text-text-secondary">
       {children}
     </div>
+  );
+}
+
+export function RoomRegion({
+  nodeId,
+  children,
+}: {
+  nodeId: string;
+  children: React.ReactNode;
+}): React.ReactElement {
+  return (
+    <section
+      role="region"
+      aria-label={nodeId + ' room'}
+      className="flex min-h-0 flex-1 flex-col overflow-y-auto"
+    >
+      {children}
+    </section>
   );
 }
 
@@ -194,11 +212,12 @@ export function NodeRoom({
   if (nodeId === null || selection === null) {
     return <RoomPlaceholder>Select a node</RoomPlaceholder>;
   }
+
+  let body: React.ReactNode;
   if (isPending) {
-    return <RoomPlaceholder>Loading node transcript</RoomPlaceholder>;
-  }
-  if (error) {
-    return (
+    body = <RoomPlaceholder>Loading node transcript</RoomPlaceholder>;
+  } else if (error) {
+    body = (
       <div className="flex flex-1 flex-col items-center justify-center gap-2 px-4 text-center text-sm text-text-secondary">
         <p>Failed to load node transcript</p>
         <button
@@ -212,24 +231,22 @@ export function NodeRoom({
         </button>
       </div>
     );
+  } else {
+    const ordered = selectNodeRoomMessages(messages ?? [], selection);
+    if (ordered.length === 0) {
+      body = <RoomPlaceholder>Node hasn't produced output</RoomPlaceholder>;
+    } else {
+      body = (
+        <div className="flex min-h-0 flex-1 flex-col gap-3 p-3">
+          {ordered.map(
+            (message): React.ReactElement => (
+              <div key={message.id}>{renderTranscriptItem(message)}</div>
+            )
+          )}
+        </div>
+      );
+    }
   }
 
-  const ordered = selectNodeRoomMessages(messages ?? [], selection);
-  if (ordered.length === 0) {
-    return <RoomPlaceholder>Node hasn't produced output</RoomPlaceholder>;
-  }
-
-  return (
-    <section
-      role="region"
-      aria-label={`${nodeId} room`}
-      className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3"
-    >
-      {ordered.map(
-        (message): React.ReactElement => (
-          <div key={message.id}>{renderTranscriptItem(message)}</div>
-        )
-      )}
-    </section>
-  );
+  return <RoomRegion nodeId={nodeId}>{body}</RoomRegion>;
 }

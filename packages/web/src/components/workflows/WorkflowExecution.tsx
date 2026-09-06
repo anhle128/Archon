@@ -16,11 +16,13 @@ import { SourceControlTab } from './source-control/source-control-tab';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { useWorkflowStore } from '@/stores/workflow-store';
 import {
+  approveWorkflowRun,
   getWorkflowRun,
   getWorkflowRunByWorker,
   getCodebase,
   getWorkflow,
   getWorkflowNodeMessages,
+  rejectWorkflowRun,
 } from '@/lib/api';
 import { ensureUtc, formatDurationMs } from '@/lib/format';
 import { selectInitialNode } from '@/lib/select-initial-node';
@@ -75,6 +77,7 @@ interface WorkflowRunQueryData {
   codebaseId: string | null;
   events: WorkflowEventResponse[];
   nodeStates: WorkflowRunNodeState[];
+  approval: unknown;
 }
 
 function isRuntimeModelReasoningEffort(value: unknown): value is RuntimeModelReasoningEffort {
@@ -316,6 +319,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
         codebaseId: data.run.codebase_id ?? null,
         events: data.events,
         nodeStates: data.nodeStates,
+        approval: data.run.metadata.approval ?? null,
       };
     },
     refetchInterval: (query): number | false => {
@@ -621,6 +625,19 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
     void queryClient.invalidateQueries({ queryKey: ['workflow-runs-status'] });
   }, [queryClient, runId]);
 
+  const handleGateApprove = useCallback(async (): Promise<void> => {
+    await approveWorkflowRun(runId);
+    await queryClient.invalidateQueries({ queryKey: ['workflowRun', runId] });
+  }, [queryClient, runId]);
+
+  const handleGateReject = useCallback(
+    async (reason?: string): Promise<void> => {
+      await rejectWorkflowRun(runId, reason);
+      await queryClient.invalidateQueries({ queryKey: ['workflowRun', runId] });
+    },
+    [queryClient, runId]
+  );
+
   if (error) {
     return (
       <div className="flex items-center justify-center h-full text-error">
@@ -776,6 +793,12 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
           isLive={isRunning}
           loadMessages={getWorkflowNodeMessages}
           onSelectNode={setSelectedDagNode}
+          definitionNodes={dagDefinitionNodes ?? []}
+          definitionPending={workflowDefPending}
+          runStatus={queryData?.workflowState.status ?? workflow.status}
+          approval={queryData?.approval ?? null}
+          onApprove={handleGateApprove}
+          onReject={handleGateReject}
           roomHeader={retryActionPanel}
           roomFooter={
             isRunning || workflow.artifacts.length === 0 ? undefined : (
