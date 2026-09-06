@@ -14,8 +14,8 @@
       "technicalNotes": "Follow Task 1 of plan docs/superpowers/plans/2026-09-07-askhuman-several-asks-outstanding.md:90-162. Modify packages/workflows/src/retry-state.test.ts. Read-only packages/workflows/src/retry-state.ts.",
       "dependsOn": [],
       "priority": 1,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 1. Files: packages/workflows/src/retry-state.test.ts. Commit 95e673af."
     },
     {
       "id": "US-002",
@@ -34,8 +34,8 @@
         "US-001"
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 2. Files: packages/core/src/db/workflow-pending-interactions.test.ts. Commit bda5c7b2."
     },
     {
       "id": "US-003",
@@ -55,8 +55,8 @@
         "US-001"
       ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 3. Files: packages/workflows/src/dag-executor.test.ts, packages/workflows/src/dag-executor.ts, packages/workflows/src/ask-human.ts, packages/workflows/src/ask-human.test.ts. Commit e1c7cc82. AskHuman handler now persist-and-pauses so two same-node Asks each call pauseWorkflowRun; executor pauseOnAskHuman records awaiting/emits only."
     },
     {
       "id": "US-004",
@@ -78,8 +78,8 @@
         "US-003"
       ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 4. Files: packages/workflows/src/subrun.test.ts. Commit 3e9341e1. InMemoryStore.pauseWorkflowRun now omits metadata.approval on Ask-only pauses; child Ask e2e proves child row ownership and parent child_workflow pause without copying the row."
     },
     {
       "id": "US-005",
@@ -98,8 +98,8 @@
         "US-002"
       ],
       "priority": 5,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 5. Files: packages/server/src/routes/api.workflow-runs.test.ts. Commit e544a427."
     },
     {
       "id": "US-006",
@@ -124,8 +124,8 @@
         "US-005"
       ],
       "priority": 6,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 6. Files: _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml. Commit cb6f50f7. Focused matrix + bun run validate green. PR handoff at artifacts/runs/60ed0531cf21f7bc7f8785bc0d68a89b/pr-body.md (Closes #89)."
     }
   ]
 }
