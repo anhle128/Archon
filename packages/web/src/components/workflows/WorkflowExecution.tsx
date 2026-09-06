@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { DagNodeProgress } from './DagNodeProgress';
+import { LegacyNodeLogs } from './LegacyNodeLogs';
 import { StepLogs } from './StepLogs';
 import { WorkflowLogs } from './WorkflowLogs';
 import { WorkflowDagViewer } from './WorkflowDagViewer';
@@ -14,7 +15,13 @@ import { DagRunTabs, type WorkflowRunView } from './source-control/dag-run-tabs'
 import { SourceControlTab } from './source-control/source-control-tab';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { useWorkflowStore } from '@/stores/workflow-store';
-import { getWorkflowRun, getWorkflowRunByWorker, getCodebase, getWorkflow } from '@/lib/api';
+import {
+  getWorkflowRun,
+  getWorkflowRunByWorker,
+  getCodebase,
+  getWorkflow,
+  getWorkflowNodeMessages,
+} from '@/lib/api';
 import { ensureUtc, formatDurationMs } from '@/lib/format';
 import { selectInitialNode } from '@/lib/select-initial-node';
 import { settleRunningDagNodesForTerminalStatus } from '@/lib/workflow-utils';
@@ -660,8 +667,8 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
     />
   );
 
-  // Logs panel — detect whether the selected node has any DB events so we can show an empty-state
-  const logsPanel = (
+  // Merged logs panel — Graph tab only. Detect whether the selected node has any DB events so we can show an empty-state
+  const mergedLogsPanel = (
     <div className="flex-1 flex flex-col overflow-hidden min-h-0 h-full">
       {retryActionPanel}
       <div className="flex-1 flex flex-col overflow-hidden min-h-0">
@@ -745,7 +752,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
           </ResizablePanel>
           <ResizableHandle withHandle />
           <ResizablePanel defaultSize={40} minSize={20}>
-            {logsPanel}
+            {mergedLogsPanel}
           </ResizablePanel>
         </ResizablePanelGroup>
       );
@@ -760,7 +767,27 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
         </div>
       );
     }
-    // Logs view: DAG "Logs" tab
+    if (isDag) {
+      return (
+        <LegacyNodeLogs
+          runId={runId}
+          nodeStates={queryData?.nodeStates ?? []}
+          events={queryData?.events ?? []}
+          isLive={isRunning}
+          loadMessages={getWorkflowNodeMessages}
+          onSelectNode={setSelectedDagNode}
+          roomHeader={retryActionPanel}
+          roomFooter={
+            isRunning || workflow.artifacts.length === 0 ? undefined : (
+              <div className="border-t border-border p-3">
+                <ArtifactSummary artifacts={workflow.artifacts} runId={runId} />
+              </div>
+            )
+          }
+        />
+      );
+    }
+    // Sequential (non-DAG) default layout keeps the merged logs panel.
     return (
       <div className="flex flex-1 overflow-hidden min-h-0">
         <div className="w-64 border-r border-border overflow-auto">
@@ -770,7 +797,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
             onNodeClick={handleNodeClick}
           />
         </div>
-        {logsPanel}
+        {mergedLogsPanel}
       </div>
     );
   };
