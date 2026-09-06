@@ -120,7 +120,7 @@ import { OutputRefError } from './output-ref';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore, WorkflowEventData } from './store';
 import { buildAiProfile } from './model-validation';
-import type { SendQueryOptions } from '@archon/providers/types';
+import { AskHumanNoStarterError, type SendQueryOptions } from '@archon/providers/types';
 import * as plannotatorGateExecutor from './plannotator-gate-executor';
 import { applyEnvOverlay } from './env-overlay';
 
@@ -24666,5 +24666,383 @@ describe('executeDagWorkflow -- command and prompt transcripts', () => {
     expect(await store.listNodeMessages(workflowRun.id, 'grp')).toEqual([]);
     const bodyRows = await store.listNodeMessages(workflowRun.id, 'grp.body');
     expect(transcriptTimeline(bodyRows)).toEqual(['started', 'text', 'completed']);
+  });
+});
+
+describe('executeDagWorkflow -- AskHuman pause', () => {
+  const askQuestions = [
+    {
+      id: 'q1',
+      prompt: 'Ship it?',
+      selection: 'single' as const,
+      options: ['yes', 'no'],
+      allowOther: false,
+    },
+  ];
+
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `dag-ask-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const commandsDir = join(testDir, '.archon', 'commands');
+    await mkdir(commandsDir, { recursive: true });
+    await writeFile(join(commandsDir, 'my-cmd.md'), 'Ask the starter about $USER_MESSAGE');
+
+    mockSendQueryDag.mockClear();
+    mockGetAgentProviderDag.mockClear();
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+  });
+
+  afterEach(async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  function storedEventTypes(store: IWorkflowStore): string[] {
+    return (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.map(
+      call => (call[0] as { event_type: string }).event_type
+    );
+  }
+
+  function wireAskPause(store: IWorkflowStore): void {
+    let status: 'running' | 'paused' = 'running';
+    store.getWorkflowRunStatus = mock(async () => status);
+    store.pauseWorkflowRun = mock(async () => {
+      status = 'paused';
+    });
+  }
+
+  async function invokeInjectedAskHuman(options: SendQueryOptions | undefined): Promise<void> {
+    const ask = options?.nativeTools?.find(tool => tool.name === 'AskHuman');
+    if (!ask) throw new Error('AskHuman was not injected');
+    await ask.handler({ questions: askQuestions }, { toolUseId: 'toolu_1', sessionId: 'sess-1' });
+  }
+
+  it.each([
+    { kind: 'command', node: { id: 'review', command: 'my-cmd' } },
+    { kind: 'prompt', node: { id: 'review', prompt: 'ask the starter' } },
+  ])('pauses a Claude $kind node on AskHuman without completing the node', async ({ node }) => {
+    mockSendQueryDag.mockImplementation(async function* (
+      _prompt: string,
+      _cwd: string,
+      _resume?: string,
+      options?: SendQueryOptions
+    ) {
+      await invokeInjectedAskHuman(options);
+    });
+
+    const store = createMockStore();
+    wireAskPause(store);
+    const workflowRun = makeWorkflowRun('ask-pause-run');
+    const live: WorkflowEmitterEvent[] = [];
+    const unsubscribe = getWorkflowEventEmitter().subscribe(event => {
+      if ('runId' in event && event.runId === workflowRun.id) live.push(event);
+    });
+
+    try {
+      await executeDagWorkflow(
+        createMockDeps(store),
+        createMockPlatform(),
+        'conv-dag',
+        testDir,
+        { name: 'ask-pause', nodes: [node] },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+    } finally {
+      unsubscribe();
+    }
+
+    expect(store.insertPendingInteraction).toHaveBeenCalledWith({
+      workflow_run_id: workflowRun.id,
+      node_id: 'review',
+      tool_use_id: 'toolu_1',
+      kind: 'ask',
+      envelope: { questions: askQuestions },
+      provider_session_id: 'sess-1',
+    });
+    expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
+    expect((store.pauseWorkflowRun as ReturnType<typeof mock>).mock.calls[0]).toEqual([
+      workflowRun.id,
+    ]);
+
+    const rows = await store.listNodeMessages(workflowRun.id, 'review');
+    expect(rows.some(row => row.kind === 'status' && row.payload.state === 'awaiting')).toBe(true);
+    expect(rows.some(row => row.kind === 'status' && row.payload.state === 'completed')).toBe(
+      false
+    );
+    expect(rows.some(row => row.kind === 'status' && row.payload.state === 'failed')).toBe(false);
+
+    expect(live.filter(event => event.type === 'node_awaiting')).toEqual([
+      { type: 'node_awaiting', runId: workflowRun.id, nodeId: 'review' },
+    ]);
+    expect(live.some(event => event.type === 'node_completed')).toBe(false);
+    expect(live.some(event => event.type === 'node_failed')).toBe(false);
+    expect(live.some(event => event.type === 'approval_pending')).toBe(false);
+
+    const types = storedEventTypes(store);
+    expect(types).not.toContain('node_completed');
+    expect(types).not.toContain('node_failed');
+    expect(types).not.toContain('approval_requested');
+    expect(types).not.toContain('approval_pending');
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('does not inject AskHuman on a Codex command node', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'codex',
+      getCapabilities: mockCodexCapabilities,
+    }));
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'ok' };
+      yield { type: 'result', sessionId: 'codex-sess' };
+    });
+
+    const store = createMockStore();
+    await executeDagWorkflow(
+      createMockDeps(store),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      {
+        name: 'codex-no-ask',
+        provider: 'codex',
+        nodes: [{ id: 'review', command: 'my-cmd' }],
+      },
+      makeWorkflowRun('codex-ask-run'),
+      'codex',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, assistant: 'codex' }
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBeGreaterThan(0);
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as SendQueryOptions;
+    expect(optionsArg.nativeTools === undefined || optionsArg.nativeTools.length === 0).toBe(true);
+    expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('fails the node on AskHumanNoStarterError without pausing', async () => {
+    const workflowRun = makeWorkflowRun('ask-nostarter-run');
+    const store = createMockStore();
+    store.insertPendingInteraction = mock(async () => {
+      throw new AskHumanNoStarterError(workflowRun.id);
+    });
+    mockSendQueryDag.mockImplementation(async function* (
+      _prompt: string,
+      _cwd: string,
+      _resume?: string,
+      options?: SendQueryOptions
+    ) {
+      await invokeInjectedAskHuman(options);
+    });
+
+    await executeDagWorkflow(
+      createMockDeps(store),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      { name: 'ask-nostarter', nodes: [{ id: 'review', prompt: 'ask' }] },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun).toHaveBeenCalled();
+    expect(storedEventTypes(store)).toContain('node_failed');
+    expect(storedEventTypes(store)).not.toContain('node_completed');
+  });
+
+  it('fails the node on pending persist errors without pausing', async () => {
+    const store = createMockStore();
+    store.insertPendingInteraction = mock(async () => {
+      throw new Error('pending persist failed');
+    });
+    mockSendQueryDag.mockImplementation(async function* (
+      _prompt: string,
+      _cwd: string,
+      _resume?: string,
+      options?: SendQueryOptions
+    ) {
+      await invokeInjectedAskHuman(options);
+    });
+
+    await executeDagWorkflow(
+      createMockDeps(store),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      { name: 'ask-persist-fail', nodes: [{ id: 'review', prompt: 'ask' }] },
+      makeWorkflowRun('ask-persist-run'),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun).toHaveBeenCalled();
+    expect(storedEventTypes(store)).toContain('node_failed');
+  });
+
+  it('pauses a Pi loop on AskHuman while keeping accumulated text and usage', async () => {
+    const usageBreakdown = [
+      {
+        provider: 'anthropic',
+        model: 'pi-test',
+        modelSource: 'reported' as const,
+        inputTokens: 11,
+        outputTokens: 7,
+        costUsd: 0.02,
+      },
+    ];
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'pi',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+    mockSendQueryDag.mockImplementation(async function* (
+      _prompt: string,
+      _cwd: string,
+      _resume?: string,
+      options?: SendQueryOptions
+    ) {
+      yield { type: 'assistant', content: 'Need a decision.' };
+      yield {
+        type: 'background_tasks',
+        tasks: [{ taskId: 'keep-open', taskType: 'agent', description: 'ask' }],
+      };
+      yield {
+        type: 'result',
+        sessionId: 'sess-1',
+        tokens: { input: 11, output: 7 },
+        cost: 0.02,
+        usageBreakdown,
+      };
+      await invokeInjectedAskHuman(options);
+    });
+
+    const store = createMockStore();
+    wireAskPause(store);
+    const mockDeps = createMockDeps(store);
+    const workflowRun = makeWorkflowRun('ask-pi-loop-run');
+    const live: WorkflowEmitterEvent[] = [];
+    const unsubscribe = getWorkflowEventEmitter().subscribe(event => {
+      if ('runId' in event && event.runId === workflowRun.id) live.push(event);
+    });
+
+    try {
+      await executeDagWorkflow(
+        mockDeps,
+        createMockPlatform(),
+        'conv-dag',
+        testDir,
+        {
+          name: 'ask-pi-loop',
+          provider: 'pi',
+          nodes: [
+            {
+              id: 'refine',
+              loop: {
+                prompt: 'Ask then continue',
+                until: 'DONE',
+                max_iterations: 3,
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'pi',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        { ...minimalConfig, assistant: 'pi', assistants: { ...minimalConfig.assistants, pi: {} } }
+      );
+    } finally {
+      unsubscribe();
+    }
+
+    expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
+    expect((store.pauseWorkflowRun as ReturnType<typeof mock>).mock.calls[0]).toEqual([
+      workflowRun.id,
+    ]);
+    expect(store.insertPendingInteraction).toHaveBeenCalledWith({
+      workflow_run_id: workflowRun.id,
+      node_id: 'refine',
+      tool_use_id: 'toolu_1',
+      kind: 'ask',
+      envelope: { questions: askQuestions },
+      provider_session_id: 'sess-1',
+    });
+
+    const rows = await store.listNodeMessages(workflowRun.id, 'refine');
+    expect(rows.some(row => row.kind === 'text' && row.payload.text === 'Need a decision.')).toBe(
+      true
+    );
+    expect(rows.some(row => row.kind === 'status' && row.payload.state === 'awaiting')).toBe(true);
+    expect(rows.some(row => row.kind === 'status' && row.payload.state === 'failed')).toBe(false);
+    expect(rows.some(row => row.kind === 'status' && row.payload.state === 'completed')).toBe(
+      false
+    );
+
+    const types = storedEventTypes(store);
+    expect(types).not.toContain('node_completed');
+    expect(types).not.toContain('node_failed');
+    expect(types).not.toContain('loop_iteration_failed');
+    expect(live.some(event => event.type === 'node_failed')).toBe(false);
+    expect(live.filter(event => event.type === 'node_awaiting')).toEqual([
+      { type: 'node_awaiting', runId: workflowRun.id, nodeId: 'refine' },
+    ]);
+
+    const usageCalls = (mockDeps.usageRecorder.recordWorkflowUsage as ReturnType<typeof mock>).mock
+      .calls;
+    expect(usageCalls.length).toBeGreaterThan(0);
+    expect(usageCalls[0][0]).toMatchObject({
+      runId: workflowRun.id,
+      stepName: 'refine',
+      agentProvider: 'pi',
+      usageBreakdown,
+    });
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
   });
 });

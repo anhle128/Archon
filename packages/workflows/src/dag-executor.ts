@@ -19,7 +19,7 @@ import type {
   WorkflowConfig,
   WorkflowDeps,
 } from './deps';
-import type { WorkflowRetryContext } from './store';
+import type { IWorkflowStore, WorkflowRetryContext } from './store';
 import type {
   SendQueryOptions,
   NodeConfig,
@@ -29,8 +29,13 @@ import type {
   ExecutionContext,
   OverlayChangeSummary,
   UsageBreakdown,
+  NativeTool,
 } from '@archon/providers/types';
-import { CONTAINER_ENV_DENYLIST } from '@archon/providers/types';
+import {
+  CONTAINER_ENV_DENYLIST,
+  AskHumanAwaitingError,
+  AskHumanNoStarterError,
+} from '@archon/providers/types';
 import type { ContainerRunContext } from './container-context';
 import { WRITEBACK_GATE_NODE_ID } from './container-context';
 import {
@@ -136,6 +141,7 @@ import {
   type SendMessageContext,
 } from './executor-shared';
 import { appendNodeTranscript } from './node-transcript';
+import { createAskHumanTool } from './ask-human';
 import {
   isLiteralSpec,
   isTierName,
@@ -1730,6 +1736,32 @@ function assertRouteTargetCanBeActivated(
   }
 }
 
+function nativeToolsForAskHuman(
+  provider: string,
+  store: IWorkflowStore,
+  workflowRunId: string,
+  nodeId: string
+): NativeTool[] | undefined {
+  return getProviderCapabilities(provider).askHuman
+    ? [createAskHumanTool({ store, workflowRunId, nodeId })]
+    : undefined;
+}
+
+async function pauseOnAskHuman(
+  deps: WorkflowDeps,
+  runId: string,
+  nodeId: string,
+  recordStatus: (state: string) => Promise<void>
+): Promise<void> {
+  await deps.store.pauseWorkflowRun(runId);
+  await recordStatus('awaiting');
+  getWorkflowEventEmitter().emit({
+    type: 'node_awaiting',
+    runId,
+    nodeId,
+  });
+}
+
 /**
  * Execute a single DAG node. Returns NodeExecutionResult regardless of success/failure.
  * Always accumulates assistant text output (for $node_id.output substitution).
@@ -1973,10 +2005,12 @@ async function executeNodeInternal(
   const nodeAbortController = new AbortController();
   // Fork when resuming — leaves the source session untouched so retries are safe.
   const shouldForkSession = resumeSessionId !== undefined;
+  const nativeTools = nativeToolsForAskHuman(provider, deps.store, workflowRun.id, stepName);
   const nodeOptionsWithAbort: SendQueryOptions | undefined = {
     ...nodeOptions,
     abortSignal: nodeAbortController.signal,
     ...(shouldForkSession ? { forkSession: true } : {}),
+    ...(nativeTools ? { nativeTools } : {}),
     traceContext: {
       name: 'execute-workflow-node',
       sessionId: workflowRun.id,
@@ -3061,8 +3095,22 @@ async function executeNodeInternal(
     lastNodeCancelCheck.delete(`${workflowRun.id}:${node.id}`);
     lastNodeActivityUpdate.delete(`${workflowRun.id}:${node.id}`);
 
+    if (error instanceof AskHumanAwaitingError) {
+      await pauseOnAskHuman(deps, workflowRun.id, node.id, recordNodeStatus);
+      return {
+        state: 'completed',
+        output: nodeOutputText,
+        costUsd: nodeCostUsd,
+        ...(nodeTokens !== undefined ? { tokens: nodeTokens } : {}),
+      };
+    }
+
     // If the abort was triggered by user cancel (not idle timeout), classify as cancel
-    if (nodeAbortController.signal.aborted && !nodeIdleTimedOut) {
+    if (
+      nodeAbortController.signal.aborted &&
+      !nodeIdleTimedOut &&
+      !(error instanceof AskHumanNoStarterError)
+    ) {
       getLog().info({ nodeId: node.id }, 'dag_node_cancelled_via_abort');
       await recordFailedStatus('Cancelled by user');
       return {
@@ -4813,6 +4861,12 @@ async function executeLoopNode(
   // ('' → node.id at top level, #2090). The loop's own per-iteration number lives in
   // each event's data (`iteration`), so no separate iteration param is threaded here.
   const stepName = stepNamePrefix + node.id;
+  const nativeTools = nativeToolsForAskHuman(
+    workflowProvider,
+    deps.store,
+    workflowRun.id,
+    stepName
+  );
   const recordLoopStatus = (state: string, detail?: string): Promise<void> =>
     appendNodeTranscript(deps.store, {
       workflow_run_id: workflowRun.id,
@@ -5277,6 +5331,7 @@ async function executeLoopNode(
         const iterationOptions: SendQueryOptions | undefined = {
           ...resolvedOptions,
           abortSignal: iterationAbortController.signal,
+          ...(nativeTools ? { nativeTools } : {}),
           traceContext: {
             name: 'execute-workflow-loop',
             sessionId: workflowRun.id,
@@ -5715,6 +5770,16 @@ async function executeLoopNode(
         }
       } catch (error) {
         foldIterationUsage();
+        if (error instanceof AskHumanAwaitingError) {
+          await pauseOnAskHuman(deps, workflowRun.id, node.id, recordLoopStatus);
+          return {
+            state: 'completed',
+            output: cleanOutput,
+            costUsd: loopTotalCostUsd,
+            ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+            loopIterations: i,
+          };
+        }
         const err = error as Error;
         getLog().error({ err, nodeId: node.id, iteration: i }, 'loop_node.iteration_failed');
         return await failLoopIteration(err.message, {
