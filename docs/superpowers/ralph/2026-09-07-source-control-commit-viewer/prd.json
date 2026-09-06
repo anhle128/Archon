@@ -18,8 +18,8 @@
       "technicalNotes": "Plan Task 1 (docs/superpowers/plans/2026-09-07-source-control-commit-viewer.md:312-773). Create packages/git/src/git-oid.ts and git-oid.test.ts; modify packages/git/src/changed-files.ts, changed-files.test.ts, and index.ts. Locked contracts at lines 122-145, 165-176, 199-237.",
       "dependsOn": [],
       "priority": 1,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 1. Files: packages/git/src/git-oid.ts, packages/git/src/git-oid.test.ts, packages/git/src/changed-files.ts, packages/git/src/changed-files.test.ts, packages/git/src/index.ts."
     },
     {
       "id": "US-002",

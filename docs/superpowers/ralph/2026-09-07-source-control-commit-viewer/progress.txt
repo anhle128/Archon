@@ -1,0 +1,43 @@
+## Codebase Patterns
+
+### Git-oid helpers stay package-internal
+- **Where**: `packages/git/src/git-oid.ts`, `packages/git/src/index.ts`
+- **Pattern**: `parseGitObjectId`, `resolveCommitParents`, `FULL_GIT_OBJECT_ID_RE`, and `GitCommitRefError` are imported by sibling modules. Export `parseNameStatusZ` and `ChangedFilesRequest` from the package root; do not re-export git-oid symbols.
+- **Example**: `import { parseGitObjectId, resolveCommitParents } from './git-oid';`
+
+### Keep explicit root vs parent diff-tree argv
+- **Where**: `packages/git/src/changed-files.ts` `changedFiles`
+- **Pattern**: Two literal argv arrays (root uses `--root` and omits parent; non-root is `parentOid commitOid`). Do not extract a one-use builder (Rule of Three). Now porcelain stays on the no-`commit` branch and must not call `parseGitObjectId` or `resolveCommitParents`.
+- **Example**: `parents[0] === undefined ? [..., '--root', ..., commit] : [..., parents[0], commit]`
+
+### Isolate commit-listing fixtures per test
+- **Where**: `packages/git/src/changed-files.test.ts` `commit changedFiles`
+- **Pattern**: Bun runs tests concurrently. Give merge-commit coverage its own repo under the describe temp root instead of mutating the sibling test's checkout.
+
+---
+
+## 2026-09-07 — US-001: Commit object-name parsing and commit changedFiles
+
+**Status**: PASSED
+**Files changed**:
+- `packages/git/src/git-oid.ts` — FULL_GIT_OBJECT_ID_RE, GitCommitRefError, parseGitObjectId, resolveCommitParents
+- `packages/git/src/git-oid.test.ts` — SHA-1/SHA-256 parse cases; root/child parents; missing/blob/unreachable rejects
+- `packages/git/src/changed-files.ts` — parseNameStatusZ; ChangedFilesRequest; commit diff-tree listing
+- `packages/git/src/changed-files.test.ts` — name-status projection, commit listing, first-parent merge
+- `packages/git/src/index.ts` — export parseNameStatusZ and ChangedFilesRequest only
+
+**Acceptance criteria verified**:
+- [x] Create packages/git/src/git-oid.ts exporting FULL_GIT_OBJECT_ID_RE, GitCommitRefError, parseGitObjectId(raw: string), and resolveCommitParents(workingPath, oid).
+- [x] parseGitObjectId accepts 40-character SHA-1 and 64-character SHA-256 lowercase hex strings; rejects short, uppercase, live, HEAD, and peel syntax with GitCommitRefError.
+- [x] resolveCommitParents verifies commit object type via git rev-parse --verify --quiet OID^{commit}, reachability via git merge-base --is-ancestor OID HEAD, and returns parents in order via git rev-list --parents -n 1 OID; throws GitCommitRefError for non-commit, non-existent, or unreachable commit objects.
+- [x] Implement parseNameStatusZ(stdout: string) in packages/git/src/changed-files.ts; project ordinary M/A/D/T records, rename records (R100 -> old D + new A), copy records (C100 -> new A), preserve spaces and newlines, and fail fast on malformed records.
+- [x] Export parseNameStatusZ from packages/git/src/index.ts; do not export parseGitObjectId, resolveCommitParents, FULL_GIT_OBJECT_ID_RE, or GitCommitRefError from package root.
+- [x] Update changedFiles(workingPath, request?) to accept ChangedFilesRequest with optional commit string; when commit is supplied, run git diff-tree name-status with --root for root commits or parentOid commitOid for commits with parents; compute revision as sha256(oid + '\0' + stdout).
+- [x] Ensure changedFiles without commit retains existing porcelain Now behavior byte-for-byte.
+- [x] Pass tests in packages/git/src/git-oid.test.ts and packages/git/src/changed-files.test.ts.
+
+**Learnings**:
+- `bun x eslint path/to/*.test.ts --max-warnings 0` fails because test files are ignored; lint production files only.
+- Merge listing must not share a checkout with the special-name commit test under Bun's concurrent runner.
+
+---
