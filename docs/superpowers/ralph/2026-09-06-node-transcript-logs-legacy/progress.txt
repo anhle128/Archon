@@ -1,5 +1,10 @@
 ## Codebase Patterns
 
+### Lint heap for full-repo eslint
+- **Where**: root `package.json` `lint` (`bun x eslint . --cache`)
+- **Pattern**: Default Node heap (~4GB) OOMs/SIGABRTs on `bun run validate` lint. Re-run with `NODE_OPTIONS=--max-old-space-size=8192`. Not a source defect; do not weaken `--max-warnings 0`.
+- **Example**: `NODE_OPTIONS=--max-old-space-size=8192 bun run lint --max-warnings 0`
+
 ### Avoid bang-prefixed lines in eval Python strings
 - **Where**: `packages/web/src/components/workflows/WorkflowExecution.tsx` roomFooter wiring
 - **Pattern**: A line that begins with bang inside an eval-tool Python string is interpolated as a shell snippet and can rewrite source to `__omp_shell(...)`. Prefer `isRunning || length === 0` over a bang-prefixed condition. Keep unique-string Python with match count == 1 and `export function WorkflowExecution` as the surviving marker.
@@ -451,3 +456,26 @@ BLOCKER US-006 | gate=`(cd packages/workflows && bun test src/dag-executor.test.
 - Sequential non-DAG layout still uses mergedLogsPanel; only `if (isDag)` Logs gets LegacyNodeLogs
 
 ---
+
+## 2026-09-06 — US-015: Validate and mark Story 5.1 complete
+
+**Status**: PASSED
+**Files changed**:
+- `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml` — 5-1-open-a-nodes-own-transcript-from-logs-legacy backlog → done
+
+**Acceptance criteria verified**:
+- [x] Focused Task 10 tests independently: workflows schemas 4, node-transcript 2, dag-executor 562, core persistence 6, sqlite 65, migration/bundled-schema 8, store-adapter 39, server workflow-runs 144 pass + 9 todo, web client 1, web UI 25
+- [x] bun run check:schema-upgrades skipped: DATABASE_URL and PGHOST unset, no docker/local PostgreSQL; CI remains the upgrade gate
+- [x] validate pipeline: bundled checks, type-check, lint (8GB heap), format:check, test:install, bun run test (package-isolated, exit 0)
+- [x] Manual walkthrough on localhost:5174/legacy/workflows/runs/run-us015: unmerged setup/review/loop ×1/loop ×2; review started/text/Read a.ts/completed; iteration slices; empty "Node hasn't produced output"; Graph React Flow + merged WorkflowLogs; no Ask/awaiting chrome
+- [x] Only development_status.5-1-open-a-nodes-own-transcript-from-logs-legacy changed to done
+- [x] Commit docs: mark legacy node transcript story done
+
+**Learnings**:
+- Local `bun run lint` hits Node heap limit at ~4GB; NODE_OPTIONS=--max-old-space-size=8192 is required for validate on this machine
+- Walkthrough used isolated ARCHON_HOME seeded with executor-equivalent transcript rows plus bun run dev:server/web (PORT=3871 / Vite 5174); live provider run not required to inspect the UI
+- Vite bound localhost (IPv6) not 127.0.0.1; curl 127.0.0.1:5174 failed while http://localhost:5174 worked
+
+---
+
+BLOCKER US-015 | gate=`bun run validate` | cause=us015-validate lint SIGABRT/exit 134 on default ~4GB heap (javascript abort in eslint, not a source warning) | action=re-ran same unmodified validate with NODE_OPTIONS=--max-old-space-size=8192 as us015-validate-8g; exit 0 after bundled checks, type-check, eslint --max-warnings 0, prettier --check, test:install, bun run test | 2026-09-06
