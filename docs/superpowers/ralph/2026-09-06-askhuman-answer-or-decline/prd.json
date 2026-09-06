@@ -142,8 +142,8 @@
         "US-006"
       ],
       "priority": 7,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 7. Files: packages/server/src/routes/schemas/workflow.schemas.ts, packages/server/src/routes/api.ts, packages/server/src/routes/api.workflow-runs.test.ts."
     },
     {
       "id": "US-008",

@@ -1,5 +1,10 @@
 ## Codebase Patterns
 
+### Ask answer route keeps real operations; auto-resume is ask-answer
+- **Where**: `packages/server/src/routes/api.ts`, `packages/server/src/routes/api.workflow-runs.test.ts`
+- **Pattern**: Import and decorate `askAnswerBodySchema.openapi('AskAnswerBody')`. Register POST `/api/workflows/runs/{runId}/ask/{requestId}/answer` via `registerOpenApiRoute`. Keep real `answerAskHuman`; mock `resolvePendingInteraction` plus typed pending errors on `@archon/core/db/workflow-pending-interactions`, and map `X-Archon-User` through `@archon/core/db/users`. `tryAutoResumeAfterGate(run, 'ask-answer', actorUserId)` only after `resumed === true`. Intermediate answers and non-web parents return 200 without dispatch.
+- **Example**: `await tryAutoResumeAfterGate(result.run, 'ask-answer', requester?.userId)`
+
 ### Operations own post-commit Ask signals; resume never calls resumeWorkflowRun
 - **Where**: `packages/core/src/operations/workflow-operations.ts`
 - **Pattern**: `answerAskHuman` authorizes the starter (`actorUserId` required, must equal non-null `run.user_id`, no admin override), calls `resolvePendingInteraction` once, then logs `workflow.ask_resolved` and emits identifier-only `interaction_resolved` only after that promise resolves. Return the pre-resolution run. `resumeWorkflow` lists pending rows, rejects any `pending` status, and accepts `running` only when at least one Ask row is `answered`. Do not call `resumeWorkflowRun` from either operation. Mock `../db/workflow-pending-interactions` and `@archon/workflows/event-emitter` before importing operations tests.
@@ -188,5 +193,28 @@
 - Log and emit only after the persistence promise resolves; a deferred mock is the proof, not call-order on a resolved Promise.
 - Preserve typed DB errors by rethrowing the same instance; do not map them by message text.
 - StrReplace on large files in this harness can truncate; patch with unique full-block replacement and assert the file grew.
+
+---
+
+## 2026-09-07 — US-007: Register starter-only AskHuman answer route and auto-dispatch
+
+**Status**: PASSED
+**Files changed**:
+- `packages/server/src/routes/schemas/workflow.schemas.ts` — added `askAnswerRequestSchema` as `askAnswerBodySchema.openapi('AskAnswerBody')`
+- `packages/server/src/routes/api.ts` — registered the Ask answer POST route, typed error mapping, and `ask-answer` auto-resume
+- `packages/server/src/routes/api.workflow-runs.test.ts` — starter auth, status mapping, and auto-dispatch coverage
+
+**Acceptance criteria verified**:
+- [x] packages/server/src/routes/schemas/workflow.schemas.ts defines askAnswerRequestSchema decorated with .openapi('AskAnswerBody')
+- [x] packages/server/src/routes/api.ts registers POST /api/workflows/runs/{runId}/ask/{requestId}/answer using registerOpenApiRoute
+- [x] Route maps responses to 200, 400, 401, 403, 404, 409, and 500
+- [x] When resumed is true and run has a web parent conversation, route calls tryAutoResumeAfterGate with action 'ask-answer'
+- [x] Non-web parent or intermediate answer (resumed: false) returns 200 without auto-dispatching
+- [x] bun test src/routes/api.workflow-runs.test.ts in packages/server (160 pass)
+
+**Learnings**:
+- Keep the real `answerAskHuman` operation under test; mock the DB CAS and users header mapping, not the operations module.
+- StrReplace on large files in this harness can truncate; patch with unique full-block replacement and assert the file grew.
+- `X-Archon-User` resolves through `findOrCreateUserByPlatformIdentity`; identity-map the header value to a deterministic user id in tests.
 
 ---
