@@ -256,6 +256,16 @@ function createMockStore(): IWorkflowStore {
       nodeMessages
         .filter(row => row.workflow_run_id === workflowRunId && row.node_id === nodeId)
         .sort((a, b) => a.seq - b.seq),
+    insertPendingInteraction: mock(async input => ({
+      ...input,
+      id: 'pending-1',
+      status: 'pending' as const,
+      answer: null,
+      created_at: new Date(),
+      resolved_at: null,
+      resolved_by: null,
+    })),
+    listPendingInteractions: mock(async () => []),
   };
 }
 

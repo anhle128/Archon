@@ -158,6 +158,12 @@ mock.module('../db/workflow-node-messages', () => ({
   appendNodeMessage: mockAppendNodeMessage,
   listNodeMessages: mockListNodeMessages,
 }));
+const mockInsertPendingInteraction = mock(() => Promise.resolve({ id: 'pend-1' }));
+const mockListPendingInteractions = mock(() => Promise.resolve([]));
+mock.module('../db/workflow-pending-interactions', () => ({
+  insertPendingInteraction: mockInsertPendingInteraction,
+  listPendingInteractions: mockListPendingInteractions,
+}));
 
 class TestTransformError extends Error {
   readonly code: string;
@@ -319,6 +325,8 @@ describe('createWorkflowStore', () => {
       'getCodebaseEnvVars',
       'appendNodeMessage',
       'listNodeMessages',
+      'insertPendingInteraction',
+      'listPendingInteractions',
     ];
     for (const method of requiredMethods) {
       expect(typeof store[method]).toBe('function');
@@ -362,6 +370,69 @@ describe('createWorkflowStore', () => {
     const result = await store.listNodeMessages('run-1', 'review');
     expect(mockListNodeMessages).toHaveBeenCalledWith('run-1', 'review');
     expect(result).toEqual(rows);
+  });
+
+  test('delegates insertPendingInteraction to DB and returns the result', async () => {
+    const input = {
+      workflow_run_id: 'run-1',
+      node_id: 'review',
+      tool_use_id: 'toolu_1',
+      kind: 'ask' as const,
+      envelope: { questions: [] },
+      provider_session_id: 'sess-1',
+    };
+    const row = {
+      ...input,
+      id: 'pend-1',
+      status: 'pending' as const,
+      answer: null,
+      created_at: new Date('2026-09-06T00:00:00.000Z'),
+      resolved_at: null,
+      resolved_by: null,
+    };
+    mockInsertPendingInteraction.mockResolvedValueOnce(row);
+    const store = createWorkflowStore();
+    const result = await store.insertPendingInteraction(input);
+    expect(mockInsertPendingInteraction).toHaveBeenCalledWith(input);
+    expect(result).toBe(row);
+  });
+
+  test('delegates listPendingInteractions to DB and returns the result', async () => {
+    const rows = [
+      {
+        id: 'pend-1',
+        workflow_run_id: 'run-1',
+        node_id: 'review',
+        tool_use_id: 'toolu_1',
+        kind: 'ask' as const,
+        status: 'pending' as const,
+        envelope: { questions: [] },
+        answer: null,
+        provider_session_id: 'sess-1',
+        created_at: new Date('2026-09-06T00:00:00.000Z'),
+        resolved_at: null,
+        resolved_by: null,
+      },
+      {
+        id: 'pend-2',
+        workflow_run_id: 'run-1',
+        node_id: 'review',
+        tool_use_id: 'toolu_2',
+        kind: 'ask' as const,
+        status: 'pending' as const,
+        envelope: { questions: [] },
+        answer: null,
+        provider_session_id: 'sess-1',
+        created_at: new Date('2026-09-06T00:00:01.000Z'),
+        resolved_at: null,
+        resolved_by: null,
+      },
+    ];
+    mockListPendingInteractions.mockResolvedValueOnce(rows);
+    const store = createWorkflowStore();
+    const result = await store.listPendingInteractions('run-1');
+    expect(mockListPendingInteractions).toHaveBeenCalledWith('run-1');
+    expect(result).toBe(rows);
   });
 
   test('delegates getWorkflowRunStatus to DB and returns typed status', async () => {

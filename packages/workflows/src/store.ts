@@ -13,6 +13,10 @@ import type {
   EnvOverlaySnapshot,
 } from './schemas';
 import type { AppendNodeMessageInput, NodeMessage } from './schemas/node-message';
+import type {
+  InsertPendingInteractionInput,
+  PendingInteraction,
+} from './schemas/pending-interaction';
 
 export interface PersistRouteDecisionTransitionInput {
   workflow_run_id: string;
@@ -221,8 +225,22 @@ export interface IWorkflowNodeMessageStore {
   listNodeMessages(workflowRunId: string, nodeId: string): Promise<NodeMessage[]>;
 }
 
+/**
+ * Pending AskHuman / permission row persistence. Inherited by `IWorkflowStore`
+ * so the engine dependency object stays one seam; callers that only insert or
+ * list pending rows can depend on this capability alone.
+ */
+export interface IWorkflowPendingInteractionStore {
+  insertPendingInteraction(input: InsertPendingInteractionInput): Promise<PendingInteraction>;
+  listPendingInteractions(workflowRunId: string): Promise<PendingInteraction[]>;
+}
+
 export interface IWorkflowStore
-  extends IRunTreeStore, IWorkflowEnvOverlayStore, IWorkflowNodeMessageStore {
+  extends
+    IRunTreeStore,
+    IWorkflowEnvOverlayStore,
+    IWorkflowNodeMessageStore,
+    IWorkflowPendingInteractionStore {
   // Run lifecycle
   createWorkflowRun(data: {
     workflow_name: string;
