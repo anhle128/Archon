@@ -1,8 +1,17 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactElement } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactElement,
+} from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 
-import type { GitLogCommit } from '@/lib/api';
+import type { GitChangedFile, GitLogCommit } from '@/lib/api';
 
+import { ChangedFilesList } from './changed-files-list';
 import { assignCommitLanes } from './commit-lanes';
 import { CommitGraphRow, COMMIT_ROW_HEIGHT } from './commit-graph-row';
 
@@ -19,13 +28,28 @@ export interface CommitHistoryGraphProps {
   commits: readonly GitLogCommit[];
   nowMs?: number;
   idPrefix?: string;
+  expandedOid?: string | null;
+  commitFiles?: readonly GitChangedFile[];
+  commitFilesLoadState?: 'idle' | 'loading' | 'error';
+  selectedPath?: string | null;
+  onToggleCommit?: (commit: GitLogCommit) => void;
+  onOpenFile?: (file: GitChangedFile) => void;
+}
+
+function expandedExtraHeight(loadState: 'idle' | 'loading' | 'error', fileCount: number): number {
+  if (loadState === 'loading' || fileCount === 0) return 36;
+  return Math.min(240, fileCount * 28 + 16);
 }
 
 export function CommitHistoryGraph(props: CommitHistoryGraphProps): ReactElement {
   const idPrefix = props.idPrefix ?? 'sc-history-commit';
   const nowMs = props.nowMs ?? Date.now();
+  const expandedOid = props.expandedOid ?? null;
+  const commitFiles = props.commitFiles ?? [];
+  const commitFilesLoadState = props.commitFilesLoadState ?? 'idle';
   const graph = useMemo(() => assignCommitLanes(props.commits), [props.commits]);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [commitFileActiveIndex, setCommitFileActiveIndex] = useState(0);
   const clampedActiveIndex =
     props.commits.length === 0 ? 0 : Math.min(props.commits.length - 1, activeIndex);
   const parentRef = useRef<HTMLDivElement | null>(null);
@@ -34,10 +58,24 @@ export function CommitHistoryGraph(props: CommitHistoryGraphProps): ReactElement
     if (activeIndex !== clampedActiveIndex) setActiveIndex(clampedActiveIndex);
   }, [activeIndex, clampedActiveIndex]);
 
+  useEffect(() => {
+    setCommitFileActiveIndex(0);
+  }, [expandedOid]);
+
+  useEffect(() => {
+    setCommitFileActiveIndex(current =>
+      commitFiles.length === 0 ? 0 : Math.min(commitFiles.length - 1, current)
+    );
+  }, [commitFiles.length]);
+
   const virtualizer = useVirtualizer({
     count: props.commits.length,
     getScrollElement: (): HTMLDivElement | null => parentRef.current,
-    estimateSize: (): number => COMMIT_ROW_HEIGHT,
+    estimateSize: (index: number): number => {
+      const commit = props.commits[index];
+      if (commit?.oid !== expandedOid) return COMMIT_ROW_HEIGHT;
+      return COMMIT_ROW_HEIGHT + expandedExtraHeight(commitFilesLoadState, commitFiles.length);
+    },
     initialRect: { width: 0, height: 280 },
     overscan: 8,
   });
@@ -47,6 +85,10 @@ export function CommitHistoryGraph(props: CommitHistoryGraphProps): ReactElement
     ? `${idPrefix}-${String(clampedActiveIndex)}`
     : undefined;
 
+  useLayoutEffect(() => {
+    virtualizer.measure();
+  }, [commitFiles.length, commitFilesLoadState, expandedOid, virtualizer]);
+
   const activate = (index: number): void => {
     const commit = props.commits[index];
     if (!commit) return;
@@ -54,6 +96,7 @@ export function CommitHistoryGraph(props: CommitHistoryGraphProps): ReactElement
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    if (event.currentTarget !== event.target) return;
     if (
       event.key === 'ArrowDown' ||
       event.key === 'ArrowUp' ||
@@ -68,7 +111,8 @@ export function CommitHistoryGraph(props: CommitHistoryGraphProps): ReactElement
     }
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
-      activate(clampedActiveIndex);
+      const commit = props.commits[clampedActiveIndex];
+      if (commit) props.onToggleCommit?.(commit);
     }
   };
 
@@ -87,9 +131,12 @@ export function CommitHistoryGraph(props: CommitHistoryGraphProps): ReactElement
           const commit = props.commits[virtualItem.index];
           const layout = graph.rows[virtualItem.index];
           if (!commit || !layout) return null;
+          const expanded = expandedOid === commit.oid;
           return (
             <div
               key={virtualItem.key}
+              data-index={virtualItem.index}
+              ref={virtualizer.measureElement}
               style={{
                 position: 'absolute',
                 top: 0,
@@ -105,11 +152,48 @@ export function CommitHistoryGraph(props: CommitHistoryGraphProps): ReactElement
                 id={`${idPrefix}-${String(virtualItem.index)}`}
                 active={virtualItem.index === clampedActiveIndex}
                 nowMs={nowMs}
+                expanded={expanded}
                 onSelect={(): void => {
                   parentRef.current?.focus();
                   activate(virtualItem.index);
+                  props.onToggleCommit?.(commit);
                 }}
               />
+              {expanded ? (
+                commitFilesLoadState === 'loading' ? (
+                  <p role="status" className="h-9 px-4 py-2 text-xs text-text-secondary">
+                    Loading files
+                  </p>
+                ) : commitFilesLoadState === 'error' && commitFiles.length === 0 ? (
+                  <p role="status" className="h-9 px-4 py-2 text-xs text-text-secondary">
+                    Could not refresh files.
+                  </p>
+                ) : commitFiles.length === 0 ? (
+                  <p role="status" className="h-9 px-4 py-2 text-xs text-text-secondary">
+                    No file changes
+                  </p>
+                ) : (
+                  <div
+                    className="flex min-h-0 flex-col pl-2"
+                    style={{ height: Math.min(240, commitFiles.length * 28 + 16) }}
+                  >
+                    {commitFilesLoadState === 'error' ? (
+                      <p role="status" className="px-2 pb-1 text-xs text-text-secondary">
+                        Could not refresh files.
+                      </p>
+                    ) : null}
+                    <ChangedFilesList
+                      files={commitFiles}
+                      activeIndex={commitFileActiveIndex}
+                      onActiveIndexChange={setCommitFileActiveIndex}
+                      selectedPath={props.selectedPath}
+                      onOpenFile={props.onOpenFile}
+                      ariaLabel="Commit files"
+                      idPrefix={`sc-commit-${commit.oid}-file`}
+                    />
+                  </div>
+                )
+              ) : null}
             </div>
           );
         })}

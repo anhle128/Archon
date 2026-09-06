@@ -95,6 +95,70 @@ describe('CommitHistoryGraph', () => {
     expect(html).toContain('height:4800px');
     expect(html).not.toContain('commit-199');
   });
+
+  test('renders expanded commit files inline with a distinct list prefix and no Back copy', () => {
+    const html = renderToStaticMarkup(
+      <CommitHistoryGraph
+        commits={COMMITS}
+        nowMs={NOW}
+        expandedOid={D}
+        commitFiles={[{ path: 'src/from-commit.ts', status: 'M' }]}
+        commitFilesLoadState="idle"
+        onToggleCommit={(): void => undefined}
+      />
+    );
+    expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain('aria-label="Commit files"');
+    expect(html).toContain('src/from-commit.ts');
+    expect(html).toContain('sc-commit-' + D + '-file-0');
+    expect(html).toContain('>M<');
+    expect(html).not.toContain('Back');
+  });
+
+  test('renders bounded loading and refresh-error copy inside the expanded row', () => {
+    const loading = renderToStaticMarkup(
+      <CommitHistoryGraph
+        commits={COMMITS}
+        nowMs={NOW}
+        expandedOid={D}
+        commitFiles={[]}
+        commitFilesLoadState="loading"
+      />
+    );
+    expect(loading).toContain('Loading files');
+    expect(loading).toContain('height:132px');
+    const failed = renderToStaticMarkup(
+      <CommitHistoryGraph
+        commits={COMMITS}
+        nowMs={NOW}
+        expandedOid={D}
+        commitFiles={[]}
+        commitFilesLoadState="error"
+      />
+    );
+    expect(failed).toContain('Could not refresh files.');
+    expect(failed).not.toContain('No file changes');
+  });
+
+  test('reserves expanded-row height while the nested file list remains virtualized', () => {
+    const files = Array.from({ length: 200 }, (_unused, index) => ({
+      path: `commit-file-${String(index)}.ts`,
+      status: 'M' as const,
+    }));
+    const html = renderToStaticMarkup(
+      <CommitHistoryGraph
+        commits={COMMITS}
+        nowMs={NOW}
+        expandedOid={D}
+        commitFiles={files}
+        commitFilesLoadState="idle"
+        onToggleCommit={(): void => undefined}
+      />
+    );
+    expect(html).toContain('height:336px');
+    expect(html).toContain('height:5600px');
+    expect(html).not.toContain('commit-file-199.ts');
+  });
 });
 
 describe('nextCommitIndex', () => {

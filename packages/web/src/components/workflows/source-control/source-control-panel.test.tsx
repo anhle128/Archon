@@ -16,6 +16,11 @@ function renderPanel(overrides: Partial<PanelProps> = {}): string {
       stale={false}
       onReload={(): void => undefined}
       onAcceptPending={(): void => undefined}
+      expandedCommit={null}
+      commitSnapshot={null}
+      commitLoadState="idle"
+      onToggleCommit={(): void => undefined}
+      onOpenCommitFile={(): void => undefined}
       {...overrides}
     />
   );
@@ -141,7 +146,7 @@ describe('SourceControlPanel', () => {
         ],
         revision: 'a'.repeat(64),
       },
-      selectedPath: 'new.ts',
+      selectedNowPath: 'new.ts',
     });
 
     const activeStart = html.indexOf('id="sc-changes-file-0"');
@@ -243,5 +248,74 @@ describe('SourceControlPanel', () => {
     });
 
     expect(html).toContain('Showing the newest 500 commits.');
+  });
+
+  test('keeps Changes pinned while History shows an expanded commit file list', () => {
+    const html = renderPanel({
+      snapshot: { files: [{ path: 'now.ts', status: 'A' }], revision: 'a'.repeat(64) },
+      historySnapshot: {
+        commits: [
+          {
+            oid: '1'.repeat(40),
+            parents: [],
+            authorName: 'Ada',
+            authorDate: '2026-09-06T18:09:18Z',
+            subject: 'work',
+          },
+        ],
+        revision: 'a'.repeat(64),
+        truncated: false,
+      },
+      expandedCommit: {
+        oid: '1'.repeat(40),
+        parents: [],
+        authorName: 'Ada',
+        authorDate: '2026-09-06T18:09:18Z',
+        subject: 'work',
+      },
+      commitSnapshot: {
+        files: [{ path: 'then.ts', status: 'M' }],
+        revision: 'b'.repeat(64),
+      },
+      commitLoadState: 'idle',
+      onToggleCommit: (): void => undefined,
+    });
+    expect(html).toContain('Changes');
+    expect(html).toContain('now.ts');
+    expect(html).toContain('then.ts');
+    expect(html).toContain('History');
+    expect(html).not.toContain('Back');
+    expect(html).not.toContain('Stage');
+  });
+
+  test('shows No file changes for an expanded empty commit', () => {
+    const html = renderPanel({
+      snapshot: { files: [], revision: 'a'.repeat(64) },
+      historySnapshot: {
+        commits: [
+          {
+            oid: '1'.repeat(40),
+            parents: [],
+            authorName: 'Ada',
+            authorDate: '2026-09-06T18:09:18Z',
+            subject: 'empty',
+          },
+        ],
+        revision: 'a'.repeat(64),
+        truncated: false,
+      },
+      expandedCommit: {
+        oid: '1'.repeat(40),
+        parents: [],
+        authorName: 'Ada',
+        authorDate: '2026-09-06T18:09:18Z',
+        subject: 'empty',
+      },
+      commitSnapshot: { files: [], revision: 'b'.repeat(64) },
+      commitLoadState: 'idle',
+      onToggleCommit: (): void => undefined,
+    });
+    expect(html).toContain('No file changes');
+    expect(html).toContain('No uncommitted changes');
   });
 });

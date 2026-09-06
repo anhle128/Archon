@@ -591,7 +591,12 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
             onReload={onReload}
             onAcceptPending={onAcceptPending}
             onOpenFile={onOpenFile}
-            selectedPath={selectedFile?.path ?? null}
+            selectedNowPath={selectedFile?.path ?? null}
+            expandedCommit={null}
+            commitSnapshot={null}
+            commitLoadState="idle"
+            onToggleCommit={(): void => undefined}
+            onOpenCommitFile={(): void => undefined}
             listRef={listRef}
           />
         }

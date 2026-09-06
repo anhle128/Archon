@@ -567,6 +567,11 @@ describe('SourceControlTab', () => {
           stale: false,
           onReload: (): void => undefined,
           onAcceptPending: (): void => undefined,
+          expandedCommit: null,
+          commitSnapshot: null,
+          commitLoadState: 'idle',
+          onToggleCommit: (): void => undefined,
+          onOpenCommitFile: (): void => undefined,
           onOpenFile: (file: GitChangedFile): void => {
             opened.push(file);
           },
@@ -628,6 +633,11 @@ describe('SourceControlTab', () => {
           stale: false,
           onReload: (): void => undefined,
           onAcceptPending: (): void => undefined,
+          expandedCommit: null,
+          commitSnapshot: null,
+          commitLoadState: 'idle',
+          onToggleCommit: (): void => undefined,
+          onOpenCommitFile: (): void => undefined,
         })
       );
     });

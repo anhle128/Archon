@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactElement, type Ref } from 'react';
 
-import type { GitChangedFile, GitEmptyReason } from '@/lib/api';
+import type { GitChangedFile, GitEmptyReason, GitLogCommit } from '@/lib/api';
 
 import { ChangedFilesList } from './changed-files-list';
 import { CommitHistoryGraph } from './commit-history-graph';
@@ -19,17 +19,28 @@ export interface SourceControlPanelProps {
   onReload: () => void;
   onAcceptPending: () => void;
   onOpenFile?: (file: GitChangedFile) => void;
-  selectedPath?: string | null;
+  selectedNowPath?: string | null;
+  selectedCommitPath?: string | null;
   ariaLabel?: string;
   idPrefix?: string;
   listRef?: Ref<HTMLDivElement | null>;
+  expandedCommit: GitLogCommit | null;
+  commitSnapshot: SourceControlSnapshot | null;
+  commitLoadState: SourceControlLoadState;
+  onToggleCommit: (commit: GitLogCommit) => void;
+  onOpenCommitFile: (file: GitChangedFile) => void;
 }
 
 function displayedEmptyReason(
   snapshot: SourceControlSnapshot | null,
-  historySnapshot: GitLogSnapshot | null
+  historySnapshot: GitLogSnapshot | null,
+  commitSnapshot: SourceControlSnapshot | null
 ): GitEmptyReason | undefined {
-  const reasons = [snapshot?.emptyReason, historySnapshot?.emptyReason];
+  const reasons = [
+    snapshot?.emptyReason,
+    historySnapshot?.emptyReason,
+    commitSnapshot?.emptyReason,
+  ];
   if (reasons.includes('container')) return 'container';
   return reasons.find(reason => reason === 'no_checkout');
 }
@@ -37,9 +48,17 @@ function displayedEmptyReason(
 export function SourceControlPanel(props: SourceControlPanelProps): ReactElement {
   const files = props.snapshot?.files ?? [];
   const commits = props.historySnapshot?.commits ?? [];
+  const commitFiles =
+    props.commitSnapshot != null && props.commitSnapshot.emptyReason === undefined
+      ? props.commitSnapshot.files
+      : [];
   const [activeIndex, setActiveIndex] = useState(0);
   const clampedActiveIndex = files.length === 0 ? 0 : Math.min(files.length - 1, activeIndex);
-  const emptyReason = displayedEmptyReason(props.snapshot, props.historySnapshot);
+  const emptyReason = displayedEmptyReason(
+    props.snapshot,
+    props.historySnapshot,
+    props.commitSnapshot
+  );
 
   useEffect(() => {
     if (activeIndex !== clampedActiveIndex) setActiveIndex(clampedActiveIndex);
@@ -132,7 +151,7 @@ export function SourceControlPanel(props: SourceControlPanelProps): ReactElement
             onActiveIndexChange={(index: number): void => {
               setActiveIndex(index);
             }}
-            selectedPath={props.selectedPath}
+            selectedPath={props.selectedNowPath}
             onOpenFile={props.onOpenFile}
             ariaLabel={props.ariaLabel}
             idPrefix={props.idPrefix}
@@ -186,7 +205,17 @@ export function SourceControlPanel(props: SourceControlPanelProps): ReactElement
           </p>
         ) : null}
 
-        {commits.length > 0 ? <CommitHistoryGraph commits={commits} /> : null}
+        {commits.length > 0 ? (
+          <CommitHistoryGraph
+            commits={commits}
+            expandedOid={props.expandedCommit?.oid ?? null}
+            commitFiles={commitFiles}
+            commitFilesLoadState={props.commitLoadState}
+            selectedPath={props.selectedCommitPath}
+            onToggleCommit={props.onToggleCommit}
+            onOpenFile={props.onOpenCommitFile}
+          />
+        ) : null}
       </section>
     </div>
   );
