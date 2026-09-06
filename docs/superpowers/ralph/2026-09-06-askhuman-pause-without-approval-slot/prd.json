@@ -40,8 +40,8 @@
         "US-001"
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 2. Files: packages/workflows/src/store.ts, packages/core/src/db/workflows.ts, packages/core/src/db/workflows.test.ts. Ask pause omits metadata.approval; already-paused is idempotent; gate pause unchanged."
     },
     {
       "id": "US-003",
@@ -58,8 +58,8 @@
       "technicalNotes": "Follow plan Task 3 at docs/superpowers/plans/2026-09-06-askhuman-pause-without-approval-slot.md:602-690. Modify migrations/000_combined.sql, packages/core/src/db/adapters/sqlite.ts, packages/core/src/db/adapters/sqlite.test.ts, AGENTS.md, and run bun run generate:bundled-schema.",
       "dependsOn": [],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 3. Files: migrations/000_combined.sql, packages/core/src/db/adapters/sqlite.ts, packages/core/src/db/adapters/sqlite.test.ts, packages/core/src/db/bundled-schema.generated.ts, AGENTS.md. Table 23 has 12 columns, named unique (workflow_run_id, tool_use_id), trailing column comments, SQLite parity floor 181, Better Auth documented as 24-27."
     },
     {
       "id": "US-004",
@@ -82,8 +82,8 @@
         "US-003"
       ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 4. Files: packages/workflows/src/schemas/pending-interaction.ts, packages/workflows/src/schemas/pending-interaction.test.ts, packages/providers/src/types.ts, packages/core/src/schemas/pending-interaction.ts, packages/core/src/schemas/index.ts, packages/core/src/db/workflow-pending-interactions.ts, packages/core/src/db/workflow-pending-interactions.test.ts, packages/core/src/db/index.ts, packages/core/package.json. Insert+node_awaiting are one transaction; null user_id throws AskHumanNoStarterError; list orders created_at ASC, id ASC."
     },
     {
       "id": "US-005",
@@ -100,8 +100,8 @@
         "US-004"
       ],
       "priority": 5,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 5. Files: packages/workflows/src/store.ts, packages/core/src/workflows/store-adapter.ts, packages/core/src/workflows/store-adapter.test.ts, packages/workflows/src/dag-executor.test.ts, packages/workflows/src/executor.test.ts, packages/workflows/src/executor-preamble.test.ts, packages/workflows/src/script-node-deps.test.ts, packages/workflows/src/subrun.test.ts. IWorkflowPendingInteractionStore composed into IWorkflowStore; adapter delegates to DB; doubles compile."
     },
     {
       "id": "US-006",
@@ -122,8 +122,8 @@
         "US-005"
       ],
       "priority": 6,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 6. Files: packages/server/src/routes/schemas/workflow.schemas.ts, packages/server/src/routes/api.ts, packages/server/src/routes/api.workflow-runs.test.ts, packages/web/src/lib/api.generated.d.ts, packages/web/src/lib/types.ts, packages/web/src/components/workflows/NodeRunList.tsx. GET run embeds pending_interactions from the table, projects awaiting, keeps messages Ask-free."
     },
     {
       "id": "US-007",
@@ -142,8 +142,8 @@
         "US-005"
       ],
       "priority": 7,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "WORKFLOW_EVENT_TYPES includes node_awaiting and interaction_resolved. Live emitter event is { type: 'node_awaiting', runId, nodeId } with no card. DASHBOARD_SOURCE_EVENT_TYPES includes node_awaiting. Poller and live mappings emit workflow_status paused without approval/envelope/questions. Slack exhaustive switch ignores node_awaiting (no approval card). interaction_resolved is not mapped in Story 6.2."
     },
     {
       "id": "US-008",
@@ -163,8 +163,8 @@
         "US-004"
       ],
       "priority": 8,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 8. Files: packages/providers/src/types.ts, packages/providers/src/claude/native-tools.ts, packages/providers/src/claude/native-tools.test.ts, packages/providers/src/community/pi/native-tools.ts, packages/providers/src/community/pi/native-tools.test.ts. Nested questions[] conversion, NativeToolHandlerContext, runtime onControlError rethrows same instance."
     },
     {
       "id": "US-009",
@@ -184,8 +184,8 @@
         "US-008"
       ],
       "priority": 9,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 9. Files: packages/providers/src/claude/provider.ts, packages/providers/src/claude/provider.test.ts. Attempt-local bridge captures session_id and PreToolUse tool_use_id; onControlError aborts and sendQuery rethrows the same AskHumanControlError before classify/retry and after clean iterator exit."
     },
     {
       "id": "US-010",
@@ -204,8 +204,8 @@
         "US-008"
       ],
       "priority": 10,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 10. Files: packages/providers/src/community/pi/provider.ts, packages/providers/src/community/pi/provider.test.ts. Per-session runtime supplies session.sessionId and _toolCallId; onControlError aborts and sendQuery rethrows the same AskHumanControlError after bridgeSession returns or throws."
     },
     {
       "id": "US-011",
@@ -225,8 +225,8 @@
         "US-010"
       ],
       "priority": 11,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 11. Files: packages/providers/src/types.ts, packages/providers/src/{claude,codex,grok,e2e-fake,community/{pi,copilot,omp,opencode,qodercli}}/capabilities.ts, scripts/generate-capability-matrix.ts, packages/docs-web/src/content/docs/reference/provider-capabilities.md, packages/providers/src/registry.test.ts, packages/providers/src/observability.test.ts, packages/providers/src/claude/provider.test.ts, packages/providers/src/codex/provider.test.ts."
     },
     {
       "id": "US-012",
@@ -249,8 +249,8 @@
         "US-011"
       ],
       "priority": 12,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 12. Files: packages/workflows/src/ask-human.ts, packages/workflows/src/ask-human.test.ts, packages/workflows/src/dag-executor.ts, packages/workflows/src/dag-executor.test.ts, packages/workflows/package.json. AskHuman is injected on command/prompt/loop when askHuman is true; Ask pause omits approval context, records awaiting, emits live node_awaiting, and skips node_completed/node_failed. NoStarter and persist errors take the node-failed path."
     },
     {
       "id": "US-013",
@@ -271,8 +271,8 @@
         "US-012"
       ],
       "priority": 13,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 13. Files: packages/workflows/src/dag-executor.ts, packages/workflows/src/dag-executor.test.ts, packages/core/src/orchestrator/orchestrator-agent.test.ts. collectAskHumanUnsupportedProviders inspects command/prompt/loop and nested loop_group bodies via WorkflowModelScope. allowed_tools names are normalized with split(\"(\")[0].trim(). AskHuman/mcp__archon__AskHuman on askHuman === false throws before sendQuery. Chat still injects only manage_run."
     },
     {
       "id": "US-014",
@@ -294,8 +294,8 @@
         "US-013"
       ],
       "priority": 14,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 14. Files: _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml. All Task 14 focused suites passed; generate/check bundled-schema and capability-matrix clean; check:schema-upgrades OK on archon-postgres-1; bun run validate passed with NODE_OPTIONS=--max-old-space-size=8192. No Ask cards, answer POST, or resolvePendingInteraction mapper."
     }
   ]
 }
