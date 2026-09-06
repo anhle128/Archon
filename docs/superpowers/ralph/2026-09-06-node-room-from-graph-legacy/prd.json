@@ -1,0 +1,162 @@
+{
+  "feature": "Node Room From Graph (Legacy)",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Pure run-graph contracts, constants, and taken-path classifier",
+      "description": "As a web developer, I want pure types, constants, and taken-path classification modules, so that graph layout and path routing share a dependency-free mathematical foundation.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/lib/run-graph/types.ts defining NodeState ('pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'awaiting'), RouteOutcome ('positive' | 'negative' | 'exhausted'), LayoutEdgeKind ('dependency' | 'conditional' | 'route'), LayoutNode, LayoutEdge, Point, PortSide ('top' | 'bottom' | 'left' | 'right'), LayoutRoute, LayoutResult, and LayoutInput.",
+        "Create packages/web/src/lib/run-graph/constants.ts exporting exact constants NODE_WIDTH = 180, NODE_HEIGHT = 80, NODE_SEP = 40, RANK_SEP = 80, SIDE_PORT_THRESHOLD = 135 (NODE_WIDTH * 0.75), and BACK_EDGE_GUTTER = 46.",
+        "Create packages/web/src/lib/run-graph/taken-path.ts implementing isOnPath(state: NodeState | undefined): boolean and isEdgeTaken(targetState: NodeState | undefined): boolean.",
+        "isOnPath returns true only for 'running', 'completed', 'failed', and 'awaiting'; returns false for 'pending', 'skipped', and undefined.",
+        "isEdgeTaken delegates to isOnPath(targetState) according to the approved target-started rule.",
+        "The pure module contains zero imports from react, @xyflow/react, @dagrejs/dagre, @/lib/api, or browser DOM (window/document).",
+        "Write unit tests in packages/web/src/lib/run-graph/taken-path.test.ts verifying all NodeState values and passing via ( cd packages/web && bun test src/lib/run-graph/taken-path.test.ts )."
+      ],
+      "technicalNotes": "Follow Task 1 of plan: docs/superpowers/plans/2026-09-06-node-room-from-graph-legacy.md:107-205, 303-338. Create types.ts, constants.ts, taken-path.ts, and taken-path.test.ts in packages/web/src/lib/run-graph/. Pure TypeScript only, no any, no external dependencies.",
+      "dependsOn": [],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Cycle-safe layered positions",
+      "description": "As a web developer, I want a deterministic cycle-safe layered position algorithm, so that complex workflows with retry loops receive stable, readable node coordinates.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/lib/run-graph/positions.ts implementing computePositions(nodeIds: readonly string[], edges: readonly LayoutEdge[]): PositionResult returning positions, layers, and backEdgeIds.",
+        "Deduplicate node IDs preserving their first appearance, and ignore edges whose source or target is not in the deduplicated set.",
+        "Build adjacency lists in input edge order and detect back edges using DFS (marking self-edges and edges to an active gray ancestor as back edges).",
+        "Exclude detected back edges from longest-path layering; assign targetLayer = max(targetLayer, sourceLayer + 1) in topological order.",
+        "Perform two complete barycenter sweeps (top-down with predecessors, bottom-up with successors), preserving current positions for nodes without adjacent neighbors and breaking ties with original first-seen index.",
+        "Center each layer horizontally within the maximum layer width using NODE_WIDTH + NODE_SEP (220px) horizontal spacing and NODE_HEIGHT + RANK_SEP (160px) vertical spacing, returning top-left coordinates.",
+        "Calculation never inspects node states and produces byte-for-byte identical output on repeated calls.",
+        "Tests in packages/web/src/lib/run-graph/positions.test.ts cover empty input, single node, duplicate IDs, missing endpoints, fork centering, layer crossings (a->d, b->c reordering), retry loop back edges (start->work->review->work), two-node cycles, and determinism, passing via ( cd packages/web && bun test src/lib/run-graph/positions.test.ts )."
+      ],
+      "technicalNotes": "Follow Task 2 of plan: docs/superpowers/plans/2026-09-06-node-room-from-graph-legacy.md:207-240, 340-388. Create packages/web/src/lib/run-graph/positions.ts and positions.test.ts. Follow the approved barycenter and DFS cycle breaking algorithms.",
+      "dependsOn": [
+        "US-001"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Cubic routes and public layout function",
+      "description": "As a web developer, I want distance-aware cubic edge routing and a public layout function, so that React Flow edges render smooth, collision-free paths for forward and back edges.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/lib/run-graph/routes.ts implementing buildRoutes(input): LayoutRoute[] generating cubic SVG paths in 'M x y C x y x y x y' format.",
+        "Forward edges leave source bottom-center; short edges (span <= 1 layer or horizontal offset <= SIDE_PORT_THRESHOLD) enter target top-center with bend = Math.max(18, (end.y - start.y) * 0.45).",
+        "Long forward edges enter target left-center when target is right of source, or right-center when target is left of source, with sourceBend = Math.max(24, (end.y - start.y) * 0.5) and targetBend = Math.max(40, Math.abs(dx) * 0.35).",
+        "Non-self back edges leave source left-center, enter target left-center, and route through an outer left-flank lane at min(source.x, target.x) - BACK_EDGE_GUTTER.",
+        "Self-edges start at left-center, end at top-center, and route through an upper-left gutter lane.",
+        "Set labelPosition appropriately for top-target, side-target, back-edge, and self-edge routes, and preserve kind, label, and outcome from input edges.",
+        "Set taken from target state via isOnPath; set backEdge from backEdgeIds; omit routes when either endpoint lacks a position.",
+        "Create packages/web/src/lib/run-graph/layout.ts implementing layout(input: LayoutInput): LayoutResult combining computePositions and buildRoutes.",
+        "Create packages/web/src/lib/run-graph/index.ts exporting layout as the only runtime value, along with type exports for NodeState, RouteOutcome, LayoutEdgeKind, LayoutNode, LayoutEdge, Point, PortSide, LayoutRoute, LayoutResult, and LayoutInput.",
+        "Tests in routes.test.ts and layout.test.ts cover all routing geometries, label positions, state-independent positions, back routes, and public contracts, passing via ( cd packages/web && bun test src/lib/run-graph/routes.test.ts src/lib/run-graph/layout.test.ts ).",
+        "Import audit confirms no imports from react, @xyflow/react, @dagrejs/dagre, @/lib/api, window, or document in packages/web/src/lib/run-graph/."
+      ],
+      "technicalNotes": "Follow Task 3 of plan: docs/superpowers/plans/2026-09-06-node-room-from-graph-legacy.md:242-281, 390-449. Create routes.ts, routes.test.ts, layout.ts, layout.test.ts, index.ts. Keep public API narrow.",
+      "dependsOn": [
+        "US-001",
+        "US-002"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Adapt workflow definitions to shared run-graph input",
+      "description": "As a web developer, I want an adapter from DagNode definitions and live execution statuses to LayoutInput, so that the legacy viewer can consume pure layout without coupling to engine schemas.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/components/workflows/build-run-graph-input.ts exporting buildRunGraphInput and layoutRunGraph.",
+        "buildRunGraphInput transforms DagNode[] and liveStatus into RunGraphInput in definition order; the last matching live status wins, and missing status defaults to 'pending'.",
+        "The adapter never maps or emits 'awaiting' from WorkflowStepStatus in Story 5.3.",
+        "Ordinary depends_on dependencies become dependency edges with id `${dependency}->${node.id}`; when node.when is non-empty, edge kind becomes 'conditional' with label: node.when.",
+        "route_loop targets suppress ordinary dependency edges from the route controller; route targets are emitted in reversed ROUTE_LOOP_OUTCOMES order ('exhausted', 'negative', 'positive') with kind: 'route' and label set to outcome.",
+        "Target id collisions use `${source}->${target}:${outcome}` for uniqueness.",
+        "layoutRunGraph passes the adapter output directly to pure layout().",
+        "Tests in build-run-graph-input.test.ts verify node order, live status precedence, conditional edges, route_loop ordering and deduplication, and skipped target classification, passing via ( cd packages/web && bun test src/components/workflows/build-run-graph-input.test.ts src/lib/dag-layout.test.ts )."
+      ],
+      "technicalNotes": "Follow Task 4 of plan: docs/superpowers/plans/2026-09-06-node-room-from-graph-legacy.md:283-317, 451-496. Create build-run-graph-input.ts and build-run-graph-input.test.ts. Import ROUTE_LOOP_OUTCOMES, RouteLoopConfig, and DagNode from @/lib/api.",
+      "dependsOn": [
+        "US-003"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Render shared routes in legacy React Flow viewer",
+      "description": "As an operator, I want the legacy DAG viewer to render nodes and edges using shared run-graph routes and styling, so that taken paths, conditions, and retry loops are visually clear without breaking pan/zoom.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/components/workflows/RunGraphRouteEdge.tsx exporting RunGraphRouteEdge component and RunGraphFlowEdge type.",
+        "RunGraphRouteEdge renders BaseEdge with route.path, labelX, labelY, label, and markerEnd without recalculating geometry.",
+        "Edge stroke styles follow design tokens: untaken edges use var(--border); taken dependency/conditional use var(--accent-bright); taken positive route uses var(--success); taken negative route uses var(--accent); taken exhausted route uses var(--error); back edges and conditional edges use stroke-dasharray (dashed).",
+        "Create packages/web/src/components/workflows/build-workflow-dag-view-model.ts exporting buildWorkflowDagViewModel(input): WorkflowDagViewModel.",
+        "buildWorkflowDagViewModel sets node positions from layoutRunGraph, preserves all execution node display fields via resolveExecutionNodeDisplay, sets selected from selectedNodeId, and creates React Flow edges with type: 'runGraphRoute' and animated: true only when target node status is 'running'.",
+        "Update packages/web/src/components/workflows/WorkflowDagViewer.tsx to register edgeTypes = { runGraphRoute: RunGraphRouteEdge } at module scope, replace dagNodesToReactFlow with buildWorkflowDagViewModel, and retain fit, pan, zoom, controls, executing chip, and onNodeClick.",
+        "Tests in RunGraphRouteEdge.test.tsx and build-workflow-dag-view-model.test.ts pass via ( cd packages/web && bun test src/components/workflows/build-workflow-dag-view-model.test.ts src/components/workflows/RunGraphRouteEdge.test.tsx ).",
+        "packages/web type check passes with no any and no React Flow generic mismatches via ( cd packages/web && bun run type-check )."
+      ],
+      "technicalNotes": "Follow Task 5 of plan: docs/superpowers/plans/2026-09-06-node-room-from-graph-legacy.md:319-366, 498-558. Create RunGraphRouteEdge.tsx, RunGraphRouteEdge.test.tsx, build-workflow-dag-view-model.ts, build-workflow-dag-view-model.test.ts; modify WorkflowDagViewer.tsx.",
+      "dependsOn": [
+        "US-004"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Share one room between Graph and Logs with unified selection",
+      "description": "As an operator, I want clicking a graph node to open the exact same per-type node room as clicking a logs row, so that switching between Graph and Logs preserves node selection and room state.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/components/workflows/resolve-graph-room-row.ts exporting resolveGraphRoomRow(input): LogRow | null.",
+        "resolveGraphRoomRow returns null when nodeId is null; prefers the last ordinary { kind: 'node' } row matching nodeId; falls back to the last matching row (e.g. iteration); or synthesizes a pending LogRow from liveStatus or nodeId if no row matches.",
+        "Move packages/web/src/components/workflows/LegacyNodeLogs.tsx to LegacyGraphLogsPane.tsx (using git mv) and rename export to LegacyGraphLogsPane.",
+        "LegacyGraphLogsPane renders a single ResizablePanelGroup (defaultSizes 60/40); left panel renders renderGraph in 'graph' mode or NodeRunList in 'logs' mode; right panel always renders the single LegacyNodeRoom.",
+        "LegacyGraphLogsPane tracks selectedLogRowId; graph node clicks clear selectedLogRowId and resolve canonical row via resolveGraphRoomRow, while logs row clicks preserve iteration-specific row ID.",
+        "Switching between Graph and Logs preserves the selected node, room DOM node, and does not re-fetch messages for unchanged selections.",
+        "Add pure selector resolveWorkflowExecutionBody to packages/web/src/components/workflows/WorkflowExecution.tsx, returning 'graph-logs-pane' for DAG Graph and Logs views, 'source-control' for Source Control, 'chat' for Chat with parent, and 'sequential' for non-DAG runs.",
+        "Update WorkflowExecution.tsx renderBody to use resolveWorkflowExecutionBody, rendering LegacyGraphLogsPane for both Graph and Logs, removing mergedLogsPanel from DAG Graph mode.",
+        "Ensure neither Graph nor Logs contains AskHuman cards, empty Ask slots, awaiting status, or waiting-on-you chrome.",
+        "Tests in resolve-graph-room-row.test.ts, LegacyGraphLogsPane.test.tsx, and WorkflowExecution.test.tsx pass via ( cd packages/web && bun test src/components/workflows/WorkflowExecution.test.tsx src/components/workflows/resolve-graph-room-row.test.ts && NODE_ENV=development bun test src/components/workflows/LegacyGraphLogsPane.test.tsx )."
+      ],
+      "technicalNotes": "Follow Task 6 of plan: docs/superpowers/plans/2026-09-06-node-room-from-graph-legacy.md:368-450, 560-690. Move LegacyNodeLogs.tsx/test to LegacyGraphLogsPane.tsx/test via git mv. Implement resolveGraphRoomRow and wire WorkflowExecution.tsx.",
+      "dependsOn": [
+        "US-005"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "Validate story and update sprint tracking",
+      "description": "As a release engineer, I want all pure, adapter, component, and integration tests validated with full repository checks, so that Story 5.3 is cleanly transitioned to done.",
+      "acceptanceCriteria": [
+        "All unit and adapter tests in packages/web pass: run-graph taken-path, positions, routes, layout, build-run-graph-input, build-workflow-dag-view-model, RunGraphRouteEdge, resolve-graph-room-row, and dag-layout.",
+        "All mounted pane and room tests pass in isolated invocations with NODE_ENV=development: LegacyGraphLogsPane.test.tsx, LegacyNodeRoom.test.tsx, NodeTranscriptPane.test.tsx, NodeRoom.test.tsx.",
+        "Neighboring regressions in WorkflowExecution.test.tsx, dag-run-tabs.test.tsx, and build-log-rows.test.ts pass.",
+        "packages/web type check passes with zero errors via ( cd packages/web && bun run type-check ).",
+        "bun run lint --max-warnings 0 exits zero with no warnings.",
+        "bun run validate exits zero.",
+        "Update _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml changing 5-3-open-the-same-node-room-from-the-graph-legacy from backlog to done and updating last_updated timestamps.",
+        "git diff --check and bun run format:check exit zero; final diff is clean and contains only story files and sprint status."
+      ],
+      "technicalNotes": "Follow Task 7 of plan: docs/superpowers/plans/2026-09-06-node-room-from-graph-legacy.md:692-749. Run checks in sequence. Never run bare bun test from repository root.",
+      "dependsOn": [
+        "US-006"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
