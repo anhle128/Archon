@@ -124,8 +124,8 @@
         "US-005"
       ],
       "priority": 6,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 6. Files: packages/web/src/components/workflows/source-control/source-control-tab.tsx, packages/web/src/component-integration/source-control-tab.test.tsx."
     },
     {
       "id": "US-007",

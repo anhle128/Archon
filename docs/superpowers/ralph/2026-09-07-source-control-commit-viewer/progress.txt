@@ -1,5 +1,16 @@
 ## Codebase Patterns
 
+### Set viewerScopeRef before starting a viewer request
+- **Where**: `packages/web/src/components/workflows/source-control/source-control-tab.tsx` `onOpenScopedFile`
+- **Pattern**: Assign `viewerScopeRef.current = scope` and `setViewerScope(scope)` synchronously before `beginRequest()`. Capture `fetchSpy` into a const before `waitFor` closures so tsc does not re-widen `let fetchSpy`.
+- **Example**: `viewerScopeRef.current = scope; setViewerScope(scope);`
+
+### Route commit changes separately from Now in mockGitRoutes
+- **Where**: `packages/web/src/component-integration/source-control-tab.test.tsx` `mockGitRoutes`
+- **Pattern**: Parse `ref` from `/git/changes` with `new URL(url, 'http://archon.local')`. A present `ref` must not increment the Now `changesCall` counter. Story 2.1 Enter-to-expand tests need `onCommitChanges`.
+- **Example**: `if (ref !== null) { commitChangesCall += 1; ... }`
+
+
 ### Isolate nested History keyboard at the listbox boundary
 - **Where**: `packages/web/src/components/workflows/source-control/commit-history-graph.tsx` `onKeyDown`
 - **Pattern**: Return when `event.currentTarget !== event.target` so nested `ChangedFilesList` Arrow/Enter/Space cannot move or collapse the outer History row. Enter/Space on the History listbox itself calls `onToggleCommit`.
@@ -182,5 +193,29 @@
 - Expanded History total size for 4 commits is 24+36+72=132 (loading) and 24+240+72=336 (populated); nested list 200×28=5600.
 - Direct `createElement(SourceControlPanel)` tests omit new required props unless stubs are added.
 - `commitSnapshot !== null` still reads `.emptyReason` when the prop is undefined; use `!= null`.
+
+---
+
+## 2026-09-07 — US-006: Load commit files into the shared viewer
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/source-control/source-control-tab.tsx` — ViewerScope, commit snapshot reducer + query, scope-aware loadViewerFile/openers
+- `packages/web/src/component-integration/source-control-tab.test.tsx` — commit changes mock routing; expand/M/A/D/fallback/collapse tests
+
+**Acceptance criteria verified**:
+- [x] ViewerScope type defaults to `{ kind: 'now' }`
+- [x] Dedicated sourceControlSnapshotReducer + useQuery `['workflowRunGitChanges', runId, expandedCommit?.oid]`
+- [x] onToggleCommit toggles expand without mutating the open viewer
+- [x] onOpenCommitFile sets commit scope and opens FileViewer
+- [x] M uses diff `ref: scope.oid`; A uses file `source: scope.oid`; D uses file `source: scope.parentOid`
+- [x] fileFallback true falls back to raw file `source: scope.oid`
+- [x] Collapse hides inline files and keeps the open commit viewer
+- [x] Mounted integration tests covering commit M, A, D, and binary fallback
+
+**Learnings**:
+- `calledUrls(fetchSpy)` inside `waitFor` fails tsc because `let fetchSpy` is re-widened in closures; capture a const first.
+- Enter on History now fetches `?ref=`; Story 2.1 keyboard tests must stub `onCommitChanges`.
+- Leave scoped paging and 3-snapshot Reload to US-007.
 
 ---
