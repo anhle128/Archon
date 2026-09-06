@@ -141,6 +141,10 @@ export const WORKFLOW_EVENT_TYPES = [
   // internal audit event; not mapped to external outbox or dashboard SSE sources.
   // Payload schema: packages/workflows/src/schemas/usage-breakdown.ts.
   'node_usage_recorded',
+  // AskHuman pause (Story 6.2). `interaction_resolved` is reserved for Story 6.3;
+  // do not map it to SSE in this story.
+  'node_awaiting',
+  'interaction_resolved',
 ] as const;
 
 export type WorkflowEventType = (typeof WORKFLOW_EVENT_TYPES)[number];
