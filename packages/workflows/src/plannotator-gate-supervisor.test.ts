@@ -43,6 +43,7 @@ class FakeGateStore implements Pick<
   | 'getWorkflowRunStatus'
   | 'resolveApprovalGate'
   | 'transitionPlannotatorGate'
+  | 'resolvePendingInteraction'
 > {
   run: WorkflowRun;
   events: StoredEvent[] = [];
@@ -241,6 +242,26 @@ class FakeGateStore implements Pick<
     });
     return true;
   }
+
+  resolvePendingInteraction: IWorkflowStore['resolvePendingInteraction'] = input =>
+    Promise.resolve({
+      interaction: {
+        id: 'pending-1',
+        workflow_run_id: input.workflow_run_id,
+        node_id: 'review',
+        tool_use_id: input.tool_use_id,
+        kind: 'ask',
+        status: 'answered',
+        envelope: {},
+        answer: input.answer,
+        provider_session_id: 'sess-1',
+        created_at: new Date(),
+        resolved_at: new Date(),
+        resolved_by: input.resolved_by,
+      },
+      resumed: false,
+      remaining_pending: 0,
+    });
 
   asStore(): IWorkflowStore {
     return this as unknown as IWorkflowStore;

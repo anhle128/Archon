@@ -16,6 +16,8 @@ import type { AppendNodeMessageInput, NodeMessage } from './schemas/node-message
 import type {
   InsertPendingInteractionInput,
   PendingInteraction,
+  ResolvePendingInteractionInput,
+  ResolvePendingInteractionResult,
 } from './schemas/pending-interaction';
 
 export interface PersistRouteDecisionTransitionInput {
@@ -231,12 +233,15 @@ export interface IWorkflowNodeMessageStore {
 
 /**
  * Pending AskHuman / permission row persistence. Inherited by `IWorkflowStore`
- * so the engine dependency object stays one seam; callers that only insert or
- * list pending rows can depend on this capability alone.
+ * so the engine dependency object stays one seam; callers that only insert,
+ * list, or resolve pending rows can depend on this capability alone.
  */
 export interface IWorkflowPendingInteractionStore {
   insertPendingInteraction(input: InsertPendingInteractionInput): Promise<PendingInteraction>;
   listPendingInteractions(workflowRunId: string): Promise<PendingInteraction[]>;
+  resolvePendingInteraction(
+    input: ResolvePendingInteractionInput
+  ): Promise<ResolvePendingInteractionResult>;
 }
 
 export interface IWorkflowStore

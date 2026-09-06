@@ -439,6 +439,8 @@ export function createWorkflowStore(): IWorkflowStore {
     insertPendingInteraction: input => workflowPendingInteractionDb.insertPendingInteraction(input),
     listPendingInteractions: workflowRunId =>
       workflowPendingInteractionDb.listPendingInteractions(workflowRunId),
+    resolvePendingInteraction: input =>
+      workflowPendingInteractionDb.resolvePendingInteraction(input),
   };
 }
 

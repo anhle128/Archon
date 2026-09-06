@@ -388,6 +388,26 @@ class InMemoryStore implements IWorkflowStore {
       this.pendingInteractions.filter(r => r.workflow_run_id === workflowRunId).map(r => ({ ...r }))
     );
 
+  resolvePendingInteraction: IWorkflowStore['resolvePendingInteraction'] = input =>
+    Promise.resolve({
+      interaction: {
+        id: 'pending-1',
+        workflow_run_id: input.workflow_run_id,
+        node_id: 'review',
+        tool_use_id: input.tool_use_id,
+        kind: 'ask',
+        status: 'answered',
+        envelope: {},
+        answer: input.answer,
+        provider_session_id: 'sess-1',
+        created_at: new Date(),
+        resolved_at: new Date(),
+        resolved_by: input.resolved_by,
+      },
+      resumed: false,
+      remaining_pending: 0,
+    });
+
   // --- test helpers ---
   /** Mimic approveWorkflow for a standard approval gate: write node_completed for
    *  the gate node + stamp approval.resolved='approved'. */
