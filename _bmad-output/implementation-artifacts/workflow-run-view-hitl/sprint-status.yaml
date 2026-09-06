@@ -1,5 +1,5 @@
 # generated: 2026-09-06 00:34:00 +0700
-# last_updated: 2026-09-07 03:35:00 +0700
+# last_updated: 2026-09-07 04:01:53 +0700
 # project: Archon
 # project_key: NOKEY
 # tracking_system: file-system
@@ -34,7 +34,7 @@
 #   - done: Retrospective has been completed
 
 generated: "2026-09-06 00:34:00 +0700"
-last_updated: "2026-09-07 03:35:00 +0700"
+last_updated: "2026-09-07 04:01:53 +0700"
 project: Archon
 feature: workflow-run-view-hitl
 project_key: NOKEY
@@ -55,28 +55,8 @@ development_status:
   6-1-prove-claude-and-pi-can-resume-after-askhuman: done
   6-2-pause-a-run-when-the-agent-asks-without-stealing-the-approval-slot: done
   6-3-answer-or-decline-the-ask-so-the-node-can-continue: done
-  6-4-keep-several-asks-outstanding-without-a-second-scheduler: backlog
+  6-4-keep-several-asks-outstanding-without-a-second-scheduler: done
   6-5-answer-the-ask-in-the-legacy-node-room: backlog
   6-6-answer-the-ask-in-the-command-center-room: backlog
   6-7-confirm-a-permission-by-envelope-only: backlog
   epic-6-retrospective: optional
-
-⚠ 2 unresolved conflicts detected
-- ours = HEAD
-- theirs = c25ea00c (chore: mark AskHuman answer story 6.3 done)
-NOTICE: Inspect a block by reading `conflict://<N>` (add `/ours` / `/theirs` / `/base` to render a single side). Resolve with `write({ path: "conflict://<N>", content })`, or bulk-resolve every registered conflict with `write({ path: "conflict://*", content })`. Writes replace ONLY the marker block (markers + all sides) — never repeat the lines before/after it; they stay in place.
-`content` shorthand: a line that is exactly `@ours` / `@theirs` / `@base` / `@both` expands to that recorded section. `@both` is ours-then-theirs with no separator — only for additive conflicts where each side adds something different; NEVER for competing edits of the same lines (pick a side or write the combined text). Lines that are not a token pass through verbatim, so `"// keep both\n@ours\n@theirs"` literally writes the comment, then ours, then theirs.
-Per-id bulk: `write({ path: "conflict://*", content: "1: @ours\n2: @theirs\n…" })` resolves each listed id with that side in ONE call — the cheapest way through many pick-one conflicts; unlisted ids stay registered.
-Resolve each block faithfully: keep one side (`@ours`/`@theirs`), or combine them when both intents apply — never invent content beyond the recorded sides, and never stack both sides of competing edits. Resolve several conflicts in a single turn by issuing multiple `write` calls at once; ids stay valid as earlier blocks are resolved.
-
-──── #1  L2-6 ────
-<<< ours
-# last_updated: 2026-09-06 23:44:20 +0700
->>> theirs
-# last_updated: 2026-09-07 01:23:49 +0700
-
-──── #2  L41-45 ────
-<<< ours
-last_updated: "2026-09-06 23:44:20 +0700"
->>> theirs
-last_updated: "2026-09-07 01:23:49 +0700"
