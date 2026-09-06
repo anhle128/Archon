@@ -1,5 +1,16 @@
 ## Codebase Patterns
 
+### Isolated OpenAPI generation uses a private server
+- **Where**: `packages/web` `generate:types`; `packages/server`
+- **Pattern**: `generate:types` hardcodes port 3090. If another checkout already owns 3090, start an isolated server (`ARCHON_HOME` temp dir, empty `DATABASE_URL`, `skipPlatformAdapters: true`, `HOST=127.0.0.1`, a free port) and run `openapi-typescript` against that `/api/openapi.json`. Do not kill or reuse a foreign 3090 process.
+- **Example**: `bun x openapi-typescript http://127.0.0.1:59953/api/openapi.json -o packages/web/src/lib/api.generated.d.ts`
+
+### CLI resume tests must mock pending-interaction helpers
+- **Where**: `packages/cli/src/commands/workflow.test.ts`; `packages/core/src/operations/workflow-operations.ts`
+- **Pattern**: `mock.module()` merges. `resumeWorkflow` now calls `listPendingInteractions`, so omitting `@archon/core/db/workflow-pending-interactions` leaves the real SQLite helper and fails with `unable to open database file` (#2240). Default the mock to an empty pending list.
+- **Example**: `listPendingInteractions: mock(() => Promise.resolve([]))`
+
+
 ### Pi Ask resume requires the existing session and continues the agent
 - **Where**: `packages/providers/src/community/pi/{session-resolver,event-bridge,provider}.ts`
 - **Pattern**: Non-empty `resumeInteractions` sets `requireExisting: true` (throws `PiSessionResumeRequiredError` instead of `SessionManager.create`), appends matching `ToolResultMessage` rows (or verifies identical existing ones), checks the transcript tail, then `bridgeSession(..., 'continue')` so `session.agent.continue()` runs and `session.prompt` never does. Failures log `{ errorClass }` as `pi.ask_resume_failed` and replace isError `errors` with `Could not resume the AskHuman session`. Continue-mode event-bridge logs must not include raw `err` or `errorMessage`.
@@ -327,5 +338,30 @@
 - Do not destructure PascalCase class names from dynamic imports (`PiSessionResumeRequiredError`); access them as `sessionResolver.PiSessionResumeRequiredError` to satisfy naming-convention.
 - Continue-mode event-bridge must not log raw `err` or `errorMessage` — both leak answer sentinels into the mock logger payload.
 - Run `askhuman-resume.characterization.test.ts` in its own `bun test` process; `provider.test.ts` `mock.module` of `@earendil-works/pi-coding-agent` poisons AuthStorage.inMemory in the same process.
+
+---
+
+## 2026-09-07 — US-012: Regenerate API contract, full validation, and mark Story 6.3 done
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/lib/api.generated.d.ts` — regenerated against an isolated OpenAPI server; includes POST `/api/workflows/runs/{runId}/ask/{requestId}/answer` and `AskAnswerBody`
+- `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml` — marked `6-3-answer-or-decline-the-ask-so-the-node-can-continue` as `done`
+
+**Acceptance criteria verified**:
+- [x] packages/web/src/lib/api.generated.d.ts regenerated and reflects POST `/api/workflows/runs/{runId}/ask/{requestId}/answer` and `AskAnswerBody`
+- [x] Package-isolated test suites pass in packages/workflows, packages/core, packages/server, packages/adapters, and packages/providers
+- [x] `bun run validate` exits 0 with no ESLint warnings and clean typechecks
+- [x] No migration files, database inventory discrepancies, or dependency lockfile versions modified
+- [x] sprint-status.yaml marks `6-3-answer-or-decline-the-ask-so-the-node-can-continue` as done
+
+**Learnings**:
+- `generate:types` cannot share another checkout's 3090; use a private server and `openapi-typescript` against that URL.
+- `bun run validate` pulled in CLI tests that now hit live SQLite via `resumeWorkflow` → `listPendingInteractions`; mock the pending-interaction module (merge-mock, same as #2240).
+- Never combine `provider.test.ts` and `askhuman-resume.characterization.test.ts` in one `bun test` process.
+
+**Blocker Ledger**:
+BLOCKER US-012 | gate=bun run validate | cause=packages/web/src/components/workflows/build-run-graph-input.ts:35 TS2366 Function lacks ending return statement (missing awaiting case; same fingerprint on clean stash) | action=chore(unblock) effd63f4 add case 'awaiting': return status | 2026-09-07
+BLOCKER US-012 | gate=bun test src/commands/workflow.test.ts (via bun run validate) | cause=packages/cli/src/commands/workflow.test.ts:6442 expected Cannot resume run with status 'completed', received unable to open database file (resumeWorkflow lists pending rows; same fingerprint on clean stash) | action=chore(unblock) 8318cd5b mock @archon/core/db/workflow-pending-interactions | 2026-09-07
 
 ---

@@ -255,8 +255,8 @@
         "US-011"
       ],
       "priority": 12,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 12. Files: packages/web/src/lib/api.generated.d.ts, _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml. Unblocks: effd63f4 (awaiting switch), 8318cd5b (CLI pending-interaction mock)."
     }
   ]
 }
