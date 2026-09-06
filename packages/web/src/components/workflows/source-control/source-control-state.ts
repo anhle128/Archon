@@ -48,7 +48,7 @@ export function toSourceControlSnapshot(response: GitChangesResponse): SourceCon
   };
 }
 
-function fingerprint(snapshot: SourceControlSnapshot): string {
+export function sourceControlSnapshotFingerprint(snapshot: SourceControlSnapshot): string {
   return snapshot.emptyReason === undefined
     ? `ready:${snapshot.revision}`
     : `empty:${snapshot.emptyReason}`;
@@ -68,7 +68,10 @@ export function sourceControlSnapshotReducer(
     return { displayed: action.snapshot, pending: null };
   }
 
-  if (fingerprint(state.displayed) === fingerprint(action.snapshot)) {
+  if (
+    sourceControlSnapshotFingerprint(state.displayed) ===
+    sourceControlSnapshotFingerprint(action.snapshot)
+  ) {
     return { displayed: state.displayed, pending: null };
   }
 

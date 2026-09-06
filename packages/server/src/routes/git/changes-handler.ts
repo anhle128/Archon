@@ -4,6 +4,7 @@ import { changedFiles, toWorktreePath } from '@archon/git';
 import { createLogger } from '@archon/paths';
 
 import type { GitChangesResponse } from '../schemas/git.schemas';
+import { isValidGitObjectId } from './path-input';
 import { loadRunCheckout } from './run-checkout';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -15,10 +16,16 @@ function getLog(): ReturnType<typeof createLogger> {
 
 export async function handleGitChanges(
   c: Context,
-  apiError: (c: Context, status: 404 | 500, message: string) => Response
+  apiError: (c: Context, status: 400 | 404 | 500, message: string) => Response
 ): Promise<Response> {
   const runId = c.req.param('runId') ?? '';
   getLog().info({ runId }, 'git.changes_started');
+
+  const ref = c.req.query('ref');
+  if (ref !== undefined && !isValidGitObjectId(ref)) {
+    getLog().info({ runId, errorType: 'invalid_ref' }, 'git.changes_failed');
+    return apiError(c, 400, 'Invalid commit ref');
+  }
 
   try {
     const gate = await loadRunCheckout(runId);
@@ -39,7 +46,10 @@ export async function handleGitChanges(
     }
 
     try {
-      const result = await changedFiles(toWorktreePath(gate.workingPath));
+      const result =
+        ref === undefined
+          ? await changedFiles(toWorktreePath(gate.workingPath))
+          : await changedFiles(toWorktreePath(gate.workingPath), { commit: ref });
       const body: GitChangesResponse = {
         files: result.files,
         revision: result.revision,
@@ -56,6 +66,14 @@ export async function handleGitChanges(
         };
         getLog().info({ runId, emptyReason: recheck.emptyReason }, 'git.changes_completed');
         return c.json(body);
+      }
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        (error as { name?: unknown }).name === 'GitCommitRefError'
+      ) {
+        getLog().info({ runId, errorType: 'invalid_ref' }, 'git.changes_failed');
+        return apiError(c, 400, 'Invalid commit ref');
       }
       getLog().error(
         { runId, errorType: error instanceof Error ? error.name : typeof error },

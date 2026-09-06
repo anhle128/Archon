@@ -5134,7 +5134,7 @@ export function registerApiRoutes(
     }
   });
 
-  // GET /api/workflows/runs/:runId/git/changes - Live uncommitted changes for a run
+  // GET /api/workflows/runs/:runId/git/changes - Now-or-commit files for a run
   registerOpenApiRoute(gitChangesRoute, async c => {
     return handleGitChanges(c, apiError);
   });
@@ -5144,7 +5144,7 @@ export function registerApiRoutes(
     return handleGitLog(c, apiError);
   });
 
-  // GET /api/workflows/runs/:runId/git/diff - Now hunks for a modified file
+  // GET /api/workflows/runs/:runId/git/diff - Now-or-commit hunks for a modified file
   registerOpenApiRoute(gitDiffRoute, async c => {
     return handleGitDiff(c, apiError);
   });

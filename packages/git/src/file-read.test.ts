@@ -7,6 +7,7 @@ import * as exec from './exec';
 import { fileAt, fileDiff, GitFileError, hasNulInFirst8k, parseUnifiedDiff } from './file-read';
 import { GitPathError } from './git-path';
 import { toWorktreePath } from './types';
+import { VIEWER_DIFF_CONTEXT_LINES } from './viewer-limits';
 
 const NUL_FIXTURE_BYTES = 1_048_577;
 const HASH_RE = /^[a-f0-9]{64}$/;
@@ -609,5 +610,213 @@ describe('fileAt and fileDiff', () => {
     await expect(
       fileDiff(toWorktreePath(repoPath), 'stale-diff.ts', { cursor: first.cursor })
     ).rejects.toMatchObject({ name: 'GitFileError', code: 'stale_cursor' });
+  });
+});
+
+describe('commit fileDiff', () => {
+  let root = '';
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), 'archon-commit-file-diff-'));
+  });
+
+  afterAll(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  async function initRepo(name: string): Promise<string> {
+    const repoPath = join(root, name);
+    await mkdir(repoPath);
+    await exec.execFileAsync('git', ['init', '-b', 'main', repoPath]);
+    await exec.execFileAsync('git', ['-C', repoPath, 'config', 'user.email', 'test@example.com']);
+    await exec.execFileAsync('git', ['-C', repoPath, 'config', 'user.name', 'Test User']);
+    return repoPath;
+  }
+
+  test('commit fileDiff compares first parent to the commit and never uses live or oid:path', async () => {
+    const repoPath = await initRepo('text-diff');
+    const workingPath = toWorktreePath(repoPath);
+    await writeFile(join(repoPath, 'tracked.ts'), 'before line\n');
+    if (process.platform !== 'win32') {
+      await writeFile(join(repoPath, ':colon.ts'), 'before colon\n');
+    }
+    await exec.execFileAsync('git', ['-C', repoPath, 'add', 'tracked.ts']);
+    if (process.platform !== 'win32') {
+      await exec.execFileAsync('git', [
+        '-C',
+        repoPath,
+        '--literal-pathspecs',
+        'add',
+        '--',
+        ':colon.ts',
+      ]);
+    }
+    await exec.execFileAsync('git', ['-C', repoPath, 'commit', '-m', 'parent']);
+    const parent = (
+      await exec.execFileAsync('git', ['-C', repoPath, 'rev-parse', 'HEAD'])
+    ).stdout.trim();
+    await writeFile(join(repoPath, 'tracked.ts'), 'after line\n');
+    if (process.platform !== 'win32') {
+      await writeFile(join(repoPath, ':colon.ts'), 'after colon\n');
+    }
+    await exec.execFileAsync('git', ['-C', repoPath, 'add', 'tracked.ts']);
+    if (process.platform !== 'win32') {
+      await exec.execFileAsync('git', [
+        '-C',
+        repoPath,
+        '--literal-pathspecs',
+        'add',
+        '--',
+        ':colon.ts',
+      ]);
+    }
+    await exec.execFileAsync('git', ['-C', repoPath, 'commit', '-m', 'child']);
+    const child = (
+      await exec.execFileAsync('git', ['-C', repoPath, 'rev-parse', 'HEAD'])
+    ).stdout.trim();
+
+    const result = await fileDiff(workingPath, 'tracked.ts', { commit: child });
+    expect(result.scope).toBe('commit');
+    expect(result.ref).toBe(child);
+    expect(result.status).toBe('M');
+    expect(result.fileFallback).toBe(false);
+    expect(
+      result.hunks.some(hunk => hunk.changes.some(change => change.content.includes('after line')))
+    ).toBe(true);
+    if (process.platform !== 'win32') {
+      const colon = await fileDiff(workingPath, ':colon.ts', { commit: child });
+      expect(
+        colon.hunks.some(hunk => hunk.changes.some(change => change.content === 'after colon'))
+      ).toBe(true);
+    }
+
+    const now = await fileDiff(workingPath, 'tracked.ts');
+    expect(now.scope).toBe('now');
+    expect(now.ref).toBe('live');
+
+    const childProcess = await import('child_process');
+    const spawnSpy = spyOn(childProcess, 'spawn');
+    try {
+      await fileDiff(workingPath, 'tracked.ts', { commit: child });
+      const spawnedArgv = spawnSpy.mock.calls.map(call => (call[1] as string[] | undefined) ?? []);
+      const diffTree = spawnedArgv.find(args => args.includes('diff-tree'));
+      expect(diffTree).toEqual([
+        '-C',
+        workingPath,
+        '--no-optional-locks',
+        '--literal-pathspecs',
+        'diff-tree',
+        '--no-commit-id',
+        '-p',
+        '--no-color',
+        '--no-ext-diff',
+        '--no-textconv',
+        '--text',
+        `-U${String(VIEWER_DIFF_CONTEXT_LINES)}`,
+        parent,
+        child,
+        '--',
+        'tracked.ts',
+      ]);
+      expect(spawnedArgv.some(args => args.includes(`${child}:tracked.ts`))).toBe(false);
+      expect(diffTree).toContain(parent);
+      expect(diffTree).toContain(child);
+      expect(diffTree).not.toContain('HEAD');
+    } finally {
+      spawnSpy.mockRestore();
+    }
+
+    await expect(fileDiff(workingPath, 'tracked.ts', { commit: 'HEAD' })).rejects.toMatchObject({
+      name: 'GitCommitRefError',
+    });
+  });
+
+  test('commit binary M returns fileFallback against the commit tree', async () => {
+    const repoPath = await initRepo('binary-diff');
+    const workingPath = toWorktreePath(repoPath);
+    await writeFile(join(repoPath, 'blob.bin'), Buffer.from([0, 1, 2]));
+    await exec.execFileAsync('git', ['-C', repoPath, 'add', 'blob.bin']);
+    await exec.execFileAsync('git', ['-C', repoPath, 'commit', '-m', 'binary parent']);
+    await writeFile(join(repoPath, 'blob.bin'), Buffer.from([0, 9, 9]));
+    await exec.execFileAsync('git', ['-C', repoPath, 'add', 'blob.bin']);
+    await exec.execFileAsync('git', ['-C', repoPath, 'commit', '-m', 'binary child']);
+    const child = (
+      await exec.execFileAsync('git', ['-C', repoPath, 'rev-parse', 'HEAD'])
+    ).stdout.trim();
+    const result = await fileDiff(workingPath, 'blob.bin', { commit: child });
+    expect(result).toMatchObject({
+      status: 'M',
+      scope: 'commit',
+      ref: child,
+      hunks: [],
+      binary: true,
+      fileFallback: true,
+    });
+    const raw = await fileAt(workingPath, 'blob.bin', { kind: 'tree', treeIsh: child });
+    expect(Buffer.from(raw.bytes)).toEqual(Buffer.from([0, 9, 9]));
+  });
+
+  test('rejects a full commit object that exists but is not reachable from HEAD', async () => {
+    const repoPath = await initRepo('unreachable');
+    const workingPath = toWorktreePath(repoPath);
+    await writeFile(join(repoPath, 'blob.bin'), Buffer.from([0, 1, 2]));
+    await exec.execFileAsync('git', ['-C', repoPath, 'add', 'blob.bin']);
+    await exec.execFileAsync('git', ['-C', repoPath, 'commit', '-m', 'binary parent']);
+    await writeFile(join(repoPath, 'blob.bin'), Buffer.from([0, 9, 9]));
+    await exec.execFileAsync('git', ['-C', repoPath, 'add', 'blob.bin']);
+    await exec.execFileAsync('git', ['-C', repoPath, 'commit', '-m', 'binary child']);
+    const head = (
+      await exec.execFileAsync('git', ['-C', repoPath, 'rev-parse', 'HEAD'])
+    ).stdout.trim();
+    const parent = (
+      await exec.execFileAsync('git', ['-C', repoPath, 'rev-parse', 'HEAD^'])
+    ).stdout.trim();
+    const unreachable = (
+      await exec.execFileAsync('git', [
+        '-C',
+        repoPath,
+        'commit-tree',
+        `${head}^{tree}`,
+        '-p',
+        parent,
+        '-m',
+        'unreachable raw source',
+      ])
+    ).stdout.trim();
+    await expect(
+      fileAt(workingPath, 'blob.bin', { kind: 'tree', treeIsh: unreachable })
+    ).rejects.toMatchObject({ name: 'GitCommitRefError', code: 'invalid_ref' });
+  });
+
+  test('pages a commit diff with a cursor tied to the parent and commit blobs', async () => {
+    const repoPath = await initRepo('paged-diff');
+    const workingPath = toWorktreePath(repoPath);
+    const original = Array.from({ length: 25_000 }, (_unused, index) => `keep-${String(index)}`);
+    await writeFile(join(repoPath, 'commit-paged.ts'), original.join('\n') + '\n');
+    await exec.execFileAsync('git', ['-C', repoPath, 'add', 'commit-paged.ts']);
+    await exec.execFileAsync('git', ['-C', repoPath, 'commit', '-m', 'paged parent']);
+    const changed = [...original];
+    for (let index = 0; index < changed.length; index += 10) {
+      changed[index] = `changed-${String(index)}`;
+    }
+    await writeFile(join(repoPath, 'commit-paged.ts'), changed.join('\n') + '\n');
+    await exec.execFileAsync('git', ['-C', repoPath, 'add', 'commit-paged.ts']);
+    await exec.execFileAsync('git', ['-C', repoPath, 'commit', '-m', 'paged child']);
+    const child = (
+      await exec.execFileAsync('git', ['-C', repoPath, 'rev-parse', 'HEAD'])
+    ).stdout.trim();
+
+    const first = await fileDiff(workingPath, 'commit-paged.ts', { commit: child });
+    expect(first.scope).toBe('commit');
+    expect(first.ref).toBe(child);
+    expect(first.truncated).toBe(true);
+    expect(first.cursor.length).toBeGreaterThan(0);
+    const second = await fileDiff(workingPath, 'commit-paged.ts', {
+      commit: child,
+      cursor: first.cursor,
+    });
+    expect(second.scope).toBe('commit');
+    expect(second.ref).toBe(child);
+    expect(second.hunks[0]?.header).not.toBe(first.hunks[0]?.header);
   });
 });

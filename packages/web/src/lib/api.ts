@@ -441,7 +441,15 @@ export type GitDiffResponse = components['schemas']['GitDiffResponse'];
 export type GitReadyDiffResponse = Exclude<GitDiffResponse, { emptyReason: GitEmptyReason }>;
 export type GitDiffHunk = components['schemas']['GitDiffHunk'];
 export type GitDiffChange = components['schemas']['GitDiffChange'];
-export type GitFileSource = 'worktree' | 'head';
+const FULL_GIT_OBJECT_ID_RE = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
+
+function assertCommitRef(ref: string): string {
+  if (!FULL_GIT_OBJECT_ID_RE.test(ref)) throw new Error('Invalid commit ref');
+  return ref;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents -- locked GitFileSource contract
+export type GitFileSource = 'worktree' | 'head' | string;
 export type GitFileClientResult =
   | { kind: 'empty'; emptyReason: GitEmptyReason }
   | {
@@ -488,10 +496,13 @@ function parseExactBoolean(value: string): boolean | undefined {
 
 export async function getWorkflowRunGitChanges(
   runId: string,
-  options?: { signal?: AbortSignal }
+  options?: { ref?: string; signal?: AbortSignal }
 ): Promise<GitChangesResponse> {
+  const params = new URLSearchParams();
+  if (options?.ref !== undefined) params.set('ref', assertCommitRef(options.ref));
+  const query = params.toString();
   return fetchJSON(
-    `/api/workflows/runs/${encodeURIComponent(runId)}/git/changes`,
+    `/api/workflows/runs/${encodeURIComponent(runId)}/git/changes${query ? `?${query}` : ''}`,
     options?.signal ? { signal: options.signal } : undefined
   );
 }
@@ -509,9 +520,10 @@ export async function getWorkflowRunGitLog(
 export async function getWorkflowRunGitDiff(
   runId: string,
   path: string,
-  options?: { cursor?: string; signal?: AbortSignal }
+  options?: { cursor?: string; ref?: string; signal?: AbortSignal }
 ): Promise<GitDiffResponse> {
   const params = new URLSearchParams({ path });
+  if (options?.ref !== undefined) params.set('ref', assertCommitRef(options.ref));
   if (options?.cursor) params.set('cursor', options.cursor);
   return fetchJSON(
     '/api/workflows/runs/' + encodeURIComponent(runId) + '/git/diff?' + params.toString(),
@@ -529,7 +541,9 @@ export function gitFileUrl(
     .split('/')
     .map(segment => encodeURIComponent(segment))
     .join('/');
-  const params = new URLSearchParams({ source });
+  const resolvedSource =
+    source === 'worktree' || source === 'head' ? source : assertCommitRef(source);
+  const params = new URLSearchParams({ source: resolvedSource });
   if (options?.cursor) params.set('cursor', options.cursor);
   if (options?.download) params.set('download', '1');
   return (

@@ -7,14 +7,21 @@ export const gitChangesRoute = createRoute({
   method: 'get',
   path: '/api/workflows/runs/{runId}/git/changes',
   tags: ['Workflows'],
-  summary: "List a run's uncommitted git changes",
+  summary: "List a run's live or commit-scoped git changes",
   request: {
     params: z.object({ runId: z.string().min(1) }),
+    query: z.object({
+      ref: z.string().optional(),
+    }),
   },
   responses: {
     200: {
       content: { 'application/json': { schema: gitChangesResponseSchema } },
-      description: 'Live changes or a CAP-6 empty envelope',
+      description: 'Live changes, commit changes, or a CAP-6 empty envelope',
+    },
+    400: {
+      content: { 'application/json': { schema: errorSchema } },
+      description: 'Invalid commit ref',
     },
     404: {
       content: { 'application/json': { schema: errorSchema } },

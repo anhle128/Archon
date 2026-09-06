@@ -23,6 +23,7 @@ export interface CommitGraphRowProps {
   id: string;
   active: boolean;
   nowMs: number;
+  expanded: boolean;
   onSelect: () => void;
 }
 
@@ -40,6 +41,7 @@ export function CommitGraphRow(props: CommitGraphRowProps): ReactElement {
       tabIndex={-1}
       id={props.id}
       aria-selected={props.active}
+      aria-expanded={props.expanded}
       aria-label={`${accessibleKind} ${shortOid}: ${props.commit.subject}; ${props.commit.authorName}; ${relativeTime}`}
       data-active={props.active ? 'true' : 'false'}
       onPointerDown={(event: PointerEvent<HTMLButtonElement>): void => {
