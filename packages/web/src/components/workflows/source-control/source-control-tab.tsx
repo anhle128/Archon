@@ -33,6 +33,7 @@ import {
   sourceControlSnapshotReducer,
   toGitLogSnapshot,
   toSourceControlSnapshot,
+  type GitLogSnapshot,
   type GitLogSnapshotState,
   type SourceControlSnapshot,
   type SourceControlSnapshotState,
@@ -209,6 +210,29 @@ function sameSnapshot(left: SourceControlSnapshot, right: SourceControlSnapshot)
   return left.emptyReason === right.emptyReason && left.revision === right.revision;
 }
 
+function sameGitLogSnapshot(left: GitLogSnapshot, right: GitLogSnapshot): boolean {
+  return left.emptyReason === right.emptyReason && left.revision === right.revision;
+}
+
+function pendingAfterReceive<T>(
+  current: { displayed: T | null; pending: T | null },
+  incoming: T | null,
+  same: (left: T, right: T) => boolean
+): T | null {
+  if (incoming === null) return current.pending;
+  if (current.displayed === null) return null;
+  if (same(current.displayed, incoming)) return null;
+  return incoming;
+}
+
+function historyContainsOid(snapshot: GitLogSnapshot | null, oid: string): boolean {
+  return (
+    snapshot !== null &&
+    snapshot.emptyReason === undefined &&
+    snapshot.commits.some(commit => commit.oid === oid)
+  );
+}
+
 function pendingViewerMatchesFile(
   pending: PendingViewer | null,
   file: GitChangedFile | undefined,
@@ -242,7 +266,11 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
     id: 0,
     controller: null,
   });
-  const pendingListRequestRef = useRef<{ id: number; runId: string } | null>(null);
+  const pendingListRequestRef = useRef<{
+    id: number;
+    runId: string;
+    commitOid: string | null;
+  } | null>(null);
   const snapshotRef = useRef(snapshotState);
   snapshotRef.current = snapshotState;
   const historySnapshotRef = useRef<GitLogSnapshotState>(historySnapshotState);
@@ -298,6 +326,7 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
     data: commitData,
     isError: commitIsError,
     isFetching: commitIsFetching,
+    refetch: refetchCommit,
   } = useQuery({
     queryKey: ['workflowRunGitChanges', runId, expandedCommit?.oid ?? null],
     enabled: expandedCommit !== null,
@@ -323,6 +352,16 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
         queryKey: ['workflowRunGitLog', pendingListRequest.runId],
         exact: true,
       });
+      if (pendingListRequest.commitOid !== null) {
+        void queryClient.cancelQueries({
+          queryKey: [
+            'workflowRunGitChanges',
+            pendingListRequest.runId,
+            pendingListRequest.commitOid,
+          ],
+          exact: true,
+        });
+      }
       pendingListRequestRef.current = null;
     }
     requestRef.current.controller?.abort();
@@ -462,36 +501,80 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
 
   const onReload = useCallback((): void => {
     const { id, signal } = beginRequest();
-    pendingListRequestRef.current = { id, runId };
+    const expanded = expandedCommitRef.current;
+    pendingListRequestRef.current = { id, runId, commitOid: expanded?.oid ?? null };
     void (async (): Promise<void> => {
       try {
-        const [result, historyResult] = await Promise.all([refetch(), refetchHistory()]);
+        const [nowResult, historyResult, commitResult] = await Promise.all([
+          refetch(),
+          refetchHistory(),
+          expanded === null ? Promise.resolve(null) : refetchCommit(),
+        ]);
         if (!isCurrent(id, signal)) return;
-        if (historyResult.isSuccess && historyResult.data !== undefined) {
-          dispatchHistory({
-            type: 'received',
-            snapshot: toGitLogSnapshot(historyResult.data),
-          });
+
+        const nowSnapshot =
+          nowResult.isSuccess && nowResult.data !== undefined
+            ? toSourceControlSnapshot(nowResult.data)
+            : null;
+        const historySnapshot =
+          historyResult.isSuccess && historyResult.data !== undefined
+            ? toGitLogSnapshot(historyResult.data)
+            : null;
+        const commitSnapshot =
+          commitResult?.isSuccess && commitResult.data !== undefined
+            ? toSourceControlSnapshot(commitResult.data)
+            : null;
+
+        if (nowSnapshot) dispatch({ type: 'received', snapshot: nowSnapshot });
+        if (historySnapshot) {
+          dispatchHistory({ type: 'received', snapshot: historySnapshot });
         }
-        if (!result.isSuccess || result.data === undefined) return;
-        const candidate = toSourceControlSnapshot(result.data);
-        const candidateFile = selectedFileInSnapshot(candidate, selectedFileRef.current);
-        if (!candidateFile) {
-          dispatch({ type: 'received', snapshot: candidate });
-          return;
+        if (commitSnapshot) {
+          dispatchCommit({ type: 'received', snapshot: commitSnapshot });
         }
-        const loaded = await loadViewerFile(runId, candidateFile, viewerScopeRef.current, signal);
+
+        const pendingNow = pendingAfterReceive(snapshotRef.current, nowSnapshot, sameSnapshot);
+        const pendingHistory = pendingAfterReceive(
+          historySnapshotRef.current,
+          historySnapshot,
+          sameGitLogSnapshot
+        );
+        const pendingCommit = pendingAfterReceive(
+          commitSnapshotRef.current,
+          commitSnapshot,
+          sameSnapshot
+        );
+
+        const selected = selectedFileRef.current;
+        const scope = viewerScopeRef.current;
+        if (!selected) return;
+
+        const expandedNow = expandedCommitRef.current;
+        let reloadFile: GitChangedFile | null = selected;
+        if (scope.kind === 'now') {
+          reloadFile = pendingNow
+            ? (selectedFileInSnapshot(pendingNow, selected) ?? null)
+            : selected;
+        } else if (expandedNow !== null && scope.oid === expandedNow.oid) {
+          reloadFile = pendingCommit
+            ? (selectedFileInSnapshot(pendingCommit, selected) ?? null)
+            : selected;
+        }
+
+        if (reloadFile === null) return;
+
+        const loaded = await loadViewerFile(runId, reloadFile, scope, signal);
         if (!isCurrent(id, signal)) return;
-        const displayedFp = viewerFingerprint(viewerStateRef.current);
-        const candidateFp = viewerFingerprint(loaded);
-        const displayedSnapshot = snapshotRef.current.displayed;
-        const listChanged =
-          displayedSnapshot === null || !sameSnapshot(displayedSnapshot, candidate);
-        dispatch({ type: 'received', snapshot: candidate });
-        if (candidateFp === displayedFp && !listChanged) {
+
+        const snapshotsUnchanged =
+          pendingNow === null && pendingHistory === null && pendingCommit === null;
+        if (
+          viewerFingerprint(loaded) === viewerFingerprint(viewerStateRef.current) &&
+          snapshotsUnchanged
+        ) {
           setPendingViewer(null);
         } else {
-          setPendingViewer({ file: candidateFile, scope: viewerScopeRef.current, state: loaded });
+          setPendingViewer({ file: reloadFile, scope, state: loaded });
         }
       } catch (error: unknown) {
         if (isAbortError(error) || !isCurrent(id, signal)) return;
@@ -501,7 +584,7 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
         }
       }
     })();
-  }, [beginRequest, isCurrent, refetch, refetchHistory, runId]);
+  }, [beginRequest, isCurrent, refetch, refetchCommit, refetchHistory, runId]);
 
   const onViewerReload = useCallback((): void => {
     if (viewerState.kind === 'error' && selectedFile) {
@@ -533,6 +616,7 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
   const onLoadMore = useCallback((): void => {
     const file = selectedFileRef.current;
     const state = viewerStateRef.current;
+    const scope = viewerScopeRef.current;
     if (!file) return;
     const pagingText = state.kind === 'text' && state.truncated && state.cursor !== '';
     const pagingDiff =
@@ -550,7 +634,12 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
       };
       try {
         if (state.kind === 'text') {
-          const source: GitFileSource = file.status === 'A' ? 'worktree' : 'head';
+          const source = rawSourceFor(file, scope);
+          if (source === null) {
+            finishPage();
+            setViewerState({ kind: 'error', file });
+            return;
+          }
           const next = await getWorkflowRunGitFile(runId, file.path, source, {
             cursor: state.cursor,
             signal,
@@ -577,6 +666,7 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
         if (state.kind !== 'diff') return;
         const next = await getWorkflowRunGitDiff(runId, file.path, {
           cursor: state.response.cursor,
+          ref: scope.kind === 'commit' ? scope.oid : undefined,
           signal,
         });
         if (!isCurrent(id, signal)) return;
@@ -620,40 +710,91 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
 
   const onAcceptPending = useCallback((): void => {
     abortCurrent();
-    const pendingList = snapshotRef.current.pending;
+    const pendingNow = snapshotRef.current.pending;
     const pendingHistory = historySnapshotRef.current.pending;
-    const acceptedHistory = pendingHistory ?? historySnapshotRef.current.displayed;
+    const pendingCommit = commitSnapshotRef.current.pending;
     const pendingView = pendingViewerRef.current;
-    const acceptedList = pendingList ?? snapshotRef.current.displayed;
     const selected = selectedFileRef.current;
-    const acceptedFile = selectedFileInSnapshot(
-      acceptedList ?? { files: [], revision: '' },
-      selected
-    );
-    if (
-      pendingList &&
-      acceptedFile &&
-      !pendingViewerMatchesFile(pendingView, acceptedFile, viewerScopeRef.current)
-    ) {
-      return;
+    const scope = viewerScopeRef.current;
+    const expanded = expandedCommitRef.current;
+    const acceptedNow = pendingNow ?? snapshotRef.current.displayed;
+    const acceptedHistory = pendingHistory ?? historySnapshotRef.current.displayed;
+    const acceptedCommit = pendingCommit ?? commitSnapshotRef.current.displayed;
+
+    if (scope.kind === 'now' && pendingNow) {
+      const matching = selectedFileInSnapshot(pendingNow, selected);
+      if (matching && !pendingViewerMatchesFile(pendingView, matching, scope)) {
+        return;
+      }
     }
-    if (pendingList) dispatch({ type: 'accept_pending' });
-    if (pendingHistory) dispatchHistory({ type: 'accept_pending' });
     if (
-      !acceptedList ||
-      acceptedList.emptyReason !== undefined ||
-      acceptedHistory?.emptyReason !== undefined ||
-      !acceptedFile
+      scope.kind === 'commit' &&
+      expanded !== null &&
+      scope.oid === expanded.oid &&
+      pendingCommit
     ) {
+      const matching = selectedFileInSnapshot(pendingCommit, selected);
+      if (matching && !pendingViewerMatchesFile(pendingView, matching, scope)) {
+        return;
+      }
+    }
+
+    const acceptedListForScope =
+      scope.kind === 'now'
+        ? acceptedNow
+        : scope.kind === 'commit' && expanded !== null && scope.oid === expanded.oid
+          ? acceptedCommit
+          : null;
+    const fileGoneFromScopeList =
+      acceptedListForScope !== null &&
+      selected !== null &&
+      selectedFileInSnapshot(acceptedListForScope, selected) === undefined;
+    const anyCap6 =
+      acceptedNow?.emptyReason !== undefined ||
+      acceptedHistory?.emptyReason !== undefined ||
+      acceptedCommit?.emptyReason !== undefined;
+
+    const acceptAllReducers = (): void => {
+      if (pendingNow) dispatch({ type: 'accept_pending' });
+      if (pendingHistory) dispatchHistory({ type: 'accept_pending' });
+      if (pendingCommit) dispatchCommit({ type: 'accept_pending' });
+    };
+
+    const collapseIfMissingFromHistory = (): void => {
+      if (expanded !== null && !historyContainsOid(acceptedHistory, expanded.oid)) {
+        setExpandedCommit(null);
+        dispatchCommit({ type: 'reset' });
+      }
+    };
+
+    if (anyCap6) {
+      acceptAllReducers();
       setSelectedFile(null);
       setViewerState({ kind: 'idle' });
       setPendingViewer(null);
       viewerScopeRef.current = { kind: 'now' };
       setViewerScope({ kind: 'now' });
+      setExpandedCommit(null);
+      dispatchCommit({ type: 'reset' });
       listRef.current?.focus();
       return;
     }
-    if (pendingView) {
+
+    if (fileGoneFromScopeList) {
+      acceptAllReducers();
+      setSelectedFile(null);
+      setViewerState({ kind: 'idle' });
+      setPendingViewer(null);
+      viewerScopeRef.current = { kind: 'now' };
+      setViewerScope({ kind: 'now' });
+      collapseIfMissingFromHistory();
+      listRef.current?.focus();
+      return;
+    }
+
+    acceptAllReducers();
+    collapseIfMissingFromHistory();
+    if (pendingView && sameViewerScope(pendingView.scope, scope)) {
       setSelectedFile(pendingView.file);
       setViewerState(pendingView.state);
       viewerScopeRef.current = pendingView.scope;
@@ -679,21 +820,35 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
     : commitIsFetching
       ? 'loading'
       : 'idle';
-  const pendingListFile = snapshotState.pending
+  const pendingNowFile = snapshotState.pending
     ? selectedFileInSnapshot(snapshotState.pending, selectedFile)
     : undefined;
-  const pendingListNeedsViewer =
+  const pendingNowNeedsViewer =
+    viewerScope.kind === 'now' &&
     snapshotState.pending?.emptyReason === undefined &&
     snapshotState.pending !== null &&
     selectedFile !== null &&
-    pendingListFile !== undefined;
+    pendingNowFile !== undefined;
+  const pendingCommitFile = commitSnapshotState.pending
+    ? selectedFileInSnapshot(commitSnapshotState.pending, selectedFile)
+    : undefined;
+  const pendingCommitNeedsViewer =
+    viewerScope.kind === 'commit' &&
+    expandedCommit !== null &&
+    viewerScope.oid === expandedCommit.oid &&
+    commitSnapshotState.pending?.emptyReason === undefined &&
+    commitSnapshotState.pending !== null &&
+    selectedFile !== null &&
+    pendingCommitFile !== undefined;
   const changesCanBeAccepted =
-    snapshotState.pending === null ||
-    !pendingListNeedsViewer ||
-    pendingViewerMatchesFile(pendingViewer, pendingListFile, viewerScope);
+    (!pendingNowNeedsViewer ||
+      pendingViewerMatchesFile(pendingViewer, pendingNowFile, viewerScope)) &&
+    (!pendingCommitNeedsViewer ||
+      pendingViewerMatchesFile(pendingViewer, pendingCommitFile, viewerScope));
   const hasPending =
     snapshotState.pending !== null ||
     historySnapshotState.pending !== null ||
+    commitSnapshotState.pending !== null ||
     pendingViewer !== null;
   const stale = hasPending && changesCanBeAccepted;
 

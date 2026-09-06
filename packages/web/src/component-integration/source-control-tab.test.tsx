@@ -22,6 +22,7 @@ import { SourceControlTab } from '../components/workflows/source-control/source-
 
 const REVISION_A = 'a'.repeat(64);
 const REVISION_B = 'b'.repeat(64);
+const REVISION_C = 'e'.repeat(64);
 const HASH_A = 'c'.repeat(64);
 const HASH_B = 'd'.repeat(64);
 
@@ -1767,7 +1768,7 @@ describe('SourceControlTab', () => {
     ).toBe(false);
   });
 
-  test('operates History from the keyboard without opening a diff or file in Story 2.1', async () => {
+  test('keyboard Enter expands files and nested Enter opens one without collapsing History', async () => {
     const secondCommit = {
       ...HISTORY_COMMIT,
       oid: '2'.repeat(40),
@@ -1780,27 +1781,44 @@ describe('SourceControlTab', () => {
         revision: REVISION_A,
         truncated: false,
       }),
-      onCommitChanges: () => ({ files: [], revision: REVISION_B }),
+      onCommitChanges: ref => {
+        expect(ref).toBe(secondCommit.oid);
+        return { files: [{ path: 'nested.ts', status: 'M' }], revision: REVISION_B };
+      },
+      onDiff: url => {
+        expect(url).toContain('ref=' + secondCommit.oid);
+        return jsonResponse({
+          ...readyDiff('nested.ts', 'before', 'after'),
+          scope: 'commit',
+          ref: secondCommit.oid,
+        });
+      },
     });
-
     await renderTab('run-1');
     await waitFor(() => host.textContent?.includes(HISTORY_COMMIT.subject), 'commit row');
     const history = host.querySelector('[role="listbox"][aria-label="Commit history"]');
     if (!(history instanceof HTMLElement)) throw new Error('Missing History listbox');
-    expect(history.getAttribute('aria-activedescendant')).toBe('sc-history-commit-0');
-
     await act(async () => {
       history.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
     });
     expect(history.getAttribute('aria-activedescendant')).toBe('sc-history-commit-1');
-    expect(host.querySelector('#sc-history-commit-1')?.getAttribute('aria-selected')).toBe('true');
-
     await act(async () => {
       history.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     });
-
+    await waitFor(() => host.textContent?.includes('nested.ts'), 'nested commit file');
+    expect(history.getAttribute('aria-activedescendant')).toBe('sc-history-commit-1');
+    expect(host.querySelector('#sc-history-commit-1')?.getAttribute('aria-expanded')).toBe('true');
     expect(calledUrls(fetchSpy).filter(url => url.includes('/git/diff'))).toEqual([]);
     expect(calledUrls(fetchSpy).filter(url => url.includes('/git/file/'))).toEqual([]);
+    const commitFiles = host.querySelector('[role="listbox"][aria-label="Commit files"]');
+    if (!(commitFiles instanceof HTMLElement)) throw new Error('Missing commit files listbox');
+    await act(async () => {
+      commitFiles.focus();
+      commitFiles.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    });
+    await waitFor(() => host.querySelector('[aria-label="Before"]') !== null, 'nested commit diff');
+    expect(history.getAttribute('aria-activedescendant')).toBe('sc-history-commit-1');
+    expect(host.querySelector('#sc-history-commit-1')?.getAttribute('aria-expanded')).toBe('true');
   });
 
   test('freezes a divergent History until the shared stale action is accepted', async () => {
@@ -2068,5 +2086,235 @@ describe('SourceControlTab', () => {
     expect(fileUrls[0]).toContain('source=' + CHILD_COMMIT.oid);
     expect(host.querySelector('a')?.getAttribute('href')).toContain('source=' + CHILD_COMMIT.oid);
     expect(host.querySelector('a')?.getAttribute('href')).toContain('download=1');
+  });
+
+  test('selecting a Changes file returns the viewer to now/live', async () => {
+    fetchSpy = mockGitRoutes({
+      onChanges: () => ({ files: [{ path: 'now.ts', status: 'A' }], revision: REVISION_A }),
+      onLog: () => ({ commits: [CHILD_COMMIT], revision: REVISION_A, truncated: false }),
+      onCommitChanges: () => ({
+        files: [{ path: 'then.ts', status: 'M' }],
+        revision: REVISION_B,
+      }),
+      onDiff: url => {
+        if (!url.includes('ref=' + CHILD_COMMIT.oid)) {
+          throw new Error(`Unexpected diff fetch: ${url}`);
+        }
+        return jsonResponse({
+          path: 'then.ts',
+          status: 'M',
+          scope: 'commit',
+          ref: CHILD_COMMIT.oid,
+          hunks: [
+            {
+              oldStart: 1,
+              oldLines: 1,
+              newStart: 1,
+              newLines: 1,
+              header: '@@ -1 +1 @@',
+              changes: [
+                { type: 'delete', content: 'before', oldLine: 1 },
+                { type: 'insert', content: 'after', newLine: 1 },
+              ],
+            },
+          ],
+          cursor: '',
+          truncated: false,
+          binary: false,
+          fileFallback: false,
+        });
+      },
+      onFile: url => {
+        expect(url).toContain('source=worktree');
+        expect(url).not.toContain('ref=');
+        return textFileResponse('now-body\n', HASH_A);
+      },
+    });
+    await renderTab('run/one');
+    await waitFor(() => host.textContent?.includes(CHILD_COMMIT.subject), 'commit row');
+    await act(async () => {
+      host
+        .querySelector('#sc-history-commit-0')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await waitFor(() => host.textContent?.includes('then.ts'), 'commit files');
+    await clickOption('then.ts');
+    await waitFor(() => host.querySelector('[aria-label="Before"]') !== null, 'commit diff');
+    await clickOption('now.ts');
+    await waitFor(() => host.textContent?.includes('now-body'), 'now file');
+    expect(host.querySelector('[aria-label="Before"]')).toBeNull();
+    expect(host.textContent).not.toContain('Back');
+    expect(
+      calledUrls(fetchSpy).some(
+        url => url.includes('/git/file/now.ts') && url.includes('source=worktree')
+      )
+    ).toBe(true);
+  });
+
+  test('Load more keeps the commit oid and opaque cursor for commit text', async () => {
+    fetchSpy = mockGitRoutes({
+      onChanges: () => ({ files: [], revision: REVISION_A }),
+      onLog: () => ({ commits: [CHILD_COMMIT], revision: REVISION_A, truncated: false }),
+      onCommitChanges: () => ({
+        files: [{ path: 'added.txt', status: 'A' }],
+        revision: REVISION_B,
+      }),
+      onFile: (_url, call) =>
+        call === 1
+          ? presentedFileResponse('first\n', HASH_A, {
+              'Content-Type': 'text/plain; charset=utf-8',
+              'X-Archon-Git-Truncated': 'true',
+              'X-Archon-Git-Cursor': 'commit+cursor',
+              'X-Archon-Git-Byte-Length': '13',
+              'X-Archon-Git-Presentation': 'text',
+            })
+          : presentedFileResponse('second\n', HASH_A, {
+              'Content-Type': 'text/plain; charset=utf-8',
+              'X-Archon-Git-Presentation': 'text',
+              'X-Archon-Git-Byte-Length': '13',
+            }),
+    });
+    await renderTab('run/one');
+    await waitFor(() => host.textContent?.includes(CHILD_COMMIT.subject), 'commit row');
+    await act(async () => {
+      host
+        .querySelector('#sc-history-commit-0')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await waitFor(() => host.textContent?.includes('added.txt'), 'commit files');
+    await clickOption('added.txt');
+    await waitFor(() => host.textContent?.includes('Load more'), 'Load more');
+    await act(async () => {
+      requireButton('Load more').click();
+    });
+    await waitFor(() => host.textContent?.includes('second'), 'second page');
+    const fileUrls = calledUrls(fetchSpy).filter(url => url.includes('/git/file/added.txt'));
+    expect(fileUrls).toHaveLength(2);
+    expect(fileUrls.every(url => url.includes('source=' + CHILD_COMMIT.oid))).toBe(true);
+    expect(fileUrls[1]).toContain('cursor=commit%2Bcursor');
+  });
+
+  test('Load more keeps the commit oid and opaque cursor for commit hunks', async () => {
+    fetchSpy = mockGitRoutes({
+      onChanges: () => ({ files: [], revision: REVISION_A }),
+      onLog: () => ({ commits: [CHILD_COMMIT], revision: REVISION_A, truncated: false }),
+      onCommitChanges: () => ({
+        files: [{ path: 'large.ts', status: 'M' }],
+        revision: REVISION_B,
+      }),
+      onDiff: (url, call) => {
+        expect(url).toContain('ref=' + CHILD_COMMIT.oid);
+        if (call === 2) expect(url).toContain('cursor=commit%2Bdiff');
+        return jsonResponse({
+          ...(call === 1 ? FIRST_DIFF_PAGE : SECOND_DIFF_PAGE),
+          scope: 'commit',
+          ref: CHILD_COMMIT.oid,
+          cursor: call === 1 ? 'commit+diff' : '',
+        });
+      },
+    });
+    await renderTab('run/one');
+    await waitFor(() => host.textContent?.includes(CHILD_COMMIT.subject), 'commit row');
+    await act(async () => {
+      host
+        .querySelector('#sc-history-commit-0')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await waitFor(() => host.textContent?.includes('large.ts'), 'commit files');
+    await clickOption('large.ts');
+    await waitFor(() => host.textContent?.includes('Load more'), 'Load more');
+    await act(async () => {
+      requireButton('Load more').click();
+    });
+    await waitFor(() => host.textContent?.includes('second'), 'second hunk page');
+    expect(calledUrls(fetchSpy).filter(url => url.includes('/git/diff'))).toHaveLength(2);
+  });
+
+  test('Reload freezes an open commit diff until Changed on disk is accepted', async () => {
+    let diffCall = 0;
+    fetchSpy = mockGitRoutes({
+      onChanges: call =>
+        call === 1
+          ? { files: [{ path: 'now.ts', status: 'A' }], revision: REVISION_A }
+          : { files: [{ path: 'now.ts', status: 'A' }], revision: REVISION_B },
+      onLog: call =>
+        call === 1
+          ? { commits: [CHILD_COMMIT], revision: REVISION_A, truncated: false }
+          : {
+              commits: [{ ...CHILD_COMMIT, subject: 'rewritten subject' }],
+              revision: REVISION_B,
+              truncated: false,
+            },
+      onCommitChanges: (_ref, call) =>
+        call === 1
+          ? { files: [{ path: 'then.ts', status: 'M' }], revision: REVISION_B }
+          : {
+              files: [
+                { path: 'then.ts', status: 'M' },
+                { path: 'pending.ts', status: 'A' },
+              ],
+              revision: REVISION_C,
+            },
+      onDiff: () => {
+        diffCall += 1;
+        const after = diffCall === 1 ? 'frozen-after' : 'pending-after';
+        return jsonResponse({
+          path: 'then.ts',
+          status: 'M',
+          scope: 'commit',
+          ref: CHILD_COMMIT.oid,
+          hunks: [
+            {
+              oldStart: 1,
+              oldLines: 1,
+              newStart: 1,
+              newLines: 1,
+              header: '@@ -1 +1 @@',
+              changes: [
+                { type: 'delete', content: 'before', oldLine: 1 },
+                { type: 'insert', content: after, newLine: 1 },
+              ],
+            },
+          ],
+          cursor: '',
+          truncated: false,
+          binary: false,
+          fileFallback: false,
+        });
+      },
+    });
+    await renderTab('run/one');
+    await waitFor(() => host.textContent?.includes(CHILD_COMMIT.subject), 'commit row');
+    await act(async () => {
+      host
+        .querySelector('#sc-history-commit-0')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await waitFor(() => host.textContent?.includes('then.ts'), 'commit files');
+    await clickOption('then.ts');
+    await waitFor(() => host.textContent?.includes('frozen-after'), 'open commit diff');
+    await act(async () => {
+      requireButton('Reload').click();
+    });
+    await waitFor(() => host.textContent?.includes('Changed on disk — Reload'), 'stale banner');
+    expect(host.textContent).toContain('frozen-after');
+    expect(host.textContent).not.toContain('pending-after');
+    expect(host.textContent).not.toContain('pending.ts');
+    expect(host.textContent).toContain(CHILD_COMMIT.subject);
+    expect(host.textContent).not.toContain('rewritten subject');
+    await act(async () => {
+      requireButton('Changed on disk — Reload').click();
+    });
+    await waitFor(() => host.textContent?.includes('rewritten subject'), 'accepted History');
+    await waitFor(() => host.textContent?.includes('pending-after'), 'accepted commit diff');
+    expect(host.textContent).toContain('pending.ts');
+    const urls = calledUrls(fetchSpy);
+    expect(urls.filter(url => url.includes('/git/log'))).toHaveLength(2);
+    expect(urls.filter(url => url.includes('/git/changes') && !url.includes('ref='))).toHaveLength(
+      2
+    );
+    expect(
+      urls.filter(url => url.includes('/git/changes') && url.includes('ref=' + CHILD_COMMIT.oid))
+    ).toHaveLength(2);
   });
 });
