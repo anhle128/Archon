@@ -633,9 +633,9 @@ nodes:
         jq -e '[.userStories[].tasks[]? | select(.passes==false)] | length == 0' "$RLN_PRD" >/dev/null 2>&1
     depends_on:
       - ralph-native-preflight
-    effort: high
+    effort: xhigh
     provider: omp
-    model: xai-oauth/grok-4.5
+    model: "alibaba-token-plan/qwen3.8-max"
 
   - id: ralph-sync-back
     prompt: |
