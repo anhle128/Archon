@@ -1,17 +1,19 @@
 /**
- * Logs-only composition: selectable unmerged node-run list plus one transcript room.
+ * Logs-only composition: selectable unmerged node-run list plus one typed room.
  */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import {
   getWorkflowNodeMessages,
+  type DagNode,
   type WorkflowEventResponse,
   type WorkflowNodeStateResponse,
 } from '@/lib/api';
+import type { WorkflowRunStatus } from '@/lib/types';
 
 import { buildLogRows, type LogRow } from './build-log-rows';
+import { LegacyNodeRoom } from './LegacyNodeRoom';
 import { NodeRunList } from './NodeRunList';
-import { NodeTranscriptPane } from './NodeTranscriptPane';
 
 export interface LegacyNodeLogsProps {
   runId: string;
@@ -22,6 +24,12 @@ export interface LegacyNodeLogsProps {
   onSelectNode: (nodeId: string | null) => void;
   roomHeader?: ReactNode;
   roomFooter?: ReactNode;
+  definitionNodes: readonly DagNode[];
+  definitionPending: boolean;
+  runStatus: WorkflowRunStatus;
+  approval: unknown;
+  onApprove: () => Promise<void>;
+  onReject: (reason?: string) => Promise<void>;
 }
 
 export function LegacyNodeLogs({
@@ -33,6 +41,12 @@ export function LegacyNodeLogs({
   onSelectNode,
   roomHeader,
   roomFooter,
+  definitionNodes,
+  definitionPending,
+  runStatus,
+  approval,
+  onApprove,
+  onReject,
 }: LegacyNodeLogsProps): React.ReactElement {
   const rows = useMemo(() => buildLogRows(nodeStates, events), [nodeStates, events]);
   const [selectedLogRowId, setSelectedLogRowId] = useState<string | null>(null);
@@ -62,11 +76,18 @@ export function LegacyNodeLogs({
       </div>
       <div className="flex-1 flex flex-col overflow-hidden min-h-0 h-full">
         {roomHeader}
-        <NodeTranscriptPane
+        <LegacyNodeRoom
           runId={runId}
           row={selectedRow}
           isLive={isLive}
           loadMessages={loadMessages}
+          definitionNodes={definitionNodes}
+          definitionPending={definitionPending}
+          events={events}
+          runStatus={runStatus}
+          approval={approval}
+          onApprove={onApprove}
+          onReject={onReject}
         />
         {roomFooter}
       </div>
