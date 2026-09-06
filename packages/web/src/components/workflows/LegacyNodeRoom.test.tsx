@@ -166,7 +166,6 @@ function renderStatic(args: {
     <LegacyNodeRoom
       runId="run-1"
       row={args.row}
-      isLive={false}
       loadMessages={args.loadMessages}
       definitionNodes={args.definitionNodes ?? []}
       definitionPending={args.definitionPending ?? false}
@@ -175,6 +174,12 @@ function renderStatic(args: {
       approval={args.approval ?? null}
       onApprove={async (): Promise<void> => undefined}
       onReject={async (): Promise<void> => undefined}
+      pendingInteractions={[]}
+      viewerIsStarter={false}
+      starterDisplayName={null}
+      actionStates={{}}
+      onSubmitAsk={async (): Promise<void> => undefined}
+      nodeState={undefined}
     />
   );
 }
@@ -311,7 +316,6 @@ describe('LegacyNodeRoom static rooms', () => {
       <LegacyNodeRoom
         runId="run-1"
         row={SETUP_ROW}
-        isLive={false}
         loadMessages={loadMessages}
         definitionNodes={[{ id: 'setup', bash: 'echo ready' }]}
         definitionPending={false}
@@ -320,6 +324,12 @@ describe('LegacyNodeRoom static rooms', () => {
         approval={null}
         onApprove={async (): Promise<void> => undefined}
         onReject={async (): Promise<void> => undefined}
+        pendingInteractions={[]}
+        viewerIsStarter={false}
+        starterDisplayName={null}
+        actionStates={{}}
+        onSubmitAsk={async (): Promise<void> => undefined}
+        nodeState={undefined}
       />
     );
     expect(markup).toContain('ready');
@@ -663,7 +673,6 @@ describe('LegacyNodeRoom dispatcher', () => {
         createElement(LegacyNodeRoom, {
           runId: 'run-1',
           row: args.row,
-          isLive: false,
           loadMessages: args.loadMessages,
           definitionNodes: args.definitionNodes ?? [],
           definitionPending: args.definitionPending ?? false,
@@ -672,6 +681,12 @@ describe('LegacyNodeRoom dispatcher', () => {
           approval: null,
           onApprove: async (): Promise<void> => undefined,
           onReject: async (): Promise<void> => undefined,
+          pendingInteractions: [],
+          viewerIsStarter: false,
+          starterDisplayName: null,
+          actionStates: {},
+          onSubmitAsk: async (): Promise<void> => undefined,
+          nodeState: undefined,
         })
       )
     );

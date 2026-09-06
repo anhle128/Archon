@@ -3,7 +3,14 @@ process.env.NODE_ENV = 'development';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { Window } from 'happy-dom';
 
-import type { WorkflowNodeMessageResponse, WorkflowNodeMessagesResponse } from '@/lib/api';
+import type {
+  AskAnswerBody,
+  PendingInteraction,
+  WorkflowNodeMessageResponse,
+  WorkflowNodeMessagesResponse,
+  WorkflowNodeStateResponse,
+} from '@/lib/api';
+import type { WorkflowRunStatus } from '@/lib/types';
 
 import type { LogRow } from './build-log-rows';
 import type { Root } from 'react-dom/client';
@@ -209,9 +216,13 @@ function deferred<T>(): {
 }
 
 describe('transcriptRefetchInterval', () => {
-  test('returns 1000 while live and false otherwise', () => {
-    expect(transcriptRefetchInterval(true)).toBe(1000);
-    expect(transcriptRefetchInterval(false)).toBe(false);
+  test('polls node messages for non-terminal run statuses', () => {
+    expect(transcriptRefetchInterval('pending')).toBe(1000);
+    expect(transcriptRefetchInterval('running')).toBe(1000);
+    expect(transcriptRefetchInterval('paused')).toBe(1000);
+    expect(transcriptRefetchInterval('completed')).toBe(false);
+    expect(transcriptRefetchInterval('failed')).toBe(false);
+    expect(transcriptRefetchInterval('cancelled')).toBe(false);
   });
 });
 
@@ -257,8 +268,14 @@ describe('NodeTranscriptPane', () => {
 
   function renderPane(args: {
     row: LogRow | null;
-    isLive?: boolean;
+    runStatus?: WorkflowRunStatus;
     loadMessages: (runId: string, nodeId: string) => Promise<WorkflowNodeMessagesResponse>;
+    pendingInteractions?: readonly PendingInteraction[];
+    viewerIsStarter?: boolean;
+    starterDisplayName?: string | null;
+    actionStates?: Record<string, { phase: 'sending' } | undefined>;
+    nodeState?: WorkflowNodeStateResponse;
+    onSubmitAsk?: (requestId: string, body: AskAnswerBody) => Promise<void>;
   }): void {
     root.render(
       createElement(
@@ -267,8 +284,15 @@ describe('NodeTranscriptPane', () => {
         createElement(nodeTranscriptPane.NodeTranscriptPane, {
           runId: 'run-1',
           row: args.row,
-          isLive: args.isLive ?? false,
+          runStatus: args.runStatus ?? 'completed',
           loadMessages: args.loadMessages,
+          pendingInteractions: args.pendingInteractions ?? [],
+          viewerIsStarter: args.viewerIsStarter ?? true,
+          starterDisplayName:
+            args.starterDisplayName === undefined ? 'Avery' : args.starterDisplayName,
+          actionStates: args.actionStates ?? {},
+          nodeState: args.nodeState,
+          onSubmitAsk: args.onSubmitAsk ?? (async (): Promise<void> => undefined),
         })
       )
     );
@@ -368,5 +392,303 @@ describe('NodeTranscriptPane', () => {
       ['run-1', 'review'],
     ]);
     expect(host.querySelector('[aria-label="review room"]')).not.toBeNull();
+  });
+
+  function pendingAsk(overrides: Partial<PendingInteraction> = {}): PendingInteraction {
+    return {
+      id: 'ask-1',
+      workflow_run_id: 'run-1',
+      node_id: 'review',
+      tool_use_id: 'tool-ask',
+      kind: 'ask',
+      status: 'pending',
+      envelope: {
+        questions: [
+          {
+            id: 'q1',
+            prompt: 'Ship it?',
+            selection: 'single',
+            options: ['Ship', 'Hold'],
+            allowOther: false,
+          },
+        ],
+      },
+      answer: null,
+      provider_session_id: 'sess-1',
+      created_at: CREATED_AT,
+      resolved_at: null,
+      resolved_by: null,
+      ...overrides,
+    };
+  }
+
+  function reactProps(node: Element): {
+    onChange?: (event: { target: { value: string; checked: boolean } }) => void;
+    onSubmit?: (event: { preventDefault: () => void }) => void;
+  } | null {
+    const key = Object.keys(node).find(candidate => candidate.startsWith('__reactProps$'));
+    if (key === undefined) {
+      return null;
+    }
+    const props = (node as unknown as Record<string, unknown>)[key];
+    if (props === null || typeof props !== 'object') {
+      return null;
+    }
+    return props as {
+      onChange?: (event: { target: { value: string; checked: boolean } }) => void;
+      onSubmit?: (event: { preventDefault: () => void }) => void;
+    };
+  }
+
+  const ASK_TOOL: WorkflowNodeMessageResponse = {
+    id: 'm-ask-tool',
+    seq: 8,
+    kind: 'tool',
+    payload: { name: 'AskHuman', id: 'tool-ask', input: { questions: [] } },
+    created_at: CREATED_AT,
+  };
+
+  test('places an anchored Ask card after the matching tool chip and submits the request id', async () => {
+    const submitted: [string, AskAnswerBody][] = [];
+    await act(async () => {
+      renderPane({
+        row: REVIEW_ROW,
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({
+          messages: [...FIXTURE, ASK_TOOL],
+        }),
+        pendingInteractions: [pendingAsk()],
+        onSubmitAsk: async (requestId, body): Promise<void> => {
+          submitted.push([requestId, body]);
+        },
+      });
+    });
+    await flushUntil(host, 'anchored ask', () => (host.textContent ?? '').includes('Ship it?'));
+    const text = host.textContent ?? '';
+    expect(text.indexOf('AskHuman')).toBeGreaterThan(-1);
+    expect(text.indexOf('AskHuman')).toBeLessThan(text.indexOf('Ship it?'));
+    const ship = host.querySelector('input[type="radio"][value="Ship"]');
+    if (!(ship instanceof win.HTMLInputElement)) {
+      throw new Error('missing Ship control');
+    }
+    await act(async () => {
+      const onChange = reactProps(ship)?.onChange;
+      if (onChange === undefined) {
+        throw new Error('missing radio onChange');
+      }
+      onChange({ target: { value: 'Ship', checked: true } });
+    });
+    await flush();
+    const form = host.querySelector('form[aria-label="question from agent, 1 questions"]');
+    if (form === null) {
+      throw new Error('missing Ask form');
+    }
+    await act(async () => {
+      form.dispatchEvent(
+        new win.Event('submit', { bubbles: true, cancelable: true }) as unknown as Event
+      );
+    });
+    await flush();
+    expect(submitted).toEqual([['tool-ask', { answers: [{ questionId: 'q1', value: 'Ship' }] }]]);
+  });
+
+  test('keeps unanchored current Asks at the end and hides other-slice and status-row cards', async () => {
+    const loopMessages: WorkflowNodeMessageResponse[] = [
+      { id: 's1', seq: 1, kind: 'status', payload: { state: 'started' }, created_at: CREATED_AT },
+      {
+        id: 'i1s',
+        seq: 2,
+        kind: 'status',
+        payload: { state: 'iteration_started', detail: '1' },
+        created_at: CREATED_AT,
+      },
+      {
+        id: 't1',
+        seq: 3,
+        kind: 'tool',
+        payload: { name: 'Write', id: 'tool-iter-1', input: {} },
+        created_at: CREATED_AT,
+      },
+      {
+        id: 'i1c',
+        seq: 4,
+        kind: 'status',
+        payload: { state: 'iteration_completed', detail: '1' },
+        created_at: CREATED_AT,
+      },
+      {
+        id: 'i2s',
+        seq: 5,
+        kind: 'status',
+        payload: { state: 'iteration_started', detail: '2' },
+        created_at: CREATED_AT,
+      },
+      {
+        id: 't2',
+        seq: 6,
+        kind: 'tool',
+        payload: { name: 'Read', id: 'tool-1', input: { path: 'a.ts' } },
+        created_at: CREATED_AT,
+      },
+      {
+        id: 'i2c',
+        seq: 7,
+        kind: 'status',
+        payload: { state: 'iteration_failed', detail: '2' },
+        created_at: CREATED_AT,
+      },
+      { id: 'tail', seq: 8, kind: 'text', payload: { text: 'after-loop' }, created_at: CREATED_AT },
+    ];
+    const otherSliceAsk = pendingAsk({
+      id: 'ask-iter-1',
+      tool_use_id: 'tool-iter-1',
+    });
+    const unanchored = pendingAsk({
+      id: 'ask-open',
+      tool_use_id: 'tool-missing',
+    });
+    await act(async () => {
+      renderPane({
+        row: ITERATION_TWO_ROW,
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({
+          messages: loopMessages,
+        }),
+        pendingInteractions: [otherSliceAsk, unanchored],
+      });
+    });
+    await flushUntil(host, 'iteration two', () => (host.textContent ?? '').includes('Read'));
+    expect(host.textContent).toContain('Read');
+    expect(host.querySelector('form[aria-label="question from agent, 1 questions"]')).toBeNull();
+    expect(host.textContent).not.toContain('Ship it?');
+    expect(host.textContent).not.toContain('Ship it?');
+
+    queryClient.clear();
+    await act(async () => {
+      renderPane({
+        row: REVIEW_ROW,
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({
+          messages: loopMessages,
+        }),
+        pendingInteractions: [unanchored],
+      });
+    });
+    await flushUntil(host, 'unanchored ask', () => (host.textContent ?? '').includes('Ship it?'));
+    const text = host.textContent ?? '';
+    expect(text.lastIndexOf('Ship it?')).toBeGreaterThan(text.indexOf('Read'));
+
+    queryClient.clear();
+    await act(async () => {
+      renderPane({
+        row: REVIEW_ROW,
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({
+          messages: [
+            ...FIXTURE,
+            {
+              id: 'm-awaiting',
+              seq: 8,
+              kind: 'status',
+              payload: { state: 'awaiting', detail: 'waiting' },
+              created_at: CREATED_AT,
+            },
+          ],
+        }),
+        pendingInteractions: [],
+      });
+    });
+    await flushUntil(host, 'status awaiting', () => (host.textContent ?? '').includes('awaiting'));
+    expect(host.querySelector('form[aria-label="question from agent, 1 questions"]')).toBeNull();
+    expect(host.textContent).not.toContain('Ship it?');
+  });
+
+  test('still renders every node Ask after Retry when the transcript query fails', async () => {
+    await act(async () => {
+      renderPane({
+        row: REVIEW_ROW,
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => {
+          throw new Error('boom');
+        },
+        pendingInteractions: [pendingAsk(), pendingAsk({ id: 'ask-2', tool_use_id: 'tool-b' })],
+      });
+    });
+    await flushUntil(
+      host,
+      'error asks',
+      () =>
+        (host.textContent ?? '').includes('Failed to load node transcript') &&
+        (host.textContent ?? '').includes('Ship it?')
+    );
+    expect(host.textContent).toContain('Retry');
+    expect(
+      host.querySelectorAll('form[aria-label="question from agent, 1 questions"]')
+    ).toHaveLength(2);
+  });
+
+  test('keeps two pending Asks independent and focuses only the first actionable card', async () => {
+    await act(async () => {
+      renderPane({
+        row: REVIEW_ROW,
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({
+          messages: [
+            ASK_TOOL,
+            {
+              id: 'm-ask-tool-2',
+              seq: 9,
+              kind: 'tool',
+              payload: { name: 'AskHuman', id: 'tool-b', input: {} },
+              created_at: CREATED_AT,
+            },
+          ],
+        }),
+        pendingInteractions: [pendingAsk(), pendingAsk({ id: 'ask-2', tool_use_id: 'tool-b' })],
+      });
+    });
+    await flushUntil(
+      host,
+      'two asks',
+      () =>
+        host.querySelectorAll('form[aria-label="question from agent, 1 questions"]').length === 2
+    );
+    expect(
+      host.querySelectorAll('form[aria-label="question from agent, 1 questions"]')
+    ).toHaveLength(2);
+    expect((host.ownerDocument ?? document).activeElement?.id).toBe('ask-1:q1:Ship');
+  });
+
+  test('renders Invalid Ask payload for a malformed envelope with no mutation actions', async () => {
+    await act(async () => {
+      renderPane({
+        row: REVIEW_ROW,
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({
+          messages: [ASK_TOOL],
+        }),
+        pendingInteractions: [pendingAsk({ envelope: { questions: [] } })],
+      });
+    });
+    await flushUntil(host, 'invalid ask', () =>
+      (host.textContent ?? '').includes('Invalid Ask payload')
+    );
+    expect(host.querySelector('form[aria-label="question from agent, 1 questions"]')).toBeNull();
+    expect(host.textContent).not.toContain('Submit');
+    expect(host.textContent).not.toContain('Decline');
+  });
+
+  test('names Avery and disables choices for a non-starter card', async () => {
+    await act(async () => {
+      renderPane({
+        row: REVIEW_ROW,
+        viewerIsStarter: false,
+        starterDisplayName: 'Avery',
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({
+          messages: [ASK_TOOL],
+        }),
+        pendingInteractions: [pendingAsk()],
+      });
+    });
+    await flushUntil(host, 'named readonly', () =>
+      (host.textContent ?? '').includes('Waiting for Avery to answer')
+    );
+    expect(host.querySelector('fieldset[disabled]')).not.toBeNull();
+    expect(host.textContent).toContain('Waiting for Avery to answer');
+    expect(host.textContent).not.toContain('Submit');
+    expect(host.textContent).not.toContain('Decline');
   });
 });

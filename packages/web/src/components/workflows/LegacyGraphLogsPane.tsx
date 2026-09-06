@@ -6,9 +6,11 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import {
   getWorkflowNodeMessages,
+  type AskAnswerBody,
   type ConversationResponse,
   type DagNode,
   type MessageResponse,
+  type PendingInteraction,
   type WorkflowEventResponse,
   type WorkflowNodeStateResponse,
 } from '@/lib/api';
@@ -17,7 +19,9 @@ import type { WorkflowRunStatus } from '@/lib/types';
 
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 
+import type { AskActionStateByRequest } from './ask-answer-controller';
 import { buildChatTimeline, type ChatTimelineEntry } from './build-chat-timeline';
+
 import { buildLogRows, type LogRow } from './build-log-rows';
 import { ChatTimeline } from './ChatTimeline';
 import { LegacyNodeRoom } from './LegacyNodeRoom';
@@ -38,7 +42,6 @@ export interface LegacyGraphLogsPaneProps {
   runId: string;
   nodeStates: readonly WorkflowNodeStateResponse[];
   events: readonly WorkflowEventResponse[];
-  isLive: boolean;
   loadMessages: typeof getWorkflowNodeMessages;
   parentPlatformId: string | null;
   loadParentMessages: (conversationId: string) => Promise<MessageResponse[]>;
@@ -55,6 +58,11 @@ export interface LegacyGraphLogsPaneProps {
   approval: unknown;
   onApprove: () => Promise<void>;
   onReject: (reason?: string) => Promise<void>;
+  pendingInteractions: readonly PendingInteraction[];
+  viewerIsStarter: boolean;
+  starterDisplayName: string | null;
+  actionStates: AskActionStateByRequest;
+  onSubmitAsk: (requestId: string, body: AskAnswerBody) => Promise<void>;
 }
 
 export function runChatMessagesRefetchInterval(status: WorkflowRunStatus): 3000 | false {
@@ -144,7 +152,6 @@ export function LegacyGraphLogsPane({
   runId,
   nodeStates,
   events,
-  isLive,
   loadMessages,
   parentPlatformId,
   loadParentMessages,
@@ -158,6 +165,11 @@ export function LegacyGraphLogsPane({
   approval,
   onApprove,
   onReject,
+  pendingInteractions,
+  viewerIsStarter,
+  starterDisplayName,
+  actionStates,
+  onSubmitAsk,
 }: LegacyGraphLogsPaneProps): React.ReactElement {
   const visibleNodeStates = useMemo(
     () => synthesizeLegacyLogNodeStates({ nodeStates, events, runStatus, approval }),
@@ -369,7 +381,6 @@ export function LegacyGraphLogsPane({
           <LegacyNodeRoom
             runId={runId}
             row={selectedRow}
-            isLive={isLive}
             loadMessages={loadMessages}
             definitionNodes={definitionNodes}
             definitionPending={definitionPending}
@@ -378,6 +389,16 @@ export function LegacyGraphLogsPane({
             approval={approval}
             onApprove={onApprove}
             onReject={onReject}
+            pendingInteractions={pendingInteractions}
+            viewerIsStarter={viewerIsStarter}
+            starterDisplayName={starterDisplayName}
+            actionStates={actionStates}
+            onSubmitAsk={onSubmitAsk}
+            nodeState={
+              selectedRow === null
+                ? undefined
+                : visibleNodeStates.find(state => state.nodeId === selectedRow.nodeId)
+            }
           />
           {roomFooter}
         </div>
