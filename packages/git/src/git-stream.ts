@@ -1,4 +1,5 @@
 import * as childProcess from 'child_process';
+import type { Readable } from 'stream';
 
 import type { RepoPath, WorktreePath } from './types';
 
@@ -34,26 +35,39 @@ function concatBytes(chunks: Uint8Array[], total: number): Uint8Array {
   return out;
 }
 
-function waitClose(child: childProcess.ChildProcess): Promise<number | null> {
-  return new Promise((resolve, reject) => {
-    child.once('error', () => {
-      reject(opaqueStreamError());
-    });
-    child.once('close', (code: number | null) => {
-      resolve(code);
-    });
-  });
-}
-
 function toUint8Array(chunk: Buffer | string): Uint8Array {
   return typeof chunk === 'string' ? Buffer.from(chunk) : new Uint8Array(chunk);
+}
+
+function childExitMonitor(
+  child: childProcess.ChildProcess,
+  stdout?: Readable
+): Promise<{ code?: number | null; error?: Error }> {
+  return new Promise(resolve => {
+    let settled = false;
+    child.once('error', () => {
+      if (settled) return;
+      settled = true;
+      stdout?.destroy();
+      resolve({ error: opaqueStreamError() });
+    });
+    child.once('close', (code: number | null) => {
+      if (settled) return;
+      settled = true;
+      resolve({ code });
+    });
+  });
 }
 
 export function streamGitStdout(request: GitStreamRequest): ReadableStream<Uint8Array> {
   const child = spawnGit(request);
   child.stderr?.resume();
+  const stdout = child.stdout;
   let intentionalStop = false;
   let closed = false;
+  let stdoutEnded = false;
+  let childExitCode: number | null | undefined;
+  let pump: (() => void) | undefined;
 
   if (request.signal) {
     request.signal.addEventListener(
@@ -78,15 +92,39 @@ export function streamGitStdout(request: GitStreamRequest): ReadableStream<Uint8
         controller.close();
       };
 
-      const stdout = child.stdout;
       if (!stdout) {
         fail();
         return;
       }
 
-      stdout.on('data', (chunk: Buffer | string) => {
+      const maybeFinish = (): void => {
         if (closed) return;
-        controller.enqueue(toUint8Array(chunk));
+        if (intentionalStop) {
+          finish();
+          return;
+        }
+        if (childExitCode === undefined) return;
+        const accepted = request.acceptExitCodes ?? [0];
+        if (childExitCode === null || !accepted.includes(childExitCode)) {
+          fail();
+          return;
+        }
+        if (stdoutEnded) finish();
+      };
+      pump = (): void => {
+        if (closed) return;
+        while ((controller.desiredSize ?? 1) > 0) {
+          const chunk = stdout.read() as Buffer | string | null;
+          if (chunk === null) break;
+          controller.enqueue(toUint8Array(chunk));
+        }
+      };
+
+      stdout.pause();
+      stdout.on('readable', pump);
+      stdout.on('end', () => {
+        stdoutEnded = true;
+        maybeFinish();
       });
       stdout.on('error', () => {
         if (intentionalStop) {
@@ -96,20 +134,25 @@ export function streamGitStdout(request: GitStreamRequest): ReadableStream<Uint8
         fail();
       });
       child.on('error', () => {
-        fail();
-      });
-      child.on('close', (code: number | null) => {
-        const accepted = request.acceptExitCodes ?? [0];
-        if (intentionalStop || (code !== null && accepted.includes(code))) {
+        if (intentionalStop) {
           finish();
           return;
         }
+        stdout.destroy();
         fail();
       });
+      child.on('close', (code: number | null) => {
+        childExitCode = code;
+        maybeFinish();
+      });
+    },
+    pull(): void {
+      pump?.();
     },
     cancel(): void {
       intentionalStop = true;
       closed = true;
+      stdout?.destroy();
       if (!child.killed) child.kill();
     },
   });
@@ -125,6 +168,7 @@ export async function readGitStdoutWindow(
   const child = spawnGit(request);
   child.stderr?.resume();
   const stdout = child.stdout;
+  const exit = childExitMonitor(child, stdout ?? undefined);
   if (!stdout) {
     child.kill();
     throw opaqueStreamError();
@@ -164,9 +208,10 @@ export async function readGitStdoutWindow(
     if (!intentionalCutoff) throw opaqueStreamError();
   }
 
-  const exitCode = await waitClose(child);
-  if (!intentionalCutoff && exitCode !== 0) {
-    throw opaqueStreamError();
+  const status = await exit;
+  if (!intentionalCutoff) {
+    if (status.error) throw status.error;
+    if (status.code !== 0) throw opaqueStreamError();
   }
 
   return concatBytes(chunks, taken);

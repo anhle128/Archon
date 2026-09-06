@@ -136,7 +136,16 @@ async function loadViewerFile(
     if (raw.kind === 'empty') {
       return { kind: 'unavailable', file, emptyReason: raw.emptyReason };
     }
-    if (raw.kind === 'text') throw new Error('Invalid binary git file response');
+    if (raw.kind === 'text') {
+      return {
+        kind: 'text',
+        file,
+        text: raw.text,
+        contentHash: raw.contentHash,
+        truncated: raw.truncated,
+        cursor: raw.cursor,
+      };
+    }
     return fromRawFile(runId, file, 'worktree', raw);
   }
 

@@ -1,9 +1,16 @@
+process.env.NODE_ENV = 'development';
+
 import { afterEach, beforeEach, expect, mock, test } from 'bun:test';
 import { Window } from 'happy-dom';
-import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
+import type { Root } from 'react-dom/client';
 
-import { InlineImage } from './inline-image';
+const react = await import('react');
+const reactDomClient = await import('react-dom/client');
+const inlineImage = await import('./inline-image');
+
+const act = react.act;
+const createRoot = reactDomClient.createRoot;
+const inlineImageComponent = inlineImage.InlineImage;
 
 let win: Window;
 let host: Element;
@@ -43,11 +50,21 @@ test('replaces and revokes object URLs when bytes change and on unmount', async 
   const mountedRoot = root;
   if (!mountedRoot) throw new Error('Missing React root');
   await act(async () => {
-    mountedRoot.render(<InlineImage bytes={Uint8Array.from([1])} mediaType="image/png" />);
+    mountedRoot.render(
+      react.createElement(inlineImageComponent, {
+        bytes: Uint8Array.from([1]),
+        mediaType: 'image/png',
+      })
+    );
   });
   expect(host.querySelector('img')?.getAttribute('src')).toBe('blob:first');
   await act(async () => {
-    mountedRoot.render(<InlineImage bytes={Uint8Array.from([2])} mediaType="image/png" />);
+    mountedRoot.render(
+      react.createElement(inlineImageComponent, {
+        bytes: Uint8Array.from([2]),
+        mediaType: 'image/png',
+      })
+    );
   });
   expect(revokeObjectURL).toHaveBeenCalledWith('blob:first');
   expect(host.querySelector('img')?.getAttribute('src')).toBe('blob:second');

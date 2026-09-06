@@ -1516,6 +1516,29 @@ describe('SourceControlTab', () => {
     expect(host.querySelector('a')?.getAttribute('href')).toContain('download=1');
   });
 
+  test('a binary-to-text M fallback renders the raw worktree text', async () => {
+    fetchSpy = mockGitRoutes({
+      onChanges: () => ({
+        files: [{ path: 'became-text.txt', status: 'M' }],
+        revision: REVISION_A,
+      }),
+      onDiff: () => jsonResponse({ ...binaryDiff('became-text.txt'), fileFallback: true }),
+      onFile: () =>
+        presentedFileResponse('plain text now\n', HASH_A, {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'X-Archon-Git-Presentation': 'text',
+          'X-Archon-Git-Byte-Length': '15',
+        }),
+    });
+    await renderTab('run-1');
+    await waitFor(() => host.textContent?.includes('became-text.txt'), 'file list');
+    await clickOption('became-text.txt');
+    await waitFor(() => host.textContent?.includes('plain text now'), 'text fallback');
+    expect(host.querySelector('[aria-label="Before"]')).toBeNull();
+    expect(host.querySelector('.hljs')).not.toBeNull();
+    expect(calledUrls(fetchSpy).at(-1)).toContain('source=worktree');
+  });
+
   test('download-only renders no pre body', async () => {
     fetchSpy = mockGitRoutes({
       onChanges: () => ({

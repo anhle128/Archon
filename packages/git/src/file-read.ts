@@ -146,6 +146,7 @@ function createWorktreeFileStream(
   let nodeStream: ReturnType<FileHandle['createReadStream']> | undefined;
   let handle: FileHandle | undefined;
   let closed = false;
+  let pump: (() => void) | undefined;
 
   return new ReadableStream<Uint8Array>({
     async start(controller): Promise<void> {
@@ -167,18 +168,30 @@ function createWorktreeFileStream(
           throw new GitPathError('escape');
         }
         nodeStream = handle.createReadStream();
-        nodeStream.on('data', (chunk: Buffer | string) => {
+        const closeHandle = (): void => {
+          void handle?.close().catch(() => undefined);
+        };
+        pump = (): void => {
           if (closed) return;
-          controller.enqueue(toUint8Array(chunk));
-        });
+          while ((controller.desiredSize ?? 1) > 0) {
+            const chunk = nodeStream?.read() as Buffer | string | null | undefined;
+            if (chunk === null || chunk === undefined) break;
+            controller.enqueue(toUint8Array(chunk));
+          }
+        };
+        nodeStream.pause();
+        nodeStream.on('readable', pump);
         nodeStream.on('end', () => {
+          closeHandle();
           finish();
         });
         nodeStream.on('error', (error: Error) => {
+          closeHandle();
           fail(error);
         });
         const abort = (): void => {
           nodeStream?.destroy();
+          closeHandle();
           finish();
         };
         if (signal) {
@@ -189,6 +202,9 @@ function createWorktreeFileStream(
         if (handle !== undefined) await handle.close().catch(() => undefined);
         fail(error);
       }
+    },
+    pull(): void {
+      pump?.();
     },
     cancel(): void {
       closed = true;
