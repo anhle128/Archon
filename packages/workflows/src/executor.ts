@@ -13,6 +13,7 @@ import type {
   AppliedEnvOverlay,
   DagNode,
   EnvOverlaySnapshot,
+  PendingInteraction,
   WorkflowDefinition,
   WorkflowRun,
   WorkflowExecutionResult,
@@ -590,14 +591,24 @@ export type ExecuteWorkflowOptions = ResumePayload & {
   appliedEnvOverlay?: AppliedEnvOverlay;
 };
 
+function isPendingAsk(row: PendingInteraction): boolean {
+  return row.kind === 'ask' && row.status === 'pending';
+}
+
+function isAnsweredAsk(row: PendingInteraction): boolean {
+  return row.kind === 'ask' && row.status === 'answered';
+}
+
 /**
  * Read-only resume eligibility + prior DAG snapshot for a located candidate.
  * Does **not** claim the run (no `resumeWorkflowRun` CAS). Callers that still
  * need conversation/isolation gates before ownership transfer use this first,
  * then {@link hydrateResumableRun} exactly once after those gates succeed.
  *
- * Returns `null` when the candidate has no completed nodes and no re-runnable
- * gate state — nothing worth resuming.
+ * Throws when any Ask row is still `pending`. Returns `null` when the candidate
+ * has no completed nodes, no re-runnable gate state, and no answered Ask —
+ * nothing worth resuming. Answered Ask rows make a first-node run resumable
+ * even with an empty completed-node map.
  */
 export async function inspectResumableRun(
   deps: WorkflowDeps,
@@ -605,9 +616,15 @@ export async function inspectResumableRun(
 ): Promise<{
   priorCompletedNodes: Map<string, string>;
   priorTokenUsage: { input: number; output: number };
+  hasAnsweredAsk: boolean;
 } | null> {
   const snapshot = await deps.store.getDagResumeSnapshot(candidate.id);
   const priorCompletedNodes = snapshot.completedNodeOutputs;
+  const interactions = await deps.store.listPendingInteractions(candidate.id);
+  if (interactions.some(isPendingAsk)) {
+    throw new Error(`Answer or decline the Ask before resuming run ${candidate.id}`);
+  }
+  const hasAnsweredAsk = interactions.some(isAnsweredAsk);
   // A gate whose node deliberately writes NO node_completed on pause must still be
   // resumable with zero completed nodes: interactive loops, Plannotator takeover,
   // and a `workflow:` node blocked on a child (#2121 Phase 2) whose child is first.
@@ -621,25 +638,27 @@ export async function inspectResumableRun(
     approvalType === 'interactive_loop' ||
     (approvalType === 'plannotator_gate' && approval?.phase === 'opening') ||
     approvalType === 'child_workflow';
-  if (priorCompletedNodes.size === 0 && !hasReRunGateState) {
+  if (priorCompletedNodes.size === 0 && !hasReRunGateState && !hasAnsweredAsk) {
     getLog().info(
       { resumableRunId: candidate.id },
       'workflow.dag_resume_skipped_no_completed_nodes'
     );
     return null;
   }
-  return { priorCompletedNodes, priorTokenUsage: snapshot.tokens };
+  return { priorCompletedNodes, priorTokenUsage: snapshot.tokens, hasAnsweredAsk };
 }
 
 /**
  * Hydrate an already-located resumable `WorkflowRun` candidate into the form
  * {@link executeWorkflow} expects. Returns `null` when the candidate has no
- * completed nodes and no re-runnable gate state — nothing worth resuming.
+ * completed nodes, no re-runnable gate state, and no answered Ask — nothing
+ * worth resuming.
  *
- * Performs the compare-and-set claim (`resumeWorkflowRun`) as the final step.
- * Callers that must keep the run paused until conversation/isolation gates
- * pass should {@link inspectResumableRun} first and only call this after those
- * gates succeed (US-020).
+ * Performs the compare-and-set claim (`resumeWorkflowRun`) as the final step,
+ * except when the candidate is already `running` because an answered Ask
+ * resumed it. Callers that must keep the run paused until conversation/isolation
+ * gates pass should {@link inspectResumableRun} first and only call this after
+ * those gates succeed (US-020).
  *
  * The return shape is spread-compatible with {@link ExecuteWorkflowOptions}
  * so callers can write `executeWorkflow(..., { ...hydrated, codebaseId })`.
@@ -661,7 +680,10 @@ export async function hydrateResumableRun(
   if (!inspected) {
     return null;
   }
-  const preCreatedRun = await deps.store.resumeWorkflowRun(candidate.id);
+  const alreadyRunningFromAsk = candidate.status === 'running' && inspected.hasAnsweredAsk;
+  const preCreatedRun = alreadyRunningFromAsk
+    ? candidate
+    : await deps.store.resumeWorkflowRun(candidate.id);
   getLog().info(
     { workflowRunId: preCreatedRun.id, priorCompletedCount: inspected.priorCompletedNodes.size },
     'workflow.dag_resuming'
