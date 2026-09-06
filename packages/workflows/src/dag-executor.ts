@@ -4813,6 +4813,13 @@ async function executeLoopNode(
   // ('' → node.id at top level, #2090). The loop's own per-iteration number lives in
   // each event's data (`iteration`), so no separate iteration param is threaded here.
   const stepName = stepNamePrefix + node.id;
+  const recordLoopStatus = (state: string, detail?: string): Promise<void> =>
+    appendNodeTranscript(deps.store, {
+      workflow_run_id: workflowRun.id,
+      node_id: stepName,
+      kind: 'status',
+      payload: { state, ...(detail !== undefined ? { detail } : {}) },
+    });
 
   // Emit node_started up-front so every terminal outcome of this loop node is
   // paired with a corresponding _started event — same pattern the bash and
@@ -4856,6 +4863,7 @@ async function executeLoopNode(
     nodeName: node.id,
     ...(requestMetadata ?? { provider: workflowProvider }),
   });
+  await recordLoopStatus('started');
 
   /**
    * Single failure finalizer for this loop node (see the pairing contract on
@@ -4896,6 +4904,7 @@ async function executeLoopNode(
       nodeName: node.id,
       error,
     });
+    await recordLoopStatus('failed', error);
     return {
       state: 'failed',
       output: extras.output ?? '',
@@ -4940,6 +4949,7 @@ async function executeLoopNode(
         nodeId: node.id,
       })
     );
+    await recordLoopStatus('completed');
     // Same declared-field capture as the normal completion return below and as the
     // resume-hydration path (#2091). This is a COMPLETION exit, so a consumer's
     // `$loop.output.field` must get the identical strict contract here: without it a
@@ -5098,6 +5108,7 @@ async function executeLoopNode(
       .catch((err: Error) => {
         logEventStoreError(err, i);
       });
+    await recordLoopStatus('iteration_started', String(i));
 
     // Session threading. Fresh loop runs start iteration 1 without a prior
     // session. Resumed interactive loops continue from the session captured
@@ -5311,6 +5322,14 @@ async function executeLoopNode(
             fullOutput += msg.content;
             const cleaned = stripCompletionTags(msg.content, loop.until);
             cleanOutput += cleaned;
+            if (cleaned !== '') {
+              await appendNodeTranscript(deps.store, {
+                workflow_run_id: workflowRun.id,
+                node_id: stepName,
+                kind: 'text',
+                payload: { text: cleaned },
+              });
+            }
             if (platform.getStreamingMode() === 'stream' && cleaned) {
               await safeSendMessage(platform, conversationId, cleaned, msgContext);
             }
@@ -5515,6 +5534,17 @@ async function executeLoopNode(
             runningTools.set(toolCallId, { toolName: msg.toolName, startedAt: now });
             if (!msg.toolCallId) lastAnonymousToolCallId = toolCallId;
 
+            await appendNodeTranscript(deps.store, {
+              workflow_run_id: workflowRun.id,
+              node_id: stepName,
+              kind: 'tool',
+              payload: {
+                name: msg.toolName,
+                id: toolCallId,
+                ...(msg.toolInput !== undefined ? { input: msg.toolInput } : {}),
+              },
+            });
+
             // Emit tool_started for the current tool (fire-and-forget)
             getWorkflowEventEmitter().emit({
               type: 'tool_started',
@@ -5676,6 +5706,7 @@ async function executeLoopNode(
           .catch((evtErr: Error) => {
             logEventStoreError(evtErr, i);
           });
+        await recordLoopStatus('iteration_failed', String(i));
         return await failLoopNode(`Loop iteration ${i} failed: ${err.message}`, {
           costUsd: loopTotalCostUsd,
           ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
@@ -5767,6 +5798,7 @@ async function executeLoopNode(
           .catch((evtErr: Error) => {
             logEventStoreError(evtErr, i);
           });
+        await recordLoopStatus('iteration_failed', String(i));
         return failLoopNode(`Loop iteration ${i} failed: ${emptyError}`, {
           costUsd: loopTotalCostUsd,
           ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
@@ -6059,6 +6091,7 @@ async function executeLoopNode(
       .catch((err: Error) => {
         logEventStoreError(err, i);
       });
+    await recordLoopStatus('iteration_completed', String(i));
 
     await logNodeComplete(logDir, workflowRun.id, `${node.id}-iteration-${String(i)}`, node.id, {
       durationMs: duration,
@@ -6128,6 +6161,7 @@ async function executeLoopNode(
         ...(loopFinalStopReason ? { stopReason: loopFinalStopReason } : {}),
         ...(loopTotalNumTurns !== undefined ? { numTurns: loopTotalNumTurns } : {}),
       });
+      await recordLoopStatus('completed');
       // Declared field set, so a downstream `$loop.output.field` gets the same
       // strict contract every other producer enforces: a field not in the schema
       // fails the consumer, a declared-optional absent one resolves to ''. Only

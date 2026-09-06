@@ -24361,4 +24361,218 @@ describe('executeDagWorkflow -- command and prompt transcripts', () => {
     const workflowRun = await runNodes(store, [{ id: 'stats', bash: 'echo hi' }]);
     expect(await store.listNodeMessages(workflowRun.id, 'stats')).toEqual([]);
   });
+
+  it('records two-iteration loop markers with cleaned assistant text between them', async () => {
+    let callCount = 0;
+    mockSendQueryDag.mockImplementation(function* () {
+      callCount++;
+      if (callCount === 1) {
+        yield { type: 'assistant', content: 'First pass.' };
+        yield {
+          type: 'tool',
+          toolName: 'Read',
+          toolCallId: 'tool-1',
+          toolInput: { path: 'a.ts' },
+        };
+        yield { type: 'result', sessionId: 'loop-session-1' };
+      } else {
+        yield { type: 'assistant', content: 'Second pass. <promise>DONE</promise>' };
+        yield { type: 'result', sessionId: 'loop-session-2' };
+      }
+    });
+
+    const store = createMockStore();
+    const workflowRun = await runNodes(store, [
+      {
+        id: 'refine',
+        loop: {
+          prompt: 'Iterate until done.',
+          until: 'DONE',
+          max_iterations: 5,
+        },
+      },
+    ]);
+    const rows = await store.listNodeMessages(workflowRun.id, 'refine');
+    expect(transcriptTimeline(rows)).toEqual([
+      'started',
+      'iteration_started',
+      'text',
+      'tool',
+      'iteration_completed',
+      'iteration_started',
+      'text',
+      'iteration_completed',
+      'completed',
+    ]);
+    expect(
+      rows.filter(row => row.kind === 'status' && row.payload.state === 'started')
+    ).toHaveLength(1);
+    const iterationStarts = rows.filter(
+      row => row.kind === 'status' && row.payload.state === 'iteration_started'
+    );
+    const iterationCompletes = rows.filter(
+      row => row.kind === 'status' && row.payload.state === 'iteration_completed'
+    );
+    expect(
+      iterationStarts.map(row => (row.kind === 'status' ? row.payload.detail : undefined))
+    ).toEqual(['1', '2']);
+    expect(
+      iterationCompletes.map(row => (row.kind === 'status' ? row.payload.detail : undefined))
+    ).toEqual(['1', '2']);
+    const textRows = rows.filter(row => row.kind === 'text');
+    expect(textRows[0]?.payload).toEqual({ text: 'First pass.' });
+    expect(textRows[1]?.payload).toEqual({ text: 'Second pass.' });
+    expect(rows.find(row => row.kind === 'tool')?.payload).toEqual({
+      name: 'Read',
+      id: 'tool-1',
+      input: { path: 'a.ts' },
+    });
+  });
+
+  it('records iteration_failed before node-level failed on an iteration error', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'result', sessionId: 'empty-session' };
+    });
+
+    const store = createMockStore();
+    const workflowRun = await runNodes(store, [
+      {
+        id: 'refine',
+        loop: { prompt: 'Iterate.', until: 'DONE', max_iterations: 3 },
+      },
+    ]);
+    const rows = await store.listNodeMessages(workflowRun.id, 'refine');
+    expect(transcriptTimeline(rows)).toEqual([
+      'started',
+      'iteration_started',
+      'iteration_failed',
+      'failed',
+    ]);
+    expect(rows[2]?.kind === 'status' ? rows[2].payload.detail : undefined).toBe('1');
+  });
+
+  it('records started then completed on finalize-on-approve resume without a new iteration marker', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'should never run' };
+      yield { type: 'result', sessionId: 'never' };
+    });
+
+    const store = createMockStore();
+    const workflowRun = await runNodes(
+      store,
+      [
+        {
+          id: 'refine',
+          loop: {
+            prompt: 'Refine.',
+            until: 'APPROVED',
+            max_iterations: 10,
+            interactive: true,
+            gate_message: 'Review.',
+          },
+        },
+      ],
+      makeWorkflowRun('finalize-run', {
+        metadata: {
+          approval: {
+            type: 'interactive_loop',
+            nodeId: 'refine',
+            iteration: 1,
+            sessionId: 'sig-session-1',
+            message: 'gate',
+            completionSignaled: true,
+            signaledOutput: 'REPORT',
+            signaledTokens: { input: 40, output: 4 },
+          },
+          loop_user_input: 'Approved',
+          loop_feedback_given: false,
+        },
+      })
+    );
+    const rows = await store.listNodeMessages(workflowRun.id, 'refine');
+    expect(transcriptTimeline(rows)).toEqual(['started', 'completed']);
+    expect(mockSendQueryDag.mock.calls.length).toBe(0);
+  });
+
+  it('records failed on max-iteration exhaustion without a completed row', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'still working' };
+      yield { type: 'result', sessionId: 'loop-session' };
+    });
+
+    const store = createMockStore();
+    const workflowRun = await runNodes(store, [
+      {
+        id: 'my-loop',
+        loop: { prompt: 'Do task.', until: 'COMPLETE', max_iterations: 2 },
+      },
+    ]);
+    const rows = await store.listNodeMessages(workflowRun.id, 'my-loop');
+    expect(transcriptTimeline(rows)).toEqual([
+      'started',
+      'iteration_started',
+      'text',
+      'iteration_completed',
+      'iteration_started',
+      'text',
+      'iteration_completed',
+      'failed',
+    ]);
+    expect(
+      rows.filter(row => row.kind === 'status' && row.payload.state === 'completed')
+    ).toHaveLength(0);
+  });
+
+  it('does not record completed when an interactive loop pauses at a declared approval gate', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'Need review.' };
+      yield { type: 'result', sessionId: 'loop-session-1' };
+    });
+
+    const store = createMockStore();
+    const workflowRun = await runNodes(store, [
+      {
+        id: 'refine',
+        loop: {
+          prompt: 'Iterate.',
+          until: 'DONE',
+          max_iterations: 5,
+          interactive: true,
+          gate_message: 'Review.',
+        },
+      },
+    ]);
+    const rows = await store.listNodeMessages(workflowRun.id, 'refine');
+    expect(transcriptTimeline(rows)).toEqual([
+      'started',
+      'iteration_started',
+      'text',
+      'iteration_completed',
+    ]);
+    expect(
+      rows.filter(row => row.kind === 'status' && row.payload.state === 'completed')
+    ).toHaveLength(0);
+  });
+
+  it('does not record loop-group container output while recording prefixed body transcripts', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'done\nDONE' };
+      yield { type: 'result', sessionId: 'lg-session' };
+    });
+
+    const store = createMockStore();
+    const workflowRun = await runNodes(store, [
+      {
+        id: 'grp',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 1,
+          nodes: [{ id: 'body', prompt: 'body work' }],
+        },
+      },
+    ]);
+    expect(await store.listNodeMessages(workflowRun.id, 'grp')).toEqual([]);
+    const bodyRows = await store.listNodeMessages(workflowRun.id, 'grp.body');
+    expect(transcriptTimeline(bodyRows)).toEqual(['started', 'text', 'completed']);
+  });
 });
