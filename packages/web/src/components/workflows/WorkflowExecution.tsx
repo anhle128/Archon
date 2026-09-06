@@ -696,7 +696,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
     />
   );
 
-  // Merged logs panel — Graph tab only. Detect whether the selected node has any DB events so we can show an empty-state
+  // Sequential non-DAG runs keep the merged logs panel and selected-node empty state.
   const sequentialLogsPanel = (
     <div className="flex-1 flex flex-col overflow-hidden min-h-0 h-full">
       {retryActionPanel}
